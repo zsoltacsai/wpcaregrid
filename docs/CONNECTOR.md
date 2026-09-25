@@ -89,6 +89,8 @@ Base: `/api/v1/connector`. JSON in, JSON out. Errors are always `{"error": {"cod
 | `GET /jobs` | credential | Up to 5 queued jobs, marked delivered. | ″ |
 | `POST /jobs/{uuid}/result` | credential | Result of a delivered job. `202`, or `200` with `duplicate: true` if already recorded. | ″ |
 | `POST /disconnect` | credential | The site disconnects itself; the credential is revoked. | ″ |
+| `POST /admin-access/claim` | credential | Consumes a one-time admin-access token brought by the customer's browser; returns the `CREATE_ADMIN_SESSION` job ([ADMIN_ACCESS.md](ADMIN_ACCESS.md)). | 20/min per connector |
+| `POST /admin-access/{uuid}/ended` | credential | The site ended an admin session (expired, revoked on the site, disconnected, deactivated). | ″ |
 
 Error codes include `INVALID_REQUEST`, `RATE_LIMITED`, `UNAUTHENTICATED`, `CONNECTOR_REVOKED`, `WEBSITE_MISMATCH`, `HTTPS_REQUIRED`, `INVALID_PAIRING_CODE`, `SITE_URL_MISMATCH`, `SERVICE_INACTIVE`, `JOB_NOT_FOUND`, `JOB_NOT_DELIVERED`, `JOB_NOT_ALLOWED`.
 
@@ -107,6 +109,7 @@ Error codes include `INVALID_REQUEST`, `RATE_LIMITED`, `UNAUTHENTICATED`, `CONNE
 | `UPDATE_THEME` | updates | `stylesheet` (e.g. `twentytwentyfive`), optional `target_version`, `backup_uuid` | Updates one theme |
 | `UPDATE_CORE` | updates | `policy` (`minor`/`major`), optional `target_version`, `backup_uuid` | Updates WordPress |
 | `BACKUP_FILES` / `BACKUP_DATABASE` / `BACKUP_FULL` | backup_files / backup_database / backup_full | `backup_uuid`, `reason`, `chunk_size` | Builds a backup locally and uploads it to WP CareGrid ([BACKUP_ENGINE.md](BACKUP_ENGINE.md)) |
+| `CREATE_ADMIN_SESSION` | admin_access | `request_uuid`, `access_level` (`maintenance`/`full_admin`), `website_uuid`, `session_expires_at` | Starts a temporary WordPress session for a managed account. Never delivered by poll: only returned by `/admin-access/claim` inside the customer's browser request ([ADMIN_ACCESS.md](ADMIN_ACCESS.md)) |
 | `RESTORE` | restore_files / restore_database / restore_full (by `scope`) | `restore_uuid`, `backup_uuid`, `scope`, `objects` (name, size, sha256) | Restores one of this site's own backups |
 
 `backup_uuid` on updates is set by the server only after it verified a pre-update backup. Database jobs and capabilities exist only on MySQL/MariaDB sites; capabilities are sent with every heartbeat, so the server always knows what a site can do.
@@ -136,6 +139,8 @@ There is no `RUN_PHP`, `RUN_COMMAND`, `EXECUTE_CODE` or `EVAL`, and no way to ad
 5. runs the health checks and a fresh inventory: `partial` (`UPDATED_HEALTH_CRITICAL`) if the site is critical afterwards.
 
 Results carry `previous_version`, `new_version`, `backup`, `health` and `inventory`.
+
+**Admin access entry points in the plugin.** Besides cron, the plugin has two request-time hooks, both for [admin access](ADMIN_ACCESS.md): `wp-login.php?action=wp_caregrid_access` (POST only; the browser landing that claims a one-time token) and an `init` guard that ends expired admin sessions. The site reports the landing URL as `admin_access_url` at pairing and with every heartbeat; poll and heartbeat responses carry `admin_access`, the list of sessions WP CareGrid still considers live, and the plugin ends any other.
 
 ## Health
 
@@ -169,11 +174,11 @@ Per plugin: `valid`, `expired`, `unknown` or `not_available`.
 
 ## Admin page
 
-**Settings → WP CareGrid** (`manage_options` only): connection status, connected website UUID, connector version (and newer version if any), last successful communication, next poll, capabilities, recent log events; the pairing form when not connected, otherwise **Check connection now** and **Disconnect**. Every action checks the capability and a nonce; other users get a 403 and nothing happens.
+**Settings → WP CareGrid** (`manage_options` only): connection status, active WP CareGrid admin access (level, expiry) with **Revoke admin access**, connected website UUID, connector version (and newer version if any), last successful communication, next poll, capabilities, recent log events; the pairing form when not connected, otherwise **Check connection now** and **Disconnect**. Every action checks the capability and a nonce; other users get a 403 and nothing happens.
 
 ## Disconnect and revocation
 
-- **From WordPress** (Disconnect button): the plugin calls `POST /disconnect` (server revokes, marks the website disconnected, cancels open jobs), then deletes the credential and the schedule. The local reset happens even if WP CareGrid is unreachable.
+- **From WordPress** (Disconnect button): the plugin calls `POST /disconnect` (server revokes, marks the website disconnected, cancels open jobs), then deletes the credential and the schedule and ends every admin session. The local reset happens even if WP CareGrid is unreachable.
 - **From the customer area** (Disconnect website): the server revokes all connectors of the website, invalidates open pairing codes and cancels open jobs. The site's next heartbeat or poll gets `CONNECTOR_REVOKED`; the plugin deletes its credential, stops its schedule and shows "Disconnected by WP CareGrid – pair again".
 - **Re-pairing** revokes the previous connector.
 - A revoked connector **never reconnects on its own**: only a new pairing code does. Other errors (network, 5xx, a proxy's plain 401) never drop the credential.
@@ -207,4 +212,4 @@ then upload the ZIP (Plugins → Add New → Upload Plugin), activate, and pair 
 
 ## Future capabilities
 
-Not in this version, and not advertised: malware scanning, request signing with a per-connector key pair (`public_key`), self-update of the connector, automated disaster recovery. Backups and restores are in [BACKUP_ENGINE.md](BACKUP_ENGINE.md). A new capability is only advertised once its jobs exist on both sides and are covered by tests.
+Not in this version, and not advertised: malware scanning, request signing with a per-connector key pair (`public_key`), self-update of the connector, automated disaster recovery. Backups and restores are in [BACKUP_ENGINE.md](BACKUP_ENGINE.md), admin access in [ADMIN_ACCESS.md](ADMIN_ACCESS.md). A new capability is only advertised once its jobs exist on both sides and are covered by tests.

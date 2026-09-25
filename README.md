@@ -151,6 +151,13 @@ Files, database and full backups through the connector, stored on S3-compatible 
 - Operators: `php artisan backup:admin {list|show|run|retry|verify|delete} {uuid}`.
 - Needs the scheduler (`backup:schedule`, `backup:monitor`, `backup:retention`) and a queue worker (`TransferBackup`).
 
+## Admin access
+
+Customers open their WordPress admin from the website page without a WordPress password: a one-time token (120 s, single use, stored hashed) is carried by a POST form to the site, the connector claims it and creates a real WordPress session for a managed account. **Open Admin** gives maintenance access (restricted role `wp_caregrid_maintenance`, 30 min); temporary full administrator access (15 min) needs an explicit confirmation. Every step is audited; access can be revoked from the account or from WordPress. Architecture, capabilities and security model: **[docs/ADMIN_ACCESS.md](docs/ADMIN_ACCESS.md)**.
+
+- Durations and limits: `ADMIN_ACCESS_*` (see `.env.example`); levels per plan in `config/admin_access.php`.
+- Needs the scheduler (`admin-access:expire`) and connector 0.3.0 on the site.
+
 ## Demo content
 
 The dashboard, license and activity-log previews use fictional data from `app/Content/DemoDashboard.php` and always show a "Demo data" / "Example" label. They must not be presented as real customer statistics.
