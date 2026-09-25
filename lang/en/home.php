@@ -61,7 +61,7 @@ return [
 
     'why' => [
         'eyebrow' => 'Why maintenance',
-        'title' => "A WordPress doesn't maintain itself.",
+        'title' => "WordPress doesn't maintain itself.",
         'lead' => 'Plugins, themes and WordPress itself change constantly. Without regular care, small problems add up.',
         'items' => [
             'outdated' => ['title' => 'Outdated software', 'text' => 'Old plugins and themes can create security and compatibility problems.'],
@@ -175,7 +175,7 @@ return [
             ],
             'backup_frequency' => [
                 'question' => 'How often are backups made?',
-                'answer' => 'The WordPress Basic plan includes weekly backups; all other plans include daily backups. A backup is also made before updates.',
+                'answer' => 'It depends on the plan. WordPress: monthly on Basic, weekly on Business, daily on Secure. WooCommerce: weekly on Basic, daily on Business and Secure. A backup is also made before updates.',
             ],
             'license' => [
                 'question' => 'What happens if a plugin license expires?',

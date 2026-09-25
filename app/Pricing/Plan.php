@@ -19,6 +19,7 @@ final readonly class Plan
         public array $prices,
         public bool $highlighted = false,
         public ?string $badge = null,
+        public ?string $backupFrequency = null,
     ) {}
 
     /** Stable identifier, e.g. "woocommerce-business". Used for checkout and analytics. */

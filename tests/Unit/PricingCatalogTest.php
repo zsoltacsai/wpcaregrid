@@ -110,4 +110,38 @@ class PricingCatalogTest extends TestCase
 
         PricingCatalog::fromConfig(config('pricing'), 'CHF');
     }
+
+    /** @return array<string, array{string, string, string}> */
+    public static function backupFrequencies(): array
+    {
+        return [
+            'WordPress Basic' => ['wordpress', 'basic', 'Monthly remote backups'],
+            'WordPress Business' => ['wordpress', 'business', 'Weekly remote backups'],
+            'WordPress Secure' => ['wordpress', 'secure', 'Daily remote backups'],
+            'WooCommerce Basic' => ['woocommerce', 'basic', 'Weekly remote backups'],
+            'WooCommerce Business' => ['woocommerce', 'business', 'Daily remote backups'],
+            'WooCommerce Secure' => ['woocommerce', 'secure', 'Daily remote backups'],
+        ];
+    }
+
+    #[DataProvider('backupFrequencies')]
+    public function test_backup_frequency_feature_matches_the_config(string $line, string $key, string $feature): void
+    {
+        $plan = collect($this->catalog()->productLine($line)->plans)->firstWhere('key', $key);
+        $backupLines = array_values(array_filter($plan->features, fn ($f) => str_ends_with($f, 'remote backups')));
+
+        $this->assertSame([$feature], $backupLines);
+        $this->assertSame(config("pricing.product_lines.{$line}.plans.{$key}.backup_frequency"), $plan->backupFrequency);
+        $this->assertNotContains(':backups', $plan->features);
+    }
+
+    public function test_plan_descriptions(): void
+    {
+        foreach ($this->catalog()->productLines() as $line) {
+            $this->assertSame(
+                ['Essential maintenance for smaller WordPress sites.', 'Regular maintenance for business websites.', 'Extra security and faster response.'],
+                array_map(fn ($plan) => $plan->description, $line->plans),
+            );
+        }
+    }
 }

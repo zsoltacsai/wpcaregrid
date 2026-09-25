@@ -64,16 +64,24 @@ final class PricingCatalog
                 }
 
                 $text = "pricing.product_lines.{$lineKey}.plans.{$planKey}";
+                $backupFrequency = $plan['backup_frequency'] ?? null;
+                $features = array_map(
+                    fn (string $feature) => $feature === ':backups' && $backupFrequency
+                        ? __("pricing.backups.{$backupFrequency}")
+                        : $feature,
+                    (array) __("{$text}.features"),
+                );
 
                 $plans[] = new Plan(
                     productLine: $lineKey,
                     key: $planKey,
                     name: __("{$text}.name"),
                     description: __("{$text}.description"),
-                    features: (array) __("{$text}.features"),
+                    features: $features,
                     prices: $prices,
                     highlighted: $plan['highlighted'] ?? false,
                     badge: isset($plan['badge']) ? __("pricing.badges.{$plan['badge']}") : null,
+                    backupFrequency: $backupFrequency,
                 );
             }
 

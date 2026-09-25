@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Content\DemoDashboard;
 use Tests\TestCase;
 
 class HomepageTest extends TestCase
@@ -30,7 +31,7 @@ class HomepageTest extends TestCase
         $this->get('/')->assertSeeInOrder([
             'WordPress maintenance, without the hassle.',
             'Functional checks',
-            'A WordPress doesn&#039;t maintain itself.',
+            'WordPress doesn&#039;t maintain itself.',
             'We don&#039;t just update. We check.',
             'Plans and pricing',
             'All your websites in one place.',
@@ -102,5 +103,42 @@ class HomepageTest extends TestCase
             ->assertSee('aria-controls="mobile-menu"', false)
             ->assertSee('aria-controls="faq-1-panel"', false)
             ->assertSee('aria-pressed="true"', false);
+    }
+
+    public function test_public_demo_ui_uses_only_reserved_example_domains(): void
+    {
+        $html = $this->get('/')->getContent();
+
+        foreach (['fndeco.com', 'petplaza.hu', 'A WordPress doesn'] as $forbidden) {
+            $this->assertStringNotContainsString($forbidden, $html);
+        }
+
+        // Every domain-looking value in the demo data is an RFC 2606/6761 example name.
+        $demo = json_encode([
+            DemoDashboard::sites(),
+            DemoDashboard::latestUpdateRun(),
+            DemoDashboard::pendingUpdates(),
+            DemoDashboard::licenses(),
+            DemoDashboard::expiredLicense(),
+            DemoDashboard::activity(),
+        ]);
+        preg_match_all('/"(?:domain|site)":"([^"]+)"/', $demo, $matches);
+
+        $this->assertNotEmpty($matches[1]);
+        foreach (array_unique($matches[1]) as $domain) {
+            $this->assertMatchesRegularExpression('/(^|\.)example(\.(com|org|net))?$/', $domain, "{$domain} is not a reserved example domain.");
+        }
+    }
+
+    public function test_full_dashboard_count_matches_the_sites_shown(): void
+    {
+        $sites = DemoDashboard::sites();
+
+        $this->get('/')->assertSee(count($sites).' sites');
+        $this->assertCount(6, $sites);
+        $this->assertSame(7, array_sum(array_column($sites, 'updates')));
+        $this->assertSame(4, count(array_filter($sites, fn ($site) => $site['updates'] > 0)));
+        $this->assertSame(1, count(array_filter($sites, fn ($site) => $site['security'] === 'issue')));
+        $this->assertSame(2, count(array_filter($sites, fn ($site) => $site['license'] === 'expired')));
     }
 }

@@ -14,6 +14,9 @@
 | can carry a Stripe Price ID. Amounts are whole units as shown to the
 | customer.
 |
+| `backup_frequency` (daily, weekly or monthly) drives the backup line in
+| each plan's feature list, so the two cannot disagree.
+|
 | Only HUF prices exist today. EUR, USD and GBP have display formats so they
 | can be switched on by adding price sets; there are deliberately no
 | converted amounts.
@@ -80,6 +83,7 @@ return [
         'wordpress' => [
             'plans' => [
                 'basic' => [
+                    'backup_frequency' => 'monthly',
                     'prices' => [
                         [
                             'currency' => 'HUF',
@@ -90,6 +94,7 @@ return [
                     ],
                 ],
                 'business' => [
+                    'backup_frequency' => 'weekly',
                     'highlighted' => true,
                     'badge' => 'most_popular',
                     'prices' => [
@@ -102,6 +107,7 @@ return [
                     ],
                 ],
                 'secure' => [
+                    'backup_frequency' => 'daily',
                     'prices' => [
                         [
                             'currency' => 'HUF',
@@ -117,6 +123,7 @@ return [
         'woocommerce' => [
             'plans' => [
                 'basic' => [
+                    'backup_frequency' => 'weekly',
                     'prices' => [
                         [
                             'currency' => 'HUF',
@@ -127,6 +134,7 @@ return [
                     ],
                 ],
                 'business' => [
+                    'backup_frequency' => 'daily',
                     'highlighted' => true,
                     'badge' => 'most_popular',
                     'prices' => [
@@ -139,6 +147,7 @@ return [
                     ],
                 ],
                 'secure' => [
+                    'backup_frequency' => 'daily',
                     'prices' => [
                         [
                             'currency' => 'HUF',

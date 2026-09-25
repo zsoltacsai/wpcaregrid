@@ -33,6 +33,13 @@ return [
     'save' => 'Save :amount',
     'choose' => 'Choose :plan',
 
+    // Replaces the ':backups' entry in a plan's features, from config('pricing...backup_frequency').
+    'backups' => [
+        'daily' => 'Daily remote backups',
+        'weekly' => 'Weekly remote backups',
+        'monthly' => 'Monthly remote backups',
+    ],
+
     'badges' => [
         'most_popular' => 'Most popular',
     ],
@@ -51,10 +58,10 @@ return [
             'plans' => [
                 'basic' => [
                     'name' => 'Basic',
-                    'description' => 'Routine care for a simple website.',
+                    'description' => 'Essential maintenance for smaller WordPress sites.',
                     'features' => [
                         'WordPress, plugin and theme updates',
-                        'Weekly remote backups',
+                        ':backups',
                         'Uptime monitoring',
                         'Monthly security check',
                         'Activity log',
@@ -62,10 +69,10 @@ return [
                 ],
                 'business' => [
                     'name' => 'Business',
-                    'description' => 'For sites your business relies on.',
+                    'description' => 'Regular maintenance for business websites.',
                     'features' => [
                         'Everything in Basic',
-                        'Daily remote backups',
+                        ':backups',
                         'Functional checks after important updates',
                         'Weekly security check',
                         'Plugin and theme license check',
@@ -73,9 +80,10 @@ return [
                 ],
                 'secure' => [
                     'name' => 'Secure',
-                    'description' => 'Closer monitoring and faster response.',
+                    'description' => 'Extra security and faster response.',
                     'features' => [
                         'Everything in Business',
+                        ':backups',
                         'Daily security check',
                         'Malware cleanup',
                         'Priority response',
@@ -91,10 +99,10 @@ return [
             'plans' => [
                 'basic' => [
                     'name' => 'Basic',
-                    'description' => 'Routine care for a smaller store.',
+                    'description' => 'Essential maintenance for smaller WordPress sites.',
                     'features' => [
                         'WordPress, WooCommerce, plugin and theme updates',
-                        'Daily remote backups',
+                        ':backups',
                         'Uptime monitoring',
                         'Monthly security check',
                         'Activity log',
@@ -102,9 +110,10 @@ return [
                 ],
                 'business' => [
                     'name' => 'Business',
-                    'description' => 'For stores that take orders every day.',
+                    'description' => 'Regular maintenance for business websites.',
                     'features' => [
                         'Everything in Basic',
+                        ':backups',
                         'Checkout flow check after updates',
                         'Payment and order email checks',
                         'Weekly security check',
@@ -113,9 +122,10 @@ return [
                 ],
                 'secure' => [
                     'name' => 'Secure',
-                    'description' => 'Closer monitoring for high-volume stores.',
+                    'description' => 'Extra security and faster response.',
                     'features' => [
                         'Everything in Business',
+                        ':backups',
                         'Daily security check',
                         'Malware cleanup',
                         'Priority response',
