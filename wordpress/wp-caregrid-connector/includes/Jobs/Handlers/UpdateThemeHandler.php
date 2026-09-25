@@ -64,7 +64,7 @@ final class UpdateThemeHandler implements JobHandler
 
         $backup = $this->guard->backup_state();
         $skin = new \WP_Ajax_Upgrader_Skin;
-        $result = (new \Theme_Upgrader($skin))->upgrade($stylesheet);
+        $result = UpgraderLoader::quietly(fn () => (new \Theme_Upgrader($skin))->upgrade($stylesheet));
 
         wp_clean_themes_cache();
         $new_version = (string) wp_get_theme($stylesheet)->get('Version');

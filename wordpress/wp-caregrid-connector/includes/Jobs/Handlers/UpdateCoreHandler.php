@@ -70,7 +70,7 @@ final class UpdateCoreHandler implements JobHandler
         $backup = $this->guard->backup_state();
 
         try {
-            $result = ($this->runner)($offer);
+            $result = UpgraderLoader::quietly(fn () => ($this->runner)($offer));
         } catch (\Throwable $e) {
             $result = new \WP_Error('core_upgrade_exception', 'The core upgrade threw an exception.');
         }

@@ -69,7 +69,7 @@ final class UpdatePluginHandler implements JobHandler
 
         $backup = $this->guard->backup_state();
         $skin = new \WP_Ajax_Upgrader_Skin;
-        $result = (new \Plugin_Upgrader($skin))->upgrade($plugin);
+        $result = UpgraderLoader::quietly(fn () => (new \Plugin_Upgrader($skin))->upgrade($plugin));
 
         wp_clean_plugins_cache();
         $after = get_plugin_data(WP_PLUGIN_DIR.'/'.$plugin, false, false);

@@ -1,0 +1,25 @@
+{
+    "name": "wpcaregrid/connector-tests",
+    "description": "Integration tests for the WP CareGrid Connector plugin, run inside a real WordPress on SQLite.",
+    "license": "GPL-2.0-or-later",
+    "require-dev": {
+        "php": "^8.2",
+        "aaemnnosttv/wp-sqlite-db": "^1.3",
+        "johnpbloch/wordpress-core": "~7.1.0",
+        "phpunit/phpunit": "^12.0"
+    },
+    "config": {
+        "allow-plugins": {
+            "*": false
+        },
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "WPCareGrid\\Connector\\Tests\\": "tests/"
+        }
+    }
+}
