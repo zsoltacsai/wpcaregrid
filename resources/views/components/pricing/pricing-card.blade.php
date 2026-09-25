@@ -1,13 +1,19 @@
-{{-- A single plan. Renders every billing interval; Alpine shows the selected one. --}}
+{{--
+    A single plan (App\Pricing\PlanOffer). Renders every billing interval;
+    Alpine shows the selected one. The button carries only the logical
+    selection; the checkout resolves the price again on the server.
+--}}
 @use('App\Pricing\BillingInterval')
-@props(['plan', 'productLineLabel', 'defaultInterval', 'freeMonthsLabel' => null])
+@props(['offer', 'defaultInterval', 'freeMonthsLabel' => null])
 
 @php
-    $signupUrl = fn (BillingInterval $interval) => config('marketing.links.signup').'?'.http_build_query([
-        'plan' => $plan->id(),
-        'billing' => $interval->value,
+    $plan = $offer->plan;
+    $checkoutUrl = fn (BillingInterval $interval) => route('checkout.show', [
+        'product' => $plan->productType->value,
+        'plan' => $plan->tier->value,
+        'interval' => $interval->value,
     ]);
-    $savings = $plan->annualSavings();
+    $savings = $offer->annualSavings();
 @endphp
 
 <article
@@ -30,11 +36,11 @@
 
     <div class="mt-6 min-h-[96px] border-t border-line pt-6">
         @foreach (BillingInterval::cases() as $interval)
-            @php $price = $plan->price($interval); @endphp
+            @php $price = $offer->price($interval); @endphp
             <div
                 x-show="interval === '{{ $interval->value }}'"
                 @if ($interval !== $defaultInterval) x-cloak @endif
-                data-stripe-price="{{ $price->stripePriceId }}"
+                data-price="{{ $interval->value }}"
             >
                 <p class="flex flex-wrap items-baseline gap-x-2">
                     <span class="text-[36px] leading-none font-semibold tracking-[-0.02em] text-primary lg:text-[40px]">{{ $price->money->formattedAmount() }}</span>
@@ -58,17 +64,23 @@
     </div>
 
     <x-ui.button
-        :href="$signupUrl($defaultInterval)"
-        x-bind:href="interval === 'annual' ? '{{ $signupUrl(BillingInterval::Annual) }}' : '{{ $signupUrl(BillingInterval::Monthly) }}'"
+        :href="$checkoutUrl($defaultInterval)"
+        x-bind:href="interval === 'annual' ? '{{ $checkoutUrl(BillingInterval::Annual) }}' : '{{ $checkoutUrl(BillingInterval::Monthly) }}'"
         :variant="$plan->highlighted ? 'primary' : 'secondary'"
         size="lg"
         class="mt-6 w-full"
     >
-        {{ __('pricing.choose', ['plan' => $plan->name]) }}<span class="sr-only"> ({{ $productLineLabel }})</span>
+        {{ __('pricing.choose', ['plan' => $plan->name]) }}<span class="sr-only"> ({{ $plan->productType->label() }})</span>
     </x-ui.button>
 
     <ul class="mt-6 space-y-3 text-sm">
-        @foreach ($plan->features as $feature)
+        @if ($offer->previousPlan)
+            <li class="flex gap-3">
+                <x-ui.icon name="check" class="mt-0.5 size-4 text-accent-ink" />
+                <span>{{ __('pricing.everything_in', ['plan' => $offer->previousPlan->name]) }}</span>
+            </li>
+        @endif
+        @foreach ($offer->highlightedFeatures() as $feature)
             <li class="flex gap-3">
                 <x-ui.icon name="check" class="mt-0.5 size-4 text-accent-ink" />
                 <span>{{ $feature }}</span>

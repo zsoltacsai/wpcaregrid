@@ -5,8 +5,8 @@
 | Pricing copy (English)
 |--------------------------------------------------------------------------
 |
-| Plan names, descriptions and features, plus the pricing table's interface
-| text. Amounts and Stripe IDs live in config/pricing.php.
+| Plan names, descriptions, feature labels and pricing table text. Which
+| features a plan has, and all amounts, live in config/pricing.php.
 |
 */
 
@@ -32,109 +32,65 @@ return [
     'billed_annually' => 'Billed annually.',
     'save' => 'Save :amount',
     'choose' => 'Choose :plan',
-
-    // Replaces the ':backups' entry in a plan's features, from config('pricing...backup_frequency').
-    'backups' => [
-        'daily' => 'Daily remote backups',
-        'weekly' => 'Weekly remote backups',
-        'monthly' => 'Monthly remote backups',
-    ],
+    'everything_in' => 'Everything in :plan',
 
     'badges' => [
         'most_popular' => 'Most popular',
     ],
 
-    // Shown under the plans for the currency being displayed.
-    'currency_notes' => [
-        'HUF' => 'Prices in Hungarian forint, per website. These are final prices; no VAT is added.',
+    // Shown under the prices, per the market's tax treatment.
+    'tax_notes' => [
+        'final_price_no_vat_added' => 'Prices in Hungarian forint, per website. These are final prices; no VAT is added.',
+        'undetermined' => '',
     ],
     'licenses_note' => 'Third-party plugin and theme licenses are not included.',
 
-    'product_lines' => [
-
+    'product_types' => [
         'wordpress' => [
             'label' => 'WordPress',
             'summary' => 'For company websites, blogs and landing pages.',
-            'plans' => [
-                'basic' => [
-                    'name' => 'Basic',
-                    'description' => 'Essential maintenance for smaller WordPress sites.',
-                    'features' => [
-                        'WordPress, plugin and theme updates',
-                        ':backups',
-                        'Uptime monitoring',
-                        'Monthly security check',
-                        'Activity log',
-                    ],
-                ],
-                'business' => [
-                    'name' => 'Business',
-                    'description' => 'Regular maintenance for business websites.',
-                    'features' => [
-                        'Everything in Basic',
-                        ':backups',
-                        'Functional checks after important updates',
-                        'Weekly security check',
-                        'Plugin and theme license check',
-                    ],
-                ],
-                'secure' => [
-                    'name' => 'Secure',
-                    'description' => 'Extra security and faster response.',
-                    'features' => [
-                        'Everything in Business',
-                        ':backups',
-                        'Daily security check',
-                        'Malware cleanup',
-                        'Priority response',
-                        'Monthly maintenance report',
-                    ],
-                ],
-            ],
         ],
-
         'woocommerce' => [
             'label' => 'WooCommerce',
             'summary' => 'For online stores, with extra checks around the purchasing process.',
-            'plans' => [
-                'basic' => [
-                    'name' => 'Basic',
-                    'description' => 'Essential maintenance for smaller WordPress sites.',
-                    'features' => [
-                        'WordPress, WooCommerce, plugin and theme updates',
-                        ':backups',
-                        'Uptime monitoring',
-                        'Monthly security check',
-                        'Activity log',
-                    ],
-                ],
-                'business' => [
-                    'name' => 'Business',
-                    'description' => 'Regular maintenance for business websites.',
-                    'features' => [
-                        'Everything in Basic',
-                        ':backups',
-                        'Checkout flow check after updates',
-                        'Payment and order email checks',
-                        'Weekly security check',
-                        'Plugin and theme license check',
-                    ],
-                ],
-                'secure' => [
-                    'name' => 'Secure',
-                    'description' => 'Extra security and faster response.',
-                    'features' => [
-                        'Everything in Business',
-                        ':backups',
-                        'Daily security check',
-                        'Malware cleanup',
-                        'Priority response',
-                        'Monthly maintenance report',
-                    ],
-                ],
-            ],
         ],
+    ],
 
+    'plans' => [
+        'wordpress' => [
+            'basic' => ['name' => 'Basic', 'description' => 'Essential maintenance for smaller WordPress sites.'],
+            'business' => ['name' => 'Business', 'description' => 'Regular maintenance for business websites.'],
+            'secure' => ['name' => 'Secure', 'description' => 'Extra security and faster response.'],
+        ],
+        'woocommerce' => [
+            'basic' => ['name' => 'Basic', 'description' => 'Essential maintenance for smaller WordPress sites.'],
+            'business' => ['name' => 'Business', 'description' => 'Regular maintenance for business websites.'],
+            'secure' => ['name' => 'Secure', 'description' => 'Extra security and faster response.'],
+        ],
+    ],
+
+    'features' => [
+        'core_plugin_theme_updates' => 'WordPress, plugin and theme updates',
+        'core_woocommerce_plugin_theme_updates' => 'WordPress, WooCommerce, plugin and theme updates',
+        'remote_backups' => [
+            'daily' => 'Daily remote backups',
+            'weekly' => 'Weekly remote backups',
+            'monthly' => 'Monthly remote backups',
+        ],
+        'security_check' => [
+            'daily' => 'Daily security check',
+            'weekly' => 'Weekly security check',
+            'monthly' => 'Monthly security check',
+        ],
+        'uptime_monitoring' => 'Uptime monitoring',
+        'activity_log' => 'Activity log',
+        'functional_checks' => 'Functional checks after important updates',
+        'license_check' => 'Plugin and theme license check',
+        'checkout_flow_check' => 'Checkout flow check after updates',
+        'payment_email_checks' => 'Payment and order email checks',
+        'malware_cleanup' => 'Malware cleanup',
+        'priority_response' => 'Priority response',
+        'monthly_report' => 'Monthly maintenance report',
     ],
 
 ];

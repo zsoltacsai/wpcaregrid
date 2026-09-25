@@ -28,6 +28,18 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    /*
+    | Stripe, test mode only for now. Keys come from the environment and are
+    | never committed. A live key (sk_live_…) is refused unless
+    | STRIPE_ALLOW_LIVE_MODE=true is set deliberately.
+    */
+    'stripe' => [
+        'key' => env('STRIPE_KEY'),
+        'secret' => env('STRIPE_SECRET'),
+        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+        'allow_live_mode' => (bool) env('STRIPE_ALLOW_LIVE_MODE', false),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

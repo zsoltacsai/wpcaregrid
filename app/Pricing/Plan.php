@@ -2,52 +2,32 @@
 
 namespace App\Pricing;
 
-use InvalidArgumentException;
-
+/**
+ * A product type × tier, independent of market and price.
+ */
 final readonly class Plan
 {
-    /**
-     * @param  list<string>  $features
-     * @param  array<string, Price>  $prices  Keyed by BillingInterval value.
-     */
+    /** @param  list<Feature>  $features  The complete feature list, not a diff against a lower tier. */
     public function __construct(
-        public string $productLine,
-        public string $key,
+        public ProductType $productType,
+        public PlanTier $tier,
         public string $name,
         public string $description,
         public array $features,
-        public array $prices,
+        public string $backupFrequency,
         public bool $highlighted = false,
         public ?string $badge = null,
-        public ?string $backupFrequency = null,
     ) {}
 
-    /** Stable identifier, e.g. "woocommerce-business". Used for checkout and analytics. */
+    /** Stable identifier, e.g. "woocommerce-business". */
     public function id(): string
     {
-        return "{$this->productLine}-{$this->key}";
+        return "{$this->productType->value}-{$this->tier->value}";
     }
 
-    public function price(BillingInterval $interval): Price
+    /** @return list<string> */
+    public function featureLabels(): array
     {
-        return $this->prices[$interval->value]
-            ?? throw new InvalidArgumentException("Plan [{$this->id()}] has no {$interval->value} price.");
-    }
-
-    /** What an annual subscription saves compared with twelve monthly payments. */
-    public function annualSavings(): Money
-    {
-        $monthly = $this->price(BillingInterval::Monthly)->money;
-        $annual = $this->price(BillingInterval::Annual)->money;
-
-        return $monthly->multiply(12)->subtract($annual);
-    }
-
-    /** Annual savings expressed in whole months of the monthly price. */
-    public function freeMonthsOnAnnual(): int
-    {
-        $monthly = $this->price(BillingInterval::Monthly)->money->amount;
-
-        return $monthly > 0 ? intdiv($this->annualSavings()->amount, $monthly) : 0;
+        return array_map(fn (Feature $feature) => $feature->label, $this->features);
     }
 }

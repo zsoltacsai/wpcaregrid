@@ -43,6 +43,8 @@ The approved brand pack lives in `design/` (guidelines in `design/brand/BRAND.md
 | Design tokens (colours, radii, fonts, container) | `resources/css/app.css` (mirrors `design/brand/DESIGN_TOKENS.css`) |
 | Brand logo and icon components | `resources/views/components/brand/`, `app/Support/BrandAsset.php` |
 | CTA link targets | `config/marketing.php` |
+| Checkout, Stripe gateway, webhook handling | `app/Checkout/`, `app/Http/Controllers/CheckoutController.php`, `StripeWebhookController.php` |
+| Checkout pages | `resources/views/pages/checkout/`, `resources/views/pages/pricing.blade.php` |
 
 ## Languages
 
@@ -54,19 +56,36 @@ The homepage is English. All wording lives in translation files, so a language i
 | `lang/en/pricing.php` | Plan names, descriptions and features; pricing table text |
 | `lang/en/dashboard.php` | Dashboard preview text (reused by the future customer dashboard) |
 | `lang/en/status.php` | Status labels (Healthy, Attention, Critical…) |
+| `lang/en/checkout.php`, `countries.php` | Checkout pages, error messages, billing countries |
 
 To add Hungarian, copy `lang/en` to `lang/hu`, translate the values and set the locale (for example per route prefix). Page structure (order, icons, links) stays in `app/Content/HomepageContent.php`; demo data in `app/Content/DemoDashboard.php` holds only keys and numbers. A test fails if a translation key ever shows up as text on the page.
 
 ## Pricing
 
-Prices live in `config/pricing.php` and are read through `App\Pricing\PricingCatalog`, never hardcoded in Blade.
+One source of truth: `config/pricing.php`, read through `App\Pricing\PricingCatalog`. The homepage pricing cards, `/pricing` and the checkout all use it.
 
-- Each plan has a list of price sets: `currency`, optional `locale`, and `monthly` / `annual` entries with `amount` and `stripe_price_id` (from `.env`).
-- HUF prices are final customer prices; no VAT is added. They display as "8,990 Ft" in English and "8 990 Ft" in Hungarian (`currencies.*.formats`).
-- EUR, USD and GBP have display formats but no prices; there are no converted amounts. To offer one, add a price set per plan and map a locale to it in `locale_currencies`. Asking for a currency without prices throws rather than guessing.
-- The catalogue is built per request for the current locale (`PricingCatalog::fromConfig($config, currency, locale)`).
-- The "2 months free" message is calculated from the prices, so it stays correct if prices change.
-- Plan buttons link to `MARKETING_SIGNUP_URL?plan=<product-line>-<plan>&billing=<monthly|annual>`, ready to hand to a checkout endpoint.
+| Concept | Where | Notes |
+| --- | --- | --- |
+| Plan (product type × tier) | `plans` | Backup and security-check frequency, and the **complete** feature list per plan. Cards derive "Everything in …" from these lists. |
+| Market | `markets` | Billing-country rule (ISO codes, `*` = any), currency and `tax_treatment`. |
+| Price | `prices` | Product type, plan, interval, market, currency, amount in minor units (8 990 Ft = `899000`), `stripe_price_id`, `active`. |
+| Wording | `lang/en/pricing.php` | Plan names, descriptions, feature labels. |
+
+- Annual prices are stored explicitly (10 × monthly = 2 months free). The UI never calculates them.
+- Only the Hungarian market (`HU` → HUF) has prices. EU (EUR), GB (GBP) and the rest-of-world fallback (USD) are defined without prices: no exchange-rate conversion, nothing invented. Checkout for those countries shows "not available yet".
+- `tax_treatment` is a recorded business setting (`final_price_no_vat_added` for Hungary, `undetermined` elsewhere), stored on every checkout. No tax is calculated in the app.
+- `php artisan pricing:verify-stripe` compares every configured Stripe Price ID with Stripe (exists, active, amount, currency, interval).
+
+## Checkout
+
+`/pricing` → `/checkout?product=…&plan=…&interval=…` → `POST /checkout` → Stripe Checkout → `/checkout/success` or `/checkout/cancel/{intent}`.
+
+- The browser only sends a logical selection (product, plan, interval) plus email, name and billing country. The server resolves the price for the billing country (`PricingCatalog::resolve`); a submitted amount or Stripe Price ID is ignored.
+- A `checkout_intents` row is written before the Stripe redirect: selection, market, currency, amount, tax treatment, Stripe Price ID, promotion, status (`pending` → `checkout_created` → `completed` / `cancelled` / `expired` / `failed`).
+- Only a signed Stripe webhook (`POST /stripe/webhook`) marks an intent `completed`. The success page changes nothing.
+- A repeated submit from the same browser reuses the open Stripe session; `POST /checkout` is rate limited; only the browser that started a checkout can cancel it (the Stripe session is expired too).
+- Promotion codes are entered in our form, checked against `promotions` rules (dates, usage limit, product types, plans, intervals, markets, currency), then applied by Stripe via the linked `promo_…` ID. Stripe's own code field is off.
+- Stripe runs in test mode: keys come from `.env` (`STRIPE_KEY`, `STRIPE_SECRET`, `STRIPE_WEBHOOK_SECRET`); a live key is refused unless `STRIPE_ALLOW_LIVE_MODE=true`.
 
 ## Demo content
 

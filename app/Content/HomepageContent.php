@@ -13,11 +13,11 @@ final class HomepageContent
     public static function navigation(): array
     {
         return [
-            ['label' => __('home.nav.services'), 'href' => '#services'],
-            ['label' => __('home.nav.pricing'), 'href' => '#pricing'],
-            ['label' => __('home.nav.how_it_works'), 'href' => '#how-it-works'],
-            ['label' => __('home.nav.custom_development'), 'href' => '#custom-development'],
-            ['label' => __('home.nav.faq'), 'href' => '#faq'],
+            ['label' => __('home.nav.services'), 'href' => route('home').'#services'],
+            ['label' => __('home.nav.pricing'), 'href' => route('home').'#pricing'],
+            ['label' => __('home.nav.how_it_works'), 'href' => route('home').'#how-it-works'],
+            ['label' => __('home.nav.custom_development'), 'href' => route('home').'#custom-development'],
+            ['label' => __('home.nav.faq'), 'href' => route('home').'#faq'],
         ];
     }
 

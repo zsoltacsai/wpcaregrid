@@ -31,7 +31,7 @@
 
         <div class="hidden items-center gap-2 lg:flex">
             <x-ui.button :href="$links['login']" variant="ghost">{{ __('home.nav.login') }}</x-ui.button>
-            <x-ui.button href="#pricing">{{ __('home.nav.get_started') }}</x-ui.button>
+            <x-ui.button :href="route('home').'#pricing'">{{ __('home.nav.get_started') }}</x-ui.button>
         </div>
 
         <button
@@ -75,7 +75,7 @@
 
             <div class="mt-4 grid grid-cols-2 gap-2 pb-2">
                 <x-ui.button :href="$links['login']" variant="secondary" size="lg">{{ __('home.nav.login') }}</x-ui.button>
-                <x-ui.button href="#pricing" size="lg" x-on:click="open = false">{{ __('home.nav.get_started') }}</x-ui.button>
+                <x-ui.button :href="route('home').'#pricing'" size="lg" x-on:click="open = false">{{ __('home.nav.get_started') }}</x-ui.button>
             </div>
         </x-ui.container>
     </div>

@@ -2,6 +2,9 @@
 
 namespace App\Pricing;
 
+use InvalidArgumentException;
+
+/** An amount in the currency's smallest unit (fillér, cent, penny). */
 final readonly class Money
 {
     public function __construct(
@@ -16,6 +19,10 @@ final readonly class Money
 
     public function subtract(self $other): self
     {
+        if ($other->currency->code !== $this->currency->code) {
+            throw new InvalidArgumentException('Cannot subtract amounts in different currencies.');
+        }
+
         return new self($this->amount - $other->amount, $this->currency);
     }
 

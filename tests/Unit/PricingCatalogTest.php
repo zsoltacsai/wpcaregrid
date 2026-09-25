@@ -3,20 +3,36 @@
 namespace Tests\Unit;
 
 use App\Pricing\BillingInterval;
+use App\Pricing\Exceptions\InvalidPriceSelection;
+use App\Pricing\Exceptions\MarketNotAvailable;
+use App\Pricing\Exceptions\PriceInactive;
+use App\Pricing\Exceptions\PriceNotPurchasable;
+use App\Pricing\PlanTier;
+use App\Pricing\PriceSelection;
 use App\Pricing\PricingCatalog;
+use App\Pricing\ProductType;
+use App\Pricing\TaxTreatment;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class PricingCatalogTest extends TestCase
 {
-    private function catalog(): PricingCatalog
+    private function catalog(?string $locale = null): PricingCatalog
     {
-        return PricingCatalog::fromConfig(config('pricing'));
+        return PricingCatalog::fromConfig(config('pricing'), $locale);
     }
 
-    /** @return array<string, array{string, string, int, int}> */
-    public static function agreedPrices(): array
+    /** Give every configured price a (fake-format) Stripe ID, as a deployed environment would. */
+    private function withStripeIds(): void
+    {
+        foreach (array_keys(config('pricing.prices')) as $i) {
+            config(["pricing.prices.{$i}.stripe_price_id" => "price_test_{$i}"]);
+        }
+    }
+
+    /** @return array<string, array{string, string, int, int}> Amounts in forint. */
+    public static function hungarianPrices(): array
     {
         return [
             'WordPress Basic' => ['wordpress', 'basic', 8990, 89900],
@@ -28,120 +44,228 @@ class PricingCatalogTest extends TestCase
         ];
     }
 
-    #[DataProvider('agreedPrices')]
-    public function test_plans_use_the_agreed_prices(string $line, string $key, int $monthly, int $annual): void
+    #[DataProvider('hungarianPrices')]
+    public function test_hungarian_prices(string $product, string $tier, int $monthly, int $annual): void
     {
-        $plan = collect($this->catalog()->productLine($line)->plans)->firstWhere('key', $key);
+        $catalog = $this->catalog();
+        $market = $catalog->market('hu');
 
-        $this->assertSame($monthly, $plan->price(BillingInterval::Monthly)->money->amount);
-        $this->assertSame($annual, $plan->price(BillingInterval::Annual)->money->amount);
-        $this->assertSame('HUF', $plan->price(BillingInterval::Monthly)->money->currency->code);
-        $this->assertSame(2, $plan->freeMonthsOnAnnual());
+        $monthlyPrice = $catalog->price(ProductType::from($product), PlanTier::from($tier), BillingInterval::Monthly, $market);
+        $annualPrice = $catalog->price(ProductType::from($product), PlanTier::from($tier), BillingInterval::Annual, $market);
+
+        // Stored in fillér (minor units), as Stripe expects HUF amounts.
+        $this->assertSame($monthly * 100, $monthlyPrice->money->amount);
+        $this->assertSame($annual * 100, $annualPrice->money->amount);
+        $this->assertSame('HUF', $monthlyPrice->money->currency->code);
+        $this->assertSame('HUF', $annualPrice->money->currency->code);
     }
 
-    public function test_business_is_the_only_highlighted_plan(): void
+    public function test_every_annual_price_is_ten_times_monthly_and_stored_explicitly(): void
     {
-        foreach ($this->catalog()->productLines() as $line) {
-            $highlighted = array_values(array_filter($line->plans, fn ($plan) => $plan->highlighted));
+        $rows = collect(config('pricing.prices'));
 
-            $this->assertCount(1, $highlighted);
-            $this->assertSame('business', $highlighted[0]->key);
-            $this->assertSame('Most popular', $highlighted[0]->badge);
+        $this->assertCount(12, $rows);
+
+        foreach ($rows->where('interval', 'annual') as $annual) {
+            $monthly = $rows->first(fn ($row) => $row['interval'] === 'monthly'
+                && $row['product_type'] === $annual['product_type']
+                && $row['plan'] === $annual['plan']
+                && $row['market'] === $annual['market']);
+
+            $this->assertNotNull($monthly);
+            $this->assertIsInt($annual['amount']);
+            $this->assertSame($monthly['amount'] * 10, $annual['amount']);
+        }
+
+        foreach (ProductType::cases() as $type) {
+            foreach ($this->catalog()->offers($type) as $offer) {
+                $this->assertSame(2, $offer->freeMonthsOnAnnual());
+            }
         }
     }
 
-    public function test_annual_savings_and_free_months(): void
+    public function test_wordpress_and_woocommerce_are_priced_separately(): void
     {
-        $plan = $this->catalog()->productLine('wordpress')->plans[0];
+        $catalog = $this->catalog();
+        $wp = collect($catalog->offers(ProductType::WordPress))->map(fn ($o) => $o->monthly->money->amount)->all();
+        $woo = collect($catalog->offers(ProductType::WooCommerce))->map(fn ($o) => $o->monthly->money->amount)->all();
 
-        $this->assertSame(17980, $plan->annualSavings()->amount);
-        $this->assertSame(2, $this->catalog()->annualFreeMonths());
-    }
-
-    public function test_money_is_formatted_for_the_locale(): void
-    {
-        $english = $this->catalog()->productLine('wordpress')->plans[1]->price(BillingInterval::Annual);
-        $hungarian = PricingCatalog::fromConfig(config('pricing'), locale: 'hu')
-            ->productLine('wordpress')->plans[1]->price(BillingInterval::Annual);
-
-        $this->assertSame('189,900', $english->money->formattedAmount());
-        $this->assertSame("189,900\u{00A0}Ft", $english->money->format());
-        $this->assertSame("189\u{202F}900\u{00A0}Ft", $hungarian->money->format());
-    }
-
-    public function test_plan_ids_and_stripe_price_ids_are_exposed(): void
-    {
-        config(['pricing.product_lines.wordpress.plans.basic.prices.0.monthly.stripe_price_id' => 'price_123']);
-
-        $plan = $this->catalog()->productLine('wordpress')->plans[0];
-
-        $this->assertSame('wordpress-basic', $plan->id());
-        $this->assertSame('Basic', $plan->name);
-        $this->assertSame('price_123', $plan->price(BillingInterval::Monthly)->stripePriceId);
-    }
-
-    public function test_locale_specific_price_set_wins_over_a_general_one(): void
-    {
-        config(['pricing.product_lines.wordpress.plans.basic.prices.1' => [
-            'currency' => 'HUF',
-            'locale' => 'hu',
-            'monthly' => ['amount' => 1, 'stripe_price_id' => null],
-            'annual' => ['amount' => 10, 'stripe_price_id' => null],
-        ]]);
-
-        $hu = PricingCatalog::fromConfig(config('pricing'), locale: 'hu')->productLine('wordpress')->plans[0];
-        $en = PricingCatalog::fromConfig(config('pricing'), locale: 'en')->productLine('wordpress')->plans[0];
-
-        $this->assertSame(1, $hu->price(BillingInterval::Monthly)->money->amount);
-        $this->assertSame(8990, $en->price(BillingInterval::Monthly)->money->amount);
-    }
-
-    public function test_currencies_without_prices_are_not_invented(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('has no EUR prices');
-
-        PricingCatalog::fromConfig(config('pricing'), 'EUR');
-    }
-
-    public function test_unknown_currency_is_rejected(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-
-        PricingCatalog::fromConfig(config('pricing'), 'CHF');
+        $this->assertSame([899000, 1899000, 2899000], $wp);
+        $this->assertSame([1490000, 2490000, 3990000], $woo);
     }
 
     /** @return array<string, array{string, string, string}> */
     public static function backupFrequencies(): array
     {
         return [
-            'WordPress Basic' => ['wordpress', 'basic', 'Monthly remote backups'],
-            'WordPress Business' => ['wordpress', 'business', 'Weekly remote backups'],
-            'WordPress Secure' => ['wordpress', 'secure', 'Daily remote backups'],
-            'WooCommerce Basic' => ['woocommerce', 'basic', 'Weekly remote backups'],
-            'WooCommerce Business' => ['woocommerce', 'business', 'Daily remote backups'],
-            'WooCommerce Secure' => ['woocommerce', 'secure', 'Daily remote backups'],
+            'WordPress Basic' => ['wordpress', 'basic', 'monthly'],
+            'WordPress Business' => ['wordpress', 'business', 'weekly'],
+            'WordPress Secure' => ['wordpress', 'secure', 'daily'],
+            'WooCommerce Basic' => ['woocommerce', 'basic', 'weekly'],
+            'WooCommerce Business' => ['woocommerce', 'business', 'daily'],
+            'WooCommerce Secure' => ['woocommerce', 'secure', 'daily'],
         ];
     }
 
     #[DataProvider('backupFrequencies')]
-    public function test_backup_frequency_feature_matches_the_config(string $line, string $key, string $feature): void
+    public function test_backup_frequency(string $product, string $tier, string $frequency): void
     {
-        $plan = collect($this->catalog()->productLine($line)->plans)->firstWhere('key', $key);
-        $backupLines = array_values(array_filter($plan->features, fn ($f) => str_ends_with($f, 'remote backups')));
+        $plan = $this->catalog()->plan(ProductType::from($product), PlanTier::from($tier));
+        $backups = array_values(array_filter($plan->features, fn ($f) => $f->key === 'remote_backups'));
 
-        $this->assertSame([$feature], $backupLines);
-        $this->assertSame(config("pricing.product_lines.{$line}.plans.{$key}.backup_frequency"), $plan->backupFrequency);
-        $this->assertNotContains(':backups', $plan->features);
+        $this->assertSame($frequency, $plan->backupFrequency);
+        $this->assertCount(1, $backups);
+        $this->assertSame($frequency, $backups[0]->frequency);
+        $this->assertSame(ucfirst($frequency).' remote backups', $backups[0]->label);
+    }
+
+    public function test_every_plan_has_a_complete_resolved_feature_list(): void
+    {
+        foreach (ProductType::cases() as $type) {
+            $plans = $this->catalog()->plans($type);
+
+            foreach ($plans as $index => $plan) {
+                $keys = array_map(fn ($f) => $f->key, $plan->features);
+
+                $this->assertNotContains('everything_in', $keys);
+                $this->assertContains('remote_backups', $keys);
+                $this->assertContains('security_check', $keys);
+
+                // A higher tier includes every feature of the tier below.
+                if ($index > 0) {
+                    $lower = array_map(fn ($f) => $f->key, $plans[$index - 1]->features);
+                    $this->assertSame([], array_values(array_diff($lower, $keys)), "{$plan->id()} is missing features of the tier below.");
+                }
+
+                foreach ($plan->featureLabels() as $label) {
+                    $this->assertStringNotContainsString('pricing.', $label, 'Untranslated feature label.');
+                }
+            }
+        }
     }
 
     public function test_plan_descriptions(): void
     {
-        foreach ($this->catalog()->productLines() as $line) {
+        foreach (ProductType::cases() as $type) {
             $this->assertSame(
                 ['Essential maintenance for smaller WordPress sites.', 'Regular maintenance for business websites.', 'Extra security and faster response.'],
-                array_map(fn ($plan) => $plan->description, $line->plans),
+                array_map(fn ($plan) => $plan->description, $this->catalog()->plans($type)),
             );
         }
+    }
+
+    public function test_business_is_the_only_highlighted_plan(): void
+    {
+        foreach (ProductType::cases() as $type) {
+            $highlighted = array_values(array_filter($this->catalog()->plans($type), fn ($p) => $p->highlighted));
+
+            $this->assertCount(1, $highlighted);
+            $this->assertSame(PlanTier::Business, $highlighted[0]->tier);
+            $this->assertSame('Most popular', $highlighted[0]->badge);
+        }
+    }
+
+    public function test_hungary_resolves_to_huf_with_final_price_tax_treatment(): void
+    {
+        $this->withStripeIds();
+        $catalog = $this->catalog();
+
+        $market = $catalog->marketForCountry('HU');
+        $price = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Business, BillingInterval::Monthly), 'hu');
+
+        $this->assertSame('hu', $market->key);
+        $this->assertSame('HUF', $market->currencyCode);
+        $this->assertSame(TaxTreatment::FinalPriceNoVatAdded, $market->taxTreatment);
+        $this->assertSame('HUF', $price->money->currency->code);
+        $this->assertSame(1899000, $price->money->amount);
+    }
+
+    public function test_money_is_formatted_for_the_locale(): void
+    {
+        $price = $this->catalog('en')->price(ProductType::WordPress, PlanTier::Business, BillingInterval::Annual, $this->catalog()->market('hu'));
+        $hu = $this->catalog('hu')->price(ProductType::WordPress, PlanTier::Business, BillingInterval::Annual, $this->catalog('hu')->market('hu'));
+
+        $this->assertSame('189,900', $price->money->formattedAmount());
+        $this->assertSame("189,900\u{00A0}Ft", $price->money->format());
+        $this->assertSame("189\u{202F}900\u{00A0}Ft", $hu->money->format());
+    }
+
+    /** @return array<string, array{string}> */
+    public static function internationalCountries(): array
+    {
+        return ['Germany (EUR market)' => ['DE'], 'United Kingdom (GBP market)' => ['GB'], 'United States (fallback)' => ['US'], 'Unlisted country' => ['JP']];
+    }
+
+    #[DataProvider('internationalCountries')]
+    public function test_international_markets_have_no_invented_prices(string $country): void
+    {
+        $this->withStripeIds();
+        $catalog = $this->catalog();
+
+        $this->assertNotSame('hu', $catalog->marketForCountry($country)->key);
+        $this->assertFalse($catalog->hasPrices($catalog->marketForCountry($country)));
+
+        $this->expectException(MarketNotAvailable::class);
+        $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly), $country);
+    }
+
+    public function test_only_hungarian_prices_exist(): void
+    {
+        $this->assertSame(['HUF'], collect(config('pricing.prices'))->pluck('currency')->unique()->values()->all());
+        $this->assertSame(['hu'], collect(config('pricing.prices'))->pluck('market')->unique()->values()->all());
+    }
+
+    /** @return array<string, array{mixed, mixed, mixed}> */
+    public static function invalidSelections(): array
+    {
+        return [
+            'invalid product type' => ['joomla', 'basic', 'monthly'],
+            'invalid plan' => ['wordpress', 'platinum', 'monthly'],
+            'invalid interval' => ['wordpress', 'basic', 'weekly'],
+            'missing values' => [null, null, null],
+            'array injection' => [['wordpress'], 'basic', 'monthly'],
+        ];
+    }
+
+    #[DataProvider('invalidSelections')]
+    public function test_invalid_selection_fails(mixed $product, mixed $plan, mixed $interval): void
+    {
+        $this->expectException(InvalidPriceSelection::class);
+
+        PriceSelection::fromInput($product, $plan, $interval);
+    }
+
+    public function test_inactive_price_cannot_be_resolved(): void
+    {
+        $this->withStripeIds();
+        config(['pricing.prices.0.active' => false]); // wordpress basic monthly hu
+
+        $this->expectException(PriceInactive::class);
+        $this->catalog()->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly), 'HU');
+    }
+
+    public function test_missing_stripe_price_id_cannot_be_resolved(): void
+    {
+        config(['pricing.prices.0.stripe_price_id' => null]);
+
+        $this->expectException(PriceNotPurchasable::class);
+        $this->catalog()->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly), 'HU');
+    }
+
+    public function test_resolved_price_carries_the_configured_stripe_id(): void
+    {
+        config(['pricing.prices.3.stripe_price_id' => 'price_configured']); // wordpress business annual hu
+
+        $price = $this->catalog()->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Business, BillingInterval::Annual), 'HU');
+
+        $this->assertSame('price_configured', $price->stripePriceId);
+    }
+
+    public function test_price_currency_must_match_its_market(): void
+    {
+        config(['pricing.prices.0.currency' => 'EUR']);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->catalog();
     }
 }

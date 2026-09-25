@@ -8,7 +8,8 @@ final readonly class Currency
         public string $code,
         public string $symbol,
         public string $symbolPosition = 'after',
-        public int $decimals = 0,
+        public int $minorUnits = 2,
+        public int $displayDecimals = 0,
         public string $decimalSeparator = '.',
         public string $thousandsSeparator = ',',
     ) {}
@@ -26,22 +27,28 @@ final readonly class Currency
             code: $code,
             symbol: $config['symbol'] ?? $code,
             symbolPosition: $config['symbol_position'] ?? 'after',
-            decimals: $config['decimals'] ?? 0,
+            minorUnits: $config['minor_units'] ?? 2,
+            displayDecimals: $config['display_decimals'] ?? 0,
             decimalSeparator: $format['decimal_separator'] ?? '.',
             thousandsSeparator: $format['thousands_separator'] ?? ',',
         );
     }
 
-    /** Format an amount without the currency symbol, e.g. "8,990". */
-    public function formatAmount(int|float $amount): string
+    /** Format an amount in minor units without the symbol, e.g. 899000 → "8,990". */
+    public function formatAmount(int $minorAmount): string
     {
-        return number_format($amount, $this->decimals, $this->decimalSeparator, $this->thousandsSeparator);
+        return number_format(
+            $minorAmount / (10 ** $this->minorUnits),
+            $this->displayDecimals,
+            $this->decimalSeparator,
+            $this->thousandsSeparator,
+        );
     }
 
-    /** Format an amount with the currency symbol, e.g. "8,990 Ft" or "€89". */
-    public function format(int|float $amount): string
+    /** Format an amount in minor units with the symbol, e.g. "8,990 Ft" or "€89". */
+    public function format(int $minorAmount): string
     {
-        $number = $this->formatAmount($amount);
+        $number = $this->formatAmount($minorAmount);
 
         return $this->symbolPosition === 'before'
             ? $this->symbol.$number

@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Content\DemoDashboard;
+use App\Pricing\PricingCatalog;
+use App\Pricing\ProductType;
 use Tests\TestCase;
 
 class HomepageTest extends TestCase
@@ -140,5 +142,33 @@ class HomepageTest extends TestCase
         $this->assertSame(4, count(array_filter($sites, fn ($site) => $site['updates'] > 0)));
         $this->assertSame(1, count(array_filter($sites, fn ($site) => $site['security'] === 'issue')));
         $this->assertSame(2, count(array_filter($sites, fn ($site) => $site['license'] === 'expired')));
+    }
+
+    public function test_pricing_cards_render_exactly_the_catalogue_features(): void
+    {
+        $catalog = app(PricingCatalog::class);
+        $html = $this->get('/')->getContent();
+
+        foreach (ProductType::cases() as $type) {
+            foreach ($catalog->offers($type) as $offer) {
+                // Isolate this plan's card.
+                $this->assertSame(1, preg_match('#<article\s+aria-labelledby="plan-'.$offer->plan->id().'".*?</article>#s', $html, $card));
+                preg_match_all('#<li class="flex gap-3">.*?<span>(.*?)</span>#s', $card[0], $items);
+                $rendered = array_map(fn ($item) => html_entity_decode(trim($item)), $items[1]);
+
+                $expected = $offer->highlightedFeatures();
+                if ($offer->previousPlan) {
+                    array_unshift($expected, "Everything in {$offer->previousPlan->name}");
+                }
+
+                $this->assertSame($expected, $rendered, "Card for {$offer->plan->id()} differs from the pricing data.");
+
+                // Every listed feature (apart from the summary line) is in the plan's full list.
+                foreach ($offer->highlightedFeatures() as $feature) {
+                    $this->assertContains($feature, $offer->plan->featureLabels());
+                }
+                $this->assertStringContainsString(ucfirst($offer->plan->backupFrequency).' remote backups', $card[0]);
+            }
+        }
     }
 }

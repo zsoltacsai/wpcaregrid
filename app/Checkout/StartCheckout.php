@@ -1,0 +1,104 @@
+<?php
+
+namespace App\Checkout;
+
+use App\Models\CheckoutIntent;
+use App\Models\Promotion;
+use App\Pricing\Exceptions\PricingException;
+use App\Pricing\PriceSelection;
+use App\Pricing\PricingCatalog;
+use Illuminate\Support\Facades\DB;
+
+/**
+ * Resolve the price on the server, record the intent, then create the
+ * Stripe Checkout Session for it.
+ */
+final class StartCheckout
+{
+    /** How long a repeated submit may reuse an open session. */
+    private const REUSE_WINDOW_MINUTES = 30;
+
+    public function __construct(
+        private readonly PricingCatalog $catalog,
+        private readonly CheckoutGateway $gateway,
+    ) {}
+
+    /**
+     * @throws PricingException when the selection cannot be sold to this country
+     * @throws PromotionRejected when the code is unknown or not valid for the price
+     * @throws CheckoutUnavailable when Stripe cannot be used
+     */
+    public function handle(PriceSelection $selection, CustomerDetails $customer, ?string $promotionCode, string $browserSessionId): CheckoutIntent
+    {
+        $price = $this->catalog->resolve($selection, $customer->country);
+        $market = $this->catalog->market($price->market);
+
+        $promotion = null;
+        if ($promotionCode !== null && trim($promotionCode) !== '') {
+            $promotion = Promotion::findByCode($promotionCode) ?? throw new PromotionRejected('unknown');
+
+            if ($reason = $promotion->ineligibilityReason($price)) {
+                throw new PromotionRejected($reason);
+            }
+        }
+
+        $sessionHash = CheckoutIntent::hashBrowserSession($browserSessionId);
+
+        // A double click or a resubmitted form reuses the open Stripe session
+        // instead of creating a second one.
+        $existing = CheckoutIntent::query()
+            ->where('browser_session_hash', $sessionHash)
+            ->where('email', $customer->email)
+            ->where('product_type', $selection->productType->value)
+            ->where('plan', $selection->tier->value)
+            ->where('interval', $selection->interval->value)
+            ->where('promotion_id', $promotion?->id)
+            ->where('created_at', '>=', now()->subMinutes(self::REUSE_WINDOW_MINUTES))
+            ->latest('id')
+            ->first();
+
+        if ($existing?->isReusable()) {
+            return $existing;
+        }
+
+        $intent = DB::transaction(fn () => CheckoutIntent::create([
+            'status' => CheckoutStatus::Pending,
+            'email' => $customer->email,
+            'first_name' => $customer->firstName,
+            'last_name' => $customer->lastName,
+            'country' => $customer->country,
+            'customer_type' => $customer->customerType,
+            'company_name' => $customer->companyName,
+            'tax_id' => $customer->taxId,
+            'billing_address' => $customer->billingAddress,
+            'product_type' => $price->productType,
+            'plan' => $price->tier,
+            'interval' => $price->interval,
+            'market' => $price->market,
+            'currency' => $price->money->currency->code,
+            'amount' => $price->money->amount,
+            'tax_treatment' => $market->taxTreatment->value,
+            'stripe_price_id' => $price->stripePriceId,
+            'promotion_id' => $promotion?->id,
+            'promotion_code' => $promotion?->code,
+            'browser_session_hash' => $sessionHash,
+        ]));
+
+        try {
+            $session = $this->gateway->createSession($intent, $promotion);
+        } catch (CheckoutUnavailable $e) {
+            $intent->update(['status' => CheckoutStatus::Failed, 'failure_reason' => $e->getMessage()]);
+
+            throw $e;
+        }
+
+        $intent->update([
+            'status' => CheckoutStatus::CheckoutCreated,
+            'stripe_checkout_session_id' => $session->id,
+            'stripe_checkout_url' => $session->url,
+            'stripe_checkout_expires_at' => $session->expiresAt,
+        ]);
+
+        return $intent;
+    }
+}
