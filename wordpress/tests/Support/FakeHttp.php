@@ -57,9 +57,15 @@ final class FakeHttp
     {
         $method = strtoupper($args['method'] ?? 'GET');
         $path = str_starts_with($url, self::API) ? substr($url, strlen(self::API)) : null;
-        $body = is_string($args['body'] ?? null) ? json_decode($args['body'], true) : ($args['body'] ?? null);
+        $query = [];
+        if ($path !== null && str_contains($path, '?')) {
+            [$path, $query_string] = explode('?', $path, 2);
+            parse_str($query_string, $query);
+        }
+        $raw = is_string($args['body'] ?? null) ? $args['body'] : '';
+        $body = $raw !== '' ? json_decode($raw, true) : ($args['body'] ?? null);
 
-        $this->requests[] = ['method' => $method, 'url' => $url, 'path' => $path, 'headers' => $args['headers'] ?? [], 'body' => $body, 'args' => $args];
+        $this->requests[] = ['method' => $method, 'url' => $url, 'path' => $path, 'query' => $query, 'headers' => $args['headers'] ?? [], 'body' => $body, 'raw' => $raw, 'args' => $args];
 
         if ($path === null) {
             $host = wp_parse_url($url, PHP_URL_HOST);
@@ -91,6 +97,10 @@ final class FakeHttp
                 return $response;
             }
 
+            if (isset($response['raw'])) {
+                return $this->reply($response['status'], $response['raw'], ['content-type' => 'application/octet-stream'] + ($response['headers'] ?? []));
+            }
+
             return $this->reply($response['status'], wp_json_encode($response['body'] ?? new \stdClass));
         }
 
@@ -119,10 +129,10 @@ final class FakeHttp
         return ['status' => $status, 'body' => ['error' => ['code' => $code, 'message' => $message]]];
     }
 
-    private function reply(int $status, string $body): array
+    private function reply(int $status, string $body, array $headers = ['content-type' => 'application/json']): array
     {
         return [
-            'headers' => ['content-type' => 'application/json'],
+            'headers' => $headers,
             'body' => $body,
             'response' => ['code' => $status, 'message' => get_status_header_desc($status)],
             'cookies' => [],

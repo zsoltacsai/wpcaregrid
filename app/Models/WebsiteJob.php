@@ -49,6 +49,17 @@ class WebsiteJob extends Model
         return $this->belongsTo(Connector::class);
     }
 
+    /** BACKUP_*: the backup being made. UPDATE_*: the backup protecting the update. */
+    public function backup(): BelongsTo
+    {
+        return $this->belongsTo(Backup::class);
+    }
+
+    public function restore(): BelongsTo
+    {
+        return $this->belongsTo(BackupRestore::class, 'restore_id');
+    }
+
     /** What the connector receives: identifiers, type and validated payload only. */
     public function toConnectorArray(): array
     {

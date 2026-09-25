@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Account\BackupController;
 use App\Http\Controllers\Account\BillingController;
 use App\Http\Controllers\Account\ConnectorDownloadController;
 use App\Http\Controllers\Account\DashboardController;
@@ -54,6 +55,10 @@ Route::middleware(['auth', 'customer'])->prefix('account')->name('account.')->gr
     Route::get('/websites/{website}', [WebsiteController::class, 'show'])->name('websites.show');
     Route::post('/websites/{website}/pairing-code', [WebsiteController::class, 'pairingCode'])->middleware('throttle:10,1')->name('websites.pairing-code');
     Route::post('/websites/{website}/disconnect', [WebsiteController::class, 'disconnect'])->name('websites.disconnect');
+    Route::get('/websites/{website}/backups', [BackupController::class, 'index'])->name('websites.backups.index');
+    Route::post('/websites/{website}/backups', [BackupController::class, 'store'])->middleware('throttle:6,1')->name('websites.backups.store');
+    Route::get('/websites/{website}/backups/{backup}/restore', [BackupController::class, 'restoreForm'])->scopeBindings()->name('websites.backups.restore');
+    Route::post('/websites/{website}/backups/{backup}/restore', [BackupController::class, 'restore'])->scopeBindings()->middleware('throttle:6,1')->name('websites.backups.restore.store');
     Route::get('/connector/download', ConnectorDownloadController::class)->name('connector.download');
 
     Route::get('/subscription', [SubscriptionController::class, 'index'])->name('subscription');

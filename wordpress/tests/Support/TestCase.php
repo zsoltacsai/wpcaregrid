@@ -56,6 +56,10 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
         remove_all_filters('wp_caregrid_license_providers');
 
         foreach ($this->cleanup as $path) {
+            // A fixture plugin left active would make every later health check critical.
+            if (str_starts_with($path, WP_PLUGIN_DIR.'/')) {
+                deactivate_plugins(basename($path).'/'.basename($path).'.php', true);
+            }
             self::remove($path);
         }
         wp_clean_plugins_cache(false);

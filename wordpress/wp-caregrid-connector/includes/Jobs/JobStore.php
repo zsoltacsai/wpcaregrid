@@ -25,11 +25,13 @@ final class JobStore
     }
 
     /** Record the start of a job before anything is executed. */
-    public function begin(string $uuid, string $type): void
+    public function begin(string $uuid, string $type, array $payload = []): void
     {
         $jobs = $this->all();
         $jobs[$uuid] = [
             'type' => $type,
+            // Validated payload: identifiers only, kept so an interrupted backup can resume.
+            'payload' => $payload,
             'state' => self::RUNNING,
             'started_at' => gmdate('c'),
             'completed_at' => null,

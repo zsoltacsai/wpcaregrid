@@ -28,7 +28,20 @@ final class Client
         return $this->request('GET', $path, [], true);
     }
 
-    public function request(string $method, string $path, array $body, bool $authenticated): Response
+    /** Upload raw bytes (a backup chunk). */
+    public function put_raw(string $path, string $bytes, array $headers = []): Response
+    {
+        return $this->request('PUT', $path, [], true, ['raw' => $bytes, 'headers' => $headers, 'timeout' => 120]);
+    }
+
+    /** Download raw bytes (a restore chunk). */
+    public function get_raw(string $path): Response
+    {
+        return $this->request('GET', $path, [], true, ['timeout' => 120]);
+    }
+
+    /** @param  array{raw?: string, headers?: array, timeout?: int}  $options */
+    public function request(string $method, string $path, array $body, bool $authenticated, array $options = []): Response
     {
         $url = rtrim((string) WP_CAREGRID_API_URL, '/').'/'.ltrim($path, '/');
 
@@ -40,9 +53,9 @@ final class Client
 
         $headers = [
             'Accept' => 'application/json',
-            'Content-Type' => 'application/json',
+            'Content-Type' => isset($options['raw']) ? 'application/octet-stream' : 'application/json',
             'User-Agent' => 'WP-CareGrid-Connector/'.WP_CAREGRID_VERSION,
-        ];
+        ] + (array) ($options['headers'] ?? []);
 
         if ($authenticated) {
             $credential = $this->credentials->get();
@@ -61,8 +74,8 @@ final class Client
             [
                 'method' => $method,
                 'headers' => $headers,
-                'body' => $method === 'GET' ? null : wp_json_encode($body),
-                'timeout' => 20,
+                'body' => $method === 'GET' ? null : ($options['raw'] ?? wp_json_encode($body)),
+                'timeout' => (int) ($options['timeout'] ?? 20),
                 'redirection' => 0,
                 'sslverify' => true,
             ]
@@ -75,8 +88,14 @@ final class Client
         }
 
         $status = (int) wp_remote_retrieve_response_code($response);
-        $data = json_decode((string) wp_remote_retrieve_body($response), true);
+        $raw = (string) wp_remote_retrieve_body($response);
+        $type = (string) wp_remote_retrieve_header($response, 'content-type');
+        $is_json = str_contains($type, 'json') || ($type === '' && str_starts_with(ltrim($raw), '{'));
+        $data = $is_json ? json_decode($raw, true) : null;
         $data = is_array($data) ? $data : [];
+        $headers_in = wp_remote_retrieve_headers($response);
+        $headers_in = is_object($headers_in) && method_exists($headers_in, 'getAll') ? $headers_in->getAll() : (array) $headers_in;
+        $response_headers = array_change_key_case(array_map(fn ($v) => is_array($v) ? implode(',', $v) : (string) $v, $headers_in), CASE_LOWER);
         $error = is_array($data['error'] ?? null) ? $data['error'] : [];
 
         if ($status >= 400) {
@@ -87,7 +106,9 @@ final class Client
             $status,
             $data,
             isset($error['code']) ? (string) $error['code'] : null,
-            isset($error['message']) ? (string) $error['message'] : null
+            isset($error['message']) ? (string) $error['message'] : null,
+            $is_json ? '' : $raw,
+            $response_headers
         );
     }
 

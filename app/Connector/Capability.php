@@ -5,7 +5,7 @@ namespace App\Connector;
 /**
  * What a connector can do. A connector advertises only what it has
  * implemented; the server only sends jobs the connector advertised.
- * backup / restore / security are reserved for later milestones.
+ * Security capabilities are reserved for a later milestone.
  */
 enum Capability: string
 {
@@ -13,6 +13,12 @@ enum Capability: string
     case Health = 'health';
     case Updates = 'updates';
     case LicenseCheck = 'license_check';
+    case BackupFiles = 'backup_files';
+    case BackupDatabase = 'backup_database';
+    case BackupFull = 'backup_full';
+    case RestoreFiles = 'restore_files';
+    case RestoreDatabase = 'restore_database';
+    case RestoreFull = 'restore_full';
 
     /** @param  array<mixed>  $values  Unknown values are dropped. */
     public static function listFrom(array $values): array

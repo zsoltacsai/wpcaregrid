@@ -10,6 +10,8 @@
         'primary' => 'bg-action text-white hover:bg-action-hover',
         'secondary' => 'border border-line-strong bg-surface text-primary hover:border-primary',
         'ghost' => 'text-primary hover:bg-subtle',
+        // Destructive actions (restore). danger-ink on white text is 6:1.
+        'danger' => 'bg-danger-ink text-white hover:bg-danger',
         'inverse-outline' => 'border border-on-dark/35 text-on-dark hover:border-on-dark hover:bg-white/5',
     ];
 

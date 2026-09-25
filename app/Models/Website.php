@@ -79,6 +79,21 @@ class Website extends Model
         return $this->hasOne(WebsiteInventory::class);
     }
 
+    public function backups(): HasMany
+    {
+        return $this->hasMany(Backup::class);
+    }
+
+    public function restores(): HasMany
+    {
+        return $this->hasMany(BackupRestore::class);
+    }
+
+    public function events(): HasMany
+    {
+        return $this->hasMany(WebsiteEvent::class);
+    }
+
     public function presence(): Presence
     {
         return $this->activeConnector?->presence()

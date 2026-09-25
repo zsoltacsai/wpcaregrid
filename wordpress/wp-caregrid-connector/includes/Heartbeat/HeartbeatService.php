@@ -32,7 +32,7 @@ final class HeartbeatService
             'site_url' => home_url('/'),
             'woocommerce' => InventoryCollector::woocommerce(),
             'last_successful_poll_at' => Settings::get('last_poll_at'),
-            'capabilities' => JobRegistry::CAPABILITIES,
+            'capabilities' => JobRegistry::capabilities(),
             'health' => $health ? ['status' => $health['status'], 'findings' => $health['findings']] : null,
             'sent_at' => gmdate('c'),
         ];

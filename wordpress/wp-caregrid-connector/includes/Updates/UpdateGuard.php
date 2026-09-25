@@ -17,12 +17,15 @@ final class UpdateGuard
     ) {}
 
     /**
-     * Backups are a later milestone. The state is reported explicitly so no
-     * one assumes a backup was taken.
+     * Whether a backup protects this update. WP CareGrid only sends an
+     * update with a backup_uuid after it verified that backup in storage;
+     * without one, the result says so explicitly.
      */
-    public function backup_state(): array
+    public function backup_state(?string $backup_uuid = null): array
     {
-        return ['status' => 'not_available', 'reason' => 'The connector has no backup capability yet.'];
+        return $backup_uuid
+            ? ['status' => 'verified_by_server', 'backup_uuid' => $backup_uuid]
+            : ['status' => 'none', 'reason' => 'No backup was required for this update.'];
     }
 
     public function after(): array

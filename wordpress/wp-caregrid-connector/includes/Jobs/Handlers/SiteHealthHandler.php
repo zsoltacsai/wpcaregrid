@@ -11,7 +11,7 @@ final class SiteHealthHandler implements JobHandler
 {
     public function __construct(private readonly HealthChecker $health) {}
 
-    public function capability(): string
+    public function capability(array $payload = []): string
     {
         return 'health';
     }

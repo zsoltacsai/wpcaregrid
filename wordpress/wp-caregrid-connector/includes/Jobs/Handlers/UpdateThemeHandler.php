@@ -16,21 +16,21 @@ final class UpdateThemeHandler implements JobHandler
 {
     public function __construct(private readonly UpdateGuard $guard) {}
 
-    public function capability(): string
+    public function capability(array $payload = []): string
     {
         return 'updates';
     }
 
     public function validate(array $payload): array
     {
-        InvalidPayload::check($payload, ['stylesheet', 'target_version'], ['stylesheet']);
+        InvalidPayload::check($payload, ['stylesheet', 'target_version', 'backup_uuid'], ['stylesheet']);
 
         $stylesheet = (string) $payload['stylesheet'];
         if (! preg_match('/^[A-Za-z0-9._-]+$/', $stylesheet) || str_contains($stylesheet, '..')) {
             throw new InvalidPayload('Invalid theme identifier.');
         }
 
-        return ['stylesheet' => $stylesheet, 'target_version' => InvalidPayload::version($payload['target_version'] ?? null)];
+        return ['stylesheet' => $stylesheet, 'target_version' => InvalidPayload::version($payload['target_version'] ?? null), 'backup_uuid' => InvalidPayload::uuid($payload['backup_uuid'] ?? null)];
     }
 
     public function handle(array $payload): JobResult
@@ -62,7 +62,7 @@ final class UpdateThemeHandler implements JobHandler
             return JobResult::skipped('TARGET_VERSION_UNAVAILABLE', 'The offered version differs from the requested version.', $details + ['offered_version' => $offer['new_version']]);
         }
 
-        $backup = $this->guard->backup_state();
+        $backup = $this->guard->backup_state($payload['backup_uuid'] ?? null);
         $skin = new \WP_Ajax_Upgrader_Skin;
         $result = UpgraderLoader::quietly(fn () => (new \Theme_Upgrader($skin))->upgrade($stylesheet));
 

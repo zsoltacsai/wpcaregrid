@@ -11,7 +11,7 @@ final class GetInventoryHandler implements JobHandler
 {
     public function __construct(private readonly InventoryCollector $inventory) {}
 
-    public function capability(): string
+    public function capability(array $payload = []): string
     {
         return 'inventory';
     }

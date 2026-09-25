@@ -3,7 +3,10 @@
 namespace WPCareGrid\Connector\Jobs;
 
 use WPCareGrid\Connector\Api\Client;
+use WPCareGrid\Connector\Backups\Maintenance;
+use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Core\Connection;
+use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Core\Settings;
 use WPCareGrid\Connector\Security\Logger;
 
@@ -16,10 +19,6 @@ use WPCareGrid\Connector\Security\Logger;
  */
 final class JobRunner
 {
-    private const LOCK = 'wp_caregrid_poll_lock';
-
-    private const LOCK_TTL = 900;
-
     private const MAX_TRIES = 50;
 
     public function __construct(
@@ -39,6 +38,11 @@ final class JobRunner
         }
 
         try {
+            // Housekeeping: a restore that died must not leave the site in
+            // maintenance mode; stale temporary backup files are removed.
+            Maintenance::cleanup_stale();
+            TempDir::cleanup_stale($this->store);
+
             $summary['delivered'] += $this->flush_outbox();
 
             $response = $this->api->get('jobs');
@@ -87,7 +91,21 @@ final class JobRunner
         $known = $this->store->find($uuid);
 
         if ($known) {
-            // Seen before: never execute again.
+            // Seen before: never execute again. A backup that was interrupted
+            // while uploading continues the upload; it is not made again.
+            $resumable = $this->registry->handler((string) $known['type']);
+            if ($known['state'] === JobStore::RUNNING && $resumable instanceof ResumableJob && $resumable->can_resume((array) ($known['payload'] ?? []))) {
+                Logger::info('job.resumed', ['job' => $uuid, 'type' => $known['type']]);
+                try {
+                    $result = $resumable->resume((array) $known['payload']);
+                } catch (\Throwable $e) {
+                    $result = JobResult::failed('JOB_EXCEPTION', 'The job failed unexpectedly.', ['exception' => get_class($e)]);
+                }
+                $this->store->complete($uuid, $result, $known['started_at'] ?? null);
+
+                return true;
+            }
+
             if ($known['state'] === JobStore::RUNNING) {
                 $this->store->complete($uuid, JobResult::failed('JOB_INTERRUPTED', 'The job started but did not finish; it was not run again.'), $known['started_at'] ?? null);
                 Logger::warning('job.interrupted', ['job' => $uuid, 'type' => $known['type']]);
@@ -101,8 +119,8 @@ final class JobRunner
 
         $handler = $this->registry->handler($type);
 
-        // Defence in depth: refuse anything not on the local whitelist or not advertised.
-        if (! $handler || ! in_array($handler->capability(), JobRegistry::CAPABILITIES, true)) {
+        // Defence in depth: refuse anything not on the local whitelist.
+        if (! $handler) {
             $this->store->complete($uuid, JobResult::failed('UNSUPPORTED_JOB_TYPE', 'This job type is not supported by the connector.', ['type' => substr($type, 0, 64)]));
             Logger::warning('job.unsupported', ['job' => $uuid, 'type' => substr($type, 0, 64)]);
 
@@ -120,8 +138,16 @@ final class JobRunner
             return false;
         }
 
+        // Only what this site can actually do (e.g. no database jobs without MySQL).
+        if (! in_array($handler->capability($payload), JobRegistry::capabilities(), true)) {
+            $this->store->complete($uuid, JobResult::failed('CAPABILITY_UNAVAILABLE', 'This site does not support this job.', ['type' => $type]));
+            Logger::warning('job.capability_unavailable', ['job' => $uuid, 'type' => $type]);
+
+            return false;
+        }
+
         // Recorded before execution: if this process dies, the job is not repeated.
-        $this->store->begin($uuid, $type);
+        $this->store->begin($uuid, $type, $payload);
         Logger::info('job.started', ['job' => $uuid, 'type' => $type]);
 
         try {
@@ -179,24 +205,11 @@ final class JobRunner
 
     private function lock(): bool
     {
-        $now = time();
-
-        if (add_option(self::LOCK, $now, '', false)) {
-            return true;
-        }
-
-        // A lock older than the TTL belongs to a process that died.
-        if ((int) get_option(self::LOCK) < $now - self::LOCK_TTL) {
-            update_option(self::LOCK, $now, false);
-
-            return true;
-        }
-
-        return false;
+        return Lock::acquire();
     }
 
     private function unlock(): void
     {
-        delete_option(self::LOCK);
+        Lock::release();
     }
 }

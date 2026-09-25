@@ -40,12 +40,12 @@ final class UpdatesTest extends TestCase
 
         $result = $this->run_job('UPDATE_PLUGIN', ['plugin' => $file, 'target_version' => '1.1.0']);
 
-        $this->assertSame('success', $result['status'], wp_json_encode($result['error']));
+        $this->assertSame('success', $result['status'], wp_json_encode([$result['error'], $result['data']['health'] ?? null]));
         $this->assertSame('PLUGIN_UPDATED', $result['result_code']);
         $this->assertSame('1.0.0', $result['data']['previous_version']);
         $this->assertSame('1.1.0', $result['data']['new_version']);
         $this->assertTrue($result['data']['active']);
-        $this->assertSame('not_available', $result['data']['backup']['status'], 'No backup is claimed.');
+        $this->assertSame(['status' => 'none', 'reason' => 'No backup was required for this update.'], $result['data']['backup'], 'No backup is claimed.');
         $this->assertContains($result['data']['health']['status'], ['healthy', 'attention']);
         $this->assertSame('1.1.0', array_column($result['data']['inventory']['plugins'], 'version', 'file')[$file]);
 
@@ -120,7 +120,7 @@ final class UpdatesTest extends TestCase
 
         $result = $this->run_job('UPDATE_THEME', ['stylesheet' => 'caregrid-theme', 'target_version' => '1.1']);
 
-        $this->assertSame('success', $result['status'], wp_json_encode($result['error']));
+        $this->assertSame('success', $result['status'], wp_json_encode([$result['error'], $result['data']['health'] ?? null]));
         $this->assertSame('THEME_UPDATED', $result['result_code']);
         $this->assertSame('1.0', $result['data']['previous_version']);
         $this->assertSame('1.1', $result['data']['new_version']);
@@ -150,12 +150,12 @@ final class UpdatesTest extends TestCase
 
         $result = $this->run_job('UPDATE_CORE', ['policy' => 'minor', 'target_version' => '7.1.3']);
 
-        $this->assertSame('success', $result['status'], wp_json_encode($result['error']));
+        $this->assertSame('success', $result['status'], wp_json_encode([$result['error'], $result['data']['health'] ?? null]));
         $this->assertSame('CORE_UPDATED', $result['result_code']);
         $this->assertSame('7.1.2', $result['data']['previous_version']);
         $this->assertSame('7.1.3', $result['data']['new_version']);
         $this->assertSame('7.1.3', $result['data']['inventory']['core']['version']);
-        $this->assertSame('not_available', $result['data']['backup']['status']);
+        $this->assertSame('none', $result['data']['backup']['status']);
     }
 
     public function test_core_major_update_is_refused_under_the_minor_policy(): void

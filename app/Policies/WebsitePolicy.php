@@ -30,4 +30,15 @@ class WebsitePolicy
     {
         return $this->view($user, $website);
     }
+
+    /** Requesting a backup or a restore is a paid action for the site's own plan. */
+    public function backup(User $user, Website $website): bool
+    {
+        return $this->view($user, $website) && $website->allowsServiceOperations();
+    }
+
+    public function restore(User $user, Website $website): bool
+    {
+        return $this->backup($user, $website);
+    }
 }

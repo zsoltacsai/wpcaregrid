@@ -48,7 +48,17 @@ $remove($root);
 mkdir($root.'/database', 0777, true);
 mkdir($root.'/wp-content/plugins', 0777, true);
 mkdir($root.'/wp-content/uploads', 0777, true);
-copy($vendor.'/aaemnnosttv/wp-sqlite-db/src/db.php', $root.'/wp-content/db.php');
+$mysql = null;
+if (preg_match('#^([^:]+):([^@]*)@([^/]+)/(\w+)$#', (string) getenv('WP_CAREGRID_TEST_MYSQL'), $mysql)) {
+    // A fresh site every run: empty the test database first.
+    $link = new mysqli($mysql[3], $mysql[1], $mysql[2], $mysql[4]);
+    foreach ($link->query('SHOW TABLES')->fetch_all() as [$table]) {
+        $link->query("DROP TABLE `{$table}`");
+    }
+    $link->close();
+} else {
+    copy($vendor.'/aaemnnosttv/wp-sqlite-db/src/db.php', $root.'/wp-content/db.php');
+}
 $copy($core.'/wp-content/themes/twentytwentyfive', $root.'/wp-content/themes/twentytwentyfive');
 // A copy, not a symlink, so plugin_basename() works as on a real site.
 $copy(dirname(__DIR__).'/wp-caregrid-connector', $root.'/wp-content/plugins/wp-caregrid-connector');
@@ -57,7 +67,7 @@ exec(escapeshellarg(PHP_BINARY).' '.escapeshellarg(__DIR__.'/install.php').' 2>&
 if ($status !== 0) {
     exit("Installing WordPress failed:\n".implode("\n", $output)."\n");
 }
-fwrite(STDOUT, implode("\n", $output).PHP_EOL);
+fwrite(STDOUT, implode("\n", $output).($mysql ? ' Database: MySQL/MariaDB.' : ' Database: SQLite (database backup tests are skipped).').PHP_EOL);
 
 if (! getenv('WP_CAREGRID_KEEP_SITE')) {
     register_shutdown_function(static fn () => $remove($root));

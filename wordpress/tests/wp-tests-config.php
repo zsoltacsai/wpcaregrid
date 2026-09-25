@@ -16,14 +16,24 @@ define('ABSPATH', dirname(__DIR__).'/vendor/johnpbloch/wordpress-core/');
 define('WP_CONTENT_DIR', $root.'/wp-content');
 define('WP_CONTENT_URL', 'https://site.example/wp-content');
 
-// SQLite drop-in (wp-content/db.php).
-define('DB_DIR', $root.'/database/');
-define('DB_FILE', 'wp.sqlite');
-define('DB_NAME', 'wordpress');
-define('DB_USER', '');
-define('DB_PASSWORD', '');
-define('DB_HOST', '');
-define('DB_CHARSET', 'utf8');
+// MySQL/MariaDB when WP_CAREGRID_TEST_MYSQL=user:password@host/database is set
+// (needed for the database backup and restore tests); otherwise SQLite
+// through the wp-content/db.php drop-in.
+if (preg_match('#^([^:]+):([^@]*)@([^/]+)/(\w+)$#', (string) getenv('WP_CAREGRID_TEST_MYSQL'), $mysql)) {
+    define('DB_NAME', $mysql[4]);
+    define('DB_USER', $mysql[1]);
+    define('DB_PASSWORD', $mysql[2]);
+    define('DB_HOST', $mysql[3]);
+    define('DB_CHARSET', 'utf8mb4');
+} else {
+    define('DB_DIR', $root.'/database/');
+    define('DB_FILE', 'wp.sqlite');
+    define('DB_NAME', 'wordpress');
+    define('DB_USER', '');
+    define('DB_PASSWORD', '');
+    define('DB_HOST', '');
+    define('DB_CHARSET', 'utf8');
+}
 define('DB_COLLATE', '');
 
 foreach (['AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY', 'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT'] as $salt) {

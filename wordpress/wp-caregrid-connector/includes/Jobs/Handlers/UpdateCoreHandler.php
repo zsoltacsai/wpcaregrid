@@ -28,20 +28,20 @@ final class UpdateCoreHandler implements JobHandler
         $this->installed_version = $installed_version ?? [self::class, 'version_on_disk'];
     }
 
-    public function capability(): string
+    public function capability(array $payload = []): string
     {
         return 'updates';
     }
 
     public function validate(array $payload): array
     {
-        InvalidPayload::check($payload, ['policy', 'target_version'], ['policy']);
+        InvalidPayload::check($payload, ['policy', 'target_version', 'backup_uuid'], ['policy']);
 
         if (! in_array($payload['policy'], ['minor', 'major'], true)) {
             throw new InvalidPayload('Invalid update policy.');
         }
 
-        return ['policy' => $payload['policy'], 'target_version' => InvalidPayload::version($payload['target_version'] ?? null)];
+        return ['policy' => $payload['policy'], 'target_version' => InvalidPayload::version($payload['target_version'] ?? null), 'backup_uuid' => InvalidPayload::uuid($payload['backup_uuid'] ?? null)];
     }
 
     public function handle(array $payload): JobResult
@@ -67,7 +67,7 @@ final class UpdateCoreHandler implements JobHandler
             return JobResult::skipped('TARGET_VERSION_UNAVAILABLE', 'The offered version differs from the requested version.', $details);
         }
 
-        $backup = $this->guard->backup_state();
+        $backup = $this->guard->backup_state($payload['backup_uuid'] ?? null);
 
         try {
             $result = UpgraderLoader::quietly(fn () => ($this->runner)($offer));

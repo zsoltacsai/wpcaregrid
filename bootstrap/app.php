@@ -35,7 +35,7 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Connector API refusals: {"error": {"code", "message"}}.
-        $exceptions->render(fn (ConnectorError $e) => AuthenticateConnector::error($e->errorCode, $e->getMessage(), $e->status));
+        $exceptions->render(fn (ConnectorError $e) => AuthenticateConnector::error($e->errorCode, $e->getMessage(), $e->status, $e->details));
         $exceptions->render(function (ValidationException $e, Request $request) {
             if ($request->is('api/*')) {
                 return response()->json(['error' => ['code' => 'INVALID_REQUEST', 'message' => 'The request is invalid.', 'fields' => $e->errors()]], 422);

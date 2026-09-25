@@ -56,6 +56,11 @@ class AppServiceProvider extends ServiceProvider
             'connector:'.($request->attributes->get('connector')?->id ?? $request->ip()),
         ));
 
+        // Backup chunks and restore downloads: many requests per backup, still per connector.
+        RateLimiter::for('connector-transfer', fn (Request $request) => Limit::perMinute(600)->by(
+            'connector-transfer:'.($request->attributes->get('connector')?->id ?? $request->ip()),
+        ));
+
         RateLimiter::for('checkout', fn (Request $request) => [
             Limit::perMinute(10)->by($request->ip()),
             Limit::perHour(30)->by($request->ip()),

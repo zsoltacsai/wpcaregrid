@@ -13,7 +13,7 @@ final class CountingHandler implements JobHandler
 
     public function __construct(private readonly string $capability = 'health', private readonly ?\Throwable $throw = null) {}
 
-    public function capability(): string
+    public function capability(array $payload = []): string
     {
         return $this->capability;
     }

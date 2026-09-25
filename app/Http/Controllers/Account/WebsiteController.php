@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Account;
 
+use App\Backups\BackupPolicy;
 use App\Connector\JobStatus;
 use App\Connector\PairingCodes;
 use App\Http\Controllers\Controller;
@@ -71,8 +72,12 @@ class WebsiteController extends Controller
             'website' => $website,
             'connector' => $website->activeConnector,
             'inventory' => $website->inventory,
-            'jobs' => $website->jobs()->latest('id')->limit(10)->get(),
+            'jobs' => $website->jobs()->with('backup')->latest('id')->limit(10)->get(),
             'canPair' => request()->user()->can('pair', $website),
+            'latestBackup' => $website->backups()->latest('id')->first(),
+            'latestVerified' => $website->backups()->verified()->whereNull('objects_deleted_at')->latest('verified_at')->first(),
+            'backupPolicy' => app(BackupPolicy::class)->for($website),
+            'canBackup' => request()->user()->can('backup', $website),
             'pairingCode' => $this->flashedPairingCode(),
         ]);
     }

@@ -6,6 +6,7 @@ use WPCareGrid\Connector\Api\Client;
 use WPCareGrid\Connector\Auth\CredentialStore;
 use WPCareGrid\Connector\Core\Scheduler;
 use WPCareGrid\Connector\Core\Settings;
+use WPCareGrid\Connector\Jobs\JobRegistry;
 use WPCareGrid\Connector\Tests\Support\FakeHttp;
 use WPCareGrid\Connector\Tests\Support\TestCase;
 
@@ -41,7 +42,7 @@ final class PairingTest extends TestCase
         );
         $this->assertSame('ABCDEFGHJK23', $request['body']['pairing_code']);
         $this->assertSame('https://site.example/', $request['body']['site_url']);
-        $this->assertSame(['inventory', 'health', 'updates', 'license_check'], $request['body']['capabilities']);
+        $this->assertSame(JobRegistry::capabilities(), $request['body']['capabilities']);
         $this->assertArrayNotHasKey('Authorization', $request['headers'], 'Pairing is not authenticated with a credential.');
         $this->assertSame(0, $request['args']['redirection'], 'Redirects are never followed.');
         $this->assertTrue($request['args']['sslverify']);
@@ -89,7 +90,7 @@ final class PairingTest extends TestCase
 
     public function test_unknown_capabilities_from_the_server_are_ignored(): void
     {
-        $this->http->on('POST pair', $this->pair_response(['capabilities' => ['inventory', 'run_php', 'backup_full']]));
+        $this->http->on('POST pair', $this->pair_response(['capabilities' => ['inventory', 'run_php', 'restore_everything']]));
 
         $this->plugin()->pairing()->pair(self::PAIRING_CODE);
 

@@ -29,4 +29,13 @@ final class InvalidPayload extends \InvalidArgumentException
 
         return $version;
     }
+
+    public static function uuid(?string $uuid): ?string
+    {
+        if ($uuid !== null && ! preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $uuid)) {
+            throw new self('Invalid UUID.');
+        }
+
+        return $uuid;
+    }
 }

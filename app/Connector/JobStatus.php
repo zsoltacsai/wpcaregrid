@@ -5,6 +5,8 @@ namespace App\Connector;
 enum JobStatus: string
 {
     case Queued = 'queued';
+    // An update waiting for its pre-update backup to be verified; never delivered.
+    case Waiting = 'waiting';
     case Delivered = 'delivered';
     case Success = 'success';
     case Failed = 'failed';
@@ -21,6 +23,6 @@ enum JobStatus: string
 
     public function isFinal(): bool
     {
-        return ! in_array($this, [self::Queued, self::Delivered], true);
+        return ! in_array($this, [self::Queued, self::Waiting, self::Delivered], true);
     }
 }

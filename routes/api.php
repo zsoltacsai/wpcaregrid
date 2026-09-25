@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\V1\BackupController;
 use App\Http\Controllers\Api\V1\ConnectorController;
 use Illuminate\Support\Facades\Route;
 
@@ -18,3 +19,18 @@ Route::prefix('v1/connector')->name('api.v1.connector.')->controller(ConnectorCo
         Route::post('/disconnect', 'disconnect')->name('disconnect');
     });
 });
+
+/*
+| Backup data: chunked, resumable uploads from the connector, and ranged
+| downloads for a restore in progress. Separate limiter: many small requests.
+*/
+Route::prefix('v1/connector/backups/{backup}')->name('api.v1.connector.backups.')->controller(BackupController::class)
+    ->middleware(['connector.auth', 'throttle:connector-transfer'])
+    ->whereIn('name', ['files', 'database'])
+    ->group(function () {
+        Route::get('/objects/{name}', 'status')->name('status');
+        Route::put('/objects/{name}', 'chunk')->name('chunk');
+        Route::post('/objects/{name}/complete', 'complete')->name('complete');
+        Route::get('/objects/{name}/content', 'content')->name('content');
+        Route::post('/finalize', 'finalize')->name('finalize');
+    });

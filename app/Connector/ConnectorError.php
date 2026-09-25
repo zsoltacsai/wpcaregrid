@@ -11,7 +11,8 @@ use RuntimeException;
  */
 final class ConnectorError extends RuntimeException
 {
-    public function __construct(public readonly string $errorCode, string $message, public readonly int $status = 422)
+    /** @param  array<string, scalar>  $details  Safe, machine-readable extras (e.g. expected_offset). */
+    public function __construct(public readonly string $errorCode, string $message, public readonly int $status = 422, public readonly array $details = [])
     {
         parent::__construct($message);
     }

@@ -41,7 +41,7 @@ final class PairingService
                 'connector_version' => WP_CAREGRID_VERSION,
                 'wp_version' => get_bloginfo('version'),
                 'php_version' => PHP_VERSION,
-                'capabilities' => JobRegistry::CAPABILITIES,
+                'capabilities' => JobRegistry::capabilities(),
             ],
             false
         );
@@ -67,7 +67,7 @@ final class PairingService
                 'connector_uuid' => $data['connector_uuid'] ?? null,
                 'connected_at' => gmdate('c'),
                 'last_success_at' => gmdate('c'),
-                'capabilities' => array_values(array_intersect((array) ($data['capabilities'] ?? []), JobRegistry::CAPABILITIES)),
+                'capabilities' => array_values(array_intersect((array) ($data['capabilities'] ?? []), JobRegistry::capabilities())),
                 'last_error' => null,
             ]
         );

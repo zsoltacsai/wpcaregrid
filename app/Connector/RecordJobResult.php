@@ -51,6 +51,7 @@ final class RecordJobResult
             ])->save();
 
             $this->apply($connector, $job, $result['data'] ?? []);
+            app(JobLifecycle::class)->finished($job);
 
             Log::info('Connector job result recorded.', ['job' => $job->uuid, 'type' => $job->type->value, 'status' => $job->status->value, 'code' => $job->result_code]);
 

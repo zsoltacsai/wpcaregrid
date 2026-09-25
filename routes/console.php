@@ -10,3 +10,8 @@ Artisan::command('inspire', function () {
 
 // Websites whose connector stopped reporting in.
 Schedule::command('connector:update-presence')->everyTenMinutes();
+
+// Backups: queue due scheduled backups, time out stuck ones, apply retention.
+Schedule::command('backup:schedule')->hourly()->withoutOverlapping();
+Schedule::command('backup:monitor')->everyTenMinutes()->withoutOverlapping();
+Schedule::command('backup:retention')->dailyAt('03:30')->withoutOverlapping();

@@ -104,6 +104,8 @@
         </x-account.panel>
     </div>
 
+    <x-backups.summary class="mt-6" :website="$website" :latest="$latestBackup" :verified="$latestVerified" :policy="$backupPolicy" :can-backup="$canBackup" />
+
     {{-- Inventory --}}
     <x-account.panel :title="__('connector.account.inventory')" heading-id="inventory-title" class="mt-6">
         @if ($inventory)
@@ -174,7 +176,9 @@
                 @foreach ($jobs as $job)
                     @php $tone = ['success' => 'positive', 'failed' => 'danger', 'partial' => 'warning', 'expired' => 'warning'][$job->status->value] ?? 'neutral'; @endphp
                     <li class="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 py-2.5 sm:grid-cols-[1fr_auto_auto]">
-                        <span class="text-primary">{{ __('connector.jobs.types.'.$job->type->value) }} @if ($job->result_code)<span class="font-mono text-xs text-muted">· {{ $job->result_code }}</span>@endif</span>
+                        <span class="text-primary">{{ __('connector.jobs.types.'.$job->type->value) }} @if ($job->result_code)<span class="font-mono text-xs text-muted">· {{ $job->result_code }}</span>@endif
+                            @if ($job->type->isUpdate() && $job->backup?->status === \App\Backups\BackupStatus::Verified)<span class="mt-0.5 flex items-center gap-1 text-xs text-accent-ink"><x-ui.icon name="shield" class="size-3.5" />{{ __('backups.account.protected') }} · <span class="font-mono">{{ $job->backup->verified_at->translatedFormat('j M Y H:i') }}</span></span>@endif
+                        </span>
                         <span class="row-start-2 font-mono text-xs text-muted sm:row-start-auto">{{ ($job->completed_at ?? $job->created_at)->translatedFormat('j M Y H:i') }}</span>
                         <span class="row-span-2 sm:row-span-1"><x-ui.status-badge :tone="$tone" variant="code">{{ __('connector.jobs.statuses.'.$job->status->value) }}</x-ui.status-badge></span>
                     </li>

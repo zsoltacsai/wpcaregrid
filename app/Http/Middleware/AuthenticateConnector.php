@@ -56,8 +56,9 @@ class AuthenticateConnector
         return $next($request);
     }
 
-    public static function error(string $code, string $message, int $status): JsonResponse
+    /** @param  array<string, scalar>  $details */
+    public static function error(string $code, string $message, int $status, array $details = []): JsonResponse
     {
-        return response()->json(['error' => ['code' => $code, 'message' => $message]], $status);
+        return response()->json(['error' => ['code' => $code, 'message' => $message] + ($details ? ['details' => $details] : [])], $status);
     }
 }

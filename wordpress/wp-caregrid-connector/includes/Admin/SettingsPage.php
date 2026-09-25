@@ -130,7 +130,7 @@ final class SettingsPage
 					<?php if ($state['latest_version'] && version_compare(WP_CAREGRID_VERSION, $state['latest_version'], '<')) { ?> — <?php echo esc_html(sprintf( /* translators: %s: version */ __('version %s is available', 'wp-caregrid'), $state['latest_version'])); ?><?php } ?></td></tr>
 				<tr><th scope="row"><?php esc_html_e('Last successful communication', 'wp-caregrid'); ?></th><td><?php echo esc_html($when($state['last_success_at'])); ?></td></tr>
 				<tr><th scope="row"><?php esc_html_e('Next poll', 'wp-caregrid'); ?></th><td><?php echo esc_html($connected && $next_poll ? $when($next_poll) : '—'); ?></td></tr>
-				<tr><th scope="row"><?php esc_html_e('Capabilities', 'wp-caregrid'); ?></th><td><code><?php echo esc_html(implode(', ', JobRegistry::CAPABILITIES)); ?></code></td></tr>
+				<tr><th scope="row"><?php esc_html_e('Capabilities', 'wp-caregrid'); ?></th><td><code><?php echo esc_html(implode(', ', JobRegistry::capabilities())); ?></code></td></tr>
 			</table>
 
 			<?php if ($connected) { ?>

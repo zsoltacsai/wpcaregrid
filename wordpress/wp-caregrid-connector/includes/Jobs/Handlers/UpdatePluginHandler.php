@@ -20,21 +20,21 @@ final class UpdatePluginHandler implements JobHandler
 {
     public function __construct(private readonly UpdateGuard $guard) {}
 
-    public function capability(): string
+    public function capability(array $payload = []): string
     {
         return 'updates';
     }
 
     public function validate(array $payload): array
     {
-        InvalidPayload::check($payload, ['plugin', 'target_version'], ['plugin']);
+        InvalidPayload::check($payload, ['plugin', 'target_version', 'backup_uuid'], ['plugin']);
 
         $plugin = (string) $payload['plugin'];
         if (! preg_match('/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)?\.php$/', $plugin) || str_contains($plugin, '..')) {
             throw new InvalidPayload('Invalid plugin identifier.');
         }
 
-        return ['plugin' => $plugin, 'target_version' => InvalidPayload::version($payload['target_version'] ?? null)];
+        return ['plugin' => $plugin, 'target_version' => InvalidPayload::version($payload['target_version'] ?? null), 'backup_uuid' => InvalidPayload::uuid($payload['backup_uuid'] ?? null)];
     }
 
     public function handle(array $payload): JobResult
@@ -67,7 +67,7 @@ final class UpdatePluginHandler implements JobHandler
             return JobResult::skipped('TARGET_VERSION_UNAVAILABLE', 'The offered version differs from the requested version.', $details + ['offered_version' => $offer->new_version]);
         }
 
-        $backup = $this->guard->backup_state();
+        $backup = $this->guard->backup_state($payload['backup_uuid'] ?? null);
         $skin = new \WP_Ajax_Upgrader_Skin;
         $result = UpgraderLoader::quietly(fn () => (new \Plugin_Upgrader($skin))->upgrade($plugin));
 

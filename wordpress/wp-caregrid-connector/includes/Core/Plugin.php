@@ -5,6 +5,8 @@ namespace WPCareGrid\Connector\Core;
 use WPCareGrid\Connector\Admin\SettingsPage;
 use WPCareGrid\Connector\Api\Client;
 use WPCareGrid\Connector\Auth\CredentialStore;
+use WPCareGrid\Connector\Backups\Downloader;
+use WPCareGrid\Connector\Backups\Uploader;
 use WPCareGrid\Connector\Health\HealthChecker;
 use WPCareGrid\Connector\Heartbeat\HeartbeatService;
 use WPCareGrid\Connector\Inventory\InventoryCollector;
@@ -19,7 +21,8 @@ use WPCareGrid\Connector\Updates\UpdateGuard;
 /**
  * Builds the services and registers WordPress hooks. Only three entry
  * points exist: two cron events and the admin page. No REST routes, no
- * public AJAX, no front-end output.
+ * public AJAX, no front-end output. Backups and restores run inside the
+ * poll, never in a visitor's request.
  */
 final class Plugin
 {
@@ -108,11 +111,25 @@ final class Plugin
                     'UPDATE_PLUGIN' => new Handlers\UpdatePluginHandler($guard),
                     'UPDATE_THEME' => new Handlers\UpdateThemeHandler($guard),
                     'UPDATE_CORE' => new Handlers\UpdateCoreHandler($guard),
+                    'BACKUP_FILES' => new Handlers\BackupHandler('files', $this->api(), $this->uploader()),
+                    'BACKUP_DATABASE' => new Handlers\BackupHandler('database', $this->api(), $this->uploader()),
+                    'BACKUP_FULL' => new Handlers\BackupHandler('full', $this->api(), $this->uploader()),
+                    'RESTORE' => new Handlers\RestoreHandler($this->downloader(), $this->health()),
                 ]
             );
         }
 
         return $this->services['registry'];
+    }
+
+    public function uploader(): Uploader
+    {
+        return $this->services['uploader'] ??= new Uploader($this->api());
+    }
+
+    public function downloader(): Downloader
+    {
+        return $this->services['downloader'] ??= new Downloader($this->api());
     }
 
     public function runner(): JobRunner
