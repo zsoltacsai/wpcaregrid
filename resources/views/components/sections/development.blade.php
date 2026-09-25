@@ -17,10 +17,14 @@
     <ul class="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:gap-6">
         @foreach ($services as $service)
             <li>
-                <x-ui.feature-card :icon="$service['icon']" :title="$service['title']">
+                <x-ui.service-card :icon="$service['icon']" :title="$service['title']">
                     {{ $service['text'] }}
-                </x-ui.feature-card>
+                </x-ui.service-card>
             </li>
         @endforeach
     </ul>
+
+    <p class="mt-6 text-sm text-muted">
+        Custom development is a separate paid service, quoted and billed independently of maintenance subscriptions.
+    </p>
 </x-ui.section>

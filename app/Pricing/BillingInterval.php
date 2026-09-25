@@ -15,7 +15,7 @@ enum BillingInterval: string
         };
     }
 
-    /** Unit shown next to a price, e.g. "HUF / month". */
+    /** Unit shown next to a price, e.g. "Ft/month". */
     public function unit(): string
     {
         return match ($this) {

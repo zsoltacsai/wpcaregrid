@@ -10,7 +10,7 @@
     <ol class="mt-10 grid gap-8 sm:grid-cols-2 lg:grid-cols-4 lg:gap-6">
         @foreach ($steps as $step)
             <li class="border-t-2 border-primary pt-6">
-                <p class="font-mono text-sm font-medium text-accent-ink" aria-hidden="true">{{ $step['number'] }}</p>
+                <p class="text-sm font-semibold text-accent-ink tabular-nums" aria-hidden="true">{{ $step['number'] }}</p>
                 <h3 class="mt-3 text-lg font-semibold">{{ $step['title'] }}</h3>
                 <p class="mt-2 text-sm leading-relaxed text-muted">{{ $step['text'] }}</p>
             </li>

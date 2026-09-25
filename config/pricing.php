@@ -25,7 +25,7 @@ return [
 
     'currencies' => [
         'HUF' => [
-            'symbol' => 'HUF',
+            'symbol' => 'Ft',
             'symbol_position' => 'after',
             'decimals' => 0,
             'decimal_separator' => ',',

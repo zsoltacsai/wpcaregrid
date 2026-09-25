@@ -21,7 +21,7 @@
                 @if ($site)
                     <div>
                         <dt class="text-muted">Website</dt>
-                        <dd class="mt-1 font-mono text-primary">{{ $site }}</dd>
+                        <dd class="mt-1 text-primary">{{ $site }}</dd>
                     </div>
                 @endif
                 @if ($detected)

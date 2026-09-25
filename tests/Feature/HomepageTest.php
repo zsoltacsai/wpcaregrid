@@ -42,7 +42,27 @@ class HomepageTest extends TestCase
             $response->assertSee(str_replace(' ', "\u{202F}", $amount));
         }
 
-        $response->assertSee('2 months free')->assertSee('Most popular');
+        $response->assertSee('Ft/month')->assertSee('Ft/year')->assertSee('2 months free')->assertSee('Most popular');
+    }
+
+    public function test_approved_brand_assets_are_used(): void
+    {
+        $this->get('/')
+            ->assertOk()
+            // Grid mark from design/brand/logo, with its single accent square.
+            ->assertSee('fill="#5B8C72"', false)
+            // Descriptor only on the large footer logo, not in the header.
+            ->assertSee('WORDPRESS MAINTENANCE')
+            ->assertSee('favicon.svg')
+            ->assertSee('apple-touch-icon.png');
+    }
+
+    public function test_key_service_messages_are_present(): void
+    {
+        $this->get('/')
+            ->assertSeeInOrder(['Backup', 'Update', 'Check', 'Functional test'])
+            ->assertSee('notified when a license is detected as expired or invalid')
+            ->assertSee('separate paid service');
     }
 
     public function test_dashboard_previews_are_labelled_as_demo_data(): void

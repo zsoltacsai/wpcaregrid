@@ -1,16 +1,15 @@
 {{--
     Link or button styled as a call to action.
-    variant: primary | secondary | ghost | inverse | inverse-outline
+    variant: primary (green action) | secondary | ghost | inverse-outline (on dark)
     size: md | lg
 --}}
 @props(['href' => null, 'variant' => 'primary', 'size' => 'md', 'icon' => null])
 
 @php
     $variants = [
-        'primary' => 'bg-primary text-white hover:bg-primary-hover',
+        'primary' => 'bg-action text-white hover:bg-action-hover',
         'secondary' => 'border border-line-strong bg-surface text-primary hover:border-primary',
         'ghost' => 'text-primary hover:bg-subtle',
-        'inverse' => 'bg-canvas text-primary hover:bg-white',
         'inverse-outline' => 'border border-on-dark/35 text-on-dark hover:border-on-dark hover:bg-white/5',
     ];
 

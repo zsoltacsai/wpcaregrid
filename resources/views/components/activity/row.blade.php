@@ -13,7 +13,7 @@
     <div class="col-span-1 row-start-2 min-w-0 sm:row-start-auto">
         <p class="text-sm font-medium text-primary">{{ $entry['event'] }}</p>
         <p class="mt-0.5 truncate text-xs text-muted sm:text-sm">
-            {{ $entry['detail'] }} <span aria-hidden="true">·</span> <span class="font-mono">{{ $entry['site'] }}</span>
+            {{ $entry['detail'] }} <span aria-hidden="true">·</span> {{ $entry['site'] }}
         </p>
     </div>
     <div class="col-start-2 row-span-2 row-start-1 self-center sm:col-start-auto sm:row-span-1 sm:row-start-auto">

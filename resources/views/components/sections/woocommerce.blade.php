@@ -27,7 +27,7 @@
             <li class="relative flex items-center gap-4 rounded-md border border-line bg-canvas px-4 py-3 md:flex-col md:gap-3 md:px-2 md:py-6 md:text-center">
                 <x-ui.icon-tile :name="$step['icon']" tone="plain" />
                 <span class="flex-1">
-                    <span class="block font-mono text-xs text-muted">{{ sprintf('%02d', $loop->iteration) }}</span>
+                    <span class="block text-xs text-muted tabular-nums">{{ sprintf('%02d', $loop->iteration) }}</span>
                     <span class="block text-sm font-semibold text-primary">{{ $step['title'] }}</span>
                 </span>
                 <x-ui.icon name="check" class="size-4 text-accent-ink md:hidden" />

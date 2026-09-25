@@ -1,0 +1,15 @@
+WP CareGrid — Color palette
+
+Primary dark  #17212B
+Background    #F6F6F2
+Surface       #FFFFFF
+Text          #27313A
+Muted         #66717A
+Border        #D9DDD8
+Accent green  #5B8C72
+Warning       #C58A32
+Danger        #C84735
+
+Typography
+Primary: IBM Plex Sans
+Technical/UI metadata: IBM Plex Mono

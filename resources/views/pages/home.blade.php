@@ -1,5 +1,5 @@
 <x-layouts.marketing>
-    <x-sections.hero :trust-indicators="$content->trustIndicators()" :sites="$demo->heroSites()" />
+    <x-sections.hero :trust-indicators="$content->trustIndicators()" :sites="$demo->heroSites()" :update-run="$demo->latestUpdateRun()" />
     <x-sections.services :services="$content->services()" />
     <x-sections.why-maintenance :problems="$content->problems()" />
     <x-sections.verification :steps="$content->verificationSteps()" />

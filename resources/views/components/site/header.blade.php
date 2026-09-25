@@ -13,8 +13,8 @@
     class="sticky top-0 z-50 border-b border-transparent bg-canvas transition-shadow duration-200 data-raised:border-line data-raised:shadow-header"
 >
     <x-ui.container class="flex h-16 items-center justify-between gap-6 lg:h-[72px]">
-        <a href="{{ route('home') }}" class="rounded-sm" aria-label="WP CareGrid home">
-            <x-site.logo />
+        <a href="{{ route('home') }}" class="shrink-0 rounded-sm" aria-label="WP CareGrid home">
+            <x-brand.logo :descriptor="false" class="h-8 lg:h-9" />
         </a>
 
         <nav aria-label="Main" class="hidden lg:block">

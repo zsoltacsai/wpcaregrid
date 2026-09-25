@@ -10,7 +10,7 @@
         </div>
 
         <div class="flex flex-col gap-3 sm:flex-row">
-            <x-ui.button href="#pricing" variant="inverse" size="lg" icon="arrow-right">View plans</x-ui.button>
+            <x-ui.button href="#pricing" size="lg" icon="arrow-right">View plans</x-ui.button>
             <x-ui.button :href="config('marketing.links.contact')" variant="inverse-outline" size="lg">Contact us</x-ui.button>
         </div>
     </div>

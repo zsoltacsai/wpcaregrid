@@ -5,6 +5,8 @@
 @import '@fontsource/ibm-plex-sans/latin-ext-500.css';
 @import '@fontsource/ibm-plex-sans/latin-600.css';
 @import '@fontsource/ibm-plex-sans/latin-ext-600.css';
+/* 700 is only used by the "WP" in the logo wordmark. */
+@import '@fontsource/ibm-plex-sans/latin-700.css';
 @import '@fontsource/ibm-plex-mono/latin-400.css';
 @import '@fontsource/ibm-plex-mono/latin-ext-400.css';
 @import '@fontsource/ibm-plex-mono/latin-500.css';
@@ -15,16 +17,18 @@
 @source '../../storage/framework/views/*.php';
 
 /*
- * WP CareGrid design tokens.
- * Brand colours are fixed; the "-ink" variants are darker text shades of the
- * status colours so small text keeps WCAG AA contrast on light surfaces.
+ * WP CareGrid design tokens — source of truth: design/brand/DESIGN_TOKENS.css.
+ * Brand colours are used as supplied. Two kinds of derived shades exist only
+ * for WCAG AA contrast, never as new brand colours:
+ *   - "action": the accent green deepened just enough for white button text
+ *     (#5B8C72 with white text is 3.9:1; #4F7D65 is 4.7:1).
+ *   - "-ink": darker text shades of the status colours for small text.
  */
 @theme {
     --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
     --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
     --color-primary: #17212b;
-    --color-primary-hover: #26333f;
     --color-canvas: #f6f6f2;
     --color-surface: #ffffff;
     --color-subtle: #eeefea;
@@ -34,6 +38,8 @@
     --color-line-strong: #c3c9c3;
 
     --color-accent: #5b8c72;
+    --color-action: #4f7d65;
+    --color-action-hover: #3d6a53;
     --color-accent-ink: #3d6a53;
     --color-accent-soft: #e6efe9;
 
@@ -57,10 +63,6 @@
     --shadow-card: 0 1px 2px rgb(23 33 43 / 0.04);
     --shadow-raised: 0 1px 2px rgb(23 33 43 / 0.05), 0 8px 24px rgb(23 33 43 / 0.06);
     --shadow-header: 0 1px 0 rgb(23 33 43 / 0.04), 0 4px 16px rgb(23 33 43 / 0.05);
-
-    --text-display: 3.5rem;
-    --text-display--line-height: 1.08;
-    --text-display--letter-spacing: -0.025em;
 }
 
 @layer base {

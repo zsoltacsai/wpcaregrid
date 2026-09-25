@@ -1,9 +1,9 @@
-@props(['trustIndicators', 'sites'])
+@props(['trustIndicators', 'sites', 'updateRun'])
 
 <section aria-labelledby="hero-title" class="pt-8 pb-16 sm:pt-12 sm:pb-20 lg:pt-16 lg:pb-24">
-    <x-ui.container class="grid items-center gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-16">
+    <x-ui.container class="grid items-center gap-12 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] lg:gap-16">
         <div>
-            <h1 id="hero-title" class="text-[36px] leading-[1.1] font-semibold tracking-[-0.02em] sm:text-5xl sm:leading-[1.08] lg:text-display">
+            <h1 id="hero-title" class="text-[34px] leading-[1.12] font-semibold tracking-[-0.02em] sm:text-[42px] lg:text-[48px] lg:leading-[1.1]">
                 WordPress maintenance, without the hassle.
             </h1>
 
@@ -26,6 +26,6 @@
             </ul>
         </div>
 
-        <x-dashboard.hero-preview :sites="$sites" />
+        <x-dashboard.hero-preview :sites="$sites" :update-run="$updateRun" />
     </x-ui.container>
 </section>

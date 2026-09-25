@@ -32,6 +32,24 @@ final class DemoDashboard
         return array_slice(self::sites(), 0, 4);
     }
 
+    /**
+     * The most recent update run on one demo site, step by step.
+     *
+     * @return array{site: string, steps: list<array{label: string, time: string, status: Status}>}
+     */
+    public static function latestUpdateRun(): array
+    {
+        return [
+            'site' => 'fndeco.com',
+            'steps' => [
+                ['label' => 'Backup', 'time' => '03:10', 'status' => Status::Verified],
+                ['label' => 'Update', 'time' => '03:24', 'status' => Status::Success],
+                ['label' => 'Check', 'time' => '03:27', 'status' => Status::Success],
+                ['label' => 'Functional test', 'time' => '03:31', 'status' => Status::Success],
+            ],
+        ];
+    }
+
     /** @return list<array{value: string, label: string, detail: string, tone: string, icon: string}> */
     public static function metrics(): array
     {

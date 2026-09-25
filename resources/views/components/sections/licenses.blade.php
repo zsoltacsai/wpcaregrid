@@ -5,7 +5,7 @@
                 id="licenses-title"
                 eyebrow="License management"
                 title="Expired licenses don't go unnoticed."
-                lead="Premium plugins and themes stop receiving updates when their license runs out. We check license status as part of maintenance and tell you when one needs renewing."
+                lead="Premium plugins and themes stop receiving updates when their license runs out. We check license status as part of routine maintenance, and the site owner is notified when a license is detected as expired or invalid."
             />
 
             <p class="mt-8 flex max-w-2xl items-start gap-3 border-l-2 border-line-strong pl-4 text-sm text-ink">

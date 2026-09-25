@@ -13,7 +13,7 @@
         <div class="min-w-0">
             <p class="flex items-center gap-2">
                 <x-ui.status-dot :tone="$site['status']->tone()" />
-                <span class="truncate font-mono text-sm font-medium text-primary">{{ $site['domain'] }}</span>
+                <span class="truncate text-sm font-medium text-primary">{{ $site['domain'] }}</span>
             </p>
             <p class="mt-1 truncate pl-4 text-xs text-muted">
                 {{ $site['platform'] }} <span aria-hidden="true">·</span> Backup {{ $site['last_backup'] }}
@@ -26,7 +26,7 @@
         <div class="min-w-0">
             <p class="flex items-center gap-2">
                 <x-ui.status-dot :tone="$site['status']->tone()" />
-                <span class="truncate font-mono text-sm font-medium text-primary">{{ $site['domain'] }}</span>
+                <span class="truncate text-sm font-medium text-primary">{{ $site['domain'] }}</span>
             </p>
             <p class="mt-0.5 truncate pl-4 text-xs text-muted">{{ $site['platform'] }} <span class="md:hidden">· {{ $site['plan'] }}</span></p>
         </div>

@@ -63,7 +63,7 @@ class PricingCatalogTest extends TestCase
         $price = $this->catalog()->productLine('wordpress')->plans[1]->price(BillingInterval::Annual);
 
         $this->assertSame("189\u{202F}900", $price->money->formattedAmount());
-        $this->assertSame("189\u{202F}900\u{00A0}HUF", $price->money->format());
+        $this->assertSame("189\u{202F}900\u{00A0}Ft", $price->money->format());
     }
 
     public function test_plan_ids_and_stripe_price_ids_are_exposed(): void

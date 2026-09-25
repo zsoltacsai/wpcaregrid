@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="72" viewBox="0 0 420 72" role="img" aria-label="WP CareGrid">
+<rect width="420" height="72" fill="#17212B"/>
+<g transform="translate(2 7)"><rect x="2" y="2" width="14" height="14" rx="3" fill="#FFFFFF"/><rect x="20" y="2" width="14" height="14" rx="3" fill="#FFFFFF"/><rect x="38" y="2" width="14" height="14" rx="3" fill="#FFFFFF"/><rect x="2" y="20" width="14" height="14" rx="3" fill="#FFFFFF"/><rect x="20" y="20" width="14" height="14" rx="3" fill="#FFFFFF"/><rect x="38" y="20" width="14" height="14" rx="3" fill="#5B8C72"/><rect x="2" y="38" width="14" height="14" rx="3" fill="#FFFFFF"/><rect x="20" y="38" width="14" height="14" rx="3" fill="#FFFFFF"/><rect x="38" y="38" width="14" height="14" rx="3" fill="#FFFFFF"/></g>
+<text x="72" y="43" font-family="IBM Plex Sans, Arial, sans-serif" font-size="34" font-weight="700" fill="#FFFFFF">WP</text><text x="135" y="43" font-family="IBM Plex Sans, Arial, sans-serif" font-size="34" font-weight="400" fill="#FFFFFF">CareGrid</text>
+<text x="73" y="62" font-family="IBM Plex Sans, Arial, sans-serif" font-size="10" letter-spacing="3.2" font-weight="500" fill="#FFFFFF">WORDPRESS MAINTENANCE</text>
+</svg>

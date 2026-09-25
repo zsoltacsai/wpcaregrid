@@ -32,7 +32,7 @@ final readonly class Currency
         return number_format($amount, $this->decimals, $this->decimalSeparator, $this->thousandsSeparator);
     }
 
-    /** Format an amount with the currency symbol, e.g. "8 990 HUF". */
+    /** Format an amount with the currency symbol, e.g. "8 990 Ft". */
     public function format(int|float $amount): string
     {
         $number = $this->formatAmount($amount);

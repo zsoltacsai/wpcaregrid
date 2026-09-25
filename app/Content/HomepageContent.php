@@ -51,15 +51,15 @@ final class HomepageContent
         ];
     }
 
-    /** @return list<array{title: string, text: string, icon: string}> */
+    /** @return list<array{title: string, text: string, icon: string, result: string}> */
     public static function verificationSteps(): array
     {
         return [
-            ['title' => 'Backup', 'text' => 'A fresh backup is made before anything changes.', 'icon' => 'archive'],
-            ['title' => 'Update', 'text' => 'Core, plugins and themes are updated in a controlled order.', 'icon' => 'refresh'],
-            ['title' => 'Check', 'text' => 'We confirm the site loads without errors.', 'icon' => 'search'],
-            ['title' => 'Functional test', 'text' => 'Key pages, forms and logins are tested.', 'icon' => 'clipboard-check'],
-            ['title' => 'Done', 'text' => 'The result is recorded in your activity log.', 'icon' => 'check-circle'],
+            ['title' => 'Backup', 'text' => 'A fresh backup is made and verified before anything changes.', 'icon' => 'archive', 'result' => 'Verified'],
+            ['title' => 'Update', 'text' => 'Core, plugins and themes are updated in a controlled order.', 'icon' => 'refresh', 'result' => 'Updated'],
+            ['title' => 'Check', 'text' => 'We confirm the site loads without errors.', 'icon' => 'search', 'result' => 'No errors'],
+            ['title' => 'Functional test', 'text' => 'Key pages, forms, logins and checkout are tested.', 'icon' => 'clipboard-check', 'result' => 'Passed'],
+            ['title' => 'Done', 'text' => 'The result is recorded in your activity log.', 'icon' => 'check-circle', 'result' => 'Logged'],
         ];
     }
 
@@ -80,7 +80,7 @@ final class HomepageContent
     public static function developmentServices(): array
     {
         return [
-            ['title' => 'Custom plugins', 'text' => 'Functionality built for your site, written to WordPress coding standards.', 'icon' => 'plug'],
+            ['title' => 'Custom plugins', 'text' => 'Functionality built for your site, following WordPress coding standards.', 'icon' => 'plug'],
             ['title' => 'API integrations', 'text' => 'Connect WordPress to invoicing, CRM, shipping or inventory systems.', 'icon' => 'arrows-exchange'],
             ['title' => 'WooCommerce development', 'text' => 'Custom checkout steps, product types, pricing rules and extensions.', 'icon' => 'store'],
             ['title' => 'Automation', 'text' => 'Scheduled tasks, imports and exports that replace manual work.', 'icon' => 'cog'],

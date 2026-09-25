@@ -88,7 +88,7 @@
             <ul class="grid gap-4 md:grid-cols-3 lg:gap-6">
                 @foreach ($line->plans as $plan)
                     <li>
-                        <x-pricing.plan-card :plan="$plan" :product-line-label="$line->label" :default-interval="$defaultInterval" :free-months-label="$freeMonthsLabel" />
+                        <x-pricing.pricing-card :plan="$plan" :product-line-label="$line->label" :default-interval="$defaultInterval" :free-months-label="$freeMonthsLabel" />
                     </li>
                 @endforeach
             </ul>
@@ -96,6 +96,6 @@
     @endforeach
 
     <p class="mt-6 text-sm text-muted">
-        Prices in {{ $catalog->currency->code }}. Third-party plugin and theme licenses are not included.
+        Prices in Hungarian forint ({{ $catalog->currency->code }}), per website. Third-party plugin and theme licenses are not included.
     </p>
 </div>

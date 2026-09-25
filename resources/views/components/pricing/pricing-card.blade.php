@@ -14,14 +14,14 @@
     aria-labelledby="plan-{{ $plan->id() }}"
     @class([
         'relative flex h-full flex-col rounded-lg border bg-surface p-6 md:p-4 lg:p-8',
-        'border-primary shadow-raised ring-1 ring-primary' => $plan->highlighted,
+        'border-accent shadow-raised ring-1 ring-accent' => $plan->highlighted,
         'border-line' => ! $plan->highlighted,
     ])
 >
     <header class="flex items-start justify-between gap-4">
         <h3 id="plan-{{ $plan->id() }}" class="text-xl font-semibold">{{ $plan->name }}</h3>
         @if ($plan->badge)
-            <span class="inline-flex h-6 items-center rounded-full bg-primary px-2.5 text-xs font-medium whitespace-nowrap text-white">
+            <span class="inline-flex h-6 items-center rounded-full bg-action px-2.5 text-xs font-medium whitespace-nowrap text-white">
                 {{ $plan->badge }}
             </span>
         @endif
@@ -38,7 +38,7 @@
             >
                 <p class="flex flex-wrap items-baseline gap-x-2">
                     <span class="text-[36px] leading-none font-semibold tracking-[-0.02em] text-primary lg:text-[40px]">{{ $price->money->formattedAmount() }}</span>
-                    <span class="text-sm text-muted">{{ $price->money->currency->symbol }} / {{ $interval->unit() }}</span>
+                    <span class="text-sm text-muted">{{ $price->money->currency->symbol }}/{{ $interval->unit() }}</span>
                 </p>
 
                 @if ($interval === BillingInterval::Monthly)
