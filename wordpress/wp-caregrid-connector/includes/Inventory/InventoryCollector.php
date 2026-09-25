@@ -45,17 +45,23 @@ final class InventoryCollector
 
     private function core(): array
     {
+        $updates = get_site_transient('update_core');
         $offer = null;
-        foreach ((array) (get_site_transient('update_core')->updates ?? []) as $update) {
+        foreach ((array) ($updates->updates ?? []) as $update) {
             if ('upgrade' === ($update->response ?? null)) {
                 $offer = $update;
                 break;
             }
         }
 
+        // Null when WordPress has not checked for this version: unknown, not "up to date".
+        // A completed check always lists at least one offer ("latest" or "upgrade");
+        // WordPress records version_checked even when the request failed.
+        $checked = ($updates->version_checked ?? null) === get_bloginfo('version') && ! empty($updates->updates);
+
         return [
             'version' => get_bloginfo('version'),
-            'update_available' => $offer !== null,
+            'update_available' => $offer !== null ? true : ($checked ? false : null),
             'latest_version' => $offer->current ?? null,
         ];
     }
@@ -76,7 +82,7 @@ final class InventoryCollector
                 'name' => wp_strip_all_tags((string) $data['Name']),
                 'version' => (string) $data['Version'],
                 'active' => is_plugin_active($file),
-                'update_available' => $update !== null,
+                'update_available' => self::update_state($update !== null, $updates->checked[$file] ?? null, (string) $data['Version']),
                 'new_version' => $update->new_version ?? null,
                 'update_source' => $source,
                 'license' => $this->licenses->detect($file, $data, $source),
@@ -100,12 +106,26 @@ final class InventoryCollector
                 'name' => wp_strip_all_tags((string) $theme->get('Name')),
                 'version' => (string) $theme->get('Version'),
                 'active' => $stylesheet === $active,
-                'update_available' => $update !== null,
+                'update_available' => self::update_state($update !== null, $updates->checked[$stylesheet] ?? null, (string) $theme->get('Version')),
                 'new_version' => is_array($update) ? ($update['new_version'] ?? null) : null,
             ];
         }
 
         return $list;
+    }
+
+    /**
+     * true: an update is offered. false: WordPress checked this version and
+     * found none. null: not checked (e.g. the site cannot reach its update
+     * servers), so "up to date" would be a guess.
+     */
+    private static function update_state(bool $offered, $checked_version, string $installed): ?bool
+    {
+        if ($offered) {
+            return true;
+        }
+
+        return $checked_version !== null && (string) $checked_version === $installed ? false : null;
     }
 
     /** Where updates come from: just the host, never the package URL. */

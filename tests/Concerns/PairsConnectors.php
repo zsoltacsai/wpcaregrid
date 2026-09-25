@@ -70,7 +70,7 @@ trait PairsConnectors
             'php_version' => '8.4.19',
             'plugins' => [
                 ['file' => 'akismet/akismet.php', 'slug' => 'akismet', 'name' => 'Akismet', 'version' => '5.3', 'active' => true, 'update_available' => true, 'new_version' => '5.4', 'update_source' => 'wordpress.org', 'license' => ['status' => 'not_available']],
-                ['file' => 'wp-rocket/wp-rocket.php', 'slug' => 'wp-rocket', 'name' => 'WP Rocket', 'version' => '3.16', 'active' => true, 'update_available' => false, 'license' => ['status' => 'unknown']],
+                ['file' => 'wp-rocket/wp-rocket.php', 'slug' => 'wp-rocket', 'name' => 'WP Rocket', 'version' => '3.16', 'active' => true, 'update_available' => null, 'license' => ['status' => 'unknown']],
             ],
             'themes' => [
                 ['stylesheet' => 'twentytwentyfive', 'name' => 'Twenty Twenty-Five', 'version' => '1.2', 'active' => true, 'update_available' => false],

@@ -15,7 +15,7 @@ use Illuminate\Validation\ValidationException;
  */
 class QueueConnectorJob extends Command
 {
-    protected $signature = 'connector:queue-job {website : Website UUID} {type : Job type} {--payload={} : JSON payload}';
+    protected $signature = 'connector:queue-job {website : Website UUID} {type : Job type} {--payload= : JSON payload, default an empty object}';
 
     protected $description = 'Queue a connector job for a website';
 
@@ -23,7 +23,7 @@ class QueueConnectorJob extends Command
     {
         $website = Website::where('uuid', $this->argument('website'))->first();
         $type = JobType::tryFrom(strtoupper($this->argument('type')));
-        $payload = json_decode((string) $this->option('payload'), true);
+        $payload = json_decode((string) ($this->option('payload') ?: '{}'), true);
 
         if (! $website || ! $type || ! is_array($payload)) {
             $this->error('Unknown website, unsupported job type or invalid JSON payload. Supported: '.implode(', ', array_column(JobType::cases(), 'value')));

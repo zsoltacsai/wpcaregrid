@@ -13,6 +13,7 @@ use App\Websites\WebsiteStatus;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 
 class WebsiteController extends Controller
@@ -72,7 +73,7 @@ class WebsiteController extends Controller
             'inventory' => $website->inventory,
             'jobs' => $website->jobs()->latest('id')->limit(10)->get(),
             'canPair' => request()->user()->can('pair', $website),
-            'pairingCode' => session('pairing_code'),
+            'pairingCode' => $this->flashedPairingCode(),
         ]);
     }
 
@@ -87,7 +88,7 @@ class WebsiteController extends Controller
         $code = $codes->issue($website, $request->user());
 
         return redirect()->route('account.websites.show', $website)
-            ->with('pairing_code', ['code' => $code, 'expires_at' => now()->addSeconds(config('connector.pairing_code_ttl'))]);
+            ->with('pairing_code', ['code' => $code, 'expires_at' => now()->addSeconds(config('connector.pairing_code_ttl'))->toIso8601String()]);
     }
 
     /** Revoke the website's connector. It cannot reconnect without a new pairing code. */
@@ -121,5 +122,22 @@ class WebsiteController extends Controller
         $path = rtrim($parts['path'] ?? '', '/');
 
         return strtolower($parts['scheme']).'://'.strtolower($parts['host']).(isset($parts['port']) ? ':'.$parts['port'] : '').$path;
+    }
+
+    /**
+     * The code generated on the previous request (flashed, shown once).
+     * Sessions are JSON-serialised, so the expiry travels as a string.
+     *
+     * @return array{code: string, expires_at: Carbon}|null
+     */
+    private function flashedPairingCode(): ?array
+    {
+        $flashed = session('pairing_code');
+
+        if (! is_array($flashed) || ! is_string($flashed['code'] ?? null) || ! is_string($flashed['expires_at'] ?? null)) {
+            return null;
+        }
+
+        return ['code' => $flashed['code'], 'expires_at' => Carbon::parse($flashed['expires_at'])];
     }
 }

@@ -63,6 +63,50 @@ final class InventoryTest extends TestCase
         }
     }
 
+    public function test_unchecked_updates_are_reported_as_unknown_not_up_to_date(): void
+    {
+        $offered = $this->install_plugin('offered-plugin', '1.0.0');
+        $current = $this->install_plugin('current-plugin', '2.0.0');
+        $unchecked = $this->install_plugin('unchecked-plugin', '3.0.0');
+        set_site_transient('update_plugins', (object) [
+            'last_checked' => time(),
+            'checked' => [$offered => '1.0.0', $current => '2.0.0'],
+            'response' => [$offered => (object) ['slug' => 'offered-plugin', 'plugin' => $offered, 'new_version' => '1.1.0', 'package' => '']],
+            'no_update' => [],
+            'translations' => [],
+        ]);
+
+        $inventory = $this->plugin()->inventory()->collect();
+
+        $states = array_column($inventory['plugins'], 'update_available', 'file');
+        $this->assertTrue($states[$offered]);
+        $this->assertFalse($states[$current]);
+        $this->assertNull($states[$unchecked]);
+        $this->assertNull($inventory['core']['update_available'], 'WordPress has not checked for core updates.');
+        $this->assertNull(array_column($inventory['themes'], 'update_available', 'stylesheet')['twentytwentyfive']);
+    }
+
+    public function test_core_is_up_to_date_only_after_a_completed_check(): void
+    {
+        global $wp_version;
+
+        // What WordPress stores when its first check failed.
+        set_site_transient('update_core', (object) ['updates' => [], 'version_checked' => $wp_version, 'last_checked' => time()]);
+        $this->assertNull($this->plugin()->inventory()->collect()['core']['update_available']);
+
+        set_site_transient('update_core', (object) ['updates' => [(object) ['response' => 'latest', 'current' => $wp_version, 'locale' => 'en_US']], 'version_checked' => $wp_version, 'last_checked' => time()]);
+        $this->assertFalse($this->plugin()->inventory()->collect()['core']['update_available']);
+    }
+
+    public function test_checked_version_that_changed_since_is_unknown_again(): void
+    {
+        $file = $this->install_plugin('caregrid-sample', '1.1.0');
+        // The last check saw 1.0.0; the site has changed since.
+        set_site_transient('update_plugins', (object) ['last_checked' => time(), 'checked' => [$file => '1.0.0'], 'response' => [], 'no_update' => [], 'translations' => []]);
+
+        $this->assertNull(array_column($this->plugin()->inventory()->collect()['plugins'], 'update_available', 'file')[$file]);
+    }
+
     public function test_woocommerce_is_detected_when_installed(): void
     {
         $file = $this->install_plugin('woocommerce', '9.9.0');

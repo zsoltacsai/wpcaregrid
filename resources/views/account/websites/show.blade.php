@@ -111,7 +111,11 @@
                 <x-account.detail :label="__('connector.account.wordpress')">
                     <span class="font-mono">{{ $inventory->core['version'] }}</span>
                     <span class="block text-xs font-normal text-muted">
-                        {{ ($inventory->core['update_available'] ?? false) ? __('connector.account.update_to', ['version' => $inventory->core['latest_version'] ?? '']) : __('connector.account.up_to_date') }}
+                        @switch($inventory->core['update_available'] ?? null)
+                            @case(true) {{ __('connector.account.update_to', ['version' => $inventory->core['latest_version'] ?? '']) }} @break
+                            @case(false) {{ __('connector.account.up_to_date') }} @break
+                            @default {{ __('connector.account.not_checked') }}
+                        @endswitch
                     </span>
                 </x-account.detail>
                 <x-account.detail :label="__('connector.account.php')"><span class="font-mono">{{ $inventory->php_version }}</span></x-account.detail>
@@ -145,7 +149,7 @@
                                     </td>
                                     <td class="px-4 py-2.5 font-mono text-xs">{{ $item['version'] ?? '' }}</td>
                                     <td class="px-4 py-2.5 text-xs">
-                                        @if ($item['update_available'])<span class="text-warning-ink">{{ $item['new_version'] ?? '' }}</span>@else<span class="text-muted">{{ __('connector.account.up_to_date') }}</span>@endif
+                                        @if ($item['update_available'] === true)<span class="text-warning-ink">{{ $item['new_version'] ?? '' }}</span>@elseif ($item['update_available'] === false)<span class="text-muted">{{ __('connector.account.up_to_date') }}</span>@else<span class="text-muted">{{ __('connector.account.not_checked') }}</span>@endif
                                     </td>
                                     @if ($group === 'plugins')
                                         @php $license = LicenseStatus::tryFrom($item['license']['status'] ?? '') ?? LicenseStatus::Unknown; @endphp

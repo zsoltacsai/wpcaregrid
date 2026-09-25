@@ -67,7 +67,8 @@ class ConnectorController extends Controller
             'capabilities' => ['present', 'array', 'max:20'],
             'capabilities.*' => ['string', 'max:32'],
             'health' => ['nullable', 'array'],
-            ...HealthIngest::rules('health.'),
+            // Null until the site has run its first health check.
+            ...($request->filled('health') ? HealthIngest::rules('health.') : []),
             'sent_at' => ['nullable', 'date'],
         ]);
 

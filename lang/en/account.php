@@ -187,7 +187,7 @@ return [
         'steps' => [
             'connect' => ['title' => 'Connect your website', 'text' => 'Tell us which website this plan covers.'],
             'connection' => ['title' => 'Connection', 'text' => 'Install the WP CareGrid Connector plugin on your website.'],
-            'initial_check' => ['title' => 'Initial check', 'text' => 'We review the site, make a first backup and note anything that needs attention.'],
+            'initial_check' => ['title' => 'Initial check', 'text' => 'We review the site and note anything that needs attention.'],
             'ready' => ['title' => 'Ready', 'text' => 'Maintenance runs on schedule.'],
         ],
         'step_states' => [

@@ -1,5 +1,7 @@
 <?php
 
+use WPCareGrid\Connector\Core\Plugin;
+
 /**
  * Boots a real WordPress for the connector tests: WordPress core from
  * Composer, SQLite instead of MySQL, a fresh site per run. Only outbound
@@ -71,6 +73,6 @@ require ABSPATH.'wp-settings.php';
 require_once ABSPATH.'wp-admin/includes/plugin.php';
 require_once ABSPATH.'wp-admin/includes/admin.php';
 
-if (! is_plugin_active('wp-caregrid-connector/wp-caregrid-connector.php') || ! class_exists(\WPCareGrid\Connector\Core\Plugin::class)) {
+if (! is_plugin_active('wp-caregrid-connector/wp-caregrid-connector.php') || ! class_exists(Plugin::class)) {
     exit("The connector is not active in the test site.\n");
 }

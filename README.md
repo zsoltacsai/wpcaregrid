@@ -16,7 +16,7 @@ npm run build        # or `npm run dev` while working on the front end
 php artisan serve
 ```
 
-Tests: `php artisan test`
+Tests: `php artisan test` (server) and `cd wordpress && composer install && vendor/bin/phpunit` (connector plugin, runs in a real WordPress on SQLite).
 
 ## Brand
 
@@ -94,7 +94,7 @@ One source of truth: `config/pricing.php`, read through `App\Pricing\PricingCata
 | `User` | Login only (email, password, verification). |
 | `Customer` | Commercial entity: contact and billing details, `stripe_customer_id`. One login per customer for now (`customers.user_id`); multi-user/agency access can move to a pivot later. |
 | `Subscription` | Mirror of a Stripe subscription: plan, price, status, billing period, cancellation. Status comes only from Stripe events. |
-| `Website` | A site covered by one subscription. Connector fields are placeholders until the WP CareGrid Connector exists. |
+| `Website` | A site covered by one subscription: connection status, health, inventory. |
 | `CheckoutIntent` | What was bought, linked to the customer and subscription once payment is confirmed. |
 | `StripeEvent` | IDs of processed Stripe events (idempotency). |
 
@@ -124,6 +124,19 @@ Unknown future statuses are logged and ignored rather than guessed.
 `/login`, `/forgot-password`, `/account/activate/{token}`, and under `/account` (auth + linked, verified customer): dashboard, websites (+ onboarding), subscription, billing, profile. Records are addressed by UUID and every one is checked by a policy (`WebsitePolicy`, `SubscriptionPolicy`, `CustomerPolicy`); another customer's record returns 403. Adding a website needs an active subscription with no website yet (one website per plan).
 
 Emails (`app/Mail`, queued after the database transaction commits): account activation, welcome, payment confirmation, payment failed, subscription activated, subscription canceled. Run a queue worker (`php artisan queue:work`) in production.
+
+## WP CareGrid Connector
+
+The WordPress plugin lives in `wordpress/wp-caregrid-connector`; the API it talks to is `/api/v1/connector` (`routes/api.php`). Architecture, pairing, security model, job types and the data it sends: **[docs/CONNECTOR.md](docs/CONNECTOR.md)**.
+
+Install locally:
+
+1. `php artisan connector:package` builds the ZIP that customers download from their website page.
+2. In a WordPress site, set `WP_CAREGRID_API_URL` (and, for plain-HTTP localhost only, `WP_CAREGRID_ALLOW_INSECURE_LOCALHOST`) in `wp-config.php`.
+3. Plugins → Add New → Upload Plugin, activate.
+4. In the account, open the website and generate a pairing code; enter it under Settings → WP CareGrid.
+
+Operators queue jobs with `php artisan connector:queue-job <website-uuid> <TYPE> --payload='{…}'`. Run the scheduler (`php artisan schedule:work` locally) so connection presence is updated.
 
 ## Demo content
 

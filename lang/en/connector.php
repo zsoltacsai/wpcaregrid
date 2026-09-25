@@ -88,6 +88,7 @@ return [
         'inactive' => 'inactive',
         'update_to' => 'Update available: :version',
         'up_to_date' => 'Up to date',
+        'not_checked' => 'Not checked yet',
         'plugins' => 'Plugins',
         'themes' => 'Themes',
         'plugin' => 'Plugin',

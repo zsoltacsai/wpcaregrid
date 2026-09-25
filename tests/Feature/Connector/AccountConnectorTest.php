@@ -28,6 +28,8 @@ class AccountConnectorTest extends TestCase
         $this->assertStringNotContainsString('code=', $response->headers->get('Location'));
 
         $code = session('pairing_code')['code'];
+        // Sessions are JSON-serialised in production: the flashed value must survive that.
+        $this->assertSame(session('pairing_code'), json_decode(json_encode(session('pairing_code')), true));
         $this->assertMatchesRegularExpression('/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/', $code);
 
         $stored = ConnectorPairingCode::sole();
@@ -79,6 +81,7 @@ class AccountConnectorTest extends TestCase
             ->assertOk()
             ->assertSee('Connected')
             ->assertSee('WP Rocket')
+            ->assertSee('Not checked yet') // Unchecked is not shown as "Up to date".
             ->assertSee('Unknown')
             ->assertSee(__('connector.account.license_note'))
             ->assertDontSee($site['credential']);

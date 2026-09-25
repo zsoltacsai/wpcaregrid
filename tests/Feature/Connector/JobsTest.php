@@ -35,6 +35,18 @@ class JobsTest extends TestCase
         }
     }
 
+    public function test_operators_queue_jobs_from_the_command_line(): void
+    {
+        $site = $this->pairedWebsite();
+        $site['website']->jobs()->delete();
+
+        $this->artisan('connector:queue-job', ['website' => $site['website']->uuid, 'type' => 'GET_INVENTORY'])->assertSuccessful();
+        $this->artisan('connector:queue-job', ['website' => $site['website']->uuid, 'type' => 'UPDATE_PLUGIN', '--payload' => '{"plugin":"akismet/akismet.php"}'])->assertSuccessful();
+        $this->artisan('connector:queue-job', ['website' => $site['website']->uuid, 'type' => 'UPDATE_PLUGIN', '--payload' => '{"plugin":"../../wp-config.php"}'])->assertFailed();
+
+        $this->assertSame(['GET_INVENTORY', 'UPDATE_PLUGIN'], $site['website']->jobs()->orderBy('id')->get()->map(fn ($job) => $job->type->value)->all());
+    }
+
     public function test_polling_delivers_queued_jobs_once_marked(): void
     {
         $site = $this->pairedWebsite();

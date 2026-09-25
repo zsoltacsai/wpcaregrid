@@ -47,6 +47,18 @@ class ConnectorApiTest extends TestCase
         $this->assertSame(Presence::Connected, $website->presence());
     }
 
+    public function test_first_heartbeat_without_a_health_report_is_accepted(): void
+    {
+        // Exactly what the plugin sends right after pairing, before its first check.
+        $site = $this->pairedWebsite();
+
+        $this->withHeaders($this->connectorHeaders($site))
+            ->postJson(route('api.v1.connector.heartbeat'), $this->heartbeatPayload(['health' => null, 'last_successful_poll_at' => null, 'site_url' => 'https://company.example/']))
+            ->assertOk();
+
+        $this->assertNull($site['website']->refresh()->health_checked_at);
+    }
+
     public function test_heartbeat_is_validated(): void
     {
         $site = $this->pairedWebsite();
