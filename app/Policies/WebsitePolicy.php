@@ -18,4 +18,16 @@ class WebsitePolicy
         return $user->customer?->hasActiveSubscription() === true
             && $user->customer->subscriptionAvailableForWebsite() !== null;
     }
+
+    /** Generating a pairing code is a paid action for the site's own plan. */
+    public function pair(User $user, Website $website): bool
+    {
+        return $this->view($user, $website) && $website->allowsServiceOperations();
+    }
+
+    /** Disconnecting is always allowed for the owner, even without an active plan. */
+    public function disconnect(User $user, Website $website): bool
+    {
+        return $this->view($user, $website);
+    }
 }

@@ -1,0 +1,107 @@
+<?php
+
+return [
+
+    'presence' => [
+        'never_connected' => 'Not connected',
+        'connected' => 'Connected',
+        'stale' => 'Not responding',
+        'disconnected' => 'Disconnected',
+    ],
+
+    'health' => [
+        'healthy' => 'Healthy',
+        'attention' => 'Attention',
+        'critical' => 'Critical',
+        'unknown' => 'Unknown',
+    ],
+
+    'licenses' => [
+        'valid' => 'Valid',
+        'expired' => 'Expired',
+        'unknown' => 'Unknown',
+        'not_available' => 'Not available',
+    ],
+
+    'finding_statuses' => [
+        'pass' => 'Pass',
+        'warning' => 'Warning',
+        'fail' => 'Fail',
+        'unknown' => 'Unknown',
+    ],
+
+    'jobs' => [
+        'types' => [
+            'GET_INVENTORY' => 'Inventory',
+            'SITE_HEALTH' => 'Health check',
+            'LICENSE_CHECK' => 'License check',
+            'UPDATE_PLUGIN' => 'Plugin update',
+            'UPDATE_THEME' => 'Theme update',
+            'UPDATE_CORE' => 'WordPress update',
+        ],
+        'statuses' => [
+            'queued' => 'Queued',
+            'delivered' => 'Sent to site',
+            'success' => 'Success',
+            'failed' => 'Failed',
+            'partial' => 'Partial',
+            'skipped' => 'Skipped',
+            'expired' => 'Expired',
+            'cancelled' => 'Cancelled',
+        ],
+    ],
+
+    'account' => [
+        'connection' => 'Connection',
+        'status' => 'Status',
+        'last_seen' => 'Last contact',
+        'version' => 'Connector version',
+        'outdated' => 'Update available (:version)',
+        'never' => 'Never',
+        'pair_title' => 'Connect with the WP CareGrid Connector',
+        'pair_steps' => [
+            'Download the WP CareGrid Connector plugin.',
+            'In WordPress, go to Plugins → Add New → Upload Plugin, upload the ZIP and activate it.',
+            'Go to Settings → WP CareGrid and enter the pairing code below.',
+        ],
+        'download' => 'Download plugin',
+        'generate_code' => 'Generate pairing code',
+        'new_code' => 'Generate a new code',
+        'code_label' => 'Pairing code',
+        'code_note' => 'Valid until :time and usable once. It is not shown again; generate a new one if needed.',
+        'no_password' => 'You do not need to share any WordPress, hosting or database password.',
+        'pair_needs_plan' => 'Pairing needs an active subscription for this website.',
+        'disconnect' => 'Disconnect website',
+        'disconnect_confirm' => 'The connector loses access immediately. Reconnecting needs a new pairing code.',
+        'disconnect_yes' => 'Yes, disconnect',
+        'cancel' => 'Cancel',
+        'disconnected' => 'The website has been disconnected. The connector can no longer access WP CareGrid.',
+        'health' => 'Health',
+        'health_none' => 'No health report yet.',
+        'checked_at' => 'Checked :time',
+        'inventory' => 'Inventory',
+        'inventory_none' => 'No inventory received yet.',
+        'wordpress' => 'WordPress',
+        'php' => 'PHP',
+        'woocommerce' => 'WooCommerce',
+        'not_installed' => 'Not installed',
+        'inactive' => 'inactive',
+        'update_to' => 'Update available: :version',
+        'up_to_date' => 'Up to date',
+        'plugins' => 'Plugins',
+        'themes' => 'Themes',
+        'plugin' => 'Plugin',
+        'theme' => 'Theme',
+        'installed_version' => 'Version',
+        'update' => 'Update',
+        'license' => 'License',
+        'active' => 'Active',
+        'license_note' => '"Unknown" means the plugin does not let us verify its license automatically. It does not mean the license is valid or expired.',
+        'jobs' => 'Recent activity',
+        'jobs_none' => 'No activity yet.',
+        'job' => 'Job',
+        'result' => 'Result',
+        'time' => 'Time',
+    ],
+
+];

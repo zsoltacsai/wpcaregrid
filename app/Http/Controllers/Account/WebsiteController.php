@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers\Account;
 
+use App\Connector\JobStatus;
+use App\Connector\PairingCodes;
 use App\Http\Controllers\Controller;
 use App\Models\Website;
 use App\Pricing\ProductType;
+use App\Rules\PublicWebsiteUrl;
 use App\Websites\ConnectorStatus;
 use App\Websites\WebsiteStatus;
 use Illuminate\Contracts\View\View;
@@ -42,7 +45,7 @@ class WebsiteController extends Controller
         $request->merge(['url' => $this->normalizeUrl((string) $request->input('url'))]);
 
         $validated = $request->validate([
-            'url' => ['required', 'string', 'max:255', 'url:http,https', Rule::unique('websites')->where('customer_id', $customer->id)],
+            'url' => ['required', 'string', 'max:255', 'url:http,https', new PublicWebsiteUrl, Rule::unique('websites')->where('customer_id', $customer->id)],
             'type' => ['required', Rule::enum(ProductType::class)],
         ], ['url.unique' => __('account.websites.duplicate')]);
 
@@ -61,7 +64,43 @@ class WebsiteController extends Controller
     {
         $this->authorize('view', $website);
 
-        return view('account.websites.show', ['website' => $website]);
+        $website->load(['activeConnector', 'inventory']);
+
+        return view('account.websites.show', [
+            'website' => $website,
+            'connector' => $website->activeConnector,
+            'inventory' => $website->inventory,
+            'jobs' => $website->jobs()->latest('id')->limit(10)->get(),
+            'canPair' => request()->user()->can('pair', $website),
+            'pairingCode' => session('pairing_code'),
+        ]);
+    }
+
+    /**
+     * Issue a one-time pairing code. It is shown once, via the session
+     * (never in a URL), and only its hash is stored.
+     */
+    public function pairingCode(Request $request, Website $website, PairingCodes $codes): RedirectResponse
+    {
+        $this->authorize('pair', $website);
+
+        $code = $codes->issue($website, $request->user());
+
+        return redirect()->route('account.websites.show', $website)
+            ->with('pairing_code', ['code' => $code, 'expires_at' => now()->addSeconds(config('connector.pairing_code_ttl'))]);
+    }
+
+    /** Revoke the website's connector. It cannot reconnect without a new pairing code. */
+    public function disconnect(Website $website): RedirectResponse
+    {
+        $this->authorize('disconnect', $website);
+
+        $website->connectors()->where('status', 'active')->get()->each->revoke('disconnected_by_customer');
+        $website->pairingCodes()->whereNull('used_at')->whereNull('invalidated_at')->update(['invalidated_at' => now()]);
+        $website->jobs()->whereIn('status', [JobStatus::Queued, JobStatus::Delivered])->update(['status' => JobStatus::Cancelled->value]);
+        $website->update(['connector_status' => ConnectorStatus::Revoked, 'status' => WebsiteStatus::Disconnected]);
+
+        return redirect()->route('account.websites.show', $website)->with('status', __('connector.account.disconnected'));
     }
 
     /** "Company.example/" → "https://company.example" (scheme added, host lower-cased, trailing slash removed). */

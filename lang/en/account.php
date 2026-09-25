@@ -72,6 +72,7 @@ return [
         'awaiting_connection' => 'Awaiting connection',
         'connected' => 'Connected',
         'error' => 'Connection error',
+        'revoked' => 'Disconnected',
     ],
 
     'dashboard' => [
@@ -177,6 +178,7 @@ return [
         'view' => 'View',
         'types' => ['wordpress' => 'WordPress', 'woocommerce' => 'WooCommerce'],
         'duplicate' => 'This website has already been added.',
+        'invalid_url' => 'Enter the public address of the website, e.g. https://company.example.',
     ],
 
     'onboarding' => [

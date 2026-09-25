@@ -110,17 +110,27 @@ class OnboardingTest extends TestCase
 
             $this->get(route('account.websites.show', $website))
                 ->assertOk()
-                ->assertSee(__('account.onboarding.not_connected'))
-                ->assertSee(__('account.onboarding.connection_placeholder'));
+                ->assertSee(__('connector.presence.never_connected'))
+                ->assertDontSee('>'.__('connector.presence.connected').'<', false)
+                ->assertSee(__('connector.account.pair_title'));
         }
 
         $this->get(route('account.dashboard'))->assertSee('0 connected');
     }
 
-    public function test_confirmed_connection_completes_the_connection_step(): void
+    public function test_steps_complete_only_with_connector_confirmation_and_initial_check(): void
     {
         $website = Website::factory()->create(['connector_status' => ConnectorStatus::Connected, 'status' => WebsiteStatus::Connected]);
 
-        $this->assertSame(['connect' => 'done', 'connection' => 'done', 'initial_check' => 'done', 'ready' => 'done'], $website->onboardingStates());
+        // Connected, but no health report or inventory yet.
+        $this->assertSame(['connect' => 'done', 'connection' => 'done', 'initial_check' => 'current', 'ready' => 'not_started'], $website->onboardingStates());
+
+        $website->update(['health_status' => 'healthy', 'health_findings' => [], 'health_checked_at' => now()]);
+        $website->inventory()->create(['core' => ['version' => '7.1.2', 'update_available' => false], 'plugins' => [], 'themes' => [], 'php_version' => '8.4.0']);
+
+        $this->assertSame(['connect' => 'done', 'connection' => 'done', 'initial_check' => 'done', 'ready' => 'done'], $website->refresh()->onboardingStates());
+
+        $website->update(['health_status' => 'critical']);
+        $this->assertSame('not_started', $website->refresh()->onboardingStates()['ready']);
     }
 }

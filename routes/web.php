@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Account\BillingController;
+use App\Http\Controllers\Account\ConnectorDownloadController;
 use App\Http\Controllers\Account\DashboardController;
 use App\Http\Controllers\Account\ProfileController;
 use App\Http\Controllers\Account\SubscriptionController;
@@ -51,6 +52,9 @@ Route::middleware(['auth', 'customer'])->prefix('account')->name('account.')->gr
     Route::get('/websites/new', [WebsiteController::class, 'create'])->name('websites.create');
     Route::post('/websites', [WebsiteController::class, 'store'])->name('websites.store');
     Route::get('/websites/{website}', [WebsiteController::class, 'show'])->name('websites.show');
+    Route::post('/websites/{website}/pairing-code', [WebsiteController::class, 'pairingCode'])->middleware('throttle:10,1')->name('websites.pairing-code');
+    Route::post('/websites/{website}/disconnect', [WebsiteController::class, 'disconnect'])->name('websites.disconnect');
+    Route::get('/connector/download', ConnectorDownloadController::class)->name('connector.download');
 
     Route::get('/subscription', [SubscriptionController::class, 'index'])->name('subscription');
     Route::get('/subscriptions/{subscription}', [SubscriptionController::class, 'show'])->name('subscriptions.show');

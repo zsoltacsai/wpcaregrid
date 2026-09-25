@@ -1,0 +1,133 @@
+<?php
+
+namespace WPCareGrid\Connector\Core;
+
+use WPCareGrid\Connector\Admin\SettingsPage;
+use WPCareGrid\Connector\Api\Client;
+use WPCareGrid\Connector\Auth\CredentialStore;
+use WPCareGrid\Connector\Health\HealthChecker;
+use WPCareGrid\Connector\Heartbeat\HeartbeatService;
+use WPCareGrid\Connector\Inventory\InventoryCollector;
+use WPCareGrid\Connector\Jobs\Handlers;
+use WPCareGrid\Connector\Jobs\JobRegistry;
+use WPCareGrid\Connector\Jobs\JobRunner;
+use WPCareGrid\Connector\Jobs\JobStore;
+use WPCareGrid\Connector\Licenses\LicenseDetector;
+use WPCareGrid\Connector\Pairing\PairingService;
+use WPCareGrid\Connector\Updates\UpdateGuard;
+
+/**
+ * Builds the services and registers WordPress hooks. Only three entry
+ * points exist: two cron events and the admin page. No REST routes, no
+ * public AJAX, no front-end output.
+ */
+final class Plugin
+{
+    private static ?self $instance = null;
+
+    private array $services = [];
+
+    public static function instance(): self
+    {
+        return self::$instance ??= new self;
+    }
+
+    public static function boot(): void
+    {
+        $plugin = self::instance();
+
+        Scheduler::register();
+        add_action(Scheduler::HEARTBEAT, [$plugin, 'run_heartbeat']);
+        add_action(Scheduler::POLL, [$plugin, 'run_poll']);
+
+        if (is_admin()) {
+            (new SettingsPage($plugin))->register();
+        }
+    }
+
+    public function run_heartbeat(): void
+    {
+        $this->heartbeat()->send();
+    }
+
+    public function run_poll(): void
+    {
+        $this->runner()->poll();
+    }
+
+    public function credentials(): CredentialStore
+    {
+        return $this->services['credentials'] ??= new CredentialStore;
+    }
+
+    public function api(): Client
+    {
+        return $this->services['api'] ??= new Client($this->credentials());
+    }
+
+    public function connection(): Connection
+    {
+        return $this->services['connection'] ??= new Connection($this->api(), $this->credentials());
+    }
+
+    public function pairing(): PairingService
+    {
+        return $this->services['pairing'] ??= new PairingService($this->api(), $this->credentials(), $this->connection());
+    }
+
+    public function health(): HealthChecker
+    {
+        return $this->services['health'] ??= new HealthChecker;
+    }
+
+    public function inventory(): InventoryCollector
+    {
+        return $this->services['inventory'] ??= new InventoryCollector(new LicenseDetector);
+    }
+
+    public function heartbeat(): HeartbeatService
+    {
+        return $this->services['heartbeat'] ??= new HeartbeatService($this->api(), $this->connection(), $this->health());
+    }
+
+    public function jobs(): JobStore
+    {
+        return $this->services['jobs'] ??= new JobStore;
+    }
+
+    public function registry(): JobRegistry
+    {
+        if (! isset($this->services['registry'])) {
+            $guard = new UpdateGuard($this->health(), $this->inventory());
+
+            $this->services['registry'] = new JobRegistry(
+                [
+                    'GET_INVENTORY' => new Handlers\GetInventoryHandler($this->inventory()),
+                    'SITE_HEALTH' => new Handlers\SiteHealthHandler($this->health()),
+                    'LICENSE_CHECK' => new Handlers\LicenseCheckHandler($this->inventory()),
+                    'UPDATE_PLUGIN' => new Handlers\UpdatePluginHandler($guard),
+                    'UPDATE_THEME' => new Handlers\UpdateThemeHandler($guard),
+                    'UPDATE_CORE' => new Handlers\UpdateCoreHandler($guard),
+                ]
+            );
+        }
+
+        return $this->services['registry'];
+    }
+
+    public function runner(): JobRunner
+    {
+        return $this->services['runner'] ??= new JobRunner($this->api(), $this->registry(), $this->jobs(), $this->connection());
+    }
+
+    /** For tests: replace a service. */
+    public function set(string $name, object $service): void
+    {
+        $this->services[$name] = $service;
+    }
+
+    public function reset(): void
+    {
+        $this->services = [];
+    }
+}

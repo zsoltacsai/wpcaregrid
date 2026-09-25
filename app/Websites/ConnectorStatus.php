@@ -13,6 +13,7 @@ enum ConnectorStatus: string
     case AwaitingConnection = 'awaiting_connection';
     case Connected = 'connected';
     case Error = 'error';
+    case Revoked = 'revoked';
 
     public function isConfirmed(): bool
     {

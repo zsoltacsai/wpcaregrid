@@ -45,6 +45,17 @@ class AppServiceProvider extends ServiceProvider
             Limit::perMinute(10)->by($request->ip()),
         ]);
 
+        // Connector pairing: per IP, since the caller has no identity yet.
+        RateLimiter::for('connector-pair', fn (Request $request) => [
+            Limit::perMinute(5)->by($request->ip()),
+            Limit::perHour(20)->by($request->ip()),
+        ]);
+
+        // Authenticated connector traffic: per connector (runs after connector.auth).
+        RateLimiter::for('connector-api', fn (Request $request) => Limit::perMinute(30)->by(
+            'connector:'.($request->attributes->get('connector')?->id ?? $request->ip()),
+        ));
+
         RateLimiter::for('checkout', fn (Request $request) => [
             Limit::perMinute(10)->by($request->ip()),
             Limit::perHour(30)->by($request->ip()),
