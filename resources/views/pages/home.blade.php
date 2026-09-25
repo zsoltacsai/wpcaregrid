@@ -1,5 +1,9 @@
-<x-layouts.marketing>
-    <x-sections.hero :trust-indicators="$content->trustIndicators()" :sites="$demo->heroSites()" :update-run="$demo->latestUpdateRun()" />
+<x-layouts.marketing :title="__('home.meta.title')" :description="__('home.meta.description')">
+    <x-sections.hero
+        :trust-indicators="$content->trustIndicators()"
+        :sites="$demo->heroSites()"
+        :update-run="$demo->latestUpdateRun()"
+    />
     <x-sections.services :services="$content->services()" />
     <x-sections.why-maintenance :problems="$content->problems()" />
     <x-sections.verification :steps="$content->verificationSteps()" />
@@ -10,7 +14,7 @@
         :updates="$demo->pendingUpdates()"
         :licenses="$demo->licenses()"
     />
-    <x-sections.licenses />
+    <x-sections.licenses :license="$demo->expiredLicense()" />
     <x-sections.woocommerce :flow="$content->woocommerceFlow()" />
     <x-sections.development :services="$content->developmentServices()" />
     <x-sections.how-it-works :steps="$content->steps()" />

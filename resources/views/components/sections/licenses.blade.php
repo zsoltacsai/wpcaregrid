@@ -1,18 +1,22 @@
+@props(['license'])
+
 <x-ui.section labelledby="licenses-title">
     <div class="grid items-center gap-10 lg:grid-cols-2 lg:gap-16">
         <div>
             <x-ui.section-heading
                 id="licenses-title"
-                eyebrow="License management"
-                title="Expired licenses don't go unnoticed."
-                lead="Premium plugins and themes stop receiving updates when their license runs out. We check license status as part of routine maintenance, and the site owner is notified when a license is detected as expired or invalid."
+                :eyebrow="__('home.licenses.eyebrow')"
+                :title="__('home.licenses.title')"
+                :lead="__('home.licenses.lead')"
             />
 
-            <p class="mt-8 flex max-w-2xl items-start gap-3 border-l-2 border-line-strong pl-4 text-sm text-ink">
-                Third-party plugin and theme licenses remain the customer's responsibility.
+            <p class="mt-4 max-w-2xl text-sm text-muted">{{ __('home.licenses.limitation') }}</p>
+
+            <p class="mt-8 flex max-w-2xl items-start gap-3 border-l-2 border-line-strong pl-4 text-sm font-medium text-ink">
+                {{ __('home.licenses.responsibility') }}
             </p>
         </div>
 
-        <x-dashboard.license-notice product="WP Rocket" site="petplaza.hu" detected="24 Sep 2026" />
+        <x-dashboard.license-notice :product="$license['product']" :site="$license['site']" :detected="$license['detected']" />
     </div>
 </x-ui.section>

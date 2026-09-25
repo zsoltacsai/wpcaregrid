@@ -9,19 +9,13 @@ enum BillingInterval: string
 
     public function label(): string
     {
-        return match ($this) {
-            self::Monthly => 'Monthly',
-            self::Annual => 'Annual',
-        };
+        return __("pricing.intervals.{$this->value}");
     }
 
-    /** Unit shown next to a price, e.g. "Ft/month". */
+    /** Unit shown next to a price, e.g. "month" in "Ft / month". */
     public function unit(): string
     {
-        return match ($this) {
-            self::Monthly => 'month',
-            self::Annual => 'year',
-        };
+        return __("pricing.units.{$this->value}");
     }
 
     public function months(): int

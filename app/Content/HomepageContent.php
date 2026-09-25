@@ -3,8 +3,9 @@
 namespace App\Content;
 
 /**
- * Copy for the marketing homepage, kept out of the Blade templates so it can
- * be edited (or moved to translation files) without touching the markup.
+ * Structure of the marketing homepage: which items appear, in what order,
+ * with which icon or link. All wording comes from lang/{locale}/home.php, so
+ * a new language only needs a translation file.
  */
 final class HomepageContent
 {
@@ -12,125 +13,102 @@ final class HomepageContent
     public static function navigation(): array
     {
         return [
-            ['label' => 'Services', 'href' => '#services'],
-            ['label' => 'Pricing', 'href' => '#pricing'],
-            ['label' => 'How it works', 'href' => '#how-it-works'],
-            ['label' => 'Custom Development', 'href' => '#custom-development'],
-            ['label' => 'FAQ', 'href' => '#faq'],
+            ['label' => __('home.nav.services'), 'href' => '#services'],
+            ['label' => __('home.nav.pricing'), 'href' => '#pricing'],
+            ['label' => __('home.nav.how_it_works'), 'href' => '#how-it-works'],
+            ['label' => __('home.nav.custom_development'), 'href' => '#custom-development'],
+            ['label' => __('home.nav.faq'), 'href' => '#faq'],
         ];
     }
 
     /** @return list<array{label: string, icon: string}> */
     public static function trustIndicators(): array
     {
-        return [
-            ['label' => 'No long-term contract', 'icon' => 'calendar'],
-            ['label' => 'Secure connection', 'icon' => 'lock'],
-            ['label' => 'For businesses', 'icon' => 'briefcase'],
-        ];
+        return self::items('home.hero.trust', [
+            'contract' => 'calendar',
+            'connection' => 'lock',
+            'business' => 'briefcase',
+        ], fn (string $text) => ['label' => $text]);
     }
 
     /** @return list<array{title: string, text: string, icon: string}> */
     public static function services(): array
     {
-        return [
-            ['title' => 'Updates', 'text' => 'WordPress, plugins and themes', 'icon' => 'refresh'],
-            ['title' => 'Backups', 'text' => 'Files and database stored remotely', 'icon' => 'archive'],
-            ['title' => 'Security', 'text' => 'Vulnerability and malware checks', 'icon' => 'shield'],
-            ['title' => 'Functional checks', 'text' => 'We verify important functions after updates', 'icon' => 'clipboard-check'],
-        ];
+        return self::items('home.services.items', [
+            'updates' => 'refresh',
+            'backups' => 'archive',
+            'security' => 'shield',
+            'functional' => 'clipboard-check',
+        ]);
     }
 
-    /** @return list<array{title: string, text: string, icon: string}> */
+    /** @return list<array{title: string, text: string, icon: string, tone: string}> */
     public static function problems(): array
     {
-        return [
-            ['title' => 'Outdated software', 'text' => 'Outdated plugins and themes are a common entry point for attacks. Updates close known vulnerabilities.', 'icon' => 'clock'],
-            ['title' => 'No recent backup', 'text' => 'Without a recent backup stored off the server, a failed update or a hosting problem can mean lost content and orders.', 'icon' => 'archive-x'],
-            ['title' => 'Updates can break things', 'text' => 'A plugin update can break a form, a layout or the checkout. Often nobody notices until a customer does.', 'icon' => 'alert-triangle'],
-        ];
+        $tones = ['outdated' => 'warning', 'backup' => 'danger', 'updates' => 'warning'];
+
+        return array_map(
+            fn (array $item) => $item + ['tone' => $tones[$item['key']]],
+            self::items('home.why.items', [
+                'outdated' => 'clock',
+                'backup' => 'archive-x',
+                'updates' => 'alert-triangle',
+            ]),
+        );
     }
 
-    /** @return list<array{title: string, text: string, icon: string, result: string}> */
+    /** @return list<array{title: string, text: string, result: string, icon: string}> */
     public static function verificationSteps(): array
     {
-        return [
-            ['title' => 'Backup', 'text' => 'A fresh backup is made and verified before anything changes.', 'icon' => 'archive', 'result' => 'Verified'],
-            ['title' => 'Update', 'text' => 'Core, plugins and themes are updated in a controlled order.', 'icon' => 'refresh', 'result' => 'Updated'],
-            ['title' => 'Check', 'text' => 'We confirm the site loads without errors.', 'icon' => 'search', 'result' => 'No errors'],
-            ['title' => 'Functional test', 'text' => 'Key pages, forms, logins and checkout are tested.', 'icon' => 'clipboard-check', 'result' => 'Passed'],
-            ['title' => 'Done', 'text' => 'The result is recorded in your activity log.', 'icon' => 'check-circle', 'result' => 'Logged'],
-        ];
+        return self::items('home.verification.steps', [
+            'backup' => 'archive',
+            'update' => 'refresh',
+            'check' => 'search',
+            'functional' => 'clipboard-check',
+            'done' => 'check-circle',
+        ]);
     }
 
     /** @return list<array{title: string, icon: string}> */
     public static function woocommerceFlow(): array
     {
-        return [
-            ['title' => 'Product', 'icon' => 'package'],
-            ['title' => 'Cart', 'icon' => 'cart'],
-            ['title' => 'Checkout', 'icon' => 'clipboard'],
-            ['title' => 'Payment', 'icon' => 'credit-card'],
-            ['title' => 'Order', 'icon' => 'receipt'],
-            ['title' => 'Email', 'icon' => 'mail'],
-        ];
+        return self::items('home.woocommerce.flow', [
+            'product' => 'package',
+            'cart' => 'cart',
+            'checkout' => 'clipboard',
+            'payment' => 'credit-card',
+            'order' => 'receipt',
+            'email' => 'mail',
+        ], fn (string $text) => ['title' => $text]);
     }
 
     /** @return list<array{title: string, text: string, icon: string}> */
     public static function developmentServices(): array
     {
-        return [
-            ['title' => 'Custom plugins', 'text' => 'Functionality built for your site, following WordPress coding standards.', 'icon' => 'plug'],
-            ['title' => 'API integrations', 'text' => 'Connect WordPress to invoicing, CRM, shipping or inventory systems.', 'icon' => 'arrows-exchange'],
-            ['title' => 'WooCommerce development', 'text' => 'Custom checkout steps, product types, pricing rules and extensions.', 'icon' => 'store'],
-            ['title' => 'Automation', 'text' => 'Scheduled tasks, imports and exports that replace manual work.', 'icon' => 'cog'],
-        ];
+        return self::items('home.development.items', [
+            'plugins' => 'plug',
+            'api' => 'arrows-exchange',
+            'woocommerce' => 'store',
+            'automation' => 'cog',
+        ]);
     }
 
     /** @return list<array{number: string, title: string, text: string}> */
     public static function steps(): array
     {
-        return [
-            ['number' => '01', 'title' => 'Choose a plan', 'text' => 'Pick the plan that fits your site. Monthly or annual billing.'],
-            ['number' => '02', 'title' => 'Connect your website', 'text' => 'Connect your site through a secure connection. No need to share your admin password.'],
-            ['number' => '03', 'title' => 'Initial check', 'text' => 'We review your site, make a first backup and note anything that needs attention.'],
-            ['number' => '04', 'title' => 'Ongoing maintenance', 'text' => 'Updates, backups and checks run on schedule. Everything is logged.'],
-        ];
+        $steps = self::items('home.how.steps', ['plan' => null, 'connect' => null, 'audit' => null, 'ongoing' => null]);
+
+        foreach ($steps as $index => $step) {
+            $steps[$index]['number'] = sprintf('%02d', $index + 1);
+        }
+
+        return $steps;
     }
 
     /** @return list<array{question: string, answer: string}> */
     public static function faqs(): array
     {
-        return [
-            [
-                'question' => 'Do I need to give you my WordPress password?',
-                'answer' => 'No. You connect your website through a secure connection that you can revoke at any time. You do not need to send us your administrator password.',
-            ],
-            [
-                'question' => 'What happens if an update breaks my website?',
-                'answer' => 'Every update is preceded by a backup. If a check after the update fails, we restore the last working state and investigate the cause before trying the update again.',
-            ],
-            [
-                'question' => 'Where are backups stored?',
-                'answer' => 'Backups are stored remotely, separate from your hosting server, so a server problem does not take your backups with it.',
-            ],
-            [
-                'question' => 'How often are backups made?',
-                'answer' => 'WordPress Basic includes weekly backups; all other plans include daily backups. A backup is also made before every update.',
-            ],
-            [
-                'question' => 'What happens if a plugin license expires?',
-                'answer' => 'We let you know when we find an expired plugin or theme license. Renewing third-party licenses remains your responsibility. Until a license is renewed, that plugin or theme may not receive updates.',
-            ],
-            [
-                'question' => 'What happens if my website is infected?',
-                'answer' => 'We notify you as soon as a security check finds a problem and agree the next steps with you. Malware cleanup is included in Secure plans; on other plans we quote it separately.',
-            ],
-            [
-                'question' => 'Can you develop custom plugins?',
-                'answer' => 'Yes. We build custom plugins, API integrations and WooCommerce extensions. Tell us what you need and we will reply with a proposal.',
-            ],
-        ];
+        return array_values((array) __('home.faq.items'));
     }
 
     /** @return list<array{heading: string, links: list<array{label: string, href: string}>}> */
@@ -140,30 +118,45 @@ final class HomepageContent
 
         return [
             [
-                'heading' => 'Product',
+                'heading' => __('home.footer.columns.product'),
+                'links' => self::navigation(),
+            ],
+            [
+                'heading' => __('home.footer.columns.account'),
                 'links' => [
-                    ['label' => 'Services', 'href' => '#services'],
-                    ['label' => 'Pricing', 'href' => '#pricing'],
-                    ['label' => 'How it works', 'href' => '#how-it-works'],
-                    ['label' => 'Custom Development', 'href' => '#custom-development'],
-                    ['label' => 'FAQ', 'href' => '#faq'],
+                    ['label' => __('home.nav.login'), 'href' => $links['login']],
+                    ['label' => __('home.footer.links.contact'), 'href' => $links['contact']],
                 ],
             ],
             [
-                'heading' => 'Account',
+                'heading' => __('home.footer.columns.legal'),
                 'links' => [
-                    ['label' => 'Login', 'href' => $links['login']],
-                    ['label' => 'Contact', 'href' => $links['contact']],
-                ],
-            ],
-            [
-                'heading' => 'Legal',
-                'links' => [
-                    ['label' => 'Terms', 'href' => $links['terms']],
-                    ['label' => 'Privacy', 'href' => $links['privacy']],
-                    ['label' => 'Cookie Policy', 'href' => $links['cookies']],
+                    ['label' => __('home.footer.links.terms'), 'href' => $links['terms']],
+                    ['label' => __('home.footer.links.privacy'), 'href' => $links['privacy']],
+                    ['label' => __('home.footer.links.cookies'), 'href' => $links['cookies']],
                 ],
             ],
         ];
+    }
+
+    /**
+     * Pair each key with its icon and translated text, keeping the order of
+     * $icons (the page structure) rather than the translation file.
+     *
+     * @param  array<string, string|null>  $icons
+     * @param  (callable(mixed): array<string, mixed>)|null  $map  Turns a translation value into fields.
+     * @return list<array<string, mixed>>
+     */
+    private static function items(string $key, array $icons, ?callable $map = null): array
+    {
+        $text = (array) __($key);
+        $items = [];
+
+        foreach ($icons as $itemKey => $icon) {
+            $fields = $map ? $map($text[$itemKey]) : $text[$itemKey];
+            $items[] = ['key' => $itemKey, 'icon' => $icon] + $fields;
+        }
+
+        return $items;
     }
 }

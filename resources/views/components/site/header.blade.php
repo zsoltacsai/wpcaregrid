@@ -13,11 +13,11 @@
     class="sticky top-0 z-50 border-b border-transparent bg-canvas transition-shadow duration-200 data-raised:border-line data-raised:shadow-header"
 >
     <x-ui.container class="flex h-16 items-center justify-between gap-6 lg:h-[72px]">
-        <a href="{{ route('home') }}" class="shrink-0 rounded-sm" aria-label="WP CareGrid home">
+        <a href="{{ route('home') }}" class="shrink-0 rounded-sm" aria-label="{{ __('home.home_link') }}">
             <x-brand.logo :descriptor="false" class="h-8 lg:h-9" />
         </a>
 
-        <nav aria-label="Main" class="hidden lg:block">
+        <nav aria-label="{{ __('home.nav.label') }}" class="hidden lg:block">
             <ul class="flex items-center gap-6 xl:gap-8">
                 @foreach ($navigation as $item)
                     <li>
@@ -30,8 +30,8 @@
         </nav>
 
         <div class="hidden items-center gap-2 lg:flex">
-            <x-ui.button :href="$links['login']" variant="ghost">Login</x-ui.button>
-            <x-ui.button href="#pricing">Get started</x-ui.button>
+            <x-ui.button :href="$links['login']" variant="ghost">{{ __('home.nav.login') }}</x-ui.button>
+            <x-ui.button href="#pricing">{{ __('home.nav.get_started') }}</x-ui.button>
         </div>
 
         <button
@@ -43,7 +43,7 @@
             aria-expanded="false"
             :aria-expanded="open.toString()"
         >
-            <span class="sr-only" x-text="open ? 'Close menu' : 'Open menu'">Open menu</span>
+            <span class="sr-only" x-text="open ? @js(__('home.nav.close_menu')) : @js(__('home.nav.open_menu'))">{{ __('home.nav.open_menu') }}</span>
             <x-ui.icon name="menu" class="size-6" x-show="!open" />
             <x-ui.icon name="close" class="size-6" x-show="open" x-cloak />
         </button>
@@ -56,7 +56,7 @@
         class="max-h-[calc(100dvh-64px)] overflow-y-auto border-t border-line bg-canvas lg:hidden"
     >
         <x-ui.container class="py-4">
-            <nav aria-label="Mobile">
+            <nav aria-label="{{ __('home.nav.mobile_label') }}">
                 <ul class="divide-y divide-line">
                     @foreach ($navigation as $item)
                         <li>
@@ -74,8 +74,8 @@
             </nav>
 
             <div class="mt-4 grid grid-cols-2 gap-2 pb-2">
-                <x-ui.button :href="$links['login']" variant="secondary" size="lg">Login</x-ui.button>
-                <x-ui.button href="#pricing" size="lg" x-on:click="open = false">Get started</x-ui.button>
+                <x-ui.button :href="$links['login']" variant="secondary" size="lg">{{ __('home.nav.login') }}</x-ui.button>
+                <x-ui.button href="#pricing" size="lg" x-on:click="open = false">{{ __('home.nav.get_started') }}</x-ui.button>
             </div>
         </x-ui.container>
     </div>

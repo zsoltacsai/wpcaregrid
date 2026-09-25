@@ -1,11 +1,7 @@
 @props(['steps'])
 
 <x-ui.section id="how-it-works" tone="surface" labelledby="how-title">
-    <x-ui.section-heading
-        id="how-title"
-        eyebrow="How it works"
-        title="Up and running in four steps."
-    />
+    <x-ui.section-heading id="how-title" :eyebrow="__('home.how.eyebrow')" :title="__('home.how.title')" />
 
     <ol class="mt-10 grid gap-8 sm:grid-cols-2 lg:grid-cols-4 lg:gap-6">
         @foreach ($steps as $step)

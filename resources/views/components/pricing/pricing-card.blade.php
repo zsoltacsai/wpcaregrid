@@ -38,18 +38,18 @@
             >
                 <p class="flex flex-wrap items-baseline gap-x-2">
                     <span class="text-[36px] leading-none font-semibold tracking-[-0.02em] text-primary lg:text-[40px]">{{ $price->money->formattedAmount() }}</span>
-                    <span class="text-sm text-muted">{{ $price->money->currency->symbol }}/{{ $interval->unit() }}</span>
+                    <span class="text-sm text-muted">{{ __('pricing.per_unit', ['currency' => $price->money->currency->symbol, 'unit' => $interval->unit()]) }}</span>
                 </p>
 
                 @if ($interval === BillingInterval::Monthly)
-                    <p class="mt-3 text-sm text-muted">Billed monthly. No long-term contract.</p>
+                    <p class="mt-3 text-sm text-muted">{{ __('pricing.billed_monthly') }}</p>
                 @else
                     <p class="mt-3 flex flex-wrap items-center gap-2 text-sm text-ink">
                         @if ($freeMonthsLabel && $savings->isPositive())
                             <x-ui.status-badge tone="positive">{{ $freeMonthsLabel }}</x-ui.status-badge>
-                            <span>Save {{ $savings->format() }}</span>
+                            <span>{{ __('pricing.save', ['amount' => $savings->format()]) }}</span>
                         @else
-                            <span class="text-muted">Billed annually.</span>
+                            <span class="text-muted">{{ __('pricing.billed_annually') }}</span>
                         @endif
                     </p>
                 @endif
@@ -64,7 +64,7 @@
         size="lg"
         class="mt-6 w-full"
     >
-        Choose {{ $plan->name }}<span class="sr-only"> {{ $productLineLabel }}</span>
+        {{ __('pricing.choose', ['plan' => $plan->name]) }}<span class="sr-only"> ({{ $productLineLabel }})</span>
     </x-ui.button>
 
     <ul class="mt-6 space-y-3 text-sm">

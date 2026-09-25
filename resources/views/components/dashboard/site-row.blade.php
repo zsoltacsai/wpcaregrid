@@ -1,11 +1,13 @@
 {{--
     One website in a dashboard list.
-    variant: compact (hero preview) | full (dashboard preview, adds plan and update columns on wide screens)
+    variant: compact (hero preview) | full (all states; a table row from lg up, stacked below)
 --}}
 @props(['site', 'variant' => 'compact'])
 
 @php
-    $updates = $site['updates'] === 0 ? 'Up to date' : $site['updates'].' '.Str::plural('update', $site['updates']).' pending';
+    $platform = __("dashboard.platforms.{$site['platform']}");
+    $backupDay = __("dashboard.days.{$site['last_backup']['day']}");
+    $backupTime = $site['last_backup']['time'];
 @endphp
 
 @if ($variant === 'compact')
@@ -16,27 +18,55 @@
                 <span class="truncate text-sm font-medium text-primary">{{ $site['domain'] }}</span>
             </p>
             <p class="mt-1 truncate pl-4 text-xs text-muted">
-                {{ $site['platform'] }} <span aria-hidden="true">·</span> Backup {{ $site['last_backup'] }}
+                {{ $platform }} <span aria-hidden="true">·</span>
+                <span class="whitespace-nowrap">{{ __('dashboard.backup_at', ['when' => $backupDay]) }} <span class="font-mono">{{ $backupTime }}</span></span>
             </p>
         </div>
         <x-ui.status-badge :status="$site['status']" />
     </li>
 @else
-    <li {{ $attributes->merge(['class' => 'grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 px-4 py-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.3fr)_104px] md:px-6']) }}>
-        <div class="min-w-0">
-            <p class="flex items-center gap-2">
-                <x-ui.status-dot :tone="$site['status']->tone()" />
-                <span class="truncate text-sm font-medium text-primary">{{ $site['domain'] }}</span>
-            </p>
-            <p class="mt-0.5 truncate pl-4 text-xs text-muted">{{ $site['platform'] }} <span class="md:hidden">· {{ $site['plan'] }}</span></p>
+    <li {{ $attributes->merge(['class' => 'px-4 py-3 md:px-6']) }}>
+        {{-- Below lg: domain and status, then the states as a wrapped list. --}}
+        <div class="lg:hidden">
+            <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                    <p class="flex items-center gap-2">
+                        <x-ui.status-dot :tone="$site['status']->tone()" />
+                        <span class="truncate text-sm font-medium text-primary">{{ $site['domain'] }}</span>
+                    </p>
+                    <p class="mt-0.5 pl-4 text-xs text-muted">
+                        {{ $platform }} <span aria-hidden="true">·</span>
+                        <span class="whitespace-nowrap">{{ __('dashboard.backup_at', ['when' => $backupDay]) }} <span class="font-mono">{{ $backupTime }}</span></span>
+                    </p>
+                </div>
+                <x-ui.status-badge :status="$site['status']" />
+            </div>
+            <dl class="mt-2 flex flex-wrap gap-x-4 gap-y-1 pl-4 text-xs">
+                @foreach (['updates', 'security', 'license'] as $type)
+                    <div class="flex items-center gap-1">
+                        <dt class="sr-only">{{ __("dashboard.columns.{$type}") }}</dt>
+                        <dd><x-dashboard.site-state :type="$type" :site="$site" /></dd>
+                    </div>
+                @endforeach
+            </dl>
         </div>
-        <p class="hidden text-sm text-ink md:block">{{ $site['plan'] }}</p>
-        <p class="col-start-1 row-start-2 pl-4 text-xs text-muted md:col-start-auto md:row-start-auto md:pl-0 md:text-sm md:text-ink">
-            <span class="md:sr-only">Last backup:</span> <span class="font-mono">{{ $site['last_backup'] }}</span>
-        </p>
-        <p class="hidden text-sm text-ink md:block">{{ $site['note'] }}</p>
-        <div class="col-start-2 row-span-2 row-start-1 justify-self-end md:col-start-auto md:row-span-1 md:row-start-auto">
-            <x-ui.status-badge :status="$site['status']" />
+
+        {{-- lg and up: one row per site, aligned with the column headers. --}}
+        <div class="hidden items-center gap-x-4 text-sm lg:grid lg:grid-cols-(--dashboard-columns)">
+            <div class="min-w-0">
+                <p class="flex items-center gap-2">
+                    <x-ui.status-dot :tone="$site['status']->tone()" />
+                    <span class="truncate font-medium text-primary">{{ $site['domain'] }}</span>
+                </p>
+                <p class="mt-0.5 truncate pl-4 text-xs text-muted">{{ $platform }}</p>
+            </div>
+            <p class="text-ink">{{ $backupDay }} <span class="font-mono">{{ $backupTime }}</span></p>
+            <x-dashboard.site-state type="updates" :site="$site" />
+            <x-dashboard.site-state type="security" :site="$site" />
+            <x-dashboard.site-state type="license" :site="$site" />
+            <div class="justify-self-end">
+                <x-ui.status-badge :status="$site['status']" />
+            </div>
         </div>
     </li>
 @endif

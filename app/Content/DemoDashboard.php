@@ -9,20 +9,26 @@ use App\Enums\Status;
  *
  * Everything here is fictional demo content and is always rendered with a
  * visible "Demo data" label. It must never be presented as real customer
- * or business statistics.
+ * or business statistics. Values are keys and numbers only; the components
+ * turn them into text through lang/{locale}/dashboard.php.
  */
 final class DemoDashboard
 {
-    /** @return list<array{domain: string, platform: string, plan: string, last_backup: string, updates: int, note: string, status: Status}> */
+    /**
+     * @return list<array{
+     *     domain: string, platform: string, last_backup: array{day: string, time: string},
+     *     updates: int, security: string, license: string, status: Status
+     * }>
+     */
     public static function sites(): array
     {
         return [
-            ['domain' => 'fndeco.com', 'platform' => 'WooCommerce', 'plan' => 'Business', 'last_backup' => 'Today 03:10', 'updates' => 0, 'note' => 'All checks passed', 'status' => Status::Healthy],
-            ['domain' => 'petplaza.hu', 'platform' => 'WooCommerce', 'plan' => 'Secure', 'last_backup' => 'Today 02:45', 'updates' => 3, 'note' => '3 updates pending', 'status' => Status::Attention],
-            ['domain' => 'example.com', 'platform' => 'WordPress', 'plan' => 'Basic', 'last_backup' => 'Today 03:30', 'updates' => 1, 'note' => 'Update scheduled', 'status' => Status::Healthy],
-            ['domain' => 'shop.example.com', 'platform' => 'WooCommerce', 'plan' => 'Business', 'last_backup' => 'Today 01:55', 'updates' => 2, 'note' => 'Security issue found', 'status' => Status::Critical],
-            ['domain' => 'blog.example.org', 'platform' => 'WordPress', 'plan' => 'Basic', 'last_backup' => 'Yesterday 23:40', 'updates' => 1, 'note' => 'License expired', 'status' => Status::Attention],
-            ['domain' => 'docs.example.net', 'platform' => 'WordPress', 'plan' => 'Business', 'last_backup' => 'Today 03:05', 'updates' => 0, 'note' => 'All checks passed', 'status' => Status::Healthy],
+            ['domain' => 'fndeco.com', 'platform' => 'woocommerce', 'last_backup' => ['day' => 'today', 'time' => '03:10'], 'updates' => 0, 'security' => 'ok', 'license' => 'valid', 'status' => Status::Healthy],
+            ['domain' => 'petplaza.hu', 'platform' => 'woocommerce', 'last_backup' => ['day' => 'today', 'time' => '02:45'], 'updates' => 3, 'security' => 'ok', 'license' => 'expired', 'status' => Status::Attention],
+            ['domain' => 'example.com', 'platform' => 'wordpress', 'last_backup' => ['day' => 'today', 'time' => '03:30'], 'updates' => 1, 'security' => 'ok', 'license' => 'none', 'status' => Status::Healthy],
+            ['domain' => 'shop.example.com', 'platform' => 'woocommerce', 'last_backup' => ['day' => 'today', 'time' => '01:55'], 'updates' => 2, 'security' => 'issue', 'license' => 'valid', 'status' => Status::Critical],
+            ['domain' => 'blog.example.org', 'platform' => 'wordpress', 'last_backup' => ['day' => 'yesterday', 'time' => '23:40'], 'updates' => 1, 'security' => 'ok', 'license' => 'expired', 'status' => Status::Attention],
+            ['domain' => 'docs.example.net', 'platform' => 'wordpress', 'last_backup' => ['day' => 'today', 'time' => '03:05'], 'updates' => 0, 'security' => 'ok', 'license' => 'valid', 'status' => Status::Healthy],
         ];
     }
 
@@ -35,29 +41,29 @@ final class DemoDashboard
     /**
      * The most recent update run on one demo site, step by step.
      *
-     * @return array{site: string, steps: list<array{label: string, time: string, status: Status}>}
+     * @return array{site: string, steps: list<array{key: string, time: string, status: Status}>}
      */
     public static function latestUpdateRun(): array
     {
         return [
             'site' => 'fndeco.com',
             'steps' => [
-                ['label' => 'Backup', 'time' => '03:10', 'status' => Status::Verified],
-                ['label' => 'Update', 'time' => '03:24', 'status' => Status::Success],
-                ['label' => 'Check', 'time' => '03:27', 'status' => Status::Success],
-                ['label' => 'Functional test', 'time' => '03:31', 'status' => Status::Success],
+                ['key' => 'backup', 'time' => '03:10', 'status' => Status::Verified],
+                ['key' => 'update', 'time' => '03:24', 'status' => Status::Success],
+                ['key' => 'check', 'time' => '03:27', 'status' => Status::Success],
+                ['key' => 'functional', 'time' => '03:31', 'status' => Status::Success],
             ],
         ];
     }
 
-    /** @return list<array{value: string, label: string, detail: string, tone: string, icon: string}> */
+    /** @return list<array{key: string, value: int, tone: string, icon: string}> */
     public static function metrics(): array
     {
         return [
-            ['value' => '42', 'label' => 'Successful backups', 'detail' => 'Last 7 days', 'tone' => 'positive', 'icon' => 'archive'],
-            ['value' => '7', 'label' => 'Updates pending', 'detail' => 'Across 4 sites', 'tone' => 'neutral', 'icon' => 'refresh'],
-            ['value' => '1', 'label' => 'Security issue', 'detail' => 'shop.example.com', 'tone' => 'danger', 'icon' => 'shield'],
-            ['value' => '2', 'label' => 'Expired licenses', 'detail' => 'Customer action required', 'tone' => 'warning', 'icon' => 'key'],
+            ['key' => 'backups', 'value' => 42, 'tone' => 'positive', 'icon' => 'archive'],
+            ['key' => 'updates', 'value' => 7, 'tone' => 'neutral', 'icon' => 'refresh'],
+            ['key' => 'security', 'value' => 1, 'tone' => 'danger', 'icon' => 'shield'],
+            ['key' => 'licenses', 'value' => 2, 'tone' => 'warning', 'icon' => 'key'],
         ];
     }
 
@@ -65,10 +71,10 @@ final class DemoDashboard
     public static function pendingUpdates(): array
     {
         return [
-            ['name' => 'WooCommerce', 'site' => 'petplaza.hu', 'type' => 'Plugin'],
-            ['name' => 'Yoast SEO', 'site' => 'petplaza.hu', 'type' => 'Plugin'],
-            ['name' => 'Storefront', 'site' => 'shop.example.com', 'type' => 'Theme'],
-            ['name' => 'WordPress core', 'site' => 'example.com', 'type' => 'Core'],
+            ['name' => 'WooCommerce', 'site' => 'petplaza.hu', 'type' => 'plugin'],
+            ['name' => 'Yoast SEO', 'site' => 'petplaza.hu', 'type' => 'plugin'],
+            ['name' => 'Storefront', 'site' => 'shop.example.com', 'type' => 'theme'],
+            ['name' => 'WordPress core', 'site' => 'example.com', 'type' => 'core'],
         ];
     }
 
@@ -81,14 +87,22 @@ final class DemoDashboard
         ];
     }
 
-    /** @return list<array{date: string, time: string, event: string, detail: string, site: string, status: Status}> */
+    /** The license shown in the license management example. */
+    public static function expiredLicense(): array
+    {
+        return ['product' => 'WP Rocket', 'site' => 'petplaza.hu', 'detected' => '2026-09-24'];
+    }
+
+    /**
+     * @return list<array{date: string, time: string, event: string, detail: string, detail_params: array<string, string>, site: string, status: Status}>
+     */
     public static function activity(): array
     {
         return [
-            ['date' => '2026-09-25', 'time' => '03:10', 'event' => 'Backup', 'detail' => 'Files and database stored remotely', 'site' => 'fndeco.com', 'status' => Status::Verified],
-            ['date' => '2026-09-25', 'time' => '03:24', 'event' => 'Plugin update', 'detail' => 'WooCommerce updated', 'site' => 'fndeco.com', 'status' => Status::Success],
-            ['date' => '2026-09-25', 'time' => '03:31', 'event' => 'Functional check', 'detail' => 'Cart, checkout and order email tested', 'site' => 'fndeco.com', 'status' => Status::Success],
-            ['date' => '2026-09-24', 'time' => '09:00', 'event' => 'License check', 'detail' => 'WP Rocket license expired', 'site' => 'petplaza.hu', 'status' => Status::Warning],
+            ['date' => '2026-09-25', 'time' => '03:10', 'event' => 'backup', 'detail' => 'backup_stored', 'detail_params' => [], 'site' => 'fndeco.com', 'status' => Status::Verified],
+            ['date' => '2026-09-25', 'time' => '03:24', 'event' => 'plugin_update', 'detail' => 'plugin_updated', 'detail_params' => ['name' => 'WooCommerce'], 'site' => 'fndeco.com', 'status' => Status::Success],
+            ['date' => '2026-09-25', 'time' => '03:31', 'event' => 'functional_check', 'detail' => 'checkout_tested', 'detail_params' => [], 'site' => 'fndeco.com', 'status' => Status::Success],
+            ['date' => '2026-09-24', 'time' => '09:00', 'event' => 'license_check', 'detail' => 'license_expired', 'detail_params' => ['name' => 'WP Rocket'], 'site' => 'petplaza.hu', 'status' => Status::Warning],
         ];
     }
 }

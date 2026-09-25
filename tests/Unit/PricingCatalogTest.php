@@ -58,28 +58,56 @@ class PricingCatalogTest extends TestCase
         $this->assertSame(2, $this->catalog()->annualFreeMonths());
     }
 
-    public function test_money_is_formatted_for_the_currency(): void
+    public function test_money_is_formatted_for_the_locale(): void
     {
-        $price = $this->catalog()->productLine('wordpress')->plans[1]->price(BillingInterval::Annual);
+        $english = $this->catalog()->productLine('wordpress')->plans[1]->price(BillingInterval::Annual);
+        $hungarian = PricingCatalog::fromConfig(config('pricing'), locale: 'hu')
+            ->productLine('wordpress')->plans[1]->price(BillingInterval::Annual);
 
-        $this->assertSame("189\u{202F}900", $price->money->formattedAmount());
-        $this->assertSame("189\u{202F}900\u{00A0}Ft", $price->money->format());
+        $this->assertSame('189,900', $english->money->formattedAmount());
+        $this->assertSame("189,900\u{00A0}Ft", $english->money->format());
+        $this->assertSame("189\u{202F}900\u{00A0}Ft", $hungarian->money->format());
     }
 
     public function test_plan_ids_and_stripe_price_ids_are_exposed(): void
     {
-        config(['pricing.product_lines.wordpress.plans.basic.prices.HUF.monthly.stripe_price_id' => 'price_123']);
+        config(['pricing.product_lines.wordpress.plans.basic.prices.0.monthly.stripe_price_id' => 'price_123']);
 
         $plan = $this->catalog()->productLine('wordpress')->plans[0];
 
         $this->assertSame('wordpress-basic', $plan->id());
+        $this->assertSame('Basic', $plan->name);
         $this->assertSame('price_123', $plan->price(BillingInterval::Monthly)->stripePriceId);
+    }
+
+    public function test_locale_specific_price_set_wins_over_a_general_one(): void
+    {
+        config(['pricing.product_lines.wordpress.plans.basic.prices.1' => [
+            'currency' => 'HUF',
+            'locale' => 'hu',
+            'monthly' => ['amount' => 1, 'stripe_price_id' => null],
+            'annual' => ['amount' => 10, 'stripe_price_id' => null],
+        ]]);
+
+        $hu = PricingCatalog::fromConfig(config('pricing'), locale: 'hu')->productLine('wordpress')->plans[0];
+        $en = PricingCatalog::fromConfig(config('pricing'), locale: 'en')->productLine('wordpress')->plans[0];
+
+        $this->assertSame(1, $hu->price(BillingInterval::Monthly)->money->amount);
+        $this->assertSame(8990, $en->price(BillingInterval::Monthly)->money->amount);
+    }
+
+    public function test_currencies_without_prices_are_not_invented(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('has no EUR prices');
+
+        PricingCatalog::fromConfig(config('pricing'), 'EUR');
     }
 
     public function test_unknown_currency_is_rejected(): void
     {
         $this->expectException(InvalidArgumentException::class);
 
-        PricingCatalog::fromConfig(config('pricing'), 'EUR');
+        PricingCatalog::fromConfig(config('pricing'), 'CHF');
     }
 }

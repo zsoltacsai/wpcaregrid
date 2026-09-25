@@ -12,7 +12,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->app->singleton(
+        $this->app->scoped(
             PricingCatalog::class,
             fn () => PricingCatalog::fromConfig(config('pricing')),
         );

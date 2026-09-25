@@ -3,9 +3,9 @@
 <x-ui.section id="pricing" labelledby="pricing-title">
     <x-ui.section-heading
         id="pricing-title"
-        eyebrow="Pricing"
-        title="Plans and pricing"
-        lead="A fixed price per website. Pay monthly, or annually and get two months free. No long-term contract."
+        :eyebrow="__('home.pricing.eyebrow')"
+        :title="__('home.pricing.title')"
+        :lead="__('home.pricing.lead')"
     />
 
     <x-pricing.table :catalog="$catalog" class="mt-10" />

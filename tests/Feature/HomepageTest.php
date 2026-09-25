@@ -6,12 +6,23 @@ use Tests\TestCase;
 
 class HomepageTest extends TestCase
 {
-    public function test_homepage_renders(): void
+    public function test_homepage_renders_with_seo_metadata(): void
     {
-        $this->get('/')
+        $response = $this->get('/')
             ->assertOk()
-            ->assertSee('<h1', false)
-            ->assertSee('WordPress maintenance, without the hassle.');
+            ->assertSee('<title>WP CareGrid – WordPress Maintenance, Backups &amp; Security</title>', false)
+            ->assertSee('<meta name="description" content="WordPress and WooCommerce maintenance, backups, security checks and functional verification for businesses.">', false)
+            ->assertSee('WordPress maintained. Website working.');
+
+        $this->assertSame(1, substr_count($response->getContent(), '<h1'));
+    }
+
+    public function test_no_translation_keys_leak_into_the_page(): void
+    {
+        $html = $this->get('/')->getContent();
+
+        $this->assertDoesNotMatchRegularExpression('/>\s*(home|pricing|dashboard|status)\.[a-z_]+(\.[a-z_]+)*\s*</', $html);
+        $this->assertDoesNotMatchRegularExpression('/"(home|pricing|dashboard|status)\.[a-z_]+\.[a-z_.]+"/', $html);
     }
 
     public function test_sections_appear_in_the_agreed_order(): void
@@ -38,11 +49,16 @@ class HomepageTest extends TestCase
     {
         $response = $this->get('/');
 
-        foreach (['8 990', '89 900', '18 990', '189 900', '28 990', '289 900', '14 900', '149 000', '24 900', '249 000', '39 900', '399 000'] as $amount) {
-            $response->assertSee(str_replace(' ', "\u{202F}", $amount));
+        foreach (['8,990', '89,900', '18,990', '189,900', '28,990', '289,900', '14,900', '149,000', '24,900', '249,000', '39,900', '399,000'] as $amount) {
+            $response->assertSee('>'.$amount.'<', false);
         }
 
-        $response->assertSee('Ft/month')->assertSee('Ft/year')->assertSee('2 months free')->assertSee('Most popular');
+        $response
+            ->assertSee('Ft / month')
+            ->assertSee('Ft / year')
+            ->assertSee('2 months free')
+            ->assertSee('Most popular')
+            ->assertSee('These are final prices; no VAT is added.');
     }
 
     public function test_approved_brand_assets_are_used(): void
@@ -60,9 +76,12 @@ class HomepageTest extends TestCase
     public function test_key_service_messages_are_present(): void
     {
         $this->get('/')
-            ->assertSeeInOrder(['Backup', 'Update', 'Check', 'Functional test'])
-            ->assertSee('notified when a license is detected as expired or invalid')
-            ->assertSee('separate paid service');
+            ->assertSee('Our maintenance process includes a backup, update, technical check and functional verification.')
+            ->assertSeeInOrder(['Step 01', 'Backup', 'Step 02', 'Update', 'Step 03', 'Check', 'Step 04', 'Functional test', 'Step 05', 'Done'])
+            ->assertSee('WP CareGrid records it and notifies the website owner')
+            ->assertSee('Not every plugin license can be checked automatically')
+            ->assertSee('Custom development is a separate service')
+            ->assertSeeInOrder(['Product', 'Cart', 'Checkout', 'Payment', 'Order', 'Email']);
     }
 
     public function test_dashboard_previews_are_labelled_as_demo_data(): void
@@ -70,7 +89,10 @@ class HomepageTest extends TestCase
         $this->get('/')
             ->assertSee('Demo data')
             ->assertSee('Illustrative figures, not real customer data.')
-            ->assertSee('Third-party plugin and theme licenses remain the customer\'s responsibility.', false);
+            ->assertSeeInOrder(['Last backup', 'Updates', 'Security', 'License', 'Status'])
+            ->assertSee('Issue found')
+            ->assertSee('3 pending')
+            ->assertSee("Third-party plugin and theme licenses remain the customer's responsibility.");
     }
 
     public function test_interactive_controls_expose_their_state(): void

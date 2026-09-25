@@ -8,5 +8,6 @@ final readonly class Price
         public Money $money,
         public BillingInterval $interval,
         public ?string $stripePriceId = null,
+        public ?string $locale = null,
     ) {}
 }

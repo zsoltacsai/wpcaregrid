@@ -21,16 +21,7 @@ enum Status: string
 
     public function label(): string
     {
-        return match ($this) {
-            self::Healthy => 'Healthy',
-            self::Attention => 'Attention',
-            self::Critical => 'Critical',
-            self::Verified => 'Verified',
-            self::Success => 'Success',
-            self::Warning => 'Warning',
-            self::Pending => 'Pending',
-            self::LicenseExpired => 'License expired',
-        };
+        return __("status.{$this->value}");
     }
 
     /** Visual tone used by the status badge and indicator dots. */

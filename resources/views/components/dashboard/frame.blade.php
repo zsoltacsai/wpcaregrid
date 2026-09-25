@@ -2,7 +2,7 @@
     Application-window chrome for dashboard previews. Always shows the demo
     label so preview data is never mistaken for real customer data.
 --}}
-@props(['title', 'caption'])
+@props(['title', 'caption', 'label' => null])
 
 <figure {{ $attributes->merge(['class' => 'overflow-hidden rounded-lg border border-line bg-surface shadow-raised']) }}>
     <figcaption class="sr-only">{{ $caption }}</figcaption>
@@ -12,7 +12,7 @@
             <x-brand.icon class="size-6" />
             <p class="truncate text-sm font-medium text-primary">{{ $title }}</p>
         </div>
-        <x-ui.demo-label />
+        <x-ui.demo-label :text="$label ?? __('dashboard.demo_label')" />
     </div>
 
     {{ $slot }}

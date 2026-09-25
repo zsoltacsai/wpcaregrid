@@ -13,26 +13,32 @@ final readonly class Currency
         public string $thousandsSeparator = ',',
     ) {}
 
-    /** @param  array<string, mixed>  $config */
-    public static function fromConfig(string $code, array $config): self
+    /**
+     * @param  array<string, mixed>  $config  One entry of config('pricing.currencies').
+     * @param  string  $locale  Site locale; picks the matching number format, falling back to English.
+     */
+    public static function fromConfig(string $code, array $config, string $locale = 'en'): self
     {
+        $formats = $config['formats'] ?? [];
+        $format = $formats[$locale] ?? $formats['en'] ?? reset($formats) ?: [];
+
         return new self(
             code: $code,
             symbol: $config['symbol'] ?? $code,
             symbolPosition: $config['symbol_position'] ?? 'after',
             decimals: $config['decimals'] ?? 0,
-            decimalSeparator: $config['decimal_separator'] ?? '.',
-            thousandsSeparator: $config['thousands_separator'] ?? ',',
+            decimalSeparator: $format['decimal_separator'] ?? '.',
+            thousandsSeparator: $format['thousands_separator'] ?? ',',
         );
     }
 
-    /** Format an amount without the currency symbol, e.g. "8 990". */
+    /** Format an amount without the currency symbol, e.g. "8,990". */
     public function formatAmount(int|float $amount): string
     {
         return number_format($amount, $this->decimals, $this->decimalSeparator, $this->thousandsSeparator);
     }
 
-    /** Format an amount with the currency symbol, e.g. "8 990 Ft". */
+    /** Format an amount with the currency symbol, e.g. "8,990 Ft" or "€89". */
     public function format(int|float $amount): string
     {
         $number = $this->formatAmount($amount);

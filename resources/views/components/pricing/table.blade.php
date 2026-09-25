@@ -10,7 +10,8 @@
     $defaultLine = $catalog->defaultProductLine;
     $defaultInterval = $catalog->defaultInterval;
     $freeMonths = $catalog->annualFreeMonths();
-    $freeMonthsLabel = $freeMonths > 0 ? $freeMonths.' '.Str::plural('month', $freeMonths).' free' : null;
+    $freeMonthsLabel = $freeMonths > 0 ? trans_choice('pricing.free_months', $freeMonths) : null;
+    $currencyNote = 'pricing.currency_notes.'.$catalog->currency->code;
 @endphp
 
 <div
@@ -22,7 +23,7 @@
     {{ $attributes }}
 >
     <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div role="tablist" aria-label="Plan type" class="grid grid-cols-2 rounded-md border border-line bg-surface p-1 sm:inline-grid sm:w-auto">
+        <div role="tablist" aria-label="{{ __('pricing.tabs_label') }}" class="grid grid-cols-2 rounded-md border border-line bg-surface p-1 sm:inline-grid sm:w-auto">
             @foreach ($productLines as $line)
                 @php $isDefault = $line->key === $defaultLine; @endphp
                 <button
@@ -45,7 +46,7 @@
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
-            <div role="group" aria-label="Billing period" class="inline-grid grid-cols-2 rounded-md border border-line bg-surface p-1">
+            <div role="group" aria-label="{{ __('pricing.billing_label') }}" class="inline-grid grid-cols-2 rounded-md border border-line bg-surface p-1">
                 @foreach (BillingInterval::cases() as $interval)
                     @php $isDefault = $interval === $defaultInterval; @endphp
                     <button
@@ -68,7 +69,7 @@
                     class="inline-flex h-8 items-center gap-1.5 rounded-full border border-accent/35 bg-accent-soft px-3 text-sm font-medium text-accent-ink transition-colors data-active:border-accent-ink data-active:bg-accent-ink data-active:text-white"
                 >
                     <x-ui.icon name="check" class="size-4" />
-                    <span>Annual: {{ $freeMonthsLabel }}</span>
+                    <span>{{ __('pricing.annual_offer', ['offer' => $freeMonthsLabel]) }}</span>
                 </p>
             @endif
         </div>
@@ -96,6 +97,6 @@
     @endforeach
 
     <p class="mt-6 text-sm text-muted">
-        Prices in Hungarian forint ({{ $catalog->currency->code }}), per website. Third-party plugin and theme licenses are not included.
+        @if (Lang::has($currencyNote)){{ __($currencyNote) }}@endif {{ __('pricing.licenses_note') }}
     </p>
 </div>

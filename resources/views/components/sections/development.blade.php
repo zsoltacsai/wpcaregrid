@@ -4,13 +4,13 @@
     <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <x-ui.section-heading
             id="development-title"
-            eyebrow="Custom development"
-            title="Need more than maintenance?"
-            lead="We also build WordPress and WooCommerce functionality to order, maintained to the same standard as the rest of your site."
+            :eyebrow="__('home.development.eyebrow')"
+            :title="__('home.development.title')"
+            :lead="__('home.development.lead')"
         />
 
         <x-ui.button :href="config('marketing.links.contact')" size="lg" icon="arrow-right" class="self-start lg:self-auto">
-            Talk about a project
+            {{ __('home.development.cta') }}
         </x-ui.button>
     </div>
 
@@ -24,7 +24,5 @@
         @endforeach
     </ul>
 
-    <p class="mt-6 text-sm text-muted">
-        Custom development is a separate paid service, quoted and billed independently of maintenance subscriptions.
-    </p>
+    <p class="mt-6 text-sm text-muted">{{ __('home.development.note') }}</p>
 </x-ui.section>

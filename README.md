@@ -37,19 +37,34 @@ The approved brand pack lives in `design/` (guidelines in `design/brand/BRAND.md
 | Header, footer | `resources/views/components/site/` |
 | Pricing table and pricing card | `resources/views/components/pricing/`, `resources/js/components/pricing-table.js` |
 | Dashboard previews, process step, activity row, FAQ item | `resources/views/components/{dashboard,process,activity,faq}/` |
-| Page copy | `app/Content/HomepageContent.php` |
+| Page structure (order, icons, links) | `app/Content/HomepageContent.php` |
 | Demo dashboard data | `app/Content/DemoDashboard.php` |
 | Statuses (label + colour tone) | `app/Enums/Status.php` |
 | Design tokens (colours, radii, fonts, container) | `resources/css/app.css` (mirrors `design/brand/DESIGN_TOKENS.css`) |
 | Brand logo and icon components | `resources/views/components/brand/`, `app/Support/BrandAsset.php` |
 | CTA link targets | `config/marketing.php` |
 
+## Languages
+
+The homepage is English. All wording lives in translation files, so a language is added without touching components:
+
+| File | Contents |
+| --- | --- |
+| `lang/en/home.php` | Homepage copy, SEO title and description, navigation, FAQ |
+| `lang/en/pricing.php` | Plan names, descriptions and features; pricing table text |
+| `lang/en/dashboard.php` | Dashboard preview text (reused by the future customer dashboard) |
+| `lang/en/status.php` | Status labels (Healthy, Attention, Critical…) |
+
+To add Hungarian, copy `lang/en` to `lang/hu`, translate the values and set the locale (for example per route prefix). Page structure (order, icons, links) stays in `app/Content/HomepageContent.php`; demo data in `app/Content/DemoDashboard.php` holds only keys and numbers. A test fails if a translation key ever shows up as text on the page.
+
 ## Pricing
 
 Prices live in `config/pricing.php` and are read through `App\Pricing\PricingCatalog`, never hardcoded in Blade.
 
-- Each plan has a price per currency and billing interval, and an optional Stripe Price ID (from `.env`).
-- To add a currency, add it under `currencies` and add a matching key under each plan's `prices`. The catalogue is built for one currency at a time (`PricingCatalog::fromConfig($config, 'EUR')`).
+- Each plan has a list of price sets: `currency`, optional `locale`, and `monthly` / `annual` entries with `amount` and `stripe_price_id` (from `.env`).
+- HUF prices are final customer prices; no VAT is added. They display as "8,990 Ft" in English and "8 990 Ft" in Hungarian (`currencies.*.formats`).
+- EUR, USD and GBP have display formats but no prices; there are no converted amounts. To offer one, add a price set per plan and map a locale to it in `locale_currencies`. Asking for a currency without prices throws rather than guessing.
+- The catalogue is built per request for the current locale (`PricingCatalog::fromConfig($config, currency, locale)`).
 - The "2 months free" message is calculated from the prices, so it stays correct if prices change.
 - Plan buttons link to `MARKETING_SIGNUP_URL?plan=<product-line>-<plan>&billing=<monthly|annual>`, ready to hand to a checkout endpoint.
 

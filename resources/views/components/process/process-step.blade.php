@@ -3,7 +3,7 @@
     Vertical list on small screens (connector on the left), a row of cards
     with arrows between them from lg up.
 --}}
-@props(['step', 'number', 'last' => false])
+@props(['step', 'stepLabel', 'last' => false])
 
 <li {{ $attributes->merge(['class' => 'relative flex gap-4 pb-6 last:pb-0 lg:pb-0']) }}>
     @unless ($last)
@@ -23,7 +23,7 @@
         <div class="mb-4 hidden lg:block">
             <x-ui.icon-tile :name="$step['icon']" :tone="$last ? 'positive' : 'plain'" />
         </div>
-        <p class="text-xs font-semibold tracking-[0.12em] text-muted uppercase">Step {{ $number }}</p>
+        <p class="text-xs font-semibold tracking-[0.12em] text-muted uppercase">{{ $stepLabel }}</p>
         <h3 class="mt-1 text-lg font-semibold">{{ $step['title'] }}</h3>
         <p class="mt-2 text-sm leading-relaxed text-muted">{{ $step['text'] }}</p>
         <p class="mt-4 lg:mt-auto lg:pt-4">
