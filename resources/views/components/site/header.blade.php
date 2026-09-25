@@ -30,7 +30,11 @@
         </nav>
 
         <div class="hidden items-center gap-2 lg:flex">
-            <x-ui.button :href="$links['login']" variant="ghost">{{ __('home.nav.login') }}</x-ui.button>
+            @auth
+                <x-ui.button :href="route('account.dashboard')" variant="ghost">{{ __('account.nav.label') }}</x-ui.button>
+            @else
+                <x-ui.button :href="$links['login']" variant="ghost">{{ __('home.nav.login') }}</x-ui.button>
+            @endauth
             <x-ui.button :href="route('home').'#pricing'">{{ __('home.nav.get_started') }}</x-ui.button>
         </div>
 
@@ -74,7 +78,11 @@
             </nav>
 
             <div class="mt-4 grid grid-cols-2 gap-2 pb-2">
-                <x-ui.button :href="$links['login']" variant="secondary" size="lg">{{ __('home.nav.login') }}</x-ui.button>
+                @auth
+                    <x-ui.button :href="route('account.dashboard')" variant="secondary" size="lg">{{ __('account.nav.label') }}</x-ui.button>
+                @else
+                    <x-ui.button :href="$links['login']" variant="secondary" size="lg">{{ __('home.nav.login') }}</x-ui.button>
+                @endauth
                 <x-ui.button :href="route('home').'#pricing'" size="lg" x-on:click="open = false">{{ __('home.nav.get_started') }}</x-ui.button>
             </div>
         </x-ui.container>

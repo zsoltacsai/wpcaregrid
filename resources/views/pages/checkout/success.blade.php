@@ -1,17 +1,27 @@
 {{--
-    Where Stripe sends the customer after checkout. Showing this page does
-    not mark anything as paid; the Stripe webhook does that.
+    Where Stripe sends the customer after checkout. This page never
+    activates anything: it only reports what the verified webhook has done.
 --}}
+@php
+    $confirmed = $intent?->status === \App\Checkout\CheckoutStatus::Completed;
+@endphp
+
 <x-layouts.marketing :title="__('checkout.meta.success_title')" :description="__('home.meta.description')">
     <section class="py-16 sm:py-20 lg:py-24" aria-labelledby="success-title">
         <x-ui.container class="max-w-[720px]">
             <div class="rounded-lg border border-line bg-surface p-6 sm:p-10">
-                <x-ui.icon-tile name="check-circle" tone="positive" />
-                <h1 id="success-title" class="mt-6 text-[28px] leading-[1.15] font-semibold tracking-[-0.015em] sm:text-[32px]">
-                    {{ __('checkout.success.title') }}
-                </h1>
-                <p class="mt-3 text-lg text-ink">{{ __('checkout.success.lead') }}</p>
-                <p class="mt-4 text-base leading-relaxed text-muted">{{ __('checkout.success.body') }}</p>
+                @if ($confirmed)
+                    <x-ui.icon-tile name="check-circle" tone="positive" />
+                    <h1 id="success-title" class="mt-6 text-[28px] leading-[1.15] font-semibold tracking-[-0.015em] sm:text-[32px]">{{ __('checkout.success.title') }}</h1>
+                    <p class="mt-3 text-lg text-ink">{{ __('checkout.success.lead') }}</p>
+                    <p class="mt-4 text-base leading-relaxed text-muted">
+                        {{ $intent->customer?->user?->hasVerifiedEmail() ? __('account.dashboard.setup_text') : __('account.success.account_email') }}
+                    </p>
+                @else
+                    <x-ui.icon-tile name="clock" />
+                    <h1 id="success-title" class="mt-6 text-[28px] leading-[1.15] font-semibold tracking-[-0.015em] sm:text-[32px]">{{ __('account.success.confirming_title') }}</h1>
+                    <p class="mt-4 text-base leading-relaxed text-muted">{{ __('account.success.confirming_body') }}</p>
+                @endif
 
                 @if ($intent)
                     <dl class="mt-8 grid gap-4 border-t border-line pt-6 text-sm sm:grid-cols-2">
@@ -30,8 +40,13 @@
                     <p class="mt-4 text-sm text-muted">{{ __('checkout.success.email_note', ['email' => $intent->email]) }}</p>
                 @endif
 
-                <div class="mt-8">
-                    <x-ui.button :href="route('home')" variant="secondary">{{ __('checkout.success.home') }}</x-ui.button>
+                <div class="mt-8 flex flex-col gap-3 sm:flex-row">
+                    @if ($confirmed)
+                        <x-ui.button :href="route('login')">{{ __('account.success.login') }}</x-ui.button>
+                    @else
+                        <x-ui.button :href="request()->fullUrl()" variant="secondary">{{ __('account.success.refresh') }}</x-ui.button>
+                    @endif
+                    <x-ui.button :href="route('home')" variant="ghost">{{ __('checkout.success.home') }}</x-ui.button>
                 </div>
             </div>
         </x-ui.container>

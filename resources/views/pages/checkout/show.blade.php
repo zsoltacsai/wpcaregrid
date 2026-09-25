@@ -8,7 +8,7 @@
 @php
     $plan = $offer->plan;
     $interval = old('interval', $selection->interval->value);
-    $country = old('country', 'HU');
+    $country = old('country', $account?->country_code ?? 'HU');
 @endphp
 
 <x-layouts.marketing :title="__('checkout.meta.checkout_title')" :description="__('home.meta.description')">
@@ -97,11 +97,11 @@
                         <p class="text-xs font-semibold tracking-[0.12em] text-muted uppercase" aria-hidden="true">{{ __('checkout.details_heading') }}</p>
 
                         <div class="mt-4 grid gap-5">
-                            <x-form.field name="email" type="email" :label="__('checkout.fields.email')" :hint="__('checkout.fields.email_hint')" autocomplete="email" required maxlength="254" />
+                            <x-form.field name="email" type="email" :label="__('checkout.fields.email')" :hint="__('checkout.fields.email_hint')" :value="$account?->email" :readonly="$account !== null" autocomplete="email" required maxlength="254" />
 
                             <div class="grid gap-5 sm:grid-cols-2">
-                                <x-form.field name="first_name" :label="__('checkout.fields.first_name')" autocomplete="given-name" required maxlength="100" />
-                                <x-form.field name="last_name" :label="__('checkout.fields.last_name')" autocomplete="family-name" required maxlength="100" />
+                                <x-form.field name="first_name" :label="__('checkout.fields.first_name')" :value="$account?->first_name" autocomplete="given-name" required maxlength="100" />
+                                <x-form.field name="last_name" :label="__('checkout.fields.last_name')" :value="$account?->last_name" autocomplete="family-name" required maxlength="100" />
                             </div>
 
                             <x-form.select

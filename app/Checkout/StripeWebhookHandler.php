@@ -2,31 +2,82 @@
 
 namespace App\Checkout;
 
+use App\Billing\InvoiceEvents;
+use App\Billing\ProvisionCustomer;
+use App\Billing\SubscriptionSync;
 use App\Models\CheckoutIntent;
+use App\Models\StripeEvent;
+use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Stripe\Event;
 
 /**
- * Applies verified Stripe events to checkout intents. This is the only place
- * an intent becomes `completed`. Subscription lifecycle events (renewals,
- * cancellations, failed renewals) are acknowledged and left for the billing
- * milestone.
+ * Applies verified Stripe events. The only path by which a checkout is
+ * completed, a customer is provisioned or a subscription gains access.
+ *
+ * Each event ID is processed once: it is recorded in the same transaction
+ * as its effects, so a failure rolls both back (Stripe retries) and a
+ * redelivery is skipped. Handlers do not assume delivery order.
  */
 final class StripeWebhookHandler
 {
-    public function handle(Event $event): void
+    public function __construct(
+        private readonly ProvisionCustomer $provision,
+        private readonly SubscriptionSync $subscriptions,
+        private readonly InvoiceEvents $invoices,
+    ) {}
+
+    /** @return bool False when the event had already been processed. */
+    public function handle(Event $event): bool
     {
-        $session = $event->data->object;
+        if (StripeEvent::where('stripe_event_id', $event->id)->exists()) {
+            return false;
+        }
+
+        try {
+            DB::transaction(function () use ($event) {
+                StripeEvent::create([
+                    'stripe_event_id' => $event->id,
+                    'type' => $event->type,
+                    'object_id' => $event->data->object->id ?? null,
+                    'stripe_created_at' => isset($event->created) ? Carbon::createFromTimestamp($event->created) : null,
+                    'processed_at' => now(),
+                ]);
+
+                $this->dispatch($event);
+            });
+        } catch (UniqueConstraintViolationException $e) {
+            // The same event was processed concurrently by another request.
+            if (str_contains($e->getMessage(), 'stripe_events')) {
+                return false;
+            }
+
+            throw $e;
+        }
+
+        return true;
+    }
+
+    private function dispatch(Event $event): void
+    {
+        $object = $event->data->object;
 
         match ($event->type) {
-            'checkout.session.completed' => $this->completed($session, paid: in_array($session->payment_status ?? null, ['paid', 'no_payment_required'], true)),
-            'checkout.session.async_payment_succeeded' => $this->completed($session, paid: true),
-            'checkout.session.async_payment_failed' => $this->transition($session, CheckoutStatus::Failed, ['failure_reason' => 'async_payment_failed']),
-            'checkout.session.expired' => $this->transition($session, CheckoutStatus::Expired),
+            'checkout.session.completed' => $this->checkoutCompleted($object, paid: in_array($object->payment_status ?? null, ['paid', 'no_payment_required'], true)),
+            'checkout.session.async_payment_succeeded' => $this->checkoutCompleted($object, paid: true),
+            'checkout.session.async_payment_failed' => $this->checkoutTransition($object, CheckoutStatus::Failed, ['failure_reason' => 'async_payment_failed']),
+            'checkout.session.expired' => $this->checkoutTransition($object, CheckoutStatus::Expired),
+            'customer.subscription.created',
+            'customer.subscription.updated',
+            'customer.subscription.deleted' => $this->subscriptions->apply($object, (int) ($event->created ?? time())),
+            'invoice.paid' => $this->invoices->paid($object),
+            'invoice.payment_failed' => $this->invoices->failed($object),
             default => null,
         };
     }
 
-    private function completed(object $session, bool $paid): void
+    private function checkoutCompleted(object $session, bool $paid): void
     {
         $intent = $this->intentFor($session);
 
@@ -41,17 +92,22 @@ final class StripeWebhookHandler
         ]);
 
         // A session can complete with a delayed payment method still pending;
-        // it only counts once Stripe reports it paid.
+        // nothing is provisioned until Stripe reports it paid.
         if ($paid && $intent->canMoveTo(CheckoutStatus::Completed)) {
             $intent->status = CheckoutStatus::Completed;
             $intent->completed_at = now();
         }
 
         $intent->save();
+
+        if ($paid) {
+            $customer = $this->provision->forIntent($intent, $intent->stripe_customer_id);
+            $this->subscriptions->attachCheckout($intent, $customer, $intent->stripe_subscription_id);
+        }
     }
 
     /** @param  array<string, mixed>  $attributes */
-    private function transition(object $session, CheckoutStatus $status, array $attributes = []): void
+    private function checkoutTransition(object $session, CheckoutStatus $status, array $attributes = []): void
     {
         $intent = $this->intentFor($session);
 
@@ -60,11 +116,22 @@ final class StripeWebhookHandler
         }
     }
 
-    /** Match by session ID, the reference we stored when creating it. */
+    /**
+     * The intent named by the session's client_reference_id, which the server
+     * set when creating the session. It must also match the session ID.
+     */
     private function intentFor(object $session): ?CheckoutIntent
     {
-        return isset($session->id)
-            ? CheckoutIntent::where('stripe_checkout_session_id', $session->id)->first()
+        $intent = is_string($session->client_reference_id ?? null)
+            ? CheckoutIntent::where('uuid', $session->client_reference_id)->first()
             : null;
+
+        $intent ??= isset($session->id) ? CheckoutIntent::where('stripe_checkout_session_id', $session->id)->first() : null;
+
+        if ($intent && $intent->stripe_checkout_session_id && $intent->stripe_checkout_session_id !== ($session->id ?? null)) {
+            return null;
+        }
+
+        return $intent;
     }
 }

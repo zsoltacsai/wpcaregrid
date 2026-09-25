@@ -245,12 +245,23 @@ class CheckoutTest extends TestCase
 
         $this->get(route('checkout.success', ['session_id' => $intent->stripe_checkout_session_id]))
             ->assertOk()
-            ->assertSee('Payment received')
+            ->assertSee('Your payment is being confirmed.')
+            ->assertDontSee('Payment received')
             ->assertSee(strtoupper(substr($intent->uuid, 0, 8)));
+
+        // Nothing is provisioned by the redirect.
+        $this->assertDatabaseCount('customers', 0);
+        $this->assertDatabaseCount('subscriptions', 0);
 
         $intent->refresh();
         $this->assertSame(CheckoutStatus::CheckoutCreated, $intent->status);
         $this->assertNull($intent->completed_at);
+
+        // Once the verified webhook has completed it, the page says so.
+        $intent->update(['status' => CheckoutStatus::Completed]);
+        $this->get(route('checkout.success', ['session_id' => $intent->stripe_checkout_session_id]))
+            ->assertSee('Payment received')
+            ->assertDontSee('Your payment is being confirmed.');
     }
 
     public function test_success_page_hides_order_details_from_other_sessions(): void

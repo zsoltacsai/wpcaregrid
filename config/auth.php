@@ -99,6 +99,15 @@ return [
             'expire' => 60,
             'throttle' => 60,
         ],
+
+        // Account activation after purchase: the customer sets their first
+        // password from an emailed link. Longer-lived than a reset link.
+        'activations' => [
+            'provider' => 'users',
+            'table' => env('AUTH_PASSWORD_RESET_TOKEN_TABLE', 'password_reset_tokens'),
+            'expire' => 60 * 24 * 7,
+            'throttle' => 60,
+        ],
     ],
 
     /*

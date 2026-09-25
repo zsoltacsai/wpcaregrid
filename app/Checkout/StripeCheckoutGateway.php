@@ -76,7 +76,9 @@ final class StripeCheckoutGateway implements CheckoutGateway
         $parameters = [
             'mode' => 'subscription',
             'line_items' => [['price' => $intent->stripe_price_id, 'quantity' => 1]],
-            'customer_email' => $intent->email,
+            ...($intent->customer?->stripe_customer_id
+                ? ['customer' => $intent->customer->stripe_customer_id]
+                : ['customer_email' => $intent->email]),
             'client_reference_id' => $intent->uuid,
             'metadata' => $metadata,
             'subscription_data' => ['metadata' => $metadata],

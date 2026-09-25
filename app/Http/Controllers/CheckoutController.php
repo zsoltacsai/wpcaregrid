@@ -49,6 +49,7 @@ class CheckoutController extends Controller
             'market' => $market,
             'freeMonths' => $offer->freeMonthsOnAnnual(),
             'countries' => __('countries'),
+            'account' => $request->user()?->customer,
             // Countries whose market has prices; the page warns about the rest
             // before submitting. The server checks again.
             'purchasableCountries' => collect(array_keys(__('countries')))
@@ -65,6 +66,7 @@ class CheckoutController extends Controller
                 $request->customer(),
                 $request->validated('promotion_code'),
                 $request->session()->getId(),
+                $request->user()?->customer,
             );
         } catch (MarketNotAvailable $e) {
             return back()->withInput()->withErrors(['country' => $e->customerMessage()]);

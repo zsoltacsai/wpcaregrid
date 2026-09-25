@@ -87,6 +87,44 @@ One source of truth: `config/pricing.php`, read through `App\Pricing\PricingCata
 - Promotion codes are entered in our form, checked against `promotions` rules (dates, usage limit, product types, plans, intervals, markets, currency), then applied by Stripe via the linked `promo_…` ID. Stripe's own code field is off.
 - Stripe runs in test mode: keys come from `.env` (`STRIPE_KEY`, `STRIPE_SECRET`, `STRIPE_WEBHOOK_SECRET`); a live key is refused unless `STRIPE_ALLOW_LIVE_MODE=true`.
 
+## Customers, subscriptions and accounts
+
+| Model | Purpose |
+| --- | --- |
+| `User` | Login only (email, password, verification). |
+| `Customer` | Commercial entity: contact and billing details, `stripe_customer_id`. One login per customer for now (`customers.user_id`); multi-user/agency access can move to a pivot later. |
+| `Subscription` | Mirror of a Stripe subscription: plan, price, status, billing period, cancellation. Status comes only from Stripe events. |
+| `Website` | A site covered by one subscription. Connector fields are placeholders until the WP CareGrid Connector exists. |
+| `CheckoutIntent` | What was bought, linked to the customer and subscription once payment is confirmed. |
+| `StripeEvent` | IDs of processed Stripe events (idempotency). |
+
+### Payment → account
+
+1. `checkout.session.completed` (paid) or `async_payment_succeeded` → intent `completed` → customer resolved (logged-in buyer, then Stripe customer ID, then normalised email; an existing profile is never overwritten) → login created if none exists, with a 7-day activation link (`activations` password broker). Passwords are never emailed.
+2. `customer.subscription.created/updated/deleted` → status, periods and cancellation synced. Older events never overwrite newer state (`stripe_synced_at`). An active/trialing subscription also confirms payment, so any delivery order works.
+3. `invoice.paid` / `invoice.payment_failed` → last payment recorded and emailed; access only changes through the subscription status.
+4. The checkout success page only reports: "Your payment is being confirmed." until the webhook has completed the intent.
+
+Every event is recorded in `stripe_events` in the same transaction as its effects: a redelivered event is skipped; a failed one rolls back and Stripe retries.
+
+### Subscription status mapping
+
+| Stripe | Local | Access |
+| --- | --- | --- |
+| (not received yet) | `pending` | no |
+| `incomplete` / `incomplete_expired` | same | no |
+| `trialing` / `active` | same | **yes** |
+| `past_due` / `unpaid` / `paused` | same | no (payment problem) |
+| `canceled` | `canceled` | no |
+
+Unknown future statuses are logged and ignored rather than guessed.
+
+### Customer area
+
+`/login`, `/forgot-password`, `/account/activate/{token}`, and under `/account` (auth + linked, verified customer): dashboard, websites (+ onboarding), subscription, billing, profile. Records are addressed by UUID and every one is checked by a policy (`WebsitePolicy`, `SubscriptionPolicy`, `CustomerPolicy`); another customer's record returns 403. Adding a website needs an active subscription with no website yet (one website per plan).
+
+Emails (`app/Mail`, queued after the database transaction commits): account activation, welcome, payment confirmation, payment failed, subscription activated, subscription canceled. Run a queue worker (`php artisan queue:work`) in production.
+
 ## Demo content
 
 The dashboard, license and activity-log previews use fictional data from `app/Content/DemoDashboard.php` and always show a "Demo data" / "Example" label. They must not be presented as real customer statistics.

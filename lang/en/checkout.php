@@ -6,7 +6,7 @@ return [
         'pricing_title' => 'Pricing – WP CareGrid',
         'pricing_description' => 'WordPress and WooCommerce maintenance plans. Pay monthly, or annually and get two months free.',
         'checkout_title' => 'Checkout – WP CareGrid',
-        'success_title' => 'Payment received – WP CareGrid',
+        'success_title' => 'Order status – WP CareGrid',
         'cancel_title' => 'Checkout cancelled – WP CareGrid',
     ],
 

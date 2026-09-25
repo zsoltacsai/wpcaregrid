@@ -3,6 +3,7 @@
 namespace App\Checkout;
 
 use App\Models\CheckoutIntent;
+use App\Models\Customer;
 use App\Models\Promotion;
 use App\Pricing\Exceptions\PricingException;
 use App\Pricing\PriceSelection;
@@ -24,12 +25,28 @@ final class StartCheckout
     ) {}
 
     /**
+     * @param  Customer|null  $account  The logged-in customer, if any (from the session, never from input).
+     *
      * @throws PricingException when the selection cannot be sold to this country
      * @throws PromotionRejected when the code is unknown or not valid for the price
      * @throws CheckoutUnavailable when Stripe cannot be used
      */
-    public function handle(PriceSelection $selection, CustomerDetails $customer, ?string $promotionCode, string $browserSessionId): CheckoutIntent
+    public function handle(PriceSelection $selection, CustomerDetails $customer, ?string $promotionCode, string $browserSessionId, ?Customer $account = null): CheckoutIntent
     {
+        // A logged-in customer buys for their own account and email.
+        if ($account) {
+            $customer = new CustomerDetails(
+                email: $account->email,
+                firstName: $account->first_name,
+                lastName: $account->last_name,
+                country: $customer->country,
+                customerType: $account->customer_type ?? 'individual',
+                companyName: $account->company_name,
+                taxId: $account->tax_id,
+                billingAddress: $account->billing_address,
+            );
+        }
+
         $price = $this->catalog->resolve($selection, $customer->country);
         $market = $this->catalog->market($price->market);
 
@@ -63,6 +80,7 @@ final class StartCheckout
 
         $intent = DB::transaction(fn () => CheckoutIntent::create([
             'status' => CheckoutStatus::Pending,
+            'customer_id' => $account?->id,
             'email' => $customer->email,
             'first_name' => $customer->firstName,
             'last_name' => $customer->lastName,

@@ -200,6 +200,18 @@ final class PricingCatalog
         return null;
     }
 
+    /** The configured price with this Stripe Price ID, if any. */
+    public function priceByStripeId(string $stripePriceId): ?Price
+    {
+        foreach ($this->prices as $price) {
+            if ($price->hasStripePrice() && $price->stripePriceId === $stripePriceId) {
+                return $price;
+            }
+        }
+
+        return null;
+    }
+
     /**
      * Resolve what a customer may be charged for a selection, based on their
      * billing country. The only way checkout obtains a price.
