@@ -19,7 +19,14 @@ final class BackupText
 
     public static function size(?int $bytes): string
     {
-        return $bytes === null ? '—' : Number::fileSize($bytes, $bytes >= 1024 * 1024 ? 1 : 0);
+        if ($bytes === null) {
+            return '—';
+        }
+
+        // "142 MB", "3.4 MB", "812 KB".
+        $mib = 1024 * 1024;
+
+        return Number::fileSize($bytes, $bytes >= $mib && $bytes < 10 * $mib ? 1 : 0);
     }
 
     private static function lookup(string $prefix, ?string $code): string

@@ -89,6 +89,8 @@ class BackupController extends Controller
         $restoring = $record->website->restores()
             ->where('backup_id', $record->id)
             ->where('status', RestoreStatus::Restoring)
+            // Only objects inside the restore's scope: a database restore cannot fetch the files.
+            ->whereIn('scope', ['full', $name])
             ->whereHas('job', fn ($q) => $q->where('connector_id', $connector->id))
             ->exists();
 

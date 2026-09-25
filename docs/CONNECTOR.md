@@ -103,9 +103,13 @@ Error codes include `INVALID_REQUEST`, `RATE_LIMITED`, `UNAUTHENTICATED`, `CONNE
 | `GET_INVENTORY` | inventory | – | Collects the inventory |
 | `SITE_HEALTH` | health | – | Runs the health checks |
 | `LICENSE_CHECK` | license_check | – | Reports license states |
-| `UPDATE_PLUGIN` | updates | `plugin` (basename, e.g. `akismet/akismet.php`), optional `target_version` | Updates one plugin |
-| `UPDATE_THEME` | updates | `stylesheet` (e.g. `twentytwentyfive`), optional `target_version` | Updates one theme |
-| `UPDATE_CORE` | updates | `policy` (`minor`/`major`), optional `target_version` | Updates WordPress |
+| `UPDATE_PLUGIN` | updates | `plugin` (basename, e.g. `akismet/akismet.php`), optional `target_version`, `backup_uuid` | Updates one plugin |
+| `UPDATE_THEME` | updates | `stylesheet` (e.g. `twentytwentyfive`), optional `target_version`, `backup_uuid` | Updates one theme |
+| `UPDATE_CORE` | updates | `policy` (`minor`/`major`), optional `target_version`, `backup_uuid` | Updates WordPress |
+| `BACKUP_FILES` / `BACKUP_DATABASE` / `BACKUP_FULL` | backup_files / backup_database / backup_full | `backup_uuid`, `reason`, `chunk_size` | Builds a backup locally and uploads it to WP CareGrid ([BACKUP_ENGINE.md](BACKUP_ENGINE.md)) |
+| `RESTORE` | restore_files / restore_database / restore_full (by `scope`) | `restore_uuid`, `backup_uuid`, `scope`, `objects` (name, size, sha256) | Restores one of this site's own backups |
+
+`backup_uuid` on updates is set by the server only after it verified a pre-update backup. Database jobs and capabilities exist only on MySQL/MariaDB sites; capabilities are sent with every heartbeat, so the server always knows what a site can do.
 
 There is no `RUN_PHP`, `RUN_COMMAND`, `EXECUTE_CODE` or `EVAL`, and no way to add a type: the list is a constant on both sides (`App\Connector\JobType`, `JobRegistry::TYPES`), not a filter.
 
@@ -120,12 +124,13 @@ There is no `RUN_PHP`, `RUN_COMMAND`, `EXECUTE_CODE` or `EVAL`, and no way to ad
 - Before a job runs, the plugin records its UUID as `running` in `wp_caregrid_jobs`. A UUID it has seen is **never executed again**: a completed one has its stored result re-sent; one left `running` (the process died) is reported as `JOB_INTERRUPTED`, not re-run.
 - Results that cannot be delivered (network error, timeout, 429, 5xx) stay in a local outbox and are sent on the next poll, without re-running the job. Permanent refusals (4xx) are dropped after logging.
 - The server accepts one result per job; repeats get `duplicate: true` and change nothing.
-- One poll at a time per site (option lock, taken over after 15 minutes if a process died).
+- One poll at a time per site (option lock, taken over after 15 minutes if a process died; long backups and restores keep it fresh).
+- A backup interrupted while uploading resumes its upload at the next poll instead of being reported as interrupted; it is never built twice.
 
 **Updates** use WordPress's own `Plugin_Upgrader`, `Theme_Upgrader` and `Core_Upgrader` with the update WordPress itself offers (the package URL is never taken from WP CareGrid). The handler:
 
 1. reports `skipped` if nothing is offered or the offer differs from `target_version`; for core, `MAJOR_UPDATE_NOT_ALLOWED` when the policy is `minor` and the offer is on another `x.y` branch;
-2. records the backup state (`not_available` in this version: nobody may assume a backup exists);
+2. records the backup state: `{status: verified_by_server, backup_uuid}` when a verified backup protects the update, `{status: none}` otherwise (see pre-update backups in [BACKUP_ENGINE.md](BACKUP_ENGINE.md));
 3. runs the upgrader with its output buffered;
 4. re-reads the version **from disk** and only reports success when it actually increased; reactivates a plugin WordPress deactivated during the update;
 5. runs the health checks and a fresh inventory: `partial` (`UPDATED_HEALTH_CRITICAL`) if the site is critical afterwards.
@@ -156,8 +161,9 @@ Per plugin: `valid`, `expired`, `unknown` or `not_available`.
 | Heartbeat | every 15 min | connector/WordPress/PHP versions, home URL, WooCommerce installed/active/version, last poll time, capabilities, latest health summary and findings |
 | Inventory | on request | WordPress version and whether an update is offered (`null` = not checked, never guessed as "up to date"); PHP version; per plugin: file, slug, name, version, active, update offered, new version, update source **host**, license state; per theme: stylesheet, name, version, active, update offered, new version |
 | Job results | per job | status, result code, versions before/after, health findings, inventory, structured error (code, message, safe details) |
+| Backups | on request | the backup objects and manifest described in [BACKUP_ENGINE.md](BACKUP_ENGINE.md): site files (`wp-config.php` with database credentials, keys and salts removed) and the database without transients and without the connector's state, only when a backup job asks for them |
 
-**Never sent:** post or page content, users or user data, passwords, e-mail addresses, payment data, `wp_options` values, plugin settings, license keys, package URLs, files, media, database contents or credentials, salts, the WP CareGrid credential, stack traces. The server also drops unexpected fields from inventory payloads.
+**Never sent outside a backup:** post or page content, users or user data, passwords, e-mail addresses, payment data, `wp_options` values, plugin settings, license keys, package URLs, files, media, database contents or credentials, salts, the WP CareGrid credential, stack traces. The server also drops unexpected fields from inventory payloads.
 
 **Logs** (last 100 entries in `wp_caregrid_log`, shown to administrators; the PHP error log with `WP_DEBUG_LOG`): events and error codes only. Credentials, bearer tokens, pairing codes and values under keys like `password`, `token`, `secret`, `auth`, `cookie`, `salt` are redacted.
 
@@ -201,4 +207,4 @@ then upload the ZIP (Plugins → Add New → Upload Plugin), activate, and pair 
 
 ## Future capabilities
 
-Not in this version, and not advertised: `backup_files`, `backup_database`, `backup_full`, `restore` (Backup Engine), remote storage (S3, SFTP), malware scanning, request signing with a per-connector key pair (`public_key`), self-update of the connector. A new capability is only advertised once its jobs exist on both sides and are covered by tests.
+Not in this version, and not advertised: malware scanning, request signing with a per-connector key pair (`public_key`), self-update of the connector, automated disaster recovery. Backups and restores are in [BACKUP_ENGINE.md](BACKUP_ENGINE.md). A new capability is only advertised once its jobs exist on both sides and are covered by tests.

@@ -36,7 +36,7 @@ class ConnectorApiTest extends TestCase
         $this->withHeaders($this->connectorHeaders($site))
             ->postJson(route('api.v1.connector.heartbeat'), $this->heartbeatPayload(['connector_version' => '0.0.9', 'wp_version' => '7.1.3']))
             ->assertOk()
-            ->assertJson(['ok' => true, 'jobs_pending' => 3, 'latest_connector_version' => '0.1.0', 'connector_outdated' => true, 'heartbeat_interval' => 900, 'poll_interval' => 300]);
+            ->assertJson(['ok' => true, 'jobs_pending' => 3, 'latest_connector_version' => '0.2.0', 'connector_outdated' => true, 'heartbeat_interval' => 900, 'poll_interval' => 300]);
 
         $website = $site['website']->refresh();
         $connector = $website->activeConnector;

@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Backups\Storage\StorageManager;
 use App\Checkout\CheckoutGateway;
 use App\Checkout\StripeCheckoutGateway;
 use App\Pricing\PricingCatalog;
@@ -21,6 +22,9 @@ class AppServiceProvider extends ServiceProvider
             PricingCatalog::class,
             fn () => PricingCatalog::fromConfig(config('pricing')),
         );
+
+        // One set of storage connections per request or queue job.
+        $this->app->scoped(StorageManager::class);
 
         $this->app->bind(CheckoutGateway::class, fn () => new StripeCheckoutGateway(
             secret: config('services.stripe.secret'),

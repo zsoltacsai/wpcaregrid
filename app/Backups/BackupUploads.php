@@ -129,7 +129,7 @@ class BackupUploads
     /** The connector says the object is complete: size and SHA-256 must match what arrived. */
     public function complete(Backup $backup, string $name, int $size, string $sha256): BackupObject
     {
-        return DB::transaction(function () use ($backup, $name, $size, $sha256) {
+        $object = DB::transaction(function () use ($backup, $name, $size, $sha256) {
             $object = BackupObject::whereKey($this->object($backup, $name)->id)->lockForUpdate()->first();
 
             if ($object->status === BackupObject::RECEIVED && $object->sha256 === $sha256 && $object->size === $size) {
@@ -140,17 +140,19 @@ class BackupUploads
             $actual = is_file($path) ? hash_file('sha256', $path) : null;
 
             if ($object->received_bytes !== $size || ! $actual || ! hash_equals($sha256, $actual)) {
-                // Start over: nothing unverified is kept.
+                // Start over: nothing unverified is kept. Committed before the refusal.
                 @unlink($path);
                 $object->forceFill(['status' => BackupObject::PENDING, 'received_bytes' => 0])->save();
 
-                throw new ConnectorError('CHECKSUM_MISMATCH', 'The received data does not match the declared size and checksum. Upload it again.', 422);
+                return null;
             }
 
             $object->forceFill(['status' => BackupObject::RECEIVED, 'size' => $size, 'sha256' => $sha256])->save();
 
             return $object;
         });
+
+        return $object ?? throw new ConnectorError('CHECKSUM_MISMATCH', 'The received data does not match the declared size and checksum. Upload it again.', 422);
     }
 
     /**

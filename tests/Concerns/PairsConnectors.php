@@ -27,7 +27,7 @@ trait PairsConnectors
             'pairing_code' => $code,
             'installation_id' => (string) Str::uuid(),
             'site_url' => $siteUrl,
-            'connector_version' => '0.1.0',
+            'connector_version' => '0.2.0',
             'wp_version' => '7.1.2',
             'php_version' => '8.4.19',
             'capabilities' => ['inventory', 'health', 'updates', 'license_check'],
@@ -53,7 +53,7 @@ trait PairsConnectors
     protected function heartbeatPayload(array $overrides = []): array
     {
         return $overrides + [
-            'connector_version' => '0.1.0',
+            'connector_version' => '0.2.0',
             'wp_version' => '7.1.2',
             'php_version' => '8.4.19',
             'site_url' => 'https://company.example',

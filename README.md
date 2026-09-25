@@ -16,7 +16,7 @@ npm run build        # or `npm run dev` while working on the front end
 php artisan serve
 ```
 
-Tests: `php artisan test` (server) and `cd wordpress && composer install && vendor/bin/phpunit` (connector plugin, runs in a real WordPress on SQLite).
+Tests: `php artisan test` (server; S3 and SFTP providers are tested against moto and OpenSSH when installed) and `cd wordpress && composer install && vendor/bin/phpunit` (connector plugin in a real WordPress; set `WP_CAREGRID_TEST_MYSQL=user:password@host/database` to include the database backup and restore tests).
 
 ## Brand
 
@@ -95,6 +95,9 @@ One source of truth: `config/pricing.php`, read through `App\Pricing\PricingCata
 | `Customer` | Commercial entity: contact and billing details, `stripe_customer_id`. One login per customer for now (`customers.user_id`); multi-user/agency access can move to a pivot later. |
 | `Subscription` | Mirror of a Stripe subscription: plan, price, status, billing period, cancellation. Status comes only from Stripe events. |
 | `Website` | A site covered by one subscription: connection status, health, inventory. |
+| `Backup`, `BackupObject` | One backup of one website and its stored objects (checksums, verification). |
+| `BackupRestore` | A confirmed restore of one verified backup. |
+| `WebsiteEvent` | Audit log of backup and restore events. |
 | `CheckoutIntent` | What was bought, linked to the customer and subscription once payment is confirmed. |
 | `StripeEvent` | IDs of processed Stripe events (idempotency). |
 
@@ -137,6 +140,16 @@ Install locally:
 4. In the account, open the website and generate a pairing code; enter it under Settings → WP CareGrid.
 
 Operators queue jobs with `php artisan connector:queue-job <website-uuid> <TYPE> --payload='{…}'`. Run the scheduler (`php artisan schedule:work` locally) so connection presence is updated.
+
+## Backups
+
+Files, database and full backups through the connector, stored on S3-compatible storage or SFTP and verified (size and SHA-256) before they count; retention per plan; a verified backup before updates; restores behind a verified safety backup. Architecture, format, verification, retention and restore safety: **[docs/BACKUP_ENGINE.md](docs/BACKUP_ENGINE.md)**.
+
+- Configure storage with `BACKUP_STORAGE` and `BACKUP_S3_*` or `BACKUP_SFTP_*` (see `.env.example`). Without it, backups are unavailable and nothing is queued.
+- Retention values are a commercial decision and have no defaults: until `BACKUP_RETENTION_*` are set, nothing is deleted.
+- Live restores are off until `BACKUP_RESTORE_ENABLED=true`.
+- Operators: `php artisan backup:admin {list|show|run|retry|verify|delete} {uuid}`.
+- Needs the scheduler (`backup:schedule`, `backup:monitor`, `backup:retention`) and a queue worker (`TransferBackup`).
 
 ## Demo content
 

@@ -134,20 +134,27 @@ return [
         'not_possible' => 'This backup cannot be restored now',
     ],
 
+    // Audit events ("backup.verified" → events.backup.verified).
     'events' => [
-        'backup.requested' => 'Backup requested',
-        'backup.started' => 'Backup started',
-        'backup.uploaded' => 'Backup uploaded',
-        'backup.verified' => 'Backup verified',
-        'backup.failed' => 'Backup failed',
-        'backup.corrupt' => 'Backup failed verification',
-        'backup.expired' => 'Backup expired',
-        'backup.deleted' => 'Backup deleted',
-        'restore.requested' => 'Restore requested',
-        'restore.started' => 'Restore started',
-        'restore.completed' => 'Restore completed',
-        'restore.failed' => 'Restore failed',
-        'update.blocked' => 'Update not run: backup required',
+        'backup' => [
+            'requested' => 'Backup requested',
+            'started' => 'Backup started',
+            'uploaded' => 'Backup uploaded',
+            'verified' => 'Backup verified',
+            'failed' => 'Backup failed',
+            'corrupt' => 'Backup failed verification',
+            'expired' => 'Backup expired',
+            'deleted' => 'Backup deleted',
+        ],
+        'restore' => [
+            'requested' => 'Restore requested',
+            'started' => 'Restore started',
+            'completed' => 'Restore completed',
+            'failed' => 'Restore failed',
+        ],
+        'update' => [
+            'blocked' => 'Update not run: backup required',
+        ],
     ],
 
 ];

@@ -16,6 +16,9 @@ final class Maintenance
 {
     private static ?string $active = null;
 
+    /** Resolved when maintenance starts, so the shutdown failsafe never needs the database. */
+    private static ?string $marker = null;
+
     public static function file(): string
     {
         return ABSPATH.'.maintenance';
@@ -28,7 +31,7 @@ final class Maintenance
         }
 
         // The marker first: without it the failsafes could not tell the file is ours.
-        TempDir::ensure();
+        self::$marker = TempDir::ensure().'/maintenance.json';
         if (@file_put_contents(self::marker(), wp_json_encode(['restore' => $restore_uuid, 'since' => time()])) === false) {
             throw new BackupFailure('MAINTENANCE_FAILED', 'Maintenance mode could not be enabled.');
         }
@@ -38,7 +41,11 @@ final class Maintenance
         }
 
         if (self::$active === null) {
-            register_shutdown_function([self::class, 'disable']);
+            register_shutdown_function(static function () {
+                if (self::$active !== null) {
+                    self::disable();
+                }
+            });
         }
         self::$active = $restore_uuid;
     }
@@ -51,6 +58,7 @@ final class Maintenance
             @unlink(self::marker());
         }
         self::$active = null;
+        self::$marker = null;
     }
 
     public static function is_ours(): bool
@@ -68,6 +76,6 @@ final class Maintenance
 
     private static function marker(): string
     {
-        return TempDir::path().'/maintenance.json';
+        return self::$marker ?? TempDir::path().'/maintenance.json';
     }
 }

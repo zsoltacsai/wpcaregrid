@@ -35,7 +35,7 @@
         </x-account.panel>
     @endif
 
-    <div class="overflow-x-auto rounded-lg border border-line bg-surface">
+    <div class="relative overflow-x-auto rounded-lg border border-line bg-surface">
         <table class="w-full min-w-[720px] text-left text-sm">
             <caption class="sr-only">{{ __('backups.account.title') }}</caption>
             <thead class="bg-subtle text-xs font-semibold tracking-[0.08em] text-muted uppercase">

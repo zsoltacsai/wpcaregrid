@@ -81,7 +81,8 @@ class BackupAdmin extends Command
     private function requestBackup(BackupService $backups, Website $website): int
     {
         $type = $this->option('type') ? BackupType::from($this->option('type')) : null;
-        $backup = $backups->request($website, BackupReason::Manual, 'operator', $type);
+        // Operator backups are "recovery": the customer cooldown does not apply.
+        $backup = $backups->request($website, BackupReason::Recovery, 'operator', $type);
         $this->components->info("Queued backup {$backup->uuid}");
 
         return self::SUCCESS;
