@@ -103,7 +103,7 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
                     'capabilities' => ['inventory', 'health', 'updates', 'license_check'],
                     'heartbeat_interval' => 900,
                     'poll_interval' => 300,
-                    'latest_connector_version' => '0.2.0',
+                    'latest_connector_version' => '0.3.0',
                 ],
                 $overrides
             ),

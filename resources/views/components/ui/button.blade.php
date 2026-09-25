@@ -1,7 +1,7 @@
 {{--
     Link or button styled as a call to action.
     variant: primary (green action) | secondary | ghost | inverse-outline (on dark)
-    size: md | lg
+    size: sm | md | lg
 --}}
 @props(['href' => null, 'variant' => 'primary', 'size' => 'md', 'icon' => null])
 
@@ -16,6 +16,7 @@
     ];
 
     $sizes = [
+        'sm' => 'h-8 px-3 text-sm',
         'md' => 'h-10 px-4 text-sm',
         'lg' => 'h-12 px-6 text-[15px]',
     ];

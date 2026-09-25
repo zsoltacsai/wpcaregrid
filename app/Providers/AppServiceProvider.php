@@ -65,6 +65,19 @@ class AppServiceProvider extends ServiceProvider
             'connector-transfer:'.($request->attributes->get('connector')?->id ?? $request->ip()),
         ));
 
+        // Admin access claims: a person clicking, so few; per connector.
+        RateLimiter::for('connector-admin-access', fn (Request $request) => Limit::perMinute(20)->by(
+            'connector-admin-access:'.($request->attributes->get('connector')?->id ?? $request->ip()),
+        ));
+
+        // Customers opening WordPress admin: per user and per website.
+        RateLimiter::for('admin-access', fn (Request $request) => [
+            Limit::perMinute(5)->by('admin-access:user:'.$request->user()?->id),
+            // Throttling runs before route-model binding: the parameter may still be the UUID.
+            Limit::perHour(20)->by('admin-access:website:'.(is_object($request->route('website')) ? $request->route('website')->uuid : (string) $request->route('website'))),
+        ]);
+        RateLimiter::for('admin-access-full', fn (Request $request) => Limit::perHour(5)->by('admin-access-full:user:'.$request->user()?->id));
+
         RateLimiter::for('checkout', fn (Request $request) => [
             Limit::perMinute(10)->by($request->ip()),
             Limit::perHour(30)->by($request->ip()),

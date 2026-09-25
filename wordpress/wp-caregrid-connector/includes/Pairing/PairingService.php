@@ -2,6 +2,7 @@
 
 namespace WPCareGrid\Connector\Pairing;
 
+use WPCareGrid\Connector\AdminAccess\AdminAccess;
 use WPCareGrid\Connector\Api\Client;
 use WPCareGrid\Connector\Auth\CredentialStore;
 use WPCareGrid\Connector\Auth\InstallationId;
@@ -42,6 +43,7 @@ final class PairingService
                 'wp_version' => get_bloginfo('version'),
                 'php_version' => PHP_VERSION,
                 'capabilities' => JobRegistry::capabilities(),
+                'admin_access_url' => AdminAccess::login_url(),
             ],
             false
         );

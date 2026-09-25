@@ -2,6 +2,7 @@
 
 namespace WPCareGrid\Connector\Jobs;
 
+use WPCareGrid\Connector\AdminAccess\AdminAccess;
 use WPCareGrid\Connector\Api\Client;
 use WPCareGrid\Connector\Backups\Maintenance;
 use WPCareGrid\Connector\Backups\TempDir;
@@ -61,6 +62,9 @@ final class JobRunner
 
             Settings::update(['last_poll_at' => gmdate('c'), 'last_success_at' => gmdate('c'), 'last_error' => null]);
             $this->connection->apply_schedule($response->data);
+            if (is_array($response->data['admin_access'] ?? null)) {
+                AdminAccess::reconcile($response->data['admin_access']);
+            }
 
             foreach ((array) ($response->data['jobs'] ?? []) as $job) {
                 if (is_array($job) && $this->process($job)) {

@@ -55,6 +55,8 @@ final class JobQueue
 
         $jobs = $website->jobs()
             ->whereIn('status', [JobStatus::Queued, JobStatus::Delivered])
+            // Admin sessions need the customer's browser on the site: only handed out by a claim.
+            ->where('type', '!=', JobType::CreateAdminSession)
             ->oldest('id')
             ->limit(config('connector.jobs_per_poll'))
             ->get();

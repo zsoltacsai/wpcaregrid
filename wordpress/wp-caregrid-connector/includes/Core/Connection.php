@@ -2,6 +2,7 @@
 
 namespace WPCareGrid\Connector\Core;
 
+use WPCareGrid\Connector\AdminAccess\AdminAccess;
 use WPCareGrid\Connector\Api\Client;
 use WPCareGrid\Connector\Auth\CredentialStore;
 use WPCareGrid\Connector\Security\Logger;
@@ -59,6 +60,8 @@ final class Connection
 
     private function forget(string $status): void
     {
+        // No CareGrid session survives the connection.
+        AdminAccess::end_all($status, false);
         $this->credentials->clear();
         Scheduler::unschedule();
         Settings::reset($status);

@@ -92,6 +92,9 @@
                     @if (session('status'))
                         <x-account.notice tone="positive" class="mb-6">{{ session('status') }}</x-account.notice>
                     @endif
+                    @if (session('account_error'))
+                        <x-account.notice tone="danger" class="mb-6">{{ session('account_error') }}</x-account.notice>
+                    @endif
                     @if (session('backup_error'))
                         <x-account.notice tone="danger" class="mb-6">{{ session('backup_error') }}</x-account.notice>
                     @endif

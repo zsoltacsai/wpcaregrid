@@ -2,6 +2,8 @@
 
 namespace WPCareGrid\Connector\Admin;
 
+use WPCareGrid\Connector\AdminAccess\Accounts;
+use WPCareGrid\Connector\AdminAccess\AdminAccess;
 use WPCareGrid\Connector\Core\Plugin;
 use WPCareGrid\Connector\Core\Scheduler;
 use WPCareGrid\Connector\Core\Settings;
@@ -23,6 +25,7 @@ final class SettingsPage
         'pair' => 'wp_caregrid_pair',
         'disconnect' => 'wp_caregrid_disconnect',
         'sync' => 'wp_caregrid_sync',
+        'revoke_access' => 'wp_caregrid_revoke_access',
     ];
 
     public function __construct(private readonly Plugin $plugin) {}
@@ -70,6 +73,14 @@ final class SettingsPage
         $ok = $this->plugin->heartbeat()->send();
         $this->plugin->runner()->poll();
         $this->finish($ok ? 'success' : 'error', $ok ? __('Contacted WP CareGrid.', 'wp-caregrid') : __('WP CareGrid could not be reached. See the log below.', 'wp-caregrid'));
+    }
+
+    /** End every WP CareGrid admin session on this site now. */
+    public function handle_revoke_access(): void
+    {
+        $this->authorize('revoke_access');
+        AdminAccess::end_all('revoked_on_site');
+        $this->finish('success', __('WP CareGrid admin access was revoked. Its sessions have ended.', 'wp-caregrid'));
     }
 
     /** Capability and nonce, on every action. */
@@ -153,6 +164,26 @@ final class SettingsPage
 					<label for="wp-caregrid-code"><?php esc_html_e('Pairing code', 'wp-caregrid'); ?></label>
 					<input type="text" id="wp-caregrid-code" name="pairing_code" class="regular-text code" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX" required>
 					<?php submit_button(__('Connect', 'wp-caregrid'), 'primary', 'submit', false); ?>
+				</form>
+			<?php } ?>
+
+			<h2><?php esc_html_e('WP CareGrid admin access', 'wp-caregrid'); ?></h2>
+			<p class="description"><?php esc_html_e('WP CareGrid opens this admin with its own temporary accounts; no password is shared. They have no role while no access is active.', 'wp-caregrid'); ?></p>
+			<?php $access = AdminAccess::state(); ?>
+			<table class="form-table" role="presentation">
+				<?php foreach (['maintenance' => __('Maintenance access', 'wp-caregrid'), 'full_admin' => __('Temporary full admin', 'wp-caregrid')] as $level => $label) { ?>
+					<tr><th scope="row"><?php echo esc_html($label); ?></th>
+						<td><?php echo isset($access[$level])
+                            ? esc_html(sprintf( /* translators: %s: time */ __('Active until %s', 'wp-caregrid'), $when((int) $access[$level]['expires_at'])))
+                            : esc_html__('No active session', 'wp-caregrid'); ?></td></tr>
+				<?php } ?>
+				<tr><th scope="row"><?php esc_html_e('Maintenance role', 'wp-caregrid'); ?></th><td><code><?php echo esc_html(implode(', ', Accounts::CAPABILITIES)); ?></code></td></tr>
+			</table>
+			<?php if ($access) { ?>
+				<form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+					<input type="hidden" name="action" value="<?php echo esc_attr(self::ACTIONS['revoke_access']); ?>">
+					<?php wp_nonce_field(self::ACTIONS['revoke_access']); ?>
+					<?php submit_button(__('Revoke current CareGrid access', 'wp-caregrid'), 'delete', 'submit', false); ?>
 				</form>
 			<?php } ?>
 

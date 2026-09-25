@@ -15,3 +15,6 @@ Schedule::command('connector:update-presence')->everyTenMinutes();
 Schedule::command('backup:schedule')->hourly()->withoutOverlapping();
 Schedule::command('backup:monitor')->everyTenMinutes()->withoutOverlapping();
 Schedule::command('backup:retention')->dailyAt('03:30')->withoutOverlapping();
+
+// Admin access: unused tokens and ended sessions expire server-side.
+Schedule::command('admin-access:expire')->everyMinute()->withoutOverlapping();

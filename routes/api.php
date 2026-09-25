@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\V1\AdminAccessController;
 use App\Http\Controllers\Api\V1\BackupController;
 use App\Http\Controllers\Api\V1\ConnectorController;
 use Illuminate\Support\Facades\Route;
@@ -33,4 +34,15 @@ Route::prefix('v1/connector/backups/{backup}')->name('api.v1.connector.backups.'
         Route::post('/objects/{name}/complete', 'complete')->name('complete');
         Route::get('/objects/{name}/content', 'content')->name('content');
         Route::post('/finalize', 'finalize')->name('finalize');
+    });
+
+/*
+| Admin access: the connector exchanges the browser's one-time token while
+| the customer waits on the site's login page. Tight per-connector limits.
+*/
+Route::prefix('v1/connector/admin-access')->name('api.v1.connector.admin-access.')->controller(AdminAccessController::class)
+    ->middleware(['connector.auth', 'throttle:connector-admin-access'])
+    ->group(function () {
+        Route::post('/claim', 'claim')->name('claim');
+        Route::post('/{uuid}/ended', 'ended')->name('ended');
     });

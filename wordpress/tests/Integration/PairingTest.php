@@ -37,7 +37,7 @@ final class PairingTest extends TestCase
         [$request] = $this->http->api_requests('POST pair');
         $this->assertSame(FakeHttp::API.'pair', $request['url']);
         $this->assertSame(
-            ['pairing_code', 'installation_id', 'site_url', 'connector_version', 'wp_version', 'php_version', 'capabilities'],
+            ['pairing_code', 'installation_id', 'site_url', 'connector_version', 'wp_version', 'php_version', 'capabilities', 'admin_access_url'],
             array_keys($request['body'])
         );
         $this->assertSame('ABCDEFGHJK23', $request['body']['pairing_code']);

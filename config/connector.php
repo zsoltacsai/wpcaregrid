@@ -13,7 +13,7 @@
 return [
 
     // Newest connector release; older connectors are flagged as outdated.
-    'latest_version' => env('CONNECTOR_LATEST_VERSION', '0.2.0'),
+    'latest_version' => env('CONNECTOR_LATEST_VERSION', '0.3.0'),
 
     // Refuse plain-HTTP connector requests (on by default in production).
     'require_https' => (bool) env('CONNECTOR_REQUIRE_HTTPS', env('APP_ENV') === 'production'),

@@ -78,6 +78,7 @@ class WebsiteController extends Controller
             'latestVerified' => $website->backups()->verified()->whereNull('objects_deleted_at')->latest('verified_at')->first(),
             'backupPolicy' => app(BackupPolicy::class)->for($website),
             'canBackup' => request()->user()->can('backup', $website),
+            'canAdminAccess' => request()->user()->can('adminAccess', $website) && $website->isConnected(),
             'pairingCode' => $this->flashedPairingCode(),
         ]);
     }

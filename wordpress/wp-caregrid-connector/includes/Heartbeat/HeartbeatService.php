@@ -2,6 +2,7 @@
 
 namespace WPCareGrid\Connector\Heartbeat;
 
+use WPCareGrid\Connector\AdminAccess\AdminAccess;
 use WPCareGrid\Connector\Api\Client;
 use WPCareGrid\Connector\Core\Connection;
 use WPCareGrid\Connector\Core\Settings;
@@ -35,6 +36,7 @@ final class HeartbeatService
             'capabilities' => JobRegistry::capabilities(),
             'health' => $health ? ['status' => $health['status'], 'findings' => $health['findings']] : null,
             'sent_at' => gmdate('c'),
+            'admin_access_url' => AdminAccess::login_url(),
         ];
     }
 
@@ -60,6 +62,9 @@ final class HeartbeatService
 
         Settings::update(['last_heartbeat_at' => gmdate('c'), 'last_success_at' => gmdate('c'), 'last_error' => null]);
         $this->connection->apply_schedule($response->data);
+        if (is_array($response->data['admin_access'] ?? null)) {
+            AdminAccess::reconcile($response->data['admin_access']);
+        }
 
         return true;
     }

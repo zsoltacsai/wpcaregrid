@@ -89,6 +89,11 @@ class Website extends Model
         return $this->hasMany(BackupRestore::class);
     }
 
+    public function adminAccessRequests(): HasMany
+    {
+        return $this->hasMany(AdminAccessRequest::class);
+    }
+
     public function events(): HasMany
     {
         return $this->hasMany(WebsiteEvent::class);

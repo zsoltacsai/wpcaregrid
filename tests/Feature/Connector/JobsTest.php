@@ -25,7 +25,7 @@ class JobsTest extends TestCase
     public function test_only_whitelisted_job_types_exist(): void
     {
         $this->assertSame(
-            ['GET_INVENTORY', 'SITE_HEALTH', 'LICENSE_CHECK', 'UPDATE_PLUGIN', 'UPDATE_THEME', 'UPDATE_CORE', 'BACKUP_FILES', 'BACKUP_DATABASE', 'BACKUP_FULL', 'RESTORE'],
+            ['GET_INVENTORY', 'SITE_HEALTH', 'LICENSE_CHECK', 'UPDATE_PLUGIN', 'UPDATE_THEME', 'UPDATE_CORE', 'BACKUP_FILES', 'BACKUP_DATABASE', 'BACKUP_FULL', 'RESTORE', 'CREATE_ADMIN_SESSION'],
             array_column(JobType::cases(), 'value'),
         );
 

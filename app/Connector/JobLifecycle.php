@@ -2,8 +2,10 @@
 
 namespace App\Connector;
 
+use App\AdminAccess\AdminAccessService;
 use App\Backups\BackupService;
 use App\Backups\RestoreService;
+use App\Models\AdminAccessRequest;
 use App\Models\WebsiteJob;
 
 /**
@@ -37,6 +39,10 @@ class JobLifecycle
 
         if ($job->type === JobType::Restore && $job->restore) {
             $this->restores->jobFinished($job->restore, $job);
+        }
+
+        if ($job->type === JobType::CreateAdminSession && ($request = AdminAccessRequest::where('job_id', $job->id)->first())) {
+            app(AdminAccessService::class)->jobFinished($request, $job);
         }
     }
 }

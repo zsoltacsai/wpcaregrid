@@ -20,6 +20,7 @@ final class JobRegistry
         'UPDATE_PLUGIN', 'UPDATE_THEME', 'UPDATE_CORE',
         'BACKUP_FILES', 'BACKUP_DATABASE', 'BACKUP_FULL',
         'RESTORE',
+        'CREATE_ADMIN_SESSION',
     ];
 
     /**
@@ -28,7 +29,7 @@ final class JobRegistry
      */
     public static function capabilities(): array
     {
-        $capabilities = ['inventory', 'health', 'updates', 'license_check', 'backup_files', 'restore_files'];
+        $capabilities = ['inventory', 'health', 'updates', 'license_check', 'backup_files', 'restore_files', 'admin_access'];
 
         if (DatabaseDumper::supported()) {
             array_push($capabilities, 'backup_database', 'backup_full', 'restore_database', 'restore_full');

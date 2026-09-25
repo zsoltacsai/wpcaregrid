@@ -3,6 +3,7 @@
 namespace WPCareGrid\Connector\Tests\Integration;
 
 use WPCareGrid\Connector\Admin\SettingsPage;
+use WPCareGrid\Connector\AdminAccess\AdminAccess;
 use WPCareGrid\Connector\Auth\CredentialStore;
 use WPCareGrid\Connector\Security\Logger;
 use WPCareGrid\Connector\Tests\Support\FakeHttp;
@@ -99,6 +100,10 @@ final class CredentialExposureTest extends TestCase
                     foreach ($callbacks as $callback) {
                         $function = $callback['function'];
                         $owner = is_array($function) ? (is_object($function[0]) ? get_class($function[0]) : $function[0]) : (is_string($function) ? $function : '');
+                        // The only exception: the admin-access session guard (signs out ended CareGrid sessions).
+                        if ($hook === 'init' && $function === [AdminAccess::class, 'guard']) {
+                            continue;
+                        }
                         $this->assertStringNotContainsString('WPCareGrid', $owner, "Connector hooked into {$hook}.");
                     }
                 }

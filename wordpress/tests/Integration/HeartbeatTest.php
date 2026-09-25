@@ -23,7 +23,7 @@ final class HeartbeatTest extends TestCase
         $this->assertSame('Bearer '.self::CREDENTIAL, $request['headers']['Authorization']);
         $this->assertSame(self::WEBSITE, $request['headers']['X-CareGrid-Website']);
         $this->assertSame(
-            ['connector_version', 'wp_version', 'php_version', 'site_url', 'woocommerce', 'last_successful_poll_at', 'capabilities', 'health', 'sent_at'],
+            ['connector_version', 'wp_version', 'php_version', 'site_url', 'woocommerce', 'last_successful_poll_at', 'capabilities', 'health', 'sent_at', 'admin_access_url'],
             array_keys($request['body'])
         );
         $this->assertSame(['installed', 'active', 'version'], array_keys($request['body']['woocommerce']));

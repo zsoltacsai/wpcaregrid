@@ -107,7 +107,7 @@ final class JobsTest extends TestCase
         $this->plugin()->runner()->poll();
 
         $this->assertSame(0, $rogue->runs);
-        $this->assertSame(['GET_INVENTORY', 'SITE_HEALTH', 'LICENSE_CHECK', 'UPDATE_PLUGIN', 'UPDATE_THEME', 'UPDATE_CORE', 'BACKUP_FILES', 'BACKUP_DATABASE', 'BACKUP_FULL', 'RESTORE'], JobRegistry::TYPES);
+        $this->assertSame(['GET_INVENTORY', 'SITE_HEALTH', 'LICENSE_CHECK', 'UPDATE_PLUGIN', 'UPDATE_THEME', 'UPDATE_CORE', 'BACKUP_FILES', 'BACKUP_DATABASE', 'BACKUP_FULL', 'RESTORE', 'CREATE_ADMIN_SESSION'], JobRegistry::TYPES);
     }
 
     public function test_invalid_payloads_are_refused_before_anything_runs(): void

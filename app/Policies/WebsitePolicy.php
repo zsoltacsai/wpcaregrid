@@ -41,4 +41,16 @@ class WebsitePolicy
     {
         return $this->backup($user, $website);
     }
+
+    /** Opening WordPress admin is a paid action for the site's own plan. */
+    public function adminAccess(User $user, Website $website): bool
+    {
+        return $this->view($user, $website) && $website->allowsServiceOperations();
+    }
+
+    /** Ending access is always allowed for the owner, even without an active plan. */
+    public function revokeAdminAccess(User $user, Website $website): bool
+    {
+        return $this->view($user, $website);
+    }
 }

@@ -104,6 +104,8 @@
         </x-account.panel>
     </div>
 
+    <x-admin-access.panel class="mt-6" :website="$website" :can-open="$canAdminAccess" />
+
     <x-backups.summary class="mt-6" :website="$website" :latest="$latestBackup" :verified="$latestVerified" :policy="$backupPolicy" :can-backup="$canBackup" />
 
     {{-- Inventory --}}

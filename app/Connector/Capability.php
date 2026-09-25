@@ -19,6 +19,7 @@ enum Capability: string
     case RestoreFiles = 'restore_files';
     case RestoreDatabase = 'restore_database';
     case RestoreFull = 'restore_full';
+    case AdminAccess = 'admin_access';
 
     /** @param  array<mixed>  $values  Unknown values are dropped. */
     public static function listFrom(array $values): array

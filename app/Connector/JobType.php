@@ -25,6 +25,8 @@ enum JobType: string
     case BackupDatabase = 'BACKUP_DATABASE';
     case BackupFull = 'BACKUP_FULL';
     case Restore = 'RESTORE';
+    // Delivered only in answer to a claim from the browser's request on the site, never by polling.
+    case CreateAdminSession = 'CREATE_ADMIN_SESSION';
 
     /** @param  array<string, mixed>  $payload  RESTORE needs the capability of its scope. */
     public function requiredCapability(array $payload = []): Capability
@@ -38,6 +40,7 @@ enum JobType: string
             self::BackupDatabase => Capability::BackupDatabase,
             self::BackupFull => Capability::BackupFull,
             self::Restore => Capability::tryFrom('restore_'.($payload['scope'] ?? '')) ?? Capability::RestoreFull,
+            self::CreateAdminSession => Capability::AdminAccess,
         };
     }
 
@@ -98,6 +101,12 @@ enum JobType: string
             self::BackupFiles, self::BackupDatabase, self::BackupFull => $backup,
             // The objects and checksums of the backup to restore; the connector
             // checks them against its own record of the backups it made.
+            self::CreateAdminSession => [
+                'request_uuid' => ['required', 'uuid'],
+                'access_level' => ['required', Rule::in(['maintenance', 'full_admin'])],
+                'website_uuid' => ['nullable', 'uuid'],
+                'session_expires_at' => ['nullable', 'date'],
+            ],
             self::Restore => [
                 'restore_uuid' => ['required', 'uuid'],
                 'backup_uuid' => ['required', 'uuid'],

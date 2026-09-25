@@ -10,7 +10,7 @@ final class Settings
 {
     public const OPTION = 'wp_caregrid_state';
 
-    public const OPTIONS = [self::OPTION, 'wp_caregrid_credential', 'wp_caregrid_jobs', 'wp_caregrid_log', 'wp_caregrid_health', 'wp_caregrid_installation_id', 'wp_caregrid_poll_lock', 'wp_caregrid_backup_runs', 'wp_caregrid_backup_index', 'wp_caregrid_temp_suffix'];
+    public const OPTIONS = [self::OPTION, 'wp_caregrid_credential', 'wp_caregrid_jobs', 'wp_caregrid_log', 'wp_caregrid_health', 'wp_caregrid_installation_id', 'wp_caregrid_poll_lock', 'wp_caregrid_backup_runs', 'wp_caregrid_backup_index', 'wp_caregrid_temp_suffix', 'wp_caregrid_admin_access'];
 
     public const DISCONNECTED = 'disconnected';
 

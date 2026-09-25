@@ -3,6 +3,9 @@
 namespace WPCareGrid\Connector\Core;
 
 use WPCareGrid\Connector\Admin\SettingsPage;
+use WPCareGrid\Connector\AdminAccess\Accounts;
+use WPCareGrid\Connector\AdminAccess\AdminAccess;
+use WPCareGrid\Connector\AdminAccess\Landing;
 use WPCareGrid\Connector\Api\Client;
 use WPCareGrid\Connector\Auth\CredentialStore;
 use WPCareGrid\Connector\Backups\Downloader;
@@ -19,9 +22,10 @@ use WPCareGrid\Connector\Pairing\PairingService;
 use WPCareGrid\Connector\Updates\UpdateGuard;
 
 /**
- * Builds the services and registers WordPress hooks. Only three entry
- * points exist: two cron events and the admin page. No REST routes, no
- * public AJAX, no front-end output. Backups and restores run inside the
+ * Builds the services and registers WordPress hooks. Entry points: two
+ * cron events, the admin page, and the admin-access landing on
+ * wp-login.php (POST only, useless without WP CareGrid's confirmation).
+ * No REST routes, no public AJAX, no front-end output. Backups and restores run inside the
  * poll, never in a visitor's request.
  */
 final class Plugin
@@ -42,6 +46,13 @@ final class Plugin
         Scheduler::register();
         add_action(Scheduler::HEARTBEAT, [$plugin, 'run_heartbeat']);
         add_action(Scheduler::POLL, [$plugin, 'run_poll']);
+
+        // Admin access: the wp-login.php landing, the session guard, expiry and account protections.
+        AdminAccess::use_api($plugin->api());
+        Accounts::register_protections();
+        (new Landing($plugin))->register();
+        add_action('init', [AdminAccess::class, 'guard'], 1);
+        add_action(AdminAccess::CRON, static fn ($level) => AdminAccess::end((string) $level, 'expired'));
 
         if (is_admin()) {
             (new SettingsPage($plugin))->register();
@@ -115,6 +126,7 @@ final class Plugin
                     'BACKUP_DATABASE' => new Handlers\BackupHandler('database', $this->api(), $this->uploader()),
                     'BACKUP_FULL' => new Handlers\BackupHandler('full', $this->api(), $this->uploader()),
                     'RESTORE' => new Handlers\RestoreHandler($this->downloader(), $this->health()),
+                    'CREATE_ADMIN_SESSION' => new Handlers\CreateAdminSessionHandler,
                 ]
             );
         }

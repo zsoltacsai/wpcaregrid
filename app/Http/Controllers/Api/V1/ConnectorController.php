@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\AdminAccess\AdminAccessService;
 use App\Connector\Capability;
 use App\Connector\ConnectorError;
 use App\Connector\HealthIngest;
@@ -36,9 +37,11 @@ class ConnectorController extends Controller
             'php_version' => ['nullable', 'string', 'max:32'],
             'capabilities' => ['present', 'array', 'max:20'],
             'capabilities.*' => ['string', 'max:32'],
+            'admin_access_url' => ['nullable', 'string', 'max:255', 'url:http,https'],
         ]);
 
         [$connector, $credential] = $pairing->pair($data);
+        $connector->forceFill(['admin_access_url' => $data['admin_access_url'] ?? null])->save();
 
         return response()->json([
             'website_uuid' => $connector->website->uuid,
@@ -70,9 +73,11 @@ class ConnectorController extends Controller
             // Null until the site has run its first health check.
             ...($request->filled('health') ? HealthIngest::rules('health.') : []),
             'sent_at' => ['nullable', 'date'],
+            'admin_access_url' => ['nullable', 'string', 'max:255', 'url:http,https'],
         ]);
 
         $connector->forceFill([
+            'admin_access_url' => $data['admin_access_url'] ?? null,
             'connector_version' => $data['connector_version'],
             'site_url' => $data['site_url'],
             'capabilities' => Capability::listFrom($data['capabilities']),
@@ -98,6 +103,7 @@ class ConnectorController extends Controller
             'jobs_pending' => $website->jobs()->whereIn('status', [JobStatus::Queued, JobStatus::Delivered])->count(),
             'latest_connector_version' => config('connector.latest_version'),
             'connector_outdated' => $connector->isOutdated(),
+            'admin_access' => app(AdminAccessService::class)->liveFor($website),
             ...$this->schedule(),
         ]);
     }
@@ -117,7 +123,12 @@ class ConnectorController extends Controller
 
         $connector->forceFill(['last_successful_poll_at' => now()])->save();
 
-        return response()->json(['jobs' => $jobs->map->toConnectorArray()->all(), ...$this->schedule()]);
+        return response()->json([
+            'jobs' => $jobs->map->toConnectorArray()->all(),
+            // Admin sessions the site may keep; it ends any other CareGrid session.
+            'admin_access' => app(AdminAccessService::class)->liveFor($connector->website),
+            ...$this->schedule(),
+        ]);
     }
 
     public function result(Request $request, string $job, RecordJobResult $results): JsonResponse
