@@ -14,8 +14,4 @@ final readonly class SecuritySummary
         public ?CarbonInterface $lastScanAt = null,
     ) {}
 
-    public static function notConfigured(): self
-    {
-        return new self(SecurityState::NotConfigured);
-    }
 }

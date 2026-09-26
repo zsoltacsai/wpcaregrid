@@ -7,8 +7,8 @@ use WPCareGrid\Connector\Core\Plugin;
 /**
  * Plugin Name:       WP CareGrid Connector
  * Plugin URI:        https://wpcaregrid.com
- * Description:       Connects this website to WP CareGrid for maintenance: inventory, health checks and approved updates. Uses a dedicated site credential; no WordPress, hosting or database password is needed.
- * Version:           0.3.0
+ * Description:       Connects this website to WP CareGrid for maintenance: inventory, health checks, approved updates and security scans. Uses a dedicated site credential; no WordPress, hosting or database password is needed.
+ * Version:           0.4.0
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Author:            WP CareGrid
@@ -19,7 +19,7 @@ use WPCareGrid\Connector\Core\Plugin;
  */
 defined('ABSPATH') || exit;
 
-define('WP_CAREGRID_VERSION', '0.3.0');
+define('WP_CAREGRID_VERSION', '0.4.0');
 define('WP_CAREGRID_FILE', __FILE__);
 define('WP_CAREGRID_DIR', __DIR__);
 

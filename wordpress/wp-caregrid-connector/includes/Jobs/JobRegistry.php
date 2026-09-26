@@ -8,7 +8,8 @@ use WPCareGrid\Connector\Backups\DatabaseDumper;
  * The fixed list of jobs this connector will run. Anything not listed here
  * is refused, whatever the server sends. There is deliberately no job for
  * running PHP, shell commands, SQL or WordPress hooks, and the list is not
- * filterable.
+ * filterable. Security jobs read (SECURITY_SCAN) or make one verified,
+ * reversible change to one file or plugin; none takes code or a URL.
  */
 final class JobRegistry
 {
@@ -21,6 +22,7 @@ final class JobRegistry
         'BACKUP_FILES', 'BACKUP_DATABASE', 'BACKUP_FULL',
         'RESTORE',
         'CREATE_ADMIN_SESSION',
+        'SECURITY_SCAN', 'SECURITY_QUARANTINE', 'SECURITY_RESTORE_QUARANTINE', 'SECURITY_REPAIR_FILE', 'SECURITY_DISABLE_PLUGIN',
     ];
 
     /**
@@ -29,7 +31,7 @@ final class JobRegistry
      */
     public static function capabilities(): array
     {
-        $capabilities = ['inventory', 'health', 'updates', 'license_check', 'backup_files', 'restore_files', 'admin_access'];
+        $capabilities = ['inventory', 'health', 'updates', 'license_check', 'backup_files', 'restore_files', 'admin_access', 'security_scan', 'security_quarantine', 'security_remediate'];
 
         if (DatabaseDumper::supported()) {
             array_push($capabilities, 'backup_database', 'backup_full', 'restore_database', 'restore_full');

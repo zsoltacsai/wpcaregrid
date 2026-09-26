@@ -40,6 +40,8 @@ class Website extends Model
             'health_status' => HealthStatus::class,
             'health_findings' => 'array',
             'health_checked_at' => 'datetime',
+            'security_status' => HealthStatus::class,
+            'security_scanned_at' => 'datetime',
         ];
     }
 
@@ -97,6 +99,31 @@ class Website extends Model
     public function events(): HasMany
     {
         return $this->hasMany(WebsiteEvent::class);
+    }
+
+    public function securityScans(): HasMany
+    {
+        return $this->hasMany(SecurityScan::class);
+    }
+
+    public function securityFindings(): HasMany
+    {
+        return $this->hasMany(SecurityFinding::class);
+    }
+
+    public function securityIncidents(): HasMany
+    {
+        return $this->hasMany(SecurityIncident::class);
+    }
+
+    public function securityRemediations(): HasMany
+    {
+        return $this->hasMany(SecurityRemediation::class);
+    }
+
+    public function securityQuarantines(): HasMany
+    {
+        return $this->hasMany(SecurityQuarantine::class);
     }
 
     public function presence(): Presence

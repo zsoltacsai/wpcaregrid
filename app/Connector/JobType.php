@@ -27,6 +27,25 @@ enum JobType: string
     case Restore = 'RESTORE';
     // Delivered only in answer to a claim from the browser's request on the site, never by polling.
     case CreateAdminSession = 'CREATE_ADMIN_SESSION';
+    // Security & Malware Engine (connector 0.4.0). Scans are read-only; the
+    // others each make one reversible or verified change to one file or plugin.
+    case SecurityScan = 'SECURITY_SCAN';
+    case SecurityQuarantine = 'SECURITY_QUARANTINE';
+    case SecurityRestoreQuarantine = 'SECURITY_RESTORE_QUARANTINE';
+    case SecurityRepairFile = 'SECURITY_REPAIR_FILE';
+    case SecurityDisablePlugin = 'SECURITY_DISABLE_PLUGIN';
+
+    /** A path relative to the WordPress root: a root file, or inside wp-admin, wp-includes or wp-content. */
+    public const SITE_PATH = '/^(?:(?:wp-admin|wp-includes|wp-content)\/[A-Za-z0-9._\-\/@+~ ]{1,480}|[A-Za-z0-9._-]{1,191})$/';
+
+    /** No "." or ".." segments and no empty segments: never outside the site. */
+    public const SITE_PATH_UNSAFE = '/(^|\/)\.{1,2}(\/|$)|\/\/|\/$/';
+
+    /** @return list<string> */
+    public static function sitePathRules(): array
+    {
+        return ['required', 'string', 'regex:'.self::SITE_PATH, 'not_regex:'.self::SITE_PATH_UNSAFE];
+    }
 
     /** @param  array<string, mixed>  $payload  RESTORE needs the capability of its scope. */
     public function requiredCapability(array $payload = []): Capability
@@ -41,12 +60,21 @@ enum JobType: string
             self::BackupFull => Capability::BackupFull,
             self::Restore => Capability::tryFrom('restore_'.($payload['scope'] ?? '')) ?? Capability::RestoreFull,
             self::CreateAdminSession => Capability::AdminAccess,
+            self::SecurityScan => Capability::SecurityScan,
+            self::SecurityQuarantine, self::SecurityRestoreQuarantine => Capability::SecurityQuarantine,
+            self::SecurityRepairFile, self::SecurityDisablePlugin => Capability::SecurityRemediate,
         };
     }
 
     public function changesTheSite(): bool
     {
-        return in_array($this, [self::UpdatePlugin, self::UpdateTheme, self::UpdateCore, self::Restore], true);
+        return in_array($this, [self::UpdatePlugin, self::UpdateTheme, self::UpdateCore, self::Restore, ...self::securityChanges()], true);
+    }
+
+    /** @return list<self> Security jobs that change a file or plugin on the site. */
+    public static function securityChanges(): array
+    {
+        return [self::SecurityQuarantine, self::SecurityRestoreQuarantine, self::SecurityRepairFile, self::SecurityDisablePlugin];
     }
 
     public function isUpdate(): bool
@@ -106,6 +134,39 @@ enum JobType: string
                 'access_level' => ['required', Rule::in(['maintenance', 'full_admin'])],
                 'website_uuid' => ['nullable', 'uuid'],
                 'session_expires_at' => ['nullable', 'date'],
+            ],
+            self::SecurityScan => [
+                'scan_uuid' => ['required', 'uuid'],
+                'scan_type' => ['required', Rule::in(['integrity', 'malware', 'full'])],
+                'part' => ['required', 'integer', 'min:1', 'max:'.(int) config('security.scan.max_parts')],
+                'time_budget' => ['required', 'integer', 'min:10', 'max:600'],
+            ],
+            // The site checks the file's current hash before touching it, so a
+            // stale or replayed job never acts on a different file.
+            self::SecurityQuarantine => [
+                'remediation_uuid' => ['required', 'uuid'],
+                'finding_uuid' => ['required', 'uuid'],
+                'path' => self::sitePathRules(),
+                'sha256' => ['required', 'string', 'regex:/^[a-f0-9]{64}$/'],
+            ],
+            self::SecurityRestoreQuarantine => [
+                'remediation_uuid' => ['required', 'uuid'],
+                'quarantine_uuid' => ['required', 'uuid'],
+                'path' => self::sitePathRules(),
+                'sha256' => ['required', 'string', 'regex:/^[a-f0-9]{64}$/'],
+            ],
+            // The clean copy comes from WordPress.org for the installed version,
+            // fetched and verified by the site: no URL, no content from the server.
+            self::SecurityRepairFile => [
+                'remediation_uuid' => ['required', 'uuid'],
+                'source' => ['required', Rule::in(['core', 'plugin'])],
+                'plugin' => ['required_if:source,plugin', 'nullable', 'string', 'max:191', 'regex:/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.php$/', 'not_regex:/\.\./'],
+                'path' => self::sitePathRules(),
+                'sha256' => ['nullable', 'string', 'regex:/^[a-f0-9]{64}$/'],
+            ],
+            self::SecurityDisablePlugin => [
+                'remediation_uuid' => ['required', 'uuid'],
+                'plugin' => ['required', 'string', 'max:191', 'regex:/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)?\.php$/', 'not_regex:/\.\./'],
             ],
             self::Restore => [
                 'restore_uuid' => ['required', 'uuid'],

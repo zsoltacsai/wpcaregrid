@@ -127,6 +127,11 @@ final class Plugin
                     'BACKUP_FULL' => new Handlers\BackupHandler('full', $this->api(), $this->uploader()),
                     'RESTORE' => new Handlers\RestoreHandler($this->downloader(), $this->health()),
                     'CREATE_ADMIN_SESSION' => new Handlers\CreateAdminSessionHandler,
+                    'SECURITY_SCAN' => new Handlers\SecurityScanHandler,
+                    'SECURITY_QUARANTINE' => new Handlers\SecurityQuarantineHandler,
+                    'SECURITY_RESTORE_QUARANTINE' => new Handlers\SecurityRestoreQuarantineHandler,
+                    'SECURITY_REPAIR_FILE' => new Handlers\SecurityRepairFileHandler,
+                    'SECURITY_DISABLE_PLUGIN' => new Handlers\SecurityDisablePluginHandler,
                 ]
             );
         }

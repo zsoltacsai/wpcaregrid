@@ -113,7 +113,7 @@ class OperatorConsoleTest extends TestCase
             ->assertSee(__('operator.health.healthy'))
             ->assertSee(__('operator.connector_states.connected'))
             ->assertSee(__('operator.backup_states.verified'))
-            ->assertSee(__('operator.security.states.not_configured'))
+            ->assertSee(__('operator.security.states.not_scanned'))
             ->assertSee(__('operator.websites.updates_pending', ['count' => 2]));
     }
 
@@ -164,7 +164,8 @@ class OperatorConsoleTest extends TestCase
         $this->assertSame(['never.example'], $hosts(['type' => 'woocommerce']));
         $this->assertSame(['never.example'], $hosts(['type' => 'woocommerce', 'status' => 'critical']));
         $this->assertSame([], $hosts(['security' => 'findings']), 'No scanner: no website has findings.');
-        $this->assertCount(6, $hosts(['security' => 'not_configured']));
+        $this->assertCount(6, $hosts(['security' => 'not_scanned']), 'Nothing has been scanned yet.');
+        $this->assertSame([], $hosts(['security' => 'not_configured']), 'The engine exists: nothing is "not configured".');
         // Unknown values are ignored, not errors.
         $this->assertCount(6, $hosts(['status' => 'bogus', 'connector' => ['x'], 'sort' => 'password', 'direction' => 'sideways']));
     }
@@ -222,7 +223,8 @@ class OperatorConsoleTest extends TestCase
             ->assertSee('akismet/akismet.php')
             ->assertSee('Twenty Twenty-Five')
             ->assertSee(config('connector.latest_version'))
-            ->assertSee(__('operator.security.not_configured'))
+            ->assertSee(__('security.states.unknown'))
+            ->assertSee(route('operator.websites.security', $website))
             ->assertSee(__('operator.admin_access.none'))
             ->assertSee(__('operator.admin_access.open'))
             ->assertSee(__('operator.backups.request'))
@@ -265,14 +267,18 @@ class OperatorConsoleTest extends TestCase
             ->assertDontSee('action="'.route('operator.websites.admin-access.maintenance', $website).'"', false);
     }
 
-    public function test_security_page_says_no_scanner_is_configured(): void
+    public function test_security_page_without_scans_shows_nothing_invented(): void
     {
         $this->consoleSite();
         $this->asOperator();
 
-        $this->get(route('operator.security.index'))->assertOk()
-            ->assertSee(__('operator.security.not_configured'))
-            ->assertDontSee(__('operator.security.open_findings'));
+        $html = $this->get(route('operator.security.index'))->assertOk()
+            ->assertSee(__('operator.security.no_incidents'))
+            ->assertSee(__('operator.security.no_open_findings'))
+            ->assertSee(__('security.unavailable_reasons.VULNERABILITY_SOURCE_NOT_CONFIGURED'))
+            ->getContent();
+        $this->assertSame(0, $this->metric($html, 'open_findings'));
+        $this->assertSame(1, $this->metric($html, 'not_scanned'));
     }
 
     public function test_a_future_scanner_plugs_into_the_console(): void
@@ -310,7 +316,9 @@ class OperatorConsoleTest extends TestCase
         $this->asOperator();
 
         $this->assertSame(3, $this->metric($this->get(route('operator.dashboard'))->getContent(), 'security_findings'));
-        $this->get(route('operator.security.index'))->assertOk()->assertSee(__('operator.security.states.findings'))->assertSee(__('operator.security.severities.high'))->assertSee($website->host());
+        // The overview lists websites by their stored security state; the row comes from the scanner.
+        $website->forceFill(['security_status' => 'attention', 'security_open_findings' => 3])->save();
+        $this->get(route('operator.security.index'))->assertOk()->assertSee(__('operator.security.severities.high'))->assertSee($website->host());
         $this->get(route('operator.websites.show', $website))->assertOk()->assertSee(__('operator.security.severities.high'));
         $this->get(route('operator.websites.index', ['security' => 'findings']))->assertOk()->assertSee($website->host());
     }

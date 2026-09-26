@@ -106,6 +106,8 @@
 
     <x-admin-access.panel class="mt-6" :website="$website" :can-open="$canAdminAccess" />
 
+    <x-security.customer-panel class="mt-6" :website="$website" />
+
     <x-backups.summary class="mt-6" :website="$website" :latest="$latestBackup" :verified="$latestVerified" :policy="$backupPolicy" :can-backup="$canBackup" />
 
     {{-- Inventory --}}

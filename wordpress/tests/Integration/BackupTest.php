@@ -44,7 +44,7 @@ final class BackupTest extends TestCase
 
     public function test_only_implemented_backup_capabilities_are_advertised(): void
     {
-        $expected = ['inventory', 'health', 'updates', 'license_check', 'backup_files', 'restore_files', 'admin_access'];
+        $expected = ['inventory', 'health', 'updates', 'license_check', 'backup_files', 'restore_files', 'admin_access', 'security_scan', 'security_quarantine', 'security_remediate'];
         if ($this->mysql()) {
             array_push($expected, 'backup_database', 'backup_full', 'restore_database', 'restore_full');
         }

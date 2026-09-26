@@ -26,7 +26,7 @@ The console adds no business logic of its own. Every change goes through the ser
 | Read models | `app/Operator/WebsiteDirectory.php` (search, filter, sort), `Overview.php` (dashboard), `ConnectorState.php`, `BackupState.php`, `Refusal.php` (wording) |
 | Update requests | `app/Connector/RequestUpdate.php` |
 | Disconnect | `app/Connector/DisconnectWebsite.php` (shared with the customer area) |
-| Security placeholder | `app/Security/` (`SecurityScanner`, `NotConfiguredScanner`, `SecuritySummary`, `SecurityState`, `Severity`) |
+| Security (console side) | `app/Security/` (`SecurityScanner`, `EngineScanner`, `SecuritySummary`, `SecurityState`, `Severity`); the engine: [SECURITY_ENGINE.md](SECURITY_ENGINE.md) |
 | Audit actor | `app/Websites/Actor.php`, `app/Websites/AuditLog.php` |
 | Managing operators | `php artisan operator:user` (`app/Console/Commands/ManageOperator.php`) |
 | Views, wording | `resources/views/operator/`, `resources/views/components/operator/`, `resources/views/components/layouts/operator.blade.php`, `lang/en/operator.php` |
@@ -67,7 +67,9 @@ Being an operator grants nothing by itself: an operator with no permissions can 
 | `updates.view` | Update history and last result |
 | `updates.run` | Queue a plugin, theme or core update |
 | `security.view` | Security section and `/operator/security` |
-| `security.scan` | Reserved for the Security/Malware milestone (no scanner yet) |
+| `security.scan` | Run and cancel security scans |
+| `security.manage` | Finding decisions (confirm, false positive, ignore, reopen) and incidents |
+| `security.remediate` | Quarantine, repair, plugin deactivation, undo quarantine (not in the standard set; see [SECURITY_INCIDENTS.md](SECURITY_INCIDENTS.md)) |
 | `admin_access.request` | Open WordPress admin with **maintenance** access, revoke any open access |
 | `admin_access.full` | Request **temporary full administrator** access (see below) |
 | `licenses.view` | Plugin license states and details |
@@ -121,7 +123,7 @@ Every model is bound by UUID. Nested models use scoped bindings (a backup or acc
 - **WordPress, Plugins, Themes:** installed and available versions, one Update button per item the site reports as updatable (`updates.run`), update history and last result (`updates.view`), licenses with "View details" (`licenses.view`).
 - **WooCommerce:** version and state from the inventory.
 - **Backups** (`backups.view`): schedule, retention, storage provider name, history with verification time, errors, expiry; "Request backup" (`backups.run`); "Restore" (`backups.restore`).
-- **Security:** see [Future Security/Malware integration](#future-securitymalware-integration).
+- **Security:** state, open findings, highest severity, last scan and "Run scan"; details on `/operator/websites/{uuid}/security` (see [SECURITY_ENGINE.md](SECURITY_ENGINE.md)).
 - **Admin access:** "No active access", "Maintenance access active · expires in …", or "Temporary full admin active · expires in …", with who requested it. Open Admin, Revoke Access and Request full admin, each only with its permission. When Open Admin is not possible the reason is shown (site offline, connector outdated…).
 - **Activity** (`audit.view`): this website's audit log.
 
@@ -194,23 +196,9 @@ Events added in this milestone, recorded where the action already happens:
 
 Existing events (`backup.*`, `restore.*`, `admin_access.*`) now carry the operator as actor when an operator acted. The customer's "Backup activity" panel shows backup, restore and update events only.
 
-## Future Security/Malware integration
+## Security integration
 
-The console reads security data only through `App\Security\SecurityScanner`:
-
-```php
-interface SecurityScanner
-{
-    public function isConfigured(): bool;
-    public function summaries(iterable $websites): array;   // website id => SecuritySummary (one query per page)
-    public function openFindings(): int;                    // dashboard figure
-    public function whereState(Builder $websites, SecurityState $state): void; // list filter, in SQL
-}
-```
-
-`SecuritySummary` holds a `SecurityState` (`not_configured`, `not_scanned`, `no_issues`, `findings`), a findings count, the highest `Severity` (`low`…`critical`) and the last scan time. Today `NotConfiguredScanner` is bound in `AppServiceProvider`. Every website shows "No security scanner configured yet", the dashboard shows 0 findings, and nothing is invented.
-
-The Security/Malware milestone binds its own implementation (backed by its findings table) instead. The dashboard metric, list column and filter, website Security section and `/operator/security` then show real data without changes (a test proves this with a fake scanner). `security.scan` is reserved for starting scans; the `security.*` audit events and scan jobs belong to that milestone.
+The console reads security data through `App\Security\SecurityScanner`, implemented by `EngineScanner` (the Security & Malware Engine) and bound in `AppServiceProvider`: the dashboard's security findings figure, the website list's security column and filter, the website Security section and `/operator/security` all show real scan results. The engine's own pages (website security, findings, incidents, remediation) and routes are documented in [SECURITY_ENGINE.md](SECURITY_ENGINE.md) and [SECURITY_INCIDENTS.md](SECURITY_INCIDENTS.md).
 
 ## Configuration
 

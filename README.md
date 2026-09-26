@@ -46,6 +46,7 @@ The approved brand pack lives in `design/` (guidelines in `design/brand/BRAND.md
 | Checkout, Stripe gateway, webhook handling | `app/Checkout/`, `app/Http/Controllers/CheckoutController.php`, `StripeWebhookController.php` |
 | Checkout pages | `resources/views/pages/checkout/`, `resources/views/pages/pricing.blade.php` |
 | Operator console | `routes/operator.php`, `app/Http/Controllers/Operator/`, `app/Operator/`, `resources/views/operator/` |
+| Security engine, Site Health | `app/Security/`, `app/SiteHealth/`, `config/security.php`, `wordpress/wp-caregrid-connector/includes/Security/` |
 
 ## Languages
 
@@ -165,6 +166,14 @@ The internal console for the service team lives at `/operator`, with its own log
 
 - Create an operator: `php artisan operator:user you@wpcaregrid.com --standard` (everything except full admin; `--grant=`, `--revoke=`, `--disable`).
 - Operators get temporary full WordPress admin only with `admin_access.full` and `ADMIN_ACCESS_OPERATOR_FULL_ADMIN=true` (off by default).
+
+## Security & Malware Engine
+
+Connector 0.4.0 scans each site locally (WordPress.org checksums for core and plugins, versioned malware indicator rules, database, administrators, cron, configuration) and reports structured findings only; the server matches the inventory against a configured vulnerability feed, deduplicates findings, keeps incidents, and feeds the security state into Unified Site Health. Severity and confidence are separate; only operators confirm malware. Remediation (quarantine, core/plugin file repair, plugin deactivation) is operator-initiated, needs a verified full backup and is **off by default**. Details: **[docs/SECURITY_ENGINE.md](docs/SECURITY_ENGINE.md)**, [MALWARE_SCANNING.md](docs/MALWARE_SCANNING.md), [SECURITY_FINDINGS.md](docs/SECURITY_FINDINGS.md), [SECURITY_INCIDENTS.md](docs/SECURITY_INCIDENTS.md).
+
+- Settings: `SECURITY_*` in `.env.example`; `config/security.php`. Keep `SECURITY_REMEDIATION_ENABLED=false` in production (checklist in SECURITY_INCIDENTS.md).
+- Vulnerabilities only with `SECURITY_VULNERABILITY_SOURCE=wordfence` and a feed (`php artisan security:vulnerabilities:sync`); otherwise "Vulnerability scanner not configured".
+- Needs the scheduler (`security:monitor`, `security:schedule`) and connector 0.4.0 on the sites.
 
 ## Demo content
 

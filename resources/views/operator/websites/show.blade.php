@@ -385,19 +385,30 @@
             </x-operator.section>
         @endcan
 
-        {{-- Security (placeholder until the Security/Malware milestone) --}}
+        {{-- Security: the state SecurityPosture keeps, and the way to the details --}}
         @can('operator.security.view')
             <x-operator.section :title="__('operator.detail.sections.security')" id="security">
+                <x-slot:action>
+                    <a href="{{ route('operator.websites.security', $website) }}" class="text-xs font-medium text-primary underline underline-offset-2">{{ __('operator.detail.security_details') }}</a>
+                </x-slot:action>
                 @if (! $securityConfigured)
                     <p class="text-sm font-medium text-primary">{{ __('operator.security.not_configured') }}</p>
                     <p class="mt-1 text-xs text-muted">{{ __('operator.security.not_configured_text') }}</p>
                 @else
+                    @php $securityState = $website->security_status; @endphp
                     <dl class="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
-                        <x-account.detail :label="__('operator.detail.security_state')"><x-ui.status-badge :tone="$security->state->tone()">{{ $security->state->label() }}</x-ui.status-badge></x-account.detail>
-                        <x-account.detail :label="__('operator.security.findings')">{{ $security->findings }}</x-account.detail>
+                        <x-account.detail :label="__('operator.detail.security_state')"><x-ui.status-badge :tone="$securityState?->tone() ?? 'neutral'">{{ __('security.states.'.($securityState?->value ?? 'unknown')) }}</x-ui.status-badge></x-account.detail>
+                        <x-account.detail :label="__('operator.detail.security_open')">{{ $security->findings }}</x-account.detail>
                         <x-account.detail :label="__('operator.security.severity')">@if ($security->highestSeverity)<x-ui.status-badge :tone="$security->highestSeverity->tone()">{{ $security->highestSeverity->label() }}</x-ui.status-badge>@endif</x-account.detail>
-                        <x-account.detail :label="__('operator.security.last_scan')">@if ($security->lastScanAt)<span class="font-mono">{{ $time($security->lastScanAt) }}</span>@endif</x-account.detail>
+                        <x-account.detail :label="__('operator.security.last_scan')"><span class="font-mono">{{ $time($security->lastScanAt) }}</span></x-account.detail>
                     </dl>
+                    @can('operator.security.scan')
+                        <form method="POST" action="{{ route('operator.websites.security.scans.store', $website) }}" class="mt-4">
+                            @csrf
+                            <input type="hidden" name="type" value="full">
+                            <x-ui.button type="submit" size="sm" variant="secondary">{{ __('operator.security.run_scan') }}</x-ui.button>
+                        </form>
+                    @endcan
                 @endif
             </x-operator.section>
         @endcan

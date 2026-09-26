@@ -21,6 +21,10 @@ enum Permission: string
     case UpdatesRun = 'updates.run';
     case SecurityView = 'security.view';
     case SecurityScan = 'security.scan';
+    // Finding decisions (confirm, false positive, ignore) and incidents.
+    case SecurityManage = 'security.manage';
+    // Quarantine, repair and plugin deactivation (behind a verified backup and the remediation switch).
+    case SecurityRemediate = 'security.remediate';
     case AdminAccessRequest = 'admin_access.request';
     case AdminAccessFull = 'admin_access.full';
     case LicensesView = 'licenses.view';
@@ -43,12 +47,13 @@ enum Permission: string
     }
 
     /**
-     * Everything except full admin: a sensible set for a day-to-day operator.
+     * A sensible set for a day-to-day operator: everything except full
+     * admin and changing files on sites (remediation).
      *
      * @return list<self>
      */
     public static function standard(): array
     {
-        return array_values(array_filter(self::cases(), fn (self $p) => $p !== self::AdminAccessFull));
+        return array_values(array_filter(self::cases(), fn (self $p) => ! in_array($p, [self::AdminAccessFull, self::SecurityRemediate], true)));
     }
 }

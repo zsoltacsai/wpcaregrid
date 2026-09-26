@@ -9,6 +9,7 @@ use App\Models\Backup;
 use App\Models\Connector;
 use App\Models\Website;
 use App\Models\WebsiteJob;
+use App\Security\RemediationService;
 use App\Websites\AuditLog;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
@@ -150,5 +151,6 @@ class BackupService
     {
         app(PreUpdateBackups::class)->backupSettled($backup);
         app(RestoreService::class)->safetyBackupSettled($backup);
+        app(RemediationService::class)->backupSettled($backup);
     }
 }

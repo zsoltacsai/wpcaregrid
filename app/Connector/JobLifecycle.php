@@ -7,7 +7,11 @@ use App\Backups\BackupService;
 use App\Backups\PreUpdateBackups;
 use App\Backups\RestoreService;
 use App\Models\AdminAccessRequest;
+use App\Models\SecurityRemediation;
+use App\Models\SecurityScan;
 use App\Models\WebsiteJob;
+use App\Security\RemediationService;
+use App\Security\SecurityScanService;
 use App\Websites\AuditLog;
 
 /**
@@ -30,6 +34,14 @@ class JobLifecycle
 
         if ($job->type === JobType::Restore && $job->restore) {
             $this->restores->started($job->restore);
+        }
+
+        if ($job->type === JobType::SecurityScan && ($scan = SecurityScan::where('job_id', $job->id)->first())) {
+            app(SecurityScanService::class)->started($scan, $job);
+        }
+
+        if (in_array($job->type, JobType::securityChanges(), true) && ($remediation = SecurityRemediation::where('job_id', $job->id)->first())) {
+            app(RemediationService::class)->started($remediation);
         }
 
         // Once per job: a job is re-delivered when a poll response was lost.
@@ -58,6 +70,14 @@ class JobLifecycle
                 // Not "code": that key holds backup error codes in the customer's backup activity.
                 'result' => $job->result_code ?? ($job->error['code'] ?? null),
             ]);
+        }
+
+        if ($job->type === JobType::SecurityScan && ($scan = SecurityScan::where('job_id', $job->id)->first())) {
+            app(SecurityScanService::class)->jobFinished($scan, $job);
+        }
+
+        if (in_array($job->type, JobType::securityChanges(), true) && ($remediation = SecurityRemediation::where('job_id', $job->id)->first())) {
+            app(RemediationService::class)->jobFinished($remediation, $job);
         }
 
         if ($job->type === JobType::CreateAdminSession && ($request = AdminAccessRequest::where('job_id', $job->id)->first())) {

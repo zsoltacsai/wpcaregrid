@@ -8,8 +8,11 @@ use App\Checkout\StripeCheckoutGateway;
 use App\Models\User;
 use App\Operator\Permission;
 use App\Pricing\PricingCatalog;
-use App\Security\NotConfiguredScanner;
+use App\Security\EngineScanner;
 use App\Security\SecurityScanner;
+use App\Security\Vulnerabilities\NoVulnerabilitySource;
+use App\Security\Vulnerabilities\VulnerabilitySource;
+use App\Security\Vulnerabilities\WordfenceFeed;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -31,9 +34,14 @@ class AppServiceProvider extends ServiceProvider
         // One set of storage connections per request or queue job.
         $this->app->scoped(StorageManager::class);
 
-        // No security scanner exists yet (Security/Malware milestone); the
-        // operator console reads findings only through this interface.
-        $this->app->singleton(SecurityScanner::class, NotConfiguredScanner::class);
+        // The operator console reads findings only through this interface.
+        $this->app->singleton(SecurityScanner::class, EngineScanner::class);
+
+        // Vulnerability data only from a configured, trusted source (docs/SECURITY_ENGINE.md).
+        $this->app->bind(VulnerabilitySource::class, fn () => match (config('security.vulnerabilities.source')) {
+            'wordfence' => WordfenceFeed::fromConfig(),
+            default => new NoVulnerabilitySource,
+        });
 
         $this->app->bind(CheckoutGateway::class, fn () => new StripeCheckoutGateway(
             secret: config('services.stripe.secret'),
@@ -106,6 +114,14 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('operator-restore', fn (Request $request) => [
             Limit::perMinute(3)->by('operator-restore:'.$request->user()?->id),
             Limit::perHour(5)->by('operator-restore:website:'.$operatorWebsite($request)),
+        ]);
+        RateLimiter::for('operator-security', fn (Request $request) => [
+            Limit::perMinute(10)->by('operator-security:'.$request->user()?->id),
+            Limit::perHour(30)->by('operator-security:website:'.$operatorWebsite($request)),
+        ]);
+        RateLimiter::for('operator-remediate', fn (Request $request) => [
+            Limit::perMinute(3)->by('operator-remediate:'.$request->user()?->id),
+            Limit::perHour(10)->by('operator-remediate:website:'.$operatorWebsite($request)),
         ]);
         RateLimiter::for('operator-connector', fn (Request $request) => [
             Limit::perMinute(5)->by('operator-connector:'.$request->user()?->id),

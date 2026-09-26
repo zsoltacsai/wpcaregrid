@@ -85,6 +85,12 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
         return false; // No header() call in the test process.
     }
 
+    /** Remove this path after the test. */
+    protected function cleanup_later(string $path): void
+    {
+        $this->cleanup[] = $path;
+    }
+
     protected function plugin(): Plugin
     {
         return Plugin::instance();

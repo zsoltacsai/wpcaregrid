@@ -7,9 +7,8 @@ use Illuminate\Database\Eloquent\Builder;
 
 /**
  * Where the operator console reads security findings from. The console
- * never decides what a finding is: the Security/Malware milestone provides
- * an implementation backed by real scan results. Until then
- * NotConfiguredScanner reports that no scanner exists, and nothing is invented.
+ * never decides what a finding is; EngineScanner (the Security & Malware
+ * Engine) answers from real scan results.
  */
 interface SecurityScanner
 {

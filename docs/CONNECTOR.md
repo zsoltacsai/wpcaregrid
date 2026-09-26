@@ -111,6 +111,11 @@ Error codes include `INVALID_REQUEST`, `RATE_LIMITED`, `UNAUTHENTICATED`, `CONNE
 | `BACKUP_FILES` / `BACKUP_DATABASE` / `BACKUP_FULL` | backup_files / backup_database / backup_full | `backup_uuid`, `reason`, `chunk_size` | Builds a backup locally and uploads it to WP CareGrid ([BACKUP_ENGINE.md](BACKUP_ENGINE.md)) |
 | `CREATE_ADMIN_SESSION` | admin_access | `request_uuid`, `access_level` (`maintenance`/`full_admin`), `website_uuid`, `session_expires_at` | Starts a temporary WordPress session for a managed account. Never delivered by poll: only returned by `/admin-access/claim` inside the customer's browser request ([ADMIN_ACCESS.md](ADMIN_ACCESS.md)) |
 | `RESTORE` | restore_files / restore_database / restore_full (by `scope`) | `restore_uuid`, `backup_uuid`, `scope`, `objects` (name, size, sha256) | Restores one of this site's own backups |
+| `SECURITY_SCAN` | security_scan | `scan_uuid`, `scan_type` (`integrity`/`malware`/`full`), `part`, `time_budget` | Read-only security scan in resumable parts; reports findings only ([MALWARE_SCANNING.md](MALWARE_SCANNING.md)) |
+| `SECURITY_QUARANTINE` | security_quarantine | `remediation_uuid`, `finding_uuid`, `path`, `sha256` | Moves one file into the connector's quarantine (reversible) |
+| `SECURITY_RESTORE_QUARANTINE` | security_quarantine | `remediation_uuid`, `quarantine_uuid`, `path`, `sha256` | Puts a quarantined file back, never over another file |
+| `SECURITY_REPAIR_FILE` | security_remediate | `remediation_uuid`, `source` (`core`/`plugin`), `plugin`, `path`, optional `sha256` | Replaces one official file with its verified clean copy from WordPress.org |
+| `SECURITY_DISABLE_PLUGIN` | security_remediate | `remediation_uuid`, `plugin` | Deactivates one plugin silently |
 
 `backup_uuid` on updates is set by the server only after it verified a pre-update backup. Database jobs and capabilities exist only on MySQL/MariaDB sites; capabilities are sent with every heartbeat, so the server always knows what a site can do.
 
@@ -212,4 +217,4 @@ then upload the ZIP (Plugins → Add New → Upload Plugin), activate, and pair 
 
 ## Future capabilities
 
-Not in this version, and not advertised: malware scanning, request signing with a per-connector key pair (`public_key`), self-update of the connector, automated disaster recovery. Backups and restores are in [BACKUP_ENGINE.md](BACKUP_ENGINE.md), admin access in [ADMIN_ACCESS.md](ADMIN_ACCESS.md). A new capability is only advertised once its jobs exist on both sides and are covered by tests.
+Not in this version, and not advertised: request signing with a per-connector key pair (`public_key`), self-update of the connector, automated disaster recovery. Backups and restores are in [BACKUP_ENGINE.md](BACKUP_ENGINE.md), admin access in [ADMIN_ACCESS.md](ADMIN_ACCESS.md), security scanning and remediation (connector 0.4.0) in [SECURITY_ENGINE.md](SECURITY_ENGINE.md). A new capability is only advertised once its jobs exist on both sides and are covered by tests.

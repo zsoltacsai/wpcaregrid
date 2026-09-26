@@ -26,6 +26,11 @@ final class AuditLog
         'admin_access.requested', 'admin_access.authorized', 'admin_access.started', 'admin_access.expired', 'admin_access.revoked', 'admin_access.failed',
         'connector.paired', 'connector.disconnected',
         'license.expired',
+        'security.scan_requested', 'security.scan_started', 'security.scan_completed', 'security.scan_partial', 'security.scan_failed', 'security.scan_cancelled',
+        'security.finding_opened', 'security.finding_confirmed', 'security.finding_status', 'security.finding_quarantined', 'security.finding_remediated',
+        'security.incident_opened', 'security.incident_status', 'security.incident_resolved', 'security.incident_closed',
+        'security.remediation_requested', 'security.remediation_refused', 'security.remediation_blocked', 'security.remediation_failed',
+        'security.quarantine_restored',
     ];
 
     /**

@@ -5,7 +5,7 @@ namespace App\Connector;
 /**
  * What a connector can do. A connector advertises only what it has
  * implemented; the server only sends jobs the connector advertised.
- * Security capabilities are reserved for a later milestone.
+ * Security scanning, quarantine and file repair come with connector 0.4.0.
  */
 enum Capability: string
 {
@@ -20,6 +20,9 @@ enum Capability: string
     case RestoreDatabase = 'restore_database';
     case RestoreFull = 'restore_full';
     case AdminAccess = 'admin_access';
+    case SecurityScan = 'security_scan';
+    case SecurityQuarantine = 'security_quarantine';
+    case SecurityRemediate = 'security_remediate';
 
     /** @param  array<mixed>  $values  Unknown values are dropped. */
     public static function listFrom(array $values): array

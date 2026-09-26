@@ -11,7 +11,7 @@ use Illuminate\Http\Request;
 /** Everything that happened across websites, from the audit log (website_events). */
 class ActivityController extends Controller
 {
-    public const GROUPS = ['backup', 'restore', 'update', 'admin_access', 'connector', 'license'];
+    public const GROUPS = ['backup', 'restore', 'update', 'admin_access', 'connector', 'license', 'security'];
 
     public const ACTORS = [Actor::CUSTOMER, Actor::OPERATOR, Actor::SYSTEM];
 

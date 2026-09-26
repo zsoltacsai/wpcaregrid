@@ -6,6 +6,8 @@ use App\Http\Controllers\Operator\BackupController;
 use App\Http\Controllers\Operator\DashboardController;
 use App\Http\Controllers\Operator\LoginController;
 use App\Http\Controllers\Operator\SecurityController;
+use App\Http\Controllers\Operator\SecurityFindingController;
+use App\Http\Controllers\Operator\SecurityIncidentController;
 use App\Http\Controllers\Operator\UpdateController;
 use App\Http\Controllers\Operator\WebsiteController;
 use Illuminate\Support\Facades\Route;
@@ -45,6 +47,21 @@ Route::prefix('operator')->name('operator.')->group(function () {
 
         Route::get('/backups', [BackupController::class, 'index'])->middleware('can:operator.backups.view')->name('backups.index');
         Route::get('/security', SecurityController::class)->middleware('can:operator.security.view')->name('security.index');
+
+        // Security & Malware Engine: every change goes through SecurityScanService,
+        // FindingDecisions, RemediationService or IncidentService.
+        Route::get('/websites/{website}/security', [SecurityFindingController::class, 'index'])->middleware('can:operator.security.view')->name('websites.security');
+        Route::post('/websites/{website}/security/scans', [SecurityFindingController::class, 'scan'])->middleware(['can:operator.security.scan', 'throttle:operator-security'])->name('websites.security.scans.store');
+        Route::post('/websites/{website}/security/scans/{securityScan}/cancel', [SecurityFindingController::class, 'cancel'])->scopeBindings()->middleware(['can:operator.security.scan', 'throttle:operator-action'])->name('websites.security.scans.cancel');
+        Route::post('/websites/{website}/security/findings/{securityFinding}/status', [SecurityFindingController::class, 'decide'])->scopeBindings()->middleware(['can:operator.security.manage', 'throttle:operator-action'])->name('websites.security.findings.status');
+        Route::post('/websites/{website}/security/findings/{securityFinding}/remediations', [SecurityFindingController::class, 'remediate'])->scopeBindings()->middleware(['can:operator.security.remediate', 'throttle:operator-remediate'])->name('websites.security.findings.remediate');
+        Route::post('/websites/{website}/security/quarantines/{securityQuarantine}/restore', [SecurityFindingController::class, 'restoreQuarantine'])->scopeBindings()->middleware(['can:operator.security.remediate', 'throttle:operator-remediate'])->name('websites.security.quarantines.restore');
+        Route::post('/websites/{website}/security/incidents', [SecurityIncidentController::class, 'store'])->middleware(['can:operator.security.manage', 'throttle:operator-action'])->name('websites.security.incidents.store');
+        Route::get('/websites/{website}/security/incidents/{securityIncident}', [SecurityIncidentController::class, 'show'])->scopeBindings()->middleware('can:operator.security.view')->name('websites.security.incidents.show');
+        Route::post('/websites/{website}/security/incidents/{securityIncident}/status', [SecurityIncidentController::class, 'status'])->scopeBindings()->middleware(['can:operator.security.manage', 'throttle:operator-action'])->name('websites.security.incidents.status');
+        Route::post('/websites/{website}/security/incidents/{securityIncident}/notes', [SecurityIncidentController::class, 'note'])->scopeBindings()->middleware(['can:operator.security.manage', 'throttle:operator-action'])->name('websites.security.incidents.notes');
+        Route::post('/websites/{website}/security/incidents/{securityIncident}/backup', [SecurityIncidentController::class, 'backup'])->scopeBindings()->middleware(['can:operator.backups.run', 'throttle:operator-backup'])->name('websites.security.incidents.backup');
+        Route::post('/websites/{website}/security/incidents/{securityIncident}/admin-access', [SecurityIncidentController::class, 'adminAccess'])->scopeBindings()->middleware(['can:operator.admin_access.request', 'throttle:admin-access'])->name('websites.security.incidents.admin-access');
         Route::get('/activity', ActivityController::class)->middleware('can:operator.audit.view')->name('activity.index');
     });
 });

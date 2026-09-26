@@ -114,6 +114,10 @@ final class JobQueue
             // Overwriting a site needs a connector that is reporting in right now.
             $type === JobType::Restore && ! config('backup.restore.enabled') => 'restore is not enabled',
             $type === JobType::Restore && $connector->presence() !== Presence::Connected => 'connector is not currently reporting in',
+            // Changing files for security needs a site that is reporting in, and the feature switched on.
+            in_array($type, JobType::securityChanges(), true) && $connector->presence() !== Presence::Connected => 'connector is not currently reporting in',
+            // Undoing a quarantine stays possible when remediation is switched off again.
+            in_array($type, JobType::securityChanges(), true) && $type !== JobType::SecurityRestoreQuarantine && ! config('security.remediation.enabled') => 'security remediation is not enabled',
             default => null,
         };
     }

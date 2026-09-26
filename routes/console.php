@@ -18,3 +18,10 @@ Schedule::command('backup:retention')->dailyAt('03:30')->withoutOverlapping();
 
 // Admin access: unused tokens and ended sessions expire server-side.
 Schedule::command('admin-access:expire')->everyMinute()->withoutOverlapping();
+
+// Security: time out stuck scans; scheduled scans (off unless SECURITY_SCHEDULE_ENABLED);
+// vulnerability feed refresh (only when a source and feed URL are configured).
+Schedule::command('security:monitor')->everyTenMinutes()->withoutOverlapping();
+Schedule::command('security:schedule')->hourly()->withoutOverlapping();
+Schedule::command('security:vulnerabilities:sync')->dailyAt('04:10')->withoutOverlapping()
+    ->when(fn () => config('security.vulnerabilities.source') === 'wordfence' && config('security.vulnerabilities.feed_url'));
