@@ -66,7 +66,7 @@ class BackupFlowTest extends TestCase
         $this->assertSame(['verified', 'verified', 'verified'], $backup->objects()->pluck('status')->all());
         $this->assertDirectoryDoesNotExist(config('backup.upload.staging_path').'/'.$backup->uuid, 'Staged data is removed once verified.');
 
-        $this->assertSame(['backup.requested', 'backup.started', 'backup.uploaded', 'backup.verified'], WebsiteEvent::orderBy('id')->pluck('event')->all());
+        $this->assertSame(['backup.requested', 'backup.started', 'backup.uploaded', 'backup.verified'], WebsiteEvent::where('event', 'like', 'backup.%')->orderBy('id')->pluck('event')->all());
         $this->actingAs($site['website']->customer->user)->get(route('account.websites.backups.index', $site['website']))
             ->assertSee(['Backup requested', 'Backup verified'])->assertDontSee('backups.events');
 

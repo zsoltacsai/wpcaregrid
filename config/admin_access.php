@@ -23,6 +23,10 @@ return [
     // New requests per website per hour (on top of the route rate limits).
     'max_requests_per_hour' => (int) env('ADMIN_ACCESS_MAX_REQUESTS_PER_HOUR', 10),
 
+    // Operators may request full admin only when this is enabled AND they hold the
+    // admin_access.full permission. Off by default: full admin stays customer-only.
+    'operator_full_admin' => (bool) env('ADMIN_ACCESS_OPERATOR_FULL_ADMIN', false),
+
     // Access levels each plan allows. Full admin is never the default action.
     'plans' => collect(['wordpress', 'woocommerce'])->mapWithKeys(fn (string $product) => [
         $product => collect(['basic', 'business', 'secure'])->mapWithKeys(fn (string $tier) => [

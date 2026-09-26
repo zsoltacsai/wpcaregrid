@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Account;
 
 use App\Backups\BackupPolicy;
-use App\Connector\JobStatus;
+use App\Connector\DisconnectWebsite;
 use App\Connector\PairingCodes;
 use App\Http\Controllers\Controller;
 use App\Models\Website;
@@ -98,14 +98,11 @@ class WebsiteController extends Controller
     }
 
     /** Revoke the website's connector. It cannot reconnect without a new pairing code. */
-    public function disconnect(Website $website): RedirectResponse
+    public function disconnect(Request $request, Website $website, DisconnectWebsite $disconnect): RedirectResponse
     {
         $this->authorize('disconnect', $website);
 
-        $website->connectors()->where('status', 'active')->get()->each->revoke('disconnected_by_customer');
-        $website->pairingCodes()->whereNull('used_at')->whereNull('invalidated_at')->update(['invalidated_at' => now()]);
-        $website->jobs()->whereIn('status', [JobStatus::Queued, JobStatus::Delivered])->update(['status' => JobStatus::Cancelled->value]);
-        $website->update(['connector_status' => ConnectorStatus::Revoked, 'status' => WebsiteStatus::Disconnected]);
+        $disconnect($website, 'disconnected_by_customer', 'customer:'.$request->user()->id);
 
         return redirect()->route('account.websites.show', $website)->with('status', __('connector.account.disconnected'));
     }

@@ -4,6 +4,7 @@ namespace App\Connector;
 
 use App\Models\Connector;
 use App\Models\WebsiteInventory;
+use App\Websites\AuditLog;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 
@@ -60,6 +61,7 @@ final class InventoryIngest
     {
         $data = Validator::make($inventory, self::rules())->validate();
         $website = $connector->website;
+        $previous = $website->inventory?->plugins ?? [];
 
         $record = WebsiteInventory::updateOrCreate(['website_id' => $website->id], [
             'connector_id' => $connector->id,
@@ -70,11 +72,30 @@ final class InventoryIngest
             'php_version' => $data['php_version'],
             'collected_at' => $data['collected_at'] ?? now(),
         ]);
+        $record->refreshCounts();
 
         $connector->update(['last_inventory_at' => now()]);
         $website->update(['wordpress_version' => $data['core']['version'], 'php_version' => $data['php_version']]);
+        $this->recordNewlyExpired($record, $previous);
 
         return $record;
+    }
+
+    /**
+     * A license reported as expired (by the plugin itself) that was not
+     * expired before is audited once. Unknown is never treated as expired.
+     *
+     * @param  array<int, array<string, mixed>>  $previous
+     */
+    private function recordNewlyExpired(WebsiteInventory $inventory, array $previous): void
+    {
+        $wasExpired = collect($previous)->filter(fn (array $plugin) => ($plugin['license']['status'] ?? null) === LicenseStatus::Expired->value)->pluck('file')->all();
+
+        foreach ($inventory->plugins as $plugin) {
+            if (($plugin['license']['status'] ?? null) === LicenseStatus::Expired->value && ! in_array($plugin['file'], $wasExpired, true)) {
+                AuditLog::record($inventory->website, 'license.expired', data: ['plugin' => $plugin['file'], 'expires_at' => $plugin['license']['expires_at'] ?? null]);
+            }
+        }
     }
 
     /**
@@ -100,6 +121,7 @@ final class InventoryIngest
         }
 
         $byFile = collect($data)->keyBy('file');
+        $previous = $inventory->plugins;
 
         $inventory->update(['plugins' => collect($inventory->plugins)->map(function (array $plugin) use ($byFile) {
             if ($license = $byFile->get($plugin['file'])) {
@@ -108,5 +130,7 @@ final class InventoryIngest
 
             return $plugin;
         })->all()]);
+        $inventory->refreshCounts();
+        $this->recordNewlyExpired($inventory, $previous);
     }
 }

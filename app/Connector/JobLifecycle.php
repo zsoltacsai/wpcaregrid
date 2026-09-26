@@ -4,9 +4,11 @@ namespace App\Connector;
 
 use App\AdminAccess\AdminAccessService;
 use App\Backups\BackupService;
+use App\Backups\PreUpdateBackups;
 use App\Backups\RestoreService;
 use App\Models\AdminAccessRequest;
 use App\Models\WebsiteJob;
+use App\Websites\AuditLog;
 
 /**
  * Tells the backup and restore domains what happened to their connector
@@ -29,6 +31,11 @@ class JobLifecycle
         if ($job->type === JobType::Restore && $job->restore) {
             $this->restores->started($job->restore);
         }
+
+        // Once per job: a job is re-delivered when a poll response was lost.
+        if ($job->type->isUpdate() && $job->attempts === 1) {
+            AuditLog::record($job->website, 'update.started', data: ['job' => $job->uuid, 'type' => $job->type->value, 'target' => JobQueue::updateTarget($job->payload ?? [])]);
+        }
     }
 
     public function finished(WebsiteJob $job): void
@@ -39,6 +46,18 @@ class JobLifecycle
 
         if ($job->type === JobType::Restore && $job->restore) {
             $this->restores->jobFinished($job->restore, $job);
+        }
+
+        // Blocked updates (no verified pre-update backup) are recorded as update.blocked instead.
+        if ($job->type->isUpdate() && $job->result_code !== PreUpdateBackups::BLOCKED) {
+            AuditLog::record($job->website, in_array($job->status, [JobStatus::Success, JobStatus::Skipped], true) ? 'update.completed' : 'update.failed', data: [
+                'job' => $job->uuid,
+                'type' => $job->type->value,
+                'target' => JobQueue::updateTarget($job->payload ?? []),
+                'status' => $job->status->value,
+                // Not "code": that key holds backup error codes in the customer's backup activity.
+                'result' => $job->result_code ?? ($job->error['code'] ?? null),
+            ]);
         }
 
         if ($job->type === JobType::CreateAdminSession && ($request = AdminAccessRequest::where('job_id', $job->id)->first())) {

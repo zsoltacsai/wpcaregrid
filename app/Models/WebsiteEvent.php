@@ -22,6 +22,11 @@ class WebsiteEvent extends Model
         return $this->belongsTo(Website::class);
     }
 
+    public function actorUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'actor_user_id');
+    }
+
     public function backup(): BelongsTo
     {
         return $this->belongsTo(Backup::class);

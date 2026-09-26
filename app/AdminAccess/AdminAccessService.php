@@ -13,6 +13,8 @@ use App\Models\Connector;
 use App\Models\User;
 use App\Models\Website;
 use App\Models\WebsiteJob;
+use App\Operator\Permission;
+use App\Websites\Actor;
 use App\Websites\AuditLog;
 use Illuminate\Support\Facades\DB;
 
@@ -80,9 +82,12 @@ class AdminAccessService
 
         return match (true) {
             // Customers only for their own websites (the policy checks this too).
-            $actor === ActorType::Customer && ($user?->customer === null || $user->customer->id !== $website->customer_id) => 'NOT_AUTHORIZED',
-            // Operators: maintenance only until customer consent for full admin exists.
-            $actor === ActorType::Operator && $level === AccessLevel::FullAdmin => 'FULL_ADMIN_REQUIRES_CUSTOMER',
+            $actor === ActorType::Customer && ($user?->customer === null || $user->customer->id !== $website->customer_id || $user->isOperator()) => 'NOT_AUTHORIZED',
+            // Operators: an operator login with the permission for this level, checked
+            // here as well as on the route, so no caller can skip it.
+            $actor === ActorType::Operator && ! $user?->hasOperatorPermission(Permission::AdminAccessRequest) => 'NOT_AUTHORIZED',
+            $actor === ActorType::Operator && $level === AccessLevel::FullAdmin && ! config('admin_access.operator_full_admin') => 'FULL_ADMIN_REQUIRES_CUSTOMER',
+            $actor === ActorType::Operator && $level === AccessLevel::FullAdmin && ! $user->hasOperatorPermission(Permission::AdminAccessFull) => 'NOT_AUTHORIZED',
             ! $website->allowsServiceOperations() => 'SUBSCRIPTION_INACTIVE',
             $connector === null => 'NOT_CONNECTED',
             $connector->presence() !== Presence::Connected => 'CONNECTOR_OFFLINE',
@@ -195,11 +200,13 @@ class AdminAccessService
         }
     }
 
-    public function revoke(AdminAccessRequest $request, ?User $by, string $reason = 'revoked_by_customer'): void
+    public function revoke(AdminAccessRequest $request, ?User $by, ?string $reason = null): void
     {
         if (! $request->status->isOpen()) {
             return;
         }
+
+        $reason ??= $by?->isOperator() ? 'revoked_by_operator' : 'revoked_by_customer';
 
         $request->job()->whereIn('status', [JobStatus::Queued->value, JobStatus::Delivered->value])->update(['status' => JobStatus::Cancelled->value]);
         $this->finish($request, AdminAccessStatus::Revoked, $reason, $by);
@@ -278,7 +285,7 @@ class AdminAccessService
     private function finish(AdminAccessRequest $request, AdminAccessStatus $status, string $reason, ?User $by = null): void
     {
         $request->transitionTo($status, ['ended_at' => now(), 'end_reason' => $reason, 'revoked_by_user_id' => $by?->id]);
-        AuditLog::record($request->website, $status === AdminAccessStatus::Expired ? 'admin_access.expired' : 'admin_access.revoked', actor: $by ? 'customer:'.$by->id : 'system', access: $request, data: ['level' => $request->access_level->value, 'reason' => $reason]);
+        AuditLog::record($request->website, $status === AdminAccessStatus::Expired ? 'admin_access.expired' : 'admin_access.revoked', actor: $by ? Actor::user($by)->label() : 'system', access: $request, data: ['level' => $request->access_level->value, 'reason' => $reason]);
     }
 
     private function actorLabel(ActorType $actor, ?User $user): string

@@ -5,6 +5,7 @@ namespace App\Models;
 use App\AdminAccess\AdminAccessService;
 use App\Connector\Capability;
 use App\Connector\Presence;
+use App\Websites\AuditLog;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -94,9 +95,11 @@ class Connector extends Model
     }
 
     /** Every disconnect path ends here, so admin access always ends with the connector. */
-    public function revoke(string $reason): void
+    public function revoke(string $reason, string $actor = 'system'): void
     {
         $this->forceFill(['status' => self::REVOKED, 'revoked_at' => now(), 'revoked_reason' => $reason])->save();
+
+        AuditLog::record($this->website, 'connector.disconnected', actor: $actor, data: ['reason' => $reason, 'connector_version' => $this->connector_version]);
 
         app(AdminAccessService::class)->revokeAll($this->website, 'connector_'.$reason);
     }

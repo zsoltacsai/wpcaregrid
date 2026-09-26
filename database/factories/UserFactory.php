@@ -3,6 +3,7 @@
 namespace Database\Factories;
 
 use App\Models\User;
+use App\Operator\Permission;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -31,6 +32,19 @@ class UserFactory extends Factory
             'password' => static::$password ??= Hash::make('password'),
             'remember_token' => Str::random(10),
         ];
+    }
+
+    /**
+     * An internal operator with exactly these permissions (none by default).
+     *
+     * @param  list<Permission>  $permissions
+     */
+    public function operator(array $permissions = []): static
+    {
+        return $this->afterMaking(fn (User $user) => $user->forceFill([
+            'role' => User::ROLE_OPERATOR,
+            'operator_permissions' => array_map(fn (Permission $p) => $p->value, $permissions),
+        ]));
     }
 
     /**

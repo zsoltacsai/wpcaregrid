@@ -28,7 +28,9 @@ class BackupController extends Controller
             'website' => $website,
             'backups' => $website->backups()->latest('id')->paginate(25),
             'restores' => $website->restores()->with('backup')->latest('id')->limit(5)->get(),
-            'events' => $website->events()->latest('id')->limit(15)->get(),
+            // Backup activity only; admin access and connector events have their own places.
+            'events' => $website->events()->where(fn ($q) => $q->where('event', 'like', 'backup.%')->orWhere('event', 'like', 'restore.%')->orWhere('event', 'like', 'update.%'))
+                ->latest('id')->limit(15)->get(),
             'policy' => $policy->for($website),
             'canBackup' => $request->user()->can('backup', $website),
         ]);

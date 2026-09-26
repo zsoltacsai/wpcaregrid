@@ -153,6 +153,10 @@ return [
             'failed' => 'Restore failed',
         ],
         'update' => [
+            'requested' => 'Update requested',
+            'started' => 'Update started',
+            'completed' => 'Update completed',
+            'failed' => 'Update failed',
             'blocked' => 'Update not run: backup required',
         ],
     ],

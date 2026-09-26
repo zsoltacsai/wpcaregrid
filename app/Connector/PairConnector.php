@@ -4,6 +4,7 @@ namespace App\Connector;
 
 use App\Models\Connector;
 use App\Models\ConnectorPairingCode;
+use App\Websites\AuditLog;
 use App\Websites\ConnectorStatus;
 use App\Websites\WebsiteStatus;
 use Illuminate\Support\Facades\DB;
@@ -81,6 +82,7 @@ final class PairConnector
                 }
             }
 
+            AuditLog::record($website, 'connector.paired', data: ['connector_version' => $connector->connector_version]);
             Log::info('Connector paired.', ['website' => $website->uuid, 'connector' => $connector->uuid, 'version' => $connector->connector_version]);
 
             return [$connector, $credential];

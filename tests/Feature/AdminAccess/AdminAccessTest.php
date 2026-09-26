@@ -9,8 +9,10 @@ use App\AdminAccess\AdminAccessService;
 use App\AdminAccess\AdminAccessStatus;
 use App\Connector\JobType;
 use App\Models\AdminAccessRequest;
+use App\Models\User;
 use App\Models\WebsiteEvent;
 use App\Models\WebsiteJob;
+use App\Operator\Permission;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -55,7 +57,7 @@ class AdminAccessTest extends TestCase
         $this->assertSame('CREATE_ADMIN_SESSION', $request->job->type->value);
         $this->assertSame([], $this->withHeaders($this->connectorHeaders($site))->getJson(route('api.v1.connector.jobs'))->json('jobs'));
 
-        $this->assertSame(['admin_access.requested'], WebsiteEvent::pluck('event')->all());
+        $this->assertSame(['admin_access.requested'], WebsiteEvent::where('event', 'like', 'admin_access.%')->pluck('event')->all());
     }
 
     public function test_full_flow_to_an_active_session_and_its_expiry(): void
@@ -86,7 +88,7 @@ class AdminAccessTest extends TestCase
 
         $this->assertSame(AdminAccessStatus::Expired, $request->refresh()->status);
         $this->assertSame([], $this->withHeaders($this->connectorHeaders($site))->getJson(route('api.v1.connector.jobs'))->json('admin_access'));
-        $this->assertSame(['admin_access.requested', 'admin_access.authorized', 'admin_access.started', 'admin_access.expired'], WebsiteEvent::orderBy('id')->pluck('event')->all());
+        $this->assertSame(['admin_access.requested', 'admin_access.authorized', 'admin_access.started', 'admin_access.expired'], WebsiteEvent::where('event', 'like', 'admin_access.%')->orderBy('id')->pluck('event')->all());
         $this->assertSame(4, WebsiteEvent::where('admin_access_request_id', $request->id)->count());
     }
 
@@ -159,12 +161,16 @@ class AdminAccessTest extends TestCase
     {
         $site = $this->accessReadySite();
         $service = app(AdminAccessService::class);
+        $operator = User::factory()->operator([Permission::AdminAccessRequest, Permission::AdminAccessFull])->create();
 
-        $this->assertRefused('FULL_ADMIN_REQUIRES_CUSTOMER', fn () => $service->request($site['website'], null, ActorType::Operator, AccessLevel::FullAdmin, true));
+        // Full admin for operators stays off unless explicitly enabled (admin_access.operator_full_admin).
+        $this->assertRefused('FULL_ADMIN_REQUIRES_CUSTOMER', fn () => $service->request($site['website'], $operator, ActorType::Operator, AccessLevel::FullAdmin, true));
+        // An operator request always names the operator, and needs the permission.
+        $this->assertRefused('NOT_AUTHORIZED', fn () => $service->request($site['website'], null, ActorType::Operator, AccessLevel::Maintenance));
 
-        [$request] = $service->request($site['website'], null, ActorType::Operator, AccessLevel::Maintenance);
+        [$request] = $service->request($site['website'], $operator, ActorType::Operator, AccessLevel::Maintenance);
         $this->assertSame(ActorType::Operator, $request->actor_type);
-        $this->assertNull($request->requested_by_user_id);
+        $this->assertSame($operator->id, $request->requested_by_user_id);
     }
 
     /* ----- One-time use, expiry, revocation ----- */

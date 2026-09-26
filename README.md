@@ -45,6 +45,7 @@ The approved brand pack lives in `design/` (guidelines in `design/brand/BRAND.md
 | CTA link targets | `config/marketing.php` |
 | Checkout, Stripe gateway, webhook handling | `app/Checkout/`, `app/Http/Controllers/CheckoutController.php`, `StripeWebhookController.php` |
 | Checkout pages | `resources/views/pages/checkout/`, `resources/views/pages/pricing.blade.php` |
+| Operator console | `routes/operator.php`, `app/Http/Controllers/Operator/`, `app/Operator/`, `resources/views/operator/` |
 
 ## Languages
 
@@ -157,6 +158,13 @@ Customers open their WordPress admin from the website page without a WordPress p
 
 - Durations and limits: `ADMIN_ACCESS_*` (see `.env.example`); levels per plan in `config/admin_access.php`.
 - Needs the scheduler (`admin-access:expire`) and connector 0.3.0 on the site.
+
+## Operator console
+
+The internal console for the service team lives at `/operator`, with its own login and guard (customers never get in). Operators are logins with the `operator` role and explicit permissions (`websites.view`, `backups.restore`, `admin_access.full`…), managed only from the command line. The console shows real data only (dashboard, website list with search/filters, website detail, backups, activity). Its actions go through the existing services: `BackupService`, `RestoreService`, `JobQueue`, `AdminAccessService`. Security findings are a placeholder until the Security/Malware milestone. Details: **[docs/OPERATOR_CONSOLE.md](docs/OPERATOR_CONSOLE.md)**.
+
+- Create an operator: `php artisan operator:user you@wpcaregrid.com --standard` (everything except full admin; `--grant=`, `--revoke=`, `--disable`).
+- Operators get temporary full WordPress admin only with `admin_access.full` and `ADMIN_ACCESS_OPERATOR_FULL_ADMIN=true` (off by default).
 
 ## Demo content
 

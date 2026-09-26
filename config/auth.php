@@ -42,6 +42,13 @@ return [
             'driver' => 'session',
             'provider' => 'users',
         ],
+
+        // Internal operator console (/operator). A separate guard with its own
+        // login: being signed in to the customer area never signs anyone in here.
+        'operator' => [
+            'driver' => 'session',
+            'provider' => 'users',
+        ],
     ],
 
     /*

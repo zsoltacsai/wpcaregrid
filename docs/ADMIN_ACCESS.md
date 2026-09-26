@@ -38,7 +38,7 @@ Customer browser ◀─(7) redirect to /wp-admin/ with WordPress's own auth cook
 | Role while active | `wp_caregrid_maintenance` | `administrator` |
 | Default duration | 30 minutes (`ADMIN_ACCESS_MAINTENANCE_MINUTES`) | 15 minutes (`ADMIN_ACCESS_FULL_ADMIN_MINUTES`) |
 | Hard cap in the plugin | 60 minutes | 30 minutes |
-| Who may request | the customer who owns the website; an operator | the customer only (`FULL_ADMIN_REQUIRES_CUSTOMER` for operators) |
+| Who may request | the customer who owns the website; an operator with `admin_access.request` | the customer; an operator only with `admin_access.full` **and** `ADMIN_ACCESS_OPERATOR_FULL_ADMIN=true` (off by default: `FULL_ADMIN_REQUIRES_CUSTOMER`) |
 | Extra rate limit | – | 5 per hour per user |
 
 Full admin requires the confirmation page ("Grant temporary full administrator access for 15 minutes?") and a checked confirmation box; the POST without it is refused with `CONFIRMATION_REQUIRED`. Which levels a plan allows is set in `config/admin_access.php` (`plans`); `ADMIN_ACCESS_FULL_ADMIN_ALLOWED=false` turns full admin off for every plan.
@@ -109,7 +109,7 @@ Ending a session removes the role, destroys all of the account's WordPress sessi
 
 | From | Effect |
 | --- | --- |
-| Customer area, **Revoke** | request `revoked` at once; the site ends the session at its next poll/heartbeat (reconciliation) or at expiry, whichever comes first |
+| Customer area or operator console, **Revoke** | request `revoked` at once; the site ends the session at its next poll/heartbeat (reconciliation) or at expiry, whichever comes first |
 | A new request for the same website and level | the previous open request is revoked (`superseded`) |
 | Disconnect (either side), re-pairing, connector revocation | `Connector::revoke()` revokes every open request of the website; the plugin ends all sessions when it forgets its credential |
 | WordPress, **Settings → WP CareGrid → Revoke admin access** | all sessions end immediately and WP CareGrid is told (`revoked_on_site`) |
@@ -153,7 +153,7 @@ Error pages say what happened in plain words (expired, already used, revoked, su
 ## Customer and operator authorisation
 
 - **Customer:** must be logged in, own the website (`WebsitePolicy::adminAccess`), have an active subscription, and the site must be connected, online and advertise the `admin_access` capability. Revoking needs only view access to the website, so a customer can always revoke, even after the subscription ends.
-- **Operator:** `AdminAccessService::request(..., ActorType::Operator, AccessLevel::Maintenance)` is supported and audited as an operator; operators can never request full admin. There is no operator console yet; operator access must be wired to one when it exists, with its own authentication.
+- **Operator:** through the operator console ([OPERATOR_CONSOLE.md](OPERATOR_CONSOLE.md)), on its own guard. `AdminAccessService` itself requires an operator login with `admin_access.request` for maintenance access (`NOT_AUTHORIZED` otherwise, also for a request without a user). Full admin needs `admin_access.full` and `ADMIN_ACCESS_OPERATOR_FULL_ADMIN=true`; with the default `false` operators get `FULL_ADMIN_REQUIRES_CUSTOMER`. Operator requests and revocations are audited with `actor_type = operator` and the operator's user ID; an operator revoking records `revoked_by_operator`.
 - The request is always tied to the requesting user (`requested_by_user_id`).
 
 ## Configuration
@@ -164,6 +164,7 @@ ADMIN_ACCESS_MAINTENANCE_MINUTES=30
 ADMIN_ACCESS_FULL_ADMIN_MINUTES=15
 ADMIN_ACCESS_MAX_REQUESTS_PER_HOUR=10
 ADMIN_ACCESS_FULL_ADMIN_ALLOWED=true
+ADMIN_ACCESS_OPERATOR_FULL_ADMIN=false
 ```
 
 The scheduler must run (`admin-access:expire`). Sites need connector 0.3.0 or newer; older connectors do not advertise `admin_access`, and the Open Admin button explains that the plugin must be updated.

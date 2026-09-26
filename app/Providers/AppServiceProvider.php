@@ -5,9 +5,14 @@ namespace App\Providers;
 use App\Backups\Storage\StorageManager;
 use App\Checkout\CheckoutGateway;
 use App\Checkout\StripeCheckoutGateway;
+use App\Models\User;
+use App\Operator\Permission;
 use App\Pricing\PricingCatalog;
+use App\Security\NotConfiguredScanner;
+use App\Security\SecurityScanner;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 
@@ -25,6 +30,10 @@ class AppServiceProvider extends ServiceProvider
 
         // One set of storage connections per request or queue job.
         $this->app->scoped(StorageManager::class);
+
+        // No security scanner exists yet (Security/Malware milestone); the
+        // operator console reads findings only through this interface.
+        $this->app->singleton(SecurityScanner::class, NotConfiguredScanner::class);
 
         $this->app->bind(CheckoutGateway::class, fn () => new StripeCheckoutGateway(
             secret: config('services.stripe.secret'),
@@ -77,6 +86,31 @@ class AppServiceProvider extends ServiceProvider
             Limit::perHour(20)->by('admin-access:website:'.(is_object($request->route('website')) ? $request->route('website')->uuid : (string) $request->route('website'))),
         ]);
         RateLimiter::for('admin-access-full', fn (Request $request) => Limit::perHour(5)->by('admin-access-full:user:'.$request->user()?->id));
+
+        // Operator console: each operator is limited on its own; sensitive actions
+        // also per website. The services keep their own limits on top.
+        foreach (Permission::cases() as $permission) {
+            Gate::define($permission->gate(), fn (User $user) => $user->hasOperatorPermission($permission));
+        }
+
+        $operatorWebsite = fn (Request $request) => is_object($request->route('website')) ? $request->route('website')->uuid : (string) $request->route('website');
+        RateLimiter::for('operator-action', fn (Request $request) => Limit::perMinute(30)->by('operator-action:'.$request->user()?->id));
+        RateLimiter::for('operator-backup', fn (Request $request) => [
+            Limit::perMinute(6)->by('operator-backup:'.$request->user()?->id),
+            Limit::perHour(10)->by('operator-backup:website:'.$operatorWebsite($request)),
+        ]);
+        RateLimiter::for('operator-update', fn (Request $request) => [
+            Limit::perMinute(10)->by('operator-update:'.$request->user()?->id),
+            Limit::perHour(30)->by('operator-update:website:'.$operatorWebsite($request)),
+        ]);
+        RateLimiter::for('operator-restore', fn (Request $request) => [
+            Limit::perMinute(3)->by('operator-restore:'.$request->user()?->id),
+            Limit::perHour(5)->by('operator-restore:website:'.$operatorWebsite($request)),
+        ]);
+        RateLimiter::for('operator-connector', fn (Request $request) => [
+            Limit::perMinute(5)->by('operator-connector:'.$request->user()?->id),
+            Limit::perHour(10)->by('operator-connector:website:'.$operatorWebsite($request)),
+        ]);
 
         RateLimiter::for('checkout', fn (Request $request) => [
             Limit::perMinute(10)->by($request->ip()),

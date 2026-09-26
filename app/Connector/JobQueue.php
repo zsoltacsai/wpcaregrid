@@ -6,6 +6,7 @@ use App\Backups\PreUpdateBackups;
 use App\Models\Connector;
 use App\Models\Website;
 use App\Models\WebsiteJob;
+use App\Websites\AuditLog;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 
@@ -35,7 +36,10 @@ final class JobQueue
         }
 
         if ($type->isUpdate() && ! isset($links['status'])) {
-            return app(PreUpdateBackups::class)->queueUpdate($website, $type, $payload, $requestedBy);
+            $job = app(PreUpdateBackups::class)->queueUpdate($website, $type, $payload, $requestedBy);
+            AuditLog::record($website, 'update.requested', $job->backup, actor: $requestedBy, data: ['job' => $job->uuid, 'type' => $type->value, 'target' => self::updateTarget($payload)]);
+
+            return $job;
         }
 
         return $website->jobs()->create([
@@ -86,6 +90,12 @@ final class JobQueue
 
             return true;
         })->values();
+    }
+
+    /** What an update job changes: the plugin basename, theme stylesheet or "wordpress". */
+    public static function updateTarget(array $payload): string
+    {
+        return (string) ($payload['plugin'] ?? $payload['stylesheet'] ?? 'wordpress');
     }
 
     /**
