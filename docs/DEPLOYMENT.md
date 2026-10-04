@@ -26,13 +26,13 @@ One application server is assumed. Everything below works with more than one (sh
 
 | | |
 | --- | --- |
-| OS | Linux (Ubuntu 24.04 LTS is what CI runs) |
-| PHP | 8.4 (CLI and FPM; `composer.json` allows 8.3, CI tests 8.4) |
-| PHP extensions | ctype, curl, dom, fileinfo, filter, intl, mbstring, openssl, pcntl, pdo_mysql, posix, session, sodium, tokenizer, xml, zip |
-| Database | MySQL 8.4 (tested in CI). SQLite is for development and tests only |
-| Web server | nginx (or Apache) with TLS |
-| Process supervisor | supervisor or systemd, for the two queue workers |
-| Build tools | Composer 2, Node.js 22 + npm (only to build assets) |
+| OS | Linux, x86_64 (Ubuntu 24.04 LTS is what CI runs) |
+| PHP | **8.4** (CLI and FPM). `composer.json` allows `^8.3`, but CI tests 8.4 only. Ubuntu 24.04 ships 8.3, so install 8.4 from the `ppa:ondrej/php` repository |
+| PHP extensions | Required by the locked packages (`composer check-platform-reqs --no-dev --lock`): ctype, curl, dom, fileinfo, filter, hash, iconv, json, libxml, mbstring, openssl, pcre, session, simplexml, tokenizer. Required by the application: **intl** (`Number::fileSize`), **zip** (`connector:package`), **pdo_mysql** (MySQL), **pcntl** (CLI only: queue worker `--timeout`). Ubuntu packages: `php8.4-fpm php8.4-cli php8.4-mysql php8.4-mbstring php8.4-xml php8.4-curl php8.4-zip php8.4-intl` (the others are built in) |
+| Database | **MySQL 8.4 LTS** (tested in CI, migrations roll back fully). Ubuntu 24.04 ships 8.0 (end of life April 2026); install 8.4 from the MySQL APT repository. MariaDB is not tested. SQLite is for development and tests only |
+| Web server | nginx with TLS (Let's Encrypt / certbot) |
+| Process supervisor | supervisor (or systemd), for the two queue workers |
+| Build tools | Composer 2; Node.js **22** + npm to build assets (Vite 8 needs Node ≥ 20.19 or ≥ 22.12; Ubuntu 24.04 ships 18, so use the NodeSource 22.x repository) |
 | Disk | Application + logs, plus the backup **staging** space (see Capacity) |
 
 PHP settings for the web (FPM) pool: `upload_max_filesize` and `post_max_size` ≥ 16M (backup chunks are 4 MiB by default, 8 MiB at most), `memory_limit` 256M, `max_execution_time` 60. The CLI (workers) uses no time limit; the workers' own `--timeout` applies.
@@ -53,7 +53,14 @@ php artisan system:check           # must not report ERROR; see below
 php artisan owner:user owner@your-domain --name="Owner"   # prints a one-time invitation link
 ```
 
-Permissions: the web and worker users write to `storage/` and `bootstrap/cache/` only. The document root is `public/`; `storage/app/private` (connector package, backup staging) is never served (the `local` disk's HTTP serving is switched off).
+Permissions: the web and worker users write to `storage/` and `bootstrap/cache/` only; nothing else needs to be writable, and `storage:link` is not needed (no public disk is used). The document root is `public/` and only `public/`; `storage/app/private` (connector package, backup staging, vulnerability feed) is never served (the `local` disk's HTTP serving is switched off).
+
+Files are owned by the deploy user; the web, worker and cron processes run as `www-data`. Give both users write access to the two writable trees with default ACLs, so files created by either stay writable by the other (otherwise a log file created by a deploy command can lock out the web server):
+
+```sh
+sudo setfacl -R  -m u:www-data:rwX -m u:deploy:rwX storage bootstrap/cache
+sudo setfacl -dR -m u:www-data:rwX -m u:deploy:rwX storage bootstrap/cache
+```
 
 No seeders run in production: `migrate --force` creates empty tables only. Demo data exists only in development databases.
 
@@ -169,10 +176,11 @@ Failed jobs: `php artisan queue:failed` (also counted on the owner System page a
 Exactly one cron entry, on one server:
 
 ```cron
+# crontab -u www-data -e   (the same user as the workers)
 * * * * * cd /var/www/wpcaregrid && php artisan schedule:run >> /dev/null 2>&1
 ```
 
-(`php artisan schedule:work` in the foreground is for development.) Every task is `withoutOverlapping()` and `onOneServer()`.
+(`php artisan schedule:work` in the foreground is for development.) Every task is `withoutOverlapping()` and `onOneServer()`; the locks use the cache store (`CACHE_STORE=database`). Times are UTC (`config/app.php`), so "03:30" is 03:30 UTC. `system:check` reports the scheduler as NOT CONFIGURED until the first run records its heartbeat.
 
 | Task | When | Purpose |
 | --- | --- | --- |
@@ -188,7 +196,9 @@ Exactly one cron entry, on one server:
 
 ## Mail
 
-Transactional only (activation, welcome, payment confirmation and failure, subscription changes, operator/owner invitations). All mail is queued (`default` worker) and sent after the database transaction that triggered it commits. Links are built from `APP_URL` (also in the worker), so production mail never contains `localhost` links: `system:check` reports a local `APP_URL` in production as an error. Mail contains links, never passwords or tokens other than the single-use link itself. A failure is a failed job (visible on the System page) and a log entry. `MAIL_MAILER=log` writes mail to the log file and is reported as "not configured".
+Transactional only (activation, welcome, payment confirmation and failure, subscription changes, operator/owner invitations).
+
+Transports that work with the installed packages: **SMTP** (any provider's SMTP relay: `MAIL_MAILER=smtp`, `MAIL_HOST`, `MAIL_PORT=587` with STARTTLS or `465` with `MAIL_SCHEME=smtps`, `MAIL_USERNAME`, `MAIL_PASSWORD`) and **Amazon SES** (`MAIL_MAILER=ses` with the `AWS_*` keys; the AWS SDK is installed). Laravel's `postmark` and `resend` API transports need packages that are not installed: use those providers through their SMTP relay. `MAIL_FROM_ADDRESS` must be on a domain verified at the provider with SPF and DKIM (and a DMARC record), or mail lands in spam or is rejected. Mailpit and `log` are development tools only. All mail is queued (`default` worker) and sent after the database transaction that triggered it commits. Links are built from `APP_URL` (also in the worker), so production mail never contains `localhost` links: `system:check` reports a local `APP_URL` in production as an error. Mail contains links, never passwords or tokens other than the single-use link itself. A failure is a failed job (visible on the System page) and a log entry. `MAIL_MAILER=log` writes mail to the log file and is reported as "not configured".
 
 ## Stripe (test mode first)
 
@@ -259,9 +269,13 @@ Live restore is off (`BACKUP_RESTORE_ENABLED=false`) until the staging rehearsal
 
 ## Updating a running installation
 
+Deploy a known commit (or tag) and note the one running before it; that is the rollback target.
+
 ```sh
-php artisan down --retry=60          # connectors and browsers get 503 and retry
-git pull
+git rev-parse HEAD > ../previous-release   # the rollback target
+mysqldump --single-transaction --routines <database> | gzip > ../db-before-$(date +%F-%H%M).sql.gz
+php artisan down --retry=60          # connectors, browsers and Stripe get 503 and retry
+git fetch && git checkout <commit or tag>
 composer install --no-dev --optimize-autoloader --no-interaction
 npm ci && npm run build
 php artisan migrate --force
@@ -273,6 +287,90 @@ php artisan system:check
 ```
 
 Run the HTTP smoke test against the result: `php tests/smoke/http-smoke.php https://<APP_URL>` (read-only: public pages, sign-in pages, area isolation, headers).
+
+Run the artisan commands as `www-data` (`sudo -u www-data php artisan …`) or with the ACLs above in place.
+
+## Rollback
+
+1. `php artisan down --retry=60`.
+2. If the release added migrations and they must be undone: `php artisan migrate:rollback --step=<number of new migrations> --pretend` first, then without `--pretend`. Every migration has a working `down()` (CI migrates, rolls everything back and migrates again on SQLite and MySQL), but rolling back drops columns and tables with their data. When in doubt, restore the dump taken before the update instead.
+3. `git checkout $(cat ../previous-release)`, then the same steps as an update: `composer install --no-dev --optimize-autoloader --no-interaction`, `npm ci && npm run build`, `php artisan optimize:clear` and the four caches, `php artisan connector:package` if `CONNECTOR_LATEST_VERSION` differs.
+4. `php artisan queue:restart`, `php artisan up`, `php artisan system:check`, the smoke test.
+
+Stripe events that arrived during the downtime are retried by Stripe; connectors retry on their own.
+
+## Staging: staging.wpcaregrid.com
+
+Staging runs the same code and configuration as production would, against Stripe **test mode**, a real mail provider and real S3-compatible storage, with non-production WordPress sites. It is where PILOT.md's end-to-end test and the restore rehearsal run. It is **not** production: no real customers, no live payments.
+
+### Server
+
+Ubuntu 24.04 x86_64, 2 vCPU, 4 GB RAM, 80 GB SSD, public IPv4. DNS: an `A` record for `staging.wpcaregrid.com`. Firewall: only 22, 80 and 443 open (`ufw allow OpenSSH`, `ufw allow 'Nginx Full'`); MySQL listens on 127.0.0.1 only.
+
+```sh
+sudo add-apt-repository ppa:ondrej/php
+# MySQL 8.4 LTS: add the MySQL APT repository (dev.mysql.com/downloads/repo/apt), select "mysql-8.4-lts"
+# Node.js 22: add the NodeSource 22.x repository
+sudo apt update
+sudo apt install nginx mysql-server supervisor git unzip acl certbot python3-certbot-nginx nodejs \
+  php8.4-fpm php8.4-cli php8.4-mysql php8.4-mbstring php8.4-xml php8.4-curl php8.4-zip php8.4-intl
+# Composer 2: getcomposer.org/download (verify the installer checksum)
+php -v && mysql --version && node -v && php -m | grep -Ei 'intl|zip|pdo_mysql|pcntl'
+```
+
+On 4 GB: `innodb_buffer_pool_size = 1G`, PHP-FPM `pm.max_children = 10`; the PHP settings from Server requirements above.
+
+Database: `CREATE DATABASE wpcaregrid CHARACTER SET utf8mb4 COLLATION utf8mb4_unicode_ci; CREATE USER 'wpcaregrid'@'localhost' IDENTIFIED BY '<generated>'; GRANT ALL ON wpcaregrid.* TO 'wpcaregrid'@'localhost';`
+
+Code: the repository is private; give the server a read-only GitHub **deploy key**, clone into `/var/www/wpcaregrid` as the deploy user, then follow First installation and the ACLs above.
+
+### Staging `.env`
+
+Production values from the table above, and:
+
+| Setting | Staging value |
+| --- | --- |
+| `APP_ENV` | `production`. The application's production safeguards are tied to this value: `system:check` fails on missing configuration, debug / non-https `APP_URL` are errors, HSTS and connector HTTPS are on by default, admin access is handed over to `https` sites only. Staging must rehearse them; it is told apart by `APP_URL` and `APP_NAME` |
+| `APP_NAME` | `"WP CareGrid Staging"` (shown in page titles and as the mail sender name) |
+| `APP_URL` | `https://staging.wpcaregrid.com` |
+| `APP_DEBUG` | `false` |
+| `LOG_CHANNEL` / `LOG_LEVEL` | `daily` / `info` |
+| `MAIL_*` | the provider's SMTP relay; `MAIL_FROM_ADDRESS` on a verified domain (for example `staging@wpcaregrid.com`) |
+| `STRIPE_*` | test-mode keys (`sk_test_…`, `pk_test_…`), the 12 price IDs and 2 product IDs (STRIPE_TEST_MODE.md), the staging endpoint's `whsec_…`, `STRIPE_ALLOW_LIVE_MODE=false` |
+| `BACKUP_STORAGE` | `s3`, with `BACKUP_S3_ENDPOINT` (empty for AWS), `BACKUP_S3_REGION`, `BACKUP_S3_BUCKET` (private, staging-only), `BACKUP_S3_KEY` / `BACKUP_S3_SECRET` (limited to that bucket: put, get, head, list, delete), `BACKUP_S3_PREFIX`, `BACKUP_S3_PATH_STYLE` as the provider requires, `BACKUP_S3_SSE=AES256` (or empty if the provider rejects the header and encrypts by bucket policy) |
+| `BACKUP_RETENTION_*` | set per plan before scheduled backups run for long (no default: nothing is deleted while unset) |
+| `HTTP_CSP` | `report-only` |
+| Safety switches | unchanged: `SECURITY_REMEDIATION_ENABLED=false`, `ADMIN_ACCESS_OPERATOR_FULL_ADMIN=false`, `BACKUP_RESTORE_ENABLED=false` (until the restore rehearsal) |
+
+There is no application-level backup encryption key: archives are protected in transit by TLS and at rest by the storage's server-side encryption. `APP_KEY` signs sessions, cookies and activation tokens and encrypts no stored data; keep it in the password manager with the rest of `.env`.
+
+### nginx
+
+The server block from Web server above with `server_name staging.wpcaregrid.com`, `root /var/www/wpcaregrid/public`, the certificate from `sudo certbot --nginx -d staging.wpcaregrid.com`, and one addition so staging is never indexed (the marketing pages say `index,follow`):
+
+```nginx
+    add_header X-Robots-Tag "noindex, nofollow" always;
+```
+
+Do not put HTTP basic authentication in front of the whole site: Stripe webhooks (`/stripe/webhook`) and connectors (`/api/v1/connector/…`) must reach it.
+
+### Stripe (test mode)
+
+Use the existing test sandbox (STRIPE_TEST_MODE.md): the same products, prices and promotion code. Create a **new** webhook endpoint `https://staging.wpcaregrid.com/stripe/webhook` with the nine events and put its signing secret into the staging `.env`. Delete the temporary endpoint left from the local tunnel test. Every endpoint of a sandbox receives all of its events, so keep only staging's endpoint enabled while staging is in use (events for checkouts it did not create are ignored, but they clutter its logs).
+
+### Staging checklist
+
+1. Packages installed; `php -v` 8.4, `mysql --version` 8.4, `node -v` 22; `composer check-platform-reqs --no-dev`.
+2. First installation done; `.env` per the table; caches built; ACLs set.
+3. nginx + certificate; `https://staging.wpcaregrid.com/up` answers 200; `http://` redirects; `X-Robots-Tag` present.
+4. Supervisor running both workers (`supervisorctl status`); cron as `www-data`.
+5. `php artisan system:check` exits 0: every part OK (scheduler after its first minute).
+6. `php artisan pricing:verify-stripe`: ok for all 12.
+7. Smoke test: `php tests/smoke/http-smoke.php https://staging.wpcaregrid.com`.
+8. Owner created (`php artisan owner:user <email> --name="…"`); invitation email received through the real provider (not spam); link is `https://staging.wpcaregrid.com/…`.
+9. PILOT.md end-to-end run, including the Stripe test purchase from `/pricing` with the webhook arriving at staging.
+10. A manual FULL backup of a test site reaches the bucket and is **verified**; then the restore rehearsal (RELEASE_CHECKLIST.md) before `BACKUP_RESTORE_ENABLED` is reconsidered.
+11. Nightly `mysqldump` of the staging database to storage off the server.
 
 ## Continuous integration
 

@@ -8,7 +8,10 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 
 | Item | State | Check |
 | --- | --- | --- |
-| PHP 8.4 with required extensions | READY | CI runs PHP 8.4 on Ubuntu 24.04; server: `php -v`, `php -m` (DEPLOYMENT.md) |
+| PHP 8.4 with required extensions | READY | CI runs PHP 8.4 on Ubuntu 24.04; Ubuntu ships 8.3, so the server needs `ppa:ondrej/php`; exact extension list in DEPLOYMENT.md; server: `composer check-platform-reqs --no-dev` |
+| Fresh install without dev packages | READY | `composer install --no-dev`, build, migrate, `connector:package`, all caches, rollback and re-migrate verified on an exported copy of the repository (2026-10-04) |
+| Staging server `staging.wpcaregrid.com` | NOT CONFIGURED | DEPLOYMENT.md "Staging" (server, `.env`, nginx, Stripe endpoint, checklist) |
+| Rollback procedure | READY (documented) | DEPLOYMENT.md "Rollback"; to be rehearsed once on staging |
 | `APP_ENV=production`, `APP_DEBUG=false`, `APP_KEY` set | NOT CONFIGURED | `system:check` Application = OK (ERROR if debug in production) |
 | `APP_URL` is the public `https://` domain | NOT CONFIGURED | `system:check` Application (ERROR if http or local in production) |
 | HTTPS redirect, HSTS, secure cookies | READY | defaults when `APP_URL` is https (tests: ProductionHardeningTest) |
@@ -26,7 +29,7 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 | Indexes and foreign keys | READY | verified on MySQL 8.4 (every table has a primary key; foreign keys on all relations) |
 | Server-side suite on MySQL | READY | CI server job (mysql); found and fixed: reason codes longer than their columns, JSON key order in tests |
 | No seed or demo data in production | READY | `migrate --force` only; no seeders run |
-| Production MySQL database and user | NOT CONFIGURED | `system:check` Database = OK, no pending migrations |
+| Production MySQL database and user | NOT CONFIGURED | MySQL 8.4 LTS from the MySQL APT repository (Ubuntu 24.04 ships 8.0); `system:check` Database = OK, no pending migrations |
 | Backup of WP CareGrid's own database | NOT CONFIGURED | nightly `mysqldump` to separate storage (DEPLOYMENT.md) |
 
 ## Queue

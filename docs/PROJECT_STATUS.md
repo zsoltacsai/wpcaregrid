@@ -8,10 +8,11 @@ Last updated: 2026-10-04
 ## Branch and HEAD
 
 - Branch: `claude/ecstatic-wozniak-oemyuf` (also the main branch used for PRs)
-- Latest milestone commits: `0b54777` **Real Stripe Test Mode Validation**, `eeb1ada` **Complete Stripe product validation**, then `836316f` (MySQL test fix) and this status update
-- Before them: `9171262` status update, `3f01f5d` CI configuration fix, `050afe0` **Production Hardening, CI & Release Readiness**
+- Latest commit: **Staging deployment preparation** (documentation only; local, not pushed; `git log --oneline -3` shows its hash)
+- Before it (pushed, CI green): `7d6327c` status update, `836316f` MySQL test fix, `eeb1ada` **Complete Stripe product validation**, `0b54777` **Real Stripe Test Mode Validation**
+- Earlier: `9171262` status update, `3f01f5d` CI configuration fix, `050afe0` **Production Hardening, CI & Release Readiness**
 - Earlier: `2f7d0b4` Owner Admin & Content Management, `4076684` Security & Malware Engine, `ba2d1db` Internal Operator Console
-- All pushed to `origin` (github.com/zsoltacsai/wpcaregrid); push only when requested, never force.
+- Everything before the latest commit is pushed to `origin` (github.com/zsoltacsai/wpcaregrid); push only when requested, never force.
 
 ## Completed milestones
 
@@ -25,6 +26,22 @@ Last updated: 2026-10-04
 | Internal Operator Console | `ba2d1db` | docs/OPERATOR_CONSOLE.md |
 | Unified Site Health + Security & Malware Engine | `4076684` | docs/SECURITY_ENGINE.md, MALWARE_SCANNING.md, SECURITY_FINDINGS.md, SECURITY_INCIDENTS.md |
 | Owner Admin & Content Management | `2f7d0b4` | docs/OWNER_ADMIN.md, CONTENT_MANAGEMENT.md, PRICING_ADMIN.md |
+
+## Staging — PREPARED (documented and verified locally), NOT DEPLOYED
+
+Target: `staging.wpcaregrid.com`, Ubuntu 24.04 x86_64, 2 vCPU, 4 GB RAM, 80 GB SSD. Nothing is deployed; no server access has been given. The procedure is docs/DEPLOYMENT.md "Staging" (server packages, `.env`, nginx, Stripe endpoint, checklist) plus "Rollback".
+
+Audit (2026-10-04) against the code, not memory:
+
+- **No application change is needed for staging.** A fresh copy of the repository installed with `composer install --no-dev` built, migrated, packaged the connector, built all four caches, rolled back and re-migrated, and ran `system:check`; with the staging values (`APP_ENV=production`, `APP_DEBUG=false`, https `APP_URL`) secure cookies, forced HTTPS, HSTS and connector HTTPS were on, Stripe live mode, remediation, operator full admin and live restore off, and `system:check` exited 1 until the scheduler, Stripe, storage and mail are configured (the intended gate).
+- Versions: PHP 8.4 and MySQL 8.4 LTS are what CI tests, but Ubuntu 24.04 ships PHP 8.3, MySQL 8.0 (end of life) and Node.js 18 (Vite 8 needs ≥ 20.19 / 22.12): the server needs `ppa:ondrej/php`, the MySQL APT repository (8.4 LTS) and NodeSource 22.x.
+- Extensions: from `composer check-platform-reqs --no-dev --lock` plus the application's own use (intl for `Number::fileSize`, zip for `connector:package`, pdo_mysql, pcntl for worker timeouts); `sodium` and `posix`, listed before, are not required.
+- Staging runs `APP_ENV=production` (the production safeguards are tied to that value) and is told apart by `APP_URL` and `APP_NAME`; nginx adds `X-Robots-Tag: noindex` (the marketing pages say `index,follow`).
+- Mail: SMTP or Amazon SES work with the installed packages; Laravel's postmark/resend API transports do not (their packages are not installed). The sender domain needs SPF, DKIM and DMARC.
+- Backups: S3 settings `BACKUP_S3_*`; no application-level encryption key (TLS in transit, `BACKUP_S3_SSE=AES256` at rest); retention has no default (nothing deleted until `BACKUP_RETENTION_*` is set).
+- Docs corrected: cron runs as `www-data`, artisan commands as `www-data` or with default ACLs on `storage/` and `bootstrap/cache/`, a database dump before every migration, a rollback procedure.
+
+External prerequisites (owner actions, not code): the server and SSH access, the DNS record, a read-only GitHub deploy key (private repository), an SMTP provider with a verified sender domain, an S3-compatible bucket with a bucket-limited key, a staging Stripe webhook endpoint (and deleting the old local tunnel endpoint).
 
 ## Stripe test mode — VALIDATED (local, through an https tunnel; CI green)
 
@@ -81,7 +98,7 @@ CI validation (2026-10-04):
 Still needed before the milestone is complete:
 
 1. ~~Stripe test-mode configuration and an end-to-end test purchase~~ — validated locally (above); repeat PILOT.md step 4 on staging with its own webhook endpoint.
-2. Production/staging server per DEPLOYMENT.md: HTTPS domain, MySQL, workers, cron, a real mail provider, backup storage.
+2. Staging server per DEPLOYMENT.md "Staging" (prepared, not deployed): HTTPS domain, MySQL 8.4, workers, cron, a real mail provider, S3 backup storage.
 3. Restore rehearsal on a staging copy, then decide on `BACKUP_RESTORE_ENABLED`.
 4. First-customer safety gates in PILOT.md on the real installation.
 5. GitHub branch protection with the CI checks required.
@@ -101,11 +118,11 @@ Windows development machine:
 
 ## Next milestone
 
-Finish this one (list above; the next blocker is a staging server with HTTPS, a real mail provider and backup storage). After that, per CLAUDE.md §29: real backup storage, transactional email, controlled pilot onboarding.
+Finish this one (list above). Next: deploy staging per DEPLOYMENT.md "Staging" once the server, DNS, deploy key, mail provider and bucket exist, then run its checklist and PILOT.md there. After that, per CLAUDE.md §29: real backup storage, transactional email, controlled pilot onboarding.
 
 ## Blockers
 
-- External accounts and configuration: backup storage, mail provider, a staging/production server, optionally a vulnerability feed licence. Stripe test mode is set up (sandbox keys only in the local `.env`).
+- Staging cannot be deployed until these exist (owner actions): the server with SSH access, the `staging.wpcaregrid.com` DNS record, a read-only GitHub deploy key, an SMTP provider with SPF/DKIM on the sender domain, an S3-compatible bucket and key. Optionally a vulnerability feed licence. Stripe test mode is set up (sandbox keys only in the local `.env`).
 
 ## Pending manual configuration
 
@@ -127,4 +144,5 @@ Finish this one (list above; the next blocker is a staging server with HTTPS, a 
 - Windows-only filesystem limitations skip with an explicit reason locally and fail in CI (strict mode); production code is never weakened for them.
 - Prices: config/pricing.php is the baseline; owner-published prices override it for future checkouts only.
 - Stripe: one Product per product type (WordPress, WooCommerce), one Price per plan × interval × market; one check (`StripePriceVerifier::verify()`: amount, currency, interval, active, Product) for the command, owner publishing and the owner's Stripe check. Promotion codes need a local rule row and a Stripe promotion code; local rules decide eligibility, Stripe applies the discount.
+- Staging runs `APP_ENV=production` (the production safeguards are tied to that exact value); it is identified by `APP_URL`, `APP_NAME` and Stripe test mode, never by a weaker environment name.
 - Tests never use the developer's Stripe keys (`phpunit.xml` pins them empty); the real-Stripe browser E2E is opt-in and outside CI.
