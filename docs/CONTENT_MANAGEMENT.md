@@ -36,7 +36,7 @@ There is no review workflow, scheduling or version history yet.
 
 ## Localization
 
-Locales are configured in `config/content.php` (`en`, `hu`); adding one there is enough for the editor. Each locale has its own records; nothing is copied or translated automatically. Built-in copy exists only where `lang/{locale}` has the texts (today English only), so a Hungarian section is *Missing* until it is published.
+Locales are configured in `config/content.php` (`en`, `hu`); adding one there is enough for the editor. Each locale has its own records; nothing is copied or translated automatically. Built-in copy exists where `lang/{locale}` has the texts: today English and Hungarian, so every section is *Built-in text* in both languages and nothing is *Missing*. A language added to `config/content.php` without translation files has every section *Missing* until it is published (the public page then shows the fallback language, section by section).
 
 The editor shows every language with its state for the section being edited, and, when editing a non-fallback language, the fallback language's text under each field as a reference (never copied into the field).
 
@@ -50,7 +50,13 @@ Public pages use the application locale (`APP_LOCALE`). For each section, `Conte
 
 A section is always taken whole from one source and one language; fields are never mixed across languages. A section shown in the fallback language gets a `lang="en"` attribute, so browsers and screen readers know. A published section always has all required fields (publishing refuses otherwise); a field added to the schema later is empty in older content, not filled from another language.
 
-Interface strings that are not content (pricing table labels, form labels, the customer portal) come from the translation files; Laravel falls back to English for keys a locale lacks. Hungarian translation files do not exist yet.
+Interface strings that are not content (pricing table labels, form labels) come from the translation files; Laravel falls back to English for keys a locale lacks.
+
+### Hungarian copy
+
+`lang/hu/` holds the Hungarian public site, with exactly the keys of the English files (`HungarianContentTest` fails on a missing key, an empty or untranslated text, or a lost `:placeholder`): `home.php` (all 13 homepage sections, navigation, footer, homepage SEO), `pricing.php` (plan wording and pricing table), `checkout.php` (pricing-page SEO, the order pages), `dashboard.php` and `status.php` (the demo dashboard on the homepage), `countries.php` (billing countries, Hungarian names in Hungarian order) and, in `account.php`, only the few keys the public order pages use. The customer portal, owner and operator areas, emails and the connector are English only; for them Laravel falls back to English key by key.
+
+Conventions: brand and product names (WP CareGrid, WordPress, WooCommerce, Stripe) and the plan names Basic, Business and Secure are not translated; the claims are exactly those of the English text; prices and amounts always come from `config/pricing.php` (the Hungarian text only says "havi/éves", "két hónap ingyenes", "végleges árak: áfát nem számítunk fel"). Terms: karbantartás (maintenance), mentés (backup), frissítés (update), bővítmény (plugin), téma (theme), licenc (license), vezérlőpult (dashboard), tevékenységnapló (activity log), funkcionális ellenőrzés (functional check). The owner can still replace any Hungarian section by publishing their own text in the editor; that always wins over the built-in copy.
 
 ## Preview
 

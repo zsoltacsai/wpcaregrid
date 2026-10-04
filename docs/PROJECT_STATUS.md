@@ -8,11 +8,12 @@ Last updated: 2026-10-04
 ## Branch and HEAD
 
 - Branch: `claude/ecstatic-wozniak-oemyuf` (also the main branch used for PRs)
-- Latest commit: **Staging deployment preparation** (documentation only; local, not pushed; `git log --oneline -3` shows its hash)
-- Before it (pushed, CI green): `7d6327c` status update, `836316f` MySQL test fix, `eeb1ada` **Complete Stripe product validation**, `0b54777` **Real Stripe Test Mode Validation**
+- Latest commit: **Complete Hungarian public content** (local, not pushed; `git log --oneline -3` shows its hash)
+- Before it (pushed, CI green): `5231eeb` **Staging deployment preparation**, `7d6327c` status update, `836316f` MySQL test fix, `eeb1ada` **Complete Stripe product validation**, `0b54777` **Real Stripe Test Mode Validation**
 - Earlier: `9171262` status update, `3f01f5d` CI configuration fix, `050afe0` **Production Hardening, CI & Release Readiness**
 - Earlier: `2f7d0b4` Owner Admin & Content Management, `4076684` Security & Malware Engine, `ba2d1db` Internal Operator Console
 - Everything before the latest commit is pushed to `origin` (github.com/zsoltacsai/wpcaregrid); push only when requested, never force.
+- Not committed (separate small fix, outside the milestones): empty `MARKETING_*_URL` values in `.env` turned the header and footer Login link into a dead link; `config/marketing.php` now treats empty as unset (`.env.example`, `config/marketing.php`, `tests/Feature/HomepageTest.php`).
 
 ## Completed milestones
 
@@ -26,6 +27,17 @@ Last updated: 2026-10-04
 | Internal Operator Console | `ba2d1db` | docs/OPERATOR_CONSOLE.md |
 | Unified Site Health + Security & Malware Engine | `4076684` | docs/SECURITY_ENGINE.md, MALWARE_SCANNING.md, SECURITY_FINDINGS.md, SECURITY_INCIDENTS.md |
 | Owner Admin & Content Management | `2f7d0b4` | docs/OWNER_ADMIN.md, CONTENT_MANAGEMENT.md, PRICING_ADMIN.md |
+
+## Hungarian public content — COMPLETE (built-in copy)
+
+Done 2026-10-04. The English site was complete; Owner Admin showed every Hungarian section as *Missing* (23 of 23: 13 homepage, 2 site (navigation, footer), 6 plan wording, 2 SEO) because `lang/hu` did not exist, and public pages in Hungarian fell back to English section by section.
+
+- Mechanism: the editor state comes from `ContentState::of()` (`Section::builtIn($locale)` = `lang/{locale}`), so the warning is real, not a display switch. It is gone because Hungarian built-in copy now exists, the same way the English content is stored (no database rows, nothing to seed or publish per environment; the owner's published text still wins).
+- Added: `lang/hu/{home,pricing,checkout,dashboard,status,countries,account}.php`: 375 Hungarian texts, with exactly the keys of the English files (account: only the 7 keys the public order pages use). 7 FAQ items, 5 navigation items, 17 plan feature labels, homepage and pricing SEO titles and descriptions, footer and legal link labels. Beyond the 23 content sections, the homepage demo dashboard, the pricing table and the order pages are Hungarian too, so a Hungarian page shows no English.
+- Not changed: `lang/en`, `config/pricing.php`, Stripe, pricing engine, subscription logic, content architecture, design, routes. Prices on Hungarian pages are the configured ones ("8 990 Ft / hó", "189 900 Ft / év"; annual = ten monthly payments, "két hónap ingyenes"; "végleges árak: áfát nem számítunk fel").
+- Left in English on purpose: customer portal, owner and operator areas, emails (not public content; Laravel falls back key by key). `account.php` in Hungarian therefore holds only the public order-page keys. Brand and product names and the plan names Basic, Business, Secure stay as they are. The English WooCommerce plan descriptions still say "smaller WordPress sites" (an English copy quirk, translated faithfully, not altered).
+- Found in the browser check (mobile 375, tablet 768, desktop 1280): the compact dashboard title was truncated in Hungarian ("Weboldalak áttekintése" → "Weboldalak"); the demo log lines are single-line by design in both languages.
+- Tests (`HungarianContentTest`, 9): every section built-in in both languages and not *Missing*; Hungarian files have exactly the English keys; no Hungarian text identical to English (except named brand/identifier texts), none empty, no lost `:placeholder`; Hungarian pages render without fallback (`lang="en"` absent, no English left on `/`, `/pricing`, checkout); prices are the configured ones; English rendering unchanged; Hungarian drafts do not leak and published text wins; Owner Admin lists show no *Missing*; a deliberately missing language (`de`) is still reported. The fallback tests in `ContentManagementTest` now use that `de` fixture instead of Hungarian. Mutation-checked (an English text, a removed key, a lost placeholder each fail).
 
 ## Staging — PREPARED (documented and verified locally), NOT DEPLOYED
 
@@ -109,7 +121,7 @@ Linux CI (authoritative): see "CI validation" above.
 
 Windows development machine:
 
-- Server suite on SQLite: 605 tests, all pass except 7 explicit skips (6 S3/SFTP tests without local services, 1 Windows-only permission assertion).
+- Server suite on SQLite: 614 tests, all pass except 7 explicit skips (6 S3/SFTP tests without local services, 1 Windows-only permission assertion).
 - Server suite on MySQL 8.4 (local): all pass with the same explicit skips.
 - WordPress connector suite (169 tests) on SQLite and MySQL 8.4: all pass; skips are MySQL-only/SQLite-only tests and explicit Windows symlink/permission limitations (strict in CI).
 - Local end-to-end run with a real WordPress and connector 0.4.1: PILOT.md.

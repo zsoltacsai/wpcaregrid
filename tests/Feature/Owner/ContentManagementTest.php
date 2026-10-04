@@ -26,6 +26,16 @@ class ContentManagementTest extends TestCase
         return array_replace_recursive($values, $changes);
     }
 
+    /**
+     * A language the owner can write in but that has no built-in copy: the
+     * deliberately incomplete fixture for "missing translation" behaviour
+     * (English and Hungarian are both complete, see HungarianContentTest).
+     */
+    private function withGerman(): void
+    {
+        config(['content.locales' => ['en' => 'English', 'hu' => 'Magyar', 'de' => 'Deutsch']]);
+    }
+
     private function save(string $key, string $locale, array $fields, string $action = 'draft', string $area = 'content')
     {
         return $this->put(route("owner.{$area}.update", [$key, $locale]), ['action' => $action, 'fields' => $fields]);
@@ -36,7 +46,7 @@ class ContentManagementTest extends TestCase
         $this->get('/')->assertOk()->assertSee('WordPress maintenance, without the hassle.');
 
         $this->asOwner();
-        $this->get(route('owner.content.index'))->assertOk()->assertSee('Hero')->assertSee('Built-in text')->assertSee('Missing');
+        $this->get(route('owner.content.index'))->assertOk()->assertSee('Hero')->assertSee('Built-in text')->assertDontSee('Missing');
         $this->get(route('owner.content.edit', ['home.hero', 'en']))->assertOk()->assertSee('WordPress maintenance, without the hassle.');
     }
 
@@ -84,26 +94,31 @@ class ContentManagementTest extends TestCase
     public function test_translations_are_separate_records_and_missing_ones_are_visible(): void
     {
         $this->asOwner();
+        $this->withGerman();
         $hero = ContentSchema::section('home.hero');
 
-        // No Hungarian copy exists: shown as missing, with English as a reference only.
-        $this->assertSame(ContentState::MISSING, ContentState::of($hero, 'hu', null)->state);
-        $this->get(route('owner.content.edit', ['home.hero', 'hu']))->assertOk()
-            ->assertSee('No Magyar content yet')
+        // No German copy exists: shown as missing, with English as a reference only.
+        $this->assertSame(ContentState::MISSING, ContentState::of($hero, 'de', null)->state);
+        $this->get(route('owner.content.edit', ['home.hero', 'de']))->assertOk()
+            ->assertSee('No Deutsch content yet')
             ->assertSee('<span class="font-mono uppercase">en:</span>', false)
             ->assertDontSee('value="WordPress maintenance, without the hassle."', false);
+        $this->get(route('owner.content.index'))->assertOk()->assertSee('Missing');
 
-        $this->save('home.hero', 'hu', $this->fields('home.hero', 'hu', [
-            'eyebrow' => 'WordPress karbantartva.', 'title' => 'WordPress karbantartás gond nélkül.', 'description' => 'Frissítések, mentések és ellenőrzések.',
-            'primary_cta_label' => 'Csomagok', 'primary_cta_url' => '#pricing', 'secondary_cta_label' => 'Hogyan működik', 'secondary_cta_url' => '#how-it-works',
-            'trust' => ['contract' => ['label' => 'Nincs hűségidő', 'enabled' => '1'], 'connection' => ['label' => 'Biztonságos kapcsolat', 'enabled' => '1'], 'business' => ['label' => 'Cégeknek', 'enabled' => '1']],
+        $this->save('home.hero', 'de', $this->fields('home.hero', 'de', [
+            'eyebrow' => 'WordPress gewartet.', 'title' => 'WordPress-Wartung ohne Aufwand.', 'description' => 'Updates, Backups und Prüfungen.',
+            'primary_cta_label' => 'Tarife', 'primary_cta_url' => '#pricing', 'secondary_cta_label' => 'So funktioniert es', 'secondary_cta_url' => '#how-it-works',
+            'trust' => ['contract' => ['label' => 'Keine Vertragsbindung', 'enabled' => '1'], 'connection' => ['label' => 'Sichere Verbindung', 'enabled' => '1'], 'business' => ['label' => 'Für Unternehmen', 'enabled' => '1']],
         ]), 'publish')->assertSessionHasNoErrors();
 
-        $this->assertSame(['en' => null, 'hu' => 'WordPress karbantartás gond nélkül.'], [
+        $this->assertSame(['en' => null, 'hu' => null, 'de' => 'WordPress-Wartung ohne Aufwand.'], [
             'en' => ContentEntry::where('locale', 'en')->first()?->published['title'],
-            'hu' => ContentEntry::where('locale', 'hu')->sole()->published['title'],
+            'hu' => ContentEntry::where('locale', 'hu')->first()?->published['title'],
+            'de' => ContentEntry::where('locale', 'de')->sole()->published['title'],
         ]);
-        $this->assertSame(ContentState::PUBLISHED, ContentState::of($hero, 'hu', ContentEntry::where('locale', 'hu')->sole())->state);
+        $this->assertSame(ContentState::PUBLISHED, ContentState::of($hero, 'de', ContentEntry::where('locale', 'de')->sole())->state);
+        // English and Hungarian are untouched.
+        $this->assertSame(ContentState::BUILT_IN, ContentState::of($hero, 'hu', null)->state);
         // English is untouched.
         $this->get('/')->assertSee('WordPress maintenance, without the hassle.');
     }
@@ -111,25 +126,26 @@ class ContentManagementTest extends TestCase
     public function test_public_fallback_is_whole_sections_in_english_never_mixed_fields(): void
     {
         $this->asOwner();
-        $this->save('home.hero', 'hu', $this->fields('home.hero', 'hu', [
-            'eyebrow' => 'Szlogen', 'title' => 'Magyar főcím', 'description' => 'Magyar leírás.',
-            'primary_cta_label' => 'Csomagok', 'primary_cta_url' => '#pricing', 'secondary_cta_label' => 'Működés', 'secondary_cta_url' => '#how-it-works',
-            'trust' => ['contract' => ['label' => 'Nincs hűségidő'], 'connection' => ['label' => 'Kapcsolat'], 'business' => ['label' => 'Cégeknek']],
+        $this->withGerman();
+        $this->save('home.hero', 'de', $this->fields('home.hero', 'de', [
+            'eyebrow' => 'Slogan', 'title' => 'Deutsche Überschrift', 'description' => 'Deutsche Beschreibung.',
+            'primary_cta_label' => 'Tarife', 'primary_cta_url' => '#pricing', 'secondary_cta_label' => 'Ablauf', 'secondary_cta_url' => '#how-it-works',
+            'trust' => ['contract' => ['label' => 'Keine Bindung'], 'connection' => ['label' => 'Verbindung'], 'business' => ['label' => 'Für Firmen']],
         ]), 'publish')->assertSessionHasNoErrors();
 
-        app()->setLocale('hu');
+        app()->setLocale('de');
         $content = app(ContentRepository::class);
         $content->flush();
 
         $hero = $content->section('home.hero');
-        $this->assertSame(['hu', null, 'Magyar főcím'], [$hero->locale, $hero->fallbackLang(), $hero['title']]);
+        $this->assertSame(['de', null, 'Deutsche Überschrift'], [$hero->locale, $hero->fallbackLang(), $hero['title']]);
 
         $faq = $content->section('home.faq');
-        $this->assertSame(['en', 'en'], [$faq->locale, $faq->fallbackLang()], 'No Hungarian FAQ: the whole section is English, and marked so.');
+        $this->assertSame(['en', 'en'], [$faq->locale, $faq->fallbackLang()], 'No German FAQ: the whole section is English, and marked so.');
 
-        config(['app.locale' => 'hu']);
+        config(['app.locale' => 'de']);
         $html = $this->get('/')->assertOk()->getContent();
-        $this->assertStringContainsString('Magyar főcím', $html);
+        $this->assertStringContainsString('Deutsche Überschrift', $html);
         $this->assertMatchesRegularExpression('/<section[^>]*id="faq"[^>]*lang="en"|<section[^>]*lang="en"[^>]*id="faq"/', $html);
         $this->assertDoesNotMatchRegularExpression('/<section[^>]*aria-labelledby="hero-title"[^>]*lang=/', $html);
     }
