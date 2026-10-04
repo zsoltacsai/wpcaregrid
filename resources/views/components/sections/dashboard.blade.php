@@ -1,16 +1,16 @@
-@props(['metrics', 'sites', 'updates', 'licenses'])
+@props(['content', 'metrics', 'sites', 'updates', 'licenses'])
 
-<x-ui.section tone="surface" labelledby="dashboard-title">
+<x-ui.section tone="surface" labelledby="dashboard-title" :lang="$content->fallbackLang()">
     <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <x-ui.section-heading
             id="dashboard-title"
-            :eyebrow="__('home.dashboard.eyebrow')"
-            :title="__('home.dashboard.title')"
-            :lead="__('home.dashboard.lead')"
+            :eyebrow="$content['eyebrow']"
+            :title="$content['title']"
+            :lead="$content['description']"
         />
         <p class="flex flex-wrap items-center gap-3 text-sm text-muted">
             <x-ui.demo-label />
-            <span>{{ __('home.dashboard.demo_note') }}</span>
+            <span>{{ $content['demo_note'] }}</span>
         </p>
     </div>
 

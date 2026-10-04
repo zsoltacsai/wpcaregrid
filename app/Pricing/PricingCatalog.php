@@ -6,6 +6,7 @@ use App\Pricing\Exceptions\InvalidPriceSelection;
 use App\Pricing\Exceptions\MarketNotAvailable;
 use App\Pricing\Exceptions\PriceInactive;
 use App\Pricing\Exceptions\PriceNotPurchasable;
+use ArrayAccess;
 use InvalidArgumentException;
 
 /**
@@ -32,8 +33,12 @@ final class PricingCatalog
         public readonly BillingInterval $defaultInterval,
     ) {}
 
-    /** @param  array<string, mixed>  $config  config('pricing') */
-    public static function fromConfig(array $config, ?string $locale = null): self
+    /**
+     * @param  array<string, mixed>  $config  config('pricing'), with published owner prices applied (PricingOverrides)
+     * @param  array<string, ArrayAccess<string, mixed>|array<string, mixed>>  $marketing  Owner-written plan wording,
+     *                                                                                     keyed "{product}.{tier}" (ContentRepository::planMarketing())
+     */
+    public static function fromConfig(array $config, ?string $locale = null, array $marketing = []): self
     {
         $locale ??= app()->getLocale();
 
@@ -63,16 +68,27 @@ final class PricingCatalog
             foreach ($tiers as $tierKey => $plan) {
                 $tier = PlanTier::from($tierKey);
                 $text = "pricing.plans.{$productKey}.{$tierKey}";
+                $owner = $marketing["{$productKey}.{$tierKey}"] ?? null;
+                $features = array_map(fn (string $key) => self::feature($key, $plan), $plan['features']);
+
+                if ($owner !== null) {
+                    // Wording only: what a plan includes technically (backups, checks) stays in config.
+                    $custom = array_values(array_filter(array_map(fn ($item) => trim((string) ($item['label'] ?? '')), (array) $owner['features'])));
+                    $features = $custom === [] ? $features : array_map(fn (string $label, int $i) => new Feature("custom.{$i}", $label), $custom, array_keys($custom));
+                }
 
                 $plans["{$productKey}.{$tierKey}"] = new Plan(
                     productType: $productType,
                     tier: $tier,
-                    name: __("{$text}.name"),
-                    description: __("{$text}.description"),
-                    features: array_map(fn (string $key) => self::feature($key, $plan), $plan['features']),
+                    name: $owner !== null ? (string) $owner['name'] : __("{$text}.name"),
+                    description: $owner !== null ? (string) $owner['description'] : __("{$text}.description"),
+                    features: $features,
                     backupFrequency: $plan['backup_frequency'],
                     highlighted: $plan['highlighted'] ?? false,
-                    badge: isset($plan['badge']) ? __("pricing.badges.{$plan['badge']}") : null,
+                    badge: $owner !== null
+                        ? (filled($owner['badge']) ? (string) $owner['badge'] : null)
+                        : (isset($plan['badge']) ? __("pricing.badges.{$plan['badge']}") : null),
+                    cta: $owner !== null && filled($owner['cta_label']) ? (string) $owner['cta_label'] : null,
                 );
             }
         }
@@ -97,6 +113,7 @@ final class PricingCatalog
                 money: new Money((int) $price['amount'], $currencies[$price['currency']]),
                 stripePriceId: $price['stripe_price_id'] ?? null,
                 active: (bool) ($price['active'] ?? true),
+                retiredStripePriceIds: array_values(array_filter((array) ($price['retired_stripe_price_ids'] ?? []), 'is_string')),
             );
         }
 
@@ -119,17 +136,33 @@ final class PricingCatalog
      */
     private static function feature(string $key, array $plan): Feature
     {
-        $frequency = match ($key) {
-            'remote_backups' => $plan['backup_frequency'],
-            'security_check' => $plan['security_check_frequency'],
-            default => null,
-        };
-
         return new Feature(
             key: $key,
-            label: __($frequency ? "pricing.features.{$key}.{$frequency}" : "pricing.features.{$key}"),
-            frequency: $frequency,
+            label: self::featureLabel($key, $plan),
+            frequency: self::featureFrequency($key, $plan),
         );
+    }
+
+    /**
+     * A feature's label in a locale (the current one by default).
+     *
+     * @param  array<string, mixed>  $plan
+     */
+    public static function featureLabel(string $key, array $plan, ?string $locale = null): string
+    {
+        $frequency = self::featureFrequency($key, $plan);
+
+        return __($frequency ? "pricing.features.{$key}.{$frequency}" : "pricing.features.{$key}", [], $locale);
+    }
+
+    /** @param  array<string, mixed>  $plan */
+    private static function featureFrequency(string $key, array $plan): ?string
+    {
+        return match ($key) {
+            'remote_backups' => $plan['backup_frequency'] ?? null,
+            'security_check' => $plan['security_check_frequency'] ?? null,
+            default => null,
+        };
     }
 
     /** @return list<ProductType> */
@@ -200,7 +233,11 @@ final class PricingCatalog
         return null;
     }
 
-    /** The configured price with this Stripe Price ID, if any. */
+    /**
+     * The price with this Stripe Price ID, if any: the current one, else a
+     * price that used it before (an existing subscription keeps its plan
+     * after the owner changes the price for new checkouts).
+     */
     public function priceByStripeId(string $stripePriceId): ?Price
     {
         foreach ($this->prices as $price) {
@@ -209,7 +246,25 @@ final class PricingCatalog
             }
         }
 
+        foreach ($this->prices as $price) {
+            if (in_array($stripePriceId, $price->retiredStripePriceIds, true)) {
+                return $price;
+            }
+        }
+
         return null;
+    }
+
+    /** @return list<Price> Every price, active or not, in every market. */
+    public function allPrices(): array
+    {
+        return $this->prices;
+    }
+
+    /** @return array<string, Market> */
+    public function markets(): array
+    {
+        return $this->markets;
     }
 
     /**

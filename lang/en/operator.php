@@ -47,6 +47,8 @@ return [
         'updates.run' => 'Run updates',
         'security.view' => 'View security',
         'security.scan' => 'Run security scans',
+        'security.manage' => 'Decide on findings and manage incidents',
+        'security.remediate' => 'Quarantine, repair and deactivate (remediation)',
         'admin_access.request' => 'Open WordPress admin (maintenance)',
         'admin_access.full' => 'Temporary full WordPress administrator',
         'licenses.view' => 'View licenses',
@@ -482,6 +484,7 @@ return [
     'actors' => [
         'customer' => 'Customer',
         'operator' => 'Operator',
+        'owner' => 'Owner',
         'system' => 'System',
     ],
 

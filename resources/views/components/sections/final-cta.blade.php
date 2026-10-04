@@ -1,15 +1,17 @@
-<x-ui.section tone="dark" labelledby="cta-title" class="border-t border-primary">
+@props(['content'])
+
+<x-ui.section tone="dark" labelledby="cta-title" class="border-t border-primary" :lang="$content->fallbackLang()">
     <div class="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-between">
         <div class="max-w-2xl">
             <h2 id="cta-title" class="text-[28px] leading-[1.15] font-semibold tracking-[-0.015em] text-on-dark sm:text-[32px] lg:text-[40px]">
-                {{ __('home.cta.title') }}
+                {{ $content['title'] }}
             </h2>
-            <p class="mt-4 text-base text-on-dark-muted sm:text-lg">{{ __('home.cta.text') }}</p>
+            <p class="mt-4 text-base text-on-dark-muted sm:text-lg">{{ $content['description'] }}</p>
         </div>
 
         <div class="flex flex-col gap-3 sm:flex-row">
-            <x-ui.button href="#pricing" size="lg" icon="arrow-right">{{ __('home.cta.primary') }}</x-ui.button>
-            <x-ui.button :href="config('marketing.links.contact')" variant="inverse-outline" size="lg">{{ __('home.cta.secondary') }}</x-ui.button>
+            <x-ui.button :href="$content->url('primary_url')" size="lg" icon="arrow-right">{{ $content['primary_label'] }}</x-ui.button>
+            <x-ui.button :href="$content->url('secondary_url')" variant="inverse-outline" size="lg">{{ $content['secondary_label'] }}</x-ui.button>
         </div>
     </div>
 </x-ui.section>

@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Auth;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * The operator console needs a verified login with the operator role and no
+ * The operator console needs a verified, enabled login with the operator role and no
  * customer account: operator and customer identities are never mixed.
  * Runs after auth:operator. Permissions are checked per route (can:operator.*).
  */
@@ -18,7 +18,7 @@ class EnsureOperator
     {
         $user = Auth::guard('operator')->user();
 
-        if (! $user?->isOperator() || ! $user->hasVerifiedEmail() || $user->customer()->exists()) {
+        if (! $user?->isActiveOperator() || $user->customer()->exists()) {
             Auth::guard('operator')->logout();
             $request->session()->regenerate(true);
             $request->session()->regenerateToken();

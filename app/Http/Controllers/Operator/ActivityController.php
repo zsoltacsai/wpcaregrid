@@ -13,7 +13,7 @@ class ActivityController extends Controller
 {
     public const GROUPS = ['backup', 'restore', 'update', 'admin_access', 'connector', 'license', 'security'];
 
-    public const ACTORS = [Actor::CUSTOMER, Actor::OPERATOR, Actor::SYSTEM];
+    public const ACTORS = [Actor::CUSTOMER, Actor::OPERATOR, Actor::OWNER, Actor::SYSTEM];
 
     public function __invoke(Request $request): View
     {

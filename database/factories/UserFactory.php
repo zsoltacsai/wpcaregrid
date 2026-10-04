@@ -47,6 +47,12 @@ class UserFactory extends Factory
         ]));
     }
 
+    /** An owner login (business administration). */
+    public function owner(): static
+    {
+        return $this->afterMaking(fn (User $user) => $user->forceFill(['role' => User::ROLE_OWNER]));
+    }
+
     /**
      * Indicate that the model's email address should be unverified.
      */

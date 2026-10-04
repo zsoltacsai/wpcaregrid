@@ -5,9 +5,12 @@ namespace App\Providers;
 use App\Backups\Storage\StorageManager;
 use App\Checkout\CheckoutGateway;
 use App\Checkout\StripeCheckoutGateway;
+use App\Content\ContentRepository;
 use App\Models\User;
 use App\Operator\Permission;
+use App\Owner\OwnerAbility;
 use App\Pricing\PricingCatalog;
+use App\Pricing\PricingOverrides;
 use App\Security\EngineScanner;
 use App\Security\SecurityScanner;
 use App\Security\Vulnerabilities\NoVulnerabilitySource;
@@ -26,9 +29,16 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        // Published owner content, read once per request (cache cleared on publish).
+        $this->app->scoped(ContentRepository::class);
+
+        // config/pricing.php with prices and plan wording published in the owner area.
         $this->app->scoped(
             PricingCatalog::class,
-            fn () => PricingCatalog::fromConfig(config('pricing')),
+            fn ($app) => PricingCatalog::fromConfig(
+                $app->make(PricingOverrides::class)->apply(config('pricing')),
+                marketing: $app->make(ContentRepository::class)->planMarketing(),
+            ),
         );
 
         // One set of storage connections per request or queue job.
@@ -100,6 +110,23 @@ class AppServiceProvider extends ServiceProvider
         foreach (Permission::cases() as $permission) {
             Gate::define($permission->gate(), fn (User $user) => $user->hasOperatorPermission($permission));
         }
+
+        // Owner area: every route names one of these; only owners pass.
+        foreach (OwnerAbility::cases() as $ability) {
+            Gate::define($ability->gate(), fn (User $user) => $ability->allows($user));
+        }
+
+        // Sensitive owner changes (prices, operators, customers, content): per owner.
+        RateLimiter::for('owner-sensitive', fn (Request $request) => [
+            Limit::perMinute(20)->by('owner-sensitive:'.$request->user()?->id),
+            Limit::perHour(200)->by('owner-sensitive:'.$request->user()?->id),
+        ]);
+        // Calls that reach Stripe or a website: fewer.
+        RateLimiter::for('owner-external', fn (Request $request) => Limit::perMinute(5)->by('owner-external:'.$request->user()?->id));
+        RateLimiter::for('staff-invitation', fn (Request $request) => [
+            Limit::perMinute(5)->by('staff-invitation:'.$request->user()?->id),
+            Limit::perHour(30)->by('staff-invitation:'.$request->user()?->id),
+        ]);
 
         $operatorWebsite = fn (Request $request) => is_object($request->route('website')) ? $request->route('website')->uuid : (string) $request->route('website');
         RateLimiter::for('operator-action', fn (Request $request) => Limit::perMinute(30)->by('operator-action:'.$request->user()?->id));

@@ -7,6 +7,7 @@ use App\Pricing\BillingInterval;
 use App\Pricing\Currency;
 use App\Pricing\Money;
 use App\Pricing\PlanTier;
+use App\Pricing\PricingCatalog;
 use App\Pricing\ProductType;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -76,9 +77,10 @@ class Subscription extends Model
         return $this->status->grantsAccess();
     }
 
+    /** The plan's name as the pricing catalogue shows it (including wording published in the owner area). */
     public function planName(): string
     {
-        return __("pricing.plans.{$this->product_type->value}.{$this->plan->value}.name");
+        return app(PricingCatalog::class)->plan($this->product_type, $this->plan)->name;
     }
 
     public function money(): Money

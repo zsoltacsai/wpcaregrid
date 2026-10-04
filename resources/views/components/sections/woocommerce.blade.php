@@ -1,12 +1,12 @@
-@props(['flow'])
+@props(['content', 'flow'])
 
-<x-ui.section tone="surface" labelledby="woocommerce-title">
+<x-ui.section tone="surface" labelledby="woocommerce-title" :lang="$content->fallbackLang()">
     <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <x-ui.section-heading
             id="woocommerce-title"
-            :eyebrow="__('home.woocommerce.eyebrow')"
-            :title="__('home.woocommerce.title')"
-            :lead="__('home.woocommerce.lead')"
+            :eyebrow="$content['eyebrow']"
+            :title="$content['title']"
+            :lead="$content['description']"
         />
 
         <x-ui.button
@@ -18,7 +18,7 @@
             x-data
             x-on:click="$dispatch('pricing:select', 'woocommerce')"
         >
-            {{ __('home.woocommerce.cta') }}
+            {{ $content['cta_label'] }}
         </x-ui.button>
     </div>
 

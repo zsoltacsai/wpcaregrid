@@ -70,7 +70,7 @@
         size="lg"
         class="mt-6 w-full"
     >
-        {{ __('pricing.choose', ['plan' => $plan->name]) }}<span class="sr-only"> ({{ $plan->productType->label() }})</span>
+        {{ $plan->cta ?? __('pricing.choose', ['plan' => $plan->name]) }}<span class="sr-only"> ({{ $plan->productType->label() }})</span>
     </x-ui.button>
 
     <ul class="mt-6 space-y-3 text-sm">

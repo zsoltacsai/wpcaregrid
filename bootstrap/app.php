@@ -4,6 +4,7 @@ use App\Connector\ConnectorError;
 use App\Http\Middleware\AuthenticateConnector;
 use App\Http\Middleware\EnsureCustomerAccount;
 use App\Http\Middleware\EnsureOperator;
+use App\Http\Middleware\EnsureOwner;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -22,7 +23,10 @@ return Application::configure(basePath: dirname(__DIR__))
         api: __DIR__.'/../routes/api.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
-        then: fn () => Route::middleware('web')->group(__DIR__.'/../routes/operator.php'),
+        then: function () {
+            Route::middleware('web')->group(__DIR__.'/../routes/operator.php');
+            Route::middleware('web')->group(__DIR__.'/../routes/owner.php');
+        },
     )
     ->withMiddleware(function (Middleware $middleware): void {
         // Stripe signs webhook requests; they cannot carry a CSRF token.
@@ -31,6 +35,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'customer' => EnsureCustomerAccount::class,
             'operator' => EnsureOperator::class,
+            'owner' => EnsureOwner::class,
             'connector.auth' => AuthenticateConnector::class,
         ]);
 
@@ -38,10 +43,23 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->prependToPriorityList(before: ThrottleRequests::class, prepend: AuthenticateConnector::class);
 
         // Logged-in visitors of guest pages (login, reset) go to their account;
-        // the operator console has its own login and its own landing page.
-        $isOperatorArea = fn (Request $request) => $request->is('operator', 'operator/*');
-        $middleware->redirectUsersTo(fn (Request $request) => $isOperatorArea($request) ? route('operator.dashboard') : route('account.dashboard'));
-        $middleware->redirectGuestsTo(fn (Request $request) => $isOperatorArea($request) ? route('operator.login') : route('login'));
+        // the operator console and the owner area have their own logins and
+        // landing pages.
+        $area = fn (Request $request) => match (true) {
+            $request->is('operator', 'operator/*') => 'operator',
+            $request->is('owner', 'owner/*') => 'owner',
+            default => null,
+        };
+        $middleware->redirectUsersTo(fn (Request $request) => match ($area($request)) {
+            'operator' => route('operator.dashboard'),
+            'owner' => route('owner.dashboard'),
+            default => route('account.dashboard'),
+        });
+        $middleware->redirectGuestsTo(fn (Request $request) => match ($area($request)) {
+            'operator' => route('operator.login'),
+            'owner' => route('owner.login'),
+            default => route('login'),
+        });
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Connector API refusals: {"error": {"code", "message"}}.
@@ -63,6 +81,15 @@ return Application::configure(basePath: dirname(__DIR__))
                 Log::notice('Operator action refused.', ['operator' => Auth::guard('operator')->id(), 'route' => $request->route()?->getName()]);
 
                 return response()->view('operator.errors.forbidden', [], 403);
+            }
+        });
+
+        // Owner area: the same plain "not permitted" page.
+        $exceptions->render(function (AccessDeniedHttpException $e, Request $request) {
+            if ($request->is('owner', 'owner/*') && ! $request->expectsJson() && Auth::guard('owner')->check()) {
+                Log::notice('Owner action refused.', ['owner' => Auth::guard('owner')->id(), 'route' => $request->route()?->getName()]);
+
+                return response()->view('owner.errors.forbidden', [], 403);
             }
         });
 

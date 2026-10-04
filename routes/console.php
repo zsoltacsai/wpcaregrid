@@ -1,7 +1,9 @@
 <?php
 
+use App\Owner\SystemStatus;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schedule;
 
 Artisan::command('inspire', function () {
@@ -25,3 +27,7 @@ Schedule::command('security:monitor')->everyTenMinutes()->withoutOverlapping();
 Schedule::command('security:schedule')->hourly()->withoutOverlapping();
 Schedule::command('security:vulnerabilities:sync')->dailyAt('04:10')->withoutOverlapping()
     ->when(fn () => config('security.vulnerabilities.source') === 'wordfence' && config('security.vulnerabilities.feed_url'));
+
+// Owner system page: proof that the scheduler runs (a timestamp, nothing else).
+Schedule::call(fn () => Cache::forever(SystemStatus::SCHEDULER_HEARTBEAT, now()->toIso8601String()))
+    ->everyMinute()->name('system:scheduler-heartbeat');

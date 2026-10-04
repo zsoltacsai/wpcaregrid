@@ -17,6 +17,8 @@ final readonly class Plan
         public string $backupFrequency,
         public bool $highlighted = false,
         public ?string $badge = null,
+        // Button text written in the owner area; null: "Choose {plan}".
+        public ?string $cta = null,
     ) {}
 
     /** Stable identifier, e.g. "woocommerce-business". */

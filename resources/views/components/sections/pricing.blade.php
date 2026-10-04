@@ -1,11 +1,11 @@
-@props(['catalog', 'headingLevel' => 'h2'])
+@props(['intro', 'catalog', 'headingLevel' => 'h2'])
 
-<x-ui.section id="pricing" labelledby="pricing-title">
+<x-ui.section id="pricing" labelledby="pricing-title" :lang="$intro->fallbackLang()">
     <x-ui.section-heading
         id="pricing-title"
-        :eyebrow="__('home.pricing.eyebrow')"
-        :title="__('home.pricing.title')"
-        :lead="__('home.pricing.lead')"
+        :eyebrow="$intro['eyebrow']"
+        :title="$intro['title']"
+        :lead="$intro['description']"
         :level="$headingLevel"
     />
 

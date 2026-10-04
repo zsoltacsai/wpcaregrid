@@ -1,7 +1,7 @@
-@props(['steps'])
+@props(['content', 'steps'])
 
-<x-ui.section id="how-it-works" tone="surface" labelledby="how-title">
-    <x-ui.section-heading id="how-title" :eyebrow="__('home.how.eyebrow')" :title="__('home.how.title')" />
+<x-ui.section id="how-it-works" tone="surface" labelledby="how-title" :lang="$content->fallbackLang()">
+    <x-ui.section-heading id="how-title" :eyebrow="$content['eyebrow']" :title="$content['title']" />
 
     <ol class="mt-10 grid gap-8 sm:grid-cols-2 lg:grid-cols-4 lg:gap-6">
         @foreach ($steps as $step)

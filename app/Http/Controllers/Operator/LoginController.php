@@ -34,7 +34,7 @@ class LoginController extends Controller
         $attempt = [
             'email' => mb_strtolower(trim($credentials['email'])),
             'password' => $credentials['password'],
-            fn (Builder $query) => $query->where('role', User::ROLE_OPERATOR)->whereNotNull('email_verified_at')->whereDoesntHave('customer'),
+            fn (Builder $query) => $query->where('role', User::ROLE_OPERATOR)->whereNull('operator_disabled_at')->whereNotNull('email_verified_at')->whereDoesntHave('customer'),
         ];
 
         if (! $guard->attempt($attempt)) {

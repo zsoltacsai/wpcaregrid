@@ -37,7 +37,8 @@ enum Permission: string
 
     public function label(): string
     {
-        return __('operator.permissions.'.$this->value);
+        // The translation keys contain dots ("websites.view"), so they are read from the array, not as a path.
+        return (string) (((array) __('operator.permissions'))[$this->value] ?? $this->value);
     }
 
     /** @return list<string> */

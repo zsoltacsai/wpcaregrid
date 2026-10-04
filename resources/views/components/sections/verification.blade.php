@@ -1,11 +1,11 @@
-@props(['steps'])
+@props(['content', 'steps'])
 
-<x-ui.section tone="surface" labelledby="verification-title">
+<x-ui.section tone="surface" labelledby="verification-title" :lang="$content->fallbackLang()">
     <x-ui.section-heading
         id="verification-title"
-        :eyebrow="__('home.verification.eyebrow')"
-        :title="__('home.verification.title')"
-        :lead="__('home.verification.lead')"
+        :eyebrow="$content['eyebrow']"
+        :title="$content['title']"
+        :lead="$content['description']"
     />
 
     <ol class="mt-12 grid lg:grid-cols-5 lg:gap-8 xl:gap-12">

@@ -1,16 +1,16 @@
-@props(['services'])
+@props(['content', 'services'])
 
-<x-ui.section id="custom-development" labelledby="development-title">
+<x-ui.section id="custom-development" labelledby="development-title" :lang="$content->fallbackLang()">
     <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <x-ui.section-heading
             id="development-title"
-            :eyebrow="__('home.development.eyebrow')"
-            :title="__('home.development.title')"
-            :lead="__('home.development.lead')"
+            :eyebrow="$content['eyebrow']"
+            :title="$content['title']"
+            :lead="$content['description']"
         />
 
-        <x-ui.button :href="config('marketing.links.contact')" size="lg" icon="arrow-right" class="self-start lg:self-auto">
-            {{ __('home.development.cta') }}
+        <x-ui.button :href="$content->url('cta_url')" size="lg" icon="arrow-right" class="self-start lg:self-auto">
+            {{ $content['cta_label'] }}
         </x-ui.button>
     </div>
 
@@ -24,5 +24,7 @@
         @endforeach
     </ul>
 
-    <p class="mt-6 text-sm text-muted">{{ __('home.development.note') }}</p>
+    @if (filled($content['note']))
+        <p class="mt-6 text-sm text-muted">{{ $content['note'] }}</p>
+    @endif
 </x-ui.section>

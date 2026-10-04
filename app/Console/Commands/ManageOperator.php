@@ -47,6 +47,12 @@ class ManageOperator extends Command
             return self::FAILURE;
         }
 
+        if ($user?->isOwner()) {
+            $this->error('This login belongs to an owner. Operators need their own login.');
+
+            return self::FAILURE;
+        }
+
         if ($this->option('disable')) {
             $user?->forceFill(['role' => null, 'operator_permissions' => null])->save();
             $this->info($user ? "Operator access removed from {$email}." : "No login {$email}.");

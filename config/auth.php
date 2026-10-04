@@ -49,6 +49,13 @@ return [
             'driver' => 'session',
             'provider' => 'users',
         ],
+
+        // Owner administration (/owner). Its own guard and login, like the
+        // operator console: no other sign-in grants owner access.
+        'owner' => [
+            'driver' => 'session',
+            'provider' => 'users',
+        ],
     ],
 
     /*
@@ -113,6 +120,16 @@ return [
             'provider' => 'users',
             'table' => env('AUTH_PASSWORD_RESET_TOKEN_TABLE', 'password_reset_tokens'),
             'expire' => 60 * 24 * 7,
+            'throttle' => 60,
+        ],
+
+        // Operator and owner invitations: the invited person sets their own
+        // password. A separate token table, so these links never work as
+        // customer activation or password reset links, or the other way round.
+        'staff_invitations' => [
+            'provider' => 'users',
+            'table' => 'staff_invitation_tokens',
+            'expire' => 60 * 72,
             'throttle' => 60,
         ],
     ],

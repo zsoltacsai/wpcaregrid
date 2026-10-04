@@ -3,16 +3,15 @@
 namespace App\Console\Commands;
 
 use App\Pricing\BillingInterval;
-use App\Pricing\Price;
 use App\Pricing\PricingCatalog;
+use App\Pricing\StripePriceVerifier;
 use Illuminate\Console\Command;
-use Stripe\Exception\ApiErrorException;
-use Stripe\StripeClient;
 
 /**
  * Checks every configured Stripe Price ID against Stripe: it must exist, be
  * active, recurring on the right interval, and charge exactly the amount and
- * currency in config/pricing.php. Run after changing prices in either place.
+ * currency in the catalogue (config/pricing.php plus prices published in the
+ * owner area). Run after changing prices in either place.
  */
 class VerifyStripePrices extends Command
 {
@@ -20,17 +19,14 @@ class VerifyStripePrices extends Command
 
     protected $description = 'Compare configured Stripe Price IDs with the pricing catalogue';
 
-    public function handle(PricingCatalog $catalog): int
+    public function handle(PricingCatalog $catalog, StripePriceVerifier $verifier): int
     {
-        $secret = config('services.stripe.secret');
-
-        if (! $secret) {
+        if (! $verifier->configured()) {
             $this->error('STRIPE_SECRET is not set.');
 
             return self::FAILURE;
         }
 
-        $stripe = new StripeClient($secret);
         $rows = [];
         $problems = 0;
 
@@ -43,8 +39,8 @@ class VerifyStripePrices extends Command
                         continue;
                     }
 
-                    $issue = $this->check($stripe, $price, $interval);
-                    $problems += $issue === 'ok' ? 0 : 1;
+                    $issue = $verifier->check($price->stripePriceId, $price->money->amount, $price->money->currency->code, $interval);
+                    $problems += $issue === StripePriceVerifier::OK ? 0 : 1;
                     $rows[] = ["{$plan->productType->value}.{$plan->tier->value}.{$interval->value}.{$marketKey}", $price->stripePriceId ?: '—', $issue];
                 }
             }
@@ -53,28 +49,5 @@ class VerifyStripePrices extends Command
         $this->table(['Price', 'Stripe Price ID', 'Result'], $rows);
 
         return $problems === 0 ? self::SUCCESS : self::FAILURE;
-    }
-
-    private function check(StripeClient $stripe, Price $price, BillingInterval $interval): string
-    {
-        if (! $price->hasStripePrice()) {
-            return 'missing ID';
-        }
-
-        try {
-            $remote = $stripe->prices->retrieve($price->stripePriceId);
-        } catch (ApiErrorException $e) {
-            return 'not found ('.($e->getStripeCode() ?? 'error').')';
-        }
-
-        $expectedInterval = $interval === BillingInterval::Annual ? 'year' : 'month';
-
-        return match (true) {
-            ! $remote->active => 'inactive in Stripe',
-            strtoupper($remote->currency) !== $price->money->currency->code => "currency {$remote->currency}",
-            $remote->unit_amount !== $price->money->amount => "amount {$remote->unit_amount}",
-            ($remote->recurring->interval ?? null) !== $expectedInterval || ($remote->recurring->interval_count ?? 1) !== 1 => 'wrong interval',
-            default => 'ok',
-        };
     }
 }

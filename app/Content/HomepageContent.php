@@ -4,37 +4,48 @@ namespace App\Content;
 
 /**
  * Structure of the marketing homepage: which items appear, in what order,
- * with which icon or link. All wording comes from lang/{locale}/home.php, so
- * a new language only needs a translation file.
+ * with which icon or link. Wording comes from the content sections
+ * (App\Content\Schema\ContentSchema): published owner content, else the
+ * built-in copy in lang/{locale}/home.php, per the fallback policy in
+ * ContentRepository. Icons stay tied to the page structure.
  */
 final class HomepageContent
 {
-    /** @return list<array{label: string, href: string}> */
-    public static function navigation(): array
+    public function __construct(private readonly ContentRepository $content) {}
+
+    public static function current(): self
     {
-        return [
-            ['label' => __('home.nav.services'), 'href' => route('home').'#services'],
-            ['label' => __('home.nav.pricing'), 'href' => route('home').'#pricing'],
-            ['label' => __('home.nav.how_it_works'), 'href' => route('home').'#how-it-works'],
-            ['label' => __('home.nav.custom_development'), 'href' => route('home').'#custom-development'],
-            ['label' => __('home.nav.faq'), 'href' => route('home').'#faq'],
-        ];
+        return new self(app(ContentRepository::class));
+    }
+
+    public function section(string $key): ContentValues
+    {
+        return $this->content->section($key);
+    }
+
+    /** @return list<array{label: string, href: string}> */
+    public function navigation(): array
+    {
+        return array_values(array_map(
+            fn (array $item) => ['label' => (string) $item['label'], 'href' => SafeUrl::orFallback($item['url'] ?? null)],
+            $this->content->section('site.navigation')->items('items'),
+        ));
     }
 
     /** @return list<array{label: string, icon: string}> */
-    public static function trustIndicators(): array
+    public function trustIndicators(): array
     {
-        return self::items('home.hero.trust', [
+        return $this->items('home.hero', 'trust', [
             'contract' => 'calendar',
             'connection' => 'lock',
             'business' => 'briefcase',
-        ], fn (string $text) => ['label' => $text]);
+        ]);
     }
 
     /** @return list<array{title: string, text: string, icon: string}> */
-    public static function services(): array
+    public function services(): array
     {
-        return self::items('home.services.items', [
+        return $this->items('home.services', 'items', [
             'updates' => 'refresh',
             'backups' => 'archive',
             'security' => 'shield',
@@ -43,13 +54,13 @@ final class HomepageContent
     }
 
     /** @return list<array{title: string, text: string, icon: string, tone: string}> */
-    public static function problems(): array
+    public function problems(): array
     {
         $tones = ['outdated' => 'warning', 'backup' => 'danger', 'updates' => 'warning'];
 
         return array_map(
             fn (array $item) => $item + ['tone' => $tones[$item['key']]],
-            self::items('home.why.items', [
+            $this->items('home.why', 'items', [
                 'outdated' => 'clock',
                 'backup' => 'archive-x',
                 'updates' => 'alert-triangle',
@@ -58,9 +69,9 @@ final class HomepageContent
     }
 
     /** @return list<array{title: string, text: string, result: string, icon: string}> */
-    public static function verificationSteps(): array
+    public function verificationSteps(): array
     {
-        return self::items('home.verification.steps', [
+        return $this->items('home.update_process', 'steps', [
             'backup' => 'archive',
             'update' => 'refresh',
             'check' => 'search',
@@ -70,22 +81,22 @@ final class HomepageContent
     }
 
     /** @return list<array{title: string, icon: string}> */
-    public static function woocommerceFlow(): array
+    public function woocommerceFlow(): array
     {
-        return self::items('home.woocommerce.flow', [
+        return $this->items('home.woocommerce', 'flow', [
             'product' => 'package',
             'cart' => 'cart',
             'checkout' => 'clipboard',
             'payment' => 'credit-card',
             'order' => 'receipt',
             'email' => 'mail',
-        ], fn (string $text) => ['title' => $text]);
+        ]);
     }
 
     /** @return list<array{title: string, text: string, icon: string}> */
-    public static function developmentServices(): array
+    public function developmentServices(): array
     {
-        return self::items('home.development.items', [
+        return $this->items('home.development', 'items', [
             'plugins' => 'plug',
             'api' => 'arrows-exchange',
             'woocommerce' => 'store',
@@ -94,9 +105,9 @@ final class HomepageContent
     }
 
     /** @return list<array{number: string, title: string, text: string}> */
-    public static function steps(): array
+    public function steps(): array
     {
-        $steps = self::items('home.how.steps', ['plan' => null, 'connect' => null, 'audit' => null, 'ongoing' => null]);
+        $steps = $this->items('home.how', 'steps', ['plan' => null, 'connect' => null, 'audit' => null, 'ongoing' => null]);
 
         foreach ($steps as $index => $step) {
             $steps[$index]['number'] = sprintf('%02d', $index + 1);
@@ -105,56 +116,65 @@ final class HomepageContent
         return $steps;
     }
 
-    /** @return list<array{question: string, answer: string}> */
-    public static function faqs(): array
+    /**
+     * Enabled questions in their order. Answers are sanitised HTML (checked
+     * again here, whatever is stored).
+     *
+     * @return list<array{question: string, answer: string}>
+     */
+    public function faqs(): array
     {
-        return array_values((array) __('home.faq.items'));
+        return array_values(array_map(
+            fn (array $item) => ['question' => (string) $item['question'], 'answer' => HtmlSanitizer::clean((string) $item['answer'])],
+            $this->content->section('home.faq')->items('items'),
+        ));
     }
 
     /** @return list<array{heading: string, links: list<array{label: string, href: string}>}> */
-    public static function footerColumns(): array
+    public function footerColumns(): array
     {
         $links = config('marketing.links');
+        $footer = $this->content->section('site.footer');
+        $navigation = $this->content->section('site.navigation');
 
         return [
             [
-                'heading' => __('home.footer.columns.product'),
-                'links' => self::navigation(),
+                'heading' => (string) $footer['product_heading'],
+                'links' => $this->navigation(),
             ],
             [
-                'heading' => __('home.footer.columns.account'),
+                'heading' => (string) $footer['account_heading'],
                 'links' => [
-                    ['label' => __('home.nav.login'), 'href' => $links['login']],
-                    ['label' => __('home.footer.links.contact'), 'href' => $links['contact']],
+                    ['label' => (string) $navigation['login_label'], 'href' => $links['login']],
+                    ['label' => (string) $footer['contact_label'], 'href' => $links['contact']],
                 ],
             ],
             [
-                'heading' => __('home.footer.columns.legal'),
+                'heading' => (string) $footer['legal_heading'],
                 'links' => [
-                    ['label' => __('home.footer.links.terms'), 'href' => $links['terms']],
-                    ['label' => __('home.footer.links.privacy'), 'href' => $links['privacy']],
-                    ['label' => __('home.footer.links.cookies'), 'href' => $links['cookies']],
+                    ['label' => (string) $footer['terms_label'], 'href' => $links['terms']],
+                    ['label' => (string) $footer['privacy_label'], 'href' => $links['privacy']],
+                    ['label' => (string) $footer['cookies_label'], 'href' => $links['cookies']],
                 ],
             ],
         ];
     }
 
     /**
-     * Pair each key with its icon and translated text, keeping the order of
-     * $icons (the page structure) rather than the translation file.
+     * Enabled items of a group, in page order, with their icon.
      *
      * @param  array<string, string|null>  $icons
-     * @param  (callable(mixed): array<string, mixed>)|null  $map  Turns a translation value into fields.
      * @return list<array<string, mixed>>
      */
-    private static function items(string $key, array $icons, ?callable $map = null): array
+    private function items(string $section, string $field, array $icons): array
     {
-        $text = (array) __($key);
+        $values = $this->content->section($section)->items($field);
         $items = [];
 
-        foreach ($icons as $itemKey => $icon) {
-            $fields = $map ? $map($text[$itemKey]) : $text[$itemKey];
-            $items[] = ['key' => $itemKey, 'icon' => $icon] + $fields;
+        foreach ($icons as $key => $icon) {
+            if (isset($values[$key])) {
+                $items[] = ['key' => $key, 'icon' => $icon] + $values[$key];
+            }
         }
 
         return $items;

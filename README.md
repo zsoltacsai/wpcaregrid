@@ -60,7 +60,7 @@ The homepage is English. All wording lives in translation files, so a language i
 | `lang/en/status.php` | Status labels (Healthy, Attention, Critical…) |
 | `lang/en/checkout.php`, `countries.php` | Checkout pages, error messages, billing countries |
 
-To add Hungarian, copy `lang/en` to `lang/hu`, translate the values and set the locale (for example per route prefix). Page structure (order, icons, links) stays in `app/Content/HomepageContent.php`; demo data in `app/Content/DemoDashboard.php` holds only keys and numbers. A test fails if a translation key ever shows up as text on the page.
+The homepage copy in these files is the **built-in** content. The owner can replace it section by section, per locale (`en`, `hu`), from the owner area; published owner content wins, and a section without content in the page's language is shown whole in English (docs/CONTENT_MANAGEMENT.md). Interface strings (pricing table labels, forms, portal) stay in the translation files; to translate them, copy `lang/en` to `lang/hu`. Page structure (order, icons) stays in `app/Content/HomepageContent.php`; demo data in `app/Content/DemoDashboard.php` holds only keys and numbers. A test fails if a translation key ever shows up as text on the page.
 
 ## Pricing
 
@@ -162,7 +162,7 @@ Customers open their WordPress admin from the website page without a WordPress p
 
 ## Operator console
 
-The internal console for the service team lives at `/operator`, with its own login and guard (customers never get in). Operators are logins with the `operator` role and explicit permissions (`websites.view`, `backups.restore`, `admin_access.full`…), managed only from the command line. The console shows real data only (dashboard, website list with search/filters, website detail, backups, activity). Its actions go through the existing services: `BackupService`, `RestoreService`, `JobQueue`, `AdminAccessService`. Security findings are a placeholder until the Security/Malware milestone. Details: **[docs/OPERATOR_CONSOLE.md](docs/OPERATOR_CONSOLE.md)**.
+The internal console for the service team lives at `/operator`, with its own login and guard (customers never get in). Operators are logins with the `operator` role and explicit permissions (`websites.view`, `backups.restore`, `admin_access.full`…), managed from the command line or by the owner (invitation, permissions, disable/enable). The console shows real data only (dashboard, website list with search/filters, website detail, backups, activity). Its actions go through the existing services: `BackupService`, `RestoreService`, `JobQueue`, `AdminAccessService`. Security findings are a placeholder until the Security/Malware milestone. Details: **[docs/OPERATOR_CONSOLE.md](docs/OPERATOR_CONSOLE.md)**.
 
 - Create an operator: `php artisan operator:user you@wpcaregrid.com --standard` (everything except full admin; `--grant=`, `--revoke=`, `--disable`).
 - Operators get temporary full WordPress admin only with `admin_access.full` and `ADMIN_ACCESS_OPERATOR_FULL_ADMIN=true` (off by default).
@@ -174,6 +174,10 @@ Connector 0.4.0 scans each site locally (WordPress.org checksums for core and pl
 - Settings: `SECURITY_*` in `.env.example`; `config/security.php`. Keep `SECURITY_REMEDIATION_ENABLED=false` in production (checklist in SECURITY_INCIDENTS.md).
 - Vulnerabilities only with `SECURITY_VULNERABILITY_SOURCE=wordfence` and a feed (`php artisan security:vulnerabilities:sync`); otherwise "Vulnerability scanner not configured".
 - Needs the scheduler (`security:monitor`, `security:schedule`) and connector 0.4.0 on the sites.
+
+## Owner administration
+
+The business owner's area lives at `/owner`, with its own login and guard (customers and operators never get in; owners are created with `php artisan owner:user`, by invitation link). It shows real business figures (MRR, customers, subscriptions, Site Health counts, failed backups, findings, expired licenses), customers (search, filters, editing of contact and billing details), websites with Unified Site Health (backup and security scan through the existing services), operators (invitation, explicit permissions, disable/enable), pricing (validated price drafts and publishing, future checkouts only), structured homepage content per language with draft/publish and signed preview, navigation, SEO and system status. Every change is audited; secrets are never shown. Details: **[docs/OWNER_ADMIN.md](docs/OWNER_ADMIN.md)**, [CONTENT_MANAGEMENT.md](docs/CONTENT_MANAGEMENT.md), [PRICING_ADMIN.md](docs/PRICING_ADMIN.md).
 
 ## Demo content
 

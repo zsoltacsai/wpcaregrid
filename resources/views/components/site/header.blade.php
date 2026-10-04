@@ -1,5 +1,7 @@
 @php
-    $navigation = \App\Content\HomepageContent::navigation();
+    $site = \App\Content\HomepageContent::current();
+    $navigation = $site->navigation();
+    $labels = $site->section('site.navigation');
     $links = config('marketing.links');
 @endphp
 
@@ -33,9 +35,9 @@
             @auth
                 <x-ui.button :href="route('account.dashboard')" variant="ghost">{{ __('account.nav.label') }}</x-ui.button>
             @else
-                <x-ui.button :href="$links['login']" variant="ghost">{{ __('home.nav.login') }}</x-ui.button>
+                <x-ui.button :href="$links['login']" variant="ghost">{{ $labels['login_label'] }}</x-ui.button>
             @endauth
-            <x-ui.button :href="route('home').'#pricing'">{{ __('home.nav.get_started') }}</x-ui.button>
+            <x-ui.button :href="route('home').'#pricing'">{{ $labels['cta_label'] }}</x-ui.button>
         </div>
 
         <button
@@ -81,9 +83,9 @@
                 @auth
                     <x-ui.button :href="route('account.dashboard')" variant="secondary" size="lg">{{ __('account.nav.label') }}</x-ui.button>
                 @else
-                    <x-ui.button :href="$links['login']" variant="secondary" size="lg">{{ __('home.nav.login') }}</x-ui.button>
+                    <x-ui.button :href="$links['login']" variant="secondary" size="lg">{{ $labels['login_label'] }}</x-ui.button>
                 @endauth
-                <x-ui.button :href="route('home').'#pricing'" size="lg" x-on:click="open = false">{{ __('home.nav.get_started') }}</x-ui.button>
+                <x-ui.button :href="route('home').'#pricing'" size="lg" x-on:click="open = false">{{ $labels['cta_label'] }}</x-ui.button>
             </div>
         </x-ui.container>
     </div>

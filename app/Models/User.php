@@ -20,7 +20,11 @@ use Illuminate\Notifications\Notifiable;
  * the customer setting a password, which also verifies the email address.
  *
  * Internal operators are logins with role "operator", no customer, and an
- * explicit permission list (never mass-assignable; set by operator:user).
+ * explicit permission list (never mass-assignable; set by operator:user or
+ * the owner area). Disabling an operator keeps the permissions for later.
+ *
+ * Owners (role "owner") run the business: customers, operators, pricing and
+ * content. They are not operators and hold no operator permissions.
  */
 class User extends Authenticatable implements MustVerifyEmail
 {
@@ -28,6 +32,8 @@ class User extends Authenticatable implements MustVerifyEmail
     use HasFactory, Notifiable;
 
     public const ROLE_OPERATOR = 'operator';
+
+    public const ROLE_OWNER = 'owner';
 
     /**
      * Get the attributes that should be cast.
@@ -40,6 +46,7 @@ class User extends Authenticatable implements MustVerifyEmail
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'operator_permissions' => 'array',
+            'operator_disabled_at' => 'datetime',
         ];
     }
 
@@ -53,10 +60,21 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->role === self::ROLE_OPERATOR;
     }
 
-    /** Only operators have permissions, and only those explicitly granted. */
+    /** An operator who may sign in: not disabled, invitation accepted (email verified). */
+    public function isActiveOperator(): bool
+    {
+        return $this->isOperator() && $this->operator_disabled_at === null && $this->hasVerifiedEmail();
+    }
+
+    public function isOwner(): bool
+    {
+        return $this->role === self::ROLE_OWNER;
+    }
+
+    /** Only enabled operators have permissions, and only those explicitly granted. */
     public function hasOperatorPermission(Permission $permission): bool
     {
-        return $this->isOperator() && in_array($permission->value, $this->operator_permissions ?? [], true);
+        return $this->isOperator() && $this->operator_disabled_at === null && in_array($permission->value, $this->operator_permissions ?? [], true);
     }
 
     /** @return list<Permission> */

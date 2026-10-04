@@ -11,6 +11,7 @@ use App\Http\Controllers\Account\WebsiteController;
 use App\Http\Controllers\Auth\ActivationController;
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\PasswordResetController;
+use App\Http\Controllers\Auth\StaffActivationController;
 use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\PricingController;
@@ -45,6 +46,10 @@ Route::middleware('guest')->group(function () {
 });
 
 Route::post('/logout', [LoginController::class, 'destroy'])->middleware('auth')->name('logout');
+
+// Invited operators and owners set their own password; they then sign in on their own login page.
+Route::get('/staff/activate/{token}', [StaffActivationController::class, 'show'])->name('staff.activate');
+Route::post('/staff/activate', [StaffActivationController::class, 'store'])->middleware('throttle:login')->name('staff.activate.store');
 
 // Customer area. Every model is loaded by UUID and authorised by a policy.
 Route::middleware(['auth', 'customer'])->prefix('account')->name('account.')->group(function () {

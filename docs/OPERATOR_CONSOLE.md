@@ -37,12 +37,12 @@ The console adds no business logic of its own. Every change goes through the ser
 - **Separate guard.** Operators sign in at `/operator/login` on the `operator` session guard. Being signed in to the customer area (`web` guard) never signs anyone in to the console, and the other way round. `/operator/*` sends guests to the operator login, never the customer login.
 - **Same user table, a role.** An operator is a `users` row with `role = operator`, a verified email and **no customer**. No separate account table. `role` and `operator_permissions` are not mass-assignable. A customer login can never be an operator: login, `EnsureOperator` and `operator:user` all refuse it.
 - **Login:** rate limited (`throttle:login`: 5/min per email and IP, 20/min per IP). The session ID is regenerated on sign-in (session fixation). Wrong password, customer login, non-operator and unverified accounts all get the same message. An "intended" URL is followed only if it is inside the console.
-- **Every console request** passes `auth:operator` and `operator` (`EnsureOperator`: role, verified, no customer; otherwise it signs the session out). Responses carry `Cache-Control: no-store` and `X-Robots-Tag: noindex`.
+- **Every console request** passes `auth:operator` and `operator` (`EnsureOperator`: role, verified, not disabled, no customer; otherwise it signs the session out). Responses carry `Cache-Control: no-store` and `X-Robots-Tag: noindex`.
 - Operators cannot use the customer area. `EnsureCustomerAccount` signs out any login without an active customer, and `WebsitePolicy` only grants a website to its own customer.
 
 ### Managing operators
 
-There is deliberately no UI for granting access:
+Operators are managed by the owner in the owner area (docs/OWNER_ADMIN.md: invitation by email, explicit permissions, disable/enable; a disabled operator keeps its permissions but cannot sign in, and is signed out on its next request) or from the command line:
 
 ```sh
 php artisan operator:user ops@wpcaregrid.com --name="Ops" --standard   # every permission except admin_access.full

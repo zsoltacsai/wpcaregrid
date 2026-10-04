@@ -15,6 +15,19 @@ return [
         'ignore' => 'If you did not place this order, you can ignore this email.',
     ],
 
+    'staff_invitation' => [
+        'subject' => 'Your WP CareGrid login',
+        'intro' => 'You have been given access to the WP CareGrid :area.',
+        'body' => 'Set a password to activate your login. Nobody else knows or sets it.',
+        'action' => 'Set your password',
+        'expiry' => 'This link can be used once and is valid for :hours hours.',
+        'ignore' => 'If you did not expect this email, you can ignore it.',
+        'areas' => [
+            'operator' => 'operator console',
+            'owner' => 'owner administration',
+        ],
+    ],
+
     'welcome' => [
         'subject' => 'Welcome to WP CareGrid',
         'intro' => 'Your account is active.',

@@ -1,0 +1,130 @@
+<?php
+
+/*
+|--------------------------------------------------------------------------
+| Content editor labels (owner area)
+|--------------------------------------------------------------------------
+|
+| Names of the editable sections, their fields and fixed items. The page
+| copy itself is in lang/{locale}/home.php (built-in) and content_entries
+| (published by the owner).
+|
+*/
+
+return [
+
+    'sections' => [
+        'home_hero' => 'Hero',
+        'home_services' => 'Services',
+        'home_why' => 'Why maintenance',
+        'home_update_process' => 'Update process',
+        'home_pricing_intro' => 'Pricing introduction',
+        'home_dashboard' => 'Dashboard section',
+        'home_licenses' => 'License section',
+        'home_woocommerce' => 'WooCommerce',
+        'home_development' => 'Custom development',
+        'home_how' => 'How it works',
+        'home_activity' => 'Activity log',
+        'home_faq' => 'FAQ',
+        'home_final_cta' => 'Final call to action',
+        'site_navigation' => 'Navigation',
+        'site_footer' => 'Footer',
+        'seo_home' => 'Homepage',
+        'seo_pricing' => 'Pricing page',
+        'pricing_wordpress_basic' => 'WordPress Basic',
+        'pricing_wordpress_business' => 'WordPress Business',
+        'pricing_wordpress_secure' => 'WordPress Secure',
+        'pricing_woocommerce_basic' => 'WooCommerce Basic',
+        'pricing_woocommerce_business' => 'WooCommerce Business',
+        'pricing_woocommerce_secure' => 'WooCommerce Secure',
+    ],
+
+    'fields' => [
+        'eyebrow' => 'Eyebrow',
+        'title' => 'Title',
+        'description' => 'Description',
+        'body' => 'Body',
+        'text' => 'Text',
+        'label' => 'Label',
+        'url' => 'URL',
+        'enabled' => 'Shown on the page',
+        'position' => 'Position',
+        'primary_cta_label' => 'Primary button label',
+        'primary_cta_url' => 'Primary button link',
+        'secondary_cta_label' => 'Secondary button label',
+        'secondary_cta_url' => 'Secondary button link',
+        'trust' => 'Trust indicators',
+        'items' => 'Items',
+        'steps' => 'Steps',
+        'result' => 'Result label',
+        'demo_note' => 'Demo data note',
+        'limitation' => 'Limitation',
+        'disclaimer' => 'Disclaimer',
+        'cta_label' => 'Button label',
+        'cta_url' => 'Button link',
+        'flow' => 'Purchase flow steps',
+        'note' => 'Note',
+        'contact_prompt' => 'Contact prompt',
+        'contact_label' => 'Contact link label',
+        'contact_url' => 'Contact link',
+        'question' => 'Question',
+        'answer' => 'Answer',
+        'primary_label' => 'Primary button label',
+        'primary_url' => 'Primary button link',
+        'secondary_label' => 'Secondary button label',
+        'secondary_url' => 'Secondary button link',
+        'login_label' => 'Login label',
+        'product_heading' => 'Product column heading',
+        'account_heading' => 'Account column heading',
+        'legal_heading' => 'Legal column heading',
+        'terms_label' => 'Terms link label',
+        'privacy_label' => 'Privacy link label',
+        'cookies_label' => 'Cookie policy link label',
+        'descriptor' => 'Descriptor',
+        'canonical_url' => 'Canonical URL',
+        'robots' => 'Robots',
+        'og_title' => 'Open Graph title',
+        'og_description' => 'Open Graph description',
+        'name' => 'Plan name',
+        'badge' => 'Badge',
+        'features' => 'Features',
+    ],
+
+    // Fixed cards and steps, by key.
+    'items' => [
+        'contract' => 'No contract',
+        'connection' => 'Connection',
+        'business' => 'Business',
+        'updates' => 'Updates',
+        'backups' => 'Backups',
+        'security' => 'Security',
+        'functional' => 'Functional',
+        'outdated' => 'Outdated software',
+        'backup' => 'Backup',
+        'update' => 'Update',
+        'check' => 'Check',
+        'done' => 'Done',
+        'product' => 'Product',
+        'cart' => 'Cart',
+        'checkout' => 'Checkout',
+        'payment' => 'Payment',
+        'order' => 'Order',
+        'email' => 'Email',
+        'plugins' => 'Custom plugins',
+        'api' => 'API integrations',
+        'woocommerce' => 'WooCommerce',
+        'automation' => 'Automation',
+        'plan' => 'Choose a plan',
+        'connect' => 'Connect',
+        'audit' => 'Initial check',
+        'ongoing' => 'Ongoing',
+    ],
+
+    'options' => [
+        'index,follow' => 'Index, follow (default)',
+        'noindex,follow' => 'Do not index, follow links',
+        'index,nofollow' => 'Index, do not follow links',
+        'noindex,nofollow' => 'Do not index, do not follow links',
+    ],
+
+];

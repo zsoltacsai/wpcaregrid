@@ -1,15 +1,17 @@
 @php
-    $columns = \App\Content\HomepageContent::footerColumns();
+    $site = \App\Content\HomepageContent::current();
+    $columns = $site->footerColumns();
+    $footer = $site->section('site.footer');
 @endphp
 
-<footer class="on-dark border-t border-dark-line bg-primary text-on-dark">
+<footer class="on-dark border-t border-dark-line bg-primary text-on-dark" @if ($footer->fallbackLang()) lang="{{ $footer->fallbackLang() }}" @endif>
     <x-ui.container class="py-12 lg:py-16">
         <div class="grid gap-10 md:grid-cols-[1.4fr_repeat(3,1fr)] md:gap-8">
             <div>
                 <a href="{{ route('home') }}" class="inline-block rounded-sm" aria-label="{{ __('home.home_link') }}">
                     <x-brand.logo tone="dark" class="h-16" />
                 </a>
-                <p class="mt-4 text-sm text-on-dark">{{ __('home.tagline') }}</p>
+                <p class="mt-4 text-sm text-on-dark">{{ $footer['description'] }}</p>
                 <p class="mt-1 text-sm text-on-dark-muted">wpcaregrid.com</p>
             </div>
 
@@ -33,7 +35,7 @@
 
         <div class="mt-12 flex flex-col gap-2 border-t border-dark-line pt-6 text-sm text-on-dark-muted sm:flex-row sm:items-center sm:justify-between">
             <p>{{ __('home.footer.copyright', ['year' => now()->year]) }}</p>
-            <p>{{ __('home.descriptor') }}</p>
+            <p>{{ $footer['descriptor'] }}</p>
         </div>
     </x-ui.container>
 </footer>
