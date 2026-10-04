@@ -263,7 +263,8 @@ class PricingAdminTest extends TestCase
             'expected_product' => 'prod_woocommerce',
             'product_type' => 'woocommerce',
         ])->assertSessionHasNoErrors();
-        $this->assertSame(['currency', 'amount', 'stripe_price_id', 'active'], array_keys(PriceDefinition::sole()->draft));
+        // The key set only: MySQL returns JSON object keys in its own order.
+        $this->assertEqualsCanonicalizing(['currency', 'amount', 'stripe_price_id', 'active'], array_keys(PriceDefinition::sole()->draft));
         $this->assertSame('wordpress', PriceDefinition::sole()->product_type);
 
         $this->post(route('owner.pricing.prices.publish', self::KEY), ['confirm' => '1', 'stripe_product_id' => 'prod_woocommerce', 'product_type' => 'woocommerce'])
