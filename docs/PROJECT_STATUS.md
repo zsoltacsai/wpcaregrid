@@ -8,12 +8,12 @@ Last updated: 2026-10-04
 ## Branch and HEAD
 
 - Branch: `claude/ecstatic-wozniak-oemyuf` (also the main branch used for PRs)
-- Latest commit: **Complete Hungarian public content** (local, not pushed; `git log --oneline -3` shows its hash)
+- Latest commits (local, not pushed; `git log --oneline -3` shows the hashes): **Complete Hungarian public content**, then **Fix login configuration**
 - Before it (pushed, CI green): `5231eeb` **Staging deployment preparation**, `7d6327c` status update, `836316f` MySQL test fix, `eeb1ada` **Complete Stripe product validation**, `0b54777` **Real Stripe Test Mode Validation**
 - Earlier: `9171262` status update, `3f01f5d` CI configuration fix, `050afe0` **Production Hardening, CI & Release Readiness**
 - Earlier: `2f7d0b4` Owner Admin & Content Management, `4076684` Security & Malware Engine, `ba2d1db` Internal Operator Console
 - Everything before the latest commit is pushed to `origin` (github.com/zsoltacsai/wpcaregrid); push only when requested, never force.
-- Not committed (separate small fix, outside the milestones): empty `MARKETING_*_URL` values in `.env` turned the header and footer Login link into a dead link; `config/marketing.php` now treats empty as unset (`.env.example`, `config/marketing.php`, `tests/Feature/HomepageTest.php`).
+- Separate small fix, committed on its own as **Fix login configuration** (after the Hungarian content commit): empty `MARKETING_*_URL` values (as shipped in the old `.env.example`) turned the header and footer Login link into a dead link; `config/marketing.php` now treats empty as unset. Contact, Terms, Privacy and Cookie pages are still not built, so those links point at their default paths and answer 404.
 
 ## Completed milestones
 

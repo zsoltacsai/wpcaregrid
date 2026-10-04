@@ -11,14 +11,17 @@
 |
 */
 
+// An empty value ("MARKETING_LOGIN_URL=", as in .env.example) counts as unset.
+$link = fn (string $name, string $default): string => filled(env($name)) ? (string) env($name) : $default;
+
 return [
 
     'links' => [
-        'login' => env('MARKETING_LOGIN_URL', '/login'),
-        'contact' => env('MARKETING_CONTACT_URL', '/contact'),
-        'terms' => env('MARKETING_TERMS_URL', '/terms'),
-        'privacy' => env('MARKETING_PRIVACY_URL', '/privacy'),
-        'cookies' => env('MARKETING_COOKIES_URL', '/cookie-policy'),
+        'login' => $link('MARKETING_LOGIN_URL', '/login'),
+        'contact' => $link('MARKETING_CONTACT_URL', '/contact'),
+        'terms' => $link('MARKETING_TERMS_URL', '/terms'),
+        'privacy' => $link('MARKETING_PRIVACY_URL', '/privacy'),
+        'cookies' => $link('MARKETING_COOKIES_URL', '/cookie-policy'),
     ],
 
 ];

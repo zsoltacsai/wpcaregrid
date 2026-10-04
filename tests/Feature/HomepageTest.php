@@ -20,6 +20,36 @@ class HomepageTest extends TestCase
         $this->assertSame(1, substr_count($response->getContent(), '<h1'));
     }
 
+    /** config/marketing.php as it is loaded with this environment value. */
+    private function marketingConfigWith(string $name, string $value): array
+    {
+        [$_ENV[$name], $_SERVER[$name]] = [$value, $value];
+        putenv("{$name}={$value}");
+
+        try {
+            return require config_path('marketing.php');
+        } finally {
+            unset($_ENV[$name], $_SERVER[$name]);
+            putenv($name);
+        }
+    }
+
+    public function test_login_links_to_the_customer_login_even_when_the_setting_is_empty(): void
+    {
+        // .env.example ships "MARKETING_LOGIN_URL=" with no value; it used to
+        // leave the header Login as a button that went nowhere.
+        config(['marketing' => $this->marketingConfigWith('MARKETING_LOGIN_URL', '')]);
+        $html = $this->get('/')->assertOk()->getContent();
+
+        $this->assertSame('/login', config('marketing.links.login'));
+        $this->assertSame(3, substr_count($html, 'href="/login"'), 'Header, mobile menu and footer.');
+        $this->assertDoesNotMatchRegularExpression('#<button[^>]*>\s*Login\s*</button>#', $html);
+        $this->get('/login')->assertOk();
+
+        config(['marketing' => $this->marketingConfigWith('MARKETING_LOGIN_URL', 'https://app.example.com/login')]);
+        $this->assertSame(3, substr_count($this->get('/')->getContent(), 'href="https://app.example.com/login"'));
+    }
+
     public function test_no_translation_keys_leak_into_the_page(): void
     {
         $html = $this->get('/')->getContent();
