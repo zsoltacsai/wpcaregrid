@@ -8,8 +8,13 @@ use Stripe\StripeClient;
 /**
  * Compares one Stripe Price with what the catalogue says it charges: it must
  * exist, be active, recurring on the right interval, in the same currency
- * and amount, and (productOf) belong to the configured Stripe Product. Read-only: nothing is created or changed in Stripe. Used by
- * pricing:verify-stripe and before an owner publishes a price.
+ * and amount, and belong to the Stripe Product configured for its product
+ * type (STRIPE_PRODUCT_WORDPRESS / STRIPE_PRODUCT_WOOCOMMERCE). The expected
+ * product always comes from configuration, never from a request.
+ *
+ * Read-only: nothing is created or changed in Stripe. verify() is the one
+ * check used by pricing:verify-stripe, the owner's "Check prices in
+ * Stripe" and publishing a price in the owner area.
  */
 class StripePriceVerifier
 {
@@ -20,7 +25,36 @@ class StripePriceVerifier
         return filled(config('services.stripe.secret'));
     }
 
-    /** "ok", or what is wrong ("missing ID", "not found (…)", "amount 100"…). */
+    /**
+     * The full check of a catalogue price: check(), then the product.
+     * "ok", or what is wrong ("amount 100", "product prod_…"…).
+     */
+    public function verify(?string $stripePriceId, int $amount, string $currency, BillingInterval $interval, ProductType $productType): string
+    {
+        $result = $this->check($stripePriceId, $amount, $currency, $interval);
+        if ($result !== self::OK) {
+            return $result;
+        }
+
+        $expected = $this->expectedProduct($productType);
+        if ($expected === null) {
+            return 'product not configured (STRIPE_PRODUCT_'.strtoupper($productType->value).')';
+        }
+
+        $actual = $this->productOf((string) $stripePriceId);
+
+        return $actual === $expected ? self::OK : 'product '.($actual ?? 'unreadable');
+    }
+
+    /** The configured Stripe Product for a product type, or null when not set. */
+    public function expectedProduct(ProductType $productType): ?string
+    {
+        $product = config("pricing.stripe_products.{$productType->value}");
+
+        return is_string($product) && $product !== '' ? $product : null;
+    }
+
+    /** "ok", or what is wrong with the Price itself ("missing ID", "not found (…)", "amount 100"…). */
     public function check(?string $stripePriceId, int $amount, string $currency, BillingInterval $interval): string
     {
         if (blank($stripePriceId)) {

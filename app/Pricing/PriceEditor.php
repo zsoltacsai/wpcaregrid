@@ -19,7 +19,8 @@ use Illuminate\Validation\ValidationException;
  *   customers are shown, and stored in minor units within Stripe's limit.
  * - An active price needs a Stripe Price ID ("price_…"), used by no other
  *   price; when Stripe is configured it must match in Stripe (amount,
- *   currency, interval, active) before it is published.
+ *   currency, interval, active, and the Stripe Product of the price's
+ *   product type, taken from configuration) before it is published.
  * - Publishing affects future checkouts only. Existing subscriptions keep
  *   their Stripe price; earlier Stripe Price IDs stay recognised.
  */
@@ -106,7 +107,8 @@ final class PriceEditor
 
         $verified = false;
         if ($draft['active'] && $this->stripe->configured()) {
-            $result = $this->stripe->check($draft['stripe_price_id'], $draft['amount'], $draft['currency'], $key->interval);
+            // The product type comes from the price being edited (the route), never from the form.
+            $result = $this->stripe->verify($draft['stripe_price_id'], $draft['amount'], $draft['currency'], $key->interval, $key->productType);
             if ($result !== StripePriceVerifier::OK) {
                 throw ValidationException::withMessages(['stripe_price_id' => __('owner.pricing.errors.stripe_mismatch', ['result' => $result])]);
             }

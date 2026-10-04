@@ -18,6 +18,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\ActsAsOwner;
 use Tests\Fakes\FakeCheckoutGateway;
+use Tests\Fakes\FakeStripePriceVerifier;
 use Tests\TestCase;
 
 /** Technical price editing: drafts, validation, publishing, Stripe checks and checkout safety. */
@@ -190,23 +191,22 @@ class PricingAdminTest extends TestCase
         $this->assertSame([4900, 'EUR', 'eu'], [$price->money->amount, $price->money->currency->code, $price->market]);
     }
 
+    private function stripeConfigured(): FakeStripePriceVerifier
+    {
+        config([
+            'services.stripe.secret' => 'sk_test_unit',
+            'pricing.stripe_products' => ['wordpress' => 'prod_wordpress', 'woocommerce' => 'prod_woocommerce'],
+        ]);
+        $this->app->instance(StripePriceVerifier::class, $verifier = new FakeStripePriceVerifier);
+
+        return $verifier;
+    }
+
     public function test_publishing_checks_the_price_in_stripe_when_stripe_is_configured(): void
     {
-        config(['services.stripe.secret' => 'sk_test_unit']);
-        $verifier = new class extends StripePriceVerifier
-        {
-            public string $result = 'amount 1899000';
-
-            public array $checked = [];
-
-            public function check(?string $stripePriceId, int $amount, string $currency, BillingInterval $interval): string
-            {
-                $this->checked[] = [$stripePriceId, $amount, $currency, $interval->value];
-
-                return $this->result;
-            }
-        };
-        $this->app->instance(StripePriceVerifier::class, $verifier);
+        $verifier = $this->stripeConfigured();
+        $verifier->result = 'amount 1899000';
+        $verifier->products['price_business_2027'] = 'prod_wordpress';
         $this->asOwner();
         $this->draft([]);
 
@@ -220,23 +220,96 @@ class PricingAdminTest extends TestCase
         $this->assertTrue(AdminAuditEvent::where('event', 'price.published')->sole()->data['stripe_verified']);
     }
 
+    /** @return array<string, array{0: string, 1: string, 2: string, 3: string}> */
+    public static function productTypes(): array
+    {
+        return [
+            'WordPress price' => ['wordpress.business.monthly.hu', '19990', 'prod_wordpress', 'prod_woocommerce'],
+            'WooCommerce price' => ['woocommerce.business.annual.hu', '259000', 'prod_woocommerce', 'prod_wordpress'],
+        ];
+    }
+
+    #[DataProvider('productTypes')]
+    public function test_a_price_must_belong_to_the_stripe_product_of_its_product_type(string $key, string $amount, string $own, string $other): void
+    {
+        $verifier = $this->stripeConfigured();
+        $owner = $this->asOwner();
+        $this->draft(['amount' => $amount, 'stripe_price_id' => 'price_new_2027'], $key)->assertSessionHasNoErrors();
+        $before = $this->catalog()->allPrices();
+
+        // The Price matches in amount, currency and interval but belongs to the other product.
+        $verifier->products['price_new_2027'] = $other;
+        $this->publish($key)->assertSessionHasErrors(['stripe_price_id' => __('owner.pricing.errors.stripe_mismatch', ['result' => "product {$other}"])]);
+        $this->assertEquals($before, $this->catalog()->allPrices(), 'Nothing is published.');
+        $this->assertSame(0, AdminAuditEvent::where('event', 'price.published')->count());
+        $this->assertNotNull(PriceDefinition::where('product_type', explode('.', $key)[0])->sole()->draft, 'The draft stays for correction.');
+
+        $verifier->products['price_new_2027'] = $own;
+        $this->publish($key)->assertSessionHasNoErrors();
+        $this->assertSame('price_new_2027', PriceDefinition::where('product_type', explode('.', $key)[0])->sole()->stripe_price_id);
+        $this->assertTrue(AdminAuditEvent::where('event', 'price.published')->where('actor_user_id', $owner->id)->sole()->data['stripe_verified']);
+    }
+
+    public function test_the_browser_cannot_choose_the_expected_product(): void
+    {
+        $verifier = $this->stripeConfigured();
+        $verifier->products['price_new_2027'] = 'prod_woocommerce';
+        $this->asOwner();
+
+        // Extra fields naming another product or product type are not part of the draft.
+        $this->draft([
+            'stripe_price_id' => 'price_new_2027',
+            'stripe_product_id' => 'prod_woocommerce',
+            'expected_product' => 'prod_woocommerce',
+            'product_type' => 'woocommerce',
+        ])->assertSessionHasNoErrors();
+        $this->assertSame(['currency', 'amount', 'stripe_price_id', 'active'], array_keys(PriceDefinition::sole()->draft));
+        $this->assertSame('wordpress', PriceDefinition::sole()->product_type);
+
+        $this->post(route('owner.pricing.prices.publish', self::KEY), ['confirm' => '1', 'stripe_product_id' => 'prod_woocommerce', 'product_type' => 'woocommerce'])
+            ->assertSessionHasErrors(['stripe_price_id' => __('owner.pricing.errors.stripe_mismatch', ['result' => 'product prod_woocommerce'])]);
+        $this->assertSame(1899000, $this->businessMonthly()->money->amount);
+    }
+
+    public function test_publishing_is_refused_while_the_expected_product_is_not_configured(): void
+    {
+        $this->stripeConfigured();
+        config(['pricing.stripe_products.wordpress' => null]);
+        $this->asOwner();
+        $this->draft([]);
+
+        $this->publish()->assertSessionHasErrors(['stripe_price_id' => __('owner.pricing.errors.stripe_mismatch', ['result' => 'product not configured (STRIPE_PRODUCT_WORDPRESS)'])]);
+        $this->assertSame(1899000, $this->businessMonthly()->money->amount);
+    }
+
+    public function test_an_inactive_price_is_published_without_a_stripe_check(): void
+    {
+        $verifier = $this->stripeConfigured();
+        $verifier->products['price_business_2027'] = 'prod_woocommerce';
+        $this->asOwner();
+        $this->draft(['active' => '0']);
+
+        $this->publish()->assertSessionHasNoErrors();
+        $this->assertSame([], $verifier->checked, 'Nothing is sold through an inactive price.');
+        $this->assertFalse(PriceDefinition::sole()->active);
+    }
+
     public function test_the_stripe_check_runs_only_on_request_and_keeps_only_the_outcome(): void
     {
         $this->asOwner();
         $this->post(route('owner.pricing.verify'))->assertSessionHas('owner_error', fn ($e) => $e['code'] === 'STRIPE_NOT_CONFIGURED');
 
+        $verifier = $this->stripeConfigured();
         config(['services.stripe.secret' => 'sk_test_unit_SECRET']);
-        $this->app->instance(StripePriceVerifier::class, new class extends StripePriceVerifier
-        {
-            public function check(?string $stripePriceId, int $amount, string $currency, BillingInterval $interval): string
-            {
-                return $stripePriceId === 'price_wordpress_basic_monthly' ? 'inactive in Stripe' : self::OK;
-            }
-        });
+        $verifier->results['price_wordpress_basic_monthly'] = 'inactive in Stripe';
+        $verifier->products['price_woocommerce_secure_annual'] = 'prod_wordpress';
 
         $this->post(route('owner.pricing.verify'))->assertSessionHas('status');
-        $this->get(route('owner.pricing.index'))->assertSee('wordpress.basic.monthly.hu: inactive in Stripe')->assertDontSee('sk_test_unit_SECRET');
-        $this->assertEquals(['ok' => false, 'problems' => 1], AdminAuditEvent::where('event', 'stripe.verified')->sole()->data);
+        $this->get(route('owner.pricing.index'))
+            ->assertSee('wordpress.basic.monthly.hu: inactive in Stripe')
+            ->assertSee('woocommerce.secure.annual.hu: product prod_wordpress')
+            ->assertDontSee('sk_test_unit_SECRET');
+        $this->assertEquals(['ok' => false, 'problems' => 2], AdminAuditEvent::where('event', 'stripe.verified')->sole()->data);
     }
 
     public function test_discarding_a_draft_keeps_the_published_price(): void

@@ -29,7 +29,7 @@ On saving and again on publishing:
 - currency: one of the configured currencies **and** the market's own currency; free text and other currencies are refused;
 - amount: entered in the main unit ("18990"), digits only with at most as many decimals as customers are shown (`display_decimals`; HUF: none), stored in minor units, above zero and at most 99 999 999 minor units (Stripe's limit);
 - Stripe Price ID: `price_…` format; required when the price is on sale; not used (now or before) by another price;
-- when Stripe is configured (`STRIPE_SECRET`), publishing first checks the Price ID in Stripe (`StripePriceVerifier`, read-only): it must exist, be active, recurring on the same interval, in the same currency and amount. A mismatch blocks publishing. Without Stripe configured the price can be published, recorded as not verified.
+- when Stripe is configured (`STRIPE_SECRET`), publishing an on-sale price first checks the Price ID in Stripe (`StripePriceVerifier::verify()`, read-only): it must exist, be active, recurring on the same interval, in the same currency and amount, and belong to the Stripe Product of the price's product type (`STRIPE_PRODUCT_WORDPRESS` / `STRIPE_PRODUCT_WOOCOMMERCE`). The product type comes from the price being edited, the expected Product from configuration; nothing in the form can name either. A mismatch, or a missing `STRIPE_PRODUCT_*`, blocks publishing and keeps the draft. A price taken off sale is published without a Stripe check. Without Stripe configured the price can be published, recorded as not verified.
 
 ### Effect on checkout and subscriptions
 
@@ -42,7 +42,7 @@ On saving and again on publishing:
 
 ### Stripe configuration
 
-Stripe keys and webhook secret stay in the environment; the owner area never shows, creates or rotates them. "Check prices in Stripe" runs the same check as `php artisan pricing:verify-stripe` for every price on sale and keeps only the outcome (time, number of problems, which prices); the system page shows the last result.
+Stripe keys and webhook secret stay in the environment; the owner area never shows, creates or rotates them. "Check prices in Stripe" runs the same check (`verify()`, including the Product) as `php artisan pricing:verify-stripe` for every price on sale and keeps only the outcome (time, number of problems, which prices); the system page shows the last result.
 
 ## Plan wording
 

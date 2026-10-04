@@ -8,8 +8,8 @@ Last updated: 2026-10-04
 ## Branch and HEAD
 
 - Branch: `claude/ecstatic-wozniak-oemyuf` (also the main branch used for PRs)
-- Latest commit: **Real Stripe Test Mode Validation** (local, not pushed; `git log --oneline -3` shows its hash)
-- Before it: `9171262` status update, `3f01f5d` CI configuration fix, `050afe0` **Production Hardening, CI & Release Readiness** (pushed)
+- Latest commit: **Complete Stripe product validation** (local, not pushed; `git log --oneline -3` shows its hash)
+- Before it: `0b54777` **Real Stripe Test Mode Validation** (local, not pushed), `9171262` status update, `3f01f5d` CI configuration fix, `050afe0` **Production Hardening, CI & Release Readiness** (pushed)
 - Earlier: `2f7d0b4` Owner Admin & Content Management, `4076684` Security & Malware Engine, `ba2d1db` Internal Operator Console
 - `origin` (github.com/zsoltacsai/wpcaregrid) has everything up to `9171262`; push only when requested, never force.
 
@@ -50,6 +50,8 @@ Added: Playwright (`tests/e2e/stripe-purchase.spec.ts`, opt-in, not in CI), docs
 
 Not done here: a real mail provider (Mailpit is a local catcher), a permanent webhook endpoint (staging needs its own for its `APP_URL`), Stripe live mode, invoicing.
 
+Completed afterwards (**Complete Stripe product validation**): the owner area enforces the same Product rule. `StripePriceVerifier::verify()` (the Price check, then the Product configured for the price's product type) is the one check behind `pricing:verify-stripe`, publishing a price and "Check prices in Stripe". The product type comes from the price being edited and the expected Product from `STRIPE_PRODUCT_*`, never from the form; a Price of the other product, or a missing `STRIPE_PRODUCT_*`, blocks publishing. Inactive prices publish without a Stripe check, as before. Checked against Stripe test mode: all 12 prices ok; a WordPress Price checked as WooCommerce (and the reverse) is rejected with its real Product. `phpunit.xml` now forces the Stripe and `APP_URL` variables in both `$_ENV` and `$_SERVER`, so neither `.env` nor an exported shell variable reaches the tests (StripeTestIsolationTest).
+
 ## In progress: Production Hardening, CI & Release Readiness — IN_PROGRESS (CI validation complete)
 
 The code, tests, CI workflow and documentation of this milestone are committed and pushed, and **CI validation is complete** (first green run below). The milestone stays **IN_PROGRESS** and the platform is **not PRODUCTION_READY** until the remaining items are done; their current state is tracked in docs/RELEASE_CHECKLIST.md.
@@ -84,7 +86,7 @@ Linux CI (authoritative): see "CI validation" above.
 
 Windows development machine:
 
-- Server suite on SQLite: 599 tests, all pass except 7 explicit skips (6 S3/SFTP tests without local services, 1 Windows-only permission assertion).
+- Server suite on SQLite: 605 tests, all pass except 7 explicit skips (6 S3/SFTP tests without local services, 1 Windows-only permission assertion).
 - Server suite on MySQL 8.4 (local): all pass with the same explicit skips.
 - WordPress connector suite (169 tests) on SQLite and MySQL 8.4: all pass; skips are MySQL-only/SQLite-only tests and explicit Windows symlink/permission limitations (strict in CI).
 - Local end-to-end run with a real WordPress and connector 0.4.1: PILOT.md.
@@ -118,5 +120,5 @@ Finish this one (list above; the next blocker is a staging server with HTTPS, a 
 - CSP is staged (off → report-only → enforce) so it cannot break the application unnoticed.
 - Windows-only filesystem limitations skip with an explicit reason locally and fail in CI (strict mode); production code is never weakened for them.
 - Prices: config/pricing.php is the baseline; owner-published prices override it for future checkouts only.
-- Stripe: one Product per product type (WordPress, WooCommerce), one Price per plan × interval × market; `pricing:verify-stripe` checks amount, currency, interval and product. Promotion codes need a local rule row and a Stripe promotion code; local rules decide eligibility, Stripe applies the discount.
+- Stripe: one Product per product type (WordPress, WooCommerce), one Price per plan × interval × market; one check (`StripePriceVerifier::verify()`: amount, currency, interval, active, Product) for the command, owner publishing and the owner's Stripe check. Promotion codes need a local rule row and a Stripe promotion code; local rules decide eligibility, Stripe applies the discount.
 - Tests never use the developer's Stripe keys (`phpunit.xml` pins them empty); the real-Stripe browser E2E is opt-in and outside CI.

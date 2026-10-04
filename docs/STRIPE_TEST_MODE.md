@@ -14,7 +14,7 @@ How WP CareGrid is connected to Stripe in **test mode** (a Stripe sandbox), how 
 2. Create two Products, **WordPress** and **WooCommerce**, and under them the twelve Prices below: currency HUF, recurring, interval count 1, amounts exactly as listed (Stripe's HUF amounts have two decimals: 8 990 Ft = `899000`). Do not set a tax behaviour. Reuse existing matching Products and Prices instead of creating duplicates; give each Price the lookup key shown so it can be found again.
 3. Put the Product IDs into `STRIPE_PRODUCT_WORDPRESS` / `STRIPE_PRODUCT_WOOCOMMERCE` and each Price ID into its variable.
 4. Add a webhook endpoint (Developers → Webhooks) at `<APP_URL>/stripe/webhook` with exactly the nine events below. Put its signing secret (`whsec_…`) into `STRIPE_WEBHOOK_SECRET`.
-5. `php artisan config:cache` (if caches are used), then `php artisan pricing:verify-stripe`. Every row must say `ok`: the Price exists, is active, recurring on the right interval, in HUF, with the catalogue amount, and belongs to the configured Product. Any mismatch: **stop** and fix Stripe (create a new Price); never change the catalogue to make the check pass.
+5. `php artisan config:cache` (if caches are used), then `php artisan pricing:verify-stripe`. Every row must say `ok`: the Price exists, is active, recurring on the right interval, in HUF, with the catalogue amount, and belongs to the configured Product. Any mismatch: **stop** and fix Stripe (create a new Price); never change the catalogue to make the check pass. The same check (`StripePriceVerifier::verify()`) runs when an owner publishes a price and for "Check prices in Stripe" in the owner area.
 6. `php artisan system:check`: Stripe and Mail must be OK.
 
 ### Environment variables

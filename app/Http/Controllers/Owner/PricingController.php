@@ -115,7 +115,7 @@ class PricingController extends Controller
                 continue;
             }
 
-            $result = $verifier->check($price->stripePriceId, $price->money->amount, $price->money->currency->code, $price->interval);
+            $result = $verifier->verify($price->stripePriceId, $price->money->amount, $price->money->currency->code, $price->interval, $price->productType);
             if ($result !== StripePriceVerifier::OK) {
                 $problems[] = (new PriceKey($price->productType, $price->tier, $price->interval, $price->market))->value().': '.$result;
             }

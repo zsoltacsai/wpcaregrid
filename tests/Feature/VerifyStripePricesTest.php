@@ -2,9 +2,9 @@
 
 namespace Tests\Feature;
 
-use App\Pricing\BillingInterval;
 use App\Pricing\StripePriceVerifier;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Fakes\FakeStripePriceVerifier;
 use Tests\TestCase;
 
 /** pricing:verify-stripe: amount, currency, interval and product association of every configured Price. */
@@ -12,7 +12,7 @@ class VerifyStripePricesTest extends TestCase
 {
     use RefreshDatabase;
 
-    private object $verifier;
+    private FakeStripePriceVerifier $verifier;
 
     protected function setUp(): void
     {
@@ -25,21 +25,7 @@ class VerifyStripePricesTest extends TestCase
         config(['pricing.stripe_products' => ['wordpress' => 'prod_wordpress', 'woocommerce' => 'prod_woocommerce']]);
 
         // Stripe as configured: every Price matches and belongs to its product type's Product.
-        $this->verifier = new class extends StripePriceVerifier
-        {
-            /** @var array<string, string> */
-            public array $products = [];
-
-            public function check(?string $stripePriceId, int $amount, string $currency, BillingInterval $interval): string
-            {
-                return self::OK;
-            }
-
-            public function productOf(string $stripePriceId): ?string
-            {
-                return $this->products[$stripePriceId] ?? 'prod_'.explode('_', $stripePriceId)[1];
-            }
-        };
+        $this->verifier = new FakeStripePriceVerifier;
         $this->app->instance(StripePriceVerifier::class, $this->verifier);
     }
 

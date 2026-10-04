@@ -40,10 +40,7 @@ class VerifyStripePrices extends Command
                         continue;
                     }
 
-                    $issue = $verifier->check($price->stripePriceId, $price->money->amount, $price->money->currency->code, $interval);
-                    if ($issue === StripePriceVerifier::OK) {
-                        $issue = $this->productIssue($verifier, $price->stripePriceId, $plan->productType->value);
-                    }
+                    $issue = $verifier->verify($price->stripePriceId, $price->money->amount, $price->money->currency->code, $interval, $plan->productType);
                     $problems += $issue === StripePriceVerifier::OK ? 0 : 1;
                     $rows[] = ["{$plan->productType->value}.{$plan->tier->value}.{$interval->value}.{$marketKey}", $price->stripePriceId ?: '—', $issue];
                 }
@@ -53,19 +50,5 @@ class VerifyStripePrices extends Command
         $this->table(['Price', 'Stripe Price ID', 'Result'], $rows);
 
         return $problems === 0 ? self::SUCCESS : self::FAILURE;
-    }
-
-    /** "ok", or why the Price is not attached to the configured product. */
-    private function productIssue(StripePriceVerifier $verifier, string $stripePriceId, string $productType): string
-    {
-        $expected = config("pricing.stripe_products.{$productType}");
-
-        if (blank($expected)) {
-            return 'product not configured (STRIPE_PRODUCT_'.strtoupper($productType).')';
-        }
-
-        $actual = $verifier->productOf($stripePriceId);
-
-        return $actual === $expected ? StripePriceVerifier::OK : 'product '.($actual ?? 'unreadable');
     }
 }
