@@ -153,8 +153,10 @@ jobs:
       - name: S3-compatible test service (moto)
         run: |
           pipx install 'moto[server]==5.1.*'
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/moto_server" --help > /dev/null
+          # pipx links apps into its own bin directory (/opt/pipx_bin on GitHub runners).
+          bin="$(pipx environment --value PIPX_BIN_DIR)"
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/moto_server" --help > /dev/null
 
       - name: SFTP test service (OpenSSH, dedicated user, key authentication, pinned host key)
         run: |

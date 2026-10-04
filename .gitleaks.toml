@@ -22,6 +22,11 @@ regexes = [
   '''STORAGE_SECRET_VALUE''',
   '''SMTP_PASSWORD_VALUE''',
   '''FEED_KEY_VALUE''',
+  # Connector test harness (wordpress/tests): fixed pairing credential and
+  # admin-access token that only ever reach FakeHttp inside the test WordPress.
+  # Exact values, so any other key in the same files is still reported.
+  '''cgc_Zx8Kq2Lm4Np6Rs8Tu0Vw2Xy4Za6Bc8De0Fg2Hi4Jk6Lm8Np0''',
+  '''29df881a559de2edae17f5bbd0e93517f98d3e295f59d52864f795516b5ca42a''',
   # Throw-away CI database password and WordPress test salts.
   '''ci-root-password''',
   '''wp-caregrid-tests-[a-z_]+''',
