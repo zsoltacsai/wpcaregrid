@@ -1,3 +1,5 @@
+@props(['localeForm' => null])
+
 @php
     $site = \App\Content\HomepageContent::current();
     $navigation = $site->navigation();
@@ -32,6 +34,7 @@
         </nav>
 
         <div class="hidden items-center gap-2 lg:flex">
+            <x-site.language-switcher :form="$localeForm" />
             @auth
                 <x-ui.button :href="route('account.dashboard')" variant="ghost">{{ __('account.nav.label') }}</x-ui.button>
             @else
@@ -78,6 +81,10 @@
                     @endforeach
                 </ul>
             </nav>
+
+            <div class="mt-4 border-t border-line pt-4">
+                <x-site.language-switcher :form="$localeForm" class="-ml-3" />
+            </div>
 
             <div class="mt-4 grid grid-cols-2 gap-2 pb-2">
                 @auth

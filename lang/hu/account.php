@@ -2,24 +2,220 @@
 
 /*
 |--------------------------------------------------------------------------
-| Ügyfélfiók – csak a nyilvános rendelési folyamatban megjelenő szövegek (magyar)
+| Ügyfélfiók és bejelentkezés (magyar)
 |--------------------------------------------------------------------------
 |
-| A rendelés utáni oldal (/checkout/success) és a nyilvános lábléc ezeket a
-| kulcsokat használja. Az ügyfélportál többi szövege még nincs lefordítva:
-| a hiányzó kulcsokat a Laravel angolul adja (lang/en/account.php).
-| Minden itt szereplő kulcsnak léteznie kell a lang/en/account.php-ban.
+| Az ügyfél bejelentkezése, aktiválása és az ügyfélportál szövegei, a
+| lang/en/account.php kulcsaival azonos szerkezetben (HungarianContentTest
+| és CustomerLocalizationTest ellenőrzi). Nem ide tartozik: az owner és az
+| operátori felület, az e-mailek.
 |
 */
 
 return [
 
+    'meta_title' => ':page – WP CareGrid',
+
     'nav' => [
         'label' => 'Fiók',
+        'dashboard' => 'Vezérlőpult',
+        'websites' => 'Weboldalak',
+        'subscription' => 'Előfizetés',
+        'billing' => 'Számlázás',
+        'profile' => 'Profil',
+        'logout' => 'Kilépés',
+        'open_menu' => 'Menü megnyitása',
+        'close_menu' => 'Menü bezárása',
+        'signed_in_as' => 'Bejelentkezve: :email',
+    ],
+
+    'auth' => [
+        'login_title' => 'Belépés',
+        'login_lead' => 'Lépjen be az előfizetése és a weboldalai követéséhez.',
+        'email' => 'E-mail-cím',
+        'password' => 'Jelszó',
+        'password_confirmation' => 'Jelszó megerősítése',
+        'remember' => 'Maradjak bejelentkezve',
+        'login' => 'Belépés',
+        'forgot' => 'Elfelejtette a jelszavát?',
+        'no_account' => 'A fiókok a vásárlás után jönnek létre. A fizetés megerősítése után aktiváló e-mailt küldünk.',
+        'failed' => 'Ezek az adatok nem egyeznek a nyilvántartásunkkal.',
+        'throttled' => 'Túl sok belépési kísérlet. Kérjük, próbálja újra :seconds másodperc múlva.',
+        'forgot_title' => 'Jelszó visszaállítása',
+        'forgot_lead' => 'Adja meg az e-mail-címét, és küldünk egy hivatkozást az új jelszó beállításához.',
+        'send_link' => 'Visszaállító hivatkozás küldése',
+        'link_sent' => 'Ha ehhez az e-mail-címhez tartozik fiók, a visszaállító hivatkozás úton van.',
+        'reset_title' => 'Új jelszó beállítása',
+        'reset' => 'Jelszó mentése',
+        'reset_done' => 'A jelszava megváltozott. Most már beléphet.',
+        'invalid_link' => 'Ez a hivatkozás érvénytelen vagy lejárt. Kérjen újat alább.',
+        'back_to_login' => 'Vissza a belépéshez',
+        'activate_title' => 'Fiók aktiválása',
+        'activate_lead' => 'Állítson be jelszót ehhez: :email.',
+        'activate' => 'Fiók aktiválása',
+        'password_rules' => 'Legalább 12 karakter.',
+        'logged_out' => 'Kilépett a fiókból.',
+        'no_customer' => 'Ez a belépés nem tartozik ügyfélfiókhoz. Kérjük, lépjen kapcsolatba velünk.',
+    ],
+
+    'subscription_statuses' => [
+        'pending' => 'Megerősítés alatt',
+        'incomplete' => 'Befejezetlen',
+        'incomplete_expired' => 'Lejárt',
+        'trialing' => 'Próbaidőszak',
+        'active' => 'Aktív',
+        'past_due' => 'Fizetési késedelem',
+        'unpaid' => 'Kifizetetlen',
+        'paused' => 'Szüneteltetve',
+        'canceled' => 'Lemondva',
+    ],
+
+    'website_statuses' => [
+        'pending' => 'Függőben',
+        'connecting' => 'Csatlakozás folyamatban',
+        'connected' => 'Csatlakoztatva',
+        'attention' => 'Figyelmet igényel',
+        'critical' => 'Kritikus',
+        'disconnected' => 'Leválasztva',
+    ],
+
+    'connector_statuses' => [
+        'not_installed' => 'Nincs telepítve',
+        'awaiting_connection' => 'Csatlakozásra vár',
+        'connected' => 'Csatlakoztatva',
+        'error' => 'Kapcsolati hiba',
+        'revoked' => 'Leválasztva',
     ],
 
     'dashboard' => [
+        'title' => 'Vezérlőpult',
+        'welcome' => 'Üdv újra, :name',
+        'subscription' => 'Előfizetés',
+        'status' => 'Állapot',
+        'next_billing' => 'Következő számlázás',
+        'no_renewal' => 'Nem újul meg',
+        'websites' => 'Weboldalak',
+        'connected_count' => ':count csatlakoztatva',
+        'added_count' => '{0} Még nincs weboldal|{1} :count weboldal hozzáadva|[2,*] :count weboldal hozzáadva',
+        'setup_title' => 'Beállítás szükséges',
         'setup_text' => 'Csatlakoztassa az első weboldalát, hogy elindíthassuk a kezdeti ellenőrzést.',
+        'add_website' => 'Weboldal hozzáadása',
+        'confirming' => 'A fizetése megerősítése folyamatban van. Az előfizetése abban a pillanatban aktívvá válik, amint a Stripe megerősíti, általában egy percen belül.',
+        'payment_problem' => 'Probléma van a legutóbbi fizetésével. A csatlakoztatás és új weboldalak hozzáadása a megoldásig szünetel.',
+        'ended' => 'Ez az előfizetés véget ért.',
+        'no_subscription' => 'Még nincs előfizetése.',
+        'view_plans' => 'Csomagok megtekintése',
+        'view_subscription' => 'Előfizetés megtekintése',
+    ],
+
+    'subscription' => [
+        'title' => 'Előfizetés',
+        'lead' => 'A csomagja és a számlázási időszaka, a Stripe által megerősítve.',
+        'product' => 'Termék',
+        'plan' => 'Csomag',
+        'interval' => 'Számlázási időszak',
+        'currency' => 'Pénznem',
+        'amount' => 'Ár',
+        'status' => 'Állapot',
+        'period' => 'Jelenlegi számlázási időszak',
+        'next_billing' => 'Következő számlázás',
+        'renewal' => 'Megújulás',
+        'renews' => 'Automatikusan megújul',
+        'ends_on' => 'Vége: :date',
+        'ended' => 'Véget ért',
+        'cancel_at_period_end' => 'Lemondás az időszak végén',
+        'yes' => 'Igen',
+        'no' => 'Nem',
+        'last_payment' => 'Utolsó fizetés',
+        'payment_statuses' => ['paid' => 'Fizetve', 'failed' => 'Sikertelen'],
+        'not_available' => '—',
+        'manage' => 'Előfizetés kezelése',
+        'manage_note' => 'Az önkiszolgáló módosítás hamarosan elérhető. A csomag módosításához vagy lemondásához lépjen kapcsolatba velünk.',
+        'website' => 'Weboldal',
+        'no_website' => 'Még nincs weboldal hozzáadva',
+        'none' => 'Még nincs előfizetése.',
+    ],
+
+    'billing' => [
+        'title' => 'Számlázás',
+        'lead' => 'A számláihoz használt adatok.',
+        'details' => 'Számlázási adatok',
+        'name' => 'Név',
+        'email' => 'E-mail',
+        'company' => 'Cég',
+        'country' => 'Ország',
+        'tax_id' => 'Adószám',
+        'address' => 'Számlázási cím',
+        'customer_type' => 'Ügyfél típusa',
+        'currency' => 'Pénznem',
+        'current_subscription' => 'Jelenlegi előfizetés',
+        'invoices' => 'Számlák',
+        'invoices_placeholder' => 'A számlák itt jelennek majd meg. Addig e-mailben küldjük őket.',
+        'edit' => 'Számlázási adatok szerkesztése',
+        'not_set' => 'Nincs megadva',
+    ],
+
+    'profile' => [
+        'title' => 'Profil',
+        'lead' => 'Az elérhetőségei és a számlázási adatai. Az e-mail-címe egyben a belépési neve is; a módosításához lépjen kapcsolatba velünk.',
+        'first_name' => 'Keresztnév',
+        'last_name' => 'Vezetéknév',
+        'email' => 'E-mail-cím',
+        'customer_type' => 'Ügyfél típusa',
+        'customer_types' => ['individual' => 'Magánszemély', 'company' => 'Cég'],
+        'company_name' => 'Cégnév',
+        'country' => 'Ország',
+        'country_hint' => 'Az ország módosítása nem változtatja meg a meglévő előfizetések árát.',
+        'tax_id' => 'Adószám',
+        'address_line1' => 'Cím',
+        'address_line2' => 'Cím második sora',
+        'postal_code' => 'Irányítószám',
+        'city' => 'Település',
+        'save' => 'Módosítások mentése',
+        'saved' => 'Az adatait elmentettük.',
+        'optional' => 'nem kötelező',
+    ],
+
+    'websites' => [
+        'title' => 'Weboldalak',
+        'lead' => 'Minden csomag egy weboldalra vonatkozik.',
+        'add' => 'Weboldal hozzáadása',
+        'empty' => 'Még nincs weboldal.',
+        'no_access' => 'Weboldal hozzáadásához aktív előfizetés szükséges.',
+        'no_slot' => 'Minden csomag egy weboldalra vonatkozik, és az összes csomagjához már tartozik egy. További weboldal hozzáadásához válasszon másik csomagot.',
+        'type' => 'Típus',
+        'status' => 'Állapot',
+        'connector' => 'Csatlakozó',
+        'added' => 'Hozzáadva',
+        'view' => 'Megtekintés',
+        'types' => ['wordpress' => 'WordPress', 'woocommerce' => 'WooCommerce'],
+        'duplicate' => 'Ez a weboldal már hozzá van adva.',
+        'invalid_url' => 'Adja meg a weboldal nyilvános címét, például: https://company.example.',
+    ],
+
+    'onboarding' => [
+        'title' => 'Weboldal hozzáadása',
+        'lead' => 'Négy lépés a weboldala karbantartásához.',
+        'steps' => [
+            'connect' => ['title' => 'Weboldal megadása', 'text' => 'Adja meg, melyik weboldalra vonatkozik ez a csomag.'],
+            'connection' => ['title' => 'Csatlakozás', 'text' => 'Telepítse a WP CareGrid Connector bővítményt a weboldalára.'],
+            'initial_check' => ['title' => 'Első ellenőrzés', 'text' => 'Átnézzük az oldalt, és jelezzük, ha valami figyelmet igényel.'],
+            'ready' => ['title' => 'Kész', 'text' => 'A karbantartás ütemezetten fut.'],
+        ],
+        'step_states' => [
+            'done' => 'Kész',
+            'current' => 'Jelenlegi lépés',
+            'waiting' => 'Várakozik',
+            'not_started' => 'Nem indult el',
+        ],
+        'url' => 'Weboldal címe',
+        'url_hint' => 'A weboldal címe, például: https://company.example',
+        'type' => 'Weboldal típusa',
+        'submit' => 'Weboldal hozzáadása',
+        'created' => 'A weboldal hozzáadva. A következő lépés a csatlakoztatása.',
+        'connection_placeholder' => 'A WP CareGrid Connector még nem érhető el. A telepítési útmutatót e-mailben küldjük, amint elkészül. Addig ez a weboldal nincs csatlakoztatva.',
+        'check_placeholder' => 'Az első ellenőrzés a weboldal csatlakoztatása után indul.',
+        'not_connected' => 'Nincs csatlakoztatva',
     ],
 
     'success' => [

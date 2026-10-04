@@ -1,10 +1,10 @@
-<x-layouts.account :title="__('account.profile.title')">
+<x-layouts.account locale-form="profile-form" :title="__('account.profile.title')">
     <x-account.page-header :title="__('account.profile.title')" :lead="__('account.profile.lead')" />
 
     @php $address = $customer->billing_address ?? []; @endphp
 
     <x-account.panel>
-        <form method="POST" action="{{ route('account.profile.update') }}" class="grid gap-5" novalidate x-data="{ type: @js(old('customer_type', $customer->customer_type ?? 'individual')) }">
+        <form id="profile-form" method="POST" action="{{ route('account.profile.update') }}" class="grid gap-5" novalidate x-data="{ type: @js(old('customer_type', $customer->customer_type ?? 'individual')) }">
             @csrf
             @method('PUT')
 

@@ -10,7 +10,7 @@
     $productTypes = $catalog->productTypes();
     $defaultLine = $catalog->defaultProductType->value;
     $defaultInterval = $catalog->defaultInterval;
-    $market = $catalog->market($catalog->displayMarket);
+    $market = app(\App\Pricing\DisplayCurrency::class)->market();
     $freeMonths = $catalog->annualFreeMonths($market);
     $freeMonthsLabel = $freeMonths > 0 ? trans_choice('pricing.free_months', $freeMonths) : null;
     $taxNote = __('pricing.tax_notes.'.$market->taxTreatment->value);
@@ -48,6 +48,7 @@
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
+            <x-pricing.currency-selector :catalog="$catalog" />
             <div role="group" aria-label="{{ __('pricing.billing_label') }}" class="inline-grid grid-cols-2 rounded-md border border-line bg-surface p-1">
                 @foreach (BillingInterval::cases() as $interval)
                     @php $isDefault = $interval === $defaultInterval; @endphp

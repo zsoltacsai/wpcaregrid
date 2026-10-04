@@ -6,6 +6,8 @@ use App\Http\Middleware\EnsureCustomerAccount;
 use App\Http\Middleware\EnsureOperator;
 use App\Http\Middleware\EnsureOwner;
 use App\Http\Middleware\SecurityHeaders;
+use App\Http\Middleware\SetLocale;
+use App\Localization\Locales;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -17,6 +19,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -32,6 +35,9 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // Security headers and HTTPS redirect on every response (config/http.php).
         $middleware->append(SecurityHeaders::class);
+
+        // The display language of every web request (config/localization.php); after the session starts.
+        $middleware->web(append: [SetLocale::class]);
 
         // Stripe signs webhook requests; they cannot carry a CSRF token.
         $middleware->validateCsrfTokens(except: ['stripe/webhook']);
@@ -76,6 +82,14 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (ThrottleRequestsException $e, Request $request) {
             if ($request->is('api/*')) {
                 return response()->json(['error' => ['code' => 'RATE_LIMITED', 'message' => 'Too many requests.']], 429, $e->getHeaders());
+            }
+        });
+
+        // An unknown address matches no route, so the web middleware never ran: its 404 page takes the
+        // visitor's language from the remembered-language cookie, read here (config/localization.php).
+        $exceptions->render(function (NotFoundHttpException $e, Request $request) {
+            if ($request->route() === null && ! $request->is('api/*')) {
+                app()->setLocale(Locales::resolveWithoutSession($request));
             }
         });
 

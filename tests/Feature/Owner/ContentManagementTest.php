@@ -33,7 +33,11 @@ class ContentManagementTest extends TestCase
      */
     private function withGerman(): void
     {
-        config(['content.locales' => ['en' => 'English', 'hu' => 'Magyar', 'de' => 'Deutsch']]);
+        config([
+            'content.locales' => ['en' => 'English', 'hu' => 'Magyar', 'de' => 'Deutsch'],
+            // The public site only renders supported display languages (config/localization.php).
+            'localization.locales' => ['hu' => 'Magyar', 'en' => 'English', 'de' => 'Deutsch'],
+        ]);
     }
 
     private function save(string $key, string $locale, array $fields, string $action = 'draft', string $area = 'content')
@@ -143,7 +147,7 @@ class ContentManagementTest extends TestCase
         $faq = $content->section('home.faq');
         $this->assertSame(['en', 'en'], [$faq->locale, $faq->fallbackLang()], 'No German FAQ: the whole section is English, and marked so.');
 
-        config(['app.locale' => 'de']);
+        config(['app.locale' => 'de', 'localization.default' => 'de']);
         $html = $this->get('/')->assertOk()->getContent();
         $this->assertStringContainsString('Deutsche Überschrift', $html);
         $this->assertMatchesRegularExpression('/<section[^>]*id="faq"[^>]*lang="en"|<section[^>]*lang="en"[^>]*id="faq"/', $html);

@@ -23,6 +23,11 @@ return [
     'tagline' => 'WordPress maintained. Website working.',
     'descriptor' => 'WordPress Maintenance',
 
+    // Language selector (header and customer sidebar).
+    'language' => [
+        'label' => 'Language',
+    ],
+
     'nav' => [
         'label' => 'Main',
         'mobile_label' => 'Mobile',

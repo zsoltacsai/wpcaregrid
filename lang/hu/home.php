@@ -25,6 +25,11 @@ return [
     'tagline' => 'Karbantartott WordPress. Működő weboldal.',
     'descriptor' => 'WordPress-karbantartás',
 
+    // Nyelvválasztó (fejléc és ügyfél-oldalsáv).
+    'language' => [
+        'label' => 'Nyelv',
+    ],
+
     'nav' => [
         'label' => 'Főmenü',
         'mobile_label' => 'Mobilmenü',

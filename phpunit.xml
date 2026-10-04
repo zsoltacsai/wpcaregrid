@@ -35,6 +35,7 @@
         <!-- Independent of the developer's .env and shell (a tunnel URL, real Stripe test keys): tests never reach Stripe.
              Laravel reads $_SERVER before $_ENV, so both are forced (StripeTestIsolationTest). -->
         <env name="APP_URL" value="http://localhost" force="true"/>
+        <env name="APP_LOCALE" value="en" force="true"/>
         <env name="TRUSTED_PROXIES" value="" force="true"/>
         <env name="STRIPE_KEY" value="" force="true"/>
         <env name="STRIPE_SECRET" value="" force="true"/>
@@ -55,6 +56,7 @@
         <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_HUF" value="" force="true"/>
         <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_HUF" value="" force="true"/>
         <server name="APP_URL" value="http://localhost" force="true"/>
+        <server name="APP_LOCALE" value="en" force="true"/>
         <server name="TRUSTED_PROXIES" value="" force="true"/>
         <server name="STRIPE_KEY" value="" force="true"/>
         <server name="STRIPE_SECRET" value="" force="true"/>

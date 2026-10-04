@@ -1,0 +1,10 @@
+{
+    "Unauthorized": "Nincs jogosultság",
+    "Payment Required": "Fizetés szükséges",
+    "Forbidden": "Hozzáférés megtagadva",
+    "Not Found": "Az oldal nem található",
+    "Page Expired": "Az oldal lejárt",
+    "Too Many Requests": "Túl sok kérés",
+    "Server Error": "Szerverhiba",
+    "Service Unavailable": "A szolgáltatás átmenetileg nem érhető el"
+}

@@ -1,6 +1,6 @@
-<x-layouts.marketing :title="__('account.meta_title', ['page' => __('account.auth.activate_title')])" :description="__('home.meta.description')">
+<x-layouts.marketing locale-form="activate-form" :title="__('account.meta_title', ['page' => __('account.auth.activate_title')])" :description="__('home.meta.description')">
     <x-auth.card :title="__('account.auth.activate_title')" :lead="__('account.auth.activate_lead', ['email' => $email])">
-        <form method="POST" action="{{ route('account.activate.store') }}" class="grid gap-5" novalidate>
+        <form id="activate-form" method="POST" action="{{ route('account.activate.store') }}" class="grid gap-5" novalidate>
             @csrf
             <input type="hidden" name="token" value="{{ $token }}">
             <x-form.field name="email" type="email" :label="__('account.auth.email')" :value="$email" autocomplete="email" required :readonly="filled($email)" />

@@ -11,7 +11,7 @@
     $country = old('country', $account?->country_code ?? 'HU');
 @endphp
 
-<x-layouts.marketing :title="__('checkout.meta.checkout_title')" :description="__('home.meta.description')">
+<x-layouts.marketing locale-form="checkout-form" :title="__('checkout.meta.checkout_title')" :description="__('home.meta.description')">
     <section class="py-10 sm:py-12 lg:py-16" aria-labelledby="checkout-title">
         <x-ui.container>
             <nav aria-label="{{ __('checkout.breadcrumb') }}">
@@ -26,7 +26,7 @@
             </h1>
             <p class="mt-3 text-base text-muted sm:text-lg">{{ __('checkout.lead') }}</p>
 
-            <form
+            <form id="checkout-form"
                 method="POST"
                 action="{{ route('checkout.store') }}"
                 novalidate

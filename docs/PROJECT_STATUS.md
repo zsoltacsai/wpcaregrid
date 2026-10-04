@@ -8,8 +8,8 @@ Last updated: 2026-10-04
 ## Branch and HEAD
 
 - Branch: `claude/ecstatic-wozniak-oemyuf` (also the main branch used for PRs)
-- Latest commits (local, not pushed; `git log --oneline -3` shows the hashes): **Complete Hungarian public content**, then **Fix login configuration**
-- Before it (pushed, CI green): `5231eeb` **Staging deployment preparation**, `7d6327c` status update, `836316f` MySQL test fix, `eeb1ada` **Complete Stripe product validation**, `0b54777` **Real Stripe Test Mode Validation**
+- Latest commit: **Add bilingual frontend and customer portal** (local, not pushed; `git log --oneline -3` shows its hash)
+- Before it (pushed, CI green): `f1f172d` **Fix login configuration**, `6e159e5` **Complete Hungarian public content**, `5231eeb` **Staging deployment preparation**, `7d6327c` status update, `836316f` MySQL test fix, `eeb1ada` **Complete Stripe product validation**, `0b54777` **Real Stripe Test Mode Validation**
 - Earlier: `9171262` status update, `3f01f5d` CI configuration fix, `050afe0` **Production Hardening, CI & Release Readiness**
 - Earlier: `2f7d0b4` Owner Admin & Content Management, `4076684` Security & Malware Engine, `ba2d1db` Internal Operator Console
 - Everything before the latest commit is pushed to `origin` (github.com/zsoltacsai/wpcaregrid); push only when requested, never force.
@@ -27,6 +27,19 @@ Last updated: 2026-10-04
 | Internal Operator Console | `ba2d1db` | docs/OPERATOR_CONSOLE.md |
 | Unified Site Health + Security & Malware Engine | `4076684` | docs/SECURITY_ENGINE.md, MALWARE_SCANNING.md, SECURITY_FINDINGS.md, SECURITY_INCIDENTS.md |
 | Owner Admin & Content Management | `2f7d0b4` | docs/OWNER_ADMIN.md, CONTENT_MANAGEMENT.md, PRICING_ADMIN.md |
+
+## Bilingual frontend and customer portal — COMPLETE (English and Hungarian)
+
+Done 2026-10-05. Full description: docs/LOCALIZATION.md.
+
+- **Runtime language**: `config/localization.php` (`hu`, `en`; `APP_LOCALE` is only the default, read once so `App::setLocale()` cannot leak into the next request). `SetLocale` middleware: owner / operator / staff paths always English; else the cookie `caregrid_locale` (also carries a pre-login choice into the session), else the signed-in customer's saved preference, else the default; everything validated against the supported list. `POST /locale` (CSRF, throttled) accepts only a supported code; an invalid one is refused and changes nothing.
+- **Selector**: Magyar / English in the public header (desktop and mobile menu) and the customer sidebar; a plain server-side form, works without JavaScript; with JavaScript, typed form values (never passwords) come back after a switch (login, activation, reset, checkout, profile, add website). `<html lang>` and `Content-Language` follow the language; unknown addresses (404) too. No `hreflang` (one address per page).
+- **Currency**: `DisplayCurrency` + `PricingCatalog::sellableCurrencies()`. **Hungarian is always HUF.** English offers only currencies that have real prices: **today HUF only** (EU, GB and international have no prices), shown as a label, no dropdown; a dropdown appears when a market gets prices. No conversion, no exchange rates, no IP choice, **no fake prices**. The displayed currency never reaches checkout: price resolution stays billing country → market → catalogue price on the server; submitted amounts, currencies, Price IDs and markets are ignored. Stripe Checkout is shown in the display language (`locale`, presentation). Existing subscriptions are untouched.
+- **Preference**: `users.locale` (nullable, one small migration, rolled back and forward on SQLite and MySQL 8.4). Written only on the signed-in customer's own login; no id is ever read from a request; owner and operator logins store nothing.
+- **Translated** (Hungarian, exact keys of the English files): `account`, `backups`, `admin_access`, `security`, `site_health`, `connector` (customer login and portal), plus Laravel's `validation`, `auth`, `passwords`, `pagination` and `lang/hu.json` (404, 403, 419, 429 and other default pages). Customer login, activation (including invalid and used links), reset, the portal (dashboard, websites, onboarding, connection, backups, restore, admin access, security, subscription, billing, profile) and its states.
+- **Not translated, on purpose**: Owner Admin, Operator Console, staff invitations (English by design); **emails** (activation, welcome, payment, subscription): they use `emails.php`, and are sent by webhooks where no language exists. Translating them needs the language stored at checkout; a small separate milestone. The restore and WordPress-admin confirmation forms do not carry typed text across a switch (a conscious confirmation should not be restored).
+- Tests: `CustomerLocalizationTest` (35): languages, selector, refusal of unsupported codes, tampered cookie, foreign return address, form input, staff areas English, HU → HUF, EN currencies (a euro price fixture proves the selector appears only when prices exist and never in Hungarian), forged currency / amount / Price ID / market, subscription amounts unchanged, prices in both languages, login and auth messages, activation and reset, error pages, every portal page in both languages with no English sentence on the Hungarian page, saved preference and tenant isolation, the default does not leak between requests. Playwright (`tests/e2e/localization.spec.ts`, 8) against the local app: public pages, pricing, checkout, login, 404, mobile selector with the keyboard, customer area and a new browser keeping the saved language. Mutation-checked.
+- Found and fixed while building it: `App::setLocale()` rewrites `config('app.locale')`, so a Hungarian request would have made the next request in a long-lived worker Hungarian too (the default now has its own key); a form-associated selector in the header would have taken over the Enter key of the page's form (the selector keeps its own form and carries the values with JavaScript instead).
 
 ## Hungarian public content — COMPLETE (built-in copy)
 
@@ -121,7 +134,7 @@ Linux CI (authoritative): see "CI validation" above.
 
 Windows development machine:
 
-- Server suite on SQLite: 614 tests, all pass except 7 explicit skips (6 S3/SFTP tests without local services, 1 Windows-only permission assertion).
+- Server suite on SQLite: 651 tests, all pass except 7 explicit skips (6 S3/SFTP tests without local services, 1 Windows-only permission assertion).
 - Server suite on MySQL 8.4 (local): all pass with the same explicit skips.
 - WordPress connector suite (169 tests) on SQLite and MySQL 8.4: all pass; skips are MySQL-only/SQLite-only tests and explicit Windows symlink/permission limitations (strict in CI).
 - Local end-to-end run with a real WordPress and connector 0.4.1: PILOT.md.

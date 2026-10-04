@@ -18,6 +18,11 @@ return [
     'tabs_label' => 'Csomag típusa',
     'billing_label' => 'Számlázási időszak',
 
+    // Pénznemválasztó: csak a valódi árakkal rendelkező pénznemek jelennek meg.
+    'currency_label' => 'Pénznem',
+    'currency_apply' => 'Alkalmaz',
+    'currency_only' => 'Az árak jelenleg csak :currency pénznemben érhetők el',
+
     'intervals' => [
         'monthly' => 'Havi',
         'annual' => 'Éves',

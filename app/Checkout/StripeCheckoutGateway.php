@@ -2,6 +2,7 @@
 
 namespace App\Checkout;
 
+use App\Localization\Locales;
 use App\Models\CheckoutIntent;
 use App\Models\Promotion;
 use Illuminate\Support\Carbon;
@@ -82,7 +83,8 @@ final class StripeCheckoutGateway implements CheckoutGateway
             'client_reference_id' => $intent->uuid,
             'metadata' => $metadata,
             'subscription_data' => ['metadata' => $metadata],
-            'locale' => 'auto',
+            // Stripe's page language only (display); the price and billing data are unaffected.
+            'locale' => Locales::isSupported(app()->getLocale()) ? app()->getLocale() : 'auto',
             // Stripe replaces {CHECKOUT_SESSION_ID}; it must not be URL-encoded.
             'success_url' => route('checkout.success').'?session_id={CHECKOUT_SESSION_ID}',
             'cancel_url' => route('checkout.cancel', $intent),

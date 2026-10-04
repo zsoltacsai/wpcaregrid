@@ -1,6 +1,6 @@
-<x-layouts.marketing :title="__('account.meta_title', ['page' => __('account.auth.reset_title')])" :description="__('home.meta.description')">
+<x-layouts.marketing locale-form="reset-form" :title="__('account.meta_title', ['page' => __('account.auth.reset_title')])" :description="__('home.meta.description')">
     <x-auth.card :title="__('account.auth.reset_title')" >
-        <form method="POST" action="{{ route('password.update') }}" class="grid gap-5" novalidate>
+        <form id="reset-form" method="POST" action="{{ route('password.update') }}" class="grid gap-5" novalidate>
             @csrf
             <input type="hidden" name="token" value="{{ $token }}">
             <x-form.field name="email" type="email" :label="__('account.auth.email')" :value="$email" autocomplete="email" required :readonly="filled($email)" />

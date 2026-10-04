@@ -691,6 +691,14 @@ Draft/published states should exist.
 
 Draft content must never leak publicly.
 
+### Display language and currency
+
+Details: `docs/LOCALIZATION.md`.
+
+- The public site, customer login and customer portal are bilingual (`en`, `hu`), in Laravel's `lang/en`, `lang/hu` (UI texts), separate from owner-published content. Owner Admin, Operator Console and staff invitations stay English; customer emails are English until the language is stored at checkout.
+- A language or a displayed currency never decides a price. Hungarian is always HUF. English offers only currencies that have real prices in the pricing source (today HUF only): no conversion, no exchange rates, no IP-based choice, no invented prices. Checkout resolves billing country → market → price on the server; browser-supplied amounts, currencies, Price IDs and markets are never read.
+- A customer's language is stored on their own login (`users.locale`). No request may name another user; only supported codes are accepted.
+
 ## 23. Billing / Invoicing
 
 Stripe handles payments/subscriptions.

@@ -1,6 +1,6 @@
-<x-layouts.marketing :title="__('account.meta_title', ['page' => __('account.auth.login_title')])" :description="__('home.meta.description')">
+<x-layouts.marketing locale-form="login-form" :title="__('account.meta_title', ['page' => __('account.auth.login_title')])" :description="__('home.meta.description')">
     <x-auth.card :title="__('account.auth.login_title')" :lead="__('account.auth.login_lead')">
-        <form method="POST" action="{{ route('login') }}" class="grid gap-5" novalidate>
+        <form id="login-form" method="POST" action="{{ route('login') }}" class="grid gap-5" novalidate>
             @csrf
             <x-form.field name="email" type="email" :label="__('account.auth.email')" autocomplete="email" required autofocus />
             <x-form.field name="password" type="password" :label="__('account.auth.password')" autocomplete="current-password" required />

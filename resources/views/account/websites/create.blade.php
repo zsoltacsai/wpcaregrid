@@ -1,10 +1,10 @@
-<x-layouts.account :title="__('account.onboarding.title')">
+<x-layouts.account locale-form="website-form" :title="__('account.onboarding.title')">
     <x-account.page-header :title="__('account.onboarding.title')" :lead="__('account.onboarding.lead')" />
 
     <x-account.onboarding-steps :states="['connect' => 'current', 'connection' => 'not_started', 'initial_check' => 'not_started', 'ready' => 'not_started']" />
 
     <x-account.panel :title="__('account.onboarding.steps.connect.title')" heading-id="connect-title" class="mt-6">
-        <form method="POST" action="{{ route('account.websites.store') }}" class="grid max-w-xl gap-5" novalidate>
+        <form id="website-form" method="POST" action="{{ route('account.websites.store') }}" class="grid max-w-xl gap-5" novalidate>
             @csrf
             <x-form.field name="url" type="url" :label="__('account.onboarding.url')" :hint="__('account.onboarding.url_hint')" placeholder="https://company.example" autocomplete="url" required maxlength="255" />
 

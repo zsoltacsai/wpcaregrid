@@ -13,13 +13,19 @@ use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\Auth\StaffActivationController;
 use App\Http\Controllers\CheckoutController;
+use App\Http\Controllers\CurrencyController;
 use App\Http\Controllers\HomeController;
+use App\Http\Controllers\LocaleController;
 use App\Http\Controllers\PricingController;
 use App\Http\Controllers\StripeWebhookController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', HomeController::class)->name('home');
 Route::get('/pricing', PricingController::class)->name('pricing');
+
+// Display language and display currency. Presentation only; checkout resolves the price on the server.
+Route::post('/locale', LocaleController::class)->middleware('throttle:60,1')->name('locale.update');
+Route::post('/currency', CurrencyController::class)->middleware('throttle:60,1')->name('currency.update');
 
 Route::controller(CheckoutController::class)->prefix('checkout')->name('checkout.')->group(function () {
     // The query string carries only the logical selection (product, plan, interval).

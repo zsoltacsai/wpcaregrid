@@ -23,7 +23,7 @@ class HungarianContentTest extends TestCase
     use ActsAsOwner, RefreshDatabase;
 
     /** Translation files whose keys exist in full in both languages. */
-    private const COMPLETE_FILES = ['home', 'pricing', 'checkout', 'dashboard', 'status', 'countries'];
+    private const COMPLETE_FILES = ['home', 'pricing', 'checkout', 'dashboard', 'status', 'countries', 'account', 'backups', 'admin_access', 'security', 'site_health', 'connector'];
 
     /**
      * Text that is the same in both languages on purpose: product and brand
@@ -32,12 +32,12 @@ class HungarianContentTest extends TestCase
     private const SAME_IN_BOTH = [
         'WordPress', 'WooCommerce', 'Basic', 'Business', 'Secure', 'shop.example.com',
         '© :year WP CareGrid', ':currency / :unit', ':name', 'Belgium', 'Liechtenstein', 'Moldova',
-        'index,follow',
+        'index,follow', ':page – WP CareGrid', '—', 'PHP',
     ];
 
     private function useHungarian(): void
     {
-        config(['app.locale' => 'hu']);
+        config(['app.locale' => 'hu', 'localization.default' => 'hu']);
         app()->setLocale('hu');
         app(ContentRepository::class)->flush();
     }
@@ -72,11 +72,32 @@ class HungarianContentTest extends TestCase
                 "lang/hu/{$file}.php must have the same keys as lang/en/{$file}.php",
             );
         }
+    }
 
-        // The customer portal is not translated yet: Hungarian has only the few keys the public order pages use.
-        $english = Arr::dot(trans('account', [], 'en'));
-        foreach (array_keys(Arr::dot(trans('account', [], 'hu'))) as $key) {
-            $this->assertArrayHasKey($key, $english, "account.{$key} exists in English");
+    public function test_framework_messages_exist_in_hungarian_with_the_same_keys_and_placeholders(): void
+    {
+        // Validation, authentication, password reset and pagination texts the customer sees.
+        foreach (['validation', 'auth', 'passwords', 'pagination'] as $file) {
+            $english = Arr::dot(trans($file, [], 'en'));
+            $hungarian = Arr::dot(trans($file, [], 'hu'));
+            unset($english['attributes'], $hungarian['attributes']);
+
+            foreach ($english as $key => $text) {
+                if (! is_string($text) || str_starts_with($key, 'custom.')) {
+                    continue;
+                }
+                $this->assertArrayHasKey($key, $hungarian, "lang/hu/{$file}.php is missing {$key}");
+                $this->assertNotSame($text, $hungarian[$key], "{$file}.{$key} is not translated");
+                preg_match_all('/:[a-z_]+/', $text, $placeholders);
+                foreach ($placeholders[0] as $placeholder) {
+                    $this->assertStringContainsString($placeholder, (string) $hungarian[$key], "{$file}.{$key} lost {$placeholder}");
+                }
+            }
+        }
+
+        // The default error pages (404, 403, 419…) use the English phrase as the key.
+        foreach (['Unauthorized', 'Forbidden', 'Not Found', 'Page Expired', 'Too Many Requests', 'Server Error', 'Service Unavailable'] as $phrase) {
+            $this->assertNotSame($phrase, __($phrase, [], 'hu'), "{$phrase} is not translated (lang/hu.json)");
         }
     }
 
@@ -135,7 +156,8 @@ class HungarianContentTest extends TestCase
 
         $home = $this->get('/')->assertOk()->getContent();
         $this->assertStringContainsString('<html lang="hu">', $home);
-        $this->assertStringNotContainsString(' lang="en"', $home, 'No section is marked as English fallback.');
+        // The English button of the language selector is rightly lang="en"; no content section is.
+        $this->assertDoesNotMatchRegularExpression('/<section[^>]*lang="en"/', $home, 'No section is marked as English fallback.');
 
         foreach ([
             'Karbantartott WordPress. Működő weboldal.', 'WordPress-karbantartás, gond nélkül.', 'Mit tartalmaz a karbantartás',
@@ -212,7 +234,7 @@ class HungarianContentTest extends TestCase
         app(ContentRepository::class)->flush();
         $this->get('/')->assertSee('Közzétett főcím');
 
-        config(['app.locale' => 'en']);
+        config(['app.locale' => 'en', 'localization.default' => 'en']);
         app()->setLocale('en');
         app(ContentRepository::class)->flush();
         $this->get('/')->assertSee('WordPress maintenance, without the hassle.')->assertDontSee('Közzétett főcím');

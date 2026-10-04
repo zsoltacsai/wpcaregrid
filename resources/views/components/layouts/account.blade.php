@@ -2,7 +2,7 @@
     Customer area layout: the same brand system as the public site, with the
     navy sidebar and green active item of the product UI.
 --}}
-@props(['title'])
+@props(['title', 'localeForm' => null])
 
 @php
     $navigation = [
@@ -75,6 +75,7 @@
                     </nav>
 
                     <div class="mt-6 border-t border-dark-line pt-4 lg:mt-auto">
+                        <x-site.language-switcher :form="$localeForm" tone="dark" class="-ml-1" />
                         <p class="truncate px-3 text-xs text-on-dark-muted">{{ __('account.nav.signed_in_as', ['email' => auth()->user()->email]) }}</p>
                         <form method="POST" action="{{ route('logout') }}" class="mt-2">
                             @csrf

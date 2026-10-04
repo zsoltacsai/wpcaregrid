@@ -9,6 +9,8 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 | Item | State | Check |
 | --- | --- | --- |
 | PHP 8.4 with required extensions | READY | CI runs PHP 8.4 on Ubuntu 24.04; Ubuntu ships 8.3, so the server needs `ppa:ondrej/php`; exact extension list in DEPLOYMENT.md; server: `composer check-platform-reqs --no-dev` |
+| English and Hungarian for the public site, customer login and portal; HU → HUF; no fake international prices | READY | LOCALIZATION.md; CustomerLocalizationTest, HungarianContentTest, Playwright localization spec |
+| Customer emails in Hungarian | NOT READY | English only; needs the language stored at checkout (LOCALIZATION.md) |
 | Fresh install without dev packages | READY | `composer install --no-dev`, build, migrate, `connector:package`, all caches, rollback and re-migrate verified on an exported copy of the repository (2026-10-04) |
 | Staging server `staging.wpcaregrid.com` | NOT CONFIGURED | DEPLOYMENT.md "Staging" (server, `.env`, nginx, Stripe endpoint, checklist) |
 | Rollback procedure | READY (documented) | DEPLOYMENT.md "Rollback"; to be rehearsed once on staging |

@@ -219,6 +219,38 @@ final class PricingCatalog
         return false;
     }
 
+    /**
+     * Currencies a customer can really buy in: those of markets that have
+     * prices in the catalogue (config/pricing.php, owner-published prices).
+     * A market without prices contributes nothing, so no currency is offered
+     * before its real prices exist.
+     *
+     * @return list<string> Currency codes, in market order.
+     */
+    public function sellableCurrencies(): array
+    {
+        $codes = [];
+        foreach ($this->markets as $market) {
+            if ($this->hasPrices($market) && ! in_array($market->currencyCode, $codes, true)) {
+                $codes[] = $market->currencyCode;
+            }
+        }
+
+        return $codes;
+    }
+
+    /** The first market with prices that sells in this currency. */
+    public function marketForCurrency(string $currencyCode): ?Market
+    {
+        foreach ($this->markets as $market) {
+            if ($market->currencyCode === $currencyCode && $this->hasPrices($market)) {
+                return $market;
+            }
+        }
+
+        return null;
+    }
+
     public function price(ProductType $productType, PlanTier $tier, BillingInterval $interval, Market $market): ?Price
     {
         foreach ($this->prices as $price) {

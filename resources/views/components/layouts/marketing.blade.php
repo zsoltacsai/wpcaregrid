@@ -3,7 +3,7 @@
     title, description, canonical URL, robots, Open Graph text). It only
     changes this page's own tags. preview: a signed owner draft preview.
 --}}
-@props(['title' => null, 'description' => null, 'seo' => null, 'preview' => false])
+@props(['title' => null, 'description' => null, 'seo' => null, 'preview' => false, 'localeForm' => null])
 
 @php
     $title = filled($seo['title'] ?? null) ? $seo['title'] : $title;
@@ -53,7 +53,7 @@
             </p>
         @endif
 
-        <x-site.header />
+        <x-site.header :locale-form="$localeForm" />
 
         <main id="main" tabindex="-1" class="overflow-x-clip focus:outline-none">
             {{ $slot }}

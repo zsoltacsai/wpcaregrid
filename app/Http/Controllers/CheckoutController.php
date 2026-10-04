@@ -9,6 +9,7 @@ use App\Checkout\PromotionRejected;
 use App\Checkout\StartCheckout;
 use App\Http\Requests\StartCheckoutRequest;
 use App\Models\CheckoutIntent;
+use App\Pricing\DisplayCurrency;
 use App\Pricing\Exceptions\InvalidPriceSelection;
 use App\Pricing\Exceptions\MarketNotAvailable;
 use App\Pricing\Exceptions\PricingException;
@@ -35,7 +36,8 @@ class CheckoutController extends Controller
             return redirect()->route('pricing')->with('checkout_error', $e->customerMessage());
         }
 
-        $market = $pricing->market($pricing->displayMarket);
+        // Presentation only: StartCheckout resolves billing country → market → price on the server.
+        $market = app(DisplayCurrency::class)->market();
         $offer = collect($pricing->offers($selection->productType, $market))
             ->first(fn ($offer) => $offer->plan->tier === $selection->tier);
 

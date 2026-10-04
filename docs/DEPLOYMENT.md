@@ -334,6 +334,7 @@ Production values from the table above, and:
 | `APP_NAME` | `"WP CareGrid Staging"` (shown in page titles and as the mail sender name) |
 | `APP_URL` | `https://staging.wpcaregrid.com` |
 | `APP_DEBUG` | `false` |
+| `APP_LOCALE` | the language for visitors who have not chosen: `hu` or `en` (docs/LOCALIZATION.md). Everyone can switch; the choice is remembered in a cookie and, for customers, on their login |
 | `LOG_CHANNEL` / `LOG_LEVEL` | `daily` / `info` |
 | `MAIL_*` | the provider's SMTP relay; `MAIL_FROM_ADDRESS` on a verified domain (for example `staging@wpcaregrid.com`) |
 | `STRIPE_*` | test-mode keys (`sk_test_…`, `pk_test_…`), the 12 price IDs and 2 product IDs (STRIPE_TEST_MODE.md), the staging endpoint's `whsec_…`, `STRIPE_ALLOW_LIVE_MODE=false` |

@@ -15,6 +15,11 @@ return [
     'tabs_label' => 'Plan type',
     'billing_label' => 'Billing period',
 
+    // Currency selector: only currencies that have real prices are offered.
+    'currency_label' => 'Currency',
+    'currency_apply' => 'Apply',
+    'currency_only' => 'Prices are currently in :currency only',
+
     'intervals' => [
         'monthly' => 'Monthly',
         'annual' => 'Annual',
