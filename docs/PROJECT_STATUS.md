@@ -8,9 +8,9 @@ Last updated: 2026-10-04
 ## Branch and HEAD
 
 - Branch: `claude/ecstatic-wozniak-oemyuf` (also the main branch used for PRs)
-- Latest milestone commit: **Production Hardening, CI & Release Readiness** (the commit after `05ce059`; `git log --oneline -3` shows its hash)
+- Latest milestone commit: `050afe0` **Production Hardening, CI & Release Readiness**, followed by `3f01f5d` (CI configuration fix) and this status update
 - Earlier: `2f7d0b4` Owner Admin & Content Management, `4076684` Security & Malware Engine, `ba2d1db` Internal Operator Console
-- Milestone commits since `ba2d1db` are local only; nothing is pushed until a push is requested.
+- Pushed to `origin` (github.com/zsoltacsai/wpcaregrid); push only when requested, never force.
 
 ## Completed milestones
 
@@ -25,9 +25,9 @@ Last updated: 2026-10-04
 | Unified Site Health + Security & Malware Engine | `4076684` | docs/SECURITY_ENGINE.md, MALWARE_SCANNING.md, SECURITY_FINDINGS.md, SECURITY_INCIDENTS.md |
 | Owner Admin & Content Management | `2f7d0b4` | docs/OWNER_ADMIN.md, CONTENT_MANAGEMENT.md, PRICING_ADMIN.md |
 
-## In progress: Production Hardening, CI & Release Readiness — IN_PROGRESS
+## In progress: Production Hardening, CI & Release Readiness — IN_PROGRESS (CI validation complete)
 
-The code, tests, CI workflow and documentation of this milestone are committed. The milestone stays **IN_PROGRESS** (not PRODUCTION_READY) until the items below are done; their current state is tracked in docs/RELEASE_CHECKLIST.md.
+The code, tests, CI workflow and documentation of this milestone are committed and pushed, and **CI validation is complete** (first green run below). The milestone stays **IN_PROGRESS** and the platform is **not PRODUCTION_READY** until the remaining items are done; their current state is tracked in docs/RELEASE_CHECKLIST.md.
 
 Done in the commit:
 
@@ -36,15 +36,28 @@ Done in the commit:
 - Bugs found and fixed: customer disconnect failed on MySQL (reason column too short; now widened and transactional), security scans and incidents stored non-existent user IDs (failed on MySQL), connector file restore refused every file on Windows hosts (connector 0.4.1), backup transfers could be picked up by a second worker, empty `.env` values switched off secure defaults (`CONNECTOR_REQUIRE_HTTPS=`), customer website page overflowed on phones.
 - Docs: DEPLOYMENT.md, RELEASE_CHECKLIST.md, PILOT.md (with the local end-to-end run).
 
+CI validation (2026-10-04):
+
+- Run #1 (`050afe0`, https://github.com/zsoltacsai/wpcaregrid/actions/runs/37200352447) failed on CI configuration only: pipx links `moto_server` into `PIPX_BIN_DIR` (`/opt/pipx_bin` on GitHub runners), not `~/.local/bin`, so both server jobs stopped before the tests; gitleaks reported the fixed pairing credential and admin-access token of the connector test harness. Both WordPress jobs passed.
+- Fix `3f01f5d`: moto path resolved from pipx; exactly those two dummy values allowlisted in `.gitleaks.toml`. No application code, test or assertion changed; no check disabled.
+- Run #2 (`3f01f5d`, https://github.com/zsoltacsai/wpcaregrid/actions/runs/37215778931): **all 5 jobs green**.
+  - Quality: lint, Pint, composer audit (app and connector harness) and npm audit clean, build OK, gitleaks over the full history: no leaks.
+  - Server SQLite and MySQL 8.4: migrate / rollback / migrate, production caches, 593 tests each with 0 skips (`--fail-on-skipped`, real S3 via moto and SFTP via OpenSSH), `system:check`, HTTP smoke test (55 checks).
+  - Connector in WordPress 7.1.2: 169 tests each; SQLite skips 5 MySQL-only tests, MySQL skips 1 SQLite-only test; symlink and permission tests ran in strict mode.
+
 Still needed before the milestone is complete:
 
-1. **First green CI run on GitHub** — the workflow has not run yet (nothing pushed). Push the branch when asked and fix anything Linux-specific it finds.
-2. Stripe test-mode configuration and an end-to-end test purchase (PILOT.md step 4).
-3. Production/staging server per DEPLOYMENT.md: HTTPS domain, MySQL, workers, cron, mail, backup storage.
-4. Restore rehearsal on a staging copy, then decide on `BACKUP_RESTORE_ENABLED`.
-5. First-customer safety gates in PILOT.md on the real installation.
+1. Stripe test-mode configuration and an end-to-end test purchase (PILOT.md step 4).
+2. Production/staging server per DEPLOYMENT.md: HTTPS domain, MySQL, workers, cron, mail, backup storage.
+3. Restore rehearsal on a staging copy, then decide on `BACKUP_RESTORE_ENABLED`.
+4. First-customer safety gates in PILOT.md on the real installation.
+5. GitHub branch protection with the CI checks required.
 
-## Test baseline (2026-10-04, Windows development machine)
+## Test baseline (2026-10-04)
+
+Linux CI (authoritative): see "CI validation" above.
+
+Windows development machine:
 
 - Server suite on SQLite: see the final report of this milestone (all pass except explicit skips: 6 S3/SFTP tests without local services, 1 Windows-only permission assertion).
 - Server suite on MySQL 8.4 (local): all pass with the same explicit skips.
@@ -54,11 +67,10 @@ Still needed before the milestone is complete:
 
 ## Next milestone
 
-Finish this one (list above). After that, per CLAUDE.md §29: real Stripe test-mode configuration, real backup storage, transactional email, controlled pilot onboarding.
+Finish this one (list above; the next blocker is Stripe test-mode configuration and a test purchase). After that, per CLAUDE.md §29: real Stripe test-mode configuration, real backup storage, transactional email, controlled pilot onboarding.
 
 ## Blockers
 
-- CI has not run yet: needs a push to GitHub (not done without an explicit request).
 - External accounts and configuration: Stripe (test mode), backup storage, mail provider, a staging/production server, optionally a vulnerability feed licence.
 
 ## Pending manual configuration

@@ -99,7 +99,7 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 | Quarantine outside the web root on pilot sites | NOT READY | `WP_CAREGRID_QUARANTINE_DIR` in each pilot site's wp-config.php |
 | Quarantine write, undo, permissions, deny rules | READY | WordPress tests (Linux CI checks permissions) |
 | Who may hold `security.remediate` | NOT READY | operator procedure written |
-| Secret scanning | READY | gitleaks in CI; history scanned clean |
+| Secret scanning | READY | gitleaks in CI over the full history: clean (CI run #2); the allowlist holds only named dummy test values |
 | Dependency advisories | READY | `composer audit` (app and connector tests) and `npm audit` clean |
 | Role isolation (customer / operator / owner) | READY | AuthorizationMatrixTest covers every route of every area |
 
@@ -141,6 +141,6 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 
 | Item | State | Check |
 | --- | --- | --- |
-| Workflow: quality, server (SQLite, MySQL), WordPress (SQLite, MySQL) | READY (written) | `.github/workflows/ci.yml` |
-| First green run on GitHub | NOT READY | push the branch and check the Actions tab (not pushed in this milestone) |
+| Workflow: quality, server (SQLite, MySQL), WordPress (SQLite, MySQL) | READY | `.github/workflows/ci.yml` |
+| First green run on GitHub | READY | run #2 (commit `3f01f5d`, 2026-10-04): all 5 jobs green; server 593 tests × 2 with real S3 (moto) and SFTP (OpenSSH), 0 skips; connector 169 tests × 2; gitleaks clean over full history; audits clean. Run #1 failed on CI configuration only (moto path, two test fixtures not allowlisted) |
 | Required status checks on the main branch | NOT CONFIGURED | GitHub branch protection |
