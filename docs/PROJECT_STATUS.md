@@ -8,7 +8,7 @@ Last updated: 2026-10-04
 ## Branch and HEAD
 
 - Branch: `claude/ecstatic-wozniak-oemyuf` (also the main branch used for PRs)
-- Last milestone commit: **Owner Admin & Content Management** (the commit after `4076684`; run `git log --oneline -3` for its hash)
+- Last milestone commit: `2f7d0b4` — Owner Admin & Content Management (this status file is updated in the commit after it)
 - Milestone commits since `ba2d1db` are local only; nothing is pushed until a push is requested.
 
 ## Completed milestones
@@ -22,7 +22,7 @@ Last updated: 2026-10-04
 | Secure WordPress Admin Access | `cac19b1`, `d4dcda0` | docs/ADMIN_ACCESS.md |
 | Internal Operator Console | `ba2d1db` | docs/OPERATOR_CONSOLE.md |
 | Unified Site Health + Security & Malware Engine | `4076684` | docs/SECURITY_ENGINE.md, MALWARE_SCANNING.md, SECURITY_FINDINGS.md, SECURITY_INCIDENTS.md |
-| Owner Admin & Content Management | after `4076684` | docs/OWNER_ADMIN.md, CONTENT_MANAGEMENT.md, PRICING_ADMIN.md |
+| Owner Admin & Content Management | `2f7d0b4` | docs/OWNER_ADMIN.md, CONTENT_MANAGEMENT.md, PRICING_ADMIN.md |
 
 ## In progress
 
