@@ -11,8 +11,9 @@ use Illuminate\Support\Facades\File;
 
 /**
  * Keeps backups from hanging: unfinished uploads time out, uploaded backups
- * whose transfer was lost are handed over again, and staged data of failed
- * backups is removed once it is no longer useful.
+ * whose transfer was lost (or abandoned mid-way by a crashed worker) are
+ * handed over again, and staged data of failed backups is removed once it
+ * is no longer useful.
  */
 class MonitorBackups extends Command
 {
@@ -32,6 +33,17 @@ class MonitorBackups extends Command
 
         Backup::where('status', BackupStatus::Uploaded)->where('uploaded_at', '<', now()->subHour())
             ->each(fn (Backup $backup) => TransferBackup::dispatch($backup->id));
+
+        // A transfer whose worker died (timeout, restart, crash) leaves the backup "verifying".
+        // Past the job timeout no worker can still be on it: hand it over again. Objects
+        // already stored are not uploaded twice, and everything is verified again.
+        $abandonedBefore = now()->subSeconds((int) config('backup.transfer.timeout') + 900);
+        Backup::where('status', BackupStatus::Verifying)->where('updated_at', '<', $abandonedBefore)
+            ->each(function (Backup $backup) {
+                $backup->transitionTo(BackupStatus::Uploaded);
+                TransferBackup::dispatch($backup->id);
+                $this->components->warn("Transfer handed over again: {$backup->uuid}");
+            });
 
         $keepUntil = now()->subHours((int) config('backup.staging_retention_hours'));
         Backup::whereIn('status', [BackupStatus::Failed, BackupStatus::Corrupt, BackupStatus::Expired, BackupStatus::Deleted])

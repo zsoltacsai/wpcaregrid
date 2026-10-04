@@ -66,8 +66,10 @@ final class BackupTest extends TestCase
         $this->put(WP_CONTENT_DIR.'/ai1wm-backups/site.wpress', 'other backup plugin');
         $this->put(WP_CONTENT_DIR.'/plugins/big-plugin/huge.bin', str_repeat('x', 3 * 1024 * 1024));
         add_filter('wp_caregrid_backup_max_file_size', fn () => 2 * 1024 * 1024);
-        $this->created[] = WP_CONTENT_DIR.'/uploads/escape';
-        symlink('/etc', WP_CONTENT_DIR.'/uploads/escape');
+        $outside = sys_get_temp_dir().'/wp-caregrid-outside-'.wp_generate_password(6, false);
+        wp_mkdir_p($outside);
+        $this->cleanup_later($outside);
+        $this->symlink_or_skip($outside, WP_CONTENT_DIR.'/uploads/escape');
 
         $result = $this->run_backup('BACKUP_FILES');
 
@@ -282,8 +284,8 @@ final class BackupTest extends TestCase
     public function test_temporary_files_are_private_and_removed(): void
     {
         $dir = TempDir::ensure();
-        $this->assertSame('0700', substr(sprintf('%o', fileperms($dir)), -4));
         $this->assertFalse(TempDir::inside($dir, ABSPATH), 'Outside the web root when the system temp directory allows it.');
+        $this->assert_mode('0700', $dir);
 
         $this->run_backup('BACKUP_FILES');
         $this->assertSame([], $this->temp_files(), 'Removed after a successful upload.');

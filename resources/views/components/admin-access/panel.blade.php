@@ -42,19 +42,20 @@
 
     @if ($canOpen)
         <div class="mt-6 grid gap-4 sm:grid-cols-2">
-            <div class="flex flex-col rounded-md border border-line p-4">
+            <div class="flex min-w-0 flex-col rounded-md border border-line p-4">
                 <p class="text-sm font-semibold text-primary">{{ __('admin_access.account.maintenance_title') }}</p>
                 <p class="mt-1 flex-1 text-sm text-muted">{{ __('admin_access.account.maintenance_text', ['minutes' => AccessLevel::Maintenance->minutes()]) }}</p>
                 <form method="POST" action="{{ route('account.websites.admin-access.maintenance', $website) }}" target="_blank" class="mt-4">
                     @csrf
-                    <x-ui.button type="submit" icon="arrow-right">{{ __('admin_access.account.open') }}</x-ui.button>
+                    {{-- Long labels wrap on the narrowest phones instead of widening the page. --}}
+                    <x-ui.button type="submit" icon="arrow-right" class="h-auto! min-h-10 max-w-full py-2 text-left whitespace-normal!">{{ __('admin_access.account.open') }}</x-ui.button>
                 </form>
             </div>
-            <div class="flex flex-col rounded-md border border-line p-4">
+            <div class="flex min-w-0 flex-col rounded-md border border-line p-4">
                 <p class="text-sm font-semibold text-primary">{{ __('admin_access.account.full_title') }}</p>
                 <p class="mt-1 flex-1 text-sm text-muted">{{ __('admin_access.account.full_text', ['minutes' => AccessLevel::FullAdmin->minutes()]) }}</p>
                 <div class="mt-4">
-                    <x-ui.button :href="route('account.websites.admin-access.full-admin', $website)" variant="secondary" icon="shield">{{ __('admin_access.account.enable_full') }}</x-ui.button>
+                    <x-ui.button :href="route('account.websites.admin-access.full-admin', $website)" variant="secondary" icon="shield" class="h-auto! min-h-10 max-w-full py-2 text-left whitespace-normal!">{{ __('admin_access.account.enable_full') }}</x-ui.button>
                 </div>
             </div>
         </div>

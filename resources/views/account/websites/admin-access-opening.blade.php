@@ -25,6 +25,6 @@
             <x-ui.button type="submit">{{ __('admin_access.opening.continue') }}</x-ui.button>
         </form>
     </main>
-    <script>document.getElementById('wp-caregrid-access').submit();</script>
+    <script nonce="{{ \Illuminate\Support\Facades\Vite::cspNonce() }}">document.getElementById('wp-caregrid-access').submit();</script>
 </body>
 </html>

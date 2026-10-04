@@ -44,6 +44,20 @@ return [
             'after_commit' => false,
         ],
 
+        // Backup transfers (App\Jobs\TransferBackup) run for up to
+        // BACKUP_TRANSFER_TIMEOUT seconds. retry_after must be longer, or a
+        // second worker picks up a transfer that is still running. Worked by
+        // its own worker: php artisan queue:work backups --queue=backups
+        // (docs/DEPLOYMENT.md).
+        'backups' => [
+            'driver' => 'database',
+            'connection' => env('DB_QUEUE_CONNECTION'),
+            'table' => env('DB_QUEUE_TABLE', 'jobs'),
+            'queue' => env('BACKUP_QUEUE', 'backups'),
+            'retry_after' => (int) env('BACKUP_TRANSFER_TIMEOUT', 3600) + 600,
+            'after_commit' => false,
+        ],
+
         'beanstalkd' => [
             'driver' => 'beanstalkd',
             'host' => env('BEANSTALKD_QUEUE_HOST', 'localhost'),

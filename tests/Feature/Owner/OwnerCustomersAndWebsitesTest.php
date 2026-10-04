@@ -95,7 +95,7 @@ class OwnerCustomersAndWebsitesTest extends TestCase
 
         $customer->refresh();
         $this->assertSame(['Anna', 'Kovács', 'company', 'Acme Kft', 'AT', 'ATU1234'], [$customer->first_name, $customer->last_name, $customer->customer_type, $customer->company_name, $customer->country_code, $customer->tax_id]);
-        $this->assertSame(['line1' => 'Ring 1', 'postal_code' => '1010', 'city' => 'Wien'], $customer->billing_address);
+        $this->assertEquals(['line1' => 'Ring 1', 'postal_code' => '1010', 'city' => 'Wien'], $customer->billing_address);
         $this->assertSame(['anna@acme.example', 'cus_KEEP', true], [$customer->email, $customer->stripe_customer_id, $customer->active]);
         $this->assertSame('Anna Kovács', $customer->user->refresh()->name);
 

@@ -86,6 +86,43 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
     }
 
     /** Remove this path after the test. */
+    /**
+     * Strict runs (WP_CAREGRID_TEST_STRICT=1, as in Linux CI): what a local
+     * machine may legitimately be unable to do (create symlinks, keep test
+     * samples away from a desktop antivirus, Unix permissions) fails the
+     * test instead of skipping it, so it cannot hide a real failure.
+     */
+    protected static function strict(): bool
+    {
+        return getenv('WP_CAREGRID_TEST_STRICT') === '1';
+    }
+
+    /** Skip for an environment limitation, or fail when the run is strict. */
+    protected function environment_limitation(string $reason): never
+    {
+        self::strict() ? $this->fail($reason.' (WP_CAREGRID_TEST_STRICT=1)') : $this->markTestSkipped($reason);
+    }
+
+    /** Create a symlink for a security test, or skip/fail where the system cannot. */
+    protected function symlink_or_skip(string $target, string $link): void
+    {
+        if (! @symlink($target, $link)) {
+            $this->environment_limitation('This system cannot create symlinks; the symlink containment test runs on Linux.');
+        }
+        $this->cleanup_later($link);
+    }
+
+    /** Unix permission bits, which Windows does not have. */
+    protected function assert_mode(string $expected, string $path, string $message = ''): void
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->environment_limitation('Unix file permissions cannot be checked on Windows; verified on Linux.');
+        }
+
+        clearstatcache(true, $path);
+        $this->assertSame($expected, substr(sprintf('%o', fileperms($path)), -4), $message ?: $path);
+    }
+
     protected function cleanup_later(string $path): void
     {
         $this->cleanup[] = $path;
@@ -270,7 +307,8 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
                 }
             }
             rmdir($path);
-        } elseif (file_exists($path)) {
+        } elseif (file_exists($path) || is_link($path)) {
+            // A symlink is removed itself (also when its target is already gone), never followed.
             unlink($path);
         }
     }

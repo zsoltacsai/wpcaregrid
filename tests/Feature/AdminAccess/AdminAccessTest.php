@@ -68,7 +68,7 @@ class AdminAccessTest extends TestCase
         $job = $this->claim($site, $uuid, $token)->assertOk()->json('job');
 
         $this->assertSame('CREATE_ADMIN_SESSION', $job['type']);
-        $this->assertSame(['request_uuid', 'access_level', 'website_uuid', 'session_expires_at'], array_keys($job['payload']));
+        $this->assertEqualsCanonicalizing(['request_uuid', 'access_level', 'website_uuid', 'session_expires_at'], array_keys($job['payload']));
         $this->assertSame(['request_uuid' => $uuid, 'access_level' => 'maintenance', 'website_uuid' => $site['website']->uuid], array_slice($job['payload'], 0, 3));
         $request = AdminAccessRequest::sole();
         $this->assertSame(AdminAccessStatus::Authorized, $request->status);

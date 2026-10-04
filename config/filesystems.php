@@ -33,7 +33,8 @@ return [
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            // Not served over HTTP: nothing in this application uses temporary URLs for it.
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],

@@ -140,7 +140,8 @@ class StorageProviderTest extends TestCase
             $this->assertSame('S3 storage error: AccessDenied', $e->getMessage());
         }
 
-        if ($config = StorageServers::sftp()) {
+        if (($config = StorageServers::sftp()) || StorageServers::required()) {
+            $config ?? $this->missing('sshd is not available.');
             $wrongHost = new SftpStorage(['host_fingerprint' => 'SHA256:not-this-server'] + $config);
             try {
                 $wrongHost->verify(self::KEY, 1, str_repeat('0', 64));
@@ -176,9 +177,15 @@ class StorageProviderTest extends TestCase
     {
         return match ($provider) {
             'local' => new LocalStorage(tap(sys_get_temp_dir().'/caregrid-local-'.uniqid(), fn ($dir) => $this->beforeApplicationDestroyed(fn () => File::deleteDirectory($dir)))),
-            's3' => ($config = StorageServers::s3()) ? new S3Storage($config) : $this->markTestSkipped('moto_server is not installed.'),
-            'sftp' => ($config = StorageServers::sftp()) ? new SftpStorage($config) : $this->markTestSkipped('sshd is not available.'),
+            's3' => ($config = StorageServers::s3()) ? new S3Storage($config) : $this->missing('moto_server is not installed.'),
+            'sftp' => ($config = StorageServers::sftp()) ? new SftpStorage($config) : $this->missing('sshd is not available.'),
         };
+    }
+
+    /** Skipped on a machine without the service; a failure where it is required (CI). */
+    private function missing(string $reason): never
+    {
+        StorageServers::required() ? $this->fail($reason.' CAREGRID_TEST_REQUIRE_SERVICES=1 requires it.') : $this->markTestSkipped($reason);
     }
 
     /** @return array{0: S3Storage, 1: MockHandler} */

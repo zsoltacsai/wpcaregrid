@@ -17,9 +17,11 @@ use App\Security\Vulnerabilities\NoVulnerabilitySource;
 use App\Security\Vulnerabilities\VulnerabilitySource;
 use App\Security\Vulnerabilities\WordfenceFeed;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -64,6 +66,16 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Behind a load balancer: trust its X-Forwarded-* headers only when configured (config/http.php).
+        if (filled(config('http.trusted_proxies'))) {
+            TrustProxies::at(config('http.trusted_proxies') === '*' ? '*' : array_map('trim', explode(',', (string) config('http.trusted_proxies'))));
+        }
+
+        // Generated links (emails, redirects, signed URLs) use https:// when the application runs on HTTPS.
+        if (config('http.force_https')) {
+            URL::forceScheme('https');
+        }
+
         // Starting a checkout creates a Stripe session; keep it from being scripted.
         // Login and password forms: per email and per IP.
         RateLimiter::for('login', fn (Request $request) => [
@@ -153,6 +165,12 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('operator-connector', fn (Request $request) => [
             Limit::perMinute(5)->by('operator-connector:'.$request->user()?->id),
             Limit::perHour(10)->by('operator-connector:website:'.$operatorWebsite($request)),
+        ]);
+
+        // Customer account changes (profile, adding or disconnecting a website).
+        RateLimiter::for('account', fn (Request $request) => [
+            Limit::perMinute(20)->by('account:'.$request->user()?->id),
+            Limit::perHour(200)->by('account:'.$request->user()?->id),
         ]);
 
         RateLimiter::for('checkout', fn (Request $request) => [

@@ -57,10 +57,10 @@ Route::middleware(['auth', 'customer'])->prefix('account')->name('account.')->gr
 
     Route::get('/websites', [WebsiteController::class, 'index'])->name('websites.index');
     Route::get('/websites/new', [WebsiteController::class, 'create'])->name('websites.create');
-    Route::post('/websites', [WebsiteController::class, 'store'])->name('websites.store');
+    Route::post('/websites', [WebsiteController::class, 'store'])->middleware('throttle:account')->name('websites.store');
     Route::get('/websites/{website}', [WebsiteController::class, 'show'])->name('websites.show');
     Route::post('/websites/{website}/pairing-code', [WebsiteController::class, 'pairingCode'])->middleware('throttle:10,1')->name('websites.pairing-code');
-    Route::post('/websites/{website}/disconnect', [WebsiteController::class, 'disconnect'])->name('websites.disconnect');
+    Route::post('/websites/{website}/disconnect', [WebsiteController::class, 'disconnect'])->middleware('throttle:account')->name('websites.disconnect');
     Route::post('/websites/{website}/admin-access', [AdminAccessController::class, 'maintenance'])->middleware('throttle:admin-access')->name('websites.admin-access.maintenance');
     Route::get('/websites/{website}/admin-access/full-admin', [AdminAccessController::class, 'confirmFullAdmin'])->name('websites.admin-access.full-admin');
     Route::post('/websites/{website}/admin-access/full-admin', [AdminAccessController::class, 'fullAdmin'])->middleware(['throttle:admin-access', 'throttle:admin-access-full'])->name('websites.admin-access.full-admin.store');
@@ -77,5 +77,5 @@ Route::middleware(['auth', 'customer'])->prefix('account')->name('account.')->gr
     Route::get('/billing', BillingController::class)->name('billing');
 
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile');
-    Route::put('/profile', [ProfileController::class, 'update'])->name('profile.update');
+    Route::put('/profile', [ProfileController::class, 'update'])->middleware('throttle:account')->name('profile.update');
 });

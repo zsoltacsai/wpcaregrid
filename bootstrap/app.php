@@ -5,6 +5,7 @@ use App\Http\Middleware\AuthenticateConnector;
 use App\Http\Middleware\EnsureCustomerAccount;
 use App\Http\Middleware\EnsureOperator;
 use App\Http\Middleware\EnsureOwner;
+use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -29,6 +30,9 @@ return Application::configure(basePath: dirname(__DIR__))
         },
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Security headers and HTTPS redirect on every response (config/http.php).
+        $middleware->append(SecurityHeaders::class);
+
         // Stripe signs webhook requests; they cannot carry a CSRF token.
         $middleware->validateCsrfTokens(except: ['stripe/webhook']);
 

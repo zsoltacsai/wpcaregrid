@@ -6,12 +6,22 @@ use App\Backups\Storage\SftpStorage;
 use Aws\S3\S3Client;
 
 /**
- * Real protocol servers for the storage provider tests, started on demand:
- * moto (an S3-compatible API) and OpenSSH's sshd (SFTP). Tests are skipped
- * when the binaries are not installed.
+ * Real protocol servers for the storage provider tests: moto (an
+ * S3-compatible API, started on demand) and OpenSSH's sshd for SFTP, either
+ * one already running (CAREGRID_TEST_SFTP_* variables, as in CI) or started
+ * on demand.
+ *
+ * Without the binaries the tests are skipped, except when
+ * CAREGRID_TEST_REQUIRE_SERVICES=1 (CI): then a missing service fails the
+ * run, so a broken service setup can never pass as "skipped".
  */
 final class StorageServers
 {
+    public static function required(): bool
+    {
+        return getenv('CAREGRID_TEST_REQUIRE_SERVICES') === '1';
+    }
+
     private static ?array $s3 = null;
 
     private static ?array $sftp = null;
@@ -51,7 +61,17 @@ final class StorageServers
             return self::$sftp;
         }
 
-        if (! is_executable('/usr/sbin/sshd') || trim((string) shell_exec('command -v ssh-keygen')) === '' || posix_getuid() !== 0) {
+        // An sshd set up outside the tests (CI starts one as root with a dedicated user).
+        if (getenv('CAREGRID_TEST_SFTP_HOST')) {
+            return self::$sftp = [
+                'driver' => 'sftp', 'host' => getenv('CAREGRID_TEST_SFTP_HOST'), 'port' => (int) (getenv('CAREGRID_TEST_SFTP_PORT') ?: 22),
+                'username' => getenv('CAREGRID_TEST_SFTP_USER'), 'password' => null, 'private_key' => getenv('CAREGRID_TEST_SFTP_KEY'), 'passphrase' => null,
+                'root' => rtrim((string) getenv('CAREGRID_TEST_SFTP_ROOT'), '/').'/backups-'.getmypid(), 'timeout' => 10,
+                'host_fingerprint' => SftpStorage::fingerprint((string) file_get_contents((string) getenv('CAREGRID_TEST_SFTP_HOST_KEY'))),
+            ];
+        }
+
+        if (! is_executable('/usr/sbin/sshd') || trim((string) shell_exec('command -v ssh-keygen')) === '' || ! function_exists('posix_getuid') || posix_getuid() !== 0) {
             return null;
         }
 

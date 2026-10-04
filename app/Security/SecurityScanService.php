@@ -54,7 +54,7 @@ class SecurityScanService
                 'status' => ScanStatus::Queued,
                 'requested_by' => substr($actor, 0, 64),
                 'actor_type' => $who->type,
-                'actor_user_id' => $who->userId,
+                'actor_user_id' => $who->storedUserId(),
                 'scanner_version' => (string) config('security.scanner_version'),
                 'connector_version' => $website->activeConnector?->connector_version,
                 'vulnerability_source' => in_array('vulnerability', $type->scanners(), true) ? $this->vulnerabilities->sourceName() : null,

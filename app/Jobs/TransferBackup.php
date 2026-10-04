@@ -14,6 +14,7 @@ use App\Backups\Storage\StorageUnavailable;
 use App\Models\Backup;
 use App\Models\BackupObject;
 use App\Websites\AuditLog;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\File;
@@ -24,8 +25,14 @@ use Illuminate\Support\Facades\Log;
  * every object there (size and SHA-256). Only then is the backup
  * "verified". Storage outages are retried a limited number of times;
  * a checksum mismatch marks the backup corrupt.
+ *
+ * Runs on its own queue connection ("backups"), whose retry_after is longer
+ * than the timeout, so a transfer still running is never picked up by a
+ * second worker (which could then mark it failed). At most one transfer
+ * per backup is queued at a time; a transfer abandoned by a crashed worker
+ * is handed over again by backup:monitor.
  */
-class TransferBackup implements ShouldQueue
+class TransferBackup implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
@@ -37,6 +44,23 @@ class TransferBackup implements ShouldQueue
     {
         $this->tries = max(1, (int) config('backup.transfer.tries'));
         $this->timeout = (int) config('backup.transfer.timeout');
+
+        $connection = config('backup.transfer.connection');
+        if (config('queue.default') !== 'sync' && is_string($connection) && config("queue.connections.{$connection}")) {
+            $this->onConnection($connection);
+            $this->onQueue((string) config('backup.transfer.queue'));
+        }
+    }
+
+    public function uniqueId(): string
+    {
+        return (string) $this->backupId;
+    }
+
+    /** Longer than any run including retries; released as soon as the job finishes or fails. */
+    public function uniqueFor(): int
+    {
+        return $this->timeout + 900 * max(1, $this->tries);
     }
 
     /** @return list<int> */

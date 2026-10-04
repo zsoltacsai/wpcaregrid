@@ -55,7 +55,14 @@ final class PathGuard
         }
 
         $real = realpath($probe);
+        if ($real === false) {
+            return false;
+        }
 
-        return $real !== false && ($real === $real_root || str_starts_with($real.'/', rtrim($real_root, '/').'/'));
+        // realpath() returns backslashes on Windows: compare normalised paths (as SitePaths does).
+        $real = rtrim(wp_normalize_path($real), '/');
+        $real_root = rtrim(wp_normalize_path($real_root), '/');
+
+        return $real === $real_root || str_starts_with($real.'/', $real_root.'/');
     }
 }

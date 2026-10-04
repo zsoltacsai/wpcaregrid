@@ -179,6 +179,14 @@ Connector 0.4.0 scans each site locally (WordPress.org checksums for core and pl
 
 The business owner's area lives at `/owner`, with its own login and guard (customers and operators never get in; owners are created with `php artisan owner:user`, by invitation link). It shows real business figures (MRR, customers, subscriptions, Site Health counts, failed backups, findings, expired licenses), customers (search, filters, editing of contact and billing details), websites with Unified Site Health (backup and security scan through the existing services), operators (invitation, explicit permissions, disable/enable), pricing (validated price drafts and publishing, future checkouts only), structured homepage content per language with draft/publish and signed preview, navigation, SEO and system status. Every change is audited; secrets are never shown. Details: **[docs/OWNER_ADMIN.md](docs/OWNER_ADMIN.md)**, [CONTENT_MANAGEMENT.md](docs/CONTENT_MANAGEMENT.md), [PRICING_ADMIN.md](docs/PRICING_ADMIN.md).
 
+## Deployment, CI and release readiness
+
+Production setup (PHP 8.4, MySQL 8.4, nginx, two queue workers, one cron scheduler, storage, mail, Stripe): **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**. Release gates with their current state: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). Pilot procedure and the end-to-end smoke test: [docs/PILOT.md](docs/PILOT.md).
+
+- `php artisan system:check` reports each part (application, database, queue, scheduler, connector API, Stripe, backup storage, security scanner, mail, safety switches) as OK, WARNING, ERROR or NOT CONFIGURED, without printing secrets.
+- `php tests/smoke/http-smoke.php https://<host>` checks a running installation (read-only).
+- `.github/workflows/ci.yml` runs on Linux with PHP 8.4: lint, Pint, dependency audits, build, secret scan, the server suite on SQLite and MySQL 8.4 with real S3 (moto) and SFTP (OpenSSH) services, and the connector suite inside real WordPress on SQLite and MySQL.
+
 ## Demo content
 
 The dashboard, license and activity-log previews use fictional data from `app/Content/DemoDashboard.php` and always show a "Demo data" / "Example" label. They must not be presented as real customer statistics.

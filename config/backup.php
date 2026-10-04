@@ -68,6 +68,9 @@ return [
         'max_object_size' => (int) env('BACKUP_MAX_OBJECT_SIZE', 50 * 1024 * $mib),
         // Received data waits here until it is stored and verified.
         'staging_path' => env('BACKUP_STAGING_PATH', storage_path('app/private/backup-staging')),
+        // Warn (system:check, owner System page) when the staging disk has less free space
+        // than this. Size it for the largest site times the number of parallel uploads.
+        'staging_min_free_mb' => (int) env('BACKUP_STAGING_MIN_FREE_MB', 20480),
         // Restore downloads are served in ranges of at most this size.
         'download_chunk_size' => 8 * $mib,
     ],
@@ -77,6 +80,11 @@ return [
         'tries' => (int) env('BACKUP_TRANSFER_TRIES', 3),
         'backoff' => [60, 300, 900],
         'timeout' => (int) env('BACKUP_TRANSFER_TIMEOUT', 3600),
+        // Queue connection and queue for transfers (config/queue.php "backups",
+        // whose retry_after is longer than the timeout). Ignored when the
+        // default connection is "sync" (tests, local development).
+        'connection' => env('BACKUP_QUEUE_CONNECTION', 'backups'),
+        'queue' => env('BACKUP_QUEUE', 'backups'),
         // Where storage has no native SHA-256, read the object back and hash it.
         'readback' => (bool) env('BACKUP_VERIFY_READBACK', true),
     ],

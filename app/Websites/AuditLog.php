@@ -5,7 +5,6 @@ namespace App\Websites;
 use App\Models\AdminAccessRequest;
 use App\Models\Backup;
 use App\Models\BackupRestore;
-use App\Models\User;
 use App\Models\Website;
 use App\Models\WebsiteEvent;
 use Illuminate\Support\Facades\Log;
@@ -56,8 +55,7 @@ final class AuditLog
             'admin_access_request_id' => $access?->id,
             'actor' => substr($actor, 0, 64),
             'actor_type' => $who->type,
-            // A label naming a user that no longer exists keeps its type only.
-            'actor_user_id' => $who->userId !== null && User::whereKey($who->userId)->exists() ? $who->userId : null,
+            'actor_user_id' => $who->storedUserId(),
             'data' => $data ?: null,
         ]);
     }

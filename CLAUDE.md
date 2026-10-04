@@ -380,7 +380,7 @@ Unknown future Stripe statuses are logged and not guessed.
 
 ## 14. WordPress Connector
 
-Current Connector version: **0.4.0**
+Current Connector version: **0.4.1**
 
 Communication:
 - outbound HTTPS only
@@ -735,6 +735,7 @@ Project branch:
 Important commits:
 - `ba2d1db` — Internal Operator Console
 - `4076684` — Security & Malware Engine
+- `2f7d0b4` — Owner Admin & Content Management
 
 Do not rewrite history.
 
@@ -878,11 +879,12 @@ Linux CI should be authoritative for Linux/production-like filesystem behavior.
 - Internal Operator Console
 - Unified Site Health
 - Security & Malware Engine
+- Owner Admin + CMS
 
 ### Next / planned
 
-1. Owner Admin + CMS
-2. Production hardening / CI / deployment
+1. ~~Owner Admin + CMS~~ (done)
+2. Production hardening / CI / deployment (in progress: docs/PROJECT_STATUS.md)
 3. Real Stripe test-mode configuration
 4. Real backup storage setup
 5. Transactional email

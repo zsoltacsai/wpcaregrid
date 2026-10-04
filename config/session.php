@@ -169,7 +169,8 @@ return [
     |
     */
 
-    'secure' => env('SESSION_SECURE_COOKIE'),
+    // Secure (HTTPS-only) cookies; on by default when APP_URL is https:// (an empty value counts as not set).
+    'secure' => in_array(env('SESSION_SECURE_COOKIE'), [null, ''], true) ? str_starts_with((string) env('APP_URL', ''), 'https://') : (bool) env('SESSION_SECURE_COOKIE'),
 
     /*
     |--------------------------------------------------------------------------

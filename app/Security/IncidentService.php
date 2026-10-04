@@ -10,7 +10,6 @@ use App\Models\SecurityFinding;
 use App\Models\SecurityIncident;
 use App\Models\SecurityIncidentEvent;
 use App\Models\SecurityScan;
-use App\Models\User;
 use App\Models\Website;
 use App\Websites\Actor;
 use App\Websites\AuditLog;
@@ -45,7 +44,7 @@ class IncidentService
                 'summary' => $summary ? mb_substr($summary, 0, 1000) : null,
                 'opened_by' => substr($actor, 0, 64),
                 'actor_type' => $who->type,
-                'actor_user_id' => $who->userId,
+                'actor_user_id' => $who->storedUserId(),
             ]);
 
             $this->log($incident, 'opened', $actor, ['severity' => $severity?->value]);
@@ -193,7 +192,7 @@ class IncidentService
             'type' => $type,
             'actor' => substr($actor, 0, 64),
             'actor_type' => $who->type,
-            'actor_user_id' => $who->userId !== null && User::whereKey($who->userId)->exists() ? $who->userId : null,
+            'actor_user_id' => $who->storedUserId(),
             'data' => array_filter($data, fn ($v) => $v !== null) ?: null,
             'note' => $note,
         ]);

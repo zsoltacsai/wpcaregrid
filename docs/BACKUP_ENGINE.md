@@ -164,7 +164,8 @@ Restore: awaiting_safety_backup → queued → restoring → restored | needs_at
 ```
 
 - **Transitions:** `Backup::transitionTo()` and `BackupRestore::transitionTo()` refuse any transition not listed above.
-- **Monitoring:** `backup:monitor` fails backups stuck unfinished for 6 hours (`BACKUP_TIMED_OUT`), re-dispatches lost transfers, and removes staged data of failed backups after 24 hours.
+- **Monitoring:** `backup:monitor` fails backups stuck unfinished for 6 hours (`BACKUP_TIMED_OUT`), re-dispatches lost transfers, hands over transfers abandoned in `verifying` by a dead worker (after the transfer timeout + 15 minutes; stored objects are not uploaded again, everything is verified again), and removes staged data of failed backups after 24 hours.
+- **Transfer queue:** `TransferBackup` runs on its own queue connection `backups` (config/queue.php) whose `retry_after` is `BACKUP_TRANSFER_TIMEOUT` + 600 s, so a transfer that is still running is never picked up by a second worker. At most one transfer per backup is queued (`ShouldBeUnique`). Worker: `php artisan queue:work backups --queue=backups --timeout=3660` (docs/DEPLOYMENT.md). With the `sync` queue (tests, local development) it runs inline.
 - **Storage outages:** 3 attempts (retries after 1 and 5 minutes), then the backup fails as `STORAGE_UNAVAILABLE` ("Remote storage unavailable" for the customer).
 - **Connector-side files:** temporary files are removed after upload or failure. Leftovers of jobs that are not running are removed after 6 hours.
 
@@ -274,7 +275,7 @@ A restore always names one verified, unexpired backup of the same website, and a
 | `backup:admin verify {backup}` | Re-check the stored objects |
 | `backup:admin delete {backup} [--confirm-only-backup]` | Remove the stored objects, keep the record |
 
-Run the scheduler (`php artisan schedule:work`, or cron with `schedule:run`) and a queue worker (`php artisan queue:work`).
+Run the scheduler (`php artisan schedule:work`, or cron with `schedule:run`) and two queue workers: `php artisan queue:work database --queue=default` and `php artisan queue:work backups --queue=backups --timeout=3660` (docs/DEPLOYMENT.md).
 
 ## Configuration
 

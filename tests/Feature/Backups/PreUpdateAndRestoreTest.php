@@ -53,7 +53,7 @@ class PreUpdateAndRestoreTest extends TestCase
         $this->assertSame(BackupReason::PreUpdate, $backup->reason);
         $this->assertSame(BackupType::Full, $backup->type);
         $this->assertSame($update->id, $backup->update_job_id);
-        $this->assertSame(['kind' => 'plugin', 'identifier' => 'akismet/akismet.php', 'previous_version' => '5.3'], $backup->update_target);
+        $this->assertEquals(['kind' => 'plugin', 'identifier' => 'akismet/akismet.php', 'previous_version' => '5.3'], $backup->update_target);
 
         // Only the backup job is handed to the connector; the update is held back.
         $delivered = array_column($this->pollJobs($site), 'type');
@@ -166,7 +166,8 @@ class PreUpdateAndRestoreTest extends TestCase
         $restore->refresh();
         $this->assertSame(RestoreStatus::Queued, $restore->status);
         $job = collect($this->pollJobs($site))->firstWhere('type', 'RESTORE');
-        $this->assertSame([
+        // Stored as JSON: key order is the database's (MySQL sorts keys), the content must match exactly.
+        $this->assertEquals([
             'restore_uuid' => $restore->uuid,
             'backup_uuid' => $source->uuid,
             'scope' => 'database',

@@ -46,6 +46,15 @@ final readonly class Actor
         return new self(in_array($label, [self::CUSTOMER, self::OPERATOR, self::OWNER], true) ? $label : self::SYSTEM, null);
     }
 
+    /**
+     * The user ID to store with a record (actor_user_id): only a user that
+     * exists. A label naming a user that no longer exists keeps its type only.
+     */
+    public function storedUserId(): ?int
+    {
+        return $this->userId !== null && User::whereKey($this->userId)->exists() ? $this->userId : null;
+    }
+
     public function label(): string
     {
         return $this->type.($this->userId !== null ? ':'.$this->userId : '');

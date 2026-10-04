@@ -49,6 +49,7 @@ final class SystemStatus
             $this->backupStorage(),
             $this->securityScanner(),
             $this->mail(),
+            $this->safetySwitches(),
         ];
     }
 
@@ -57,19 +58,29 @@ final class SystemStatus
         $production = app()->environment('production');
         $debug = (bool) config('app.debug');
         $key = filled(config('app.key'));
+        $url = (string) config('app.url');
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        $https = str_starts_with($url, 'https://');
+        $localUrl = $host === '' || in_array($host, ['localhost', '127.0.0.1', '::1', '[::1]'], true) || str_ends_with($host, '.test') || str_ends_with($host, '.localhost');
+        $secureCookie = (bool) config('session.secure');
 
         return new StatusCheck('application', match (true) {
-            ! $key || ($production && $debug) => HealthStatus::Critical,
-            $debug => HealthStatus::Attention,
+            ! $key || ($production && ($debug || ! $https || $localUrl)) => HealthStatus::Critical,
+            $debug || ($production && ! $secureCookie) => HealthStatus::Attention,
             default => HealthStatus::Healthy,
         }, match (true) {
             ! $key => __('owner.system.summaries.app_key_missing'),
             $production && $debug => __('owner.system.summaries.debug_in_production'),
+            $production && $localUrl => __('owner.system.summaries.app_url_local'),
+            $production && ! $https => __('owner.system.summaries.app_url_http'),
+            $production && ! $secureCookie => __('owner.system.summaries.cookie_not_secure'),
             default => __('owner.system.summaries.running', ['env' => app()->environment()]),
         }, [
             __('owner.system.details.environment') => (string) app()->environment(),
             __('owner.system.details.debug') => $this->onOff($debug),
             __('owner.system.details.app_key') => $this->configured($key),
+            __('owner.system.details.https') => $https ? __('owner.system.values.yes') : __('owner.system.values.no'),
+            __('owner.system.details.secure_cookie') => $this->onOff($secureCookie),
             __('owner.system.details.php') => PHP_VERSION,
             __('owner.system.details.laravel') => app()->version(),
         ]);
@@ -106,7 +117,13 @@ final class SystemStatus
             : null;
         $waiting = $oldest ? (int) now()->diffInMinutes(CarbonImmutable::createFromTimestamp((int) $oldest), true) : 0;
 
+        // Backup transfers must not be picked up by a second worker while they still run.
+        $transferConnection = (string) config('backup.transfer.connection');
+        $transferSafe = $driver === 'sync' || (config("queue.connections.{$transferConnection}") !== null
+            && (int) config("queue.connections.{$transferConnection}.retry_after") > (int) config('backup.transfer.timeout'));
+
         $status = match (true) {
+            ! $transferSafe => HealthStatus::Critical,
             $driver === 'sync' && app()->environment('production') => HealthStatus::Attention,
             $waiting > 15 => HealthStatus::Critical,
             $failed > 0 => HealthStatus::Attention,
@@ -114,12 +131,14 @@ final class SystemStatus
         };
 
         return new StatusCheck('queue', $status, match (true) {
+            ! $transferSafe => __('owner.system.summaries.transfer_queue_unsafe'),
             $waiting > 15 => __('owner.system.summaries.queue_stuck', ['minutes' => $waiting]),
             $failed > 0 => __('owner.system.summaries.failed_jobs', ['count' => $failed]),
             default => __('owner.system.summaries.queue_ok', ['driver' => $driver]),
         }, [
             __('owner.system.details.driver') => $driver,
             __('owner.system.details.failed_jobs') => (string) $failed,
+            __('owner.system.details.backup_queue') => $driver === 'sync' ? 'sync' : $transferConnection.' / '.config('backup.transfer.queue'),
         ]);
     }
 
@@ -138,7 +157,7 @@ final class SystemStatus
             default => __('owner.system.summaries.scheduler_running'),
         }, [
             __('owner.system.details.last_run') => $last?->format('Y-m-d H:i') ?? '—',
-        ]);
+        ], notConfigured: $last === null);
     }
 
     private function connectorApi(): StatusCheck
@@ -209,7 +228,7 @@ final class SystemStatus
             __('owner.system.details.last_verification') => is_array($verification)
                 ? $verification['at'].' · '.($verification['ok'] ? __('owner.system.values.ok') : __('owner.system.values.problems', ['count' => $verification['problems']]))
                 : '—',
-        ]);
+        ], notConfigured: ! $configured);
     }
 
     private function backupStorage(): StatusCheck
@@ -218,20 +237,34 @@ final class SystemStatus
         $selected = (string) config('backup.storage');
         $verified = $name ? Backup::where('status', BackupStatus::Verified->value)->where('verified_at', '>=', now()->subDays(7))->exists() : false;
 
+        // Uploads are staged on this server before they go to storage: enough free space?
+        $staging = (string) config('backup.upload.staging_path');
+        $probe = $staging;
+        while ($probe !== '' && ! is_dir($probe) && dirname($probe) !== $probe) {
+            $probe = dirname($probe);
+        }
+        $free = is_dir($probe) ? @disk_free_space($probe) : false;
+        $needed = (int) config('backup.upload.staging_min_free_mb') * 1024 * 1024;
+        $tight = $free !== false && $free < $needed;
+
         return new StatusCheck('backup_storage', match (true) {
             $name === null => HealthStatus::Critical,
+            $tight => HealthStatus::Attention,
             $name === 'local' && app()->environment('production') => HealthStatus::Attention,
             ! $verified => HealthStatus::Unknown,
             default => HealthStatus::Healthy,
         }, match (true) {
             $name === null => $selected === '' ? __('owner.system.summaries.storage_not_selected') : __('owner.system.summaries.storage_incomplete'),
+            $tight => __('owner.system.summaries.staging_low', ['free' => $this->gib($free), 'needed' => $this->gib($needed)]),
+            $name === 'local' && app()->environment('production') => __('owner.system.summaries.storage_local'),
             ! $verified => __('owner.system.summaries.storage_no_recent'),
             default => __('owner.system.summaries.storage_connected'),
         }, [
             __('owner.system.details.provider') => $name ?? ($selected !== '' ? $selected : '—'),
             __('owner.system.details.credentials') => $this->configured($name !== null),
             __('owner.system.details.verified_7_days') => $verified ? __('owner.system.values.yes') : __('owner.system.values.no'),
-        ]);
+            __('owner.system.details.staging_free') => $free === false ? '—' : $this->gib($free),
+        ], notConfigured: $name === null && $selected === '');
     }
 
     private function securityScanner(): StatusCheck
@@ -273,7 +306,32 @@ final class SystemStatus
         }, [
             __('owner.system.details.driver') => $driver,
             __('owner.system.details.from_address') => $this->configured($from),
-        ]);
+        ], notConfigured: $local);
+    }
+
+    /**
+     * The switches that allow changes on customer sites. Conservative by
+     * default; anything turned on is shown so it is a deliberate decision.
+     */
+    private function safetySwitches(): StatusCheck
+    {
+        $switches = [
+            'remediation' => (bool) config('security.remediation.enabled'),
+            'operator_full_admin' => (bool) config('admin_access.operator_full_admin'),
+            'restore' => (bool) config('backup.restore.enabled'),
+            'plugin_deactivation' => (bool) config('security.remediation.allow_disable_plugin'),
+        ];
+        $enabled = array_keys(array_filter($switches));
+
+        return new StatusCheck('safety', $enabled === [] ? HealthStatus::Healthy : HealthStatus::Attention, $enabled === []
+            ? __('owner.system.summaries.safety_conservative')
+            : __('owner.system.summaries.safety_enabled', ['switches' => implode(', ', array_map(fn ($s) => __('owner.system.switches.'.$s), $enabled))]),
+            collect($switches)->mapWithKeys(fn ($on, $switch) => [__('owner.system.switches.'.$switch) => $this->onOff($on)])->all());
+    }
+
+    private function gib(int|float $bytes): string
+    {
+        return number_format($bytes / 1024 ** 3, 1).' GiB';
     }
 
     private function configured(bool $set): string

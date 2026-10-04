@@ -87,16 +87,16 @@ class RemediationTest extends TestCase
         $this->assertSame($backup->id, $remediation->backup_id);
         $this->assertSame($incident->id, $remediation->incident_id);
         $this->assertSame('operator:'.$operator->id, $remediation->requested_by);
-        $this->assertSame(['path' => $finding->path, 'sha256' => str_repeat('a', 64), 'size' => 120, 'finding_status' => 'confirmed'], $remediation->before);
+        $this->assertEquals(['path' => $finding->path, 'sha256' => str_repeat('a', 64), 'size' => 120, 'finding_status' => 'confirmed'], $remediation->before);
         $job = $remediation->job;
         $this->assertSame('SECURITY_QUARANTINE', $job->type->value);
-        $this->assertSame(['remediation_uuid' => $remediation->uuid, 'finding_uuid' => $finding->uuid, 'path' => $finding->path, 'sha256' => str_repeat('a', 64)], $job->payload);
+        $this->assertEquals(['remediation_uuid' => $remediation->uuid, 'finding_uuid' => $finding->uuid, 'path' => $finding->path, 'sha256' => str_repeat('a', 64)], $job->payload);
 
         $this->reportRemediation($site, $remediation);
 
         $remediation->refresh();
         $this->assertSame(RemediationStatus::Completed, $remediation->status);
-        $this->assertSame(['path' => $finding->path, 'exists' => false], $remediation->after);
+        $this->assertEquals(['path' => $finding->path, 'exists' => false], $remediation->after);
         $this->assertSame(FindingStatus::Quarantined, $finding->refresh()->status);
         $quarantine = SecurityQuarantine::sole();
         $this->assertSame([$finding->path, str_repeat('a', 64), 120, '0644', $finding->id, $remediation->id], [$quarantine->original_path, $quarantine->sha256, $quarantine->size, $quarantine->original_permissions, $quarantine->finding_id, $quarantine->remediation_id]);
@@ -259,7 +259,7 @@ class RemediationTest extends TestCase
         // Undo refused by the site (a file exists at the original path now).
         $undo = $service->restoreQuarantine($quarantine, $this->remediator());
         $this->assertSame(RemediationStatus::Queued, $undo->status, 'Undoing needs no new backup.');
-        $this->assertSame(['remediation_uuid' => $undo->uuid, 'quarantine_uuid' => $quarantine->uuid, 'path' => $quarantine->original_path, 'sha256' => $quarantine->sha256], $undo->job->payload);
+        $this->assertEquals(['remediation_uuid' => $undo->uuid, 'quarantine_uuid' => $quarantine->uuid, 'path' => $quarantine->original_path, 'sha256' => $quarantine->sha256], $undo->job->payload);
         $this->reportRemediation($site, $undo, 'failed', 'QUARANTINE_TARGET_EXISTS', [], ['code' => 'QUARANTINE_TARGET_EXISTS', 'message' => 'A file exists.']);
         $this->assertSame(SecurityQuarantine::QUARANTINED, $quarantine->refresh()->status);
         $this->assertSame(FindingStatus::Quarantined, $finding->refresh()->status);
@@ -283,7 +283,7 @@ class RemediationTest extends TestCase
         $service = app(RemediationService::class);
 
         $repair = $service->request($core, RemediationType::RepairCoreFile, $this->remediator());
-        $this->assertSame(['remediation_uuid' => $repair->uuid, 'source' => 'core', 'path' => 'wp-includes/version.php', 'sha256' => $core->sha256()], $repair->job->payload);
+        $this->assertEquals(['remediation_uuid' => $repair->uuid, 'source' => 'core', 'path' => 'wp-includes/version.php', 'sha256' => $core->sha256()], $repair->job->payload);
         $this->reportRemediation($site, $repair, 'success', 'FILE_REPAIRED', ['remediation' => ['remediation_uuid' => $repair->uuid, 'after' => ['path' => 'wp-includes/version.php', 'sha256' => str_repeat('c', 64), 'exists' => true]]]);
         $this->assertSame(FindingStatus::Remediated, $core->refresh()->status);
         $this->assertTrue(WebsiteEvent::where('event', 'security.finding_remediated')->exists());
@@ -291,7 +291,7 @@ class RemediationTest extends TestCase
         $this->reportScan($site, $this->requestScan($site, ScanType::Malware), [['component' => 'plugin:akismet', 'path' => 'wp-content/plugins/akismet/evil.php'] + $this->suspiciousFile('wp-content/plugins/akismet/evil.php')]);
         $pluginFinding = SecurityFinding::where('path', 'wp-content/plugins/akismet/evil.php')->sole();
         $disable = $service->request($pluginFinding, RemediationType::DisablePlugin, $this->remediator());
-        $this->assertSame(['remediation_uuid' => $disable->uuid, 'plugin' => 'akismet/akismet.php'], $disable->job->payload);
+        $this->assertEquals(['remediation_uuid' => $disable->uuid, 'plugin' => 'akismet/akismet.php'], $disable->job->payload);
 
         foreach (WebsiteJob::whereIn('type', ['SECURITY_REPAIR_FILE', 'SECURITY_DISABLE_PLUGIN'])->get() as $job) {
             $this->assertStringNotContainsString('http', json_encode($job->payload));

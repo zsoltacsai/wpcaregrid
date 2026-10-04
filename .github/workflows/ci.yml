@@ -1,0 +1,274 @@
+# Continuous integration on Linux (docs/DEPLOYMENT.md, docs/RELEASE_CHECKLIST.md).
+#
+# Every job must pass. Missing test services fail the run instead of being
+# skipped (CAREGRID_TEST_REQUIRE_SERVICES, WP_CAREGRID_TEST_STRICT,
+# --fail-on-skipped). Nothing is deployed from here.
+name: CI
+
+on:
+  push:
+    branches:
+      - claude/ecstatic-wozniak-oemyuf
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PHP_VERSION: '8.4'
+  NODE_VERSION: '22'
+  PHP_EXTENSIONS: mbstring, intl, gd, zip, sodium, pdo_sqlite, sqlite3, pdo_mysql, mysqli, fileinfo, openssl, curl, posix, pcntl, bcmath
+
+jobs:
+  quality:
+    name: Quality (lint, style, dependencies, build, secrets)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: ${{ env.PHP_EXTENSIONS }}
+          coverage: none
+          tools: composer:v2
+
+      - name: No local files, databases or keys in the repository
+        run: |
+          if git ls-files | grep -E '(^|/)\.env$|(^|/)\.env\.(production|backup)$|\.sqlite$|\.sqlite3$|(^|/)id_(rsa|ed25519|ecdsa)$|\.pem$|\.p12$|(^|/)auth\.json$|^public/hot$|^storage/.+\.key$'; then
+            echo "::error::Local or secret files are tracked (listed above)."
+            exit 1
+          fi
+
+      - name: Validate composer files
+        run: |
+          composer validate --strict --no-check-publish
+          composer validate --strict --no-check-publish --working-dir=wordpress
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: PHP syntax (application, tests, connector)
+        run: |
+          find app bootstrap config database lang routes tests wordpress/wp-caregrid-connector wordpress/tests -name '*.php' -print0 \
+            | xargs -0 -n 50 -P 4 sh -c 'for f; do php -l "$f" > /dev/null || exit 255; done' sh
+
+      - name: Code style (Pint)
+        run: vendor/bin/pint --test
+
+      - name: PHP dependency advisories (application and connector test harness)
+        run: |
+          composer audit --locked --no-interaction
+          composer audit --locked --no-interaction --working-dir=wordpress
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Frontend build
+        run: |
+          npm ci
+          npm run build
+
+      - name: npm advisories (high and critical)
+        run: npm audit --audit-level=high
+
+      - name: Secret scan (gitleaks, full history, findings redacted)
+        env:
+          GITLEAKS_VERSION: 8.21.2
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" detect --source=. --config=.gitleaks.toml --redact --no-banner --verbose
+
+  server:
+    name: Server tests (PHP 8.4, ${{ matrix.database }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, mysql]
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: caregrid
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      # A missing S3 or SFTP test service fails the run (tests/Support/StorageServers.php).
+      CAREGRID_TEST_REQUIRE_SERVICES: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: ${{ env.PHP_EXTENSIONS }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Database for this job
+        run: |
+          if [ "${{ matrix.database }}" = "mysql" ]; then
+            {
+              echo "DB_CONNECTION=mysql"
+              echo "DB_HOST=127.0.0.1"
+              echo "DB_PORT=3306"
+              echo "DB_DATABASE=caregrid"
+              echo "DB_USERNAME=root"
+              echo "DB_PASSWORD=ci-root-password"
+            } >> "$GITHUB_ENV"
+          fi
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # Views reference the Vite manifest.
+      - name: Frontend build
+        run: |
+          npm ci
+          npm run build
+
+      - name: S3-compatible test service (moto)
+        run: |
+          pipx install 'moto[server]==5.1.*'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/moto_server" --help > /dev/null
+
+      - name: SFTP test service (OpenSSH, dedicated user, key authentication, pinned host key)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
+          sudo useradd --create-home --shell /bin/bash caregrid-sftp
+          # No password, but not a locked account: sshd refuses keys for locked accounts without PAM.
+          sudo usermod -p '*' caregrid-sftp
+          dir="$RUNNER_TEMP/sftp"; mkdir -p "$dir"
+          ssh-keygen -q -t ed25519 -N '' -f "$dir/client"
+          sudo install -d -m 700 -o caregrid-sftp -g caregrid-sftp /home/caregrid-sftp/.ssh /home/caregrid-sftp/storage
+          sudo install -m 600 -o caregrid-sftp -g caregrid-sftp "$dir/client.pub" /home/caregrid-sftp/.ssh/authorized_keys
+          sudo ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/caregrid_test_host_ed25519
+          cp /etc/ssh/caregrid_test_host_ed25519.pub "$dir/host.pub"
+          printf '%s\n' \
+            'Port 2222' 'ListenAddress 127.0.0.1' 'HostKey /etc/ssh/caregrid_test_host_ed25519' \
+            'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'PubkeyAuthentication yes' 'UsePAM no' \
+            'AllowUsers caregrid-sftp' 'Subsystem sftp internal-sftp' 'PidFile /run/caregrid-test-sshd.pid' \
+            | sudo tee /etc/ssh/caregrid_test_sshd_config > /dev/null
+          sudo mkdir -p /run/sshd
+          sudo /usr/sbin/sshd -t -f /etc/ssh/caregrid_test_sshd_config
+          sudo /usr/sbin/sshd -f /etc/ssh/caregrid_test_sshd_config
+          {
+            echo "CAREGRID_TEST_SFTP_HOST=127.0.0.1"
+            echo "CAREGRID_TEST_SFTP_PORT=2222"
+            echo "CAREGRID_TEST_SFTP_USER=caregrid-sftp"
+            echo "CAREGRID_TEST_SFTP_KEY=$dir/client"
+            echo "CAREGRID_TEST_SFTP_HOST_KEY=$dir/host.pub"
+            echo "CAREGRID_TEST_SFTP_ROOT=/home/caregrid-sftp/storage"
+          } >> "$GITHUB_ENV"
+
+      - name: Application environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate --force
+          if [ "${{ matrix.database }}" = "sqlite" ]; then
+            touch database/ci.sqlite
+            echo "DB_DATABASE=$PWD/database/ci.sqlite" >> "$GITHUB_ENV"
+          fi
+
+      - name: Migrations from an empty database, full rollback, and again
+        run: |
+          php artisan migrate --force
+          php artisan migrate:rollback --force
+          php artisan migrate --force
+          php artisan migrate:status | tee /dev/stderr | grep -q Pending && exit 1 || true
+
+      - name: Production caches build (config, routes, views, events)
+        run: |
+          php artisan config:cache
+          php artisan route:cache
+          php artisan view:cache
+          php artisan event:cache
+          php artisan optimize:clear
+
+      - name: Test suite
+        # The suite uses its own database settings (phpunit.xml) unless the job sets them.
+        run: |
+          if [ "${{ matrix.database }}" = "sqlite" ]; then unset DB_DATABASE; fi
+          vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings
+
+      - name: System check (runs, never prints secrets)
+        run: php artisan system:check
+
+      - name: HTTP smoke test against a running server (production caches)
+        run: |
+          php artisan config:cache
+          php artisan route:cache
+          php artisan view:cache
+          php artisan serve --host=127.0.0.1 --port=8000 > "$RUNNER_TEMP/serve.log" 2>&1 &
+          for i in $(seq 1 50); do curl -fsS http://127.0.0.1:8000/up > /dev/null && break; sleep 0.2; done
+          php tests/smoke/http-smoke.php http://127.0.0.1:8000
+          php artisan optimize:clear
+
+  wordpress:
+    name: Connector tests in WordPress (PHP 8.4, ${{ matrix.database }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, mysql]
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: wordpress
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      # Symlink containment and permission tests must run here, never be skipped.
+      WP_CAREGRID_TEST_STRICT: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: ${{ env.PHP_EXTENSIONS }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Install WordPress and test dependencies
+        working-directory: wordpress
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Connector tests (real WordPress)
+        working-directory: wordpress
+        run: |
+          if [ "${{ matrix.database }}" = "mysql" ]; then
+            export WP_CAREGRID_TEST_MYSQL='root:ci-root-password@127.0.0.1/wordpress'
+          fi
+          vendor/bin/phpunit --display-skipped

@@ -28,7 +28,7 @@ class SystemStatusTest extends TestCase
         foreach (['Application', 'Database', 'Queue', 'Scheduler', 'Connector API', 'Stripe', 'Backup storage', 'Security scanner', 'Mail'] as $name) {
             $response->assertSee($name);
         }
-        $this->assertCount(9, $this->states());
+        $this->assertCount(10, $this->states());
     }
 
     public function test_secret_values_are_never_shown(): void

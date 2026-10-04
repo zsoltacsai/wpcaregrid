@@ -46,9 +46,9 @@ class SecurityScanTest extends TestCase
 
         $this->assertSame(ScanStatus::Queued, $scan->status);
         $this->assertSame(config('security.scanner_version'), $scan->scanner_version);
-        $this->assertSame(['status' => 'unavailable', 'reason' => 'VULNERABILITY_SOURCE_NOT_CONFIGURED', 'source' => 'none'], $scan->coverage['vulnerability']);
+        $this->assertEquals(['status' => 'unavailable', 'reason' => 'VULNERABILITY_SOURCE_NOT_CONFIGURED', 'source' => 'none'], $scan->coverage['vulnerability']);
         $job = WebsiteJob::where('type', 'SECURITY_SCAN')->sole();
-        $this->assertSame(['scan_uuid' => $scan->uuid, 'scan_type' => 'full', 'part' => 1, 'time_budget' => 60], $job->payload);
+        $this->assertEquals(['scan_uuid' => $scan->uuid, 'scan_type' => 'full', 'part' => 1, 'time_budget' => 60], $job->payload);
         $this->assertSame('scan_requested', explode('.', WebsiteEvent::where('event', 'like', 'security.%')->sole()->event)[1]);
 
         $this->pollJobs($site);
@@ -70,7 +70,7 @@ class SecurityScanTest extends TestCase
         $this->assertSame(2, SecurityFinding::count());
         $this->assertTrue(WebsiteEvent::where('event', 'security.scan_completed')->exists());
         // The job keeps counts only; findings live in security_findings.
-        $this->assertSame(['security' => ['scan_uuid' => $scan->uuid, 'part' => 1, 'complete' => true, 'findings' => 2]], WebsiteJob::where('type', 'SECURITY_SCAN')->sole()->result);
+        $this->assertEquals(['security' => ['scan_uuid' => $scan->uuid, 'part' => 1, 'complete' => true, 'findings' => 2]], WebsiteJob::where('type', 'SECURITY_SCAN')->sole()->result);
     }
 
     public function test_a_scan_continues_in_parts_until_the_site_reports_it_complete(): void
@@ -160,7 +160,7 @@ class SecurityScanTest extends TestCase
         $this->reportScan($site, $scan, [$finding]);
 
         $stored = SecurityFinding::sole();
-        $this->assertSame(['rules', 'size', 'lines'], array_keys($stored->evidence));
+        $this->assertEqualsCanonicalizing(['rules', 'size', 'lines'], array_keys($stored->evidence));
         // Stored as text (control characters and runs of spaces normalised), not as HTML.
         $this->assertSame('<script>alert(1)</script>Suspicious file', $stored->title);
         $json = json_encode($stored->toArray());

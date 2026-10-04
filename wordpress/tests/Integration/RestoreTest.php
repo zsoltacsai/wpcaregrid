@@ -183,8 +183,7 @@ final class RestoreTest extends TestCase
         $outside = sys_get_temp_dir().'/caregrid-outside-'.wp_generate_password(6, false);
         mkdir($outside);
         $this->created[] = $outside;
-        $this->created[] = WP_CONTENT_DIR.'/uploads/link-out';
-        symlink($outside, WP_CONTENT_DIR.'/uploads/link-out');
+        $this->symlink_or_skip($outside, WP_CONTENT_DIR.'/uploads/link-out');
 
         $result = $this->restore_crafted_archive(fn (TarWriter $tar) => $tar->add_string('wp-content/uploads/link-out/owned.php', '<?php evil();', time()));
 

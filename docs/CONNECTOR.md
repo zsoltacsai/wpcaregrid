@@ -215,6 +215,13 @@ define('WP_CAREGRID_ALLOW_INSECURE_LOCALHOST', true); // development only
 
 then upload the ZIP (Plugins → Add New → Upload Plugin), activate, and pair from Settings → WP CareGrid with a code from the website's page in the account. Note: `php artisan serve` and `php -S` handle one request at a time unless `PHP_CLI_SERVER_WORKERS` is set; the site's health checks make loopback requests, so give the WordPress server a few workers.
 
+## Versions
+
+| Version | Changes |
+| --- | --- |
+| 0.4.1 | File restore containment check normalises Windows paths (`PathGuard::contained()`), as the security scanner already did: on Windows hosts every restored file was refused as unsafe. No change on Linux. |
+| 0.4.0 | Security scanning, quarantine and controlled file repair (SECURITY_ENGINE.md). |
+
 ## Future capabilities
 
 Not in this version, and not advertised: request signing with a per-connector key pair (`public_key`), self-update of the connector, automated disaster recovery. Backups and restores are in [BACKUP_ENGINE.md](BACKUP_ENGINE.md), admin access in [ADMIN_ACCESS.md](ADMIN_ACCESS.md), security scanning and remediation (connector 0.4.0) in [SECURITY_ENGINE.md](SECURITY_ENGINE.md). A new capability is only advertised once its jobs exist on both sides and are covered by tests.

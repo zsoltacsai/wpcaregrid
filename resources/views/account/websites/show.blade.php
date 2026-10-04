@@ -136,7 +136,7 @@
 
             @foreach (['plugins' => 'plugin', 'themes' => 'theme'] as $group => $label)
                 <h3 class="mt-8 text-sm font-semibold">{{ __('connector.account.'.$group) }} <span class="font-normal text-muted">({{ count($inventory->{$group}) }})</span></h3>
-                <div class="mt-3 overflow-x-auto rounded-md border border-line">
+                <div class="relative mt-3 overflow-x-auto rounded-md border border-line">
                     <table class="w-full min-w-[560px] text-left text-sm">
                         <thead class="bg-canvas text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">
                             <tr>
@@ -179,8 +179,8 @@
             <ul class="divide-y divide-line text-sm">
                 @foreach ($jobs as $job)
                     @php $tone = ['success' => 'positive', 'failed' => 'danger', 'partial' => 'warning', 'expired' => 'warning'][$job->status->value] ?? 'neutral'; @endphp
-                    <li class="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 py-2.5 sm:grid-cols-[1fr_auto_auto]">
-                        <span class="text-primary">{{ __('connector.jobs.types.'.$job->type->value) }} @if ($job->result_code)<span class="font-mono text-xs text-muted">· {{ $job->result_code }}</span>@endif
+                    <li class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                        <span class="min-w-0 [overflow-wrap:anywhere] text-primary">{{ __('connector.jobs.types.'.$job->type->value) }} @if ($job->result_code)<span class="font-mono text-xs text-muted">· {{ $job->result_code }}</span>@endif
                             @if ($job->type->isUpdate() && $job->backup?->status === \App\Backups\BackupStatus::Verified)<span class="mt-0.5 flex items-center gap-1 text-xs text-accent-ink"><x-ui.icon name="shield" class="size-3.5" />{{ __('backups.account.protected') }}</span>@endif
                         </span>
                         <span class="row-start-2 font-mono text-xs text-muted sm:row-start-auto">{{ ($job->completed_at ?? $job->created_at)->translatedFormat('j M Y H:i') }}</span>

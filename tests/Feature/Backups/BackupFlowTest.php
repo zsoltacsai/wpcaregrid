@@ -41,7 +41,7 @@ class BackupFlowTest extends TestCase
 
         $jobs = $this->pollJobs($site);
         $this->assertSame('BACKUP_FULL', $jobs[0]['type']);
-        $this->assertSame(['backup_uuid', 'reason', 'chunk_size'], array_keys($jobs[0]['payload']), 'Only logical information; no storage, paths or credentials.');
+        $this->assertEqualsCanonicalizing(['backup_uuid', 'reason', 'chunk_size'], array_keys($jobs[0]['payload']), 'Only logical information; no storage, paths or credentials.');
         $this->assertSame(BackupStatus::Running, $backup->refresh()->status);
 
         $objects = ['files' => str_repeat('F', 23), 'database' => str_repeat('D', 11)];
@@ -207,9 +207,16 @@ class BackupFlowTest extends TestCase
         $this->putChunk($site, $backup, 'files', 0, 'DATA');
 
         $path = config('backup.upload.staging_path').'/'.$backup->uuid.'/files.tar.gz';
+        $this->beforeApplicationDestroyed(fn () => File::deleteDirectory(dirname($path)));
+        $this->assertFileExists($path);
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            // Only this assertion depends on the platform; Linux CI runs it (the authoritative result).
+            $this->markTestSkipped('Unix file permissions (0600/0700) cannot be checked on Windows; verified on Linux.');
+        }
+
         $this->assertSame('0600', substr(sprintf('%o', fileperms($path)), -4));
         $this->assertSame('0700', substr(sprintf('%o', fileperms(dirname($path))), -4));
-        File::deleteDirectory(dirname($path));
     }
 
     public function test_missing_storage_configuration_queues_nothing(): void

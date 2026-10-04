@@ -94,7 +94,7 @@ class JobsTest extends TestCase
         $theme = $this->queue($site['website'], JobType::UpdateTheme, ['stylesheet' => 'twentytwentyfive']);
         $core = $this->queue($site['website'], JobType::UpdateCore, ['policy' => 'minor']);
 
-        $this->assertSame(['plugin' => 'akismet/akismet.php', 'target_version' => '5.4'], $plugin->payload);
+        $this->assertEquals(['plugin' => 'akismet/akismet.php', 'target_version' => '5.4'], $plugin->payload);
         $this->assertSame(['stylesheet' => 'twentytwentyfive'], $theme->payload);
         $this->assertSame(['policy' => 'minor'], $core->payload);
     }

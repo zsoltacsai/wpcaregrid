@@ -13,10 +13,11 @@
 return [
 
     // Newest connector release; older connectors are flagged as outdated.
-    'latest_version' => env('CONNECTOR_LATEST_VERSION', '0.4.0'),
+    'latest_version' => env('CONNECTOR_LATEST_VERSION', '0.4.1'),
 
-    // Refuse plain-HTTP connector requests (on by default in production).
-    'require_https' => (bool) env('CONNECTOR_REQUIRE_HTTPS', env('APP_ENV') === 'production'),
+    // Refuse plain-HTTP connector requests (on by default in production). An empty
+    // CONNECTOR_REQUIRE_HTTPS= counts as not set, so the production default stays.
+    'require_https' => in_array(env('CONNECTOR_REQUIRE_HTTPS'), [null, ''], true) ? env('APP_ENV') === 'production' : (bool) env('CONNECTOR_REQUIRE_HTTPS'),
 
     'heartbeat_interval' => (int) env('CONNECTOR_HEARTBEAT_INTERVAL', 900),
 

@@ -77,6 +77,34 @@ final class SecurityRemediationTest extends TestCase
         $this->assertSame(1767225600, filemtime($absolute));
     }
 
+    public function test_the_default_quarantine_location_is_private_and_not_servable(): void
+    {
+        [$relative, $absolute] = $this->upload('2026/private.php', "<?php echo 'x';\n");
+        @chmod($absolute, 0640);
+        $sha = hash_file('sha256', $absolute);
+        $this->quarantine($relative, $sha, $remediation = wp_generate_uuid4());
+
+        $dir = QuarantineStore::path();
+        // Without WP_CAREGRID_QUARANTINE_DIR (recommended: outside the web root) it lives in
+        // wp-content under a random, unguessable name: web servers that ignore the deny
+        // files (nginx) cannot be pointed at it by guessing.
+        $this->assertMatchesRegularExpression('#/wp-caregrid-quarantine-[a-z0-9]{24}$#', $dir);
+        $this->assertStringContainsString('Require all denied', (string) file_get_contents($dir.'/.htaccess'));
+        $this->assertStringContainsString('php_flag engine off', (string) file_get_contents($dir.'/.htaccess'));
+        $this->assertStringContainsString('<deny users="*" />', (string) file_get_contents($dir.'/web.config'));
+        $this->assertStringContainsString('<clear />', (string) file_get_contents($dir.'/web.config'), 'No handlers: nothing is executed by IIS.');
+        $this->assertStringNotContainsString('.php', basename($dir.'/'.$remediation.'.quarantined'));
+
+        $this->assert_mode('0700', $dir);
+        $this->assert_mode('0600', $dir.'/'.$remediation.'.quarantined');
+        $this->assert_mode('0600', $dir.'/'.$remediation.'.json');
+
+        // Undo restores the original permissions too.
+        $this->handle(new SecurityRestoreQuarantineHandler, ['remediation_uuid' => wp_generate_uuid4(), 'quarantine_uuid' => wp_generate_uuid4(), 'path' => $relative, 'sha256' => $sha]);
+        $this->assertFileExists($absolute);
+        $this->assert_mode('0640', $absolute);
+    }
+
     public function test_quarantine_refuses_a_file_that_changed_since_the_scan(): void
     {
         [$relative, $absolute] = $this->upload('2026/changed.php', "<?php echo 'x';\n");
@@ -147,10 +175,7 @@ final class SecurityRemediationTest extends TestCase
         file_put_contents($outside, "<?php echo 1;\n");
         $this->cleanup_later($outside);
         $link = WP_CONTENT_DIR.'/uploads/link.php';
-        if (! @symlink($outside, $link)) {
-            $this->markTestSkipped('This system cannot create symlinks.');
-        }
-        $this->cleanup_later($link);
+        $this->symlink_or_skip($outside, $link);
 
         $this->assertSame('UNSAFE_PATH', $this->quarantine('wp-content/uploads/link.php', hash_file('sha256', $outside))->code);
         $this->assertFileExists($outside);

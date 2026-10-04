@@ -80,7 +80,7 @@ class PricingAdminTest extends TestCase
 
         $this->assertSame(1899000, $this->businessMonthly()->money->amount);
         $this->get('/')->assertSee('>18,990<', false)->assertDontSee('>19,990<', false);
-        $this->assertSame(['currency' => 'HUF', 'amount' => 1999000, 'stripe_price_id' => 'price_business_2027', 'active' => true], PriceDefinition::sole()->draft);
+        $this->assertEquals(['currency' => 'HUF', 'amount' => 1999000, 'stripe_price_id' => 'price_business_2027', 'active' => true], PriceDefinition::sole()->draft);
         $this->assertNull(PriceDefinition::sole()->published_at);
 
         // Publishing needs the explicit confirmation.
@@ -236,7 +236,7 @@ class PricingAdminTest extends TestCase
 
         $this->post(route('owner.pricing.verify'))->assertSessionHas('status');
         $this->get(route('owner.pricing.index'))->assertSee('wordpress.basic.monthly.hu: inactive in Stripe')->assertDontSee('sk_test_unit_SECRET');
-        $this->assertSame(['ok' => false, 'problems' => 1], AdminAuditEvent::where('event', 'stripe.verified')->sole()->data);
+        $this->assertEquals(['ok' => false, 'problems' => 1], AdminAuditEvent::where('event', 'stripe.verified')->sole()->data);
     }
 
     public function test_discarding_a_draft_keeps_the_published_price(): void

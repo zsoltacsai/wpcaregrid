@@ -262,10 +262,7 @@ final class SecurityScanTest extends TestCase
         $this->cleanup_later($outside);
         file_put_contents($outside.'/evil.php', "<?php system(\$_GET['c']);\n");
         $link = WP_CONTENT_DIR.'/uploads/linked';
-        if (! @symlink($outside, $link)) {
-            $this->markTestSkipped('This system cannot create symlinks.');
-        }
-        $this->cleanup_later($link);
+        $this->symlink_or_skip($outside, $link);
 
         $security = $this->scan('malware');
 
@@ -502,7 +499,7 @@ final class SecurityScanTest extends TestCase
         clearstatcache();
         foreach ($paths as $path) {
             if (! is_file($path)) {
-                $this->markTestSkipped('A local antivirus removed the test sample '.basename($path).'; exclude the test directory (wp-caregrid-tests-*) to run this test.');
+                $this->environment_limitation('A local antivirus removed the test sample '.basename($path).'; exclude the test directory (wp-caregrid-tests-*) to run this test.');
             }
         }
     }

@@ -1,0 +1,36 @@
+# Secret scanning (CI "quality" job): gitleaks' default rules, plus an
+# allowlist for dummy values that tests and CI use on purpose. Real keys
+# never belong in the repository; production values live in the server's
+# environment (docs/DEPLOYMENT.md).
+title = "WP CareGrid gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Dummy test and CI values (not secrets)"
+regexes = [
+  # Test fixtures: storage and Stripe placeholders that only exist in tests.
+  '''test-secret-key-do-not-log''',
+  '''test-access-key''',
+  '''sk_test_unit[A-Za-z_]*''',
+  '''sk_test_SECRET_STRIPE_KEY_123''',
+  '''pk_test_PUBLISHABLE_456''',
+  '''whsec_WEBHOOK_SECRET_789''',
+  '''whsec_test[A-Za-z0-9_]*''',
+  '''AKIA_STORAGE_KEY''',
+  '''STORAGE_SECRET_VALUE''',
+  '''SMTP_PASSWORD_VALUE''',
+  '''FEED_KEY_VALUE''',
+  # Throw-away CI database password and WordPress test salts.
+  '''ci-root-password''',
+  '''wp-caregrid-tests-[a-z_]+''',
+  # Factory and test passwords for throw-away test users.
+  '''password-123456''',
+  '''(chosen|owner|operator|other)-password-[0-9]+''',
+]
+paths = [
+  '''composer\.lock''',
+  '''package-lock\.json''',
+  '''wordpress/composer\.lock''',
+]
