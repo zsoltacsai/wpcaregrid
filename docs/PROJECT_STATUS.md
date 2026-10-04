@@ -8,10 +8,10 @@ Last updated: 2026-10-04
 ## Branch and HEAD
 
 - Branch: `claude/ecstatic-wozniak-oemyuf` (also the main branch used for PRs)
-- Latest commit: **Complete Stripe product validation** (local, not pushed; `git log --oneline -3` shows its hash)
-- Before it: `0b54777` **Real Stripe Test Mode Validation** (local, not pushed), `9171262` status update, `3f01f5d` CI configuration fix, `050afe0` **Production Hardening, CI & Release Readiness** (pushed)
+- Latest milestone commits: `0b54777` **Real Stripe Test Mode Validation**, `eeb1ada` **Complete Stripe product validation**, then `836316f` (MySQL test fix) and this status update
+- Before them: `9171262` status update, `3f01f5d` CI configuration fix, `050afe0` **Production Hardening, CI & Release Readiness**
 - Earlier: `2f7d0b4` Owner Admin & Content Management, `4076684` Security & Malware Engine, `ba2d1db` Internal Operator Console
-- `origin` (github.com/zsoltacsai/wpcaregrid) has everything up to `9171262`; push only when requested, never force.
+- All pushed to `origin` (github.com/zsoltacsai/wpcaregrid); push only when requested, never force.
 
 ## Completed milestones
 
@@ -26,7 +26,7 @@ Last updated: 2026-10-04
 | Unified Site Health + Security & Malware Engine | `4076684` | docs/SECURITY_ENGINE.md, MALWARE_SCANNING.md, SECURITY_FINDINGS.md, SECURITY_INCIDENTS.md |
 | Owner Admin & Content Management | `2f7d0b4` | docs/OWNER_ADMIN.md, CONTENT_MANAGEMENT.md, PRICING_ADMIN.md |
 
-## Stripe test mode — VALIDATED (local, through an https tunnel)
+## Stripe test mode — VALIDATED (local, through an https tunnel; CI green)
 
 Validated 2026-10-04 against a Stripe test sandbox, from the local installation exposed through a temporary Cloudflare tunnel (Stripe needs an https webhook URL), with Mailpit as the SMTP catcher. Procedure and configuration: docs/STRIPE_TEST_MODE.md. **This is test-mode validation only; the platform is not PRODUCTION_READY.**
 
@@ -49,6 +49,12 @@ Found and fixed:
 Added: Playwright (`tests/e2e/stripe-purchase.spec.ts`, opt-in, not in CI), docs/STRIPE_TEST_MODE.md, a test that a failure while processing a webhook leaves nothing behind (no email for a rolled-back login) and the redelivery succeeds once.
 
 Not done here: a real mail provider (Mailpit is a local catcher), a permanent webhook endpoint (staging needs its own for its `APP_URL`), Stripe live mode, invoicing.
+
+CI for these commits (2026-10-04):
+
+- Run #4 (`eeb1ada`, https://github.com/zsoltacsai/wpcaregrid/actions/runs/37229524459) failed on MySQL only: a new test compared the price draft's JSON keys in insertion order, and MySQL returns JSON object keys in its own order. Every other job passed.
+- Fix `836316f`: the assertion compares the key set (what it checks: no browser-supplied field enters the draft). Test-only; reproduced and verified on a local MySQL 8.4 first.
+- Run #5 (`836316f`, https://github.com/zsoltacsai/wpcaregrid/actions/runs/37230005110): **all 5 jobs green**. Quality: Pint, composer audit (app and connector harness) and npm audit clean, build OK, gitleaks over 23 commits: no leaks. Server SQLite and MySQL 8.4: migrations, caches, 605 tests each with 0 skips (`--fail-on-skipped`, real S3 via moto and SFTP via OpenSSH), `system:check`, HTTP smoke test (55 checks). Connector in WordPress 7.1.2: 169 tests each; SQLite skips the 5 MySQL-only tests, MySQL the 1 SQLite-only test (unchanged).
 
 Completed afterwards (**Complete Stripe product validation**): the owner area enforces the same Product rule. `StripePriceVerifier::verify()` (the Price check, then the Product configured for the price's product type) is the one check behind `pricing:verify-stripe`, publishing a price and "Check prices in Stripe". The product type comes from the price being edited and the expected Product from `STRIPE_PRODUCT_*`, never from the form; a Price of the other product, or a missing `STRIPE_PRODUCT_*`, blocks publishing. Inactive prices publish without a Stripe check, as before. Checked against Stripe test mode: all 12 prices ok; a WordPress Price checked as WooCommerce (and the reverse) is rejected with its real Product. `phpunit.xml` now forces the Stripe and `APP_URL` variables in both `$_ENV` and `$_SERVER`, so neither `.env` nor an exported shell variable reaches the tests (StripeTestIsolationTest).
 
