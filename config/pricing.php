@@ -205,6 +205,15 @@ return [
     ],
 
     /*
+    | The Stripe Product each product type's Prices must belong to;
+    | pricing:verify-stripe checks every configured Price against it.
+    */
+    'stripe_products' => [
+        'wordpress' => env('STRIPE_PRODUCT_WORDPRESS'),
+        'woocommerce' => env('STRIPE_PRODUCT_WOOCOMMERCE'),
+    ],
+
+    /*
     | Prices. Stripe Price IDs come from the environment; a missing ID blocks
     | checkout for that price but does not hide it from the pricing table.
     | Set `active` to false to stop selling a price without deleting it.

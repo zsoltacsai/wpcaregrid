@@ -885,7 +885,7 @@ Linux CI should be authoritative for Linux/production-like filesystem behavior.
 
 1. ~~Owner Admin + CMS~~ (done)
 2. Production hardening / CI / deployment (in progress: docs/PROJECT_STATUS.md)
-3. Real Stripe test-mode configuration
+3. ~~Real Stripe test-mode configuration~~ (validated locally: docs/STRIPE_TEST_MODE.md)
 4. Real backup storage setup
 5. Transactional email
 6. Controlled pilot onboarding

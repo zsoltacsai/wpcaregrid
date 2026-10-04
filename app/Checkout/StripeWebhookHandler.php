@@ -6,6 +6,7 @@ use App\Billing\InvoiceEvents;
 use App\Billing\ProvisionCustomer;
 use App\Billing\SubscriptionSync;
 use App\Models\CheckoutIntent;
+use App\Models\Promotion;
 use App\Models\StripeEvent;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
@@ -96,6 +97,11 @@ final class StripeWebhookHandler
         if ($paid && $intent->canMoveTo(CheckoutStatus::Completed)) {
             $intent->status = CheckoutStatus::Completed;
             $intent->completed_at = now();
+
+            // Counted once, when the intent completes, so max_redemptions applies to later checkouts.
+            if ($intent->promotion_id) {
+                Promotion::whereKey($intent->promotion_id)->increment('times_redeemed');
+            }
         }
 
         $intent->save();

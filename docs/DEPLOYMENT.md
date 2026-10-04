@@ -194,7 +194,9 @@ Transactional only (activation, welcome, payment confirmation and failure, subsc
 
 Keys stay in the environment; the owner area never shows, creates or rotates them. Live keys are refused unless `STRIPE_ALLOW_LIVE_MODE=true`.
 
-1. In the Stripe dashboard (test mode) create one product per plan and **12 recurring prices in HUF**, exactly matching `config/pricing.php`:
+Full procedure, price mapping, tax setting and troubleshooting: [STRIPE_TEST_MODE.md](STRIPE_TEST_MODE.md).
+
+1. In the Stripe dashboard (test mode) create two products, **WordPress** and **WooCommerce**, and **12 recurring prices in HUF**, exactly matching `config/pricing.php`:
 
    | Plan | Monthly | Annual |
    | --- | ---: | ---: |
@@ -206,9 +208,9 @@ Keys stay in the environment; the owner area never shows, creates or rotates the
    | WooCommerce Secure | 39 900 Ft | 399 000 Ft |
 
    Monthly prices recur every month, annual every year (interval count 1).
-2. Put the `price_…` IDs into `STRIPE_PRICE_<PRODUCT>_<PLAN>_<INTERVAL>_HUF`, the secret key into `STRIPE_SECRET` (`sk_test_…`), the publishable key into `STRIPE_KEY` (`pk_test_…`).
+2. Put the `price_…` IDs into `STRIPE_PRICE_<PRODUCT>_<PLAN>_<INTERVAL>_HUF`, the product IDs into `STRIPE_PRODUCT_WORDPRESS` / `STRIPE_PRODUCT_WOOCOMMERCE`, the secret key into `STRIPE_SECRET` (`sk_test_…`), the publishable key into `STRIPE_KEY` (`pk_test_…`).
 3. Add a webhook endpoint `https://<APP_URL>/stripe/webhook` with these events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Put its signing secret into `STRIPE_WEBHOOK_SECRET`.
-4. `php artisan config:cache && php artisan pricing:verify-stripe` must print `ok` for every price (exists, active, recurring, same amount, currency and interval). The owner area's "Check prices in Stripe" runs the same check.
+4. `php artisan config:cache && php artisan pricing:verify-stripe` must print `ok` for every price (exists, active, recurring, same amount, currency and interval, attached to the configured product). The owner area's "Check prices in Stripe" runs the same check.
 5. Test purchase with Stripe's test card. The account is created only when the signed webhook arrives; the success page alone never activates anything.
 
 Without `STRIPE_SECRET` checkout refuses to start, `system:check` reports Stripe as NOT CONFIGURED, and the webhook answers 500 "not configured" (Stripe will retry).

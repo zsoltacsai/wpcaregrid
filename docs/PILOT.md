@@ -46,7 +46,7 @@ Run against a local installation (`APP_ENV=e2e`, SQLite, local backup storage, b
 | --- | --- |
 | 1–2 | Owner signed in; System and `system:check` showed the real state (Stripe and mail not configured, as expected locally) |
 | 3 | Operator invited from the owner area; the queued invitation email used `APP_URL`; activated through the link; signed in to the console |
-| 4 | **Not run:** Stripe is not configured locally. Customer and active subscription were created directly in the database. Must be run with Stripe test mode on staging. |
+| 4 | **Not run in this pilot run:** Stripe was not configured yet; customer and subscription were created directly in the database. Since run with real Stripe test mode locally through an https tunnel (STRIPE_TEST_MODE.md, 2026-10-04); still to repeat on staging. |
 | 5 | Website created directly (the customer form only accepts public addresses; this site was on 127.0.0.1) |
 | 6–10 | Pairing code generated in the account; paired from WordPress admin; heartbeat, inventory, health and license check reported |
 | 11–12 | Manual FULL backup (13 MB) uploaded, transferred by the `backups` worker, **verified** |

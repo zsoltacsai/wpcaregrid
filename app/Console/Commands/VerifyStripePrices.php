@@ -11,7 +11,8 @@ use Illuminate\Console\Command;
  * Checks every configured Stripe Price ID against Stripe: it must exist, be
  * active, recurring on the right interval, and charge exactly the amount and
  * currency in the catalogue (config/pricing.php plus prices published in the
- * owner area). Run after changing prices in either place.
+ * owner area), and belong to the Stripe Product configured for its product
+ * type. Run after changing prices in either place.
  */
 class VerifyStripePrices extends Command
 {
@@ -40,6 +41,9 @@ class VerifyStripePrices extends Command
                     }
 
                     $issue = $verifier->check($price->stripePriceId, $price->money->amount, $price->money->currency->code, $interval);
+                    if ($issue === StripePriceVerifier::OK) {
+                        $issue = $this->productIssue($verifier, $price->stripePriceId, $plan->productType->value);
+                    }
                     $problems += $issue === StripePriceVerifier::OK ? 0 : 1;
                     $rows[] = ["{$plan->productType->value}.{$plan->tier->value}.{$interval->value}.{$marketKey}", $price->stripePriceId ?: '—', $issue];
                 }
@@ -49,5 +53,19 @@ class VerifyStripePrices extends Command
         $this->table(['Price', 'Stripe Price ID', 'Result'], $rows);
 
         return $problems === 0 ? self::SUCCESS : self::FAILURE;
+    }
+
+    /** "ok", or why the Price is not attached to the configured product. */
+    private function productIssue(StripePriceVerifier $verifier, string $stripePriceId, string $productType): string
+    {
+        $expected = config("pricing.stripe_products.{$productType}");
+
+        if (blank($expected)) {
+            return 'product not configured (STRIPE_PRODUCT_'.strtoupper($productType).')';
+        }
+
+        $actual = $verifier->productOf($stripePriceId);
+
+        return $actual === $expected ? StripePriceVerifier::OK : 'product '.($actual ?? 'unreadable');
     }
 }

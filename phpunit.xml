@@ -32,5 +32,26 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <!-- Independent of the developer's .env (a tunnel URL, real Stripe test keys): tests never reach Stripe. -->
+        <env name="APP_URL" value="http://localhost"/>
+        <env name="TRUSTED_PROXIES" value=""/>
+        <env name="STRIPE_KEY" value=""/>
+        <env name="STRIPE_SECRET" value=""/>
+        <env name="STRIPE_WEBHOOK_SECRET" value=""/>
+        <env name="STRIPE_ALLOW_LIVE_MODE" value="false"/>
+        <env name="STRIPE_PRODUCT_WORDPRESS" value=""/>
+        <env name="STRIPE_PRODUCT_WOOCOMMERCE" value=""/>
+        <env name="STRIPE_PRICE_WORDPRESS_BASIC_MONTHLY_HUF" value=""/>
+        <env name="STRIPE_PRICE_WORDPRESS_BASIC_ANNUAL_HUF" value=""/>
+        <env name="STRIPE_PRICE_WORDPRESS_BUSINESS_MONTHLY_HUF" value=""/>
+        <env name="STRIPE_PRICE_WORDPRESS_BUSINESS_ANNUAL_HUF" value=""/>
+        <env name="STRIPE_PRICE_WORDPRESS_SECURE_MONTHLY_HUF" value=""/>
+        <env name="STRIPE_PRICE_WORDPRESS_SECURE_ANNUAL_HUF" value=""/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BASIC_MONTHLY_HUF" value=""/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BASIC_ANNUAL_HUF" value=""/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_MONTHLY_HUF" value=""/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_ANNUAL_HUF" value=""/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_HUF" value=""/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_HUF" value=""/>
     </php>
 </phpunit>

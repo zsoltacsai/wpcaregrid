@@ -8,9 +8,10 @@ Last updated: 2026-10-04
 ## Branch and HEAD
 
 - Branch: `claude/ecstatic-wozniak-oemyuf` (also the main branch used for PRs)
-- Latest milestone commit: `050afe0` **Production Hardening, CI & Release Readiness**, followed by `3f01f5d` (CI configuration fix) and this status update
+- Latest commit: **Real Stripe Test Mode Validation** (local, not pushed; `git log --oneline -3` shows its hash)
+- Before it: `9171262` status update, `3f01f5d` CI configuration fix, `050afe0` **Production Hardening, CI & Release Readiness** (pushed)
 - Earlier: `2f7d0b4` Owner Admin & Content Management, `4076684` Security & Malware Engine, `ba2d1db` Internal Operator Console
-- Pushed to `origin` (github.com/zsoltacsai/wpcaregrid); push only when requested, never force.
+- `origin` (github.com/zsoltacsai/wpcaregrid) has everything up to `9171262`; push only when requested, never force.
 
 ## Completed milestones
 
@@ -24,6 +25,30 @@ Last updated: 2026-10-04
 | Internal Operator Console | `ba2d1db` | docs/OPERATOR_CONSOLE.md |
 | Unified Site Health + Security & Malware Engine | `4076684` | docs/SECURITY_ENGINE.md, MALWARE_SCANNING.md, SECURITY_FINDINGS.md, SECURITY_INCIDENTS.md |
 | Owner Admin & Content Management | `2f7d0b4` | docs/OWNER_ADMIN.md, CONTENT_MANAGEMENT.md, PRICING_ADMIN.md |
+
+## Stripe test mode — VALIDATED (local, through an https tunnel)
+
+Validated 2026-10-04 against a Stripe test sandbox, from the local installation exposed through a temporary Cloudflare tunnel (Stripe needs an https webhook URL), with Mailpit as the SMTP catcher. Procedure and configuration: docs/STRIPE_TEST_MODE.md. **This is test-mode validation only; the platform is not PRODUCTION_READY.**
+
+- Stripe: products WordPress and WooCommerce, 12 recurring HUF prices (lookup keys `caregrid_<product>_<plan>_<interval>_huf`), webhook endpoint with the 9 events, coupon + promotion code `PILOT10` (10 % once). `pricing:verify-stripe`: ok for all 12, including the product (new check).
+- Tax: Stripe Tax off, no tax rates, no tax behaviour on the prices; every session `amount_tax` 0 = the listed final price (Hungarian rule).
+- Real purchases through `/pricing` and Stripe Checkout (test card): WordPress Business monthly (several runs), WooCommerce Business annual, WordPress Basic monthly with `PILOT10` (Stripe charged 809100 = 8 091 Ft). Each: one intent → one customer (local UUID, Stripe customer linked) → one login → one active subscription with the right plan, interval and HUF amount; activation, payment and "subscription active" emails with https `APP_URL` links; activation sets the password, verifies the email, single-use link; login; dashboard (plan, Active, "Connect your first website"); subscription page; first website entered onboarding.
+- Refused / safe: international billing country (before Stripe), unknown and not-applicable promotion codes (local rule; the Stripe code itself is unrestricted), declined card (nothing created, no email), abandoned checkout (intent cancelled, session expired), success and cancel URLs from another browser and a forged session ID (no change), unsigned and forged webhooks (400).
+- Webhook: every processed event redelivered twice with a valid signature → 2xx, no new rows or emails. Browser back before the webhook (endpoint paused): "Your payment is being confirmed", no account, no email; delivering the missed events later, out of order, provisioned exactly once.
+- Failed payment (`pm_card_chargeCustomerFail`, plan change billed at once): Stripe `past_due` → local `past_due` with the new plan, `invoice.payment_failed` recorded, "Your payment did not go through" email, dashboard shows the payment problem and pauses onboarding.
+- Cancellation: at period end → still active, "Does not renew"; immediately → `canceled`, cancellation email, "This subscription has ended".
+- Formatting: "18,990 Ft" (en), "8 990 Ft" (hu, narrow no-break space); never smallest units.
+- No Stripe secret, webhook secret or card data in pages, logs, the database, queued jobs or emails.
+
+Found and fixed:
+
+- Promotion redemptions were never counted, so `max_redemptions` never applied: now counted once when a paid checkout completes (regression test).
+- The test suite read `APP_URL`, Stripe keys and Price IDs from the developer's `.env` (a tunnel URL broke a test; a real key could have reached Stripe): `phpunit.xml` now pins them.
+- `pricing:verify-stripe` did not check the product a Price belongs to: `STRIPE_PRODUCT_WORDPRESS` / `STRIPE_PRODUCT_WOOCOMMERCE` added and checked.
+
+Added: Playwright (`tests/e2e/stripe-purchase.spec.ts`, opt-in, not in CI), docs/STRIPE_TEST_MODE.md, a test that a failure while processing a webhook leaves nothing behind (no email for a rolled-back login) and the redelivery succeeds once.
+
+Not done here: a real mail provider (Mailpit is a local catcher), a permanent webhook endpoint (staging needs its own for its `APP_URL`), Stripe live mode, invoicing.
 
 ## In progress: Production Hardening, CI & Release Readiness — IN_PROGRESS (CI validation complete)
 
@@ -47,8 +72,8 @@ CI validation (2026-10-04):
 
 Still needed before the milestone is complete:
 
-1. Stripe test-mode configuration and an end-to-end test purchase (PILOT.md step 4).
-2. Production/staging server per DEPLOYMENT.md: HTTPS domain, MySQL, workers, cron, mail, backup storage.
+1. ~~Stripe test-mode configuration and an end-to-end test purchase~~ — validated locally (above); repeat PILOT.md step 4 on staging with its own webhook endpoint.
+2. Production/staging server per DEPLOYMENT.md: HTTPS domain, MySQL, workers, cron, a real mail provider, backup storage.
 3. Restore rehearsal on a staging copy, then decide on `BACKUP_RESTORE_ENABLED`.
 4. First-customer safety gates in PILOT.md on the real installation.
 5. GitHub branch protection with the CI checks required.
@@ -59,26 +84,27 @@ Linux CI (authoritative): see "CI validation" above.
 
 Windows development machine:
 
-- Server suite on SQLite: see the final report of this milestone (all pass except explicit skips: 6 S3/SFTP tests without local services, 1 Windows-only permission assertion).
+- Server suite on SQLite: 599 tests, all pass except 7 explicit skips (6 S3/SFTP tests without local services, 1 Windows-only permission assertion).
 - Server suite on MySQL 8.4 (local): all pass with the same explicit skips.
 - WordPress connector suite (169 tests) on SQLite and MySQL 8.4: all pass; skips are MySQL-only/SQLite-only tests and explicit Windows symlink/permission limitations (strict in CI).
 - Local end-to-end run with a real WordPress and connector 0.4.1: PILOT.md.
+- Stripe test-mode browser E2E (Playwright, real Stripe Checkout): 6 passed, plus the delayed-webhook test (runs only with the endpoint paused): STRIPE_TEST_MODE.md.
 - Run with `vendor/bin/phpunit -c phpunit.xml` (`php artisan test` breaks when the path contains `=`). Linux CI is authoritative for filesystem behaviour.
 
 ## Next milestone
 
-Finish this one (list above; the next blocker is Stripe test-mode configuration and a test purchase). After that, per CLAUDE.md §29: real Stripe test-mode configuration, real backup storage, transactional email, controlled pilot onboarding.
+Finish this one (list above; the next blocker is a staging server with HTTPS, a real mail provider and backup storage). After that, per CLAUDE.md §29: real backup storage, transactional email, controlled pilot onboarding.
 
 ## Blockers
 
-- External accounts and configuration: Stripe (test mode), backup storage, mail provider, a staging/production server, optionally a vulnerability feed licence.
+- External accounts and configuration: backup storage, mail provider, a staging/production server, optionally a vulnerability feed licence. Stripe test mode is set up (sandbox keys only in the local `.env`).
 
 ## Pending manual configuration
 
 - Production `.env` per DEPLOYMENT.md (`APP_ENV=production`, `APP_DEBUG=false`, https `APP_URL`, MySQL, mail, storage, Stripe); never commit it.
 - `php artisan migrate --force`, `php artisan connector:package`, `php artisan owner:user …`.
 - Supervisor for the two workers, cron for `schedule:run`, nginx with TLS.
-- Stripe: 12 HUF prices, webhook with 9 events, `pricing:verify-stripe`.
+- Stripe (staging): copy the test keys and the product/price IDs into the staging `.env`, create a webhook endpoint for the staging `APP_URL` (9 events) and set its secret, run `pricing:verify-stripe` (STRIPE_TEST_MODE.md). The temporary local tunnel endpoint is disabled in Stripe; delete it when no longer needed.
 - Backup storage and staging disk; nightly backup of WP CareGrid's own database.
 - Pilot sites: `WP_CAREGRID_QUARANTINE_DIR` outside the web root.
 - GitHub: branch protection with the CI checks required.
@@ -92,3 +118,5 @@ Finish this one (list above; the next blocker is Stripe test-mode configuration 
 - CSP is staged (off → report-only → enforce) so it cannot break the application unnoticed.
 - Windows-only filesystem limitations skip with an explicit reason locally and fail in CI (strict mode); production code is never weakened for them.
 - Prices: config/pricing.php is the baseline; owner-published prices override it for future checkouts only.
+- Stripe: one Product per product type (WordPress, WooCommerce), one Price per plan × interval × market; `pricing:verify-stripe` checks amount, currency, interval and product. Promotion codes need a local rule row and a Stripe promotion code; local rules decide eligibility, Stripe applies the discount.
+- Tests never use the developer's Stripe keys (`phpunit.xml` pins them empty); the real-Stripe browser E2E is opt-in and outside CI.

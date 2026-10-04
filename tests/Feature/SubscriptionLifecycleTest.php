@@ -11,11 +11,19 @@ use App\Mail\SubscriptionActivated;
 use App\Mail\SubscriptionCanceled;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
+use App\Models\Promotion;
 use App\Models\StripeEvent;
 use App\Models\Subscription;
 use App\Models\User;
+use App\Pricing\BillingInterval;
+use App\Pricing\PlanTier;
+use App\Pricing\PricingCatalog;
+use App\Pricing\ProductType;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Mail\Events\MessageSent;
+use Illuminate\Mail\MailManager;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Mail;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\SendsStripeWebhooks;
@@ -219,6 +227,63 @@ class SubscriptionLifecycleTest extends TestCase
     }
 
     // --- Payment not (yet) confirmed ----------------------------------------
+
+    public function test_a_paid_checkout_redeems_its_promotion_once(): void
+    {
+        // Found in the real Stripe test run: redemptions were never counted, so max_redemptions never applied.
+        $promotion = Promotion::create(['code' => 'PILOT10', 'stripe_promotion_code_id' => 'promo_1', 'discount_type' => 'percent', 'percent_off' => 10, 'max_redemptions' => 1]);
+        $intent = $this->intent(['promotion_id' => $promotion->id, 'promotion_code' => 'PILOT10']);
+        $unpaid = $this->intent(['promotion_id' => $promotion->id, 'promotion_code' => 'PILOT10', 'stripe_checkout_session_id' => 'cs_test_2']);
+
+        $this->completeCheckout($unpaid, ['id' => 'cs_test_2', 'payment_status' => 'unpaid', 'subscription' => 'sub_test_2'])->assertStatus(204);
+        $this->assertSame(0, $promotion->refresh()->times_redeemed, 'Not redeemed before Stripe reports the payment.');
+
+        $this->completeCheckout($intent, eventId: 'evt_paid')->assertStatus(204);
+        $this->completeCheckout($intent, eventId: 'evt_paid')->assertStatus(204);
+        $this->completeCheckout($intent, ['payment_status' => 'paid'], eventId: 'evt_async', type: 'checkout.session.async_payment_succeeded')->assertStatus(204);
+
+        $this->assertSame(1, $promotion->refresh()->times_redeemed, 'Counted once per completed checkout, never per event.');
+        $catalog = app(PricingCatalog::class);
+        $price = $catalog->price(ProductType::WordPress, PlanTier::Business, BillingInterval::Monthly, $catalog->market('hu'));
+        $this->assertSame('used_up', $promotion->ineligibilityReason($price), 'The next checkout with the code is refused.');
+    }
+
+    public function test_a_failure_while_processing_leaves_nothing_behind_and_the_redelivery_succeeds(): void
+    {
+        // The real mailer on the sync queue: Mail::fake() would record mail queued inside the rolled-back transaction.
+        Mail::swap(new MailManager($this->app));
+        $sent = [];
+        Event::listen(MessageSent::class, function (MessageSent $event) use (&$sent) {
+            $sent[] = $event->message->getSubject();
+        });
+
+        $intent = $this->intent();
+        $failing = true;
+        Subscription::creating(function () use (&$failing) {
+            if ($failing) {
+                throw new \RuntimeException('Database unavailable.');
+            }
+        });
+
+        $this->completeCheckout($intent, eventId: 'evt_retry')->assertStatus(500);
+
+        $this->assertSame(CheckoutStatus::CheckoutCreated, $intent->refresh()->status, 'Rolled back with the failure.');
+        $this->assertDatabaseCount('customers', 0);
+        $this->assertDatabaseCount('users', 0);
+        $this->assertDatabaseCount('stripe_events', 0);
+        $this->assertSame([], $sent, 'No email for a login that was rolled back.');
+
+        // Stripe retries the same event; it is processed once.
+        $failing = false;
+        $this->completeCheckout($intent, eventId: 'evt_retry')->assertStatus(204);
+        $this->completeCheckout($intent, eventId: 'evt_retry')->assertStatus(204);
+
+        $this->assertSame(CheckoutStatus::Completed, $intent->refresh()->status);
+        $this->assertSame(1, Customer::count());
+        $this->assertSame(1, Subscription::count());
+        $this->assertSame(1, StripeEvent::where('stripe_event_id', 'evt_retry')->count());
+        $this->assertSame([(new AccountActivation(Customer::sole(), 'x'))->envelope()->subject], $sent, 'One activation email, after the successful retry.');
+    }
 
     public function test_unpaid_checkout_does_not_provision_anything(): void
     {

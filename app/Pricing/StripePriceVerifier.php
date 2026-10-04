@@ -8,7 +8,7 @@ use Stripe\StripeClient;
 /**
  * Compares one Stripe Price with what the catalogue says it charges: it must
  * exist, be active, recurring on the right interval, in the same currency
- * and amount. Read-only: nothing is created or changed in Stripe. Used by
+ * and amount, and (productOf) belong to the configured Stripe Product. Read-only: nothing is created or changed in Stripe. Used by
  * pricing:verify-stripe and before an owner publishes a price.
  */
 class StripePriceVerifier
@@ -42,6 +42,18 @@ class StripePriceVerifier
             ($remote->recurring->interval ?? null) !== $expectedInterval || ($remote->recurring->interval_count ?? 1) !== 1 => 'wrong interval',
             default => self::OK,
         };
+    }
+
+    /** The Stripe Product a Price belongs to, or null when the Price cannot be read. */
+    public function productOf(string $stripePriceId): ?string
+    {
+        try {
+            $product = $this->client()->prices->retrieve($stripePriceId)->product;
+        } catch (ApiErrorException) {
+            return null;
+        }
+
+        return is_string($product) ? $product : ($product->id ?? null);
     }
 
     protected function client(): StripeClient

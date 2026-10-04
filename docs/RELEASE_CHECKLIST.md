@@ -51,19 +51,22 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 | Item | State | Check |
 | --- | --- | --- |
 | Real mailer and sender address | NOT CONFIGURED | `system:check` Mail = OK (log driver = NOT CONFIGURED) |
-| Mail queued, links from `APP_URL` | READY | invitation link used `APP_URL` in the local E2E run |
-| Delivery tested (invitation, password reset, activation) | NOT READY | PILOT.md first-customer gates |
+| Mail queued, links from `APP_URL` | READY | invitation link (pilot E2E) and activation link (Stripe E2E through an https tunnel) used `APP_URL` |
+| Delivery tested (invitation, password reset, activation) | NOT READY | activation, payment and subscription emails verified through SMTP into Mailpit (test catcher, 2026-10-04); a real provider on staging is still open (PILOT.md) |
 
 ## Stripe
 
 | Item | State | Check |
 | --- | --- | --- |
-| Test-mode keys (`STRIPE_KEY`, `STRIPE_SECRET`) | NOT CONFIGURED | `system:check` Stripe |
-| 12 recurring HUF prices created and their IDs set | NOT CONFIGURED | `php artisan pricing:verify-stripe` prints ok for all 12 |
-| Webhook endpoint + signing secret, 9 events | NOT CONFIGURED | Stripe dashboard; DEPLOYMENT.md lists the events |
+| Test-mode keys (`STRIPE_KEY`, `STRIPE_SECRET`) | READY (local) | test sandbox keys in the local `.env`; staging needs its own `.env` (STRIPE_TEST_MODE.md) |
+| 2 products and 12 recurring HUF prices created and their IDs set | READY | `php artisan pricing:verify-stripe`: ok for all 12, including the product (2026-10-04) |
+| Webhook endpoint + signing secret, 9 events | READY (local) | registered for the temporary tunnel and verified; staging needs its own endpoint for its `APP_URL` |
+| Tax setting for Hungary (final price, no VAT added) | READY | Stripe Tax off, no tax rates, `amount_tax` 0 on every session (STRIPE_TEST_MODE.md) |
+| Promotion codes (local rules + Stripe discount) | READY | real checkout with `PILOT10`: 8 990 Ft → 8 091 Ft charged; unknown and not-applicable codes refused locally |
 | Webhook signature, idempotency, transaction, retries | READY | tests (SubscriptionLifecycleTest, CheckoutTest) |
 | Browser success page never activates service | READY | tests |
-| Test purchase end to end | NOT READY | PILOT.md step 4 on staging |
+| Test purchase end to end | READY (local) | Playwright against real Stripe Checkout through an https tunnel (STRIPE_TEST_MODE.md); repeat on staging (PILOT.md step 4) |
+| Failed payment, cancellation, webhook replay, delayed webhook | READY | real test-mode runs 2026-10-04 (PROJECT_STATUS.md) |
 | Live mode | NOT READY | separate decision after the test-mode pilot (`STRIPE_ALLOW_LIVE_MODE`) |
 
 ## Backups
