@@ -296,6 +296,16 @@ Run the artisan commands as `www-data` (`sudo -u www-data php artisan …`) or w
 
 1. `php artisan down --retry=60`.
 2. If the release added migrations and they must be undone: `php artisan migrate:rollback --step=<number of new migrations> --pretend` first, then without `--pretend`. Every migration has a working `down()` (CI migrates, rolls everything back and migrates again on SQLite and MySQL), but rolling back drops columns and tables with their data. When in doubt, restore the dump taken before the update instead.
+
+   **Data loss in the owner commercial migrations (COUPONS.md, PROBONO.md, RECOVERY_OFFERS.md).** Rolling back a release that contains them destroys data that cannot be rebuilt from Stripe or from the code:
+
+   | Migration | What its `down()` removes |
+   | --- | --- |
+   | `add_internal_plans_to_subscriptions` | **deletes every PROBONO / internal-plan subscription row** (they have no Stripe counterpart), then drops the internal-plan columns (`internal_plan`, dates, internal note, assigned-by) |
+   | `create_recovery_offers_table` | **drops the `recovery_offers` table** with every offer, its scope, price, status and payment reference |
+   | `add_owner_management_to_promotions` | drops the coupon duration, per-customer limit, internal note, Stripe coupon ID and creator columns, and turns `percent_off` back into a whole number (a fractional percentage such as 12.5 is rounded) |
+
+   A database backup is therefore **required before any rollback that includes these migrations**: the `mysqldump` from "Updating a running installation" taken immediately before the update is the one to keep. Do not run `migrate:rollback` for them without it. A payment already confirmed by Stripe for an offer is not undone by dropping the table; the offer record would be gone, so restore the dump if the offers must survive.
 3. `git checkout $(cat ../previous-release)`, then the same steps as an update: `composer install --no-dev --optimize-autoloader --no-interaction`, `npm ci && npm run build`, `php artisan optimize:clear` and the four caches, `php artisan connector:package` if `CONNECTOR_LATEST_VERSION` differs.
 4. `php artisan queue:restart`, `php artisan up`, `php artisan system:check`, the smoke test.
 
@@ -359,7 +369,7 @@ Do not put HTTP basic authentication in front of the whole site: Stripe webhooks
 
 ### Stripe (test mode)
 
-Use the existing test sandbox (STRIPE_TEST_MODE.md): the same products, prices and promotion code. Create a **new** webhook endpoint `https://staging.wpcaregrid.com/stripe/webhook` with the nine events and put its signing secret into the staging `.env`. Delete the temporary endpoint left from the local tunnel test. Every endpoint of a sandbox receives all of its events, so keep only staging's endpoint enabled while staging is in use (events for checkouts it did not create are ignored, but they clutter its logs).
+Use the existing test sandbox (STRIPE_TEST_MODE.md): the same products and prices. **Coupons are not carried over.** They are managed in the Owner Admin (Owner → Coupons, [COUPONS.md](COUPONS.md)), and staging does not depend on a promotion code created by hand in the Stripe dashboard: the staging `promotions` table starts empty, and when the owner creates a coupon in the WP CareGrid Owner interface the application creates the matching Stripe coupon and promotion code itself (`PromotionGateway`, with the staging `STRIPE_SECRET`). A code that exists only in Stripe, or only from an earlier local test, is not accepted by the staging checkout; there is nothing to copy or sync. Create a **new** webhook endpoint `https://staging.wpcaregrid.com/stripe/webhook` with the nine events and put its signing secret into the staging `.env`. Delete the temporary endpoint left from the local tunnel test. Every endpoint of a sandbox receives all of its events, so keep only staging's endpoint enabled while staging is in use (events for checkouts it did not create are ignored, but they clutter its logs).
 
 ### Staging checklist
 
@@ -374,6 +384,10 @@ Use the existing test sandbox (STRIPE_TEST_MODE.md): the same products, prices a
 9. PILOT.md end-to-end run, including the Stripe test purchase from `/pricing` with the webhook arriving at staging.
 10. A manual FULL backup of a test site reaches the bucket and is **verified**; then the restore rehearsal (RELEASE_CHECKLIST.md) before `BACKUP_RESTORE_ENABLED` is reconsidered.
 11. Nightly `mysqldump` of the staging database to storage off the server.
+12. Scheduled commands of the owner commercial tools (`internal-plans:sync`, `offers:expire`):
+    1. Registered: `sudo -u www-data php artisan schedule:list` shows both as `0 * * * *` (hourly) with a "Next Due" time.
+    2. Scheduler heartbeat running: `php artisan system:check` shows Scheduler OK (heartbeat younger than 5 minutes), and the owner System page agrees.
+    3. They run successfully: `sudo -u www-data php artisan internal-plans:sync` prints "Started 0, ended 0 internal plan(s)." and `sudo -u www-data php artisan offers:expire` prints "Expired 0 recovery offer(s).", both exit 0 (the numbers differ when a PROBONO plan or an offer is due). Then, once, during the first minute of an hour, `sudo -u www-data php artisan schedule:run`: both commands are listed as running and finish without an error. This is the same path cron uses.
 
 ## Continuous integration
 

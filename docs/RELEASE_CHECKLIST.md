@@ -49,6 +49,8 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 | Item | State | Check |
 | --- | --- | --- |
 | One cron entry `schedule:run` every minute | NOT CONFIGURED | `system:check` Scheduler = OK (heartbeat younger than 5 minutes) |
+| `internal-plans:sync` and `offers:expire` registered with the scheduler (hourly) | NOT CONFIGURED | `php artisan schedule:list` lists both (checked locally; to be repeated on staging) |
+| `internal-plans:sync` and `offers:expire` execute successfully on staging | NOT CONFIGURED | run both by hand (exit 0), then `php artisan schedule:run` in the first minute of an hour; DEPLOYMENT.md "Staging checklist" item 12 |
 | No duplicate task runs | READY | every task `withoutOverlapping()` + `onOneServer()` |
 
 ## Mail
@@ -128,7 +130,7 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 | 100% coupon against real Stripe test mode (browser) | READY | docs/STRIPE_TEST_MODE.md (2026-10-05) |
 | PROBONO internal, not public, no backups | READY | PROBONO.md; ProbonoPlanTest |
 | Recovery offers: one-time payment, webhook-authoritative | READY | RECOVERY_OFFERS.md; RecoveryOffersTest, real Stripe test mode |
-| Hourly `internal-plans:sync` and `offers:expire` run by the scheduler | READY | routes/console.php; the owner System page shows the scheduler heartbeat |
+| Hourly `internal-plans:sync` and `offers:expire` registered in the scheduler | READY | routes/console.php; `php artisan schedule:list`. Running on staging: see "Scheduler" above |
 | Invoices for offers and coupons' sales | NOT READY | invoice provider milestone (CLAUDE.md section 23) |
 
 ## Owner Admin
