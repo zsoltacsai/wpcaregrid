@@ -41,17 +41,31 @@ class StorageManager
             }
         }
 
+        if ($driver === 's3' && $this->s3EncryptionIssue($config) !== null) {
+            return false;
+        }
+
         return $driver !== 'sftp' || filled($config['password'] ?? null) || filled($config['private_key'] ?? null);
+    }
+
+    /** Return a safe S3 encryption configuration issue for readiness output. */
+    public function configurationIssue(string $name): ?string
+    {
+        $config = config("backup.providers.{$name}");
+
+        return is_array($config) && ($config['driver'] ?? null) === 's3'
+            ? $this->s3EncryptionIssue($config)
+            : null;
     }
 
     public function provider(string $name): BackupStorage
     {
-        if (isset($this->providers[$name])) {
-            return $this->providers[$name];
-        }
-
         if (! $this->isConfigured($name)) {
             throw new StorageNotConfigured("Backup storage \"{$name}\" is not configured.");
+        }
+
+        if (isset($this->providers[$name])) {
+            return $this->providers[$name];
         }
 
         $config = config("backup.providers.{$name}");
@@ -67,5 +81,11 @@ class StorageManager
     public function set(string $name, BackupStorage $storage): void
     {
         $this->providers[$name] = $storage;
+    }
+
+    /** @param array<string, mixed> $config */
+    private function s3EncryptionIssue(array $config): ?string
+    {
+        return S3EncryptionConfig::issue($config, app()->environment('production'));
     }
 }

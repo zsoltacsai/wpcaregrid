@@ -82,6 +82,8 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 | --- | --- | --- |
 | Storage provider configured (S3 or SFTP) | NOT CONFIGURED | `system:check` Backup storage = OK after a verified backup |
 | S3 and SFTP integrations | READY | CI against real services (moto, OpenSSH with pinned host key) |
+| SSE-C implementation / CI validation | NOT READY | SSE-C support is implemented in the current local changes; CI validation is pending |
+| Hetzner Object Storage E2E and `HeadObject` checksum behavior | NOT READY | No real-provider E2E has been performed; checksum compatibility remains unverified |
 | Storage secrets never leave the server or reach logs | READY | tests (StorageProviderTest, CredentialExposureTest) |
 | Staging disk sized | NOT CONFIGURED | `system:check` warns below `BACKUP_STAGING_MIN_FREE_MB` |
 | Retention per plan | NOT CONFIGURED | a commercial decision; nothing is deleted until set |

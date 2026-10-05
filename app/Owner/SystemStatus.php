@@ -235,6 +235,7 @@ final class SystemStatus
     {
         $name = $this->storage->defaultName();
         $selected = (string) config('backup.storage');
+        $configurationIssue = $selected !== '' ? $this->storage->configurationIssue($selected) : null;
         $verified = $name ? Backup::where('status', BackupStatus::Verified->value)->where('verified_at', '>=', now()->subDays(7))->exists() : false;
 
         // Uploads are staged on this server before they go to storage: enough free space?
@@ -254,7 +255,7 @@ final class SystemStatus
             ! $verified => HealthStatus::Unknown,
             default => HealthStatus::Healthy,
         }, match (true) {
-            $name === null => $selected === '' ? __('owner.system.summaries.storage_not_selected') : __('owner.system.summaries.storage_incomplete'),
+            $name === null => $configurationIssue ?? ($selected === '' ? __('owner.system.summaries.storage_not_selected') : __('owner.system.summaries.storage_incomplete')),
             $tight => __('owner.system.summaries.staging_low', ['free' => $this->gib($free), 'needed' => $this->gib($needed)]),
             $name === 'local' && app()->environment('production') => __('owner.system.summaries.storage_local'),
             ! $verified => __('owner.system.summaries.storage_no_recent'),

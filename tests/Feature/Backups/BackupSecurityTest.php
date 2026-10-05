@@ -68,10 +68,12 @@ class BackupSecurityTest extends TestCase
 
     public function test_storage_credentials_never_reach_jobs_responses_or_logs(): void
     {
+        $sseCustomerKey = bin2hex(str_repeat("\x05", 32));
         config([
             'backup.storage' => 'local',
             'backup.providers.s3.secret' => 'S3-SECRET-VALUE',
             'backup.providers.s3.key' => 'S3-KEY-VALUE',
+            'backup.providers.s3.sse_customer_key' => $sseCustomerKey,
             'backup.providers.sftp.password' => 'SFTP-PASSWORD-VALUE',
         ]);
         $logged = [];
@@ -86,7 +88,7 @@ class BackupSecurityTest extends TestCase
         $responses .= json_encode(Backup::all()->toArray()).json_encode(WebsiteJob::all()->toArray()).implode('', $logged);
         $responses .= $this->actingAs($site['website']->customer->user)->get(route('account.websites.backups.index', $site['website']))->getContent();
 
-        foreach (['S3-SECRET-VALUE', 'S3-KEY-VALUE', 'SFTP-PASSWORD-VALUE', $this->storageRoot] as $secret) {
+        foreach (['S3-SECRET-VALUE', 'S3-KEY-VALUE', 'SFTP-PASSWORD-VALUE', $sseCustomerKey, $this->storageRoot] as $secret) {
             $this->assertStringNotContainsString($secret, $responses);
         }
     }

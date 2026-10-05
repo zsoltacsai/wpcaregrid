@@ -245,7 +245,7 @@ A restore always names one verified, unexpired backup of the same website, and a
 - **Storage credentials** are in the server's `.env` only.
   - They never appear in job payloads, responses, logs, customer pages or exceptions: provider errors carry an error code only.
   - SFTP requires a pinned host-key fingerprint.
-  - S3 objects use server-side encryption (`BACKUP_S3_SSE`, default `AES256`).
+  - S3 encryption mode is `BACKUP_S3_ENCRYPTION_MODE` (`legacy` by default, preserving `BACKUP_S3_SSE=AES256`; explicit `sse-s3`, `sse-c`, and `none` modes are available). In `sse-c` mode, `BACKUP_S3_SSE` is ignored for encryption-header selection; `BACKUP_S3_SSE=AES256` does not activate SSE-C. SSE-C uses `BACKUP_S3_SSE_C_KEY`, exactly 64 hexadecimal characters for 32 random bytes. The provider does not store this key; losing it makes encrypted backups unrecoverable. Securely escrow it outside the server and repository. `none` is only appropriate when encryption is supplied by another layer and requires `BACKUP_S3_ALLOW_UNENCRYPTED=true` in production.
 - **Connector jobs carry logical identifiers only:** backup UUID, reason and chunk size. There are no paths, URLs or credentials, and unknown payload keys are refused on both sides.
 - **Tenant isolation:**
   - backups, uploads, downloads and restores are scoped to the authenticated connector's website, and to the customer's own websites through `WebsitePolicy` and scoped route bindings;
@@ -282,6 +282,9 @@ Run the scheduler (`php artisan schedule:work`, or cron with `schedule:run`) and
 All settings are in `config/backup.php`, read from `.env` (see `.env.example`):
 
 - **storage:** `BACKUP_STORAGE` (`s3`, `sftp`, or `local` for development only; empty means backups are unavailable), with `BACKUP_S3_*` and `BACKUP_SFTP_*`;
+- **S3 encryption:** legacy mode preserves `BACKUP_S3_SSE` behavior; explicit `sse-s3` uses that setting, `sse-c` requires the 32-byte hex key, and `none` sends no server-side encryption header. The SSE-C key is required for HEAD, GET, range reads, and multipart operations and must be recoverable for restores. Do not log or commit it.
+- **S3 permissions:** object-level put, get, and delete for the configured bucket/prefix. `HeadObject` uses get permission. The application does not require `ListBucket`/object listing, bucket creation/deletion, copy, or tagging.
+- **S3 provider validation status:** SSE-C support is implemented in the current local code changes; CI validation is pending, and real Hetzner Object Storage E2E has not been performed. Hetzner `HeadObject` checksum behavior remains unverified. Keep SHA-256 verification enabled; missing native checksums use readback hashing when configured.
 - **uploads and staging:** chunk size, maximum object size, staging path;
 - **transfer:** tries, backoff and timeout;
 - **verification:** read-back;

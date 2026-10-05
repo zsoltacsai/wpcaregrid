@@ -128,6 +128,145 @@ class StorageProviderTest extends TestCase
         }
     }
 
+    public function test_s3_sse_c_validates_a_32_byte_hex_key_without_exposing_it(): void
+    {
+        $key = bin2hex(str_repeat("\x01", 32));
+        $this->assertInstanceOf(S3Storage::class, new S3Storage($this->sseCConfig($key)));
+
+        foreach ([null, str_repeat('a', 62), str_repeat('g', 64)] as $invalid) {
+            try {
+                new S3Storage($this->sseCConfig($invalid));
+                $this->fail('Invalid SSE-C key was accepted.');
+            } catch (\InvalidArgumentException $e) {
+                $this->assertSame('S3 SSE-C requires a 64-character hexadecimal key (32 bytes).', $e->getMessage());
+            }
+        }
+
+        try {
+            new S3Storage(['encryption_mode' => 'sse-customer-key']);
+            $this->fail('Unknown encryption mode was accepted.');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertSame('Invalid S3 encryption mode.', $e->getMessage());
+        }
+    }
+
+    public function test_s3_explicit_sse_s3_and_none_modes_are_supported(): void
+    {
+        [$storage, $mock] = $this->mockedS3(['encryption_mode' => 'sse-s3']);
+        $sent = null;
+        $mock->append(function (CommandInterface $command) use (&$sent) {
+            $sent = $command->toArray();
+
+            return new Result;
+        });
+        $storage->put(self::KEY, $this->stream('bytes'), 5, hash('sha256', 'bytes'));
+        $this->assertSame('AES256', $sent['ServerSideEncryption']);
+
+        [$storage, $mock] = $this->mockedS3(['encryption_mode' => 'none']);
+        $mock->append(function (CommandInterface $command) {
+            $this->assertArrayNotHasKey('ServerSideEncryption', $command->toArray());
+
+            return new Result;
+        });
+        $storage->put(self::KEY, $this->stream('bytes'), 5, hash('sha256', 'bytes'));
+    }
+
+    public function test_s3_sse_c_is_sent_for_put_and_delete_omits_it(): void
+    {
+        $rawKey = str_repeat("\x01", 32);
+        [$storage, $mock] = $this->mockedS3($this->sseCConfig(bin2hex($rawKey)));
+        $sent = [];
+        $mock->append(function (CommandInterface $command) use (&$sent) {
+            $sent[] = $command->toArray();
+
+            return new Result;
+        });
+        $mock->append(function (CommandInterface $command) use (&$sent) {
+            $sent[] = $command->toArray();
+
+            return new Result;
+        });
+
+        $storage->put(self::KEY, $this->stream('bytes'), 5, hash('sha256', 'bytes'));
+        $storage->delete(self::KEY);
+
+        $this->assertSseCParams($sent[0], $rawKey);
+        $this->assertArrayNotHasKey('SSECustomerKey', $sent[1]);
+        $this->assertArrayNotHasKey('SSECustomerKeyMD5', $sent[1]);
+    }
+
+    public function test_s3_sse_c_is_sent_for_all_multipart_commands(): void
+    {
+        $rawKey = str_repeat("\x02", 32);
+        [$storage, $mock] = $this->mockedS3($this->sseCConfig(bin2hex($rawKey)));
+        $commands = [];
+        foreach ([
+            ['UploadId' => 'upload-id'],
+            ['ETag' => 'part-etag'],
+            ['ETag' => 'complete-etag'],
+        ] as $result) {
+            $mock->append(function (CommandInterface $command) use (&$commands, $result) {
+                $commands[] = $command->toArray();
+
+                return new Result($result);
+            });
+        }
+
+        $storage->put(self::KEY, $this->stream(str_repeat('x', 1001)), 1001, hash('sha256', str_repeat('x', 1001)));
+
+        $this->assertCount(3, $commands);
+        foreach ($commands as $command) {
+            $this->assertSseCParams($command, $rawKey);
+        }
+    }
+
+    public function test_s3_sse_c_is_sent_for_head_readback_and_range_get(): void
+    {
+        $rawKey = str_repeat("\x03", 32);
+        [$storage, $mock] = $this->mockedS3($this->sseCConfig(bin2hex($rawKey)));
+        $commands = [];
+        $mock->append(function (CommandInterface $command) use (&$commands) {
+            $commands[] = $command->toArray();
+
+            return new Result(['ContentLength' => 5]);
+        });
+        $mock->append(function (CommandInterface $command) use (&$commands) {
+            $commands[] = $command->toArray();
+
+            return new Result(['Body' => \GuzzleHttp\Psr7\Utils::streamFor('bytes')]);
+        });
+        $mock->append(function (CommandInterface $command) use (&$commands) {
+            $commands[] = $command->toArray();
+
+            return new Result(['Body' => \GuzzleHttp\Psr7\Utils::streamFor('yte')]);
+        });
+        config(['backup.transfer.readback' => true]);
+
+        $verification = $storage->verify(self::KEY, 5, hash('sha256', 'bytes'));
+        $this->assertTrue($verification->ok());
+        $this->assertSame('yte', $storage->readRange(self::KEY, 1, 3));
+
+        $this->assertCount(3, $commands);
+        foreach ($commands as $command) {
+            $this->assertSseCParams($command, $rawKey);
+        }
+    }
+
+    public function test_s3_sse_c_key_never_appears_in_storage_exceptions(): void
+    {
+        $hexKey = bin2hex(str_repeat("\x04", 32));
+        [$storage, $mock] = $this->mockedS3($this->sseCConfig($hexKey));
+        $mock->append(fn (CommandInterface $command) => new S3Exception('request failed '.$hexKey, $command, ['code' => 'AccessDenied']));
+
+        try {
+            $storage->put(self::KEY, $this->stream('bytes'), 5, hash('sha256', 'bytes'));
+            $this->fail('No storage error.');
+        } catch (StorageUnavailable $e) {
+            $this->assertSame('S3 storage error: AccessDenied', $e->getMessage());
+            $this->assertStringNotContainsString($hexKey, $e->getMessage());
+        }
+    }
+
     public function test_storage_errors_never_contain_credentials(): void
     {
         [$storage, $mock] = $this->mockedS3();
@@ -173,6 +312,78 @@ class StorageProviderTest extends TestCase
         $manager->provider('sftp');
     }
 
+    public function test_s3_readiness_rejects_invalid_encryption_settings(): void
+    {
+        $manager = app(StorageManager::class);
+        $base = ['driver' => 's3', 'bucket' => 'caregrid', 'key' => 'k', 'secret' => 's'];
+
+        foreach ([
+            ['encryption_mode' => 'sse-c'],
+            ['encryption_mode' => 'sse-c', 'sse_customer_key' => str_repeat('a', 62)],
+            ['encryption_mode' => 'sse-c', 'sse_customer_key' => str_repeat('g', 64)],
+            ['encryption_mode' => 'unsupported'],
+        ] as $encryption) {
+            app()->detectEnvironment(fn () => 'testing');
+            config(['backup.providers.s3' => $base + $encryption]);
+            $this->assertFalse($manager->isConfigured('s3'));
+            $issue = $manager->configurationIssue('s3');
+            $this->assertNotNull($issue);
+            if (isset($encryption['sse_customer_key'])) {
+                $this->assertStringNotContainsString($encryption['sse_customer_key'], $issue);
+            }
+        }
+
+        config(['backup.providers.s3' => $base + [
+            'encryption_mode' => 'sse-c',
+            'sse_customer_key' => bin2hex(str_repeat("\x06", 32)),
+        ]]);
+        $this->assertTrue($manager->isConfigured('s3'));
+        $this->assertNull($manager->configurationIssue('s3'));
+    }
+
+    public function test_production_none_requires_an_explicit_override(): void
+    {
+        $manager = app(StorageManager::class);
+        $config = ['driver' => 's3', 'bucket' => 'caregrid', 'key' => 'k', 'secret' => 's', 'encryption_mode' => 'none'];
+
+        app()->detectEnvironment(fn () => 'production');
+        config(['backup.storage' => 's3', 'backup.providers.s3' => $config + ['allow_unencrypted' => false]]);
+        $this->assertFalse($manager->isConfigured('s3'));
+        $this->assertNull($manager->defaultName());
+        $issue = $manager->configurationIssue('s3');
+        $this->assertStringContainsString('BACKUP_S3_ALLOW_UNENCRYPTED=true', (string) $issue);
+
+        config(['backup.providers.s3.allow_unencrypted' => true]);
+        $this->assertTrue($manager->isConfigured('s3'));
+        $this->assertNull($manager->configurationIssue('s3'));
+
+        app()->detectEnvironment(fn () => 'testing');
+        config(['backup.providers.s3.allow_unencrypted' => false]);
+        $this->assertTrue($manager->isConfigured('s3'));
+    }
+
+    public function test_cached_s3_provider_does_not_bypass_production_encryption_readiness(): void
+    {
+        $manager = app(StorageManager::class);
+        app()->detectEnvironment(fn () => 'production');
+        config([
+            'backup.providers.s3' => [
+                'driver' => 's3',
+                'bucket' => 'caregrid',
+                'key' => 'k',
+                'secret' => 's',
+                'encryption_mode' => 'none',
+                'allow_unencrypted' => true,
+            ],
+        ]);
+
+        $this->assertInstanceOf(S3Storage::class, $manager->provider('s3'));
+        config(['backup.providers.s3.allow_unencrypted' => false]);
+
+        $this->expectException(StorageNotConfigured::class);
+        $manager->provider('s3');
+    }
+
     private function storage(string $provider): BackupStorage
     {
         return match ($provider) {
@@ -189,14 +400,30 @@ class StorageProviderTest extends TestCase
     }
 
     /** @return array{0: S3Storage, 1: MockHandler} */
-    private function mockedS3(): array
+    private function mockedS3(array $overrides = []): array
     {
         $mock = new MockHandler;
-        $storage = new S3Storage(['endpoint' => 'https://s3.example', 'region' => 'eu-central-1', 'bucket' => 'caregrid', 'key' => 'k', 'secret' => 's', 'prefix' => 'backups', 'use_path_style_endpoint' => true, 'server_side_encryption' => 'AES256', 'multipart_threshold' => 1000, 'part_size' => 5 * 1024 * 1024]);
+        $storage = new S3Storage(array_replace(['endpoint' => 'https://s3.example', 'region' => 'eu-central-1', 'bucket' => 'caregrid', 'key' => 'k', 'secret' => 's', 'prefix' => 'backups', 'use_path_style_endpoint' => true, 'server_side_encryption' => 'AES256', 'multipart_threshold' => 1000, 'part_size' => 5 * 1024 * 1024], $overrides));
         $client = new S3Client(['version' => 'latest', 'region' => 'eu-central-1', 'credentials' => ['key' => 'k', 'secret' => 's'], 'handler' => $mock]);
         (new \ReflectionProperty(S3Storage::class, 'client'))->setValue($storage, $client);
 
         return [$storage, $mock];
+    }
+
+    /** @return array<string, mixed> */
+    private function sseCConfig(?string $hexKey): array
+    {
+        return ['encryption_mode' => 'sse-c', 'sse_customer_key' => $hexKey];
+    }
+
+    /** @param array<string, mixed> $params */
+    private function assertSseCParams(array $params, string $rawKey): void
+    {
+        $this->assertSame('AES256', $params['SSECustomerAlgorithm']);
+        // The AWS SDK middleware encodes both raw binary values for HTTP headers.
+        $this->assertSame(base64_encode($rawKey), $params['SSECustomerKey']);
+        $this->assertSame(base64_encode(md5($rawKey, true)), $params['SSECustomerKeyMD5']);
+        $this->assertArrayNotHasKey('ServerSideEncryption', $params);
     }
 
     /** @return resource */

@@ -25,7 +25,13 @@ final class S3Storage implements BackupStorage
     private ?S3Client $client = null;
 
     /** @param  array<string, mixed>  $config  config('backup.providers.s3') */
-    public function __construct(private readonly array $config) {}
+    public function __construct(private readonly array $config)
+    {
+        $issue = S3EncryptionConfig::issue($this->config, app()->environment('production'));
+        if ($issue !== null) {
+            throw new \InvalidArgumentException($issue);
+        }
+    }
 
     public function name(): string
     {
@@ -35,9 +41,7 @@ final class S3Storage implements BackupStorage
     public function put(string $key, $stream, int $size, string $sha256): void
     {
         $params = ['Bucket' => $this->config['bucket'], 'Key' => $this->key($key), 'ContentType' => 'application/octet-stream'];
-        if (! empty($this->config['server_side_encryption'])) {
-            $params['ServerSideEncryption'] = $this->config['server_side_encryption'];
-        }
+        $params += $this->encryptionParameters();
 
         try {
             if ($size <= (int) $this->config['multipart_threshold']) {
@@ -54,7 +58,7 @@ final class S3Storage implements BackupStorage
                 'bucket' => $params['Bucket'],
                 'key' => $params['Key'],
                 'part_size' => max(5 * 1024 * 1024, (int) $this->config['part_size']),
-                'params' => array_diff_key($params, array_flip(['Bucket', 'Key'])),
+                'params' => array_diff_key($params, array_flip(['Bucket', 'Key', 'ChecksumSHA256'])),
             ]))->upload();
         } catch (AwsException $e) {
             if (in_array($e->getAwsErrorCode(), ['BadDigest', 'XAmzContentSHA256Mismatch', 'InvalidDigest'], true)) {
@@ -70,7 +74,7 @@ final class S3Storage implements BackupStorage
     public function verify(string $key, int $size, string $sha256): Verification
     {
         try {
-            $head = $this->client()->headObject(['Bucket' => $this->config['bucket'], 'Key' => $this->key($key), 'ChecksumMode' => 'ENABLED']);
+            $head = $this->client()->headObject(['Bucket' => $this->config['bucket'], 'Key' => $this->key($key), 'ChecksumMode' => 'ENABLED'] + $this->encryptionParameters());
         } catch (AwsException $e) {
             if ($e->getStatusCode() === 404) {
                 return Verification::failed('MISSING');
@@ -96,7 +100,7 @@ final class S3Storage implements BackupStorage
         }
 
         try {
-            $object = $this->client()->getObject(['Bucket' => $this->config['bucket'], 'Key' => $this->key($key), '@http' => ['stream' => true]]);
+            $object = $this->client()->getObject(['Bucket' => $this->config['bucket'], 'Key' => $this->key($key), '@http' => ['stream' => true]] + $this->encryptionParameters());
             $body = $object['Body']->detach();
             $actual = $this->streamHash($body);
         } catch (AwsException $e) {
@@ -111,7 +115,7 @@ final class S3Storage implements BackupStorage
     public function readRange(string $key, int $offset, int $length): string
     {
         try {
-            $object = $this->client()->getObject(['Bucket' => $this->config['bucket'], 'Key' => $this->key($key), 'Range' => 'bytes='.$offset.'-'.($offset + $length - 1)]);
+            $object = $this->client()->getObject(['Bucket' => $this->config['bucket'], 'Key' => $this->key($key), 'Range' => 'bytes='.$offset.'-'.($offset + $length - 1)] + $this->encryptionParameters());
         } catch (AwsException $e) {
             throw $this->unavailable($e);
         }
@@ -133,6 +137,30 @@ final class S3Storage implements BackupStorage
         $prefix = trim((string) ($this->config['prefix'] ?? ''), '/');
 
         return ($prefix !== '' ? $prefix.'/' : '').ObjectKey::assert($key);
+    }
+
+    /** @return array<string, string> */
+    private function encryptionParameters(): array
+    {
+        $mode = $this->config['encryption_mode'] ?? 'legacy';
+        if ($mode === 'sse-c') {
+            $key = hex2bin($this->config['sse_customer_key']);
+
+            return [
+                'SSECustomerAlgorithm' => 'AES256',
+                // The AWS SDK base64-encodes the raw key and raw MD5 digest.
+                'SSECustomerKey' => $key,
+                'SSECustomerKeyMD5' => md5($key, true),
+            ];
+        }
+
+        $sse = match ($mode) {
+            'none' => null,
+            'sse-s3' => $this->config['server_side_encryption'] ?? 'AES256',
+            default => $this->config['server_side_encryption'] ?? null,
+        };
+
+        return is_string($sse) && $sse !== '' ? ['ServerSideEncryption' => $sse] : [];
     }
 
     private function client(): S3Client

@@ -32,8 +32,15 @@ return [
             'secret' => env('BACKUP_S3_SECRET'),
             'prefix' => env('BACKUP_S3_PREFIX', 'backups'),
             'use_path_style_endpoint' => (bool) env('BACKUP_S3_PATH_STYLE', false),
-            // Server-side encryption at rest; empty to leave it to the bucket policy.
+            // `legacy` preserves BACKUP_S3_SSE behavior for existing deployments.
+            // Explicit modes are `sse-s3`, `sse-c`, and `none`.
+            'encryption_mode' => env('BACKUP_S3_ENCRYPTION_MODE', 'legacy'),
+            // SSE-S3 setting (kept for backwards compatibility).
             'server_side_encryption' => env('BACKUP_S3_SSE', 'AES256'),
+            // Exactly 64 hex characters (32 random bytes); required only for sse-c.
+            'sse_customer_key' => env('BACKUP_S3_SSE_C_KEY'),
+            // Production-only safety valve for provider-managed at-rest encryption with mode=none.
+            'allow_unencrypted' => (bool) env('BACKUP_S3_ALLOW_UNENCRYPTED', false),
             // Objects up to this size are sent in one PUT with a SHA-256 checksum S3 verifies.
             'multipart_threshold' => (int) env('BACKUP_S3_MULTIPART_THRESHOLD', 100 * $mib),
             'part_size' => (int) env('BACKUP_S3_PART_SIZE', 16 * $mib),
