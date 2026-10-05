@@ -4,6 +4,38 @@
 
 @php $s = $subscription; @endphp
 
+@if ($s->isInternal())
+    {{-- An internal plan (PROBONO): assigned, not bought. No price, no billing, no Stripe. --}}
+    <dl class="grid gap-x-8 gap-y-5 text-sm sm:grid-cols-2">
+        <x-account.detail :label="__('account.subscription.product')">{{ $s->product_type->label() }}</x-account.detail>
+        <x-account.detail :label="__('account.subscription.plan')">{{ $s->planName() }}</x-account.detail>
+        <x-account.detail :label="__('account.subscription.status')">
+            <x-ui.status-badge :tone="$s->status->tone()">{{ $s->status->label() }}</x-ui.status-badge>
+        </x-account.detail>
+        <x-account.detail :label="__('account.subscription.website')">{{ $s->website?->host() ?? __('account.subscription.no_website') }}</x-account.detail>
+        <x-account.detail :label="__('account.subscription.internal.since')">
+            <span class="font-mono">{{ ($s->internal_starts_at ?? $s->activated_at ?? $s->created_at)->translatedFormat('j M Y') }}</span>
+        </x-account.detail>
+        <x-account.detail :label="__('account.subscription.internal.until')">
+            @if ($s->internal_ends_at)<span class="font-mono">{{ $s->internal_ends_at->translatedFormat('j M Y') }}</span>@else{{ __('account.subscription.internal.no_end') }}@endif
+        </x-account.detail>
+    </dl>
+
+    <div class="mt-6 border-t border-line pt-6">
+        <h3 class="text-sm font-semibold text-primary">{{ __('account.subscription.internal.includes_title') }}</h3>
+        <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-ink">
+            @foreach (['updates', 'health', 'licenses'] as $item)
+                <li>{{ __('account.subscription.internal.includes.'.$item) }}</li>
+            @endforeach
+        </ul>
+        <h3 class="mt-4 text-sm font-semibold text-primary">{{ __('account.subscription.internal.excludes_title') }}</h3>
+        <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-ink">
+            @foreach (['backups', 'scans', 'admin_access'] as $item)
+                <li>{{ __('account.subscription.internal.excludes.'.$item) }}</li>
+            @endforeach
+        </ul>
+    </div>
+@else
 <dl class="grid gap-x-8 gap-y-5 text-sm sm:grid-cols-2">
     <x-account.detail :label="__('account.subscription.product')">{{ $s->product_type->label() }}</x-account.detail>
     <x-account.detail :label="__('account.subscription.plan')">{{ $s->planName() }}</x-account.detail>
@@ -44,3 +76,4 @@
         {{ $s->website?->host() ?? __('account.subscription.no_website') }}
     </x-account.detail>
 </dl>
+@endif

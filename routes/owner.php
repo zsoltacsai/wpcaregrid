@@ -1,14 +1,18 @@
 <?php
 
 use App\Http\Controllers\Owner\ContentController;
+use App\Http\Controllers\Owner\CouponController;
 use App\Http\Controllers\Owner\CustomerController;
 use App\Http\Controllers\Owner\DashboardController;
+use App\Http\Controllers\Owner\InternalPlanController;
 use App\Http\Controllers\Owner\LoginController;
 use App\Http\Controllers\Owner\OperatorController;
 use App\Http\Controllers\Owner\PricingController;
+use App\Http\Controllers\Owner\RecoveryOfferController;
 use App\Http\Controllers\Owner\SeoController;
 use App\Http\Controllers\Owner\SystemController;
 use App\Http\Controllers\Owner\WebsiteController;
+use App\Models\Promotion;
 use App\Models\User;
 use Illuminate\Support\Facades\Route;
 
@@ -22,6 +26,9 @@ use Illuminate\Support\Facades\Route;
 
 // Only operator logins: a customer or owner ID in the URL is a 404.
 Route::bind('operatorUser', fn (string $value) => User::where('role', User::ROLE_OPERATOR)->whereKey(ctype_digit($value) ? (int) $value : 0)->firstOrFail());
+
+// Coupons are addressed by their code, which is upper-case and limited to letters, digits, - and _.
+Route::bind('coupon', fn (string $value) => Promotion::where('code', strtoupper($value))->firstOrFail());
 
 Route::prefix('owner')->name('owner.')->group(function () {
     Route::middleware('guest:owner')->group(function () {
@@ -37,6 +44,11 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::get('/customers', [CustomerController::class, 'index'])->middleware('can:owner.customers.view')->name('customers.index');
         Route::get('/customers/{customer}', [CustomerController::class, 'show'])->middleware('can:owner.customers.view')->name('customers.show');
         Route::put('/customers/{customer}', [CustomerController::class, 'update'])->middleware(['can:owner.customers.manage', 'throttle:owner-sensitive'])->name('customers.update');
+
+        // PROBONO, an internal plan the owner assigns (docs/PROBONO.md). The plan is fixed server-side.
+        Route::post('/customers/{customer}/internal-plans', [InternalPlanController::class, 'store'])->middleware(['can:owner.plans.assign', 'throttle:owner-sensitive'])->name('customers.internal-plans.store');
+        Route::put('/customers/{customer}/internal-plans/{subscription}', [InternalPlanController::class, 'update'])->scopeBindings()->middleware(['can:owner.plans.assign', 'throttle:owner-sensitive'])->name('customers.internal-plans.update');
+        Route::post('/customers/{customer}/internal-plans/{subscription}/end', [InternalPlanController::class, 'end'])->scopeBindings()->middleware(['can:owner.plans.assign', 'throttle:owner-sensitive'])->name('customers.internal-plans.end');
 
         Route::get('/websites', [WebsiteController::class, 'index'])->middleware('can:owner.websites.view')->name('websites.index');
         Route::get('/websites/{website}', [WebsiteController::class, 'show'])->middleware('can:owner.websites.view')->name('websites.show');
@@ -58,6 +70,26 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::put('/pricing/prices/{price}', [PricingController::class, 'update'])->middleware(['can:owner.pricing.manage', 'throttle:owner-sensitive'])->name('pricing.prices.update');
         Route::post('/pricing/prices/{price}/publish', [PricingController::class, 'publish'])->middleware(['can:owner.pricing.manage', 'throttle:owner-sensitive', 'throttle:owner-external'])->name('pricing.prices.publish');
         Route::post('/pricing/prices/{price}/discard', [PricingController::class, 'discard'])->middleware(['can:owner.pricing.manage', 'throttle:owner-sensitive'])->name('pricing.prices.discard');
+
+        // Coupons (docs/COUPONS.md): the one coupon engine, managed here.
+        Route::get('/coupons', [CouponController::class, 'index'])->middleware('can:owner.coupons.manage')->name('coupons.index');
+        Route::get('/coupons/create', [CouponController::class, 'create'])->middleware('can:owner.coupons.manage')->name('coupons.create');
+        Route::post('/coupons', [CouponController::class, 'store'])->middleware(['can:owner.coupons.manage', 'throttle:owner-sensitive', 'throttle:owner-coupons'])->name('coupons.store');
+        Route::get('/coupons/{coupon}', [CouponController::class, 'show'])->middleware('can:owner.coupons.manage')->name('coupons.show');
+        Route::put('/coupons/{coupon}', [CouponController::class, 'update'])->middleware(['can:owner.coupons.manage', 'throttle:owner-sensitive'])->name('coupons.update');
+        Route::post('/coupons/{coupon}/activate', [CouponController::class, 'activate'])->middleware(['can:owner.coupons.manage', 'throttle:owner-sensitive', 'throttle:owner-coupons'])->name('coupons.activate');
+        Route::post('/coupons/{coupon}/deactivate', [CouponController::class, 'deactivate'])->middleware(['can:owner.coupons.manage', 'throttle:owner-sensitive', 'throttle:owner-coupons'])->name('coupons.deactivate');
+        Route::delete('/coupons/{coupon}', [CouponController::class, 'destroy'])->middleware(['can:owner.coupons.manage', 'throttle:owner-sensitive', 'throttle:owner-coupons'])->name('coupons.destroy');
+
+        // Custom security recovery offers (docs/RECOVERY_OFFERS.md). One-time payment, confirmed by webhook.
+        Route::get('/offers', [RecoveryOfferController::class, 'index'])->middleware('can:owner.offers.manage')->name('offers.index');
+        Route::get('/offers/create', [RecoveryOfferController::class, 'create'])->middleware('can:owner.offers.manage')->name('offers.create');
+        Route::post('/offers', [RecoveryOfferController::class, 'store'])->middleware(['can:owner.offers.manage', 'throttle:owner-sensitive'])->name('offers.store');
+        Route::get('/offers/{offer}', [RecoveryOfferController::class, 'show'])->middleware('can:owner.offers.manage')->name('offers.show');
+        Route::put('/offers/{offer}', [RecoveryOfferController::class, 'update'])->middleware(['can:owner.offers.manage', 'throttle:owner-sensitive'])->name('offers.update');
+        Route::post('/offers/{offer}/send', [RecoveryOfferController::class, 'send'])->middleware(['can:owner.offers.manage', 'throttle:owner-sensitive'])->name('offers.send');
+        Route::post('/offers/{offer}/cancel', [RecoveryOfferController::class, 'cancel'])->middleware(['can:owner.offers.manage', 'throttle:owner-sensitive', 'throttle:owner-external'])->name('offers.cancel');
+        Route::post('/offers/{offer}/complete', [RecoveryOfferController::class, 'complete'])->middleware(['can:owner.offers.manage', 'throttle:owner-sensitive'])->name('offers.complete');
 
         // Homepage, site and plan wording. SEO sections are edited under /owner/seo.
         Route::get('/content', [ContentController::class, 'index'])->middleware('can:owner.content.manage')->name('content.index');

@@ -1,6 +1,13 @@
 <x-layouts.account :title="__('account.dashboard.title')">
     <x-account.page-header :title="__('account.dashboard.welcome', ['name' => $customer->first_name])" />
 
+    @if ($openOffers > 0)
+        <x-account.notice tone="warning" class="mb-6">
+            {{ trans_choice('offers.dashboard_open', $openOffers, ['count' => $openOffers]) }}
+            <a href="{{ route('account.offers.index') }}" class="font-medium underline underline-offset-4">{{ __('offers.dashboard_view') }}</a>
+        </x-account.notice>
+    @endif
+
     <div class="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <x-account.panel :title="__('account.dashboard.subscription')" heading-id="dashboard-subscription">
             @if ($subscription)

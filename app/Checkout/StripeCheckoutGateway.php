@@ -94,6 +94,14 @@ final class StripeCheckoutGateway implements CheckoutGateway
         // check. Stripe's own code field stays off so it cannot be bypassed.
         if ($promotion) {
             $parameters['discounts'] = [['promotion_code' => $promotion->stripe_promotion_code_id]];
+
+            // 100% off for ever: nothing will ever be charged, so Checkout does not ask for a payment
+            // method (the session completes with payment_status "no_payment_required"). A 100% coupon
+            // that applies once or for some months still collects one, because the subscription is
+            // charged afterwards. The session is still completed only by Stripe's signed webhook.
+            if ($promotion->makesEveryInvoiceFree()) {
+                $parameters['payment_method_collection'] = 'if_required';
+            }
         }
 
         return $parameters;

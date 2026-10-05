@@ -32,7 +32,8 @@ class ScheduleScans extends Command
 
         Website::with(['subscription', 'activeConnector'])->whereNotNull('subscription_id')->each(function (Website $website) use ($scans) {
             $subscription = $website->subscription;
-            if (! $website->allowsServiceOperations() || $website->presence() !== Presence::Connected || ! $subscription?->product_type || ! $subscription->plan) {
+            // An internal plan has no public tier, so no plan-driven frequency: no scheduled scans (InternalPlan).
+            if (! $website->allowsServiceOperations() || $website->presence() !== Presence::Connected || ! $subscription?->product_type || ! $subscription->plan || $subscription->isInternal()) {
                 return;
             }
 

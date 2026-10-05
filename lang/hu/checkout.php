@@ -65,6 +65,7 @@ return [
         'inactive' => 'Ez a kedvezménykód nem aktív.',
         'not_started' => 'Ez a kedvezménykód még nem érvényes.',
         'expired' => 'Ez a kedvezménykód lejárt.',
+        'already_used' => 'Ezt a kedvezménykódot Ön már a legnagyobb megengedett számú alkalommal felhasználta.',
         'used_up' => 'Ezt a kedvezménykódot már a legnagyobb megengedett számú alkalommal használták fel.',
         'not_applicable' => 'Ez a kedvezménykód nem használható a kiválasztott csomaggal vagy számlázási időszakkal.',
     ],

@@ -271,6 +271,11 @@ class AdminAccessService
     {
         $subscription = $website->subscription;
 
+        // An internal plan says for itself whether it includes admin access (PROBONO: no).
+        if ($subscription?->internal_plan !== null) {
+            return $subscription->internal_plan->includesAdminAccess();
+        }
+
         return $subscription?->product_type && $subscription->plan
             && (bool) config("admin_access.plans.{$subscription->product_type->value}.{$subscription->plan->value}.{$level->value}", false);
     }

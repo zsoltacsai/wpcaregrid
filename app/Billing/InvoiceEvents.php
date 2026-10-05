@@ -38,7 +38,8 @@ final class InvoiceEvents
 
         $subscription->save();
 
-        if ($subscription->customer) {
+        // A zero invoice (100% discount) is not a payment: no "payment received" email.
+        if ($subscription->customer && (int) ($invoice->amount_paid ?? 0) > 0) {
             Mail::to($subscription->customer->email)->queue(new PaymentConfirmation($subscription, $this->money($invoice, 'amount_paid')));
         }
     }

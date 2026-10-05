@@ -92,6 +92,13 @@ final class JobQueue
         })->values();
     }
 
+    private function planExcludesBackups(Website $website): bool
+    {
+        $internal = $website->subscription?->internal_plan;
+
+        return $internal !== null && ! $internal->includesBackups();
+    }
+
     /** What an update job changes: the plugin basename, theme stylesheet or "wordpress". */
     public static function updateTarget(array $payload): string
     {
@@ -111,6 +118,10 @@ final class JobQueue
             ! $connector?->isActive() || $connector->website_id !== $website->id => 'website is not connected',
             ! $website->allowsServiceOperations() => 'subscription is not active',
             ! $connector->can($capability) => "connector does not support {$capability->value}",
+            // An internal plan that excludes backups (PROBONO): no backup or restore job is ever queued or
+            // handed out, whatever created it. Checked again at delivery, so a job queued before the
+            // plan was assigned is cancelled instead of released.
+            ($type->isBackup() || $type === JobType::Restore) && $this->planExcludesBackups($website) => 'plan does not include backups',
             // Overwriting a site needs a connector that is reporting in right now.
             $type === JobType::Restore && ! config('backup.restore.enabled') => 'restore is not enabled',
             $type === JobType::Restore && $connector->presence() !== Presence::Connected => 'connector is not currently reporting in',

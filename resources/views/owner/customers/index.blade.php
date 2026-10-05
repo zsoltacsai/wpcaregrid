@@ -76,7 +76,7 @@
                             <td class="px-3 py-2 font-mono text-xs">{{ $customer->country_code }}</td>
                             <td class="px-3 py-2 text-xs whitespace-nowrap">
                                 @if ($subscription)
-                                    {{ $subscription->product_type->label() }} {{ __('owner.tiers.'.$subscription->plan->value) }}
+                                    {{ $subscription->product_type->label() }} {{ $subscription->tierLabel() }}
                                     <x-ui.status-badge :status="$subscription->status" class="ml-1" />
                                 @else
                                     <span class="text-muted">{{ __('owner.customers.no_subscription') }}</span>
@@ -100,7 +100,7 @@
                     <p class="truncate text-xs text-muted">{{ $customer->company_name ?: '—' }} · {{ $customer->country_code }}</p>
                     <div class="mt-2 flex flex-wrap gap-1.5">
                         @if ($subscription)
-                            <x-ui.status-badge :status="$subscription->status">{{ $subscription->product_type->label() }} {{ __('owner.tiers.'.$subscription->plan->value) }} · {{ $subscription->status->label() }}</x-ui.status-badge>
+                            <x-ui.status-badge :status="$subscription->status">{{ $subscription->product_type->label() }} {{ $subscription->tierLabel() }} · {{ $subscription->status->label() }}</x-ui.status-badge>
                         @endif
                         <x-ui.status-badge tone="neutral">{{ trans_choice('owner.customers.website_count', $customer->websites_count) }}</x-ui.status-badge>
                     </div>

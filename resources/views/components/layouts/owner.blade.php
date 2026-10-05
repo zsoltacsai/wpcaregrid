@@ -12,6 +12,8 @@
         ['route' => 'owner.websites.index', 'active' => 'owner.websites.*', 'label' => __('owner.nav.websites'), 'icon' => 'globe'],
         ['route' => 'owner.operators.index', 'active' => 'owner.operators.*', 'label' => __('owner.nav.operators'), 'icon' => 'key'],
         ['route' => 'owner.pricing.index', 'active' => 'owner.pricing.*', 'label' => __('owner.nav.pricing'), 'icon' => 'credit-card'],
+        ['route' => 'owner.coupons.index', 'active' => 'owner.coupons.*', 'label' => __('owner.nav.coupons'), 'icon' => 'receipt'],
+        ['route' => 'owner.offers.index', 'active' => 'owner.offers.*', 'label' => __('owner.nav.offers'), 'icon' => 'shield'],
         ['route' => 'owner.content.index', 'active' => 'owner.content.*', 'label' => __('owner.nav.content'), 'icon' => 'list'],
         ['route' => 'owner.seo.index', 'active' => 'owner.seo.*', 'label' => __('owner.nav.seo'), 'icon' => 'search'],
         ['route' => 'owner.system', 'active' => 'owner.system', 'label' => __('owner.nav.system'), 'icon' => 'cog'],

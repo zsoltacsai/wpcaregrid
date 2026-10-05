@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Billing\InternalPlan;
 use App\Billing\SubscriptionStatus;
 use App\Pricing\BillingInterval;
 use App\Pricing\Currency;
@@ -42,6 +43,9 @@ class Subscription extends Model
             'status' => SubscriptionStatus::class,
             'product_type' => ProductType::class,
             'plan' => PlanTier::class,
+            'internal_plan' => InternalPlan::class,
+            'internal_starts_at' => 'datetime',
+            'internal_ends_at' => 'datetime',
             'interval' => BillingInterval::class,
             'amount' => 'integer',
             'current_period_start' => 'datetime',
@@ -72,27 +76,57 @@ class Subscription extends Model
         return $this->hasOne(Website::class);
     }
 
+    /** An internal plan (PROBONO): no Stripe subscription, no public tier, no price. */
+    public function isInternal(): bool
+    {
+        return $this->internal_plan !== null;
+    }
+
     public function grantsAccess(): bool
     {
-        return $this->status->grantsAccess();
+        if (! $this->status->grantsAccess()) {
+            return false;
+        }
+
+        // An internal plan also stops at its end date, without waiting for the scheduled sync.
+        return ! $this->isInternal() || $this->internalWindowOpen();
+    }
+
+    /** Whether "now" is inside the internal plan's optional start and end dates. */
+    public function internalWindowOpen(?Carbon $now = null): bool
+    {
+        $now ??= Carbon::now();
+
+        return ($this->internal_starts_at === null || $now->gte($this->internal_starts_at))
+            && ($this->internal_ends_at === null || $now->lt($this->internal_ends_at));
     }
 
     /** The plan's name as the pricing catalogue shows it (including wording published in the owner area). */
     public function planName(): string
     {
+        if ($this->isInternal()) {
+            return $this->internal_plan->label();
+        }
+
         return app(PricingCatalog::class)->plan($this->product_type, $this->plan)->name;
+    }
+
+    /** Short English tier label for the owner area. */
+    public function tierLabel(): string
+    {
+        return $this->isInternal() ? $this->internal_plan->label() : __('owner.tiers.'.$this->plan->value);
     }
 
     public function money(): Money
     {
         $config = config("pricing.currencies.{$this->currency}", []);
 
-        return new Money($this->amount, Currency::fromConfig($this->currency, $config, app()->getLocale()));
+        return new Money((int) $this->amount, Currency::fromConfig($this->currency, $config, app()->getLocale()));
     }
 
     /** Next charge date, or null when the subscription will not renew. */
     public function nextBillingDate(): ?Carbon
     {
-        return $this->status->hasEnded() || $this->cancel_at_period_end ? null : $this->current_period_end;
+        return $this->isInternal() || $this->status->hasEnded() || $this->cancel_at_period_end ? null : $this->current_period_end;
     }
 }

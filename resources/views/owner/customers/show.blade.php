@@ -1,6 +1,9 @@
 <x-layouts.owner :title="$customer->fullName()">
     <x-operator.page-header :title="$customer->fullName()" :lead="$customer->company_name" :eyebrow="__('owner.customers.title')">
         <x-slot:actions>
+            @if ($customer->active && $customer->websites->isNotEmpty())
+                <x-ui.button :href="route('owner.offers.create', ['customer' => $customer->uuid])" variant="secondary" size="sm">{{ __('owner.offers.new') }}</x-ui.button>
+            @endif
             <x-ui.status-badge :tone="$customer->active ? 'positive' : 'neutral'">{{ __('owner.customers.states.'.($customer->active ? 'active' : 'inactive')) }}</x-ui.status-badge>
         </x-slot:actions>
     </x-operator.page-header>
@@ -47,7 +50,7 @@
                         @foreach ($customer->subscriptions as $subscription)
                             <tr>
                                 <td class="px-2 py-2">{{ $subscription->product_type->label() }} {{ $subscription->planName() }}</td>
-                                <td class="px-2 py-2">{{ $subscription->interval->label() }}</td>
+                                <td class="px-2 py-2">{{ $subscription->interval?->label() ?? "—" }}</td>
                                 <td class="px-2 py-2 tabular-nums">{{ $subscription->amount !== null && $subscription->currency ? $subscription->money()->format() : '—' }}</td>
                                 <td class="px-2 py-2"><x-ui.status-badge :status="$subscription->status" /></td>
                                 <td class="px-2 py-2 font-mono text-xs">{{ $subscription->nextBillingDate()?->format('Y-m-d') ?? ($subscription->cancel_at_period_end ? __('owner.customers.cancels') : '—') }}</td>
@@ -58,6 +61,80 @@
                 </table>
             </div>
             <p class="mt-3 text-xs text-muted">{{ __('owner.customers.stripe_note') }}</p>
+        @endif
+    </x-operator.section>
+
+    @php
+        $internal = $customer->subscriptions->filter(fn ($s) => $s->isInternal());
+        $open = $internal->filter(fn ($s) => in_array($s->status, [\App\Billing\SubscriptionStatus::Pending, \App\Billing\SubscriptionStatus::Active], true));
+        $stamp = fn ($date) => $date?->format('Y-m-d\TH:i');
+    @endphp
+    <x-operator.section :title="__('owner.probono.section')" id="customer-internal-plan" class="mt-4">
+        <p class="mb-4 text-sm text-muted">{{ __('owner.probono.lead') }}</p>
+
+        @foreach ($internal as $plan)
+            @php $isOpen = $open->contains('id', $plan->id); @endphp
+            <div class="mb-4 rounded-md border border-line p-3" id="internal-plan-{{ $plan->uuid }}">
+                <div class="flex flex-wrap items-center gap-2">
+                    <span class="font-semibold text-primary">{{ $plan->planName() }}</span>
+                    <span class="text-xs text-muted">{{ $plan->product_type->label() }}</span>
+                    <x-ui.status-badge :status="$plan->status" />
+                    <span class="text-xs text-muted">
+                        {{ $plan->internal_starts_at ? __('owner.probono.starts_on', ['date' => $plan->internal_starts_at->format('Y-m-d')]) : __('owner.probono.since', ['date' => ($plan->activated_at ?? $plan->created_at)->format('Y-m-d')]) }},
+                        {{ $plan->internal_ends_at ? __('owner.probono.until', ['date' => $plan->internal_ends_at->format('Y-m-d')]) : __('owner.probono.no_end') }}
+                    </span>
+                    <span class="text-xs text-muted">· {{ __('owner.probono.website') }}: {{ $customer->websites->firstWhere('subscription_id', $plan->id)?->host() ?? __('owner.probono.no_website') }}</span>
+                </div>
+
+                @if ($isOpen)
+                    <form method="POST" action="{{ route('owner.customers.internal-plans.update', [$customer, $plan]) }}" class="mt-3 grid gap-3 md:grid-cols-2" novalidate>
+                        @csrf
+                        @method('PUT')
+                        <x-form.field :name="'starts_at'" type="datetime-local" :label="__('owner.probono.starts_at')" :value="$stamp($plan->internal_starts_at)" :optional="true" />
+                        <x-form.field :name="'ends_at'" type="datetime-local" :label="__('owner.probono.ends_at')" :value="$stamp($plan->internal_ends_at)" :optional="true" :hint="__('owner.probono.dates_hint', ['zone' => config('app.timezone')])" />
+                        <div class="md:col-span-2">
+                            <label for="note-{{ $plan->uuid }}" class="block text-sm font-medium text-primary">{{ __('owner.probono.note') }} <span class="font-normal text-muted">({{ __('owner.optional') }})</span></label>
+                            <textarea id="note-{{ $plan->uuid }}" name="note" rows="2" maxlength="1000" class="mt-2 block w-full rounded-sm border border-line-strong bg-surface px-4 py-3 text-[15px] text-ink">{{ $plan->internal_note }}</textarea>
+                            <p class="mt-1 text-xs text-muted">{{ __('owner.probono.note_hint') }}</p>
+                        </div>
+                        <div class="md:col-span-2"><x-ui.button type="submit" variant="secondary" size="sm">{{ __('owner.probono.save') }}</x-ui.button></div>
+                    </form>
+                    <form method="POST" action="{{ route('owner.customers.internal-plans.end', [$customer, $plan]) }}" class="mt-2" onsubmit="return confirm(@js(__('owner.probono.end_confirm')))">
+                        @csrf
+                        <x-ui.button type="submit" variant="ghost" size="sm">{{ __('owner.probono.end') }}</x-ui.button>
+                    </form>
+                @elseif ($plan->internal_note)
+                    <p class="mt-2 text-xs text-muted">{{ $plan->internal_note }}</p>
+                @endif
+            </div>
+        @endforeach
+
+        @if ($internal->isEmpty())
+            <p class="mb-4 text-sm text-muted">{{ __('owner.probono.none') }}</p>
+        @endif
+
+        @if ($customer->active)
+            <form method="POST" action="{{ route('owner.customers.internal-plans.store', $customer) }}" class="grid gap-3 border-t border-line pt-4 md:grid-cols-2" novalidate>
+                @csrf
+                <div class="md:col-span-2">
+                    <h3 class="text-sm font-semibold text-primary">{{ __('owner.probono.assign') }}</h3>
+                    <p class="text-xs text-muted">{{ __('owner.probono.assign_lead') }}</p>
+                </div>
+                <x-form.select name="product_type" :label="__('owner.probono.product')" :options="collect(\App\Pricing\ProductType::cases())->mapWithKeys(fn ($t) => [$t->value => $t->label()])->all()" :selected="$customer->websites->first()?->type?->value ?? 'wordpress'" />
+                <div></div>
+                <x-form.field name="starts_at" type="datetime-local" :label="__('owner.probono.starts_at')" :optional="true" />
+                <x-form.field name="ends_at" type="datetime-local" :label="__('owner.probono.ends_at')" :optional="true" :hint="__('owner.probono.dates_hint', ['zone' => config('app.timezone')])" />
+                <div class="md:col-span-2">
+                    <label for="note-new" class="block text-sm font-medium text-primary">{{ __('owner.probono.note') }} <span class="font-normal text-muted">({{ __('owner.optional') }})</span></label>
+                    <textarea id="note-new" name="note" rows="2" maxlength="1000" class="mt-2 block w-full rounded-sm border border-line-strong bg-surface px-4 py-3 text-[15px] text-ink">{{ old('note') }}</textarea>
+                    <p class="mt-1 text-xs text-muted">{{ __('owner.probono.note_hint') }}</p>
+                </div>
+                <label class="flex items-start gap-2 rounded-sm border border-warning/40 bg-warning-soft px-3 py-2 text-sm text-warning-ink md:col-span-2">
+                    <input type="checkbox" name="confirm" value="1" class="mt-0.5 size-4">
+                    <span>{{ __('owner.probono.confirm') }}</span>
+                </label>
+                <div class="md:col-span-2"><x-ui.button type="submit">{{ __('owner.probono.assign') }}</x-ui.button></div>
+            </form>
         @endif
     </x-operator.section>
 

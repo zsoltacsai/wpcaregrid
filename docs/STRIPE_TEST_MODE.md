@@ -61,7 +61,7 @@ Hungarian business rule: the listed price is the final customer price, no VAT ad
 
 ### Promotion codes
 
-A code works only when it exists in **both** places: a Stripe Coupon + Promotion Code (Stripe applies the discount), and a local `promotions` row with the same code, its `stripe_promotion_code_id` and the local rules (product types, plans, intervals, markets, dates, `max_redemptions`). The server checks the local rules before creating the Checkout Session; Stripe's own code field is off, so the browser cannot bypass them. `times_redeemed` counts completed, paid checkouts.
+Coupons are created in the owner area (Owner → Coupons, [COUPONS.md](COUPONS.md)), which creates the Stripe coupon and promotion code through the API and the local row together; creating them by hand is no longer needed. A code works only when it exists in **both** places: a Stripe Coupon + Promotion Code (Stripe applies the discount), and a local `promotions` row with the same code, its `stripe_promotion_code_id` and the local rules (product types, plans, intervals, markets, dates, `max_redemptions`). The server checks the local rules before creating the Checkout Session; Stripe's own code field is off, so the browser cannot bypass them. `times_redeemed` counts completed, paid checkouts.
 
 ## Testing a real purchase locally
 
@@ -103,6 +103,17 @@ It is not part of CI: it needs Stripe keys and a public address.
 ## Replacing the webhook secret
 
 Roll it in the Dashboard (Webhooks → endpoint → Signing secret → Roll; Stripe can keep the old secret valid for a while) or create a new endpoint. Put the new `whsec_…` into `STRIPE_WEBHOOK_SECRET`, run `php artisan config:cache` if caches are used, and check: a resent event is answered 2xx, a request without a valid signature 400. Never put a signing secret into the repository, logs or tickets.
+
+## Coupons, the 100% case and recovery offers (2026-10-05)
+
+Validated against real Stripe test mode (API level: `StripePromotionGateway`, `StripeCheckoutGateway` and `StripeOfferPaymentGateway` against the live test API; browser level: `tests/e2e/owner-commercial.spec.ts` through a temporary Cloudflare tunnel, a registered test webhook endpoint with the same nine events, Mailpit). No new webhook events are needed: offers use `checkout.session.completed` and `async_payment_succeeded`.
+
+- Coupons created by the owner area exist in Stripe as the requested percentage and duration, with an active promotion code; deactivating and re-activating in the owner area switches the Stripe promotion code; a duplicate code is refused before a second Stripe call.
+- 10% once on Business monthly: Checkout total 17,091 Ft (discount 1,899 Ft); paid with the test card; the signed webhook created the customer once and the coupon's use count became 1.
+- 100% **forever**: Checkout shows "Start for free", the email only, "100% off", "Total due today HUF 0.00" and **no card fields**; completed without a payment method; the signed webhook provisioned exactly one customer, one login and one subscription (one activation email, no "payment received" email for the $0 invoice); the coupon's use count became 1.
+- 100% **once**: total 0 today, payment method still collected (checked at API level). 12.5% for 3 months: total 87.5%.
+- Recovery offer: a one-time `payment` Checkout Session of 45,000 Ft built from the stored offer (inline line item, no Stripe Price); paid with the test card in English and in Hungarian; the offer stayed *accepted* until the webhook arrived and then became *paid* once; emails (offer sent, payment received) in the customer's language; accepting again reused the open session; cancelling expired it in Stripe.
+- Live mode stays refused (`STRIPE_ALLOW_LIVE_MODE=false`); the same key checks apply to the new gateways.
 
 ## Last validation
 

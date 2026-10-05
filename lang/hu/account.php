@@ -23,6 +23,7 @@ return [
         'subscription' => 'Előfizetés',
         'billing' => 'Számlázás',
         'profile' => 'Profil',
+        'offers' => 'Ajánlatok',
         'logout' => 'Kilépés',
         'open_menu' => 'Menü megnyitása',
         'close_menu' => 'Menü bezárása',
@@ -133,6 +134,23 @@ return [
         'manage_note' => 'Az önkiszolgáló módosítás hamarosan elérhető. A csomag módosításához vagy lemondásához lépjen kapcsolatba velünk.',
         'website' => 'Weboldal',
         'no_website' => 'Még nincs weboldal hozzáadva',
+        'internal' => [
+            'since' => 'Aktív ettől',
+            'until' => 'Eddig',
+            'no_end' => 'Nincs lejárati dátum',
+            'includes_title' => 'A csomag tartalmazza',
+            'excludes_title' => 'A csomag nem tartalmazza',
+            'includes' => [
+                'updates' => 'Bővítmények, sablonok és a WordPress frissítése',
+                'health' => 'Az oldal állapotának figyelése',
+                'licenses' => 'Licencellenőrzés',
+            ],
+            'excludes' => [
+                'backups' => 'Mentés: nem készül és nem állítható vissza, a frissítések mentés nélkül futnak',
+                'scans' => 'Ütemezett biztonsági vizsgálat',
+                'admin_access' => 'Ideiglenes WordPress-adminisztrátori hozzáférés',
+            ],
+        ],
         'none' => 'Még nincs előfizetése.',
     ],
 

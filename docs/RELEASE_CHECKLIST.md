@@ -120,6 +120,17 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 | `ADMIN_ACCESS_OPERATOR_FULL_ADMIN=false` | READY | default; `system:check` Safety switches |
 | Tested on a real host over HTTPS | NOT READY | PILOT.md |
 
+## Commercial operations (coupons, PROBONO, recovery offers)
+
+| Item | State | Check |
+| --- | --- | --- |
+| Owner coupons: percentage 0 < p <= 100, one engine, 100% supported | READY | COUPONS.md; CouponManagementTest, ZeroChargeCheckoutTest |
+| 100% coupon against real Stripe test mode (browser) | READY | docs/STRIPE_TEST_MODE.md (2026-10-05) |
+| PROBONO internal, not public, no backups | READY | PROBONO.md; ProbonoPlanTest |
+| Recovery offers: one-time payment, webhook-authoritative | READY | RECOVERY_OFFERS.md; RecoveryOffersTest, real Stripe test mode |
+| Hourly `internal-plans:sync` and `offers:expire` run by the scheduler | READY | routes/console.php; the owner System page shows the scheduler heartbeat |
+| Invoices for offers and coupons' sales | NOT READY | invoice provider milestone (CLAUDE.md section 23) |
+
 ## Owner Admin
 
 | Item | State | Check |

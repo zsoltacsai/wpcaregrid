@@ -65,6 +65,7 @@ return [
         'STORAGE_NOT_CONFIGURED' => 'Backups are temporarily unavailable. Please try again later.',
         'SUBSCRIPTION_INACTIVE' => 'Backups need an active subscription.',
         'NO_BACKUP_PLAN' => 'Your plan does not include backups.',
+        'BACKUPS_NOT_INCLUDED' => 'Backups are not part of your plan.',
         'NOT_CONNECTED' => 'The website must be connected and reporting in.',
         'CAPABILITY_MISSING' => 'Update the WP CareGrid Connector on your website to use this feature.',
         'MANUAL_NOT_ALLOWED' => 'Your plan does not include on-demand backups.',

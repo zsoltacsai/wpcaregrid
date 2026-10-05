@@ -5,6 +5,7 @@ use App\Http\Controllers\Account\BackupController;
 use App\Http\Controllers\Account\BillingController;
 use App\Http\Controllers\Account\ConnectorDownloadController;
 use App\Http\Controllers\Account\DashboardController;
+use App\Http\Controllers\Account\OfferController;
 use App\Http\Controllers\Account\ProfileController;
 use App\Http\Controllers\Account\SubscriptionController;
 use App\Http\Controllers\Account\WebsiteController;
@@ -81,6 +82,13 @@ Route::middleware(['auth', 'customer'])->prefix('account')->name('account.')->gr
     Route::get('/subscriptions/{subscription}', [SubscriptionController::class, 'show'])->name('subscriptions.show');
 
     Route::get('/billing', BillingController::class)->name('billing');
+
+    // Custom recovery offers addressed to this customer (policy: own offers, never drafts).
+    Route::get('/offers', [OfferController::class, 'index'])->name('offers.index');
+    Route::get('/offers/{offer}', [OfferController::class, 'show'])->name('offers.show');
+    Route::post('/offers/{offer}/accept', [OfferController::class, 'accept'])->middleware('throttle:account')->name('offers.accept');
+    Route::post('/offers/{offer}/pay', [OfferController::class, 'pay'])->middleware('throttle:account')->name('offers.pay');
+    Route::post('/offers/{offer}/decline', [OfferController::class, 'decline'])->middleware('throttle:account')->name('offers.decline');
 
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile');
     Route::put('/profile', [ProfileController::class, 'update'])->middleware('throttle:account')->name('profile.update');

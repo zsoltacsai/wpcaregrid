@@ -200,6 +200,12 @@ Separate paid work includes:
 
 Do not promise unlimited development in maintenance plans.
 
+### Owner commercial tools (docs/COUPONS.md, PROBONO.md, RECOVERY_OFFERS.md)
+
+- **Coupons** are managed in Owner Admin and use the one existing engine (`promotions`, `Promotion::ineligibilityReason()`). 0 < percent <= 100; 100% is an ordinary coupon, never a special code. Code, percentage and duration are fixed after creation (Stripe coupons are immutable). The browser never supplies a discount, amount or Stripe ID.
+- **PROBONO** is an internal plan, assigned only by the owner. It is not a `PlanTier`: it must never reach the catalogue, public pricing, checkout or a Stripe Price, and has no price. It has **no backups** (explicit capability, enforced in `BackupPolicy` and `JobQueue`); a missing price or plan never means "backups allowed". Its feature boundary is in docs/PROBONO.md; do not widen it silently.
+- **Recovery offers** are one-off, owner-created, bound to one customer and one of that customer's websites, paid once through Stripe Checkout (`mode = payment`) from the stored price, and confirmed only by the signed webhook. They are not subscriptions, not Basic/Business/Secure, and never claim a security finding. Internal notes are never shown to customers.
+
 ## 7. Third-Party Licenses
 
 Third-party plugin/theme licenses are the customer's responsibility.
@@ -888,6 +894,7 @@ Linux CI should be authoritative for Linux/production-like filesystem behavior.
 - Unified Site Health
 - Security & Malware Engine
 - Owner Admin + CMS
+- Owner commercial operations (coupons, PROBONO, custom recovery offers)
 
 ### Next / planned
 

@@ -26,7 +26,16 @@ class BackupPolicy
         $settings = $plan ? (array) config("backup.plans.{$plan->productType->value}.{$plan->tier->value}", []) : [];
         $storage = $this->storage->defaultName();
 
+        // An internal plan states for itself whether it includes backups (PROBONO: it does not).
+        // This is checked before anything else, so no setting or missing price can enable backups.
+        $internal = $subscription?->internal_plan;
+        if ($internal !== null) {
+            $plan = null;
+            $settings = [];
+        }
+
         $refusal = match (true) {
+            $internal !== null && ! $internal->includesBackups() => 'BACKUPS_NOT_INCLUDED',
             $plan === null || $settings === [] => 'NO_BACKUP_PLAN',
             ! $website->allowsServiceOperations() => 'SUBSCRIPTION_INACTIVE',
             $storage === null => 'STORAGE_NOT_CONFIGURED',

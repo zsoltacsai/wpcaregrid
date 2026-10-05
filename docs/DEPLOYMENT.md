@@ -192,6 +192,8 @@ Exactly one cron entry, on one server:
 | `security:monitor` | every 10 min | time out stuck scans |
 | `security:schedule` | hourly | scheduled scans (only with `SECURITY_SCHEDULE_ENABLED=true`) |
 | `security:vulnerabilities:sync` | daily 04:10 | refresh the vulnerability feed (only when configured) |
+| `internal-plans:sync` | hourly | start PROBONO plans at their start date, end them at their end date |
+| `offers:expire` | hourly | expire recovery offers whose validity passed, stop their unpaid Checkout Sessions |
 | `system:scheduler-heartbeat` | every minute | proof for the System page that the scheduler runs |
 
 ## Mail

@@ -27,6 +27,10 @@ enum OwnerAbility: string
     case PricingManage = 'pricing.manage';
     case ContentManage = 'content.manage';
     case SeoManage = 'seo.manage';
+    // Commercial: coupons, internal plans (PROBONO) and custom recovery offers. Owner only.
+    case CouponsManage = 'coupons.manage';
+    case PlansAssign = 'plans.assign';
+    case OffersManage = 'offers.manage';
     case SystemView = 'system.view';
 
     public function gate(): string

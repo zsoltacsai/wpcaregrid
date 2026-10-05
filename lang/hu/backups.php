@@ -65,6 +65,7 @@ return [
         'STORAGE_NOT_CONFIGURED' => 'A mentések átmenetileg nem érhetők el. Kérjük, próbálja újra később.',
         'SUBSCRIPTION_INACTIVE' => 'A mentésekhez aktív előfizetés szükséges.',
         'NO_BACKUP_PLAN' => 'A csomagja nem tartalmaz mentést.',
+        'BACKUPS_NOT_INCLUDED' => 'A mentés nem része a csomagjának.',
         'NOT_CONNECTED' => 'A weboldalnak csatlakoztatva kell lennie, és jelentenie kell.',
         'CAPABILITY_MISSING' => 'A funkció használatához frissítse a WP CareGrid Connector bővítményt a weboldalán.',
         'MANUAL_NOT_ALLOWED' => 'A csomagja nem tartalmaz igény szerinti mentést.',

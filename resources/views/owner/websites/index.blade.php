@@ -75,7 +75,7 @@
                                 @endif
                             </td>
                             <td class="px-3 py-2 text-xs whitespace-nowrap">{{ $row['website']->type->label() }}</td>
-                            <td class="px-3 py-2 text-xs whitespace-nowrap">{{ $row['website']->subscription ? __('owner.tiers.'.$row['website']->subscription->plan->value) : '—' }}</td>
+                            <td class="px-3 py-2 text-xs whitespace-nowrap">{{ $row['website']->subscription ? $row['website']->subscription->tierLabel() : '—' }}</td>
                             <td class="px-3 py-2"><x-ui.status-badge :tone="$row['report']->overall->tone()">{{ $row['report']->overall->label() }}</x-ui.status-badge></td>
                             <td class="px-3 py-2"><x-ui.status-badge :tone="$row['connector']->tone()">{{ $row['connector']->label() }}</x-ui.status-badge></td>
                             <td class="px-3 py-2"><x-ui.status-badge :tone="$row['backup']->tone()">{{ $row['backup']->label() }}</x-ui.status-badge></td>

@@ -3,16 +3,17 @@
 > Kept up to date at the end of every milestone (see CLAUDE.md §27).
 > A new session should read CLAUDE.md, this file and the relevant docs, then run `git status` and `git log --oneline -12`.
 
-Last updated: 2026-10-04
+Last updated: 2026-10-05
 
 ## Branch and HEAD
 
 - Branch: `claude/ecstatic-wozniak-oemyuf` (also the main branch used for PRs)
-- Latest commit: **Add bilingual frontend and customer portal** (`8afa9d6`, pushed, CI green)
+- Latest commit: **Add owner coupons and custom offers** (local, not pushed; `git log --oneline -3` shows its hash)
+- Before it (pushed, CI green): `321bda1` **Upgrade GitHub Actions runtimes**, `c5b60ab` status update, `8afa9d6` **Add bilingual frontend and customer portal**
 - Before it (pushed, CI green): `f1f172d` **Fix login configuration**, `6e159e5` **Complete Hungarian public content**, `5231eeb` **Staging deployment preparation**, `7d6327c` status update, `836316f` MySQL test fix, `eeb1ada` **Complete Stripe product validation**, `0b54777` **Real Stripe Test Mode Validation**
 - Earlier: `9171262` status update, `3f01f5d` CI configuration fix, `050afe0` **Production Hardening, CI & Release Readiness**
 - Earlier: `2f7d0b4` Owner Admin & Content Management, `4076684` Security & Malware Engine, `ba2d1db` Internal Operator Console
-- Everything is pushed to `origin` (github.com/zsoltacsai/wpcaregrid); push only when requested, never force.
+- Everything up to `321bda1` is pushed to `origin` (github.com/zsoltacsai/wpcaregrid); the newest commit is local until a push is requested; never force.
 - Separate small fix, committed on its own as **Fix login configuration** (after the Hungarian content commit): empty `MARKETING_*_URL` values (as shipped in the old `.env.example`) turned the header and footer Login link into a dead link; `config/marketing.php` now treats empty as unset. Contact, Terms, Privacy and Cookie pages are still not built, so those links point at their default paths and answer 404.
 
 ## Completed milestones
@@ -27,6 +28,19 @@ Last updated: 2026-10-04
 | Internal Operator Console | `ba2d1db` | docs/OPERATOR_CONSOLE.md |
 | Unified Site Health + Security & Malware Engine | `4076684` | docs/SECURITY_ENGINE.md, MALWARE_SCANNING.md, SECURITY_FINDINGS.md, SECURITY_INCIDENTS.md |
 | Owner Admin & Content Management | `2f7d0b4` | docs/OWNER_ADMIN.md, CONTENT_MANAGEMENT.md, PRICING_ADMIN.md |
+
+## Owner commercial operations — COMPLETE: coupons, PROBONO, custom recovery offers
+
+Done 2026-10-05. Descriptions: docs/COUPONS.md, docs/PROBONO.md, docs/RECOVERY_OFFERS.md.
+
+- **Coupons** (Owner → Coupons, ability `owner.coupons.manage`): create, edit rules, activate / deactivate, delete if unused. One coupon engine: the existing `promotions` table and `Promotion::ineligibilityReason()`; checkout, redemption counting and the webhook are unchanged. The owner area creates the Stripe coupon and promotion code through `PromotionGateway` (`StripePromotionGateway`; fake in tests). Percentage: above 0, up to 100, two decimals, parsed from digits (0 is refused: Stripe cannot create it and it would change nothing). Code, percentage and duration are fixed after creation (a Stripe coupon is immutable); validity, limits (total and per customer), restrictions (product, plan, period), note and active are editable. Audit: created, updated, activated, deactivated, deleted, redeemed.
+- **100% discount**: an ordinary coupon. Verified against real Stripe test mode: total exactly 0, never negative; `payment_method_collection = if_required` only for 100% **forever** (then the hosted page asks for no card); 100% once / for some months still collects a payment method because the subscription is charged afterwards. Stripe reports `no_payment_required`, which the webhook already treated as paid; provisioning happens once, replays change nothing, a `$0` invoice sends no payment email. Small isolated changes: `StripeCheckoutGateway`, `InvoiceEvents`.
+- **PROBONO** (Owner → Customer → Internal plan, ability `owner.plans.assign`): `InternalPlan` enum, deliberately not a `PlanTier` (so it cannot reach the catalogue, pricing page, checkout or Stripe). A normal `subscriptions` row with `internal_plan`, no Stripe subscription, no public tier, no price (those columns became nullable), optional start and end dates (`internal-plans:sync` hourly). **Includes**: updates, health, licence checks. **Excludes**: backups of any kind (scheduled, manual, pre-update, retention, restore), scheduled security scans, customer WordPress admin access. Backups are refused in `BackupPolicy` (`BACKUPS_NOT_INCLUDED`, decided before any config) and again in `JobQueue::refusal` at queue and delivery time.
+- **Recovery offers** (Owner → Recovery offers, ability `owner.offers.manage`): `recovery_offers` table; one customer, one website of that customer; stored price and currency (HUF only, from `PricingCatalog::sellableCurrencies()`); states draft, offered, accepted, declined, expired, paid, cancelled, completed. One-time Stripe Checkout (`mode = payment`, inline line item, no Stripe Price), paid only by the signed webhook (`RecoveryOffers::markPaid`: session, amount and currency must match the stored offer), idempotent. Customer portal: Offers list and page (accept, decline, pay), English and Hungarian. First localized customer emails (`RecoveryOfferSent`, `RecoveryOfferPaid`, in the customer's saved language, once each).
+- **Migrations** (three, rolled back and forward on SQLite, on a copy of the real development database with data, and on MySQL 8.4): `add_owner_management_to_promotions`, `add_internal_plans_to_subscriptions`, `create_recovery_offers_table`.
+- **Tests**: `CouponManagementTest` (18), `ZeroChargeCheckoutTest` (5), `ProbonoPlanTest` (22), `RecoveryOffersTest` (30). Server suite 726 tests on SQLite and on MySQL 8.4 (719 pass, the same 7 local skips as before, no failures). Real Stripe test mode: API level (21 checks) and browser level (`tests/e2e/owner-commercial.spec.ts`, 8 Playwright tests: public PROBONO absence, owner coupons, a 10% purchase, a 100% forever purchase without a card, PROBONO assignment, a recovery offer paid in English and in Hungarian, 375px mobile layouts): all passed. Results in docs/STRIPE_TEST_MODE.md.
+- **Found and fixed while building it**: the Eloquent guardable-column cache is per process, so a MySQL test database that predates a migration silently drops the new attributes (recreate the database; CI always starts empty); the owner coupon actions share the Stripe-bound rate limit, which locked the owner out after five typos (own limiter `owner-coupons`, 10/min); Stripe's zero-total hosted page has no Link checkbox, which the E2E helper waited for.
+- **Not done / limits**: no invoice for coupon or offer sales (invoice provider milestone); offers are HUF only; the older customer emails are still English; usage limits are counted at confirmation (two simultaneous checkouts can both pass a limit of 1); no refund flow for offers.
 
 ## Bilingual frontend and customer portal — COMPLETE (English and Hungarian)
 
@@ -129,14 +143,14 @@ Still needed before the milestone is complete:
 4. First-customer safety gates in PILOT.md on the real installation.
 5. GitHub branch protection with the CI checks required.
 
-## Test baseline (2026-10-04)
+## Test baseline (2026-10-05)
 
 Linux CI (authoritative): see "CI validation" above.
 
 Windows development machine:
 
-- Server suite on SQLite: 651 tests, all pass except 7 explicit skips (6 S3/SFTP tests without local services, 1 Windows-only permission assertion).
-- Server suite on MySQL 8.4 (local): all pass with the same explicit skips.
+- Server suite on SQLite: 726 tests, all pass except 7 explicit skips (6 S3/SFTP tests without local services, 1 Windows-only permission assertion).
+- Server suite on MySQL 8.4 (local, a fresh database): 726 tests, all pass with the same explicit skips.
 - WordPress connector suite (169 tests) on SQLite and MySQL 8.4: all pass; skips are MySQL-only/SQLite-only tests and explicit Windows symlink/permission limitations (strict in CI).
 - Local end-to-end run with a real WordPress and connector 0.4.1: PILOT.md.
 - Stripe test-mode browser E2E (Playwright, real Stripe Checkout): 6 passed, plus the delayed-webhook test (runs only with the endpoint paused): STRIPE_TEST_MODE.md.
@@ -169,6 +183,7 @@ Finish this one (list above). Next: deploy staging per DEPLOYMENT.md "Staging" o
 - CSP is staged (off → report-only → enforce) so it cannot break the application unnoticed.
 - Windows-only filesystem limitations skip with an explicit reason locally and fail in CI (strict mode); production code is never weakened for them.
 - Prices: config/pricing.php is the baseline; owner-published prices override it for future checkouts only.
+- Coupons, PROBONO and recovery offers are owner-only commercial tools. PROBONO is not a `PlanTier` and has no price; its backup capability is explicitly off. A recovery offer is a one-time payment from a stored price and is never a subscription or a security finding.
 - Stripe: one Product per product type (WordPress, WooCommerce), one Price per plan × interval × market; one check (`StripePriceVerifier::verify()`: amount, currency, interval, active, Product) for the command, owner publishing and the owner's Stripe check. Promotion codes need a local rule row and a Stripe promotion code; local rules decide eligibility, Stripe applies the discount.
 - Staging runs `APP_ENV=production` (the production safeguards are tied to that exact value); it is identified by `APP_URL`, `APP_NAME` and Stripe test mode, never by a weaker environment name.
 - Tests never use the developer's Stripe keys (`phpunit.xml` pins them empty); the real-Stripe browser E2E is opt-in and outside CI.

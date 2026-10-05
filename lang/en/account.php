@@ -11,6 +11,7 @@ return [
         'subscription' => 'Subscription',
         'billing' => 'Billing',
         'profile' => 'Profile',
+        'offers' => 'Offers',
         'logout' => 'Log out',
         'open_menu' => 'Open menu',
         'close_menu' => 'Close menu',
@@ -121,6 +122,23 @@ return [
         'manage_note' => 'Self-service changes are coming soon. Contact us to change or cancel your plan.',
         'website' => 'Website',
         'no_website' => 'No website added yet',
+        'internal' => [
+            'since' => 'Active since',
+            'until' => 'Until',
+            'no_end' => 'No end date',
+            'includes_title' => 'Included in this plan',
+            'excludes_title' => 'Not included in this plan',
+            'includes' => [
+                'updates' => 'Plugin, theme and WordPress updates',
+                'health' => 'Site health monitoring',
+                'licenses' => 'Licence checks',
+            ],
+            'excludes' => [
+                'backups' => 'Backups: none are made or restored, and updates run without a backup first',
+                'scans' => 'Scheduled security scans',
+                'admin_access' => 'Temporary WordPress admin access',
+            ],
+        ],
         'none' => 'You have no subscription yet.',
     ],
 

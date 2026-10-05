@@ -65,6 +65,7 @@ return [
         'inactive' => 'This promotion code is not active.',
         'not_started' => 'This promotion code is not valid yet.',
         'expired' => 'This promotion code has expired.',
+        'already_used' => 'You have already used this promotion code the maximum number of times.',
         'used_up' => 'This promotion code has already been used the maximum number of times.',
         'not_applicable' => 'This promotion code cannot be used with the selected plan or billing period.',
     ],

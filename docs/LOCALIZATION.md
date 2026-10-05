@@ -12,7 +12,7 @@ How the public site, the customer login and the customer portal are shown in Eng
 | Customer login: log in, activation link, forgot / reset password, logout, errors (validation, authentication, 404, 403, 419, 429) | Magyar, English |
 | Customer portal: dashboard, websites and onboarding, connection, backups and restore, WordPress admin access, security, subscription, billing, profile | Magyar, English |
 | Owner area, operator console, staff invitations | English only, always (`english_only` paths) |
-| Emails | English only, see below |
+| Emails | Recovery offers: English and Hungarian (the customer's saved language). Activation, welcome, payment, subscription: English only, see below |
 
 ## How a language is chosen
 
@@ -48,14 +48,16 @@ Laravel's own structure (no package): `lang/en`, `lang/hu`.
 | Files | What |
 | --- | --- |
 | `home`, `pricing`, `checkout`, `dashboard`, `status`, `countries` | public site, pricing table, order pages, demo dashboard, status labels, billing countries |
-| `account`, `backups`, `admin_access`, `security`, `site_health`, `connector` | customer login and portal |
+| `account`, `backups`, `admin_access`, `security`, `site_health`, `connector`, `offers` | customer login and portal (`offers`: recovery offers and their emails) |
 | `validation`, `auth`, `passwords`, `pagination`, `hu.json` | framework messages: validation errors with Hungarian field names, authentication, password reset, the default error pages |
 
 `HungarianContentTest` fails on a missing key, an untranslated or empty text, or a lost `:placeholder`; `CustomerLocalizationTest` renders every portal page in both languages and fails when an English sentence of `lang/en` is shown on a Hungarian page. Brand and product names (WP CareGrid, WordPress, WooCommerce, Stripe, PHP) and the plan names Basic, Business, Secure are not translated.
 
 ## Emails
 
-Customer emails (activation, welcome, payment, subscription) are **English only**: they use `emails.php`, which has no Hungarian file. They are sent by Stripe webhooks, where no request and so no language exists; sending them in the customer's language needs the language stored at checkout (`checkout_intents`, `customers`) and `->locale()` on the mailables. That is a separate, small milestone; the login and activation pages themselves are fully bilingual.
+The **recovery offer** emails ([RECOVERY_OFFERS.md](RECOVERY_OFFERS.md): offer sent, payment received) are sent in the customer's saved language (`Customer::mailLocale()`: `users.locale`, else the default), from `lang/{en,hu}/offers.php`. They are sent from the owner area and from a webhook for an offer that already has a customer, so a language is known.
+
+The older customer emails (activation, welcome, payment, subscription) are **English only**: they use `emails.php`, which has no Hungarian file. They are sent by Stripe webhooks, where no request and so no language exists; sending them in the customer's language needs the language stored at checkout (`checkout_intents`, `customers`) and `->locale()` on the mailables. That is a separate, small milestone; the login and activation pages themselves are fully bilingual.
 
 ## Adding a language or a currency
 

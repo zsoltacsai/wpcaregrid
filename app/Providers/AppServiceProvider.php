@@ -4,9 +4,13 @@ namespace App\Providers;
 
 use App\Backups\Storage\StorageManager;
 use App\Checkout\CheckoutGateway;
+use App\Checkout\PromotionGateway;
 use App\Checkout\StripeCheckoutGateway;
+use App\Checkout\StripePromotionGateway;
 use App\Content\ContentRepository;
 use App\Models\User;
+use App\Offers\OfferPaymentGateway;
+use App\Offers\StripeOfferPaymentGateway;
 use App\Operator\Permission;
 use App\Owner\OwnerAbility;
 use App\Pricing\PricingCatalog;
@@ -56,6 +60,16 @@ class AppServiceProvider extends ServiceProvider
         });
 
         $this->app->bind(CheckoutGateway::class, fn () => new StripeCheckoutGateway(
+            secret: config('services.stripe.secret'),
+            allowLiveMode: config('services.stripe.allow_live_mode'),
+        ));
+
+        // Owner-managed coupons and recovery offer payments: same key rules as checkout.
+        $this->app->bind(PromotionGateway::class, fn () => new StripePromotionGateway(
+            secret: config('services.stripe.secret'),
+            allowLiveMode: config('services.stripe.allow_live_mode'),
+        ));
+        $this->app->bind(OfferPaymentGateway::class, fn () => new StripeOfferPaymentGateway(
             secret: config('services.stripe.secret'),
             allowLiveMode: config('services.stripe.allow_live_mode'),
         ));
@@ -135,6 +149,11 @@ class AppServiceProvider extends ServiceProvider
         ]);
         // Calls that reach Stripe or a website: fewer.
         RateLimiter::for('owner-external', fn (Request $request) => Limit::perMinute(5)->by('owner-external:'.$request->user()?->id));
+        // Coupons reach Stripe too, but a typo or two while typing a percentage must not lock the owner out.
+        RateLimiter::for('owner-coupons', fn (Request $request) => [
+            Limit::perMinute(10)->by('owner-coupons:'.$request->user()?->id),
+            Limit::perHour(60)->by('owner-coupons:'.$request->user()?->id),
+        ]);
         RateLimiter::for('staff-invitation', fn (Request $request) => [
             Limit::perMinute(5)->by('staff-invitation:'.$request->user()?->id),
             Limit::perHour(30)->by('staff-invitation:'.$request->user()?->id),

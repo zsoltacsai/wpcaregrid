@@ -35,3 +35,7 @@ Schedule::command('security:vulnerabilities:sync')->dailyAt('04:10')->withoutOve
 // Owner system page: proof that the scheduler runs (a timestamp, nothing else).
 Schedule::call(fn () => Cache::forever(SystemStatus::SCHEDULER_HEARTBEAT, now()->toIso8601String()))
     ->everyMinute()->name('system:scheduler-heartbeat')->onOneServer();
+
+// Internal plans (PROBONO) and recovery offers follow their dates.
+Schedule::command('internal-plans:sync')->hourly()->withoutOverlapping()->onOneServer();
+Schedule::command('offers:expire')->hourly()->withoutOverlapping()->onOneServer();

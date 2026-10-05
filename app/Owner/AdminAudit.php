@@ -21,6 +21,9 @@ final class AdminAudit
         'customer.updated',
         'operator.invited', 'operator.invitation_resent', 'operator.permissions_changed', 'operator.disabled', 'operator.enabled',
         'stripe.verified',
+        'coupon.created', 'coupon.updated', 'coupon.activated', 'coupon.deactivated', 'coupon.deleted', 'coupon.redeemed',
+        'probono.assigned', 'probono.changed', 'probono.ended', 'probono.started', 'probono.expired',
+        'offer.created', 'offer.updated', 'offer.sent', 'offer.accepted', 'offer.declined', 'offer.paid', 'offer.cancelled', 'offer.expired', 'offer.completed',
     ];
 
     /** @param  array<string, scalar|list<scalar>|null>  $data */

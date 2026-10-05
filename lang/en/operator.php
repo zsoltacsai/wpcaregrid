@@ -89,6 +89,7 @@ return [
         'LEVEL_NOT_ALLOWED' => 'The website\'s plan does not include this access level.',
         'SUBSCRIPTION_INACTIVE' => 'The website\'s subscription is not active.',
         'NO_BACKUP_PLAN' => 'The website\'s plan does not include backups.',
+        'BACKUPS_NOT_INCLUDED' => 'The website\'s plan explicitly excludes backups (internal plan).',
         'MANUAL_NOT_ALLOWED' => 'The website\'s plan does not include on-demand backups.',
         'RESTORE_NOT_AVAILABLE' => 'Restores are not enabled for this plan or service.',
         'MAJOR_CORE_UPDATE_NOT_ALLOWED' => 'Major WordPress updates are not allowed by the service policy.',

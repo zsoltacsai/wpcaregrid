@@ -57,6 +57,10 @@ final class StartCheckout
             if ($reason = $promotion->ineligibilityReason($price)) {
                 throw new PromotionRejected($reason);
             }
+
+            if ($promotion->usedUpBy($customer->email, $account?->id)) {
+                throw new PromotionRejected('already_used');
+            }
         }
 
         $sessionHash = CheckoutIntent::hashBrowserSession($browserSessionId);

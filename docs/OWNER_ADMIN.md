@@ -30,13 +30,18 @@ Every owner route has `auth:owner`, `owner` and exactly one ability `can:owner.*
 | `owner.websites.view` / `owner.websites.operate` | website list and detail / backup and security scan |
 | `owner.operators.manage` | operators, invitations, permissions, disable/enable |
 | `owner.pricing.manage` | prices, plan wording links, Stripe price check |
+| `owner.coupons.manage` | coupons: create, edit rules, activate / deactivate, delete if unused ([COUPONS.md](COUPONS.md)) |
+| `owner.plans.assign` | assign, change and end PROBONO, the internal plan ([PROBONO.md](PROBONO.md)) |
+| `owner.offers.manage` | custom recovery offers: create, send, edit, cancel, complete ([RECOVERY_OFFERS.md](RECOVERY_OFFERS.md)) |
 | `owner.content.manage` | homepage, navigation, footer, plan wording, draft preview |
 | `owner.seo.manage` | SEO metadata |
 | `owner.system.view` | system status |
 
 All abilities pass only for a verified owner without a customer record; customers and operators never pass, whatever permissions they hold. There is deliberately no ability to read secrets, impersonate customers, or restore, update, open admin access or remediate websites.
 
-Rate limiters: `owner-sensitive` (20/min, 200/hour per owner) for customer, operator, price and content changes; `owner-external` (5/min) for actions that reach Stripe or a website; `staff-invitation` (5/min, 30/hour) for invitations.
+Rate limiters: `owner-sensitive` (20/min, 200/hour per owner) for customer, operator, price and content changes; `owner-external` (5/min) for actions that reach Stripe or a website; `staff-invitation` (5/min, 30/hour) for invitations; `owner-coupons` (10/min, 60/hour) for the coupon actions that reach Stripe.
+
+Commercial operations (coupons, PROBONO, recovery offers) are owner-only: operators never receive these abilities, whatever operator permissions they hold, and customers cannot reach any of the routes.
 
 ## Dashboard
 
@@ -54,6 +59,12 @@ List with server-side pagination (25), search by email, company or website URL, 
 The owner may change first and last name, customer type, company, billing country, tax ID and billing address. Not editable (and not shown, where secret): login email, password, payment methods and card data (in Stripe), Stripe data other than the customer reference, subscriptions, connector and storage credentials. Unknown form fields are ignored. Each change is audited as `customer.updated` with the **names** of the changed fields, not their values. Changing the billing country affects future checkouts only. Local changes are not pushed to Stripe.
 
 The Stripe customer ID is shown on the detail page as a reference for finding the customer in the Stripe dashboard; it is not a secret.
+
+The detail page also holds the **Internal plan** panel (assign PROBONO, change its dates, end it; [PROBONO.md](PROBONO.md)) and a **New offer** button for a custom recovery offer ([RECOVERY_OFFERS.md](RECOVERY_OFFERS.md)). Internal plans show as "PROBONO" in the customer and website lists.
+
+## Coupons, internal plan and recovery offers
+
+The **Coupons** and **Recovery offers** menu items open the coupon management and the offers list. Descriptions: [COUPONS.md](COUPONS.md), [PROBONO.md](PROBONO.md), [RECOVERY_OFFERS.md](RECOVERY_OFFERS.md). PROBONO has no menu item of its own and is nowhere public.
 
 ## Websites
 

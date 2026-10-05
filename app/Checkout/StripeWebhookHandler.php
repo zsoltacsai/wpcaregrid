@@ -8,6 +8,8 @@ use App\Billing\SubscriptionSync;
 use App\Models\CheckoutIntent;
 use App\Models\Promotion;
 use App\Models\StripeEvent;
+use App\Offers\RecoveryOffers;
+use App\Owner\AdminAudit;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +29,7 @@ final class StripeWebhookHandler
         private readonly ProvisionCustomer $provision,
         private readonly SubscriptionSync $subscriptions,
         private readonly InvoiceEvents $invoices,
+        private readonly RecoveryOffers $offers,
     ) {}
 
     /** @return bool False when the event had already been processed. */
@@ -80,6 +83,13 @@ final class StripeWebhookHandler
 
     private function checkoutCompleted(object $session, bool $paid): void
     {
+        // A one-time recovery offer payment is not a subscription checkout.
+        if (($session->metadata->kind ?? null) === 'recovery_offer') {
+            $this->offers->markPaid($session);
+
+            return;
+        }
+
         $intent = $this->intentFor($session);
 
         if (! $intent) {
@@ -101,6 +111,7 @@ final class StripeWebhookHandler
             // Counted once, when the intent completes, so max_redemptions applies to later checkouts.
             if ($intent->promotion_id) {
                 Promotion::whereKey($intent->promotion_id)->increment('times_redeemed');
+                AdminAudit::record(null, 'coupon.redeemed', 'coupon', (string) $intent->promotion_code, ['checkout_intent' => $intent->uuid]);
             }
         }
 

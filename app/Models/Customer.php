@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Billing\SubscriptionStatus;
+use App\Localization\Locales;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -58,6 +59,18 @@ class Customer extends Model
         return Attribute::make(set: fn (string $value) => strtoupper($value));
     }
 
+    /**
+     * The language for emails that can use the customer's choice: the one saved
+     * on their login (users.locale), else the site default. Older emails are
+     * still English only (docs/LOCALIZATION.md).
+     */
+    public function mailLocale(): string
+    {
+        $saved = $this->user?->locale;
+
+        return Locales::isSupported($saved) ? $saved : Locales::default();
+    }
+
     public function fullName(): string
     {
         return trim("{$this->first_name} {$this->last_name}");
@@ -78,6 +91,11 @@ class Customer extends Model
         return $this->hasMany(Website::class);
     }
 
+    public function recoveryOffers(): HasMany
+    {
+        return $this->hasMany(RecoveryOffer::class);
+    }
+
     public function checkoutIntents(): HasMany
     {
         return $this->hasMany(CheckoutIntent::class);
@@ -88,7 +106,11 @@ class Customer extends Model
     {
         $granting = array_filter(SubscriptionStatus::cases(), fn (SubscriptionStatus $status) => $status->grantsAccess());
 
-        return $this->subscriptions()->whereIn('status', array_map(fn ($status) => $status->value, $granting));
+        return $this->subscriptions()->whereIn('status', array_map(fn ($status) => $status->value, $granting))
+            // An internal plan counts only inside its optional start and end dates.
+            ->where(fn ($q) => $q->whereNull('internal_plan')->orWhere(fn ($i) => $i
+                ->where(fn ($s) => $s->whereNull('internal_starts_at')->orWhere('internal_starts_at', '<=', now()))
+                ->where(fn ($e) => $e->whereNull('internal_ends_at')->orWhere('internal_ends_at', '>', now()))));
     }
 
     public function hasActiveSubscription(): bool

@@ -12,6 +12,11 @@
         ['route' => 'account.billing', 'active' => 'account.billing', 'label' => __('account.nav.billing'), 'icon' => 'credit-card'],
         ['route' => 'account.profile', 'active' => 'account.profile*', 'label' => __('account.nav.profile'), 'icon' => 'user'],
     ];
+
+    // Custom offers appear in the menu only for a customer who has been sent one.
+    if (auth()->user()?->customer?->recoveryOffers()->visibleToCustomer()->exists()) {
+        array_splice($navigation, 3, 0, [['route' => 'account.offers.index', 'active' => 'account.offers.*', 'label' => __('account.nav.offers'), 'icon' => 'clipboard']]);
+    }
 @endphp
 
 <!DOCTYPE html>

@@ -225,7 +225,7 @@ final class PriceEditor
         ];
     }
 
-    private function minor(string $major, string $currency): int
+    public function minor(string $major, string $currency): int
     {
         $minorUnits = (int) config("pricing.currencies.{$currency}.minor_units", 2);
         [$whole, $fraction] = array_pad(explode('.', $major, 2), 2, '');
