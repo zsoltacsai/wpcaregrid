@@ -273,26 +273,50 @@ Live restore is off (`BACKUP_RESTORE_ENABLED=false`) until the staging rehearsal
 
 ## Updating a running installation
 
-Deploy a known commit (or tag) and note the one running before it; that is the rollback target.
+### Staging deployment
+
+Use the repository-controlled `scripts/deploy-staging.sh` on the staging VPS only. Run it as `deploy`, from `/var/www/wpcaregrid`, with the exact full commit SHA to deploy:
 
 ```sh
-git rev-parse HEAD > ../previous-release   # the rollback target
-mysqldump --single-transaction --routines <database> | gzip > ../db-before-$(date +%F-%H%M).sql.gz
-php artisan down --retry=60          # connectors, browsers and Stripe get 503 and retry
-git fetch && git checkout <commit or tag>
-composer install --no-dev --optimize-autoloader --no-interaction
-npm ci && npm run build
-php artisan migrate --force
-php artisan connector:package        # when CONNECTOR_LATEST_VERSION changed
-php artisan optimize:clear && php artisan config:cache && php artisan route:cache && php artisan view:cache && php artisan event:cache
-php artisan queue:restart
-php artisan up
-php artisan system:check
+cd /var/www/wpcaregrid
+bash scripts/deploy-staging.sh <full-40-character-commit-sha>
 ```
 
-Run the HTTP smoke test against the result: `php tests/smoke/http-smoke.php https://<APP_URL>` (read-only: public pages, sign-in pages, area isolation, headers).
+With no argument, the script deploys the current tip of `claude/ecstatic-wozniak-oemyuf`. A supplied SHA must exist in that branch's fetched history; moving refs and short SHAs are rejected. The script serializes concurrent deploys, rejects dirty or untracked repository state, and never runs `git clean` or resets local changes. `.env` and `storage/` are deployment data, not release files.
 
-Run the artisan commands as `www-data` (`sudo -u www-data php artisan …`) or with the ACLs above in place.
+Before the first use, the staging HTTPS server block in `/etc/nginx/sites-available/wpcaregrid` must contain this gate inside the `staging.wpcaregrid.com` TLS server only:
+
+```nginx
+    if (-f /var/lib/wpcaregrid/deploy-maintenance) {
+        return 503 "Staging deployment in progress.\n";
+    }
+```
+
+Validate the Nginx configuration and reload it after adding the gate. Do not add this to a production server block. The script verifies the active configuration and probes that the gate returns HTTP 503 before it changes the release. The marker is stored under `/var/lib`, outside the web root, and persists through a reboot so an interrupted deployment remains closed rather than falling back to PHP-FPM.
+
+The script then follows this order:
+
+1. Verify PHP 8.4, Composer 2, Node.js 22, the protected `.env`, writable application directories, cron, the active config cache, baseline HTTP health and both Supervisor workers.
+2. Fetch the staging branch, resolve one immutable commit SHA and create a new gzip-verified MySQL backup in `/home/deploy/private-backups`. Existing backups are never overwritten or removed. Automated snapshot pruning is intentionally disabled; define and approve a separate retention policy before enabling any cleanup.
+3. Enable the Nginx 503 gate, then Laravel maintenance mode. The Nginx gate runs before PHP-FPM, so a request cannot boot Laravel while its configuration cache is absent.
+4. Stop `wpcaregrid-default` and `wpcaregrid-backups` through Supervisor. Supervisor waits for each worker's configured graceful stop interval, allowing an in-progress job to finish before application files change.
+5. Check out the exact SHA, install Composer dependencies with `--no-dev`, verify PHP-FPM can read the Composer autoloader and PHP dependency files, build Vite assets, remove build-only `node_modules`, and run migrations with `--force`.
+6. Run `optimize:clear` and rebuild config, route, view and event caches while the Nginx gate is still active. `optimize:clear` also clears the cached scheduler heartbeat; the script waits for the normal cron tick to restore it before opening HTTP. Bootstrap config cache contains secrets, so bootstrap cache files are private to `deploy` and readable by `www-data` through per-file ACLs; group and other access is removed and checked. Compiled Blade views must be readable by PHP-FPM; the script resets prior default ACLs, reapplies the documented deploy/`www-data` entries, and verifies readability before and after the HTTP smoke. `.env` remains `deploy:deploy` mode `0600` throughout. Rebuild the private connector ZIP only when `CONNECTOR_LATEST_VERSION` changes.
+7. Bring Laravel out of maintenance mode while the Nginx gate remains active. Signal `queue:restart`, start both named Supervisor programs, and require each to be `RUNNING` with a new PID. This lets workers boot normally without exposing requests during the transition.
+8. Verify migration status, scheduler availability and `system:check`. `application`, `database`, `queue`, `scheduler` and `safety` must be `OK`; any `ERROR` fails the deploy. Expected staging `WARNING` and `NOT CONFIGURED` integrations (for example Stripe, mail, connectors or backup storage) are reported but do not block deployment.
+9. Remove the Nginx gate and test the HTTPS homepage, `/up`, the guest Owner authentication redirect, `/.env` and `/.git/config`; recheck worker states before marking the gate released. The script keeps its recovery flag active through these checks and reinstalls the gate before recovery if interrupted. Any failed HTTP, permission or worker check re-engages the gate and Laravel maintenance mode.
+
+The deployment is an in-place, single-node update. It provides a controlled 503 during code, migration and cache transitions, not zero downtime. The one-minute cron continues to invoke `schedule:run`; Laravel maintenance mode suppresses ordinary scheduled tasks during the critical section. Queue workers are stopped so jobs cannot execute against mixed code. The approach does not provide multi-node coordination or blue/green rollback.
+
+The script exits non-zero on any failed command. Before a code switch, its exit handler tries to restore the still-current healthy release. After a code switch, it only reopens traffic if Composer, asset build, migration and any required connector package build all completed and caches, critical health checks, scheduler and workers can be verified. If that is not safe, it deliberately leaves the Nginx gate active and attempts to leave Laravel in maintenance mode; if Laravel cannot boot, the Nginx gate still returns the controlled 503. It prints the recovery marker path. It never runs an automatic migration rollback.
+
+For a failed deployment, inspect the exact phase and logs first. Keep `/var/lib/wpcaregrid/deploy-maintenance` in place until the code, production dependencies, database and caches agree. Restore a known commit and its production dependencies, rebuild all four caches, verify critical `system:check` components and both workers, then run `php artisan up` and remove the gate. Do not remove the gate merely to test whether the site has recovered.
+
+This script is staging-specific. Production deployment remains a separately reviewed operation. Run the full read-only HTTP smoke test against the result when required: `php tests/smoke/http-smoke.php https://<APP_URL>`.
+
+### Manual production update reference
+
+For a separately approved production release, preserve the existing production procedure and take a protected database backup before migration. Run Artisan as the deployment user with the documented ACLs; keep `.env` mode `0600`, rebuild the config cache before reopening traffic, restart queue workers, and perform the health checks. The staging deployment script must not be pointed at production.
 
 ## Rollback
 
@@ -309,8 +333,9 @@ Run the artisan commands as `www-data` (`sudo -u www-data php artisan …`) or w
    | `create_integration_credentials_table` | drops every Owner-managed encrypted integration credential; recover them only from a protected database backup plus the matching `APP_KEY` |
 
    A database backup is therefore **required before any rollback that includes these migrations**: the `mysqldump` from "Updating a running installation" taken immediately before the update is the one to keep. Do not run `migrate:rollback` for them without it. A payment already confirmed by Stripe for an offer is not undone by dropping the table; the offer record would be gone, so restore the dump if the offers must survive.
-3. `git checkout $(cat ../previous-release)`, then the same steps as an update: `composer install --no-dev --optimize-autoloader --no-interaction`, `npm ci && npm run build`, `php artisan optimize:clear` and the four caches, `php artisan connector:package` if `CONNECTOR_LATEST_VERSION` differs.
-4. `php artisan queue:restart`, `php artisan up`, `php artisan system:check`, the smoke test.
+3. For staging, keep the Nginx maintenance gate active while restoring a known-good full commit SHA with `scripts/deploy-staging.sh <sha>`. The script uses the same guarded dependency, migration, cache and worker sequence. Do not manually remove the gate during recovery. For production, use a separately reviewed recovery procedure that keeps requests gated while dependencies and all four caches are restored.
+4. Restore database state only when required by the failed migration and only after reviewing the migration's `down()` behavior and the protected pre-deploy dump. Never run an automatic destructive rollback as part of deployment recovery.
+5. Verify `system:check`, both queue workers, scheduler and the HTTP/security smoke checks before reopening traffic.
 
 Stripe events that arrived during the downtime are retried by Stripe; connectors retry on their own.
 
