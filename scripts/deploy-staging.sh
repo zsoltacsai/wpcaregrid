@@ -321,11 +321,12 @@ normalize_tracked_checkout_permissions() {
 }
 
 runtime_source_access_ok() {
-    local path directory
+    local path directory entry
     local -a runtime_paths=(
         artisan
         bootstrap/app.php
         app/Owner/IntegrationCredentials.php
+        app/Http/Controllers/Owner/CloudflareDnsController.php
         config/app.php
         vendor/autoload.php
         resources/views/owner/dns/cloudflare.blade.php
@@ -342,7 +343,21 @@ runtime_source_access_ok() {
         done
     done
 
-    log 'PHP-FPM can read representative application, configuration, dependency, Blade, and build files.'
+    while IFS= read -r -d '' entry; do
+        path="${entry#*$'\t'}"
+        case "$path" in
+            app/*|bootstrap/*|config/*|database/*|lang/*|public/*|resources/*|routes/*|scripts/*|artisan) ;;
+            *) continue ;;
+        esac
+        case "$path" in
+            *.php|*.sh|artisan) ;;
+            *) continue ;;
+        esac
+        [[ -f "$path" && ! -L "$path" ]] || continue
+        sudo -n -u www-data test -r "$path" || { log "PHP-FPM cannot read tracked runtime source: ${path}"; return 1; }
+    done < <(git ls-files -z)
+
+    log 'PHP-FPM can read representative runtime files and all tracked PHP/shell source files.'
 }
 
 check_http() {
@@ -672,6 +687,7 @@ main() {
 
     [[ "$(stat -c '%U:%G:%a' .env)" == 'deploy:deploy:600' ]] || fail '.env ownership or mode changed unexpectedly.'
     [[ -r bootstrap/cache/config.php ]] && sudo -n -u www-data test -r bootstrap/cache/config.php || fail 'PHP-FPM cannot read the rebuilt production config cache.'
+    normalize_tracked_checkout_permissions || fail 'Could not normalize tracked checkout permissions after build steps.'
     runtime_source_access_ok || fail 'PHP-FPM cannot read all representative runtime files.'
     [[ "$(git rev-parse HEAD)" == "$target_commit" ]] || fail 'The deployed Git HEAD changed unexpectedly.'
     [[ "$(git status --porcelain --untracked-files=all)" == '' ]] || fail 'The deployed Git working tree is not clean.'
