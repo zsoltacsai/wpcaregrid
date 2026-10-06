@@ -4,6 +4,7 @@ use App\Http\Controllers\Owner\ContentController;
 use App\Http\Controllers\Owner\CouponController;
 use App\Http\Controllers\Owner\CustomerController;
 use App\Http\Controllers\Owner\DashboardController;
+use App\Http\Controllers\Owner\IntegrationCredentialController;
 use App\Http\Controllers\Owner\InternalPlanController;
 use App\Http\Controllers\Owner\LoginController;
 use App\Http\Controllers\Owner\OperatorController;
@@ -107,5 +108,9 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::post('/seo/{section}/{locale}/discard', [ContentController::class, 'discard'])->middleware(['can:owner.seo.manage', 'throttle:owner-sensitive'])->name('seo.discard');
 
         Route::get('/system', SystemController::class)->middleware('can:owner.system.view')->name('system');
+
+        Route::get('/integrations', [IntegrationCredentialController::class, 'index'])->middleware('can:owner.integrations.manage')->name('integrations.index');
+        Route::post('/integrations', [IntegrationCredentialController::class, 'store'])->middleware(['can:owner.integrations.manage', 'throttle:owner-sensitive'])->name('integrations.store');
+        Route::delete('/integrations/{id}', [IntegrationCredentialController::class, 'destroy'])->middleware(['can:owner.integrations.manage', 'throttle:owner-sensitive'])->name('integrations.destroy');
     });
 });

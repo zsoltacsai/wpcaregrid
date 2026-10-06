@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Offers\OfferPaymentGateway;
 use App\Offers\StripeOfferPaymentGateway;
 use App\Operator\Permission;
+use App\Owner\IntegrationCredentials;
 use App\Owner\OwnerAbility;
 use App\Pricing\PricingCatalog;
 use App\Pricing\PricingOverrides;
@@ -25,6 +26,7 @@ use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
@@ -80,6 +82,23 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Database-backed service credentials override their fixed config keys at runtime.
+        // Never bake these values into bootstrap/cache/config.php.
+        $arguments = $_SERVER['argv'] ?? [];
+        $buildingConfigCache = $this->app->runningInConsole()
+            && (in_array('config:cache', $arguments, true) || in_array('optimize', $arguments, true));
+        if (! $buildingConfigCache) {
+            $hasCredentialTable = false;
+            try {
+                $hasCredentialTable = Schema::hasTable('integration_credentials');
+            } catch (\Throwable) {
+                // Fresh installs and config-only commands can run before DB provisioning.
+            }
+            if ($hasCredentialTable) {
+                $this->app->make(IntegrationCredentials::class)->apply();
+            }
+        }
+
         // Behind a load balancer: trust its X-Forwarded-* headers only when configured (config/http.php).
         if (filled(config('http.trusted_proxies'))) {
             TrustProxies::at(config('http.trusted_proxies') === '*' ? '*' : array_map('trim', explode(',', (string) config('http.trusted_proxies'))));

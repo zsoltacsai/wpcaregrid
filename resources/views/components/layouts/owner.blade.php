@@ -17,6 +17,7 @@
         ['route' => 'owner.content.index', 'active' => 'owner.content.*', 'label' => __('owner.nav.content'), 'icon' => 'list'],
         ['route' => 'owner.seo.index', 'active' => 'owner.seo.*', 'label' => __('owner.nav.seo'), 'icon' => 'search'],
         ['route' => 'owner.system', 'active' => 'owner.system', 'label' => __('owner.nav.system'), 'icon' => 'cog'],
+        ['route' => 'owner.integrations.index', 'active' => 'owner.integrations.*', 'label' => __('owner.nav.integrations'), 'icon' => 'key'],
     ];
     $refusal = session('owner_error');
 @endphp

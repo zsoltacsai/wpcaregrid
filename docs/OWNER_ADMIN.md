@@ -36,8 +36,9 @@ Every owner route has `auth:owner`, `owner` and exactly one ability `can:owner.*
 | `owner.content.manage` | homepage, navigation, footer, plan wording, draft preview |
 | `owner.seo.manage` | SEO metadata |
 | `owner.system.view` | system status |
+| `owner.integrations.manage` | replace or clear fixed application service credentials; values are never readable |
 
-All abilities pass only for a verified owner without a customer record; customers and operators never pass, whatever permissions they hold. There is deliberately no ability to read secrets, impersonate customers, or restore, update, open admin access or remediate websites.
+All abilities pass only for a verified owner without a customer record; customers and operators never pass, whatever permissions they hold. Owners may replace fixed application-wide integration credentials on `/owner/integrations`, but cannot read stored values or manage customer/connector credentials, impersonate customers, restore, update, open admin access or remediate websites.
 
 Rate limiters: `owner-sensitive` (20/min, 200/hour per owner) for customer, operator, price and content changes; `owner-external` (5/min) for actions that reach Stripe or a website; `staff-invitation` (5/min, 30/hour) for invitations; `owner-coupons` (10/min, 60/hour) for the coupon actions that reach Stripe.
 
@@ -103,9 +104,24 @@ Audit: `operator.invited` (with permissions), `operator.permissions_changed` (gr
 
 The page reads configuration and stored data only; it does not contact Stripe or storage. Secret values are read only to tell whether they are set; a test asserts that none appears on the page.
 
+## Integration credentials
+
+`/owner/integrations` accepts only fixed credential fields. Laravel `Crypt::encryptString()` encrypts each value with the configured Laravel cipher and `APP_KEY`; the authenticated Laravel payload (including its IV and MAC or AEAD tag) is stored in `integration_credentials.value`. At application boot the ciphertext is decrypted and applied only to the allowlisted config paths; the database-backed values are excluded when building Laravel's config cache. The page displays source/status only, never the value. A blank form makes no change; replacement requires a newly entered value. Status distinguishes an Owner-managed value, an environment fallback, and no value configured anywhere. Clear physically deletes only the Owner-managed database row and restores any server environment fallback as the active value; the confirmation and status warn that this does not revoke that fallback. Remove or rotate the server-side value to revoke it. Changing `APP_KEY` without migrating/re-encrypting credentials makes existing stored credentials undecryptable; losing it means restoring the matching `APP_KEY` from secure recovery, not resetting it. Database backups containing `integration_credentials` must be protected together with the matching `APP_KEY`. Disaster recovery must preserve and restore that exact database-backup/`APP_KEY` pairing.
+
+| Credential | UI stores | Runtime use | Additional configuration / limitation |
+| --- | --- | --- | --- |
+| Stripe publishable, secret, webhook | Yes | Yes | Stripe live-mode guard remains a separate server setting. |
+| S3 access, secret, SSE-C key | Yes | Yes, via `backup.providers.s3` | `BACKUP_STORAGE`, endpoint, region, bucket, prefix and encryption mode remain server config. Hetzner provider E2E is separately unverified. |
+| SMTP password | Yes | Yes, with `MAIL_MAILER=smtp` | Host, username, port, sender and TLS settings remain server config. |
+| Amazon SES access/secret | Yes | Yes, with `MAIL_MAILER=ses`; the same AWS credentials also populate the configured S3/SQS/DynamoDB config paths | Region and provider selection remain server config. |
+| Postmark / Resend API keys | Yes | **No, not operationally** | The installed mail transports require packages not present in `composer.lock`; use SMTP relay until those packages/integration are added. |
+| Wordfence feed key | Yes | Yes, for the vulnerability sync command | Feed source and URL must also be configured. |
+
+The UI does not accept arbitrary setting names, personal credentials, customer WordPress/hosting/FTP/database passwords, or Hetzner account-management tokens. Hetzner Object Storage uses its S3-compatible access/secret pair. Non-secret endpoint and bucket settings remain server configuration. Web requests use saved values immediately; long-running queue workers must be restarted after a credential change. Számlázz.hu is not integrated; adding credentials alone would not enable invoicing and requires a separate integration.
+
 ## Audit log
 
-`admin_audit_events` (`App\Owner\AdminAudit`): owner user, actor type, event, subject type and key (content key and locale, price key, customer UUID, operator ID), data (identifiers, field names, codes), IP address and time. Never passwords, tokens, secrets or card data. Events: `owner.signed_in`, `content.*`, `price.*`, `customer.updated`, `operator.*`, `stripe.verified`. Website operations started by an owner are recorded in the website audit log (`website_events`) by the services.
+`admin_audit_events` (`App\Owner\AdminAudit`): owner user, actor type, event, subject type and key (content key and locale, price key, customer UUID, operator ID), data (identifiers, field names, codes), IP address and time. Never passwords, tokens, secrets or card data. Events: `owner.signed_in`, `content.*`, `price.*`, `customer.updated`, `operator.*`, `stripe.verified`, `integration_credential.updated`, `integration_credential.cleared`. Credential events contain the actor, action, field identifier and timestamp only, never plaintext or ciphertext. Website operations started by an owner are recorded in the website audit log (`website_events`) by the services.
 
 The dashboard shows the latest owner changes; customer and operator pages show their own.
 
@@ -113,5 +129,5 @@ The dashboard shows the latest owner changes; customer and operator pages show t
 
 - Separate guard, role check on every request, one explicit ability per route, CSRF, rate limits, audit.
 - Identifiers in URLs: customers and websites by UUID, operators by ID bound to operator logins only (a customer or owner ID is a 404), prices by validated key, content by schema key and configured locale.
-- No secrets in pages: password hashes, remember tokens, connector credentials, storage credentials and Stripe keys are never rendered; tests check this.
-- No customer impersonation, no Stripe or storage credential editing, no server configuration, no bulk operations.
+- No secrets in pages: password hashes, remember tokens, connector credentials and service credential values are never rendered; only configured status is shown.
+- No customer impersonation, no customer or connector credential editing, no server configuration, no bulk operations.

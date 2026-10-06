@@ -10,10 +10,9 @@ use App\Models\User;
  * logins with the owner role pass; customers and operators never do,
  * whatever else they hold.
  *
- * There is deliberately no ability to read secrets (Stripe keys, storage
- * or connector credentials, passwords), to impersonate customers, or to
- * restore, update or remediate websites: those stay with operators and
- * their explicit permissions.
+ * Owners may replace fixed global service credentials, but cannot read
+ * stored values, access customer/connector credentials, impersonate customers,
+ * or restore, update or remediate websites.
  */
 enum OwnerAbility: string
 {
@@ -32,6 +31,7 @@ enum OwnerAbility: string
     case PlansAssign = 'plans.assign';
     case OffersManage = 'offers.manage';
     case SystemView = 'system.view';
+    case IntegrationsManage = 'integrations.manage';
 
     public function gate(): string
     {
