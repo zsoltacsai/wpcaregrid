@@ -96,6 +96,72 @@ class IntegrationCredentialTest extends TestCase
             ->assertDontSee($secret);
     }
 
+    public function test_smtp_environment_fallback_owner_override_and_clear_use_the_runtime_mailer_config(): void
+    {
+        $this->asOwner();
+        $credentials = app(IntegrationCredentials::class);
+        $fallback = 'test-only-'.str_repeat('s', 48);
+        $ownerValue = 'test-only-'.str_repeat('t', 48);
+
+        config(['mail.mailers.smtp.password' => $fallback]);
+        config(['owner_integration_credentials.environment_fallbacks.smtp_password' => true]);
+
+        $this->assertSame(['owner_managed' => false, 'environment_fallback' => true], $credentials->configured()['smtp_password']);
+        $this->get(route('owner.integrations.index'))
+            ->assertOk()
+            ->assertSee(__('owner.integrations.environment_managed'))
+            ->assertSee(__('owner.integrations.environment_fallback_active'))
+            ->assertDontSee($fallback);
+
+        $this->post(route('owner.integrations.store'), ['id' => 'smtp_password', 'value' => $ownerValue])
+            ->assertRedirect(route('owner.integrations.index'))
+            ->assertDontSee($ownerValue);
+
+        $credentials->apply();
+        $this->assertSame($ownerValue, config('mail.mailers.smtp.password'));
+        $this->assertSame(['owner_managed' => true, 'environment_fallback' => true], $credentials->configured()['smtp_password']);
+        $this->get(route('owner.integrations.index'))
+            ->assertOk()
+            ->assertSee(__('owner.integrations.owner_managed'))
+            ->assertSee(__('owner.integrations.environment_fallback_will_remain'))
+            ->assertDontSee($fallback)
+            ->assertDontSee($ownerValue);
+
+        $this->delete(route('owner.integrations.destroy', 'smtp_password'))
+            ->assertRedirect(route('owner.integrations.index'))
+            ->assertDontSee($fallback)
+            ->assertDontSee($ownerValue);
+        $this->assertDatabaseMissing('integration_credentials', ['id' => 'smtp_password']);
+
+        // A new request starts from the environment-derived mailer configuration.
+        config(['mail.mailers.smtp.password' => $fallback]);
+        $this->assertSame($fallback, config('mail.mailers.smtp.password'));
+        $this->assertSame(['owner_managed' => false, 'environment_fallback' => true], $credentials->configured()['smtp_password']);
+        $this->get(route('owner.integrations.index'))
+            ->assertOk()
+            ->assertSee(__('owner.integrations.environment_managed'))
+            ->assertSee(__('owner.integrations.environment_fallback_active'))
+            ->assertDontSee($fallback)
+            ->assertDontSee($ownerValue);
+    }
+
+    public function test_smtp_null_and_empty_environment_values_do_not_count_as_fallbacks(): void
+    {
+        $this->asOwner();
+        $credentials = app(IntegrationCredentials::class);
+
+        foreach ([null, ''] as $emptyValue) {
+            config(['mail.mailers.smtp.password' => $emptyValue]);
+            config(['owner_integration_credentials.environment_fallbacks' => []]);
+
+            $this->assertSame(['owner_managed' => false, 'environment_fallback' => false], $credentials->configured()['smtp_password']);
+        }
+
+        $this->get(route('owner.integrations.index'))
+            ->assertOk()
+            ->assertSee(__('owner.integrations.not_configured'));
+    }
+
     public function test_clearing_owner_value_keeps_environment_fallback_active_and_explicit(): void
     {
         $this->asOwner();
