@@ -24,6 +24,7 @@ final class AdminAudit
         'integration_credential.updated', 'integration_credential.cleared',
         'dns.record.create_requested', 'dns.record.update_requested', 'dns.record.delete_requested',
         'dns.record.created', 'dns.record.updated', 'dns.record.deleted', 'dns.record.failed',
+        'dns.infrastructure.applied', 'dns.infrastructure.failed',
         'coupon.created', 'coupon.updated', 'coupon.activated', 'coupon.deactivated', 'coupon.deleted', 'coupon.redeemed',
         'probono.assigned', 'probono.changed', 'probono.ended', 'probono.started', 'probono.expired',
         'offer.created', 'offer.updated', 'offer.sent', 'offer.accepted', 'offer.declined', 'offer.paid', 'offer.cancelled', 'offer.expired', 'offer.completed',

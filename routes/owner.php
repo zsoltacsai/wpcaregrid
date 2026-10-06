@@ -117,6 +117,9 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::prefix('dns/cloudflare')->name('dns.cloudflare.')->middleware('can:owner.dns.manage')->group(function () {
             Route::get('/', [CloudflareDnsController::class, 'index'])->middleware('throttle:owner-external')->name('index');
             Route::get('/zones/{zone}', [CloudflareDnsController::class, 'zone'])->middleware('throttle:owner-external')->name('zone');
+            Route::get('/infrastructure', [CloudflareDnsController::class, 'infrastructure'])->middleware('throttle:owner-external')->name('infrastructure');
+            Route::post('/infrastructure/plan', [CloudflareDnsController::class, 'planInfrastructure'])->middleware(['throttle:owner-sensitive', 'throttle:owner-external'])->name('infrastructure.plan');
+            Route::post('/infrastructure/apply', [CloudflareDnsController::class, 'applyInfrastructure'])->middleware(['throttle:owner-sensitive', 'throttle:owner-external'])->name('infrastructure.apply');
             Route::post('/records/plan', [CloudflareDnsController::class, 'planEnsure'])->middleware(['throttle:owner-sensitive', 'throttle:owner-external'])->name('records.plan');
             Route::post('/records/apply', [CloudflareDnsController::class, 'applyEnsure'])->middleware(['throttle:owner-sensitive', 'throttle:owner-external'])->name('records.apply');
             Route::post('/records/delete/plan', [CloudflareDnsController::class, 'planDelete'])->middleware(['throttle:owner-sensitive', 'throttle:owner-external'])->name('records.delete.plan');

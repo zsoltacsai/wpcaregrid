@@ -1,6 +1,7 @@
 <x-layouts.owner :title="__('owner.dns.title')">
     <h1 class="text-2xl font-semibold">{{ __('owner.dns.title') }}</h1>
     <p class="mt-2 text-slate-600">{{ __('owner.dns.lead') }}</p>
+    <p class="mt-3"><a class="text-blue-700 underline" href="{{ route('owner.dns.cloudflare.infrastructure') }}">{{ __('owner.dns.infrastructure.link') }}</a></p>
     @if (session('status')) <p class="mt-4 rounded bg-green-50 p-3 text-green-800">{{ session('status') }}</p> @endif
     @if ($error) <p class="mt-4 rounded bg-amber-50 p-3 text-amber-900">{{ __('owner.dns.errors.'.$error) }}</p> @endif
     <section class="mt-6 rounded border p-4">

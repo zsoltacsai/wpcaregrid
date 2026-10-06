@@ -66,6 +66,35 @@ final class CloudflareDnsService
     /** @param array<string, mixed> $input @return array<string, mixed> */
     public function planEnsure(string $zoneName, array $input): array
     {
+        return $this->planEnsureInternal($zoneName, $input, allowProtected: false);
+    }
+
+    /** Plan only one immutable, server-defined infrastructure record. */
+    public function planInfrastructureEnsure(string $definitionId): array
+    {
+        $definition = WpCareGridInfrastructureDns::definitions()[$definitionId] ?? null;
+        if (! is_array($definition)) {
+            throw new CloudflareDnsException('invalid_record');
+        }
+
+        return $this->planEnsureInternal($definition['zone'], $definition['record'], allowProtected: true)
+            + ['definition_id' => $definition['id']];
+    }
+
+    /** Apply a server-defined record only after re-planning the exact desired state. */
+    public function applyInfrastructureEnsure(string $definitionId, array $expectedPlan): array
+    {
+        $plan = $this->planInfrastructureEnsure($definitionId);
+        if ($plan !== $expectedPlan) {
+            throw new CloudflareDnsException('record_conflict');
+        }
+
+        return $this->applyEnsurePlan($plan);
+    }
+
+    /** @param array<string, mixed> $input @return array<string, mixed> */
+    private function planEnsureInternal(string $zoneName, array $input, bool $allowProtected): array
+    {
         $zoneName = DnsNames::normalizeZone($zoneName);
         $zone = $this->resolveZone($zoneName);
         $desired = DnsRecordData::fromInput($zoneName, $input);
@@ -93,11 +122,15 @@ final class CloudflareDnsService
                 throw new CloudflareDnsException('invalid_record');
             }
         } else {
-            $matches = array_values(array_filter($sameName, function (array $record) use ($desired): bool {
+            $matches = array_values(array_filter($sameName, function (array $record) use ($desired, $allowProtected): bool {
                 if (strtoupper((string) ($record['type'] ?? '')) !== $desired->type) {
                     return false;
                 }
                 if ($desired->type === 'CNAME') {
+                    return true;
+                }
+
+                if ($allowProtected) {
                     return true;
                 }
 
@@ -111,7 +144,7 @@ final class CloudflareDnsService
         $current = $matches[0] ?? null;
         $desiredPayload = $desired->payload();
         $action = $current === null ? 'created' : ($this->sameConfiguration($current, $desiredPayload) ? 'unchanged' : 'updated');
-        if ($action !== 'unchanged' && $this->isProtectedName($desired->name)) {
+        if ($action !== 'unchanged' && $this->isProtectedName($desired->name) && ! $allowProtected) {
             throw new CloudflareDnsException('record_protected');
         }
 
@@ -131,10 +164,17 @@ final class CloudflareDnsService
         if ($plan !== $expectedPlan) {
             throw new CloudflareDnsException('record_conflict');
         }
+
+        return $this->applyEnsurePlan($plan);
+    }
+
+    /** @param array<string, mixed> $plan @return array<string, mixed> */
+    private function applyEnsurePlan(array $plan): array
+    {
         if ($plan['action'] === 'unchanged') {
             return $plan;
         }
-        $zone = $this->resolveZone($zoneName);
+        $zone = $this->resolveZone($plan['zone']);
         $record = $plan['action'] === 'created'
             ? $this->client->createRecord((string) $zone['id'], $plan['after'])
             : $this->client->updateRecord((string) $zone['id'], (string) $plan['record_id'], $plan['after']);

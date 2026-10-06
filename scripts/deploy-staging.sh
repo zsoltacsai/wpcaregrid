@@ -15,7 +15,9 @@ readonly SCHEDULER_PAUSE_FILE="${GATE_DIR}/scheduler-paused"
 readonly SCHEDULER_WRAPPER='/usr/local/bin/wpcaregrid-scheduler'
 readonly LEGACY_SCHEDULER_CRON='* * * * * cd /var/www/wpcaregrid && php artisan schedule:run >> /dev/null 2>&1'
 readonly GUARDED_SCHEDULER_CRON="* * * * * ${SCHEDULER_WRAPPER} >> /dev/null 2>&1"
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# Always install the scheduler wrapper from the application checkout being deployed,
+# even when the reviewed deploy script is invoked from a protected temporary copy.
+readonly SCRIPT_DIR="${APP_DIR}/scripts"
 readonly BACKUP_DIR='/home/deploy/private-backups'
 readonly WORKERS=('wpcaregrid-default' 'wpcaregrid-backups')
 
@@ -275,6 +277,72 @@ runtime_cache_access_ok() {
     done < <(find "$cache_dir" -maxdepth 1 -type f -name '*.php' -print0)
 
     sudo -n -u www-data test -r public/build/manifest.json
+}
+
+normalize_tracked_checkout_permissions() {
+    local entry metadata path mode directory
+
+    # Git stores executable bits, but umask 077 can make freshly checked-out
+    # files/directories unreadable to PHP-FPM. Normalize only tracked regular
+    # files to Git's recorded mode and their source-tree parent directories to
+    # 0755. Runtime/private directories are deliberately excluded.
+    while IFS= read -r -d '' entry; do
+        metadata="${entry%%$'\t'*}"
+        path="${entry#*$'\t'}"
+        mode="${metadata%% *}"
+
+        case "$path" in
+            artisan|composer.json|composer.lock|package.json|vite.config.*|postcss.config.*|tailwind.config.*|app/*|bootstrap/*|config/*|database/*|lang/*|public/*|resources/*|routes/*|scripts/*) ;;
+            *) continue ;;
+        esac
+        case "$path" in
+            storage/*|bootstrap/cache/*|public/build/*) continue ;;
+        esac
+
+        case "$mode" in
+            100644) [[ -f "$path" && ! -L "$path" ]] && chmod 0644 -- "$path" || return 1 ;;
+            100755) [[ -f "$path" && ! -L "$path" ]] && chmod 0755 -- "$path" || return 1 ;;
+            *) continue ;;
+        esac
+
+        directory="$(dirname -- "$path")"
+        while [[ "$directory" != '.' ]]; do
+            case "$directory" in
+                storage|storage/*|bootstrap/cache|bootstrap/cache/*|public/build|public/build/*)
+                    break
+                    ;;
+            esac
+            chmod 0755 -- "$directory" || return 1
+            directory="$(dirname -- "$directory")"
+        done
+    done < <(git ls-files --stage -z)
+
+    log 'Tracked checkout permissions normalized from Git file modes; private runtime paths were excluded.'
+}
+
+runtime_source_access_ok() {
+    local path directory
+    local -a runtime_paths=(
+        artisan
+        bootstrap/app.php
+        app/Owner/IntegrationCredentials.php
+        config/app.php
+        vendor/autoload.php
+        resources/views/owner/dns/cloudflare.blade.php
+        public/build/manifest.json
+    )
+
+    for path in "${runtime_paths[@]}"; do
+        [[ -f "$path" ]] || { log "Required runtime file is missing: ${path}"; return 1; }
+        sudo -n -u www-data test -r "$path" || { log "PHP-FPM cannot read required runtime file: ${path}"; return 1; }
+        directory="$(dirname -- "$path")"
+        while [[ "$directory" != '.' ]]; do
+            sudo -n -u www-data test -x "$directory" || { log "PHP-FPM cannot traverse required runtime directory: ${directory}"; return 1; }
+            directory="$(dirname -- "$directory")"
+        done
+    done
+
+    log 'PHP-FPM can read representative application, configuration, dependency, Blade, and build files.'
 }
 
 check_http() {
@@ -546,6 +614,7 @@ main() {
     CODE_SWITCHED=1
     git checkout --detach "$target_commit"
     [[ "$(git rev-parse HEAD)" == "$target_commit" ]] || fail 'Checked-out HEAD does not match the requested commit.'
+    normalize_tracked_checkout_permissions || fail 'Could not normalize tracked checkout permissions safely.'
 
     log 'Installing production Composer dependencies.'
     umask 022
@@ -603,6 +672,7 @@ main() {
 
     [[ "$(stat -c '%U:%G:%a' .env)" == 'deploy:deploy:600' ]] || fail '.env ownership or mode changed unexpectedly.'
     [[ -r bootstrap/cache/config.php ]] && sudo -n -u www-data test -r bootstrap/cache/config.php || fail 'PHP-FPM cannot read the rebuilt production config cache.'
+    runtime_source_access_ok || fail 'PHP-FPM cannot read all representative runtime files.'
     [[ "$(git rev-parse HEAD)" == "$target_commit" ]] || fail 'The deployed Git HEAD changed unexpectedly.'
     [[ "$(git status --porcelain --untracked-files=all)" == '' ]] || fail 'The deployed Git working tree is not clean.'
 

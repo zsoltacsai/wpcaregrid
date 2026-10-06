@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Owner;
 
 use App\Cloudflare\CloudflareDnsException;
 use App\Cloudflare\CloudflareDnsService;
+use App\Cloudflare\WpCareGridInfrastructureDns;
 use App\Http\Controllers\Controller;
 use App\Owner\AdminAudit;
 use App\Owner\IntegrationCredentials;
@@ -46,6 +47,81 @@ final class CloudflareDnsController extends Controller
         }
 
         return view('owner.dns.zone', ['zone' => $zone, 'records' => $records, 'error' => $error]);
+    }
+
+    public function infrastructure(CloudflareDnsService $dns): View
+    {
+        $plans = [];
+        $error = null;
+        foreach (WpCareGridInfrastructureDns::definitions() as $id => $definition) {
+            try {
+                $plans[$id] = $dns->planInfrastructureEnsure($id);
+            } catch (CloudflareDnsException $exception) {
+                $error ??= $exception->category;
+            }
+        }
+
+        return view('owner.dns.infrastructure', [
+            'definitions' => WpCareGridInfrastructureDns::definitions(),
+            'plans' => $plans,
+            'error' => $error,
+        ]);
+    }
+
+    public function planInfrastructure(Request $request, CloudflareDnsService $dns): RedirectResponse
+    {
+        $data = $request->validate(['definition_id' => ['required', 'string', 'in:staging_wp_test_a,staging_mail_a']]);
+        try {
+            $plan = $dns->planInfrastructureEnsure($data['definition_id']);
+        } catch (CloudflareDnsException $exception) {
+            AdminAudit::record($request->user('owner'), 'dns.infrastructure.failed', 'dns_definition', $data['definition_id'], [
+                'operation' => 'preview', 'error' => $exception->category,
+            ]);
+
+            return back()->with('dns_error', $exception->category);
+        }
+
+        $id = Str::random(40);
+        $request->session()->put('cloudflare_dns_previews.'.$id, [
+            'kind' => 'infrastructure', 'definition_id' => $data['definition_id'], 'plan' => $plan, 'created_at' => now()->timestamp,
+        ]);
+
+        return to_route('owner.dns.cloudflare.infrastructure')->with('dns_preview_id', $id);
+    }
+
+    public function applyInfrastructure(Request $request, CloudflareDnsService $dns): RedirectResponse
+    {
+        $data = $request->validate(['preview_id' => ['required', 'string', 'size:40'], 'confirmed' => ['accepted']]);
+        $key = 'cloudflare_dns_previews.'.$data['preview_id'];
+        $preview = $request->session()->get($key);
+        abort_unless(is_array($preview)
+            && ($preview['kind'] ?? null) === 'infrastructure'
+            && now()->timestamp - (int) ($preview['created_at'] ?? 0) <= 600, 404);
+
+        $definition = WpCareGridInfrastructureDns::definitions()[$preview['definition_id'] ?? ''] ?? null;
+        abort_unless(is_array($definition), 404);
+        try {
+            $result = $dns->applyInfrastructureEnsure($definition['id'], $preview['plan']);
+            if ($result['action'] !== 'unchanged') {
+                AdminAudit::record($request->user('owner'), 'dns.infrastructure.applied', 'dns_definition', $definition['id'], [
+                    'zone' => $definition['zone'],
+                    'type' => $definition['record']['type'],
+                    'name' => $definition['record']['name'],
+                    'record_id' => (string) ($result['record_id'] ?? $result['result']['id'] ?? 'unknown'),
+                    'result' => $result['action'],
+                ]);
+            }
+            $request->session()->forget($key);
+
+            return to_route('owner.dns.cloudflare.infrastructure')->with('status', __('owner.dns.infrastructure.'.($result['action'] === 'unchanged' ? 'unchanged' : 'applied')));
+        } catch (CloudflareDnsException $exception) {
+            AdminAudit::record($request->user('owner'), 'dns.infrastructure.failed', 'dns_definition', $definition['id'], [
+                'zone' => $definition['zone'], 'type' => $definition['record']['type'], 'name' => $definition['record']['name'],
+                'operation' => $preview['plan']['action'], 'error' => $exception->category,
+            ]);
+
+            return to_route('owner.dns.cloudflare.infrastructure')->with('dns_error', $exception->category);
+        }
     }
 
     public function planEnsure(Request $request, CloudflareDnsService $dns): RedirectResponse

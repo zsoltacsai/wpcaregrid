@@ -888,6 +888,27 @@ return [
         'empty' => 'No records returned for this approved zone.',
         'ensure_title' => 'Add or update a record',
         'ensure_lead' => 'A/AAAA/TXT/MX values can coexist. Row edits target the selected record ID; duplicate matches are rejected.',
+        'infrastructure' => [
+            'title' => 'Managed infrastructure DNS',
+            'link' => 'Managed infrastructure DNS',
+            'lead' => 'These are fixed, server-defined staging records. Viewing and previewing is read-only. A record changes only after you review the current state and explicitly approve the preview. Arbitrary values and deletion are not available here.',
+            'preview' => 'Infrastructure DNS change preview',
+            'current_plan' => 'Status',
+            'status' => [
+                'matches' => 'MATCHES DESIRED STATE',
+                'missing' => 'MISSING',
+                'update_needed' => 'UPDATE NEEDED',
+            ],
+            'preview_button' => 'Refresh preview',
+            'confirm' => 'I reviewed this exact server-defined DNS change and approve it.',
+            'apply' => 'Apply approved infrastructure record',
+            'applied' => 'The approved infrastructure DNS record was applied and audited.',
+            'unchanged' => 'The infrastructure record already matches; no DNS change was made.',
+            'records' => [
+                'staging_wp_test_a' => 'Staging WordPress test host',
+                'staging_mail_a' => 'Staging mail host (not created until explicitly approved)',
+            ],
+        ],
         'errors' => [
             'not_configured' => 'Cloudflare is not configured.',
             'authentication' => 'Cloudflare rejected the API token.',

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Owner;
 
+use App\Cloudflare\WpCareGridInfrastructureDns;
 use App\Models\AdminAuditEvent;
 use App\Models\Customer;
 use App\Models\User;
@@ -138,7 +139,7 @@ class CloudflareDnsTest extends TestCase
         ])->assertRedirect(route('owner.dns.cloudflare.index'))->assertSessionHas('dns_error', 'record_protected');
 
         $event = AdminAuditEvent::where('event', 'dns.record.failed')->firstOrFail();
-        $this->assertSame(['error' => 'record_protected', 'operation' => 'ensure'], $event->data);
+        $this->assertSame(['operation' => 'ensure', 'error' => 'record_protected'], $event->data);
         $this->assertStringNotContainsString('192.0.2.2', $event->toJson());
         $this->assertStringNotContainsString('synthetic-token', $event->toJson());
     }
@@ -194,5 +195,106 @@ class CloudflareDnsTest extends TestCase
         $this->assertStringNotContainsString($token, $auditJson);
         $this->assertStringNotContainsString('Authorization', $auditJson);
         Http::assertSent(fn ($request) => $request->method() === 'POST' && str_contains($request->url(), '/dns_records'));
+    }
+
+    public function test_managed_infrastructure_dns_requires_a_fixed_preview_and_explicit_approval(): void
+    {
+        $this->asOwner();
+        config(['services.cloudflare.api_token' => 'synthetic-token', 'cloudflare.allowed_zones' => ['wpcaregrid.com']]);
+        $records = [];
+        $writes = 0;
+        Http::fake(function ($request) use (&$records, &$writes) {
+            if (str_contains($request->url(), '/zones') && ! str_contains($request->url(), '/dns_records')) {
+                return Http::response(['success' => true, 'result' => [['id' => '0123456789abcdef0123456789abcdef', 'name' => 'wpcaregrid.com']], 'result_info' => ['total_pages' => 1]]);
+            }
+            if ($request->method() === 'GET') {
+                return Http::response(['success' => true, 'result' => $records, 'result_info' => ['total_pages' => 1]]);
+            }
+            $writes++;
+            $record = ['id' => 'abcdef0123456789abcdef0123456789', ...$request->data()];
+            $records[] = $record;
+
+            return Http::response(['success' => true, 'result' => $record]);
+        });
+
+        $this->get(route('owner.dns.cloudflare.infrastructure'))->assertOk()
+            ->assertSee('wp-test.staging.wpcaregrid.com')
+            ->assertSee('mail.wpcaregrid.com');
+        $this->assertSame(0, $writes);
+
+        $this->post(route('owner.dns.cloudflare.infrastructure.plan'), ['definition_id' => 'staging_wp_test_a'])->assertRedirect();
+        $previewId = session('dns_preview_id');
+        $this->assertIsString($previewId);
+        $this->assertSame(0, $writes, 'Planning must not mutate Cloudflare DNS.');
+
+        $this->get(route('owner.dns.cloudflare.infrastructure'))
+            ->assertOk()
+            ->assertSee(route('owner.dns.cloudflare.infrastructure.apply'), false);
+        $this->post(route('owner.dns.cloudflare.infrastructure.apply'), ['preview_id' => $previewId, 'confirmed' => '1'])->assertRedirect();
+
+        $this->assertSame(1, $writes);
+        $this->assertSame('wp-test.staging.wpcaregrid.com', $records[0]['name']);
+        $this->assertSame('85.155.243.164', $records[0]['content']);
+        $this->assertFalse($records[0]['proxied']);
+        $event = AdminAuditEvent::where('event', 'dns.infrastructure.applied')->firstOrFail();
+        $this->assertSame('staging_wp_test_a', $event->subject_key);
+        $this->assertSame('wpcaregrid.com', $event->data['zone']);
+        $this->assertSame('A', $event->data['type']);
+        $this->assertSame('wp-test.staging.wpcaregrid.com', $event->data['name']);
+        $this->assertSame('created', $event->data['result']);
+        $this->assertNotNull($event->ip_address);
+        $this->assertStringNotContainsString('synthetic-token', $event->toJson());
+        Http::assertSent(fn ($request) => $request->method() === 'POST' && str_ends_with($request->url(), '/dns_records'));
+    }
+
+    public function test_managed_infrastructure_page_shows_matches_and_missing_states_without_writes(): void
+    {
+        $this->asOwner();
+        config(['services.cloudflare.api_token' => 'synthetic-token', 'cloudflare.allowed_zones' => ['wpcaregrid.com']]);
+        $desired = WpCareGridInfrastructureDns::definitions()['staging_wp_test_a']['record'];
+        $record = [
+            'id' => 'abcdef0123456789abcdef0123456789',
+            'zone_id' => '0123456789abcdef0123456789abcdef',
+            ...$desired,
+        ];
+        Http::fake(function ($request) use ($record) {
+            if (str_contains($request->url(), '/zones') && ! str_contains($request->url(), '/dns_records')) {
+                return Http::response(['success' => true, 'result' => [['id' => $record['zone_id'], 'name' => 'wpcaregrid.com']], 'result_info' => ['total_pages' => 1]]);
+            }
+
+            return Http::response(['success' => true, 'result' => [$record], 'result_info' => ['total_pages' => 1]]);
+        });
+
+        $this->get(route('owner.dns.cloudflare.infrastructure'))->assertOk()
+            ->assertSee('wp-test.staging.wpcaregrid.com')
+            ->assertSee(__('owner.dns.infrastructure.status.matches'))
+            ->assertSee('mail.wpcaregrid.com')
+            ->assertSee(__('owner.dns.infrastructure.status.missing'));
+
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+    }
+
+    public function test_managed_infrastructure_rejects_arbitrary_ids_and_requires_confirmation(): void
+    {
+        $this->asOwner();
+        config(['services.cloudflare.api_token' => 'synthetic-token', 'cloudflare.allowed_zones' => ['wpcaregrid.com']]);
+        Http::fake();
+
+        $this->post(route('owner.dns.cloudflare.infrastructure.plan'), ['definition_id' => 'attacker_record'])
+            ->assertSessionHasErrors('definition_id');
+        $this->post(route('owner.dns.cloudflare.infrastructure.apply'), ['preview_id' => str_repeat('a', 40)])
+            ->assertSessionHasErrors('confirmed');
+        Http::assertNothingSent();
+
+        foreach (['owner.dns.cloudflare.infrastructure.plan', 'owner.dns.cloudflare.infrastructure.apply'] as $name) {
+            $route = app('router')->getRoutes()->getByName($name);
+            $this->assertContains('web', $route->gatherMiddleware());
+            $this->assertContains('can:owner.dns.manage', $route->gatherMiddleware());
+            $this->assertContains('throttle:owner-sensitive', $route->gatherMiddleware());
+            $this->assertContains('throttle:owner-external', $route->gatherMiddleware());
+        }
+        $this->assertContains('GET', app('router')->getRoutes()->getByName('owner.dns.cloudflare.infrastructure')->methods());
+        $this->assertNotContains('POST', app('router')->getRoutes()->getByName('owner.dns.cloudflare.infrastructure')->methods());
+        Http::assertNothingSent();
     }
 }

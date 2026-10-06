@@ -5,6 +5,7 @@ namespace Tests\Feature\Cloudflare;
 use App\Cloudflare\CloudflareApiClient;
 use App\Cloudflare\CloudflareDnsException;
 use App\Cloudflare\CloudflareDnsService;
+use App\Cloudflare\WpCareGridInfrastructureDns;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -102,6 +103,71 @@ class CloudflareDnsServiceTest extends TestCase
         $service->applyEnsure('wpcaregrid.com', $updateInput, $unchangedPlan);
         Http::assertSent(fn (Request $request) => $request->method() === 'PUT');
         Http::assertSent(fn (Request $request) => str_contains($request->url(), '/zones/'.self::ZONE_ID.'/dns_records'));
+    }
+
+    public function test_server_defined_infrastructure_records_can_be_planned_without_a_dns_write(): void
+    {
+        $writes = 0;
+        Http::fake(function (Request $request) use (&$writes) {
+            if (str_contains($request->url(), '/zones') && ! str_contains($request->url(), '/dns_records')) {
+                return Http::response(['success' => true, 'result' => [['id' => self::ZONE_ID, 'name' => 'wpcaregrid.com']], 'result_info' => ['total_pages' => 1]]);
+            }
+            if ($request->method() !== 'GET') {
+                $writes++;
+            }
+
+            return Http::response(['success' => true, 'result' => [], 'result_info' => ['total_pages' => 1]]);
+        });
+
+        $definitions = WpCareGridInfrastructureDns::definitions();
+        $plan = app(CloudflareDnsService::class)->planInfrastructureEnsure('staging_wp_test_a');
+
+        $this->assertSame('created', $plan['action']);
+        $this->assertSame('staging_wp_test_a', $plan['definition_id']);
+        $this->assertSame($definitions['staging_wp_test_a']['record'], $plan['after']);
+        $this->assertSame('wp-test.staging.wpcaregrid.com', $plan['after']['name']);
+        $this->assertFalse($plan['after']['proxied']);
+        $this->assertSame(0, $writes);
+
+        try {
+            app(CloudflareDnsService::class)->planEnsure('wpcaregrid.com', $plan['after']);
+            $this->fail('The generic DNS editor must continue to protect infrastructure names.');
+        } catch (CloudflareDnsException $exception) {
+            $this->assertSame('record_protected', $exception->category);
+        }
+        $this->assertSame(0, $writes);
+    }
+
+    public function test_server_defined_infrastructure_apply_replans_and_rejects_changed_provider_state(): void
+    {
+        $record = null;
+        $writes = 0;
+        Http::fake(function (Request $request) use (&$record, &$writes) {
+            if (str_contains($request->url(), '/zones') && ! str_contains($request->url(), '/dns_records')) {
+                return Http::response(['success' => true, 'result' => [['id' => self::ZONE_ID, 'name' => 'wpcaregrid.com']], 'result_info' => ['total_pages' => 1]]);
+            }
+            if ($request->method() === 'GET') {
+                return Http::response(['success' => true, 'result' => $record ? [$record] : [], 'result_info' => ['total_pages' => 1]]);
+            }
+            $writes++;
+
+            return Http::response(['success' => true, 'result' => []]);
+        });
+
+        $service = app(CloudflareDnsService::class);
+        $preview = $service->planInfrastructureEnsure('staging_wp_test_a');
+        $record = [
+            'id' => self::RECORD_ID, 'type' => 'A', 'name' => 'wp-test.staging.wpcaregrid.com',
+            'content' => '192.0.2.55', 'ttl' => 1, 'proxied' => false,
+        ];
+
+        try {
+            $service->applyInfrastructureEnsure('staging_wp_test_a', $preview);
+            $this->fail('Changed provider state must invalidate the earlier preview.');
+        } catch (CloudflareDnsException $exception) {
+            $this->assertSame('record_conflict', $exception->category);
+        }
+        $this->assertSame(0, $writes);
     }
 
     public function test_duplicate_matching_records_are_conflicts(): void
