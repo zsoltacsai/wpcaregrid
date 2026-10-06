@@ -10,6 +10,12 @@ readonly ORIGIN_URL='git@github.com-wpcaregrid:zsoltacsai/wpcaregrid.git'
 readonly APP_URL='https://staging.wpcaregrid.com'
 readonly GATE_DIR='/var/lib/wpcaregrid'
 readonly GATE_FILE="${GATE_DIR}/deploy-maintenance"
+readonly SCHEDULER_LOCK_FILE="${GATE_DIR}/scheduler.lock"
+readonly SCHEDULER_PAUSE_FILE="${GATE_DIR}/scheduler-paused"
+readonly SCHEDULER_WRAPPER='/usr/local/bin/wpcaregrid-scheduler'
+readonly LEGACY_SCHEDULER_CRON='* * * * * cd /var/www/wpcaregrid && php artisan schedule:run >> /dev/null 2>&1'
+readonly GUARDED_SCHEDULER_CRON="* * * * * ${SCHEDULER_WRAPPER} >> /dev/null 2>&1"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly BACKUP_DIR='/home/deploy/private-backups'
 readonly WORKERS=('wpcaregrid-default' 'wpcaregrid-backups')
 
@@ -20,8 +26,11 @@ COMPOSER_READY=0
 ASSETS_READY=0
 MIGRATIONS_READY=0
 CONNECTOR_READY=0
+SCHEDULER_LOCK_HELD=0
 TEMP_BACKUP=''
 CHECK_REPORT=''
+CRON_TEMP=''
+CRON_TEMP_OUTPUT=''
 declare -A OLD_WORKER_PIDS=()
 
 log() {
@@ -51,6 +60,105 @@ workers_running() {
     for worker in "${WORKERS[@]}"; do
         worker_pid "$worker" >/dev/null || return 1
     done
+}
+
+install_scheduler_guard() {
+    local wrapper_source current_cron cron_started_at attempt
+
+    wrapper_source="${SCRIPT_DIR}/run-scheduler.sh"
+    [[ -f "$wrapper_source" ]] || fail 'The repository scheduler wrapper is missing beside the deployment script.'
+    command -v logger >/dev/null || fail 'The logger utility is required by the scheduler wrapper.'
+    command -v flock >/dev/null || fail 'The flock utility is required for scheduler/deployment coordination.'
+    command -v pgrep >/dev/null || fail 'The pgrep utility is required to drain a legacy scheduler process safely.'
+
+    sudo -n install -d -o root -g root -m 0755 "$GATE_DIR"
+    if [[ ! -e "$SCHEDULER_LOCK_FILE" ]]; then
+        sudo -n install -o deploy -g www-data -m 0660 /dev/null "$SCHEDULER_LOCK_FILE"
+    fi
+    [[ -f "$SCHEDULER_LOCK_FILE" && ! -L "$SCHEDULER_LOCK_FILE" ]] || fail 'The scheduler lock path must be a regular file, not a symlink.'
+    [[ "$(stat -c '%U:%G:%a' "$SCHEDULER_LOCK_FILE")" == 'deploy:www-data:660' ]] || fail 'The scheduler lock must be deploy:www-data mode 0660.'
+    sudo -n -u www-data test -r "$SCHEDULER_LOCK_FILE" || fail 'www-data cannot read the scheduler lock file.'
+
+    # Replace the installed wrapper atomically so cron never sees a partial script.
+    sudo -n install -o root -g root -m 0755 "$wrapper_source" "${SCHEDULER_WRAPPER}.new"
+    sudo -n mv -f -- "${SCHEDULER_WRAPPER}.new" "$SCHEDULER_WRAPPER"
+
+    current_cron="$(sudo -n crontab -u www-data -l 2>/dev/null)" || fail 'Could not read the www-data crontab.'
+    if grep -Fxq "$GUARDED_SCHEDULER_CRON" <<<"$current_cron"; then
+        [[ "$(grep -Fc 'schedule:run' <<<"$current_cron")" == '0' ]] || fail 'A second unguarded schedule:run crontab entry exists.'
+        log 'The www-data scheduler already uses the guarded wrapper.'
+        return 0
+    fi
+
+    [[ "$(grep -Fc "$LEGACY_SCHEDULER_CRON" <<<"$current_cron")" == '1' ]] || fail 'The existing www-data scheduler crontab does not match the reviewed legacy entry.'
+    [[ "$(grep -Fc 'schedule:run' <<<"$current_cron")" == '1' ]] || fail 'Expected exactly one Laravel scheduler crontab entry.'
+    CRON_TEMP="$(mktemp /tmp/wpcaregrid-crontab.XXXXXX)"
+    CRON_TEMP_OUTPUT="${CRON_TEMP}.new"
+    chmod 0600 "$CRON_TEMP"
+    printf '%s\n' "$current_cron" >"$CRON_TEMP"
+    awk -v old="$LEGACY_SCHEDULER_CRON" -v new="$GUARDED_SCHEDULER_CRON" \
+        '$0 == old { print new; changed++; next } { print } END { if (changed != 1) exit 1 }' \
+        "$CRON_TEMP" >"$CRON_TEMP_OUTPUT" || fail 'Could not safely replace the reviewed scheduler crontab entry.'
+    chmod 0600 "$CRON_TEMP_OUTPUT"
+    sudo -n crontab -u www-data "$CRON_TEMP_OUTPUT"
+    current_cron="$(sudo -n crontab -u www-data -l 2>/dev/null)" || fail 'Could not verify the updated www-data crontab.'
+    grep -Fxq "$GUARDED_SCHEDULER_CRON" <<<"$current_cron" || fail 'The guarded scheduler crontab entry was not installed.'
+    [[ "$(grep -Fc 'schedule:run' <<<"$current_cron")" == '0' ]] || fail 'The old direct schedule:run entry remains active.'
+    rm -f -- "$CRON_TEMP" "$CRON_TEMP_OUTPUT"
+    CRON_TEMP=''
+    CRON_TEMP_OUTPUT=''
+
+    # Cron reloads user crontabs asynchronously. Do not proceed until its log
+    # proves it invoked the wrapper at least once; all of this happens while the
+    # current application and config cache are still healthy.
+    cron_started_at="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+    log 'Waiting for cron to observe the guarded scheduler crontab.'
+    for attempt in {1..75}; do
+        if sudo -n journalctl -u cron --since "$cron_started_at" -o cat --no-pager 2>/dev/null | grep -Fq "$SCHEDULER_WRAPPER"; then
+            log 'Cron invoked the guarded scheduler wrapper.'
+            return 0
+        fi
+        sleep 1
+    done
+
+    fail 'Cron did not invoke the guarded scheduler wrapper within 75 seconds.'
+}
+
+acquire_scheduler_guard() {
+    local attempt scheduler_probe
+
+    (( SCHEDULER_LOCK_HELD )) && return 0
+    exec 8<>"$SCHEDULER_LOCK_FILE" || fail 'Could not open the scheduler/deployment lock.'
+    flock -x -w 90 8 || fail 'Could not acquire the scheduler/deployment lock within 90 seconds.'
+    SCHEDULER_LOCK_HELD=1
+
+    # The first wrapper installation can overlap one invocation from cron's
+    # previously cached crontab. Drain that unguarded process before the gate.
+    for attempt in {1..90}; do
+        if ! pgrep -u www-data -f 'artisan schedule:run' >/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+    pgrep -u www-data -f 'artisan schedule:run' >/dev/null && fail 'A legacy or active scheduler process did not exit after the exclusive lock was acquired.'
+
+    scheduler_probe="$(sudo -n -u www-data "$SCHEDULER_WRAPPER" 2>&1)" || fail 'The guarded scheduler wrapper failed its deployment-lock probe.'
+    [[ "$scheduler_probe" == 'wpcaregrid scheduler skipped: deployment guard active' ]] || fail 'The scheduler wrapper did not prove that it skips Laravel while the deployment lock is held.'
+    log 'Scheduler wrapper probe confirmed no Laravel bootstrap while deployment lock is held.'
+}
+
+pause_scheduler() {
+    sudo -n install -o root -g root -m 0644 /dev/null "$SCHEDULER_PAUSE_FILE"
+    log 'Persistent scheduler pause marker installed.'
+}
+
+resume_scheduler() {
+    (( SCHEDULER_LOCK_HELD )) || fail 'Cannot resume the scheduler without holding the deployment lock.'
+    sudo -n rm -f -- "$SCHEDULER_PAUSE_FILE"
+    flock -u 8
+    SCHEDULER_LOCK_HELD=0
+    exec 8>&-
+    log 'Scheduler resumed after the production config cache was verified.'
 }
 
 wait_for_restarted_workers() {
@@ -232,6 +340,9 @@ mark_gate_released() {
 recover_after_failure() {
     log 'Attempting guarded recovery while the Nginx gate is active.'
 
+    acquire_scheduler_guard || return 1
+    pause_scheduler || return 1
+
     # A failure or signal can occur after the marker is removed for smoke
     # checks. Reinstall it before doing any recovery work.
     GATE_ACTIVE=1
@@ -257,6 +368,7 @@ recover_after_failure() {
         WORKERS_MAY_BE_STOPPED=0
     fi
 
+    resume_scheduler || return 1
     wait_for_scheduler || return 1
     check_system_health || return 1
     workers_running || return 1
@@ -304,6 +416,8 @@ on_exit() {
     trap - EXIT
     [[ -n "$TEMP_BACKUP" ]] && rm -f -- "$TEMP_BACKUP"
     [[ -n "$CHECK_REPORT" ]] && rm -f -- "$CHECK_REPORT"
+    [[ -n "$CRON_TEMP" ]] && rm -f -- "$CRON_TEMP"
+    [[ -n "$CRON_TEMP_OUTPUT" ]] && rm -f -- "$CRON_TEMP_OUTPUT"
 
     if (( status != 0 && GATE_ACTIVE )); then
         log "Deployment failed with status ${status}."
@@ -348,12 +462,13 @@ main() {
         done < <(find "$cache_dir" -maxdepth 1 -type f -name '*.php' -print0)
     done
     [[ ! -e "$GATE_FILE" ]] || fail "A previous deployment gate exists at ${GATE_FILE}; inspect and recover it before retrying."
+    [[ ! -e "$SCHEDULER_PAUSE_FILE" ]] || fail "A previous scheduler pause marker exists at ${SCHEDULER_PAUSE_FILE}; inspect and recover it before retrying."
     [[ "$(git status --porcelain --untracked-files=all)" == '' ]] || fail 'The repository has tracked or untracked changes; deploy only from a clean checkout.'
     sudo -n true || fail 'Non-interactive sudo is required.'
     sudo -n nginx -t >/dev/null || fail 'Nginx configuration is invalid.'
     sudo -n nginx -T 2>/dev/null | grep -Fq 'if (-f /var/lib/wpcaregrid/deploy-maintenance)' || fail 'The staging Nginx deployment gate is not configured.'
     sudo -n systemctl is-active --quiet cron || fail 'The cron scheduler service is not active.'
-    sudo -n crontab -u www-data -l 2>/dev/null | grep -Fq 'artisan schedule:run' || fail 'The www-data one-minute Laravel scheduler entry is missing.'
+    install_scheduler_guard
     command -v git >/dev/null && command -v composer >/dev/null && command -v npm >/dev/null && command -v curl >/dev/null || fail 'A required deployment tool is missing.'
     php -r 'exit(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === 4 ? 0 : 1);' || fail 'PHP 8.4 CLI is required.'
     composer --version | grep -q 'Composer version 2\.' || fail 'Composer 2 is required.'
@@ -404,7 +519,9 @@ main() {
     log "Database backup ready: ${backup_path}"
 
     sudo -n install -d -o root -g root -m 0755 "$GATE_DIR"
+    acquire_scheduler_guard
     GATE_ACTIVE=1
+    pause_scheduler
     sudo -n install -o root -g root -m 0644 /dev/null "$GATE_FILE"
     gate_probe="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}/up")"
     [[ "$gate_probe" == '503' ]] || fail "Nginx deployment gate returned ${gate_probe}, expected controlled HTTP 503."
@@ -489,6 +606,7 @@ main() {
     [[ "$(git rev-parse HEAD)" == "$target_commit" ]] || fail 'The deployed Git HEAD changed unexpectedly.'
     [[ "$(git status --porcelain --untracked-files=all)" == '' ]] || fail 'The deployed Git working tree is not clean.'
 
+    resume_scheduler
     wait_for_scheduler || fail 'Scheduler heartbeat did not recover after cache refresh.'
     workers_running || fail 'One or more required Supervisor workers stopped before traffic was reopened.'
     release_gate
