@@ -17,6 +17,7 @@ use Aws\MockHandler;
 use Aws\Result;
 use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
+use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Facades\File;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Support\StorageServers;
@@ -146,7 +147,7 @@ class StorageProviderTest extends TestCase
             new S3Storage(['encryption_mode' => 'sse-customer-key']);
             $this->fail('Unknown encryption mode was accepted.');
         } catch (\InvalidArgumentException $e) {
-            $this->assertSame('Invalid S3 encryption mode.', $e->getMessage());
+            $this->assertSame('Unsupported S3 encryption mode.', $e->getMessage());
         }
     }
 
@@ -233,12 +234,12 @@ class StorageProviderTest extends TestCase
         $mock->append(function (CommandInterface $command) use (&$commands) {
             $commands[] = $command->toArray();
 
-            return new Result(['Body' => \GuzzleHttp\Psr7\Utils::streamFor('bytes')]);
+            return new Result(['Body' => Utils::streamFor('bytes')]);
         });
         $mock->append(function (CommandInterface $command) use (&$commands) {
             $commands[] = $command->toArray();
 
-            return new Result(['Body' => \GuzzleHttp\Psr7\Utils::streamFor('yte')]);
+            return new Result(['Body' => Utils::streamFor('yte')]);
         });
         config(['backup.transfer.readback' => true]);
 
