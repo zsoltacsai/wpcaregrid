@@ -10,13 +10,12 @@ use Illuminate\Console\Command;
  * The owner System page as a command, for deployments and monitoring:
  *
  *   php artisan system:check            table, exit 1 on any ERROR (and, in
- *                                       production, on NOT CONFIGURED)
+ *                                       production, on required NOT CONFIGURED)
  *   php artisan system:check --json     machine-readable
  *   php artisan system:check --strict   also exit 1 on WARNING / NOT CONFIGURED
  *
- * Each part is OK, WARNING, ERROR or NOT CONFIGURED. Reads configuration
- * and stored data only (no calls to Stripe or storage) and never prints a
- * secret value: only whether it is set.
+ * Each part is OK, WARNING, ERROR or NOT CONFIGURED. The optional Cloudflare
+ * check is read-only; no DNS mutations are performed. Secret values are never printed.
  */
 class SystemCheck extends Command
 {
@@ -36,6 +35,7 @@ class SystemCheck extends Command
                 'level' => $check->level(),
                 'summary' => $check->summary,
                 'details' => $check->details,
+                'optional' => $check->optional,
             ], $checks), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
         } else {
             $this->table(['Part', 'Result', 'Summary'], array_map(fn (StatusCheck $check) => [
@@ -46,12 +46,19 @@ class SystemCheck extends Command
         }
 
         $levels = array_map(fn (StatusCheck $check) => $check->level(), $checks);
-        // In production every part is required: missing configuration fails as well.
+        // Optional integration gaps remain visible but do not block the normal production check.
+        $requiredConfigurationMissing = self::hasRequiredConfigurationMissing($checks);
         $failed = in_array('ERROR', $levels, true)
-            || (app()->environment('production') && in_array('NOT CONFIGURED', $levels, true))
+            || (app()->environment('production') && $requiredConfigurationMissing)
             || ($this->option('strict') && array_diff($levels, ['OK']) !== []);
 
         return $failed ? self::FAILURE : self::SUCCESS;
+    }
+
+    /** @param list<StatusCheck> $checks */
+    public static function hasRequiredConfigurationMissing(array $checks): bool
+    {
+        return collect($checks)->contains(fn (StatusCheck $check) => $check->level() === 'NOT CONFIGURED' && ! $check->optional);
     }
 
     private function colour(string $level): string

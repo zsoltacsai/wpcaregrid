@@ -4,6 +4,8 @@ namespace App\Owner;
 
 use App\Backups\BackupStatus;
 use App\Backups\Storage\StorageManager;
+use App\Cloudflare\CloudflareDnsException;
+use App\Cloudflare\CloudflareDnsService;
 use App\Connector\HealthStatus;
 use App\Models\Backup;
 use App\Models\Connector;
@@ -22,7 +24,7 @@ use Throwable;
  * The owner's system page: is each part configured and working. Reports
  * states, drivers and counts only. Secret values (keys, passwords, tokens,
  * storage credentials) are read solely to tell whether they are set, and
- * never returned, logged or shown. Nothing here calls Stripe or storage;
+ * never returned, logged or shown. Nothing here calls Stripe or backup storage;
  * the Stripe price check is a separate, explicit action.
  */
 final class SystemStatus
@@ -46,6 +48,7 @@ final class SystemStatus
             $this->scheduler(),
             $this->connectorApi(),
             $this->stripe(),
+            $this->cloudflare(),
             $this->backupStorage(),
             $this->securityScanner(),
             $this->mail(),
@@ -229,6 +232,32 @@ final class SystemStatus
                 ? $verification['at'].' · '.($verification['ok'] ? __('owner.system.values.ok') : __('owner.system.values.problems', ['count' => $verification['problems']]))
                 : '—',
         ], notConfigured: ! $configured);
+    }
+
+    private function cloudflare(): StatusCheck
+    {
+        $token = filled(config('services.cloudflare.api_token'));
+        if (! $token) {
+            return new StatusCheck('cloudflare', HealthStatus::Unknown, __('owner.system.summaries.cloudflare_not_configured'), [
+                __('owner.system.details.credentials') => __('owner.system.values.not_configured'),
+            ], notConfigured: true, optional: true);
+        }
+
+        try {
+            $diagnostic = app(CloudflareDnsService::class)->diagnose();
+
+            return new StatusCheck('cloudflare', HealthStatus::Healthy, __('owner.system.summaries.cloudflare_connected'), [
+                __('owner.system.details.credentials') => __('owner.system.values.configured'),
+                __('owner.system.details.approved_zones') => (string) count($diagnostic['zones']),
+                __('owner.system.details.dns_read') => __('owner.system.values.available'),
+                __('owner.system.details.dns_edit') => __('owner.system.values.not_probed'),
+            ]);
+        } catch (CloudflareDnsException $exception) {
+            return new StatusCheck('cloudflare', HealthStatus::Attention, __('owner.system.summaries.cloudflare_unavailable'), [
+                __('owner.system.details.credentials') => __('owner.system.values.configured'),
+                __('owner.system.details.cloudflare_error') => __('owner.dns.errors.'.$exception->category),
+            ]);
+        }
     }
 
     private function backupStorage(): StatusCheck

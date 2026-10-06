@@ -40,6 +40,10 @@ return [
         'allow_live_mode' => (bool) env('STRIPE_ALLOW_LIVE_MODE', false),
     ],
 
+    'cloudflare' => [
+        'api_token' => env('CLOUDFLARE_API_TOKEN'),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

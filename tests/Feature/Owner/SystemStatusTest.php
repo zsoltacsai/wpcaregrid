@@ -6,6 +6,7 @@ use App\Connector\HealthStatus;
 use App\Owner\SystemStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Tests\Concerns\ActsAsOwner;
 use Tests\TestCase;
 
@@ -13,6 +14,12 @@ use Tests\TestCase;
 class SystemStatusTest extends TestCase
 {
     use ActsAsOwner, RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.cloudflare.api_token' => null]);
+    }
 
     /** @return array<string, HealthStatus> */
     private function states(): array
@@ -25,10 +32,10 @@ class SystemStatusTest extends TestCase
         $this->asOwner();
 
         $response = $this->get(route('owner.system'))->assertOk();
-        foreach (['Application', 'Database', 'Queue', 'Scheduler', 'Connector API', 'Stripe', 'Backup storage', 'Security scanner', 'Mail'] as $name) {
+        foreach (['Application', 'Database', 'Queue', 'Scheduler', 'Connector API', 'Stripe', 'Cloudflare DNS', 'Backup storage', 'Security scanner', 'Mail'] as $name) {
             $response->assertSee($name);
         }
-        $this->assertCount(10, $this->states());
+        $this->assertCount(11, $this->states());
     }
 
     public function test_secret_values_are_never_shown(): void
@@ -37,6 +44,7 @@ class SystemStatusTest extends TestCase
             'services.stripe.secret' => 'sk_test_SECRET_STRIPE_KEY_123',
             'services.stripe.key' => 'pk_test_PUBLISHABLE_456',
             'services.stripe.webhook_secret' => 'whsec_WEBHOOK_SECRET_789',
+            'services.cloudflare.api_token' => 'cloudflare_secret_token_123',
             'backup.providers.s3.key' => 'AKIA_STORAGE_KEY',
             'backup.providers.s3.secret' => 'STORAGE_SECRET_VALUE',
             'backup.providers.s3.bucket' => 'private-bucket-name',
@@ -44,6 +52,16 @@ class SystemStatusTest extends TestCase
             'security.vulnerabilities.feed_key' => 'FEED_KEY_VALUE',
             'app.key' => 'base64:'.base64_encode(str_repeat('k', 32)),
         ];
+        Http::fake(function ($request) {
+            if (str_ends_with($request->url(), '/user/tokens/verify')) {
+                return Http::response(['success' => true, 'result' => ['status' => 'active']]);
+            }
+            if (str_contains($request->url(), '/zones') && ! str_contains($request->url(), '/dns_records')) {
+                return Http::response(['success' => true, 'result' => [['id' => '0123456789abcdef0123456789abcdef', 'name' => 'wpcaregrid.com']], 'result_info' => ['total_pages' => 1]]);
+            }
+
+            return Http::response(['success' => true, 'result' => [], 'result_info' => ['total_pages' => 1]]);
+        });
         config($secrets + ['backup.storage' => 's3', 'mail.default' => 'smtp']);
         $this->asOwner();
 
@@ -72,6 +90,35 @@ class SystemStatusTest extends TestCase
         $this->assertSame(HealthStatus::Unknown, $states['connector_api']);
         $this->assertSame(HealthStatus::Unknown, $states['security_scanner']);
         $this->assertSame(HealthStatus::Healthy, $states['database']);
+        $this->assertSame(HealthStatus::Unknown, $states['cloudflare']);
+        $cloudflare = collect(app(SystemStatus::class)->checks())->firstWhere('key', 'cloudflare');
+        $this->assertSame('NOT CONFIGURED', $cloudflare->level());
+        $this->assertTrue($cloudflare->optional);
+    }
+
+    public function test_cloudflare_status_checks_are_read_only_and_report_failures_as_warning(): void
+    {
+        config(['services.cloudflare.api_token' => 'cloudflare-test-token', 'cloudflare.allowed_zones' => ['wpcaregrid.com']]);
+        $statusCode = 200;
+        Http::fake(function ($request) use (&$statusCode) {
+            if ($statusCode === 403) {
+                return Http::response(['success' => false], 403);
+            }
+            if (str_ends_with($request->url(), '/user/tokens/verify')) {
+                return Http::response(['success' => true, 'result' => ['status' => 'active']]);
+            }
+            if (str_contains($request->url(), '/zones') && ! str_contains($request->url(), '/dns_records')) {
+                return Http::response(['success' => true, 'result' => [['id' => '0123456789abcdef0123456789abcdef', 'name' => 'wpcaregrid.com']], 'result_info' => ['total_pages' => 1]]);
+            }
+
+            return Http::response(['success' => true, 'result' => [], 'result_info' => ['total_pages' => 1]]);
+        });
+
+        $this->assertSame(HealthStatus::Healthy, $this->states()['cloudflare']);
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+
+        $statusCode = 403;
+        $this->assertSame(HealthStatus::Attention, $this->states()['cloudflare']);
     }
 
     public function test_the_scheduler_heartbeat_decides_the_scheduler_state(): void

@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Owner\CloudflareDnsController;
 use App\Http\Controllers\Owner\ContentController;
 use App\Http\Controllers\Owner\CouponController;
 use App\Http\Controllers\Owner\CustomerController;
@@ -112,5 +113,14 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::get('/integrations', [IntegrationCredentialController::class, 'index'])->middleware('can:owner.integrations.manage')->name('integrations.index');
         Route::post('/integrations', [IntegrationCredentialController::class, 'store'])->middleware(['can:owner.integrations.manage', 'throttle:owner-sensitive'])->name('integrations.store');
         Route::delete('/integrations/{id}', [IntegrationCredentialController::class, 'destroy'])->middleware(['can:owner.integrations.manage', 'throttle:owner-sensitive'])->name('integrations.destroy');
+
+        Route::prefix('dns/cloudflare')->name('dns.cloudflare.')->middleware('can:owner.dns.manage')->group(function () {
+            Route::get('/', [CloudflareDnsController::class, 'index'])->middleware('throttle:owner-external')->name('index');
+            Route::get('/zones/{zone}', [CloudflareDnsController::class, 'zone'])->middleware('throttle:owner-external')->name('zone');
+            Route::post('/records/plan', [CloudflareDnsController::class, 'planEnsure'])->middleware(['throttle:owner-sensitive', 'throttle:owner-external'])->name('records.plan');
+            Route::post('/records/apply', [CloudflareDnsController::class, 'applyEnsure'])->middleware(['throttle:owner-sensitive', 'throttle:owner-external'])->name('records.apply');
+            Route::post('/records/delete/plan', [CloudflareDnsController::class, 'planDelete'])->middleware(['throttle:owner-sensitive', 'throttle:owner-external'])->name('records.delete.plan');
+            Route::post('/records/delete/apply', [CloudflareDnsController::class, 'applyDelete'])->middleware(['throttle:owner-sensitive', 'throttle:owner-external'])->name('records.delete.apply');
+        });
     });
 });

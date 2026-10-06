@@ -7,10 +7,13 @@ use App\Backups\BackupReason;
 use App\Backups\BackupService;
 use App\Backups\BackupStatus;
 use App\Connector\DisconnectWebsite;
+use App\Connector\HealthStatus;
+use App\Console\Commands\SystemCheck;
 use App\Http\Middleware\SecurityHeaders;
 use App\Jobs\TransferBackup;
 use App\Models\Connector;
 use App\Models\Website;
+use App\Owner\StatusCheck;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\Artisan;
@@ -28,6 +31,7 @@ class ProductionHardeningTest extends TestCase
     {
         parent::setUp();
         $this->setUpBackups(['manual' => true]);
+        config(['services.cloudflare.api_token' => null]);
     }
 
     protected function tearDown(): void
@@ -254,14 +258,14 @@ class ProductionHardeningTest extends TestCase
 
         $this->assertSame(0, Artisan::call('system:check'));
         $table = Artisan::output();
-        foreach (['Application', 'Database', 'Queue', 'Scheduler', 'Connector API', 'Stripe', 'Backup storage', 'Security scanner', 'Mail', 'Safety switches'] as $part) {
+        foreach (['Application', 'Database', 'Queue', 'Scheduler', 'Connector API', 'Stripe', 'Cloudflare DNS', 'Backup storage', 'Security scanner', 'Mail', 'Safety switches'] as $part) {
             $this->assertStringContainsString($part, $table);
         }
 
         Artisan::call('system:check', ['--json' => true]);
         $json = Artisan::output();
         $checks = json_decode($json, true);
-        $this->assertCount(10, $checks);
+        $this->assertCount(11, $checks);
         foreach ($checks as $check) {
             $this->assertContains($check['level'], ['OK', 'WARNING', 'ERROR', 'NOT CONFIGURED']);
         }
@@ -279,6 +283,16 @@ class ProductionHardeningTest extends TestCase
         $this->app->detectEnvironment(fn () => 'production');
         config(['app.debug' => false]);
         $this->assertSame(1, Artisan::call('system:check'), 'In production every part is required.');
+    }
+
+    public function test_optional_cloudflare_not_configured_does_not_fail_normal_production_check(): void
+    {
+        $cloudflare = new StatusCheck('cloudflare', HealthStatus::Unknown, 'Cloudflare is not configured.', notConfigured: true, optional: true);
+        $requiredPart = new StatusCheck('stripe', HealthStatus::Unknown, 'Stripe is not configured.', notConfigured: true);
+
+        $this->assertSame('NOT CONFIGURED', $cloudflare->level());
+        $this->assertFalse(SystemCheck::hasRequiredConfigurationMissing([$cloudflare]));
+        $this->assertTrue(SystemCheck::hasRequiredConfigurationMissing([$cloudflare, $requiredPart]));
     }
 
     public function test_unsafe_switches_and_transfer_settings_are_reported(): void

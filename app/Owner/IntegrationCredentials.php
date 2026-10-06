@@ -13,6 +13,7 @@ final class IntegrationCredentials
         'stripe_publishable' => ['label' => 'Stripe publishable key', 'config' => ['services.stripe.key']],
         'stripe_secret' => ['label' => 'Stripe secret key', 'config' => ['services.stripe.secret']],
         'stripe_webhook' => ['label' => 'Stripe webhook secret', 'config' => ['services.stripe.webhook_secret']],
+        'cloudflare_api_token' => ['label' => 'Cloudflare API token', 'config' => ['services.cloudflare.api_token']],
         's3_access' => ['label' => 'S3-compatible storage access key (Hetzner)', 'config' => ['backup.providers.s3.key']],
         's3_secret' => ['label' => 'S3-compatible storage secret key (Hetzner)', 'config' => ['backup.providers.s3.secret']],
         's3_sse_c' => ['label' => 'S3 SSE-C encryption key', 'config' => ['backup.providers.s3.sse_customer_key']],

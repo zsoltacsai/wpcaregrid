@@ -37,8 +37,11 @@ Every owner route has `auth:owner`, `owner` and exactly one ability `can:owner.*
 | `owner.seo.manage` | SEO metadata |
 | `owner.system.view` | system status |
 | `owner.integrations.manage` | replace or clear fixed application service credentials; values are never readable |
+| `owner.dns.manage` | inspect approved Cloudflare zones and preview/apply DNS changes |
 
 All abilities pass only for a verified owner without a customer record; customers and operators never pass, whatever permissions they hold. Owners may replace fixed application-wide integration credentials on `/owner/integrations`, but cannot read stored values or manage customer/connector credentials, impersonate customers, restore, update, open admin access or remediate websites.
+
+Cloudflare DNS is managed separately at `/owner/dns/cloudflare`. Its scoped API token is a fixed Owner Integration (`cloudflare_api_token`), encrypted using Laravel encryption and never displayed after saving. See [CLOUDFLARE_DNS.md](CLOUDFLARE_DNS.md) for token scope, zone allowlist, previews, protected records and audit behavior. Database backups containing `integration_credentials` must be preserved with the matching `APP_KEY`; losing or replacing that key without re-encryption makes stored credentials unreadable.
 
 Rate limiters: `owner-sensitive` (20/min, 200/hour per owner) for customer, operator, price and content changes; `owner-external` (5/min) for actions that reach Stripe or a website; `staff-invitation` (5/min, 30/hour) for invitations; `owner-coupons` (10/min, 60/hour) for the coupon actions that reach Stripe.
 

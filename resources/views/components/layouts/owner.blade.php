@@ -18,6 +18,7 @@
         ['route' => 'owner.seo.index', 'active' => 'owner.seo.*', 'label' => __('owner.nav.seo'), 'icon' => 'search'],
         ['route' => 'owner.system', 'active' => 'owner.system', 'label' => __('owner.nav.system'), 'icon' => 'cog'],
         ['route' => 'owner.integrations.index', 'active' => 'owner.integrations.*', 'label' => __('owner.nav.integrations'), 'icon' => 'key'],
+        ['route' => 'owner.dns.cloudflare.index', 'active' => 'owner.dns.cloudflare.*', 'label' => __('owner.nav.dns'), 'icon' => 'globe'],
     ];
     $refusal = session('owner_error');
 @endphp

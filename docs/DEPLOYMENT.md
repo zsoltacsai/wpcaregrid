@@ -1,5 +1,7 @@
 # Deployment
 
+Cloudflare DNS access is optional and does not affect application boot. Configure a scoped token through Owner → Integrations; see [CLOUDFLARE_DNS.md](CLOUDFLARE_DNS.md). Keep `CLOUDFLARE_ALLOWED_ZONES` limited to exact zone names and mirror that restriction in the token. DNS changes are never run automatically by deployment, readiness checks or the scheduler. Each Owner DNS mutation requires a preview and explicit confirmation.
+
 A clean deployment of WP CareGrid from this repository to a Linux server, and how to run it: web server, database, queue workers, scheduler, storage, mail, Stripe and security settings. Release gates are in [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md), the pilot in [PILOT.md](PILOT.md). No real credentials belong in this file or in the repository.
 
 ## What runs

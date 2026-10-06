@@ -3,7 +3,11 @@
 > Kept up to date at the end of every milestone (see CLAUDE.md §27).
 > A new session should read CLAUDE.md, this file and the relevant docs, then run `git status` and `git log --oneline -12`.
 
-Last updated: 2026-10-05
+Last updated: 2026-10-06
+
+## Current local milestone — Cloudflare DNS Owner integration (uncommitted)
+
+Implementation is in progress on `claude/ecstatic-wozniak-oemyuf` at the unchanged base `dc1409e9d109118d8f5be560c0a346e4eb504bac`. Adds encrypted Owner Integration token mapping, exact-zone allowlisting, a read-only-capable Cloudflare API adapter, validated/idempotent record planning, explicit preview/apply, protected-record safeguards, audit events, Owner UI and mocked tests. **No staging deployment or Cloudflare API call has been made, and no DNS has been changed.** After adversarial review, validation used an isolated checkout and disposable MySQL schema: 784 tests / 12,441 assertions / 6 skipped; 44 focused Cloudflare/security tests / 145 assertions; Pint 554 files; PHP syntax 22 changed/new files. The frontend build, whitespace check and local secret-pattern scan also pass. Gitleaks is unavailable in the local/isolated environment. Keep `.claude/` untouched and uncommitted.
 
 ## Branch and HEAD
 

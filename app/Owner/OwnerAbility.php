@@ -32,6 +32,7 @@ enum OwnerAbility: string
     case OffersManage = 'offers.manage';
     case SystemView = 'system.view';
     case IntegrationsManage = 'integrations.manage';
+    case DnsManage = 'dns.manage';
 
     public function gate(): string
     {
