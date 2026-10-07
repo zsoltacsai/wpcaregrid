@@ -91,8 +91,257 @@ class BillingSnapshotTest extends TestCase
         ]])->assertStatus(204);
 
         $subscription = Subscription::sole();
-        $this->assertSame('once', $subscription->discount_duration);
+        $this->assertNull($subscription->discount_type);
+        $this->assertNull($subscription->discount_duration);
         $this->assertSame(1899000, $subscription->current_recurring_amount);
+    }
+
+    public function test_stripe_discount_id_uses_matching_expanded_discount_and_never_first_global_promotion(): void
+    {
+        Promotion::create([
+            'code' => 'OLDERONCE10', 'stripe_coupon_id' => 'coupon_old_once', 'stripe_promotion_code_id' => 'promo_old_once',
+            'discount_type' => 'percent', 'percent_off' => 10, 'duration' => 'once',
+        ]);
+        Promotion::create([
+            'code' => 'FOREVER25', 'stripe_coupon_id' => 'coupon_forever_25', 'stripe_promotion_code_id' => 'promo_forever_25',
+            'discount_type' => 'percent', 'percent_off' => 25, 'duration' => 'forever',
+        ]);
+
+        $intent = $this->intent();
+        $this->subscription($intent, [
+            // Stripe's API response can provide the list ID plus the matching
+            // expanded legacy Discount object in `discount`.
+            'discounts' => ['di_forever_25'],
+            'discount' => [
+                'id' => 'di_forever_25',
+                'promotion_code' => 'promo_forever_25',
+                'coupon' => ['id' => 'coupon_forever_25', 'percent_off' => 25, 'duration' => 'forever'],
+            ],
+        ])->assertStatus(204);
+
+        $subscription = Subscription::sole();
+        $this->assertSame('promo_forever_25', $subscription->stripe_promotion_code_id);
+        $this->assertSame('coupon_forever_25', $subscription->stripe_coupon_id);
+        $this->assertSame('percent', $subscription->discount_type);
+        $this->assertSame('25.00', $subscription->discount_percent);
+        $this->assertSame('forever', $subscription->discount_duration);
+        $this->assertSame(1424250, $subscription->current_recurring_amount);
+    }
+
+    public function test_modern_expanded_discount_source_uses_its_exact_coupon_mapping(): void
+    {
+        Promotion::create([
+            'code' => 'OLDONCE10', 'stripe_coupon_id' => 'coupon_old_modern', 'stripe_promotion_code_id' => 'promo_old_modern',
+            'discount_type' => 'percent', 'percent_off' => 10, 'duration' => 'once',
+        ]);
+        Promotion::create([
+            'code' => 'MODERNFOREVER25', 'stripe_coupon_id' => 'coupon_modern_forever', 'stripe_promotion_code_id' => 'promo_modern_forever',
+            'discount_type' => 'percent', 'percent_off' => 25, 'duration' => 'forever',
+        ]);
+
+        $snapshot = app(SubscriptionBillingSnapshot::class)->fromStripe((object) [
+            'discounts' => [[
+                'id' => 'di_modern_forever',
+                'promotion_code' => 'promo_modern_forever',
+                'source' => ['type' => 'coupon', 'coupon' => 'coupon_modern_forever'],
+            ]],
+        ], null, (object) ['unit_amount' => 89000, 'currency' => 'eur']);
+
+        $this->assertSame('coupon_modern_forever', $snapshot['stripe_coupon_id']);
+        $this->assertSame('promo_modern_forever', $snapshot['stripe_promotion_code_id']);
+        $this->assertSame('percent', $snapshot['discount_type']);
+        $this->assertSame('25.00', $snapshot['discount_percent']);
+        $this->assertSame('forever', $snapshot['discount_duration']);
+        $this->assertSame(66750, $snapshot['current_recurring_amount']);
+    }
+
+    public function test_missing_stripe_coupon_duration_never_claims_a_future_recurring_discount(): void
+    {
+        $snapshot = app(SubscriptionBillingSnapshot::class)->fromStripe((object) [
+            'discounts' => [[
+                'id' => 'di_missing_duration',
+                'source' => ['type' => 'coupon', 'coupon' => ['id' => 'coupon_missing_duration', 'percent_off' => 25]],
+            ]],
+        ], null, (object) ['unit_amount' => 89000, 'currency' => 'eur']);
+
+        $this->assertNull($snapshot['discount_type']);
+        $this->assertNull($snapshot['discount_duration']);
+        $this->assertNull($snapshot['current_recurring_amount']);
+    }
+
+    public function test_unexpanded_discount_id_cannot_import_terms_from_an_unrelated_promotion(): void
+    {
+        Promotion::create([
+            'code' => 'UNRELATEDONCE10', 'stripe_coupon_id' => 'coupon_unrelated_once', 'stripe_promotion_code_id' => 'promo_unrelated_once',
+            'discount_type' => 'percent', 'percent_off' => 10, 'duration' => 'once',
+        ]);
+        $forever = Promotion::create([
+            'code' => 'LOCALFOREVER25', 'stripe_coupon_id' => 'coupon_local_forever', 'stripe_promotion_code_id' => 'promo_local_forever',
+            'discount_type' => 'percent', 'percent_off' => 25, 'duration' => 'forever',
+        ]);
+        $intent = $this->intent(['promotion_id' => $forever->id, 'promotion_code' => $forever->code]);
+
+        $this->subscription($intent, ['discounts' => ['di_unexpanded']])->assertStatus(204);
+
+        $subscription = Subscription::sole();
+        $this->assertNull($subscription->discount_type);
+        $this->assertNull($subscription->discount_percent);
+        $this->assertNull($subscription->discount_duration);
+        $this->assertNull($subscription->stripe_promotion_code_id);
+        $this->assertNull($subscription->current_recurring_amount, 'An unexpanded active discount cannot establish future recurring terms.');
+    }
+
+    public function test_initial_forever_invoice_discount_does_not_invent_a_missing_subscription_discount(): void
+    {
+        $forever = Promotion::create([
+            'code' => 'NEGATIVEFOREVER25', 'stripe_coupon_id' => 'coupon_negative_forever', 'stripe_promotion_code_id' => 'promo_negative_forever',
+            'discount_type' => 'percent', 'percent_off' => 25, 'duration' => 'forever',
+        ]);
+        $intent = $this->intent(['promotion_id' => $forever->id, 'promotion_code' => $forever->code]);
+        $created = now()->timestamp;
+
+        $this->stripeEvent('checkout.session.completed', [
+            'id' => 'cs_snapshot', 'object' => 'checkout.session', 'status' => 'complete', 'payment_status' => 'paid',
+            'currency' => 'huf', 'client_reference_id' => $intent->uuid, 'customer' => 'cus_snapshot',
+            'subscription' => 'sub_snapshot', 'invoice' => 'in_negative_forever', 'created' => $created,
+            'discounts' => [['coupon' => null, 'promotion_code' => 'promo_negative_forever']],
+            'total_details' => ['amount_discount' => 474750],
+        ], 'evt_negative_forever_session', $created)->assertStatus(204);
+
+        $this->stripeEvent('customer.subscription.created', [
+            'id' => 'sub_snapshot', 'object' => 'subscription', 'customer' => 'cus_snapshot', 'status' => 'active',
+            'metadata' => ['checkout_intent' => $intent->uuid], 'discounts' => [],
+            'items' => ['data' => [['price' => ['id' => 'price_wordpress_business_monthly_HUF', 'unit_amount' => 1899000, 'currency' => 'huf']]]],
+        ], 'evt_negative_forever_subscription', $created + 1)->assertStatus(204);
+
+        $subscription = Subscription::sole();
+        $this->assertSame('percent', $subscription->initial_discount_type);
+        $this->assertSame('25.00', $subscription->initial_discount_percent);
+        $this->assertSame('forever', $subscription->initial_discount_duration);
+        $this->assertSame(474750, $subscription->initial_invoice_discount_total);
+        $this->assertNull($subscription->discount_type);
+        $this->assertNull($subscription->discount_percent);
+        $this->assertNull($subscription->discount_duration);
+        $this->assertSame(1899000, $subscription->current_recurring_amount);
+    }
+
+    public function test_interleaved_once_and_forever_transactions_keep_stripe_discount_snapshots_isolated(): void
+    {
+        $this->setEurAnnualPriceId();
+        $once = Promotion::create([
+            'code' => 'INTERLEAVEDONCE10', 'stripe_coupon_id' => 'coupon_interleaved_once', 'stripe_promotion_code_id' => 'promo_interleaved_once',
+            'discount_type' => 'percent', 'percent_off' => 10, 'duration' => 'once',
+        ]);
+        $forever = Promotion::create([
+            'code' => 'INTERLEAVEDFOREVER25', 'stripe_coupon_id' => 'coupon_interleaved_forever', 'stripe_promotion_code_id' => 'promo_interleaved_forever',
+            'discount_type' => 'percent', 'percent_off' => 25, 'duration' => 'forever',
+        ]);
+        $intentA = $this->intent([
+            'email' => 'once-isolated@example.test', 'first_name' => 'Once', 'promotion_id' => $once->id,
+            'promotion_code' => $once->code, 'stripe_checkout_session_id' => 'cs_interleaved_once',
+            'country' => 'DE', 'market' => 'INTERNATIONAL', 'currency' => 'EUR', 'amount' => 89000,
+            'interval' => 'annual', 'stripe_price_id' => 'price_wordpress_business_annual_EUR',
+        ]);
+        $intentB = $this->intent([
+            'email' => 'forever-isolated@example.test', 'first_name' => 'Forever', 'promotion_id' => $forever->id,
+            'promotion_code' => $forever->code, 'stripe_checkout_session_id' => 'cs_interleaved_forever',
+            'country' => 'DE', 'market' => 'INTERNATIONAL', 'currency' => 'EUR', 'amount' => 89000,
+            'interval' => 'annual', 'stripe_price_id' => 'price_wordpress_business_annual_EUR',
+        ]);
+        $created = now()->timestamp;
+
+        $this->stripeEvent('checkout.session.completed', [
+            'id' => 'cs_interleaved_once', 'object' => 'checkout.session', 'status' => 'complete', 'payment_status' => 'paid',
+            'currency' => 'eur', 'client_reference_id' => $intentA->uuid, 'customer' => 'cus_interleaved_once',
+            'subscription' => 'sub_interleaved_once', 'invoice' => 'in_interleaved_once', 'created' => $created,
+            'discounts' => [['coupon' => null, 'promotion_code' => 'promo_interleaved_once']],
+            'total_details' => ['amount_discount' => 8900],
+        ], 'evt_interleaved_session_once', $created)->assertStatus(204);
+        $this->stripeEvent('checkout.session.completed', [
+            'id' => 'cs_interleaved_forever', 'object' => 'checkout.session', 'status' => 'complete', 'payment_status' => 'paid',
+            'currency' => 'eur', 'client_reference_id' => $intentB->uuid, 'customer' => 'cus_interleaved_forever',
+            'subscription' => 'sub_interleaved_forever', 'invoice' => 'in_interleaved_forever', 'created' => $created + 1,
+            'discounts' => [['coupon' => null, 'promotion_code' => 'promo_interleaved_forever']],
+            'total_details' => ['amount_discount' => 22250],
+        ], 'evt_interleaved_session_forever', $created + 1)->assertStatus(204);
+
+        $item = ['current_period_start' => $created, 'current_period_end' => $created + 31536000,
+            'price' => ['id' => 'price_wordpress_business_annual_EUR', 'unit_amount' => 89000, 'currency' => 'eur']];
+        $this->stripeEvent('customer.subscription.created', [
+            'id' => 'sub_interleaved_once', 'object' => 'subscription', 'customer' => 'cus_interleaved_once', 'status' => 'active',
+            'metadata' => ['checkout_intent' => $intentA->uuid], 'discounts' => ['di_interleaved_once'],
+            'discount' => ['id' => 'di_interleaved_once', 'promotion_code' => 'promo_interleaved_once',
+                'coupon' => ['id' => 'coupon_interleaved_once', 'percent_off' => 10, 'duration' => 'once']],
+            'items' => ['data' => [$item]],
+        ], 'evt_interleaved_subscription_once', $created + 2)->assertStatus(204);
+        $this->stripeEvent('customer.subscription.created', [
+            'id' => 'sub_interleaved_forever', 'object' => 'subscription', 'customer' => 'cus_interleaved_forever', 'status' => 'active',
+            'metadata' => ['checkout_intent' => $intentB->uuid], 'discounts' => ['di_interleaved_forever'],
+            'discount' => ['id' => 'di_interleaved_forever', 'promotion_code' => 'promo_interleaved_forever',
+                'coupon' => ['id' => 'coupon_interleaved_forever', 'percent_off' => 25, 'duration' => 'forever']],
+            'items' => ['data' => [$item]],
+        ], 'evt_interleaved_subscription_forever', $created + 3)->assertStatus(204);
+
+        $this->assertSubscriptionDiscount($intentA, null, null, null, 89000);
+        $this->assertSubscriptionDiscount($intentB, 'percent', '25.00', 'forever', 66750);
+
+        $this->stripeEvent('invoice.paid', [
+            'id' => 'in_interleaved_forever', 'object' => 'invoice', 'customer' => 'cus_interleaved_forever', 'currency' => 'eur',
+            'status' => 'paid', 'billing_reason' => 'subscription_create', 'created' => $created + 6,
+            'subtotal' => 89000, 'total_discount_amounts' => [['amount' => 22250, 'discount' => 'di_interleaved_forever']],
+            'total_taxes' => [['amount' => 0]], 'total' => 66750, 'amount_paid' => 66750, 'amount_due' => 0,
+            'parent' => ['subscription_details' => ['subscription' => 'sub_interleaved_forever', 'metadata' => ['checkout_intent' => $intentB->uuid]]],
+            'status_transitions' => ['paid_at' => $created + 6],
+        ], 'evt_interleaved_invoice_forever', $created + 6)->assertStatus(204);
+        $this->stripeEvent('invoice.paid', [
+            'id' => 'in_interleaved_once', 'object' => 'invoice', 'customer' => 'cus_interleaved_once', 'currency' => 'eur',
+            'status' => 'paid', 'billing_reason' => 'subscription_create', 'created' => $created + 7,
+            'subtotal' => 89000, 'total_discount_amounts' => [['amount' => 8900, 'discount' => 'di_interleaved_once']],
+            'total_taxes' => [['amount' => 0]], 'total' => 80100, 'amount_paid' => 80100, 'amount_due' => 0,
+            'parent' => ['subscription_details' => ['subscription' => 'sub_interleaved_once', 'metadata' => ['checkout_intent' => $intentA->uuid]]],
+            'status_transitions' => ['paid_at' => $created + 7],
+        ], 'evt_interleaved_invoice_once', $created + 7)->assertStatus(204);
+
+        $onceInvoice = BillingInvoice::where('stripe_invoice_id', 'in_interleaved_once')->sole();
+        $foreverInvoice = BillingInvoice::where('stripe_invoice_id', 'in_interleaved_forever')->sole();
+        $this->assertSame('once', $onceInvoice->applied_discount_duration);
+        $this->assertSame('10.00', $onceInvoice->applied_discount_percent);
+        $this->assertSame(80100, $onceInvoice->amount_paid);
+        $this->assertSame('forever', $foreverInvoice->applied_discount_duration);
+        $this->assertSame('25.00', $foreverInvoice->applied_discount_percent);
+        $this->assertSame(66750, $foreverInvoice->amount_paid);
+
+        // Renewed/no-discount and still-discounted states arrive interleaved.
+        $this->stripeEvent('customer.subscription.updated', [
+            'id' => 'sub_interleaved_once', 'object' => 'subscription', 'customer' => 'cus_interleaved_once', 'status' => 'active',
+            'metadata' => ['checkout_intent' => $intentA->uuid], 'discounts' => [], 'items' => ['data' => [$item]],
+        ], 'evt_interleaved_update_once', $created + 4)->assertStatus(204);
+        $this->stripeEvent('customer.subscription.updated', [
+            'id' => 'sub_interleaved_forever', 'object' => 'subscription', 'customer' => 'cus_interleaved_forever', 'status' => 'active',
+            'metadata' => ['checkout_intent' => $intentB->uuid], 'discounts' => ['di_interleaved_forever'],
+            'discount' => ['id' => 'di_interleaved_forever', 'promotion_code' => 'promo_interleaved_forever',
+                'coupon' => ['id' => 'coupon_interleaved_forever', 'percent_off' => 25, 'duration' => 'forever']],
+            'items' => ['data' => [$item]],
+        ], 'evt_interleaved_update_forever', $created + 5)->assertStatus(204);
+
+        $this->assertSubscriptionDiscount($intentA, null, null, null, 89000);
+        $this->assertSubscriptionDiscount($intentB, 'percent', '25.00', 'forever', 66750);
+        $this->assertSame('once', $this->subscriptionForIntent($intentA)->initial_discount_duration);
+        $this->assertSame('forever', $this->subscriptionForIntent($intentB)->initial_discount_duration);
+    }
+
+    private function assertSubscriptionDiscount(CheckoutIntent $intent, ?string $type, ?string $percent, ?string $duration, int $recurring): void
+    {
+        $subscription = $this->subscriptionForIntent($intent);
+        $this->assertSame($type, $subscription->discount_type);
+        $this->assertSame($percent, $subscription->discount_percent);
+        $this->assertSame($duration, $subscription->discount_duration);
+        $this->assertSame($recurring, $subscription->current_recurring_amount);
+    }
+
+    private function subscriptionForIntent(CheckoutIntent $intent): Subscription
+    {
+        return Subscription::where('checkout_intent_id', $intent->id)->sole();
     }
 
     public function test_legacy_repeating_coupon_is_preserved_and_remains_recurring_until_its_stripe_end(): void
