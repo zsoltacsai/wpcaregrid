@@ -199,6 +199,32 @@ class PricingCatalogTest extends TestCase
         $this->assertSame('89,900 Ft', $catalog->currency('HUF')->format(8990000));
     }
 
+    public function test_currency_formatter_preserves_significant_fractional_units_and_compacts_whole_values(): void
+    {
+        $english = $this->catalog('en');
+
+        foreach ([
+            ['EUR', 89000, '€890'],
+            ['EUR', 66750, '€667.50'],
+            ['EUR', 22250, '€222.50'],
+            ['EUR', 80100, '€801'],
+            ['USD', 9900, '$99'],
+            ['USD', 7425, '$74.25'],
+            ['GBP', 159000, '£1,590'],
+            ['GBP', 119250, '£1,192.50'],
+            ['EUR', 0, '€0'],
+            ['EUR', 1, '€0.01'],
+        ] as [$currency, $amount, $expected]) {
+            $this->assertSame($expected, $english->currency($currency)->format($amount));
+        }
+
+        $hungarian = $this->catalog('hu');
+        $this->assertSame("667,50\u{00A0}€", $hungarian->currency('EUR')->format(66750));
+        $this->assertSame("8\u{202F}990\u{00A0}Ft", $hungarian->currency('HUF')->format(899000));
+        $this->assertSame(0, $english->currency('EUR')->displayDecimals, 'Price-entry precision remains unchanged.');
+        $this->assertFalse($hungarian->currency('HUF')->displayFractionalMinorUnits);
+    }
+
     public function test_fixed_international_prices_are_present_in_each_currency(): void
     {
         $rows = collect(config('pricing.prices'));

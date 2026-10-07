@@ -84,9 +84,11 @@ return [
 
     /*
     | Display formats. `minor_units` is the ISO 4217 exponent used for stored
-    | amounts; `display_decimals` is how many decimals customers see. Number
-    | formats are keyed by site locale ("8,990 Ft" in English, "8 990 Ft" in
-    | Hungarian).
+    | amounts; `display_decimals` limits price-entry precision. Set
+    | `display_fractional_minor_units` to show a non-zero fractional amount
+    | at the currency's minor-unit precision while keeping whole amounts
+    | compact. Number formats are keyed by site locale ("8,990 Ft" in English,
+    | "8 990 Ft" in Hungarian).
     */
     'currencies' => [
         'HUF' => [
@@ -104,21 +106,33 @@ return [
             'symbol_position' => 'before',
             'minor_units' => 2,
             'display_decimals' => 0,
-            'formats' => ['en' => ['thousands_separator' => ',', 'decimal_separator' => '.']],
+            'display_fractional_minor_units' => true,
+            'formats' => [
+                'en' => ['thousands_separator' => ',', 'decimal_separator' => '.'],
+                'hu' => ['thousands_separator' => "\u{202F}", 'decimal_separator' => ',', 'symbol_position' => 'after'],
+            ],
         ],
         'USD' => [
             'symbol' => '$',
             'symbol_position' => 'before',
             'minor_units' => 2,
             'display_decimals' => 0,
-            'formats' => ['en' => ['thousands_separator' => ',', 'decimal_separator' => '.']],
+            'display_fractional_minor_units' => true,
+            'formats' => [
+                'en' => ['thousands_separator' => ',', 'decimal_separator' => '.'],
+                'hu' => ['thousands_separator' => "\u{202F}", 'decimal_separator' => ',', 'symbol_position' => 'after'],
+            ],
         ],
         'GBP' => [
             'symbol' => '£',
             'symbol_position' => 'before',
             'minor_units' => 2,
             'display_decimals' => 0,
-            'formats' => ['en' => ['thousands_separator' => ',', 'decimal_separator' => '.']],
+            'display_fractional_minor_units' => true,
+            'formats' => [
+                'en' => ['thousands_separator' => ',', 'decimal_separator' => '.'],
+                'hu' => ['thousands_separator' => "\u{202F}", 'decimal_separator' => ',', 'symbol_position' => 'after'],
+            ],
         ],
     ],
 

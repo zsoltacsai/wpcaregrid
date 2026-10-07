@@ -60,6 +60,53 @@ class CustomerBillingSnapshotTest extends TestCase
         }
     }
 
+    public function test_customer_portal_displays_exact_fractional_forever_discount_and_paid_invoice_amount(): void
+    {
+        $customer = Customer::factory()->withUser()->create();
+        $subscription = Subscription::factory()->for($customer)->create([
+            'product_type' => 'wordpress', 'plan' => 'business', 'interval' => 'annual',
+            'currency' => 'EUR', 'amount' => 89000,
+            'base_price_amount' => 89000, 'base_price_currency' => 'EUR',
+            'pricing_market' => 'INTERNATIONAL',
+            'discount_type' => 'percent', 'discount_percent' => '25.00', 'discount_duration' => 'forever',
+            'current_recurring_amount' => 66750, 'current_recurring_currency' => 'EUR',
+            'billing_snapshot_confirmed_at' => now(),
+            'initial_discount_type' => 'percent', 'initial_discount_percent' => '25.00',
+            'initial_discount_duration' => 'forever', 'initial_invoice_discount_total' => 22250,
+            'initial_discount_snapshot_confirmed_at' => now(),
+        ]);
+        $invoice = BillingInvoice::create([
+            'stripe_invoice_id' => 'in_portal_forever_fractional',
+            'subscription_id' => $subscription->id,
+            'customer_id' => $customer->id,
+            'subtotal' => 89000,
+            'discount_total' => 22250,
+            'tax_total' => 0,
+            'total' => 66750,
+            'amount_paid' => 66750,
+            'amount_due' => 0,
+            'currency' => 'EUR',
+            'invoice_status' => 'paid',
+            'applied_discount_type' => 'percent',
+            'applied_discount_percent' => '25.00',
+            'applied_discount_duration' => 'forever',
+            'stripe_created_at' => now(),
+            'paid_at' => now(),
+        ]);
+
+        $response = $this->actingAs($customer->user)
+            ->get(route('account.subscription'))
+            ->assertOk()
+            ->assertSee('€890')
+            ->assertSee('€667.50')
+            ->assertSee('25%')
+            ->assertSee(__('account.subscription.discount_durations.forever'))
+            ->assertSee($invoice->money('amount_paid')->format())
+            ->assertDontSee('€668');
+
+        $this->assertSame(2, substr_count($response->getContent(), '€667.50'));
+    }
+
     public function test_customer_portal_does_not_claim_an_unconfirmed_recurring_amount(): void
     {
         $customer = Customer::factory()->withUser()->create();

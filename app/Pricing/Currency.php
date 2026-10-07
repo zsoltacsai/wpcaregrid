@@ -12,6 +12,7 @@ final readonly class Currency
         public int $displayDecimals = 0,
         public string $decimalSeparator = '.',
         public string $thousandsSeparator = ',',
+        public bool $displayFractionalMinorUnits = false,
     ) {}
 
     /**
@@ -26,11 +27,12 @@ final readonly class Currency
         return new self(
             code: $code,
             symbol: $config['symbol'] ?? $code,
-            symbolPosition: $config['symbol_position'] ?? 'after',
+            symbolPosition: $format['symbol_position'] ?? $config['symbol_position'] ?? 'after',
             minorUnits: $config['minor_units'] ?? 2,
             displayDecimals: $config['display_decimals'] ?? 0,
             decimalSeparator: $format['decimal_separator'] ?? '.',
             thousandsSeparator: $format['thousands_separator'] ?? ',',
+            displayFractionalMinorUnits: $config['display_fractional_minor_units'] ?? false,
         );
     }
 
@@ -40,20 +42,25 @@ final readonly class Currency
         $negative = $minorAmount < 0;
         $absolute = abs($minorAmount);
         $divisor = 10 ** $this->minorUnits;
-        $whole = $this->displayDecimals === 0
+        $decimals = $this->displayDecimals > 0
+            ? $this->displayDecimals
+            : ($this->displayFractionalMinorUnits ? $this->minorUnits : 0);
+        $whole = $decimals === 0
             ? intdiv($absolute + intdiv($divisor, 2), $divisor)
             : intdiv($absolute, $divisor);
         $fraction = $absolute % $divisor;
         $visibleFraction = '';
 
-        if ($this->displayDecimals > 0) {
-            $fractionScale = 10 ** $this->displayDecimals;
+        if ($decimals > 0) {
+            $fractionScale = 10 ** $decimals;
             $roundedFraction = intdiv(($fraction * $fractionScale) + intdiv($divisor, 2), $divisor);
             if ($roundedFraction >= $fractionScale) {
                 $whole++;
                 $roundedFraction = 0;
             }
-            $visibleFraction = $this->decimalSeparator.str_pad((string) $roundedFraction, $this->displayDecimals, '0', STR_PAD_LEFT);
+            if ($roundedFraction !== 0) {
+                $visibleFraction = $this->decimalSeparator.str_pad((string) $roundedFraction, $decimals, '0', STR_PAD_LEFT);
+            }
         }
 
         return ($negative ? '-' : '').number_format($whole, 0, '', $this->thousandsSeparator).$visibleFraction;
