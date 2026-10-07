@@ -9,6 +9,7 @@ use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Subscription;
 use App\Pricing\PricingCatalog;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -41,7 +42,51 @@ final class SubscriptionSync
         }
 
         $eventTime = Carbon::createFromTimestamp($eventCreated);
-        $subscription = Subscription::where('stripe_subscription_id', $stripe->id)->first();
+        $intent = $this->intentFrom($stripe->metadata ?? null);
+        $item = $stripe->items->data[0] ?? null;
+        $stripePriceId = $item->price->id ?? null;
+        $existing = Subscription::where('stripe_subscription_id', $stripe->id)->first();
+
+        if ($existing) {
+            $sameSecondCancellation = $existing->stripe_synced_at
+                && $status === SubscriptionStatus::Canceled
+                && $existing->status !== SubscriptionStatus::Canceled
+                && $eventTime->equalTo($existing->stripe_synced_at);
+            if (! $sameSecondCancellation && $this->eventIsOlder($eventTime, $eventId, $existing->stripe_synced_at, $existing->stripe_synced_event_id)) {
+                return $existing;
+            }
+            if ($existing->status === SubscriptionStatus::Canceled && $status !== SubscriptionStatus::Canceled
+                && $existing->stripe_synced_at?->equalTo($eventTime)) {
+                return $existing;
+            }
+            if ($this->identityConflicts($existing, $stripe, $intent)) {
+                Log::warning('Stripe subscription identity does not match its local billing record.', [
+                    'stripe_subscription' => $stripe->id ?? null,
+                    'stripe_customer' => $stripe->customer ?? null,
+                ]);
+
+                return $existing;
+            }
+        }
+
+        // A newly active subscription needs its Customer before the Subscription
+        // row is locked/created; this keeps webhook lock order consistent.
+        $resolvedCustomer = null;
+        if ($status->grantsAccess()) {
+            if ($intent && ! $existing?->customer_id) {
+                $resolvedCustomer = $this->provision->forIntent($intent, $stripe->customer ?? null);
+            } elseif ($existing?->customer_id) {
+                $resolvedCustomer = Customer::query()->find($existing->customer_id);
+            }
+        }
+
+        $subscription = $this->subscriptionForUpdateOrCreate($stripe->id, $intent, $stripePriceId);
+
+        if (! $subscription) {
+            Log::warning('Stripe subscription with an unknown price and no checkout ignored.', ['stripe_subscription' => $stripe->id]);
+
+            return null;
+        }
 
         $sameSecondCancellation = $subscription
             && $subscription->stripe_synced_at
@@ -53,7 +98,6 @@ final class SubscriptionSync
             return $subscription;
         }
 
-        $intent = $this->intentFrom($stripe->metadata ?? null);
         if ($subscription?->status === SubscriptionStatus::Canceled && $status !== SubscriptionStatus::Canceled
             && $subscription->stripe_synced_at?->equalTo($eventTime)) {
             return $subscription;
@@ -68,16 +112,7 @@ final class SubscriptionSync
             return $subscription;
         }
 
-        $item = $stripe->items->data[0] ?? null;
-        $stripePriceId = $item->price->id ?? $subscription?->stripe_price_id;
-
-        $subscription ??= $this->newFromIntentOrPrice($stripe->id, $intent, $stripePriceId);
-
-        if (! $subscription) {
-            Log::warning('Stripe subscription with an unknown price and no checkout ignored.', ['stripe_subscription' => $stripe->id]);
-
-            return null;
-        }
+        $stripePriceId ??= $subscription->stripe_price_id;
 
         // Plan changes made in Stripe (e.g. a later billing portal) follow the price.
         if ($stripePriceId && ($price = $this->catalog->priceByStripeId($stripePriceId))) {
@@ -90,7 +125,7 @@ final class SubscriptionSync
             ]);
         }
 
-        $previousStatus = $subscription->exists ? $subscription->status : null;
+        $previousStatus = $subscription->wasRecentlyCreated ? null : $subscription->status;
 
         $subscription->fill([
             'billing_source' => 'stripe',
@@ -119,10 +154,12 @@ final class SubscriptionSync
         // Stripe reporting the subscription active/trialing confirms payment,
         // so the customer can be resolved even if the checkout event is late.
         if (! $subscription->customer_id && $status->grantsAccess()) {
-            $customer = $intent
+            $customer = $resolvedCustomer ?? ($intent
                 ? $this->provision->forIntent($intent, $stripe->customer ?? null)
-                : Customer::where('stripe_customer_id', $stripe->customer ?? '')->first();
+                : Customer::where('stripe_customer_id', $stripe->customer ?? '')->first());
             $subscription->customer()->associate($customer);
+        } elseif ($resolvedCustomer && $subscription->customer_id === $resolvedCustomer->id) {
+            $subscription->setRelation('customer', $resolvedCustomer);
         }
 
         $this->recordActivation($subscription);
@@ -144,7 +181,7 @@ final class SubscriptionSync
             ->update($invoiceUpdate);
 
         if ($previousStatus && $previousStatus !== SubscriptionStatus::Canceled && $status === SubscriptionStatus::Canceled && $subscription->customer) {
-            Mail::to($subscription->customer->email)->queue(new SubscriptionCanceled($subscription));
+            Mail::to($subscription->customer->email)->queue((new SubscriptionCanceled($subscription))->afterCommit());
         }
 
         $this->notifyActivation($subscription);
@@ -163,8 +200,11 @@ final class SubscriptionSync
             return null;
         }
 
-        $subscription = Subscription::where('stripe_subscription_id', $stripeSubscriptionId)->first()
-            ?? $this->newFromIntentOrPrice($stripeSubscriptionId, $intent, $intent->stripe_price_id);
+        $subscription = $this->subscriptionForUpdateOrCreate($stripeSubscriptionId, $intent, $intent->stripe_price_id);
+
+        if (! $subscription) {
+            return null;
+        }
 
         if ($subscription->exists && (
             ($subscription->customer_id && $subscription->customer_id !== $customer->id)
@@ -186,6 +226,8 @@ final class SubscriptionSync
 
         if (! $subscription->customer_id) {
             $subscription->customer()->associate($customer);
+        } else {
+            $subscription->setRelation('customer', $customer);
         }
 
         $this->recordActivation($subscription);
@@ -243,7 +285,60 @@ final class SubscriptionSync
     {
         $uuid = $metadata->checkout_intent ?? null;
 
-        return is_string($uuid) ? CheckoutIntent::where('uuid', $uuid)->first() : null;
+        // Every event for a checkout locks the same intent before touching its
+        // Customer, Subscription, or Invoice. This serializes valid Stripe
+        // event orderings under MySQL REPEATABLE READ.
+        return is_string($uuid) ? CheckoutIntent::where('uuid', $uuid)->lockForUpdate()->first() : null;
+    }
+
+    /**
+     * Resolve or materialize the one local row for a Stripe subscription.
+     * The caller's signed-webhook transaction is expected to be active. The
+     * lock is a current read, and the unique-key fallback handles contenders
+     * that do not share a CheckoutIntent (or reach this method outside the
+     * normal serialized checkout path).
+     */
+    private function subscriptionForUpdateOrCreate(string $stripeSubscriptionId, ?CheckoutIntent $intent, ?string $stripePriceId): ?Subscription
+    {
+        $subscription = Subscription::query()
+            ->where('stripe_subscription_id', $stripeSubscriptionId)
+            ->lockForUpdate()
+            ->first();
+
+        if ($subscription) {
+            return $subscription;
+        }
+
+        $subscription = $this->newFromIntentOrPrice($stripeSubscriptionId, $intent, $stripePriceId);
+
+        if (! $subscription) {
+            return null;
+        }
+
+        try {
+            $subscription->save();
+
+            return $subscription;
+        } catch (UniqueConstraintViolationException $exception) {
+            if (! $this->isStripeSubscriptionIdCollision($exception)) {
+                throw $exception;
+            }
+
+            // A plain SELECT can be pinned to an old REPEATABLE READ snapshot.
+            // FOR UPDATE is a current read and sees the committed winner.
+            return Subscription::query()
+                ->where('stripe_subscription_id', $stripeSubscriptionId)
+                ->lockForUpdate()
+                ->first() ?? throw $exception;
+        }
+    }
+
+    private function isStripeSubscriptionIdCollision(UniqueConstraintViolationException $exception): bool
+    {
+        $message = $exception->getMessage();
+
+        return str_contains($message, 'subscriptions_stripe_subscription_id_unique')
+            || str_contains($message, 'subscriptions.stripe_subscription_id');
     }
 
     private function recordActivation(Subscription $subscription): void
@@ -256,9 +351,11 @@ final class SubscriptionSync
     /** Announce activation once, when both access and the customer are known. */
     private function notifyActivation(Subscription $subscription): void
     {
-        if ($subscription->activated_at && ! $subscription->activation_notified_at && $subscription->customer) {
+        $customer = $subscription->customer;
+
+        if ($subscription->activated_at && ! $subscription->activation_notified_at && $customer) {
             $subscription->forceFill(['activation_notified_at' => now()])->save();
-            Mail::to($subscription->customer->email)->queue(new SubscriptionActivated($subscription));
+            Mail::to($customer->email)->queue((new SubscriptionActivated($subscription))->afterCommit());
         }
     }
 

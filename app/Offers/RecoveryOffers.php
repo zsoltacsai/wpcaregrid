@@ -310,7 +310,7 @@ final class RecoveryOffers
 
             if (! $offer->payment_notified_at) {
                 $offer->forceFill(['payment_notified_at' => now()])->save();
-                Mail::to($offer->customer->email)->queue(new RecoveryOfferPaid($offer));
+                Mail::to($offer->customer->email)->queue((new RecoveryOfferPaid($offer))->afterCommit());
             }
 
             return $offer;

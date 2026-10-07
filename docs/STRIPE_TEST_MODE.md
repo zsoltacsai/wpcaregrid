@@ -64,7 +64,7 @@ Every annual amount is exactly 10× its monthly amount (“2 months free”); no
 
 `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`.
 
-Every event is signature-checked (`STRIPE_WEBHOOK_SECRET`), recorded by event ID in the same transaction as its effects (a redelivery is skipped; a failure rolls everything back and Stripe retries), and handled without assuming delivery order. Emails from webhooks are queued after the transaction commits.
+Every event is signature-checked (`STRIPE_WEBHOOK_SECRET`), recorded by event ID in the same transaction as its effects (a redelivery is skipped; a failure rolls everything back and Stripe retries), and handled without assuming delivery order. Billing webhook transactions make at most three bounded attempts for database deadlocks; other failures are not retried as success. Contending subscription events lock in this order: CheckoutIntent, Customer/User, Subscription, BillingInvoice, then promotion reservation. Unique-key races re-read the winning Stripe row with a locking/current read, while the unique Stripe ID constraints remain enforced. Webhook emails are queued after commit so a rolled-back deadlock attempt cannot send duplicate mail.
 
 ### Tax (test mode)
 

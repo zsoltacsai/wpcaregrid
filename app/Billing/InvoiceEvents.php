@@ -12,6 +12,7 @@ use App\Models\Subscription;
 use App\Owner\AdminAudit;
 use App\Pricing\Currency;
 use App\Pricing\Money;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -87,8 +88,14 @@ final class InvoiceEvents
         }
 
         // A zero invoice (100% discount) is not a payment: no "payment received" email.
-        if ($notifyPayment && $subscription->customer && (int) ($invoice->amount_paid ?? 0) > 0) {
-            Mail::to($subscription->customer->email)->queue(new PaymentConfirmation($subscription, $this->money($invoice, 'amount_paid')));
+        if ($subscription && ! $subscription->relationLoaded('customer') && $subscription->customer_id) {
+            $subscription->load('customer');
+        }
+        $customer = $subscription?->customer;
+
+        if ($notifyPayment && $subscription && $customer && (int) ($invoice->amount_paid ?? 0) > 0) {
+            $subscription->setRelation('customer', $customer);
+            Mail::to($customer->email)->queue((new PaymentConfirmation($subscription, $this->money($invoice, 'amount_paid')))->afterCommit());
         }
     }
 
@@ -105,7 +112,7 @@ final class InvoiceEvents
         $subscription->update(['last_payment_status' => 'failed']);
 
         if ($notifyFailure && $subscription->customer) {
-            Mail::to($subscription->customer->email)->queue(new PaymentFailed($subscription, $this->money($invoice, 'amount_due')));
+            Mail::to($subscription->customer->email)->queue((new PaymentFailed($subscription, $this->money($invoice, 'amount_due')))->afterCommit());
         }
     }
 
@@ -195,10 +202,54 @@ final class InvoiceEvents
         if ($notifyFailure) {
             $attributes['payment_failure_notified_at'] = now();
         }
-        if ($row) {
+        if (! $row) {
+            try {
+                $row = BillingInvoice::create(['stripe_invoice_id' => $id, ...$attributes]);
+            } catch (UniqueConstraintViolationException $exception) {
+                if (! str_contains($exception->getMessage(), 'billing_invoices_stripe_invoice_id_unique')
+                    && ! str_contains($exception->getMessage(), 'billing_invoices.stripe_invoice_id')) {
+                    throw $exception;
+                }
+
+                // The insert winner may have committed after this transaction's
+                // REPEATABLE READ snapshot was established. Re-read it as a
+                // current read, then apply the same identity/order checks below.
+                $row = BillingInvoice::query()
+                    ->where('stripe_invoice_id', $id)
+                    ->lockForUpdate()
+                    ->first() ?? throw $exception;
+
+                if (($row->stripe_customer_id && $stripeCustomerId && ! hash_equals($row->stripe_customer_id, $stripeCustomerId))
+                    || ($row->stripe_subscription_id && $stripeSubscriptionId && ! hash_equals($row->stripe_subscription_id, $stripeSubscriptionId))) {
+                    Log::warning('Stripe invoice identity does not match its local billing record.', ['stripe_invoice' => $id]);
+
+                    return [$row, false, false];
+                }
+                if ($this->eventIsOlder($eventTime, $eventId, $row->last_stripe_event_at, $row->last_stripe_event_id, $incomingStatus, $row->invoice_status)
+                    || ($row->invoice_status === 'paid' && $incomingStatus !== 'paid')) {
+                    return [$row, false, false];
+                }
+
+                $notifyPayment = $statusOverride === 'paid'
+                    && $paidAt !== null
+                    && $subscription !== null
+                    && ! $row->payment_confirmation_notified_at;
+                $notifyFailure = $statusOverride === 'open' && $subscription !== null && ! $row->payment_failure_notified_at;
+                if ($notifyPayment) {
+                    $attributes['payment_confirmation_notified_at'] = now();
+                } else {
+                    unset($attributes['payment_confirmation_notified_at']);
+                }
+                if ($notifyFailure) {
+                    $attributes['payment_failure_notified_at'] = now();
+                } else {
+                    unset($attributes['payment_failure_notified_at']);
+                }
+            }
+        }
+
+        if ($row->exists && $row->wasRecentlyCreated === false && $row->getKey()) {
             $row->fill($attributes)->save();
-        } else {
-            $row = BillingInvoice::create(['stripe_invoice_id' => $id, ...$attributes]);
         }
 
         return [$row, true, $notifyPayment || $notifyFailure];
@@ -218,14 +269,19 @@ final class InvoiceEvents
             return null;
         }
 
-        $subscription = Subscription::where('stripe_subscription_id', $stripeSubscriptionId)->first();
-
-        if (! $subscription && $paymentConfirmed && ($intent = $this->subscriptions->intentFrom($details->metadata ?? null))) {
+        // Match SubscriptionSync's lock order: checkout intent first, then
+        // customer/user and subscription, then the invoice row.
+        $intent = $this->subscriptions->intentFrom($details->metadata ?? null);
+        if ($paymentConfirmed && $intent) {
             $customer = $this->provision->forIntent($intent, $invoice->customer ?? null);
-            $subscription = $this->subscriptions->attachCheckout($intent, $customer, $stripeSubscriptionId);
+
+            return $this->subscriptions->attachCheckout($intent, $customer, $stripeSubscriptionId);
         }
 
-        return $subscription;
+        return Subscription::query()
+            ->where('stripe_subscription_id', $stripeSubscriptionId)
+            ->lockForUpdate()
+            ->first();
     }
 
     private function subscriptionId(object $invoice): mixed

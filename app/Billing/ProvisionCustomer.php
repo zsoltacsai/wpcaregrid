@@ -124,7 +124,7 @@ final class ProvisionCustomer
 
         if ($user->wasRecentlyCreated) {
             $token = Password::broker('activations')->createToken($user);
-            Mail::to($customer->email)->queue(new AccountActivation($customer, $token));
+            Mail::to($customer->email)->queue((new AccountActivation($customer, $token))->afterCommit());
         }
 
         $customer->user()->associate($user)->save();

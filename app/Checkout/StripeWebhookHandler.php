@@ -40,6 +40,22 @@ final class StripeWebhookHandler
         }
 
         try {
+            // A deadlock aborts the entire transaction, including the event
+            // receipt and DB-backed queue writes. Retry only this bounded,
+            // transactional webhook unit; other errors still fail closed.
+            $attempts = in_array($event->type, [
+                'checkout.session.completed',
+                'checkout.session.async_payment_succeeded',
+                'checkout.session.async_payment_failed',
+                'checkout.session.expired',
+                'customer.subscription.created',
+                'customer.subscription.updated',
+                'customer.subscription.deleted',
+                'invoice.paid',
+                'invoice.payment_failed',
+                'invoice.finalized',
+            ], true) ? 3 : 1;
+
             DB::transaction(function () use ($event) {
                 StripeEvent::create([
                     'stripe_event_id' => $event->id,
@@ -50,7 +66,7 @@ final class StripeWebhookHandler
                 ]);
 
                 $this->dispatch($event);
-            });
+            }, attempts: $attempts);
         } catch (UniqueConstraintViolationException $e) {
             // The same event was processed concurrently by another request.
             if (str_contains($e->getMessage(), 'stripe_events')) {
@@ -109,12 +125,6 @@ final class StripeWebhookHandler
             $intent->status = CheckoutStatus::Completed;
             $intent->completed_at = now();
 
-            // Convert the reserved slot only after Stripe confirms payment.
-            if ($intent->promotion_id) {
-                if ($this->reservations->consume($intent)) {
-                    AdminAudit::record(null, 'coupon.redeemed', 'coupon', (string) $intent->promotion_code, ['checkout_intent' => $intent->uuid]);
-                }
-            }
         }
 
         $intent->save();
@@ -122,6 +132,12 @@ final class StripeWebhookHandler
         if ($paid) {
             $customer = $this->provision->forIntent($intent, $intent->stripe_customer_id);
             $this->subscriptions->attachCheckout($intent, $customer, $intent->stripe_subscription_id);
+
+            // Keep the graph lock order consistent: intent, customer/user,
+            // subscription, then promotion reservation.
+            if ($intent->promotion_id && $this->reservations->consume($intent)) {
+                AdminAudit::record(null, 'coupon.redeemed', 'coupon', (string) $intent->promotion_code, ['checkout_intent' => $intent->uuid]);
+            }
         }
     }
 
@@ -151,10 +167,10 @@ final class StripeWebhookHandler
     private function intentFor(object $session): ?CheckoutIntent
     {
         $intent = is_string($session->client_reference_id ?? null)
-            ? CheckoutIntent::where('uuid', $session->client_reference_id)->first()
+            ? CheckoutIntent::where('uuid', $session->client_reference_id)->lockForUpdate()->first()
             : null;
 
-        $intent ??= isset($session->id) ? CheckoutIntent::where('stripe_checkout_session_id', $session->id)->first() : null;
+        $intent ??= isset($session->id) ? CheckoutIntent::where('stripe_checkout_session_id', $session->id)->lockForUpdate()->first() : null;
 
         if ($intent && $intent->stripe_checkout_session_id && $intent->stripe_checkout_session_id !== ($session->id ?? null)) {
             return null;
