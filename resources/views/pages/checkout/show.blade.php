@@ -35,11 +35,16 @@
                     interval: @js($interval),
                     country: @js($country),
                     currency: @js($currency),
+                    lockedCurrency: @js($lockedCurrency),
                     prices: @js($priceMatrix),
                     purchasable: @js($purchasableCountries),
                     submitting: false,
-                    get available() { return this.purchasable.includes(this.country) },
+                    get available() {
+                        return this.purchasable.includes(this.country)
+                            && (!this.lockedCurrency || (this.country === 'HU' ? this.lockedCurrency === 'HUF' : this.lockedCurrency !== 'HUF'));
+                    },
                     syncCurrency() {
+                        if (this.lockedCurrency) { this.currency = this.lockedCurrency; return; }
                         if (this.country === 'HU') this.currency = 'HUF';
                         else if (this.currency === 'HUF') this.currency = @js($defaultInternationalCurrency);
                     },
@@ -127,10 +132,13 @@
                                 <label for="checkout-currency" class="mb-2 block text-sm font-medium">{{ __('checkout.fields.currency') }}</label>
                                 <select id="checkout-currency" name="currency" x-model="currency" class="h-11 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm text-primary" required>
                                     @foreach ($currencies as $code)
-                                        <option value="{{ $code }}" @selected($currency === $code) :disabled="country === 'HU' ? '{{ $code }}' !== 'HUF' : '{{ $code }}' === 'HUF'">{{ $code }}</option>
+                                        <option value="{{ $code }}" @selected($currency === $code) :disabled="lockedCurrency ? '{{ $code }}' !== lockedCurrency : (country === 'HU' ? '{{ $code }}' !== 'HUF' : '{{ $code }}' === 'HUF')">{{ $code }}</option>
                                     @endforeach
                                 </select>
                                 <p class="mt-1 text-xs text-muted">{{ __('checkout.fields.currency_hint') }}</p>
+                                @if ($lockedCurrency)
+                                    <p class="mt-1 text-xs text-muted">{{ __('checkout.fields.currency_locked', ['currency' => $lockedCurrency]) }}</p>
+                                @endif
                                 @error('currency')<p role="alert" class="mt-1 text-sm text-danger-ink">{{ $message }}</p>@enderror
                             </div>
 

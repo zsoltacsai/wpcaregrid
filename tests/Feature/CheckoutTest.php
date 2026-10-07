@@ -2,10 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Billing\SubscriptionStatus;
 use App\Checkout\CheckoutGateway;
 use App\Checkout\CheckoutStatus;
 use App\Models\CheckoutIntent;
+use App\Models\Customer;
 use App\Models\Promotion;
+use App\Models\Subscription;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\SendsStripeWebhooks;
@@ -220,6 +223,106 @@ class CheckoutTest extends TestCase
 
         $this->assertDatabaseCount('checkout_intents', 0);
         $this->assertSame([], $this->gateway->created);
+    }
+
+    public function test_existing_eur_customer_cannot_submit_gbp_even_with_a_valid_coupon(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['country_code' => 'DE', 'stripe_customer_id' => 'cus_existing_eur']);
+        Subscription::factory()->for($customer)->create([
+            'stripe_customer_id' => $customer->stripe_customer_id,
+            'currency' => 'EUR', 'market' => 'INTERNATIONAL', 'amount' => 89000,
+        ]);
+        $promotion = Promotion::create([
+            'code' => 'LOCKTEST', 'stripe_promotion_code_id' => 'promo_lock',
+            'discount_type' => 'percent', 'percent_off' => 100, 'duration' => 'once',
+            'max_redemptions' => 1,
+        ]);
+
+        $this->actingAs($customer->user)->submit([
+            'email' => 'attacker@example.test', 'country' => 'DE', 'currency' => 'GBP', 'promotion_code' => 'LOCKTEST',
+            'stripe_price_id' => 'price_attacker', 'market' => 'gb',
+        ])->assertSessionHasErrors(['checkout' => __('checkout.errors.customer_currency_mismatch', ['currency' => 'EUR'])]);
+
+        $this->assertDatabaseCount('checkout_intents', 0);
+        $this->assertDatabaseCount('promotion_reservations', 0);
+        $this->assertDatabaseCount('subscriptions', 1);
+        $this->assertDatabaseCount('billing_invoices', 0);
+        $this->assertSame(0, $promotion->refresh()->times_redeemed);
+        $this->assertSame([], $this->gateway->created);
+    }
+
+    public function test_stale_gbp_preference_displays_locked_eur_and_same_currency_checkout_still_works(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['country_code' => 'DE', 'stripe_customer_id' => 'cus_existing_eur']);
+        Subscription::factory()->for($customer)->create(['stripe_customer_id' => $customer->stripe_customer_id, 'currency' => 'EUR']);
+
+        $this->actingAs($customer->user)->withSession(['display_currency' => 'GBP', '_old_input' => ['currency' => 'GBP', 'country' => 'DE']])
+            ->get(route('checkout.show', ['product' => 'wordpress', 'plan' => 'business', 'interval' => 'annual']))
+            ->assertOk()
+            ->assertSee(__('checkout.fields.currency_locked', ['currency' => 'EUR']))
+            ->assertSee('lockedCurrency:', false)
+            ->assertSee('value="EUR" selected', false);
+
+        $this->submit(['country' => 'DE', 'currency' => 'EUR', 'email' => 'wrong@example.test'])->assertStatus(303);
+        $this->assertSame($customer->email, CheckoutIntent::sole()->email);
+        $this->assertSame('EUR', CheckoutIntent::sole()->currency);
+        $this->assertCount(1, $this->gateway->created);
+    }
+
+    public function test_historical_cancelled_subscription_does_not_lock_a_customer(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['country_code' => 'DE', 'stripe_customer_id' => 'cus_cancelled']);
+        Subscription::factory()->for($customer)->status(SubscriptionStatus::Canceled)->create([
+            'stripe_customer_id' => $customer->stripe_customer_id, 'currency' => 'EUR',
+        ]);
+
+        $this->actingAs($customer->user)->submit(['country' => 'DE', 'currency' => 'GBP'])->assertStatus(303);
+        $this->assertSame('GBP', CheckoutIntent::sole()->currency);
+    }
+
+    public function test_multiple_current_subscriptions_agree_or_fail_closed(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['country_code' => 'DE', 'stripe_customer_id' => 'cus_multiple']);
+        foreach ([SubscriptionStatus::Active, SubscriptionStatus::PastDue] as $status) {
+            Subscription::factory()->for($customer)->status($status)->create([
+                'stripe_customer_id' => $customer->stripe_customer_id, 'currency' => 'EUR',
+            ]);
+        }
+
+        $this->actingAs($customer->user)->submit(['country' => 'DE', 'currency' => 'GBP'])
+            ->assertSessionHasErrors(['checkout' => __('checkout.errors.customer_currency_mismatch', ['currency' => 'EUR'])]);
+        $this->assertDatabaseCount('checkout_intents', 0);
+
+        $customer->subscriptions()->orderByDesc('id')->firstOrFail()->update(['currency' => 'GBP']);
+        $this->submit(['country' => 'DE', 'currency' => 'EUR'])
+            ->assertSessionHasErrors(['checkout' => __('checkout.errors.customer_currency_ambiguous')]);
+        $this->assertDatabaseCount('checkout_intents', 0);
+        $this->assertSame([], $this->gateway->created);
+    }
+
+    public function test_inconsistent_stripe_customer_mapping_fails_closed(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['country_code' => 'DE', 'stripe_customer_id' => 'cus_right']);
+        Subscription::factory()->for($customer)->create(['stripe_customer_id' => 'cus_wrong', 'currency' => 'EUR']);
+
+        $this->actingAs($customer->user)->submit(['country' => 'DE', 'currency' => 'EUR'])
+            ->assertSessionHasErrors(['checkout' => __('checkout.errors.customer_currency_ambiguous')]);
+        $this->assertDatabaseCount('checkout_intents', 0);
+    }
+
+    public function test_huf_lock_rejects_international_selection_and_guests_keep_their_choice(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['country_code' => 'HU', 'stripe_customer_id' => 'cus_huf']);
+        Subscription::factory()->for($customer)->create(['stripe_customer_id' => $customer->stripe_customer_id, 'currency' => 'HUF']);
+
+        $this->actingAs($customer->user)->submit(['country' => 'DE', 'currency' => 'EUR'])
+            ->assertSessionHasErrors(['checkout' => __('checkout.errors.customer_currency_mismatch', ['currency' => 'HUF'])]);
+        $this->assertDatabaseCount('checkout_intents', 0);
+
+        auth()->logout();
+        $this->submit(['country' => 'DE', 'currency' => 'EUR'])->assertStatus(303);
+        $this->submit(['country' => 'GB', 'currency' => 'GBP'])->assertStatus(303);
+        $this->assertSame(['EUR', 'GBP'], CheckoutIntent::orderBy('id')->pluck('currency')->all());
     }
 
     public function test_inactive_price_cannot_be_checked_out(): void

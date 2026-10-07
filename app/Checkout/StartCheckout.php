@@ -5,6 +5,7 @@ namespace App\Checkout;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Promotion;
+use App\Pricing\Exceptions\CustomerCurrencyMismatch;
 use App\Pricing\Exceptions\PricingException;
 use App\Pricing\PriceSelection;
 use App\Pricing\PricingCatalog;
@@ -23,6 +24,7 @@ final class StartCheckout
         private readonly PricingCatalog $catalog,
         private readonly CheckoutGateway $gateway,
         private readonly PromotionReservations $reservations,
+        private readonly ExistingCustomerCurrencyLock $currencyLock,
     ) {}
 
     /**
@@ -60,6 +62,11 @@ final class StartCheckout
 
         $price = $this->catalog->resolve($selection, $customer->country, $currency);
         $market = $this->catalog->market($price->market);
+
+        if ($account && ($lockedCurrency = $this->currencyLock->forCustomer($account)) !== null
+            && $lockedCurrency !== $price->money->currency->code) {
+            throw new CustomerCurrencyMismatch($lockedCurrency);
+        }
 
         $promotion = null;
         if ($promotionCode !== null && trim($promotionCode) !== '') {

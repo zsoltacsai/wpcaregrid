@@ -5,12 +5,14 @@ namespace App\Http\Controllers;
 use App\Checkout\CheckoutGateway;
 use App\Checkout\CheckoutStatus;
 use App\Checkout\CheckoutUnavailable;
+use App\Checkout\ExistingCustomerCurrencyLock;
 use App\Checkout\PromotionRejected;
 use App\Checkout\StartCheckout;
 use App\Http\Requests\StartCheckoutRequest;
 use App\Models\CheckoutIntent;
 use App\Pricing\BillingInterval;
 use App\Pricing\DisplayCurrency;
+use App\Pricing\Exceptions\AmbiguousCustomerCurrency;
 use App\Pricing\Exceptions\InvalidPriceSelection;
 use App\Pricing\Exceptions\MarketNotAvailable;
 use App\Pricing\Exceptions\PricingException;
@@ -26,7 +28,7 @@ class CheckoutController extends Controller
     /** Session key holding the UUIDs of intents started in this browser session. */
     private const SESSION_INTENTS = 'checkout.intents';
 
-    public function show(Request $request, PricingCatalog $pricing): View|RedirectResponse
+    public function show(Request $request, PricingCatalog $pricing, ExistingCustomerCurrencyLock $currencyLock): View|RedirectResponse
     {
         try {
             $selection = PriceSelection::fromInput(
@@ -39,9 +41,17 @@ class CheckoutController extends Controller
         }
 
         $display = app(DisplayCurrency::class);
+        $account = $request->user()?->customer;
+        try {
+            $lockedCurrency = $account ? $currencyLock->forCustomer($account) : null;
+        } catch (AmbiguousCustomerCurrency $e) {
+            return redirect()->route('pricing')->with('checkout_error', $e->customerMessage());
+        }
         $billingCountry = old('country', $request->user()?->customer?->country_code ?? 'HU');
         $currency = $display->selected();
-        if (strtoupper((string) $billingCountry) === 'HU') {
+        if ($lockedCurrency !== null) {
+            $currency = $lockedCurrency;
+        } elseif (strtoupper((string) $billingCountry) === 'HU') {
             $currency = 'HUF';
         } elseif ($currency === 'HUF') {
             $currency = $pricing->defaultInternationalCurrency();
@@ -81,6 +91,7 @@ class CheckoutController extends Controller
             'offer' => $offer,
             'market' => $market,
             'currency' => $currency,
+            'lockedCurrency' => $lockedCurrency,
             'currencies' => $display->available(),
             'defaultInternationalCurrency' => $pricing->defaultInternationalCurrency(),
             'priceMatrix' => $priceMatrix,
