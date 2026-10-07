@@ -44,7 +44,7 @@ class CustomerController extends Controller
 
     public function show(Customer $customer, SiteHealth $health): View
     {
-        $customer->load(['subscriptions' => fn ($q) => $q->latest('id'), 'websites.activeConnector', 'websites.inventory', 'websites.subscription', 'websites.customer', 'user']);
+        $customer->load(['subscriptions' => fn ($q) => $q->with('billingInvoices')->latest('id'), 'websites.activeConnector', 'websites.inventory', 'websites.subscription', 'websites.customer', 'user']);
 
         return view('owner.customers.show', [
             'customer' => $customer,

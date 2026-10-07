@@ -66,6 +66,18 @@
             @if ($s->discount_duration)<span class="text-muted"> · {{ __('account.subscription.discount_durations.'.$s->discount_duration, ['months' => $s->discount_duration_months]) }}</span>@endif
         </x-account.detail>
     @endif
+    @if ($s->initial_discount_snapshot_confirmed_at && $s->initial_discount_duration === 'once')
+        <x-account.detail :label="__('account.subscription.initial_invoice_discount')">
+            @if ($s->initial_discount_type === 'percent' && $s->initial_discount_percent !== null)
+                {{ $s->initialDiscountPercentLabel() }}%
+            @elseif ($s->initial_discount_type === 'fixed' && $s->initial_discount_amount !== null && $s->initial_discount_currency)
+                {{ (new \App\Pricing\Money($s->initial_discount_amount, \App\Pricing\Currency::fromConfig($s->initial_discount_currency, config("pricing.currencies.{$s->initial_discount_currency}", []), app()->getLocale())))->format() }}
+            @else
+                {{ __('account.subscription.discount_unknown') }}
+            @endif
+            <span class="text-muted"> · {{ __('account.subscription.discount_durations.once') }}</span>
+        </x-account.detail>
+    @endif
     <x-account.detail :label="__('account.subscription.status')">
         <x-ui.status-badge :tone="$s->status->tone()">{{ $s->status->label() }}</x-ui.status-badge>
     </x-account.detail>

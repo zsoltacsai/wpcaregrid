@@ -52,6 +52,11 @@ class Subscription extends Model
             'base_price_amount' => 'integer',
             'discount_percent' => 'decimal:2',
             'discount_amount' => 'integer',
+            'initial_discount_percent' => 'decimal:2',
+            'initial_discount_amount' => 'integer',
+            'initial_discount_duration_months' => 'integer',
+            'initial_invoice_discount_total' => 'integer',
+            'initial_discount_snapshot_confirmed_at' => 'datetime',
             'current_recurring_amount' => 'integer',
             'billing_snapshot_confirmed_at' => 'datetime',
             'current_period_start' => 'datetime',
@@ -167,6 +172,17 @@ class Subscription extends Model
         }
 
         $value = (string) $this->discount_percent;
+
+        return rtrim(rtrim($value, '0'), '.');
+    }
+
+    public function initialDiscountPercentLabel(): ?string
+    {
+        if ($this->initial_discount_percent === null) {
+            return null;
+        }
+
+        $value = (string) $this->initial_discount_percent;
 
         return rtrim(rtrim($value, '0'), '.');
     }

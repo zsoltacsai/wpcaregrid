@@ -92,4 +92,40 @@ class CustomerBillingSnapshotTest extends TestCase
             ->assertSee(__('account.subscription.amount_unknown'))
             ->assertSee(__('account.subscription.discount_unknown'));
     }
+
+    public function test_customer_portal_separates_a_once_initial_invoice_discount_from_future_recurring_price(): void
+    {
+        $customer = Customer::factory()->withUser()->create();
+        $subscription = Subscription::factory()->for($customer)->create([
+            'product_type' => 'wordpress', 'plan' => 'business', 'interval' => 'annual',
+            'currency' => 'EUR', 'amount' => 89000,
+            'base_price_amount' => 89000, 'base_price_currency' => 'EUR',
+            'initial_discount_type' => 'percent', 'initial_discount_percent' => '10.00',
+            'initial_discount_duration' => 'once', 'initial_stripe_coupon_id' => 'coupon_once_snapshot',
+            'initial_discount_snapshot_confirmed_at' => now(),
+            'current_recurring_amount' => 89000, 'current_recurring_currency' => 'EUR',
+            'billing_snapshot_confirmed_at' => now(),
+        ]);
+        $invoice = BillingInvoice::create([
+            'stripe_invoice_id' => 'in_once_portal', 'subscription_id' => $subscription->id,
+            'customer_id' => $customer->id, 'stripe_subscription_id' => 'sub_once_portal',
+            'subtotal' => 89000, 'discount_total' => 8900, 'tax_total' => 0,
+            'total' => 80100, 'amount_paid' => 80100, 'amount_due' => 0,
+            'currency' => 'EUR', 'invoice_status' => 'paid', 'billing_reason' => 'subscription_create',
+            'applied_discount_type' => 'percent', 'applied_discount_percent' => '10.00',
+            'applied_discount_duration' => 'once', 'stripe_coupon_id' => 'coupon_once_snapshot',
+            'stripe_created_at' => now(), 'paid_at' => now(),
+        ]);
+
+        $response = $this->actingAs($customer->user)->get(route('account.subscription'))
+            ->assertOk()
+            ->assertSee(__('account.subscription.initial_invoice_discount'))
+            ->assertSee('10%')
+            ->assertSee(__('account.subscription.discount_durations.once'))
+            ->assertSee($subscription->currentRecurringMoney()->format())
+            ->assertSee($invoice->money('amount_paid')->format());
+
+        $this->assertSame(89000, $subscription->current_recurring_amount);
+        $this->assertNotSame($invoice->amount_paid, $subscription->current_recurring_amount);
+    }
 }

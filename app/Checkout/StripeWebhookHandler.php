@@ -2,6 +2,7 @@
 
 namespace App\Checkout;
 
+use App\Billing\CheckoutDiscountSnapshotSync;
 use App\Billing\InvoiceEvents;
 use App\Billing\ProvisionCustomer;
 use App\Billing\SubscriptionSync;
@@ -30,6 +31,7 @@ final class StripeWebhookHandler
         private readonly InvoiceEvents $invoices,
         private readonly RecoveryOffers $offers,
         private readonly PromotionReservations $reservations,
+        private readonly CheckoutDiscountSnapshotSync $discountSnapshots,
     ) {}
 
     /** @return bool False when the event had already been processed. */
@@ -131,7 +133,10 @@ final class StripeWebhookHandler
 
         if ($paid) {
             $customer = $this->provision->forIntent($intent, $intent->stripe_customer_id);
-            $this->subscriptions->attachCheckout($intent, $customer, $intent->stripe_subscription_id);
+            $subscription = $this->subscriptions->attachCheckout($intent, $customer, $intent->stripe_subscription_id);
+            if ($subscription) {
+                $this->discountSnapshots->apply($session, $intent);
+            }
 
             // Keep the graph lock order consistent: intent, customer/user,
             // subscription, then promotion reservation.

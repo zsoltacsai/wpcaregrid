@@ -51,7 +51,14 @@
                             <tr>
                                 <td class="px-2 py-2">{{ $subscription->product_type->label() }} {{ $subscription->planName() }}</td>
                                 <td class="px-2 py-2">{{ $subscription->interval?->label() ?? "—" }}</td>
-                                <td class="px-2 py-2 tabular-nums">{{ $subscription->amount !== null && $subscription->currency ? $subscription->money()->format() : '—' }}</td>
+                                <td class="px-2 py-2 tabular-nums">
+                                    <div>{{ $subscription->currentRecurringMoney()?->format() ?? ($subscription->amount !== null && $subscription->currency ? $subscription->money()->format() : '—') }}</div>
+                                    @if ($subscription->currentRecurringMoney())<div class="text-xs text-muted">{{ __('owner.customers.current_recurring') }}</div>@endif
+                                    @if ($subscription->basePriceMoney() && $subscription->currentRecurringMoney())<div class="text-xs text-muted">{{ __('account.subscription.base_amount') }}: {{ $subscription->basePriceMoney()->format() }}</div>@endif
+                                    @if ($subscription->initial_discount_snapshot_confirmed_at && $subscription->initial_discount_duration === 'once')
+                                        <div class="mt-1 text-xs text-muted">{{ __('owner.customers.initial_invoice_discount') }}: {{ $subscription->initial_discount_type === 'percent' ? ($subscription->initialDiscountPercentLabel().'%' ) : __('account.subscription.discount_unknown') }}</div>
+                                    @endif
+                                </td>
                                 <td class="px-2 py-2"><x-ui.status-badge :status="$subscription->status" /></td>
                                 <td class="px-2 py-2 font-mono text-xs">{{ $subscription->nextBillingDate()?->format('Y-m-d') ?? ($subscription->cancel_at_period_end ? __('owner.customers.cancels') : '—') }}</td>
                                 <td class="px-2 py-2 text-xs">{{ $customer->websites->firstWhere('subscription_id', $subscription->id)?->host() ?? '—' }}</td>
@@ -61,6 +68,21 @@
                 </table>
             </div>
             <p class="mt-3 text-xs text-muted">{{ __('owner.customers.stripe_note') }}</p>
+            @foreach ($customer->subscriptions as $subscription)
+                @if ($subscription->billingInvoices->isNotEmpty())
+                    <div class="mt-4 border-t border-line pt-3">
+                        <h3 class="text-xs font-semibold text-primary">{{ __('owner.customers.invoice_history') }} · {{ $subscription->planName() }}</h3>
+                        <ul class="mt-2 divide-y divide-line text-xs">
+                            @foreach ($subscription->billingInvoices as $invoice)
+                                <li class="flex flex-wrap items-center justify-between gap-2 py-2">
+                                    <span>{{ $invoice->stripe_created_at?->format('Y-m-d') ?? '—' }} · {{ __('account.subscription.invoice_statuses.'.$invoice->invoice_status, [], app()->getLocale()) }}</span>
+                                    <span class="tabular-nums">{{ $invoice->money('amount_paid')?->format() ?? __('account.subscription.amount_unknown') }}</span>
+                                </li>
+                            @endforeach
+                        </ul>
+                    </div>
+                @endif
+            @endforeach
         @endif
     </x-operator.section>
 

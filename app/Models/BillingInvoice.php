@@ -16,6 +16,10 @@ class BillingInvoice extends Model
         return [
             'subtotal' => 'integer',
             'discount_total' => 'integer',
+            'applied_discount_percent' => 'decimal:2',
+            'applied_discount_amount' => 'integer',
+            'applied_discount_duration_months' => 'integer',
+            'discount_snapshot_confirmed_at' => 'datetime',
             'tax_total' => 'integer',
             'total' => 'integer',
             'amount_paid' => 'integer',

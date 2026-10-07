@@ -2,10 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Billing\CheckoutDiscountSnapshot;
 use App\Billing\SubscriptionBillingSnapshot;
 use App\Checkout\CheckoutStatus;
 use App\Models\BillingInvoice;
 use App\Models\CheckoutIntent;
+use App\Models\Promotion;
 use App\Models\Subscription;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Concerns\SendsStripeWebhooks;
@@ -297,6 +299,186 @@ class BillingSnapshotTest extends TestCase
         $this->assertSame(1899000, $subscription->current_recurring_amount);
         $this->assertNull($subscription->discount_type);
         $this->assertNull($subscription->stripe_coupon_id);
+    }
+
+    public function test_paid_checkout_session_snapshots_once_discount_without_lowering_future_recurring_amount(): void
+    {
+        $promotion = Promotion::create([
+            'code' => 'ONCE10', 'stripe_coupon_id' => 'coupon_once_10', 'stripe_promotion_code_id' => 'promo_once_10',
+            'discount_type' => 'percent', 'percent_off' => 10, 'duration' => 'once',
+        ]);
+        $this->setEurAnnualPriceId();
+        $intent = $this->intent([
+            'promotion_id' => $promotion->id,
+            'stripe_checkout_session_id' => 'cs_once_snapshot',
+            'country' => 'DE', 'market' => 'INTERNATIONAL', 'currency' => 'EUR', 'amount' => 89000,
+            'interval' => 'annual', 'stripe_price_id' => 'price_wordpress_business_annual_EUR',
+        ]);
+        $created = now()->timestamp;
+        $invoice = [
+            'id' => 'in_once_snapshot', 'object' => 'invoice', 'customer' => 'cus_once_snapshot', 'currency' => 'eur',
+            'status' => 'paid', 'billing_reason' => 'subscription_create', 'created' => $created,
+            'subtotal' => 89000, 'total_discount_amounts' => [['amount' => 8900, 'discount' => 'di_once_snapshot']],
+            'total_taxes' => [['amount' => 0]], 'total' => 80100, 'amount_paid' => 80100, 'amount_due' => 0,
+            'payment_intent' => 'pi_once_snapshot',
+            'parent' => ['subscription_details' => ['subscription' => 'sub_once_snapshot', 'metadata' => ['checkout_intent' => $intent->uuid]]],
+            'status_transitions' => ['finalized_at' => $created, 'paid_at' => $created],
+        ];
+
+        // Invoice arrives before checkout completion; it records actual money, while terms are not yet known.
+        $this->stripeEvent('invoice.paid', $invoice, 'evt_once_invoice')->assertStatus(204);
+        $this->assertSame(8900, BillingInvoice::sole()->discount_total);
+        $this->assertNull(BillingInvoice::sole()->applied_discount_type);
+
+        $session = [
+            'id' => 'cs_once_snapshot', 'object' => 'checkout.session', 'status' => 'complete',
+            'payment_status' => 'paid', 'livemode' => false, 'currency' => 'eur', 'client_reference_id' => $intent->uuid,
+            'customer' => 'cus_once_snapshot', 'subscription' => 'sub_once_snapshot', 'invoice' => 'in_once_snapshot',
+            'created' => $created, 'discounts' => [['coupon' => null, 'promotion_code' => 'promo_once_10']],
+            'total_details' => ['amount_discount' => 8900],
+        ];
+        $this->stripeEvent('checkout.session.completed', $session, 'evt_once_session')->assertStatus(204);
+
+        $this->stripeEvent('customer.subscription.created', [
+            'id' => 'sub_once_snapshot', 'object' => 'subscription', 'customer' => 'cus_once_snapshot', 'status' => 'active',
+            'metadata' => ['checkout_intent' => $intent->uuid], 'discounts' => [],
+            'items' => ['data' => [['current_period_start' => $created, 'current_period_end' => $created + 31536000,
+                'price' => ['id' => 'price_wordpress_business_annual_EUR', 'unit_amount' => 89000, 'currency' => 'eur']]]],
+        ], 'evt_once_subscription')->assertStatus(204);
+
+        $subscription = Subscription::sole();
+        $this->assertSame(89000, $subscription->base_price_amount);
+        $this->assertSame('EUR', $subscription->base_price_currency);
+        $this->assertSame('percent', $subscription->initial_discount_type);
+        $this->assertSame('10.00', $subscription->initial_discount_percent);
+        $this->assertSame('once', $subscription->initial_discount_duration);
+        $this->assertSame(8900, $subscription->initial_invoice_discount_total);
+        $this->assertSame('coupon_once_10', $subscription->initial_stripe_coupon_id);
+        $this->assertSame('promo_once_10', $subscription->initial_stripe_promotion_code_id);
+        $this->assertSame(89000, $subscription->current_recurring_amount);
+        $this->assertSame('EUR', $subscription->current_recurring_currency);
+        $this->assertNull($subscription->discount_type, 'The once coupon is not an ongoing subscription discount.');
+
+        $snapshot = BillingInvoice::sole();
+        $this->assertSame(89000, $snapshot->subtotal);
+        $this->assertSame(8900, $snapshot->discount_total);
+        $this->assertSame(80100, $snapshot->total);
+        $this->assertSame(80100, $snapshot->amount_paid);
+        $this->assertSame('percent', $snapshot->applied_discount_type);
+        $this->assertSame('10.00', $snapshot->applied_discount_percent);
+        $this->assertSame('once', $snapshot->applied_discount_duration);
+
+        // Later subscription state has no ongoing discount and must preserve the historical first-invoice terms.
+        $later = $this->stripeSubscription('sub_once_snapshot', 'active', [
+            'metadata' => ['checkout_intent' => $intent->uuid],
+            'items' => ['data' => [['price' => ['id' => 'price_wordpress_business_annual_EUR', 'unit_amount' => 89000, 'currency' => 'eur']]]],
+            'discounts' => [],
+        ]);
+        $this->stripeEvent('customer.subscription.updated', $later, 'evt_once_subscription_later')->assertStatus(204);
+        $this->assertSame('once', $subscription->refresh()->initial_discount_duration);
+        $this->assertSame(89000, $subscription->current_recurring_amount);
+
+        $this->stripeEvent('invoice.paid', $invoice, 'evt_once_invoice')->assertStatus(204);
+        $this->assertSame(1, BillingInvoice::count());
+        $this->assertSame(8900, BillingInvoice::sole()->discount_total);
+        $this->assertSame('once', BillingInvoice::sole()->applied_discount_duration);
+    }
+
+    public function test_forever_and_full_once_snapshots_keep_their_distinct_recurring_semantics(): void
+    {
+        $this->setEurAnnualPriceId();
+        $forever = Promotion::create([
+            'code' => 'FOREVER25', 'stripe_coupon_id' => 'coupon_forever_25', 'stripe_promotion_code_id' => 'promo_forever_25',
+            'discount_type' => 'percent', 'percent_off' => 25, 'duration' => 'forever',
+        ]);
+        $onceFree = Promotion::create([
+            'code' => 'ONCE100', 'stripe_coupon_id' => 'coupon_once_100', 'stripe_promotion_code_id' => 'promo_once_100',
+            'discount_type' => 'percent', 'percent_off' => 100, 'duration' => 'once',
+        ]);
+        $service = app(CheckoutDiscountSnapshot::class);
+
+        $foreverSnapshot = $service->fromSession((object) [
+            'discounts' => [['promotion_code' => 'promo_forever_25']], 'total_details' => ['amount_discount' => 22250],
+        ], $forever);
+        $this->assertSame('forever', $foreverSnapshot['initial_discount_duration']);
+        $ongoing = app(SubscriptionBillingSnapshot::class)->fromStripe(
+            (object) ['discounts' => [['source' => ['coupon' => ['percent_off' => 25, 'duration' => 'forever']]]]],
+            null,
+            (object) ['unit_amount' => 89000, 'currency' => 'eur'],
+        );
+        $this->assertSame(66750, $ongoing['current_recurring_amount']);
+
+        $freeSnapshot = $service->fromSession((object) [
+            'discounts' => [['promotion_code' => 'promo_once_100']], 'total_details' => ['amount_discount' => 89000],
+        ], $onceFree);
+        $this->assertSame('100.00', $freeSnapshot['initial_discount_percent']);
+        $this->assertSame('once', $freeSnapshot['initial_discount_duration']);
+        $this->assertSame(89000, app(SubscriptionBillingSnapshot::class)->fromStripe(
+            (object) ['discounts' => []],
+            null,
+            (object) ['unit_amount' => 89000, 'currency' => 'eur'],
+        )['current_recurring_amount']);
+    }
+
+    public function test_session_first_subscription_then_invoice_order_converges_and_duplicate_subscription_keeps_once_history(): void
+    {
+        $promotion = Promotion::create([
+            'code' => 'ORDERONCE10', 'stripe_coupon_id' => 'coupon_order_once', 'stripe_promotion_code_id' => 'promo_order_once',
+            'discount_type' => 'percent', 'percent_off' => 10, 'duration' => 'once',
+        ]);
+        $this->setEurAnnualPriceId();
+        $intent = $this->intent([
+            'promotion_id' => $promotion->id, 'stripe_checkout_session_id' => 'cs_order_once',
+            'country' => 'DE', 'market' => 'INTERNATIONAL', 'currency' => 'EUR', 'amount' => 89000,
+            'interval' => 'annual', 'stripe_price_id' => 'price_wordpress_business_annual_EUR',
+        ]);
+        $created = now()->timestamp;
+
+        $this->stripeEvent('checkout.session.completed', [
+            'id' => 'cs_order_once', 'object' => 'checkout.session', 'status' => 'complete', 'payment_status' => 'paid',
+            'currency' => 'eur', 'client_reference_id' => $intent->uuid, 'customer' => 'cus_order_once', 'subscription' => 'sub_order_once',
+            'invoice' => 'in_order_once', 'created' => $created,
+            'discounts' => [['coupon' => null, 'promotion_code' => 'promo_order_once']],
+            'total_details' => ['amount_discount' => 8900],
+        ], 'evt_order_session', $created)->assertStatus(204);
+
+        $subscription = [
+            'id' => 'sub_order_once', 'object' => 'subscription', 'customer' => 'cus_order_once', 'status' => 'active',
+            'metadata' => ['checkout_intent' => $intent->uuid], 'discounts' => [],
+            'items' => ['data' => [['price' => ['id' => 'price_wordpress_business_annual_EUR', 'unit_amount' => 89000, 'currency' => 'eur']]]],
+        ];
+        $this->stripeEvent('customer.subscription.created', $subscription, 'evt_order_created', $created + 1)->assertStatus(204);
+        $invoice = [
+            'id' => 'in_order_once', 'object' => 'invoice', 'customer' => 'cus_order_once', 'currency' => 'eur',
+            'status' => 'paid', 'billing_reason' => 'subscription_create', 'created' => $created + 1,
+            'subtotal' => 89000, 'total_discount_amounts' => [['amount' => 8900]], 'total_taxes' => [['amount' => 0]],
+            'total' => 80100, 'amount_paid' => 80100, 'amount_due' => 0,
+            'parent' => ['subscription_details' => ['subscription' => 'sub_order_once', 'metadata' => ['checkout_intent' => $intent->uuid]]],
+            'status_transitions' => ['paid_at' => $created + 1],
+        ];
+        $this->stripeEvent('invoice.paid', $invoice, 'evt_order_paid', $created + 1)->assertStatus(204);
+        $this->stripeEvent('customer.subscription.updated', $subscription, 'evt_order_updated', $created + 2)->assertStatus(204);
+        $this->stripeEvent('customer.subscription.updated', $subscription, 'evt_order_updated', $created + 2)->assertStatus(204);
+
+        $subscriptionRow = Subscription::sole();
+        $invoiceRow = BillingInvoice::sole();
+        $this->assertSame('once', $subscriptionRow->initial_discount_duration);
+        $this->assertSame(8900, $subscriptionRow->initial_invoice_discount_total);
+        $this->assertSame(89000, $subscriptionRow->current_recurring_amount);
+        $this->assertSame('percent', $invoiceRow->applied_discount_type);
+        $this->assertSame('once', $invoiceRow->applied_discount_duration);
+        $this->assertSame(8900, $invoiceRow->discount_total);
+        $this->assertSame(80100, $invoiceRow->amount_paid);
+        $this->assertSame(1, BillingInvoice::count());
+    }
+
+    private function setEurAnnualPriceId(): void
+    {
+        foreach (config('pricing.prices') as $index => $price) {
+            if ($price['product_type'] === 'wordpress' && $price['plan'] === 'business' && $price['interval'] === 'annual' && $price['currency'] === 'EUR') {
+                config(["pricing.prices.{$index}.stripe_price_id" => 'price_wordpress_business_annual_EUR']);
+            }
+        }
     }
 
     public function test_stale_invoice_failure_does_not_overwrite_a_paid_snapshot(): void

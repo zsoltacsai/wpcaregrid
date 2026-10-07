@@ -133,6 +133,7 @@ return [
         'current_recurring' => 'Jelenlegi ismétlődő díj',
         'amount_unknown' => 'A Stripe még nem erősítette meg az összeget',
         'discount' => 'Kedvezmény',
+        'initial_invoice_discount' => 'Kezdő számla kedvezménye',
         'discount_unknown' => 'A kedvezmény részletei nem érhetők el',
         'discount_durations' => ['once' => 'csak az első számlára', 'repeating' => ':months hónapig', 'forever' => 'folyamatos'],
         'invoice_history' => 'Számla- és fizetési előzmények',

@@ -121,6 +121,7 @@ return [
         'current_recurring' => 'Current recurring amount',
         'amount_unknown' => 'Amount not confirmed by Stripe yet',
         'discount' => 'Discount',
+        'initial_invoice_discount' => 'Initial invoice discount',
         'discount_unknown' => 'Discount details are not available',
         'discount_durations' => ['once' => 'first invoice only', 'repeating' => 'for :months months', 'forever' => 'ongoing'],
         'invoice_history' => 'Invoice and payment history',

@@ -191,6 +191,32 @@ final class InvoiceEvents
             'last_stripe_event_id' => $eventId,
         ];
 
+        if ($subscription
+            && ($invoice->billing_reason ?? null) === 'subscription_create'
+            && $subscription->initial_discount_snapshot_confirmed_at
+            && $subscription->initial_invoice_discount_total === $attributes['discount_total']) {
+            $attributes += [
+                'applied_discount_type' => $subscription->initial_discount_type,
+                'applied_discount_percent' => $subscription->initial_discount_percent,
+                'applied_discount_amount' => $subscription->initial_discount_amount,
+                'applied_discount_currency' => $subscription->initial_discount_currency,
+                'applied_discount_duration' => $subscription->initial_discount_duration,
+                'applied_discount_duration_months' => $subscription->initial_discount_duration_months,
+                'stripe_coupon_id' => $subscription->initial_stripe_coupon_id,
+                'stripe_promotion_code_id' => $subscription->initial_stripe_promotion_code_id,
+                'stripe_promotion_code' => $subscription->initial_stripe_promotion_code,
+                'discount_snapshot_confirmed_at' => $subscription->initial_discount_snapshot_confirmed_at,
+            ];
+        } elseif ($subscription
+            && ($invoice->billing_reason ?? null) === 'subscription_create'
+            && $subscription->initial_discount_snapshot_confirmed_at
+            && $subscription->initial_invoice_discount_total !== $attributes['discount_total']) {
+            Log::warning('Stripe Checkout and initial invoice discount totals do not match.', [
+                'stripe_invoice' => $id,
+                'stripe_subscription' => $stripeSubscriptionId,
+            ]);
+        }
+
         $notifyPayment = $statusOverride === 'paid'
             && $paidAt !== null
             && $subscription !== null
