@@ -23,8 +23,10 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Mail\Events\MessageSent;
 use Illuminate\Mail\MailManager;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\SendsStripeWebhooks;
 use Tests\TestCase;
@@ -32,6 +34,8 @@ use Tests\TestCase;
 class SubscriptionLifecycleTest extends TestCase
 {
     use RefreshDatabase, SendsStripeWebhooks;
+
+    private ?string $raceEmailToCleanUp = null;
 
     protected function setUp(): void
     {
@@ -113,6 +117,7 @@ class SubscriptionLifecycleTest extends TestCase
 
         $this->assertSame(CheckoutStatus::Completed, $intent->status);
         $this->assertSame($customer->id, $intent->customer_id);
+        $this->assertSame('sub_test_1', $intent->stripe_subscription_id);
 
         $this->assertSame('anna.kovacs@company.example', $customer->email, 'Email is normalised.');
         $this->assertSame('cus_test_1', $customer->stripe_customer_id);
@@ -169,6 +174,104 @@ class SubscriptionLifecycleTest extends TestCase
         $this->assertSame($intent->id, $subscription->checkout_intent_id);
         Mail::assertQueued(AccountActivation::class, 1);
         Mail::assertQueued(SubscriptionActivated::class, 1);
+    }
+
+    public function test_concurrent_webhook_provisioning_recovers_from_customer_and_user_email_races(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->markTestSkipped('This isolation test requires independent MySQL connections.');
+        }
+
+        $email = 'race-'.Str::uuid().'@company.example';
+        $this->raceEmailToCleanUp = $email;
+        $intent = $this->intent(['email' => $email]);
+        $customerRaceInjected = false;
+        $userRaceInjected = false;
+        $this->useRaceConnection();
+
+        Customer::creating(function (Customer $candidate) use (&$customerRaceInjected, $email) {
+            if (! $customerRaceInjected && Customer::normalizeEmail($candidate->email) === Customer::normalizeEmail($email)) {
+                $customerRaceInjected = true;
+                DB::connection('race')->table('customers')->insert([
+                    'email' => $candidate->email,
+                    'first_name' => 'Concurrent',
+                    'last_name' => 'Customer',
+                    'country_code' => 'DE',
+                    'customer_type' => 'individual',
+                    'uuid' => (string) Str::uuid(),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+        });
+
+        User::creating(function (User $candidate) use (&$userRaceInjected, $email) {
+            if (! $userRaceInjected && Customer::normalizeEmail($candidate->email) === Customer::normalizeEmail($email)) {
+                $userRaceInjected = true;
+                DB::connection('race')->table('users')->insert([
+                    'name' => 'Concurrent Login',
+                    'email' => $candidate->email,
+                    'password' => bcrypt(Str::random(48)),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+        });
+
+        $this->completeCheckout($intent, eventId: 'evt_checkout_race')->assertStatus(204);
+        $this->subscriptionEvent('customer.subscription.created', 'active', $intent, eventId: 'evt_subscription_race')->assertStatus(204);
+        $this->stripeEvent('invoice.paid', $this->invoice($intent), eventId: 'evt_invoice_race')->assertStatus(204);
+
+        $intent->refresh();
+        $customer = Customer::query()->where('email', $email)->lockForUpdate()->sole();
+        $user = User::query()->where('email', $email)->lockForUpdate()->sole();
+        $subscription = Subscription::sole();
+
+        $this->assertTrue($customerRaceInjected);
+        $this->assertTrue($userRaceInjected);
+        $this->assertSame(CheckoutStatus::Completed, $intent->status);
+        $this->assertSame($customer->id, $intent->customer_id);
+        $this->assertSame('sub_test_1', $intent->stripe_subscription_id);
+        $this->assertSame('Concurrent', $customer->first_name, 'A raced-in customer profile is not overwritten by checkout input.');
+        $this->assertSame('DE', $customer->country_code);
+        $this->assertSame('Concurrent Login', $user->name);
+        $this->assertSame($customer->id, $user->customer->id);
+        $this->assertSame($customer->id, $subscription->customer_id);
+        $this->assertSame($intent->id, $subscription->checkout_intent_id);
+        $this->assertSame(1, DB::connection('race')->table('customers')->where('email', $email)->count());
+        $this->assertSame(1, DB::connection('race')->table('users')->where('email', $email)->count());
+        $this->assertDatabaseCount('subscriptions', 1);
+        $this->assertDatabaseCount('billing_invoices', 1);
+    }
+
+    protected function tearDown(): void
+    {
+        parent::tearDown();
+
+        if ($this->raceEmailToCleanUp === null || getenv('DB_CONNECTION') !== 'mysql') {
+            return;
+        }
+
+        $connection = sprintf(
+            'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
+            getenv('DB_HOST') ?: '127.0.0.1',
+            getenv('DB_PORT') ?: '3306',
+            getenv('DB_DATABASE') ?: '',
+        );
+        $pdo = new \PDO($connection, getenv('DB_USERNAME') ?: '', getenv('DB_PASSWORD') ?: '');
+        $pdo->prepare('DELETE FROM users WHERE email = ?')->execute([$this->raceEmailToCleanUp]);
+        $pdo->prepare('DELETE FROM customers WHERE email = ?')->execute([$this->raceEmailToCleanUp]);
+        $pdo = null;
+    }
+
+    private function useRaceConnection(): void
+    {
+        $defaultConnection = DB::connection();
+        $connectionConfig = $defaultConnection->getConfig();
+        $connectionConfig['database'] = $defaultConnection->getDatabaseName();
+
+        config(['database.connections.race' => $connectionConfig]);
+        DB::purge('race');
     }
 
     public function test_an_older_subscription_event_does_not_overwrite_newer_state(): void

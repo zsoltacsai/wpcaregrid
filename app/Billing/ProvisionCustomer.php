@@ -6,6 +6,7 @@ use App\Mail\AccountActivation;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\User;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password;
@@ -56,16 +57,7 @@ final class ProvisionCustomer
         $customer = $intentCustomer
             ?? $stripeCustomer
             ?? Customer::findByEmail($intent->email)
-            ?? Customer::create([
-                'email' => $intent->email,
-                'first_name' => $intent->first_name,
-                'last_name' => $intent->last_name,
-                'company_name' => $intent->company_name,
-                'country_code' => $intent->country,
-                'customer_type' => $intent->customer_type,
-                'tax_id' => $intent->tax_id,
-                'billing_address' => $intent->billing_address,
-            ]);
+            ?? $this->customerByEmailOrCreate($intent);
 
         if ($stripeCustomerId && ! $customer->stripe_customer_id
             && ! Customer::where('stripe_customer_id', $stripeCustomerId)->exists()) {
@@ -82,29 +74,55 @@ final class ProvisionCustomer
         return $customer;
     }
 
+    private function customerByEmailOrCreate(CheckoutIntent $intent): Customer
+    {
+        $email = Customer::normalizeEmail($intent->email);
+
+        try {
+            return Customer::query()->firstOrCreate(['email' => $email], [
+                'first_name' => $intent->first_name,
+                'last_name' => $intent->last_name,
+                'company_name' => $intent->company_name,
+                'country_code' => $intent->country,
+                'customer_type' => $intent->customer_type,
+                'tax_id' => $intent->tax_id,
+                'billing_address' => $intent->billing_address,
+            ]);
+        } catch (UniqueConstraintViolationException $exception) {
+            // Under MySQL REPEATABLE READ, the transaction's earlier email lookup
+            // can establish a snapshot that cannot see a concurrently committed
+            // row. A locking read is a current read and resolves the winning insert.
+            return Customer::query()->where('email', $email)->lockForUpdate()->first() ?? throw $exception;
+        }
+    }
+
     private function ensureUser(Customer $customer): void
     {
         if ($customer->user_id) {
             return;
         }
 
-        $user = User::where('email', $customer->email)->first();
+        $email = Customer::normalizeEmail($customer->email);
 
-        if ($user?->customer()->exists()) {
+        try {
+            $user = User::query()->firstOrCreate(['email' => $email], [
+                'name' => $customer->fullName(),
+                // Unusable until the customer sets a password via the activation link.
+                'password' => Str::random(64),
+            ]);
+        } catch (UniqueConstraintViolationException $exception) {
+            // Match the customer current-read recovery for a concurrent account insert.
+            $user = User::query()->where('email', $email)->lockForUpdate()->first() ?? throw $exception;
+        }
+
+        if ($user->customer()->exists()) {
             // The email's login already belongs to another customer; never merge silently.
             Log::warning('Customer email matches a login linked to another customer.', ['customer' => $customer->uuid]);
 
             return;
         }
 
-        if (! $user) {
-            $user = User::create([
-                'name' => $customer->fullName(),
-                'email' => $customer->email,
-                // Unusable until the customer sets a password via the activation link.
-                'password' => Str::random(64),
-            ]);
-
+        if ($user->wasRecentlyCreated) {
             $token = Password::broker('activations')->createToken($user);
             Mail::to($customer->email)->queue(new AccountActivation($customer, $token));
         }
