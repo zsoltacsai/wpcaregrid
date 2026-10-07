@@ -14,6 +14,7 @@ use App\Offers\StripeOfferPaymentGateway;
 use App\Operator\Permission;
 use App\Owner\IntegrationCredentials;
 use App\Owner\OwnerAbility;
+use App\Owner\OwnerSettings;
 use App\Pricing\PricingCatalog;
 use App\Pricing\PricingOverrides;
 use App\Security\EngineScanner;
@@ -39,6 +40,7 @@ class AppServiceProvider extends ServiceProvider
     {
         // Published owner content, read once per request (cache cleared on publish).
         $this->app->scoped(ContentRepository::class);
+        $this->app->scoped(OwnerSettings::class);
 
         // config/pricing.php with prices and plan wording published in the owner area.
         $this->app->scoped(
@@ -96,6 +98,15 @@ class AppServiceProvider extends ServiceProvider
             }
             if ($hasCredentialTable) {
                 $this->app->make(IntegrationCredentials::class)->apply();
+            }
+            $hasSettingsTable = false;
+            try {
+                $hasSettingsTable = Schema::hasTable('owner_settings');
+            } catch (\Throwable) {
+                // A fresh install can boot before migrations are provisioned.
+            }
+            if ($hasSettingsTable) {
+                $this->app->make(OwnerSettings::class)->applyRuntimeConfiguration();
             }
         }
 
@@ -168,6 +179,10 @@ class AppServiceProvider extends ServiceProvider
         ]);
         // Calls that reach Stripe or a website: fewer.
         RateLimiter::for('owner-external', fn (Request $request) => Limit::perMinute(5)->by('owner-external:'.$request->user()?->id));
+        RateLimiter::for('owner-settings-mail', fn (Request $request) => [
+            Limit::perMinute(3)->by('owner-settings-mail:'.$request->user('owner')?->id),
+            Limit::perHour(10)->by('owner-settings-mail:'.$request->user('owner')?->id),
+        ]);
         // Coupons reach Stripe too, but a typo or two while typing a percentage must not lock the owner out.
         RateLimiter::for('owner-coupons', fn (Request $request) => [
             Limit::perMinute(10)->by('owner-coupons:'.$request->user()?->id),

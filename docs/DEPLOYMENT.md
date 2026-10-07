@@ -84,6 +84,8 @@ No seeders run in production: `migrate --force` creates empty tables only. Demo 
 
 Defaults that must **stay** as shipped until their documented approval: `SECURITY_REMEDIATION_ENABLED=false`, `ADMIN_ACCESS_OPERATOR_FULL_ADMIN=false`, `BACKUP_RESTORE_ENABLED=false`, `SECURITY_REMEDIATION_ALLOW_DISABLE_PLUGIN=false`. `php artisan system:check` shows any of them that is on ("Safety switches").
 
+The Owner Settings foundation adds the `owner_settings` table via normal migrations. Its typed values are stored in the database and applied at Laravel runtime; the deployment must retain the standard order of `migrate --force`, config/cache rebuild and worker restart. Owner Settings values are not written into `bootstrap/cache/config.php`; the database remains authoritative after each boot. Secrets such as SMTP passwords remain in encrypted Service Credentials. Persisted settings are memoized only for a Laravel request/job and refreshed after committed changes; no shared cache needs invalidation.
+
 Leave optional switches with secure defaults unset rather than empty: an empty `HTTP_FORCE_HTTPS=`, `HTTP_HSTS=`, `SESSION_SECURE_COOKIE=` or `CONNECTOR_REQUIRE_HTTPS=` counts as unset, so the secure default applies.
 
 ## Web server

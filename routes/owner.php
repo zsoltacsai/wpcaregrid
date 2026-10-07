@@ -9,6 +9,7 @@ use App\Http\Controllers\Owner\IntegrationCredentialController;
 use App\Http\Controllers\Owner\InternalPlanController;
 use App\Http\Controllers\Owner\LoginController;
 use App\Http\Controllers\Owner\OperatorController;
+use App\Http\Controllers\Owner\OwnerSettingsController;
 use App\Http\Controllers\Owner\PricingController;
 use App\Http\Controllers\Owner\RecoveryOfferController;
 use App\Http\Controllers\Owner\SeoController;
@@ -109,6 +110,12 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::post('/seo/{section}/{locale}/discard', [ContentController::class, 'discard'])->middleware(['can:owner.seo.manage', 'throttle:owner-sensitive'])->name('seo.discard');
 
         Route::get('/system', SystemController::class)->middleware('can:owner.system.view')->name('system');
+
+        // The controller validates the explicit section allowlist after auth so
+        // invalid section probes cannot bypass the Owner login redirect.
+        Route::get('/settings/{section?}', [OwnerSettingsController::class, 'show'])->middleware('can:owner.settings.manage')->name('settings.index');
+        Route::put('/settings/{section}', [OwnerSettingsController::class, 'update'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('settings.update');
+        Route::post('/settings/mail/test', [OwnerSettingsController::class, 'sendTest'])->middleware(['can:owner.settings.manage', 'throttle:owner-settings-mail'])->name('settings.mail.test');
 
         Route::get('/integrations', [IntegrationCredentialController::class, 'index'])->middleware('can:owner.integrations.manage')->name('integrations.index');
         Route::post('/integrations', [IntegrationCredentialController::class, 'store'])->middleware(['can:owner.integrations.manage', 'throttle:owner-sensitive'])->name('integrations.store');
