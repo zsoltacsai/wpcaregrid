@@ -119,18 +119,31 @@ final class StartCheckout
         try {
             $session = $this->gateway->createSession($intent, $promotion);
         } catch (CheckoutUnavailable $e) {
-            $intent->update(['status' => CheckoutStatus::Failed, 'failure_reason' => $e->getMessage()]);
-            $this->reservations->release($intent);
+            if ($e->outcomeUnknown) {
+                // A timeout/5xx may have happened after Stripe created the
+                // Session. Keep the intent pending and the slot reserved;
+                // a signed event can still resolve it by client_reference_id.
+                $intent->update(['failure_reason' => $e->getMessage()]);
+            } else {
+                $intent->update(['status' => CheckoutStatus::Failed, 'failure_reason' => $e->getMessage()]);
+                $this->reservations->release($intent);
+            }
 
             throw $e;
         }
 
-        $intent->update([
-            'status' => CheckoutStatus::CheckoutCreated,
-            'stripe_checkout_session_id' => $session->id,
-            'stripe_checkout_url' => $session->url,
-            'stripe_checkout_expires_at' => $session->expiresAt,
-        ]);
+        $intent = DB::transaction(function () use ($intent, $session) {
+            $locked = CheckoutIntent::query()->whereKey($intent->id)->lockForUpdate()->firstOrFail();
+            $locked->stripe_checkout_session_id ??= $session->id;
+            $locked->stripe_checkout_url ??= $session->url;
+            $locked->stripe_checkout_expires_at ??= $session->expiresAt;
+            if ($locked->status === CheckoutStatus::Pending) {
+                $locked->status = CheckoutStatus::CheckoutCreated;
+            }
+            $locked->save();
+
+            return $locked;
+        });
         $this->reservations->setExpiry($intent, $session->expiresAt);
 
         return $intent;

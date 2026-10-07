@@ -5,9 +5,11 @@ namespace Tests\Feature;
 use App\Billing\SubscriptionStatus;
 use App\Checkout\CheckoutGateway;
 use App\Checkout\CheckoutStatus;
+use App\Checkout\PromotionReservations;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Promotion;
+use App\Models\PromotionReservation;
 use App\Models\Subscription;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -568,6 +570,61 @@ class CheckoutTest extends TestCase
         $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $intent->id, 'status' => 'released']);
     }
 
+    public function test_ambiguous_checkout_creation_failure_holds_reservation_for_signed_stripe_resolution(): void
+    {
+        Promotion::create([
+            'code' => 'UNKNOWNOUTCOME', 'stripe_promotion_code_id' => 'promo_unknown',
+            'discount_type' => 'percent', 'percent_off' => 10, 'max_redemptions' => 1,
+        ]);
+        $this->gateway->fail = true;
+        $this->gateway->outcomeUnknown = true;
+
+        $this->submit(['promotion_code' => 'UNKNOWNOUTCOME'])->assertSessionHasErrors(['checkout' => __('checkout.errors.unavailable')]);
+
+        $intent = CheckoutIntent::sole();
+        $this->assertSame(CheckoutStatus::Pending, $intent->status);
+        $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $intent->id, 'status' => 'reserved']);
+        $this->assertSame(0, Promotion::sole()->times_redeemed);
+
+        // Stripe can deliver its signed expiry event even if the create
+        // response was lost before the local Session ID could be saved.
+        $this->stripeEvent('checkout.session.expired', [
+            'id' => 'cs_test_response_lost',
+            'client_reference_id' => $intent->uuid,
+        ])->assertStatus(204);
+
+        $this->assertSame(CheckoutStatus::Expired, $intent->refresh()->status);
+        $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $intent->id, 'status' => 'released']);
+        $this->assertSame(0, Promotion::sole()->times_redeemed);
+    }
+
+    public function test_paid_webhook_can_complete_an_intent_when_stripe_create_response_was_lost(): void
+    {
+        Promotion::create([
+            'code' => 'LOSTRESPONSE', 'stripe_promotion_code_id' => 'promo_lost_response',
+            'discount_type' => 'percent', 'percent_off' => 10, 'max_redemptions' => 1,
+        ]);
+        $this->gateway->fail = true;
+        $this->gateway->outcomeUnknown = true;
+
+        $this->submit(['promotion_code' => 'LOSTRESPONSE'])->assertSessionHasErrors(['checkout' => __('checkout.errors.unavailable')]);
+
+        $intent = CheckoutIntent::sole();
+        $sessionId = 'cs_test_lost_response';
+        $this->stripeEvent('checkout.session.completed', [
+            'id' => $sessionId,
+            'client_reference_id' => $intent->uuid,
+            'payment_status' => 'paid',
+            'customer' => 'cus_test_lost_response',
+            'subscription' => 'sub_test_lost_response',
+        ])->assertStatus(204);
+
+        $this->assertSame(CheckoutStatus::Completed, $intent->refresh()->status);
+        $this->assertSame($sessionId, $intent->stripe_checkout_session_id);
+        $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $intent->id, 'status' => 'consumed']);
+        $this->assertSame(1, Promotion::sole()->refresh()->times_redeemed);
+    }
+
     public function test_success_url_does_not_mark_the_order_as_paid(): void
     {
         $this->submit();
@@ -629,17 +686,32 @@ class CheckoutTest extends TestCase
         ]);
         $this->submit(['promotion_code' => 'CANCELSAFE']);
         $intent = CheckoutIntent::sole();
+        $this->gateway->failExpire = true;
         $this->get(route('checkout.cancel', $intent))->assertOk();
 
         $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $intent->id, 'status' => 'reserved']);
+        PromotionReservation::where('checkout_intent_id', $intent->id)->update(['reserved_until' => now()->subSecond()]);
+        $this->submit(['email' => 'blocked@company.example', 'promotion_code' => 'CANCELSAFE'])
+            ->assertSessionHasErrors('promotion_code');
+        $this->assertSame(CheckoutStatus::Cancelled, $intent->refresh()->status);
+
         $this->stripeEvent('checkout.session.expired', [
             'id' => $intent->stripe_checkout_session_id,
             'client_reference_id' => $intent->uuid,
-        ])->assertStatus(204);
+        ], eventId: 'evt_cancelsafe_expired')->assertStatus(204);
+        $this->stripeEvent('checkout.session.expired', [
+            'id' => $intent->stripe_checkout_session_id,
+            'client_reference_id' => $intent->uuid,
+        ], eventId: 'evt_cancelsafe_expired')->assertStatus(204);
 
-        $this->assertSame(CheckoutStatus::Cancelled, $intent->refresh()->status);
+        $this->assertSame(CheckoutStatus::Expired, $intent->refresh()->status);
         $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $intent->id, 'status' => 'released']);
         $this->assertSame(0, Promotion::sole()->times_redeemed);
+
+        $this->submit(['email' => 'replacement@company.example', 'promotion_code' => 'CANCELSAFE'])
+            ->assertRedirect();
+        $this->assertDatabaseCount('promotion_reservations', 2);
+        $this->assertSame(1, app(PromotionReservations::class)->activeCount(Promotion::sole()));
     }
 
     public function test_another_browser_cannot_cancel_an_intent(): void
@@ -651,6 +723,18 @@ class CheckoutTest extends TestCase
         $this->get(route('checkout.cancel', $intent))->assertOk();
 
         $this->assertSame(CheckoutStatus::CheckoutCreated, $intent->refresh()->status);
+        $this->assertSame([], $this->gateway->expired);
+    }
+
+    public function test_cancel_does_not_overwrite_a_completed_intent(): void
+    {
+        $this->submit();
+        $intent = CheckoutIntent::sole();
+        $intent->update(['status' => CheckoutStatus::Completed]);
+
+        $this->get(route('checkout.cancel', $intent))->assertOk();
+
+        $this->assertSame(CheckoutStatus::Completed, $intent->refresh()->status);
         $this->assertSame([], $this->gateway->expired);
     }
 

@@ -48,6 +48,59 @@ class PromotionReservationConcurrencyTest extends TestCase
         $this->assertConcurrentCapacity(maxRedemptions: 2, contenders: 2, consumed: 1);
     }
 
+    public function test_concurrent_release_and_completion_cannot_both_restore_and_consume_capacity(): void
+    {
+        if (DB::getDefaultConnection() !== 'mysql' || ! function_exists('pcntl_fork')) {
+            $this->markTestSkipped('Requires MySQL and pcntl for real process-level contention.');
+        }
+
+        [$promotion, $intents, $price] = $this->case(maxRedemptions: 1, contenders: 1);
+        $intent = $intents[0];
+        $reservations = app(PromotionReservations::class);
+        $reservations->reserve($promotion, $intent, $price, $intent->email, null);
+        $intent->update(['status' => CheckoutStatus::Completed]);
+
+        $connection = DB::getDefaultConnection();
+        $directory = $this->barrierDirectory();
+        $children = [];
+
+        try {
+            foreach (['release', 'consume'] as $operation) {
+                $children[] = $this->fork(function () use ($connection, $directory, $operation, $intent) {
+                    DB::purge($connection);
+                    file_put_contents($directory.DIRECTORY_SEPARATOR."ready-{$operation}", '1', LOCK_EX);
+                    $this->waitFor($directory.DIRECTORY_SEPARATOR.'go', $directory);
+
+                    $fresh = CheckoutIntent::query()->findOrFail($intent->id);
+                    $result = app(PromotionReservations::class)->{$operation}($fresh) ? 'changed' : 'unchanged';
+                    file_put_contents($directory.DIRECTORY_SEPARATOR."result-{$operation}", $result, LOCK_EX);
+                    exit(0);
+                });
+            }
+
+            $this->waitFor($directory.DIRECTORY_SEPARATOR.'ready-release', $directory);
+            $this->waitFor($directory.DIRECTORY_SEPARATOR.'ready-consume', $directory);
+            file_put_contents($directory.DIRECTORY_SEPARATOR.'go', '1', LOCK_EX);
+
+            foreach ($children as $pid) {
+                pcntl_waitpid($pid, $status);
+                $this->assertTrue(pcntl_wifexited($status), 'A lifecycle contender did not exit cleanly.');
+                $this->assertSame(0, pcntl_wexitstatus($status));
+            }
+
+            $reservation = PromotionReservation::query()->where('checkout_intent_id', $intent->id)->sole();
+            $this->assertContains($reservation->status, ['consumed', 'released']);
+            $this->assertLessThanOrEqual(1, $promotion->refresh()->times_redeemed + app(PromotionReservations::class)->activeCount($promotion));
+            $this->assertSame(
+                $reservation->status === 'consumed' ? 1 : 0,
+                $promotion->refresh()->times_redeemed,
+            );
+        } finally {
+            $this->stopChildren($children);
+            $this->removeBarrierDirectory($directory);
+        }
+    }
+
     public function test_capacity_uses_a_current_read_after_waiting_for_the_promotion_lock(): void
     {
         if (DB::getDefaultConnection() !== 'mysql' || ! function_exists('pcntl_fork')) {

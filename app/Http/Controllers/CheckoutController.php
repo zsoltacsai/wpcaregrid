@@ -184,14 +184,22 @@ class CheckoutController extends Controller
     public function cancel(Request $request, CheckoutIntent $intent, CheckoutGateway $gateway): View
     {
         // Only the browser that started the checkout can cancel it, and only
-        // while it is open. Expiring the Stripe session stops a later payment.
+        // while it is open. The cancel URL is only a request to expire Stripe;
+        // capacity remains held until Stripe confirms expiry by webhook.
         if ($this->startedInThisSession($request, $intent) && $intent->canMoveTo(CheckoutStatus::Cancelled)) {
-            DB::transaction(function () use ($intent) {
-                $intent->update(['status' => CheckoutStatus::Cancelled, 'cancelled_at' => now()]);
+            $sessionId = DB::transaction(function () use ($intent) {
+                $locked = CheckoutIntent::query()->whereKey($intent->id)->lockForUpdate()->first();
+                if (! $locked || ! $locked->canMoveTo(CheckoutStatus::Cancelled)) {
+                    return null;
+                }
+
+                $locked->update(['status' => CheckoutStatus::Cancelled, 'cancelled_at' => now()]);
+
+                return $locked->stripe_checkout_session_id;
             });
 
-            if ($intent->stripe_checkout_session_id) {
-                rescue(fn () => $gateway->expireSession($intent->stripe_checkout_session_id), report: false);
+            if ($sessionId) {
+                rescue(fn () => $gateway->expireSession($sessionId), report: false);
             }
         }
 

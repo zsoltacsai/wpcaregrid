@@ -21,11 +21,6 @@ final class PromotionReservations
             }
 
             $now = now();
-            PromotionReservation::query()
-                ->where('promotion_id', $locked->id)
-                ->where('status', 'reserved')
-                ->where('reserved_until', '<=', $now)
-                ->update(['status' => 'released', 'released_at' => $now, 'updated_at' => $now]);
 
             $existing = PromotionReservation::query()->where('checkout_intent_id', $intent->id)->lockForUpdate()->first();
             if ($existing?->status === 'reserved') {
@@ -46,16 +41,20 @@ final class PromotionReservations
             }
 
             $emailHash = $this->emailHash($email);
-            // `COUNT(*)` here used to be a normal consistent read. Under
-            // MySQL REPEATABLE READ that can keep an older snapshot even
-            // after this transaction waited for the promotion row lock. Read
-            // reservation rows as a current/locking read so the capacity
-            // decision sees commits made by the transaction that held the
-            // serialization lock immediately before us.
+            // A local timestamp cannot prove a Stripe Checkout Session is
+            // unpayable: Stripe may have created it just before the process
+            // crashed, or its completion webhook may be delayed. Only a
+            // signed terminal event or a definite pre-session failure may
+            // release capacity. Count every still-reserved row, even after
+            // its advisory `reserved_until` timestamp.
+            //
+            // Under MySQL REPEATABLE READ, this must remain a current/locking
+            // read so the capacity decision sees commits made by the
+            // transaction that held the promotion row lock immediately
+            // before us.
             $activeReservations = PromotionReservation::query()
                 ->where('promotion_id', $locked->id)
                 ->where('status', 'reserved')
-                ->where('reserved_until', '>', $now)
                 ->lockForUpdate()
                 ->get();
 
@@ -176,7 +175,6 @@ final class PromotionReservations
         return PromotionReservation::query()
             ->where('promotion_id', $promotion->id)
             ->where('status', 'reserved')
-            ->where('reserved_until', '>', now())
             ->count();
     }
 

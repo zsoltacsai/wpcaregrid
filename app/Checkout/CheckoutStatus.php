@@ -4,7 +4,7 @@ namespace App\Checkout;
 
 enum CheckoutStatus: string
 {
-    /** Recorded locally, Stripe session not created yet. */
+    /** Local checkout whose Stripe Session state is not yet confirmed. */
     case Pending = 'pending';
 
     /** Stripe Checkout Session created; the customer has been sent to Stripe. */

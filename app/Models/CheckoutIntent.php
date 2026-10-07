@@ -84,8 +84,11 @@ class CheckoutIntent extends Model
     {
         return match ($status) {
             CheckoutStatus::CheckoutCreated => $this->status === CheckoutStatus::Pending,
-            CheckoutStatus::Completed => in_array($this->status, [CheckoutStatus::CheckoutCreated, CheckoutStatus::Cancelled, CheckoutStatus::Expired], true),
-            CheckoutStatus::Cancelled, CheckoutStatus::Expired => $this->status === CheckoutStatus::CheckoutCreated,
+            // Signed Stripe events can arrive before the create-session
+            // response is persisted (or resolve an ambiguous network result).
+            CheckoutStatus::Completed => in_array($this->status, [CheckoutStatus::Pending, CheckoutStatus::CheckoutCreated, CheckoutStatus::Cancelled, CheckoutStatus::Expired], true),
+            CheckoutStatus::Cancelled => $this->status === CheckoutStatus::CheckoutCreated,
+            CheckoutStatus::Expired => in_array($this->status, [CheckoutStatus::Pending, CheckoutStatus::CheckoutCreated, CheckoutStatus::Cancelled], true),
             CheckoutStatus::Failed => ! $this->status->isFinal(),
             CheckoutStatus::Pending => false,
         };

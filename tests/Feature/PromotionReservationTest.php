@@ -121,19 +121,29 @@ class PromotionReservationTest extends TestCase
         $this->assertSame(0, $promotion->refresh()->times_redeemed);
     }
 
-    public function test_expired_claim_is_released_and_slot_can_be_reclaimed(): void
+    public function test_elapsed_local_reservation_deadline_does_not_release_a_potentially_payable_session(): void
     {
         $promotion = $this->promotion();
         $reservations = app(PromotionReservations::class);
-        $expired = $this->intent();
+        $expired = $this->intent('buyer@example.test', [
+            'stripe_checkout_session_id' => 'cs_test_still_open',
+            'stripe_checkout_expires_at' => now()->addHour(),
+        ]);
         $next = $this->intent('next@example.test');
         $reservations->reserve($promotion, $expired, $this->price(), $expired->email, null);
         PromotionReservation::where('checkout_intent_id', $expired->id)->update(['reserved_until' => now()->subSecond()]);
 
-        $reservations->reserve($promotion, $next, $this->price(), $next->email, null);
+        try {
+            $reservations->reserve($promotion, $next, $this->price(), $next->email, null);
+            $this->fail('A local timestamp cannot prove that the Stripe Session is no longer payable.');
+        } catch (PromotionRejected $exception) {
+            $this->assertSame('used_up', $exception->reason);
+        }
 
-        $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $expired->id, 'status' => 'released']);
-        $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $next->id, 'status' => 'reserved']);
+        $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $expired->id, 'status' => 'reserved']);
+        $this->assertDatabaseMissing('promotion_reservations', ['checkout_intent_id' => $next->id]);
+        $this->assertSame(1, $reservations->activeCount($promotion));
+        $this->assertSame(0, $promotion->refresh()->remainingRedemptions());
     }
 
     public function test_release_and_consume_are_idempotent_and_consume_only_the_intents_claim(): void

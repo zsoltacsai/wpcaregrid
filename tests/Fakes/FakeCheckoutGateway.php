@@ -22,6 +22,10 @@ class FakeCheckoutGateway implements CheckoutGateway
 
     public bool $fail = false;
 
+    public bool $outcomeUnknown = false;
+
+    public bool $failExpire = false;
+
     public function createSession(CheckoutIntent $intent, ?Promotion $promotion): CheckoutSession
     {
         $this->created[] = [
@@ -32,7 +36,7 @@ class FakeCheckoutGateway implements CheckoutGateway
         ];
 
         if ($this->fail) {
-            throw CheckoutUnavailable::providerError();
+            throw CheckoutUnavailable::providerError($this->outcomeUnknown);
         }
 
         $id = 'cs_test_'.Str::random(24);
@@ -43,5 +47,9 @@ class FakeCheckoutGateway implements CheckoutGateway
     public function expireSession(string $sessionId): void
     {
         $this->expired[] = $sessionId;
+
+        if ($this->failExpire) {
+            throw new \RuntimeException('Fake expire request failed.');
+        }
     }
 }

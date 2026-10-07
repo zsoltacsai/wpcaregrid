@@ -181,6 +181,13 @@ final class StripeWebhookHandler
             return null;
         }
 
+        // A signed event can be the first response received after Stripe
+        // created a Session but the API response was lost. Link its ID here
+        // before applying terminal/completion state.
+        if ($intent && ! $intent->stripe_checkout_session_id && is_string($session->id ?? null)) {
+            $intent->update(['stripe_checkout_session_id' => $session->id]);
+        }
+
         return $intent;
     }
 }

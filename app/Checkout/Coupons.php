@@ -85,7 +85,6 @@ final class Coupons
             $reserved = PromotionReservation::query()
                 ->where('promotion_id', $locked->id)
                 ->where('status', 'reserved')
-                ->where('reserved_until', '>', now())
                 ->count();
             if ($limit !== null && $limit < $locked->times_redeemed + $reserved) {
                 throw ValidationException::withMessages(['max_redemptions' => __('owner.coupons.errors.limit_below_used', ['used' => $locked->times_redeemed + $reserved])]);

@@ -105,7 +105,6 @@ class Promotion extends Model
         $reserved = PromotionReservation::query()
             ->where('promotion_id', $this->id)
             ->where('status', 'reserved')
-            ->where('reserved_until', '>', now())
             ->count();
 
         return max(0, $this->max_redemptions - $this->times_redeemed - $reserved);
@@ -140,7 +139,6 @@ class Promotion extends Model
         $reserved = PromotionReservation::query()
             ->where('promotion_id', $this->id)
             ->where('status', 'reserved')
-            ->where('reserved_until', '>', now())
             ->where(fn ($query) => $query->where('email_hash', hash_hmac('sha256', mb_strtolower(trim($email)), (string) config('app.key')))
                 ->when($customerId, fn ($query) => $query->orWhere('customer_id', $customerId)))
             ->count();

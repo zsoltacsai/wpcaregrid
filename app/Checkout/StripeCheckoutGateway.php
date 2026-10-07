@@ -7,6 +7,7 @@ use App\Models\CheckoutIntent;
 use App\Models\Promotion;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
+use Stripe\Exception\ApiConnectionException;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
 
@@ -30,6 +31,17 @@ final class StripeCheckoutGateway implements CheckoutGateway
                 $this->sessionParameters($intent, $promotion),
                 ['idempotency_key' => "checkout-intent-{$intent->uuid}"],
             );
+        } catch (ApiConnectionException $e) {
+            // Stripe may have created the Session but the response may have
+            // been lost. Keep the promotion reservation until a signed
+            // terminal event resolves the outcome.
+            Log::warning('Stripe checkout session creation outcome is unknown.', [
+                'checkout_intent' => $intent->uuid,
+                'stripe_error' => $e->getStripeCode() ?? $e::class,
+                'stripe_request_id' => $e->getRequestId(),
+            ]);
+
+            throw CheckoutUnavailable::providerError(outcomeUnknown: true);
         } catch (ApiErrorException $e) {
             // Stripe error messages never contain the secret key or card data.
             Log::warning('Stripe checkout session could not be created.', [
@@ -38,7 +50,8 @@ final class StripeCheckoutGateway implements CheckoutGateway
                 'stripe_request_id' => $e->getRequestId(),
             ]);
 
-            throw CheckoutUnavailable::providerError();
+            $status = $e->getHttpStatus();
+            throw CheckoutUnavailable::providerError(outcomeUnknown: $status === null || $status >= 500);
         }
 
         return new CheckoutSession(
