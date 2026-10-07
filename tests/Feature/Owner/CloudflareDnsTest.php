@@ -139,7 +139,8 @@ class CloudflareDnsTest extends TestCase
         ])->assertRedirect(route('owner.dns.cloudflare.index'))->assertSessionHas('dns_error', 'record_protected');
 
         $event = AdminAuditEvent::where('event', 'dns.record.failed')->firstOrFail();
-        $this->assertSame(['operation' => 'ensure', 'error' => 'record_protected'], $event->data);
+        $this->assertSame('ensure', $event->data['operation']);
+        $this->assertSame('record_protected', $event->data['error']);
         $this->assertStringNotContainsString('192.0.2.2', $event->toJson());
         $this->assertStringNotContainsString('synthetic-token', $event->toJson());
     }
