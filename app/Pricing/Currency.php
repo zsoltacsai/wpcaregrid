@@ -37,12 +37,26 @@ final readonly class Currency
     /** Format an amount in minor units without the symbol, e.g. 899000 → "8,990". */
     public function formatAmount(int $minorAmount): string
     {
-        return number_format(
-            $minorAmount / (10 ** $this->minorUnits),
-            $this->displayDecimals,
-            $this->decimalSeparator,
-            $this->thousandsSeparator,
-        );
+        $negative = $minorAmount < 0;
+        $absolute = abs($minorAmount);
+        $divisor = 10 ** $this->minorUnits;
+        $whole = $this->displayDecimals === 0
+            ? intdiv($absolute + intdiv($divisor, 2), $divisor)
+            : intdiv($absolute, $divisor);
+        $fraction = $absolute % $divisor;
+        $visibleFraction = '';
+
+        if ($this->displayDecimals > 0) {
+            $fractionScale = 10 ** $this->displayDecimals;
+            $roundedFraction = intdiv(($fraction * $fractionScale) + intdiv($divisor, 2), $divisor);
+            if ($roundedFraction >= $fractionScale) {
+                $whole++;
+                $roundedFraction = 0;
+            }
+            $visibleFraction = $this->decimalSeparator.str_pad((string) $roundedFraction, $this->displayDecimals, '0', STR_PAD_LEFT);
+        }
+
+        return ($negative ? '-' : '').number_format($whole, 0, '', $this->thousandsSeparator).$visibleFraction;
     }
 
     /** Format an amount in minor units with the symbol, e.g. "8,990 Ft" or "€89". */

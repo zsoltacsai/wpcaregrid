@@ -44,6 +44,7 @@ final class InternalPlans
             $started = $startsAt === null || $startsAt->lte(now());
 
             $subscription = Subscription::create([
+                'billing_source' => 'internal_probono',
                 'customer_id' => $customer->id,
                 'internal_plan' => $plan,
                 'product_type' => $product,

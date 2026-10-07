@@ -77,12 +77,12 @@ class Promotion extends Model
     /** "10", "12.5", "100" for display. */
     public function percentLabel(): string
     {
-        return $this->percent_off === null ? '' : rtrim(rtrim(number_format((float) $this->percent_off, 2, '.', ''), '0'), '.');
+        return $this->percent_off === null ? '' : rtrim(rtrim((string) $this->percent_off, '0'), '.');
     }
 
     public function isFullDiscount(): bool
     {
-        return $this->discount_type === 'percent' && $this->percent_off !== null && (float) $this->percent_off >= 100.0;
+        return $this->discount_type === 'percent' && $this->percent_off !== null && (int) str_replace('.', '', (string) $this->percent_off) >= 10000;
     }
 
     /**
@@ -98,7 +98,17 @@ class Promotion extends Model
     /** Redemptions still available, or null when unlimited. */
     public function remainingRedemptions(): ?int
     {
-        return $this->max_redemptions === null ? null : max(0, $this->max_redemptions - $this->times_redeemed);
+        if ($this->max_redemptions === null) {
+            return null;
+        }
+
+        $reserved = PromotionReservation::query()
+            ->where('promotion_id', $this->id)
+            ->where('status', 'reserved')
+            ->where('reserved_until', '>', now())
+            ->count();
+
+        return max(0, $this->max_redemptions - $this->times_redeemed - $reserved);
     }
 
     /** Whether this buyer (a customer or an email address) has used the code as often as allowed. */
@@ -110,7 +120,7 @@ class Promotion extends Model
 
         $used = CheckoutIntent::where('promotion_id', $this->id)
             ->where('status', CheckoutStatus::Completed)
-            ->where(fn ($q) => $q->where('email', mb_strtolower(trim($email)))->when($customerId, fn ($q) => $q->orWhere('customer_id', $customerId)))
+            ->where(fn ($q) => $q->whereRaw('LOWER(email) = ?', [mb_strtolower(trim($email))])->when($customerId, fn ($q) => $q->orWhere('customer_id', $customerId)))
             ->count();
 
         return $used >= $this->max_redemptions_per_customer;
@@ -119,7 +129,38 @@ class Promotion extends Model
     /** Whether any checkout ever used this code; a coupon with history is deactivated, not deleted. */
     public function hasHistory(): bool
     {
-        return $this->times_redeemed > 0 || CheckoutIntent::where('promotion_id', $this->id)->exists();
+        return $this->times_redeemed > 0
+            || CheckoutIntent::where('promotion_id', $this->id)->exists()
+            || PromotionReservation::where('promotion_id', $this->id)->exists();
+    }
+
+    public function marketLabelKey(): string
+    {
+        return match ($this->marketGroupValue()) {
+            'HU' => 'hu',
+            'INTERNATIONAL' => 'international',
+            'CUSTOM' => 'custom',
+            'all' => 'all',
+            default => 'all',
+        };
+    }
+
+    public function marketGroupValue(): string
+    {
+        if (empty($this->markets)) {
+            return 'all';
+        }
+
+        $groups = [];
+        foreach ($this->markets as $market) {
+            $value = strtoupper((string) $market);
+            $groups[] = $value === 'HU' || strtolower((string) $market) === 'hu'
+                ? 'HU'
+                : (in_array(strtolower((string) $market), ['eu', 'gb', 'international'], true) || $value === 'INTERNATIONAL' ? 'INTERNATIONAL' : 'CUSTOM');
+        }
+        $groups = array_values(array_unique($groups));
+
+        return count($groups) === 1 ? $groups[0] : 'CUSTOM';
     }
 
     /**
@@ -138,7 +179,7 @@ class Promotion extends Model
             ! $this->allows($this->product_types, $price->productType->value) => 'not_applicable',
             ! $this->allows($this->plans, $price->tier->value, "{$price->productType->value}.{$price->tier->value}") => 'not_applicable',
             ! $this->allows($this->intervals, $price->interval->value) => 'not_applicable',
-            ! $this->allows($this->markets, $price->market) => 'not_applicable',
+            ! $this->allowsMarket($price) => 'not_applicable',
             $this->discount_type === 'fixed' && $this->currency !== $price->money->currency->code => 'not_applicable',
             default => null,
         };
@@ -148,5 +189,18 @@ class Promotion extends Model
     private function allows(?array $allowed, string ...$candidates): bool
     {
         return empty($allowed) || array_intersect($candidates, $allowed) !== [];
+    }
+
+    private function allowsMarket(Price $price): bool
+    {
+        if (empty($this->markets)) {
+            return true;
+        }
+
+        $group = strtoupper($price->marketGroup);
+        $allowed = array_map('strtoupper', $this->markets);
+
+        return in_array($group, $allowed, true)
+            || in_array($price->market, $this->markets, true);
     }
 }

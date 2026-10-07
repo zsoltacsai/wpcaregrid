@@ -9,12 +9,9 @@ namespace App\Pricing;
  *   billing country → market → price on the server (StartCheckout), and the
  *   Stripe Price ID always comes from the catalogue. Nothing here is read by
  *   checkout, and no currency, amount or Price ID from a request is trusted.
- * - Only currencies that have real prices are offered (PricingCatalog::
- *   sellableCurrencies()). Today that is HUF only. There is no conversion,
- *   no exchange rate and no IP-based choice; a market without prices offers
- *   nothing until its prices exist.
- * - Hungarian is always HUF. Choosing English returns to the default
- *   currency of the display market.
+ * - Only configured currencies with real prices are offered.
+ * - Locale selects an initial suggestion only. Checkout requires HUF for HU
+ *   billing and EUR/USD/GBP for every other billing country.
  */
 final class DisplayCurrency
 {
@@ -27,9 +24,7 @@ final class DisplayCurrency
      */
     public function available(?string $locale = null): array
     {
-        $locale ??= app()->getLocale();
-
-        return $locale === 'hu' ? ['HUF'] : $this->catalog()->sellableCurrencies();
+        return $this->catalog()->sellableCurrencies();
     }
 
     /** More than one real choice: only then is a selector shown. */
@@ -39,7 +34,7 @@ final class DisplayCurrency
     }
 
     /** The currency prices are shown in. */
-    public function selected(): string
+    public function selected(?string $locale = null): string
     {
         $available = $this->available();
         $chosen = session(self::SESSION_KEY);
@@ -48,9 +43,13 @@ final class DisplayCurrency
             return $chosen;
         }
 
-        $default = $this->catalog()->market($this->catalog()->displayMarket)->currencyCode;
+        $default = $locale !== null ? CurrencySuggestion::forLocale($locale) : CurrencySuggestion::fromRequest();
 
-        return in_array($default, $available, true) ? $default : ($available[0] ?? $default);
+        if (in_array($default, $available, true)) {
+            return $default;
+        }
+
+        return $this->catalog()->defaultInternationalCurrency() ?? ($available[0] ?? 'HUF');
     }
 
     /** The market whose price list is displayed in the selected currency. */

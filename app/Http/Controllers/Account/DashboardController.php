@@ -19,7 +19,9 @@ class DashboardController extends Controller
             'websiteCount' => $customer->websites()->count(),
             'connectedCount' => $customer->websites()->where('connector_status', 'connected')->count(),
             'canAddWebsite' => $request->user()->can('create', Website::class),
-            'openOffers' => $customer->recoveryOffers()->whereIn('status', ['offered', 'accepted'])->where('valid_until', '>', now())->count(),
+            'openOffers' => strtoupper((string) $customer->country_code) === 'HU'
+                ? $customer->recoveryOffers()->where('currency', 'HUF')->whereIn('status', ['offered', 'accepted'])->where('valid_until', '>', now())->count()
+                : 0,
         ]);
     }
 }

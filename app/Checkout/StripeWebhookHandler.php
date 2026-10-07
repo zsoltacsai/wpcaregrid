@@ -6,7 +6,6 @@ use App\Billing\InvoiceEvents;
 use App\Billing\ProvisionCustomer;
 use App\Billing\SubscriptionSync;
 use App\Models\CheckoutIntent;
-use App\Models\Promotion;
 use App\Models\StripeEvent;
 use App\Offers\RecoveryOffers;
 use App\Owner\AdminAudit;
@@ -30,6 +29,7 @@ final class StripeWebhookHandler
         private readonly SubscriptionSync $subscriptions,
         private readonly InvoiceEvents $invoices,
         private readonly RecoveryOffers $offers,
+        private readonly PromotionReservations $reservations,
     ) {}
 
     /** @return bool False when the event had already been processed. */
@@ -74,9 +74,10 @@ final class StripeWebhookHandler
             'checkout.session.expired' => $this->checkoutTransition($object, CheckoutStatus::Expired),
             'customer.subscription.created',
             'customer.subscription.updated',
-            'customer.subscription.deleted' => $this->subscriptions->apply($object, (int) ($event->created ?? time())),
-            'invoice.paid' => $this->invoices->paid($object),
-            'invoice.payment_failed' => $this->invoices->failed($object),
+            'customer.subscription.deleted' => $this->subscriptions->apply($object, (int) ($event->created ?? time()), $event->id),
+            'invoice.paid' => $this->invoices->paid($object, (int) ($event->created ?? time()), $event->id),
+            'invoice.payment_failed' => $this->invoices->failed($object, (int) ($event->created ?? time()), $event->id),
+            'invoice.finalized' => $this->invoices->record($object, (int) ($event->created ?? time()), $event->id),
             default => null,
         };
     }
@@ -108,10 +109,11 @@ final class StripeWebhookHandler
             $intent->status = CheckoutStatus::Completed;
             $intent->completed_at = now();
 
-            // Counted once, when the intent completes, so max_redemptions applies to later checkouts.
+            // Convert the reserved slot only after Stripe confirms payment.
             if ($intent->promotion_id) {
-                Promotion::whereKey($intent->promotion_id)->increment('times_redeemed');
-                AdminAudit::record(null, 'coupon.redeemed', 'coupon', (string) $intent->promotion_code, ['checkout_intent' => $intent->uuid]);
+                if ($this->reservations->consume($intent)) {
+                    AdminAudit::record(null, 'coupon.redeemed', 'coupon', (string) $intent->promotion_code, ['checkout_intent' => $intent->uuid]);
+                }
             }
         }
 
@@ -130,6 +132,15 @@ final class StripeWebhookHandler
 
         if ($intent?->canMoveTo($status)) {
             $intent->update(['status' => $status, ...$attributes]);
+        }
+
+        // A signed Stripe expiry is definitive even if the browser already
+        // marked the intent cancelled; a late paid completion instead consumes
+        // the still-held reservation.
+        if ($intent && $status === CheckoutStatus::Expired) {
+            $this->reservations->release($intent);
+        } elseif ($intent && $status === CheckoutStatus::Failed && $intent->status === CheckoutStatus::Failed) {
+            $this->reservations->release($intent);
         }
     }
 

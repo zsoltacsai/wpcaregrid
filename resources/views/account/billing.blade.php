@@ -16,7 +16,12 @@
                 <x-account.detail :label="__('account.billing.country')">{{ __('countries.'.$customer->country_code) }}</x-account.detail>
                 <x-account.detail :label="__('account.billing.tax_id')">{{ $customer->tax_id }}</x-account.detail>
                 <x-account.detail :label="__('account.billing.address')" class="sm:col-span-2">{{ implode(', ', array_filter([$address['line1'] ?? null, $address['line2'] ?? null, trim(($address['postal_code'] ?? '').' '.($address['city'] ?? ''))])) }}</x-account.detail>
-                <x-account.detail :label="__('account.billing.currency')">{{ $subscription?->currency }}</x-account.detail>
+                @if ($subscription && ! $subscription->isInternal())
+                    <x-account.detail :label="__('account.billing.currency')">{{ $subscription->currency }}</x-account.detail>
+                    <x-account.detail :label="__('account.subscription.base_amount')"><span class="tabular-nums">{{ $subscription->basePriceMoney()?->format() ?? __('account.subscription.amount_unknown') }}</span></x-account.detail>
+                    <x-account.detail :label="__('account.subscription.current_recurring')"><span class="tabular-nums">{{ $subscription->currentRecurringMoney()?->format() ?? __('account.subscription.amount_unknown') }}</span></x-account.detail>
+                    <x-account.detail :label="__('account.billing.billing_interval')">{{ $subscription->interval->label() }}</x-account.detail>
+                @endif
                 <x-account.detail :label="__('account.billing.current_subscription')">
                     @if ($subscription){{ $subscription->planName() }} — {{ $subscription->product_type->label() }} · {{ $subscription->status->label() }}@endif
                 </x-account.detail>
@@ -24,7 +29,18 @@
         </x-account.panel>
 
         <x-account.panel :title="__('account.billing.invoices')" heading-id="billing-invoices">
-            <p class="text-sm text-muted">{{ __('account.billing.invoices_placeholder') }}</p>
+            @if ($invoices->isEmpty())
+                <p class="text-sm text-muted">{{ __('account.billing.invoices_placeholder') }}</p>
+            @else
+                <ul class="divide-y divide-line text-sm">
+                    @foreach ($invoices as $invoice)
+                        <li class="flex flex-wrap items-center justify-between gap-2 py-3">
+                            <span>{{ $invoice->stripe_created_at?->translatedFormat('j M Y') ?? '—' }} · {{ __('account.subscription.invoice_statuses.'.$invoice->invoice_status) }}</span>
+                            <span class="tabular-nums">{{ $invoice->money('amount_paid')?->format() ?? __('account.subscription.amount_unknown') }}</span>
+                        </li>
+                    @endforeach
+                </ul>
+            @endif
         </x-account.panel>
     </div>
 </x-layouts.account>

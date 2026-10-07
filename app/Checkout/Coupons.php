@@ -3,6 +3,7 @@
 namespace App\Checkout;
 
 use App\Models\Promotion;
+use App\Models\PromotionReservation;
 use App\Models\User;
 use App\Owner\AdminAudit;
 use Illuminate\Support\Facades\DB;
@@ -22,7 +23,7 @@ use Illuminate\Validation\ValidationException;
  */
 final class Coupons
 {
-    public const EDITABLE = ['starts_at', 'expires_at', 'max_redemptions', 'max_redemptions_per_customer', 'product_types', 'plans', 'intervals', 'note'];
+    public const EDITABLE = ['starts_at', 'expires_at', 'max_redemptions', 'max_redemptions_per_customer', 'product_types', 'plans', 'intervals', 'markets', 'note'];
 
     public function __construct(private readonly PromotionGateway $gateway) {}
 
@@ -33,6 +34,10 @@ final class Coupons
      */
     public function create(array $data, User $actor): Promotion
     {
+        if (! in_array($data['duration'] ?? null, ['once', 'forever'], true)) {
+            throw ValidationException::withMessages(['duration' => __('owner.coupons.errors.repeating_deprecated')]);
+        }
+
         $code = strtoupper(trim($data['code']));
 
         if (Promotion::where('code', $code)->exists()) {
@@ -74,22 +79,27 @@ final class Coupons
     /** @param  array<string, mixed>  $data  Validated editable fields. */
     public function update(Promotion $promotion, array $data, User $actor): Promotion
     {
-        $limit = $data['max_redemptions'] ?? null;
-        if ($limit !== null && $limit < $promotion->times_redeemed) {
-            throw ValidationException::withMessages(['max_redemptions' => __('owner.coupons.errors.limit_below_used', ['used' => $promotion->times_redeemed])]);
-        }
+        return DB::transaction(function () use ($promotion, $data, $actor) {
+            $locked = Promotion::query()->whereKey($promotion->id)->lockForUpdate()->firstOrFail();
+            $limit = $data['max_redemptions'] ?? null;
+            $reserved = PromotionReservation::query()
+                ->where('promotion_id', $locked->id)
+                ->where('status', 'reserved')
+                ->where('reserved_until', '>', now())
+                ->count();
+            if ($limit !== null && $limit < $locked->times_redeemed + $reserved) {
+                throw ValidationException::withMessages(['max_redemptions' => __('owner.coupons.errors.limit_below_used', ['used' => $locked->times_redeemed + $reserved])]);
+            }
 
-        $promotion->fill($this->editable($data));
-        $changed = array_values(array_intersect(array_keys($promotion->getDirty()), self::EDITABLE));
+            $locked->fill($this->editable($data));
+            $changed = array_values(array_intersect(array_keys($locked->getDirty()), self::EDITABLE));
+            if ($changed !== []) {
+                $locked->save();
+                AdminAudit::record($actor, 'coupon.updated', 'coupon', $locked->code, ['fields' => $changed]);
+            }
 
-        if ($changed !== []) {
-            DB::transaction(function () use ($promotion, $changed, $actor) {
-                $promotion->save();
-                AdminAudit::record($actor, 'coupon.updated', 'coupon', $promotion->code, ['fields' => $changed]);
-            });
-        }
-
-        return $promotion;
+            return $locked;
+        });
     }
 
     /**
@@ -144,6 +154,7 @@ final class Coupons
             'product_types' => $list('product_types'),
             'plans' => $list('plans'),
             'intervals' => $list('intervals'),
+            'markets' => $list('markets'),
             'note' => filled($data['note'] ?? null) ? $data['note'] : null,
         ];
     }

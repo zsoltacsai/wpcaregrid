@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
+use UnexpectedValueException;
 
 /**
  * Resolves the Customer (and login) for a checkout whose payment Stripe has
@@ -29,8 +30,31 @@ final class ProvisionCustomer
 {
     public function forIntent(CheckoutIntent $intent, ?string $stripeCustomerId): Customer
     {
-        $customer = $intent->customer
-            ?? ($stripeCustomerId ? Customer::where('stripe_customer_id', $stripeCustomerId)->first() : null)
+        $intentCustomer = $intent->customer;
+        $stripeCustomer = $stripeCustomerId
+            ? Customer::where('stripe_customer_id', $stripeCustomerId)->first()
+            : null;
+
+        if ($intentCustomer && $stripeCustomer && $intentCustomer->id !== $stripeCustomer->id) {
+            Log::warning('Stripe customer does not match the checkout customer.', [
+                'checkout_intent' => $intent->uuid,
+                'stripe_customer' => $stripeCustomerId,
+            ]);
+
+            throw new UnexpectedValueException('Stripe customer identity conflict.');
+        }
+
+        if ($stripeCustomer && Customer::normalizeEmail($stripeCustomer->email) !== Customer::normalizeEmail($intent->email)) {
+            Log::warning('Stripe customer email does not match the checkout intent.', [
+                'checkout_intent' => $intent->uuid,
+                'stripe_customer' => $stripeCustomerId,
+            ]);
+
+            throw new UnexpectedValueException('Stripe customer identity conflict.');
+        }
+
+        $customer = $intentCustomer
+            ?? $stripeCustomer
             ?? Customer::findByEmail($intent->email)
             ?? Customer::create([
                 'email' => $intent->email,

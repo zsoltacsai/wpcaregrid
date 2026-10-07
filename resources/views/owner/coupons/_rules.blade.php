@@ -15,6 +15,12 @@
 <fieldset class="mt-4">
     <legend class="text-sm font-medium text-primary">{{ __('owner.coupons.fields.restrictions') }} <span class="font-normal text-muted">({{ __('owner.optional') }})</span></legend>
     <p class="mt-1 text-xs text-muted">{{ __('owner.coupons.hints.restrictions') }}</p>
+    <div class="mt-3 max-w-md">
+        @php
+            $marketGroup = old('market_group', $coupon?->marketGroupValue() ?? 'all');
+        @endphp
+        <x-form.select name="market_group" :label="__('owner.coupons.fields.market_group')" :options="$marketGroups" :selected="$marketGroup" :hint="__('owner.coupons.hints.market_group')" />
+    </div>
     <div class="mt-2 grid gap-4 sm:grid-cols-3">
         <div>
             <p class="text-xs font-medium text-muted">{{ __('owner.coupons.fields.product_types') }}</p>

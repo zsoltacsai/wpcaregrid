@@ -27,11 +27,13 @@ return [
         'last_name' => 'Vezetéknév',
         'country' => 'Számlázási ország',
         'country_hint' => 'Az ár és a pénznem a számlázási országtól függ.',
+        'currency' => 'Ár pénzneme',
+        'currency_hint' => 'Magyar számlázás esetén HUF-ban történik a fizetés. Más országok EUR, USD vagy GBP pénznemet választhatnak.',
         'promotion_code' => 'Kedvezménykód',
         'optional' => 'nem kötelező',
     ],
 
-    'international_unavailable' => 'A Magyarországon kívülre számlázott ügyfelek árai még nem érhetők el. Ha szeretne feliratkozni, kérjük, lépjen kapcsolatba velünk.',
+    'international_unavailable' => 'Ehhez a számlázási országhoz még nem érhetők el árak. Ha szeretne feliratkozni, kérjük, lépjen kapcsolatba velünk.',
 
     'submit' => 'Tovább a fizetéshez',
     'redirect_note' => 'A fizetési adatok megadásához átirányítjuk a Stripe oldalára.',
@@ -54,7 +56,8 @@ return [
 
     'errors' => [
         'invalid_selection' => 'A kiválasztott csomag nem érhető el. Kérjük, válasszon újra csomagot.',
-        'market_not_available' => 'A számlázási országának árai még nem érhetők el. A rendelés jelenleg a Magyarországra számlázott ügyfelek számára nyitott.',
+        'market_not_available' => 'Ehhez a számlázási országhoz még nem érhető el ár. Kérjük, vegye fel velünk a kapcsolatot.',
+        'market_currency_mismatch' => 'Magyar számlázáshoz HUF szükséges. Más számlázási ország esetén EUR, USD vagy GBP választható.',
         'price_inactive' => 'Ez a csomag jelenleg nem rendelhető meg.',
         'price_not_purchasable' => 'A csomag online rendelése még nem érhető el. A feliratkozáshoz kérjük, lépjen kapcsolatba velünk.',
         'unavailable' => 'Az online rendelés átmenetileg nem elérhető. Kérjük, próbálja újra később, vagy lépjen kapcsolatba velünk.',

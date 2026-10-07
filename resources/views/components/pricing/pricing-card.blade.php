@@ -4,7 +4,7 @@
     selection; the checkout resolves the price again on the server.
 --}}
 @use('App\Pricing\BillingInterval')
-@props(['offer', 'defaultInterval', 'freeMonthsLabel' => null])
+@props(['offer', 'defaultInterval', 'currency' => null, 'freeMonthsLabel' => null])
 
 @php
     $plan = $offer->plan;
@@ -43,8 +43,8 @@
                 data-price="{{ $interval->value }}"
             >
                 <p class="flex flex-wrap items-baseline gap-x-2">
-                    <span class="text-[36px] leading-none font-semibold tracking-[-0.02em] text-primary lg:text-[40px]">{{ $price->money->formattedAmount() }}</span>
-                    <span class="text-sm text-muted">{{ __('pricing.per_unit', ['currency' => $price->money->currency->symbol, 'unit' => $interval->unit()]) }}</span>
+                    <span class="text-[36px] leading-none font-semibold tracking-[-0.02em] text-primary lg:text-[40px]">{{ $price->money->format() }}</span>
+                    <span class="text-sm text-muted">/ {{ $interval->unit() }}</span>
                 </p>
 
                 @if ($interval === BillingInterval::Monthly)

@@ -8,12 +8,13 @@ use App\Models\CheckoutIntent;
 use App\Models\Promotion;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\SendsStripeWebhooks;
 use Tests\Fakes\FakeCheckoutGateway;
 use Tests\TestCase;
 
 class CheckoutTest extends TestCase
 {
-    use RefreshDatabase;
+    use RefreshDatabase, SendsStripeWebhooks;
 
     private FakeCheckoutGateway $gateway;
 
@@ -23,11 +24,12 @@ class CheckoutTest extends TestCase
 
         // As in a configured environment: every HU price has a Stripe Price ID.
         foreach (config('pricing.prices') as $i => $price) {
-            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}"]);
+            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}_{$price['currency']}"]);
         }
 
         $this->gateway = new FakeCheckoutGateway;
         $this->app->instance(CheckoutGateway::class, $this->gateway);
+        $this->useWebhookSecret();
 
         // Keep one browser session across requests, as a real browser would.
         $this->withCookie(config('session.cookie'), $this->browserSession = str_repeat('b', 40));
@@ -53,6 +55,7 @@ class CheckoutTest extends TestCase
                 'first_name' => 'Anna',
                 'last_name' => 'Kovács',
                 'country' => 'HU',
+                'currency' => 'HUF',
             ]);
     }
 
@@ -97,11 +100,11 @@ class CheckoutTest extends TestCase
         $this->assertSame('wordpress', $intent->product_type->value);
         $this->assertSame('business', $intent->plan->value);
         $this->assertSame('monthly', $intent->interval->value);
-        $this->assertSame('hu', $intent->market);
+        $this->assertSame('HU', $intent->market);
         $this->assertSame('HUF', $intent->currency);
         $this->assertSame(1899000, $intent->amount);
         $this->assertSame('final_price_no_vat_added', $intent->tax_treatment);
-        $this->assertSame('price_wordpress_business_monthly', $intent->stripe_price_id);
+        $this->assertSame('price_wordpress_business_monthly_HUF', $intent->stripe_price_id);
         $this->assertNotNull($intent->uuid);
     }
 
@@ -109,19 +112,27 @@ class CheckoutTest extends TestCase
     {
         $this->submit([
             'stripe_price_id' => 'price_attacker',
+            'stripe_coupon_id' => 'coupon_attacker',
+            'stripe_promotion_code_id' => 'promo_attacker',
+            'promotion_id' => 999999,
+            'discounts' => [['promotion_code' => 'promo_attacker']],
+            'discount_percent' => 100,
+            'discount_amount' => 1,
             'price' => 'price_attacker',
             'amount' => 1,
-            'currency' => 'EUR',
+            'currency' => 'HUF',
             'market' => 'eu',
         ]);
 
         $intent = CheckoutIntent::sole();
 
-        $this->assertSame('price_wordpress_business_monthly', $intent->stripe_price_id);
-        $this->assertSame('price_wordpress_business_monthly', $this->gateway->created[0]['intent']->stripe_price_id);
+        $this->assertSame('price_wordpress_business_monthly_HUF', $intent->stripe_price_id);
+        $this->assertSame('price_wordpress_business_monthly_HUF', $this->gateway->created[0]['intent']->stripe_price_id);
         $this->assertSame(1899000, $intent->amount);
         $this->assertSame('HUF', $intent->currency);
-        $this->assertSame('hu', $intent->market);
+        $this->assertSame('HU', $intent->market);
+        $this->assertNull($intent->promotion_id);
+        $this->assertNull($this->gateway->created[0]['promotion']);
     }
 
     public function test_interval_changes_the_resolved_price(): void
@@ -129,7 +140,7 @@ class CheckoutTest extends TestCase
         $this->submit(['product' => 'woocommerce', 'plan' => 'basic', 'interval' => 'annual']);
 
         $intent = CheckoutIntent::sole();
-        $this->assertSame('price_woocommerce_basic_annual', $intent->stripe_price_id);
+        $this->assertSame('price_woocommerce_basic_annual_HUF', $intent->stripe_price_id);
         $this->assertSame(14900000, $intent->amount);
     }
 
@@ -142,6 +153,7 @@ class CheckoutTest extends TestCase
             'invalid interval' => ['interval', 'weekly'],
             'invalid email' => ['email', 'not-an-email'],
             'unknown country' => ['country', 'XX'],
+            'unsupported currency' => ['currency', 'JPY'],
             'malformed promotion code' => ['promotion_code', 'DROP TABLE;'],
         ];
     }
@@ -155,10 +167,23 @@ class CheckoutTest extends TestCase
         $this->assertSame([], $this->gateway->created);
     }
 
-    public function test_international_customer_gets_a_clear_message(): void
+    public function test_international_customer_gets_server_resolved_eur_price(): void
     {
-        $this->submit(['country' => 'DE'])
-            ->assertSessionHasErrors(['country' => __('checkout.errors.market_not_available')]);
+        $this->submit(['country' => 'DE', 'currency' => 'EUR'])->assertStatus(303);
+
+        $intent = CheckoutIntent::sole();
+        $this->assertSame('INTERNATIONAL', $intent->market);
+        $this->assertSame('EUR', $intent->currency);
+        $this->assertSame(8900, $intent->amount);
+        $this->assertSame('price_wordpress_business_monthly_EUR', $intent->stripe_price_id);
+    }
+
+    public function test_market_currency_rules_are_enforced_server_side(): void
+    {
+        $this->submit(['country' => 'HU', 'currency' => 'GBP'])
+            ->assertSessionHasErrors(['checkout' => __('checkout.errors.market_currency_mismatch')]);
+        $this->submit(['country' => 'US', 'currency' => 'HUF'])
+            ->assertSessionHasErrors(['checkout' => __('checkout.errors.market_currency_mismatch')]);
 
         $this->assertDatabaseCount('checkout_intents', 0);
         $this->assertSame([], $this->gateway->created);
@@ -193,6 +218,53 @@ class CheckoutTest extends TestCase
         $this->assertSame($promotion->id, $intent->promotion_id);
         $this->assertSame('WELCOME10', $intent->promotion_code);
         $this->assertTrue($this->gateway->created[0]['promotion']->is($promotion));
+    }
+
+    public function test_fixed_discount_currency_must_match_the_server_resolved_checkout_currency(): void
+    {
+        Promotion::create([
+            'code' => 'FIXHUF', 'stripe_promotion_code_id' => 'promo_huf', 'discount_type' => 'fixed',
+            'amount_off' => 100000, 'currency' => 'HUF',
+        ]);
+        Promotion::create([
+            'code' => 'FIXEUR', 'stripe_promotion_code_id' => 'promo_eur', 'discount_type' => 'fixed',
+            'amount_off' => 1000, 'currency' => 'EUR',
+        ]);
+
+        $this->submit(['promotion_code' => 'FIXHUF', 'country' => 'HU', 'currency' => 'HUF'])->assertStatus(303);
+        $this->submit(['promotion_code' => 'FIXHUF', 'country' => 'DE', 'currency' => 'EUR'])
+            ->assertSessionHasErrors(['promotion_code' => __('checkout.promotion_errors.not_applicable')]);
+        $this->submit(['promotion_code' => 'FIXEUR', 'country' => 'DE', 'currency' => 'EUR'])->assertStatus(303);
+        $this->submit(['promotion_code' => 'FIXEUR', 'country' => 'US', 'currency' => 'USD'])
+            ->assertSessionHasErrors(['promotion_code' => __('checkout.promotion_errors.not_applicable')]);
+
+        $intents = CheckoutIntent::orderBy('id')->get();
+        $this->assertCount(2, $intents);
+        $this->assertSame(['HUF', 'EUR'], $intents->pluck('currency')->all());
+        $this->assertSame(['FIXHUF', 'FIXEUR'], $intents->pluck('promotion_code')->all());
+    }
+
+    public function test_percentage_promotion_stays_currency_agnostic_and_annual_uses_configured_annual_price(): void
+    {
+        Promotion::create([
+            'code' => 'TENPERCENT', 'stripe_promotion_code_id' => 'promo_percent', 'discount_type' => 'percent',
+            'percent_off' => 10,
+        ]);
+
+        foreach ([['HU', 'HUF'], ['DE', 'EUR'], ['US', 'USD'], ['GB', 'GBP']] as [$country, $currency]) {
+            $this->submit(['promotion_code' => 'TENPERCENT', 'country' => $country, 'currency' => $currency])->assertStatus(303);
+        }
+
+        $this->submit([
+            'promotion_code' => 'TENPERCENT', 'country' => 'DE', 'currency' => 'EUR',
+            'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'annual',
+        ])->assertStatus(303);
+
+        $annual = CheckoutIntent::where('interval', 'annual')->sole();
+        $this->assertSame(49000, $annual->amount);
+        $this->assertSame('price_wordpress_basic_annual_EUR', $annual->stripe_price_id);
+        $this->assertSame('TENPERCENT', $annual->promotion_code);
+        $this->assertSame(5, CheckoutIntent::count());
     }
 
     public function test_promotion_restrictions_are_enforced_on_the_server(): void
@@ -236,6 +308,21 @@ class CheckoutTest extends TestCase
         $this->submit()->assertSessionHasErrors(['checkout' => __('checkout.errors.unavailable')]);
 
         $this->assertSame(CheckoutStatus::Failed, CheckoutIntent::sole()->status);
+    }
+
+    public function test_definite_checkout_provider_failure_releases_coupon_reservation(): void
+    {
+        Promotion::create([
+            'code' => 'FAILSAFE', 'stripe_promotion_code_id' => 'promo_fail',
+            'discount_type' => 'percent', 'percent_off' => 10, 'max_redemptions' => 1,
+        ]);
+        $this->gateway->fail = true;
+
+        $this->submit(['promotion_code' => 'FAILSAFE'])->assertSessionHasErrors(['checkout' => __('checkout.errors.unavailable')]);
+
+        $intent = CheckoutIntent::sole();
+        $this->assertSame(CheckoutStatus::Failed, $intent->status);
+        $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $intent->id, 'status' => 'released']);
     }
 
     public function test_success_url_does_not_mark_the_order_as_paid(): void
@@ -289,6 +376,27 @@ class CheckoutTest extends TestCase
 
         $this->assertSame(CheckoutStatus::Cancelled, $intent->refresh()->status);
         $this->assertSame([$intent->stripe_checkout_session_id], $this->gateway->expired);
+    }
+
+    public function test_cancel_holds_a_coupon_reservation_until_signed_stripe_expiry(): void
+    {
+        Promotion::create([
+            'code' => 'CANCELSAFE', 'stripe_promotion_code_id' => 'promo_cancel',
+            'discount_type' => 'percent', 'percent_off' => 10, 'max_redemptions' => 1,
+        ]);
+        $this->submit(['promotion_code' => 'CANCELSAFE']);
+        $intent = CheckoutIntent::sole();
+        $this->get(route('checkout.cancel', $intent))->assertOk();
+
+        $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $intent->id, 'status' => 'reserved']);
+        $this->stripeEvent('checkout.session.expired', [
+            'id' => $intent->stripe_checkout_session_id,
+            'client_reference_id' => $intent->uuid,
+        ])->assertStatus(204);
+
+        $this->assertSame(CheckoutStatus::Cancelled, $intent->refresh()->status);
+        $this->assertDatabaseHas('promotion_reservations', ['checkout_intent_id' => $intent->id, 'status' => 'released']);
+        $this->assertSame(0, Promotion::sole()->times_redeemed);
     }
 
     public function test_another_browser_cannot_cancel_an_intent(): void

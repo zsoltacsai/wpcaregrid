@@ -1,9 +1,7 @@
 {{--
-    Currency the prices are displayed in. Only currencies that really have
-    prices are offered (App\Pricing\DisplayCurrency); with a single one (today
-    HUF) there is nothing to choose, so it is shown as a plain label. This
-    changes the display only: checkout resolves the price on the server from
-    the billing country, never from this choice.
+    Currency is a display preference only. The server offers currencies with
+    configured prices; checkout resolves the final price from billing country
+    and the selected supported currency.
 --}}
 @use('App\Pricing\DisplayCurrency')
 @props(['catalog'])

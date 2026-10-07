@@ -23,6 +23,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', HomeController::class)->name('home');
 Route::get('/pricing', PricingController::class)->name('pricing');
+Route::view('/kalkulator', 'pages.floor-calculator')->name('floor-calculator');
 
 // Display language and display currency. Presentation only; checkout resolves the price on the server.
 Route::post('/locale', LocaleController::class)->middleware('throttle:60,1')->name('locale.update');

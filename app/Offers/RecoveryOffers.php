@@ -48,6 +48,7 @@ final class RecoveryOffers
      */
     public function create(Customer $customer, array $data, User $actor): RecoveryOffer
     {
+        $this->ensureHungarianRecoveryMarket($customer);
         $website = $this->websiteOf($customer, $data['website']);
         [$amount, $currency] = $this->price($data['amount'], $data['currency']);
         $this->checkValidity($data['valid_until']);
@@ -76,6 +77,7 @@ final class RecoveryOffers
     public function update(RecoveryOffer $offer, array $data, User $actor): RecoveryOffer
     {
         [$amount, $currency] = $this->price($data['amount'], $data['currency']);
+        $this->ensureHungarianRecoveryMarket($offer->customer);
         $this->checkValidity($data['valid_until']);
 
         return DB::transaction(function () use ($offer, $data, $amount, $currency, $actor) {
@@ -120,6 +122,7 @@ final class RecoveryOffers
             if ($offer->status !== OfferStatus::Draft) {
                 throw ValidationException::withMessages(['offer' => __('owner.offers.errors.not_draft')]);
             }
+            $this->ensureHungarianRecoveryMarket($offer->customer);
             if ($offer->validityPassed()) {
                 throw ValidationException::withMessages(['valid_until' => __('owner.offers.errors.validity_passed')]);
             }
@@ -189,8 +192,11 @@ final class RecoveryOffers
             $locked = $this->locked($offer);
 
             if ($locked->status === OfferStatus::Accepted && ! $locked->validityPassed()) {
+                $this->ensureHungarianRecoveryMarket($locked->customer, 'offers.errors.not_eligible');
+
                 return; // Already accepted: continue to payment.
             }
+            $this->ensureHungarianRecoveryMarket($locked->customer, 'offers.errors.not_eligible');
             if (! $locked->canBeAccepted()) {
                 throw ValidationException::withMessages(['offer' => __('offers.errors.not_acceptable')]);
             }
@@ -211,6 +217,8 @@ final class RecoveryOffers
     public function startPayment(RecoveryOffer $offer): RecoveryOffer
     {
         $offer = $offer->refresh();
+
+        $this->ensureHungarianRecoveryMarket($offer->customer, 'offers.errors.not_eligible');
 
         if (! $offer->canBePaid()) {
             throw ValidationException::withMessages(['offer' => __('offers.errors.not_payable')]);
@@ -369,7 +377,7 @@ final class RecoveryOffers
     {
         $currency = strtoupper(trim($currency));
 
-        if (! in_array($currency, $this->catalog->sellableCurrencies(), true)) {
+        if (! in_array($currency, $this->catalog->recoveryOfferCurrencies(), true)) {
             throw ValidationException::withMessages(['currency' => __('owner.offers.errors.currency')]);
         }
 
@@ -387,6 +395,14 @@ final class RecoveryOffers
         }
 
         return [$minor, $currency];
+    }
+
+    /** Recovery work is currently sold only in the Hungarian market, in HUF. */
+    private function ensureHungarianRecoveryMarket(Customer $customer, string $errorKey = 'owner.offers.errors.customer_market'): void
+    {
+        if (strtoupper($customer->country_code) !== 'HU') {
+            throw ValidationException::withMessages(['customer' => __($errorKey)]);
+        }
     }
 
     private function checkValidity(Carbon $validUntil): void

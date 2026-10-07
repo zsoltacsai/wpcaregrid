@@ -101,6 +101,11 @@ class Customer extends Model
         return $this->hasMany(CheckoutIntent::class);
     }
 
+    public function billingInvoices(): HasMany
+    {
+        return $this->hasMany(BillingInvoice::class)->latest('stripe_created_at');
+    }
+
     /** Subscriptions that currently grant service access. */
     public function activeSubscriptions(): HasMany
     {

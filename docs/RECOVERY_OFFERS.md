@@ -8,7 +8,7 @@ An offer describes work to be done. It is not a security finding and never claim
 
 `recovery_offers` (model `RecoveryOffer`, UUID in URLs): exactly one customer and exactly one **website of that customer** (checked on the server when creating and when editing a draft; the browser's IDs are never trusted), title, scope (free text written by the owner), internal notes (owner only), price in minor units, currency, validity, status and the timestamps of each step, the Stripe Checkout Session and the payment reference, and two "notified" timestamps so each email is sent once.
 
-**Price and currency.** The owner types the price in the main unit (`45000`); the server converts it (`PriceEditor::minor`) and stores it. That stored value is the only amount ever charged. The currency must be one the catalogue sells in (`PricingCatalog::sellableCurrencies()`): **today HUF only**. No conversion, no exchange rates, no invented currencies. Validity is at most 180 days ahead.
+**Price, market and currency.** Recovery offers are currently available only to customers whose billing country is Hungary (HU), and they remain **HUF only**. The server enforces both conditions when creating, editing, sending, accepting and starting payment; the customer portal also hides/denies offers if the billing country is no longer HU. The owner types the price in the main unit (`45000`); the server converts it (`PriceEditor::minor`) and stores it. That stored value is the only amount ever charged. The recurring subscription catalogue supports HUF, EUR, USD, and GBP, but this milestone does not expand one-time manual recovery-offer pricing. No conversion, no exchange rates, no invented currencies. Validity is at most 180 days ahead.
 
 ## States
 

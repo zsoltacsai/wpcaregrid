@@ -16,15 +16,57 @@
 |   prices     one row per product type × tier × interval × market, with
 |              the amount and the Stripe Price ID that checkout uses
 |
-| Amounts are in the currency's smallest unit, as Stripe expects them
-| (HUF has two minor units: 8 990 Ft = 899000). Annual prices are stored
-| explicitly (10 × monthly = 2 months free), never calculated.
+| Amounts are integer values in the currency's configured Stripe unit
+| (HUF: 8 990 Ft = 899000). Annual values are generated from the fixed
+| monthly matrix as 10 × monthly (2 months free); no FX arithmetic is used.
 |
-| Only the Hungarian market has prices. The other markets are defined so the
-| structure is ready, but they deliberately have no prices: no exchange-rate
-| conversion, no invented amounts. Checkout refuses a market without prices.
+| Hungary has its own market. Every other billing country is in the
+| international market, where customers choose fixed EUR, USD or GBP prices.
+| There is no FX conversion.
 |
 */
+
+$monthlyMajor = [
+    'HUF' => [
+        'wordpress' => ['basic' => 8990, 'business' => 18990, 'secure' => 28990],
+        'woocommerce' => ['basic' => 14900, 'business' => 24900, 'secure' => 39900],
+    ],
+    'EUR' => [
+        'wordpress' => ['basic' => 49, 'business' => 89, 'secure' => 149],
+        'woocommerce' => ['basic' => 69, 'business' => 99, 'secure' => 159],
+    ],
+    'USD' => [
+        'wordpress' => ['basic' => 49, 'business' => 89, 'secure' => 149],
+        'woocommerce' => ['basic' => 69, 'business' => 99, 'secure' => 159],
+    ],
+    'GBP' => [
+        'wordpress' => ['basic' => 49, 'business' => 89, 'secure' => 149],
+        'woocommerce' => ['basic' => 69, 'business' => 99, 'secure' => 159],
+    ],
+];
+
+$marketByCurrency = ['HUF' => 'hu', 'EUR' => 'eu', 'USD' => 'international', 'GBP' => 'gb'];
+$prices = [];
+foreach ($monthlyMajor as $currency => $products) {
+    foreach ($products as $product => $plans) {
+        foreach ($plans as $plan => $monthly) {
+            foreach (['monthly' => $monthly, 'annual' => $monthly * 10] as $interval => $majorAmount) {
+                $key = strtoupper("STRIPE_PRICE_{$product}_{$plan}_{$interval}_{$currency}");
+                $prices[] = [
+                    'product_type' => $product,
+                    'plan' => $plan,
+                    'interval' => $interval,
+                    'market' => $marketByCurrency[$currency],
+                    'currency' => $currency,
+                    'stripe_price_config_key' => $key,
+                    'amount' => $majorAmount * 100,
+                    'stripe_price_id' => env($key),
+                    'active' => true,
+                ];
+            }
+        }
+    }
+}
 
 return [
 
@@ -34,6 +76,11 @@ return [
     'default_product_type' => 'wordpress',
 
     'default_interval' => 'monthly',
+
+    'default_international_currency' => 'EUR',
+    'enabled_currencies' => ['HUF', 'EUR', 'USD', 'GBP'],
+    'market_groups' => ['hu' => 'HU', 'eu' => 'INTERNATIONAL', 'gb' => 'INTERNATIONAL', 'international' => 'INTERNATIONAL'],
+    'currency_markets' => ['HUF' => 'hu', 'EUR' => 'eu', 'USD' => 'international', 'GBP' => 'gb'],
 
     /*
     | Display formats. `minor_units` is the ISO 4217 exponent used for stored
@@ -86,21 +133,25 @@ return [
         'hu' => [
             'countries' => ['HU'],
             'currency' => 'HUF',
+            'group' => 'HU',
             'tax_treatment' => env('PRICING_HU_TAX_TREATMENT', 'final_price_no_vat_added'),
         ],
         'eu' => [
-            'countries' => ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK'],
+            'countries' => ['*'],
             'currency' => 'EUR',
+            'group' => 'INTERNATIONAL',
             'tax_treatment' => 'undetermined',
         ],
         'gb' => [
-            'countries' => ['GB'],
+            'countries' => [],
             'currency' => 'GBP',
+            'group' => 'INTERNATIONAL',
             'tax_treatment' => 'undetermined',
         ],
         'international' => [
-            'countries' => ['*'],
+            'countries' => [],
             'currency' => 'USD',
+            'group' => 'INTERNATIONAL',
             'tax_treatment' => 'undetermined',
         ],
     ],
@@ -218,19 +269,6 @@ return [
     | checkout for that price but does not hide it from the pricing table.
     | Set `active` to false to stop selling a price without deleting it.
     */
-    'prices' => [
-        ['product_type' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 899000, 'stripe_price_id' => env('STRIPE_PRICE_WORDPRESS_BASIC_MONTHLY_HUF'), 'active' => true],
-        ['product_type' => 'wordpress', 'plan' => 'basic', 'interval' => 'annual', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 8990000, 'stripe_price_id' => env('STRIPE_PRICE_WORDPRESS_BASIC_ANNUAL_HUF'), 'active' => true],
-        ['product_type' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 1899000, 'stripe_price_id' => env('STRIPE_PRICE_WORDPRESS_BUSINESS_MONTHLY_HUF'), 'active' => true],
-        ['product_type' => 'wordpress', 'plan' => 'business', 'interval' => 'annual', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 18990000, 'stripe_price_id' => env('STRIPE_PRICE_WORDPRESS_BUSINESS_ANNUAL_HUF'), 'active' => true],
-        ['product_type' => 'wordpress', 'plan' => 'secure', 'interval' => 'monthly', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 2899000, 'stripe_price_id' => env('STRIPE_PRICE_WORDPRESS_SECURE_MONTHLY_HUF'), 'active' => true],
-        ['product_type' => 'wordpress', 'plan' => 'secure', 'interval' => 'annual', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 28990000, 'stripe_price_id' => env('STRIPE_PRICE_WORDPRESS_SECURE_ANNUAL_HUF'), 'active' => true],
-        ['product_type' => 'woocommerce', 'plan' => 'basic', 'interval' => 'monthly', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 1490000, 'stripe_price_id' => env('STRIPE_PRICE_WOOCOMMERCE_BASIC_MONTHLY_HUF'), 'active' => true],
-        ['product_type' => 'woocommerce', 'plan' => 'basic', 'interval' => 'annual', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 14900000, 'stripe_price_id' => env('STRIPE_PRICE_WOOCOMMERCE_BASIC_ANNUAL_HUF'), 'active' => true],
-        ['product_type' => 'woocommerce', 'plan' => 'business', 'interval' => 'monthly', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 2490000, 'stripe_price_id' => env('STRIPE_PRICE_WOOCOMMERCE_BUSINESS_MONTHLY_HUF'), 'active' => true],
-        ['product_type' => 'woocommerce', 'plan' => 'business', 'interval' => 'annual', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 24900000, 'stripe_price_id' => env('STRIPE_PRICE_WOOCOMMERCE_BUSINESS_ANNUAL_HUF'), 'active' => true],
-        ['product_type' => 'woocommerce', 'plan' => 'secure', 'interval' => 'monthly', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 3990000, 'stripe_price_id' => env('STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_HUF'), 'active' => true],
-        ['product_type' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 39900000, 'stripe_price_id' => env('STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_HUF'), 'active' => true],
-    ],
+    'prices' => $prices,
 
 ];

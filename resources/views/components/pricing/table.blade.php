@@ -11,6 +11,7 @@
     $defaultLine = $catalog->defaultProductType->value;
     $defaultInterval = $catalog->defaultInterval;
     $market = app(\App\Pricing\DisplayCurrency::class)->market();
+    $selectedCurrency = app(\App\Pricing\DisplayCurrency::class)->selected();
     $freeMonths = $catalog->annualFreeMonths($market);
     $freeMonthsLabel = $freeMonths > 0 ? trans_choice('pricing.free_months', $freeMonths) : null;
     $taxNote = __('pricing.tax_notes.'.$market->taxTreatment->value);
@@ -21,6 +22,7 @@
         'productLines' => array_map(fn ($type) => $type->value, $productTypes),
         'productLine' => $defaultLine,
         'interval' => $defaultInterval->value,
+        'currency' => $selectedCurrency,
     ]))"
     {{ $attributes }}
 >
@@ -92,7 +94,7 @@
             <ul class="grid gap-4 md:grid-cols-3 lg:gap-6">
                 @foreach ($catalog->offers($type, $market) as $offer)
                     <li>
-                        <x-pricing.pricing-card :offer="$offer" :default-interval="$defaultInterval" :free-months-label="$freeMonthsLabel" />
+                        <x-pricing.pricing-card :offer="$offer" :default-interval="$defaultInterval" :currency="$selectedCurrency" :free-months-label="$freeMonthsLabel" />
                     </li>
                 @endforeach
             </ul>

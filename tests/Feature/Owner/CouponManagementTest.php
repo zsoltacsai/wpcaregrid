@@ -41,7 +41,7 @@ class CouponManagementTest extends TestCase
         $this->app->instance(CheckoutGateway::class, $this->checkout);
 
         foreach (config('pricing.prices') as $i => $price) {
-            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}"]);
+            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}_{$price['currency']}"]);
         }
     }
 
@@ -56,7 +56,7 @@ class CouponManagementTest extends TestCase
     {
         return $this->withCookie(config('session.cookie'), str_repeat('b', 40))->post(route('checkout.store'), $overrides + [
             'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly',
-            'email' => 'customer@company.example', 'first_name' => 'Anna', 'last_name' => 'Kovács', 'country' => 'HU',
+            'email' => 'customer@company.example', 'first_name' => 'Anna', 'last_name' => 'Kovács', 'country' => 'HU', 'currency' => 'HUF',
         ]);
     }
 
@@ -64,24 +64,25 @@ class CouponManagementTest extends TestCase
     {
         $owner = $this->asOwner();
 
-        $this->create(['code' => 'pilot10', 'percent_off' => '12,5', 'duration' => 'repeating', 'duration_months' => 3, 'max_redemptions' => 5, 'max_redemptions_per_customer' => 1, 'product_types' => ['wordpress'], 'plans' => ['business', 'secure'], 'intervals' => ['monthly'], 'note' => 'Pilot customers, internal.'])
+        $this->create(['code' => 'pilot10', 'percent_off' => '12,5', 'duration' => 'once', 'max_redemptions' => 5, 'max_redemptions_per_customer' => 1, 'product_types' => ['wordpress'], 'plans' => ['business', 'secure'], 'intervals' => ['monthly'], 'market_group' => 'INTERNATIONAL', 'note' => 'Pilot customers, internal.'])
             ->assertRedirect(route('owner.coupons.show', 'PILOT10'));
 
         $coupon = Promotion::sole();
         $this->assertSame('PILOT10', $coupon->code);
         $this->assertSame('12.50', $coupon->percent_off);
         $this->assertSame('percent', $coupon->discount_type);
-        $this->assertSame('repeating', $coupon->duration);
-        $this->assertSame(3, $coupon->duration_months);
+        $this->assertSame('once', $coupon->duration);
+        $this->assertNull($coupon->duration_months);
         $this->assertSame(5, $coupon->max_redemptions);
         $this->assertSame(1, $coupon->max_redemptions_per_customer);
         $this->assertSame(['wordpress'], $coupon->product_types);
         $this->assertSame(['business', 'secure'], $coupon->plans);
         $this->assertSame(['monthly'], $coupon->intervals);
+        $this->assertSame(['INTERNATIONAL'], $coupon->markets);
         $this->assertTrue($coupon->active);
         $this->assertSame('promo_test_1', $coupon->stripe_promotion_code_id);
         $this->assertSame($owner->id, $coupon->created_by_user_id);
-        $this->assertSame([['code' => 'PILOT10', 'percent_off' => '12.50', 'duration' => 'repeating', 'months' => 3]], $this->stripe->created);
+        $this->assertSame([['code' => 'PILOT10', 'percent_off' => '12.50', 'duration' => 'once', 'months' => null]], $this->stripe->created);
 
         $event = AdminAuditEvent::where('event', 'coupon.created')->sole();
         $this->assertSame($owner->id, $event->actor_user_id);
@@ -128,8 +129,8 @@ class CouponManagementTest extends TestCase
         $this->create()->assertSessionDoesntHaveErrors();
         $this->create(['code' => 'pilot10'])->assertSessionHasErrors('code');
 
-        $this->create(['code' => 'REP', 'duration' => 'repeating'])->assertSessionHasErrors('duration_months');
-        $this->create(['code' => 'REP', 'duration' => 'repeating', 'duration_months' => 37])->assertSessionHasErrors('duration_months');
+        $this->create(['code' => 'REP', 'duration' => 'repeating'])->assertSessionHasErrors('duration');
+        $this->create(['code' => 'REP', 'duration' => 'repeating', 'duration_months' => 3])->assertSessionHasErrors('duration');
         $this->create(['code' => 'DUR', 'duration' => 'sometimes'])->assertSessionHasErrors('duration');
         $this->create(['code' => 'LIM', 'max_redemptions' => 0])->assertSessionHasErrors('max_redemptions');
         $this->create(['code' => 'PLN', 'plans' => ['platinum']])->assertSessionHasErrors('plans.0');
@@ -207,6 +208,34 @@ class CouponManagementTest extends TestCase
         $this->assertSame(0, $coupon->refresh()->remainingRedemptions());
     }
 
+    public function test_market_restrictions_are_explicit_and_server_enforced(): void
+    {
+        $this->asOwner();
+        $this->create(['code' => 'HUONLY', 'market_group' => 'HU'])->assertSessionDoesntHaveErrors();
+        $coupon = Promotion::where('code', 'HUONLY')->sole();
+        $this->assertSame(['HU'], $coupon->markets);
+
+        $this->buy(['promotion_code' => 'HUONLY', 'country' => 'AT', 'currency' => 'EUR'])
+            ->assertSessionHasErrors(['promotion_code' => __('checkout.promotion_errors.not_applicable')]);
+        $this->buy(['promotion_code' => 'HUONLY', 'country' => 'HU', 'currency' => 'HUF'])
+            ->assertStatus(303);
+
+        $this->put(route('owner.coupons.update', $coupon), ['market_group' => 'INTERNATIONAL'])
+            ->assertSessionDoesntHaveErrors();
+        $this->assertSame(['INTERNATIONAL'], $coupon->refresh()->markets);
+        $this->assertSame(1, AdminAuditEvent::where('event', 'coupon.updated')->count());
+    }
+
+    public function test_repeating_duration_is_not_available_for_new_coupons(): void
+    {
+        $this->asOwner();
+
+        $this->create(['code' => 'REPEAT', 'duration' => 'repeating', 'duration_months' => 3])->assertSessionHasErrors('duration');
+
+        $this->assertDatabaseCount('promotions', 0);
+        $this->assertSame([], $this->stripe->created);
+    }
+
     public function test_deactivating_and_activating_switches_stripe_and_the_checkout_follows(): void
     {
         $owner = $this->asOwner();
@@ -267,7 +296,7 @@ class CouponManagementTest extends TestCase
         Promotion::sole()->update(['times_redeemed' => 2]);
 
         $this->get(route('owner.coupons.index'))->assertOk()->assertSee('LISTED')->assertSee('2')->assertSee('10%');
-        $this->get(route('owner.coupons.show', 'listed'))->assertOk()->assertSee('Secret internal remark')->assertSee('Redemptions left')->assertSee('>3<', false);
+        $this->get(route('owner.coupons.show', 'listed'))->assertOk()->assertSee('Secret internal remark')->assertSee('Redemptions left')->assertSee('>3 ', false);
         $this->get(route('owner.coupons.show', 'NOPE'))->assertNotFound();
 
         // The same note never reaches a public page or the checkout.
@@ -311,12 +340,12 @@ class CouponManagementTest extends TestCase
         $this->asOwner();
         $this->create(['code' => 'NOTED', 'note' => 'internal only']);
 
-        $this->buy(['promotion_code' => 'NOTED', 'amount' => 1, 'currency' => 'EUR', 'stripe_price_id' => 'price_evil', 'discount' => 100])->assertStatus(303);
+        $this->buy(['promotion_code' => 'NOTED', 'amount' => 1, 'stripe_price_id' => 'price_evil', 'discount' => 100])->assertStatus(303);
 
         $intent = CheckoutIntent::sole();
         $this->assertSame(1899000, $intent->amount);
         $this->assertSame('HUF', $intent->currency);
-        $this->assertSame('price_wordpress_business_monthly', $intent->stripe_price_id);
+        $this->assertSame('price_wordpress_business_monthly_HUF', $intent->stripe_price_id);
     }
 
     // --- Authorization -----------------------------------------------------

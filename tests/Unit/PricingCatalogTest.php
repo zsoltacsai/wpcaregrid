@@ -4,7 +4,7 @@ namespace Tests\Unit;
 
 use App\Pricing\BillingInterval;
 use App\Pricing\Exceptions\InvalidPriceSelection;
-use App\Pricing\Exceptions\MarketNotAvailable;
+use App\Pricing\Exceptions\MarketCurrencyMismatch;
 use App\Pricing\Exceptions\PriceInactive;
 use App\Pricing\Exceptions\PriceNotPurchasable;
 use App\Pricing\PlanTier;
@@ -64,13 +64,14 @@ class PricingCatalogTest extends TestCase
     {
         $rows = collect(config('pricing.prices'));
 
-        $this->assertCount(12, $rows);
+        $this->assertCount(48, $rows);
 
         foreach ($rows->where('interval', 'annual') as $annual) {
             $monthly = $rows->first(fn ($row) => $row['interval'] === 'monthly'
                 && $row['product_type'] === $annual['product_type']
                 && $row['plan'] === $annual['plan']
-                && $row['market'] === $annual['market']);
+                && $row['market'] === $annual['market']
+                && $row['currency'] === $annual['currency']);
 
             $this->assertNotNull($monthly);
             $this->assertIsInt($annual['amount']);
@@ -190,29 +191,75 @@ class PricingCatalogTest extends TestCase
         $this->assertSame("189\u{202F}900\u{00A0}Ft", $hu->money->format());
     }
 
-    /** @return array<string, array{string}> */
-    public static function internationalCountries(): array
+    public function test_currency_formatter_uses_integer_minor_units_without_float_arithmetic(): void
     {
-        return ['Germany (EUR market)' => ['DE'], 'United Kingdom (GBP market)' => ['GB'], 'United States (fallback)' => ['US'], 'Unlisted country' => ['JP']];
+        $catalog = $this->catalog('en');
+        $this->assertSame('€49', $catalog->currency('EUR')->format(4900));
+        $this->assertSame('$1,590', $catalog->currency('USD')->format(159000));
+        $this->assertSame('89,900 Ft', $catalog->currency('HUF')->format(8990000));
     }
 
-    #[DataProvider('internationalCountries')]
-    public function test_international_markets_have_no_invented_prices(string $country): void
+    public function test_fixed_international_prices_are_present_in_each_currency(): void
+    {
+        $rows = collect(config('pricing.prices'));
+        $this->assertCount(48, $rows);
+        $this->assertSame(['HUF', 'EUR', 'USD', 'GBP'], $rows->pluck('currency')->unique()->values()->all());
+
+        foreach (['EUR', 'USD', 'GBP'] as $currency) {
+            foreach ([
+                ['wordpress', 'basic', 49], ['wordpress', 'business', 89], ['wordpress', 'secure', 149],
+                ['woocommerce', 'basic', 69], ['woocommerce', 'business', 99], ['woocommerce', 'secure', 159],
+            ] as [$product, $plan, $monthlyMajor]) {
+                $monthly = $rows->first(fn ($row) => $row['product_type'] === $product && $row['plan'] === $plan && $row['interval'] === 'monthly' && $row['currency'] === $currency);
+                $annual = $rows->first(fn ($row) => $row['product_type'] === $product && $row['plan'] === $plan && $row['interval'] === 'annual' && $row['currency'] === $currency);
+                $this->assertSame($monthlyMajor * 100, $monthly['amount']);
+                $this->assertSame($monthlyMajor * 1000, $annual['amount']);
+            }
+        }
+    }
+
+    public function test_non_hungarian_country_can_resolve_each_international_currency(): void
     {
         $this->withStripeIds();
         $catalog = $this->catalog();
+        $selection = new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly);
 
-        $this->assertNotSame('hu', $catalog->marketForCountry($country)->key);
-        $this->assertFalse($catalog->hasPrices($catalog->marketForCountry($country)));
-
-        $this->expectException(MarketNotAvailable::class);
-        $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly), $country);
+        foreach (['DE' => 'EUR', 'US' => 'USD', 'GB' => 'GBP', 'JP' => 'EUR'] as $country => $currency) {
+            $price = $catalog->resolve($selection, $country, $currency);
+            $this->assertSame($currency, $price->money->currency->code);
+            $this->assertSame('INTERNATIONAL', $price->marketGroup);
+        }
     }
 
-    public function test_only_hungarian_prices_exist(): void
+    public function test_hungarian_and_international_currency_combinations_are_enforced(): void
     {
-        $this->assertSame(['HUF'], collect(config('pricing.prices'))->pluck('currency')->unique()->values()->all());
-        $this->assertSame(['hu'], collect(config('pricing.prices'))->pluck('market')->unique()->values()->all());
+        $this->withStripeIds();
+        $catalog = $this->catalog();
+        $selection = new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly);
+
+        $this->assertSame('HUF', $catalog->resolve($selection, 'HU', 'HUF')->money->currency->code);
+        foreach (['EUR', 'USD', 'GBP'] as $currency) {
+            try {
+                $catalog->resolve($selection, 'HU', $currency);
+                $this->fail('Hungary accepted '.$currency.'.');
+            } catch (MarketCurrencyMismatch) {
+                $this->addToAssertionCount(1);
+            }
+
+        }
+
+        foreach (['DE', 'US', 'GB'] as $country) {
+            foreach (['EUR', 'USD', 'GBP'] as $currency) {
+                $price = $catalog->resolve($selection, $country, $currency);
+                $this->assertSame($currency, $price->money->currency->code, "{$country} / {$currency}");
+            }
+            try {
+                $catalog->resolve($selection, $country, 'HUF');
+                $this->fail("{$country} billing accepted HUF.");
+            } catch (MarketCurrencyMismatch) {
+                $this->addToAssertionCount(1);
+            }
+        }
     }
 
     /** @return array<string, array{mixed, mixed, mixed}> */
@@ -259,6 +306,17 @@ class PricingCatalogTest extends TestCase
         $price = $this->catalog()->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Business, BillingInterval::Annual), 'HU');
 
         $this->assertSame('price_configured', $price->stripePriceId);
+    }
+
+    public function test_each_price_exposes_a_unique_authoritative_stripe_config_key(): void
+    {
+        $prices = $this->catalog()->allPrices();
+        $keys = array_map(fn ($price) => $price->stripePriceConfigKey, $prices);
+
+        $this->assertCount(48, $keys);
+        $this->assertCount(48, array_unique($keys));
+        $this->assertContains('STRIPE_PRICE_WORDPRESS_BASIC_MONTHLY_HUF', $keys);
+        $this->assertContains('STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_GBP', $keys);
     }
 
     public function test_price_currency_must_match_its_market(): void

@@ -30,6 +30,7 @@ class VerifyStripePrices extends Command
 
         $rows = [];
         $problems = 0;
+        $results = [];
 
         foreach ($catalog->plans() as $plan) {
             foreach (BillingInterval::cases() as $interval) {
@@ -42,12 +43,15 @@ class VerifyStripePrices extends Command
 
                     $issue = $verifier->verify($price->stripePriceId, $price->money->amount, $price->money->currency->code, $interval, $plan->productType);
                     $problems += $issue === StripePriceVerifier::OK ? 0 : 1;
-                    $rows[] = ["{$plan->productType->value}.{$plan->tier->value}.{$interval->value}.{$marketKey}", $price->stripePriceId ?: '—', $issue];
+                    $key = "{$plan->productType->value}.{$plan->tier->value}.{$interval->value}.{$marketKey}";
+                    $results[$key] = $issue;
+                    $rows[] = [$key, $price->hasStripePrice() ? 'yes' : 'no', $issue];
                 }
             }
         }
 
-        $this->table(['Price', 'Stripe Price ID', 'Result'], $rows);
+        $this->table(['Price', 'Configured', 'Result'], $rows);
+        cache()->forever('stripe.price_verification.results', $results);
 
         return $problems === 0 ? self::SUCCESS : self::FAILURE;
     }

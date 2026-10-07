@@ -67,12 +67,13 @@ class PricingController extends Controller
             'amount' => isset($values['amount']) ? $editor->major((int) $values['amount'], $values['currency']) : '',
             'decimals' => (int) config("pricing.currencies.{$key->currency()}.display_decimals", 0),
             'configRow' => $key->configRow(),
-            'subscriptions' => Subscription::where([
+            'subscriptions' => Subscription::query()->where([
                 'product_type' => $key->productType->value,
                 'plan' => $key->tier->value,
                 'interval' => $key->interval->value,
-                'market' => $key->market,
-            ])->whereIn('status', [SubscriptionStatus::Active->value, SubscriptionStatus::Trialing->value, SubscriptionStatus::PastDue->value])->count(),
+                'currency' => $key->currency(),
+            ])->whereIn('market', $key->market === 'hu' ? ['hu', 'HU'] : ['INTERNATIONAL', 'international'])
+                ->whereIn('status', [SubscriptionStatus::Active->value, SubscriptionStatus::Trialing->value, SubscriptionStatus::PastDue->value])->count(),
             'stripeConfigured' => app(StripePriceVerifier::class)->configured(),
         ]);
     }
@@ -110,18 +111,18 @@ class PricingController extends Controller
         }
 
         $problems = [];
+        $results = [];
         foreach ($catalog->allPrices() as $price) {
-            if (! $price->active) {
-                continue;
-            }
-
             $result = $verifier->verify($price->stripePriceId, $price->money->amount, $price->money->currency->code, $price->interval, $price->productType);
+            $key = (new PriceKey($price->productType, $price->tier, $price->interval, $price->market))->value();
+            $results[$key] = $result;
             if ($result !== StripePriceVerifier::OK) {
-                $problems[] = (new PriceKey($price->productType, $price->tier, $price->interval, $price->market))->value().': '.$result;
+                $problems[] = $key.': '.$result;
             }
         }
 
-        Cache::forever(SystemStatus::STRIPE_VERIFICATION, ['at' => now()->format('Y-m-d H:i'), 'ok' => $problems === [], 'problems' => count($problems), 'details' => array_slice($problems, 0, 50)]);
+        Cache::forever('stripe.price_verification.results', $results);
+        Cache::forever(SystemStatus::STRIPE_VERIFICATION, ['at' => now()->format('Y-m-d H:i'), 'ok' => $problems === [], 'problems' => count($problems), 'details' => array_slice($problems, 0, 50), 'price_results' => $results]);
         AdminAudit::record($request->user(), 'stripe.verified', 'price', 'catalog', ['ok' => $problems === [], 'problems' => count($problems)]);
 
         return back()->with('status', $problems === [] ? __('owner.pricing.verified_ok') : __('owner.pricing.verified_problems', ['count' => count($problems)]));

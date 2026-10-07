@@ -12,11 +12,15 @@ use Tests\TestCase;
 
 class PromotionTest extends TestCase
 {
-    private function price(ProductType $type = ProductType::WordPress, PlanTier $tier = PlanTier::Business, BillingInterval $interval = BillingInterval::Monthly)
-    {
+    private function price(
+        ProductType $type = ProductType::WordPress,
+        PlanTier $tier = PlanTier::Business,
+        BillingInterval $interval = BillingInterval::Monthly,
+        string $currency = 'HUF',
+    ) {
         $catalog = PricingCatalog::fromConfig(config('pricing'));
 
-        return $catalog->price($type, $tier, $interval, $catalog->market('hu'));
+        return $catalog->price($type, $tier, $interval, $catalog->marketForCurrency($currency));
     }
 
     private function promotion(array $attributes = []): Promotion
@@ -96,10 +100,59 @@ class PromotionTest extends TestCase
 
     public function test_fixed_discount_must_match_the_currency(): void
     {
-        $eur = $this->promotion(['discount_type' => 'fixed', 'percent_off' => null, 'amount_off' => 500, 'currency' => 'EUR']);
-        $huf = $this->promotion(['discount_type' => 'fixed', 'percent_off' => null, 'amount_off' => 100000, 'currency' => 'HUF']);
+        foreach (['EUR', 'USD', 'GBP'] as $currency) {
+            $fixed = $this->promotion(['discount_type' => 'fixed', 'percent_off' => null, 'amount_off' => 500, 'currency' => $currency]);
+            $this->assertSame('not_applicable', $fixed->ineligibilityReason($this->price(currency: 'HUF')));
+            $this->assertNull($fixed->ineligibilityReason($this->price(currency: $currency)));
+            $this->assertSame('not_applicable', $fixed->ineligibilityReason($this->price(currency: match ($currency) {
+                'EUR' => 'USD', 'USD' => 'GBP', default => 'EUR',
+            })));
+        }
 
-        $this->assertSame('not_applicable', $eur->ineligibilityReason($this->price()));
+        $huf = $this->promotion(['discount_type' => 'fixed', 'percent_off' => null, 'amount_off' => 100000, 'currency' => 'HUF']);
         $this->assertNull($huf->ineligibilityReason($this->price()));
+        foreach (['EUR', 'USD', 'GBP'] as $currency) {
+            $this->assertSame('not_applicable', $huf->ineligibilityReason($this->price(currency: $currency)));
+        }
+    }
+
+    public function test_percentage_promotions_are_currency_agnostic_for_all_catalogue_plans_and_intervals(): void
+    {
+        $promotion = $this->promotion();
+        $free = $this->promotion(['percent_off' => '100.00', 'duration' => 'forever']);
+        $this->assertTrue($free->makesEveryInvoiceFree());
+
+        foreach (['HUF', 'EUR', 'USD', 'GBP'] as $currency) {
+            foreach (ProductType::cases() as $type) {
+                foreach (PlanTier::cases() as $tier) {
+                    foreach (BillingInterval::cases() as $interval) {
+                        $price = $this->price($type, $tier, $interval, $currency);
+                        $this->assertNotNull($price, "Missing {$currency} {$type->value}.{$tier->value} {$interval->value} price.");
+                        $this->assertNull($promotion->ineligibilityReason($price), "{$currency} {$type->value}.{$tier->value} {$interval->value}");
+                        $this->assertNull($free->ineligibilityReason($price), "100% {$currency} {$type->value}.{$tier->value} {$interval->value}");
+                    }
+                }
+            }
+        }
+    }
+
+    public function test_annual_catalogue_price_is_the_discount_base_not_twelve_months_of_monthly_price(): void
+    {
+        $catalog = PricingCatalog::fromConfig(config('pricing'));
+        $promotion = $this->promotion(['percent_off' => '10.00']);
+
+        foreach (['HUF', 'EUR', 'USD', 'GBP'] as $currency) {
+            $market = $catalog->marketForCurrency($currency);
+            foreach (ProductType::cases() as $type) {
+                foreach (PlanTier::cases() as $tier) {
+                    $monthly = $catalog->price($type, $tier, BillingInterval::Monthly, $market);
+                    $annual = $catalog->price($type, $tier, BillingInterval::Annual, $market);
+
+                    $this->assertSame($monthly->money->amount * 10, $annual->money->amount);
+                    $this->assertNull($promotion->ineligibilityReason($annual));
+                    $this->assertStringContainsString('_ANNUAL_'.$currency, $annual->stripePriceConfigKey);
+                }
+            }
+        }
     }
 }

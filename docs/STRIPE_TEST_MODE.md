@@ -5,16 +5,16 @@ How WP CareGrid is connected to Stripe in **test mode** (a Stripe sandbox), how 
 ## What Stripe holds and what the application holds
 
 - **Application** (`config/pricing.php`, owner-published prices): plans, amounts, currency, intervals, markets and the tax treatment. It is the source of truth; the browser never sends an amount, currency or Price ID.
-- **Stripe**: two Products and twelve recurring HUF Prices that must match the catalogue exactly, the Checkout page, payment, the subscription and its invoices.
+- **Stripe**: two Products and 48 recurring Prices (6 plans × monthly/yearly × HUF/EUR/USD/GBP) that must match the catalogue exactly, the Checkout page, payment, and subscription records.
 - **Webhook**: the only way a payment becomes a customer, a login and a subscription. The success page after Checkout changes nothing.
 
 ## Configuration
 
 1. In the Stripe Dashboard switch to the test sandbox (top-left account switcher → Sandboxes, or `https://dashboard.stripe.com/test/apikeys`). Developers → API keys: put the secret key (`sk_test_…`) into `STRIPE_SECRET` and the publishable key (`pk_test_…`) into `STRIPE_KEY`. Keep `STRIPE_ALLOW_LIVE_MODE=false`; a `_live_` key is refused at checkout.
-2. Create two Products, **WordPress** and **WooCommerce**, and under them the twelve Prices below: currency HUF, recurring, interval count 1, amounts exactly as listed (Stripe's HUF amounts have two decimals: 8 990 Ft = `899000`). Do not set a tax behaviour. Reuse existing matching Products and Prices instead of creating duplicates; give each Price the lookup key shown so it can be found again.
-3. Put the Product IDs into `STRIPE_PRODUCT_WORDPRESS` / `STRIPE_PRODUCT_WOOCOMMERCE` and each Price ID into its variable.
+2. Reuse/create two Products, **WordPress** and **WooCommerce**, with monthly and annual recurring Prices for every plan and currency below. Each interval count is 1. Keep HUF's existing Stripe amount convention (8 990 Ft = `899000`); EUR/USD/GBP use cents/pence (e.g. €49 = `4900`). Reuse matching active TEST Prices rather than creating duplicates. Do not set tax behavior or enable Stripe Tax in this milestone.
+3. Put Product IDs into `STRIPE_PRODUCT_WORDPRESS` / `STRIPE_PRODUCT_WOOCOMMERCE` and each Price ID into its generated variable `STRIPE_PRICE_<PRODUCT>_<PLAN>_<INTERVAL>_<CURRENCY>` (for example `STRIPE_PRICE_WORDPRESS_BASIC_MONTHLY_EUR`).
 4. Add a webhook endpoint (Developers → Webhooks) at `<APP_URL>/stripe/webhook` with exactly the nine events below. Put its signing secret (`whsec_…`) into `STRIPE_WEBHOOK_SECRET`.
-5. `php artisan config:cache` (if caches are used), then `php artisan pricing:verify-stripe`. Every row must say `ok`: the Price exists, is active, recurring on the right interval, in HUF, with the catalogue amount, and belongs to the configured Product. Any mismatch: **stop** and fix Stripe (create a new Price); never change the catalogue to make the check pass. The same check (`StripePriceVerifier::verify()`) runs when an owner publishes a price and for "Check prices in Stripe" in the owner area.
+5. `php artisan config:cache` (if caches are used), then `php artisan pricing:verify-stripe`. All 48 rows must say `ok`: the Price exists, is active in TEST mode, recurring on the right interval, in the configured currency and amount, and belongs to the configured Product. Any mismatch: **stop** and fix Stripe (create a new Price); never change the catalogue to make the check pass. The same check (`StripePriceVerifier::verify()`) runs when an owner publishes a price and for "Check prices in Stripe" in the Owner area.
 6. `php artisan system:check`: Stripe and Mail must be OK.
 
 ### Environment variables
@@ -26,7 +26,7 @@ How WP CareGrid is connected to Stripe in **test mode** (a Stripe sandbox), how 
 | `STRIPE_WEBHOOK_SECRET` | `whsec_…` of the endpoint that serves this `APP_URL` |
 | `STRIPE_ALLOW_LIVE_MODE` | `false` |
 | `STRIPE_PRODUCT_WORDPRESS`, `STRIPE_PRODUCT_WOOCOMMERCE` | `prod_…` |
-| `STRIPE_PRICE_<PRODUCT>_<PLAN>_<INTERVAL>_HUF` (12) | `price_…` |
+| `STRIPE_PRICE_<PRODUCT>_<PLAN>_<INTERVAL>_<CURRENCY>` (48) | `price_…`; currency is HUF, EUR, USD, or GBP |
 | `APP_URL` | the public `https://` address: Stripe redirects and email links use it |
 | `MAIL_*` | a real mailer; the activation email is the customer's only way in |
 
@@ -47,7 +47,18 @@ How WP CareGrid is connected to Stripe in **test mode** (a Stripe sandbox), how 
 | `STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_HUF` | `caregrid_woocommerce_secure_monthly_huf` | 3990000 | month |
 | `STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_HUF` | `caregrid_woocommerce_secure_annual_huf` | 39900000 | year |
 
-Annual Prices are explicit (10 × monthly, "2 months free"); nothing calculates them. Only the Hungarian market has Prices: EU, GB and international checkouts are refused with "Pricing for your billing country is not available yet." Do not create EUR/USD/GBP Prices until those amounts are decided.
+## Fixed price matrix
+
+| Plan | HUF monthly / annual | EUR monthly / annual | USD monthly / annual | GBP monthly / annual |
+| --- | --- | --- | --- | --- |
+| WordPress Basic | 8 990 / 89 900 Ft | €49 / €490 | $49 / $490 | £49 / £490 |
+| WordPress Business | 18 990 / 189 900 Ft | €89 / €890 | $89 / $890 | £89 / £890 |
+| WordPress Secure | 28 990 / 289 900 Ft | €149 / €1 490 | $149 / $1 490 | £149 / £1 490 |
+| WooCommerce Basic | 14 900 / 149 000 Ft | €69 / €690 | $69 / $690 | £69 / £690 |
+| WooCommerce Business | 24 900 / 249 000 Ft | €99 / €990 | $99 / $990 | £99 / £990 |
+| WooCommerce Secure | 39 900 / 399 000 Ft | €159 / €1 590 | $159 / $1 590 | £159 / £1 590 |
+
+Every annual amount is exactly 10× its monthly amount (“2 months free”); no FX conversion is used. `config/pricing.php` generates the 48 env/config keys from this fixed matrix. The Owner Pricing & Currencies screen displays each row and verification state without exposing Stripe credentials. HU billing is server-enforced as HUF; all non-HU billing may choose EUR/USD/GBP. Non-HU tax treatment remains undetermined and VAT/tax logic is outside this milestone.
 
 ### Webhook events
 
@@ -57,7 +68,7 @@ Every event is signature-checked (`STRIPE_WEBHOOK_SECRET`), recorded by event ID
 
 ### Tax (test mode)
 
-Hungarian business rule: the listed price is the final customer price, no VAT added. In Stripe: Stripe Tax is not activated, there are no Tax Rates, the Prices have no tax behaviour and Checkout runs without automatic tax, so the customer pays exactly the listed amount (`amount_tax` = 0). Every checkout records `tax_treatment = final_price_no_vat_added`. Nothing beyond this Hungarian scenario is claimed; other markets have no prices and their tax treatment is `undetermined`. Invoicing (Billingo / Számlázz.hu) is separate and not part of this setup.
+Hungarian business rule: the listed HUF price is the final customer price, no VAT added. Stripe Tax is not activated, there are no Tax Rates, the Prices have no tax behaviour and Checkout runs without automatic tax, so the customer pays exactly the listed amount (`amount_tax` = 0). Every checkout records the configured tax-treatment label. International tax treatment remains `undetermined`; this milestone does not calculate VAT or tax. Invoicing (Billingo / Számlázz.hu) is separate.
 
 ### Promotion codes
 

@@ -80,15 +80,17 @@ class HomepageTest extends TestCase
 
     public function test_all_agreed_prices_are_rendered(): void
     {
+        $this->post(route('currency.update'), ['currency' => 'HUF']);
         $response = $this->get('/');
 
         foreach (['8,990', '89,900', '18,990', '189,900', '28,990', '289,900', '14,900', '149,000', '24,900', '249,000', '39,900', '399,000'] as $amount) {
-            $response->assertSee('>'.$amount.'<', false);
+            $response->assertSee('>'.$amount."\u{00A0}Ft<", false);
         }
 
         $response
-            ->assertSee('Ft / month')
-            ->assertSee('Ft / year')
+            ->assertSee('Ft')
+            ->assertSee('/ month')
+            ->assertSee('/ year')
             ->assertSee('2 months free')
             ->assertSee('Most popular')
             ->assertSee('These are final prices; no VAT is added.');

@@ -10,6 +10,8 @@ final readonly class Price
         public PlanTier $tier,
         public BillingInterval $interval,
         public string $market,
+        public string $marketGroup,
+        public string $stripePriceConfigKey,
         public Money $money,
         public ?string $stripePriceId,
         public bool $active,

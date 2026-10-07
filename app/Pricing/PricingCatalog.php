@@ -3,6 +3,7 @@
 namespace App\Pricing;
 
 use App\Pricing\Exceptions\InvalidPriceSelection;
+use App\Pricing\Exceptions\MarketCurrencyMismatch;
 use App\Pricing\Exceptions\MarketNotAvailable;
 use App\Pricing\Exceptions\PriceInactive;
 use App\Pricing\Exceptions\PriceNotPurchasable;
@@ -58,6 +59,7 @@ final class PricingCatalog
                 countries: array_map('strtoupper', $market['countries']),
                 currencyCode: $market['currency'],
                 taxTreatment: TaxTreatment::from($market['tax_treatment']),
+                group: $market['group'] ?? ($key === 'hu' ? 'HU' : 'INTERNATIONAL'),
             );
         }
 
@@ -110,6 +112,8 @@ final class PricingCatalog
                 tier: PlanTier::from($price['plan']),
                 interval: BillingInterval::from($price['interval']),
                 market: $market->key,
+                marketGroup: $market->group,
+                stripePriceConfigKey: (string) ($price['stripe_price_config_key'] ?? ''),
                 money: new Money((int) $price['amount'], $currencies[$price['currency']]),
                 stripePriceId: $price['stripe_price_id'] ?? null,
                 active: (bool) ($price['active'] ?? true),
@@ -229,19 +233,51 @@ final class PricingCatalog
      */
     public function sellableCurrencies(): array
     {
+        $enabled = (array) config('owner_settings.pricing.enabled_currencies', config('pricing.enabled_currencies', array_keys($this->currencies)));
         $codes = [];
-        foreach ($this->markets as $market) {
-            if ($this->hasPrices($market) && ! in_array($market->currencyCode, $codes, true)) {
-                $codes[] = $market->currencyCode;
+        foreach (array_values(array_unique($enabled)) as $currencyCode) {
+            foreach ($this->markets as $market) {
+                if ($market->currencyCode === $currencyCode && $this->hasPrices($market)) {
+                    $codes[] = $currencyCode;
+                    break;
+                }
             }
         }
 
         return $codes;
     }
 
+    /** Recovery offers are one-off manual prices and remain HUF-only in this milestone. */
+    public function recoveryOfferCurrencies(): array
+    {
+        return in_array('HUF', $this->sellableCurrencies(), true) ? ['HUF'] : [];
+    }
+
+    /** The configured international default when enabled, otherwise an enabled international choice. */
+    public function defaultInternationalCurrency(): ?string
+    {
+        $configured = (string) config('owner_settings.pricing.default_international_currency', config('pricing.default_international_currency', 'EUR'));
+        if (in_array($configured, $this->sellableCurrencies(), true) && $configured !== 'HUF') {
+            return $configured;
+        }
+
+        foreach (['EUR', 'USD', 'GBP'] as $currency) {
+            if (in_array($currency, $this->sellableCurrencies(), true)) {
+                return $currency;
+            }
+        }
+
+        return null;
+    }
+
     /** The first market with prices that sells in this currency. */
     public function marketForCurrency(string $currencyCode): ?Market
     {
+        $configured = config("pricing.currency_markets.{$currencyCode}");
+        if (is_string($configured) && isset($this->markets[$configured]) && $this->hasPrices($this->markets[$configured])) {
+            return $this->markets[$configured];
+        }
+
         foreach ($this->markets as $market) {
             if ($market->currencyCode === $currencyCode && $this->hasPrices($market)) {
                 return $market;
@@ -307,9 +343,20 @@ final class PricingCatalog
      * @throws PriceInactive when the price exists but is not being sold
      * @throws PriceNotPurchasable when no Stripe Price ID is configured
      */
-    public function resolve(PriceSelection $selection, string $country): Price
+    public function resolve(PriceSelection $selection, string $country, ?string $currency = null): Price
     {
-        $market = $this->marketForCountry($country);
+        $country = strtoupper(trim($country));
+        $hungarian = $country === 'HU';
+        $currency ??= $hungarian ? 'HUF' : $this->defaultInternationalCurrency();
+
+        if ($hungarian && $currency !== 'HUF') {
+            throw new MarketCurrencyMismatch;
+        }
+        if (! $hungarian && ($currency === 'HUF' || ! in_array($currency, $this->sellableCurrencies(), true))) {
+            throw new MarketCurrencyMismatch;
+        }
+
+        $market = $hungarian ? $this->market('hu') : ($this->marketForCurrency($currency) ?? throw new MarketCurrencyMismatch);
         $price = $this->price($selection->productType, $selection->tier, $selection->interval, $market);
 
         if (! $price) {

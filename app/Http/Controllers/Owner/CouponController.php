@@ -47,10 +47,12 @@ class CouponController extends Controller
         $data = $request->validate([
             'code' => ['required', 'string', 'regex:/^[A-Za-z0-9_-]{3,32}$/'],
             'percent_off' => ['required', 'string', fn ($attribute, $value, $fail) => Promotion::parsePercent($value) === null ? $fail(__('owner.coupons.errors.percent')) : null],
-            'duration' => ['required', Rule::in(['once', 'repeating', 'forever'])],
-            'duration_months' => ['nullable', 'required_if:duration,repeating', 'integer', 'between:1,36'],
+            'duration' => ['required', Rule::in(['once', 'forever'])],
             ...$this->editableRules(),
-        ], ['code.regex' => __('owner.coupons.errors.code_format')]);
+        ], [
+            'code.regex' => __('owner.coupons.errors.code_format'),
+            'duration.in' => __('owner.coupons.errors.repeating_deprecated'),
+        ]);
 
         $data['percent_off'] = Promotion::parsePercent($data['percent_off']);
 
@@ -65,7 +67,7 @@ class CouponController extends Controller
 
     public function show(Promotion $coupon): View
     {
-        return view('owner.coupons.show', $this->formData() + [
+        return view('owner.coupons.show', $this->formData(allowCustom: true) + [
             'coupon' => $coupon,
             'stripeConfigured' => filled(config('services.stripe.secret')),
             'recent' => CheckoutIntent::where('promotion_id', $coupon->id)->latest('id')->limit(10)->get(['uuid', 'status', 'product_type', 'plan', 'interval', 'completed_at', 'created_at']),
@@ -75,9 +77,18 @@ class CouponController extends Controller
 
     public function update(Request $request, Promotion $coupon, Coupons $coupons): RedirectResponse
     {
-        $data = $request->validate($this->editableRules());
+        $data = $request->validate($this->editableRules(allowCustom: true));
+        if (! array_key_exists('market_group', $data)) {
+            $data['market_group'] = $coupon->marketGroupValue();
+        }
+        if ($data['market_group'] === 'CUSTOM') {
+            if ($coupon->marketGroupValue() !== 'CUSTOM') {
+                abort(422);
+            }
+            $data['markets'] = $coupon->markets;
+        }
 
-        $coupons->update($coupon, $this->normalise($data), $request->user());
+        $coupon = $coupons->update($coupon, $this->normalise($data), $request->user());
 
         return redirect()->route('owner.coupons.show', $coupon)->with('status', $coupon->wasChanged() ? __('owner.coupons.saved') : __('owner.coupons.unchanged'));
     }
@@ -112,7 +123,7 @@ class CouponController extends Controller
     }
 
     /** @return array<string, mixed> */
-    private function editableRules(): array
+    private function editableRules(bool $allowCustom = false): array
     {
         return [
             'starts_at' => ['nullable', 'date'],
@@ -125,6 +136,7 @@ class CouponController extends Controller
             'plans.*' => ['string', Rule::enum(PlanTier::class)],
             'intervals' => ['nullable', 'array'],
             'intervals.*' => ['string', Rule::enum(BillingInterval::class)],
+            'market_group' => ['nullable', Rule::in($allowCustom ? ['all', 'HU', 'INTERNATIONAL', 'CUSTOM'] : ['all', 'HU', 'INTERNATIONAL'])],
             'note' => ['nullable', 'string', 'max:1000'],
         ];
     }
@@ -141,18 +153,31 @@ class CouponController extends Controller
         foreach (['max_redemptions', 'max_redemptions_per_customer', 'duration_months'] as $field) {
             $data[$field] = filled($data[$field] ?? null) ? (int) $data[$field] : null;
         }
+        $group = $data['market_group'] ?? 'all';
+        $data['markets'] = match ($group) {
+            'HU', 'INTERNATIONAL' => [$group],
+            'CUSTOM' => $data['markets'] ?? null,
+            default => null,
+        };
+        unset($data['market_group']);
 
         return $data;
     }
 
     /** @return array<string, mixed> */
-    private function formData(): array
+    private function formData(bool $allowCustom = false): array
     {
         return [
             'productTypes' => ProductType::cases(),
             'tiers' => PlanTier::cases(),
             'intervals' => BillingInterval::cases(),
             'timezone' => config('app.timezone'),
+            'marketGroups' => [
+                'all' => __('owner.coupons.market_groups.all'),
+                'HU' => __('owner.coupons.market_groups.hu'),
+                'INTERNATIONAL' => __('owner.coupons.market_groups.international'),
+                ...($allowCustom ? ['CUSTOM' => __('owner.coupons.market_groups.custom')] : []),
+            ],
         ];
     }
 }

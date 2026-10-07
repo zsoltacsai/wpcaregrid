@@ -51,7 +51,7 @@ trait SendsStripeWebhooks
                 'object' => 'subscription_item',
                 'current_period_start' => now()->timestamp,
                 'current_period_end' => now()->addMonth()->timestamp,
-                'price' => ['id' => 'price_wordpress_business_monthly', 'object' => 'price', 'unit_amount' => 1899000, 'currency' => 'huf'],
+                'price' => ['id' => 'price_wordpress_business_monthly_HUF', 'object' => 'price', 'unit_amount' => 1899000, 'currency' => 'huf'],
             ]]],
         ], $overrides);
     }

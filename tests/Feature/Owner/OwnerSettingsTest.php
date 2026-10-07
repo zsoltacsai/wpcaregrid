@@ -52,7 +52,7 @@ final class OwnerSettingsTest extends TestCase
         $this->assertNull($settings->get('general.support_email'));
         $this->assertSame('UTC', $settings->get('general.timezone'));
         $this->assertSame('en', $settings->get('localization.default_language'));
-        $this->assertSame(['HUF'], $settings->get('pricing.enabled_currencies'));
+        $this->assertSame(['HUF', 'EUR', 'USD', 'GBP'], $settings->get('pricing.enabled_currencies'));
         $this->assertSame(25, $settings->get('mail.port'));
         $this->assertSame('HUF', $settings->suggestedCurrency('hu-HU'));
         $this->assertSame('HUF', $settings->suggestedCurrency('hu'));
@@ -209,8 +209,11 @@ final class OwnerSettingsTest extends TestCase
         ]);
         Log::spy();
 
-        $this->assertSame('WP CareGrid', app(OwnerSettings::class)->get('general.business_name'));
-        $this->assertSame(['HUF'], app(OwnerSettings::class)->get('pricing.enabled_currencies'));
+        // The scoped settings snapshot may already have been resolved during
+        // application boot; read a fresh repository after inserting corrupt rows.
+        $settings = new OwnerSettings;
+        $this->assertSame('WP CareGrid', $settings->get('general.business_name'));
+        $this->assertSame(['HUF', 'EUR', 'USD', 'GBP'], $settings->get('pricing.enabled_currencies'));
         Log::shouldHaveReceived('warning')->twice();
     }
 
@@ -224,7 +227,8 @@ final class OwnerSettingsTest extends TestCase
         ]);
         Log::spy();
 
-        $settings = app(OwnerSettings::class);
+        // Read persisted state with a fresh request-scoped snapshot.
+        $settings = new OwnerSettings;
         $this->assertFalse($settings->hasStored('mail.mode'));
         $this->assertSame(
             $this->loopback(config('mail.mailers.smtp.host')) || config('mail.mailers.smtp.host') === config('mail.mailers.smtp.local_domain')

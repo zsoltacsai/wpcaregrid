@@ -212,21 +212,21 @@ Keys may be supplied through the environment or replaced in Owner → Integratio
 
 Full procedure, price mapping, tax setting and troubleshooting: [STRIPE_TEST_MODE.md](STRIPE_TEST_MODE.md).
 
-1. In the Stripe dashboard (test mode) create two products, **WordPress** and **WooCommerce**, and **12 recurring prices in HUF**, exactly matching `config/pricing.php`:
+1. In the Stripe dashboard (test mode) reuse/create the two products, **WordPress** and **WooCommerce**, and configure all **48 recurring prices** (6 plans × 2 intervals × HUF/EUR/USD/GBP) exactly matching `config/pricing.php`:
 
-   | Plan | Monthly | Annual |
-   | --- | ---: | ---: |
-   | WordPress Basic | 8 990 Ft | 89 900 Ft |
-   | WordPress Business | 18 990 Ft | 189 900 Ft |
-   | WordPress Secure | 28 990 Ft | 289 900 Ft |
-   | WooCommerce Basic | 14 900 Ft | 149 000 Ft |
-   | WooCommerce Business | 24 900 Ft | 249 000 Ft |
-   | WooCommerce Secure | 39 900 Ft | 399 000 Ft |
+   | Plan | HUF month/year | EUR month/year | USD month/year | GBP month/year |
+   | --- | --- | --- | --- | --- |
+   | WordPress Basic | 8 990 / 89 900 Ft | €49 / €490 | $49 / $490 | £49 / £490 |
+   | WordPress Business | 18 990 / 189 900 Ft | €89 / €890 | $89 / $890 | £89 / £890 |
+   | WordPress Secure | 28 990 / 289 900 Ft | €149 / €1 490 | $149 / $1 490 | £149 / £1 490 |
+   | WooCommerce Basic | 14 900 / 149 000 Ft | €69 / €690 | $69 / $690 | £69 / £690 |
+   | WooCommerce Business | 24 900 / 249 000 Ft | €99 / €990 | $99 / $990 | £99 / £990 |
+   | WooCommerce Secure | 39 900 / 399 000 Ft | €159 / €1 590 | $159 / $1 590 | £159 / £1 590 |
 
    Monthly prices recur every month, annual every year (interval count 1).
-2. Put the `price_…` IDs into `STRIPE_PRICE_<PRODUCT>_<PLAN>_<INTERVAL>_HUF`, the product IDs into `STRIPE_PRODUCT_WORDPRESS` / `STRIPE_PRODUCT_WOOCOMMERCE`; set `STRIPE_SECRET` (`sk_test_…`) and `STRIPE_KEY` (`pk_test_…`) in the environment or Owner → Integrations.
+2. Put the Price IDs into `STRIPE_PRICE_<PRODUCT>_<PLAN>_<INTERVAL>_<CURRENCY>` for each HUF/EUR/USD/GBP combination; the product IDs go in `STRIPE_PRODUCT_WORDPRESS` / `STRIPE_PRODUCT_WOOCOMMERCE`. Set `STRIPE_SECRET` (`sk_test_…`) and `STRIPE_KEY` (`pk_test_…`) in the environment or Owner → Integrations. Annual prices are exactly 10× monthly; these are fixed market prices, not live FX conversions.
 3. Add a webhook endpoint `https://<APP_URL>/stripe/webhook` with these events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Set `STRIPE_WEBHOOK_SECRET` in the environment or Owner → Integrations.
-4. `php artisan config:cache && php artisan pricing:verify-stripe` must print `ok` for every price (exists, active, recurring, same amount, currency and interval, attached to the configured product). The owner area's "Check prices in Stripe" runs the same check.
+4. `php artisan config:cache && php artisan pricing:verify-stripe` must print `ok` for all 48 prices (exists, active, TEST mode, recurring, exact amount/currency/interval, attached to the configured product). The Owner Pricing & Currencies page shows the per-price verification state; “Check prices in Stripe” runs the same check.
 5. Test purchase with Stripe's test card. The account is created only when the signed webhook arrives; the success page alone never activates anything.
 
 Without `STRIPE_SECRET` checkout refuses to start, `system:check` reports Stripe as NOT CONFIGURED, and the webhook answers 500 "not configured" (Stripe will retry).
@@ -382,7 +382,7 @@ Production values from the table above, and:
 | `APP_LOCALE` | the language for visitors who have not chosen: `hu` or `en` (docs/LOCALIZATION.md). Everyone can switch; the choice is remembered in a cookie and, for customers, on their login |
 | `LOG_CHANNEL` / `LOG_LEVEL` | `daily` / `info` |
 | `MAIL_*` | the provider's SMTP relay; `MAIL_FROM_ADDRESS` on a verified domain (for example `staging@wpcaregrid.com`) |
-| `STRIPE_*` | test-mode keys (`sk_test_…`, `pk_test_…`), the 12 price IDs and 2 product IDs (STRIPE_TEST_MODE.md), the staging endpoint's `whsec_…`, `STRIPE_ALLOW_LIVE_MODE=false` |
+| `STRIPE_*` | test-mode keys (`sk_test_…`, `pk_test_…`), the 48 price IDs and 2 product IDs (STRIPE_TEST_MODE.md), the staging endpoint's `whsec_…`, `STRIPE_ALLOW_LIVE_MODE=false` |
 | `BACKUP_STORAGE` | `s3`, with endpoint, region, private staging-only bucket, credentials scoped to the backup object prefix (put, get, delete; no bucket listing required), prefix and provider-specific path style. Select `BACKUP_S3_ENCRYPTION_MODE` explicitly when changing from the legacy `BACKUP_S3_SSE=AES256` behavior. In `sse-c` mode the legacy `BACKUP_S3_SSE` setting is ignored; `BACKUP_S3_SSE=AES256` does not activate SSE-C. For Hetzner Object Storage use `sse-c` and a securely escrowed `BACKUP_S3_SSE_C_KEY`; no real Hetzner E2E has been performed and `HeadObject` checksum compatibility remains unverified. |
 | `BACKUP_RETENTION_*` | set per plan before scheduled backups run for long (no default: nothing is deleted while unset) |
 | `HTTP_CSP` | `report-only` |
@@ -411,7 +411,7 @@ Use the existing test sandbox (STRIPE_TEST_MODE.md): the same products and price
 3. nginx + certificate; `https://staging.wpcaregrid.com/up` answers 200; `http://` redirects; `X-Robots-Tag` present.
 4. Supervisor running both workers (`supervisorctl status`); cron as `www-data`.
 5. `php artisan system:check` exits 0: every part OK (scheduler after its first minute).
-6. `php artisan pricing:verify-stripe`: ok for all 12.
+6. `php artisan pricing:verify-stripe`: ok for all 48.
 7. Smoke test: `php tests/smoke/http-smoke.php https://staging.wpcaregrid.com`.
 8. Owner created (`php artisan owner:user <email> --name="…"`); invitation email received through the real provider (not spam); link is `https://staging.wpcaregrid.com/…`.
 9. PILOT.md end-to-end run, including the Stripe test purchase from `/pricing` with the webhook arriving at staging.

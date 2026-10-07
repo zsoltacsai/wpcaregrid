@@ -56,7 +56,7 @@ class SubscriptionLifecycleTest extends TestCase
             'currency' => 'HUF',
             'amount' => 1899000,
             'tax_treatment' => 'final_price_no_vat_added',
-            'stripe_price_id' => 'price_wordpress_business_monthly',
+            'stripe_price_id' => 'price_wordpress_business_monthly_HUF',
             'stripe_checkout_session_id' => 'cs_test_1',
         ]);
     }
@@ -180,6 +180,65 @@ class SubscriptionLifecycleTest extends TestCase
         $this->subscriptionEvent('customer.subscription.created', 'active', $intent, created: now()->subMinutes(5)->timestamp);
 
         $this->assertSame(SubscriptionStatus::PastDue, Subscription::sole()->status);
+    }
+
+    public function test_same_second_subscription_events_use_a_stable_event_id_tie_break(): void
+    {
+        $created = now()->timestamp;
+        $first = $this->intent();
+        $second = $this->intent(['email' => 'other@example.test', 'stripe_checkout_session_id' => 'cs_test_2']);
+
+        $this->subscriptionEvent('customer.subscription.updated', 'past_due', $first, ['id' => 'sub_first'], $created, 'evt_aa_old')->assertStatus(204);
+        $this->subscriptionEvent('customer.subscription.updated', 'active', $first, ['id' => 'sub_first'], $created, 'evt_zz_winner')->assertStatus(204);
+        $this->subscriptionEvent('customer.subscription.updated', 'active', $second, ['id' => 'sub_second', 'customer' => 'cus_test_2'], $created, 'evt_zz_winner_second')->assertStatus(204);
+        $this->subscriptionEvent('customer.subscription.updated', 'past_due', $second, ['id' => 'sub_second', 'customer' => 'cus_test_2'], $created, 'evt_aa_loser_second')->assertStatus(204);
+
+        $this->assertSame(SubscriptionStatus::Active, Subscription::where('stripe_subscription_id', 'sub_first')->sole()->status);
+        $this->assertSame(SubscriptionStatus::Active, Subscription::where('stripe_subscription_id', 'sub_second')->sole()->status);
+        $this->assertSame('evt_zz_winner', Subscription::where('stripe_subscription_id', 'sub_first')->sole()->stripe_synced_event_id);
+        $this->assertSame('evt_zz_winner_second', Subscription::where('stripe_subscription_id', 'sub_second')->sole()->stripe_synced_event_id);
+    }
+
+    public function test_same_second_cancellation_wins_and_cannot_be_resurrected(): void
+    {
+        $intent = $this->intent();
+        $created = now()->timestamp;
+        $this->subscriptionEvent('customer.subscription.updated', 'active', $intent, created: $created, eventId: 'evt_zz_active')->assertStatus(204);
+        $this->subscriptionEvent('customer.subscription.deleted', 'canceled', $intent, created: $created, eventId: 'evt_aa_deleted')->assertStatus(204);
+        $this->subscriptionEvent('customer.subscription.updated', 'active', $intent, created: $created, eventId: 'evt_zzz_resurrect')->assertStatus(204);
+
+        $this->assertSame(SubscriptionStatus::Canceled, Subscription::sole()->status);
+        $this->assertSame('evt_aa_deleted', Subscription::sole()->stripe_synced_event_id);
+    }
+
+    public function test_subscription_event_with_a_foreign_customer_cannot_reassign_local_billing(): void
+    {
+        $intent = $this->intent();
+        $this->subscriptionEvent('customer.subscription.created', 'active', $intent)->assertStatus(204);
+        $subscription = Subscription::sole();
+        $customerId = $subscription->customer_id;
+
+        $this->subscriptionEvent('customer.subscription.deleted', 'canceled', $intent, ['customer' => 'cus_foreign'], eventId: 'evt_foreign_customer')->assertStatus(204);
+
+        $this->assertSame(SubscriptionStatus::Active, $subscription->refresh()->status);
+        $this->assertSame($customerId, $subscription->customer_id);
+        $this->assertSame('cus_test_1', $subscription->stripe_customer_id);
+    }
+
+    public function test_checkout_cannot_attach_a_stripe_customer_mapped_to_another_email(): void
+    {
+        $intent = $this->intent();
+        $otherCustomer = Customer::factory()->create([
+            'email' => 'different@example.test',
+            'stripe_customer_id' => 'cus_other_customer',
+        ]);
+
+        $this->completeCheckout($intent, ['customer' => 'cus_other_customer'])->assertStatus(500);
+
+        $this->assertSame(CheckoutStatus::CheckoutCreated, $intent->refresh()->status);
+        $this->assertDatabaseCount('subscriptions', 0);
+        $this->assertDatabaseCount('stripe_events', 0);
+        $this->assertSame('different@example.test', $otherCustomer->refresh()->email);
     }
 
     // --- Idempotency -------------------------------------------------------

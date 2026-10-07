@@ -17,7 +17,7 @@ interface PromotionGateway
      * Create the coupon and its customer-facing promotion code.
      *
      * @param  string  $percentOff  "10", "12.5" or "100"
-     * @param  string  $duration  once | repeating | forever
+     * @param  string  $duration  once | repeating | forever (repeating retained for legacy compatibility; new owner coupons use once/forever)
      * @return array{coupon: string, promotion_code: string}
      *
      * @throws PromotionGatewayException

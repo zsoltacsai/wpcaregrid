@@ -4,13 +4,11 @@
     <form method="POST" action="{{ route('owner.coupons.store') }}" class="grid gap-4" novalidate x-data="{ duration: @js(old('duration', 'once')), percent: @js(old('percent_off', '')) }">
         @csrf
         <x-operator.section :title="__('owner.coupons.sections.discount')" id="coupon-discount">
+            <p class="mb-3 text-xs text-muted">{{ __('owner.coupons.hints.repeating_deprecated') }}</p>
             <div class="grid gap-4 md:grid-cols-2">
                 <x-form.field name="code" :label="__('owner.coupons.fields.code')" required maxlength="32" class="font-mono" autocapitalize="characters" :hint="__('owner.coupons.hints.code')" />
                 <x-form.field name="percent_off" inputmode="decimal" :label="__('owner.coupons.fields.percent_off')" required maxlength="6" x-model="percent" :hint="__('owner.coupons.hints.percent_off')" />
-                <x-form.select name="duration" :label="__('owner.coupons.fields.duration')" :options="['once' => __('owner.coupons.durations.once'), 'repeating' => __('owner.coupons.durations.repeating'), 'forever' => __('owner.coupons.durations.forever')]" :selected="old('duration', 'once')" x-model="duration" :hint="__('owner.coupons.hints.duration')" />
-                <div x-show="duration === 'repeating'" x-cloak>
-                    <x-form.field name="duration_months" type="number" min="1" max="36" inputmode="numeric" :label="__('owner.coupons.fields.duration_months')" :hint="__('owner.coupons.hints.duration_months')" />
-                </div>
+                <x-form.select name="duration" :label="__('owner.coupons.fields.duration')" :options="['once' => __('owner.coupons.durations.once'), 'forever' => __('owner.coupons.durations.forever')]" :selected="old('duration', 'once')" x-model="duration" :hint="__('owner.coupons.hints.duration')" />
             </div>
             <p class="mt-3 text-xs text-muted" x-show="percent.trim() === '100' && duration === 'forever'" x-cloak>{{ __('owner.coupons.hints.free_forever') }}</p>
             <p class="mt-3 text-xs text-muted" x-show="percent.trim() === '100' && duration !== 'forever'" x-cloak>{{ __('owner.coupons.hints.free_then_paid') }}</p>

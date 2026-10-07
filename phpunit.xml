@@ -55,6 +55,42 @@
         <env name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_ANNUAL_HUF" value="" force="true"/>
         <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_HUF" value="" force="true"/>
         <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_HUF" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BASIC_MONTHLY_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BASIC_ANNUAL_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BUSINESS_MONTHLY_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BUSINESS_ANNUAL_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_SECURE_MONTHLY_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_SECURE_ANNUAL_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BASIC_MONTHLY_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BASIC_ANNUAL_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_MONTHLY_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_ANNUAL_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_EUR" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BASIC_MONTHLY_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BASIC_ANNUAL_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BUSINESS_MONTHLY_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BUSINESS_ANNUAL_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_SECURE_MONTHLY_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_SECURE_ANNUAL_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BASIC_MONTHLY_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BASIC_ANNUAL_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_MONTHLY_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_ANNUAL_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_USD" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BASIC_MONTHLY_GBP" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BASIC_ANNUAL_GBP" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BUSINESS_MONTHLY_GBP" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_BUSINESS_ANNUAL_GBP" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_SECURE_MONTHLY_GBP" value="" force="true"/>
+        <env name="STRIPE_PRICE_WORDPRESS_SECURE_ANNUAL_GBP" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BASIC_MONTHLY_GBP" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BASIC_ANNUAL_GBP" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_MONTHLY_GBP" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_ANNUAL_GBP" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_GBP" value="" force="true"/>
+        <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_GBP" value="" force="true"/>
         <server name="APP_URL" value="http://localhost" force="true"/>
         <server name="APP_LOCALE" value="en" force="true"/>
         <server name="TRUSTED_PROXIES" value="" force="true"/>
@@ -76,5 +112,41 @@
         <server name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_ANNUAL_HUF" value="" force="true"/>
         <server name="STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_HUF" value="" force="true"/>
         <server name="STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_HUF" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BASIC_MONTHLY_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BASIC_ANNUAL_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BUSINESS_MONTHLY_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BUSINESS_ANNUAL_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_SECURE_MONTHLY_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_SECURE_ANNUAL_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BASIC_MONTHLY_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BASIC_ANNUAL_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_MONTHLY_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_ANNUAL_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_EUR" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BASIC_MONTHLY_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BASIC_ANNUAL_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BUSINESS_MONTHLY_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BUSINESS_ANNUAL_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_SECURE_MONTHLY_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_SECURE_ANNUAL_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BASIC_MONTHLY_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BASIC_ANNUAL_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_MONTHLY_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_ANNUAL_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_USD" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BASIC_MONTHLY_GBP" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BASIC_ANNUAL_GBP" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BUSINESS_MONTHLY_GBP" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_SECURE_ANNUAL_GBP" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_SECURE_MONTHLY_GBP" value="" force="true"/>
+        <server name="STRIPE_PRICE_WORDPRESS_BUSINESS_ANNUAL_GBP" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BASIC_MONTHLY_GBP" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BASIC_ANNUAL_GBP" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_MONTHLY_GBP" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_ANNUAL_GBP" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_GBP" value="" force="true"/>
+        <server name="STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_GBP" value="" force="true"/>
     </php>
 </phpunit>

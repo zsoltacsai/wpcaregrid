@@ -22,6 +22,7 @@ final class StartCheckout
     public function __construct(
         private readonly PricingCatalog $catalog,
         private readonly CheckoutGateway $gateway,
+        private readonly PromotionReservations $reservations,
     ) {}
 
     /**
@@ -31,7 +32,7 @@ final class StartCheckout
      * @throws PromotionRejected when the code is unknown or not valid for the price
      * @throws CheckoutUnavailable when Stripe cannot be used
      */
-    public function handle(PriceSelection $selection, CustomerDetails $customer, ?string $promotionCode, string $browserSessionId, ?Customer $account = null): CheckoutIntent
+    public function handle(PriceSelection $selection, CustomerDetails $customer, ?string $promotionCode, string $browserSessionId, ?Customer $account = null, ?string $currency = null): CheckoutIntent
     {
         // A logged-in customer buys for their own account and email.
         if ($account) {
@@ -46,8 +47,18 @@ final class StartCheckout
                 billingAddress: $account->billing_address,
             );
         }
+        $customer = new CustomerDetails(
+            email: Customer::normalizeEmail($customer->email),
+            firstName: $customer->firstName,
+            lastName: $customer->lastName,
+            country: $customer->country,
+            customerType: $customer->customerType,
+            companyName: $customer->companyName,
+            taxId: $customer->taxId,
+            billingAddress: $customer->billingAddress,
+        );
 
-        $price = $this->catalog->resolve($selection, $customer->country);
+        $price = $this->catalog->resolve($selection, $customer->country, $currency);
         $market = $this->catalog->market($price->market);
 
         $promotion = null;
@@ -70,6 +81,8 @@ final class StartCheckout
         $existing = CheckoutIntent::query()
             ->where('browser_session_hash', $sessionHash)
             ->where('email', $customer->email)
+            ->where('country', $customer->country)
+            ->where('currency', $price->money->currency->code)
             ->where('product_type', $selection->productType->value)
             ->where('plan', $selection->tier->value)
             ->where('interval', $selection->interval->value)
@@ -82,34 +95,43 @@ final class StartCheckout
             return $existing;
         }
 
-        $intent = DB::transaction(fn () => CheckoutIntent::create([
-            'status' => CheckoutStatus::Pending,
-            'customer_id' => $account?->id,
-            'email' => $customer->email,
-            'first_name' => $customer->firstName,
-            'last_name' => $customer->lastName,
-            'country' => $customer->country,
-            'customer_type' => $customer->customerType,
-            'company_name' => $customer->companyName,
-            'tax_id' => $customer->taxId,
-            'billing_address' => $customer->billingAddress,
-            'product_type' => $price->productType,
-            'plan' => $price->tier,
-            'interval' => $price->interval,
-            'market' => $price->market,
-            'currency' => $price->money->currency->code,
-            'amount' => $price->money->amount,
-            'tax_treatment' => $market->taxTreatment->value,
-            'stripe_price_id' => $price->stripePriceId,
-            'promotion_id' => $promotion?->id,
-            'promotion_code' => $promotion?->code,
-            'browser_session_hash' => $sessionHash,
-        ]));
+        $intent = DB::transaction(function () use ($account, $customer, $price, $market, $promotion, $sessionHash) {
+            $intent = CheckoutIntent::create([
+                'status' => CheckoutStatus::Pending,
+                'customer_id' => $account?->id,
+                'email' => $customer->email,
+                'first_name' => $customer->firstName,
+                'last_name' => $customer->lastName,
+                'country' => $customer->country,
+                'customer_type' => $customer->customerType,
+                'company_name' => $customer->companyName,
+                'tax_id' => $customer->taxId,
+                'billing_address' => $customer->billingAddress,
+                'product_type' => $price->productType,
+                'plan' => $price->tier,
+                'interval' => $price->interval,
+                'market' => $price->marketGroup,
+                'currency' => $price->money->currency->code,
+                'amount' => $price->money->amount,
+                'tax_treatment' => $market->taxTreatment->value,
+                'stripe_price_id' => $price->stripePriceId,
+                'promotion_id' => $promotion?->id,
+                'promotion_code' => $promotion?->code,
+                'browser_session_hash' => $sessionHash,
+            ]);
+
+            if ($promotion) {
+                $this->reservations->reserve($promotion, $intent, $price, $customer->email, $account?->id);
+            }
+
+            return $intent;
+        });
 
         try {
             $session = $this->gateway->createSession($intent, $promotion);
         } catch (CheckoutUnavailable $e) {
             $intent->update(['status' => CheckoutStatus::Failed, 'failure_reason' => $e->getMessage()]);
+            $this->reservations->release($intent);
 
             throw $e;
         }
@@ -120,6 +142,7 @@ final class StartCheckout
             'stripe_checkout_url' => $session->url,
             'stripe_checkout_expires_at' => $session->expiresAt,
         ]);
+        $this->reservations->setExpiry($intent, $session->expiresAt);
 
         return $intent;
     }

@@ -10,8 +10,9 @@
             <dl class="grid grid-cols-[minmax(0,150px)_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
                 <dt class="text-muted">{{ __('owner.coupons.fields.percent_off') }}</dt><dd class="tabular-nums">{{ $coupon->percentLabel() }}%</dd>
                 <dt class="text-muted">{{ __('owner.coupons.fields.duration') }}</dt><dd>{{ __('owner.coupons.durations_short.'.$coupon->duration, ['months' => $coupon->duration_months]) }}</dd>
+                <dt class="text-muted">{{ __('owner.coupons.fields.market_group') }}</dt><dd>{{ __('owner.coupons.market_groups.'.$coupon->marketLabelKey()) }}</dd>
                 <dt class="text-muted">{{ __('owner.coupons.columns.used') }}</dt><dd class="tabular-nums">{{ $coupon->times_redeemed }}</dd>
-                <dt class="text-muted">{{ __('owner.coupons.remaining') }}</dt><dd class="tabular-nums">{{ $coupon->remainingRedemptions() ?? __('owner.coupons.unlimited') }}</dd>
+                <dt class="text-muted">{{ __('owner.coupons.remaining') }}</dt><dd class="tabular-nums">{{ $coupon->remainingRedemptions() ?? __('owner.coupons.unlimited') }} <span class="text-muted">({{ __('owner.coupons.reserved', ['count' => app(\App\Checkout\PromotionReservations::class)->activeCount($coupon)]) }})</span></dd>
                 <dt class="text-muted">{{ __('owner.coupons.created_at') }}</dt><dd class="font-mono text-xs">{{ $coupon->created_at->format('Y-m-d H:i') }}</dd>
                 <dt class="text-muted">{{ __('owner.coupons.columns.updated') }}</dt><dd class="font-mono text-xs">{{ $coupon->updated_at->format('Y-m-d H:i') }}</dd>
                 <dt class="text-muted">{{ __('owner.coupons.stripe_code') }}</dt><dd class="font-mono text-xs break-all">{{ $coupon->stripe_promotion_code_id ?: '—' }}</dd>

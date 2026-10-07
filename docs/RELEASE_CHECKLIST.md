@@ -66,7 +66,7 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 | Item | State | Check |
 | --- | --- | --- |
 | Test-mode keys (`STRIPE_KEY`, `STRIPE_SECRET`) | READY (local) | test sandbox keys in the local `.env`; staging needs its own `.env` (STRIPE_TEST_MODE.md) |
-| 2 products and 12 recurring HUF prices created and their IDs set | READY | `php artisan pricing:verify-stripe`: ok for all 12, including the product (2026-10-04) |
+| 2 products and 48 recurring TEST prices configured (HUF/EUR/USD/GBP) | PENDING | `php artisan pricing:verify-stripe` must validate all 48 prices before checkout acceptance |
 | Webhook endpoint + signing secret, 9 events | READY (local) | registered for the temporary tunnel and verified; staging needs its own endpoint for its `APP_URL` |
 | Tax setting for Hungary (final price, no VAT added) | READY | Stripe Tax off, no tax rates, `amount_tax` 0 on every session (STRIPE_TEST_MODE.md) |
 | Promotion codes (local rules + Stripe discount) | READY | real checkout with `PILOT10`: 8 990 Ft → 8 091 Ft charged; unknown and not-applicable codes refused locally |

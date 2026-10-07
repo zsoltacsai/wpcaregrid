@@ -98,7 +98,7 @@ class CustomerAreaTest extends TestCase
         $this->actingAs($customer->user)->post(route('checkout.store'), [
             'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly',
             // A different email in the form is ignored for a logged-in customer.
-            'email' => 'someone-else@company.example', 'first_name' => 'X', 'last_name' => 'Y', 'country' => 'HU',
+            'email' => 'someone-else@company.example', 'first_name' => 'X', 'last_name' => 'Y', 'country' => 'HU', 'currency' => 'HUF',
         ])->assertStatus(303);
 
         $intent = CheckoutIntent::sole();

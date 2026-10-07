@@ -20,7 +20,7 @@ use Illuminate\Validation\Rule;
  * Recovery offers in the owner area (docs/RECOVERY_OFFERS.md). The customer is
  * chosen from the list of customers; the website must belong to that customer
  * (checked in RecoveryOffers). The amount is what the owner types, converted
- * on the server; currency must be one the catalogue sells in.
+ * on the server; only HU billing customers and HUF are currently eligible.
  */
 class RecoveryOfferController extends Controller
 {
@@ -39,13 +39,15 @@ class RecoveryOfferController extends Controller
 
     public function create(Request $request, PricingCatalog $catalog): View
     {
-        $customer = $request->filled('customer') ? Customer::where('uuid', (string) $request->query('customer'))->first() : null;
+        $customer = $request->filled('customer')
+            ? Customer::where('uuid', (string) $request->query('customer'))->where('country_code', 'HU')->first()
+            : null;
 
         return view('owner.offers.create', [
-            'customers' => $customer ? collect([$customer]) : Customer::where('active', true)->orderBy('last_name')->orderBy('first_name')->limit(500)->get(['id', 'uuid', 'first_name', 'last_name', 'company_name', 'email']),
+            'customers' => $customer ? collect([$customer]) : Customer::where('active', true)->where('country_code', 'HU')->orderBy('last_name')->orderBy('first_name')->limit(500)->get(['id', 'uuid', 'first_name', 'last_name', 'company_name', 'email']),
             'customer' => $customer,
             'websites' => $customer?->websites()->orderBy('url')->get(['id', 'uuid', 'url']) ?? collect(),
-            'currencies' => $catalog->sellableCurrencies(),
+            'currencies' => $catalog->recoveryOfferCurrencies(),
             'timezone' => config('app.timezone'),
         ]);
     }
@@ -67,7 +69,7 @@ class RecoveryOfferController extends Controller
         return view('owner.offers.show', [
             'offer' => $offer,
             'websites' => $offer->customer->websites()->orderBy('url')->get(['id', 'uuid', 'url']),
-            'currencies' => $catalog->sellableCurrencies(),
+            'currencies' => $catalog->recoveryOfferCurrencies(),
             'amount' => $prices->major($offer->amount, $offer->currency),
             'timezone' => config('app.timezone'),
             'audit' => AdminAuditEvent::with('actor')->where('subject_type', 'offer')->where('subject_key', $offer->uuid)->latest('id')->limit(20)->get(),

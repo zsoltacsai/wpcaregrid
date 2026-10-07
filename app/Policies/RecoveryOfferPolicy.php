@@ -16,6 +16,8 @@ class RecoveryOfferPolicy
     {
         return $user->customer !== null
             && $offer->customer_id === $user->customer->id
+            && strtoupper((string) $user->customer->country_code) === 'HU'
+            && $offer->currency === 'HUF'
             && $offer->status !== OfferStatus::Draft
             && ($offer->status !== OfferStatus::Cancelled || $offer->offered_at !== null);
     }

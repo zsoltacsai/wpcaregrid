@@ -2,7 +2,7 @@
 
 namespace App\Pricing;
 
-/** A set of billing countries sharing one currency, price list and tax treatment. */
+/** A billing market and one currency-specific price list. */
 final readonly class Market
 {
     /** @param  list<string>  $countries  ISO 3166-1 alpha-2 codes; '*' matches any country. */
@@ -11,6 +11,7 @@ final readonly class Market
         public array $countries,
         public string $currencyCode,
         public TaxTreatment $taxTreatment,
+        public string $group = 'INTERNATIONAL',
     ) {}
 
     public function covers(string $country): bool

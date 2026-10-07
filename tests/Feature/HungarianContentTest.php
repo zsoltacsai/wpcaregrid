@@ -189,16 +189,20 @@ class HungarianContentTest extends TestCase
     public function test_hungarian_prices_are_the_configured_hungarian_prices(): void
     {
         $this->useHungarian();
+        $this->withSession(['display_currency' => 'HUF']);
         $pricing = $this->get('/pricing')->assertOk()->getContent();
+        $visible = html_entity_decode(strip_tags($pricing), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $visible = preg_replace('/[\p{Z}\s]+/u', ' ', $visible);
 
         // Amounts come from config/pricing.php and are formatted for Hungarian readers, never as minor units.
         foreach (['8 990', '18 990', '28 990', '14 900', '24 900', '39 900', '89 900', '189 900', '289 900', '149 000', '249 000', '399 000'] as $amount) {
-            $this->assertStringContainsString(str_replace(' ', "\u{202F}", $amount), $pricing, "{$amount} Ft");
+            $this->assertStringContainsString($amount, $visible, "{$amount} Ft");
         }
-        $this->assertDoesNotMatchRegularExpression('/\b(899000|1899000|2899000)\b/', $pricing);
-        $this->assertStringContainsString('hó', $pricing);
-        $this->assertStringContainsString('2 hónap ingyenes', $pricing, 'Annual = ten monthly payments, two months free.');
-        $this->assertStringContainsString('áfát nem számítunk fel', $pricing);
+        $this->assertStringContainsString('Ft', $visible);
+        $this->assertDoesNotMatchRegularExpression('/\b(899000|1899000|2899000)\b/', $visible);
+        $this->assertStringContainsString('hó', $visible);
+        $this->assertStringContainsString('2 hónap ingyenes', $visible, 'Annual = ten monthly payments, two months free.');
+        $this->assertStringContainsString('áfát nem számítunk fel', $visible);
     }
 
     public function test_english_rendering_is_unchanged(): void
@@ -212,9 +216,10 @@ class HungarianContentTest extends TestCase
         $this->assertStringNotContainsString('Gyakran ismételt kérdések', $home);
         $this->assertSame('WordPress maintained. Website working.', trans('home.tagline', [], 'en'));
 
+        $this->withSession(['display_currency' => 'EUR']);
         $pricing = $this->get('/pricing')->assertOk()->getContent();
         $this->assertStringContainsString('Plans and pricing', $pricing);
-        $this->assertStringContainsString('18,990', $pricing);
+        $this->assertStringContainsString('€89', $pricing);
     }
 
     public function test_hungarian_drafts_stay_private_and_published_content_wins_over_the_built_in_copy(): void

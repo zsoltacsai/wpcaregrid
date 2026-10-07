@@ -56,6 +56,7 @@ return [
         'not_acceptable' => 'This offer can no longer be accepted.',
         'not_payable' => 'This offer can no longer be paid.',
         'not_declinable' => 'This offer can no longer be declined.',
+        'not_eligible' => 'Recovery offers are currently available only in the Hungarian billing market.',
         'payment_unavailable' => 'The payment page could not be opened. Your acceptance is saved; please try again in a moment.',
     ],
 

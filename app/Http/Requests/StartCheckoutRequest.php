@@ -27,6 +27,7 @@ class StartCheckoutRequest extends FormRequest
             'first_name' => ['required', 'string', 'max:100'],
             'last_name' => ['required', 'string', 'max:100'],
             'country' => ['required', 'string', Rule::in(array_keys(__('countries')))],
+            'currency' => ['required', 'string', Rule::in(array_keys((array) config('pricing.currencies')))],
             'promotion_code' => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_-]+$/'],
         ];
     }

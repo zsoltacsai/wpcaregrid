@@ -37,7 +37,7 @@ class ZeroChargeCheckoutTest extends TestCase
         Mail::fake();
 
         foreach (config('pricing.prices') as $i => $price) {
-            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}"]);
+            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}_{$price['currency']}"]);
         }
     }
 
@@ -54,7 +54,7 @@ class ZeroChargeCheckoutTest extends TestCase
         return CheckoutIntent::create([
             'status' => CheckoutStatus::CheckoutCreated, 'email' => 'zero@company.example', 'first_name' => 'Zoe', 'last_name' => 'Zero', 'country' => 'HU',
             'product_type' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly', 'market' => 'hu', 'currency' => 'HUF', 'amount' => 1899000,
-            'tax_treatment' => 'final_price_no_vat_added', 'stripe_price_id' => 'price_wordpress_business_monthly',
+            'tax_treatment' => 'final_price_no_vat_added', 'stripe_price_id' => 'price_wordpress_business_monthly_HUF',
             // The first one is the session the webhook tests refer to; any further ones (one test builds several) are unique.
             'stripe_checkout_session_id' => CheckoutIntent::exists() ? 'cs_test_'.Str::random(12) : 'cs_test_zero',
             'promotion_id' => $promotion?->id, 'promotion_code' => $promotion?->code,
@@ -80,7 +80,7 @@ class ZeroChargeCheckoutTest extends TestCase
         $this->assertSame('if_required', $parameters['payment_method_collection']);
         $this->assertSame([['promotion_code' => 'promo_free']], $parameters['discounts']);
         $this->assertSame('subscription', $parameters['mode']);
-        $this->assertSame('price_wordpress_business_monthly', $parameters['line_items'][0]['price'], 'Still the catalogue price; the discount is Stripe\'s.');
+        $this->assertSame('price_wordpress_business_monthly_HUF', $parameters['line_items'][0]['price'], 'Still the catalogue price; the discount is Stripe\'s.');
 
         // 100% once or for some months: the subscription is charged afterwards, so a payment method is collected.
         foreach ([['100', 'once'], ['100', 'repeating'], ['99.99', 'forever'], ['50', 'forever'], ['10', 'once']] as $i => [$percent, $duration]) {
@@ -101,13 +101,13 @@ class ZeroChargeCheckoutTest extends TestCase
         $this->coupon('100', 'forever');
 
         $this->withCookie(config('session.cookie'), str_repeat('z', 40))->post(route('checkout.store'), [
-            'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly', 'email' => 'zero@company.example', 'first_name' => 'Zoe', 'last_name' => 'Zero', 'country' => 'HU',
-            'promotion_code' => 'freeupdate', 'amount' => 0, 'total' => 0, 'currency' => 'EUR', 'stripe_price_id' => 'price_free',
+            'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly', 'email' => 'zero@company.example', 'first_name' => 'Zoe', 'last_name' => 'Zero', 'country' => 'HU', 'currency' => 'HUF',
+            'promotion_code' => 'freeupdate', 'amount' => 0, 'total' => 0, 'stripe_price_id' => 'price_free',
         ])->assertStatus(303);
 
         $intent = CheckoutIntent::sole();
         $this->assertSame(1899000, $intent->amount, 'The intent keeps the list price; Stripe applies the discount.');
-        $this->assertSame('price_wordpress_business_monthly', $intent->stripe_price_id);
+        $this->assertSame('price_wordpress_business_monthly_HUF', $intent->stripe_price_id);
         $this->assertSame('HUF', $intent->currency);
         $this->assertTrue($gateway->created[0]['promotion']->isFullDiscount());
     }
@@ -185,7 +185,7 @@ class ZeroChargeCheckoutTest extends TestCase
         $this->coupon('100', 'forever', ['max_redemptions' => 1, 'times_redeemed' => 1]);
 
         $this->withCookie(config('session.cookie'), str_repeat('z', 40))->post(route('checkout.store'), [
-            'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly', 'email' => 'zero@company.example', 'first_name' => 'Zoe', 'last_name' => 'Zero', 'country' => 'HU', 'promotion_code' => 'FREEUPDATE',
+            'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly', 'email' => 'zero@company.example', 'first_name' => 'Zoe', 'last_name' => 'Zero', 'country' => 'HU', 'currency' => 'HUF', 'promotion_code' => 'FREEUPDATE',
         ])->assertSessionHasErrors(['promotion_code' => __('checkout.promotion_errors.used_up')]);
 
         $this->assertSame([], $gateway->created);

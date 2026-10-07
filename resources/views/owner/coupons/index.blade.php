@@ -28,7 +28,7 @@
                     @foreach ($coupons as $coupon)
                         <tr class="hover:bg-canvas/60">
                             <td class="px-3 py-2"><a href="{{ route('owner.coupons.show', $coupon) }}" class="font-mono font-medium text-primary hover:underline">{{ $coupon->code }}</a></td>
-                            <td class="px-3 py-2 tabular-nums">{{ $coupon->percentLabel() }}% <span class="text-xs text-muted">{{ __('owner.coupons.durations_short.'.$coupon->duration, ['months' => $coupon->duration_months]) }}</span></td>
+                            <td class="px-3 py-2 tabular-nums">{{ $coupon->percentLabel() }}% <span class="text-xs text-muted">{{ __('owner.coupons.durations_short.'.$coupon->duration, ['months' => $coupon->duration_months]) }}</span><span class="block text-xs text-muted">{{ __('owner.coupons.market_groups.'.($coupon->marketLabelKey())) }}</span></td>
                             <td class="px-3 py-2"><x-ui.status-badge :tone="$coupon->active ? 'positive' : 'neutral'">{{ __('owner.coupons.states.'.($coupon->active ? 'active' : 'inactive')) }}</x-ui.status-badge></td>
                             <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $coupon->starts_at?->format('Y-m-d') ?? '…' }} – {{ $coupon->expires_at?->format('Y-m-d') ?? '…' }}</td>
                             <td class="px-3 py-2 tabular-nums">{{ $coupon->times_redeemed }}@if ($coupon->max_redemptions !== null) / {{ $coupon->max_redemptions }}@endif</td>
@@ -44,6 +44,7 @@
                 <li class="min-w-0 rounded-md border border-line bg-surface p-3">
                     <a href="{{ route('owner.coupons.show', $coupon) }}" class="block truncate font-mono font-medium text-primary hover:underline">{{ $coupon->code }}</a>
                     <p class="mt-1 text-sm tabular-nums">{{ $coupon->percentLabel() }}% <span class="text-xs text-muted">{{ __('owner.coupons.durations_short.'.$coupon->duration, ['months' => $coupon->duration_months]) }}</span></p>
+                    <p class="text-xs text-muted">{{ __('owner.coupons.market_groups.'.$coupon->marketLabelKey()) }}</p>
                     <div class="mt-2 flex flex-wrap gap-1.5">
                         <x-ui.status-badge :tone="$coupon->active ? 'positive' : 'neutral'">{{ __('owner.coupons.states.'.($coupon->active ? 'active' : 'inactive')) }}</x-ui.status-badge>
                         <x-ui.status-badge tone="neutral">{{ __('owner.coupons.used_of', ['used' => $coupon->times_redeemed, 'max' => $coupon->max_redemptions ?? '∞']) }}</x-ui.status-badge>

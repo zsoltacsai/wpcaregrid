@@ -146,6 +146,48 @@ class RecoveryOffersTest extends TestCase
         $this->assertStringNotContainsString('Secret margin note', json_encode($event->data));
     }
 
+    public function test_recovery_offers_are_limited_to_hungarian_billing_customers(): void
+    {
+        $foreign = $this->customerWithWebsite('https://foreign.example', [
+            'country_code' => 'DE',
+            'email' => 'international@company.example',
+        ]);
+        $this->asOwner();
+
+        $this->newOffer([], $foreign)->assertSessionHasErrors('customer');
+        $this->get(route('owner.offers.create'))->assertDontSee('international@company.example');
+        $this->get(route('owner.offers.create', ['customer' => $foreign['customer']->uuid]))
+            ->assertDontSee('international@company.example');
+        $this->assertDatabaseCount('recovery_offers', 0);
+    }
+
+    public function test_existing_huf_recovery_offer_is_hidden_and_unpayable_if_customer_moves_out_of_hu_market(): void
+    {
+        $offer = $this->offered();
+        $this->alice['customer']->forceFill(['country_code' => 'DE'])->save();
+        $this->asCustomer();
+
+        $this->get(route('account.dashboard'))->assertOk()->assertDontSee('View offers');
+        $this->get(route('account.offers.index'))->assertOk()->assertDontSee('Malware cleanup and verification');
+        $this->get(route('account.offers.show', $offer))->assertForbidden();
+        $this->post(route('account.offers.accept', $offer))->assertForbidden();
+        $this->assertSame(OfferStatus::Offered, $offer->refresh()->status);
+        $this->assertSame([], $this->stripe->created);
+    }
+
+    public function test_service_refuses_to_start_payment_if_customer_is_no_longer_in_hu_market(): void
+    {
+        $offer = $this->accepted();
+        $this->alice['customer']->forceFill(['country_code' => 'GB'])->save();
+
+        try {
+            app(RecoveryOffers::class)->startPayment($offer);
+            $this->fail('An international customer must not use an HUF recovery offer.');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('customer', $exception->errors());
+        }
+    }
+
     public function test_an_offer_can_never_be_attached_to_another_customers_website(): void
     {
         $this->asOwner();

@@ -105,6 +105,30 @@
                                     <div class="rounded-sm bg-canvas p-3"><dt class="text-xs text-muted">{{ __('owner.settings.pricing.'.$concept) }}</dt><dd class="mt-1 text-sm">{{ __('owner.settings.pricing.'.$concept.'_status') }}</dd></div>
                                 @endforeach
                             </dl>
+                            <div class="mt-5">
+                                <h3 class="text-sm font-semibold">{{ __('owner.settings.pricing.price_matrix') }}</h3>
+                                <div class="mt-2 overflow-x-auto rounded-sm border border-line">
+                                    <table class="w-full min-w-[640px] text-left text-xs">
+                                        <thead class="bg-canvas text-muted"><tr>
+                                            @foreach (['price_plan', 'price_market', 'price_interval', 'price_amount', 'price_stripe_status'] as $column)
+                                                <th class="px-3 py-2">{{ __('owner.settings.pricing.'.$column) }}</th>
+                                            @endforeach
+                                        </tr></thead>
+                                        <tbody class="divide-y divide-line">
+                                            @foreach ($pricingRows as $row)
+                                                @php $price = $row['price']; @endphp
+                                                <tr>
+                                                    <td class="px-3 py-2">{{ $price->productType->label() }} {{ __('owner.tiers.'.$price->tier->value) }}</td>
+                                                    <td class="px-3 py-2">{{ $price->marketGroup }} · {{ $price->money->currency->code }}</td>
+                                                    <td class="px-3 py-2">{{ $price->interval->label() }}</td>
+                                                    <td class="px-3 py-2 tabular-nums">{{ $price->money->format() }}</td>
+                                                    <td class="px-3 py-2">{{ __('owner.settings.pricing.price_status.'.$row['status']) }}</td>
+                                                </tr>
+                                            @endforeach
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
                             <button class="h-10 rounded-sm bg-primary px-4 text-sm font-semibold text-white">{{ __('owner.settings.save') }}</button>
                         </form>
                     @elseif ($section === 'mail')

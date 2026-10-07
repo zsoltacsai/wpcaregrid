@@ -12,6 +12,7 @@ use App\Models\Customer;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Models\Website;
+use App\Pricing\CurrencySuggestion;
 use App\Pricing\DisplayCurrency;
 use App\Pricing\PricingCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -43,10 +44,13 @@ class CustomerLocalizationTest extends TestCase
 
         // One browser session across requests, as a real browser has (the display currency lives in it).
         $this->withCookie(config('session.cookie'), str_repeat('s', 40));
+        // RefreshDatabase does not clear the array session store between test
+        // methods; keep display currency from another test from leaking in.
+        $this->flushSession();
 
-        // As in a configured environment: every HU price has a Stripe Price ID.
+        // As in a configured environment: every currency price has a Stripe Price ID.
         foreach (config('pricing.prices') as $i => $price) {
-            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}"]);
+            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}_{$price['currency']}"]);
         }
     }
 
@@ -60,17 +64,6 @@ class CustomerLocalizationTest extends TestCase
     private function in(string $locale): static
     {
         return $this->withCookie(self::COOKIE, $locale);
-    }
-
-    /** Fixture, not shipped: an extra market with prices, to prove the selector appears only when prices exist. */
-    private function withEuroPrices(): void
-    {
-        $euro = collect(config('pricing.prices'))->map(fn (array $price) => [
-            'market' => 'eu', 'currency' => 'EUR', 'amount' => intdiv($price['amount'], 400), 'stripe_price_id' => 'price_eur_'.$price['plan'].'_'.$price['interval'],
-        ] + $price)->all();
-
-        config(['pricing.prices' => [...config('pricing.prices'), ...$euro]]);
-        app()->forgetInstance(PricingCatalog::class);
     }
 
     /** Visible text of a response: tags and entities removed. */
@@ -177,97 +170,104 @@ class CustomerLocalizationTest extends TestCase
 
     // --- Currency ------------------------------------------------------------------------------------------------
 
-    public function test_hungarian_is_always_forint_and_english_offers_only_currencies_that_have_prices(): void
+    public function test_all_fixed_currencies_are_available_independent_of_language(): void
     {
         $catalog = app(PricingCatalog::class);
         $currency = app(DisplayCurrency::class);
 
-        // Only the Hungarian market has prices; EU, GB and international deliberately have none.
-        $this->assertSame(['HUF'], $catalog->sellableCurrencies());
-        foreach (['eu', 'gb', 'international'] as $market) {
-            $this->assertFalse($catalog->hasPrices($catalog->market($market)), $market);
-        }
-
-        $this->assertSame(['HUF'], $currency->available('hu'));
-        $this->assertSame(['HUF'], $currency->available('en'));
-        $this->assertFalse($currency->canChoose());
+        $this->assertSame(['HUF', 'EUR', 'USD', 'GBP'], $catalog->sellableCurrencies());
+        $this->assertSame(['HUF', 'EUR', 'USD', 'GBP'], $currency->available('hu'));
+        $this->assertSame(['HUF', 'EUR', 'USD', 'GBP'], $currency->available('en'));
+        $this->assertTrue($currency->canChoose());
 
         foreach (['en', 'hu'] as $locale) {
             $html = $this->in($locale)->get(route('pricing'))->getContent();
-            $this->assertStringContainsString('HUF (Ft)', $html);
-            $this->assertStringNotContainsString('name="currency"', $html, 'Nothing to choose: no selector, only a label.');
+            $this->assertStringContainsString('name="currency"', $html);
+            foreach (['HUF', 'EUR', 'USD', 'GBP'] as $code) {
+                $this->assertStringContainsString('<option value="'.$code.'"', $html);
+            }
         }
-        $this->assertStringContainsString('Prices are currently in HUF only', $this->in('en')->get(route('pricing'))->getContent());
-        $this->assertStringContainsString('Az árak jelenleg csak HUF pénznemben érhetők el', $this->in('hu')->get(route('pricing'))->getContent());
     }
 
-    public function test_a_second_currency_is_offered_only_once_real_prices_exist_and_never_in_hungarian(): void
+    public function test_currency_selection_persists_and_changes_display_without_starting_checkout(): void
     {
-        $this->withEuroPrices();
-        $currency = app(DisplayCurrency::class);
-
-        $this->assertSame(['HUF', 'EUR'], $currency->available('en'));
-        $this->assertSame(['HUF'], $currency->available('hu'), 'Hungarian is HUF whatever else exists.');
-
-        $en = $this->in('en')->get(route('pricing'))->getContent();
-        $this->assertStringContainsString('name="currency"', $en);
-        $this->assertStringContainsString('<option value="EUR"', $en);
-        $this->assertStringNotContainsString('name="currency"', $this->in('hu')->get(route('pricing'))->getContent());
-
-        // Choosing EUR changes the display only; Hungarian goes back to forint; English returns to the default.
         $this->in('en')->from(route('pricing'))->post(route('currency.update'), ['currency' => 'EUR'])->assertRedirect(route('pricing'));
         $this->assertSame('EUR', session('display_currency'));
         $eur = $this->in('en')->get(route('pricing'))->getContent();
         $this->assertStringContainsString('<option value="EUR" selected', $eur);
-        $this->assertMatchesRegularExpression('#>\s*22\s*</span>#', $eur, 'Basic monthly in the fixture euro price list.');
+        $this->assertStringContainsString('€49', html_entity_decode(strip_tags($eur), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         $this->assertStringNotContainsString('8,990', $eur);
+        $this->assertDatabaseCount('checkout_intents', 0);
 
-        $this->in('hu')->from(route('pricing'))->post(route('locale.update'), ['locale' => 'hu']);
-        $this->assertNull(session('display_currency'), 'A language switch resets the currency to the default.');
-        $this->assertStringContainsString('8 990', str_replace("\u{202F}", ' ', $this->in('hu')->get(route('pricing'))->getContent()));
-        $this->assertDoesNotMatchRegularExpression('#€|EUR#', $this->in('hu')->get(route('pricing'))->getContent());
+        $this->in('en')->from(route('pricing'))->post(route('currency.update'), ['currency' => 'USD'])->assertRedirect(route('pricing'));
+        $usd = $this->in('en')->get(route('pricing'))->getContent();
+        $this->assertStringContainsString('<option value="USD" selected', $usd);
+        $this->assertStringContainsString('$49', html_entity_decode(strip_tags($usd), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+
+        $this->in('en')->from(route('pricing'))->post(route('locale.update'), ['locale' => 'hu'])->assertRedirect(route('pricing'));
+        $this->assertStringContainsString('<option value="USD" selected', $this->in('hu')->get(route('pricing'))->getContent());
     }
 
-    public function test_the_browser_cannot_force_a_currency(): void
+    public function test_locale_currency_suggestions_are_hints_only(): void
     {
-        $this->withEuroPrices();
+        $this->flushSession();
 
-        // Not offered (no prices), or not allowed in this language: refused, nothing stored.
-        $this->in('en')->post(route('currency.update'), ['currency' => 'USD'])->assertSessionHasErrors('currency');
-        $this->in('en')->post(route('currency.update'), ['currency' => 'GBP'])->assertSessionHasErrors('currency');
-        $this->in('hu')->post(route('currency.update'), ['currency' => 'EUR'])->assertSessionHasErrors('currency');
+        foreach ([
+            'hu-HU' => 'HUF', 'hu' => 'HUF', 'en-US' => 'USD', 'en-GB' => 'GBP',
+            'de' => 'EUR', 'de-DE' => 'EUR', 'de-AT' => 'EUR', 'fr' => 'EUR', 'fr-FR' => 'EUR',
+            'it' => 'EUR', 'it-IT' => 'EUR', 'es-ES' => 'EUR', 'nl' => 'EUR', 'nl-NL' => 'EUR',
+            'pt-PT' => 'EUR', 'fi-FI' => 'EUR', 'el-GR' => 'EUR', 'sk-SK' => 'EUR', 'sl-SI' => 'EUR',
+            'hr-HR' => 'EUR', 'et-EE' => 'EUR', 'lv-LV' => 'EUR', 'lt-LT' => 'EUR', 'en' => 'EUR', 'xx-YY' => 'EUR',
+        ] as $locale => $currency) {
+            $this->assertSame($currency, CurrencySuggestion::forLocale($locale));
+        }
+
+        $this->in('en')->post(route('currency.update'), ['currency' => 'JPY'])->assertSessionHasErrors('currency');
         $this->assertNull(session('display_currency'));
+        $html = $this->withHeader('Accept-Language', 'en')
+            ->in('en')->get(route('pricing', ['currency' => 'JPY', 'market' => 'attacker', 'amount' => 1]))->getContent();
+        $this->assertStringContainsString('€49', html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
 
-        // A currency, market or amount in the address does nothing.
-        $html = $this->in('en')->get(route('pricing', ['currency' => 'EUR', 'market' => 'eu', 'amount' => 1]))->getContent();
-        $this->assertStringContainsString('8,990', $html);
-        $this->assertStringContainsString('<option value="HUF" selected', $html);
-        $this->assertStringNotContainsString('<option value="EUR" selected', $html);
+    public function test_initial_currency_uses_browser_locale_as_a_suggestion_only(): void
+    {
+        $response = $this->withHeader('Accept-Language', 'en-US,en;q=0.9')->get(route('pricing'))->assertOk();
+        $this->assertStringContainsString('<option value="USD" selected', $response->getContent());
+
+        // Browser locale does not infer billing country: default HU checkout is shown in HUF.
+        $checkout = $this->withHeader('Accept-Language', 'en-US,en;q=0.9')
+            ->get(route('checkout.show', ['product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly']))
+            ->assertOk();
+        $this->assertStringContainsString('<option value="HUF" selected', $checkout->getContent());
     }
 
     public function test_checkout_resolves_the_price_on_the_server_whatever_language_or_currency_is_displayed(): void
     {
-        $this->withEuroPrices();
         $gateway = new FakeCheckoutGateway;
         $this->app->instance(CheckoutGateway::class, $gateway);
 
-        $this->in('en')->post(route('currency.update'), ['currency' => 'EUR']);
         $this->in('hu')->post(route('checkout.store'), [
             'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly',
             'email' => 'anna@company.example', 'first_name' => 'Anna', 'last_name' => 'Kovács', 'country' => 'HU',
             // Forged presentation fields: none of them is read.
             'currency' => 'EUR', 'amount' => 1, 'stripe_price_id' => 'price_evil', 'market' => 'eu', 'locale' => 'en',
+        ])->assertSessionHasErrors(['checkout' => __('checkout.errors.market_currency_mismatch')]);
+
+        $this->in('en')->post(route('checkout.store'), [
+            'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly',
+            'email' => 'anna@company.example', 'first_name' => 'Anna', 'last_name' => 'Kovács', 'country' => 'DE',
+            'currency' => 'EUR', 'amount' => 1, 'stripe_price_id' => 'price_evil', 'market' => 'hu', 'locale' => 'en',
         ])->assertStatus(303);
 
         $intent = CheckoutIntent::sole();
-        $this->assertSame(['HUF', 1899000, 'price_wordpress_business_monthly', 'hu'], [$intent->currency, $intent->amount, $intent->stripe_price_id, $intent->market]);
+        $this->assertSame(['EUR', 8900, 'price_wordpress_business_monthly_EUR', 'INTERNATIONAL'], [$intent->currency, $intent->amount, $intent->stripe_price_id, $intent->market]);
     }
 
     public function test_stripe_checkout_is_shown_in_the_display_language(): void
     {
         $intent = new CheckoutIntent([
             'uuid' => 'u-1', 'email' => 'a@b.example', 'product_type' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly', 'market' => 'hu',
-            'stripe_price_id' => 'price_wordpress_business_monthly',
+            'stripe_price_id' => 'price_wordpress_business_monthly_HUF',
         ]);
         $gateway = new StripeCheckoutGateway('sk_test_unit');
 
@@ -279,9 +279,8 @@ class CustomerLocalizationTest extends TestCase
 
     public function test_existing_subscription_amounts_never_change_with_language_or_currency(): void
     {
-        $this->withEuroPrices();
         $customer = Customer::factory()->withUser()->create();
-        $subscription = Subscription::factory()->for($customer)->create(['amount' => 1899000, 'currency' => 'HUF', 'stripe_price_id' => 'price_wordpress_business_monthly']);
+        $subscription = Subscription::factory()->for($customer)->create(['amount' => 1899000, 'currency' => 'HUF', 'stripe_price_id' => 'price_wordpress_business_monthly_HUF']);
         $before = $subscription->only(['amount', 'currency', 'stripe_price_id', 'interval', 'plan', 'product_type', 'market']);
 
         $page = fn (string $locale) => $this->actingAs($customer->user)->in($locale)->get(route('account.subscription'))->assertOk()->getContent();
@@ -297,11 +296,27 @@ class CustomerLocalizationTest extends TestCase
         $this->assertStringContainsString('18,990', $page('en'), 'Still forint, whatever was displayed.');
     }
 
+    public function test_billing_portal_labels_base_price_separately_and_does_not_claim_unconfirmed_recurring_amount(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['country_code' => 'GB']);
+        Subscription::factory()->for($customer)->create([
+            'amount' => 8900,
+            'currency' => 'GBP',
+            'interval' => 'monthly',
+            'plan' => 'business',
+            'stripe_price_id' => 'price_subscription_recorded_gbp',
+        ]);
+
+        $response = $this->actingAs($customer->user)->get(route('account.billing'))->assertOk();
+        $response->assertSee('GBP')->assertSee('£89')->assertSee('Amount not confirmed by Stripe yet')->assertSee('Monthly')->assertSee('Business');
+    }
+
     // --- Pricing ---------------------------------------------------------------------------------------------------
 
     public function test_prices_are_the_configured_forint_prices_in_both_languages(): void
     {
         $amounts = [8990, 18990, 28990, 14900, 24900, 39900, 89900, 189900, 289900, 149000, 249000, 399000];
+        $this->post(route('currency.update'), ['currency' => 'HUF']);
 
         foreach (['en' => [',', 'Monthly', 'Annual', '2 months free'], 'hu' => ["\u{202F}", 'Havi', 'Éves', '2 hónap ingyenes']] as $locale => [$separator, $monthly, $annual, $free]) {
             $html = $this->in($locale)->get(route('pricing'))->getContent();

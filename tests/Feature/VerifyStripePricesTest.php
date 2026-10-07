@@ -20,7 +20,7 @@ class VerifyStripePricesTest extends TestCase
 
         config(['services.stripe.secret' => 'sk_test_unit']);
         foreach (config('pricing.prices') as $i => $price) {
-            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}"]);
+            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}_{$price['currency']}"]);
         }
         config(['pricing.stripe_products' => ['wordpress' => 'prod_wordpress', 'woocommerce' => 'prod_woocommerce']]);
 
@@ -36,7 +36,7 @@ class VerifyStripePricesTest extends TestCase
 
     public function test_a_price_attached_to_the_other_product_fails(): void
     {
-        $this->verifier->products['price_wordpress_business_monthly'] = 'prod_woocommerce';
+        $this->verifier->products['price_wordpress_business_monthly_HUF'] = 'prod_woocommerce';
 
         $this->artisan('pricing:verify-stripe')
             ->expectsOutputToContain('product prod_woocommerce')

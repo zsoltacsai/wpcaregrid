@@ -5,11 +5,12 @@
  * component only toggles which ones are visible. Other components can switch
  * the tab by dispatching `pricing:select` with a product line key.
  */
-export default function pricingTable({ productLines, productLine, interval }) {
+export default function pricingTable({ productLines, productLine, interval, currency }) {
     return {
         productLines,
         productLine,
         interval,
+        currency,
 
         init() {
             window.addEventListener('pricing:select', (event) => {

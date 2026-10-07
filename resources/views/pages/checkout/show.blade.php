@@ -34,10 +34,18 @@
                 x-data="{
                     interval: @js($interval),
                     country: @js($country),
+                    currency: @js($currency),
+                    prices: @js($priceMatrix),
                     purchasable: @js($purchasableCountries),
                     submitting: false,
                     get available() { return this.purchasable.includes(this.country) },
+                    syncCurrency() {
+                        if (this.country === 'HU') this.currency = 'HUF';
+                        else if (this.currency === 'HUF') this.currency = @js($defaultInternationalCurrency);
+                    },
+                    priceFor(interval) { return this.prices[this.currency]?.[interval] ?? null; },
                 }"
+                x-init="syncCurrency()"
                 x-on:submit="submitting = true"
             >
                 @csrf
@@ -83,7 +91,7 @@
                                         @endif
                                     </span>
                                     <span class="text-sm text-ink">
-                                        <span class="font-semibold">{{ $price->money->format() }}</span>
+                                        <span class="font-semibold" x-text="priceFor('{{ $option->value }}')?.formatted">{{ $price->money->format() }}</span>
                                         <span class="text-muted">/ {{ $option->unit() }}</span>
                                     </span>
                                 </label>
@@ -111,8 +119,20 @@
                                 :options="$countries"
                                 :selected="$country"
                                 x-model="country"
+                                x-on:change="syncCurrency()"
                                 autocomplete="country"
                             />
+
+                            <div>
+                                <label for="checkout-currency" class="mb-2 block text-sm font-medium">{{ __('checkout.fields.currency') }}</label>
+                                <select id="checkout-currency" name="currency" x-model="currency" class="h-11 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm text-primary" required>
+                                    @foreach ($currencies as $code)
+                                        <option value="{{ $code }}" @selected($currency === $code) :disabled="country === 'HU' ? '{{ $code }}' !== 'HUF' : '{{ $code }}' === 'HUF'">{{ $code }}</option>
+                                    @endforeach
+                                </select>
+                                <p class="mt-1 text-xs text-muted">{{ __('checkout.fields.currency_hint') }}</p>
+                                @error('currency')<p role="alert" class="mt-1 text-sm text-danger-ink">{{ $message }}</p>@enderror
+                            </div>
 
                             <p
                                 x-show="!available"
@@ -157,8 +177,8 @@
                             @php $price = $offer->price($option); @endphp
                             <div x-show="interval === '{{ $option->value }}'" @if ($interval !== $option->value) x-cloak @endif class="mt-4">
                                 <p class="flex flex-wrap items-baseline gap-x-2">
-                                    <span class="text-[32px] leading-none font-semibold tracking-[-0.02em] text-primary">{{ $price->money->formattedAmount() }}</span>
-                                    <span class="text-sm text-muted">{{ __('pricing.per_unit', ['currency' => $price->money->currency->symbol, 'unit' => $option->unit()]) }}</span>
+                                    <span class="text-[32px] leading-none font-semibold tracking-[-0.02em] text-primary" x-text="priceFor('{{ $option->value }}')?.formatted">{{ $price->money->format() }}</span>
+                                    <span class="text-sm text-muted">/ {{ $option->unit() }}</span>
                                 </p>
                                 <p class="mt-2 text-sm text-muted">{{ __('checkout.summary.billed.'.$option->value) }}</p>
                             </div>

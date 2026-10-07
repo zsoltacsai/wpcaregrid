@@ -27,11 +27,13 @@ return [
         'last_name' => 'Last name',
         'country' => 'Billing country',
         'country_hint' => 'Your price and currency depend on your billing country.',
+        'currency' => 'Price currency',
+        'currency_hint' => 'Hungarian billing is charged in HUF. Other billing countries may choose EUR, USD or GBP.',
         'promotion_code' => 'Promotion code',
         'optional' => 'optional',
     ],
 
-    'international_unavailable' => 'Pricing for customers billed outside Hungary is not available yet. Please contact us if you would like to sign up.',
+    'international_unavailable' => 'Pricing for this billing country is not available yet. Please contact us if you would like to sign up.',
 
     'submit' => 'Continue to payment',
     'redirect_note' => 'You will be redirected to Stripe to enter your payment details.',
@@ -54,7 +56,8 @@ return [
 
     'errors' => [
         'invalid_selection' => 'The selected plan is not available. Please choose a plan again.',
-        'market_not_available' => 'Pricing for your billing country is not available yet. Checkout is currently open to customers billed in Hungary.',
+        'market_not_available' => 'Pricing for this billing country is not available yet. Please contact us if you would like to sign up.',
+        'market_currency_mismatch' => 'Hungarian billing requires HUF. For other billing countries, choose EUR, USD or GBP.',
         'price_inactive' => 'This plan is not available for purchase at the moment.',
         'price_not_purchasable' => 'Online checkout for this plan is not available yet. Please contact us to sign up.',
         'unavailable' => 'Online checkout is temporarily unavailable. Please try again later or contact us.',

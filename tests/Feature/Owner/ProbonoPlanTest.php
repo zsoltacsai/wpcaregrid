@@ -86,6 +86,12 @@ class ProbonoPlanTest extends TestCase
         $this->assertSame($customer->id, $subscription->customer_id);
         $this->assertSame(SubscriptionStatus::Active, $subscription->status);
         $this->assertTrue($subscription->grantsAccess());
+        $this->assertSame('internal_probono', $subscription->billing_source);
+        $this->assertNull($subscription->base_price_amount);
+        $this->assertNull($subscription->current_recurring_amount);
+        $this->assertNull($subscription->discount_type);
+        $this->assertNull($subscription->stripe_coupon_id);
+        $this->assertNull($subscription->stripe_promotion_code_id);
         $this->assertNull($subscription->plan, 'No public tier.');
         $this->assertNull($subscription->stripe_subscription_id);
         $this->assertNull($subscription->stripe_price_id);
@@ -249,10 +255,10 @@ class ProbonoPlanTest extends TestCase
         $this->get(route('checkout.show', ['product' => 'wordpress', 'plan' => 'probono', 'interval' => 'monthly']))->assertRedirect(route('pricing'));
 
         foreach (['probono', 'PROBONO', 'internal', ''] as $plan) {
-            $this->post(route('checkout.store'), ['product' => 'wordpress', 'plan' => $plan, 'interval' => 'monthly', 'email' => 'a@b.example', 'first_name' => 'A', 'last_name' => 'B', 'country' => 'HU'])
+            $this->post(route('checkout.store'), ['product' => 'wordpress', 'plan' => $plan, 'interval' => 'monthly', 'email' => 'a@b.example', 'first_name' => 'A', 'last_name' => 'B', 'country' => 'HU', 'currency' => 'HUF'])
                 ->assertSessionHasErrors('plan');
         }
-        $this->post(route('checkout.store'), ['product' => 'wordpress', 'plan' => 'basic', 'internal_plan' => 'probono', 'interval' => 'monthly', 'email' => 'a@b.example', 'first_name' => 'A', 'last_name' => 'B', 'country' => 'HU']);
+        $this->post(route('checkout.store'), ['product' => 'wordpress', 'plan' => 'basic', 'internal_plan' => 'probono', 'interval' => 'monthly', 'email' => 'a@b.example', 'first_name' => 'A', 'last_name' => 'B', 'country' => 'HU', 'currency' => 'HUF']);
 
         $this->assertDatabaseCount('checkout_intents', 0); // Nothing was recorded for a manipulated plan.
         $this->assertSame(0, Subscription::whereNotNull('internal_plan')->count());

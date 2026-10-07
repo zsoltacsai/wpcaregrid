@@ -7,8 +7,13 @@ use App\Models\User;
 use App\Owner\AdminAudit;
 use App\Owner\IntegrationCredentials;
 use App\Owner\OwnerSettings;
+use App\Owner\SystemStatus;
+use App\Pricing\PriceKey;
+use App\Pricing\PricingCatalog;
+use App\Pricing\StripePriceVerifier;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
@@ -18,7 +23,7 @@ use Throwable;
 
 final class OwnerSettingsController extends Controller
 {
-    public function show(OwnerSettings $settings, IntegrationCredentials $credentials, ?string $section = null): View
+    public function show(OwnerSettings $settings, IntegrationCredentials $credentials, PricingCatalog $catalog, ?string $section = null): View
     {
         $section ??= 'general';
         abort_unless(in_array($section, OwnerSettings::GROUPS, true), 404);
@@ -27,6 +32,22 @@ final class OwnerSettingsController extends Controller
         $settingSources = [];
         foreach (array_keys($values) as $id) {
             $settingSources[$id] = $settings->hasStored($id) ? 'owner' : 'config';
+        }
+        $priceVerification = Cache::get(SystemStatus::STRIPE_VERIFICATION, []);
+        $priceResults = (array) ($priceVerification['price_results'] ?? Cache::get('stripe.price_verification.results', []));
+        $pricingRows = [];
+        if ($section === 'pricing') {
+            foreach ($catalog->allPrices() as $price) {
+                $key = (new PriceKey($price->productType, $price->tier, $price->interval, $price->market))->value();
+                $result = $priceResults[$key] ?? null;
+                $status = blank($price->stripePriceId) ? 'not_configured' : match (true) {
+                    $result === StripePriceVerifier::OK => 'valid',
+                    ! is_string($result) => 'unverified',
+                    str_contains($result, 'amount ') || str_contains($result, 'currency ') || str_contains($result, 'interval') || str_contains($result, 'product ') => 'mismatch',
+                    default => 'invalid',
+                };
+                $pricingRows[] = ['price' => $price, 'status' => $status];
+            }
         }
 
         return view('owner.settings', [
@@ -39,6 +60,7 @@ final class OwnerSettingsController extends Controller
             'passwordConfigured' => $smtpPassword['owner_managed'] || $smtpPassword['environment_fallback'],
             'currentMailer' => (string) config('mail.default'),
             'testMailAvailable' => ! in_array(config('mail.default'), ['log', 'array'], true),
+            'pricingRows' => $pricingRows,
         ]);
     }
 

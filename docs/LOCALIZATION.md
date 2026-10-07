@@ -33,13 +33,13 @@ After the switch the visitor returns to the page they were on (only an address o
 
 ## Currency
 
-`App\Pricing\DisplayCurrency`, `PricingCatalog::sellableCurrencies()`:
+`App\Pricing\DisplayCurrency`, `CurrencySuggestion`, and `PricingCatalog`:
 
-- **Hungarian: always HUF.** Nothing else can be selected, whatever prices exist.
-- **English: the currencies that have real prices** in the catalogue (config/pricing.php, owner-published prices). A market without prices contributes nothing. **Today only HUF has prices** (the EU, GB and international markets have none), so English shows HUF as a plain label with a note, and no dropdown. A dropdown appears by itself the day a second market gets prices; nothing needs to change in the code.
-- There are **no exchange rates, no conversion, no IP-based choice** and no invented amounts. Choosing English returns the display to the default currency of the display market; choosing a currency is stored in the session only.
-- The displayed currency selects which market's price list the pricing and checkout pages **show**. It is never read when ordering: `StartCheckout` resolves the price on the server from the **billing country** (country → market → price), the Stripe Price ID always comes from the catalogue, and browser-submitted amounts, currencies, Price IDs and markets are ignored (CheckoutTest, CustomerLocalizationTest).
-- Existing subscriptions are untouched: their amount and currency are stored; only the number format changes with the language (18,990 Ft / 18 990 Ft).
+- Public display offers the fixed HUF, EUR, USD, and GBP catalogues in both UI languages. There are no exchange rates or IP-based currency choices. Each price is an integer amount in Stripe-compatible minor units; annual prices are explicitly fixed at 10 × monthly.
+- Initial browser-language suggestions are hints: `hu*` → HUF, `en-US` → USD, `en-GB` → GBP, recognized Euro/EU locales → EUR, otherwise EUR. Language and currency preferences remain independent; a manual currency choice persists in the session.
+- Billing country is authoritative at checkout. HU requires HUF; every non-HU country may choose EUR, USD, or GBP. The server resolves the Stripe Price ID from the product, plan, interval, billing country, and selected currency. Amounts, Price IDs, and market values from the browser are not trusted.
+- Tax/VAT behavior for non-HU markets remains undetermined and is not implemented by currency selection. No tax calculation is enabled here.
+- Existing subscriptions show the amount, currency, and Stripe Price stored for that subscription; changing current catalogue prices or display preferences does not alter them.
 
 ## Translation files
 

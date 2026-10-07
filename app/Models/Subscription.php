@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 
@@ -48,6 +49,11 @@ class Subscription extends Model
             'internal_ends_at' => 'datetime',
             'interval' => BillingInterval::class,
             'amount' => 'integer',
+            'base_price_amount' => 'integer',
+            'discount_percent' => 'decimal:2',
+            'discount_amount' => 'integer',
+            'current_recurring_amount' => 'integer',
+            'billing_snapshot_confirmed_at' => 'datetime',
             'current_period_start' => 'datetime',
             'current_period_end' => 'datetime',
             'cancel_at_period_end' => 'boolean',
@@ -74,6 +80,11 @@ class Subscription extends Model
     public function website(): HasOne
     {
         return $this->hasOne(Website::class);
+    }
+
+    public function billingInvoices(): HasMany
+    {
+        return $this->hasMany(BillingInvoice::class)->latest('stripe_created_at');
     }
 
     /** An internal plan (PROBONO): no Stripe subscription, no public tier, no price. */
@@ -122,6 +133,42 @@ class Subscription extends Model
         $config = config("pricing.currencies.{$this->currency}", []);
 
         return new Money((int) $this->amount, Currency::fromConfig($this->currency, $config, app()->getLocale()));
+    }
+
+    public function currentRecurringMoney(): ?Money
+    {
+        if (! $this->billing_snapshot_confirmed_at || ! is_int($this->current_recurring_amount) || ! $this->current_recurring_currency) {
+            return null;
+        }
+
+        $currency = $this->current_recurring_currency;
+        $config = config("pricing.currencies.{$currency}", []);
+
+        return isset($config['symbol']) ? new Money($this->current_recurring_amount, Currency::fromConfig($currency, $config, app()->getLocale())) : null;
+    }
+
+    public function basePriceMoney(): ?Money
+    {
+        $amount = is_int($this->base_price_amount) ? $this->base_price_amount : $this->amount;
+        $currency = $this->base_price_currency ?: $this->currency;
+        if (! is_int($amount) || ! $currency) {
+            return null;
+        }
+
+        $config = config("pricing.currencies.{$currency}", []);
+
+        return isset($config['symbol']) ? new Money($amount, Currency::fromConfig($currency, $config, app()->getLocale())) : null;
+    }
+
+    public function discountPercentLabel(): ?string
+    {
+        if ($this->discount_percent === null) {
+            return null;
+        }
+
+        $value = (string) $this->discount_percent;
+
+        return rtrim(rtrim($value, '0'), '.');
     }
 
     /** Next charge date, or null when the subscription will not renew. */

@@ -4,6 +4,7 @@ namespace App\Billing;
 
 use App\Mail\SubscriptionActivated;
 use App\Mail\SubscriptionCanceled;
+use App\Models\BillingInvoice;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Subscription;
@@ -11,6 +12,7 @@ use App\Pricing\PricingCatalog;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use UnexpectedValueException;
 
 /**
  * Keeps local subscriptions in line with Stripe. Events may arrive in any
@@ -21,13 +23,14 @@ final class SubscriptionSync
     public function __construct(
         private readonly PricingCatalog $catalog,
         private readonly ProvisionCustomer $provision,
+        private readonly SubscriptionBillingSnapshot $billingSnapshot,
     ) {}
 
     /**
      * Apply a Stripe subscription object from a customer.subscription.* event.
      * An event older than the last one applied is ignored.
      */
-    public function apply(object $stripe, int $eventCreated): ?Subscription
+    public function apply(object $stripe, int $eventCreated, ?string $eventId = null): ?Subscription
     {
         $status = SubscriptionStatus::fromStripe($stripe->status ?? null);
 
@@ -40,11 +43,31 @@ final class SubscriptionSync
         $eventTime = Carbon::createFromTimestamp($eventCreated);
         $subscription = Subscription::where('stripe_subscription_id', $stripe->id)->first();
 
-        if ($subscription?->stripe_synced_at && $eventTime->lt($subscription->stripe_synced_at)) {
+        $sameSecondCancellation = $subscription
+            && $subscription->stripe_synced_at
+            && $status === SubscriptionStatus::Canceled
+            && $subscription->status !== SubscriptionStatus::Canceled
+            && $eventTime->equalTo($subscription->stripe_synced_at);
+        if ($subscription && ! $sameSecondCancellation
+            && $this->eventIsOlder($eventTime, $eventId, $subscription->stripe_synced_at, $subscription->stripe_synced_event_id)) {
             return $subscription;
         }
 
         $intent = $this->intentFrom($stripe->metadata ?? null);
+        if ($subscription?->status === SubscriptionStatus::Canceled && $status !== SubscriptionStatus::Canceled
+            && $subscription->stripe_synced_at?->equalTo($eventTime)) {
+            return $subscription;
+        }
+
+        if ($subscription && $this->identityConflicts($subscription, $stripe, $intent)) {
+            Log::warning('Stripe subscription identity does not match its local billing record.', [
+                'stripe_subscription' => $stripe->id ?? null,
+                'stripe_customer' => $stripe->customer ?? null,
+            ]);
+
+            return $subscription;
+        }
+
         $item = $stripe->items->data[0] ?? null;
         $stripePriceId = $item->price->id ?? $subscription?->stripe_price_id;
 
@@ -62,13 +85,15 @@ final class SubscriptionSync
                 'product_type' => $price->productType,
                 'plan' => $price->tier,
                 'interval' => $price->interval,
-                'market' => $price->market,
+                'market' => $price->marketGroup,
+                'pricing_market' => $price->marketGroup,
             ]);
         }
 
         $previousStatus = $subscription->exists ? $subscription->status : null;
 
         $subscription->fill([
+            'billing_source' => 'stripe',
             'stripe_customer_id' => $stripe->customer ?? $subscription->stripe_customer_id,
             'stripe_price_id' => $stripePriceId,
             'amount' => $item->price->unit_amount ?? $subscription->amount,
@@ -81,7 +106,15 @@ final class SubscriptionSync
             'canceled_at' => $this->time($stripe->canceled_at ?? null),
             'ended_at' => $this->time($stripe->ended_at ?? null),
             'stripe_synced_at' => $eventTime,
+            'stripe_synced_event_id' => $eventId,
+            'billing_snapshot_confirmed_at' => $eventTime,
         ]);
+        $subscription->fill($this->billingSnapshot->fromStripe($stripe, $subscription, $item->price ?? null));
+
+        // A selected local promotion is only an expectation until Stripe returns its discount object.
+        if ($intent?->promotion_id && ! $this->hasDiscountState($stripe) && ! $subscription->stripe_coupon_id) {
+            $subscription->current_recurring_amount = null;
+        }
 
         // Stripe reporting the subscription active/trialing confirms payment,
         // so the customer can be resolved even if the checkout event is late.
@@ -94,6 +127,21 @@ final class SubscriptionSync
 
         $this->recordActivation($subscription);
         $subscription->save();
+
+        // An invoice event can arrive before the subscription event. Attach
+        // those Stripe-authoritative rows once the local subscription exists.
+        $invoiceUpdate = ['subscription_id' => $subscription->id];
+        if ($subscription->customer_id) {
+            $invoiceUpdate['customer_id'] = $subscription->customer_id;
+        }
+        BillingInvoice::query()
+            ->where('stripe_subscription_id', $subscription->stripe_subscription_id)
+            ->whereNull('subscription_id')
+            ->where(function ($query) use ($subscription) {
+                $query->whereNull('stripe_customer_id')
+                    ->orWhere('stripe_customer_id', $subscription->stripe_customer_id);
+            })
+            ->update($invoiceUpdate);
 
         if ($previousStatus && $previousStatus !== SubscriptionStatus::Canceled && $status === SubscriptionStatus::Canceled && $subscription->customer) {
             Mail::to($subscription->customer->email)->queue(new SubscriptionCanceled($subscription));
@@ -118,8 +166,23 @@ final class SubscriptionSync
         $subscription = Subscription::where('stripe_subscription_id', $stripeSubscriptionId)->first()
             ?? $this->newFromIntentOrPrice($stripeSubscriptionId, $intent, $intent->stripe_price_id);
 
+        if ($subscription->exists && (
+            ($subscription->customer_id && $subscription->customer_id !== $customer->id)
+            || ($subscription->checkout_intent_id && $subscription->checkout_intent_id !== $intent->id)
+            || ($subscription->stripe_customer_id && $customer->stripe_customer_id
+                && ! hash_equals($subscription->stripe_customer_id, $customer->stripe_customer_id))
+        )) {
+            Log::warning('Stripe checkout subscription identity conflicts with its existing local record.', [
+                'stripe_subscription' => $stripeSubscriptionId,
+                'checkout_intent' => $intent->uuid,
+            ]);
+
+            throw new UnexpectedValueException('Stripe subscription identity conflict.');
+        }
+
         $subscription->checkout_intent_id ??= $intent->id;
         $subscription->stripe_customer_id ??= $customer->stripe_customer_id;
+        $subscription->billing_source ??= 'stripe';
 
         if (! $subscription->customer_id) {
             $subscription->customer()->associate($customer);
@@ -137,6 +200,7 @@ final class SubscriptionSync
         if ($intent) {
             return new Subscription([
                 'stripe_subscription_id' => $stripeSubscriptionId,
+                'billing_source' => 'stripe',
                 'checkout_intent_id' => $intent->id,
                 'stripe_price_id' => $intent->stripe_price_id,
                 'product_type' => $intent->product_type,
@@ -145,6 +209,11 @@ final class SubscriptionSync
                 'market' => $intent->market,
                 'currency' => $intent->currency,
                 'amount' => $intent->amount,
+                'base_price_amount' => $intent->amount,
+                'base_price_currency' => $intent->currency,
+                'pricing_market' => $intent->market,
+                'current_recurring_amount' => null,
+                'current_recurring_currency' => $intent->currency,
                 'status' => SubscriptionStatus::Pending,
             ]);
         }
@@ -153,13 +222,19 @@ final class SubscriptionSync
 
         return $price ? new Subscription([
             'stripe_subscription_id' => $stripeSubscriptionId,
+            'billing_source' => 'stripe',
             'stripe_price_id' => $stripePriceId,
             'product_type' => $price->productType,
             'plan' => $price->tier,
             'interval' => $price->interval,
-            'market' => $price->market,
+            'market' => $price->marketGroup,
             'currency' => $price->money->currency->code,
             'amount' => $price->money->amount,
+            'base_price_amount' => $price->money->amount,
+            'base_price_currency' => $price->money->currency->code,
+            'pricing_market' => $price->marketGroup,
+            'current_recurring_amount' => null,
+            'current_recurring_currency' => $price->money->currency->code,
             'status' => SubscriptionStatus::Pending,
         ]) : null;
     }
@@ -190,5 +265,43 @@ final class SubscriptionSync
     private function time(?int $timestamp): ?Carbon
     {
         return $timestamp ? Carbon::createFromTimestamp($timestamp) : null;
+    }
+
+    private function hasDiscountState(object $stripe): bool
+    {
+        $data = method_exists($stripe, 'toArray') ? $stripe->toArray() : get_object_vars($stripe);
+
+        return array_key_exists('discounts', $data) || array_key_exists('discount', $data);
+    }
+
+    private function eventIsOlder(Carbon $incomingAt, ?string $incomingId, ?Carbon $currentAt, ?string $currentId): bool
+    {
+        if (! $currentAt) {
+            return false;
+        }
+
+        if ($incomingAt->lt($currentAt)) {
+            return true;
+        }
+
+        if ($incomingAt->equalTo($currentAt) && $currentId !== null && $incomingId !== null) {
+            // Stripe event timestamps have second precision. A stable ID
+            // tie-break makes same-second deliveries converge regardless of
+            // arrival order; the ID is not treated as a causal sequence.
+            return strcmp($incomingId, $currentId) <= 0;
+        }
+
+        return false;
+    }
+
+    private function identityConflicts(Subscription $subscription, object $stripe, ?CheckoutIntent $intent): bool
+    {
+        $incomingCustomerId = $stripe->customer ?? null;
+
+        return (is_string($incomingCustomerId)
+                && is_string($subscription->stripe_customer_id)
+                && ! hash_equals($subscription->stripe_customer_id, $incomingCustomerId))
+            || ($intent && $subscription->checkout_intent_id && $subscription->checkout_intent_id !== $intent->id)
+            || ($intent && $subscription->customer_id && $intent->customer_id && $subscription->customer_id !== $intent->customer_id);
     }
 }

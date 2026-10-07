@@ -71,6 +71,7 @@ class StripePriceVerifier
 
         return match (true) {
             ! $remote->active => 'inactive in Stripe',
+            ! (bool) config('services.stripe.allow_live_mode') && (bool) ($remote->livemode ?? false) => 'live mode price',
             strtoupper((string) $remote->currency) !== $currency => "currency {$remote->currency}",
             $remote->unit_amount !== $amount => "amount {$remote->unit_amount}",
             ($remote->recurring->interval ?? null) !== $expectedInterval || ($remote->recurring->interval_count ?? 1) !== 1 => 'wrong interval',

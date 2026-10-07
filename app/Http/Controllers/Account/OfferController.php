@@ -21,8 +21,13 @@ class OfferController extends Controller
 {
     public function index(Request $request): View
     {
+        $customer = $request->attributes->get('customer');
+        $offers = strtoupper((string) $customer->country_code) === 'HU'
+            ? $customer->recoveryOffers()->where('currency', 'HUF')->visibleToCustomer()->with('website')->latest('id')->get()
+            : collect();
+
         return view('account.offers.index', [
-            'offers' => $request->attributes->get('customer')->recoveryOffers()->visibleToCustomer()->with('website')->latest('id')->get(),
+            'offers' => $offers,
         ]);
     }
 

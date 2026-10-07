@@ -9,6 +9,7 @@ use App\Checkout\PromotionRejected;
 use App\Checkout\StartCheckout;
 use App\Http\Requests\StartCheckoutRequest;
 use App\Models\CheckoutIntent;
+use App\Pricing\BillingInterval;
 use App\Pricing\DisplayCurrency;
 use App\Pricing\Exceptions\InvalidPriceSelection;
 use App\Pricing\Exceptions\MarketNotAvailable;
@@ -18,6 +19,7 @@ use App\Pricing\PricingCatalog;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class CheckoutController extends Controller
 {
@@ -36,8 +38,19 @@ class CheckoutController extends Controller
             return redirect()->route('pricing')->with('checkout_error', $e->customerMessage());
         }
 
-        // Presentation only: StartCheckout resolves billing country → market → price on the server.
-        $market = app(DisplayCurrency::class)->market();
+        $display = app(DisplayCurrency::class);
+        $billingCountry = old('country', $request->user()?->customer?->country_code ?? 'HU');
+        $currency = $display->selected();
+        if (strtoupper((string) $billingCountry) === 'HU') {
+            $currency = 'HUF';
+        } elseif ($currency === 'HUF') {
+            $currency = $pricing->defaultInternationalCurrency();
+        }
+        if (! is_string($currency) || ! in_array($currency, $display->available(), true) || ! ($market = $pricing->marketForCurrency($currency))) {
+            return redirect()->route('pricing')->with('checkout_error', __('checkout.errors.invalid_selection'));
+        }
+
+        // Presentation only: country and currency are revalidated by StartCheckout before Stripe is called.
         $offer = collect($pricing->offers($selection->productType, $market))
             ->first(fn ($offer) => $offer->plan->tier === $selection->tier);
 
@@ -45,17 +58,41 @@ class CheckoutController extends Controller
             return redirect()->route('pricing')->with('checkout_error', __('checkout.errors.invalid_selection'));
         }
 
+        $priceMatrix = [];
+        foreach ($display->available() as $code) {
+            $currencyMarket = $pricing->marketForCurrency($code);
+            $currencyOffer = $currencyMarket ? collect($pricing->offers($selection->productType, $currencyMarket))
+                ->first(fn ($candidate) => $candidate->plan->tier === $selection->tier) : null;
+            if (! $currencyOffer) {
+                continue;
+            }
+            foreach ([BillingInterval::Monthly, BillingInterval::Annual] as $billingInterval) {
+                $price = $currencyOffer->price($billingInterval);
+                $priceMatrix[$code][$billingInterval->value] = [
+                    'amount' => $price->money->formattedAmount(),
+                    'symbol' => $price->money->currency->symbol,
+                    'formatted' => $price->money->format(),
+                ];
+            }
+        }
+
         return view('pages.checkout.show', [
             'selection' => $selection,
             'offer' => $offer,
             'market' => $market,
+            'currency' => $currency,
+            'currencies' => $display->available(),
+            'defaultInternationalCurrency' => $pricing->defaultInternationalCurrency(),
+            'priceMatrix' => $priceMatrix,
             'freeMonths' => $offer->freeMonthsOnAnnual(),
             'countries' => __('countries'),
             'account' => $request->user()?->customer,
             // Countries whose market has prices; the page warns about the rest
             // before submitting. The server checks again.
             'purchasableCountries' => collect(array_keys(__('countries')))
-                ->filter(fn (string $country) => $pricing->hasPrices($pricing->marketForCountry($country)))
+                ->filter(fn (string $country) => strtoupper($country) === 'HU'
+                    ? in_array('HUF', $display->available(), true)
+                    : $pricing->defaultInternationalCurrency() !== null)
                 ->values(),
         ]);
     }
@@ -69,6 +106,7 @@ class CheckoutController extends Controller
                 $request->validated('promotion_code'),
                 $request->session()->getId(),
                 $request->user()?->customer,
+                $request->validated('currency'),
             );
         } catch (MarketNotAvailable $e) {
             return back()->withInput()->withErrors(['country' => $e->customerMessage()]);
@@ -111,7 +149,9 @@ class CheckoutController extends Controller
         // Only the browser that started the checkout can cancel it, and only
         // while it is open. Expiring the Stripe session stops a later payment.
         if ($this->startedInThisSession($request, $intent) && $intent->canMoveTo(CheckoutStatus::Cancelled)) {
-            $intent->update(['status' => CheckoutStatus::Cancelled, 'cancelled_at' => now()]);
+            DB::transaction(function () use ($intent) {
+                $intent->update(['status' => CheckoutStatus::Cancelled, 'cancelled_at' => now()]);
+            });
 
             if ($intent->stripe_checkout_session_id) {
                 rescue(fn () => $gateway->expireSession($intent->stripe_checkout_session_id), report: false);

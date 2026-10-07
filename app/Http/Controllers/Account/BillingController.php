@@ -16,6 +16,7 @@ class BillingController extends Controller
         return view('account.billing', [
             'customer' => $customer,
             'subscription' => $customer->primarySubscription(),
+            'invoices' => $customer->billingInvoices()->limit(25)->get(),
         ]);
     }
 }

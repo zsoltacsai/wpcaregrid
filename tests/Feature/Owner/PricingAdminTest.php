@@ -32,10 +32,11 @@ class PricingAdminTest extends TestCase
     {
         parent::setUp();
 
-        // As in a configured environment: every HU price has a Stripe Price ID.
+        // As in a configured environment: every currency price has a unique Stripe Price ID.
         foreach (config('pricing.prices') as $i => $price) {
-            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}"]);
+            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}_{$price['currency']}"]);
         }
+        $this->withSession(['display_currency' => 'HUF']);
         $this->app->instance(CheckoutGateway::class, new FakeCheckoutGateway);
     }
 
@@ -68,10 +69,10 @@ class PricingAdminTest extends TestCase
         $this->asOwner();
 
         $this->get(route('owner.pricing.index'))->assertOk()
-            ->assertSee("18,990\u{00A0}Ft", false)->assertSee('price_wordpress_business_monthly')->assertSee('config/pricing.php')
+            ->assertSee("18,990\u{00A0}Ft", false)->assertSee('price_wordpress_business_monthly_HUF')->assertSee('config/pricing.php')
             ->assertSee('WordPress Business');
-        $this->get(route('owner.pricing.index', ['market' => 'eu']))->assertOk()->assertSee('No price');
-        $this->get(route('owner.pricing.prices.edit', self::KEY))->assertOk()->assertSee('value="18990"', false)->assertSee('price_wordpress_business_monthly');
+        $this->get(route('owner.pricing.index', ['market' => 'eu']))->assertOk()->assertSee('€49');
+        $this->get(route('owner.pricing.prices.edit', self::KEY))->assertOk()->assertSee('value="18990"', false)->assertSee('price_wordpress_business_monthly_HUF');
     }
 
     public function test_a_draft_changes_nothing_until_it_is_published(): void
@@ -80,7 +81,7 @@ class PricingAdminTest extends TestCase
         $this->draft([])->assertRedirect(route('owner.pricing.prices.edit', self::KEY));
 
         $this->assertSame(1899000, $this->businessMonthly()->money->amount);
-        $this->get('/')->assertSee('>18,990<', false)->assertDontSee('>19,990<', false);
+        $this->get('/')->assertSee(">18,990\u{00A0}Ft<", false)->assertDontSee(">19,990\u{00A0}Ft<", false);
         $this->assertEquals(['currency' => 'HUF', 'amount' => 1999000, 'stripe_price_id' => 'price_business_2027', 'active' => true], PriceDefinition::sole()->draft);
         $this->assertNull(PriceDefinition::sole()->published_at);
 
@@ -91,7 +92,7 @@ class PricingAdminTest extends TestCase
         $this->publish()->assertSessionHasNoErrors()->assertRedirect(route('owner.pricing.prices.edit', self::KEY));
         $price = $this->businessMonthly();
         $this->assertSame([1999000, 'price_business_2027', true], [$price->money->amount, $price->stripePriceId, $price->active]);
-        $this->get('/')->assertSee('>19,990<', false)->assertDontSee('>18,990<', false);
+        $this->get('/')->assertSee(">19,990\u{00A0}Ft<", false)->assertDontSee(">18,990\u{00A0}Ft<", false);
 
         $events = AdminAuditEvent::where('subject_type', 'price')->orderBy('id')->get();
         $this->assertSame(['price.created', 'price.published'], $events->pluck('event')->all());
@@ -111,7 +112,7 @@ class PricingAdminTest extends TestCase
             'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly',
             'email' => 'buyer@company.example', 'first_name' => 'Anna', 'last_name' => 'Kovács', 'country' => 'HU',
             // Tampering attempts: never trusted.
-            'amount' => 1, 'currency' => 'USD', 'stripe_price_id' => 'price_cheap', 'price' => 1,
+            'amount' => 1, 'currency' => 'HUF', 'stripe_price_id' => 'price_cheap', 'price' => 1,
         ])->assertRedirect();
 
         $intent = CheckoutIntent::sole();
@@ -133,7 +134,7 @@ class PricingAdminTest extends TestCase
             'not a Stripe price id' => [['stripe_price_id' => 'prod_ABC123'], 'stripe_price_id'],
             'script in price id' => [['stripe_price_id' => 'price_<script>'], 'stripe_price_id'],
             'active without price id' => [['stripe_price_id' => ''], 'stripe_price_id'],
-            'price id of another price' => [['stripe_price_id' => 'price_wordpress_basic_monthly'], 'stripe_price_id'],
+            'price id of another price' => [['stripe_price_id' => 'price_wordpress_basic_monthly_HUF'], 'stripe_price_id'],
         ];
     }
 
@@ -151,7 +152,7 @@ class PricingAdminTest extends TestCase
     public function test_a_price_can_be_taken_off_sale_for_new_checkouts(): void
     {
         $this->asOwner();
-        $this->draft(['amount' => '18990', 'stripe_price_id' => 'price_wordpress_business_monthly', 'active' => '0']);
+        $this->draft(['amount' => '18990', 'stripe_price_id' => 'price_wordpress_business_monthly_HUF', 'active' => '0']);
         $this->publish()->assertSessionHasNoErrors();
 
         $this->expectException(PriceInactive::class);
@@ -167,18 +168,18 @@ class PricingAdminTest extends TestCase
         $this->publish();
 
         $catalog = $this->catalog();
-        foreach (['price_wordpress_business_monthly', 'price_business_2027', 'price_business_2028'] as $stripeId) {
+        foreach (['price_wordpress_business_monthly_HUF', 'price_business_2027', 'price_business_2028'] as $stripeId) {
             $price = $catalog->priceByStripeId($stripeId);
             $this->assertSame(['wordpress', 'business', 'monthly', 'hu'], [$price->productType->value, $price->tier->value, $price->interval->value, $price->market], $stripeId);
         }
         $this->assertSame('price_business_2028', $this->businessMonthly()->stripePriceId);
-        $this->assertSame(['price_wordpress_business_monthly', 'price_business_2027'], PriceDefinition::sole()->retired_stripe_price_ids);
+        $this->assertSame(['price_wordpress_business_monthly_HUF', 'price_business_2027'], PriceDefinition::sole()->retired_stripe_price_ids);
 
         // A retired Price ID cannot be given to another price.
         $this->draft(['stripe_price_id' => 'price_business_2027'], 'wordpress.secure.monthly.hu')->assertSessionHasErrors('stripe_price_id');
     }
 
-    public function test_a_market_without_prices_can_get_one_in_its_own_currency(): void
+    public function test_owner_price_admin_uses_the_selected_international_market_currency(): void
     {
         $this->asOwner();
         $key = 'wordpress.business.monthly.eu';
@@ -187,7 +188,7 @@ class PricingAdminTest extends TestCase
         $this->draft(['currency' => 'EUR', 'amount' => '49', 'stripe_price_id' => 'price_eu_business'], $key)->assertSessionHasNoErrors();
         $this->publish($key)->assertSessionHasNoErrors();
 
-        $price = $this->catalog()->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Business, BillingInterval::Monthly), 'AT');
+        $price = $this->catalog()->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Business, BillingInterval::Monthly), 'AT', 'EUR');
         $this->assertSame([4900, 'EUR', 'eu'], [$price->money->amount, $price->money->currency->code, $price->market]);
     }
 
@@ -302,8 +303,8 @@ class PricingAdminTest extends TestCase
 
         $verifier = $this->stripeConfigured();
         config(['services.stripe.secret' => 'sk_test_unit_SECRET']);
-        $verifier->results['price_wordpress_basic_monthly'] = 'inactive in Stripe';
-        $verifier->products['price_woocommerce_secure_annual'] = 'prod_wordpress';
+        $verifier->results['price_wordpress_basic_monthly_HUF'] = 'inactive in Stripe';
+        $verifier->products['price_woocommerce_secure_annual_HUF'] = 'prod_wordpress';
 
         $this->post(route('owner.pricing.verify'))->assertSessionHas('status');
         $this->get(route('owner.pricing.index'))

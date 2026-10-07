@@ -3,6 +3,7 @@
 namespace App\Owner;
 
 use App\Models\User;
+use App\Pricing\CurrencySuggestion;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
@@ -26,7 +27,7 @@ final class OwnerSettings
         'general.timezone' => ['group' => 'general', 'type' => 'string', 'default' => 'UTC'],
         'general.country' => ['group' => 'general', 'type' => 'string', 'default' => 'HU'],
         'localization.default_language' => ['group' => 'localization', 'type' => 'string', 'default' => 'en'],
-        'pricing.enabled_currencies' => ['group' => 'pricing', 'type' => 'array', 'default' => ['HUF']],
+        'pricing.enabled_currencies' => ['group' => 'pricing', 'type' => 'array', 'default' => ['HUF', 'EUR', 'USD', 'GBP']],
         'pricing.default_international_currency' => ['group' => 'pricing', 'type' => 'string', 'default' => 'EUR'],
         'mail.mode' => ['group' => 'mail', 'type' => 'string', 'default' => 'local_smtp'],
         'mail.host' => ['group' => 'mail', 'type' => 'string', 'default' => '127.0.0.1'],
@@ -270,18 +271,7 @@ final class OwnerSettings
 
     public static function suggestedCurrency(string $locale): string
     {
-        $normalized = str_replace('_', '-', trim($locale));
-        $parts = explode('-', $normalized);
-        $language = strtolower($parts[0] ?? '');
-        $region = strtoupper($parts[1] ?? '');
-
-        return match (true) {
-            $language === 'hu' => 'HUF',
-            $language === 'en' && $region === 'US' => 'USD',
-            $language === 'en' && $region === 'GB' => 'GBP',
-            in_array($region, ['AT', 'BE', 'CY', 'DE', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PT', 'SI', 'SK'], true) => 'EUR',
-            default => 'EUR',
-        };
+        return CurrencySuggestion::forLocale($locale);
     }
 
     /** Hungarian billing is always assigned to the HUF market. */

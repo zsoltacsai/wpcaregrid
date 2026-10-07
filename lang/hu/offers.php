@@ -56,6 +56,7 @@ return [
         'not_acceptable' => 'Ez az ajánlat már nem fogadható el.',
         'not_payable' => 'Ez az ajánlat már nem fizethető ki.',
         'not_declinable' => 'Ez az ajánlat már nem utasítható el.',
+        'not_eligible' => 'A helyreállítási ajánlat jelenleg csak a magyar számlázási piacon érhető el.',
         'payment_unavailable' => 'A fizetési oldalt nem sikerült megnyitni. Az elfogadása mentve van; kérjük, próbálja újra egy perc múlva.',
     ],
 
