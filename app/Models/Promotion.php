@@ -111,7 +111,7 @@ class Promotion extends Model
         return max(0, $this->max_redemptions - $this->times_redeemed - $reserved);
     }
 
-    /** Whether this buyer (a customer or an email address) has used the code as often as allowed. */
+    /** Whether this buyer has completed the maximum number of checkouts. */
     public function usedUpBy(string $email, ?int $customerId = null): bool
     {
         if ($this->max_redemptions_per_customer === null) {
@@ -124,6 +124,28 @@ class Promotion extends Model
             ->count();
 
         return $used >= $this->max_redemptions_per_customer;
+    }
+
+    /** Preview also considers live reservations, without claiming a slot. */
+    public function previewUsedUpBy(string $email, ?int $customerId = null): bool
+    {
+        if ($this->max_redemptions_per_customer === null) {
+            return false;
+        }
+
+        $used = CheckoutIntent::where('promotion_id', $this->id)
+            ->where('status', CheckoutStatus::Completed)
+            ->where(fn ($q) => $q->whereRaw('LOWER(email) = ?', [mb_strtolower(trim($email))])->when($customerId, fn ($q) => $q->orWhere('customer_id', $customerId)))
+            ->count();
+        $reserved = PromotionReservation::query()
+            ->where('promotion_id', $this->id)
+            ->where('status', 'reserved')
+            ->where('reserved_until', '>', now())
+            ->where(fn ($query) => $query->where('email_hash', hash_hmac('sha256', mb_strtolower(trim($email)), (string) config('app.key')))
+                ->when($customerId, fn ($query) => $query->orWhere('customer_id', $customerId)))
+            ->count();
+
+        return $used + $reserved >= $this->max_redemptions_per_customer;
     }
 
     /** Whether any checkout ever used this code; a coupon with history is deactivated, not deleted. */

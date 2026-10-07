@@ -39,19 +39,79 @@
                     prices: @js($priceMatrix),
                     purchasable: @js($purchasableCountries),
                     submitting: false,
+                    promotionPreview: null,
+                    promotionPreviewKey: null,
+                    previewError: '',
+                    previewLoading: false,
+                    previewVersion: 0,
                     get available() {
                         return this.purchasable.includes(this.country)
                             && (!this.lockedCurrency || (this.country === 'HU' ? this.lockedCurrency === 'HUF' : this.lockedCurrency !== 'HUF'));
                     },
                     syncCurrency() {
+                        this.clearPreview();
                         if (this.lockedCurrency) { this.currency = this.lockedCurrency; return; }
                         if (this.country === 'HU') this.currency = 'HUF';
                         else if (this.currency === 'HUF') this.currency = @js($defaultInternationalCurrency);
                     },
                     priceFor(interval) { return this.prices[this.currency]?.[interval] ?? null; },
+                    previewKey() {
+                        const form = document.getElementById('checkout-form');
+                        return [form.elements.product.value, form.elements.plan.value, this.interval, this.country,
+                            this.currency, form.elements.email.value.trim().toLowerCase(), form.elements.promotion_code.value.trim().toUpperCase()].join('|');
+                    },
+                    clearPreview() {
+                        this.previewVersion++;
+                        this.promotionPreview = null;
+                        this.promotionPreviewKey = null;
+                        this.previewError = '';
+                        this.previewLoading = false;
+                    },
+                    async applyPromotion() {
+                        const form = document.getElementById('checkout-form');
+                        const code = form.elements.promotion_code.value.trim();
+                        this.clearPreview();
+                        if (!code) return;
+                        const version = this.previewVersion;
+                        const key = this.previewKey();
+                        this.previewLoading = true;
+                        try {
+                            const response = await fetch(@js(route('checkout.promotion-preview')), {
+                                method: 'POST',
+                                credentials: 'same-origin',
+                                headers: {
+                                    'Accept': 'application/json',
+                                    'Content-Type': 'application/json',
+                                    'X-CSRF-TOKEN': form.elements._token.value,
+                                },
+                                body: JSON.stringify({
+                                    product: form.elements.product.value,
+                                    plan: form.elements.plan.value,
+                                    interval: this.interval,
+                                    country: this.country,
+                                    currency: this.currency,
+                                    email: form.elements.email.value.trim(),
+                                    promotion_code: code,
+                                }),
+                            });
+                            const result = await response.json();
+                            if (version !== this.previewVersion || key !== this.previewKey()) return;
+                            if (!response.ok) {
+                                this.previewError = response.status === 422 && typeof result.message === 'string'
+                                    ? result.message : @js(__('checkout.preview.unavailable'));
+                                return;
+                            }
+                            this.promotionPreview = result;
+                            this.promotionPreviewKey = key;
+                        } catch (_) {
+                            if (version === this.previewVersion) this.previewError = @js(__('checkout.preview.unavailable'));
+                        } finally {
+                            if (version === this.previewVersion) this.previewLoading = false;
+                        }
+                    },
                 }"
                 x-init="syncCurrency()"
-                x-on:submit="submitting = true"
+                x-on:submit="if (document.getElementById('field-promotion_code').value.trim() && (!promotionPreview || promotionPreviewKey !== previewKey())) { $event.preventDefault(); applyPromotion(); } else { submitting = true; }"
             >
                 @csrf
                 <input type="hidden" name="product" value="{{ $plan->productType->value }}">
@@ -88,7 +148,7 @@
                             @foreach (BillingInterval::cases() as $option)
                                 @php $price = $offer->price($option); @endphp
                                 <label class="relative flex cursor-pointer flex-col gap-1 rounded-md border border-line-strong bg-surface p-4 hover:border-muted has-checked:border-accent has-checked:bg-accent-soft has-checked:ring-1 has-checked:ring-accent has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-accent-ink">
-                                    <input type="radio" name="interval" value="{{ $option->value }}" x-model="interval" @checked($interval === $option->value) class="sr-only">
+                                    <input type="radio" name="interval" value="{{ $option->value }}" x-model="interval" x-on:change="clearPreview()" @checked($interval === $option->value) class="sr-only">
                                     <span class="flex items-center justify-between gap-3">
                                         <span class="text-sm font-semibold text-primary">{{ $option->label() }}</span>
                                         @if ($option === BillingInterval::Annual && $freeMonths > 0)
@@ -110,7 +170,7 @@
                         <p class="text-xs font-semibold tracking-[0.12em] text-muted uppercase" aria-hidden="true">{{ __('checkout.details_heading') }}</p>
 
                         <div class="mt-4 grid gap-5">
-                            <x-form.field name="email" type="email" :label="__('checkout.fields.email')" :hint="__('checkout.fields.email_hint')" :value="$account?->email" :readonly="$account !== null" autocomplete="email" required maxlength="254" />
+                            <x-form.field name="email" type="email" :label="__('checkout.fields.email')" :hint="__('checkout.fields.email_hint')" :value="$account?->email" :readonly="$account !== null" x-on:input="clearPreview()" autocomplete="email" required maxlength="254" />
 
                             <div class="grid gap-5 sm:grid-cols-2">
                                 <x-form.field name="first_name" :label="__('checkout.fields.first_name')" :value="$account?->first_name" autocomplete="given-name" required maxlength="100" />
@@ -130,7 +190,7 @@
 
                             <div>
                                 <label for="checkout-currency" class="mb-2 block text-sm font-medium">{{ __('checkout.fields.currency') }}</label>
-                                <select id="checkout-currency" name="currency" x-model="currency" class="h-11 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm text-primary" required>
+                                <select id="checkout-currency" name="currency" x-model="currency" x-on:change="clearPreview()" class="h-11 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm text-primary" required>
                                     @foreach ($currencies as $code)
                                         <option value="{{ $code }}" @selected($currency === $code) :disabled="lockedCurrency ? '{{ $code }}' !== lockedCurrency : (country === 'HU' ? '{{ $code }}' !== 'HUF' : '{{ $code }}' === 'HUF')">{{ $code }}</option>
                                     @endforeach
@@ -152,7 +212,15 @@
                                 {{ __('checkout.international_unavailable') }}
                             </p>
 
-                            <x-form.field name="promotion_code" :label="__('checkout.fields.promotion_code')" optional autocomplete="off" maxlength="64" class="sm:max-w-xs" />
+                            <div class="sm:max-w-xs">
+                                <x-form.field name="promotion_code" :label="__('checkout.fields.promotion_code')" optional autocomplete="off" maxlength="64" x-on:input="clearPreview()" />
+                                <button type="button" x-on:click="applyPromotion()" x-bind:disabled="previewLoading || !available" class="mt-2 rounded-sm border border-line-strong px-4 py-2 text-sm font-medium text-primary hover:bg-canvas disabled:opacity-50">
+                                    {{ __('checkout.preview.apply') }}
+                                </button>
+                                <p x-show="previewLoading" x-cloak role="status" class="mt-2 text-sm text-muted">{{ __('checkout.preview.checking') }}</p>
+                                <p x-show="previewError" x-cloak role="alert" class="mt-2 text-sm text-danger-ink" x-text="previewError"></p>
+                                <p x-show="promotionPreview" x-cloak role="status" class="mt-2 text-sm text-accent-ink">{{ __('checkout.preview.applied') }}</p>
+                            </div>
                         </div>
                     </fieldset>
 
@@ -191,6 +259,14 @@
                                 <p class="mt-2 text-sm text-muted">{{ __('checkout.summary.billed.'.$option->value) }}</p>
                             </div>
                         @endforeach
+
+                        <div x-show="promotionPreview" x-cloak aria-live="polite" class="mt-5 space-y-2 border-t border-line pt-4 text-sm">
+                            <p class="flex justify-between gap-3"><span>{{ __('checkout.preview.regular') }}</span><span x-text="promotionPreview?.formatted.base + ' / ' + (interval === 'annual' ? @js(__('checkout.preview.year')) : @js(__('checkout.preview.month')))"></span></p>
+                            <p class="font-medium text-accent-ink" x-text="promotionPreview?.discount_type === 'percent' ? promotionPreview.discount_percent + '% ' + (promotionPreview.discount_duration === 'once' ? @js(__('checkout.preview.once')) : @js(__('checkout.preview.ongoing'))) : (promotionPreview?.discount_duration === 'once' ? @js(__('checkout.preview.fixed_once')) : @js(__('checkout.preview.fixed_ongoing')))"></p>
+                            <p class="flex justify-between gap-3 text-base font-semibold"><span>{{ __('checkout.preview.today') }}</span><span x-text="promotionPreview?.formatted.initial_total"></span></p>
+                            <p class="flex justify-between gap-3"><span x-text="promotionPreview?.discount_duration === 'once' ? @js(__('checkout.preview.then')) : @js(__('checkout.preview.renews'))"></span><span x-text="promotionPreview?.formatted.future_total === null ? @js(__('checkout.preview.repeating_unknown')) : promotionPreview?.formatted.future_total + ' / ' + (interval === 'annual' ? @js(__('checkout.preview.year')) : @js(__('checkout.preview.month')))"></span></p>
+                            <p class="text-xs text-muted">{{ __('checkout.preview.estimate') }}</p>
+                        </div>
 
                         <p x-show="country === 'HU' && currency === 'HUF'" x-cloak class="mt-4 text-xs text-muted">
                             {{ __('checkout.tax_note') }}

@@ -41,6 +41,26 @@ return [
     'redirect_note' => 'You will be redirected to Stripe to enter your payment details.',
     'secure_note' => 'Card details are handled by Stripe and never reach our servers.',
 
+    'preview' => [
+        'apply' => 'Apply code',
+        'checking' => 'Checking promotion…',
+        'applied' => 'Promotion applied to this estimate.',
+        'regular' => 'Regular price',
+        'today' => 'Today',
+        'then' => 'Then',
+        'renews' => 'Renews at',
+        'year' => 'year',
+        'month' => 'month',
+        'once' => 'off the first billing cycle',
+        'ongoing' => 'ongoing discount',
+        'fixed_once' => 'Discount on the first billing cycle',
+        'fixed_ongoing' => 'Ongoing discount',
+        'repeating_unknown' => 'Depends on coupon end date',
+        'estimate' => 'Preview only. The promotion is checked again at checkout.',
+        'invalid_input' => 'Check the promotion details and try again.',
+        'unavailable' => 'This promotion is unavailable for this selection. Check the code and try again.',
+    ],
+
     'summary' => [
         'heading' => 'Order summary',
         'billed' => [

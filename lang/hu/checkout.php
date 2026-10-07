@@ -41,6 +41,26 @@ return [
     'redirect_note' => 'A fizetési adatok megadásához átirányítjuk a Stripe oldalára.',
     'secure_note' => 'A kártyaadatokat a Stripe kezeli, azok soha nem jutnak el a mi szervereinkre.',
 
+    'preview' => [
+        'apply' => 'Kód alkalmazása',
+        'checking' => 'Kedvezmény ellenőrzése…',
+        'applied' => 'A kedvezményt figyelembe vettük a becslésben.',
+        'regular' => 'Eredeti ár',
+        'today' => 'Most fizetendő',
+        'then' => 'Ezután',
+        'renews' => 'Megújulási ár',
+        'year' => 'év',
+        'month' => 'hónap',
+        'once' => 'kedvezmény az első számlázási időszakra',
+        'ongoing' => 'folyamatos kedvezmény',
+        'fixed_once' => 'Kedvezmény az első számlázási időszakra',
+        'fixed_ongoing' => 'Folyamatos kedvezmény',
+        'repeating_unknown' => 'A kedvezmény lejárati idejétől függ',
+        'estimate' => 'Ez csak előzetes becslés. A kedvezményt a fizetés indításakor újra ellenőrizzük.',
+        'invalid_input' => 'Ellenőrizze a kedvezmény adatait, majd próbálja újra.',
+        'unavailable' => 'Ez a kedvezmény nem használható ehhez a választáshoz. Ellenőrizze a kódot, és próbálja újra.',
+    ],
+
     'summary' => [
         'heading' => 'Rendelés összegzése',
         'billed' => [

@@ -62,6 +62,113 @@ class CheckoutTest extends TestCase
             ]);
     }
 
+    /** @param array<string, mixed> $overrides */
+    private function preview(array $overrides = [])
+    {
+        return $this->postJson(route('checkout.promotion-preview'), $overrides + [
+            'product' => 'wordpress', 'plan' => 'business', 'interval' => 'annual',
+            'country' => 'DE', 'currency' => 'EUR', 'email' => 'preview@company.example',
+            'promotion_code' => 'PREVIEW',
+        ]);
+    }
+
+    public function test_promotion_preview_shows_once_and_forever_economics_without_creating_billing_state(): void
+    {
+        foreach ([
+            ['code' => 'PREVIEW', 'percent' => 10, 'duration' => 'once', 'initial_discount' => 8900, 'initial' => 80100, 'future' => 89000],
+            ['code' => 'FOREVER25', 'percent' => 25, 'duration' => 'forever', 'initial_discount' => 22250, 'initial' => 66750, 'future' => 66750],
+            ['code' => 'FREEONCE', 'percent' => 100, 'duration' => 'once', 'initial_discount' => 89000, 'initial' => 0, 'future' => 89000],
+        ] as $case) {
+            $promotion = Promotion::create([
+                'code' => $case['code'], 'stripe_promotion_code_id' => 'promo_'.strtolower($case['code']),
+                'discount_type' => 'percent', 'percent_off' => $case['percent'], 'duration' => $case['duration'],
+            ]);
+
+            $this->preview(['promotion_code' => $case['code']])->assertOk()
+                ->assertJsonPath('base_amount', 89000)
+                ->assertJsonPath('initial_discount_amount', $case['initial_discount'])
+                ->assertJsonPath('initial_total', $case['initial'])
+                ->assertJsonPath('future_total', $case['future'])
+                ->assertJsonPath('discount_duration', $case['duration'])
+                ->assertJsonPath('formatted.initial_total', $case['initial'] === 0 ? '€0' : ($case['initial'] === 80100 ? '€801' : '€667.50'))
+                ->assertJsonMissingPath('stripe_price_id')
+                ->assertJsonMissingPath('stripe_coupon_id');
+            $this->assertSame(0, $promotion->refresh()->times_redeemed);
+        }
+
+        $this->assertDatabaseCount('checkout_intents', 0);
+        $this->assertDatabaseCount('promotion_reservations', 0);
+        $this->assertDatabaseCount('customers', 0);
+        $this->assertDatabaseCount('users', 0);
+        $this->assertDatabaseCount('subscriptions', 0);
+        $this->assertDatabaseCount('billing_invoices', 0);
+        $this->assertSame([], $this->gateway->created);
+    }
+
+    public function test_promotion_preview_rejects_tampering_and_unavailable_codes_without_side_effects(): void
+    {
+        Promotion::create(['code' => 'PREVIEW', 'stripe_promotion_code_id' => 'promo_preview', 'discount_type' => 'percent', 'percent_off' => 10]);
+        Promotion::create(['code' => 'EXPIRED', 'stripe_promotion_code_id' => 'promo_expired', 'discount_type' => 'percent', 'percent_off' => 10, 'expires_at' => now()->subDay()]);
+        Promotion::create(['code' => 'EXHAUSTED', 'stripe_promotion_code_id' => 'promo_exhausted', 'discount_type' => 'percent', 'percent_off' => 10, 'max_redemptions' => 1, 'times_redeemed' => 1]);
+
+        foreach (['NO_SUCH_CODE', 'EXPIRED', 'EXHAUSTED'] as $code) {
+            $this->preview(['promotion_code' => $code])->assertUnprocessable()
+                ->assertJsonPath('message', __('checkout.preview.unavailable'));
+        }
+        foreach (['amount' => 0, 'stripe_price_id' => 'price_fake', 'stripe_coupon_id' => 'coupon_fake', 'market' => 'HU', 'promotion_id' => 1] as $key => $value) {
+            $this->preview([$key => $value])->assertUnprocessable();
+        }
+        $this->preview(['country' => 'HU', 'currency' => 'EUR'])->assertUnprocessable();
+        $this->preview(['country' => 'DE', 'currency' => 'HUF'])->assertUnprocessable();
+        $this->assertDatabaseCount('checkout_intents', 0);
+        $this->assertDatabaseCount('promotion_reservations', 0);
+        $this->assertSame([], $this->gateway->created);
+    }
+
+    public function test_promotion_preview_obeys_existing_customer_currency_lock(): void
+    {
+        Promotion::create(['code' => 'PREVIEW', 'stripe_promotion_code_id' => 'promo_preview', 'discount_type' => 'percent', 'percent_off' => 100, 'duration' => 'once']);
+        $customer = Customer::factory()->withUser()->create(['country_code' => 'DE', 'stripe_customer_id' => 'cus_preview_eur']);
+        Subscription::factory()->for($customer)->create(['stripe_customer_id' => 'cus_preview_eur', 'currency' => 'EUR']);
+
+        $this->actingAs($customer->user)->withSession(['display_currency' => 'GBP'])
+            ->preview(['currency' => 'GBP', 'email' => 'forged@example.test'])
+            ->assertUnprocessable()
+            ->assertJsonPath('message', __('checkout.errors.customer_currency_mismatch', ['currency' => 'EUR']));
+        $this->preview(['currency' => 'EUR', 'email' => 'forged@example.test'])
+            ->assertOk()->assertJsonPath('initial_total', 0)->assertJsonPath('future_total', 89000);
+        $this->assertDatabaseCount('checkout_intents', 0);
+    }
+
+    public function test_limited_promotion_preview_does_not_block_reuse_of_its_existing_checkout(): void
+    {
+        Promotion::create([
+            'code' => 'PREVIEW', 'stripe_promotion_code_id' => 'promo_preview',
+            'discount_type' => 'percent', 'percent_off' => 10, 'duration' => 'once',
+            'max_redemptions' => 1, 'max_redemptions_per_customer' => 1,
+        ]);
+
+        $first = $this->submit(['promotion_code' => 'PREVIEW', 'country' => 'DE', 'currency' => 'EUR', 'interval' => 'annual']);
+        $second = $this->submit(['promotion_code' => 'PREVIEW', 'country' => 'DE', 'currency' => 'EUR', 'interval' => 'annual']);
+        $this->assertSame($first->headers->get('Location'), $second->headers->get('Location'));
+        $this->assertDatabaseCount('checkout_intents', 1);
+        $this->assertDatabaseCount('promotion_reservations', 1);
+        $this->assertCount(1, $this->gateway->created);
+
+        $this->preview(['promotion_code' => 'PREVIEW', 'email' => 'customer@company.example'])
+            ->assertUnprocessable()->assertJsonPath('message', __('checkout.preview.unavailable'));
+    }
+
+    public function test_checkout_page_contains_read_only_promotion_preview_and_distinct_payment_labels(): void
+    {
+        $this->get(route('checkout.show', ['product' => 'wordpress', 'plan' => 'business', 'interval' => 'annual']))
+            ->assertOk()
+            ->assertSee('promotion-preview', false)
+            ->assertSee(__('checkout.preview.today'))
+            ->assertSee('promotionPreview?.formatted.future_total', false)
+            ->assertSee(__('checkout.preview.regular'));
+    }
+
     public function test_checkout_page_shows_the_selected_plan_and_server_prices(): void
     {
         $this->get(route('checkout.show', ['product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual']))

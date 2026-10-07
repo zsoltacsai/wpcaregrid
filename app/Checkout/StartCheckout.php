@@ -4,8 +4,6 @@ namespace App\Checkout;
 
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
-use App\Models\Promotion;
-use App\Pricing\Exceptions\CustomerCurrencyMismatch;
 use App\Pricing\Exceptions\PricingException;
 use App\Pricing\PriceSelection;
 use App\Pricing\PricingCatalog;
@@ -24,7 +22,7 @@ final class StartCheckout
         private readonly PricingCatalog $catalog,
         private readonly CheckoutGateway $gateway,
         private readonly PromotionReservations $reservations,
-        private readonly ExistingCustomerCurrencyLock $currencyLock,
+        private readonly CheckoutOfferResolver $offers,
     ) {}
 
     /**
@@ -60,26 +58,10 @@ final class StartCheckout
             billingAddress: $customer->billingAddress,
         );
 
-        $price = $this->catalog->resolve($selection, $customer->country, $currency);
+        $offer = $this->offers->resolve($selection, $customer->country, $customer->email, $currency, $promotionCode, $account);
+        $price = $offer['price'];
+        $promotion = $offer['promotion'];
         $market = $this->catalog->market($price->market);
-
-        if ($account && ($lockedCurrency = $this->currencyLock->forCustomer($account)) !== null
-            && $lockedCurrency !== $price->money->currency->code) {
-            throw new CustomerCurrencyMismatch($lockedCurrency);
-        }
-
-        $promotion = null;
-        if ($promotionCode !== null && trim($promotionCode) !== '') {
-            $promotion = Promotion::findByCode($promotionCode) ?? throw new PromotionRejected('unknown');
-
-            if ($reason = $promotion->ineligibilityReason($price)) {
-                throw new PromotionRejected($reason);
-            }
-
-            if ($promotion->usedUpBy($customer->email, $account?->id)) {
-                throw new PromotionRejected('already_used');
-            }
-        }
 
         $sessionHash = CheckoutIntent::hashBrowserSession($browserSessionId);
 

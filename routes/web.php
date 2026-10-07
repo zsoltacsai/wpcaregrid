@@ -32,6 +32,7 @@ Route::post('/currency', CurrencyController::class)->middleware('throttle:60,1')
 Route::controller(CheckoutController::class)->prefix('checkout')->name('checkout.')->group(function () {
     // The query string carries only the logical selection (product, plan, interval).
     Route::get('/', 'show')->name('show');
+    Route::post('/promotion-preview', 'preview')->middleware('throttle:checkout-preview')->name('promotion-preview');
     Route::post('/', 'store')->middleware('throttle:checkout')->name('store');
     Route::get('/success', 'success')->name('success');
     Route::get('/cancel/{intent}', 'cancel')->name('cancel');

@@ -127,7 +127,7 @@ final class SubscriptionBillingSnapshot
             if ($duration === 'once' || ! $active) {
                 $recurring = $base;
             } elseif (in_array($duration, ['forever', 'repeating'], true)) {
-                $recurring = $this->percentAfterDiscount($base, $percent);
+                $recurring = DiscountAmounts::afterPercent($base, $percent);
             }
         } elseif ($base !== null && $type === 'fixed') {
             if ($discountCurrency === $currency) {
@@ -158,20 +158,6 @@ final class SubscriptionBillingSnapshot
             'current_recurring_amount' => $recurring,
             'current_recurring_currency' => $currency,
         ];
-    }
-
-    private function percentAfterDiscount(int $amount, string $percent): int
-    {
-        [$whole, $fraction] = array_pad(explode('.', $percent, 2), 2, '0');
-        $hundredths = ((int) $whole * 100) + (int) str_pad($fraction, 2, '0');
-        $factor = 10000 - $hundredths;
-
-        // Split before multiplying so even the largest signed integer amount
-        // cannot overflow PHP's integer range during percentage calculation.
-        $wholeAmount = intdiv($amount, 10000);
-        $remainder = $amount % 10000;
-
-        return ($wholeAmount * $factor) + intdiv(($remainder * $factor) + 5000, 10000);
     }
 
     private function decimal(mixed $value): ?string

@@ -230,5 +230,10 @@ class AppServiceProvider extends ServiceProvider
             Limit::perMinute(10)->by($request->ip()),
             Limit::perHour(30)->by($request->ip()),
         ]);
+
+        RateLimiter::for('checkout-preview', fn (Request $request) => [
+            Limit::perMinute(30)->by($request->ip()),
+            Limit::perHour(120)->by($request->ip()),
+        ]);
     }
 }

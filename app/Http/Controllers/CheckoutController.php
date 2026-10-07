@@ -3,11 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Checkout\CheckoutGateway;
+use App\Checkout\CheckoutOfferResolver;
 use App\Checkout\CheckoutStatus;
 use App\Checkout\CheckoutUnavailable;
 use App\Checkout\ExistingCustomerCurrencyLock;
+use App\Checkout\PromotionPreview;
 use App\Checkout\PromotionRejected;
 use App\Checkout\StartCheckout;
+use App\Http\Requests\PromotionPreviewRequest;
 use App\Http\Requests\StartCheckoutRequest;
 use App\Models\CheckoutIntent;
 use App\Pricing\BillingInterval;
@@ -19,6 +22,7 @@ use App\Pricing\Exceptions\PricingException;
 use App\Pricing\PriceSelection;
 use App\Pricing\PricingCatalog;
 use Illuminate\Contracts\View\View;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -132,6 +136,28 @@ class CheckoutController extends Controller
         $request->session()->push(self::SESSION_INTENTS, $intent->uuid);
 
         return redirect()->away($intent->stripe_checkout_url, 303);
+    }
+
+    /** Read-only economics for the current selection. Checkout resolves again before reserving. */
+    public function preview(PromotionPreviewRequest $request, CheckoutOfferResolver $offers): JsonResponse
+    {
+        try {
+            $offer = $offers->resolve(
+                $request->selection(),
+                $request->validated('country'),
+                $request->user()?->customer?->email ?? $request->validated('email'),
+                $request->validated('currency'),
+                $request->validated('promotion_code'),
+                $request->user()?->customer,
+                preview: true,
+            );
+
+            return response()->json(PromotionPreview::from($offer['price'], $offer['promotion'])->toArray());
+        } catch (PricingException $e) {
+            return response()->json(['message' => $e->customerMessage()], 422);
+        } catch (PromotionRejected) {
+            return response()->json(['message' => __('checkout.preview.unavailable')], 422);
+        }
     }
 
     /**
