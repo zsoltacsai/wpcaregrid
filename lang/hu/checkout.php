@@ -15,6 +15,7 @@ return [
 
     'title' => 'Rendelés véglegesítése',
     'lead' => 'Erősítse meg a csomagot és az adatait. A fizetést a Stripe kezeli.',
+    'tax_note' => 'Az ár weboldalanként értendő. Ez a végleges ár; áfát nem számítunk fel.',
 
     'plan_heading' => 'Csomag',
     'change_plan' => 'Csomag módosítása',
@@ -28,7 +29,7 @@ return [
         'country' => 'Számlázási ország',
         'country_hint' => 'Az ár és a pénznem a számlázási országtól függ.',
         'currency' => 'Ár pénzneme',
-        'currency_hint' => 'Magyar számlázás esetén HUF-ban történik a fizetés. Más országok EUR, USD vagy GBP pénznemet választhatnak.',
+        'currency_hint' => 'Az elérhető pénznem a számlázási országtól függ.',
         'promotion_code' => 'Kedvezménykód',
         'optional' => 'nem kötelező',
     ],

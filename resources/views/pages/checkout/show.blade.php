@@ -184,9 +184,9 @@
                             </div>
                         @endforeach
 
-                        @if ($taxNote = __('pricing.tax_notes.'.$market->taxTreatment->value))
-                            <p class="mt-4 text-xs text-muted">{{ $taxNote }}</p>
-                        @endif
+                        <p x-show="country === 'HU' && currency === 'HUF'" x-cloak class="mt-4 text-xs text-muted">
+                            {{ __('checkout.tax_note') }}
+                        </p>
                     </div>
 
                     <div class="border-b border-line p-6">

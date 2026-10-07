@@ -15,6 +15,7 @@ return [
 
     'title' => 'Complete your order',
     'lead' => 'Confirm your plan and details. Payment is handled by Stripe.',
+    'tax_note' => 'Prices are per website. This is the final price; no VAT is added.',
 
     'plan_heading' => 'Plan',
     'change_plan' => 'Change plan',
@@ -28,7 +29,7 @@ return [
         'country' => 'Billing country',
         'country_hint' => 'Your price and currency depend on your billing country.',
         'currency' => 'Price currency',
-        'currency_hint' => 'Hungarian billing is charged in HUF. Other billing countries may choose EUR, USD or GBP.',
+        'currency_hint' => 'Currency availability depends on your billing country.',
         'promotion_code' => 'Promotion code',
         'optional' => 'optional',
     ],

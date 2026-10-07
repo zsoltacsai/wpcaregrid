@@ -72,6 +72,39 @@ class CheckoutTest extends TestCase
             ->assertDontSee('price_woocommerce', false);
     }
 
+    /** @return array<string, array{string, string, string, bool}> */
+    public static function checkoutMarketCopy(): array
+    {
+        return [
+            'Hungary HUF' => ['HU', 'HUF', '24,900', true],
+            'United States USD' => ['US', 'USD', '$99', false],
+            'United Kingdom GBP' => ['GB', 'GBP', '£99', false],
+            'international EUR' => ['DE', 'EUR', '€99', false],
+        ];
+    }
+
+    #[DataProvider('checkoutMarketCopy')]
+    public function test_checkout_tax_copy_matches_the_selected_market_and_currency(string $country, string $currency, string $amount, bool $expectsHungarianTaxCopy): void
+    {
+        $response = $this->withSession([
+            'display_currency' => $currency,
+            '_old_input' => ['country' => $country, 'currency' => $currency],
+        ])
+            ->get(route('checkout.show', ['product' => 'woocommerce', 'plan' => 'business', 'interval' => 'monthly']))
+            ->assertOk()
+            ->assertSee('WooCommerce Business')
+            ->assertSee($amount)
+            ->assertSee("x-show=\"country === 'HU' && currency === 'HUF'\"", false)
+            ->assertSee(__('checkout.fields.currency_hint'))
+            ->assertDontSee('Hungarian billing is charged in HUF');
+
+        if ($expectsHungarianTaxCopy) {
+            $response->assertSee(__('checkout.tax_note'));
+        } else {
+            $response->assertDontSee('Prices in Hungarian forint');
+        }
+    }
+
     public function test_checkout_page_rejects_an_invalid_selection(): void
     {
         $this->get(route('checkout.show', ['product' => 'joomla', 'plan' => 'basic']))
