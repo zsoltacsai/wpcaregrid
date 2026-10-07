@@ -46,13 +46,21 @@ final class PromotionReservations
             }
 
             $emailHash = $this->emailHash($email);
+            // `COUNT(*)` here used to be a normal consistent read. Under
+            // MySQL REPEATABLE READ that can keep an older snapshot even
+            // after this transaction waited for the promotion row lock. Read
+            // reservation rows as a current/locking read so the capacity
+            // decision sees commits made by the transaction that held the
+            // serialization lock immediately before us.
             $activeReservations = PromotionReservation::query()
                 ->where('promotion_id', $locked->id)
                 ->where('status', 'reserved')
-                ->where('reserved_until', '>', $now);
+                ->where('reserved_until', '>', $now)
+                ->lockForUpdate()
+                ->get();
 
             if ($locked->max_redemptions !== null
-                && $locked->times_redeemed + (clone $activeReservations)->count() >= $locked->max_redemptions) {
+                && $locked->times_redeemed + $activeReservations->count() >= $locked->max_redemptions) {
                 throw new PromotionRejected('used_up');
             }
 
@@ -62,10 +70,12 @@ final class PromotionReservations
                     ->where('status', CheckoutStatus::Completed->value)
                     ->where(fn ($query) => $query->whereRaw('LOWER(email) = ?', [mb_strtolower(trim($email))])
                         ->when($customerId, fn ($query) => $query->orWhere('customer_id', $customerId)))
+                    ->lockForUpdate()
+                    ->get(['id'])
                     ->count();
-                $reservedByCustomer = (clone $activeReservations)
-                    ->where(fn ($query) => $query->where('email_hash', $emailHash)
-                        ->when($customerId, fn ($query) => $query->orWhere('customer_id', $customerId)))
+                $reservedByCustomer = $activeReservations
+                    ->filter(fn (PromotionReservation $reservation) => hash_equals($reservation->email_hash, $emailHash)
+                        || ($customerId && $reservation->customer_id === $customerId))
                     ->count();
 
                 if ($completed + $reservedByCustomer >= $locked->max_redemptions_per_customer) {
@@ -81,7 +91,7 @@ final class PromotionReservations
                 'status' => 'reserved',
                 'reserved_until' => $now->addHours(24),
             ]);
-        });
+        }, attempts: 3);
     }
 
     public function setExpiry(CheckoutIntent $intent, mixed $expiresAt): void

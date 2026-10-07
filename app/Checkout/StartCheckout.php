@@ -114,7 +114,7 @@ final class StartCheckout
             }
 
             return $intent;
-        });
+        }, attempts: 3);
 
         try {
             $session = $this->gateway->createSession($intent, $promotion);

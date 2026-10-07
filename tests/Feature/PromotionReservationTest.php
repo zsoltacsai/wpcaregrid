@@ -107,6 +107,20 @@ class PromotionReservationTest extends TestCase
         }
     }
 
+    public function test_unlimited_promotion_still_allows_multiple_reservations(): void
+    {
+        $promotion = $this->promotion(['code' => 'UNLIMITED', 'stripe_promotion_code_id' => 'promo_unlimited', 'max_redemptions' => null, 'max_redemptions_per_customer' => null]);
+        $reservations = app(PromotionReservations::class);
+        $first = $this->intent('first@example.test', ['promotion_code' => 'UNLIMITED']);
+        $second = $this->intent('second@example.test', ['promotion_code' => 'UNLIMITED']);
+
+        $reservations->reserve($promotion, $first, $this->price(), $first->email, null);
+        $reservations->reserve($promotion, $second, $this->price(), $second->email, null);
+
+        $this->assertSame(2, $reservations->activeCount($promotion));
+        $this->assertSame(0, $promotion->refresh()->times_redeemed);
+    }
+
     public function test_expired_claim_is_released_and_slot_can_be_reclaimed(): void
     {
         $promotion = $this->promotion();
