@@ -31,6 +31,10 @@ final class InvoiceIssuanceWorkflow
             if (! $version) {
                 return ['block' => 'billing_configuration_snapshot_missing'];
             }
+            if (! is_string($version->configuration['invoice_prefix'] ?? null)
+                || preg_match('/\A[A-Z0-9]{1,5}\z/D', $version->configuration['invoice_prefix']) !== 1) {
+                return ['block' => 'invoice_prefix_unconfigured'];
+            }
             if (! $request->taxDecision instanceof ApprovedTaxDecision) {
                 return ['block' => 'approved_tax_decision_missing'];
             }
@@ -218,6 +222,7 @@ final class InvoiceIssuanceWorkflow
             'tax_decision_reference' => $request->taxDecision->reference,
             'tax_decision_version' => $request->taxDecision->version,
             'tax_line' => $request->taxDecision->line,
+            'invoice_prefix' => $request->billingSettings['invoice_prefix'] ?? null,
         ];
     }
 

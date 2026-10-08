@@ -34,11 +34,13 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         $this->enableStagingTestMode();
         Storage::fake('local');
         $owner = User::factory()->owner()->create();
+        $this->publishPrefix($owner, 'A');
         $provider = $this->mock(SyntheticInvoiceTestProvider::class);
         $provider->shouldReceive('submitSyntheticTest')->once()->withArgs(fn ($request) => $request instanceof NormalizedInvoiceRequest
             && $request->taxDecision instanceof SyntheticTestTaxSelection
             && $request->currency === 'HUF'
             && $request->amountMinor === 1000
+            && $request->billingSettings['invoice_prefix'] === 'A'
             && $request->billingSettings['notify_customer'] === false
         )->andReturn(new ProviderSubmissionResult('issued', 'TEST-2026-1', metadata: ['provider_invoice_id' => 'TEST-2026-1'], pdfContent: "%PDF-1.4\nsynthetic"));
         $provider->shouldNotReceive('lookupSyntheticTestByExternalReference');
@@ -49,6 +51,7 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         $this->assertSame('prepared', $run->status);
         $this->assertNull($run->commercial_snapshot['buyer']['email'] ?? null);
         $this->assertSame('synthetic_provider_code_selection_not_a_tax_decision', $run->commercial_snapshot['tax_decision_kind']);
+        $this->assertSame('A', $run->commercial_snapshot['billing_tax_configuration']['invoice_prefix']);
         $this->assertSame(0, InvoiceIntent::query()->count());
 
         $issued = $workflow->submit($run, $owner, 'staging.wpcaregrid.com', [
@@ -112,6 +115,7 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
     {
         $this->enableStagingTestMode();
         $owner = User::factory()->owner()->create();
+        $this->publishPrefix($owner, 'A');
         $workflow = app(SyntheticSzamlazzTestWorkflow::class);
         $workflow->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com');
         try {
@@ -122,6 +126,28 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         }
 
         $this->assertSame(0, InvoiceIntent::query()->count());
+    }
+
+    public function test_synthetic_request_freezes_account_prefix_and_requires_one_before_preparation(): void
+    {
+        $this->enableStagingTestMode();
+        $owner = User::factory()->owner()->create();
+        $workflow = app(SyntheticSzamlazzTestWorkflow::class);
+
+        try {
+            $workflow->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com');
+            $this->fail('Synthetic preparation must require an explicit account prefix.');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('test', $exception->errors());
+        }
+
+        $this->publishPrefix($owner, 'A');
+        $run = $workflow->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com');
+        $this->publishPrefix($owner, 'B');
+
+        $this->assertSame('A', $workflow->request($run)->billingSettings['invoice_prefix']);
+        $this->assertSame('A', $run->commercial_snapshot['billing_tax_configuration']['invoice_prefix']);
+        $this->assertSame('A', \App\Models\BillingTaxConfigurationVersion::query()->where('version', 1)->firstOrFail()->configuration['invoice_prefix']);
     }
 
     public function test_owner_route_requires_owner_ability_and_renders_the_confirmation_form(): void
@@ -158,5 +184,22 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
             'tax_code' => 'AAM',
             'confirmation_phrase' => 'SYNTHETIC TEST ONLY',
         ];
+    }
+
+    private function publishPrefix(User $owner, string $prefix): void
+    {
+        app(\App\Billing\SzamlazzBillingSettings::class)->publish([
+            'seller_profile_id' => null,
+            'invoice_language' => 'hu',
+            'default_payment_method' => 'bank_transfer',
+            'payment_deadline_policy' => 'same_day',
+            'fulfillment_date_policy' => 'invoice_date',
+            'invoice_prefix' => $prefix,
+            'notify_customer' => '0',
+            'currency_policy' => 'block_foreign_without_fx',
+            'tax_configuration_mode' => 'manual_review',
+            'default_tax_code' => null,
+            'effective_at' => now()->toDateString(),
+        ], $owner);
     }
 }

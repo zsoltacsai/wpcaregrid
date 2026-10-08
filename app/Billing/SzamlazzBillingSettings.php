@@ -66,6 +66,9 @@ final class SzamlazzBillingSettings
 
     public function validate(array $input): array
     {
+        if (is_string($input['invoice_prefix'] ?? null)) {
+            $input['invoice_prefix'] = trim($input['invoice_prefix']);
+        }
         $known = [...array_keys($this->defaults()), 'effective_at'];
         if (array_diff(array_keys($input), $known) !== []) {
             throw ValidationException::withMessages(['settings' => __('owner.billing_tax.validation.unknown_field')]);
@@ -76,7 +79,7 @@ final class SzamlazzBillingSettings
             'default_payment_method' => ['required', Rule::in(self::PAYMENT_METHODS)],
             'payment_deadline_policy' => ['required', Rule::in(self::PAYMENT_DEADLINES)],
             'fulfillment_date_policy' => ['required', Rule::in(self::FULFILLMENT_POLICIES)],
-            'invoice_prefix' => ['nullable', 'string', 'regex:/\A[A-Z0-9]{1,5}\z/D'],
+            'invoice_prefix' => ['nullable', 'string', 'max:5', 'regex:/\A[A-Z0-9]{1,5}\z/D'],
             'notify_customer' => ['required', 'boolean'],
             'currency_policy' => ['required', Rule::in(self::CURRENCY_POLICIES)],
             'tax_configuration_mode' => ['required', Rule::in(self::TAX_MODES)],

@@ -60,6 +60,26 @@ final class SzamlazzBillingSettingsTest extends TestCase
         $this->assertSame(0, BillingTaxConfigurationVersion::query()->count());
     }
 
+    public function test_invoice_prefix_trims_outer_whitespace_and_rejects_full_invoice_numbers_or_unsupported_format(): void
+    {
+        $this->asOwner();
+        $settings = app(SzamlazzBillingSettings::class);
+
+        $trimmed = $settings->validate(array_replace($this->values('AAM'), ['invoice_prefix' => '  A  ']));
+        $this->assertSame('A', $trimmed['configuration']['invoice_prefix']);
+
+        foreach (['A-2026-1', 'lower', '123456', 'A_'] as $invalid) {
+            try {
+                $settings->validate(array_replace($this->values('AAM'), ['invoice_prefix' => $invalid]));
+                $this->fail('Expected unsupported invoice prefix to be rejected: '.$invalid);
+            } catch (\Illuminate\Validation\ValidationException $exception) {
+                $this->assertArrayHasKey('invoice_prefix', $exception->errors());
+            }
+        }
+
+        $this->assertNull($settings->defaults()['invoice_prefix'], 'A must not become a universal default.');
+    }
+
     private function values(?string $taxCode): array
     {
         return [

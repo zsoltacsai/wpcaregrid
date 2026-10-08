@@ -32,6 +32,12 @@ final class SyntheticSzamlazzTestConcurrencyTest extends TestCase
         config(['app.url' => 'https://staging.wpcaregrid.com', 'szamlazz.synthetic_test.enabled' => true, 'szamlazz.agent_api_key' => 'synthetic-test-fixture']);
         app(IntegrationCredentials::class)->store('szamlazz_agent', 'synthetic-test-fixture');
         $owner = User::factory()->owner()->create();
+        app(\App\Billing\SzamlazzBillingSettings::class)->publish([
+            'seller_profile_id' => null, 'invoice_language' => 'hu', 'default_payment_method' => 'bank_transfer',
+            'payment_deadline_policy' => 'same_day', 'fulfillment_date_policy' => 'invoice_date', 'invoice_prefix' => 'A',
+            'notify_customer' => '0', 'currency_policy' => 'block_foreign_without_fx', 'tax_configuration_mode' => 'manual_review',
+            'default_tax_code' => null, 'effective_at' => now()->toDateString(),
+        ], $owner);
         $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'wpcg-synthetic-test-race-'.bin2hex(random_bytes(8));
         mkdir($directory, 0700);
         $pids = [];

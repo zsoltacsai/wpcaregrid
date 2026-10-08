@@ -99,6 +99,8 @@ final class SzamlazzAgentProviderTest extends TestCase
         $this->assertSame("%PDF-1.4\nTEST", $result->pdfContent);
         Http::assertSent(fn ($request) => $request->url() === 'https://www.szamlazz.hu/szamla/'
             && str_contains($request->body(), '<szamlaLetoltes>true</szamlaLetoltes>')
+            && str_contains($request->body(), '<szamlaszamElotag>TEST</szamlaszamElotag>')
+            && strpos($request->body(), '<szamlaszamElotag>TEST</szamlaszamElotag>') < strpos($request->body(), '<simpleItems>')
             && str_contains($request->body(), '<sendEmail>false</sendEmail>')
             && str_contains($request->body(), '<email>') === false
             && str_contains($request->body(), '<szamlaagentkulcs>synthetic-agent-key</szamlaagentkulcs>'));
@@ -208,6 +210,32 @@ final class SzamlazzAgentProviderTest extends TestCase
         $this->assertSame('response_contains_error', $parsed['result']);
     }
 
+    public function test_provider_error_202_is_sanitized_as_a_prefix_availability_rejection(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake(['www.szamlazz.hu/*' => Http::response('[ERR] PRIVATE DETAIL', 200, [
+            'szlahu_error_code' => '202',
+        ])]);
+
+        $request = $this->request()->withBillingSettings(['invoice_prefix' => 'A']);
+        $result = app(SzamlazzAgentProvider::class)->submit($request);
+
+        $this->assertSame('rejected', $result->outcome);
+        $this->assertSame('provider_rejected', $result->errorCategory);
+        $this->assertSame('202', $result->metadata['error_code']);
+        $this->assertStringNotContainsString('PRIVATE DETAIL', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function test_normal_submission_requires_an_explicit_valid_prefix_before_any_http_request(): void
+    {
+        Http::preventStrayRequests();
+        $result = app(SzamlazzAgentProvider::class)->submit($this->request()->withBillingSettings(['invoice_language' => 'en']));
+
+        $this->assertSame('blocked', $result->outcome);
+        $this->assertSame('invoice_prefix_unconfigured', $result->errorCategory);
+        Http::assertNothingSent();
+    }
+
     private function request(): NormalizedInvoiceRequest
     {
         return new NormalizedInvoiceRequest(
@@ -228,7 +256,7 @@ final class SzamlazzAgentProviderTest extends TestCase
             ['name' => 'WP CareGrid Synthetic TEST Buyer', 'country' => 'HU', 'postal_code' => '1111', 'city' => 'Budapest', 'address' => 'Synthetic Test Street 1'],
             'WP CareGrid synthetic Szamlazz integration test',
             new SyntheticTestTaxSelection('synthetic-provider-code-selection', 1, ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM']),
-            ['invoice_language' => 'hu', 'notify_customer' => false],
+            ['invoice_language' => 'hu', 'invoice_prefix' => 'TEST', 'notify_customer' => false],
         );
     }
 }

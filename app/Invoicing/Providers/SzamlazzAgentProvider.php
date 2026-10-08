@@ -29,6 +29,9 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider, Syntheti
         if (! $request->taxDecision instanceof ApprovedTaxDecision) {
             return new ProviderSubmissionResult('blocked', errorCategory: 'production_tax_decision_required');
         }
+        if (! $this->validInvoicePrefix($request->billingSettings['invoice_prefix'] ?? null)) {
+            return new ProviderSubmissionResult('blocked', errorCategory: 'invoice_prefix_unconfigured');
+        }
 
         return $this->sendInvoice($request, syntheticTest: false);
     }
@@ -50,6 +53,7 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider, Syntheti
                 'city' => 'Budapest', 'address' => 'Synthetic Test Street 1',
             ]
             || $request->taxDecision->line !== ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM']
+            || ! $this->validInvoicePrefix($request->billingSettings['invoice_prefix'] ?? null)
             || ($request->billingSettings['notify_customer'] ?? true) !== false) {
             return new ProviderSubmissionResult('blocked', errorCategory: 'synthetic_test_guard_failed');
         }
@@ -168,6 +172,11 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider, Syntheti
         $value = config('szamlazz.agent_api_key');
 
         return is_string($value) && $value !== '' && strtolower($value) === $value ? $value : null;
+    }
+
+    private function validInvoicePrefix(mixed $prefix): bool
+    {
+        return is_string($prefix) && preg_match('/\A[A-Z0-9]{1,5}\z/D', $prefix) === 1;
     }
 
     private function authenticatedInvoiceXml(string $xml, string $key, array $settings, bool $downloadPdf = false): ?string

@@ -2,6 +2,7 @@
 
 namespace App\Invoicing;
 
+use App\Billing\SzamlazzBillingSettings;
 use App\Invoicing\Providers\ProviderSubmissionResult;
 use App\Invoicing\Providers\SyntheticInvoiceTestProvider;
 use App\Models\SzamlazzSyntheticTestRun;
@@ -19,6 +20,7 @@ final class SyntheticSzamlazzTestWorkflow
     public function __construct(
         private readonly SyntheticSzamlazzTestGuard $guard,
         private readonly SyntheticInvoiceTestProvider $provider,
+        private readonly SzamlazzBillingSettings $billingSettings,
     ) {}
 
     public function prepare(array $input, User $actor, string $requestHost): SzamlazzSyntheticTestRun
@@ -34,6 +36,12 @@ final class SyntheticSzamlazzTestWorkflow
             'tax_code' => ['required', 'in:AAM'],
         ])->validate();
         abort_unless(SzamlazzTaxCodeRegistry::supports($validated['tax_code']), 422);
+        $configurationVersion = $this->billingSettings->current();
+        $configuration = $configurationVersion?->configuration ?? $this->billingSettings->defaults();
+        $invoicePrefix = $configuration['invoice_prefix'] ?? null;
+        if (! is_string($invoicePrefix) || preg_match('/\A[A-Z0-9]{1,5}\z/D', $invoicePrefix) !== 1) {
+            throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.prefix_required')]);
+        }
 
         $data = [
             'designation' => 'synthetic_test',
@@ -59,6 +67,11 @@ final class SyntheticSzamlazzTestWorkflow
             'notify_customer' => false,
             'description' => 'WP CareGrid synthetic Szamlazz integration test',
             'tax_decision_kind' => 'synthetic_provider_code_selection_not_a_tax_decision',
+            'billing_tax_configuration' => [
+                'version_id' => $configurationVersion?->id,
+                'version' => $configurationVersion?->version,
+                'invoice_prefix' => $invoicePrefix,
+            ],
         ];
         $hash = hash('sha256', json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         $externalReference = 'wpcg-synthetic-test-'.random_int(1_000_000_000, 9_999_999_999);
@@ -185,7 +198,8 @@ final class SyntheticSzamlazzTestWorkflow
             $snapshot['buyer'],
             'WP CareGrid synthetic Szamlazz integration test',
             new SyntheticTestTaxSelection('synthetic-provider-code-selection', 1, $line, 'hu'),
-            ['invoice_language' => 'hu', 'notify_customer' => false, 'fulfillment_date_policy' => 'invoice_date'],
+            ['invoice_language' => 'hu', 'notify_customer' => false, 'fulfillment_date_policy' => 'invoice_date',
+                'invoice_prefix' => $snapshot['billing_tax_configuration']['invoice_prefix'] ?? null],
         );
     }
 
