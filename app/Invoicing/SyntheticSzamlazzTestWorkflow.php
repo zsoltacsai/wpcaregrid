@@ -12,8 +12,8 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use LogicException;
 
 /** Owner-attested synthetic provider exercise, separate from tax-approved invoicing. */

@@ -119,10 +119,10 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         $owner = User::factory()->owner()->create();
         $nextOwner = User::factory()->owner()->create();
         $this->publishPrefix($owner, 'A');
-        $workflow = app(SyntheticSzamlazzTestWorkflow::class);
         $provider = $this->mock(SyntheticInvoiceTestProvider::class);
         $provider->shouldReceive('submitSyntheticTest')->once()->andReturn(new ProviderSubmissionResult('rejected', errorCategory: 'provider_rejected'));
         $provider->shouldNotReceive('lookupSyntheticTestByExternalReference');
+        $workflow = app(SyntheticSzamlazzTestWorkflow::class);
 
         $firstRun = $workflow->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com');
         $legacySlot = 'szamlazz-phase6-one-shot';
