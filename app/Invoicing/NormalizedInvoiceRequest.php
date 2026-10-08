@@ -19,5 +19,45 @@ final readonly class NormalizedInvoiceRequest
         public array $buyer,
         public string $description,
         public ApprovedTaxDecision $taxDecision,
+        public array $billingSettings = [],
     ) {}
+
+    public function withBillingSettings(array $settings, ?string $externalReference = null): self
+    {
+        $language = is_string($settings['invoice_language'] ?? null) ? $settings['invoice_language'] : $this->taxDecision->language;
+        $paymentMethod = is_string($settings['default_payment_method'] ?? null)
+            ? (SzamlazzPaymentMethodRegistry::label($settings['default_payment_method'], $language) ?? $this->paymentMethod)
+            : $this->paymentMethod;
+        $decision = new ApprovedTaxDecision(
+            $this->taxDecision->reference,
+            $this->taxDecision->version,
+            $this->taxDecision->line,
+            $language,
+            $this->taxDecision->exchangeRate,
+            $this->taxDecision->exchangeRateBank,
+        );
+        $dueDays = match ($settings['payment_deadline_policy'] ?? null) {
+            'days_8' => 8, 'days_15' => 15, 'days_30' => 30, default => 0,
+        };
+        $due = (new \DateTimeImmutable($this->issueDate))->modify('+'.$dueDays.' days')->format('Y-m-d');
+        $performance = ($settings['fulfillment_date_policy'] ?? null) === 'invoice_date'
+            ? $this->issueDate
+            : ($this->paymentDate ?? $this->performanceDate);
+
+        return new self(
+            $externalReference ?? $this->externalReference,
+            $this->currency,
+            $this->amountMinor,
+            $this->issueDate,
+            $performance,
+            $due,
+            $this->paymentDate,
+            $paymentMethod,
+            $this->seller,
+            $this->buyer,
+            $this->description,
+            $decision,
+            $settings,
+        );
+    }
 }

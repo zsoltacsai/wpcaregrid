@@ -3,6 +3,7 @@
 namespace App\Invoicing;
 
 use App\Jobs\Invoicing\PrepareInvoiceIntentJob;
+use App\Billing\SzamlazzBillingSettings;
 use App\Models\BillingInvoice;
 use App\Models\CustomerBillingIdentity;
 use App\Models\InvoiceIntent;
@@ -103,9 +104,24 @@ final class InvoiceIntentWorkflow
             $identityMatchesCustomer = $identity !== null
                 && $intent->customer_id !== null
                 && (int) $identity->customer_id === (int) $intent->customer_id;
-            $sellerProfile = $this->sellerProfileAt($invoice?->paid_at ?? $invoice?->finalized_at ?? $invoice?->stripe_created_at);
+            $taxConfiguration = app(SzamlazzBillingSettings::class)->current($invoice?->paid_at ?? $invoice?->finalized_at ?? $invoice?->stripe_created_at);
+            $configuredSellerId = $taxConfiguration?->configuration['seller_profile_id'] ?? null;
+            $sellerProfile = $taxConfiguration
+                ? ($configuredSellerId ? SellerTaxProfile::query()->find($configuredSellerId) : null)
+                : $this->sellerProfileAt($invoice?->paid_at ?? $invoice?->finalized_at ?? $invoice?->stripe_created_at);
 
             $snapshot = $intent->commercial_snapshot ?? [];
+            if ($taxConfiguration) {
+                $intent->billing_tax_configuration_version_id = $taxConfiguration->id;
+                $snapshot['billing_tax_configuration'] = [
+                    'version_id' => $taxConfiguration->id,
+                    'version' => $taxConfiguration->version,
+                    'effective_at' => $taxConfiguration->effective_at?->toIso8601String(),
+                    'tax_configuration_mode' => $taxConfiguration->configuration['tax_configuration_mode'] ?? null,
+                    'default_tax_code' => $taxConfiguration->configuration['default_tax_code'] ?? null,
+                    'selected_seller_profile_id' => $configuredSellerId,
+                ];
+            }
             $snapshot['stripe_invoice'] = [
                 'id' => $intent->stripe_invoice_id,
                 'status' => $invoice?->invoice_status,

@@ -198,9 +198,73 @@
             @elseif ($section === 'billing_tax')
                 <section class="rounded-md border border-line bg-surface p-5">
                     <h2 class="font-semibold">{{ __('owner.settings.groups.billing_tax.title') }}</h2><p class="mt-1 text-sm text-muted">{{ __('owner.settings.groups.billing_tax.description') }}</p>
-                    <x-ui.status-badge tone="neutral">{{ __('owner.settings.not_implemented') }}</x-ui.status-badge>
-                    <dl class="mt-4 grid gap-3 sm:grid-cols-2">@foreach (['invoicing', 'provider', 'country_rules', 'customer_type', 'vat_id', 'vies', 'invoice_language', 'automatic_invoice'] as $field)<div class="rounded-sm bg-canvas p-3"><dt class="text-xs text-muted">{{ __('owner.settings.billing_tax.'.$field) }}</dt><dd class="mt-1 text-sm">{{ __('owner.settings.not_implemented') }}</dd></div>@endforeach</dl>
-                    <p class="mt-3 text-xs text-muted">{{ __('owner.settings.billing_tax.no_tax_rules') }}</p>
+                    <p class="mt-3 rounded-sm border border-warning/40 bg-warning-soft p-3 text-sm text-warning-ink">{{ __('owner.settings.billing_tax.safety_notice') }}</p>
+                    <form method="POST" action="{{ route('owner.settings.update', 'billing_tax') }}" class="mt-5 space-y-4">
+                        @csrf @method('PUT')
+                        <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile') }}
+                            <select name="settings[seller_profile_id]" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                <option value="">{{ __('owner.settings.billing_tax.no_seller_profile') }}</option>
+                                @foreach ($billingTaxProfiles as $profile)
+                                    <option value="{{ $profile->id }}" @selected((string) old('settings.seller_profile_id', $billingTaxValues['seller_profile_id'] ?? '') === (string) $profile->id)>{{ $profile->legal_name ?: __('owner.settings.billing_tax.unnamed_profile') }} · v{{ $profile->version }} · {{ $profile->verification_status?->value }}</option>
+                                @endforeach
+                            </select>
+                        </label>
+                        <div class="grid gap-4 sm:grid-cols-2">
+                            <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.invoice_language') }}
+                                <select name="settings[invoice_language]" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    @foreach (\App\Billing\SzamlazzBillingSettings::LANGUAGES as $language)<option value="{{ $language }}" @selected(old('settings.invoice_language', $billingTaxValues['invoice_language']) === $language)>{{ strtoupper($language) }}</option>@endforeach
+                                </select>
+                            </label>
+                            <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.payment_method') }}
+                                <select name="settings[default_payment_method]" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    @foreach (\App\Billing\SzamlazzBillingSettings::PAYMENT_METHODS as $method)<option value="{{ $method }}" @selected(old('settings.default_payment_method', $billingTaxValues['default_payment_method']) === $method)>{{ __('owner.settings.billing_tax.payment_methods.'.$method) }}</option>@endforeach
+                                </select>
+                            </label>
+                            <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.payment_deadline') }}
+                                <select name="settings[payment_deadline_policy]" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    @foreach (\App\Billing\SzamlazzBillingSettings::PAYMENT_DEADLINES as $policy)<option value="{{ $policy }}" @selected(old('settings.payment_deadline_policy', $billingTaxValues['payment_deadline_policy']) === $policy)>{{ __('owner.settings.billing_tax.payment_deadlines.'.$policy) }}</option>@endforeach
+                                </select>
+                            </label>
+                            <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.fulfillment_date') }}
+                                <select name="settings[fulfillment_date_policy]" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    @foreach (\App\Billing\SzamlazzBillingSettings::FULFILLMENT_POLICIES as $policy)<option value="{{ $policy }}" @selected(old('settings.fulfillment_date_policy', $billingTaxValues['fulfillment_date_policy']) === $policy)>{{ __('owner.settings.billing_tax.fulfillment_policies.'.$policy) }}</option>@endforeach
+                                </select>
+                            </label>
+                            <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.currency_handling') }}
+                                <select name="settings[currency_policy]" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    @foreach (\App\Billing\SzamlazzBillingSettings::CURRENCY_POLICIES as $policy)<option value="{{ $policy }}" @selected(old('settings.currency_policy', $billingTaxValues['currency_policy']) === $policy)>{{ __('owner.settings.billing_tax.currency_policies.'.$policy) }}</option>@endforeach
+                                </select>
+                            </label>
+                            <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.tax_mode') }}
+                                <select name="settings[tax_configuration_mode]" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    @foreach (\App\Billing\SzamlazzBillingSettings::TAX_MODES as $mode)<option value="{{ $mode }}" @selected(old('settings.tax_configuration_mode', $billingTaxValues['tax_configuration_mode']) === $mode)>{{ __('owner.settings.billing_tax.tax_modes.'.$mode) }}</option>@endforeach
+                                </select>
+                            </label>
+                            <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.default_tax_code') }}
+                                <select name="settings[default_tax_code]" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    <option value="">{{ __('owner.settings.billing_tax.no_default_tax_code') }}</option>
+                                    @foreach ($billingTaxCodes as $code => $description)<option value="{{ $code }}" @selected(old('settings.default_tax_code', $billingTaxValues['default_tax_code']) === (string) $code)>{{ $code }} — {{ $description }}</option>@endforeach
+                                </select>
+                            </label>
+                            <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.invoice_prefix') }}
+                                <input name="settings[invoice_prefix]" value="{{ old('settings.invoice_prefix', $billingTaxValues['invoice_prefix']) }}" maxlength="5" pattern="[A-Z0-9]{1,5}" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 font-mono text-sm">
+                            </label>
+                            <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.effective_date') }}
+                                <input type="date" name="settings[effective_at]" value="{{ old('settings.effective_at', now()->toDateString()) }}" required class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                            </label>
+                        </div>
+                        <label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" name="settings[notify_customer]" value="1" @checked((bool) old('settings.notify_customer', $billingTaxValues['notify_customer']))>{{ __('owner.settings.billing_tax.notify_customer') }}</label>
+                        <p class="text-xs text-muted">{{ __('owner.settings.billing_tax.tax_code_notice') }}</p>
+                        <button class="h-10 rounded-sm bg-primary px-4 text-sm font-semibold text-white">{{ __('owner.settings.save') }}</button>
+                    </form>
+                    <h3 class="mb-2 mt-7 text-sm font-semibold">{{ __('owner.settings.billing_tax.issuance_status') }}</h3>
+                    <dl class="grid gap-2 sm:grid-cols-3">
+                        @foreach ($invoiceIssuanceGates as $gate => $enabled)
+                            <div class="rounded-sm bg-canvas p-3"><dt class="text-xs text-muted">{{ __('owner.settings.billing_tax.gates.'.$gate) }}</dt><dd class="mt-1 text-sm font-semibold">{{ $enabled ? __('owner.settings.billing_tax.enabled') : __('owner.settings.billing_tax.disabled') }}</dd></div>
+                        @endforeach
+                    </dl>
+                    <h3 class="mb-2 mt-7 text-sm font-semibold">{{ __('owner.settings.billing_tax.configuration_history') }}</h3>
+                    <div class="overflow-x-auto rounded-sm border border-line"><table class="w-full min-w-[560px] text-left text-xs"><thead class="bg-canvas text-muted"><tr><th class="px-3 py-2">{{ __('owner.settings.billing_tax.version') }}</th><th class="px-3 py-2">{{ __('owner.settings.billing_tax.effective_date') }}</th><th class="px-3 py-2">{{ __('owner.settings.billing_tax.tax_mode') }}</th><th class="px-3 py-2">{{ __('owner.settings.billing_tax.default_tax_code') }}</th><th class="px-3 py-2">{{ __('owner.settings.billing_tax.changed_by') }}</th></tr></thead><tbody class="divide-y divide-line">@forelse ($billingTaxVersions as $version)<tr><td class="px-3 py-2">v{{ $version->version }}</td><td class="px-3 py-2">{{ $version->effective_at?->translatedFormat('j M Y') }}</td><td class="px-3 py-2">{{ __('owner.settings.billing_tax.tax_modes.'.$version->configuration['tax_configuration_mode']) }}</td><td class="px-3 py-2">{{ $version->configuration['default_tax_code'] ?: '—' }}</td><td class="px-3 py-2">{{ $version->creator?->email ?? '—' }}</td></tr>@empty<tr><td colspan="5" class="px-3 py-3 text-muted">{{ __('owner.settings.billing_tax.no_versions') }}</td></tr>@endforelse</tbody></table></div>
                 </section>
             @else
                 <section class="rounded-md border border-line bg-surface p-5">

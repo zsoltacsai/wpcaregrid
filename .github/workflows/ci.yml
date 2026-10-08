@@ -244,7 +244,8 @@ jobs:
             tests/Feature/ViesReviewConcurrencyTest.php \
             tests/Feature/PromotionReservationConcurrencyTest.php \
             tests/Feature/StripeSubscriptionConcurrencyTest.php \
-            tests/Feature/InvoiceIntentConcurrencyTest.php; do
+            tests/Feature/InvoiceIntentConcurrencyTest.php \
+            tests/Feature/InvoiceIssuanceConcurrencyTest.php; do
             vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings "$test"
           done
 

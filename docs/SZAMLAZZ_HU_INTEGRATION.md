@@ -1,4 +1,71 @@
-# Számlázz.hu invoice preparation
+# Számlázz.hu billing and invoice integration
+
+## Phase 2 — billing settings and guarded provider adapter
+
+This section supersedes the Phase 1 provider-interface description below. Phase 2 adds typed Owner billing settings, immutable effective-dated configuration versions, per-intent tax proposals, a separately gated Számla Agent adapter, one-attempt issuance orchestration, and read-only reconciliation. It does not activate tax decisions or invoice issuance.
+
+### Status boundary
+
+| State | Meaning in this milestone |
+| --- | --- |
+| **TECHNICALLY IMPLEMENTED** | Owner settings, provider code registry, version snapshots, pending accountant-review proposals, local XML/XSD validation, provider adapter, issuance attempt lock, safe ambiguous outcome, and read-only lookup are implemented. |
+| **LEGALLY APPROVED** | **No tax rule is approved by this code.** Seller registration, service classification, place of supply, VAT code, wording, tax points, currency conversion, and zero-value policy still require accountant/legal approval and an explicitly versioned decision. |
+| **ACTIVATED** | **No.** `provider_enabled=false`, `dry_run=true`, and `issuance_enabled=false` remain fail-closed defaults. There is no Owner invoice-issue action or queue path that bypasses those gates. |
+
+### Owner billing settings and history
+
+Owner → Settings → Billing & Tax contains typed settings for seller profile, invoice language, payment method, payment deadline, fulfillment-date policy, optional invoice prefix, customer notification, foreign-currency handling, tax configuration mode, default provider tax code, and effective date. Only the settings allowlist is accepted. Secret values and invoice payloads are not settings fields; the Agent key remains in the existing encrypted Service Credentials store under `szamlazz_agent`.
+
+Every accepted change creates an immutable `billing_tax_configuration_versions` row with monotonically assigned version, effective timestamp, creator, and typed JSON. A database counter row serializes version assignment. Paid invoice intents link to the effective configuration version and snapshot its safe settings and seller-profile reference. Existing records remain nullable; no historical tax or seller data is invented. Audit records contain identifiers, version, effective date, tax code, and gate state, not credentials or customer tax identifiers.
+
+The Owner tax-code selector lists the provider's XML vocabulary, not legal outcomes. The source of the registry is the [official Számlázz.hu VAT-code list](https://docs.szamlazz.hu/agent/generating_invoice/vat-rates). For example, the provider distinguishes `TAHK` (outside VAT subject matter), `TAM` (VAT-exempt supply), and `AAM` (exempt person); they are not interchangeable. `eusAfa` is deliberately not emitted: provider documentation restricts its use to OSS registration or a non-Hungarian seller tax number. A configured default code never becomes a transaction decision.
+
+`MANUAL_REVIEW` permits an Owner to record a proposed tax code/treatment and an encrypted justification/basis reference for an intent. The entry records actor, timestamp, and configuration version with status `proposed_pending_accountant`; it does not alter the intent's blocked status or create an approved `TaxDecision`. The proposal form validates against the provider registry but cannot assert accountant approval. `APPROVED_RULES` is only a reserved mode: no speculative rules exist, and a missing, unapproved, or mismatched decision blocks issuance.
+
+### Provider adapter and runtime credential
+
+`SzamlazzAgentProvider` is bound only to the new `InvoiceSubmissionProvider`; the pre-existing `InvoiceProvider` binding remains the local dry-run adapter. The Agent key is read at runtime from the existing fixed `szamlazz.agent_api_key` config path after the established encrypted credential loader applies database-backed Service Credentials. It is never put into configuration cache, a queue payload, audit metadata, log context, model metadata, or serialized provider results. No credential was read from staging or used during this task.
+
+The submission adapter validates generated XML with the vendored official invoice XSD, then inserts the key into an in-memory XML DOM and submits HTTPS multipart to `https://www.szamlazz.hu/szamla/` using `action-xmlagentxmlfile`, a bounded connect/request timeout, and redirects disabled. Provider response parsing keeps only a validated invoice number and small allowlisted metadata; raw XML, response bodies, PDFs, and exception messages are discarded. Payment labels are selected from a bounded language-aware registry for supported invoice languages.
+
+The read-only reconciliation method uses the provider's documented XML query operation with `szamlaKulsoAzon`; the query schema is pinned at `resources/schemas/szamlazz-agent-xmlszamlaxml.xsd`. Querying is only useful when the same external reference was included when issuing the document. “Not found”, provider error, timeout, and malformed response remain unresolved; none proves that a prior create request did not succeed.
+
+### Issuance safety and idempotency
+
+The workflow requires all of these before inserting an attempt or calling the adapter: provider enabled, dry-run disabled, issuance enabled, an explicit allowed application environment, runtime credential, locally validated intent, immutable billing/seller snapshots, a decision with accountant/tax-counsel authority and approval reference, matching intent/version/tax code/amount/currency, payment date when required, and approved FX evidence for non-HUF currency. The provider repeats the three runtime gate checks. No default tax code can satisfy the per-intent decision gate.
+
+`invoice_issuance_attempts` has unique constraints on invoice intent, deterministic external reference, and provider invoice number. The intent row lock and unique attempt mean concurrent workers and retries can create at most one provider submission attempt. `submission_started` is committed before the external call. A timeout, process crash, or ambiguous provider response transitions to reconciliation-required and is never automatically resubmitted. Reconciliation may only resolve an attempt after a provider lookup identifies a matching invoice. A definitive provider rejection is retained as a failed attempt; changing or retrying it requires an explicit future operator policy, not an automatic retry. This is application-side idempotency; the provider's invoice endpoint is not assumed to offer an idempotency key.
+
+Refund/cancellation detection continues to set the existing review-required state only. No cancel invoice, credit note, correction, or refund API operation is implemented. Paid Stripe totals are preserved from the Stripe invoice snapshot; no value is recomputed from the current catalog. Foreign-currency issuance remains blocked unless a future approved, effective-dated FX decision supplies rate and bank.
+
+### Provider contract references reviewed 2026-10-08
+
+- [Authentication](https://docs.szamlazz.hu/agent/basics/authentication)
+- [Sending requests](https://docs.szamlazz.hu/agent/basics/sending-requests)
+- [Invoice request](https://docs.szamlazz.hu/agent/generating_invoice/request)
+- [Invoice XML + XSD](https://docs.szamlazz.hu/agent/generating_invoice/xml)
+- [Response](https://docs.szamlazz.hu/agent/generating_invoice/response)
+- [VAT codes and `eusAfa` restrictions](https://docs.szamlazz.hu/agent/generating_invoice/vat-rates)
+- [Currencies](https://docs.szamlazz.hu/agent/generating_invoice/currencies)
+- [Errors and retry guidance](https://docs.szamlazz.hu/agent/basics/error-handling)
+- [Invoice query request](https://docs.szamlazz.hu/agent/querying_xml/request)
+- [Invoice query XML](https://docs.szamlazz.hu/agent/querying_xml/xml)
+- [Duplicate invoice considerations](https://docs.szamlazz.hu/agent/generating_invoice/important-information)
+
+The official documentation is mutable; it was checked on the date above. The exact XSD snapshots are versioned files in this repository and must be rechecked against official sources before any future activation. The docs describe an Agent payment-method free-text field and normalized value; this implementation sends a localized label from a fixed translation registry. The response parser accepts the documented invoice number header/plain response and XML response fields; a malformed/unknown response is ambiguous.
+
+### Remaining blockers before invoice issuance
+
+1. Accountant/legal decision pack must resolve seller registrations and effective dates, service classification (including whether human assistance is integral/incidental), place of supply, treatment and wording per scenario, zero-total invoice duty, recurring tax point, and foreign-currency rate source.
+2. An approved, immutable TaxDecision model/rules and traceable approval workflow must replace the reserved `approved_rules` placeholder; the current Owner action records a proposal only.
+3. Validate seller profile and Agent account requirements with the accountant and provider using a dedicated TEST account. There is intentionally no “test connection” call because the documented invoice operation mutates provider state and no documented safe credential-only validation operation has been established.
+4. Verify all required buyer identity/tax fields and approved invoice XML mappings. The current invoice payload does not automatically map a customer tax identifier into Agent XML.
+5. Perform provider sandbox/dedicated-account create/query/error/reconciliation tests after explicit authorization. This task made no provider HTTP request and issued no invoice.
+6. Complete a focused security review and staging acceptance with issuance gates closed. No deployment, merge, live action, or tax activation is part of this implementation.
+
+### Rollback note
+
+The additive migration creates only configuration-version, proposal, and issuance-attempt tables plus a nullable configuration-version FK on invoice intents. Rollback drops those new tables and FK; it does not rewrite Stripe/billing rows or delete historical billing snapshots. The immutable configuration and proposal model guards updates/deletes at the application layer; database rows remain available for auditable history unless the migration itself is rolled back.
 
 ## Phase 1 boundary
 

@@ -22,6 +22,7 @@ final class AdminAudit
         'operator.invited', 'operator.invitation_resent', 'operator.permissions_changed', 'operator.disabled', 'operator.enabled',
         'stripe.verified',
         'integration_credential.updated', 'integration_credential.cleared',
+        'billing_tax.configuration_published', 'billing_tax.review_proposed', 'billing_tax.issuance_reconciliation',
         'owner_setting.updated', 'owner_settings.mail_test_sent', 'owner_settings.mail_test_failed',
         'dns.record.create_requested', 'dns.record.update_requested', 'dns.record.delete_requested',
         'dns.record.created', 'dns.record.updated', 'dns.record.deleted', 'dns.record.failed',

@@ -61,4 +61,14 @@ class InvoiceIntent extends Model
     {
         return $this->hasMany(InvoiceIntentEvent::class)->orderBy('id');
     }
+
+    public function taxReviews(): HasMany
+    {
+        return $this->hasMany(InvoiceIntentTaxReview::class)->orderBy('id');
+    }
+
+    public function issuanceAttempt(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(InvoiceIssuanceAttempt::class);
+    }
 }

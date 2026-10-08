@@ -3,10 +3,12 @@
 namespace App\Http\Controllers\Owner;
 
 use App\Http\Controllers\Controller;
+use App\Billing\SzamlazzBillingSettings;
 use App\Models\User;
 use App\Owner\AdminAudit;
 use App\Owner\IntegrationCredentials;
 use App\Owner\OwnerSettings;
+use App\Invoicing\SzamlazzTaxCodeRegistry;
 use App\Owner\SystemStatus;
 use App\Pricing\PriceKey;
 use App\Pricing\PricingCatalog;
@@ -23,7 +25,7 @@ use Throwable;
 
 final class OwnerSettingsController extends Controller
 {
-    public function show(OwnerSettings $settings, IntegrationCredentials $credentials, PricingCatalog $catalog, ?string $section = null): View
+    public function show(OwnerSettings $settings, IntegrationCredentials $credentials, PricingCatalog $catalog, SzamlazzBillingSettings $billingSettings, ?string $section = null): View
     {
         $section ??= 'general';
         abort_unless(in_array($section, OwnerSettings::GROUPS, true), 404);
@@ -61,13 +63,28 @@ final class OwnerSettingsController extends Controller
             'currentMailer' => (string) config('mail.default'),
             'testMailAvailable' => ! in_array(config('mail.default'), ['log', 'array'], true),
             'pricingRows' => $pricingRows,
+            'billingTaxValues' => $billingSettings->values(),
+            'billingTaxCurrent' => $billingSettings->current(),
+            'billingTaxVersions' => $billingSettings->history(),
+            'billingTaxProfiles' => $billingSettings->sellerProfiles(),
+            'billingTaxCodes' => SzamlazzTaxCodeRegistry::all(),
+            'invoiceIssuanceGates' => [
+                'provider_enabled' => (bool) config('szamlazz.provider_enabled'),
+                'dry_run' => (bool) config('szamlazz.dry_run'),
+                'issuance_enabled' => (bool) config('szamlazz.issuance_enabled'),
+            ],
         ]);
     }
 
-    public function update(string $section, Request $request, OwnerSettings $settings): RedirectResponse
+    public function update(string $section, Request $request, OwnerSettings $settings, SzamlazzBillingSettings $billingSettings): RedirectResponse
     {
         abort_unless(in_array($section, OwnerSettings::GROUPS, true), 404);
         try {
+            if ($section === 'billing_tax') {
+                $billingSettings->publish((array) $request->input('settings', []), $request->user('owner'));
+
+                return to_route('owner.settings.index', ['section' => $section])->with('status', __('owner.settings.saved'));
+            }
             $settings->updateGroup($section, (array) $request->input('settings', []), $request->user('owner'));
         } catch (ValidationException $exception) {
             // Never flash arbitrary settings input (including unsupported secret-like keys) into the session.
