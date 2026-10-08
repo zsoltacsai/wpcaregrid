@@ -16,11 +16,18 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
+use LogicException;
 use Tests\TestCase;
 
 final class SyntheticSzamlazzTestWorkflowTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function tearDown(): void
+    {
+        $this->app->detectEnvironment(fn () => 'testing');
+        parent::tearDown();
+    }
 
     public function test_one_synthetic_run_is_attested_immutable_and_separate_from_normal_tax_approval(): void
     {
@@ -71,7 +78,7 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
                 ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM']),
         );
 
-        $this->expectException(\LogicException::class);
+        $this->expectException(LogicException::class);
         $request->withBillingSettings(['invoice_language' => 'hu']);
     }
 

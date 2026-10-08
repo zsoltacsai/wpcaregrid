@@ -17,6 +17,12 @@ final class SyntheticSzamlazzTestConcurrencyTest extends TestCase
 {
     use DatabaseMigrations;
 
+    protected function tearDown(): void
+    {
+        $this->app->detectEnvironment(fn () => 'testing');
+        parent::tearDown();
+    }
+
     public function test_two_mysql_processes_cannot_reserve_more_than_the_single_synthetic_invoice_slot(): void
     {
         if (DB::connection()->getDriverName() !== 'mysql' || ! function_exists('pcntl_fork')) {

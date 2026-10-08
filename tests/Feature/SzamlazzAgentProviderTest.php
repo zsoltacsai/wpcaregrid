@@ -20,6 +20,12 @@ final class SzamlazzAgentProviderTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function tearDown(): void
+    {
+        $this->app->detectEnvironment(fn () => 'testing');
+        parent::tearDown();
+    }
+
     protected function setUp(): void
     {
         parent::setUp();

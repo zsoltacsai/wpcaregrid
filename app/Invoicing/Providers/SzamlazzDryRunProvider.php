@@ -133,8 +133,12 @@ final class SzamlazzDryRunProvider implements InvoiceProvider
         $this->node($xml, $header, 'penznem', $currency);
         $this->node($xml, $header, 'szamlaNyelve', $request->taxDecision->language);
         $this->node($xml, $header, 'megjegyzes', '');
-        $this->node($xml, $header, 'arfolyamBank', $request->taxDecision->exchangeRateBank ?? '');
-        $this->node($xml, $header, 'arfolyam', $request->taxDecision->exchangeRate ?? '');
+        if ($request->taxDecision->exchangeRateBank !== null && $request->taxDecision->exchangeRateBank !== '') {
+            $this->node($xml, $header, 'arfolyamBank', $request->taxDecision->exchangeRateBank);
+        }
+        if ($request->taxDecision->exchangeRate !== null && $request->taxDecision->exchangeRate !== '') {
+            $this->node($xml, $header, 'arfolyam', $request->taxDecision->exchangeRate);
+        }
         $this->node($xml, $header, 'rendelesSzam', $request->externalReference);
         $this->node($xml, $header, 'dijbekeroSzamlaszam', '');
         $this->node($xml, $header, 'elolegszamla', 'false');
