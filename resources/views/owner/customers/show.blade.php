@@ -23,7 +23,7 @@
         <x-operator.section :title="__('owner.customers.sections.billing')" id="customer-billing">
             <dl class="grid grid-cols-[minmax(0,140px)_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
                 <dt class="text-muted">{{ __('owner.customers.fields.company') }}</dt><dd class="break-words">{{ $customer->company_name ?: '—' }}</dd>
-                <dt class="text-muted">{{ __('owner.customers.fields.tax_id') }}</dt><dd class="font-mono text-xs break-all">{{ $customer->tax_id ?: '—' }}</dd>
+                <dt class="text-muted">{{ __('owner.customers.fields.tax_id') }}</dt><dd class="font-mono text-xs break-all">{{ $maskedVatIdentifier }}</dd>
                 <dt class="text-muted">{{ __('owner.customers.fields.country') }}</dt><dd>{{ $countries[$customer->country_code] ?? $customer->country_code }}</dd>
                 <dt class="text-muted">{{ __('owner.customers.fields.address') }}</dt>
                 <dd class="break-words">{{ collect([$address['line1'] ?? null, $address['line2'] ?? null, trim(($address['postal_code'] ?? '').' '.($address['city'] ?? ''))])->filter()->implode(', ') ?: '—' }}</dd>
@@ -32,6 +32,57 @@
             </dl>
         </x-operator.section>
     </div>
+
+    <x-operator.section :title="__('owner.customers.vat.title')" id="customer-vat-verification" class="mt-4">
+        <p class="mb-3 text-xs text-muted">{{ __('owner.customers.vat.evidence_only') }}</p>
+        @if (session('vat_recheck_status'))
+            @php $recheckStatus = match (session('vat_recheck_status')) { 'valid' => 'valid', 'invalid', 'malformed' => 'invalid', 'unavailable' => 'unavailable', default => 'pending_review' }; @endphp
+            <p role="status" class="mb-3 rounded-sm border border-line bg-canvas p-3 text-sm">{{ __('owner.customers.vat.statuses.'.$recheckStatus) }}</p>
+        @endif
+        @if ($billingIdentity)
+            <dl class="grid grid-cols-[minmax(0,150px)_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
+                <dt class="text-muted">{{ __('owner.customers.vat.status') }}</dt>
+                <dd>{{ $latestVatValidation ? __('owner.customers.vat.statuses.'.match ($latestVatValidation->status->value) { 'valid' => 'valid', 'invalid', 'malformed' => 'invalid', 'unavailable' => 'unavailable', default => 'pending_review' }) : __('owner.customers.vat.statuses.not_verified') }}</dd>
+                <dt class="text-muted">{{ __('owner.customers.vat.country') }}</dt><dd>{{ $latestVatValidation?->country_code ?? $billingIdentity->country_code }}</dd>
+                <dt class="text-muted">{{ __('owner.customers.vat.identifier') }}</dt><dd class="font-mono text-xs">{{ $maskedVatIdentifier }}</dd>
+                <dt class="text-muted">{{ __('owner.customers.vat.source') }}</dt><dd>{{ $latestVatValidation ? ($latestVatValidation->provider === 'eu_vies' ? __('owner.customers.vat.vies') : __('owner.customers.vat.local_check')) : '—' }}</dd>
+                <dt class="text-muted">{{ __('owner.customers.vat.last_check') }}</dt><dd>{{ $latestVatValidation?->checked_at?->format('Y-m-d H:i') ?? '—' }}</dd>
+                <dt class="text-muted">{{ __('owner.customers.vat.last_successful_check') }}</dt><dd>{{ $lastSuccessfulVatValidation?->checked_at?->format('Y-m-d H:i') ?? '—' }}</dd>
+            </dl>
+
+            @if ($vatHistory->isNotEmpty())
+                <div class="mt-4 border-t border-line pt-3">
+                    <h3 class="text-xs font-semibold text-primary">{{ __('owner.customers.vat.history') }}</h3>
+                    <ul class="mt-2 divide-y divide-line text-xs">
+                        @foreach ($vatHistory as $evidence)
+                            @php $historyStatus = match ($evidence->status->value) { 'valid' => 'valid', 'invalid', 'malformed' => 'invalid', 'unavailable' => 'unavailable', default => 'pending_review' }; @endphp
+                            <li class="flex flex-wrap justify-between gap-2 py-2"><span>{{ $evidence->country_code }} · {{ $evidence->provider === 'eu_vies' ? __('owner.customers.vat.vies') : __('owner.customers.vat.local_check') }} · {{ __('owner.customers.vat.statuses.'.$historyStatus) }} · {{ \App\Tax\Vat\VatIdentifierMasker::mask($evidence->country_code, $evidence->vat_identifier) }}</span><time datetime="{{ $evidence->checked_at?->toIso8601String() }}">{{ $evidence->checked_at?->format('Y-m-d H:i') }}</time></li>
+                        @endforeach
+                    </ul>
+                </div>
+            @endif
+
+            @if (auth('owner')->user()?->can('owner.customers.manage'))
+                <form method="POST" action="{{ route('owner.customers.vat-verification.recheck', $customer) }}" class="mt-4 border-t border-line pt-3">
+                    @csrf
+                    <x-ui.button type="submit" variant="secondary" size="sm">{{ __('owner.customers.vat.recheck') }}</x-ui.button>
+                </form>
+            @endif
+        @else
+            <p class="text-sm text-muted">{{ __('owner.customers.vat.no_identity') }}</p>
+        @endif
+
+        @if ($reviewCases->isNotEmpty())
+            <div class="mt-4 border-t border-line pt-3">
+                <h3 class="text-xs font-semibold text-primary">{{ __('owner.customers.vat.review_history') }}</h3>
+                <ul class="mt-2 divide-y divide-line text-xs">
+                    @foreach ($reviewCases as $review)
+                        <li class="py-2">{{ __('owner.customers.vat.review_statuses.'.$review->status->value) }} · {{ $review->created_at?->format('Y-m-d H:i') }} @if ($review->resolved_at) · {{ __('owner.customers.vat.resolved') }} @endif</li>
+                    @endforeach
+                </ul>
+            </div>
+        @endif
+    </x-operator.section>
 
     <x-operator.section :title="__('owner.customers.sections.subscriptions')" id="customer-subscriptions" class="mt-4">
         @if ($customer->subscriptions->isEmpty())
@@ -189,7 +240,7 @@
             <x-form.select name="customer_type" :label="__('owner.customers.fields.type')" :options="['individual' => __('owner.customers.types.individual'), 'company' => __('owner.customers.types.company')]" :selected="$customer->customer_type ?? 'individual'" />
             <x-form.field name="company_name" :label="__('owner.customers.fields.company')" :value="$customer->company_name" maxlength="150" :optional="true" />
             <x-form.select name="country_code" :label="__('owner.customers.fields.country')" :options="$countries" :selected="$customer->country_code" :hint="__('owner.customers.country_hint')" />
-            <x-form.field name="tax_id" :label="__('owner.customers.fields.tax_id')" :value="$customer->tax_id" maxlength="50" :optional="true" />
+            <x-form.field name="tax_id" :label="__('owner.customers.fields.tax_id')" value="" maxlength="50" :optional="true" :hint="__('owner.customers.vat.replace_hint')" />
             <x-form.field name="address_line1" :label="__('owner.customers.fields.address_line1')" :value="$address['line1'] ?? null" maxlength="150" :optional="true" />
             <x-form.field name="address_line2" :label="__('owner.customers.fields.address_line2')" :value="$address['line2'] ?? null" maxlength="150" :optional="true" />
             <x-form.field name="postal_code" :label="__('owner.customers.fields.postal_code')" :value="$address['postal_code'] ?? null" maxlength="20" :optional="true" />

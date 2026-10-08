@@ -1,6 +1,12 @@
 <x-layouts.owner :title="__('owner.customers.title')">
     <x-operator.page-header :title="__('owner.customers.title')" :lead="__('owner.customers.lead')" />
 
+    <div class="mb-4 flex justify-end">
+        <x-ui.button :href="route('owner.vat-verifications.index')" variant="secondary" size="sm">
+            {{ __('owner.customers.vat.queue') }}@if ($openVatReviewCount > 0) <span class="ml-1">({{ $openVatReviewCount }})</span>@endif
+        </x-ui.button>
+    </div>
+
     @php $select = 'mt-1 h-9 w-full rounded-sm border border-line-strong bg-surface px-2 text-sm text-ink hover:border-muted'; @endphp
 
     <form method="GET" action="{{ route('owner.customers.index') }}" role="search" class="rounded-md border border-line bg-surface p-3">

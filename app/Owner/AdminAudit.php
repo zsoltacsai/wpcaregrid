@@ -18,7 +18,7 @@ final class AdminAudit
         'owner.signed_in',
         'content.created', 'content.updated', 'content.published', 'content.unpublished', 'content.draft_discarded',
         'price.created', 'price.updated', 'price.published', 'price.draft_discarded',
-        'customer.updated',
+        'customer.updated', 'customer.vat_rechecked', 'customer.vat_review_resolved',
         'operator.invited', 'operator.invitation_resent', 'operator.permissions_changed', 'operator.disabled', 'operator.enabled',
         'stripe.verified',
         'integration_credential.updated', 'integration_credential.cleared',

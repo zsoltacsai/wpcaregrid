@@ -204,6 +204,28 @@ return [
         'save' => 'Módosítások mentése',
         'saved' => 'Az adatait elmentettük.',
         'optional' => 'nem kötelező',
+        'vies' => [
+            'title' => 'Közösségi adószám ellenőrzése',
+            'lead' => 'Ellenőrizze a közösségi adószámot a hivatalos VIES szolgáltatással. Az eredmény csak ellenőrzési bizonyíték, nem módosítja az adózási státuszt vagy a fizetendő összeget.',
+            'country' => 'Az adószám országa',
+            'number' => 'Közösségi adószám',
+            'verify' => 'Ellenőrzés',
+            'current_status' => 'Állapot',
+            'last_successful_check' => 'Utolsó sikeres VIES-ellenőrzés',
+            'not_checked' => 'Nincs ellenőrizve',
+            'history' => 'Ellenőrzési előzmények',
+            'source' => 'VIES',
+            'local_check' => 'Helyi formátumellenőrzés',
+            'evidence_only' => 'Ha a VIES átmenetileg nem érhető el, az adószámot elmentjük, és később újra ellenőrizheti. Az elérhetetlenség nem jelent érvénytelenséget.',
+            'company_only' => 'Az adószám ellenőrzése céges számlázási profilhoz érhető el.',
+            'status' => [
+                'not_verified' => 'Nincs ellenőrizve',
+                'valid' => 'A VIES érvényesnek jelölte az adószámot.',
+                'invalid' => 'A VIES érvénytelennek jelölte az adószámot, vagy annak formátuma nem megfelelő.',
+                'unavailable' => 'Az ellenőrzés átmenetileg nem érhető el. Később újrapróbálhatja.',
+                'pending_review' => 'Az ellenőrzés felülvizsgálatra vár. Később újrapróbálhatja.',
+            ],
+        ],
     ],
 
     'websites' => [

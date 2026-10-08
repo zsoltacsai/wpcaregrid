@@ -81,6 +81,8 @@ return new class extends Migration
         Schema::dropIfExists('billing_invoices');
 
         Schema::table('subscriptions', function (Blueprint $table) {
+            $table->dropIndex(['stripe_coupon_id']);
+            $table->dropIndex(['stripe_promotion_code_id']);
             $table->dropColumn([
                 'billing_source', 'base_price_amount', 'base_price_currency', 'pricing_market',
                 'discount_type', 'discount_percent', 'discount_amount', 'discount_currency',

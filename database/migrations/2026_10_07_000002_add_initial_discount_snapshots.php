@@ -44,6 +44,8 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('billing_invoices', function (Blueprint $table) {
+            $table->dropIndex(['stripe_coupon_id']);
+            $table->dropIndex(['stripe_promotion_code_id']);
             $table->dropColumn([
                 'applied_discount_type', 'applied_discount_percent', 'applied_discount_amount',
                 'applied_discount_currency', 'applied_discount_duration', 'applied_discount_duration_months',
@@ -53,6 +55,8 @@ return new class extends Migration
         });
 
         Schema::table('subscriptions', function (Blueprint $table) {
+            $table->dropIndex(['initial_stripe_coupon_id']);
+            $table->dropIndex(['initial_stripe_promotion_code_id']);
             $table->dropColumn([
                 'initial_discount_type', 'initial_discount_percent', 'initial_discount_amount', 'initial_invoice_discount_total',
                 'initial_discount_currency', 'initial_discount_duration', 'initial_discount_duration_months',

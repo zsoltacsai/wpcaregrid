@@ -11,6 +11,7 @@ use App\Security\ScanType;
 use App\SiteHealth\Dimension;
 use App\SiteHealth\SiteHealth;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\Concerns\ActsAsOwner;
 use Tests\Concerns\RunsSecurityScans;
 use Tests\TestCase;
@@ -73,7 +74,7 @@ class OwnerCustomersAndWebsitesTest extends TestCase
         $hash = $customer->user->getAuthPassword();
 
         $this->get(route('owner.customers.show', $customer))->assertOk()
-            ->assertSee('Acme Kft')->assertSee('HU12345678')->assertSee('Fő utca 1')->assertSee('cus_TEST123')
+            ->assertSee('Acme Kft')->assertSee('HU••••5678')->assertDontSee('HU12345678')->assertSee('Fő utca 1')->assertSee('cus_TEST123')
             ->assertSee('company.example')->assertSee($site['website']->subscription->planName())
             ->assertDontSee($hash)
             ->assertDontSee($site['credential']);
@@ -94,7 +95,10 @@ class OwnerCustomersAndWebsitesTest extends TestCase
         ])->assertRedirect(route('owner.customers.show', $customer));
 
         $customer->refresh();
-        $this->assertSame(['Anna', 'Kovács', 'company', 'Acme Kft', 'AT', 'ATU1234'], [$customer->first_name, $customer->last_name, $customer->customer_type, $customer->company_name, $customer->country_code, $customer->tax_id]);
+        $this->assertSame(['Anna', 'Kovács', 'company', 'Acme Kft', 'AT', 'ATU1234'], [$customer->first_name, $customer->last_name, $customer->customer_type, $customer->company_name, $customer->country_code, $customer->taxIdentifier()]);
+        $this->assertNull($customer->tax_id);
+        $this->assertNotSame('ATU1234', DB::table('customers')->where('id', $customer->id)->value('tax_identifier_encrypted'));
+        $this->assertSame(1, $customer->billingIdentities()->count());
         $this->assertEquals(['line1' => 'Ring 1', 'postal_code' => '1010', 'city' => 'Wien'], $customer->billing_address);
         $this->assertSame(['anna@acme.example', 'cus_KEEP', true], [$customer->email, $customer->stripe_customer_id, $customer->active]);
         $this->assertSame('Anna Kovács', $customer->user->refresh()->name);

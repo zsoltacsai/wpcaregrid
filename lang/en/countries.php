@@ -26,6 +26,7 @@ return [
     'IE' => 'Ireland',
     'IS' => 'Iceland',
     'IT' => 'Italy',
+    'XI' => 'Northern Ireland (XI)',
     'LI' => 'Liechtenstein',
     'LT' => 'Lithuania',
     'LU' => 'Luxembourg',

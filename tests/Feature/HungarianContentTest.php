@@ -32,7 +32,7 @@ class HungarianContentTest extends TestCase
     private const SAME_IN_BOTH = [
         'WordPress', 'WooCommerce', 'Basic', 'Business', 'Secure', 'shop.example.com',
         '© :year WP CareGrid', ':currency / :unit', ':name', 'Belgium', 'Liechtenstein', 'Moldova',
-        'index,follow', ':page – WP CareGrid', '—', 'PHP',
+        'index,follow', ':page – WP CareGrid', '—', 'PHP', 'VIES',
     ];
 
     private function useHungarian(): void

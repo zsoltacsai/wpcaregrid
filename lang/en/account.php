@@ -192,6 +192,28 @@ return [
         'save' => 'Save changes',
         'saved' => 'Your details have been saved.',
         'optional' => 'optional',
+        'vies' => [
+            'title' => 'EU VAT number verification',
+            'lead' => 'Check an EU VAT number with the official VIES service. The result is evidence only and does not change your tax status or checkout amount.',
+            'country' => 'VAT number country',
+            'number' => 'EU VAT number',
+            'verify' => 'Verify number',
+            'current_status' => 'Status',
+            'last_successful_check' => 'Last successful VIES check',
+            'not_checked' => 'Not checked',
+            'history' => 'Verification history',
+            'source' => 'VIES',
+            'local_check' => 'Local format check',
+            'evidence_only' => 'If VIES is temporarily unavailable, the number is saved and can be checked again later. An unavailable result is not an invalid result.',
+            'company_only' => 'VAT verification is available for company billing profiles.',
+            'status' => [
+                'not_verified' => 'Not verified',
+                'valid' => 'VIES reports this number as valid.',
+                'invalid' => 'VIES reports this number as invalid, or its format is not valid.',
+                'unavailable' => 'Verification is temporarily unavailable. You can try again later.',
+                'pending_review' => 'Verification is pending review. You can try again later.',
+            ],
+        ],
     ],
 
     'websites' => [

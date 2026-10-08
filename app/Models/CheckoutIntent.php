@@ -21,9 +21,9 @@ class CheckoutIntent extends Model
 {
     use HasUuids;
 
-    protected $guarded = ['id'];
+    protected $guarded = ['id', 'billing_identity_id'];
 
-    protected $hidden = ['browser_session_hash', 'stripe_checkout_url'];
+    protected $hidden = ['browser_session_hash', 'stripe_checkout_url', 'tax_id', 'tax_identifier_encrypted'];
 
     /** Only the public `uuid` is generated; the numeric id stays the primary key. */
     public function uniqueIds(): array
@@ -45,6 +45,7 @@ class CheckoutIntent extends Model
             'interval' => BillingInterval::class,
             'amount' => 'integer',
             'billing_address' => 'array',
+            'tax_identifier_encrypted' => 'encrypted',
             'stripe_checkout_expires_at' => 'datetime',
             'completed_at' => 'datetime',
             'cancelled_at' => 'datetime',
@@ -56,6 +57,11 @@ class CheckoutIntent extends Model
         return $this->belongsTo(Customer::class);
     }
 
+    public function billingIdentity(): BelongsTo
+    {
+        return $this->belongsTo(CustomerBillingIdentity::class, 'billing_identity_id');
+    }
+
     public function subscription(): HasOne
     {
         return $this->hasOne(Subscription::class);
@@ -64,6 +70,12 @@ class CheckoutIntent extends Model
     public function promotion(): BelongsTo
     {
         return $this->belongsTo(Promotion::class);
+    }
+
+    /** New writes use encryption; legacy intent snapshots remain readable without backfill. */
+    public function taxIdentifier(): ?string
+    {
+        return filled($this->tax_identifier_encrypted) ? $this->tax_identifier_encrypted : ($this->tax_id ?: null);
     }
 
     public static function hashBrowserSession(string $sessionId): string

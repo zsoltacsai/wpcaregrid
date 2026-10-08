@@ -19,6 +19,8 @@ class Customer extends Model
 {
     use HasFactory, HasUuids;
 
+    protected $hidden = ['tax_id', 'tax_identifier_encrypted'];
+
     protected $guarded = ['id', 'uuid'];
 
     public function uniqueIds(): array
@@ -35,6 +37,7 @@ class Customer extends Model
     {
         return [
             'billing_address' => 'array',
+            'tax_identifier_encrypted' => 'encrypted',
             'active' => 'boolean',
         ];
     }
@@ -76,6 +79,12 @@ class Customer extends Model
         return trim("{$this->first_name} {$this->last_name}");
     }
 
+    /** New writes use encrypted storage; legacy rows remain readable without backfill. */
+    public function taxIdentifier(): ?string
+    {
+        return filled($this->tax_identifier_encrypted) ? $this->tax_identifier_encrypted : ($this->tax_id ?: null);
+    }
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
@@ -104,6 +113,16 @@ class Customer extends Model
     public function billingInvoices(): HasMany
     {
         return $this->hasMany(BillingInvoice::class)->latest('stripe_created_at');
+    }
+
+    public function billingIdentities(): HasMany
+    {
+        return $this->hasMany(CustomerBillingIdentity::class)->orderByDesc('version');
+    }
+
+    public function latestBillingIdentity(): ?CustomerBillingIdentity
+    {
+        return $this->billingIdentities()->first();
     }
 
     /** Subscriptions that currently grant service access. */

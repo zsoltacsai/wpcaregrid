@@ -43,7 +43,7 @@ final class StartCheckout
                 country: $customer->country,
                 customerType: $account->customer_type ?? 'individual',
                 companyName: $account->company_name,
-                taxId: $account->tax_id,
+                taxId: $account->taxIdentifier(),
                 billingAddress: $account->billing_address,
             );
         }
@@ -94,7 +94,8 @@ final class StartCheckout
                 'country' => $customer->country,
                 'customer_type' => $customer->customerType,
                 'company_name' => $customer->companyName,
-                'tax_id' => $customer->taxId,
+                'tax_id' => null,
+                'tax_identifier_encrypted' => $customer->taxId,
                 'billing_address' => $customer->billingAddress,
                 'product_type' => $price->productType,
                 'plan' => $price->tier,

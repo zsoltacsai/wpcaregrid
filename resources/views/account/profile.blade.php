@@ -29,7 +29,7 @@
 
             <div x-show="type === 'company'" @if (old('customer_type', $customer->customer_type) !== 'company') x-cloak @endif class="grid gap-5 sm:grid-cols-2">
                 <x-form.field name="company_name" :label="__('account.profile.company_name')" :value="$customer->company_name" autocomplete="organization" maxlength="150" />
-                <x-form.field name="tax_id" :label="__('account.profile.tax_id')" :value="$customer->tax_id" optional maxlength="50" />
+                <x-form.field name="tax_id" :label="__('account.profile.tax_id')" :value="$customer->taxIdentifier()" optional maxlength="50" />
             </div>
 
             <x-form.select name="country_code" :label="__('account.profile.country')" :hint="__('account.profile.country_hint')" :options="__('countries')" :selected="$customer->country_code" autocomplete="country" class="sm:max-w-md" />
@@ -44,4 +44,67 @@
             <x-ui.button type="submit" size="lg" class="self-start">{{ __('account.profile.save') }}</x-ui.button>
         </form>
     </x-account.panel>
+
+    @if ($customer->customer_type === 'company')
+        @php
+            $vatStatus = $history->first()?->status?->value;
+            $vatDisplayStatus = match ($vatStatus) {
+                'valid' => 'valid',
+                'invalid', 'malformed' => 'invalid',
+                'unavailable' => 'unavailable',
+                'pending_verification', 'manual_review' => 'pending_review',
+                default => 'not_verified',
+            };
+        @endphp
+        <x-account.panel class="mt-4">
+            <div class="mb-4">
+                <h2 class="text-base font-semibold text-primary">{{ __('account.profile.vies.title') }}</h2>
+                <p class="mt-1 text-sm text-muted">{{ __('account.profile.vies.lead') }}</p>
+            </div>
+
+            @if (session('vat_status'))
+                @php
+                    $resultStatus = match (session('vat_status')) {
+                        'valid' => 'valid',
+                        'invalid', 'malformed' => 'invalid',
+                        'unavailable' => 'unavailable',
+                        default => 'pending_review',
+                    };
+                @endphp
+                <p role="status" class="mb-4 rounded-sm border border-line bg-canvas p-3 text-sm text-primary">{{ __('account.profile.vies.status.'.$resultStatus) }}</p>
+            @endif
+
+            <dl class="mb-4 grid gap-2 text-sm sm:grid-cols-2">
+                <div><dt class="text-xs text-muted">{{ __('account.profile.vies.current_status') }}</dt><dd>{{ __('account.profile.vies.status.'.$vatDisplayStatus) }}</dd></div>
+                <div><dt class="text-xs text-muted">{{ __('account.profile.vies.last_successful_check') }}</dt><dd>{{ $lastSuccessful?->checked_at?->format('Y-m-d H:i') ?? __('account.profile.vies.not_checked') }}</dd></div>
+            </dl>
+
+            <form method="POST" action="{{ route('account.profile.vat-verification') }}" class="grid gap-4 sm:grid-cols-2" novalidate>
+                @csrf
+                <x-form.select name="vat_country" :label="__('account.profile.vies.country')" :options="$countries" :selected="old('vat_country', $history->first()?->country_code ?? $customer->country_code)" required />
+                <x-form.field name="vat_number" :label="__('account.profile.vies.number')" :value="old('vat_number', $customer->taxIdentifier())" maxlength="50" autocomplete="off" required />
+                <p class="text-xs text-muted sm:col-span-2">{{ __('account.profile.vies.evidence_only') }}</p>
+                <div class="sm:col-span-2"><x-ui.button type="submit" size="sm">{{ __('account.profile.vies.verify') }}</x-ui.button></div>
+            </form>
+
+            @if ($history->isNotEmpty())
+                <div class="mt-5 border-t border-line pt-4">
+                    <h3 class="text-sm font-semibold text-primary">{{ __('account.profile.vies.history') }}</h3>
+                    <ul class="mt-2 divide-y divide-line text-xs">
+                        @foreach ($history as $evidence)
+                            @php
+                                $itemStatus = match ($evidence->status->value) {
+                                    'valid' => 'valid',
+                                    'invalid', 'malformed' => 'invalid',
+                                    'unavailable' => 'unavailable',
+                                    default => 'pending_review',
+                                };
+                            @endphp
+                            <li class="flex flex-wrap justify-between gap-2 py-2"><span>{{ $evidence->country_code }} · {{ $evidence->provider === 'eu_vies' ? __('account.profile.vies.source') : __('account.profile.vies.local_check') }} · {{ __('account.profile.vies.status.'.$itemStatus) }}</span><time datetime="{{ $evidence->checked_at?->toIso8601String() }}">{{ $evidence->checked_at?->format('Y-m-d H:i') }}</time></li>
+                        @endforeach
+                    </ul>
+                </div>
+            @endif
+        </x-account.panel>
+    @endif
 </x-layouts.account>

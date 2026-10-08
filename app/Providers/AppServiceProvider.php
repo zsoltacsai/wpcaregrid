@@ -22,6 +22,8 @@ use App\Security\SecurityScanner;
 use App\Security\Vulnerabilities\NoVulnerabilitySource;
 use App\Security\Vulnerabilities\VulnerabilitySource;
 use App\Security\Vulnerabilities\WordfenceFeed;
+use App\Tax\Vat\VatNumberProvider;
+use App\Tax\Vat\ViesSoapProvider;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
@@ -38,6 +40,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        $this->app->bind(VatNumberProvider::class, ViesSoapProvider::class);
+
         // Published owner content, read once per request (cache cleared on publish).
         $this->app->scoped(ContentRepository::class);
         $this->app->scoped(OwnerSettings::class);
@@ -225,6 +229,12 @@ class AppServiceProvider extends ServiceProvider
             Limit::perMinute(20)->by('account:'.$request->user()?->id),
             Limit::perHour(200)->by('account:'.$request->user()?->id),
         ]);
+
+        RateLimiter::for('vies-verification', fn (Request $request) => [
+            Limit::perMinute(5)->by('vies-user:'.$request->user()?->id),
+            Limit::perHour(15)->by('vies-ip:'.$request->ip()),
+        ]);
+        RateLimiter::for('owner-vies', fn (Request $request) => Limit::perMinute(5)->by('owner-vies:'.$request->user('owner')?->id));
 
         RateLimiter::for('checkout', fn (Request $request) => [
             Limit::perMinute(10)->by($request->ip()),

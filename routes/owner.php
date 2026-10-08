@@ -14,6 +14,7 @@ use App\Http\Controllers\Owner\PricingController;
 use App\Http\Controllers\Owner\RecoveryOfferController;
 use App\Http\Controllers\Owner\SeoController;
 use App\Http\Controllers\Owner\SystemController;
+use App\Http\Controllers\Owner\VatVerificationController as OwnerVatVerificationController;
 use App\Http\Controllers\Owner\WebsiteController;
 use App\Models\Promotion;
 use App\Models\User;
@@ -47,6 +48,9 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::get('/customers', [CustomerController::class, 'index'])->middleware('can:owner.customers.view')->name('customers.index');
         Route::get('/customers/{customer}', [CustomerController::class, 'show'])->middleware('can:owner.customers.view')->name('customers.show');
         Route::put('/customers/{customer}', [CustomerController::class, 'update'])->middleware(['can:owner.customers.manage', 'throttle:owner-sensitive'])->name('customers.update');
+        Route::get('/vat-verifications', [OwnerVatVerificationController::class, 'index'])->middleware('can:owner.customers.view')->name('vat-verifications.index');
+        Route::post('/customers/{customer}/vat-verification/recheck', [OwnerVatVerificationController::class, 'recheck'])->middleware(['can:owner.customers.manage', 'throttle:owner-vies'])->name('customers.vat-verification.recheck');
+        Route::post('/vat-verifications/{verification}/resolve', [OwnerVatVerificationController::class, 'resolve'])->middleware(['can:owner.customers.manage', 'throttle:owner-sensitive'])->name('vat-verifications.resolve');
 
         // PROBONO, an internal plan the owner assigns (docs/PROBONO.md). The plan is fixed server-side.
         Route::post('/customers/{customer}/internal-plans', [InternalPlanController::class, 'store'])->middleware(['can:owner.plans.assign', 'throttle:owner-sensitive'])->name('customers.internal-plans.store');

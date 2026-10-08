@@ -85,7 +85,7 @@ final class ProvisionCustomer
                 'company_name' => $intent->company_name,
                 'country_code' => $intent->country,
                 'customer_type' => $intent->customer_type,
-                'tax_id' => $intent->tax_id,
+                'tax_identifier_encrypted' => $intent->taxIdentifier(),
                 'billing_address' => $intent->billing_address,
             ]);
         } catch (UniqueConstraintViolationException $exception) {

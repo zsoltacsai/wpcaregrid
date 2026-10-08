@@ -37,6 +37,7 @@ return [
     'DE' => 'Németország',
     'NO' => 'Norvégia',
     'IT' => 'Olaszország',
+    'XI' => 'Észak-Írország (XI)',
     'PT' => 'Portugália',
     'RO' => 'Románia',
     'ES' => 'Spanyolország',

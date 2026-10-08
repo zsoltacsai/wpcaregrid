@@ -14,7 +14,7 @@
                 <x-account.detail :label="__('account.billing.customer_type')">{{ $customer->customer_type ? __('account.profile.customer_types.'.$customer->customer_type) : '' }}</x-account.detail>
                 <x-account.detail :label="__('account.billing.company')">{{ $customer->company_name }}</x-account.detail>
                 <x-account.detail :label="__('account.billing.country')">{{ __('countries.'.$customer->country_code) }}</x-account.detail>
-                <x-account.detail :label="__('account.billing.tax_id')">{{ $customer->tax_id }}</x-account.detail>
+                <x-account.detail :label="__('account.billing.tax_id')">{{ $customer->taxIdentifier() }}</x-account.detail>
                 <x-account.detail :label="__('account.billing.address')" class="sm:col-span-2">{{ implode(', ', array_filter([$address['line1'] ?? null, $address['line2'] ?? null, trim(($address['postal_code'] ?? '').' '.($address['city'] ?? ''))])) }}</x-account.detail>
                 @if ($subscription && ! $subscription->isInternal())
                     <x-account.detail :label="__('account.billing.currency')">{{ $subscription->currency }}</x-account.detail>

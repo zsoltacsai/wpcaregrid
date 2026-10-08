@@ -8,6 +8,7 @@ use App\Http\Controllers\Account\DashboardController;
 use App\Http\Controllers\Account\OfferController;
 use App\Http\Controllers\Account\ProfileController;
 use App\Http\Controllers\Account\SubscriptionController;
+use App\Http\Controllers\Account\VatVerificationController as AccountVatVerificationController;
 use App\Http\Controllers\Account\WebsiteController;
 use App\Http\Controllers\Auth\ActivationController;
 use App\Http\Controllers\Auth\LoginController;
@@ -94,4 +95,5 @@ Route::middleware(['auth', 'customer'])->prefix('account')->name('account.')->gr
 
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile');
     Route::put('/profile', [ProfileController::class, 'update'])->middleware('throttle:account')->name('profile.update');
+    Route::post('/profile/vat-verification', [AccountVatVerificationController::class, 'store'])->middleware('throttle:vies-verification')->name('profile.vat-verification');
 });

@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class BillingInvoice extends Model
 {
-    protected $guarded = ['id'];
+    protected $guarded = ['id', 'billing_identity_id'];
 
     protected function casts(): array
     {
@@ -41,6 +41,11 @@ class BillingInvoice extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    public function billingIdentity(): BelongsTo
+    {
+        return $this->belongsTo(CustomerBillingIdentity::class, 'billing_identity_id');
     }
 
     public function money(string $field = 'amount_paid'): ?Money

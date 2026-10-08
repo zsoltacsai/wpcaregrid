@@ -26,7 +26,7 @@ class Subscription extends Model
 {
     use HasFactory, HasUuids;
 
-    protected $guarded = ['id', 'uuid'];
+    protected $guarded = ['id', 'uuid', 'billing_identity_id'];
 
     public function uniqueIds(): array
     {
@@ -75,6 +75,11 @@ class Subscription extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    public function billingIdentity(): BelongsTo
+    {
+        return $this->belongsTo(CustomerBillingIdentity::class, 'billing_identity_id');
     }
 
     public function checkoutIntent(): BelongsTo

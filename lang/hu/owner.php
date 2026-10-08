@@ -1,0 +1,48 @@
+<?php
+
+return [
+    'customers' => [
+        'vat' => [
+            'queue' => 'Adószám-ellenőrzések',
+            'queue_empty' => 'Nincs függőben lévő adószám-ellenőrzés.',
+            'title' => 'Adószám-ellenőrzési bizonyíték',
+            'evidence_only' => 'A VIES eredménye kizárólag szolgáltatói bizonyíték. Nem módosítja az adózási besorolást, a fizetendő összeget vagy a számlázási kezelést.',
+            'status' => 'VIES-állapot',
+            'statuses' => [
+                'not_verified' => 'Nincs ellenőrizve',
+                'valid' => 'A VIES érvényesnek jelzi',
+                'invalid' => 'A VIES érvénytelennek jelzi / hibás formátum',
+                'unavailable' => 'Nem érhető el',
+                'pending_review' => 'Felülvizsgálatra vár',
+            ],
+            'country' => 'Adószám országa',
+            'identifier' => 'Adószám (kitakarva)',
+            'source' => 'Forrás',
+            'local_check' => 'Helyi formátumellenőrzés',
+            'vies' => 'VIES',
+            'last_check' => 'Legutóbbi ellenőrzés',
+            'last_successful_check' => 'Utolsó sikeres szolgáltatói ellenőrzés',
+            'history' => 'VIES-előzmények',
+            'recheck' => 'Újraellenőrzés a VIES-szel',
+            'no_identifier' => 'Nincs ellenőrizhető adószám.',
+            'no_identity' => 'Nincs elérhető számlázási adatpillanatkép.',
+            'review_history' => 'Kézi felülvizsgálati előzmények',
+            'review_statuses' => [
+                'not_required' => 'Felülvizsgálat nem szükséges',
+                'pending_verification' => 'Felülvizsgálatra vár',
+                'verified' => 'Kézi felülvizsgálat befejezve',
+                'manual_review' => 'Kézi felülvizsgálat',
+                'rejected' => 'Kézi felülvizsgálat elutasítva',
+            ],
+            'resolved' => 'lezárva',
+            'review_saved' => 'A döntés a VIES-bizonyítéktól elkülönítve elmentve.',
+            'review_status' => 'Kézi felülvizsgálat állapota',
+            'manual_decision' => 'Kézi felülvizsgálati döntés',
+            'reason' => 'Indok',
+            'reasons' => ['documents_reviewed' => 'A dokumentumok ellenőrizve', 'documents_incomplete' => 'A dokumentumok hiányosak', 'not_applicable' => 'A felülvizsgálat nem alkalmazható'],
+            'save_review' => 'Döntés mentése',
+            'manual_is_separate' => 'A kézi felülvizsgálat külön kerül tárolásra. Nem módosítja a VIES eredményét, és nem alkalmaz adózási kezelést.',
+            'replace_hint' => 'Hagyja üresen a mezőt a mentett adószám megtartásához. A meglévő érték kitakarva sem jelenik meg itt.',
+        ],
+    ],
+];
