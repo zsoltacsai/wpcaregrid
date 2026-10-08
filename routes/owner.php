@@ -7,6 +7,7 @@ use App\Http\Controllers\Owner\CustomerController;
 use App\Http\Controllers\Owner\DashboardController;
 use App\Http\Controllers\Owner\IntegrationCredentialController;
 use App\Http\Controllers\Owner\InternalPlanController;
+use App\Http\Controllers\Owner\InvoiceIntentController;
 use App\Http\Controllers\Owner\LoginController;
 use App\Http\Controllers\Owner\OperatorController;
 use App\Http\Controllers\Owner\OwnerSettingsController;
@@ -124,6 +125,9 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::get('/integrations', [IntegrationCredentialController::class, 'index'])->middleware('can:owner.integrations.manage')->name('integrations.index');
         Route::post('/integrations', [IntegrationCredentialController::class, 'store'])->middleware(['can:owner.integrations.manage', 'throttle:owner-sensitive'])->name('integrations.store');
         Route::delete('/integrations/{id}', [IntegrationCredentialController::class, 'destroy'])->middleware(['can:owner.integrations.manage', 'throttle:owner-sensitive'])->name('integrations.destroy');
+
+        Route::get('/billing/invoice-intents', [InvoiceIntentController::class, 'index'])->middleware('can:owner.billing.invoices.view')->name('billing.invoice-intents.index');
+        Route::get('/billing/invoice-intents/{invoiceIntent}', [InvoiceIntentController::class, 'show'])->middleware('can:owner.billing.invoices.view')->name('billing.invoice-intents.show');
 
         Route::prefix('dns/cloudflare')->name('dns.cloudflare.')->middleware('can:owner.dns.manage')->group(function () {
             Route::get('/', [CloudflareDnsController::class, 'index'])->middleware('throttle:owner-external')->name('index');

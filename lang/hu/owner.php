@@ -1,6 +1,46 @@
 <?php
 
 return [
+    'nav' => ['billing_invoices' => 'Számlázási előkészítések'],
+    'invoice_intents' => [
+        'title' => 'Számlázási előkészítések',
+        'lead' => 'A Stripe által kifizetett számlák előkészítésének és helyi ellenőrzésének áttekintése. Ez a felület nem állít ki számlát.',
+        'dry_run_notice' => 'Az 1. fázis csak helyi próbaüzem. A sikeres helyi ellenőrzés nem jelent szolgáltatói elfogadást vagy kiállított számlát.',
+        'id' => 'Előkészítés', 'customer' => 'Ügyfél', 'subscription' => 'Előfizetés', 'stripe_invoice' => 'Stripe-számla',
+        'amount' => 'Összeg', 'provider' => 'Szolgáltató', 'status' => 'Állapot', 'blocked_reason' => 'Blokkolás oka',
+        'dry_run_result' => 'Helyi ellenőrzés', 'not_run' => 'Nem futott le', 'retry_count' => 'Újrapróbálkozás',
+        'error_category' => 'Utolsó hibakategória', 'created' => 'Létrehozva', 'updated' => 'Frissítve', 'history' => 'Előzmények',
+        'back' => 'Vissza az előkészítésekhez', 'empty' => 'Még nincs előkészített számlázási szándék.', 'detail_title' => 'Számlázási előkészítés #:id',
+        'status' => [
+            'pending' => 'Előkészítésre vár', 'blocked_identity' => 'Blokkolva: számlázási adat',
+            'blocked_seller_profile' => 'Blokkolva: eladói adóprofil', 'blocked_tax_review' => 'Blokkolva: adózási felülvizsgálat',
+            'ready_for_dry_run' => 'Helyi próbaüzemre kész', 'dry_run_validating' => 'Helyi ellenőrzés folyamatban',
+            'dry_run_validated' => 'Helyi ellenőrzés sikeres', 'dry_run_failed' => 'Helyi ellenőrzés sikertelen',
+            'issuance_disabled' => 'Feldolgozás letiltva', 'reconciliation_required' => 'Egyeztetés szükséges',
+            'issued' => 'Kiállítva (jövőbeli fázis számára fenntartva)', 'failed' => 'Előkészítés sikertelen',
+        ],
+        'reasons' => [
+            'billing_identity_missing' => 'Ehhez az ügylethez nincs számlázási adatkapcsolat.',
+            'billing_identity_customer_mismatch' => 'A számlázási adat nem ehhez az ügyfélhez tartozik.',
+            'seller_profile_missing' => 'Nem található hatályos eladói adóprofil.',
+            'seller_profile_unverified' => 'A hatályos eladói adóprofil nincs ellenőrizve.',
+            'approved_tax_decision_missing' => 'Jóváhagyott, verziózott adózási döntés szükséges.',
+            'refund_review_required' => 'A visszatérítés emberi egyeztetést igényel; helyesbítő számla nem készült.',
+            'preparation_failed' => 'Az előkészítés korlátozott próbálkozásai elfogytak.',
+            'local_dry_run_failed' => 'A helyi ellenőrzési próbálkozások elfogytak.',
+            'local_validation_failed' => 'A helyi szolgáltatói formátumellenőrzés sikertelen.',
+            'provider_configuration_not_dry_run_only' => 'A konfiguráció nem engedélyezte a kizárólagos próbaüzemet.',
+        ],
+        'events' => [
+            'intent_created' => 'Előkészítés létrehozva Stripe által kifizetett számlából',
+            'intent_prepared' => 'Az adatok és feltételek áttekintve', 'dry_run_started' => 'Helyi ellenőrzés elindítva',
+            'preparation_failed' => 'Az előkészítési próbálkozások elfogytak',
+            'dry_run_passed' => 'Helyi ellenőrzés sikeres', 'dry_run_failed' => 'Helyi ellenőrzés sikertelen',
+            'refund_review_required' => 'Visszatérítés emberi egyeztetésre jelölve',
+            'configuration_prevented_processing' => 'A konfiguráció letiltotta a feldolgozást',
+            'manual_retry_requested' => 'Kézi újrapróbálkozás kérve',
+        ],
+    ],
     'customers' => [
         'vat' => [
             'queue' => 'Adószám-ellenőrzések',

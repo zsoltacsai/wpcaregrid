@@ -243,7 +243,8 @@ jobs:
             tests/Feature/BillingIdentityConcurrencyTest.php \
             tests/Feature/ViesReviewConcurrencyTest.php \
             tests/Feature/PromotionReservationConcurrencyTest.php \
-            tests/Feature/StripeSubscriptionConcurrencyTest.php; do
+            tests/Feature/StripeSubscriptionConcurrencyTest.php \
+            tests/Feature/InvoiceIntentConcurrencyTest.php; do
             vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings "$test"
           done
 

@@ -4,6 +4,7 @@ namespace App\Billing;
 
 use App\Checkout\CheckoutStatus;
 use App\Checkout\PromotionReservations;
+use App\Invoicing\InvoiceIntentWorkflow;
 use App\Mail\PaymentConfirmation;
 use App\Mail\PaymentFailed;
 use App\Models\BillingInvoice;
@@ -28,6 +29,7 @@ final class InvoiceEvents
         private readonly SubscriptionSync $subscriptions,
         private readonly ProvisionCustomer $provision,
         private readonly PromotionReservations $reservations,
+        private readonly InvoiceIntentWorkflow $invoiceIntents,
     ) {}
 
     public function paid(object $invoice, int $eventCreated = 0, ?string $eventId = null): void
@@ -38,6 +40,9 @@ final class InvoiceEvents
         if (! $subscription || ! $applied) {
             return;
         }
+
+        // Canonical invoice-intent entry point: only an applied Stripe-authoritative paid invoice.
+        $this->invoiceIntents->recordPaidInvoice($snapshot, $eventId);
 
         $subscription->fill(['last_payment_status' => 'paid', 'last_payment_at' => $snapshot->paid_at ?? now()]);
 

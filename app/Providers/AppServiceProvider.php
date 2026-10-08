@@ -8,6 +8,9 @@ use App\Checkout\PromotionGateway;
 use App\Checkout\StripeCheckoutGateway;
 use App\Checkout\StripePromotionGateway;
 use App\Content\ContentRepository;
+use App\Invoicing\Providers\InvoiceProvider;
+use App\Invoicing\Providers\SzamlazzDryRunProvider;
+use App\Invoicing\Providers\SzamlazzResponseParser;
 use App\Models\User;
 use App\Offers\OfferPaymentGateway;
 use App\Offers\StripeOfferPaymentGateway;
@@ -41,6 +44,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(VatNumberProvider::class, ViesSoapProvider::class);
+        $this->app->bind(InvoiceProvider::class, fn ($app) => new SzamlazzDryRunProvider($app->make(SzamlazzResponseParser::class)));
 
         // Published owner content, read once per request (cache cleared on publish).
         $this->app->scoped(ContentRepository::class);

@@ -6,6 +6,7 @@ use App\Billing\CheckoutDiscountSnapshotSync;
 use App\Billing\InvoiceEvents;
 use App\Billing\ProvisionCustomer;
 use App\Billing\SubscriptionSync;
+use App\Invoicing\InvoiceIntentWorkflow;
 use App\Models\CheckoutIntent;
 use App\Models\StripeEvent;
 use App\Offers\RecoveryOffers;
@@ -32,6 +33,7 @@ final class StripeWebhookHandler
         private readonly RecoveryOffers $offers,
         private readonly PromotionReservations $reservations,
         private readonly CheckoutDiscountSnapshotSync $discountSnapshots,
+        private readonly InvoiceIntentWorkflow $invoiceIntents,
     ) {}
 
     /** @return bool False when the event had already been processed. */
@@ -56,6 +58,7 @@ final class StripeWebhookHandler
                 'invoice.paid',
                 'invoice.payment_failed',
                 'invoice.finalized',
+                'charge.refunded',
             ], true) ? 3 : 1;
 
             DB::transaction(function () use ($event) {
@@ -96,8 +99,21 @@ final class StripeWebhookHandler
             'invoice.paid' => $this->invoices->paid($object, (int) ($event->created ?? time()), $event->id),
             'invoice.payment_failed' => $this->invoices->failed($object, (int) ($event->created ?? time()), $event->id),
             'invoice.finalized' => $this->invoices->record($object, (int) ($event->created ?? time()), $event->id),
+            'charge.refunded' => $this->refundReviewRequired($object, $event->id),
             default => null,
         };
+    }
+
+    private function refundReviewRequired(object $charge, string $eventId): void
+    {
+        $paymentIntentId = is_string($charge->payment_intent ?? null)
+            ? $charge->payment_intent
+            : (is_object($charge->payment_intent ?? null) ? ($charge->payment_intent->id ?? null) : null);
+
+        if (is_string($paymentIntentId) && $paymentIntentId !== '') {
+            // Marks a paid invoice for human reconciliation; never creates a correction invoice.
+            $this->invoiceIntents->markRefundReviewRequired($paymentIntentId, $eventId);
+        }
     }
 
     private function checkoutCompleted(object $session, bool $paid): void
