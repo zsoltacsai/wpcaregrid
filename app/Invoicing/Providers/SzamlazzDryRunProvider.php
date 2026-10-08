@@ -2,6 +2,7 @@
 
 namespace App\Invoicing\Providers;
 
+use App\Invoicing\ApprovedTaxDecision;
 use App\Invoicing\InvoiceValidationResult;
 use App\Invoicing\NormalizedInvoiceRequest;
 use DOMDocument;
@@ -133,11 +134,13 @@ final class SzamlazzDryRunProvider implements InvoiceProvider
         $this->node($xml, $header, 'penznem', $currency);
         $this->node($xml, $header, 'szamlaNyelve', $request->taxDecision->language);
         $this->node($xml, $header, 'megjegyzes', '');
-        if ($request->taxDecision->exchangeRateBank !== null && $request->taxDecision->exchangeRateBank !== '') {
-            $this->node($xml, $header, 'arfolyamBank', $request->taxDecision->exchangeRateBank);
+        $exchangeRateBank = $request->taxDecision instanceof ApprovedTaxDecision ? $request->taxDecision->exchangeRateBank : null;
+        $exchangeRate = $request->taxDecision instanceof ApprovedTaxDecision ? $request->taxDecision->exchangeRate : null;
+        if ($exchangeRateBank !== null && $exchangeRateBank !== '') {
+            $this->node($xml, $header, 'arfolyamBank', $exchangeRateBank);
         }
-        if ($request->taxDecision->exchangeRate !== null && $request->taxDecision->exchangeRate !== '') {
-            $this->node($xml, $header, 'arfolyam', $request->taxDecision->exchangeRate);
+        if ($exchangeRate !== null && $exchangeRate !== '') {
+            $this->node($xml, $header, 'arfolyam', $exchangeRate);
         }
         $this->node($xml, $header, 'rendelesSzam', $request->externalReference);
         $this->node($xml, $header, 'dijbekeroSzamlaszam', '');

@@ -5,9 +5,9 @@ namespace Tests\Feature;
 use App\Invoicing\NormalizedInvoiceRequest;
 use App\Invoicing\Providers\ProviderSubmissionResult;
 use App\Invoicing\Providers\SyntheticInvoiceTestProvider;
+use App\Invoicing\SyntheticTestTaxSelection;
 use App\Invoicing\SyntheticSzamlazzTestGuard;
 use App\Invoicing\SyntheticSzamlazzTestWorkflow;
-use App\Invoicing\SyntheticTestTaxSelection;
 use App\Models\InvoiceIntent;
 use App\Models\SzamlazzSyntheticTestRun;
 use App\Models\User;
@@ -36,7 +36,7 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         $owner = User::factory()->owner()->create();
         $provider = $this->mock(SyntheticInvoiceTestProvider::class);
         $provider->shouldReceive('submitSyntheticTest')->once()->withArgs(fn ($request) => $request instanceof NormalizedInvoiceRequest
-            && $request->taxDecision instanceof \App\Invoicing\SyntheticTestTaxSelection
+            && $request->taxDecision instanceof SyntheticTestTaxSelection
             && $request->currency === 'HUF'
             && $request->amountMinor === 1000
             && $request->billingSettings['notify_customer'] === false
