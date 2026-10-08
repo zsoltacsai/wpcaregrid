@@ -3,13 +3,21 @@
     title, description, canonical URL, robots, Open Graph text). It only
     changes this page's own tags. preview: a signed owner draft preview.
 --}}
-@props(['title' => null, 'description' => null, 'seo' => null, 'preview' => false, 'localeForm' => null])
+@props(['title' => null, 'description' => null, 'seo' => null, 'preview' => false, 'indexable' => false, 'localeForm' => null])
 
 @php
     $title = filled($seo['title'] ?? null) ? $seo['title'] : $title;
     $description = filled($seo['description'] ?? null) ? $seo['description'] : $description;
-    $canonical = filled($seo['canonical_url'] ?? null) && \App\Content\SafeUrl::isOwnHost($seo['canonical_url']) ? $seo['canonical_url'] : url()->current();
-    $robots = $preview ? 'noindex,nofollow' : (in_array($seo['robots'] ?? null, \App\Content\Schema\ContentSchema::ROBOTS, true) ? $seo['robots'] : 'index,follow');
+    $canonicalPath = request()->getPathInfo();
+    $canonicalFallback = rtrim((string) config('app.url'), '/').($canonicalPath === '/' ? '/' : $canonicalPath);
+    $canonical = filled($seo['canonical_url'] ?? null) && \App\Content\SafeUrl::isOwnHost($seo['canonical_url']) ? $seo['canonical_url'] : $canonicalFallback;
+    $mayIndex = app(\App\Seo\IndexingPolicy::class)->allowsPublicMarketingIndexing($indexable, request());
+    $requestedRobots = in_array($seo['robots'] ?? null, \App\Content\Schema\ContentSchema::ROBOTS, true) ? $seo['robots'] : null;
+    $robots = $preview
+        ? 'noindex,nofollow'
+        : (! $mayIndex
+            ? (str_starts_with((string) $requestedRobots, 'noindex,') ? $requestedRobots : 'noindex,nofollow')
+            : ($requestedRobots ?? 'index,follow'));
 @endphp
 
 <!DOCTYPE html>
@@ -20,9 +28,7 @@
 
         <title>{{ $title }}</title>
         <meta name="description" content="{{ $description }}">
-        @if ($robots !== 'index,follow')
-            <meta name="robots" content="{{ str_replace(',', ', ', $robots) }}">
-        @endif
+        <meta name="robots" content="{{ str_replace(',', ', ', $robots) }}">
         <link rel="canonical" href="{{ $canonical }}">
 
         <meta property="og:type" content="website">

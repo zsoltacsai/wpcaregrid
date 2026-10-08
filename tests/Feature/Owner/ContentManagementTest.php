@@ -227,7 +227,9 @@ class ContentManagementTest extends TestCase
             ->assertSee('<meta property="og:description" content="Maintenance with checks.">', false);
 
         // Only that page: the pricing page keeps its own defaults.
-        $this->get(route('pricing'))->assertDontSee('name="robots"', false)->assertDontSee('Managed WordPress');
+        $this->get(route('pricing'))
+            ->assertSee('<meta name="robots" content="noindex, nofollow">', false)
+            ->assertDontSee('Managed WordPress');
         $this->get(route('owner.seo.index'))->assertOk()->assertSee('noindex,follow');
     }
 

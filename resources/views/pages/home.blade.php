@@ -1,4 +1,4 @@
-<x-layouts.marketing :seo="$seo" :preview="$preview ?? false">
+<x-layouts.marketing :seo="$seo" :preview="$preview ?? false" :indexable="true">
     <x-sections.hero
         :content="$content->section('home.hero')"
         :trust-indicators="$content->trustIndicators()"
