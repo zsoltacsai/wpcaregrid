@@ -247,6 +247,9 @@ jobs:
             vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings "$test"
           done
 
+      - name: Restore disposable schema for post-test checks
+        run: php artisan migrate:fresh --force
+
       - name: System check (runs, never prints secrets)
         run: php artisan system:check
 
