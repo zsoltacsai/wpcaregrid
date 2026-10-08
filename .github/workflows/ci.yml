@@ -104,7 +104,7 @@ jobs:
         image: mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: ci-root-password
-          MYSQL_DATABASE: caregrid
+          MYSQL_DATABASE: caregrid_test
         ports:
           - 3306:3306
         options: >-
@@ -124,15 +124,23 @@ jobs:
           tools: composer:v2
 
       - name: Database for this job
+        env:
+          # Disposable test-service credential, scoped to database provisioning.
+          MYSQL_ROOT_PASSWORD: ci-root-password
         run: |
           if [ "${{ matrix.database }}" = "mysql" ]; then
+            set -euo pipefail
+            db_password="$(openssl rand -hex 32)"
+            echo "::add-mask::$db_password"
+            MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=127.0.0.1 --port=3306 --user=root --execute="CREATE DATABASE IF NOT EXISTS caregrid_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER 'caregrid_ci'@'%' IDENTIFIED BY '${db_password}'; GRANT ALL PRIVILEGES ON caregrid_test.* TO 'caregrid_ci'@'%';"
             {
               echo "DB_CONNECTION=mysql"
               echo "DB_HOST=127.0.0.1"
               echo "DB_PORT=3306"
-              echo "DB_DATABASE=caregrid"
-              echo "DB_USERNAME=root"
-              echo "DB_PASSWORD=ci-root-password"
+              echo "DB_DATABASE=caregrid_test"
+              echo "DB_USERNAME=caregrid_ci"
+              echo "DB_PASSWORD=$db_password"
+              echo "DB_URL="
             } >> "$GITHUB_ENV"
           fi
 
@@ -213,10 +221,28 @@ jobs:
           php artisan optimize:clear
 
       - name: Test suite
-        # The suite uses its own database settings (phpunit.xml) unless the job sets them.
+        # Strictly fail if the complete MySQL suite skips anything. The sqlite
+        # matrix intentionally skips database-engine-specific contention tests;
+        # those execute in the dedicated strict MySQL gate below.
         run: |
           if [ "${{ matrix.database }}" = "sqlite" ]; then unset DB_DATABASE; fi
-          vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings
+          if [ "${{ matrix.database }}" = "mysql" ]; then
+            vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings
+          else
+            vendor/bin/phpunit -c phpunit.xml --display-skipped --display-warnings
+          fi
+
+      - name: Required MySQL process-concurrency gate
+        if: matrix.database == 'mysql'
+        run: |
+          set -euo pipefail
+          for test in \
+            tests/Feature/BillingIdentityConcurrencyTest.php \
+            tests/Feature/ViesReviewConcurrencyTest.php \
+            tests/Feature/PromotionReservationConcurrencyTest.php \
+            tests/Feature/StripeSubscriptionConcurrencyTest.php; do
+            vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings "$test"
+          done
 
       - name: System check (runs, never prints secrets)
         run: php artisan system:check
