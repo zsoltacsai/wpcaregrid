@@ -1117,7 +1117,7 @@ return [
         'back' => 'Back to invoice intents',
         'empty' => 'No invoice intents have been prepared.',
         'detail_title' => 'Invoice intent #:id',
-        'status' => [
+        'statuses' => [
             'pending' => 'Pending preparation',
             'blocked_identity' => 'Blocked: billing identity',
             'blocked_seller_profile' => 'Blocked: seller profile',

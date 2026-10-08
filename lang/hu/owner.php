@@ -11,7 +11,7 @@ return [
         'dry_run_result' => 'Helyi ellenőrzés', 'not_run' => 'Nem futott le', 'retry_count' => 'Újrapróbálkozás',
         'error_category' => 'Utolsó hibakategória', 'created' => 'Létrehozva', 'updated' => 'Frissítve', 'history' => 'Előzmények',
         'back' => 'Vissza az előkészítésekhez', 'empty' => 'Még nincs előkészített számlázási szándék.', 'detail_title' => 'Számlázási előkészítés #:id',
-        'status' => [
+        'statuses' => [
             'pending' => 'Előkészítésre vár', 'blocked_identity' => 'Blokkolva: számlázási adat',
             'blocked_seller_profile' => 'Blokkolva: eladói adóprofil', 'blocked_tax_review' => 'Blokkolva: adózási felülvizsgálat',
             'ready_for_dry_run' => 'Helyi próbaüzemre kész', 'dry_run_validating' => 'Helyi ellenőrzés folyamatban',

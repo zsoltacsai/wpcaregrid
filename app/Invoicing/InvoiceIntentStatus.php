@@ -19,6 +19,6 @@ enum InvoiceIntentStatus: string
 
     public function label(): string
     {
-        return __('owner.invoice_intents.status.'.$this->value);
+        return __('owner.invoice_intents.statuses.'.$this->value);
     }
 }

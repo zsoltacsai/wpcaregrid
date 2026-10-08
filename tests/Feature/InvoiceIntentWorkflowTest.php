@@ -213,7 +213,9 @@ class InvoiceIntentWorkflowTest extends TestCase
         $this->get(route('owner.billing.invoice-intents.show', $intent))->assertRedirect(route('owner.login'));
         $this->actingAs($customerUser, 'owner')->get(route('owner.billing.invoice-intents.show', $intent))->assertRedirect(route('owner.login'));
         $response = $this->actingAs($owner, 'owner')->get(route('owner.billing.invoice-intents.show', $intent));
-        $response->assertOk()->assertDontSee('TEST-SECRET-ID');
+        $response->assertOk()
+            ->assertSee(__('owner.invoice_intents.statuses.blocked_tax_review'))
+            ->assertDontSee('TEST-SECRET-ID');
         $this->assertArrayNotHasKey('commercial_snapshot', $intent->toArray());
     }
 
