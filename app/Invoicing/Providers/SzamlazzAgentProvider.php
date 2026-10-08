@@ -2,7 +2,10 @@
 
 namespace App\Invoicing\Providers;
 
+use App\Invoicing\ApprovedTaxDecision;
 use App\Invoicing\NormalizedInvoiceRequest;
+use App\Invoicing\SyntheticSzamlazzTestGuard;
+use App\Invoicing\SyntheticTestTaxSelection;
 use DOMDocument;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
@@ -14,7 +17,7 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider, Syntheti
     public function __construct(
         private readonly SzamlazzDryRunProvider $validator,
         private readonly SzamlazzResponseParser $parser,
-        private readonly \App\Invoicing\SyntheticSzamlazzTestGuard $syntheticTestGuard,
+        private readonly SyntheticSzamlazzTestGuard $syntheticTestGuard,
     ) {}
 
     public function submit(NormalizedInvoiceRequest $request): ProviderSubmissionResult
@@ -23,7 +26,7 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider, Syntheti
             return new ProviderSubmissionResult('blocked', errorCategory: 'provider_gates_closed');
         }
 
-        if (! $request->taxDecision instanceof \App\Invoicing\ApprovedTaxDecision) {
+        if (! $request->taxDecision instanceof ApprovedTaxDecision) {
             return new ProviderSubmissionResult('blocked', errorCategory: 'production_tax_decision_required');
         }
 
@@ -33,7 +36,7 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider, Syntheti
     public function submitSyntheticTest(NormalizedInvoiceRequest $request): ProviderSubmissionResult
     {
         if (! $this->syntheticTestGuard->permits()
-            || ! $request->taxDecision instanceof \App\Invoicing\SyntheticTestTaxSelection
+            || ! $request->taxDecision instanceof SyntheticTestTaxSelection
             || strtoupper($request->currency) !== 'HUF'
             || $request->amountMinor !== 1000
             || ! preg_match('/\Awpcg-synthetic-test-[0-9]{1,12}\z/D', $request->externalReference)

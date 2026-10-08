@@ -10,6 +10,7 @@ use App\Invoicing\NormalizedInvoiceRequest;
 use App\Invoicing\Providers\InvoiceSubmissionProvider;
 use App\Invoicing\Providers\ProviderLookupResult;
 use App\Invoicing\Providers\ProviderSubmissionResult;
+use App\Invoicing\SyntheticTestTaxSelection;
 use App\Models\Customer;
 use App\Models\CustomerBillingIdentity;
 use App\Models\InvoiceIntent;
@@ -102,7 +103,7 @@ final class InvoiceIssuanceWorkflowTest extends TestCase
             ['name' => 'WP CareGrid Synthetic TEST Seller', 'country' => 'HU', 'postal_code' => '1111', 'city' => 'Budapest', 'address' => 'Synthetic Test Street 1'],
             ['name' => 'WP CareGrid Synthetic TEST Buyer', 'country' => 'HU', 'postal_code' => '1111', 'city' => 'Budapest', 'address' => 'Synthetic Test Street 1'],
             'WP CareGrid synthetic Szamlazz integration test',
-            new \App\Invoicing\SyntheticTestTaxSelection('synthetic-only', 1, ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM']),
+            new SyntheticTestTaxSelection('synthetic-only', 1, ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM']),
         );
 
         $result = app(InvoiceIssuanceWorkflow::class)->submit($intent->id, $request);

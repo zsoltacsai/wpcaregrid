@@ -4,15 +4,16 @@ namespace Tests\Feature;
 
 use App\Invoicing\ApprovedTaxDecision;
 use App\Invoicing\NormalizedInvoiceRequest;
-use App\Invoicing\SyntheticTestTaxSelection;
 use App\Invoicing\Providers\SzamlazzAgentProvider;
+use App\Invoicing\Providers\SzamlazzDryRunProvider;
 use App\Invoicing\Providers\SzamlazzResponseParser;
 use App\Invoicing\SzamlazzPaymentMethodRegistry;
+use App\Invoicing\SyntheticTestTaxSelection;
+use App\Owner\IntegrationCredentials;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use App\Owner\IntegrationCredentials;
 use Tests\TestCase;
 
 final class SzamlazzAgentProviderTest extends TestCase
@@ -82,6 +83,9 @@ final class SzamlazzAgentProviderTest extends TestCase
             'Content-Type' => 'application/pdf', 'szlahu_szamlaszam' => 'TEST-2026-1',
         ])]);
 
+        $validation = app(SzamlazzDryRunProvider::class)->validate($this->syntheticRequest());
+        $this->assertTrue($validation->valid, implode(',', $validation->errors));
+
         $result = app(SzamlazzAgentProvider::class)->submitSyntheticTest($this->syntheticRequest());
 
         $this->assertSame('issued', $result->outcome);
@@ -90,7 +94,7 @@ final class SzamlazzAgentProviderTest extends TestCase
         Http::assertSent(fn ($request) => $request->url() === 'https://www.szamlazz.hu/szamla/'
             && str_contains($request->body(), '<szamlaLetoltes>true</szamlaLetoltes>')
             && str_contains($request->body(), '<sendEmail>false</sendEmail>')
-            && ! str_contains($request->body(), '<email>')
+            && str_contains($request->body(), '<email>') === false
             && str_contains($request->body(), '<szamlaagentkulcs>synthetic-agent-key</szamlaagentkulcs>'));
     }
 

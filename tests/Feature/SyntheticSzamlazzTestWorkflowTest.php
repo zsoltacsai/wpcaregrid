@@ -3,11 +3,11 @@
 namespace Tests\Feature;
 
 use App\Invoicing\NormalizedInvoiceRequest;
-use App\Invoicing\SyntheticTestTaxSelection;
-use App\Invoicing\SyntheticSzamlazzTestGuard;
-use App\Invoicing\SyntheticSzamlazzTestWorkflow;
 use App\Invoicing\Providers\ProviderSubmissionResult;
 use App\Invoicing\Providers\SyntheticInvoiceTestProvider;
+use App\Invoicing\SyntheticSzamlazzTestGuard;
+use App\Invoicing\SyntheticSzamlazzTestWorkflow;
+use App\Invoicing\SyntheticTestTaxSelection;
 use App\Models\InvoiceIntent;
 use App\Models\SzamlazzSyntheticTestRun;
 use App\Models\User;
@@ -28,8 +28,7 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         Storage::fake('local');
         $owner = User::factory()->owner()->create();
         $provider = $this->mock(SyntheticInvoiceTestProvider::class);
-        $provider->shouldReceive('submitSyntheticTest')->once()->withArgs(fn ($request) =>
-            $request instanceof NormalizedInvoiceRequest
+        $provider->shouldReceive('submitSyntheticTest')->once()->withArgs(fn ($request) => $request instanceof NormalizedInvoiceRequest
             && $request->taxDecision instanceof \App\Invoicing\SyntheticTestTaxSelection
             && $request->currency === 'HUF'
             && $request->amountMinor === 1000
@@ -124,7 +123,8 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         $owner = User::factory()->owner()->create();
         $this->actingAs(User::factory()->create(), 'owner')
             ->get(route('owner.billing.synthetic-szamlazz-test.index'))
-            ->assertForbidden();
+            ->assertRedirect(route('owner.login'))
+            ->assertSessionHasErrors('email');
 
         $this->actingAs($owner, 'owner')
             ->get(route('owner.billing.synthetic-szamlazz-test.index'))
