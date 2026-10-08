@@ -199,6 +199,9 @@ jobs:
       - name: Application environment
         run: |
           cp .env.example .env
+          # CI has no persistent scheduler cache; keep health checks independent
+          # from the disposable DB cache table after test transactions migrate.
+          echo "CACHE_STORE=array" >> "$GITHUB_ENV"
           php artisan key:generate --force
           if [ "${{ matrix.database }}" = "sqlite" ]; then
             touch database/ci.sqlite
