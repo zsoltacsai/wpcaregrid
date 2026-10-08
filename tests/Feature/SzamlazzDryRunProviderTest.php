@@ -42,6 +42,25 @@ class SzamlazzDryRunProviderTest extends TestCase
         $this->assertContains('local_schema_unavailable', $result->errors);
     }
 
+    public function test_external_reference_preserves_opaque_case_and_rejects_missing_or_malformed_values(): void
+    {
+        $provider = app(InvoiceProvider::class);
+        $stripeInvoiceId = 'in_1uO9bWIotueNMW7s0V17DUZ1';
+        $mixedCaseReference = 'in_MiXeD-123:abc.42';
+
+        $stripeIdResult = $provider->validate($this->request(externalReference: $stripeInvoiceId));
+        $mixedCaseResult = $provider->validate($this->request(externalReference: $mixedCaseReference));
+        $missingResult = $provider->validate($this->request(externalReference: ''));
+        $malformedResult = $provider->validate($this->request(externalReference: 'in/invalid'));
+
+        $this->assertTrue($stripeIdResult->valid, implode(', ', $stripeIdResult->errors));
+        $this->assertStringContainsString($stripeInvoiceId, $stripeIdResult->xml);
+        $this->assertTrue($mixedCaseResult->valid, implode(', ', $mixedCaseResult->errors));
+        $this->assertStringContainsString($mixedCaseReference, $mixedCaseResult->xml);
+        $this->assertContains('invalid_external_reference', $missingResult->errors);
+        $this->assertContains('invalid_external_reference', $malformedResult->errors);
+    }
+
     public function test_fixture_response_parser_never_claims_phase_one_provider_acceptance(): void
     {
         $result = app(InvoiceProvider::class)->parseResponse(['szlahu_szamlaszam' => 'TEST-123'], '');
@@ -59,7 +78,7 @@ class SzamlazzDryRunProviderTest extends TestCase
         $this->assertFalse(method_exists(InvoiceProvider::class, 'issue'));
     }
 
-    private function request(?int $amountMinor = null, string $issueDate = '2026-10-08', string $performanceDate = '2026-10-08', string $paymentDueDate = '2026-10-08'): NormalizedInvoiceRequest
+    private function request(?int $amountMinor = null, string $issueDate = '2026-10-08', string $performanceDate = '2026-10-08', string $paymentDueDate = '2026-10-08', string $externalReference = 'in_1UO9bWIotueNMW7s0V17DUZ1'): NormalizedInvoiceRequest
     {
         $tax = new ApprovedTaxDecision('test-only-reference', 1, [
             'net' => 80100,
@@ -69,7 +88,7 @@ class SzamlazzDryRunProviderTest extends TestCase
         ], 'en', '1.000000', 'TEST BANK');
 
         return new NormalizedInvoiceRequest(
-            'test_invoice_123', 'EUR', $amountMinor ?? 80100, $issueDate, $performanceDate, $paymentDueDate, '2026-10-08', 'Card',
+            $externalReference, 'EUR', $amountMinor ?? 80100, $issueDate, $performanceDate, $paymentDueDate, '2026-10-08', 'Card',
             ['name' => 'Test Seller', 'country' => 'HU', 'postal_code' => '0000', 'city' => 'Test', 'address' => 'Test 1'],
             ['name' => 'Test Buyer', 'country' => 'DE', 'postal_code' => '00000', 'city' => 'Test', 'address' => 'Test 2'],
             'Test service', $tax,

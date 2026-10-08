@@ -32,13 +32,13 @@ final class SzamlazzDryRunProvider implements InvoiceProvider
             $errors[] = 'line_amounts_inconsistent';
         } elseif ($line['net'] < 0 || $line['tax'] < 0 || $line['gross'] < 0
             || $line['net'] > PHP_INT_MAX - $line['tax']
-            || $line['net'] + $line['tax'] !== $line['gross']) {
+            || $line['gross'] !== $line['net'] + $line['tax']) {
             $errors[] = 'line_amounts_inconsistent';
         }
         if ($request->amountMinor < 0 || ! $lineShapeIsValid || $request->amountMinor !== $line['gross']) {
             $errors[] = 'invoice_total_mismatch';
         }
-        if (! preg_match('/^[A-Z0-9_.:-]{1,80}$/', $request->externalReference)) {
+        if (! preg_match('/^[A-Za-z0-9_.:-]{1,80}$/', $request->externalReference)) {
             $errors[] = 'invalid_external_reference';
         }
         if (! in_array($request->taxDecision->language, ['hu', 'en', 'de', 'it', 'fr', 'ro', 'sk', 'hr', 'es', 'cz', 'pl', 'bg', 'nl', 'ru', 'si'], true)) {

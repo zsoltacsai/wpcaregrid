@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Invoicing\InvoiceIntentStatus;
 use App\Invoicing\InvoiceIntentWorkflow;
-use App\Jobs\Invoicing\PrepareInvoiceIntentJob;
 use App\Models\BillingInvoice;
 use App\Models\Customer;
 use App\Models\CustomerBillingIdentity;
@@ -16,8 +15,8 @@ use App\Models\User;
 use App\Models\VatValidation;
 use App\Tax\SellerTaxProfileRegistry;
 use App\Tax\SellerTaxProfileStatus;
-use App\Tax\VerificationStatus;
 use App\Tax\Vat\VatValidationStatus;
+use App\Tax\VerificationStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -142,6 +141,8 @@ class InvoiceIntentWorkflowTest extends TestCase
         $fresh = $intent->fresh();
         $this->assertSame(InvoiceIntentStatus::BlockedSellerProfile, $fresh->status);
         $this->assertSame('seller_profile_missing', $fresh->blocked_reason);
+        $this->assertSame($identity->id, $fresh->billing_identity_id);
+        $this->assertSame($identity->id, $fresh->commercial_snapshot['billing_identity']['id']);
         $this->assertArrayNotHasKey('seller_tax_profile', $fresh->commercial_snapshot);
         $this->assertNull(SellerTaxProfile::query()->first());
     }
@@ -209,7 +210,8 @@ class InvoiceIntentWorkflowTest extends TestCase
         $owner = User::factory()->owner()->create();
         $customerUser = User::factory()->create();
 
-        $this->actingAs($customerUser)->get(route('owner.billing.invoice-intents.show', $intent))->assertForbidden();
+        $this->get(route('owner.billing.invoice-intents.show', $intent))->assertRedirect(route('owner.login'));
+        $this->actingAs($customerUser)->get(route('owner.billing.invoice-intents.show', $intent))->assertRedirect(route('owner.login'));
         $response = $this->actingAs($owner)->get(route('owner.billing.invoice-intents.show', $intent));
         $response->assertOk()->assertDontSee('TEST-SECRET-ID');
         $this->assertArrayNotHasKey('commercial_snapshot', $intent->toArray());

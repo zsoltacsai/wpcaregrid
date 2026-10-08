@@ -49,7 +49,6 @@ final class InvoiceIntentWorkflow
                 'customer_id' => $invoice->customer_id,
                 'subscription_id' => $invoice->subscription_id,
                 'billing_invoice_id' => $invoice->id,
-                'billing_identity_id' => $invoice->billing_identity_id,
                 'stripe_invoice_id' => $invoice->stripe_invoice_id,
                 'stripe_event_id' => $stripeEventId,
                 'provider' => 'szamlazz_hu',
@@ -168,6 +167,7 @@ final class InvoiceIntentWorkflow
                 $intent->status = InvoiceIntentStatus::BlockedIdentity;
                 $intent->blocked_reason = 'billing_identity_missing';
             } elseif (! $identityMatchesCustomer) {
+                $intent->billing_identity_id = null;
                 $intent->status = InvoiceIntentStatus::BlockedIdentity;
                 $intent->blocked_reason = 'billing_identity_customer_mismatch';
             } elseif (! $sellerProfile || $sellerProfile->verification_status?->value !== 'verified') {
