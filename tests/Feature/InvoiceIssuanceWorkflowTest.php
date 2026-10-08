@@ -88,6 +88,29 @@ final class InvoiceIssuanceWorkflowTest extends TestCase
         $this->assertSame(0, InvoiceIssuanceAttempt::query()->count());
     }
 
+    public function test_synthetic_test_code_selection_cannot_satisfy_the_production_accountant_approval_gate(): void
+    {
+        $intent = $this->readyIntent();
+        config([
+            'szamlazz.provider_enabled' => true, 'szamlazz.dry_run' => false, 'szamlazz.issuance_enabled' => true,
+            'szamlazz.permitted_environments' => ['testing'], 'szamlazz.agent_api_key' => 'synthetic-test-key',
+        ]);
+        $provider = $this->mock(InvoiceSubmissionProvider::class);
+        $provider->shouldNotReceive('submit');
+        $request = new NormalizedInvoiceRequest(
+            'synthetic-test-reference', 'HUF', 1000, now()->toDateString(), now()->toDateString(), now()->toDateString(), null, 'bankkártya',
+            ['name' => 'WP CareGrid Synthetic TEST Seller', 'country' => 'HU', 'postal_code' => '1111', 'city' => 'Budapest', 'address' => 'Synthetic Test Street 1'],
+            ['name' => 'WP CareGrid Synthetic TEST Buyer', 'country' => 'HU', 'postal_code' => '1111', 'city' => 'Budapest', 'address' => 'Synthetic Test Street 1'],
+            'WP CareGrid synthetic Szamlazz integration test',
+            new \App\Invoicing\SyntheticTestTaxSelection('synthetic-only', 1, ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM']),
+        );
+
+        $result = app(InvoiceIssuanceWorkflow::class)->submit($intent->id, $request);
+
+        $this->assertSame('approved_tax_decision_missing', $result);
+        $this->assertSame(0, InvoiceIssuanceAttempt::query()->count());
+    }
+
     private function readyIntent(): InvoiceIntent
     {
         $customer = Customer::factory()->create();

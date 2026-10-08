@@ -1,6 +1,9 @@
 <x-layouts.owner :title="__('owner.invoice_intents.title')">
     <x-operator.page-header :title="__('owner.invoice_intents.title')" :lead="__('owner.invoice_intents.lead')" />
     <p class="mb-5 rounded-md border border-warning/40 bg-warning-soft p-3 text-sm text-warning-ink">{{ __('owner.invoice_intents.dry_run_notice') }}</p>
+    @can('owner.billing.synthetic_tests.manage')
+        <p class="mb-5 text-sm"><a class="underline" href="{{ route('owner.billing.synthetic-szamlazz-test.index') }}">{{ __('owner.synthetic_invoice_test.title') }}</a></p>
+    @endcan
     <nav class="mb-4 flex gap-4 text-sm" aria-label="{{ __('owner.invoice_intents.queue_navigation') }}">
         <a class="underline" href="{{ route('owner.billing.invoice-intents.index') }}">{{ __('owner.invoice_intents.all_intents') }}</a>
         <a class="underline" href="{{ route('owner.billing.invoice-intents.index', ['tax_review' => 1]) }}">{{ __('owner.invoice_intents.tax_review_queue') }}</a>

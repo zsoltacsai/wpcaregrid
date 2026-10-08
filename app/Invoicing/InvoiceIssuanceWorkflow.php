@@ -31,6 +31,9 @@ final class InvoiceIssuanceWorkflow
             if (! $version) {
                 return ['block' => 'billing_configuration_snapshot_missing'];
             }
+            if (! $request->taxDecision instanceof ApprovedTaxDecision) {
+                return ['block' => 'approved_tax_decision_missing'];
+            }
             $effectiveRequest = $request->withBillingSettings($version->configuration, 'wpcg-invoice-'.$intent->id);
             $block = $this->blockReason($intent, $effectiveRequest, $version);
             if ($block !== null) {
@@ -153,6 +156,9 @@ final class InvoiceIssuanceWorkflow
         }
         if ($intent->status !== InvoiceIntentStatus::DryRunValidated || ! $intent->dry_run_validated_at) {
             return 'local_validation_required';
+        }
+        if (! $request->taxDecision instanceof ApprovedTaxDecision) {
+            return 'approved_tax_decision_missing';
         }
         if (! $intent->tax_decision_reference || ! $intent->tax_decision_version || ! $intent->billing_tax_configuration_version_id) {
             return 'approved_tax_decision_missing';

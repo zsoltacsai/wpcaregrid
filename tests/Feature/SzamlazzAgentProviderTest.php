@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Invoicing\ApprovedTaxDecision;
 use App\Invoicing\NormalizedInvoiceRequest;
+use App\Invoicing\SyntheticTestTaxSelection;
 use App\Invoicing\Providers\SzamlazzAgentProvider;
 use App\Invoicing\Providers\SzamlazzResponseParser;
 use App\Invoicing\SzamlazzPaymentMethodRegistry;
@@ -11,6 +12,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use App\Owner\IntegrationCredentials;
 use Tests\TestCase;
 
 final class SzamlazzAgentProviderTest extends TestCase
@@ -61,6 +63,49 @@ final class SzamlazzAgentProviderTest extends TestCase
             && str_contains($request->body(), '<szamlaagentkulcs>synthetic-agent-key</szamlaagentkulcs>')
             && str_contains($request->body(), '<szamlaszamElotag>WPCG</szamlaszamElotag>')
             && str_contains($request->body(), '<sendEmail>true</sendEmail>'));
+    }
+
+    public function test_synthetic_test_submission_uses_separate_staging_guard_and_requests_pdf_without_customer_email(): void
+    {
+        $this->app->detectEnvironment(fn () => 'production');
+        config([
+            'app.url' => 'https://staging.wpcaregrid.com',
+            'szamlazz.synthetic_test.enabled' => true,
+            'szamlazz.provider_enabled' => false,
+            'szamlazz.dry_run' => true,
+            'szamlazz.issuance_enabled' => false,
+            'szamlazz.agent_api_key' => 'synthetic-agent-key',
+        ]);
+        app(IntegrationCredentials::class)->store('szamlazz_agent', 'synthetic-agent-key');
+        Http::preventStrayRequests();
+        Http::fake(['www.szamlazz.hu/*' => Http::response("%PDF-1.4\nTEST", 200, [
+            'Content-Type' => 'application/pdf', 'szlahu_szamlaszam' => 'TEST-2026-1',
+        ])]);
+
+        $result = app(SzamlazzAgentProvider::class)->submitSyntheticTest($this->syntheticRequest());
+
+        $this->assertSame('issued', $result->outcome);
+        $this->assertSame('TEST-2026-1', $result->invoiceNumber);
+        $this->assertSame("%PDF-1.4\nTEST", $result->pdfContent);
+        Http::assertSent(fn ($request) => $request->url() === 'https://www.szamlazz.hu/szamla/'
+            && str_contains($request->body(), '<szamlaLetoltes>true</szamlaLetoltes>')
+            && str_contains($request->body(), '<sendEmail>false</sendEmail>')
+            && ! str_contains($request->body(), '<email>')
+            && str_contains($request->body(), '<szamlaagentkulcs>synthetic-agent-key</szamlaagentkulcs>'));
+    }
+
+    public function test_synthetic_test_provider_rejects_wrong_host_and_wrong_test_data_without_http(): void
+    {
+        $this->app->detectEnvironment(fn () => 'production');
+        config(['app.url' => 'https://wpcaregrid.com', 'szamlazz.synthetic_test.enabled' => true]);
+        app(IntegrationCredentials::class)->store('szamlazz_agent', 'synthetic-agent-key');
+        Http::preventStrayRequests();
+
+        $result = app(SzamlazzAgentProvider::class)->submitSyntheticTest($this->syntheticRequest());
+
+        $this->assertSame('blocked', $result->outcome);
+        $this->assertSame('synthetic_test_guard_failed', $result->errorCategory);
+        Http::assertNothingSent();
     }
 
     public function test_pdf_response_is_not_saved_and_provider_errors_are_sanitized(): void
@@ -162,6 +207,18 @@ final class SzamlazzAgentProviderTest extends TestCase
             'Managed WordPress maintenance',
             new ApprovedTaxDecision('test-tax-decision', 1, ['net' => 80100, 'tax' => 0, 'gross' => 80100, 'tax_code' => 'AAM'], 'en', '1.00000000', 'Test FX source'),
             ['invoice_language' => 'en', 'invoice_prefix' => 'WPCG', 'notify_customer' => true],
+        );
+    }
+
+    private function syntheticRequest(): NormalizedInvoiceRequest
+    {
+        return new NormalizedInvoiceRequest(
+            'wpcg-synthetic-test-1', 'HUF', 1000, '2026-10-08', '2026-10-08', '2026-10-08', null, 'bankkártya',
+            ['name' => 'WP CareGrid Synthetic TEST Seller', 'country' => 'HU', 'postal_code' => '1111', 'city' => 'Budapest', 'address' => 'Synthetic Test Street 1'],
+            ['name' => 'WP CareGrid Synthetic TEST Buyer', 'country' => 'HU', 'postal_code' => '1111', 'city' => 'Budapest', 'address' => 'Synthetic Test Street 1'],
+            'WP CareGrid synthetic Szamlazz integration test',
+            new SyntheticTestTaxSelection('synthetic-provider-code-selection', 1, ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM']),
+            ['invoice_language' => 'hu', 'notify_customer' => false],
         );
     }
 }

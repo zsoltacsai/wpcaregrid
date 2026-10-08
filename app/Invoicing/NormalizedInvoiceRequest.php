@@ -18,12 +18,16 @@ final readonly class NormalizedInvoiceRequest
         public array $seller,
         public array $buyer,
         public string $description,
-        public ApprovedTaxDecision $taxDecision,
+        public ApprovedTaxDecision|SyntheticTestTaxSelection $taxDecision,
         public array $billingSettings = [],
     ) {}
 
     public function withBillingSettings(array $settings, ?string $externalReference = null): self
     {
+        if (! $this->taxDecision instanceof ApprovedTaxDecision) {
+            throw new \LogicException('Synthetic tax selections cannot be converted into approved invoice decisions.');
+        }
+
         $language = is_string($settings['invoice_language'] ?? null) ? $settings['invoice_language'] : $this->taxDecision->language;
         $paymentMethod = is_string($settings['default_payment_method'] ?? null)
             ? (SzamlazzPaymentMethodRegistry::label($settings['default_payment_method'], $language) ?? $this->paymentMethod)

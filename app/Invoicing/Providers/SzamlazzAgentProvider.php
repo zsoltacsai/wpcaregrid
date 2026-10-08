@@ -9,15 +9,53 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
 /** Mutating invoice submission adapter. It is never bound to the Phase 1 dry-run interface. */
-final class SzamlazzAgentProvider implements InvoiceSubmissionProvider
+final class SzamlazzAgentProvider implements InvoiceSubmissionProvider, SyntheticInvoiceTestProvider
 {
-    public function __construct(private readonly SzamlazzDryRunProvider $validator, private readonly SzamlazzResponseParser $parser) {}
+    public function __construct(
+        private readonly SzamlazzDryRunProvider $validator,
+        private readonly SzamlazzResponseParser $parser,
+        private readonly \App\Invoicing\SyntheticSzamlazzTestGuard $syntheticTestGuard,
+    ) {}
 
     public function submit(NormalizedInvoiceRequest $request): ProviderSubmissionResult
     {
         if (! $this->mutationsPermitted()) {
             return new ProviderSubmissionResult('blocked', errorCategory: 'provider_gates_closed');
         }
+
+        if (! $request->taxDecision instanceof \App\Invoicing\ApprovedTaxDecision) {
+            return new ProviderSubmissionResult('blocked', errorCategory: 'production_tax_decision_required');
+        }
+
+        return $this->sendInvoice($request, syntheticTest: false);
+    }
+
+    public function submitSyntheticTest(NormalizedInvoiceRequest $request): ProviderSubmissionResult
+    {
+        if (! $this->syntheticTestGuard->permits()
+            || ! $request->taxDecision instanceof \App\Invoicing\SyntheticTestTaxSelection
+            || strtoupper($request->currency) !== 'HUF'
+            || $request->amountMinor !== 1000
+            || ! preg_match('/\Awpcg-synthetic-test-[0-9]{1,12}\z/D', $request->externalReference)
+            || $request->description !== 'WP CareGrid synthetic Szamlazz integration test'
+            || $request->seller !== [
+                'name' => 'WP CareGrid Synthetic TEST Seller', 'country' => 'HU', 'postal_code' => '1111',
+                'city' => 'Budapest', 'address' => 'Synthetic Test Street 1',
+            ]
+            || $request->buyer !== [
+                'name' => 'WP CareGrid Synthetic TEST Buyer', 'country' => 'HU', 'postal_code' => '1111',
+                'city' => 'Budapest', 'address' => 'Synthetic Test Street 1',
+            ]
+            || $request->taxDecision->line !== ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM']
+            || ($request->billingSettings['notify_customer'] ?? true) !== false) {
+            return new ProviderSubmissionResult('blocked', errorCategory: 'synthetic_test_guard_failed');
+        }
+
+        return $this->sendInvoice($request, syntheticTest: true);
+    }
+
+    private function sendInvoice(NormalizedInvoiceRequest $request, bool $syntheticTest): ProviderSubmissionResult
+    {
         $key = $this->credential();
         if ($key === null) {
             return new ProviderSubmissionResult('blocked', errorCategory: 'credential_unavailable');
@@ -26,7 +64,7 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider
         if (! $validation->valid || $validation->xml === null) {
             return new ProviderSubmissionResult('rejected', errorCategory: 'local_validation_failed');
         }
-        $xml = $this->authenticatedInvoiceXml($validation->xml, $key, $request->billingSettings);
+        $xml = $this->authenticatedInvoiceXml($validation->xml, $key, $request->billingSettings, $syntheticTest);
         if ($xml === null) {
             return new ProviderSubmissionResult('rejected', errorCategory: 'local_xml_preparation_failed');
         }
@@ -42,7 +80,10 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider
 
         $parsed = $this->parser->parse($response->headers(), (string) $response->body());
         if ($response->successful() && is_string($parsed['provider_invoice_id'] ?? null) && $parsed['provider_invoice_id'] !== '' && empty($parsed['error_code'])) {
-            return new ProviderSubmissionResult('issued', $parsed['provider_invoice_id'], metadata: $this->metadata($parsed));
+            $body = (string) $response->body();
+            $pdf = $syntheticTest && str_starts_with($body, '%PDF-') && strlen($body) <= 10_485_760 ? $body : null;
+
+            return new ProviderSubmissionResult('issued', $parsed['provider_invoice_id'], metadata: $this->metadata($parsed), pdfContent: $pdf);
         }
         if (! empty($parsed['error_code']) || ($parsed['result'] ?? null) === 'response_contains_error') {
             return new ProviderSubmissionResult('rejected', errorCategory: 'provider_rejected', metadata: $this->metadata($parsed));
@@ -54,9 +95,24 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider
         return new ProviderSubmissionResult('ambiguous', errorCategory: 'provider_response_ambiguous', metadata: $this->metadata($parsed));
     }
 
+    public function lookupSyntheticTestByExternalReference(string $externalReference): ProviderLookupResult
+    {
+        if (! $this->syntheticTestGuard->permits()
+            || ! preg_match('/\Awpcg-synthetic-test-[0-9]{1,12}\z/D', $externalReference)) {
+            return new ProviderLookupResult('blocked');
+        }
+
+        return $this->lookup($externalReference, syntheticTest: true);
+    }
+
     public function lookupByExternalReference(string $externalReference): ProviderLookupResult
     {
-        if (! $this->lookupPermitted()) {
+        return $this->lookup($externalReference, syntheticTest: false);
+    }
+
+    private function lookup(string $externalReference, bool $syntheticTest): ProviderLookupResult
+    {
+        if ($syntheticTest ? ! $this->syntheticTestGuard->permits() : ! $this->lookupPermitted()) {
             return new ProviderLookupResult('blocked');
         }
         if (preg_match('/\A[A-Za-z0-9_.:-]{1,80}\z/D', $externalReference) !== 1) {
@@ -111,7 +167,7 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider
         return is_string($value) && $value !== '' && strtolower($value) === $value ? $value : null;
     }
 
-    private function authenticatedInvoiceXml(string $xml, string $key, array $settings): ?string
+    private function authenticatedInvoiceXml(string $xml, string $key, array $settings, bool $downloadPdf = false): ?string
     {
         $document = new DOMDocument;
         $previous = libxml_use_internal_errors(true);
@@ -130,6 +186,12 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider
                 $prefixNode = $xpath->query('//*[local-name()="szamlaszamElotag"]')->item(0);
                 if ($prefixNode) {
                     $prefixNode->textContent = $prefix;
+                }
+            }
+            if ($downloadPdf) {
+                $pdfNode = $xpath->query('//*[local-name()="szamlaLetoltes"]')->item(0);
+                if ($pdfNode) {
+                    $pdfNode->textContent = 'true';
                 }
             }
             $language = $settings['invoice_language'] ?? null;

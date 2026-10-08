@@ -16,4 +16,12 @@ return [
     'invoice_prefix_reference' => env('SZAMLAZZ_INVOICE_PREFIX_REFERENCE'),
     'xsd_path' => resource_path('schemas/szamlazz-agent-xmlszamla.xsd'),
     'query_xsd_path' => resource_path('schemas/szamlazz-agent-xmlszamlaxml.xsd'),
+    // A separate, owner-attested synthetic-only write path. Disabled by default;
+    // it also requires the exact staging host and an owner-managed credential.
+    'synthetic_test' => [
+        'enabled' => env('SZAMLAZZ_SYNTHETIC_TEST_ENABLED', false),
+        'allowed_host' => 'staging.wpcaregrid.com',
+        'private_disk' => 'local',
+        'private_directory' => 'private/szamlazz-synthetic-tests',
+    ],
 ];

@@ -10,5 +10,6 @@ final readonly class ProviderSubmissionResult
         public ?string $invoiceNumber = null,
         public ?string $errorCategory = null,
         public array $metadata = [],
+        public ?string $pdfContent = null,
     ) {}
 }

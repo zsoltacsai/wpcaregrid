@@ -16,6 +16,7 @@ use App\Http\Controllers\Owner\PricingController;
 use App\Http\Controllers\Owner\RecoveryOfferController;
 use App\Http\Controllers\Owner\SeoController;
 use App\Http\Controllers\Owner\SystemController;
+use App\Http\Controllers\Owner\SyntheticSzamlazzTestController;
 use App\Http\Controllers\Owner\VatVerificationController as OwnerVatVerificationController;
 use App\Http\Controllers\Owner\WebsiteController;
 use App\Models\Promotion;
@@ -131,6 +132,11 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::get('/billing/invoice-intents/{invoiceIntent}', [InvoiceIntentController::class, 'show'])->middleware('can:owner.billing.invoices.view')->name('billing.invoice-intents.show');
         Route::post('/billing/invoice-intents/{invoiceIntent}/tax-review', [InvoiceIntentTaxReviewController::class, 'store'])->middleware(['can:owner.billing.invoices.view', 'throttle:owner-sensitive'])->name('billing.invoice-intents.tax-review');
         Route::post('/billing/invoice-intents/{invoiceIntent}/reconcile', [InvoiceIntentController::class, 'reconcile'])->middleware(['can:owner.billing.invoices.view', 'throttle:owner-sensitive'])->name('billing.invoice-intents.reconcile');
+        Route::get('/billing/synthetic-szamlazz-test', [SyntheticSzamlazzTestController::class, 'index'])->middleware('can:owner.billing.synthetic_tests.manage')->name('billing.synthetic-szamlazz-test.index');
+        Route::post('/billing/synthetic-szamlazz-test', [SyntheticSzamlazzTestController::class, 'store'])->middleware(['can:owner.billing.synthetic_tests.manage', 'throttle:owner-external'])->name('billing.synthetic-szamlazz-test.store');
+        Route::post('/billing/synthetic-szamlazz-test/{run}/submit', [SyntheticSzamlazzTestController::class, 'submit'])->middleware(['can:owner.billing.synthetic_tests.manage', 'throttle:owner-external'])->name('billing.synthetic-szamlazz-test.submit');
+        Route::post('/billing/synthetic-szamlazz-test/{run}/reconcile', [SyntheticSzamlazzTestController::class, 'reconcile'])->middleware(['can:owner.billing.synthetic_tests.manage', 'throttle:owner-external'])->name('billing.synthetic-szamlazz-test.reconcile');
+        Route::get('/billing/synthetic-szamlazz-test/{run}/pdf', [SyntheticSzamlazzTestController::class, 'downloadPdf'])->middleware('can:owner.billing.synthetic_tests.manage')->name('billing.synthetic-szamlazz-test.pdf');
 
         Route::prefix('dns/cloudflare')->name('dns.cloudflare.')->middleware('can:owner.dns.manage')->group(function () {
             Route::get('/', [CloudflareDnsController::class, 'index'])->middleware('throttle:owner-external')->name('index');
