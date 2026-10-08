@@ -10,8 +10,8 @@ return new class extends Migration
     {
         Schema::create('szamlazz_synthetic_test_runs', function (Blueprint $table) {
             $table->id();
-            // A single permanent slot enforces the configured one-invoice cap,
-            // including after success, rejection, timeout, or reconciliation.
+            // A permanent unique identity is allocated per authorized run. Its
+            // state machine permits at most one provider POST for that run.
             $table->string('execution_slot', 64)->unique();
             $table->string('designation', 32)->default('synthetic_test');
             $table->string('status', 32)->index();

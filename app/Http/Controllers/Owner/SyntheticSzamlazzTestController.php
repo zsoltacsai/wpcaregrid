@@ -16,8 +16,14 @@ final class SyntheticSzamlazzTestController extends Controller
 {
     public function index(Request $request, SyntheticSzamlazzTestGuard $guard, IntegrationCredentials $credentials): View
     {
+        $runs = SzamlazzSyntheticTestRun::query()->with(['preparer', 'submitter'])->latest('id')->paginate(20);
+        $activeRunExists = SzamlazzSyntheticTestRun::query()
+            ->whereIn('status', ['prepared', 'submission_started', 'reconciliation_required'])
+            ->exists();
+
         return view('owner.billing.synthetic-szamlazz-test', [
-            'run' => SzamlazzSyntheticTestRun::query()->with(['preparer', 'submitter'])->first(),
+            'runs' => $runs,
+            'activeRunExists' => $activeRunExists,
             'stageGuardPassed' => $guard->permits($request->getHost()),
             'ownerManagedCredential' => (bool) ($credentials->configured()['szamlazz_agent']['owner_managed'] ?? false),
             'normalIssuanceGates' => [

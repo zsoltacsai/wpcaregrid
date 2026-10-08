@@ -3,6 +3,10 @@
 namespace Tests\Feature;
 
 use App\Billing\SzamlazzBillingSettings;
+use App\Invoicing\NormalizedInvoiceRequest;
+use App\Invoicing\Providers\ProviderLookupResult;
+use App\Invoicing\Providers\ProviderSubmissionResult;
+use App\Invoicing\Providers\SyntheticInvoiceTestProvider;
 use App\Invoicing\SyntheticSzamlazzTestWorkflow;
 use App\Models\SzamlazzSyntheticTestRun;
 use App\Models\User;
@@ -25,7 +29,7 @@ final class SyntheticSzamlazzTestConcurrencyTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_two_mysql_processes_cannot_reserve_more_than_the_single_synthetic_invoice_slot(): void
+    public function test_two_mysql_processes_cannot_create_overlapping_synthetic_runs(): void
     {
         if (DB::connection()->getDriverName() !== 'mysql' || ! function_exists('pcntl_fork')) {
             $this->markTestSkipped('Requires MySQL and pcntl for independent-process contention.');
@@ -97,6 +101,114 @@ final class SyntheticSzamlazzTestConcurrencyTest extends TestCase
             $this->assertSame(1, count(array_filter($results, fn ($value) => str_starts_with($value, 'prepared:'))));
             $this->assertSame(1, count(array_filter($results, fn ($value) => $value === 'rejected')));
             $this->assertSame(1, SzamlazzSyntheticTestRun::query()->count());
+        } finally {
+            foreach ($pids as $pid) {
+                if (pcntl_waitpid($pid, $status, WNOHANG) === 0) {
+                    posix_kill($pid, SIGTERM);
+                    pcntl_waitpid($pid, $status);
+                }
+            }
+            foreach (glob($directory.DIRECTORY_SEPARATOR.'*') ?: [] as $file) {
+                unlink($file);
+            }
+            @rmdir($directory);
+        }
+    }
+
+    public function test_two_mysql_processes_submitting_the_same_run_make_exactly_one_provider_post(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql' || ! function_exists('pcntl_fork')) {
+            $this->markTestSkipped('Requires MySQL and pcntl for independent-process contention.');
+        }
+        $this->app->detectEnvironment(fn () => 'production');
+        config(['app.url' => 'https://staging.wpcaregrid.com', 'szamlazz.synthetic_test.enabled' => true, 'szamlazz.agent_api_key' => 'synthetic-test-fixture']);
+        app(IntegrationCredentials::class)->store('szamlazz_agent', 'synthetic-test-fixture');
+        $owner = User::factory()->owner()->create();
+        app(SzamlazzBillingSettings::class)->publish([
+            'seller_profile_id' => null, 'invoice_language' => 'hu', 'default_payment_method' => 'bank_transfer',
+            'payment_deadline_policy' => 'same_day', 'fulfillment_date_policy' => 'invoice_date', 'invoice_prefix' => 'A',
+            'notify_customer' => '0', 'currency_policy' => 'block_foreign_without_fx', 'tax_configuration_mode' => 'manual_review',
+            'default_tax_code' => null, 'effective_at' => now()->toDateString(),
+        ], $owner);
+        $run = app(SyntheticSzamlazzTestWorkflow::class)->prepare([
+            'account_test_mode_confirmed' => '1', 'test_seller_confirmed' => '1', 'tax_code' => 'AAM', 'confirmation_phrase' => 'SYNTHETIC TEST ONLY',
+        ], $owner, 'staging.wpcaregrid.com');
+        $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'wpcg-synthetic-submit-race-'.bin2hex(random_bytes(8));
+        mkdir($directory, 0700);
+        $pids = [];
+
+        try {
+            foreach ([0, 1] as $index) {
+                $pid = pcntl_fork();
+                if ($pid === -1) {
+                    $this->fail('Unable to fork synthetic invoice submit contenders.');
+                }
+                if ($pid === 0) {
+                    DB::purge(DB::getDefaultConnection());
+                    DB::connection()->getPdo();
+                    app()->instance(SyntheticInvoiceTestProvider::class, new class($directory) implements SyntheticInvoiceTestProvider
+                    {
+                        public function __construct(private readonly string $directory) {}
+
+                        public function submitSyntheticTest(NormalizedInvoiceRequest $request): ProviderSubmissionResult
+                        {
+                            $handle = fopen($this->directory.DIRECTORY_SEPARATOR.'posts', 'a');
+                            flock($handle, LOCK_EX);
+                            fwrite($handle, "POST\n");
+                            fflush($handle);
+                            flock($handle, LOCK_UN);
+                            fclose($handle);
+
+                            return new ProviderSubmissionResult('rejected', errorCategory: 'provider_rejected');
+                        }
+
+                        public function lookupSyntheticTestByExternalReference(string $externalReference): ProviderLookupResult
+                        {
+                            return new ProviderLookupResult('not_found');
+                        }
+                    });
+                    file_put_contents($directory.DIRECTORY_SEPARATOR.'ready-'.$index, 'ready', LOCK_EX);
+                    $deadline = microtime(true) + 20;
+                    while (! is_file($directory.DIRECTORY_SEPARATOR.'release')) {
+                        if (microtime(true) >= $deadline) {
+                            exit(2);
+                        }
+                        usleep(10000);
+                    }
+                    try {
+                        app(SyntheticSzamlazzTestWorkflow::class)->submit(
+                            SzamlazzSyntheticTestRun::query()->findOrFail($run->id),
+                            User::query()->findOrFail($owner->id),
+                            'staging.wpcaregrid.com',
+                            ['confirm_submission' => '1', 'confirmation_phrase' => 'SUBMIT ONE TEST INVOICE'],
+                        );
+                        file_put_contents($directory.DIRECTORY_SEPARATOR.'result-'.$index, 'done', LOCK_EX);
+                        exit(0);
+                    } catch (Throwable $exception) {
+                        file_put_contents($directory.DIRECTORY_SEPARATOR.'result-'.$index, 'unexpected:'.get_class($exception), LOCK_EX);
+                        exit(1);
+                    }
+                }
+                $pids[] = $pid;
+            }
+
+            $deadline = microtime(true) + 20;
+            while (! is_file($directory.DIRECTORY_SEPARATOR.'ready-0') || ! is_file($directory.DIRECTORY_SEPARATOR.'ready-1')) {
+                if (microtime(true) >= $deadline) {
+                    $this->fail('Synthetic invoice submit contenders did not reach the start barrier.');
+                }
+                usleep(10000);
+            }
+            file_put_contents($directory.DIRECTORY_SEPARATOR.'release', 'go', LOCK_EX);
+            foreach ($pids as $pid) {
+                pcntl_waitpid($pid, $status);
+                $this->assertTrue(pcntl_wifexited($status));
+                $this->assertSame(0, pcntl_wexitstatus($status));
+            }
+
+            DB::purge(DB::getDefaultConnection());
+            $this->assertSame(1, substr_count((string) file_get_contents($directory.DIRECTORY_SEPARATOR.'posts'), "POST\n"));
+            $this->assertSame('rejected', SzamlazzSyntheticTestRun::query()->findOrFail($run->id)->status);
         } finally {
             foreach ($pids as $pid) {
                 if (pcntl_waitpid($pid, $status, WNOHANG) === 0) {

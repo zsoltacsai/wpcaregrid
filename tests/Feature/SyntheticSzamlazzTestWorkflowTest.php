@@ -113,21 +113,77 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         ], $owner, 'staging.wpcaregrid.com');
     }
 
-    public function test_execution_slot_is_permanently_single_use(): void
+    public function test_rejected_run_is_preserved_and_a_fresh_owner_can_prepare_a_new_unique_run(): void
     {
         $this->enableStagingTestMode();
         $owner = User::factory()->owner()->create();
+        $nextOwner = User::factory()->owner()->create();
         $this->publishPrefix($owner, 'A');
         $workflow = app(SyntheticSzamlazzTestWorkflow::class);
-        $workflow->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com');
+        $provider = $this->mock(SyntheticInvoiceTestProvider::class);
+        $provider->shouldReceive('submitSyntheticTest')->once()->andReturn(new ProviderSubmissionResult('rejected', errorCategory: 'provider_rejected'));
+        $provider->shouldNotReceive('lookupSyntheticTestByExternalReference');
+
+        $firstRun = $workflow->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com');
+        $legacySlot = 'szamlazz-phase6-one-shot';
+        DB::table('szamlazz_synthetic_test_runs')->where('id', $firstRun->id)->update(['execution_slot' => $legacySlot]);
+        $firstRun->refresh();
+        $firstReference = $firstRun->external_reference;
+        $firstHash = $firstRun->snapshot_sha256;
+
         try {
             $workflow->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com');
-            $this->fail('The one-shot unique slot should reject a second run.');
+            $this->fail('An unresolved prepared run must block another run.');
         } catch (ValidationException) {
             $this->assertSame(1, SzamlazzSyntheticTestRun::query()->count());
         }
 
+        $rejected = $workflow->submit($firstRun, $owner, 'staging.wpcaregrid.com', [
+            'confirm_submission' => '1', 'confirmation_phrase' => 'SUBMIT ONE TEST INVOICE',
+        ]);
+        $this->assertSame('rejected', $rejected->status);
+
+        $secondRun = $workflow->prepare($this->prepareInput(), $nextOwner, 'staging.wpcaregrid.com');
+        $this->assertSame(2, SzamlazzSyntheticTestRun::query()->count());
+        $this->assertSame($legacySlot, DB::table('szamlazz_synthetic_test_runs')->where('id', $firstRun->id)->value('execution_slot'));
+        $this->assertSame($firstReference, $firstRun->fresh()->external_reference);
+        $this->assertSame($firstHash, $firstRun->fresh()->snapshot_sha256);
+        $this->assertNotSame($firstRun->execution_slot, $secondRun->execution_slot);
+        $this->assertNotSame($firstRun->external_reference, $secondRun->external_reference);
+        $this->assertSame($nextOwner->id, $secondRun->prepared_by);
+        $this->assertSame(2, DB::table('admin_audit_events')->where('event', 'billing_tax.synthetic_test_prepared')->count());
         $this->assertSame(0, InvoiceIntent::query()->count());
+    }
+
+    public function test_rejected_and_ambiguous_runs_are_never_retried(): void
+    {
+        $this->enableStagingTestMode();
+        $owner = User::factory()->owner()->create();
+        $this->publishPrefix($owner, 'A');
+        $provider = $this->mock(SyntheticInvoiceTestProvider::class);
+        $provider->shouldReceive('submitSyntheticTest')->twice()->andReturn(
+            new ProviderSubmissionResult('rejected', errorCategory: 'provider_rejected'),
+            new ProviderSubmissionResult('ambiguous', errorCategory: 'provider_response_ambiguous'),
+        );
+        $provider->shouldNotReceive('lookupSyntheticTestByExternalReference');
+        $workflow = app(SyntheticSzamlazzTestWorkflow::class);
+        $submission = ['confirm_submission' => '1', 'confirmation_phrase' => 'SUBMIT ONE TEST INVOICE'];
+
+        $rejected = $workflow->submit($workflow->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com'), $owner, 'staging.wpcaregrid.com', $submission);
+        $this->assertSame('rejected', $rejected->status);
+        $this->assertSame('rejected', $workflow->submit($rejected, $owner, 'staging.wpcaregrid.com', $submission)->status);
+
+        $ambiguous = $workflow->submit($workflow->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com'), $owner, 'staging.wpcaregrid.com', $submission);
+        $this->assertSame('reconciliation_required', $ambiguous->status);
+        $this->assertSame('reconciliation_required', $workflow->submit($ambiguous, $owner, 'staging.wpcaregrid.com', $submission)->status);
+        $this->assertSame(2, SzamlazzSyntheticTestRun::query()->count());
+
+        try {
+            $workflow->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com');
+            $this->fail('A run with ambiguous provider outcome must block a new authorization.');
+        } catch (ValidationException) {
+            $this->assertSame(2, SzamlazzSyntheticTestRun::query()->count());
+        }
     }
 
     public function test_synthetic_request_freezes_account_prefix_and_requires_one_before_preparation(): void
@@ -164,7 +220,16 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         $this->actingAs($owner, 'owner')
             ->get(route('owner.billing.synthetic-szamlazz-test.index'))
             ->assertOk()
-            ->assertSee('A separate, owner-attested provider test', false);
+            ->assertSee('A separate, owner-attested provider test', false)
+            ->assertSee(__('owner.synthetic_invoice_test.history_title'));
+
+        $this->publishPrefix($owner, 'A');
+        $run = app(SyntheticSzamlazzTestWorkflow::class)->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com');
+        $this->actingAs($owner, 'owner')
+            ->get(route('owner.billing.synthetic-szamlazz-test.index'))
+            ->assertOk()
+            ->assertSee($run->external_reference)
+            ->assertSee(__('owner.synthetic_invoice_test.execution_slot_consumed'));
     }
 
     private function enableStagingTestMode(): void

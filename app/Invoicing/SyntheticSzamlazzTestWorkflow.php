@@ -13,8 +13,10 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Str;
+use LogicException;
 
-/** One-shot, Owner-attested sandbox exercise. It is separate from tax-approved invoicing. */
+/** Owner-attested synthetic provider exercise, separate from tax-approved invoicing. */
 final class SyntheticSzamlazzTestWorkflow
 {
     public function __construct(
@@ -78,8 +80,20 @@ final class SyntheticSzamlazzTestWorkflow
 
         try {
             return DB::transaction(function () use ($data, $hash, $actor, $externalReference): SzamlazzSyntheticTestRun {
+                // Serialize new runs so an unresolved/ambiguous provider outcome cannot
+                // race with authorization for another invoice against the same fixture.
+                if (! DB::table('szamlazz_synthetic_test_controls')->where('id', 1)->lockForUpdate()->first()) {
+                    throw new LogicException('Synthetic test control row is missing.');
+                }
+                $unresolvedRun = SzamlazzSyntheticTestRun::query()
+                    ->whereIn('status', ['prepared', 'submission_started', 'reconciliation_required'])
+                    ->exists();
+                if ($unresolvedRun) {
+                    throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.unresolved_run_exists')]);
+                }
+
                 $run = SzamlazzSyntheticTestRun::query()->create([
-                    'execution_slot' => 'szamlazz-phase6-one-shot',
+                    'execution_slot' => 'szamlazz-phase6-run-'.Str::uuid(),
                     'designation' => 'synthetic_test',
                     'status' => 'prepared',
                     'prepared_by' => $actor->id,
@@ -101,7 +115,7 @@ final class SyntheticSzamlazzTestWorkflow
                 return $run;
             });
         } catch (UniqueConstraintViolationException) {
-            throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.single_execution_used')]);
+            throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.duplicate_run_identity')]);
         }
     }
 
