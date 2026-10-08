@@ -238,7 +238,7 @@ class IntegrationCredentialTest extends TestCase
         $this->assertSame($secret, Crypt::decryptString($row->value));
         $audit = AdminAuditEvent::where('event', 'integration_credential.updated')->where('subject_key', 'szamlazz_agent')->sole();
         $this->assertSame($owner->id, $audit->actor_user_id);
-        $this->assertSame(['provider_id' => 'szamlazz_hu', 'action' => 'created'], $audit->data);
+        $this->assertAuditMetadataMatches(['provider_id' => 'szamlazz_hu', 'action' => 'created'], $audit->data);
         $this->assertStringNotContainsString($secret, json_encode($audit->toArray()));
         Log::shouldHaveReceived('info')->once()->withArgs(fn ($message, $context) => ! str_contains(json_encode([$message, $context]), $secret));
 
@@ -263,7 +263,7 @@ class IntegrationCredentialTest extends TestCase
             ->assertDontSee($replacement);
         $this->assertSame($replacement, Crypt::decryptString(DB::table('integration_credentials')->where('id', 'szamlazz_agent')->sole()->value));
         $replaceAudit = AdminAuditEvent::where('event', 'integration_credential.updated')->where('subject_key', 'szamlazz_agent')->latest('id')->firstOrFail();
-        $this->assertSame(['provider_id' => 'szamlazz_hu', 'action' => 'replaced'], $replaceAudit->data);
+        $this->assertAuditMetadataMatches(['provider_id' => 'szamlazz_hu', 'action' => 'replaced'], $replaceAudit->data);
         $this->assertStringNotContainsString($replacement, json_encode($replaceAudit->toArray()));
 
         $this->delete(route('owner.integrations.destroy', 'szamlazz_agent'))
@@ -271,7 +271,7 @@ class IntegrationCredentialTest extends TestCase
             ->assertDontSee($replacement);
         $this->assertDatabaseMissing('integration_credentials', ['id' => 'szamlazz_agent']);
         $deleteAudit = AdminAuditEvent::where('event', 'integration_credential.cleared')->where('subject_key', 'szamlazz_agent')->sole();
-        $this->assertSame(['provider_id' => 'szamlazz_hu', 'action' => 'deleted'], $deleteAudit->data);
+        $this->assertAuditMetadataMatches(['provider_id' => 'szamlazz_hu', 'action' => 'deleted'], $deleteAudit->data);
         $this->assertStringNotContainsString($replacement, json_encode($deleteAudit->toArray()));
     }
 
@@ -287,6 +287,15 @@ class IntegrationCredentialTest extends TestCase
 
         $this->assertDatabaseMissing('integration_credentials', ['id' => 'szamlazz_agent']);
         $this->assertDatabaseMissing('admin_audit_events', ['subject_key' => 'szamlazz_agent']);
+    }
+
+    /** Compare JSON metadata as an object: preserve exact keys/values, ignore key order. */
+    private function assertAuditMetadataMatches(array $expected, mixed $actual): void
+    {
+        $this->assertIsArray($actual);
+        ksort($expected);
+        ksort($actual);
+        $this->assertSame($expected, $actual);
     }
 
     public function test_all_registered_credentials_are_applied_to_their_runtime_config_paths(): void
