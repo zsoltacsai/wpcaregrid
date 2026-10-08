@@ -7,6 +7,7 @@ use App\Models\AdminAuditEvent;
 use App\Models\BillingTaxConfigurationVersion;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Tests\Concerns\ActsAsOwner;
 use Tests\TestCase;
 
@@ -72,7 +73,7 @@ final class SzamlazzBillingSettingsTest extends TestCase
             try {
                 $settings->validate(array_replace($this->values('AAM'), ['invoice_prefix' => $invalid]));
                 $this->fail('Expected unsupported invoice prefix to be rejected: '.$invalid);
-            } catch (\Illuminate\Validation\ValidationException $exception) {
+            } catch (ValidationException $exception) {
                 $this->assertArrayHasKey('invoice_prefix', $exception->errors());
             }
         }

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Billing\SzamlazzBillingSettings;
 use App\Invoicing\SyntheticSzamlazzTestWorkflow;
 use App\Models\SzamlazzSyntheticTestRun;
 use App\Models\User;
@@ -11,6 +12,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
+use Throwable;
 
 #[Group('billing-concurrency')]
 final class SyntheticSzamlazzTestConcurrencyTest extends TestCase
@@ -32,7 +34,7 @@ final class SyntheticSzamlazzTestConcurrencyTest extends TestCase
         config(['app.url' => 'https://staging.wpcaregrid.com', 'szamlazz.synthetic_test.enabled' => true, 'szamlazz.agent_api_key' => 'synthetic-test-fixture']);
         app(IntegrationCredentials::class)->store('szamlazz_agent', 'synthetic-test-fixture');
         $owner = User::factory()->owner()->create();
-        app(\App\Billing\SzamlazzBillingSettings::class)->publish([
+        app(SzamlazzBillingSettings::class)->publish([
             'seller_profile_id' => null, 'invoice_language' => 'hu', 'default_payment_method' => 'bank_transfer',
             'payment_deadline_policy' => 'same_day', 'fulfillment_date_policy' => 'invoice_date', 'invoice_prefix' => 'A',
             'notify_customer' => '0', 'currency_policy' => 'block_foreign_without_fx', 'tax_configuration_mode' => 'manual_review',
@@ -67,7 +69,7 @@ final class SyntheticSzamlazzTestConcurrencyTest extends TestCase
                     } catch (ValidationException) {
                         file_put_contents($directory.DIRECTORY_SEPARATOR.'result-'.$index, 'rejected', LOCK_EX);
                         exit(0);
-                    } catch (\Throwable $exception) {
+                    } catch (Throwable $exception) {
                         file_put_contents($directory.DIRECTORY_SEPARATOR.'result-'.$index, 'unexpected:'.get_class($exception), LOCK_EX);
                         exit(1);
                     }

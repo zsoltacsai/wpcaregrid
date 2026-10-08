@@ -2,12 +2,14 @@
 
 namespace Tests\Feature;
 
+use App\Billing\SzamlazzBillingSettings;
 use App\Invoicing\NormalizedInvoiceRequest;
 use App\Invoicing\Providers\ProviderSubmissionResult;
 use App\Invoicing\Providers\SyntheticInvoiceTestProvider;
 use App\Invoicing\SyntheticSzamlazzTestGuard;
 use App\Invoicing\SyntheticSzamlazzTestWorkflow;
 use App\Invoicing\SyntheticTestTaxSelection;
+use App\Models\BillingTaxConfigurationVersion;
 use App\Models\InvoiceIntent;
 use App\Models\SzamlazzSyntheticTestRun;
 use App\Models\User;
@@ -147,7 +149,7 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
 
         $this->assertSame('A', $workflow->request($run)->billingSettings['invoice_prefix']);
         $this->assertSame('A', $run->commercial_snapshot['billing_tax_configuration']['invoice_prefix']);
-        $this->assertSame('A', \App\Models\BillingTaxConfigurationVersion::query()->where('version', 1)->firstOrFail()->configuration['invoice_prefix']);
+        $this->assertSame('A', BillingTaxConfigurationVersion::query()->where('version', 1)->firstOrFail()->configuration['invoice_prefix']);
     }
 
     public function test_owner_route_requires_owner_ability_and_renders_the_confirmation_form(): void
@@ -188,7 +190,7 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
 
     private function publishPrefix(User $owner, string $prefix): void
     {
-        app(\App\Billing\SzamlazzBillingSettings::class)->publish([
+        app(SzamlazzBillingSettings::class)->publish([
             'seller_profile_id' => null,
             'invoice_language' => 'hu',
             'default_payment_method' => 'bank_transfer',
