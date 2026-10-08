@@ -2,13 +2,13 @@
 
 namespace App\Http\Controllers\Owner;
 
-use App\Http\Controllers\Controller;
 use App\Billing\SzamlazzBillingSettings;
+use App\Http\Controllers\Controller;
+use App\Invoicing\SzamlazzTaxCodeRegistry;
 use App\Models\User;
 use App\Owner\AdminAudit;
 use App\Owner\IntegrationCredentials;
 use App\Owner\OwnerSettings;
-use App\Invoicing\SzamlazzTaxCodeRegistry;
 use App\Owner\SystemStatus;
 use App\Pricing\PriceKey;
 use App\Pricing\PricingCatalog;

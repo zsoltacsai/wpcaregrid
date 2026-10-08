@@ -5,6 +5,7 @@ namespace App\Invoicing\Providers;
 use App\Invoicing\NormalizedInvoiceRequest;
 use DOMDocument;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
 /** Mutating invoice submission adapter. It is never bound to the Phase 1 dry-run interface. */
@@ -156,7 +157,7 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider
         $root->setAttributeNS('http://www.w3.org/2001/XMLSchema-instance', 'xsi:schemaLocation', 'http://www.szamlazz.hu/xmlszamlaxml https://www.szamlazz.hu/szamla/docs/xsds/agentxml/xmlszamlaxml.xsd');
         $document->appendChild($root);
         foreach (['szamlaagentkulcs' => $key, 'szamlaKulsoAzon' => $externalReference, 'pdf' => 'false'] as $name => $value) {
-            $node = $document->createElement($name);
+            $node = $document->createElementNS('http://www.szamlazz.hu/xmlszamlaxml', $name);
             $node->appendChild($document->createTextNode($value));
             $root->appendChild($node);
         }
@@ -179,7 +180,7 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider
         return $xml;
     }
 
-    private function request(string $field, string $xml): \Illuminate\Http\Client\Response
+    private function request(string $field, string $xml): Response
     {
         $timeout = max(2, min(20, (int) config('szamlazz.request_timeout_seconds', 10)));
 

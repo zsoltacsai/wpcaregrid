@@ -5,10 +5,12 @@ namespace App\Http\Controllers\Owner;
 use App\Billing\SzamlazzBillingSettings;
 use App\Http\Controllers\Controller;
 use App\Invoicing\InvoiceIntentStatus;
+use App\Invoicing\InvoiceIssuanceWorkflow;
 use App\Invoicing\SzamlazzTaxCodeRegistry;
 use App\Models\InvoiceIntent;
-use Illuminate\View\View;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\View\View;
 
 final class InvoiceIntentController extends Controller
 {
@@ -55,7 +57,7 @@ final class InvoiceIntentController extends Controller
         ]);
     }
 
-    public function reconcile(InvoiceIntent $invoiceIntent, \App\Invoicing\InvoiceIssuanceWorkflow $workflow, \Illuminate\Http\Request $request): \Illuminate\Http\RedirectResponse
+    public function reconcile(InvoiceIntent $invoiceIntent, InvoiceIssuanceWorkflow $workflow, Request $request): RedirectResponse
     {
         $attempt = $invoiceIntent->issuanceAttempt;
         abort_unless($attempt !== null, 404);

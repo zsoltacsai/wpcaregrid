@@ -39,7 +39,8 @@ return new class extends Migration
             $table->string('provider_tax_code', 16);
             $table->string('proposed_treatment', 40);
             $table->text('justification');
-            $table->string('basis_reference', 160)->nullable();
+            // Encrypted casts expand values substantially beyond the cleartext input limit.
+            $table->text('basis_reference')->nullable();
             $table->timestamp('created_at')->useCurrent();
             $table->index(['invoice_intent_id', 'created_at'], 'invoice_tax_review_intent_created_idx');
         });

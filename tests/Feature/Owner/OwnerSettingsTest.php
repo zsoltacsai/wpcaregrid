@@ -261,10 +261,13 @@ final class OwnerSettingsTest extends TestCase
     {
         $this->asOwner();
 
-        foreach (['backups', 'billing_tax', 'system'] as $section) {
+        foreach (['backups', 'system'] as $section) {
             $this->put(route('owner.settings.update', $section), ['settings' => []])
                 ->assertSessionHasErrors('settings');
         }
+
+        $this->put(route('owner.settings.update', 'billing_tax'), ['settings' => []])
+            ->assertSessionHasErrors(['invoice_language', 'default_payment_method', 'payment_deadline_policy']);
 
         $this->assertDatabaseCount('owner_settings', 0);
         $this->assertDatabaseCount('admin_audit_events', 0);

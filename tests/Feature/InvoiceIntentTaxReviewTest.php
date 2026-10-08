@@ -6,7 +6,6 @@ use App\Billing\SzamlazzBillingSettings;
 use App\Invoicing\InvoiceIntentStatus;
 use App\Models\AdminAuditEvent;
 use App\Models\InvoiceIntent;
-use App\Models\InvoiceIntentEvent;
 use App\Models\InvoiceIntentTaxReview;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;

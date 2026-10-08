@@ -2,8 +2,8 @@
 
 namespace App\Invoicing;
 
-use App\Jobs\Invoicing\PrepareInvoiceIntentJob;
 use App\Billing\SzamlazzBillingSettings;
+use App\Jobs\Invoicing\PrepareInvoiceIntentJob;
 use App\Models\BillingInvoice;
 use App\Models\CustomerBillingIdentity;
 use App\Models\InvoiceIntent;

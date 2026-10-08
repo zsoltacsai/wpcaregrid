@@ -14,6 +14,7 @@ use App\Models\Customer;
 use App\Models\CustomerBillingIdentity;
 use App\Models\InvoiceIntent;
 use App\Models\InvoiceIssuanceAttempt;
+use App\Models\User;
 use App\Tax\SellerTaxProfileRegistry;
 use App\Tax\SellerTaxProfileStatus;
 use App\Tax\VerificationStatus;
@@ -107,7 +108,7 @@ final class InvoiceIssuanceWorkflowTest extends TestCase
             'payment_deadline_policy' => 'same_day', 'fulfillment_date_policy' => 'payment_date', 'invoice_prefix' => 'WPCG',
             'notify_customer' => false, 'currency_policy' => 'block_foreign_without_fx', 'tax_configuration_mode' => 'manual_review',
             'default_tax_code' => null, 'effective_at' => now()->toDateString(),
-        ], \App\Models\User::factory()->owner()->create());
+        ], User::factory()->owner()->create());
         $intent = InvoiceIntent::query()->create([
             'customer_id' => $customer->id,
             'billing_identity_id' => $identity->id,

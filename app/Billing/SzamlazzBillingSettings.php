@@ -7,6 +7,8 @@ use App\Models\BillingTaxConfigurationVersion;
 use App\Models\SellerTaxProfile;
 use App\Models\User;
 use App\Owner\AdminAudit;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
@@ -16,10 +18,15 @@ use Illuminate\Validation\ValidationException;
 final class SzamlazzBillingSettings
 {
     public const LANGUAGES = ['hu', 'en', 'de', 'it', 'ro', 'sk', 'hr', 'fr', 'es', 'cz', 'pl', 'bg', 'nl', 'ru', 'si'];
+
     public const PAYMENT_METHODS = ['bank_transfer', 'bank_card', 'cash', 'other'];
+
     public const PAYMENT_DEADLINES = ['same_day', 'days_8', 'days_15', 'days_30'];
+
     public const FULFILLMENT_POLICIES = ['payment_date', 'invoice_date'];
+
     public const CURRENCY_POLICIES = ['preserve_source', 'block_foreign_without_fx'];
+
     public const TAX_MODES = ['manual_review', 'approved_rules'];
 
     public function defaults(): array
@@ -52,7 +59,7 @@ final class SzamlazzBillingSettings
         return $this->current($at)?->configuration ?? $this->defaults();
     }
 
-    public function history(): \Illuminate\Support\Collection
+    public function history(): Collection
     {
         return BillingTaxConfigurationVersion::query()->with('creator')->orderByDesc('version')->limit(50)->get();
     }
@@ -79,7 +86,7 @@ final class SzamlazzBillingSettings
 
         if ($validated['seller_profile_id'] !== null) {
             $profile = SellerTaxProfile::query()->find($validated['seller_profile_id']);
-            $effective = \Illuminate\Support\Carbon::parse($validated['effective_at'])->startOfDay();
+            $effective = Carbon::parse($validated['effective_at'])->startOfDay();
             if (! $profile || $profile->effective_from?->startOfDay()->gt($effective)
                 || ($profile->effective_to && $profile->effective_to->endOfDay()->lt($effective))) {
                 throw ValidationException::withMessages(['seller_profile_id' => __('owner.settings.billing_tax.validation.seller_profile_effective')]);

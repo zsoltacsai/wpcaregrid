@@ -59,6 +59,9 @@ final class SzamlazzResponseParser
             $errorCode = 'provider_reported_error';
         }
         $hasProviderError = $errorCode !== null || str_starts_with(trim($body), '[ERR]');
+        if ($hasProviderError && $errorCode === null) {
+            $errorCode = 'provider_reported_error';
+        }
 
         return [
             // A provider number is persisted only after the submission workflow

@@ -7,8 +7,8 @@ use App\Invoicing\NormalizedInvoiceRequest;
 use App\Invoicing\Providers\SzamlazzAgentProvider;
 use App\Invoicing\Providers\SzamlazzResponseParser;
 use App\Invoicing\SzamlazzPaymentMethodRegistry;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
@@ -105,7 +105,8 @@ final class SzamlazzAgentProviderTest extends TestCase
         $this->assertSame('found', $result->outcome);
         $this->assertSame('WPCG-TEST-2', $result->invoiceNumber);
         Http::assertSent(fn ($request) => str_contains($request->body(), 'action-szamla_agent_xml')
-            && str_contains($request->body(), '<szamlaKulsoAzon>wpcg-invoice-123</szamlaKulsoAzon>'));
+            && str_contains($request->body(), '<szamlaKulsoAzon>wpcg-invoice-123</szamlaKulsoAzon>')
+            && str_contains($request->body(), 'xmlns="http://www.szamlazz.hu/xmlszamlaxml"'));
     }
 
     public function test_read_only_reconciliation_remains_available_when_invoice_write_gates_are_closed(): void

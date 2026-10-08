@@ -1133,7 +1133,7 @@ return [
         'title' => 'Invoice intents',
         'queue_navigation' => 'Invoice intent queues', 'all_intents' => 'All invoice intents', 'tax_review_queue' => 'Pending tax review',
         'lead' => 'Monitor Stripe-paid invoice preparation and local validation. This screen never issues invoices.',
-        'dry_run_notice' => 'Phase 1 is local dry-run only. A validated payload is not a provider-accepted or issued invoice.',
+        'dry_run_notice' => 'Invoice issuance remains disabled. Tax proposals require accountant review and do not approve tax treatment.',
         'id' => 'Intent',
         'customer' => 'Customer',
         'subscription' => 'Subscription',

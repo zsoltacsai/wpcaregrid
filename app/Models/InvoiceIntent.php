@@ -6,6 +6,7 @@ use App\Invoicing\InvoiceIntentStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use LogicException;
 
 class InvoiceIntent extends Model
@@ -67,7 +68,7 @@ class InvoiceIntent extends Model
         return $this->hasMany(InvoiceIntentTaxReview::class)->orderBy('id');
     }
 
-    public function issuanceAttempt(): \Illuminate\Database\Eloquent\Relations\HasOne
+    public function issuanceAttempt(): HasOne
     {
         return $this->hasOne(InvoiceIssuanceAttempt::class);
     }

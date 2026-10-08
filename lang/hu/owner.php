@@ -16,7 +16,7 @@ return [
         'title' => 'Számlázási előkészítések',
         'queue_navigation' => 'Számlázási listák', 'all_intents' => 'Minden számlázási előkészítés', 'tax_review_queue' => 'Függő adózási felülvizsgálatok',
         'lead' => 'A Stripe által kifizetett számlák előkészítésének és helyi ellenőrzésének áttekintése. Ez a felület nem állít ki számlát.',
-        'dry_run_notice' => 'Az 1. fázis csak helyi próbaüzem. A sikeres helyi ellenőrzés nem jelent szolgáltatói elfogadást vagy kiállított számlát.',
+        'dry_run_notice' => 'A számlakibocsátás továbbra is ki van kapcsolva. Az adózási javaslatok könyvelői felülvizsgálatot igényelnek, és nem jelentenek jóváhagyott adókezelést.',
         'id' => 'Előkészítés', 'customer' => 'Ügyfél', 'subscription' => 'Előfizetés', 'stripe_invoice' => 'Stripe-számla',
         'amount' => 'Összeg', 'provider' => 'Szolgáltató', 'status' => 'Állapot', 'blocked_reason' => 'Blokkolás oka',
         'dry_run_result' => 'Helyi ellenőrzés', 'not_run' => 'Nem futott le', 'retry_count' => 'Újrapróbálkozás',

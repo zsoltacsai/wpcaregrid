@@ -1,5 +1,8 @@
 <x-layouts.owner :title="__('owner.invoice_intents.detail_title', ['id' => $intent->id])">
     <x-operator.page-header :title="__('owner.invoice_intents.detail_title', ['id' => $intent->id])" :lead="__('owner.invoice_intents.dry_run_notice')" />
+    @if ($intent->status === \App\Invoicing\InvoiceIntentStatus::BlockedTaxReview)
+        <p class="mb-5 text-sm text-warning-ink">{{ __('owner.invoice_intents.proposal_not_approval') }}</p>
+    @endif
     <div class="mb-5"><a class="text-sm underline" href="{{ route('owner.billing.invoice-intents.index') }}">{{ __('owner.invoice_intents.back') }}</a></div>
     <dl class="grid gap-3 rounded-md border border-line bg-surface p-5 sm:grid-cols-2">
         <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.customer') }}</dt><dd>{{ $intent->customer?->email ?? '—' }}</dd></div>

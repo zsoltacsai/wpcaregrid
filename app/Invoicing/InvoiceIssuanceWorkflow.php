@@ -8,7 +8,7 @@ use App\Models\BillingTaxConfigurationVersion;
 use App\Models\InvoiceIntent;
 use App\Models\InvoiceIntentEvent;
 use App\Models\InvoiceIssuanceAttempt;
-use App\Models\SellerTaxProfile;
+use App\Models\User;
 use App\Owner\AdminAudit;
 use Illuminate\Support\Facades\DB;
 
@@ -56,6 +56,7 @@ final class InvoiceIssuanceWorkflow
         if (isset($decision['attempt'])) {
             /** @var InvoiceIssuanceAttempt $attempt */
             $attempt = $decision['attempt'];
+
             return $attempt;
         }
 
@@ -96,7 +97,7 @@ final class InvoiceIssuanceWorkflow
         });
     }
 
-    public function reconcile(int $attemptId, ?\App\Models\User $actor = null): InvoiceIssuanceAttempt
+    public function reconcile(int $attemptId, ?User $actor = null): InvoiceIssuanceAttempt
     {
         $attempt = InvoiceIssuanceAttempt::query()->findOrFail($attemptId);
         if ($attempt->status === 'issued') {
