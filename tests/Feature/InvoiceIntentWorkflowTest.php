@@ -211,8 +211,8 @@ class InvoiceIntentWorkflowTest extends TestCase
         $customerUser = User::factory()->create();
 
         $this->get(route('owner.billing.invoice-intents.show', $intent))->assertRedirect(route('owner.login'));
-        $this->actingAs($customerUser)->get(route('owner.billing.invoice-intents.show', $intent))->assertRedirect(route('owner.login'));
-        $response = $this->actingAs($owner)->get(route('owner.billing.invoice-intents.show', $intent));
+        $this->actingAs($customerUser, 'owner')->get(route('owner.billing.invoice-intents.show', $intent))->assertRedirect(route('owner.login'));
+        $response = $this->actingAs($owner, 'owner')->get(route('owner.billing.invoice-intents.show', $intent));
         $response->assertOk()->assertDontSee('TEST-SECRET-ID');
         $this->assertArrayNotHasKey('commercial_snapshot', $intent->toArray());
     }
