@@ -156,7 +156,8 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider
         $root = $document->createElementNS('http://www.szamlazz.hu/xmlszamlaxml', 'xmlszamlaxml');
         $root->setAttributeNS('http://www.w3.org/2001/XMLSchema-instance', 'xsi:schemaLocation', 'http://www.szamlazz.hu/xmlszamlaxml https://www.szamlazz.hu/szamla/docs/xsds/agentxml/xmlszamlaxml.xsd');
         $document->appendChild($root);
-        foreach (['szamlaagentkulcs' => $key, 'szamlaKulsoAzon' => $externalReference, 'pdf' => 'false'] as $name => $value) {
+        // Keep element order aligned with the provider's published XSD sequence.
+        foreach (['szamlaagentkulcs' => $key, 'pdf' => 'false', 'szamlaKulsoAzon' => $externalReference] as $name => $value) {
             $node = $document->createElementNS('http://www.szamlazz.hu/xmlszamlaxml', $name);
             $node->appendChild($document->createTextNode($value));
             $root->appendChild($node);

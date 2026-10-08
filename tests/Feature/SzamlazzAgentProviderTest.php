@@ -66,13 +66,14 @@ final class SzamlazzAgentProviderTest extends TestCase
     public function test_pdf_response_is_not_saved_and_provider_errors_are_sanitized(): void
     {
         Http::preventStrayRequests();
-        Http::fakeSequence()->push('%PDF-synthetic-document', 200, ['Content-Type' => 'application/pdf', 'szlahu_szamlaszam' => 'WPCG-PDF-1']);
+        Http::fakeSequence()
+            ->push('%PDF-synthetic-document', 200, ['Content-Type' => 'application/pdf', 'szlahu_szamlaszam' => 'WPCG-PDF-1'])
+            ->push('[ERR] PRIVATE PROVIDER DETAIL', 200, ['Content-Type' => 'text/plain']);
         $pdf = app(SzamlazzAgentProvider::class)->submit($this->request());
         $this->assertSame('issued', $pdf->outcome);
         $this->assertArrayNotHasKey('pdf', $pdf->metadata);
         $this->assertArrayNotHasKey('body', $pdf->metadata);
 
-        Http::fake(['www.szamlazz.hu/*' => Http::response('[ERR] PRIVATE PROVIDER DETAIL', 200, ['Content-Type' => 'text/plain'])]);
         $error = app(SzamlazzAgentProvider::class)->submit($this->request());
         $this->assertSame('rejected', $error->outcome);
         $this->assertSame('provider_rejected', $error->errorCategory);
