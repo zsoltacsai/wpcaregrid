@@ -6,8 +6,8 @@ use App\Billing\SzamlazzBillingSettings;
 use App\Invoicing\NormalizedInvoiceRequest;
 use App\Invoicing\Providers\ProviderSubmissionResult;
 use App\Invoicing\Providers\SyntheticInvoiceTestProvider;
-use App\Invoicing\SyntheticSzamlazzTestGuard;
 use App\Invoicing\SyntheticSzamlazzTestContract;
+use App\Invoicing\SyntheticSzamlazzTestGuard;
 use App\Invoicing\SyntheticSzamlazzTestWorkflow;
 use App\Invoicing\SyntheticTestTaxSelection;
 use App\Models\BillingTaxConfigurationVersion;
@@ -318,7 +318,7 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
     {
         $this->assertSame(100000, SyntheticSzamlazzTestContract::grossMinorUnits());
         $this->assertSame(['net' => 100000, 'tax' => 0, 'gross' => 100000, 'tax_code' => 'AAM'], SyntheticSzamlazzTestContract::line());
-        $this->assertSame('1,000.00', SyntheticSzamlazzTestContract::formatMinorUnits(100000));
+        $this->assertSame('1000.00', SyntheticSzamlazzTestContract::formatMinorUnits(100000));
     }
 
     private function enableStagingTestMode(): void
