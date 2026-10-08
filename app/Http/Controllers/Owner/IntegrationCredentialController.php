@@ -34,8 +34,19 @@ class IntegrationCredentialController extends Controller
 
         $data = $validator->validated();
         DB::transaction(function () use ($credentials, $data, $request): void {
+            $providerId = IntegrationCredentials::FIELDS[$data['id']]['provider_id'] ?? null;
+            $isSzamlazz = $providerId === 'szamlazz_hu';
+            $action = $isSzamlazz && DB::table('integration_credentials')->where('id', $data['id'])->exists()
+                ? 'replaced'
+                : 'created';
             $credentials->store($data['id'], $data['value']);
-            AdminAudit::record($request->user('owner'), 'integration_credential.updated', 'integration_credential', $data['id']);
+            AdminAudit::record(
+                $request->user('owner'),
+                'integration_credential.updated',
+                'integration_credential',
+                $data['id'],
+                $isSzamlazz ? ['provider_id' => $providerId, 'action' => $action] : [],
+            );
         });
 
         return to_route('owner.integrations.index')->with('status', __('owner.integrations.saved'));
@@ -47,7 +58,14 @@ class IntegrationCredentialController extends Controller
 
         DB::transaction(function () use ($credentials, $id, $request): void {
             $credentials->clear($id);
-            AdminAudit::record($request->user('owner'), 'integration_credential.cleared', 'integration_credential', $id);
+            $providerId = IntegrationCredentials::FIELDS[$id]['provider_id'] ?? null;
+            AdminAudit::record(
+                $request->user('owner'),
+                'integration_credential.cleared',
+                'integration_credential',
+                $id,
+                $providerId ? ['provider_id' => $providerId, 'action' => 'deleted'] : [],
+            );
         });
 
         return to_route('owner.integrations.index')->with('status', __('owner.integrations.cleared'));

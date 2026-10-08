@@ -1013,6 +1013,14 @@ return [
         'saved' => 'Credential saved securely.',
         'cleared' => 'Owner-managed value removed. Check the status on Integrations: a server environment fallback may still be active.',
         'unsupported' => 'Számlázz.hu is not currently integrated. Adding its credentials alone would not enable invoicing; that integration needs a separate implementation.',
+        'szamlazz_agent' => [
+            'description' => 'Secure storage for the Számlázz.hu Számla Agent API key. Saving it does not enable invoice issuance.',
+            'credential_label' => 'Agent API Key',
+            'save' => 'Save API key',
+            'replace' => 'Replace API key',
+            'clear' => 'Delete API key',
+            'masked' => 'Configured; the saved key is hidden.',
+        ],
     ],
 
     'dns' => [

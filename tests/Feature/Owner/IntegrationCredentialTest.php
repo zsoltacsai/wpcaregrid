@@ -12,6 +12,7 @@ use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Tests\Concerns\ActsAsOwner;
 use Tests\TestCase;
@@ -210,6 +211,82 @@ class IntegrationCredentialTest extends TestCase
             ->assertOk()
             ->assertSee(__('owner.integrations.not_configured'))
             ->assertSee(__('owner.integrations.transport_unavailable'));
+    }
+
+    public function test_szamlazz_agent_key_is_encrypted_masked_audited_and_does_not_enable_issuance(): void
+    {
+        $owner = $this->asOwner();
+        $secret = 'test_szamlazz_agent_key_1234567890';
+        Http::preventStrayRequests();
+        Log::spy();
+
+        $this->get(route('owner.integrations.index'))
+            ->assertOk()
+            ->assertSee('Számlázz.hu — Számla Agent')
+            ->assertSee(__('owner.integrations.szamlazz_agent.credential_label'))
+            ->assertSee(__('owner.integrations.szamlazz_agent.description'))
+            ->assertDontSee('Test connection');
+
+        $this->from(route('owner.integrations.index'))
+            ->post(route('owner.integrations.store'), ['id' => 'szamlazz_agent', 'value' => $secret])
+            ->assertRedirect(route('owner.integrations.index'))
+            ->assertSessionMissing('_old_input')
+            ->assertDontSee($secret);
+
+        $row = DB::table('integration_credentials')->where('id', 'szamlazz_agent')->sole();
+        $this->assertNotSame($secret, $row->value);
+        $this->assertSame($secret, Crypt::decryptString($row->value));
+        $audit = AdminAuditEvent::where('event', 'integration_credential.updated')->where('subject_key', 'szamlazz_agent')->sole();
+        $this->assertSame($owner->id, $audit->actor_user_id);
+        $this->assertSame(['provider_id' => 'szamlazz_hu', 'action' => 'created'], $audit->data);
+        $this->assertStringNotContainsString($secret, json_encode($audit->toArray()));
+        Log::shouldHaveReceived('info')->once()->withArgs(fn ($message, $context) => ! str_contains(json_encode([$message, $context]), $secret));
+
+        $this->get(route('owner.integrations.index'))
+            ->assertOk()
+            ->assertSee(__('owner.integrations.owner_managed'))
+            ->assertSee('••••••••')
+            ->assertSee(__('owner.integrations.szamlazz_agent.masked'))
+            ->assertSee(__('owner.integrations.szamlazz_agent.replace'))
+            ->assertDontSee($secret);
+
+        app(IntegrationCredentials::class)->apply();
+        $this->assertSame($secret, config('szamlazz.agent_api_key'));
+        $this->assertSame('szamlazz_hu', config('szamlazz.provider'));
+        $this->assertFalse((bool) config('szamlazz.provider_enabled'));
+        $this->assertTrue((bool) config('szamlazz.dry_run'));
+        $this->assertFalse((bool) config('szamlazz.issuance_enabled'));
+
+        $replacement = 'test_szamlazz_agent_replacement_9876543210';
+        $this->post(route('owner.integrations.store'), ['id' => 'szamlazz_agent', 'value' => $replacement])
+            ->assertRedirect(route('owner.integrations.index'))
+            ->assertDontSee($replacement);
+        $this->assertSame($replacement, Crypt::decryptString(DB::table('integration_credentials')->where('id', 'szamlazz_agent')->sole()->value));
+        $replaceAudit = AdminAuditEvent::where('event', 'integration_credential.updated')->where('subject_key', 'szamlazz_agent')->latest('id')->firstOrFail();
+        $this->assertSame(['provider_id' => 'szamlazz_hu', 'action' => 'replaced'], $replaceAudit->data);
+        $this->assertStringNotContainsString($replacement, json_encode($replaceAudit->toArray()));
+
+        $this->delete(route('owner.integrations.destroy', 'szamlazz_agent'))
+            ->assertRedirect(route('owner.integrations.index'))
+            ->assertDontSee($replacement);
+        $this->assertDatabaseMissing('integration_credentials', ['id' => 'szamlazz_agent']);
+        $deleteAudit = AdminAuditEvent::where('event', 'integration_credential.cleared')->where('subject_key', 'szamlazz_agent')->sole();
+        $this->assertSame(['provider_id' => 'szamlazz_hu', 'action' => 'deleted'], $deleteAudit->data);
+        $this->assertStringNotContainsString($replacement, json_encode($deleteAudit->toArray()));
+    }
+
+    public function test_szamlazz_agent_key_must_not_be_empty(): void
+    {
+        $this->asOwner();
+
+        $this->from(route('owner.integrations.index'))
+            ->post(route('owner.integrations.store'), ['id' => 'szamlazz_agent', 'value' => ''])
+            ->assertRedirect(route('owner.integrations.index'))
+            ->assertSessionHasErrors('value')
+            ->assertSessionMissing('_old_input');
+
+        $this->assertDatabaseMissing('integration_credentials', ['id' => 'szamlazz_agent']);
+        $this->assertDatabaseMissing('admin_audit_events', ['subject_key' => 'szamlazz_agent']);
     }
 
     public function test_all_registered_credentials_are_applied_to_their_runtime_config_paths(): void

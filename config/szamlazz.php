@@ -8,6 +8,7 @@ return [
     'request_timeout_seconds' => (int) env('SZAMLAZZ_REQUEST_TIMEOUT', 10),
     'retry_limit' => (int) env('SZAMLAZZ_RETRY_LIMIT', 3),
     'credential_reference' => env('SZAMLAZZ_CREDENTIAL_REFERENCE', 'szamlazz_agent'),
+    'agent_api_key' => null,
     'default_language' => env('SZAMLAZZ_DEFAULT_LANGUAGE', 'hu'),
     'account_reference' => env('SZAMLAZZ_ACCOUNT_REFERENCE'),
     'invoice_prefix_reference' => env('SZAMLAZZ_INVOICE_PREFIX_REFERENCE'),

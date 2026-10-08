@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\DB;
 /** Fixed, application-supported service credentials. Values are never returned to views. */
 final class IntegrationCredentials
 {
-    /** @var array<string, array{label: string, config: list<string>, runtime_supported?: bool}> */
+    /** @var array<string, array{label: string, config: list<string>, runtime_supported?: bool, description_key?: string, credential_label_key?: string, save_label_key?: string, replace_label_key?: string, clear_label_key?: string, provider_id?: string}> */
     public const FIELDS = [
         'stripe_publishable' => ['label' => 'Stripe publishable key', 'config' => ['services.stripe.key']],
         'stripe_secret' => ['label' => 'Stripe secret key', 'config' => ['services.stripe.secret']],
@@ -20,6 +20,18 @@ final class IntegrationCredentials
         'smtp_password' => ['label' => 'SMTP password', 'config' => ['mail.mailers.smtp.password']],
         'postmark' => ['label' => 'Postmark API key', 'runtime_supported' => false, 'config' => ['services.postmark.key']],
         'resend' => ['label' => 'Resend API key', 'runtime_supported' => false, 'config' => ['services.resend.key']],
+        // The credential reference is already used by config/szamlazz.php; provider ID stays szamlazz_hu.
+        'szamlazz_agent' => [
+            'label' => 'Számlázz.hu — Számla Agent',
+            'runtime_supported' => false,
+            'config' => ['szamlazz.agent_api_key'],
+            'description_key' => 'owner.integrations.szamlazz_agent.description',
+            'credential_label_key' => 'owner.integrations.szamlazz_agent.credential_label',
+            'save_label_key' => 'owner.integrations.szamlazz_agent.save',
+            'replace_label_key' => 'owner.integrations.szamlazz_agent.replace',
+            'clear_label_key' => 'owner.integrations.szamlazz_agent.clear',
+            'provider_id' => 'szamlazz_hu',
+        ],
         'ses_access' => ['label' => 'Amazon SES access key', 'config' => ['services.ses.key', 'filesystems.disks.s3.key', 'queue.connections.sqs.key', 'cache.stores.dynamodb.key']],
         'ses_secret' => ['label' => 'Amazon SES secret key', 'config' => ['services.ses.secret', 'filesystems.disks.s3.secret', 'queue.connections.sqs.secret', 'cache.stores.dynamodb.secret']],
         'wordfence_feed' => ['label' => 'Wordfence vulnerability feed key', 'config' => ['security.vulnerabilities.feed_key']],

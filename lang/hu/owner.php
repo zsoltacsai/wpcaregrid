@@ -1,6 +1,16 @@
 <?php
 
 return [
+    'integrations' => [
+        'szamlazz_agent' => [
+            'description' => 'A Számlázz.hu Számla Agent API-kulcs biztonságos tárolása. A mentés nem engedélyezi a számlakiállítást.',
+            'credential_label' => 'Agent API-kulcs',
+            'save' => 'API-kulcs mentése',
+            'replace' => 'API-kulcs cseréje',
+            'clear' => 'API-kulcs törlése',
+            'masked' => 'Beállítva; a mentett kulcs rejtett.',
+        ],
+    ],
     'nav' => ['billing_invoices' => 'Számlázási előkészítések'],
     'invoice_intents' => [
         'title' => 'Számlázási előkészítések',

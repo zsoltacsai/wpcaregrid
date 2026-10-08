@@ -46,7 +46,11 @@ SZAMLAZZ_DRY_RUN=true
 SZAMLAZZ_ISSUANCE_ENABLED=false
 ```
 
-The credential reference points to the existing encrypted Owner Integration credential allowlist (`szamlazz_agent`). Runtime use is explicitly unsupported in Phase 1. The blank `.env.example` identifiers describe configuration only; no credential value is included. The dry-run adapter does not read or transmit the credential.
+The provider ID is `szamlazz_hu`; its Owner credential reference is `szamlazz_agent`. Owner → Service Credentials allows an authorized Owner to save, replace, or delete the Számlázz.hu Számla Agent API key. It reuses the existing `integration_credentials` store and Laravel encryption. The UI reports only configured/not configured and, when configured, a fixed masked marker; it never reads the key back into the form or returns it from a status endpoint. Credential changes are audited with the provider ID and created/replaced/deleted action only. The key is not written to audit data or logs.
+
+Saving this key does not activate the provider. `provider_enabled` remains `false`, `dry_run` remains `true`, and `issuance_enabled` remains `false`. The credential is not consumed by the Phase 1 local dry-run adapter, and saving it does not issue invoices, queue issuance, call the provider, or change tax decisions. The Owner should enter the TEST key manually only after this credential-management change has been deployed to staging; no key belongs in source, examples, fixtures, or chat.
+
+No documented non-mutating Agent API authentication/account-validation operation was identified for a “Test connection” button. The official [authentication documentation](https://docs.szamlazz.hu/agent/basics/authentication) describes the key as request authentication. The [request documentation](https://docs.szamlazz.hu/agent/basics/sending-requests) lists operations, and the read-only [taxpayer query](https://docs.szamlazz.hu/agent/querying_taxpayer/request) checks a supplied VAT number rather than validating the account or API key; it is not a suitable connection test. The documented invoice request sends invoice XML and may create a document, so this phase intentionally has no connection test and makes no call to Számlázz.hu. A future validation step requires separate approval of a safe, documented provider operation and a dedicated test account. Tax/accountant approval remains a prerequisite to issuance. The HU Tax Advisor Agent remains separate and is not integrated here.
 
 ## Owner monitoring and audit
 
