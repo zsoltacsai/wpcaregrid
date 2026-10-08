@@ -1239,6 +1239,11 @@ return [
         'unresolved_run_exists' => 'Another synthetic run is prepared or needs provider reconciliation. Resolve it before authorizing a new run.',
         'duplicate_run_identity' => 'This synthetic run could not obtain a unique execution identity. No provider request was sent; prepare again.',
         'prepared_record_invalid' => 'The immutable synthetic test snapshot or state did not pass validation.',
+        'invalid_snapshot' => 'This prepared run does not contain the required HUF 1,000 amount in integer minor units. No provider request was sent.',
+        'cancel_invalid_run' => 'Cancel this invalid prepared run',
+        'cancel_phrase' => 'Type CANCEL PREPARED TEST RUN to cancel this prepared run',
+        'cancelled' => 'The invalid prepared run was cancelled. Its snapshot and hash were preserved; no provider request was sent.',
+        'cancel_not_allowed' => 'Only a prepared run with the known invalid amount snapshot can be cancelled this way.',
         'invalid_input' => 'The synthetic test request included an unsupported field.',
     ],
 ];

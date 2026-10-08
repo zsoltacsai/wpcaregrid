@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Owner;
 
 use App\Http\Controllers\Controller;
+use App\Invoicing\SyntheticInvoiceSemanticValidator;
 use App\Invoicing\SyntheticSzamlazzTestGuard;
 use App\Invoicing\SyntheticSzamlazzTestWorkflow;
 use App\Models\SzamlazzSyntheticTestRun;
@@ -14,7 +15,7 @@ use Illuminate\View\View;
 
 final class SyntheticSzamlazzTestController extends Controller
 {
-    public function index(Request $request, SyntheticSzamlazzTestGuard $guard, IntegrationCredentials $credentials): View
+    public function index(Request $request, SyntheticSzamlazzTestGuard $guard, IntegrationCredentials $credentials, SyntheticInvoiceSemanticValidator $validator): View
     {
         $runs = SzamlazzSyntheticTestRun::query()->with(['preparer', 'submitter'])->latest('id')->paginate(20);
         $activeRunExists = SzamlazzSyntheticTestRun::query()
@@ -31,6 +32,7 @@ final class SyntheticSzamlazzTestController extends Controller
                 'dry_run' => (bool) config('szamlazz.dry_run'),
                 'issuance_enabled' => (bool) config('szamlazz.issuance_enabled'),
             ],
+            'runErrors' => $runs->getCollection()->mapWithKeys(fn (SzamlazzSyntheticTestRun $run): array => [$run->id => $validator->validateRun($run)]),
         ]);
     }
 
@@ -46,6 +48,13 @@ final class SyntheticSzamlazzTestController extends Controller
         $workflow->submit($run, $request->user('owner'), $request->getHost(), $request->only('confirm_submission', 'confirmation_phrase'));
 
         return back()->with('status', __('owner.synthetic_invoice_test.submission_finished'));
+    }
+
+    public function cancel(SzamlazzSyntheticTestRun $run, Request $request, SyntheticSzamlazzTestWorkflow $workflow): RedirectResponse
+    {
+        $workflow->cancel($run, $request->user('owner'), $request->getHost(), $request->only('reason_code', 'confirmation_phrase'));
+
+        return back()->with('status', __('owner.synthetic_invoice_test.cancelled'));
     }
 
     public function reconcile(SzamlazzSyntheticTestRun $run, Request $request, SyntheticSzamlazzTestWorkflow $workflow): RedirectResponse

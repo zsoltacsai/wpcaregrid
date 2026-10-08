@@ -20,6 +20,7 @@ final readonly class NormalizedInvoiceRequest
         public string $description,
         public ApprovedTaxDecision|SyntheticTestTaxSelection $taxDecision,
         public array $billingSettings = [],
+        public ?array $syntheticSnapshot = null,
     ) {}
 
     public function withBillingSettings(array $settings, ?string $externalReference = null): self
@@ -62,6 +63,7 @@ final readonly class NormalizedInvoiceRequest
             $this->description,
             $decision,
             $settings,
+            null,
         );
     }
 }

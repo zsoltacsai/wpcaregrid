@@ -135,6 +135,7 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::get('/billing/synthetic-szamlazz-test', [SyntheticSzamlazzTestController::class, 'index'])->middleware('can:owner.billing.synthetic_tests.manage')->name('billing.synthetic-szamlazz-test.index');
         Route::post('/billing/synthetic-szamlazz-test', [SyntheticSzamlazzTestController::class, 'store'])->middleware(['can:owner.billing.synthetic_tests.manage', 'throttle:owner-external'])->name('billing.synthetic-szamlazz-test.store');
         Route::post('/billing/synthetic-szamlazz-test/{run}/submit', [SyntheticSzamlazzTestController::class, 'submit'])->middleware(['can:owner.billing.synthetic_tests.manage', 'throttle:owner-external'])->name('billing.synthetic-szamlazz-test.submit');
+        Route::post('/billing/synthetic-szamlazz-test/{run}/cancel', [SyntheticSzamlazzTestController::class, 'cancel'])->middleware(['can:owner.billing.synthetic_tests.manage', 'throttle:owner-sensitive'])->name('billing.synthetic-szamlazz-test.cancel');
         Route::post('/billing/synthetic-szamlazz-test/{run}/reconcile', [SyntheticSzamlazzTestController::class, 'reconcile'])->middleware(['can:owner.billing.synthetic_tests.manage', 'throttle:owner-external'])->name('billing.synthetic-szamlazz-test.reconcile');
         Route::get('/billing/synthetic-szamlazz-test/{run}/pdf', [SyntheticSzamlazzTestController::class, 'downloadPdf'])->middleware('can:owner.billing.synthetic_tests.manage')->name('billing.synthetic-szamlazz-test.pdf');
 

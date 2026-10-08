@@ -4,6 +4,8 @@ namespace App\Invoicing\Providers;
 
 use App\Invoicing\ApprovedTaxDecision;
 use App\Invoicing\NormalizedInvoiceRequest;
+use App\Invoicing\SyntheticInvoiceSemanticValidator;
+use App\Invoicing\SyntheticSzamlazzTestContract;
 use App\Invoicing\SyntheticSzamlazzTestGuard;
 use App\Invoicing\SyntheticTestTaxSelection;
 use DOMDocument;
@@ -18,6 +20,7 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider, Syntheti
         private readonly SzamlazzDryRunProvider $validator,
         private readonly SzamlazzResponseParser $parser,
         private readonly SyntheticSzamlazzTestGuard $syntheticTestGuard,
+        private readonly SyntheticInvoiceSemanticValidator $syntheticSemanticValidator,
     ) {}
 
     public function submit(NormalizedInvoiceRequest $request): ProviderSubmissionResult
@@ -38,40 +41,59 @@ final class SzamlazzAgentProvider implements InvoiceSubmissionProvider, Syntheti
 
     public function submitSyntheticTest(NormalizedInvoiceRequest $request): ProviderSubmissionResult
     {
-        if (! $this->syntheticTestGuard->permits()
-            || ! $request->taxDecision instanceof SyntheticTestTaxSelection
-            || strtoupper($request->currency) !== 'HUF'
-            || $request->amountMinor !== 1000
-            || ! preg_match('/\Awpcg-synthetic-test-[0-9]{1,12}\z/D', $request->externalReference)
-            || $request->description !== 'WP CareGrid synthetic Szamlazz integration test'
-            || $request->seller !== [
-                'name' => 'WP CareGrid Synthetic TEST Seller', 'country' => 'HU', 'postal_code' => '1111',
-                'city' => 'Budapest', 'address' => 'Synthetic Test Street 1',
-            ]
-            || $request->buyer !== [
-                'name' => 'WP CareGrid Synthetic TEST Buyer', 'country' => 'HU', 'postal_code' => '1111',
-                'city' => 'Budapest', 'address' => 'Synthetic Test Street 1',
-            ]
-            || $request->taxDecision->line !== ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM']
-            || ! $this->validInvoicePrefix($request->billingSettings['invoice_prefix'] ?? null)
-            || ($request->billingSettings['notify_customer'] ?? true) !== false) {
+        $xml = $this->syntheticXml($request);
+        if ($xml === null) {
             return new ProviderSubmissionResult('blocked', errorCategory: 'synthetic_test_guard_failed');
         }
 
-        return $this->sendInvoice($request, syntheticTest: true);
+        return $this->sendInvoice($request, syntheticTest: true, preparedXml: $xml);
     }
 
-    private function sendInvoice(NormalizedInvoiceRequest $request, bool $syntheticTest): ProviderSubmissionResult
+    public function validateSyntheticTest(NormalizedInvoiceRequest $request): bool
+    {
+        return $this->syntheticXml($request) !== null;
+    }
+
+    private function syntheticXml(NormalizedInvoiceRequest $request): ?string
+    {
+        if (! $this->syntheticTestGuard->permits()
+            || ! $request->taxDecision instanceof SyntheticTestTaxSelection
+            || $request->currency !== SyntheticSzamlazzTestContract::CURRENCY
+            || $request->amountMinor !== SyntheticSzamlazzTestContract::grossMinorUnits()
+            || ! $this->validInvoicePrefix($request->billingSettings['invoice_prefix'] ?? null)
+            || ($request->billingSettings['invoice_prefix'] ?? null) !== SyntheticSzamlazzTestContract::INVOICE_PREFIX
+            || ! is_array($request->syntheticSnapshot)
+            || $this->syntheticSemanticValidator->validateRequest($request, $request->syntheticSnapshot) !== []) {
+            return null;
+        }
+
+        $key = $this->credential();
+        if ($key === null) {
+            return null;
+        }
+        $validation = $this->validator->validate($request);
+        if (! $validation->valid || $validation->xml === null) {
+            return null;
+        }
+        $xml = $this->authenticatedInvoiceXml($validation->xml, $key, $request->billingSettings, downloadPdf: true);
+        if ($xml === null || $this->syntheticSemanticValidator->validateExactXml($request, $request->syntheticSnapshot, $xml) !== []) {
+            return null;
+        }
+
+        return $xml;
+    }
+
+    private function sendInvoice(NormalizedInvoiceRequest $request, bool $syntheticTest, ?string $preparedXml = null): ProviderSubmissionResult
     {
         $key = $this->credential();
         if ($key === null) {
             return new ProviderSubmissionResult('blocked', errorCategory: 'credential_unavailable');
         }
-        $validation = $this->validator->validate($request);
-        if (! $validation->valid || $validation->xml === null) {
+        $validation = $preparedXml === null ? $this->validator->validate($request) : null;
+        if ($preparedXml === null && (! $validation?->valid || $validation->xml === null)) {
             return new ProviderSubmissionResult('rejected', errorCategory: 'local_validation_failed');
         }
-        $xml = $this->authenticatedInvoiceXml($validation->xml, $key, $request->billingSettings, $syntheticTest);
+        $xml = $preparedXml ?? $this->authenticatedInvoiceXml($validation->xml, $key, $request->billingSettings, $syntheticTest);
         if ($xml === null) {
             return new ProviderSubmissionResult('rejected', errorCategory: 'local_xml_preparation_failed');
         }

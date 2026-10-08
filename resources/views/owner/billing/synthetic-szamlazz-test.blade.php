@@ -19,7 +19,7 @@
                 <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                     <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.prepared_at') }}</dt><dd>{{ $run->created_at?->timezone(config('app.timezone'))->format('Y-m-d H:i:s T') ?? '—' }}</dd></div>
                     <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.status') }}</dt><dd>{{ $run->status }}</dd></div>
-                    <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.amount') }}</dt><dd>{{ number_format($run->amount, 0, ',', ' ') }} HUF</dd></div>
+                    <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.amount') }}</dt><dd>{{ $run->formattedAmount() }}</dd></div>
                     <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.tax_code') }}</dt><dd>{{ $run->tax_code }} · {{ __('owner.synthetic_invoice_test.mechanical_only') }}</dd></div>
                     <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.external_reference') }}</dt><dd class="font-mono">{{ $run->external_reference }}</dd></div>
                     <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.provider_invoice') }}</dt><dd>{{ $run->provider_invoice_number ?? '—' }}</dd></div>
@@ -27,7 +27,15 @@
                     <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.pdf') }}</dt><dd>{{ $run->pdf_sha256 ? __('owner.synthetic_invoice_test.pdf_stored', ['bytes' => $run->pdf_bytes, 'sha256' => $run->pdf_sha256]) : __('owner.synthetic_invoice_test.pdf_unavailable') }}</dd></div>
                     <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.error') }}</dt><dd>{{ $run->error_category ?? '—' }}</dd></div>
                 </dl>
-                @if ($run->status === 'prepared' && $stageGuardPassed)
+                @if ($run->status === 'prepared' && $stageGuardPassed && ($runErrors[$run->id] ?? []) === ['incorrect_amount_snapshot'])
+                    <div class="mt-6 rounded-md border border-danger/30 bg-danger-soft p-3 text-sm" role="alert">{{ __('owner.synthetic_invoice_test.invalid_snapshot') }}</div>
+                    <form method="POST" action="{{ route('owner.billing.synthetic-szamlazz-test.cancel', $run) }}" class="mt-4 space-y-3">
+                        @csrf
+                        <input type="hidden" name="reason_code" value="invalid_amount_snapshot">
+                        <label class="block text-sm">{{ __('owner.synthetic_invoice_test.cancel_phrase') }}<input name="confirmation_phrase" required autocomplete="off" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 sm:max-w-md"></label>
+                        <button class="h-10 rounded-sm border border-danger px-4 text-sm font-semibold text-danger">{{ __('owner.synthetic_invoice_test.cancel_invalid_run') }}</button>
+                    </form>
+                @elseif ($run->status === 'prepared' && $stageGuardPassed)
                     <form method="POST" action="{{ route('owner.billing.synthetic-szamlazz-test.submit', $run) }}" class="mt-6 space-y-3">
                         @csrf
                         <label class="flex items-start gap-2 text-sm"><input type="checkbox" name="confirm_submission" value="1" required class="mt-1">{{ __('owner.synthetic_invoice_test.confirm_test_submission') }}</label>

@@ -26,6 +26,7 @@ final class AdminAudit
         'billing_tax.synthetic_test_prepared', 'billing_tax.synthetic_test_submission_started',
         'billing_tax.synthetic_test_issued', 'billing_tax.synthetic_test_rejected',
         'billing_tax.synthetic_test_ambiguous', 'billing_tax.synthetic_test_reconciled',
+        'billing_tax.synthetic_test_cancelled',
         'owner_setting.updated', 'owner_settings.mail_test_sent', 'owner_settings.mail_test_failed',
         'dns.record.create_requested', 'dns.record.update_requested', 'dns.record.delete_requested',
         'dns.record.created', 'dns.record.updated', 'dns.record.deleted', 'dns.record.failed',

@@ -8,6 +8,7 @@ use App\Invoicing\Providers\SzamlazzAgentProvider;
 use App\Invoicing\Providers\SzamlazzDryRunProvider;
 use App\Invoicing\Providers\SzamlazzResponseParser;
 use App\Invoicing\SyntheticTestTaxSelection;
+use App\Invoicing\SyntheticSzamlazzTestContract;
 use App\Invoicing\SzamlazzPaymentMethodRegistry;
 use App\Owner\IntegrationCredentials;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -91,16 +92,20 @@ final class SzamlazzAgentProviderTest extends TestCase
 
         $validation = app(SzamlazzDryRunProvider::class)->validate($this->syntheticRequest());
         $this->assertTrue($validation->valid, implode(',', $validation->errors));
+        $provider = app(SzamlazzAgentProvider::class);
+        $this->assertTrue($provider->validateSyntheticTest($this->syntheticRequest()));
+        Http::assertNothingSent();
 
-        $result = app(SzamlazzAgentProvider::class)->submitSyntheticTest($this->syntheticRequest());
+        $result = $provider->submitSyntheticTest($this->syntheticRequest());
 
         $this->assertSame('issued', $result->outcome);
         $this->assertSame('TEST-2026-1', $result->invoiceNumber);
         $this->assertSame("%PDF-1.4\nTEST", $result->pdfContent);
         Http::assertSent(fn ($request) => $request->url() === 'https://www.szamlazz.hu/szamla/'
             && str_contains($request->body(), '<szamlaLetoltes>true</szamlaLetoltes>')
-            && str_contains($request->body(), '<szamlaszamElotag>TEST</szamlaszamElotag>')
-            && strpos($request->body(), '<szamlaszamElotag>TEST</szamlaszamElotag>') < strpos($request->body(), '<simpleItems>')
+            && str_contains($request->body(), '<szamlaszamElotag>A</szamlaszamElotag>')
+            && strpos($request->body(), '<szamlaszamElotag>A</szamlaszamElotag>') < strpos($request->body(), '<simpleItems>')
+            && str_contains($request->body(), '<bruttoErtek>1000.00</bruttoErtek>')
             && str_contains($request->body(), '<sendEmail>false</sendEmail>')
             && str_contains($request->body(), '<email>') === false
             && str_contains($request->body(), '<szamlaagentkulcs>synthetic-agent-key</szamlaagentkulcs>'));
@@ -117,6 +122,33 @@ final class SzamlazzAgentProviderTest extends TestCase
 
         $this->assertSame('blocked', $result->outcome);
         $this->assertSame('synthetic_test_guard_failed', $result->errorCategory);
+        Http::assertNothingSent();
+    }
+
+    public function test_semantic_preflight_rejects_an_incorrect_huf_minor_unit_amount_without_http(): void
+    {
+        $this->app->detectEnvironment(fn () => 'production');
+        config([
+            'app.url' => 'https://staging.wpcaregrid.com',
+            'szamlazz.synthetic_test.enabled' => true,
+            'szamlazz.provider_enabled' => false,
+            'szamlazz.dry_run' => true,
+            'szamlazz.issuance_enabled' => false,
+        ]);
+        app(IntegrationCredentials::class)->store('szamlazz_agent', 'synthetic-agent-key');
+        Http::preventStrayRequests();
+
+        $request = $this->syntheticRequest();
+        $incorrect = new NormalizedInvoiceRequest(
+            $request->externalReference, 'HUF', 1000, $request->issueDate, $request->performanceDate, $request->paymentDueDate,
+            $request->paymentDate, $request->paymentMethod, $request->seller, $request->buyer, $request->description,
+            new SyntheticTestTaxSelection('synthetic-provider-code-selection', 1, ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM']),
+            $request->billingSettings, $request->syntheticSnapshot,
+        );
+
+        $this->assertFalse(app(SzamlazzAgentProvider::class)->validateSyntheticTest($incorrect));
+        $result = app(SzamlazzAgentProvider::class)->submitSyntheticTest($incorrect);
+        $this->assertSame('blocked', $result->outcome);
         Http::assertNothingSent();
     }
 
@@ -250,13 +282,34 @@ final class SzamlazzAgentProviderTest extends TestCase
 
     private function syntheticRequest(): NormalizedInvoiceRequest
     {
+        $line = SyntheticSzamlazzTestContract::line();
+        $snapshot = [
+            'designation' => 'synthetic_test',
+            'test_account' => [
+                'credential_reference' => 'szamlazz_agent', 'owner_attested_test_mode' => true,
+                'owner_attested_at' => '2026-10-08T18:00:00+00:00', 'owner_attestor_id' => 1,
+                'test_seller_profile_confirmed' => true,
+                'seller_profile_label' => 'Owner-confirmed synthetic seller profile in the TEST account',
+            ],
+            'seller' => SyntheticSzamlazzTestContract::seller(),
+            'buyer' => SyntheticSzamlazzTestContract::buyer(),
+            'line' => $line,
+            'tax_code' => SyntheticSzamlazzTestContract::TAX_CODE,
+            'currency' => SyntheticSzamlazzTestContract::CURRENCY,
+            'amount' => SyntheticSzamlazzTestContract::grossMinorUnits(),
+            'notify_customer' => false,
+            'tax_decision_kind' => 'synthetic_provider_code_selection_not_a_tax_decision',
+            'billing_tax_configuration' => ['invoice_prefix' => 'A'],
+        ];
+
         return new NormalizedInvoiceRequest(
-            'wpcg-synthetic-test-1', 'HUF', 1000, '2026-10-08', '2026-10-08', '2026-10-08', null, 'bankkártya',
-            ['name' => 'WP CareGrid Synthetic TEST Seller', 'country' => 'HU', 'postal_code' => '1111', 'city' => 'Budapest', 'address' => 'Synthetic Test Street 1'],
-            ['name' => 'WP CareGrid Synthetic TEST Buyer', 'country' => 'HU', 'postal_code' => '1111', 'city' => 'Budapest', 'address' => 'Synthetic Test Street 1'],
+            'wpcg-synthetic-test-1', 'HUF', 100000, '2026-10-08', '2026-10-08', '2026-10-08', null, 'bankkártya',
+            SyntheticSzamlazzTestContract::seller(),
+            SyntheticSzamlazzTestContract::buyer(),
             'WP CareGrid synthetic Szamlazz integration test',
-            new SyntheticTestTaxSelection('synthetic-provider-code-selection', 1, ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM']),
-            ['invoice_language' => 'hu', 'invoice_prefix' => 'TEST', 'notify_customer' => false],
+            new SyntheticTestTaxSelection('synthetic-provider-code-selection', 1, $line),
+            ['invoice_language' => 'hu', 'invoice_prefix' => 'A', 'notify_customer' => false],
+            $snapshot,
         );
     }
 }

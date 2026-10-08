@@ -150,6 +150,11 @@ final class SyntheticSzamlazzTestConcurrencyTest extends TestCase
                     {
                         public function __construct(private readonly string $directory) {}
 
+                        public function validateSyntheticTest(NormalizedInvoiceRequest $request): bool
+                        {
+                            return true;
+                        }
+
                         public function submitSyntheticTest(NormalizedInvoiceRequest $request): ProviderSubmissionResult
                         {
                             $handle = fopen($this->directory.DIRECTORY_SEPARATOR.'posts', 'a');

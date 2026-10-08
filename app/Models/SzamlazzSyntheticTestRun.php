@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Pricing\Currency;
+use App\Pricing\Money;
 use LogicException;
 
 class SzamlazzSyntheticTestRun extends Model
@@ -13,6 +15,7 @@ class SzamlazzSyntheticTestRun extends Model
         'test_account_attested', 'test_seller_attested', 'credential_reference', 'external_reference',
         'snapshot_sha256', 'commercial_snapshot', 'provider_invoice_number', 'provider_metadata', 'error_category',
         'pdf_disk', 'pdf_path', 'pdf_sha256', 'pdf_bytes', 'submitted_at', 'resolved_at',
+        'cancelled_by', 'cancellation_reason', 'cancelled_at',
     ];
 
     protected $hidden = ['commercial_snapshot', 'provider_metadata'];
@@ -27,6 +30,7 @@ class SzamlazzSyntheticTestRun extends Model
             'provider_metadata' => 'array',
             'submitted_at' => 'immutable_datetime',
             'resolved_at' => 'immutable_datetime',
+            'cancelled_at' => 'immutable_datetime',
         ];
     }
 
@@ -54,5 +58,18 @@ class SzamlazzSyntheticTestRun extends Model
     public function submitter(): BelongsTo
     {
         return $this->belongsTo(User::class, 'submitted_by');
+    }
+
+    public function canceller(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'cancelled_by');
+    }
+
+    public function formattedAmount(): string
+    {
+        $currency = strtoupper((string) $this->currency);
+        $configuration = (array) config('pricing.currencies.'.$currency, []);
+
+        return (new Money((int) $this->amount, Currency::fromConfig($currency, $configuration)))->format();
     }
 }

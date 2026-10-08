@@ -182,6 +182,11 @@ return [
         'unresolved_run_exists' => 'Egy másik szintetikus futás előkészített vagy szolgáltatói egyeztetésre vár. Új futás engedélyezése előtt rendezze azt.',
         'duplicate_run_identity' => 'Ehhez a szintetikus futáshoz nem sikerült egyedi végrehajtási azonosítót létrehozni. Szolgáltatói kérés nem történt; készítse elő újra.',
         'prepared_record_invalid' => 'A változtathatatlan szintetikus tesztpillanatkép vagy állapot nem ment át az ellenőrzésen.',
+        'invalid_snapshot' => 'Az előkészített futás nem a szükséges, egész fillérben tárolt 1 000 HUF összeget tartalmazza. Szolgáltatói kérés nem történt.',
+        'cancel_invalid_run' => 'Hibás előkészített futás visszavonása',
+        'cancel_phrase' => 'A visszavonáshoz írja be: CANCEL PREPARED TEST RUN',
+        'cancelled' => 'A hibás előkészített futás vissza lett vonva. A pillanatkép és hash változatlan maradt; szolgáltatói kérés nem történt.',
+        'cancel_not_allowed' => 'Ezzel a művelettel csak az ismert, hibás összegű és még előkészített futás vonható vissza.',
         'invalid_input' => 'A szintetikus tesztkérés nem támogatott mezőt tartalmazott.',
     ],
 ];

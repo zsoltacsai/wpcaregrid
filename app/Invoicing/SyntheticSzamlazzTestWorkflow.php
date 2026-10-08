@@ -41,9 +41,12 @@ final class SyntheticSzamlazzTestWorkflow
         $configurationVersion = $this->billingSettings->current();
         $configuration = $configurationVersion?->configuration ?? $this->billingSettings->defaults();
         $invoicePrefix = $configuration['invoice_prefix'] ?? null;
-        if (! is_string($invoicePrefix) || preg_match('/\A[A-Z0-9]{1,5}\z/D', $invoicePrefix) !== 1) {
+        if ($invoicePrefix !== SyntheticSzamlazzTestContract::INVOICE_PREFIX) {
             throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.prefix_required')]);
         }
+
+        $line = SyntheticSzamlazzTestContract::line();
+        $amount = SyntheticSzamlazzTestContract::grossMinorUnits();
 
         $data = [
             'designation' => 'synthetic_test',
@@ -55,17 +58,12 @@ final class SyntheticSzamlazzTestWorkflow
                 'test_seller_profile_confirmed' => true,
                 'seller_profile_label' => 'Owner-confirmed synthetic seller profile in the TEST account',
             ],
-            'seller' => [
-                'name' => 'WP CareGrid Synthetic TEST Seller', 'country' => 'HU', 'postal_code' => '1111',
-                'city' => 'Budapest', 'address' => 'Synthetic Test Street 1',
-            ],
-            'buyer' => [
-                'name' => 'WP CareGrid Synthetic TEST Buyer', 'country' => 'HU', 'postal_code' => '1111',
-                'city' => 'Budapest', 'address' => 'Synthetic Test Street 1',
-            ],
-            'line' => ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => $validated['tax_code']],
-            'currency' => 'HUF',
-            'amount' => 1000,
+            'seller' => SyntheticSzamlazzTestContract::seller(),
+            'buyer' => SyntheticSzamlazzTestContract::buyer(),
+            'line' => $line,
+            'tax_code' => SyntheticSzamlazzTestContract::TAX_CODE,
+            'currency' => SyntheticSzamlazzTestContract::CURRENCY,
+            'amount' => $amount,
             'notify_customer' => false,
             'description' => 'WP CareGrid synthetic Szamlazz integration test',
             'tax_decision_kind' => 'synthetic_provider_code_selection_not_a_tax_decision',
@@ -79,7 +77,7 @@ final class SyntheticSzamlazzTestWorkflow
         $externalReference = 'wpcg-synthetic-test-'.random_int(1_000_000_000, 9_999_999_999);
 
         try {
-            return DB::transaction(function () use ($data, $hash, $actor, $externalReference): SzamlazzSyntheticTestRun {
+            return DB::transaction(function () use ($data, $hash, $actor, $externalReference, $amount): SzamlazzSyntheticTestRun {
                 // Serialize new runs so an unresolved/ambiguous provider outcome cannot
                 // race with authorization for another invoice against the same fixture.
                 if (! DB::table('szamlazz_synthetic_test_controls')->where('id', 1)->lockForUpdate()->first()) {
@@ -97,9 +95,9 @@ final class SyntheticSzamlazzTestWorkflow
                     'designation' => 'synthetic_test',
                     'status' => 'prepared',
                     'prepared_by' => $actor->id,
-                    'tax_code' => $data['line']['tax_code'],
-                    'currency' => 'HUF',
-                    'amount' => 1000,
+                    'tax_code' => SyntheticSzamlazzTestContract::TAX_CODE,
+                    'currency' => SyntheticSzamlazzTestContract::CURRENCY,
+                    'amount' => $amount,
                     'test_account_attested' => true,
                     'test_seller_attested' => true,
                     'credential_reference' => 'szamlazz_agent',
@@ -108,7 +106,7 @@ final class SyntheticSzamlazzTestWorkflow
                     'commercial_snapshot' => $data,
                 ]);
                 AdminAudit::record($actor, 'billing_tax.synthetic_test_prepared', 'synthetic_invoice_test', (string) $run->id, [
-                    'designation' => 'synthetic_test', 'currency' => 'HUF', 'amount' => 1000,
+                    'designation' => 'synthetic_test', 'currency' => SyntheticSzamlazzTestContract::CURRENCY, 'amount' => $amount,
                     'credential_reference' => 'szamlazz_agent', 'snapshot_sha256' => $hash,
                 ]);
 
@@ -130,6 +128,19 @@ final class SyntheticSzamlazzTestWorkflow
             'confirmation_phrase' => ['required', 'in:SUBMIT ONE TEST INVOICE'],
         ])->validate();
 
+        $preflightRun = SzamlazzSyntheticTestRun::query()->findOrFail($run->id);
+        if ($preflightRun->status !== 'prepared') {
+            return $preflightRun;
+        }
+        $preflightErrors = app(SyntheticInvoiceSemanticValidator::class)->validateRun($preflightRun);
+        if ($preflightErrors !== []) {
+            throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.invalid_snapshot')]);
+        }
+        $request = $this->request($preflightRun);
+        if (! $this->provider->validateSyntheticTest($request)) {
+            throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.invalid_snapshot')]);
+        }
+
         [$run, $startedNow] = DB::transaction(function () use ($run, $actor): array {
             $locked = SzamlazzSyntheticTestRun::query()->lockForUpdate()->findOrFail($run->id);
             if ($locked->status !== 'prepared') {
@@ -140,6 +151,9 @@ final class SyntheticSzamlazzTestWorkflow
                 || $locked->credential_reference !== 'szamlazz_agent'
                 || ! hash_equals($locked->snapshot_sha256, $this->snapshotHash($locked->commercial_snapshot ?? []))) {
                 throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.prepared_record_invalid')]);
+            }
+            if (app(SyntheticInvoiceSemanticValidator::class)->validateRun($locked) !== []) {
+                throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.invalid_snapshot')]);
             }
             $locked->status = 'submission_started';
             $locked->submitted_by = $actor->id;
@@ -160,6 +174,50 @@ final class SyntheticSzamlazzTestWorkflow
         $result = $this->provider->submitSyntheticTest($this->request($run));
 
         return $this->recordResult($run, $actor, $result);
+    }
+
+    public function cancel(SzamlazzSyntheticTestRun $run, User $actor, string $requestHost, array $input): SzamlazzSyntheticTestRun
+    {
+        abort_unless($actor->isOwner() && $this->guard->permits($requestHost), 404);
+        if (array_diff(array_keys($input), ['reason_code', 'confirmation_phrase']) !== []) {
+            throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.invalid_input')]);
+        }
+        Validator::make($input, [
+            'reason_code' => ['required', 'in:'.SyntheticSzamlazzTestContract::CANCELLATION_REASON_INVALID_AMOUNT],
+            'confirmation_phrase' => ['required', 'in:CANCEL PREPARED TEST RUN'],
+        ])->validate();
+
+        return DB::transaction(function () use ($run, $actor): SzamlazzSyntheticTestRun {
+            $locked = SzamlazzSyntheticTestRun::query()->lockForUpdate()->findOrFail($run->id);
+            if ($locked->status === 'cancelled'
+                && $locked->cancellation_reason === SyntheticSzamlazzTestContract::CANCELLATION_REASON_INVALID_AMOUNT) {
+                return $locked;
+            }
+            if ($locked->status !== 'prepared') {
+                throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.cancel_not_allowed')]);
+            }
+
+            $errors = app(SyntheticInvoiceSemanticValidator::class)->validateRun($locked);
+            if (! in_array('incorrect_amount_snapshot', $errors, true)
+                || array_diff($errors, ['incorrect_amount_snapshot']) !== []) {
+                throw ValidationException::withMessages(['test' => __('owner.synthetic_invoice_test.cancel_not_allowed')]);
+            }
+
+            $locked->status = 'cancelled';
+            $locked->cancelled_by = $actor->id;
+            $locked->cancellation_reason = SyntheticSzamlazzTestContract::CANCELLATION_REASON_INVALID_AMOUNT;
+            $locked->cancelled_at = now();
+            $locked->error_category = SyntheticSzamlazzTestContract::CANCELLATION_REASON_INVALID_AMOUNT;
+            $locked->resolved_at = now();
+            $locked->save();
+
+            AdminAudit::record($actor, 'billing_tax.synthetic_test_cancelled', 'synthetic_invoice_test', (string) $locked->id, [
+                'reason_code' => SyntheticSzamlazzTestContract::CANCELLATION_REASON_INVALID_AMOUNT,
+                'snapshot_sha256' => $locked->snapshot_sha256,
+            ]);
+
+            return $locked;
+        });
     }
 
     public function reconcile(SzamlazzSyntheticTestRun $run, User $actor, string $requestHost): SzamlazzSyntheticTestRun
@@ -201,8 +259,8 @@ final class SyntheticSzamlazzTestWorkflow
 
         return new NormalizedInvoiceRequest(
             $run->external_reference,
-            'HUF',
-            1000,
+            $snapshot['currency'] ?? '',
+            is_int($snapshot['amount'] ?? null) ? $snapshot['amount'] : -1,
             now()->toDateString(),
             now()->toDateString(),
             now()->toDateString(),
@@ -214,6 +272,7 @@ final class SyntheticSzamlazzTestWorkflow
             new SyntheticTestTaxSelection('synthetic-provider-code-selection', 1, $line, 'hu'),
             ['invoice_language' => 'hu', 'notify_customer' => false, 'fulfillment_date_policy' => 'invoice_date',
                 'invoice_prefix' => $snapshot['billing_tax_configuration']['invoice_prefix'] ?? null],
+            $snapshot,
         );
     }
 

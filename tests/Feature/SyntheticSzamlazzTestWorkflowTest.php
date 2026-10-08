@@ -7,6 +7,7 @@ use App\Invoicing\NormalizedInvoiceRequest;
 use App\Invoicing\Providers\ProviderSubmissionResult;
 use App\Invoicing\Providers\SyntheticInvoiceTestProvider;
 use App\Invoicing\SyntheticSzamlazzTestGuard;
+use App\Invoicing\SyntheticSzamlazzTestContract;
 use App\Invoicing\SyntheticSzamlazzTestWorkflow;
 use App\Invoicing\SyntheticTestTaxSelection;
 use App\Models\BillingTaxConfigurationVersion;
@@ -38,10 +39,11 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         $owner = User::factory()->owner()->create();
         $this->publishPrefix($owner, 'A');
         $provider = $this->mock(SyntheticInvoiceTestProvider::class);
+        $provider->shouldReceive('validateSyntheticTest')->once()->andReturnTrue();
         $provider->shouldReceive('submitSyntheticTest')->once()->withArgs(fn ($request) => $request instanceof NormalizedInvoiceRequest
             && $request->taxDecision instanceof SyntheticTestTaxSelection
             && $request->currency === 'HUF'
-            && $request->amountMinor === 1000
+            && $request->amountMinor === 100000
             && $request->billingSettings['invoice_prefix'] === 'A'
             && $request->billingSettings['notify_customer'] === false
         )->andReturn(new ProviderSubmissionResult('issued', 'TEST-2026-1', metadata: ['provider_invoice_id' => 'TEST-2026-1'], pdfContent: "%PDF-1.4\nsynthetic"));
@@ -51,6 +53,8 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         $run = $workflow->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com');
         $this->assertSame('synthetic_test', $run->designation);
         $this->assertSame('prepared', $run->status);
+        $this->assertSame(100000, $run->amount);
+        $this->assertSame("1,000\u{00A0}Ft", $run->formattedAmount());
         $this->assertNull($run->commercial_snapshot['buyer']['email'] ?? null);
         $this->assertSame('synthetic_provider_code_selection_not_a_tax_decision', $run->commercial_snapshot['tax_decision_kind']);
         $this->assertSame('A', $run->commercial_snapshot['billing_tax_configuration']['invoice_prefix']);
@@ -120,6 +124,7 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         $nextOwner = User::factory()->owner()->create();
         $this->publishPrefix($owner, 'A');
         $provider = $this->mock(SyntheticInvoiceTestProvider::class);
+        $provider->shouldReceive('validateSyntheticTest')->once()->andReturnTrue();
         $provider->shouldReceive('submitSyntheticTest')->once()->andReturn(new ProviderSubmissionResult('rejected', errorCategory: 'provider_rejected'));
         $provider->shouldNotReceive('lookupSyntheticTestByExternalReference');
         $workflow = app(SyntheticSzamlazzTestWorkflow::class);
@@ -161,6 +166,7 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
         $owner = User::factory()->owner()->create();
         $this->publishPrefix($owner, 'A');
         $provider = $this->mock(SyntheticInvoiceTestProvider::class);
+        $provider->shouldReceive('validateSyntheticTest')->twice()->andReturnTrue();
         $provider->shouldReceive('submitSyntheticTest')->twice()->andReturn(
             new ProviderSubmissionResult('rejected', errorCategory: 'provider_rejected'),
             new ProviderSubmissionResult('ambiguous', errorCategory: 'provider_response_ambiguous'),
@@ -230,6 +236,89 @@ final class SyntheticSzamlazzTestWorkflowTest extends TestCase
             ->assertOk()
             ->assertSee($run->external_reference)
             ->assertSee(__('owner.synthetic_invoice_test.execution_slot_consumed'));
+    }
+
+    public function test_legacy_incorrect_amount_is_blocked_before_submission_slot_and_can_be_cancelled_without_mutating_snapshot(): void
+    {
+        $this->enableStagingTestMode();
+        $owner = User::factory()->owner()->create();
+        $this->publishPrefix($owner, 'A');
+        $provider = $this->mock(SyntheticInvoiceTestProvider::class);
+        $provider->shouldNotReceive('validateSyntheticTest');
+        $provider->shouldNotReceive('submitSyntheticTest');
+        $version = BillingTaxConfigurationVersion::query()->latest('version')->firstOrFail();
+        $snapshot = [
+            'designation' => 'synthetic_test',
+            'test_account' => [
+                'credential_reference' => 'szamlazz_agent', 'owner_attested_test_mode' => true,
+                'owner_attested_at' => now()->toIso8601String(), 'owner_attestor_id' => $owner->id,
+                'test_seller_profile_confirmed' => true,
+                'seller_profile_label' => 'Owner-confirmed synthetic seller profile in the TEST account',
+            ],
+            'seller' => SyntheticSzamlazzTestContract::seller(),
+            'buyer' => SyntheticSzamlazzTestContract::buyer(),
+            'line' => ['net' => 1000, 'tax' => 0, 'gross' => 1000, 'tax_code' => 'AAM'],
+            'tax_code' => 'AAM', 'currency' => 'HUF', 'amount' => 1000, 'notify_customer' => false,
+            'description' => 'WP CareGrid synthetic Szamlazz integration test',
+            'tax_decision_kind' => 'synthetic_provider_code_selection_not_a_tax_decision',
+            'billing_tax_configuration' => ['version_id' => $version->id, 'version' => $version->version, 'invoice_prefix' => 'A'],
+        ];
+        $run = SzamlazzSyntheticTestRun::query()->create([
+            'execution_slot' => 'legacy-invalid-amount-slot', 'designation' => 'synthetic_test', 'status' => 'prepared',
+            'prepared_by' => $owner->id, 'tax_code' => 'AAM', 'currency' => 'HUF', 'amount' => 1000,
+            'test_account_attested' => true, 'test_seller_attested' => true, 'credential_reference' => 'szamlazz_agent',
+            'external_reference' => 'wpcg-synthetic-test-1234567890',
+            'snapshot_sha256' => hash('sha256', json_encode($snapshot, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)),
+            'commercial_snapshot' => $snapshot,
+        ]);
+        $originalHash = $run->snapshot_sha256;
+        $originalSnapshot = $run->commercial_snapshot;
+        $workflow = app(SyntheticSzamlazzTestWorkflow::class);
+
+        try {
+            $workflow->submit($run, $owner, 'staging.wpcaregrid.com', [
+                'confirm_submission' => '1', 'confirmation_phrase' => 'SUBMIT ONE TEST INVOICE',
+            ]);
+            $this->fail('Legacy incorrect amount must be blocked before submission.');
+        } catch (ValidationException) {
+            $this->assertSame('prepared', $run->fresh()->status);
+            $this->assertNull($run->fresh()->submitted_at);
+        }
+
+        $cancelled = $workflow->cancel($run, $owner, 'staging.wpcaregrid.com', [
+            'reason_code' => 'invalid_amount_snapshot', 'confirmation_phrase' => 'CANCEL PREPARED TEST RUN',
+        ]);
+        $this->assertSame('cancelled', $cancelled->status);
+        $this->assertSame($originalHash, $cancelled->snapshot_sha256);
+        $this->assertSame($originalSnapshot, $cancelled->commercial_snapshot);
+        $this->assertSame(1, DB::table('admin_audit_events')->where('event', 'billing_tax.synthetic_test_cancelled')->count());
+        $this->assertSame('cancelled', $workflow->cancel($cancelled, $owner, 'staging.wpcaregrid.com', [
+            'reason_code' => 'invalid_amount_snapshot', 'confirmation_phrase' => 'CANCEL PREPARED TEST RUN',
+        ])->status);
+        $this->assertSame(1, DB::table('admin_audit_events')->where('event', 'billing_tax.synthetic_test_cancelled')->count());
+        $this->assertSame('cancelled', $workflow->submit($cancelled, $owner, 'staging.wpcaregrid.com', [
+            'confirm_submission' => '1', 'confirmation_phrase' => 'SUBMIT ONE TEST INVOICE',
+        ])->status);
+    }
+
+    public function test_valid_amount_run_cannot_be_cancelled_as_invalid(): void
+    {
+        $this->enableStagingTestMode();
+        $owner = User::factory()->owner()->create();
+        $this->publishPrefix($owner, 'A');
+        $run = app(SyntheticSzamlazzTestWorkflow::class)->prepare($this->prepareInput(), $owner, 'staging.wpcaregrid.com');
+
+        $this->expectException(ValidationException::class);
+        app(SyntheticSzamlazzTestWorkflow::class)->cancel($run, $owner, 'staging.wpcaregrid.com', [
+            'reason_code' => 'invalid_amount_snapshot', 'confirmation_phrase' => 'CANCEL PREPARED TEST RUN',
+        ]);
+    }
+
+    public function test_contract_uses_currency_minor_units_and_exact_integer_arithmetic(): void
+    {
+        $this->assertSame(100000, SyntheticSzamlazzTestContract::grossMinorUnits());
+        $this->assertSame(['net' => 100000, 'tax' => 0, 'gross' => 100000, 'tax_code' => 'AAM'], SyntheticSzamlazzTestContract::line());
+        $this->assertSame('1,000.00', SyntheticSzamlazzTestContract::formatMinorUnits(100000));
     }
 
     private function enableStagingTestMode(): void
