@@ -39,7 +39,7 @@
             {{-- Sidebar (lg) / top bar with menu (smaller screens) --}}
             <header class="on-dark sticky top-0 z-40 bg-primary text-on-dark lg:static lg:flex lg:flex-col">
                 <div class="flex h-16 items-center justify-between gap-4 px-4 sm:px-6 lg:h-auto lg:px-6 lg:pt-6 lg:pb-8">
-                    <a href="{{ route('home') }}" class="rounded-sm" aria-label="{{ __('home.home_link') }}">
+                    <a href="{{ app(\App\Localization\MarketingRoutes::class)->home() }}" class="rounded-sm" aria-label="{{ __('home.home_link') }}">
                         <x-brand.logo tone="dark" :descriptor="false" class="h-8" />
                     </a>
                     <button

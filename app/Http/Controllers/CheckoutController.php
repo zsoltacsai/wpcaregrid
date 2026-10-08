@@ -12,6 +12,7 @@ use App\Checkout\PromotionRejected;
 use App\Checkout\StartCheckout;
 use App\Http\Requests\PromotionPreviewRequest;
 use App\Http\Requests\StartCheckoutRequest;
+use App\Localization\MarketingRoutes;
 use App\Models\CheckoutIntent;
 use App\Pricing\BillingInterval;
 use App\Pricing\DisplayCurrency;
@@ -41,7 +42,7 @@ class CheckoutController extends Controller
                 $request->query('interval', $pricing->defaultInterval->value),
             );
         } catch (InvalidPriceSelection $e) {
-            return redirect()->route('pricing')->with('checkout_error', $e->customerMessage());
+            return redirect(app(MarketingRoutes::class)->pricing())->with('checkout_error', $e->customerMessage());
         }
 
         $display = app(DisplayCurrency::class);
@@ -49,7 +50,7 @@ class CheckoutController extends Controller
         try {
             $lockedCurrency = $account ? $currencyLock->forCustomer($account) : null;
         } catch (AmbiguousCustomerCurrency $e) {
-            return redirect()->route('pricing')->with('checkout_error', $e->customerMessage());
+            return redirect(app(MarketingRoutes::class)->pricing())->with('checkout_error', $e->customerMessage());
         }
         $billingCountry = old('country', $request->user()?->customer?->country_code ?? 'HU');
         $currency = $display->selected();
@@ -61,7 +62,7 @@ class CheckoutController extends Controller
             $currency = $pricing->defaultInternationalCurrency();
         }
         if (! is_string($currency) || ! in_array($currency, $display->available(), true) || ! ($market = $pricing->marketForCurrency($currency))) {
-            return redirect()->route('pricing')->with('checkout_error', __('checkout.errors.invalid_selection'));
+            return redirect(app(MarketingRoutes::class)->pricing())->with('checkout_error', __('checkout.errors.invalid_selection'));
         }
 
         // Presentation only: country and currency are revalidated by StartCheckout before Stripe is called.
@@ -69,7 +70,7 @@ class CheckoutController extends Controller
             ->first(fn ($offer) => $offer->plan->tier === $selection->tier);
 
         if (! $offer) {
-            return redirect()->route('pricing')->with('checkout_error', __('checkout.errors.invalid_selection'));
+            return redirect(app(MarketingRoutes::class)->pricing())->with('checkout_error', __('checkout.errors.invalid_selection'));
         }
 
         $priceMatrix = [];

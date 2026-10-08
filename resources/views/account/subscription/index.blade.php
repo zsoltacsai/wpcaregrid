@@ -13,7 +13,7 @@
     @empty
         <x-account.panel>
             <p class="text-sm text-muted">{{ __('account.subscription.none') }}</p>
-            <x-ui.button :href="route('pricing')" variant="secondary" class="mt-4">{{ __('account.dashboard.view_plans') }}</x-ui.button>
+            <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->pricing()" variant="secondary" class="mt-4">{{ __('account.dashboard.view_plans') }}</x-ui.button>
         </x-account.panel>
     @endforelse
 </x-layouts.account>

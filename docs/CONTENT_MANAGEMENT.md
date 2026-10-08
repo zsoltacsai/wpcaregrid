@@ -74,7 +74,7 @@ Tests cover HTML, script and attribute injection, unsafe URLs, rich text sanitis
 
 ## SEO
 
-`/owner/seo` lists the pages (home, pricing) per locale. Fields: title, description, canonical URL (empty: the page address; otherwise on this site only), robots (`index,follow` default, `noindex,follow`, `index,nofollow`, `noindex,nofollow`), Open Graph title and description (empty: title and description). They change only that page's own tags in the marketing layout; there is no robots.txt, header or server setting, and nothing affects customer websites or other pages. A robots tag is written only when it differs from the default.
+`/owner/seo` lists the pages (home, pricing) per locale. Fields: title, description, canonical URL, robots (`index,follow` default, `noindex,follow`, `index,nofollow`, `noindex,nofollow`), Open Graph title and description (empty: title and description). Localized routes accept a canonical override only when it exactly matches the generated canonical for that locale; a mismatching existing value is ignored and a sanitized warning is logged. Metadata applies only to that page's tags. See [SEO_INDEXING.md](SEO_INDEXING.md) for indexing and sitemap gates.
 
 ## Navigation and footer
 

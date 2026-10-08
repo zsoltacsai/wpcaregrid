@@ -3,14 +3,30 @@
     title, description, canonical URL, robots, Open Graph text). It only
     changes this page's own tags. preview: a signed owner draft preview.
 --}}
-@props(['title' => null, 'description' => null, 'seo' => null, 'preview' => false, 'indexable' => false, 'localeForm' => null])
+@props(['title' => null, 'description' => null, 'seo' => null, 'preview' => false, 'indexable' => false, 'localeForm' => null, 'alternates' => []])
 
 @php
     $title = filled($seo['title'] ?? null) ? $seo['title'] : $title;
     $description = filled($seo['description'] ?? null) ? $seo['description'] : $description;
-    $canonicalPath = request()->getPathInfo();
-    $canonicalFallback = rtrim((string) config('app.url'), '/').($canonicalPath === '/' ? '/' : $canonicalPath);
-    $canonical = filled($seo['canonical_url'] ?? null) && \App\Content\SafeUrl::isOwnHost($seo['canonical_url']) ? $seo['canonical_url'] : $canonicalFallback;
+    $canonicalPath = match (request()->route()?->getName()) {
+        'home' => '/'.(string) request()->route('locale').'/',
+        'pricing' => '/'.(string) request()->route('locale').'/pricing',
+        default => request()->getPathInfo(),
+    };
+    $canonicalFallback = app(\App\Seo\CanonicalUrl::class)->forPath($canonicalPath);
+    $canonicalOverride = $seo['canonical_url'] ?? null;
+    $canonical = $canonicalFallback;
+    if (filled($canonicalOverride)) {
+        if (is_string($canonicalOverride) && hash_equals($canonicalFallback, $canonicalOverride)
+            && \App\Content\SafeUrl::isOwnHost($canonicalOverride)) {
+            $canonical = $canonicalOverride;
+        } elseif (request()->routeIs('home', 'pricing')) {
+            \Illuminate\Support\Facades\Log::warning('Ignored SEO canonical override that does not match the localized route.', [
+                'route' => request()->route()?->getName(),
+                'locale' => app()->getLocale(),
+            ]);
+        }
+    }
     $mayIndex = app(\App\Seo\IndexingPolicy::class)->allowsPublicMarketingIndexing($indexable, request());
     $requestedRobots = in_array($seo['robots'] ?? null, \App\Content\Schema\ContentSchema::ROBOTS, true) ? $seo['robots'] : null;
     $robots = $preview
@@ -30,6 +46,9 @@
         <meta name="description" content="{{ $description }}">
         <meta name="robots" content="{{ str_replace(',', ', ', $robots) }}">
         <link rel="canonical" href="{{ $canonical }}">
+        @foreach ($alternates as $language => $url)
+            <link rel="alternate" hreflang="{{ $language }}" href="{{ $url }}">
+        @endforeach
 
         <meta property="og:type" content="website">
         <meta property="og:site_name" content="WP CareGrid">

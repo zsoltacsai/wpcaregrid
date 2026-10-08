@@ -154,7 +154,7 @@ class HungarianContentTest extends TestCase
             $this->assertSame(['hu', null], [$section->locale, $section->fallbackLang()], "{$key} is served in Hungarian");
         }
 
-        $home = $this->get('/')->assertOk()->getContent();
+        $home = $this->get('/hu/')->assertOk()->getContent();
         $this->assertStringContainsString('<html lang="hu">', $home);
         // The English button of the language selector is rightly lang="en"; no content section is.
         $this->assertDoesNotMatchRegularExpression('/<section[^>]*lang="en"/', $home, 'No section is marked as English fallback.');
@@ -174,7 +174,7 @@ class HungarianContentTest extends TestCase
             $this->assertStringNotContainsString($text, $home, "English text left on the Hungarian homepage: {$text}");
         }
 
-        $pricing = $this->get('/pricing')->assertOk()->getContent();
+        $pricing = $this->get('/hu/pricing')->assertOk()->getContent();
         $this->assertStringContainsString('Éves', $pricing);
         $this->assertStringContainsString('Basic', $pricing);
         $this->assertStringNotContainsString('Monthly', $pricing);
@@ -190,7 +190,7 @@ class HungarianContentTest extends TestCase
     {
         $this->useHungarian();
         $this->withSession(['display_currency' => 'HUF']);
-        $pricing = $this->get('/pricing')->assertOk()->getContent();
+        $pricing = $this->get('/hu/pricing')->assertOk()->getContent();
         $visible = html_entity_decode(strip_tags($pricing), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $visible = preg_replace('/[\p{Z}\s]+/u', ' ', $visible);
 
@@ -207,7 +207,7 @@ class HungarianContentTest extends TestCase
 
     public function test_english_rendering_is_unchanged(): void
     {
-        $home = $this->get('/')->assertOk()->getContent();
+        $home = $this->get('/en/')->assertOk()->getContent();
 
         $this->assertStringContainsString('<html lang="en">', $home);
         foreach (['WordPress maintenance, without the hassle.', 'What maintenance includes', 'Frequently asked questions', 'Keep your WordPress maintained.', 'Cookie Policy'] as $text) {
@@ -217,7 +217,7 @@ class HungarianContentTest extends TestCase
         $this->assertSame('WordPress maintained. Website working.', trans('home.tagline', [], 'en'));
 
         $this->withSession(['display_currency' => 'EUR']);
-        $pricing = $this->get('/pricing')->assertOk()->getContent();
+        $pricing = $this->get('/en/pricing')->assertOk()->getContent();
         $this->assertStringContainsString('Plans and pricing', $pricing);
         $this->assertStringContainsString('€89', $pricing);
     }
@@ -229,7 +229,7 @@ class HungarianContentTest extends TestCase
         $draft['title'] = 'Piszkozat főcím, nem nyilvános';
         ContentEntry::create(['key' => 'home.hero', 'locale' => 'hu'])->forceFill(['draft' => $draft])->save();
 
-        $this->get('/')->assertOk()
+        $this->get('/hu/')->assertOk()
             ->assertDontSee('Piszkozat főcím, nem nyilvános')
             ->assertSee('WordPress-karbantartás, gond nélkül.');
 
@@ -237,12 +237,12 @@ class HungarianContentTest extends TestCase
         $draft['title'] = 'Közzétett főcím';
         ContentEntry::where('key', 'home.hero')->where('locale', 'hu')->sole()->forceFill(['published' => $draft, 'draft' => null])->save();
         app(ContentRepository::class)->flush();
-        $this->get('/')->assertSee('Közzétett főcím');
+        $this->get('/hu/')->assertSee('Közzétett főcím');
 
         config(['app.locale' => 'en', 'localization.default' => 'en']);
         app()->setLocale('en');
         app(ContentRepository::class)->flush();
-        $this->get('/')->assertSee('WordPress maintenance, without the hassle.')->assertDontSee('Közzétett főcím');
+        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.')->assertDontSee('Közzétett főcím');
     }
 
     public function test_the_owner_area_reports_no_missing_hungarian_content(): void

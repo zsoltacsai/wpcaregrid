@@ -1,4 +1,0 @@
-# Keep HTML paths crawlable so crawlers can read their per-page noindex tags.
-# Access control is enforced by the application, not by robots.txt.
-User-agent: *
-Disallow:

@@ -29,6 +29,6 @@ class LocaleController extends Controller
         Cookie::queue(Locales::cookie($locale));
 
         // The form the visitor was filling in comes back with what they had typed, minus secrets.
-        return redirect()->to(Locales::returnUrl($request))->withInput($request->except(self::NEVER_RESTORED));
+        return redirect()->to(Locales::returnUrl($request, $locale))->withInput($request->except(self::NEVER_RESTORED));
     }
 }

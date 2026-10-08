@@ -78,11 +78,12 @@ class CustomerLocalizationTest extends TestCase
 
     public function test_the_default_language_is_the_application_default_and_the_page_declares_it(): void
     {
-        $en = $this->get('/')->assertOk();
+        $this->get('/')->assertStatus(301)->assertRedirect(rtrim(route('home', ['locale' => 'en']), '/').'/');
+        $en = $this->get('/en/')->assertOk();
         $this->assertStringContainsString('<html lang="en">', $en->getContent());
         $en->assertHeader('Content-Language', 'en');
 
-        $hu = $this->in('hu')->get('/')->assertOk();
+        $hu = $this->in('en')->get('/hu/')->assertOk();
         $this->assertStringContainsString('<html lang="hu">', $hu->getContent());
         $hu->assertHeader('Content-Language', 'hu');
         $this->assertStringContainsString('WordPress-karbantartás, gond nélkül.', $hu->getContent());
@@ -92,24 +93,25 @@ class CustomerLocalizationTest extends TestCase
     public function test_the_language_selector_is_on_the_page_and_marks_the_active_language(): void
     {
         foreach (['en' => ['Language', 'English'], 'hu' => ['Nyelv', 'Magyar']] as $locale => [$label, $active]) {
-            $html = $this->in($locale)->get('/')->getContent();
+            $html = $this->get($locale === 'hu' ? '/hu/' : '/en/')->getContent();
 
             $this->assertStringContainsString('role="group"', $html);
             $this->assertStringContainsString('aria-label="'.$label.'"', $html);
-            $this->assertMatchesRegularExpression('/<button[^>]*lang="en"[^>]*>\s*English\s*<\/button>/', $html);
-            $this->assertMatchesRegularExpression('/<button[^>]*lang="hu"[^>]*>\s*Magyar\s*<\/button>/', $html);
-            $this->assertMatchesRegularExpression('/<button[^>]*aria-current="true"[^>]*>\s*'.$active.'\s*<\/button>/', $html);
+            $this->assertMatchesRegularExpression('/<a[^>]*lang="en"[^>]*>\s*English\s*<\/a>/', $html);
+            $this->assertMatchesRegularExpression('/<a[^>]*lang="hu"[^>]*>\s*Magyar\s*<\/a>/', $html);
+            $this->assertMatchesRegularExpression('/<a[^>]*aria-current="page"[^>]*>\s*'.$active.'\s*<\/a>/', $html);
         }
     }
 
     public function test_switching_the_language_remembers_it_and_returns_to_the_same_page(): void
     {
-        $this->from(route('pricing'))->post(route('locale.update'), ['locale' => 'hu'])
-            ->assertRedirect(route('pricing'))
+        $checkout = route('checkout.show', ['product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly']);
+        $this->from($checkout)->post(route('locale.update'), ['locale' => 'hu'])
+            ->assertRedirect($checkout)
             ->assertCookie(self::COOKIE, 'hu');
 
-        $this->in('hu')->get(route('pricing'))->assertSee('Csomagok és árak');
-        $this->in('en')->get(route('pricing'))->assertSee('Plans and pricing');
+        $this->get(route('pricing', ['locale' => 'hu']))->assertSee('Csomagok és árak');
+        $this->get(route('pricing', ['locale' => 'en']))->assertSee('Plans and pricing');
     }
 
     public function test_unsupported_languages_are_refused_and_change_nothing(): void
@@ -129,16 +131,16 @@ class CustomerLocalizationTest extends TestCase
 
     public function test_a_tampered_cookie_and_a_foreign_return_address_are_harmless(): void
     {
-        $this->in('xx')->get('/')->assertOk()->assertHeader('Content-Language', 'en');
-        $this->in('../../')->get('/')->assertOk()->assertHeader('Content-Language', 'en');
+        $this->in('xx')->get('/en/')->assertOk()->assertHeader('Content-Language', 'en');
+        $this->in('../../')->get('/en/')->assertOk()->assertHeader('Content-Language', 'en');
 
         $this->withHeader('Referer', 'https://evil.example/phish')->post(route('locale.update'), ['locale' => 'hu'])
-            ->assertRedirect(route('home'));
+            ->assertRedirect('http://localhost/hu/');
     }
 
     public function test_a_language_query_parameter_is_not_a_way_to_switch(): void
     {
-        $this->get('/?locale=hu&lang=hu')->assertOk()->assertHeader('Content-Language', 'en');
+        $this->get('/en/?locale=hu&lang=hu')->assertOk()->assertHeader('Content-Language', 'en');
     }
 
     public function test_what_was_typed_comes_back_after_a_switch_but_secrets_do_not(): void
@@ -181,7 +183,7 @@ class CustomerLocalizationTest extends TestCase
         $this->assertTrue($currency->canChoose());
 
         foreach (['en', 'hu'] as $locale) {
-            $html = $this->in($locale)->get(route('pricing'))->getContent();
+            $html = $this->get(route('pricing', ['locale' => $locale]))->getContent();
             $this->assertStringContainsString('name="currency"', $html);
             foreach (['HUF', 'EUR', 'USD', 'GBP'] as $code) {
                 $this->assertStringContainsString('<option value="'.$code.'"', $html);
@@ -191,21 +193,21 @@ class CustomerLocalizationTest extends TestCase
 
     public function test_currency_selection_persists_and_changes_display_without_starting_checkout(): void
     {
-        $this->in('en')->from(route('pricing'))->post(route('currency.update'), ['currency' => 'EUR'])->assertRedirect(route('pricing'));
+        $this->in('en')->from(route('pricing', ['locale' => 'en']))->post(route('currency.update'), ['currency' => 'EUR'])->assertRedirect(route('pricing', ['locale' => 'en']));
         $this->assertSame('EUR', session('display_currency'));
-        $eur = $this->in('en')->get(route('pricing'))->getContent();
+        $eur = $this->get(route('pricing', ['locale' => 'en']))->getContent();
         $this->assertStringContainsString('<option value="EUR" selected', $eur);
         $this->assertStringContainsString('€49', html_entity_decode(strip_tags($eur), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         $this->assertStringNotContainsString('8,990', $eur);
         $this->assertDatabaseCount('checkout_intents', 0);
 
-        $this->in('en')->from(route('pricing'))->post(route('currency.update'), ['currency' => 'USD'])->assertRedirect(route('pricing'));
-        $usd = $this->in('en')->get(route('pricing'))->getContent();
+        $this->in('en')->from(route('pricing', ['locale' => 'en']))->post(route('currency.update'), ['currency' => 'USD'])->assertRedirect(route('pricing', ['locale' => 'en']));
+        $usd = $this->get(route('pricing', ['locale' => 'en']))->getContent();
         $this->assertStringContainsString('<option value="USD" selected', $usd);
         $this->assertStringContainsString('$49', html_entity_decode(strip_tags($usd), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
 
-        $this->in('en')->from(route('pricing'))->post(route('locale.update'), ['locale' => 'hu'])->assertRedirect(route('pricing'));
-        $this->assertStringContainsString('<option value="USD" selected', $this->in('hu')->get(route('pricing'))->getContent());
+        $this->in('en')->from(route('checkout.show', ['product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly']))->post(route('locale.update'), ['locale' => 'hu'])->assertRedirect();
+        $this->assertStringContainsString('<option value="USD" selected', $this->get(route('pricing', ['locale' => 'hu']))->getContent());
     }
 
     public function test_locale_currency_suggestions_are_hints_only(): void
@@ -225,7 +227,7 @@ class CustomerLocalizationTest extends TestCase
         $this->in('en')->post(route('currency.update'), ['currency' => 'JPY'])->assertSessionHasErrors('currency');
         $this->assertNull(session('display_currency'));
         $html = $this->withHeader('Accept-Language', 'en')
-            ->in('en')->get(route('pricing', ['currency' => 'JPY', 'market' => 'attacker', 'amount' => 1]))->getContent();
+            ->in('en')->get(route('pricing', ['locale' => 'en', 'currency' => 'JPY', 'market' => 'attacker', 'amount' => 1]))->getContent();
         $this->assertStringContainsString('€49', html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
     }
 
@@ -251,7 +253,7 @@ class CustomerLocalizationTest extends TestCase
             'email' => 'anna@company.example', 'first_name' => 'Anna', 'last_name' => 'Kovács', 'country' => 'HU',
             // Forged presentation fields: none of them is read.
             'currency' => 'EUR', 'amount' => 1, 'stripe_price_id' => 'price_evil', 'market' => 'eu', 'locale' => 'en',
-        ])->assertSessionHasErrors(['checkout' => __('checkout.errors.market_currency_mismatch')]);
+        ])->assertSessionHasErrors('checkout');
 
         $this->in('en')->post(route('checkout.store'), [
             'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly',
@@ -319,7 +321,7 @@ class CustomerLocalizationTest extends TestCase
         $this->post(route('currency.update'), ['currency' => 'HUF']);
 
         foreach (['en' => [',', 'Monthly', 'Annual', '2 months free'], 'hu' => ["\u{202F}", 'Havi', 'Éves', '2 hónap ingyenes']] as $locale => [$separator, $monthly, $annual, $free]) {
-            $html = $this->in($locale)->get(route('pricing'))->getContent();
+            $html = $this->get(route('pricing', ['locale' => $locale]))->getContent();
 
             foreach ($amounts as $amount) {
                 $this->assertStringContainsString($amount >= 1000 ? number_format($amount, 0, '', '__') !== '' ? substr((string) $amount, 0, -3).$separator.substr((string) $amount, -3) : '' : (string) $amount, $html, "{$amount} in {$locale}");
@@ -643,8 +645,8 @@ class CustomerLocalizationTest extends TestCase
     public function test_a_hungarian_request_does_not_make_the_next_request_hungarian(): void
     {
         // App::setLocale() rewrites config('app.locale'); the default must not follow it (queue workers, Octane).
-        $this->in('hu')->get('/')->assertHeader('Content-Language', 'hu');
-        $this->withCookie(self::COOKIE, 'xx')->get('/')->assertHeader('Content-Language', 'en');
+        $this->in('hu')->get('/hu/')->assertHeader('Content-Language', 'hu');
+        $this->withCookie(self::COOKIE, 'xx')->get('/en/')->assertHeader('Content-Language', 'en');
     }
 
     public function test_the_language_is_no_way_to_reach_another_customers_data(): void

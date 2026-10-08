@@ -2,6 +2,7 @@
 
 namespace App\Localization;
 
+use App\Seo\CanonicalUrl;
 use Illuminate\Cookie\CookieValuePrefix;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Cookie;
@@ -59,6 +60,13 @@ final class Locales
             return 'en';
         }
 
+        // Localized public marketing URLs are deterministic and override
+        // device cookies and saved customer preferences.
+        $routeLocale = $request->route('locale');
+        if (self::isSupported($routeLocale) && self::isLocalizedMarketingRoute($request)) {
+            return $routeLocale;
+        }
+
         $remembered = $request->cookie((string) config('localization.cookie'));
         if (self::isSupported($remembered)) {
             return $remembered;
@@ -67,6 +75,16 @@ final class Locales
         $saved = $request->user('web')?->locale;
 
         return self::isSupported($saved) ? $saved : self::default();
+    }
+
+    public static function hasExplicitRouteLocale(Request $request): bool
+    {
+        return self::isSupported($request->route('locale')) && self::isLocalizedMarketingRoute($request);
+    }
+
+    public static function isLocalizedMarketingRoute(Request $request): bool
+    {
+        return $request->routeIs('home', 'pricing');
     }
 
     /**
@@ -95,11 +113,13 @@ final class Locales
     }
 
     /** Back to the page the visitor came from, only when it is on this site; otherwise the homepage. */
-    public static function returnUrl(Request $request): string
+    public static function returnUrl(Request $request, ?string $locale = null): string
     {
         $previous = (string) $request->headers->get('referer');
 
-        return $previous !== '' && parse_url($previous, PHP_URL_HOST) === $request->getHost() ? $previous : route('home');
+        return $previous !== '' && parse_url($previous, PHP_URL_HOST) === $request->getHost()
+            ? $previous
+            : app(CanonicalUrl::class)->forPath(app(MarketingRoutes::class)->home($locale));
     }
 
     /** The cookie that remembers the choice. Not sensitive; no secret in it. */

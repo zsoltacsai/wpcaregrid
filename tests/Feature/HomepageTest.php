@@ -11,7 +11,7 @@ class HomepageTest extends TestCase
 {
     public function test_homepage_renders_with_seo_metadata(): void
     {
-        $response = $this->get('/')
+        $response = $this->get('/en/')
             ->assertOk()
             ->assertSee('<title>WP CareGrid – WordPress Maintenance, Backups &amp; Security</title>', false)
             ->assertSee('<meta name="description" content="WordPress and WooCommerce maintenance, backups, security checks and functional verification for businesses.">', false)
@@ -39,7 +39,7 @@ class HomepageTest extends TestCase
         // .env.example ships "MARKETING_LOGIN_URL=" with no value; it used to
         // leave the header Login as a button that went nowhere.
         config(['marketing' => $this->marketingConfigWith('MARKETING_LOGIN_URL', '')]);
-        $html = $this->get('/')->assertOk()->getContent();
+        $html = $this->get('/en/')->assertOk()->getContent();
 
         $this->assertSame('/login', config('marketing.links.login'));
         $this->assertSame(3, substr_count($html, 'href="/login"'), 'Header, mobile menu and footer.');
@@ -47,12 +47,12 @@ class HomepageTest extends TestCase
         $this->get('/login')->assertOk();
 
         config(['marketing' => $this->marketingConfigWith('MARKETING_LOGIN_URL', 'https://app.example.com/login')]);
-        $this->assertSame(3, substr_count($this->get('/')->getContent(), 'href="https://app.example.com/login"'));
+        $this->assertSame(3, substr_count($this->get('/en/')->getContent(), 'href="https://app.example.com/login"'));
     }
 
     public function test_no_translation_keys_leak_into_the_page(): void
     {
-        $html = $this->get('/')->getContent();
+        $html = $this->get('/en/')->getContent();
 
         $this->assertDoesNotMatchRegularExpression('/>\s*(home|pricing|dashboard|status)\.[a-z_]+(\.[a-z_]+)*\s*</', $html);
         $this->assertDoesNotMatchRegularExpression('/"(home|pricing|dashboard|status)\.[a-z_]+\.[a-z_.]+"/', $html);
@@ -60,7 +60,7 @@ class HomepageTest extends TestCase
 
     public function test_sections_appear_in_the_agreed_order(): void
     {
-        $this->get('/')->assertSeeInOrder([
+        $this->get('/en/')->assertSeeInOrder([
             'WordPress maintenance, without the hassle.',
             'Functional checks',
             'WordPress doesn&#039;t maintain itself.',
@@ -81,7 +81,7 @@ class HomepageTest extends TestCase
     public function test_all_agreed_prices_are_rendered(): void
     {
         $this->post(route('currency.update'), ['currency' => 'HUF']);
-        $response = $this->get('/');
+        $response = $this->get('/en/');
 
         foreach (['8,990', '89,900', '18,990', '189,900', '28,990', '289,900', '14,900', '149,000', '24,900', '249,000', '39,900', '399,000'] as $amount) {
             $response->assertSee('>'.$amount."\u{00A0}Ft<", false);
@@ -98,7 +98,7 @@ class HomepageTest extends TestCase
 
     public function test_approved_brand_assets_are_used(): void
     {
-        $this->get('/')
+        $this->get('/en/')
             ->assertOk()
             // Grid mark from design/brand/logo, with its single accent square.
             ->assertSee('fill="#5B8C72"', false)
@@ -110,7 +110,7 @@ class HomepageTest extends TestCase
 
     public function test_key_service_messages_are_present(): void
     {
-        $this->get('/')
+        $this->get('/en/')
             ->assertSee('Our maintenance process includes a backup, update, technical check and functional verification.')
             ->assertSeeInOrder(['Step 01', 'Backup', 'Step 02', 'Update', 'Step 03', 'Check', 'Step 04', 'Functional test', 'Step 05', 'Done'])
             ->assertSee('WP CareGrid records it and notifies the website owner')
@@ -121,7 +121,7 @@ class HomepageTest extends TestCase
 
     public function test_dashboard_previews_are_labelled_as_demo_data(): void
     {
-        $this->get('/')
+        $this->get('/en/')
             ->assertSee('Demo data')
             ->assertSee('Illustrative figures, not real customer data.')
             ->assertSeeInOrder(['Last backup', 'Updates', 'Security', 'License', 'Status'])
@@ -132,7 +132,7 @@ class HomepageTest extends TestCase
 
     public function test_interactive_controls_expose_their_state(): void
     {
-        $this->get('/')
+        $this->get('/en/')
             ->assertSee('role="tablist"', false)
             ->assertSee('aria-controls="mobile-menu"', false)
             ->assertSee('aria-controls="faq-1-panel"', false)
@@ -141,7 +141,7 @@ class HomepageTest extends TestCase
 
     public function test_public_demo_ui_uses_only_reserved_example_domains(): void
     {
-        $html = $this->get('/')->getContent();
+        $html = $this->get('/en/')->getContent();
 
         foreach (['fndeco.com', 'petplaza.hu', 'A WordPress doesn'] as $forbidden) {
             $this->assertStringNotContainsString($forbidden, $html);
@@ -168,7 +168,7 @@ class HomepageTest extends TestCase
     {
         $sites = DemoDashboard::sites();
 
-        $this->get('/')->assertSee(count($sites).' sites');
+        $this->get('/en/')->assertSee(count($sites).' sites');
         $this->assertCount(6, $sites);
         $this->assertSame(7, array_sum(array_column($sites, 'updates')));
         $this->assertSame(4, count(array_filter($sites, fn ($site) => $site['updates'] > 0)));
@@ -179,7 +179,7 @@ class HomepageTest extends TestCase
     public function test_pricing_cards_render_exactly_the_catalogue_features(): void
     {
         $catalog = app(PricingCatalog::class);
-        $html = $this->get('/')->getContent();
+        $html = $this->get('/en/')->getContent();
 
         foreach (ProductType::cases() as $type) {
             foreach ($catalog->offers($type) as $offer) {

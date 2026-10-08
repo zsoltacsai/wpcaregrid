@@ -12,8 +12,8 @@
             <p class="mt-6 max-w-xl text-lg leading-relaxed text-muted">{{ $content['description'] }}</p>
 
             <div class="mt-8 flex flex-col gap-3 sm:flex-row">
-                <x-ui.button :href="$content->url('primary_cta_url')" size="lg" icon="arrow-right">{{ $content['primary_cta_label'] }}</x-ui.button>
-                <x-ui.button :href="$content->url('secondary_cta_url')" variant="secondary" size="lg">{{ $content['secondary_cta_label'] }}</x-ui.button>
+                <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->localize($content->url('primary_cta_url'))" size="lg" icon="arrow-right">{{ $content['primary_cta_label'] }}</x-ui.button>
+                <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->localize($content->url('secondary_cta_url'))" variant="secondary" size="lg">{{ $content['secondary_cta_label'] }}</x-ui.button>
             </div>
 
             <ul class="mt-8 flex flex-col gap-3 text-sm text-ink sm:flex-row sm:flex-wrap sm:gap-x-6">

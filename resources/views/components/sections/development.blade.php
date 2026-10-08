@@ -9,7 +9,7 @@
             :lead="$content['description']"
         />
 
-        <x-ui.button :href="$content->url('cta_url')" size="lg" icon="arrow-right" class="self-start lg:self-auto">
+        <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->localize($content->url('cta_url'))" size="lg" icon="arrow-right" class="self-start lg:self-auto">
             {{ $content['cta_label'] }}
         </x-ui.button>
     </div>

@@ -24,7 +24,7 @@ use InvalidArgumentException;
  * A section is never assembled from fields of different languages; a
  * section shown in the fallback language says so (fallbackLang()).
  */
-final class ContentRepository
+class ContentRepository
 {
     public const CACHE_KEY = 'content.published';
 

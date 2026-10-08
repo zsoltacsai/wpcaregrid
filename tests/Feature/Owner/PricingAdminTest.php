@@ -81,7 +81,7 @@ class PricingAdminTest extends TestCase
         $this->draft([])->assertRedirect(route('owner.pricing.prices.edit', self::KEY));
 
         $this->assertSame(1899000, $this->businessMonthly()->money->amount);
-        $this->get('/')->assertSee(">18,990\u{00A0}Ft<", false)->assertDontSee(">19,990\u{00A0}Ft<", false);
+        $this->get('/en/')->assertSee(">18,990\u{00A0}Ft<", false)->assertDontSee(">19,990\u{00A0}Ft<", false);
         $this->assertEquals(['currency' => 'HUF', 'amount' => 1999000, 'stripe_price_id' => 'price_business_2027', 'active' => true], PriceDefinition::sole()->draft);
         $this->assertNull(PriceDefinition::sole()->published_at);
 
@@ -92,7 +92,7 @@ class PricingAdminTest extends TestCase
         $this->publish()->assertSessionHasNoErrors()->assertRedirect(route('owner.pricing.prices.edit', self::KEY));
         $price = $this->businessMonthly();
         $this->assertSame([1999000, 'price_business_2027', true], [$price->money->amount, $price->stripePriceId, $price->active]);
-        $this->get('/')->assertSee(">19,990\u{00A0}Ft<", false)->assertDontSee(">18,990\u{00A0}Ft<", false);
+        $this->get('/en/')->assertSee(">19,990\u{00A0}Ft<", false)->assertDontSee(">18,990\u{00A0}Ft<", false);
 
         $events = AdminAuditEvent::where('subject_type', 'price')->orderBy('id')->get();
         $this->assertSame(['price.created', 'price.published'], $events->pluck('event')->all());
@@ -333,7 +333,7 @@ class PricingAdminTest extends TestCase
             ->forceFill(['currency' => 'EUR', 'amount' => 1, 'stripe_price_id' => 'price_x', 'active' => true, 'published_at' => now()])->save();
 
         $this->assertSame([1899000, 'HUF'], [$this->businessMonthly()->money->amount, $this->businessMonthly()->money->currency->code]);
-        $this->get('/')->assertOk();
+        $this->get('/en/')->assertOk();
     }
 
     public function test_plan_features_and_backup_frequency_are_not_changed_by_wording(): void

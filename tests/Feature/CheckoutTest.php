@@ -749,7 +749,7 @@ class CheckoutTest extends TestCase
 
     public function test_homepage_plan_buttons_link_to_checkout_with_a_logical_selection_only(): void
     {
-        $html = $this->get('/')->getContent();
+        $html = $this->get('/en/')->getContent();
 
         preg_match_all('#href="(http://[^"]+/checkout\?[^"]+)"#', $html, $matches);
         $this->assertCount(6, $matches[1], 'One default-interval link per plan card.');

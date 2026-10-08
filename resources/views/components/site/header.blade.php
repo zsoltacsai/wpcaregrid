@@ -1,6 +1,7 @@
 @props(['localeForm' => null])
 
 @php
+    $marketingRoutes = app(\App\Localization\MarketingRoutes::class);
     $site = \App\Content\HomepageContent::current();
     $navigation = $site->navigation();
     $labels = $site->section('site.navigation');
@@ -17,7 +18,7 @@
     class="sticky top-0 z-50 border-b border-transparent bg-canvas transition-shadow duration-200 data-raised:border-line data-raised:shadow-header"
 >
     <x-ui.container class="flex h-16 items-center justify-between gap-6 lg:h-[72px]">
-        <a href="{{ route('home') }}" class="shrink-0 rounded-sm" aria-label="{{ __('home.home_link') }}">
+        <a href="{{ $marketingRoutes->home() }}" class="shrink-0 rounded-sm" aria-label="{{ __('home.home_link') }}">
             <x-brand.logo :descriptor="false" class="h-8 lg:h-9" />
         </a>
 
@@ -40,7 +41,7 @@
             @else
                 <x-ui.button :href="$links['login']" variant="ghost">{{ $labels['login_label'] }}</x-ui.button>
             @endauth
-            <x-ui.button :href="route('home').'#pricing'">{{ $labels['cta_label'] }}</x-ui.button>
+            <x-ui.button :href="$marketingRoutes->home().'#pricing'">{{ $labels['cta_label'] }}</x-ui.button>
         </div>
 
         <button
@@ -92,7 +93,7 @@
                 @else
                     <x-ui.button :href="$links['login']" variant="secondary" size="lg">{{ $labels['login_label'] }}</x-ui.button>
                 @endauth
-                <x-ui.button :href="route('home').'#pricing'" size="lg" x-on:click="open = false">{{ $labels['cta_label'] }}</x-ui.button>
+                <x-ui.button :href="$marketingRoutes->home().'#pricing'" size="lg" x-on:click="open = false">{{ $labels['cta_label'] }}</x-ui.button>
             </div>
         </x-ui.container>
     </div>

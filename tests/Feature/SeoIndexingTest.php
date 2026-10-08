@@ -22,7 +22,7 @@ class SeoIndexingTest extends TestCase
     {
         $this->allowProductionIndexing();
 
-        foreach (['/', '/pricing'] as $path) {
+        foreach (['/en/', '/hu/', '/en/pricing', '/hu/pricing'] as $path) {
             $response = $this->get('https://wpcaregrid.com'.$path.'?utm_source=campaign')->assertOk();
             $response->assertSee('<meta name="robots" content="index, follow">', false);
             $response->assertSee('<link rel="canonical" href="https://wpcaregrid.com'.$path.'">', false);
@@ -40,7 +40,7 @@ class SeoIndexingTest extends TestCase
             'http.force_https' => false,
         ]);
 
-        foreach (['/', '/pricing'] as $path) {
+        foreach (['/en/', '/hu/', '/en/pricing', '/hu/pricing'] as $path) {
             $this->get('https://staging.wpcaregrid.com'.$path)
                 ->assertOk()
                 ->assertSee('<meta name="robots" content="noindex, nofollow">', false);
@@ -48,20 +48,20 @@ class SeoIndexingTest extends TestCase
 
         config(['app.env' => 'production', 'app.url' => 'https://wpcaregrid.com']);
 
-        $this->get('https://staging.wpcaregrid.com/')
+        $this->get('https://staging.wpcaregrid.com/en/')
             ->assertOk()
             ->assertSee('<meta name="robots" content="noindex, nofollow">', false);
 
         $this->allowProductionIndexing();
         config(['seo.indexing_enabled' => false]);
 
-        $this->get('https://wpcaregrid.com/')
+        $this->get('https://wpcaregrid.com/en/')
             ->assertOk()
             ->assertSee('<meta name="robots" content="noindex, nofollow">', false);
 
         config(['app.url' => 'https://staging.wpcaregrid.com']);
 
-        $this->get('https://staging.wpcaregrid.com/')
+        $this->get('https://staging.wpcaregrid.com/en/')
             ->assertOk()
             ->assertSee('<meta name="robots" content="noindex, nofollow">', false);
     }
@@ -77,28 +77,28 @@ class SeoIndexingTest extends TestCase
         Cache::forget(ContentRepository::CACHE_KEY);
         app()->forgetInstance(ContentRepository::class);
 
-        $this->get('https://wpcaregrid.com/?campaign=one')
+        $this->get('https://wpcaregrid.com/en/?campaign=one')
             ->assertOk()
-            ->assertSee('<link rel="canonical" href="https://wpcaregrid.com/">', false)
+            ->assertSee('<link rel="canonical" href="https://wpcaregrid.com/en/">', false)
             ->assertDontSee('attacker.example', false)
             ->assertDontSee('campaign=one', false);
 
-        $this->get('https://attacker.example/?campaign=two')
+        $this->get('https://attacker.example/en/?campaign=two')
             ->assertOk()
             ->assertSee('<meta name="robots" content="noindex, nofollow">', false)
-            ->assertSee('<link rel="canonical" href="https://wpcaregrid.com/">', false)
-            ->assertSee('<meta property="og:url" content="https://wpcaregrid.com/">', false)
+            ->assertSee('<link rel="canonical" href="https://wpcaregrid.com/en/">', false)
+            ->assertSee('<meta property="og:url" content="https://wpcaregrid.com/en/">', false)
             ->assertDontSee('rel="canonical" href="https://attacker.example', false)
             ->assertDontSee('property="og:url" content="https://attacker.example', false);
 
-        $seo['canonical_url'] = 'https://wpcaregrid.com/approved-home';
+        $seo['canonical_url'] = 'https://wpcaregrid.com/en/';
         $entry->forceFill(['published' => $seo, 'published_at' => now()])->save();
         Cache::forget(ContentRepository::CACHE_KEY);
         app()->forgetInstance(ContentRepository::class);
 
-        $this->get('https://wpcaregrid.com/?campaign=three')
+        $this->get('https://wpcaregrid.com/en/?campaign=three')
             ->assertOk()
-            ->assertSee('<link rel="canonical" href="https://wpcaregrid.com/approved-home">', false)
+            ->assertSee('<link rel="canonical" href="https://wpcaregrid.com/en/">', false)
             ->assertDontSee('campaign=three', false);
     }
 
@@ -172,11 +172,10 @@ class SeoIndexingTest extends TestCase
             ->assertHeader('X-Robots-Tag', 'noindex, nofollow');
     }
 
-    public function test_robots_file_keeps_noindex_pages_crawlable_and_does_not_advertise_a_missing_sitemap(): void
+    public function test_robots_endpoint_keeps_noindex_pages_crawlable_and_hides_sitemap_when_indexing_is_disabled(): void
     {
-        $robots = file_get_contents(public_path('robots.txt'));
-
-        $this->assertIsString($robots);
+        config(['seo.indexing_enabled' => false]);
+        $robots = $this->get('/robots.txt')->assertOk()->getContent();
         $this->assertStringContainsString('User-agent: *', $robots);
         $this->assertStringContainsString('Disallow:', $robots);
         $this->assertStringNotContainsString('Disallow: /checkout', $robots);
