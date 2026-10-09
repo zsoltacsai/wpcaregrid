@@ -43,11 +43,31 @@ $expect = function (bool $ok, string $what) use (&$failures, &$checks): void {
     }
 };
 
-// Public and sign-in pages render.
-foreach (['/' => 'WP CareGrid', '/pricing' => 'WP CareGrid', '/login' => 'password', '/operator/login' => 'password', '/owner/login' => 'password', '/forgot-password' => 'email'] as $path => $marker) {
+// Legacy marketing paths permanently redirect to the canonical English URLs.
+foreach (['/' => '/en/', '/pricing' => '/en/pricing'] as $path => $destination) {
+    [$status, $headers] = $get($path);
+    $expectedLocation = $base.$destination;
+    $expect($status === 301 && ($headers['location'] ?? '') === $expectedLocation, "{$path} permanently redirects to {$expectedLocation} (got {$status} ".($headers['location'] ?? '-').')');
+}
+
+// Localized marketing pages and sign-in pages render directly.
+$publicPages = [
+    '/en/' => ['WP CareGrid', 'en'],
+    '/hu/' => ['WP CareGrid', 'hu'],
+    '/en/pricing' => ['WP CareGrid', 'en'],
+    '/hu/pricing' => ['WP CareGrid', 'hu'],
+    '/login' => ['password', null],
+    '/operator/login' => ['password', null],
+    '/owner/login' => ['password', null],
+    '/forgot-password' => ['email', null],
+];
+foreach ($publicPages as $path => [$marker, $locale]) {
     [$status, $headers, $body] = $get($path);
     $expect($status === 200, "{$path} returns 200 (got {$status})");
     $expect(stripos($body, $marker) !== false, "{$path} contains \"{$marker}\"");
+    if ($locale !== null) {
+        $expect(($headers['content-language'] ?? '') === $locale, "{$path} sends Content-Language: {$locale}");
+    }
     $expect(! preg_match('/>\s*(home|pricing|owner|operator|account|content|security|checkout)\.[a-z_]+(\.[a-z_]+)+\s*</', $body), "{$path} shows no translation keys");
     $expect(stripos($body, 'Stack trace') === false && stripos($body, 'Whoops') === false, "{$path} shows no error details");
     $expect(($headers['x-content-type-options'] ?? '') === 'nosniff', "{$path} sends X-Content-Type-Options: nosniff");
@@ -58,10 +78,12 @@ foreach (['/' => 'WP CareGrid', '/pricing' => 'WP CareGrid', '/login' => 'passwo
     }
 }
 
-// The homepage has one h1 and its pricing.
-[, , $home] = $get('/');
-$expect(substr_count($home, '<h1') === 1, 'homepage has exactly one h1');
-$expect(str_contains($home, 'id="pricing"'), 'homepage has the pricing section');
+// Both localized homepages have one h1 and their pricing section.
+foreach (['/en/', '/hu/'] as $path) {
+    [, , $home] = $get($path);
+    $expect(substr_count($home, '<h1') === 1, "{$path} has exactly one h1");
+    $expect(str_contains($home, 'id="pricing"'), "{$path} has the pricing section");
+}
 
 // Protected areas send anonymous visitors to their own sign-in page.
 foreach (['/account' => '/login', '/account/websites' => '/login', '/operator' => '/operator/login', '/operator/security' => '/operator/login', '/owner' => '/owner/login', '/owner/system' => '/owner/login', '/owner/customers' => '/owner/login'] as $path => $login) {
