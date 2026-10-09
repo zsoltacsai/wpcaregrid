@@ -8,6 +8,8 @@ readonly APP_DIR='/var/www/wpcaregrid'
 readonly DEPLOY_BRANCH='claude/ecstatic-wozniak-oemyuf'
 readonly ORIGIN_URL='git@github.com-wpcaregrid:zsoltacsai/wpcaregrid.git'
 readonly APP_URL='https://staging.wpcaregrid.com'
+# The old release serves / with 200; future release transitions need an explicit reviewed baseline.
+readonly PRE_DEPLOY_BASELINE_SHA='f0194bca2d58b8eafccb1dfd1e3fc6176ed132de'
 readonly GATE_DIR='/var/lib/wpcaregrid'
 readonly GATE_FILE="${GATE_DIR}/deploy-maintenance"
 readonly SCHEDULER_LOCK_FILE="${GATE_DIR}/scheduler.lock"
@@ -395,9 +397,20 @@ check_http_redirect() {
     log "HTTP ${path}: 301 -> ${location}"
 }
 
-check_http() {
-    local path actual
+pre_deploy_smoke() {
+    local current_sha
 
+    current_sha="$(git rev-parse HEAD)" || return 1
+    [[ "$current_sha" == "$PRE_DEPLOY_BASELINE_SHA" ]] || {
+        log "Pre-deploy HEAD ${current_sha} is not the reviewed baseline ${PRE_DEPLOY_BASELINE_SHA}";
+        return 1;
+    }
+    check_http_status / 200 || return 1
+    check_http_status /up 200 || return 1
+    check_http_shared
+}
+
+post_deploy_smoke() {
     check_http_redirect / "${APP_URL}/en/" || return 1
     check_http_status /en/ 200 || return 1
     check_http_status /up 200 || return 1
@@ -405,6 +418,11 @@ check_http() {
     check_http_status /en/pricing 200 || return 1
     check_http_status /hu/ 200 || return 1
     check_http_status /hu/pricing 200 || return 1
+    check_http_shared
+}
+
+check_http_shared() {
+    local path actual
 
     actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}/owner/integrations")" || return 1
     [[ "$actual" =~ ^30[1278]$ ]] || { log "Guest Owner Integrations route returned ${actual}, expected an authentication redirect"; return 1; }
@@ -458,6 +476,8 @@ mark_gate_released() {
 }
 
 recover_after_failure() {
+    local smoke_contract
+
     log 'Attempting guarded recovery while the Nginx gate is active.'
 
     acquire_scheduler_guard || return 1
@@ -494,7 +514,12 @@ recover_after_failure() {
     workers_running || return 1
     release_gate || return 1
 
-    if ! check_http || ! runtime_cache_access_ok || ! workers_running; then
+    if (( CODE_SWITCHED )); then
+        smoke_contract=post_deploy_smoke
+    else
+        smoke_contract=pre_deploy_smoke
+    fi
+    if ! "$smoke_contract" || ! runtime_cache_access_ok || ! workers_running; then
         sudo -n install -o root -g root -m 0644 /dev/null "$GATE_FILE" || return 1
         php artisan down --retry=60 || true
         return 1
@@ -588,6 +613,8 @@ main() {
     sudo -n nginx -t >/dev/null || fail 'Nginx configuration is invalid.'
     sudo -n nginx -T 2>/dev/null | grep -Fq 'if (-f /var/lib/wpcaregrid/deploy-maintenance)' || fail 'The staging Nginx deployment gate is not configured.'
     sudo -n systemctl is-active --quiet cron || fail 'The cron scheduler service is not active.'
+    [[ -d "$BACKUP_DIR" && "$(stat -c '%U:%a' "$BACKUP_DIR")" == 'deploy:700' ]] || fail 'The protected staging database backup directory must be deploy-owned mode 0700.'
+    pre_deploy_smoke || fail 'The reviewed baseline staging release is not healthy before deployment.'
     install_scheduler_guard
     command -v git >/dev/null && command -v composer >/dev/null && command -v npm >/dev/null && command -v curl >/dev/null || fail 'A required deployment tool is missing.'
     php -r 'exit(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === 4 ? 0 : 1);' || fail 'PHP 8.4 CLI is required.'
@@ -604,7 +631,6 @@ main() {
     [[ "$env_mode" == 'production' && "$app_url_value" == 'https://staging.wpcaregrid.com' ]] || fail 'The environment is not the expected production-mode staging configuration.'
     previous_connector_version="$(php artisan config:show connector.latest_version --no-interaction 2>/dev/null | awk 'NF { value = $NF } END { print value }')"
     [[ -n "$previous_connector_version" ]] || fail 'Could not read the current connector package version.'
-    check_http || fail 'The current staging application is not healthy before deployment.'
 
     requested_ref="${1:-}"
     log "Fetching the staging branch ${DEPLOY_BRANCH}."
@@ -619,7 +645,6 @@ main() {
     fi
     log "Target commit: ${target_commit}"
 
-    [[ -d "$BACKUP_DIR" && "$(stat -c '%U:%a' "$BACKUP_DIR")" == 'deploy:700' ]] || fail 'The protected staging database backup directory must be deploy-owned mode 0700.'
     exec 9>"${BACKUP_DIR}/.deploy.lock"
     command -v flock >/dev/null || fail 'The flock utility is required to prevent concurrent deployments.'
     flock -n 9 || fail 'Another staging deployment is already running.'
@@ -733,7 +758,7 @@ main() {
     wait_for_scheduler || fail 'Scheduler heartbeat did not recover after cache refresh.'
     workers_running || fail 'One or more required Supervisor workers stopped before traffic was reopened.'
     release_gate
-    if ! check_http || ! runtime_cache_access_ok || ! workers_running; then
+    if ! post_deploy_smoke || ! runtime_cache_access_ok || ! workers_running; then
         log 'Final staging HTTP/security or runtime-cache permission check failed; closing the Nginx gate again.' >&2
         sudo -n install -o root -g root -m 0644 /dev/null "$GATE_FILE"
         php artisan down --retry=60 || true
