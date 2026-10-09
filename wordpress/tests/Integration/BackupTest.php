@@ -34,7 +34,9 @@ final class BackupTest extends TestCase
 
     protected function tearDown(): void
     {
-        foreach ($this->created as $path) {
+        // Each PHPUnit method shares one synthetic site within the run.
+        // Remove its fixtures so archives in later methods stay deterministic.
+        foreach (array_reverse($this->created) as $path) {
             TempDir::remove($path);
         }
         remove_all_filters('wp_caregrid_backup_free_space');

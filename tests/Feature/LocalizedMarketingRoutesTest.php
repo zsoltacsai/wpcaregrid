@@ -193,13 +193,13 @@ class LocalizedMarketingRoutesTest extends TestCase
         $this->assertFileDoesNotExist(public_path('robots.txt'));
     }
 
-    public function test_checkout_authentication_and_calculator_routes_remain_unprefixed(): void
+    public function test_checkout_and_authentication_routes_remain_unprefixed_and_calculator_route_is_absent(): void
     {
         $this->get(route('checkout.show', ['product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly']))
             ->assertOk()->assertSee('<meta name="robots" content="noindex, nofollow">', false);
         $this->get(route('login'))->assertOk();
         $this->get(route('account.dashboard'))->assertRedirect(route('login'));
-        $this->assertSame('kalkulator', Route::getRoutes()->getByName('floor-calculator')->uri());
+        $this->assertFalse(Route::has('floor-calculator'));
         $this->assertSame('checkout', Route::getRoutes()->getByName('checkout.show')->uri());
         $this->assertSame('login', Route::getRoutes()->getByName('login')->uri());
     }

@@ -8,7 +8,12 @@ use WPCareGrid\Connector\Core\Plugin;
  * HTTP is replaced (see Support/FakeHttp.php); options, users, nonces,
  * capabilities, cron and the upgraders are WordPress's own.
  */
-$root = sys_get_temp_dir().'/wp-caregrid-tests-'.getmypid();
+$rootToken = (string) getenv('WP_CAREGRID_TEST_RUN_TOKEN');
+if (! preg_match('/^[a-f0-9]{16}$/D', $rootToken)) {
+    $rootToken = bin2hex(random_bytes(8));
+}
+$root = sys_get_temp_dir().'/wp-caregrid-tests-'.getmypid().'-'.$rootToken;
+$marker = $root.'/.wp-caregrid-test-owned';
 putenv('WP_CAREGRID_TEST_ROOT='.$root);
 
 $vendor = dirname(__DIR__).'/vendor';
@@ -44,7 +49,10 @@ $remove = static function (string $path) use (&$remove): void {
     }
 };
 
-$remove($root);
+if (file_exists($root) || is_link($root) || ! mkdir($root, 0777, true)) {
+    exit("Refusing to reuse an existing WordPress test directory.\n");
+}
+file_put_contents($marker, $rootToken, LOCK_EX);
 mkdir($root.'/database', 0777, true);
 mkdir($root.'/wp-content/plugins', 0777, true);
 mkdir($root.'/wp-content/uploads', 0777, true);
@@ -63,15 +71,13 @@ $copy($core.'/wp-content/themes/twentytwentyfive', $root.'/wp-content/themes/twe
 // A copy, not a symlink, so plugin_basename() works as on a real site.
 $copy(dirname(__DIR__).'/wp-caregrid-connector', $root.'/wp-content/plugins/wp-caregrid-connector');
 
-exec(escapeshellarg(PHP_BINARY).' '.escapeshellarg(__DIR__.'/install.php').' 2>&1', $output, $status);
+$phpIni = php_ini_loaded_file();
+$installCommand = escapeshellarg(PHP_BINARY).($phpIni ? ' -c '.escapeshellarg($phpIni) : '').' '.escapeshellarg(__DIR__.'/install.php').' 2>&1';
+exec($installCommand, $output, $status);
 if ($status !== 0) {
     exit("Installing WordPress failed:\n".implode("\n", $output)."\n");
 }
 fwrite(STDOUT, implode("\n", $output).($mysql ? ' Database: MySQL/MariaDB.' : ' Database: SQLite (database backup tests are skipped).').PHP_EOL);
-
-if (! getenv('WP_CAREGRID_KEEP_SITE')) {
-    register_shutdown_function(static fn () => $remove($root));
-}
 
 require __DIR__.'/wp-tests-config.php';
 
@@ -85,4 +91,25 @@ require_once ABSPATH.'wp-admin/includes/admin.php';
 
 if (! is_plugin_active('wp-caregrid-connector/wp-caregrid-connector.php') || ! class_exists(Plugin::class)) {
     exit("The connector is not active in the test site.\n");
+}
+
+if (! getenv('WP_CAREGRID_KEEP_SITE') && PHP_OS_FAMILY !== 'Windows') {
+    // Register after wp-settings has created SQLite's PDOEngine destructor.
+    // That callback must release its handle before Windows can unlink wp.sqlite.
+    register_shutdown_function(static function () use ($root, $rootToken, $marker, $remove): void {
+        $temp = rtrim((string) realpath(sys_get_temp_dir()), DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR;
+        $realRoot = realpath($root);
+        $expectedName = 'wp-caregrid-tests-'.getmypid().'-'.$rootToken;
+        if (! $realRoot || ! str_starts_with($realRoot.DIRECTORY_SEPARATOR, $temp)
+            || basename($realRoot) !== $expectedName || ! is_file($marker)
+            || file_get_contents($marker) !== $rootToken) {
+            fwrite(STDERR, "Skipped cleanup because the test-owned directory marker did not match.\n");
+
+            return;
+        }
+
+        unset($GLOBALS['@pdo'], $GLOBALS['wpdb']);
+        gc_collect_cycles();
+        $remove($realRoot);
+    });
 }

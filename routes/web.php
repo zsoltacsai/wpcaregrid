@@ -27,7 +27,6 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', [LegacyMarketingRedirectController::class, 'home'])->name('legacy.home');
 Route::get('/pricing', [LegacyMarketingRedirectController::class, 'pricing'])->name('legacy.pricing');
-Route::view('/kalkulator', 'pages.floor-calculator')->name('floor-calculator');
 
 Route::get('/robots.txt', RobotsController::class)->name('robots');
 Route::get('/sitemap.xml', SitemapController::class)->name('sitemap');

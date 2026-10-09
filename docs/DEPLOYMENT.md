@@ -39,6 +39,8 @@ One application server is assumed. Everything below works with more than one (sh
 
 PHP settings for the web (FPM) pool: `upload_max_filesize` and `post_max_size` ≥ 16M (backup chunks are 4 MiB by default, 8 MiB at most), `memory_limit` 256M, `max_execution_time` 60. The CLI (workers) uses no time limit; the workers' own `--timeout` applies.
 
+For **customer WordPress sites using WP CareGrid**, recommend PHP `memory_limit` ≥ 512M for the web runtime and any CLI runtime that executes Connector work. This is a hosting recommendation based on the test evidence below, not a proven hard production minimum. Values below 512M require compatibility verification with representative backups and restores on the target host. This recommendation applies to the customer WordPress runtime; it does not change the WP CareGrid Laravel server's FPM setting above.
+
 ## First installation
 
 ```sh
@@ -251,6 +253,12 @@ Storage credentials stay on this server: they are never sent to WordPress, never
 - **Object size:** `BACKUP_MAX_OBJECT_SIZE` (50 GiB default) caps one archive; larger uploads are refused.
 - **Memory:** uploads, transfers and restores are streamed in chunks; a backup is never loaded into memory whole.
 - **Large sites:** the connector splits the archive into chunks (`BACKUP_CHUNK_SIZE`, 4 MiB) and resumes interrupted uploads; the transfer worker's timeout (`BACKUP_TRANSFER_TIMEOUT`, 1 h) must cover storing and verifying the largest site.
+
+#### WordPress PHP memory recommendation
+
+The isolated WordPress PHPUnit backup run observed an out-of-memory failure with a 128M test-process limit. At 256M, the `BackupTest` class passed but the full suite failed; at 512M, the full suite passed with an observed peak of approximately 234 MiB. These measurements describe the local test runner and synthetic test workload. They do not establish 512M as a hard production minimum or measure every site's production backup workload. Keep the PHPUnit wrapper's process-only 512M override for test runs. Hosts using lower WordPress limits should verify representative backup and restore workloads on their own PHP and site configuration.
+
+**Proposed follow-up:** include the effective WordPress PHP `memory_limit` in Connector health reporting and warn when it is below 512M. The warning should be advisory; the observed test-runner limit is not proof that backups cannot work below 512M. This health check is not implemented.
 
 ### Backups of WP CareGrid itself
 
