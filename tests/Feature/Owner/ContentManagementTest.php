@@ -47,7 +47,7 @@ class ContentManagementTest extends TestCase
 
     public function test_the_homepage_shows_built_in_copy_until_the_owner_publishes(): void
     {
-        $this->get('/')->assertOk()->assertSee('WordPress maintenance, without the hassle.');
+        $this->get('/en/')->assertOk()->assertSee('WordPress maintenance, without the hassle.');
 
         $this->asOwner();
         $this->get(route('owner.content.index'))->assertOk()->assertSee('Hero')->assertSee('Built-in text')->assertDontSee('Missing');
@@ -57,23 +57,23 @@ class ContentManagementTest extends TestCase
     public function test_a_draft_never_reaches_the_public_page_and_publishing_shows_it_at_once(): void
     {
         $owner = $this->asOwner();
-        $this->get('/')->assertSee('WordPress maintenance, without the hassle.'); // warms the published-content cache
+        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.'); // warms the published-content cache
 
         $this->save('home.hero', 'en', $this->fields('home.hero', 'en', ['title' => 'Draft headline for review']))->assertRedirect(route('owner.content.edit', ['home.hero', 'en']));
-        $this->get('/')->assertSee('WordPress maintenance, without the hassle.')->assertDontSee('Draft headline for review');
+        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.')->assertDontSee('Draft headline for review');
         $this->assertSame(ContentState::DRAFT, ContentState::of(ContentSchema::section('home.hero'), 'en', ContentEntry::sole())->state);
 
         $this->save('home.hero', 'en', $this->fields('home.hero', 'en', ['title' => 'Published headline']), 'publish')->assertSessionHasNoErrors();
-        $this->get('/')->assertSee('Published headline')->assertDontSee('WordPress maintenance, without the hassle.');
+        $this->get('/en/')->assertSee('Published headline')->assertDontSee('WordPress maintenance, without the hassle.');
 
         // A later draft leaves the published version in place.
         $this->save('home.hero', 'en', $this->fields('home.hero', 'en', ['title' => 'Next idea']));
-        $this->get('/')->assertSee('Published headline')->assertDontSee('Next idea');
+        $this->get('/en/')->assertSee('Published headline')->assertDontSee('Next idea');
         $this->assertSame(ContentState::CHANGED, ContentState::of(ContentSchema::section('home.hero'), 'en', ContentEntry::sole())->state);
 
         // Unpublishing returns the page to the built-in copy; the text is kept as a draft.
         $this->post(route('owner.content.unpublish', ['home.hero', 'en']))->assertRedirect();
-        $this->get('/')->assertSee('WordPress maintenance, without the hassle.')->assertDontSee('Published headline');
+        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.')->assertDontSee('Published headline');
         $this->assertSame('Next idea', ContentEntry::sole()->draft['title']);
 
         $events = AdminAuditEvent::where('subject_type', 'content')->orderBy('id')->get();
@@ -92,7 +92,7 @@ class ContentManagementTest extends TestCase
 
         $this->save('home.hero', 'en', $fields)->assertSessionHasNoErrors();
         $this->assertSame('', ContentEntry::sole()->draft['title']);
-        $this->get('/')->assertSee('WordPress maintenance, without the hassle.');
+        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.');
     }
 
     public function test_translations_are_separate_records_and_missing_ones_are_visible(): void
@@ -124,7 +124,7 @@ class ContentManagementTest extends TestCase
         // English and Hungarian are untouched.
         $this->assertSame(ContentState::BUILT_IN, ContentState::of($hero, 'hu', null)->state);
         // English is untouched.
-        $this->get('/')->assertSee('WordPress maintenance, without the hassle.');
+        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.');
     }
 
     public function test_public_fallback_is_whole_sections_in_english_never_mixed_fields(): void
@@ -148,10 +148,9 @@ class ContentManagementTest extends TestCase
         $this->assertSame(['en', 'en'], [$faq->locale, $faq->fallbackLang()], 'No German FAQ: the whole section is English, and marked so.');
 
         config(['app.locale' => 'de', 'localization.default' => 'de']);
-        $html = $this->get('/')->assertOk()->getContent();
-        $this->assertStringContainsString('Deutsche Überschrift', $html);
-        $this->assertMatchesRegularExpression('/<section[^>]*id="faq"[^>]*lang="en"|<section[^>]*lang="en"[^>]*id="faq"/', $html);
-        $this->assertDoesNotMatchRegularExpression('/<section[^>]*aria-labelledby="hero-title"[^>]*lang=/', $html);
+        $html = $this->get('/en/')->assertOk()->assertHeader('Content-Language', 'en')->getContent();
+        $this->assertStringContainsString('WordPress maintenance, without the hassle.', $html);
+        $this->assertStringNotContainsString('Deutsche Überschrift', $html);
     }
 
     public function test_a_field_missing_from_published_content_stays_empty_and_is_not_taken_from_another_language(): void
@@ -184,7 +183,7 @@ class ContentManagementTest extends TestCase
         $this->assertSame(['First question?', 'Hidden question?', 'Third question?'], array_column($stored, 'question'));
         $this->assertSame([1, 2, 3], array_column($stored, 'position'));
 
-        $this->get('/')->assertSeeInOrder(['First question?', 'Third question?'])->assertDontSee('Hidden question?');
+        $this->get('/en/')->assertSeeInOrder(['First question?', 'Third question?'])->assertDontSee('Hidden question?');
     }
 
     public function test_navigation_is_editable_with_order_and_visibility(): void
@@ -199,7 +198,7 @@ class ContentManagementTest extends TestCase
 
         $this->save('site.navigation', 'en', $fields, 'publish')->assertSessionHasNoErrors();
 
-        $this->get('/')->assertSeeInOrder(['href="#faq"', 'Questions', 'href="/pricing"', 'Plans'], false)
+        $this->get('/en/')->assertSeeInOrder(['href="/en/#faq"', 'Questions', 'href="/en/pricing"', 'Plans'], false)
             ->assertSee('Sign in')->assertSee('Start now')->assertDontSee('blog.wpcaregrid.example');
         // The same navigation on other public pages.
         $this->get(route('pricing'))->assertSee('Questions');
@@ -210,7 +209,7 @@ class ContentManagementTest extends TestCase
         $this->asOwner();
         config(['app.url' => 'https://wpcaregrid.example']);
         URL::forceRootUrl('https://wpcaregrid.example');
-        $fields = ['title' => 'WP CareGrid – Managed WordPress', 'description' => 'Maintenance with checks.', 'canonical_url' => 'https://wpcaregrid.example/', 'robots' => 'noindex,follow', 'og_title' => 'Share title', 'og_description' => ''];
+        $fields = ['title' => 'WP CareGrid – Managed WordPress', 'description' => 'Maintenance with checks.', 'canonical_url' => 'https://wpcaregrid.example/en/', 'robots' => 'noindex,follow', 'og_title' => 'Share title', 'og_description' => ''];
 
         // Another site as canonical, or an unknown robots value: refused.
         $this->save('seo.home', 'en', ['canonical_url' => 'https://other-site.example/'] + $fields, 'publish', 'seo')->assertSessionHasErrors('fields.canonical_url');
@@ -218,16 +217,18 @@ class ContentManagementTest extends TestCase
 
         $this->save('seo.home', 'en', $fields, 'publish', 'seo')->assertRedirect(route('owner.seo.edit', ['seo.home', 'en']));
 
-        $this->get('/')
+        $this->get('/en/')
             ->assertSee('<title>WP CareGrid – Managed WordPress</title>', false)
             ->assertSee('<meta name="description" content="Maintenance with checks.">', false)
             ->assertSee('<meta name="robots" content="noindex, follow">', false)
-            ->assertSee('<link rel="canonical" href="https://wpcaregrid.example/">', false)
+            ->assertSee('<link rel="canonical" href="https://wpcaregrid.example/en/">', false)
             ->assertSee('<meta property="og:title" content="Share title">', false)
             ->assertSee('<meta property="og:description" content="Maintenance with checks.">', false);
 
         // Only that page: the pricing page keeps its own defaults.
-        $this->get(route('pricing'))->assertDontSee('name="robots"', false)->assertDontSee('Managed WordPress');
+        $this->get(route('pricing'))
+            ->assertSee('<meta name="robots" content="noindex, nofollow">', false)
+            ->assertDontSee('Managed WordPress');
         $this->get(route('owner.seo.index'))->assertOk()->assertSee('noindex,follow');
     }
 
@@ -249,7 +250,7 @@ class ContentManagementTest extends TestCase
         // A valid link is useless without an owner session.
         auth('owner')->logout();
         $this->get($link)->assertRedirect(route('owner.login'));
-        $this->get('/')->assertDontSee('Preview-only headline');
+        $this->get('/en/')->assertDontSee('Preview-only headline');
     }
 
     public function test_plan_wording_comes_from_published_pricing_content(): void
@@ -258,10 +259,10 @@ class ContentManagementTest extends TestCase
         $fields = $this->fields('pricing.wordpress.business', 'en', ['name' => 'Professional', 'badge' => 'Recommended', 'cta_label' => 'Start Professional']);
 
         $this->save('pricing.wordpress.business', 'en', $fields)->assertSessionHasNoErrors();
-        $this->get('/')->assertDontSee('Professional');
+        $this->get('/en/')->assertDontSee('Professional');
 
         $this->save('pricing.wordpress.business', 'en', $fields, 'publish')->assertSessionHasNoErrors();
-        $this->get('/')->assertSee('Professional')->assertSee('Recommended')->assertSee('Start Professional')->assertSee('Everything in Professional');
+        $this->get('/en/')->assertSee('Professional')->assertSee('Recommended')->assertSee('Start Professional')->assertSee('Everything in Professional');
         // Same wording wherever the plan is named.
         $site = $this->customerWithWebsite();
         $this->assertSame('Professional', $site['subscription']->planName());

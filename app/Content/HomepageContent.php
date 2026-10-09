@@ -2,6 +2,8 @@
 
 namespace App\Content;
 
+use App\Localization\MarketingRoutes;
+
 /**
  * Structure of the marketing homepage: which items appear, in what order,
  * with which icon or link. Wording comes from the content sections
@@ -26,8 +28,10 @@ final class HomepageContent
     /** @return list<array{label: string, href: string}> */
     public function navigation(): array
     {
+        $routes = app(MarketingRoutes::class);
+
         return array_values(array_map(
-            fn (array $item) => ['label' => (string) $item['label'], 'href' => SafeUrl::orFallback($item['url'] ?? null)],
+            fn (array $item) => ['label' => (string) $item['label'], 'href' => $routes->localize(SafeUrl::orFallback($item['url'] ?? null))],
             $this->content->section('site.navigation')->items('items'),
         ));
     }

@@ -6,7 +6,7 @@
             <x-ui.section-heading id="faq-title" :eyebrow="$content['eyebrow']" :title="$content['title']" />
             <p class="mt-4 text-base text-muted">
                 {{ $content['contact_prompt'] }}
-                <a href="{{ $content->url('contact_url') }}" class="rounded-sm font-medium text-primary underline decoration-line-strong underline-offset-4 hover:decoration-primary">{{ $content['contact_label'] }}</a>.
+                <a href="{{ app(\App\Localization\MarketingRoutes::class)->localize($content->url('contact_url')) }}" class="rounded-sm font-medium text-primary underline decoration-line-strong underline-offset-4 hover:decoration-primary">{{ $content['contact_label'] }}</a>.
             </p>
         </div>
 

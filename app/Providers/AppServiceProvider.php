@@ -97,6 +97,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        URL::defaults(['locale' => config('localization.default', 'en')]);
+
         // Database-backed service credentials override their fixed config keys at runtime.
         // Never bake these values into bootstrap/cache/config.php.
         $arguments = $_SERVER['argv'] ?? [];

@@ -11,7 +11,7 @@
 
                 <div class="mt-8 flex flex-col gap-3 sm:flex-row">
                     <x-ui.button :href="$retryUrl" icon="arrow-right">{{ __('checkout.cancel.retry') }}</x-ui.button>
-                    <x-ui.button :href="route('pricing')" variant="secondary">{{ __('checkout.cancel.pricing') }}</x-ui.button>
+                    <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->pricing()" variant="secondary">{{ __('checkout.cancel.pricing') }}</x-ui.button>
                 </div>
             </div>
         </x-ui.container>

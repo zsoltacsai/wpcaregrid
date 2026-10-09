@@ -37,7 +37,7 @@ class ContentSafetyTest extends TestCase
             'eyebrow' => "Line\u{0007}with control",
         ])->assertSessionHasNoErrors();
 
-        $html = $this->get('/')->assertOk()->getContent();
+        $html = $this->get('/en/')->assertOk()->getContent();
 
         $this->assertStringNotContainsString('<script>alert(1)</script>', $html);
         $this->assertStringContainsString('&lt;script&gt;alert(1)&lt;/script&gt; Hello &lt;b&gt;bold&lt;/b&gt;', $html);
@@ -58,7 +58,7 @@ class ContentSafetyTest extends TestCase
         $seo['og_title'] = "' onload='alert(5)";
         $this->put(route('owner.seo.update', ['seo.home', 'en']), ['action' => 'publish', 'fields' => $seo])->assertSessionHasNoErrors();
 
-        $html = $this->get('/')->getContent();
+        $html = $this->get('/en/')->getContent();
 
         $this->assertStringNotContainsString('onmouseover="alert(3)"', $html);
         $this->assertStringContainsString('Services&quot; onmouseover=&quot;alert(3)', $html);
@@ -118,7 +118,7 @@ class ContentSafetyTest extends TestCase
         }
         app(ContentRepository::class)->flush();
 
-        $html = $this->get('/')->assertOk()->getContent();
+        $html = $this->get('/en/')->assertOk()->getContent();
         $this->assertStringNotContainsString('javascript:', $html);
         $this->assertStringNotContainsString('<script>alert(5)', $html);
         $this->assertStringNotContainsString('onclick="steal()"', $html);
@@ -143,7 +143,7 @@ class ContentSafetyTest extends TestCase
         $stored = ContentEntry::sole()->published['items'][0]['answer'];
         $this->assertSame('<p>Yes, <strong>really</strong> <a href="https://wpcaregrid.example/docs" rel="nofollow noopener noreferrer">docs</a>.</p>bad link<p>hover</p>', $stored);
 
-        $html = $this->get('/')->getContent();
+        $html = $this->get('/en/')->getContent();
         foreach (['<script>alert(1)', 'onerror', 'javascript:', '<iframe', 'onmouseover', 'onclick', 'onload=alert(4)', 'style="color:red"', '<!-- comment'] as $bad) {
             $this->assertStringNotContainsString($bad, $html, $bad);
         }

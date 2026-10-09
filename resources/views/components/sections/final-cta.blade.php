@@ -10,8 +10,8 @@
         </div>
 
         <div class="flex flex-col gap-3 sm:flex-row">
-            <x-ui.button :href="$content->url('primary_url')" size="lg" icon="arrow-right">{{ $content['primary_label'] }}</x-ui.button>
-            <x-ui.button :href="$content->url('secondary_url')" variant="inverse-outline" size="lg">{{ $content['secondary_label'] }}</x-ui.button>
+            <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->localize($content->url('primary_url'))" size="lg" icon="arrow-right">{{ $content['primary_label'] }}</x-ui.button>
+            <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->localize($content->url('secondary_url'))" variant="inverse-outline" size="lg">{{ $content['secondary_label'] }}</x-ui.button>
         </div>
     </div>
 </x-ui.section>

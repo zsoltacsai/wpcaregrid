@@ -46,7 +46,7 @@
                     @else
                         <x-ui.button :href="request()->fullUrl()" variant="secondary">{{ __('account.success.refresh') }}</x-ui.button>
                     @endif
-                    <x-ui.button :href="route('home')" variant="ghost">{{ __('checkout.success.home') }}</x-ui.button>
+                    <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->home()" variant="ghost">{{ __('checkout.success.home') }}</x-ui.button>
                 </div>
             </div>
         </x-ui.container>

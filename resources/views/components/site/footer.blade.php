@@ -1,4 +1,5 @@
 @php
+    $marketingRoutes = app(\App\Localization\MarketingRoutes::class);
     $site = \App\Content\HomepageContent::current();
     $columns = $site->footerColumns();
     $footer = $site->section('site.footer');
@@ -8,7 +9,7 @@
     <x-ui.container class="py-12 lg:py-16">
         <div class="grid gap-10 md:grid-cols-[1.4fr_repeat(3,1fr)] md:gap-8">
             <div>
-                <a href="{{ route('home') }}" class="inline-block rounded-sm" aria-label="{{ __('home.home_link') }}">
+                <a href="{{ $marketingRoutes->home() }}" class="inline-block rounded-sm" aria-label="{{ __('home.home_link') }}">
                     <x-brand.logo tone="dark" class="h-16" />
                 </a>
                 <p class="mt-4 text-sm text-on-dark">{{ $footer['description'] }}</p>

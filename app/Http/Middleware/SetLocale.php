@@ -6,6 +6,7 @@ use App\Localization\Locales;
 use App\Pricing\PricingCatalog;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\URL;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -17,7 +18,9 @@ class SetLocale
 {
     public function handle(Request $request, Closure $next): Response
     {
+        $originalLocale = app()->getLocale();
         $locale = Locales::resolve($request);
+        URL::defaults(['locale' => $locale]);
 
         if (app()->getLocale() !== $locale) {
             app()->setLocale($locale);
@@ -28,13 +31,22 @@ class SetLocale
         // A signed-in customer's saved preference follows the choice made on this device (also one made before signing in).
         $user = $request->user('web');
         $remembered = $request->cookie((string) config('localization.cookie'));
-        if ($user && Locales::isSupported($remembered) && ! Locales::isEnglishOnly($request) && $user->locale !== $remembered) {
+        if ($user && Locales::isSupported($remembered) && ! Locales::isEnglishOnly($request)
+            && ! Locales::hasExplicitRouteLocale($request) && $user->locale !== $remembered) {
             $user->forceFill(['locale' => $remembered])->saveQuietly();
         }
 
-        $response = $next($request);
-        $response->headers->set('Content-Language', $locale);
+        try {
+            $response = $next($request);
+            $response->headers->set('Content-Language', $locale);
 
-        return $response;
+            return $response;
+        } finally {
+            if (app()->getLocale() !== $originalLocale) {
+                app()->setLocale($originalLocale);
+                app()->forgetInstance(PricingCatalog::class);
+            }
+            URL::defaults(['locale' => Locales::default()]);
+        }
     }
 }

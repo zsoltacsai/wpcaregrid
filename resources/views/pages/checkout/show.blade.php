@@ -15,7 +15,7 @@
     <section class="py-10 sm:py-12 lg:py-16" aria-labelledby="checkout-title">
         <x-ui.container>
             <nav aria-label="{{ __('checkout.breadcrumb') }}">
-                <a href="{{ route('pricing') }}" class="inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-muted hover:text-primary">
+                <a href="{{ app(\App\Localization\MarketingRoutes::class)->pricing() }}" class="inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-muted hover:text-primary">
                     <x-ui.icon name="arrow-right" class="size-4 rotate-180" />
                     {{ __('checkout.back_to_pricing') }}
                 </a>
@@ -134,7 +134,7 @@
                                 <p class="mt-2 text-xl font-semibold text-primary">{{ $plan->productType->label() }} {{ $plan->name }}</p>
                                 <p class="mt-1 text-sm text-muted">{{ $plan->description }}</p>
                             </div>
-                            <a href="{{ route('home') }}#pricing" class="rounded-sm text-sm font-medium text-primary underline decoration-line-strong underline-offset-4 hover:decoration-primary">
+                            <a href="{{ app(\App\Localization\MarketingRoutes::class)->home() }}#pricing" class="rounded-sm text-sm font-medium text-primary underline decoration-line-strong underline-offset-4 hover:decoration-primary">
                                 {{ __('checkout.change_plan') }}
                             </a>
                         </div>

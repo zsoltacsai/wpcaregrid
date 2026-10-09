@@ -39,7 +39,7 @@
                 @endif
             @else
                 <p class="text-sm text-muted">{{ __('account.dashboard.no_subscription') }}</p>
-                <x-ui.button :href="route('pricing')" variant="secondary" class="mt-4">{{ __('account.dashboard.view_plans') }}</x-ui.button>
+                <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->pricing()" variant="secondary" class="mt-4">{{ __('account.dashboard.view_plans') }}</x-ui.button>
             @endif
         </x-account.panel>
 

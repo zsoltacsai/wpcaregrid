@@ -8,7 +8,8 @@ How the public site, the customer login and the customer portal are shown in Eng
 
 | Where | Languages |
 | --- | --- |
-| Public site: home, pricing, checkout, order pages | Magyar, English |
+| Public marketing: `/hu/`, `/en/`, `/hu/pricing`, `/en/pricing` | Magyar, English; locale is fixed by the URL |
+| Checkout and order pages (unprefixed) | Magyar, English; remembered locale applies |
 | Customer login: log in, activation link, forgot / reset password, logout, errors (validation, authentication, 404, 403, 419, 429) | Magyar, English |
 | Customer portal: dashboard, websites and onboarding, connection, backups and restore, WordPress admin access, security, subscription, billing, profile | Magyar, English |
 | Owner area, operator console, staff invitations | English only, always (`english_only` paths) |
@@ -19,17 +20,18 @@ How the public site, the customer login and the customer portal are shown in Eng
 For each web request (`App\Http\Middleware\SetLocale`, `App\Localization\Locales::resolve`):
 
 1. owner / operator / staff paths: English;
-2. the choice remembered on this device, the cookie `caregrid_locale` (not sensitive; one year; encrypted; validated against the supported list). It also carries a choice made **before** signing in into the customer's session;
-3. a signed-in customer's saved preference, `users.locale` (it follows them to other devices when no choice was made on the device);
-4. the default.
+2. an explicit supported locale on a localized marketing route (`/en/`, `/hu/`, and their pricing equivalents); it is deterministic and is not written to the customer preference;
+3. the choice remembered on this device, the cookie `caregrid_locale` (not sensitive; one year; encrypted; validated against the supported list). It also carries a choice made **before** signing in into the customer's session;
+4. a signed-in customer's saved preference, `users.locale` (it follows them to other devices when no choice was made on the device);
+5. the default.
 
 A tampered cookie, a saved value that is not supported or a language in the address (`?lang=hu`) is ignored. Nothing in a request can name a user: the selector posts one field, a supported code, to `POST /locale` (CSRF-protected, rate-limited). An unsupported code is refused with a validation error and changes nothing; the error never echoes the value.
 
-The selector (header and mobile menu; the customer sidebar) is a server-side form: it works without JavaScript. The language is saved on the signed-in customer's **own** login (`users.locale`, nullable, a small migration) and the cookie is set; the customer's choice changes nobody else. When the cookie and the saved preference differ for a signed-in customer, the choice made on this device wins and is saved. The owner and operator logins never store a language.
+The customer sidebar and all unprefixed pages use the server-side language form, which works without JavaScript. A `POST /locale` choice is saved on the signed-in customer's **own** login (`users.locale`, nullable, a small migration) and in the cookie; the customer's choice changes nobody else. When the cookie and saved preference differ, the choice made on this device wins and is saved. The owner and operator logins never store a language.
 
-After the switch the visitor returns to the page they were on (only an address on this site). On pages with a form (login, activation, reset, checkout, profile, add website) the selector carries what was typed into the next page (JavaScript), except passwords, file fields and tokens; without JavaScript the page reloads empty.
+On localized marketing pages the language switch links directly to the equivalent page in the other language. It does not change the saved user preference. On checkout and account pages the existing CSRF-protected `POST /locale` switch remains and returns to the same-site referrer. On pages with a form (login, activation, reset, checkout, profile, add website) it carries typed values only with JavaScript, excluding passwords, file fields and tokens; without JavaScript the page reloads empty.
 
-`<html lang>` follows the language, `Content-Language` is sent, titles and descriptions come from the content system. There is one address per page (the language is not in the URL), so there is no `hreflang`; the canonical address is the page itself. Unknown addresses (404) take the language from the cookie too (`bootstrap/app.php`).
+`<html lang>` follows the language and `Content-Language` is sent. The legacy `/` and `/pricing` addresses permanently redirect to `/en/` and `/en/pricing`. Unknown addresses (404) take the language from the cookie too (`bootstrap/app.php`). Marketing canonicals and reciprocal `hreflang` links are documented in [SEO_INDEXING.md](SEO_INDEXING.md); language alternates are emitted only while both page variants use native-locale content.
 
 ## Currency
 

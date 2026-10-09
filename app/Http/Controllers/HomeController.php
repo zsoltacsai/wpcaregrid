@@ -6,17 +6,19 @@ use App\Content\ContentRepository;
 use App\Content\DemoDashboard;
 use App\Content\HomepageContent;
 use App\Pricing\PricingCatalog;
+use App\Seo\MarketingTranslationPolicy;
 use Illuminate\Contracts\View\View;
 
 class HomeController extends Controller
 {
-    public function __invoke(PricingCatalog $pricing, ContentRepository $content): View
+    public function __invoke(PricingCatalog $pricing, ContentRepository $content, MarketingTranslationPolicy $translations): View
     {
         return view('pages.home', [
             'content' => new HomepageContent($content),
             'demo' => new DemoDashboard,
             'pricing' => $pricing,
             'seo' => $content->section('seo.home'),
+            'alternates' => $translations->alternates('home', $content),
         ]);
     }
 }

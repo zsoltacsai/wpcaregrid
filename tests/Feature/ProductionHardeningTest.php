@@ -44,7 +44,7 @@ class ProductionHardeningTest extends TestCase
 
     public function test_every_response_carries_the_security_headers(): void
     {
-        foreach (['/', '/pricing', '/login', '/operator/login', '/owner/login'] as $path) {
+        foreach (['/en/', '/en/pricing', '/login', '/operator/login', '/owner/login'] as $path) {
             $this->get($path)->assertOk()
                 ->assertHeader('X-Content-Type-Options', 'nosniff')
                 ->assertHeader('X-Frame-Options', 'SAMEORIGIN')
@@ -74,21 +74,21 @@ class ProductionHardeningTest extends TestCase
         config(['http.force_https' => true]);
 
         $this->get('http://localhost/pricing?x=1')->assertStatus(301)->assertRedirect('https://localhost/pricing?x=1');
-        $this->get('https://localhost/pricing')->assertOk();
+        $this->get('https://localhost/en/pricing')->assertOk();
         $this->get('http://localhost/up')->assertOk();
     }
 
     public function test_the_content_security_policy_is_opt_in_and_staged(): void
     {
         config(['http.csp.mode' => 'report-only']);
-        $policy = $this->get('/')->assertHeaderMissing('Content-Security-Policy')->headers->get('Content-Security-Policy-Report-Only');
+        $policy = $this->get('/en/')->assertHeaderMissing('Content-Security-Policy')->headers->get('Content-Security-Policy-Report-Only');
         $this->assertStringContainsString("default-src 'self'", $policy);
         $this->assertStringContainsString("frame-ancestors 'self'", $policy);
         $this->assertStringContainsString("object-src 'none'", $policy);
         $this->assertMatchesRegularExpression("/script-src 'self' 'unsafe-eval' 'nonce-[A-Za-z0-9+\\/=]+'/", $policy);
 
         config(['http.csp.mode' => 'enforce']);
-        $this->get('/')->assertHeader('Content-Security-Policy')->assertHeaderMissing('Content-Security-Policy-Report-Only');
+        $this->get('/en/')->assertHeader('Content-Security-Policy')->assertHeaderMissing('Content-Security-Policy-Report-Only');
 
         $this->assertStringContainsString("form-action 'self' https:", SecurityHeaders::policy(null), 'Admin access posts to the customer site.');
     }
