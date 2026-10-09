@@ -360,14 +360,51 @@ runtime_source_access_ok() {
     log 'PHP-FPM can read representative runtime files and all tracked PHP/shell source files.'
 }
 
+check_http_status() {
+    local path="$1"
+    local expected="$2"
+    local actual
+
+    actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}${path}")" || return 1
+    [[ "$actual" == "$expected" ]] || { log "HTTP ${path} returned ${actual}, expected ${expected}"; return 1; }
+    log "HTTP ${path}: ${actual}"
+}
+
+check_http_redirect() {
+    local path="$1"
+    local expected_location="$2"
+    local response actual status_line header location='' location_count=0
+
+    # Do not follow redirects: the Location header is part of the deployment contract.
+    response="$(curl --silent --show-error --dump-header - --output /dev/null --write-out $'\n%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}${path}")" || return 1
+    status_line="${response##*$'\n'}"
+    actual="$status_line"
+    while IFS= read -r header; do
+        [[ "${header,,}" == location:* ]] || continue
+        location="${header#*:}"
+        location="${location%$'\r'}"
+        location="${location#"${location%%[![:space:]]*}"}"
+        location_count=$((location_count + 1))
+    done <<<"${response%$'\n'*}"
+
+    [[ "$actual" == '301' ]] || { log "HTTP ${path} returned ${actual}, expected 301"; return 1; }
+    [[ "$location_count" == '1' && "$location" == "$expected_location" ]] || {
+        log "HTTP ${path} Location was '${location:-missing}', expected exactly '${expected_location}'";
+        return 1;
+    }
+    log "HTTP ${path}: 301 -> ${location}"
+}
+
 check_http() {
     local path actual
 
-    for path in / /up; do
-        actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}${path}")" || return 1
-        [[ "$actual" == '200' ]] || { log "HTTP ${path} returned ${actual}, expected 200"; return 1; }
-        log "HTTP ${path}: ${actual}"
-    done
+    check_http_redirect / "${APP_URL}/en/" || return 1
+    check_http_status /en/ 200 || return 1
+    check_http_status /up 200 || return 1
+    check_http_redirect /pricing "${APP_URL}/en/pricing" || return 1
+    check_http_status /en/pricing 200 || return 1
+    check_http_status /hu/ 200 || return 1
+    check_http_status /hu/pricing 200 || return 1
 
     actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}/owner/integrations")" || return 1
     [[ "$actual" =~ ^30[1278]$ ]] || { log "Guest Owner Integrations route returned ${actual}, expected an authentication redirect"; return 1; }
@@ -707,4 +744,6 @@ main() {
     log "Protected database backup retained at ${backup_path}."
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
