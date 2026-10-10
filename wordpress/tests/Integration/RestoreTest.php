@@ -15,7 +15,13 @@ use WPCareGrid\Connector\Backups\TarWriter;
 use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Backups\Uploader;
 use WPCareGrid\Connector\Core\Settings;
+use WPCareGrid\Connector\Jobs\Handlers\RestoreHandler;
+use WPCareGrid\Connector\Jobs\JobRegistry;
+use WPCareGrid\Connector\Jobs\JobRunner;
 use WPCareGrid\Connector\Tests\Support\FakeBackupServer;
+use WPCareGrid\Connector\Tests\Support\OneShotRestoreFault;
+use WPCareGrid\Connector\Tests\Support\RestoreHarnessGuard;
+use WPCareGrid\Connector\Tests\Support\RestoreVariantIndex;
 use WPCareGrid\Connector\Tests\Support\TestCase;
 
 /** RESTORE in a real WordPress, from backups this site made (FakeBackupServer serves them back). */
@@ -318,6 +324,209 @@ final class RestoreTest extends TestCase
         $this->plugin()->runner()->poll();
 
         $this->assertFileExists(ABSPATH.'.maintenance');
+    }
+
+    public function test_fault_harness_guard_refuses_non_test_or_non_loopback_contexts(): void
+    {
+        $root = (string) getenv('WP_CAREGRID_TEST_ROOT');
+        $valid = ['app_env' => 'testing', 'enabled' => true, 'root' => $root, 'site_url' => 'http://127.0.0.1:18419', 'synthetic' => true];
+        RestoreHarnessGuard::assertContext($valid);
+
+        foreach ([
+            array_replace($valid, ['app_env' => 'production']),
+            array_replace($valid, ['app_env' => 'staging']),
+            array_replace($valid, ['enabled' => false]),
+            array_replace($valid, ['site_url' => 'https://staging.wpcaregrid.com']),
+            array_replace($valid, ['site_url' => 'https://example.test']),
+            array_replace($valid, ['synthetic' => false]),
+            array_replace($valid, ['root' => sys_get_temp_dir().'/not-a-wp-caregrid-test-root']),
+        ] as $context) {
+            try {
+                RestoreHarnessGuard::assertContext($context);
+                $this->fail('The restore harness accepted an unsafe context.');
+            } catch (\RuntimeException $e) {
+                $this->assertStringContainsString('available only', $e->getMessage());
+            }
+        }
+    }
+
+    public function test_variant_lifecycle_never_changes_canonical_index_or_source_artifact(): void
+    {
+        $this->with_harness_environment(function (): void {
+            [$source, $objects] = $this->backup('BACKUP_FILES');
+            $canonicalBefore = BackupIndex::find($source);
+            $sourceHashes = [];
+            foreach ($this->server->downloads as $name => $path) {
+                $sourceHashes[$name] = hash_file('sha256', $path);
+            }
+            $variants = new RestoreVariantIndex;
+
+            try {
+                $copy = $variants->createVariant($source, $this->server->downloads);
+                $this->assertNull(BackupIndex::find($copy['backup_uuid']), 'Test variant is absent from the canonical option.');
+                $this->assertNotNull($variants->find($copy['backup_uuid']));
+                $this->assertSame($source, $copy['parent_uuid']);
+                try {
+                    $variants->createVariant($source, $this->server->downloads, 'corrupt_database');
+                    $this->fail('The harness accepted a DB mutation for a files-only source.');
+                } catch (\RuntimeException $e) {
+                    $this->assertStringContainsString('source backup scope', $e->getMessage());
+                }
+
+                $corrupt = $variants->createVariant($source, $this->server->downloads, 'corrupt_files');
+                $this->assertNotSame($sourceHashes['files'], hash_file('sha256', $corrupt['paths']['files']));
+
+                $checksum = $variants->createVariant($source, $this->server->downloads, 'files_checksum_mismatch');
+                $this->assertNotSame(hash_file('sha256', $checksum['paths']['files']), $checksum['objects']['files']['sha256']);
+
+                $missing = $variants->createVariant($source, $this->server->downloads, 'missing_files');
+                $this->assertNull($missing['paths']['files']);
+                $this->assertSame($canonicalBefore, BackupIndex::find($source));
+                foreach ($this->server->downloads as $name => $path) {
+                    $this->assertSame($sourceHashes[$name], hash_file('sha256', $path), 'Canonical source artifact remains unchanged.');
+                }
+            } finally {
+                $variants->cleanup();
+            }
+        });
+    }
+
+    public function test_database_variant_mutations_are_copied_and_test_index_only(): void
+    {
+        $this->requires_mysql();
+        $this->with_harness_environment(function (): void {
+            [$source] = $this->backup('BACKUP_DATABASE');
+            $canonicalBefore = BackupIndex::find($source);
+            $sourcePath = $this->server->downloads['database'];
+            $sourceHash = hash_file('sha256', $sourcePath);
+            $variants = new RestoreVariantIndex;
+
+            try {
+                $corrupt = $variants->createVariant($source, ['database' => $sourcePath], 'corrupt_database');
+                $checksum = $variants->createVariant($source, ['database' => $sourcePath], 'database_checksum_mismatch');
+                $missing = $variants->createVariant($source, ['database' => $sourcePath], 'missing_database');
+
+                $this->assertNotSame($sourceHash, hash_file('sha256', $corrupt['paths']['database']));
+                $this->assertNotSame(hash_file('sha256', $checksum['paths']['database']), $checksum['objects']['database']['sha256']);
+                $this->assertNull($missing['paths']['database']);
+                foreach ([$corrupt, $checksum, $missing] as $variant) {
+                    $this->assertNull(BackupIndex::find($variant['backup_uuid']));
+                    $this->assertSame($source, $variant['parent_uuid']);
+                }
+                $this->assertSame($canonicalBefore, BackupIndex::find($source));
+                $this->assertSame($sourceHash, hash_file('sha256', $sourcePath));
+            } finally {
+                $variants->cleanup();
+            }
+        });
+    }
+
+    public function test_fault_hook_is_deterministic_and_one_shot(): void
+    {
+        $this->with_harness_environment(function (): void {
+            $fault = new OneShotRestoreFault('before_destructive_mutation', 'HARNESS_STOPPED_BEFORE_MUTATION');
+            try {
+                $fault->reach('index_validated', wp_generate_uuid4());
+                $fault->reach('before_destructive_mutation', wp_generate_uuid4());
+                $this->fail('The armed one-shot hook did not fire.');
+            } catch (BackupFailure $e) {
+                $this->assertSame('HARNESS_STOPPED_BEFORE_MUTATION', $e->error_code);
+            }
+            $fault->reach('before_destructive_mutation', wp_generate_uuid4());
+            $this->assertTrue($fault->consumed());
+            $this->assertCount(3, $fault->reached());
+        });
+    }
+
+    public function test_local_variant_smoke_reaches_pre_mutation_boundary_without_restoring(): void
+    {
+        $this->requires_mysql();
+        $this->with_harness_environment(function (): void {
+            $this->put(WP_CONTENT_DIR.'/uploads/m8-harness-unchanged.txt', 'SYNTHETIC BASELINE');
+            update_option('m8_harness_unchanged', 'yes');
+            $baselineFileHash = hash_file('sha256', WP_CONTENT_DIR.'/uploads/m8-harness-unchanged.txt');
+
+            [$source, $objects] = $this->backup('BACKUP_FILES');
+            $canonicalBefore = BackupIndex::find($source);
+            $canonicalSourcePath = $this->server->downloads['files'];
+            $sourceFileHash = hash_file('sha256', $canonicalSourcePath);
+            $variants = new RestoreVariantIndex;
+            try {
+                $variant = $variants->createVariant($source, ['files' => $this->server->downloads['files']]);
+                $this->assertNull(BackupIndex::find($variant['backup_uuid']));
+                $this->server->downloads['files'] = $variant['paths']['files'];
+                $fault = new OneShotRestoreFault('before_destructive_mutation', 'HARNESS_STOPPED_BEFORE_MUTATION');
+
+                $plugin = $this->plugin();
+                $registry = new JobRegistry(['RESTORE' => new RestoreHandler($plugin->downloader(), $plugin->health(), $plugin->jobs(), $variants, $fault)]);
+                $runner = new JobRunner($plugin->api(), $registry, $plugin->jobs(), $plugin->connection());
+                $plugin->set('registry', $registry);
+                $plugin->set('runner', $runner);
+
+                $job = $this->job('RESTORE', [
+                    'restore_uuid' => wp_generate_uuid4(),
+                    'backup_uuid' => $variant['backup_uuid'],
+                    'scope' => 'files',
+                    'objects' => [['name' => 'files', ...$variant['objects']['files']]],
+                ]);
+                // Exercise the supported job-poll path with the exact same
+                // restore UUID delivered twice in one response.
+                $this->serve_jobs($job, $job);
+                $runner->poll();
+                $result = $plugin->jobs()->find($job['uuid'])['result'];
+
+                $this->assertSame('HARNESS_STOPPED_BEFORE_MUTATION', $result['result_code']);
+                $this->assertSame('failed', $result['status']);
+                $this->assertFalse($result['error']['details']->destructive_mutation_started);
+                $this->assertSame('file_staging', $result['error']['details']->failure_stage);
+                $this->assertContains(['point' => 'before_destructive_mutation', 'restore_uuid' => $job['payload']->restore_uuid], $fault->reached());
+                $this->assertSame(1, count(array_filter($fault->reached(), static fn (array $hit) => $hit['point'] === 'before_destructive_mutation')));
+                $restoreResultRequests = array_filter(
+                    $this->http->api_requests('POST jobs/*/result'),
+                    static fn (array $request) => $request['path'] === 'jobs/'.$job['uuid'].'/result'
+                );
+                $this->assertCount(1, $restoreResultRequests, 'Duplicate delivery is acknowledged without rerunning the restore.');
+                $this->assertTrue($fault->consumed());
+                $this->assertSame($canonicalBefore, BackupIndex::find($source));
+                $this->assertNull(BackupIndex::find($variant['backup_uuid']));
+                $this->assertSame($sourceFileHash, hash_file('sha256', $canonicalSourcePath));
+                $this->assertSame($baselineFileHash, hash_file('sha256', WP_CONTENT_DIR.'/uploads/m8-harness-unchanged.txt'));
+                $this->assertSame('yes', get_option('m8_harness_unchanged'));
+                $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
+                $this->assertSame([], $this->temp_files());
+            } finally {
+                $variants->cleanup();
+            }
+        });
+    }
+
+    private function with_harness_environment(callable $callback): void
+    {
+        $keys = ['APP_ENV', 'WP_CAREGRID_RESTORE_HARNESS'];
+        $previous = [];
+        foreach ($keys as $key) {
+            $value = getenv($key);
+            $previous[$key] = $value === false ? null : $value;
+        }
+        $siteUrl = get_option('siteurl');
+        $home = get_option('home');
+        $fixture = get_option('wp_caregrid_test_fixture');
+        putenv('APP_ENV=testing');
+        putenv('WP_CAREGRID_RESTORE_HARNESS=1');
+        update_option('siteurl', 'http://127.0.0.1:18419');
+        update_option('home', 'http://127.0.0.1:18419');
+        update_option('wp_caregrid_test_fixture', 'synthetic');
+
+        try {
+            $callback();
+        } finally {
+            foreach ($previous as $key => $value) {
+                $value === null ? putenv($key) : putenv($key.'='.$value);
+            }
+            update_option('siteurl', $siteUrl);
+            update_option('home', $home);
+            $fixture === false ? delete_option('wp_caregrid_test_fixture') : update_option('wp_caregrid_test_fixture', $fixture);
+        }
     }
 
     /* ----- helpers ----- */

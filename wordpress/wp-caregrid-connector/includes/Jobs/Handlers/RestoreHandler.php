@@ -3,14 +3,16 @@
 namespace WPCareGrid\Connector\Jobs\Handlers;
 
 use WPCareGrid\Connector\Backups\BackupFailure;
-use WPCareGrid\Connector\Backups\BackupIndex;
+use WPCareGrid\Connector\Backups\BackupIndexLookup;
 use WPCareGrid\Connector\Backups\DatabaseDumper;
 use WPCareGrid\Connector\Backups\DiskSpace;
 use WPCareGrid\Connector\Backups\Downloader;
 use WPCareGrid\Connector\Backups\FileRestorer;
 use WPCareGrid\Connector\Backups\Maintenance;
+use WPCareGrid\Connector\Backups\RestoreFaultHooks;
 use WPCareGrid\Connector\Backups\SqlImporter;
 use WPCareGrid\Connector\Backups\TempDir;
+use WPCareGrid\Connector\Backups\WordPressBackupIndexLookup;
 use WPCareGrid\Connector\Health\HealthChecker;
 use WPCareGrid\Connector\Jobs\InvalidPayload;
 use WPCareGrid\Connector\Jobs\JobHandler;
@@ -41,6 +43,8 @@ final class RestoreHandler implements JobHandler
         private readonly Downloader $downloader,
         private readonly HealthChecker $health,
         private readonly JobStore $jobs,
+        private readonly ?BackupIndexLookup $backup_index = null,
+        private readonly ?RestoreFaultHooks $fault_hooks = null,
     ) {}
 
     public function capability(array $payload = []): string
@@ -92,12 +96,12 @@ final class RestoreHandler implements JobHandler
         try {
             $failureStage = 'source_validation';
             $this->progress($uuid, $destructiveMutationStarted, $failureStage);
-            $this->check_index($payload);
+            $index = $this->check_index($payload);
+            $this->fault_hooks?->reach('index_validated', $uuid);
 
             $failureStage = 'backup_download';
             $this->progress($uuid, $destructiveMutationStarted, $failureStage);
             $dir = TempDir::ensure();
-            $index = BackupIndex::find($payload['backup_uuid']);
             $needed = 0;
             foreach ($payload['objects'] as $name => $object) {
                 $needed += $object['size'] + (int) ($index['objects'][$name]['uncompressed_size'] ?? $object['size'] * 3);
@@ -109,6 +113,7 @@ final class RestoreHandler implements JobHandler
                 $paths[$name] = TempDir::file($uuid, $name.'.download');
                 $this->downloader->download($payload['backup_uuid'], $name, $object['size'], $object['sha256'], $paths[$name]);
             }
+            $this->fault_hooks?->reach('objects_downloaded', $uuid);
 
             $files = null;
             if (isset($paths['files'])) {
@@ -116,6 +121,7 @@ final class RestoreHandler implements JobHandler
                 $this->progress($uuid, $destructiveMutationStarted, $failureStage);
                 $files = new FileRestorer;
                 $files->extract($paths['files'], TempDir::file($uuid, 'files-staging'));
+                $this->fault_hooks?->reach('files_prepared', $uuid);
             }
 
             if (isset($paths['database'])) {
@@ -127,18 +133,25 @@ final class RestoreHandler implements JobHandler
                 global $wpdb;
                 $importer = new SqlImporter($uuid, $wpdb->base_prefix);
                 $importer->import($paths['database']);
+                $this->fault_hooks?->reach('database_prepared', $uuid);
             }
 
+            // This boundary is after all remote and archive validation but before
+            // maintenance mode or any live table/file mutation.
+            $this->fault_hooks?->reach('before_destructive_mutation', $uuid);
             Maintenance::enable($uuid);
             try {
                 do_action('wp_caregrid_restore_critical_section', $payload['scope']);
                 $failureStage = 'database_swap';
                 $this->progress($uuid, $destructiveMutationStarted, $failureStage);
-                $importer?->swap(function () use (&$destructiveMutationStarted, $uuid) {
-                    $destructiveMutationStarted = true;
-                    $this->progress($uuid, true, 'database_swap');
-                });
-                $importer = null;
+                if ($importer !== null) {
+                    $importer->swap(function () use (&$destructiveMutationStarted, $uuid) {
+                        $destructiveMutationStarted = true;
+                        $this->progress($uuid, true, 'database_swap');
+                    });
+                    $importer = null;
+                    $this->fault_hooks?->reach('after_database_swap', $uuid);
+                }
                 $failureStage = 'file_apply';
                 // Files-only restores have no DB swap. Conservatively mark
                 // the boundary before the first live file can be replaced.
@@ -146,13 +159,20 @@ final class RestoreHandler implements JobHandler
                     $destructiveMutationStarted = true;
                 }
                 $this->progress($uuid, $destructiveMutationStarted, $failureStage);
+                if ($files !== null) {
+                    $this->fault_hooks?->reach('before_file_apply', $uuid);
+                }
                 $files?->apply(TempDir::file($uuid, 'files-staging'));
+                if ($files !== null) {
+                    $this->fault_hooks?->reach('after_file_apply', $uuid);
+                }
             } finally {
                 Maintenance::disable();
             }
 
             $failureStage = 'post_restore_health';
             $this->progress($uuid, $destructiveMutationStarted, $failureStage);
+            $this->fault_hooks?->reach('before_post_restore_health', $uuid);
             $checks = $this->post_checks();
             $health = $this->health->run();
             $passed = ! in_array(false, array_column($checks, 'passed'), true) && $health['status'] !== 'critical';
@@ -187,9 +207,9 @@ final class RestoreHandler implements JobHandler
     }
 
     /** Only backups this installation made, with the same checksums. */
-    private function check_index(array $payload): void
+    private function check_index(array $payload): array
     {
-        $known = BackupIndex::find($payload['backup_uuid']);
+        $known = ($this->backup_index ?? new WordPressBackupIndexLookup)->find($payload['backup_uuid']);
 
         foreach ($payload['objects'] as $name => $object) {
             $local = $known['objects'][$name] ?? null;
@@ -197,6 +217,8 @@ final class RestoreHandler implements JobHandler
                 throw new BackupFailure('RESTORE_BACKUP_UNKNOWN', 'This site did not make this backup, or it does not match; nothing was restored.');
             }
         }
+
+        return $known;
     }
 
     private function progress(string $uuid, bool $destructive, string $stage): void

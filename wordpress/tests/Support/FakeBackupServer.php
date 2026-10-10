@@ -97,7 +97,11 @@ final class FakeBackupServer
 
     private function content(array $request): array
     {
-        $bytes = (string) file_get_contents($this->downloads[self::name($request)]);
+        $path = $this->downloads[self::name($request)] ?? null;
+        if (! is_string($path) || ! is_file($path) || is_link($path)) {
+            return FakeHttp::error(404, 'BACKUP_OBJECT_NOT_FOUND');
+        }
+        $bytes = (string) file_get_contents($path);
         $piece = substr($bytes, (int) $request['query']['offset'], (int) $request['query']['length']);
 
         return ['status' => 200, 'raw' => $piece, 'headers' => ['x-chunk-sha256' => hash('sha256', $piece)]];
