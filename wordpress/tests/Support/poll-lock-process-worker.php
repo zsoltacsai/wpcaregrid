@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Core\Plugin;
+use WPCareGrid\Connector\Core\Scheduler;
 use WPCareGrid\Connector\Jobs\JobRunner;
 
 $configPath = $argv[1] ?? '';
@@ -249,7 +250,7 @@ if ($mode === 'controlled_poll') {
     $plugin->reset();
     $runner = new JobRunner($plugin->api(), $plugin->registry(), $plugin->jobs(), $plugin->connection());
     $summary = $runner->poll(controlledExecution: true);
-    $write($resultFile, ['summary' => $summary, 'pid' => getmypid(), 'poll_scheduled' => wp_next_scheduled(\WPCareGrid\Connector\Core\Scheduler::POLL) !== false]);
+    $write($resultFile, ['summary' => $summary, 'pid' => getmypid(), 'poll_scheduled' => wp_next_scheduled(Scheduler::POLL) !== false]);
     exit(0);
 }
 

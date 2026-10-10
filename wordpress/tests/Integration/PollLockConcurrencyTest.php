@@ -144,6 +144,10 @@ final class PollLockConcurrencyTest extends TestCase
 
     public function test_controlled_runner_uses_same_atomic_lock_and_reports_one_harmless_job(): void
     {
+        if (! defined('WP_CAREGRID_CONTROLLED_EXECUTION')) {
+            define('WP_CAREGRID_CONTROLLED_EXECUTION', true);
+            define('WP_CAREGRID_CONTROLLED_SITE_UUID', self::WEBSITE);
+        }
         $this->http->on('POST pair', $this->pair_response([
             'synthetic_site' => true,
             'controlled_execution' => true,
@@ -196,7 +200,7 @@ final class PollLockConcurrencyTest extends TestCase
             $this->finishWorker($worker['process']);
         }
 
-        $lines = is_file($events) ? array_filter(explode("\n", trim((string) file_get_contents($events))) ) : [];
+        $lines = is_file($events) ? array_filter(explode("\n", trim((string) file_get_contents($events)))) : [];
         $eventsRead = array_map(static fn (string $line): array => json_decode($line, true, 8, JSON_THROW_ON_ERROR), $lines);
         $gets = array_values(array_filter($eventsRead, static fn (array $event): bool => ($event['method'] ?? null) === 'GET'));
         $posts = array_values(array_filter($eventsRead, static fn (array $event): bool => ($event['method'] ?? null) === 'POST'));
@@ -212,6 +216,10 @@ final class PollLockConcurrencyTest extends TestCase
 
     public function test_killed_controlled_runner_releases_only_by_expiry_then_redelivers_once(): void
     {
+        if (! defined('WP_CAREGRID_CONTROLLED_EXECUTION')) {
+            define('WP_CAREGRID_CONTROLLED_EXECUTION', true);
+            define('WP_CAREGRID_CONTROLLED_SITE_UUID', self::WEBSITE);
+        }
         $this->http->on('POST pair', $this->pair_response([
             'synthetic_site' => true,
             'controlled_execution' => true,
