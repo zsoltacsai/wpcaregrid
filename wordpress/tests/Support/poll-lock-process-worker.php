@@ -5,6 +5,10 @@ declare(strict_types=1);
 use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Core\Plugin;
 use WPCareGrid\Connector\Core\Scheduler;
+use WPCareGrid\Connector\Jobs\InvalidPayload;
+use WPCareGrid\Connector\Jobs\JobHandler;
+use WPCareGrid\Connector\Jobs\JobRegistry;
+use WPCareGrid\Connector\Jobs\JobResult;
 use WPCareGrid\Connector\Jobs\JobRunner;
 
 $configPath = $argv[1] ?? '';
@@ -234,7 +238,10 @@ if ($mode === 'controlled_poll') {
             return $response(200, ['jobs' => [$job], 'poll_interval' => 300, 'website_uuid' => $siteUuid, 'synthetic_site' => true, 'controlled_execution' => true]);
         }
         if ($method === 'POST' && preg_match('#/jobs/([0-9a-f-]{36})/result$#i', $path, $match)) {
-            file_put_contents($events, wp_json_encode(['method' => 'POST', 'mode' => 'controlled', 'uuid' => $match[1], 'pid' => getmypid()])."\n", FILE_APPEND | LOCK_EX);
+            file_put_contents($events, wp_json_encode([
+                'method' => 'POST', 'mode' => 'controlled', 'uuid' => $match[1], 'pid' => getmypid(),
+                'result' => json_decode((string) ($args['body'] ?? '{}'), true),
+            ])."\n", FILE_APPEND | LOCK_EX);
 
             return $response(202, ['accepted' => true]);
         }
@@ -246,10 +253,52 @@ if ($mode === 'controlled_poll') {
     if (! $waitFor($start)) {
         exit(3);
     }
+    // Exercise the same project-local CLI entrypoint used on the fixture VPS.
     $plugin = Plugin::instance();
     $plugin->reset();
-    $runner = new JobRunner($plugin->api(), $plugin->registry(), $plugin->jobs(), $plugin->connection());
-    $summary = $runner->poll(controlledExecution: true);
+    $jobStarted = (string) ($config['job_started'] ?? '');
+    $jobHandlerGate = (string) ($config['job_handler_gate'] ?? '');
+    if ($jobStarted !== '' || $jobHandlerGate !== '') {
+        if (! $insideRoot($jobStarted) || ! $insideRoot($jobHandlerGate)) {
+            exit(8);
+        }
+        $handler = new class($jobStarted, $jobHandlerGate, $waitFor) implements JobHandler
+        {
+            public function __construct(private string $started, private string $gate, private Closure $waitFor) {}
+
+            public function capability(array $payload = []): string
+            {
+                return 'health';
+            }
+
+            public function validate(array $payload): array
+            {
+                InvalidPayload::check($payload, []);
+
+                return $payload;
+            }
+
+            public function handle(array $payload): JobResult
+            {
+                touch($this->started);
+                if (! ($this->waitFor)($this->gate)) {
+                    throw new RuntimeException('Test handler gate timed out.');
+                }
+
+                return JobResult::success('TEST_HEALTH_CHECKED');
+            }
+        };
+        $plugin->set('registry', new JobRegistry(['SITE_HEALTH' => $handler]));
+    }
+    $summary = require dirname(__DIR__, 2).'/wp-caregrid-connector/bin/caregrid-controlled-poll.php';
+    if (! is_array($summary)) {
+        if (($config['expect_refused'] ?? false) === true) {
+            $write($resultFile, ['refused' => true, 'pid' => getmypid()]);
+            exit(0);
+        }
+
+        exit(7);
+    }
     $write($resultFile, ['summary' => $summary, 'pid' => getmypid(), 'poll_scheduled' => wp_next_scheduled(Scheduler::POLL) !== false]);
     exit(0);
 }

@@ -45,7 +45,20 @@
 
         <x-operator.section :title="__('owner.websites.sections.actions')" id="website-actions">
             <p class="text-sm text-muted">{{ __('owner.websites.actions_lead') }}</p>
+            @if ($pairingCode)
+                <div class="mt-4 rounded-md border border-warning/40 bg-surface p-4" role="status">
+                    <p class="text-sm font-semibold">{{ __('owner.websites.pairing_code_once') }}</p>
+                    <p class="mt-2 font-mono text-lg tracking-wider" data-testid="pairing-code">{{ $pairingCode['code'] }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ __('owner.websites.pairing_code_expires', ['time' => $pairingCode['expires_at']->format('Y-m-d H:i:s T')]) }}</p>
+                </div>
+            @endif
             <div class="mt-4 flex flex-wrap gap-2">
+                @if ($canIssuePairingCode)
+                    <form method="POST" action="{{ route('owner.websites.pairing-code', $website) }}">
+                        @csrf
+                        <x-ui.button type="submit" size="sm" variant="secondary">{{ __('owner.websites.generate_pairing_code') }}</x-ui.button>
+                    </form>
+                @endif
                 <form method="POST" action="{{ route('owner.websites.backups.store', $website) }}">
                     @csrf
                     <x-ui.button type="submit" size="sm" variant="secondary" icon="archive">{{ __('owner.websites.run_backup') }}</x-ui.button>

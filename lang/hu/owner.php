@@ -2,6 +2,11 @@
 
 return [
     'synthetic_fixture_badge' => 'TESZT / SZINTETIKUS',
+    'websites' => [
+        'generate_pairing_code' => 'Párosítási kód létrehozása',
+        'pairing_code_once' => 'Egyszer használható Connector-párosítási kód. Másold ki most; csak egyszer jelenik meg.',
+        'pairing_code_expires' => 'Lejárat: :time.',
+    ],
     'integrations' => [
         'szamlazz_agent' => [
             'description' => 'A Számlázz.hu Számla Agent API-kulcs biztonságos tárolása. A mentés nem engedélyezi a számlakiállítást.',

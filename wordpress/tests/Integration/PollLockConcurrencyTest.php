@@ -214,6 +214,43 @@ final class PollLockConcurrencyTest extends TestCase
         }
     }
 
+    public function test_project_local_runner_refuses_when_paired_site_differs_from_local_binding(): void
+    {
+        if (! defined('WP_CAREGRID_CONTROLLED_EXECUTION')) {
+            define('WP_CAREGRID_CONTROLLED_EXECUTION', true);
+            define('WP_CAREGRID_CONTROLLED_SITE_UUID', self::WEBSITE);
+        }
+        $this->http->on('POST pair', $this->pair_response([
+            'synthetic_site' => true,
+            'controlled_execution' => true,
+            'website_uuid' => self::WEBSITE,
+        ]));
+        $this->assertTrue($this->plugin()->pairing()->pair(self::PAIRING_CODE)['ok']);
+
+        Settings::update(['website_uuid' => '00000000-0000-4000-8000-000000000001']);
+        $base = $this->harness.'/controlled-cross-site';
+        $worker = $this->startWorker([
+            'mode' => 'controlled_poll',
+            'site_uuid' => self::WEBSITE,
+            'expect_refused' => true,
+            'ready' => $base.'.ready',
+            'start_gate' => $base.'.start',
+            'api_gate' => $base.'.api',
+            'entered' => $base.'.entered',
+            'events' => $base.'.events',
+            'result_file' => $base.'.result',
+            'job' => $this->job('SITE_HEALTH'),
+        ]);
+        $this->waitForFiles([$worker['config']['ready']]);
+        touch($worker['config']['start_gate']);
+        $this->waitForFiles([$worker['config']['result_file']]);
+        $this->finishWorker($worker['process']);
+
+        $result = json_decode((string) file_get_contents($worker['config']['result_file']), true, 8, JSON_THROW_ON_ERROR);
+        $this->assertTrue($result['refused'] ?? false);
+        $this->assertFileDoesNotExist($worker['config']['entered'], 'A mismatched paired site must be refused before polling the API.');
+    }
+
     public function test_killed_controlled_runner_releases_only_by_expiry_then_redelivers_once(): void
     {
         if (! defined('WP_CAREGRID_CONTROLLED_EXECUTION')) {
@@ -232,16 +269,21 @@ final class PollLockConcurrencyTest extends TestCase
         $events = $this->harness.'/controlled-kill-events.jsonl';
         $firstStart = $this->harness.'/controlled-kill-first-start';
         $firstApiGate = $this->harness.'/controlled-kill-first-api';
+        $firstJobStarted = $this->harness.'/controlled-kill-first-job-started';
+        $firstJobGate = $this->harness.'/controlled-kill-first-job-gate';
         $firstBase = $this->harness.'/controlled-kill-first';
         $first = $this->startWorker([
             'mode' => 'controlled_poll', 'site_uuid' => self::WEBSITE,
             'ready' => $firstBase.'.ready', 'start_gate' => $firstStart, 'api_gate' => $firstApiGate,
             'entered' => $firstBase.'.entered', 'events' => $events,
             'result_file' => $firstBase.'.result', 'job' => $job,
+            'job_started' => $firstJobStarted, 'job_handler_gate' => $firstJobGate,
         ]);
         $this->waitForFiles([$first['config']['ready']]);
         touch($firstStart);
         $this->waitForFiles([$first['config']['entered']]);
+        touch($firstApiGate);
+        $this->waitForFiles([$firstJobStarted]);
         $firstPid = proc_get_status($first['process']['handle'])['pid'];
         proc_terminate($first['process']['handle'], 9);
         $deadline = microtime(true) + 10;
@@ -284,6 +326,7 @@ final class PollLockConcurrencyTest extends TestCase
         $this->assertCount(1, $posts, 'The terminated process did not report; exactly one redelivered execution reported its result.');
         $this->assertSame($uuid, $posts[0]['uuid']);
         $this->assertNotSame($firstPid, $posts[0]['pid']);
+        $this->assertSame('JOB_INTERRUPTED', $posts[0]['result']['error']['code'] ?? null, 'The claimed but interrupted job reports its durable at-most-once execution state.');
     }
 
     /** @return list<int> Winner count for each iteration. */

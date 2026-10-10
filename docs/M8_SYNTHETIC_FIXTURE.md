@@ -12,7 +12,7 @@ After the code is separately reviewed and deployed to staging, an operator may e
 php artisan caregrid:provision-m8-fixture
 ```
 
-The command only accepts the one configured synthetic customer, reserved `example.test` email, and `m8-e2e.staging.wpcaregrid.com` HTTPS host. It creates no user, subscription, billing identity, checkout intent, invoice, provider object, or notification. It refuses duplicate reserved identities. It prints only customer and website UUIDs. Pairing remains the normal one-time pairing-code protocol, issued through the authenticated Operator website workflow.
+The command only accepts the one configured synthetic customer, reserved `example.test` email, and `m8-e2e.staging.wpcaregrid.com` HTTPS host. It creates no user, subscription, billing identity, checkout intent, invoice, provider object, or notification. It refuses duplicate reserved identities. It prints only customer and website UUIDs. Pairing remains the normal one-time pairing-code protocol. An authenticated Owner with `owner.websites.operate` may issue a code only for the active synthetic fixture whose UUID exactly matches `M8_SYNTHETIC_SITE_UUID`; ordinary sites remain unavailable on this Owner action. The route uses the normal `PairingCodes` service and displays the plaintext code only in the one-time website-detail flash. The stored code and audit log contain no plaintext secret.
 
 ## Site-scoped connector execution
 
@@ -31,7 +31,13 @@ Before controlled mode is authorized, the normal Connector poll may execute only
 wp caregrid jobs poll --once
 ```
 
-The CLI accepts no target site UUID. It uses the Connector's stored pairing, normal authenticated API, site UUID header, existing atomic poll lease, WebsiteJob claim, reviewed job handler, durable restore mutation state, and result outbox. The server returns at most one job to a controlled poll. There is no public execution or process-control endpoint.
+The CLI accepts no target site UUID. Where WP-CLI is installed, use `wp caregrid jobs poll --once`. The Connector package also provides a project-local PHP entrypoint for fixtures without a global WP-CLI installation:
+
+```sh
+php wp-content/plugins/wp-caregrid-connector/bin/caregrid-controlled-poll.php
+```
+
+The entrypoint requires CLI SAPI, loads the adjacent WordPress installation through `wp-load.php`, and invokes the same `ControlledPollCommand::runOnce()` used by WP-CLI. It uses the Connector's stored pairing, normal authenticated API, site UUID header, existing atomic poll lease, WebsiteJob claim, reviewed job handler, durable restore mutation state, and result outbox. The server returns at most one job to a controlled poll. There is no public execution or process-control endpoint. A separately approved rollout must verify the exact pairing and keep restore disabled before running a harmless poll.
 
 Controlled mode is separately gated from restoration. `SYNTHETIC_FIXTURE_CONTROLLED_EXECUTION_ENABLED=true` and `M8_SYNTHETIC_SITE_UUID` are required for the site-scoped runner; `SYNTHETIC_FIXTURE_RESTORE_ENABLED` remains false until a separate, explicit M8 restore authorization. No restore is started by enabling controlled polling alone.
 

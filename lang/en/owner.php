@@ -564,6 +564,9 @@ return [
         'no_backups' => 'No backups yet.',
         'backup_queued' => 'Backup requested. It runs when the site next checks in.',
         'scan_queued' => 'Security scan requested.',
+        'generate_pairing_code' => 'Generate pairing code',
+        'pairing_code_once' => 'One-time Connector pairing code. Copy it now; this code is shown only once.',
+        'pairing_code_expires' => 'Expires at :time.',
     ],
 
     'operators' => [

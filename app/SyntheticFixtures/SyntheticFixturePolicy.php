@@ -49,6 +49,14 @@ final class SyntheticFixturePolicy
             && hash_equals((string) config('synthetic_fixtures.site_uuid'), (string) $website->uuid);
     }
 
+    /** Owner pairing is available only for the active, explicitly configured M8 fixture. */
+    public function ownerPairingAllowed(Website $website): bool
+    {
+        return $this->isEnabledFor($website)
+            && is_string(config('synthetic_fixtures.site_uuid'))
+            && hash_equals((string) config('synthetic_fixtures.site_uuid'), (string) $website->uuid);
+    }
+
     public function jobAllowed(Website $website, JobType $type): bool
     {
         if (! $this->isEnabledFor($website) || ! in_array($type, self::ALLOWED_JOBS, true)) {
