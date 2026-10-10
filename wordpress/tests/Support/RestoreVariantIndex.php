@@ -37,7 +37,7 @@ final class RestoreVariantIndex implements BackupIndexLookup
     /**
      * Copy a verified canonical backup into a unique test-only variant.
      *
-     * @param  array<string, string> $sourcePaths  Downloaded artifact copies from this synthetic test site.
+     * @param  array<string, string>  $sourcePaths  Downloaded artifact copies from this synthetic test site.
      * @return array{backup_uuid: string, parent_uuid: string, objects: array<string, array{size: int, sha256: string}>, paths: array<string, ?string>}
      */
     public function createVariant(string $sourceUuid, array $sourcePaths, string $mutation = 'copy'): array
