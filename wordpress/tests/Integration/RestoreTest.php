@@ -94,6 +94,34 @@ final class RestoreTest extends TestCase
         $this->assertNotNull(BackupIndex::find($backup));
         global $wpdb;
         $this->assertSame([], $wpdb->get_col("SHOW TABLES LIKE 'cg%'"), 'No temporary tables are left.');
+        $this->assertTrue($result['data']['destructive_mutation_started']);
+    }
+
+    public function test_file_copy_failure_after_database_swap_reports_destructive_boundary(): void
+    {
+        $this->requires_mysql();
+        $target = WP_CONTENT_DIR.'/uploads/m8-auto-recovery/failure.txt';
+        $this->put($target, 'baseline-file');
+        $this->created[] = dirname($target);
+        update_option('caregrid_restore_marker', 'baseline-db');
+        [$backup, $objects] = $this->backup('BACKUP_FULL');
+
+        update_option('caregrid_restore_marker', 'mutated-db');
+        $post = wp_insert_post(['post_title' => 'M8 mutation after backup', 'post_status' => 'publish']);
+        unlink($target);
+        mkdir($target);
+
+        $result = $this->restore($backup, 'full', $objects);
+
+        $this->assertSame('failed', $result['status']);
+        $this->assertSame('RESTORE_FILES_FAILED', $result['result_code']);
+        $this->assertTrue($result['error']['details']['destructive_mutation_started']);
+        $this->assertSame('file_apply', $result['error']['details']['failure_stage']);
+        wp_cache_flush();
+        $this->assertSame('baseline-db', get_option('caregrid_restore_marker'), 'The DB table swap completed before file copy failed.');
+        $this->assertNull(get_post($post), 'The backed-up DB state is live.');
+        $this->assertDirectoryExists($target, 'The controlled obstruction remains until explicit recovery.');
+        $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
     }
 
     public function test_full_restore(): void
@@ -263,6 +291,8 @@ final class RestoreTest extends TestCase
 
         $this->assertSame('failed', $result['status']);
         $this->assertSame('RESTORE_FILES_FAILED', $result['result_code']);
+        $this->assertFalse($result['error']['details']['destructive_mutation_started']);
+        $this->assertSame('file_staging', $result['error']['details']['failure_stage']);
         $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
     }
 

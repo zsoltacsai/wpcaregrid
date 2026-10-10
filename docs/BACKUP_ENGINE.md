@@ -160,6 +160,8 @@ Backup:  queued → running → uploading → uploaded → verifying → verifie
          verifying → uploaded (storage unavailable, retry)             verified → verifying (re-check)
 
 Restore: awaiting_safety_backup → queued → restoring → restored | needs_attention | failed
+         restoring → recovery_queued → recovering → recovered | recovery_failed
+         restoring | recovery_queued → manual_recovery_required
          awaiting_safety_backup → failed (safety backup not verified) | cancelled
 ```
 
@@ -231,14 +233,17 @@ A restore always names one verified, unexpired backup of the same website, and a
 4. **Result:**
    - `restored` only if the post-checks passed and health is not critical;
    - `needs_attention` if the restore ran but the checks found problems;
-   - `failed` otherwise, with its error code.
+   - `failed` for an explicitly reported failure before destructive changes;
+   - `recovery_queued` when the Connector confirms destructive changes began and a single compensating full restore from the linked verified safety backup is safely queued;
+   - `recovering`, followed by `recovered` or `recovery_failed`, for that compensating restore;
+   - `manual_recovery_required` if the destructive boundary is unknown, the safety backup is no longer eligible, a recovery was already attempted, or safe automatic recovery cannot be queued. The system never guesses that an ambiguous failure was harmless.
 
-   Every step is in the audit log.
+   The original failure code/stage and the recovery outcome are retained separately on the same restore record. The automatic compensation is limited to one attempt and is never recursive. Source and safety backup artifacts remain protected from deletion while recovery is active or operator recovery is required. Every phase is in the audit log (`restore.queued`, `restore.recovery_requested`, `restore.recovery_started`, `restore.recovery_completed`, and `restore.manual_recovery_required`, alongside the original request/start/failure events).
 
 - **Feature flag:** live restores are off by default (`BACKUP_RESTORE_ENABLED`). While they are off, the customer area says restores are handled on request.
 - **Known limits:**
   - files added after the backup stay in place;
-  - if copying files fails after the database swap, the site is partly restored. The verified safety backup exists for exactly this case.
+  - a confirmed post-mutation failure now queues one compensating full restore from the pre-restore safety backup. If that compensation fails, or the Connector cannot prove whether destructive work began (for example, a process interruption during the database swap), the restore is marked for manual recovery and both artifacts are retained. Automatic recovery is bounded, not a substitute for operator recovery procedures.
 
 ## Security
 

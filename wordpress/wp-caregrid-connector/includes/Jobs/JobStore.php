@@ -65,6 +65,20 @@ final class JobStore
         $this->save($jobs);
     }
 
+    /** Persist restore phase before the operation can be interrupted by a process restart. */
+    public function mark_restore_progress(string $uuid, bool $destructive, string $stage): void
+    {
+        $job = $this->find($uuid);
+        if (! $job || ($job['type'] ?? null) !== 'RESTORE' || ($job['state'] ?? null) !== self::RUNNING) {
+            return;
+        }
+
+        $this->patch($uuid, [
+            'destructive_mutation_started' => $destructive,
+            'failure_stage' => $stage,
+        ]);
+    }
+
     /** @return array<string, array> Completed jobs whose result has not been accepted yet. */
     public function undelivered(): array
     {

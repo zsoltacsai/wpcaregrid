@@ -15,6 +15,7 @@ use WPCareGrid\Connector\Health\HealthChecker;
 use WPCareGrid\Connector\Jobs\InvalidPayload;
 use WPCareGrid\Connector\Jobs\JobHandler;
 use WPCareGrid\Connector\Jobs\JobResult;
+use WPCareGrid\Connector\Jobs\JobStore;
 use WPCareGrid\Connector\Security\Logger;
 
 /**
@@ -39,6 +40,7 @@ final class RestoreHandler implements JobHandler
     public function __construct(
         private readonly Downloader $downloader,
         private readonly HealthChecker $health,
+        private readonly JobStore $jobs,
     ) {}
 
     public function capability(array $payload = []): string
@@ -81,12 +83,19 @@ final class RestoreHandler implements JobHandler
     {
         $uuid = $payload['restore_uuid'];
         $importer = null;
+        $destructiveMutationStarted = false;
+        $failureStage = 'source_validation';
+        $this->progress($uuid, $destructiveMutationStarted, $failureStage);
         @set_time_limit(0);
         ignore_user_abort(true);
 
         try {
+            $failureStage = 'source_validation';
+            $this->progress($uuid, $destructiveMutationStarted, $failureStage);
             $this->check_index($payload);
 
+            $failureStage = 'backup_download';
+            $this->progress($uuid, $destructiveMutationStarted, $failureStage);
             $dir = TempDir::ensure();
             $index = BackupIndex::find($payload['backup_uuid']);
             $needed = 0;
@@ -103,11 +112,15 @@ final class RestoreHandler implements JobHandler
 
             $files = null;
             if (isset($paths['files'])) {
+                $failureStage = 'file_staging';
+                $this->progress($uuid, $destructiveMutationStarted, $failureStage);
                 $files = new FileRestorer;
                 $files->extract($paths['files'], TempDir::file($uuid, 'files-staging'));
             }
 
             if (isset($paths['database'])) {
+                $failureStage = 'database_staging';
+                $this->progress($uuid, $destructiveMutationStarted, $failureStage);
                 if (! DatabaseDumper::supported()) {
                     throw new BackupFailure('DATABASE_NOT_SUPPORTED', 'Database restores need MySQL or MariaDB.');
                 }
@@ -119,17 +132,31 @@ final class RestoreHandler implements JobHandler
             Maintenance::enable($uuid);
             try {
                 do_action('wp_caregrid_restore_critical_section', $payload['scope']);
-                $importer?->swap();
+                $failureStage = 'database_swap';
+                $this->progress($uuid, $destructiveMutationStarted, $failureStage);
+                $importer?->swap(function () use (&$destructiveMutationStarted, $uuid) {
+                    $destructiveMutationStarted = true;
+                    $this->progress($uuid, true, 'database_swap');
+                });
                 $importer = null;
+                $failureStage = 'file_apply';
+                // Files-only restores have no DB swap. Conservatively mark
+                // the boundary before the first live file can be replaced.
+                if ($files !== null) {
+                    $destructiveMutationStarted = true;
+                }
+                $this->progress($uuid, $destructiveMutationStarted, $failureStage);
                 $files?->apply(TempDir::file($uuid, 'files-staging'));
             } finally {
                 Maintenance::disable();
             }
 
+            $failureStage = 'post_restore_health';
+            $this->progress($uuid, $destructiveMutationStarted, $failureStage);
             $checks = $this->post_checks();
             $health = $this->health->run();
             $passed = ! in_array(false, array_column($checks, 'passed'), true) && $health['status'] !== 'critical';
-            $data = ['post_checks' => $checks, 'health' => $health, 'restored' => ['scope' => $payload['scope'], 'backup_uuid' => $payload['backup_uuid'], 'files' => $files?->stats], 'wordpress_version' => $this->version_on_disk()];
+            $data = ['post_checks' => $checks, 'health' => $health, 'restored' => ['scope' => $payload['scope'], 'backup_uuid' => $payload['backup_uuid'], 'files' => $files?->stats], 'wordpress_version' => $this->version_on_disk(), 'destructive_mutation_started' => $destructiveMutationStarted, 'failure_stage' => $failureStage];
 
             Logger::info('restore.finished', ['restore' => $uuid, 'passed' => $passed]);
 
@@ -140,7 +167,20 @@ final class RestoreHandler implements JobHandler
             $importer?->discard();
             Logger::warning('restore.failed', ['restore' => $uuid, 'code' => $e->error_code]);
 
-            return JobResult::failed($e->error_code, $e->getMessage(), $e->details);
+            return JobResult::failed($e->error_code, $e->getMessage(), array_merge($e->details, [
+                'destructive_mutation_started' => $destructiveMutationStarted,
+                'failure_stage' => $failureStage,
+            ]));
+        } catch (\Throwable) {
+            // Unexpected errors must still report whether live state may have
+            // changed, without leaking exception text or a filesystem path.
+            $importer?->discard();
+            Logger::warning('restore.failed', ['restore' => $uuid, 'code' => 'RESTORE_FAILED', 'stage' => $failureStage]);
+
+            return JobResult::failed('RESTORE_FAILED', 'The restore failed during a controlled operation.', [
+                'destructive_mutation_started' => $destructiveMutationStarted,
+                'failure_stage' => $failureStage,
+            ]);
         } finally {
             TempDir::remove_job($uuid);
         }
@@ -157,6 +197,11 @@ final class RestoreHandler implements JobHandler
                 throw new BackupFailure('RESTORE_BACKUP_UNKNOWN', 'This site did not make this backup, or it does not match; nothing was restored.');
             }
         }
+    }
+
+    private function progress(string $uuid, bool $destructive, string $stage): void
+    {
+        $this->jobs->mark_restore_progress($uuid, $destructive, $stage);
     }
 
     /** @return list<array{id: string, passed: bool, message: string}> */

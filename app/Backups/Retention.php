@@ -60,7 +60,9 @@ class Retention
     /** @return list<int> */
     private function protectedIds(Website $website): array
     {
-        $restores = BackupRestore::where('website_id', $website->id)->whereIn('status', ['awaiting_safety_backup', 'queued', 'restoring'])->get();
+        $restores = BackupRestore::where('website_id', $website->id)
+            ->whereIn('status', array_map(fn (RestoreStatus $status) => $status->value, array_filter(RestoreStatus::cases(), fn (RestoreStatus $status) => $status->needsRecoveryArtifacts())))
+            ->get();
         $updates = $website->jobs()->whereNotNull('backup_id')->whereIn('status', [JobStatus::Waiting->value, JobStatus::Queued->value, JobStatus::Delivered->value])->pluck('backup_id');
 
         return $restores->pluck('backup_id')->merge($restores->pluck('safety_backup_id'))->merge($updates)->filter()->map(fn ($id) => (int) $id)->values()->all();

@@ -38,6 +38,11 @@ return [
         'needs_attention' => 'Visszaállítva, figyelmet igényel',
         'failed' => 'Sikertelen',
         'cancelled' => 'Megszakítva',
+        'recovery_queued' => 'Automatikus helyreállítás sorba állítva',
+        'recovering' => 'Automatikus helyreállítás folyamatban',
+        'recovered' => 'A visszaállítás sikertelen; az eredeti állapot helyreállt',
+        'recovery_failed' => 'Az automatikus helyreállítás sikertelen',
+        'manual_recovery_required' => 'Kézi helyreállítás szükséges',
     ],
 
     // Az ügyfelek számára megjelenő okok. A bejegyzés nélküli kódok a „default” szöveget kapják.
@@ -149,9 +154,15 @@ return [
         ],
         'restore' => [
             'requested' => 'Visszaállítás kérve',
+            'queued' => 'Visszaállítás sorba állítva',
             'started' => 'Visszaállítás elindult',
             'completed' => 'Visszaállítás befejeződött',
             'failed' => 'Visszaállítás sikertelen',
+            'recovery_requested' => 'Automatikus helyreállítás kérve',
+            'recovery_started' => 'Automatikus helyreállítás elindult',
+            'recovery_completed' => 'Automatikus helyreállítás befejeződött',
+            'recovery_failed' => 'Automatikus helyreállítás sikertelen',
+            'manual_recovery_required' => 'Kézi helyreállítás szükséges',
         ],
         'update' => [
             'requested' => 'Frissítés kérve',

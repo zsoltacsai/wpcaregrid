@@ -87,11 +87,23 @@ class BackupController extends Controller
         $objectName = BackupObjectName::tryFrom($name);
 
         $restoring = $record->website->restores()
-            ->where('backup_id', $record->id)
-            ->where('status', RestoreStatus::Restoring)
-            // Only objects inside the restore's scope: a database restore cannot fetch the files.
-            ->whereIn('scope', ['full', $name])
-            ->whereHas('job', fn ($q) => $q->where('connector_id', $connector->id))
+            ->where(function ($query) use ($record, $name, $connector) {
+                $query->where(function ($original) use ($record, $name, $connector) {
+                    $original->where('backup_id', $record->id)
+                        ->where('status', RestoreStatus::Restoring)
+                        ->whereIn('scope', ['full', $name])
+                        ->whereHas('job', fn ($q) => $q->where('connector_id', $connector->id)->where('backup_id', $record->id));
+                })->orWhere(function ($recovery) use ($record) {
+                    $recovery->where('safety_backup_id', $record->id)
+                        ->whereIn('status', [RestoreStatus::RecoveryQueued->value, RestoreStatus::Recovering->value])
+                        // Automatic recovery always restores the linked full safety backup.
+                        // A queued job has no connector_id until it is polled;
+                        // the authenticated connector is already bound to this
+                        // website by find(), so bind the designated job to the
+                        // same website and safety backup here.
+                        ->whereHas('recoveryJob', fn ($q) => $q->where('website_id', $record->website_id)->where('backup_id', $record->id));
+                });
+            })
             ->exists();
 
         if (! $restoring || $record->status !== BackupStatus::Verified || ! $objectName || ! in_array($name, $record->type->objects(), true)) {

@@ -33,7 +33,7 @@ class JobLifecycle
         }
 
         if ($job->type === JobType::Restore && $job->restore) {
-            $this->restores->started($job->restore);
+            $this->restores->started($job->restore, $job);
         }
 
         if ($job->type === JobType::SecurityScan && ($scan = SecurityScan::where('job_id', $job->id)->first())) {

@@ -20,7 +20,8 @@ final class AuditLog
     public const EVENTS = [
         'backup.requested', 'backup.started', 'backup.uploaded', 'backup.verified', 'backup.failed',
         'backup.corrupt', 'backup.expired', 'backup.deleted',
-        'restore.requested', 'restore.started', 'restore.completed', 'restore.failed',
+        'restore.requested', 'restore.queued', 'restore.started', 'restore.completed', 'restore.failed',
+        'restore.recovery_requested', 'restore.recovery_started', 'restore.recovery_completed', 'restore.recovery_failed', 'restore.manual_recovery_required',
         'update.requested', 'update.started', 'update.completed', 'update.failed', 'update.blocked',
         'admin_access.requested', 'admin_access.authorized', 'admin_access.started', 'admin_access.expired', 'admin_access.revoked', 'admin_access.failed',
         'connector.paired', 'connector.disconnected',

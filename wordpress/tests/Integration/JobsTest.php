@@ -174,6 +174,36 @@ final class JobsTest extends TestCase
         $this->assertSame('JOB_INTERRUPTED', $result['result_code']);
     }
 
+    public function test_interrupted_restore_reports_persisted_destructive_boundary(): void
+    {
+        $job = $this->job('RESTORE');
+        $this->plugin()->jobs()->begin($job['uuid'], 'RESTORE', (array) $job['payload']);
+        $this->plugin()->jobs()->mark_restore_progress($job['uuid'], true, 'database_swap');
+        $this->serve_jobs($job);
+
+        $this->plugin()->runner()->poll();
+
+        $result = $this->posted_result($job['uuid']);
+        $this->assertSame('failed', $result['status']);
+        $this->assertSame('JOB_INTERRUPTED', $result['result_code']);
+        $this->assertTrue($result['error']['details']['destructive_mutation_started']);
+        $this->assertSame('database_swap', $result['error']['details']['failure_stage']);
+    }
+
+    public function test_interrupted_restore_during_database_swap_without_durable_marker_is_unknown(): void
+    {
+        $job = $this->job('RESTORE');
+        $this->plugin()->jobs()->begin($job['uuid'], 'RESTORE', (array) $job['payload']);
+        $this->plugin()->jobs()->mark_restore_progress($job['uuid'], false, 'database_swap');
+        $this->serve_jobs($job);
+
+        $this->plugin()->runner()->poll();
+
+        $result = $this->posted_result($job['uuid']);
+        $this->assertNull($result['error']['details']['destructive_mutation_started']);
+        $this->assertSame('database_swap', $result['error']['details']['failure_stage']);
+    }
+
     public function test_an_exception_becomes_a_structured_failure_without_details(): void
     {
         $throwing = new CountingHandler('health', new \RuntimeException('DB_PASSWORD=hunter2 in /var/www/wp-config.php'));

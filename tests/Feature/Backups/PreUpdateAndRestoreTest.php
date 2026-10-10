@@ -189,14 +189,14 @@ class PreUpdateAndRestoreTest extends TestCase
 
         $restore->refresh();
         $this->assertSame(RestoreStatus::Restored, $restore->status);
-        $this->assertSame(['restore.requested', 'restore.started', 'restore.completed'], WebsiteEvent::where('restore_id', $restore->id)->orderBy('id')->pluck('event')->all());
+        $this->assertSame(['restore.requested', 'restore.queued', 'restore.started', 'restore.completed'], WebsiteEvent::where('restore_id', $restore->id)->orderBy('id')->pluck('event')->all());
     }
 
     public function test_restore_is_not_successful_without_passing_post_checks(): void
     {
         [$site, $restore, $job] = $this->restoreInProgress();
 
-        $this->reportJob($site, $job, 'success', 'RESTORED', ['health' => ['status' => 'critical', 'findings' => [['id' => 'homepage', 'status' => 'fail', 'label' => 'Home page', 'message' => 'HTTP 500']]], 'post_checks' => [['id' => 'files_present', 'passed' => true, 'message' => 'ok']]]);
+        $this->reportJob($site, $job, 'success', 'RESTORED', ['destructive_mutation_started' => false, 'health' => ['status' => 'critical', 'findings' => [['id' => 'homepage', 'status' => 'fail', 'label' => 'Home page', 'message' => 'HTTP 500']]], 'post_checks' => [['id' => 'files_present', 'passed' => true, 'message' => 'ok']]]);
 
         $this->assertSame(RestoreStatus::NeedsAttention, $restore->refresh()->status);
     }
@@ -205,12 +205,165 @@ class PreUpdateAndRestoreTest extends TestCase
     {
         [$site, $restore, $job] = $this->restoreInProgress();
 
-        $this->reportJob($site, $job, 'failed', 'RESTORE_SQL_REJECTED', [], ['code' => 'RESTORE_SQL_REJECTED', 'message' => 'Refused.']);
+        $this->reportJob($site, $job, 'failed', 'RESTORE_SQL_REJECTED', [], ['code' => 'RESTORE_SQL_REJECTED', 'message' => 'Refused.', 'details' => ['destructive_mutation_started' => false, 'failure_stage' => 'database_staging']]);
 
         $restore->refresh();
         $this->assertSame(RestoreStatus::Failed, $restore->status);
         $this->assertSame('RESTORE_SQL_REJECTED', $restore->error_code);
         $this->assertTrue(WebsiteEvent::where('event', 'restore.failed')->exists());
+    }
+
+    public function test_post_swap_file_failure_queues_one_verified_safety_recovery_and_records_both_outcomes(): void
+    {
+        [$site, $restore, $originalJob] = $this->restoreInProgress();
+        $safety = $restore->safetyBackup;
+
+        $this->reportJob($site, $originalJob, 'failed', 'RESTORE_FILES_FAILED', [], [
+            'code' => 'RESTORE_FILES_FAILED',
+            'message' => 'A file could not be restored.',
+            'details' => ['destructive_mutation_started' => true, 'failure_stage' => 'file_apply'],
+        ])->assertStatus(202);
+
+        $restore->refresh();
+        $recoveryJob = $restore->recoveryJob;
+        $this->assertSame(RestoreStatus::RecoveryQueued, $restore->status);
+        $this->assertSame('RESTORE_FILES_FAILED', $restore->error_code, 'The original failure remains visible.');
+        $this->assertSame('file_apply', $restore->failure_stage);
+        $this->assertNotNull($restore->destructive_started_at);
+        $this->assertSame(1, $restore->recovery_attempts);
+        $this->assertSame($safety->id, $recoveryJob->backup_id);
+        $this->assertSame('full', $recoveryJob->payload['scope']);
+        $this->assertSame($safety->uuid, $recoveryJob->payload['backup_uuid']);
+        $this->assertSame(2, WebsiteJob::where('restore_id', $restore->id)->count());
+        $this->assertSame('RESTORE_IN_PROGRESS', app(RestoreService::class)->refusal($site['website']->refresh(), $restore->backup, BackupType::Full));
+        $this->assertTrue($restore->fresh()->recoveryJob()->where('website_id', $site['website']->id)->where('backup_id', $safety->id)->exists());
+        $this->assertTrue($restore->website->restores()->where('safety_backup_id', $safety->id)->whereIn('status', [RestoreStatus::RecoveryQueued->value, RestoreStatus::Recovering->value])->exists());
+
+        // The safety object is downloadable only through its designated recovery job.
+        $this->withHeaders($this->connectorHeaders($site))
+            ->get(route('api.v1.connector.backups.content', [$safety->uuid, 'database']).'?offset=0&length=5')
+            ->assertOk();
+        $this->withHeaders($this->connectorHeaders($site))
+            ->get(route('api.v1.connector.backups.content', [$restore->backup->uuid, 'database']).'?offset=0&length=5')
+            ->assertForbidden();
+
+        $delivered = $this->pollJobs($site);
+        $deliveredUuids = array_column($delivered, 'uuid');
+        $this->assertContains($recoveryJob->uuid, $deliveredUuids);
+        $this->assertNotContains($originalJob->uuid, $deliveredUuids, 'A completed failed restore must not be redelivered.');
+        $restore->refresh();
+        $this->assertSame(RestoreStatus::Recovering, $restore->status);
+
+        $recoveryResponse = $this->reportJob($site, $recoveryJob, 'success', 'RESTORED', [
+            'post_checks' => [['id' => 'database', 'passed' => true, 'message' => 'ok']],
+            'health' => ['status' => 'healthy', 'findings' => []],
+            'destructive_mutation_started' => true,
+        ]);
+        $recoveryResponse->assertStatus(202);
+
+        $restore->refresh();
+        $this->assertSame(RestoreStatus::Recovered, $restore->status);
+        $this->assertSame('RESTORE_FILES_FAILED', $restore->error_code);
+        $this->assertNull($restore->recovery_error_code);
+        $this->assertFalse($restore->manual_recovery_required);
+        $this->assertNotNull($restore->recovery_completed_at);
+        $this->assertNotNull($restore->completed_at);
+        $this->assertSame(2, WebsiteJob::where('restore_id', $restore->id)->count(), 'No recursive recovery job was created.');
+        $this->assertEquals([
+            'restore.requested', 'restore.queued', 'restore.started', 'restore.failed',
+            'restore.recovery_requested', 'restore.recovery_started', 'restore.recovery_completed',
+        ], WebsiteEvent::where('restore_id', $restore->id)->orderBy('id')->pluck('event')->all());
+
+        // A duplicate final result is acknowledged without repeating recovery.
+        $this->reportJob($site, $recoveryJob, 'success', 'RESTORED', [
+            'post_checks' => [['id' => 'database', 'passed' => true, 'message' => 'ok']],
+            'health' => ['status' => 'healthy'],
+        ])->assertOk()->assertJsonPath('duplicate', true);
+        $this->assertSame(2, WebsiteJob::where('restore_id', $restore->id)->count());
+        $this->assertSame(RestoreStatus::Recovered, $restore->refresh()->status);
+    }
+
+    public function test_post_swap_failure_without_eligible_safety_backup_fails_closed_for_manual_recovery(): void
+    {
+        [$site, $restore, $job] = $this->restoreInProgress();
+        $restore->safetyBackup->forceFill(['status' => BackupStatus::Corrupt])->save();
+
+        $this->reportJob($site, $job, 'failed', 'RESTORE_FILES_FAILED', [], [
+            'code' => 'RESTORE_FILES_FAILED',
+            'message' => 'A file could not be restored.',
+            'details' => ['destructive_mutation_started' => true, 'failure_stage' => 'file_apply'],
+        ])->assertStatus(202);
+
+        $restore->refresh();
+        $this->assertSame(RestoreStatus::ManualRecoveryRequired, $restore->status);
+        $this->assertTrue($restore->manual_recovery_required);
+        $this->assertSame('RESTORE_FILES_FAILED', $restore->error_code);
+        $this->assertSame('SAFETY_BACKUP_NOT_ELIGIBLE', $restore->recovery_error_code);
+        $this->assertNull($restore->recovery_job_id);
+        $this->assertSame(1, WebsiteJob::where('restore_id', $restore->id)->count());
+        $this->assertTrue(WebsiteEvent::where('restore_id', $restore->id)->where('event', 'restore.manual_recovery_required')->exists());
+    }
+
+    public function test_failed_compensating_recovery_is_bounded_and_does_not_recurse(): void
+    {
+        [$site, $restore, $originalJob] = $this->restoreInProgress();
+        $this->reportJob($site, $originalJob, 'failed', 'RESTORE_FILES_FAILED', [], [
+            'code' => 'RESTORE_FILES_FAILED', 'message' => 'Original file failure.',
+            'details' => ['destructive_mutation_started' => true, 'failure_stage' => 'file_apply'],
+        ])->assertStatus(202);
+
+        $recoveryJob = $restore->refresh()->recoveryJob;
+        $this->pollJobs($site);
+        $this->reportJob($site, $recoveryJob, 'failed', 'RESTORE_DATABASE_FAILED', [], [
+            'code' => 'RESTORE_DATABASE_FAILED', 'message' => 'Safety restore failed.',
+            'details' => ['destructive_mutation_started' => false, 'failure_stage' => 'database_staging'],
+        ])->assertStatus(202);
+
+        $restore->refresh();
+        $this->assertSame(RestoreStatus::RecoveryFailed, $restore->status);
+        $this->assertTrue($restore->manual_recovery_required);
+        $this->assertSame('RESTORE_FILES_FAILED', $restore->error_code, 'The original failure remains recorded.');
+        $this->assertSame('RECOVERY_DATABASE_FAILED', $restore->recovery_error_code);
+        $this->assertSame(1, $restore->recovery_attempts);
+        $this->assertSame(2, WebsiteJob::where('restore_id', $restore->id)->count(), 'Recovery failure does not enqueue another recovery.');
+    }
+
+    public function test_file_failure_during_recovery_is_classified_and_requires_manual_intervention(): void
+    {
+        [$site, $restore, $originalJob] = $this->restoreInProgress();
+        $this->reportJob($site, $originalJob, 'failed', 'RESTORE_FILES_FAILED', [], [
+            'code' => 'RESTORE_FILES_FAILED', 'message' => 'Original file failure.',
+            'details' => ['destructive_mutation_started' => true, 'failure_stage' => 'file_apply'],
+        ])->assertStatus(202);
+        $recoveryJob = $restore->refresh()->recoveryJob;
+        $this->pollJobs($site);
+
+        $this->reportJob($site, $recoveryJob, 'failed', 'RESTORE_FILES_FAILED', [], [
+            'code' => 'RESTORE_FILES_FAILED', 'message' => 'Safety file copy failed.',
+            'details' => ['destructive_mutation_started' => true, 'failure_stage' => 'file_apply'],
+        ])->assertStatus(202);
+
+        $restore->refresh();
+        $this->assertSame(RestoreStatus::RecoveryFailed, $restore->status);
+        $this->assertSame('RECOVERY_FILES_FAILED', $restore->recovery_error_code);
+        $this->assertSame('RESTORE_FILES_FAILED', $restore->recovery_result['connector_error_code']);
+        $this->assertTrue($restore->manual_recovery_required);
+        $this->assertSame(2, WebsiteJob::where('restore_id', $restore->id)->count());
+    }
+
+    public function test_interruption_during_database_swap_is_unknown_and_requires_manual_recovery(): void
+    {
+        [$site, $restore, $job] = $this->restoreInProgress();
+        $this->reportJob($site, $job, 'failed', 'JOB_INTERRUPTED', [], [
+            'code' => 'JOB_INTERRUPTED', 'message' => 'The restore worker stopped during the database swap.',
+            'details' => ['destructive_mutation_started' => null, 'failure_stage' => 'database_swap'],
+        ])->assertStatus(202);
+
+        $restore->refresh();
+        $this->assertSame(RestoreStatus::ManualRecoveryRequired, $restore->status);
+        $this->assertSame('DESTRUCTIVE_STATE_UNKNOWN', $restore->recovery_error_code);
+        $this->assertNull($restore->destructive_started_at, 'The server does not claim a swap it cannot prove.');
+        $this->assertSame(1, WebsiteJob::where('restore_id', $restore->id)->count());
     }
 
     public function test_failed_safety_backup_stops_the_restore(): void

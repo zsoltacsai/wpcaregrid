@@ -111,7 +111,22 @@ final class JobRunner
             }
 
             if ($known['state'] === JobStore::RUNNING) {
-                $this->store->complete($uuid, JobResult::failed('JOB_INTERRUPTED', 'The job started but did not finish; it was not run again.'), $known['started_at'] ?? null);
+                $details = [];
+                if (($known['type'] ?? null) === 'RESTORE') {
+                    $stage = is_string($known['failure_stage'] ?? null) ? $known['failure_stage'] : 'unknown';
+                    // A process can die during the atomic swap before its
+                    // post-swap marker is durable. Treat this narrow window as
+                    // unknown so the server requires manual recovery, never as
+                    // proof that no mutation happened.
+                    $destructive = ($known['destructive_mutation_started'] ?? false) === true
+                        ? true
+                        : ($stage === 'database_swap' ? null : false);
+                    $details = [
+                        'destructive_mutation_started' => $destructive,
+                        'failure_stage' => $stage,
+                    ];
+                }
+                $this->store->complete($uuid, JobResult::failed('JOB_INTERRUPTED', 'The job started but did not finish; it was not run again.', $details), $known['started_at'] ?? null);
                 Logger::warning('job.interrupted', ['job' => $uuid, 'type' => $known['type']]);
             } else {
                 $this->store->mark_undelivered($uuid);

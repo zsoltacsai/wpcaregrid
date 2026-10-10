@@ -112,7 +112,7 @@ final class SqlImporter
     }
 
     /** Put the restored tables live in one atomic rename, then restore the connector's own state. */
-    public function swap(): void
+    public function swap(?callable $afterSwap = null): void
     {
         global $wpdb;
 
@@ -133,6 +133,12 @@ final class SqlImporter
             throw new BackupFailure('RESTORE_DATABASE_FAILED', 'The restored tables could not be put in place.');
         }
 
+        // This is the destructive boundary. Notify the caller immediately
+        // after MySQL has atomically installed the restored tables.
+        if ($afterSwap !== null) {
+            $afterSwap();
+        }
+
         foreach (array_keys($this->tables) as $table) {
             $wpdb->query('DROP TABLE IF EXISTS `'.$this->old($table).'`');
         }
@@ -140,6 +146,13 @@ final class SqlImporter
         $wpdb->query($wpdb->prepare("DELETE FROM `{$options}` WHERE option_name LIKE %s", $wpdb->esc_like('wp_caregrid_').'%'));
         foreach ((array) $connector_state as $row) {
             $wpdb->insert($options, $row);
+        }
+
+        // The connector-state snapshot can overwrite the progress marker
+        // written immediately after RENAME TABLE. Persist it again after the
+        // preserved state has been restored.
+        if ($afterSwap !== null) {
+            $afterSwap();
         }
 
         wp_cache_flush();

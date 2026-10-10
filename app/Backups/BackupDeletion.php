@@ -29,7 +29,7 @@ class BackupDeletion
             throw new BackupRefused('ONLY_VERIFIED_BACKUP', 'This is the only verified backup of the website.');
         }
 
-        $inUse = BackupRestore::whereIn('status', ['awaiting_safety_backup', 'queued', 'restoring'])
+        $inUse = BackupRestore::whereIn('status', array_map(fn (RestoreStatus $status) => $status->value, array_filter(RestoreStatus::cases(), fn (RestoreStatus $status) => $status->needsRecoveryArtifacts())))
             ->where(fn ($q) => $q->where('backup_id', $backup->id)->orWhere('safety_backup_id', $backup->id))
             ->exists();
         if ($inUse) {

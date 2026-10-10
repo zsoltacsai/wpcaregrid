@@ -38,6 +38,11 @@ return [
         'needs_attention' => 'Restored, needs attention',
         'failed' => 'Failed',
         'cancelled' => 'Cancelled',
+        'recovery_queued' => 'Automatic recovery queued',
+        'recovering' => 'Automatically recovering',
+        'recovered' => 'Restore failed; original site recovered',
+        'recovery_failed' => 'Automatic recovery failed',
+        'manual_recovery_required' => 'Manual recovery required',
     ],
 
     // Customer-facing reasons. Codes without an entry use "default".
@@ -149,9 +154,15 @@ return [
         ],
         'restore' => [
             'requested' => 'Restore requested',
+            'queued' => 'Restore queued',
             'started' => 'Restore started',
             'completed' => 'Restore completed',
             'failed' => 'Restore failed',
+            'recovery_requested' => 'Automatic recovery requested',
+            'recovery_started' => 'Automatic recovery started',
+            'recovery_completed' => 'Automatic recovery completed',
+            'recovery_failed' => 'Automatic recovery failed',
+            'manual_recovery_required' => 'Manual recovery required',
         ],
         'update' => [
             'requested' => 'Update requested',

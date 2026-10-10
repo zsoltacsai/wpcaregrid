@@ -125,7 +125,7 @@ final class Plugin
                     'BACKUP_FILES' => new Handlers\BackupHandler('files', $this->api(), $this->uploader()),
                     'BACKUP_DATABASE' => new Handlers\BackupHandler('database', $this->api(), $this->uploader()),
                     'BACKUP_FULL' => new Handlers\BackupHandler('full', $this->api(), $this->uploader()),
-                    'RESTORE' => new Handlers\RestoreHandler($this->downloader(), $this->health()),
+                    'RESTORE' => new Handlers\RestoreHandler($this->downloader(), $this->health(), $this->jobs()),
                     'CREATE_ADMIN_SESSION' => new Handlers\CreateAdminSessionHandler,
                     'SECURITY_SCAN' => new Handlers\SecurityScanHandler,
                     'SECURITY_QUARANTINE' => new Handlers\SecurityQuarantineHandler,

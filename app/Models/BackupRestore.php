@@ -36,6 +36,13 @@ class BackupRestore extends Model
             'confirmed_at' => 'datetime',
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
+            'destructive_started_at' => 'datetime',
+            'recovery_attempts' => 'integer',
+            'recovery_attempted_at' => 'datetime',
+            'recovery_started_at' => 'datetime',
+            'recovery_completed_at' => 'datetime',
+            'recovery_result' => 'array',
+            'manual_recovery_required' => 'boolean',
         ];
     }
 
@@ -57,6 +64,11 @@ class BackupRestore extends Model
     public function job(): HasOne
     {
         return $this->hasOne(WebsiteJob::class, 'restore_id');
+    }
+
+    public function recoveryJob(): BelongsTo
+    {
+        return $this->belongsTo(WebsiteJob::class, 'recovery_job_id');
     }
 
     /** @param  array<string, mixed>  $attributes */

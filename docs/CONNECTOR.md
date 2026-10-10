@@ -135,6 +135,8 @@ There is no `RUN_PHP`, `RUN_COMMAND`, `EXECUTE_CODE` or `EVAL`, and no way to ad
 - One poll at a time per site (option lock, taken over after 15 minutes if a process died; long backups and restores keep it fresh).
 - A backup interrupted while uploading resumes its upload at the next poll instead of being reported as interrupted; it is never built twice.
 
+**Restore destructive-boundary reporting.** The Connector persists restore progress (`database_staging`, `database_swap`, `file_staging`, `file_apply`, or `post_restore_health`) in its own `wp_caregrid_jobs` state. It reports whether destructive mutation began with a failed restore result. The server uses an explicit `true` only to queue one compensating restore from the verified pre-restore safety backup; explicit `false` means the failure was before the live site was changed. Missing/ambiguous evidence is reported as unknown and requires manual recovery. If a worker restarts while a restore is marked running, the Connector does not rerun it: it reports the persisted destructive marker when available, and reports unknown if interruption occurred during the database-swap boundary before a durable marker could be confirmed. This fail-closed behavior prevents an unsafe automatic retry.
+
 **Updates** use WordPress's own `Plugin_Upgrader`, `Theme_Upgrader` and `Core_Upgrader` with the update WordPress itself offers (the package URL is never taken from WP CareGrid). The handler:
 
 1. reports `skipped` if nothing is offered or the offer differs from `target_version`; for core, `MAJOR_UPDATE_NOT_ALLOWED` when the policy is `minor` and the offer is on another `x.y` branch;
