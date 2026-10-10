@@ -6,9 +6,6 @@ temporary="$(mktemp -d)"
 trap 'rm -rf -- "$temporary"' EXIT
 mkdir -p "$temporary/scripts" "$temporary/wordpress/wp-caregrid-connector/includes"
 cp "$root/scripts/check-connector-release.php" "$temporary/scripts/check-connector-release.php"
-cat > "$temporary/wordpress/wp-caregrid-connector/release.json" <<'JSON'
-{"version":"0.4.1","package_schema":1}
-JSON
 cat > "$temporary/wordpress/wp-caregrid-connector/wp-caregrid-connector.php" <<'PHP'
 <?php
 /**
@@ -25,6 +22,9 @@ git -C "$temporary" commit -qm 'Base Connector release'
 base="$(git -C "$temporary" rev-parse HEAD)"
 
 printf '%s\n' '<?php return "changed without version bump";' > "$temporary/wordpress/wp-caregrid-connector/includes/example.php"
+cat > "$temporary/wordpress/wp-caregrid-connector/release.json" <<'JSON'
+{"version":"0.4.1","package_schema":1}
+JSON
 git -C "$temporary" add .
 git -C "$temporary" commit -qm 'Runtime change without release bump'
 if php "$temporary/scripts/check-connector-release.php" "$base" >/dev/null 2>&1; then

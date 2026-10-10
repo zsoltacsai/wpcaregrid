@@ -40,8 +40,17 @@ $run = static function (array $command) use ($root): array {
 };
 
 try {
-    [$baseRelease] = $run(['git', 'show', $base.':wordpress/wp-caregrid-connector/release.json']);
-    $previous = json_decode($baseRelease, true);
+    try {
+        [$baseRelease] = $run(['git', 'show', $base.':wordpress/wp-caregrid-connector/release.json']);
+        $previous = json_decode($baseRelease, true);
+    } catch (Throwable) {
+        // Older Connector releases stored their version only in the plugin header.
+        [$basePlugin] = $run(['git', 'show', $base.':wordpress/wp-caregrid-connector/wp-caregrid-connector.php']);
+        if (! preg_match('/^\s*\*\s*Version:\s*(\S+)/m', $basePlugin, $legacyMatch)) {
+            throw new RuntimeException('Base revision has neither release metadata nor a plugin version header.');
+        }
+        $previous = ['version' => $legacyMatch[1]];
+    }
     [$changed] = $run(['git', 'diff', '--name-only', $base, 'HEAD', '--', 'wordpress/wp-caregrid-connector']);
 } catch (Throwable $error) {
     fwrite(STDERR, $error->getMessage()."\n");
