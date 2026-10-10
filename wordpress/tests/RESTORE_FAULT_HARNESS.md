@@ -24,9 +24,19 @@ The integration-test bootstrap creates a fresh disposable WordPress site. MySQL 
 
 The local smoke deliberately stops at `before_destructive_mutation`, before maintenance mode, table swap, or file copy. It goes through the Connector's actual job poll, job store, restore handler, download, checksum, and archive-preparation path.
 
-## Duplicate, concurrency, and interruption limits
+## Process concurrency and hard interruption harness
 
-The smoke sends the same restore job UUID twice through the real `JobRunner` poll and verifies the restore handler runs only once. Existing Connector tests also cover duplicate job delivery, the per-site polling lock, and persisted interrupted-job boundaries. No new multi-process concurrent-different-restore orchestrator or hard process-kill tool is added here. Those destructive interleaving scenarios remain for the separately authorized M8 failure/recovery E2E phase.
+`RestoreRequestConcurrencyTest` starts independent Laravel CLI processes against an explicitly named local MySQL test database. Both call `RestoreService::request()` for one site while the owning process holds the same `Website` row lock; it covers the same verified backup and two different verified backups. The assertions require one accepted request, one `RESTORE_IN_PROGRESS` refusal, one active lifecycle, and no lock bypass.
+
+`restore-process-worker.php` boots only an existing owned loopback WordPress test root and runs the real Connector `JobRunner::poll()` path with the real restore handler. The fake CareGrid API intercept is test-only, refuses every host except `app.caregrid.test`, and only serves verified artifact copies rooted under that temporary test site. `ProcessRestoreBarrier` publishes a PID/restore/boundary marker and waits no more than 30 seconds for the parent test. Separate opt-in tests send SIGKILL to that exact PHP worker PID before mutation or at `after_database_swap`; neither test kills MySQL or another service.
+
+The interrupted Connector poll lock has a 900-second TTL. Tests do not rewrite lock state or fake time: they wait for its real expiry before a second normal poll redelivers the same job. A per-job, non-autoloaded WordPress option is the monotonic source of truth for destructive mutation; the matching job record mirrors it. Restore progress resolves the payload restore UUID to the distinct queue job UUID. The marker is persisted immediately before `RENAME TABLE` and included in the Connector-state snapshot carried through the atomic swap. Tests verify that a pre-mutation interruption reports `destructive_mutation_started=false`, while a kill after the database table swap reports `true` and `failure_stage=database_swap`. A fresh normal test restore then returns the disposable WordPress state to its verified baseline. This exercises Connector persisted-state/redelivery semantics; Laravel's existing MySQL restore tests separately verify that confirmed post-mutation failures queue at most one compensating safety restore.
+
+Each process E2E is opt-in so the regular Connector suite remains bounded. Set `WP_CAREGRID_RUN_PRE_MUTATION_INTERRUPTION_E2E=1` to run only the pre-mutation scenario, or `WP_CAREGRID_RUN_HARD_INTERRUPTION_E2E=1` to run only the post-swap scenario, together with the dedicated MySQL fixture variables. Each waits for the real 900-second poll-lock TTL; CI reports these long destructive-process tests as skipped unless a job explicitly opts in.
+
+These process tests are test-only files, absent from the plugin's runtime package, REST routes, Owner controls, settings, and production registry. They require POSIX process support and a dedicated loopback MySQL test database. Do not point either suite at the active M8 fixture, staging, production, or customer sites.
+
+The tests do not constitute the complete Phase 4 failure matrix. Corrupt/missing object cases, provider/database failure variants, and broader timeout/retry scenarios remain separate work.
 
 ## Run
 

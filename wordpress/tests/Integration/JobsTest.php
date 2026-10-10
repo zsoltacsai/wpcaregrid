@@ -190,6 +190,33 @@ final class JobsTest extends TestCase
         $this->assertSame('database_swap', $result['error']['details']['failure_stage']);
     }
 
+    public function test_restore_mutation_marker_resolves_restore_uuid_and_never_downgrades(): void
+    {
+        $job = $this->job('RESTORE', ['restore_uuid' => wp_generate_uuid4()]);
+        $store = $this->plugin()->jobs();
+        $store->begin($job['uuid'], 'RESTORE', (array) $job['payload']);
+
+        $store->mark_restore_progress($job['payload']->restore_uuid, false, 'database_staging');
+        $this->assertFalse($store->has_destructive_mutation_started($job['uuid']));
+
+        $store->mark_restore_progress($job['payload']->restore_uuid, true, 'database_swap');
+        wp_cache_flush();
+        $this->assertTrue($store->has_destructive_mutation_started($job['uuid']));
+        $this->assertSame(true, $store->find($job['uuid'])['destructive_mutation_started']);
+
+        // A delayed pre-boundary writer cannot downgrade the durable marker.
+        $store->mark_restore_progress($job['payload']->restore_uuid, false, 'database_staging');
+        wp_cache_flush();
+        $this->assertTrue($store->has_destructive_mutation_started($job['uuid']));
+        $this->assertSame(true, $store->find($job['uuid'])['destructive_mutation_started']);
+
+        // Terminal completion retains the per-job mutation evidence.
+        $store->complete($job['uuid'], JobResult::success('RESTORED', ['destructive_mutation_started' => true]));
+        wp_cache_flush();
+        $this->assertTrue($store->has_destructive_mutation_started($job['uuid']));
+        $this->assertSame('completed', $store->find($job['uuid'])['state']);
+    }
+
     public function test_interrupted_restore_during_database_swap_without_durable_marker_is_unknown(): void
     {
         $job = $this->job('RESTORE');

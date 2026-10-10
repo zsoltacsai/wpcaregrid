@@ -366,6 +366,32 @@ class PreUpdateAndRestoreTest extends TestCase
         $this->assertSame(1, WebsiteJob::where('restore_id', $restore->id)->count());
     }
 
+    public function test_interrupted_restore_with_persisted_post_swap_marker_queues_recovery_once(): void
+    {
+        [$site, $restore, $job] = $this->restoreInProgress();
+        $result = [
+            'code' => 'JOB_INTERRUPTED',
+            'message' => 'The worker stopped after the database swap.',
+            'details' => ['destructive_mutation_started' => true, 'failure_stage' => 'database_swap'],
+        ];
+
+        $this->reportJob($site, $job, 'failed', 'JOB_INTERRUPTED', [], $result)->assertStatus(202);
+        $restore->refresh();
+        $this->assertSame(RestoreStatus::RecoveryQueued, $restore->status);
+        $this->assertSame(1, $restore->recovery_attempts);
+        $this->assertNotNull($restore->recoveryJob);
+        $this->assertSame($restore->safety_backup_id, $restore->recoveryJob->backup_id);
+        $this->assertSame(JobType::Restore, $restore->recoveryJob->type);
+
+        // Duplicate delivery of the same terminal result cannot create another
+        // compensating restore or increment the recovery attempt count.
+        $this->reportJob($site, $job, 'failed', 'JOB_INTERRUPTED', [], $result)->assertStatus(200);
+        $restore->refresh();
+        $this->assertSame(RestoreStatus::RecoveryQueued, $restore->status);
+        $this->assertSame(1, $restore->recovery_attempts);
+        $this->assertSame(2, WebsiteJob::where('restore_id', $restore->id)->count());
+    }
+
     public function test_failed_safety_backup_stops_the_restore(): void
     {
         $site = $this->backupReadySite();

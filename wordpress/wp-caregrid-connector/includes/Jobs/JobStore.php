@@ -13,6 +13,8 @@ final class JobStore
 {
     private const OPTION = 'wp_caregrid_jobs';
 
+    private const MUTATION_OPTION_PREFIX = 'wp_caregrid_restore_mutated_';
+
     private const KEEP = 300;
 
     public const RUNNING = 'running';
@@ -68,15 +70,36 @@ final class JobStore
     /** Persist restore phase before the operation can be interrupted by a process restart. */
     public function mark_restore_progress(string $uuid, bool $destructive, string $stage): void
     {
-        $job = $this->find($uuid);
-        if (! $job || ($job['type'] ?? null) !== 'RESTORE' || ($job['state'] ?? null) !== self::RUNNING) {
+        $jobUuid = $this->restore_job_uuid($uuid);
+        if ($jobUuid === null) {
             return;
         }
 
-        $this->patch($uuid, [
-            'destructive_mutation_started' => $destructive,
+        $job = $this->find($jobUuid);
+        if ($destructive) {
+            // A separate, immutable option is the durable source of truth. Its
+            // unique option_name makes concurrent inserts monotonic: no stale
+            // progress write can change true back to false.
+            add_option($this->mutation_option($jobUuid), '1', '', 'no');
+            if (! $this->has_destructive_mutation_started($jobUuid)) {
+                throw new \RuntimeException('The restore mutation marker could not be persisted.');
+            }
+        }
+
+        $this->patch($jobUuid, [
+            'destructive_mutation_started' => $destructive
+                || $this->has_destructive_mutation_started($jobUuid)
+                || ($job['destructive_mutation_started'] ?? false) === true,
             'failure_stage' => $stage,
         ]);
+    }
+
+    /** Durable across the atomic WordPress table swap and worker restarts. */
+    public function has_destructive_mutation_started(string $uuid): bool
+    {
+        $jobUuid = $this->restore_job_uuid($uuid) ?? $uuid;
+
+        return get_option($this->mutation_option($jobUuid), false) === '1';
     }
 
     /** @return array<string, array> Completed jobs whose result has not been accepted yet. */
@@ -130,5 +153,29 @@ final class JobStore
         }
 
         update_option(self::OPTION, $jobs, false);
+    }
+
+    /** Resolve the restore UUID used by RestoreHandler to its queue job UUID. */
+    private function restore_job_uuid(string $uuid): ?string
+    {
+        $job = $this->find($uuid);
+        if (($job['type'] ?? null) === 'RESTORE' && ($job['state'] ?? null) === self::RUNNING) {
+            return $uuid;
+        }
+
+        foreach ($this->all() as $jobUuid => $candidate) {
+            if (($candidate['type'] ?? null) === 'RESTORE'
+                && ($candidate['state'] ?? null) === self::RUNNING
+                && ($candidate['payload']['restore_uuid'] ?? null) === $uuid) {
+                return (string) $jobUuid;
+            }
+        }
+
+        return null;
+    }
+
+    private function mutation_option(string $jobUuid): string
+    {
+        return self::MUTATION_OPTION_PREFIX.$jobUuid;
     }
 }

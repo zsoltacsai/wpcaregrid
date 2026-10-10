@@ -146,8 +146,8 @@ final class RestoreHandler implements JobHandler
                 $this->progress($uuid, $destructiveMutationStarted, $failureStage);
                 if ($importer !== null) {
                     $importer->swap(function () use (&$destructiveMutationStarted, $uuid) {
-                        $destructiveMutationStarted = true;
                         $this->progress($uuid, true, 'database_swap');
+                        $destructiveMutationStarted = true;
                     });
                     $importer = null;
                     $this->fault_hooks?->reach('after_database_swap', $uuid);

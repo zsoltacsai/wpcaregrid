@@ -14,6 +14,7 @@ use WPCareGrid\Connector\Backups\SqlImporter;
 use WPCareGrid\Connector\Backups\TarWriter;
 use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Backups\Uploader;
+use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Core\Settings;
 use WPCareGrid\Connector\Jobs\Handlers\RestoreHandler;
 use WPCareGrid\Connector\Jobs\JobRegistry;
@@ -498,6 +499,288 @@ final class RestoreTest extends TestCase
                 $variants->cleanup();
             }
         });
+    }
+
+    public function test_hard_killed_worker_before_mutation_reports_false_after_redelivery(): void
+    {
+        if (getenv('WP_CAREGRID_RUN_PRE_MUTATION_INTERRUPTION_E2E') !== '1') {
+            $this->markTestSkipped('Opt-in: a real worker kill requires waiting for the 900-second Connector poll-lock TTL.');
+        }
+        $this->requires_mysql();
+        if (PHP_OS_FAMILY === 'Windows' || ! function_exists('posix_kill') || ! defined('SIGKILL')) {
+            $this->environment_limitation('Hard worker interruption requires a POSIX local test runner.');
+        }
+
+        $this->with_harness_environment(function (): void {
+            $this->put(WP_CONTENT_DIR.'/uploads/m8-process-interrupt/baseline.txt', 'baseline-file');
+            update_option('m8_process_interrupt_marker', 'baseline-db');
+            [$backup, $objects] = $this->backup('BACKUP_FULL');
+            $artifacts = $this->copy_verified_artifacts_into_harness($backup, $objects);
+            file_put_contents(WP_CONTENT_DIR.'/uploads/m8-process-interrupt/baseline.txt', 'pre-kill-mutated-file');
+            update_option('m8_process_interrupt_marker', 'pre-kill-mutated-db');
+            $preJob = $this->restore_job($backup, $objects);
+            [$preProcess, $preBarrier] = $this->start_worker_until_barrier($preJob, $artifacts, 'before_destructive_mutation');
+            $preMarker = $this->hard_kill_worker($preProcess, $preBarrier, 'before_destructive_mutation');
+            $this->assertSame('pre-kill-mutated-db', get_option('m8_process_interrupt_marker'));
+            $this->assertSame('pre-kill-mutated-file', file_get_contents(WP_CONTENT_DIR.'/uploads/m8-process-interrupt/baseline.txt'));
+
+            $preResult = $this->redeliver_after_connector_lock_expiry($preJob, $artifacts, $preMarker);
+            $this->assertSame('JOB_INTERRUPTED', $preResult['result']['result_code']);
+            $this->assertFalse($preResult['result']['error']['details']['destructive_mutation_started']);
+            $this->assertSame('unknown', $preResult['result']['error']['details']['failure_stage'], 'A hard kill before handler entry cannot persist a more precise stage.');
+            $this->assertSame($preJob['uuid'], $preResult['job_uuid']);
+            $this->assertSame($preMarker['restore_uuid'], $preJob['payload']->restore_uuid);
+            $this->assertSame(false, $preResult['state']['poll_lock_after']);
+            $this->record_process_evidence('connector-pre-destructive-interruption.json', ['boundary' => $preMarker, 'job_uuid' => $preJob['uuid'], 'redelivery' => $preResult]);
+        });
+    }
+
+    public function test_hard_killed_worker_after_database_swap_reports_true_and_fixture_recovers(): void
+    {
+        if (getenv('WP_CAREGRID_RUN_HARD_INTERRUPTION_E2E') !== '1') {
+            $this->markTestSkipped('Opt-in: a real worker kill requires waiting for the 900-second Connector poll-lock TTL.');
+        }
+        $this->requires_mysql();
+        if (PHP_OS_FAMILY === 'Windows' || ! function_exists('posix_kill') || ! defined('SIGKILL')) {
+            $this->environment_limitation('Hard worker interruption requires a POSIX local test runner.');
+        }
+
+        $this->with_harness_environment(function (): void {
+            $this->put(WP_CONTENT_DIR.'/uploads/m8-process-interrupt/baseline.txt', 'baseline-file');
+            update_option('m8_process_interrupt_marker', 'baseline-db');
+            [$backup, $objects] = $this->backup('BACKUP_FULL');
+            $artifacts = $this->copy_verified_artifacts_into_harness($backup, $objects);
+            $baselineFileHash = hash_file('sha256', WP_CONTENT_DIR.'/uploads/m8-process-interrupt/baseline.txt');
+
+            file_put_contents(WP_CONTENT_DIR.'/uploads/m8-process-interrupt/baseline.txt', 'post-kill-mutated-file');
+            update_option('m8_process_interrupt_marker', 'post-kill-mutated-db');
+            $postJob = $this->restore_job($backup, $objects);
+            [$postProcess, $postBarrier] = $this->start_worker_until_barrier($postJob, $artifacts, 'after_database_swap');
+            $postMarker = $this->hard_kill_worker($postProcess, $postBarrier, 'after_database_swap');
+            wp_cache_flush();
+            $this->assertSame('baseline-db', get_option('m8_process_interrupt_marker'), 'The MySQL table swap completed before the process was killed.');
+            $this->assertSame('post-kill-mutated-file', file_get_contents(WP_CONTENT_DIR.'/uploads/m8-process-interrupt/baseline.txt'), 'File application had not begun at the boundary.');
+
+            $postResult = $this->redeliver_after_connector_lock_expiry($postJob, $artifacts, $postMarker);
+            $this->assertSame('JOB_INTERRUPTED', $postResult['result']['result_code']);
+            $this->assertTrue($postResult['result']['error']['details']['destructive_mutation_started']);
+            $this->assertSame('database_swap', $postResult['result']['error']['details']['failure_stage']);
+            $this->assertSame($postJob['uuid'], $postResult['job_uuid']);
+            $this->assertSame($postMarker['restore_uuid'], $postJob['payload']->restore_uuid);
+            $this->assertSame(false, $postResult['state']['poll_lock_after']);
+
+            // These are the actual Connector values consumed by Laravel when
+            // the signed job result is reported. The paired Laravel MySQL test
+            // verifies they queue the same restore's safety backup only once.
+            $this->assertTrue($postResult['result']['error']['details']['destructive_mutation_started']);
+
+            // Return the disposable site to the known baseline through a fresh
+            // normal Connector restore job, then confirm deterministic state.
+            $recoveryJob = $this->restore_job($backup, $objects);
+            $resultFile = $this->run_worker($recoveryJob, $artifacts, null);
+            $recovery = json_decode((string) file_get_contents($resultFile), true, 32, JSON_THROW_ON_ERROR);
+            $recovery['state'] = json_decode((string) file_get_contents($resultFile.'.state'), true, 16, JSON_THROW_ON_ERROR);
+            $this->assertSame('success', $recovery['result']['status']);
+            $this->assertSame('RESTORED', $recovery['result']['result_code']);
+            wp_cache_flush();
+            $this->assertSame('baseline-db', get_option('m8_process_interrupt_marker'));
+            $this->assertSame($baselineFileHash, hash_file('sha256', WP_CONTENT_DIR.'/uploads/m8-process-interrupt/baseline.txt'));
+            $this->assertSame(false, $recovery['state']['poll_lock_after']);
+            $remainingTemp = $this->temp_files();
+            sort($remainingTemp);
+            $expectedTemp = [
+                $postJob['payload']->restore_uuid.'-database.download',
+                $postJob['payload']->restore_uuid.'-files-staging',
+                $postJob['payload']->restore_uuid.'-files.download',
+            ];
+            sort($expectedTemp);
+            $this->assertSame($expectedTemp, $remainingTemp, 'Only the interrupted restore’s job-scoped artifacts remain; normal six-hour stale cleanup and test-root teardown own their removal.');
+            $this->record_process_evidence('connector-post-destructive-interruption.json', ['boundary' => $postMarker, 'job_uuid' => $postJob['uuid'], 'redelivery' => $postResult, 'caregrid_consumption_regression' => 'PreUpdateAndRestoreTest::test_interrupted_restore_with_persisted_post_swap_marker_queues_recovery_once', 'recovery_job_uuid' => $recoveryJob['uuid'], 'recovery_result' => $recovery, 'baseline_file_sha256' => $baselineFileHash]);
+        });
+    }
+
+    private function copy_verified_artifacts_into_harness(string $backup, array $objects): array
+    {
+        $root = RestoreHarnessGuard::activeRoot();
+        $directory = $root.'/restore-process-harness/artifacts';
+        wp_mkdir_p($directory);
+        chmod(dirname($directory), 0700);
+        chmod($directory, 0700);
+        $artifacts = [];
+        foreach ($objects as $object) {
+            $name = $object['name'];
+            $source = $this->server->downloads[$name] ?? '';
+            $target = $directory.'/'.$backup.'-'.$name.'.artifact';
+            $this->assertFileExists($source);
+            $this->assertSame((int) $object['size'], filesize($source));
+            $this->assertSame($object['sha256'], hash_file('sha256', $source));
+            $this->assertTrue(copy($source, $target));
+            chmod($target, 0600);
+            $artifacts[$name] = ['path' => $target, 'size' => (int) filesize($target), 'sha256' => hash_file('sha256', $target)];
+        }
+
+        return $artifacts;
+    }
+
+    private function record_process_evidence(string $filename, array $evidence): void
+    {
+        $directory = getenv('WP_CAREGRID_M8_EVIDENCE_DIR');
+        if (! is_string($directory) || $directory === '') {
+            return;
+        }
+        $realDirectory = realpath($directory);
+        if (! is_string($realDirectory) || ! is_dir($realDirectory) || is_link($directory)) {
+            throw new \RuntimeException('The process evidence directory must already exist and cannot be a symlink.');
+        }
+        $path = $realDirectory.DIRECTORY_SEPARATOR.$filename;
+        if (is_link($path)) {
+            throw new \RuntimeException('Refusing to replace a linked process evidence file.');
+        }
+        file_put_contents($path, wp_json_encode($evidence, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), LOCK_EX);
+        chmod($path, 0600);
+    }
+
+    private function restore_job(string $backup, array $objects): array
+    {
+        $mapped = array_map(static fn (array $object): array => ['name' => $object['name'], 'size' => (int) $object['size'], 'sha256' => $object['sha256']], $objects);
+
+        return $this->job('RESTORE', ['restore_uuid' => wp_generate_uuid4(), 'backup_uuid' => $backup, 'scope' => 'full', 'objects' => $mapped]);
+    }
+
+    /** @return array{0: array, 1: string} */
+    private function start_worker_until_barrier(array $job, array $artifacts, string $point): array
+    {
+        $this->run_worker($job, $artifacts, $point, false);
+        $config = $this->worker_config_path($job['uuid']);
+        $contents = json_decode((string) file_get_contents($config), true, 32, JSON_THROW_ON_ERROR);
+        $barrier = $contents['barrier_dir'];
+        $process = $this->worker_process($config);
+        $deadline = microtime(true) + 40;
+        while (microtime(true) < $deadline && ! is_file($barrier.'/reached.json') && proc_get_status($process['handle'])['running']) {
+            usleep(10000);
+        }
+        if (! is_file($barrier.'/reached.json')) {
+            $status = proc_get_status($process['handle']);
+            if ($status['running']) {
+                posix_kill($process['pid'], SIGTERM);
+            }
+            proc_close($process['handle']);
+            $this->fail('Worker did not reach the requested deterministic restore boundary: '.trim((string) @file_get_contents($process['stderr'])));
+        }
+
+        return [$process, $barrier];
+    }
+
+    private function hard_kill_worker(array $process, string $barrier, string $expectedPoint): array
+    {
+        $marker = json_decode((string) file_get_contents($barrier.'/reached.json'), true, 16, JSON_THROW_ON_ERROR);
+        $this->assertSame($expectedPoint, $marker['point']);
+        $this->assertSame($process['pid'], (int) $marker['pid'], 'The synchronized PID is the actual PHP worker process.');
+        $this->assertTrue(posix_kill((int) $marker['pid'], SIGKILL));
+        $deadline = microtime(true) + 5;
+        do {
+            $status = proc_get_status($process['handle']);
+            if (! $status['running']) {
+                break;
+            }
+            usleep(10000);
+        } while (microtime(true) < $deadline);
+        $this->assertFalse($status['running'], 'The targeted worker process exited after SIGKILL.');
+        proc_close($process['handle']);
+
+        return $marker;
+    }
+
+    private function redeliver_after_connector_lock_expiry(array $job, array $artifacts, array $barrierMarker): array
+    {
+        $lockStarted = (int) ($barrierMarker['poll_lock_value'] ?? 0);
+        $this->assertGreaterThan(0, $lockStarted, 'The worker persisted its poll lock before reaching the barrier.');
+        $deadline = $lockStarted + Lock::TTL + 2;
+        while (time() <= $deadline) {
+            sleep(1); // Wait for the real lock TTL; no option mutation/time travel.
+        }
+        $resultFile = $this->run_worker($job, $artifacts, null);
+        $result = json_decode((string) file_get_contents($resultFile), true, 32, JSON_THROW_ON_ERROR);
+        $result['state'] = json_decode((string) file_get_contents($resultFile.'.state'), true, 16, JSON_THROW_ON_ERROR);
+        $this->assertSame($job['uuid'], $result['job_uuid']);
+
+        return $result;
+    }
+
+    private function run_worker(array $job, array $artifacts, ?string $barrier, bool $wait = true): string
+    {
+        $configPath = $this->worker_config_path($job['uuid']);
+        $root = RestoreHarnessGuard::activeRoot();
+        $barrierDir = $root.'/restore-process-harness/barriers/'.$job['uuid'];
+        wp_mkdir_p($barrierDir);
+        chmod($barrierDir, 0700);
+        $resultFile = $root.'/restore-process-harness/results/'.$job['uuid'].'-'.bin2hex(random_bytes(4)).'.json';
+        wp_mkdir_p(dirname($resultFile));
+        $contents = ['barrier' => $barrier, 'barrier_dir' => $barrierDir, 'jobs' => [$job], 'artifacts' => $artifacts, 'result_file' => $resultFile, 'state_file' => $resultFile.'.state'];
+        file_put_contents($configPath, wp_json_encode($contents, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), LOCK_EX);
+        chmod($configPath, 0600);
+        if (! $wait) {
+            return $resultFile;
+        }
+        $process = $this->worker_process($configPath);
+        $deadline = microtime(true) + 90;
+        do {
+            $status = proc_get_status($process['handle']);
+            if (! $status['running']) {
+                break;
+            }
+            usleep(10000);
+        } while (microtime(true) < $deadline);
+        if ($status['running']) {
+            posix_kill($process['pid'], SIGTERM);
+            proc_close($process['handle']);
+            $this->fail('The Connector worker exceeded its bounded runtime.');
+        }
+        $reportedExitCode = (int) ($status['exitcode'] ?? -1);
+        $closeExitCode = proc_close($process['handle']);
+        $exitCode = $closeExitCode >= 0 ? $closeExitCode : $reportedExitCode;
+        $this->assertSame(0, $exitCode, 'The Connector worker completed normally: '.trim((string) @file_get_contents($process['stderr'])));
+
+        return $resultFile;
+    }
+
+    private function worker_config_path(string $jobUuid): string
+    {
+        $root = RestoreHarnessGuard::activeRoot();
+        $directory = $root.'/restore-process-harness/config';
+        wp_mkdir_p($directory);
+        chmod($directory, 0700);
+
+        return $directory.'/'.$jobUuid.'.json';
+    }
+
+    private function worker_process(string $configPath): array
+    {
+        $root = RestoreHarnessGuard::activeRoot();
+        $logDirectory = $root.'/restore-process-harness/results';
+        wp_mkdir_p($logDirectory);
+        chmod($logDirectory, 0700);
+        $stdout = $logDirectory.'/worker-'.bin2hex(random_bytes(4)).'.out';
+        $stderr = $logDirectory.'/worker-'.bin2hex(random_bytes(4)).'.err';
+        $process = proc_open([
+            PHP_BINARY,
+            dirname(__DIR__).'/Support/restore-process-worker.php',
+            $configPath,
+        ], [
+            0 => ['file', '/dev/null', 'r'],
+            1 => ['file', $stdout, 'ab'],
+            2 => ['file', $stderr, 'ab'],
+        ], $pipes, dirname(__DIR__, 2), [
+            'APP_ENV' => 'testing',
+            'WP_CAREGRID_RESTORE_HARNESS' => '1',
+            'WP_CAREGRID_TEST_ROOT' => (string) getenv('WP_CAREGRID_TEST_ROOT'),
+            'WP_CAREGRID_TEST_MYSQL' => (string) getenv('WP_CAREGRID_TEST_MYSQL'),
+        ], ['bypass_shell' => true]);
+        $this->assertIsResource($process, 'Could not start the isolated Connector worker.');
+        $status = proc_get_status($process);
+        $this->assertGreaterThan(0, (int) $status['pid']);
+
+        return ['handle' => $process, 'pid' => (int) $status['pid'], 'stdout' => $stdout, 'stderr' => $stderr];
     }
 
     private function with_harness_environment(callable $callback): void

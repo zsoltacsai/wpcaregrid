@@ -114,11 +114,11 @@ final class JobRunner
                 $details = [];
                 if (($known['type'] ?? null) === 'RESTORE') {
                     $stage = is_string($known['failure_stage'] ?? null) ? $known['failure_stage'] : 'unknown';
-                    // A process can die during the atomic swap before its
-                    // post-swap marker is durable. Treat this narrow window as
-                    // unknown so the server requires manual recovery, never as
-                    // proof that no mutation happened.
-                    $destructive = ($known['destructive_mutation_started'] ?? false) === true
+                    // A database-swap interruption without the durable marker
+                    // is ambiguous. Never treat that state as proof that no
+                    // live mutation happened.
+                    $destructive = $this->store->has_destructive_mutation_started($uuid)
+                        || ($known['destructive_mutation_started'] ?? false) === true
                         ? true
                         : ($stage === 'database_swap' ? null : false);
                     $details = [
