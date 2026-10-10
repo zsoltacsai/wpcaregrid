@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Connector\HealthStatus;
 use App\Connector\Presence;
 use App\Pricing\ProductType;
+use App\SyntheticFixtures\SyntheticFixturePolicy;
 use App\Websites\ConnectorStatus;
 use App\Websites\WebsiteStatus;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
@@ -58,6 +59,11 @@ class Website extends Model
     public function connectors(): HasMany
     {
         return $this->hasMany(Connector::class);
+    }
+
+    public function syntheticFixture(): HasOne
+    {
+        return $this->hasOne(SyntheticSiteFixture::class);
     }
 
     /** The connector currently allowed to act for this website, if any. */
@@ -137,6 +143,12 @@ class Website extends Model
     {
         return $this->customer?->active === true
             && $this->subscription?->grantsAccess() === true;
+    }
+
+    /** Synthetic fixture access is separate from paid-plan service access. */
+    public function allowsSyntheticConnectorOperations(): bool
+    {
+        return app(SyntheticFixturePolicy::class)->isEnabledFor($this);
     }
 
     /** Connected only when the connector has confirmed it. */

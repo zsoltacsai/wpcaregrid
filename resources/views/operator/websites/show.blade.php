@@ -36,6 +36,7 @@
             · <span class="font-mono">{{ $website->uuid }}</span>
         </x-slot:eyebrow>
         <x-slot:actions>
+            @if ($website->syntheticFixture)<x-ui.status-badge tone="warning">{{ __('owner.synthetic_fixture_badge') }}</x-ui.status-badge>@endif
             <x-ui.status-badge :tone="$health->tone()">{{ $health->label() }}</x-ui.status-badge>
             <x-ui.status-badge :tone="$connectorState->tone()">{{ $connectorState->label() }}</x-ui.status-badge>
         </x-slot:actions>

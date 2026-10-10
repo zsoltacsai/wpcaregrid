@@ -5,6 +5,7 @@ namespace App\Backups;
 use App\Backups\Storage\StorageManager;
 use App\Models\Website;
 use App\Pricing\PricingCatalog;
+use App\SyntheticFixtures\SyntheticFixturePolicy;
 use Illuminate\Support\Carbon;
 
 /**
@@ -25,6 +26,34 @@ class BackupPolicy
         $plan = $subscription?->product_type && $subscription->plan ? $this->catalog->plan($subscription->product_type, $subscription->plan) : null;
         $settings = $plan ? (array) config("backup.plans.{$plan->productType->value}.{$plan->tier->value}", []) : [];
         $storage = $this->storage->defaultName();
+
+        if ($website->syntheticFixture()->exists()) {
+            $fixtures = app(SyntheticFixturePolicy::class);
+            $entitled = $fixtures->backupRestoreAllowed($website);
+            $controlled = $fixtures->controlledExecutionAllowed($website);
+            $allowed = $entitled && $controlled && $storage !== null;
+            $refusal = match (true) {
+                ! $fixtures->isEnabledFor($website) => 'SYNTHETIC_FIXTURE_NOT_ENABLED',
+                ! $entitled => 'SYNTHETIC_ENTITLEMENT_INACTIVE',
+                ! $controlled => 'SYNTHETIC_CONTROLLED_EXECUTION_DISABLED',
+                $storage === null => 'STORAGE_NOT_CONFIGURED',
+                default => null,
+            };
+
+            return new PolicyDecision(
+                eligible: $allowed,
+                refusal: $refusal,
+                frequency: null,
+                type: BackupType::Full,
+                retentionCount: null,
+                retentionDays: null,
+                storage: $storage,
+                manualAllowed: $allowed,
+                preUpdateRequired: false,
+                restoreAllowed: $allowed && $fixtures->controlledExecutionAllowed($website)
+                    && (bool) config('synthetic_fixtures.restore_enabled'),
+            );
+        }
 
         // An internal plan states for itself whether it includes backups (PROBONO: it does not).
         // This is checked before anything else, so no setting or missing price can enable backups.

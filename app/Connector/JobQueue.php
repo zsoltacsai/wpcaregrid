@@ -6,6 +6,7 @@ use App\Backups\PreUpdateBackups;
 use App\Models\Connector;
 use App\Models\Website;
 use App\Models\WebsiteJob;
+use App\SyntheticFixtures\SyntheticFixturePolicy;
 use App\Websites\AuditLog;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
@@ -53,17 +54,34 @@ final class JobQueue
     }
 
     /** @return Collection<int, WebsiteJob> Jobs to hand to this connector now. */
-    public function deliver(Connector $connector): Collection
+    public function deliver(Connector $connector, bool $controlledExecution = false): Collection
     {
         $website = $connector->website;
 
-        $jobs = $website->jobs()
+        $synthetic = $website->syntheticFixture()->exists();
+        if ($controlledExecution && ! $synthetic) {
+            throw ConnectorError::jobNotAllowed('controlled execution is reserved for the configured synthetic M8 site');
+        }
+        if ($synthetic) {
+            $policy = app(SyntheticFixturePolicy::class);
+            if ($controlledExecution && ! $policy->controlledExecutionAllowed($website)) {
+                throw ConnectorError::jobNotAllowed('controlled execution is not enabled for the configured synthetic M8 site');
+            }
+        }
+
+        $query = $website->jobs()
             ->whereIn('status', [JobStatus::Queued, JobStatus::Delivered])
             // Admin sessions need the customer's browser on the site: only handed out by a claim.
             ->where('type', '!=', JobType::CreateAdminSession)
-            ->oldest('id')
-            ->limit(config('connector.jobs_per_poll'))
-            ->get();
+            ->oldest('id');
+
+        if ($synthetic && ! $controlledExecution) {
+            // Pairing's initial health, inventory, and license checks use the
+            // normal Connector poll. Destructive fixture jobs remain hidden.
+            $query->whereIn('type', [JobType::GetInventory, JobType::SiteHealth, JobType::LicenseCheck]);
+        }
+
+        $jobs = $query->limit($controlledExecution ? 1 : config('connector.jobs_per_poll'))->get();
 
         return $jobs->filter(function (WebsiteJob $job) use ($website, $connector) {
             if ($job->attempts >= config('connector.max_job_attempts')) {
@@ -113,6 +131,16 @@ final class JobQueue
     public function refusal(Website $website, ?Connector $connector, JobType $type, array $payload = []): ?string
     {
         $capability = $type->requiredCapability($payload);
+
+        if ($website->syntheticFixture()->exists()) {
+            return match (true) {
+                ! $connector?->isActive() || $connector->website_id !== $website->id => 'website is not connected',
+                ! app(SyntheticFixturePolicy::class)->jobAllowed($website, $type) => 'synthetic test job is not enabled for this site',
+                ! $connector->can($capability) => "connector does not support {$capability->value}",
+                $type === JobType::Restore && $connector->presence() !== Presence::Connected => 'connector is not currently reporting in',
+                default => null,
+            };
+        }
 
         return match (true) {
             ! $connector?->isActive() || $connector->website_id !== $website->id => 'website is not connected',

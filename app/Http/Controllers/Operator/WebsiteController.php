@@ -55,7 +55,7 @@ class WebsiteController extends Controller
 
     public function show(Request $request, Website $website, BackupPolicy $policy, RestoreService $restores, AdminAccessService $access, SecurityScanner $security): View
     {
-        $website->load(['customer', 'subscription', 'activeConnector', 'inventory']);
+        $website->load(['customer', 'syntheticFixture', 'subscription', 'activeConnector', 'inventory']);
         $website->loadExists('connectors');
         $user = $request->user();
         $can = fn (Permission $permission) => $user->hasOperatorPermission($permission);
@@ -94,7 +94,7 @@ class WebsiteController extends Controller
     /** Re-pair: a new one-time pairing code, shown once. The current connector keeps working until it is used. */
     public function pairingCode(Request $request, Website $website, PairingCodes $codes): RedirectResponse
     {
-        if (! $website->allowsServiceOperations()) {
+        if (! $website->allowsServiceOperations() && ! $website->allowsSyntheticConnectorOperations()) {
             return back()->with('operator_error', Refusal::flash('SUBSCRIPTION_INACTIVE'));
         }
 

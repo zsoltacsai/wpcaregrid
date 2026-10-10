@@ -32,6 +32,12 @@ final class Connection
             $values['latest_version'] = substr($data['latest_connector_version'], 0, 32);
         }
 
+        $sameSite = is_string($data['website_uuid'] ?? null)
+                && hash_equals(strtolower((string) Settings::get('website_uuid')), strtolower($data['website_uuid']));
+        $values['synthetic_site'] = $sameSite && ($data['synthetic_site'] ?? false) === true;
+        $values['controlled_execution'] = $sameSite && $values['synthetic_site']
+            && ($data['controlled_execution'] ?? false) === true;
+
         if ($values) {
             Settings::update($values);
         }

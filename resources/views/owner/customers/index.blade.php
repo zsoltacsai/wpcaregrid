@@ -76,7 +76,7 @@
                     @foreach ($customers as $customer)
                         @php $subscription = $customer->subscriptions->first(fn ($s) => $s->grantsAccess()) ?? $customer->subscriptions->first(); @endphp
                         <tr class="hover:bg-canvas/60">
-                            <td class="max-w-[180px] px-3 py-2"><a href="{{ route('owner.customers.show', $customer) }}" class="block truncate font-medium text-primary hover:underline">{{ $customer->fullName() }}</a></td>
+                            <td class="max-w-[180px] px-3 py-2"><a href="{{ route('owner.customers.show', $customer) }}" class="block truncate font-medium text-primary hover:underline">{{ $customer->fullName() }}</a>@if ($customer->synthetic_fixture_exists)<x-ui.status-badge tone="warning">{{ __('owner.synthetic_fixture_badge') }}</x-ui.status-badge>@endif</td>
                             <td class="max-w-[200px] truncate px-3 py-2 text-muted">{{ $customer->email }}</td>
                             <td class="max-w-[160px] truncate px-3 py-2">{{ $customer->company_name ?: '—' }}</td>
                             <td class="px-3 py-2 font-mono text-xs">{{ $customer->country_code }}</td>
@@ -105,6 +105,7 @@
                     <p class="truncate text-xs text-muted">{{ $customer->email }}</p>
                     <p class="truncate text-xs text-muted">{{ $customer->company_name ?: '—' }} · {{ $customer->country_code }}</p>
                     <div class="mt-2 flex flex-wrap gap-1.5">
+                        @if ($customer->synthetic_fixture_exists)<x-ui.status-badge tone="warning">{{ __('owner.synthetic_fixture_badge') }}</x-ui.status-badge>@endif
                         @if ($subscription)
                             <x-ui.status-badge :status="$subscription->status">{{ $subscription->product_type->label() }} {{ $subscription->tierLabel() }} · {{ $subscription->status->label() }}</x-ui.status-badge>
                         @endif

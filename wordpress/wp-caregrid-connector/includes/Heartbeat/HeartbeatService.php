@@ -6,6 +6,7 @@ use WPCareGrid\Connector\AdminAccess\AdminAccess;
 use WPCareGrid\Connector\Api\Client;
 use WPCareGrid\Connector\Core\Connection;
 use WPCareGrid\Connector\Core\Settings;
+use WPCareGrid\Connector\Core\Scheduler;
 use WPCareGrid\Connector\Health\HealthChecker;
 use WPCareGrid\Connector\Inventory\InventoryCollector;
 use WPCareGrid\Connector\Jobs\JobRegistry;
@@ -62,6 +63,7 @@ final class HeartbeatService
 
         Settings::update(['last_heartbeat_at' => gmdate('c'), 'last_success_at' => gmdate('c'), 'last_error' => null]);
         $this->connection->apply_schedule($response->data);
+        Scheduler::sync_poll_schedule();
         if (is_array($response->data['admin_access'] ?? null)) {
             AdminAccess::reconcile($response->data['admin_access']);
         }

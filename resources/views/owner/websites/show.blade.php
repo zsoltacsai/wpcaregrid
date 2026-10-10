@@ -1,6 +1,7 @@
 <x-layouts.owner :title="$website->host()">
     <x-operator.page-header :title="$website->host()" :eyebrow="__('owner.websites.title')" :lead="$website->type->label()">
         <x-slot:actions>
+            @if ($website->syntheticFixture)<x-ui.status-badge tone="warning">{{ __('owner.synthetic_fixture_badge') }}</x-ui.status-badge>@endif
             <x-ui.status-badge :tone="$report->overall->tone()">{{ __('owner.websites.overall') }}: {{ $report->overall->label() }}</x-ui.status-badge>
         </x-slot:actions>
     </x-operator.page-header>

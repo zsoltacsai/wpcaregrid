@@ -15,8 +15,10 @@ use App\Connector\JobType;
 use App\Models\AdminAccessRequest;
 use App\Models\Backup;
 use App\Models\BackupRestore;
+use App\Models\User;
 use App\Models\WebsiteEvent;
 use App\Models\WebsiteJob;
+use App\SyntheticFixtures\SyntheticFixtureProvisioner;
 use App\Websites\AuditLog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Concerns\OperatesConsole;
@@ -37,6 +39,38 @@ class OperatorActionsTest extends TestCase
     {
         $this->tearDownBackups();
         parent::tearDown();
+    }
+
+    public function test_synthetic_site_is_visibly_classified_and_uses_normal_operator_pairing_flow(): void
+    {
+        config([
+            'app.env' => 'production',
+            'app.url' => 'https://staging.wpcaregrid.com',
+            'app.deployment_environment' => 'staging',
+            'app.deployment_hostname' => 'stg1.wpcaregrid.com',
+            'synthetic_fixtures.provisioning_enabled' => true,
+            'synthetic_fixtures.controlled_execution_enabled' => false,
+        ]);
+        $website = app(SyntheticFixtureProvisioner::class)->provision(
+            'WP CareGrid M8 E2E', 'm8-e2e@example.test', 'https://m8-e2e.staging.wpcaregrid.com',
+        )['website'];
+        $this->asOperator();
+
+        $this->get(route('operator.websites.show', $website))
+            ->assertOk()->assertSee(__('owner.synthetic_fixture_badge'));
+
+        $this->actingAs(User::factory()->owner()->create(), 'owner')
+            ->get(route('owner.customers.show', $website->customer))
+            ->assertOk()->assertSee(__('owner.synthetic_fixture_badge'))
+            ->assertDontSee(__('owner.offers.new'));
+
+        $this->asOperator();
+        $this->post(route('operator.websites.pairing-code', $website))
+            ->assertRedirect(route('operator.websites.show', $website))
+            ->assertSessionHas('pairing_code');
+
+        $this->get(route('operator.websites.show', $website))
+            ->assertOk()->assertSee(__('owner.synthetic_fixture_badge'));
     }
 
     /* ----- Backups ----- */

@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * The commercial customer: who pays and who the service is for. Login is a
@@ -98,6 +99,11 @@ class Customer extends Model
     public function websites(): HasMany
     {
         return $this->hasMany(Website::class);
+    }
+
+    public function syntheticFixture(): HasOne
+    {
+        return $this->hasOne(SyntheticSiteFixture::class);
     }
 
     public function recoveryOffers(): HasMany

@@ -28,6 +28,12 @@ return [
 
     'env' => env('APP_ENV', 'production'),
 
+    // A separate deployment identity is required for controlled synthetic
+    // fixture capabilities. Staging intentionally runs with APP_ENV=production.
+    'deployment_environment' => env('CAREGRID_DEPLOYMENT_ENV', 'production'),
+
+    'deployment_hostname' => env('CAREGRID_DEPLOYMENT_HOSTNAME', ''),
+
     /*
     |--------------------------------------------------------------------------
     | Application Debug Mode

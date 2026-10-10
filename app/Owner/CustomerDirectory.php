@@ -43,7 +43,8 @@ final class CustomerDirectory
     {
         $query = Customer::query()
             ->with(['subscriptions' => fn ($q) => $q->latest('id')])
-            ->withCount('websites');
+            ->withCount('websites')
+            ->withExists('syntheticFixture');
 
         if ($filters['q'] !== null) {
             $like = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], mb_strtolower($filters['q'])).'%';

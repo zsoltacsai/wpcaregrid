@@ -17,6 +17,7 @@ use WPCareGrid\Connector\Jobs\Handlers;
 use WPCareGrid\Connector\Jobs\JobRegistry;
 use WPCareGrid\Connector\Jobs\JobRunner;
 use WPCareGrid\Connector\Jobs\JobStore;
+use WPCareGrid\Connector\Jobs\ControlledPollCommand;
 use WPCareGrid\Connector\Licenses\LicenseDetector;
 use WPCareGrid\Connector\Pairing\PairingService;
 use WPCareGrid\Connector\Updates\UpdateGuard;
@@ -47,6 +48,14 @@ final class Plugin
         add_action(Scheduler::HEARTBEAT, [$plugin, 'run_heartbeat']);
         add_action(Scheduler::POLL, [$plugin, 'run_poll']);
 
+        if (class_exists('WP_CLI') && defined('WP_CLI') && WP_CLI) {
+            \WP_CLI::add_command('caregrid jobs poll', new ControlledPollCommand($plugin));
+        }
+
+        if (ControlledExecution::authorized()) {
+            Scheduler::unschedule_poll();
+        }
+
         // Admin access: the wp-login.php landing, the session guard, expiry and account protections.
         AdminAccess::use_api($plugin->api());
         Accounts::register_protections();
@@ -66,7 +75,9 @@ final class Plugin
 
     public function run_poll(): void
     {
-        $this->runner()->poll();
+        if (! ControlledExecution::authorized()) {
+            $this->runner()->poll();
+        }
     }
 
     public function credentials(): CredentialStore

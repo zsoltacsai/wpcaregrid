@@ -73,6 +73,7 @@
                                 @if ($row['website']->customer)
                                     <a href="{{ route('owner.customers.show', $row['website']->customer) }}" class="block truncate text-primary hover:underline">{{ $row['website']->customer->company_name ?: $row['website']->customer->fullName() }}</a>
                                 @endif
+                                @if ($row['website']->synthetic_fixture_exists)<x-ui.status-badge tone="warning">{{ __('owner.synthetic_fixture_badge') }}</x-ui.status-badge>@endif
                             </td>
                             <td class="px-3 py-2 text-xs whitespace-nowrap">{{ $row['website']->type->label() }}</td>
                             <td class="px-3 py-2 text-xs whitespace-nowrap">{{ $row['website']->subscription ? $row['website']->subscription->tierLabel() : '—' }}</td>
@@ -94,6 +95,7 @@
                     <a href="{{ route('owner.websites.show', $row['website']) }}" class="block font-medium break-all text-primary hover:underline">{{ $row['website']->host() }}</a>
                     <p class="truncate text-xs text-muted">{{ $row['website']->customer?->company_name ?: $row['website']->customer?->email }} · {{ $row['website']->type->label() }}</p>
                     <div class="mt-2 flex flex-wrap gap-1.5">
+                        @if ($row['website']->synthetic_fixture_exists)<x-ui.status-badge tone="warning">{{ __('owner.synthetic_fixture_badge') }}</x-ui.status-badge>@endif
                         <x-ui.status-badge :tone="$row['report']->overall->tone()">{{ $row['report']->overall->label() }}</x-ui.status-badge>
                         <x-ui.status-badge :tone="$row['connector']->tone()">{{ $row['connector']->label() }}</x-ui.status-badge>
                         <x-ui.status-badge :tone="$row['backup']->tone()">{{ __('owner.websites.columns.backup') }}: {{ $row['backup']->label() }}</x-ui.status-badge>

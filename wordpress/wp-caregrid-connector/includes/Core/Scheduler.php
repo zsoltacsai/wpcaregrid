@@ -35,13 +35,34 @@ final class Scheduler
     {
         self::unschedule();
         wp_schedule_event(time() + 60, 'wp_caregrid_heartbeat', self::HEARTBEAT);
-        wp_schedule_event(time() + 30, 'wp_caregrid_poll', self::POLL);
+        if (! ControlledExecution::authorized()) {
+            wp_schedule_event(time() + 30, 'wp_caregrid_poll', self::POLL);
+        }
     }
 
     public static function unschedule(): void
     {
         wp_clear_scheduled_hook(self::HEARTBEAT);
         wp_clear_scheduled_hook(self::POLL);
+    }
+
+    public static function unschedule_poll(): void
+    {
+        wp_clear_scheduled_hook(self::POLL);
+    }
+
+    /** Reconcile only the job poll event after the server changes a site's test mode. */
+    public static function sync_poll_schedule(): void
+    {
+        if (ControlledExecution::authorized()) {
+            self::unschedule_poll();
+
+            return;
+        }
+
+        if (Settings::is_connected() && ! wp_next_scheduled(self::POLL)) {
+            wp_schedule_event(time() + 30, 'wp_caregrid_poll', self::POLL);
+        }
     }
 
     public static function next_poll(): ?int

@@ -39,6 +39,8 @@ final class Settings
         'poll_interval' => 300,
         'capabilities' => [],
         'latest_version' => null,
+        'synthetic_site' => false,
+        'controlled_execution' => false,
     ];
 
     public static function all(): array

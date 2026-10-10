@@ -39,7 +39,7 @@ final class PairConnector
 
             $website = $code->website;
 
-            if (! $website->allowsServiceOperations()) {
+            if (! $website->allowsServiceOperations() && ! $website->allowsSyntheticConnectorOperations()) {
                 throw ConnectorError::serviceInactive();
             }
 

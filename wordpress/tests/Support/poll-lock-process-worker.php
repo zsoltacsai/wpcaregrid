@@ -190,5 +190,68 @@ if ($mode === 'poll') {
     exit(0);
 }
 
+if ($mode === 'controlled_poll') {
+    $ready = (string) ($config['ready'] ?? '');
+    $start = (string) ($config['start_gate'] ?? '');
+    $apiGate = (string) ($config['api_gate'] ?? '');
+    $entered = (string) ($config['entered'] ?? '');
+    $events = (string) ($config['events'] ?? '');
+    $resultFile = (string) ($config['result_file'] ?? '');
+    $siteUuid = strtolower((string) ($config['site_uuid'] ?? ''));
+    $job = (array) ($config['job'] ?? []);
+    if (! $insideRoot($ready) || ! $insideRoot($start) || ! $insideRoot($apiGate)
+        || ! $insideRoot($entered) || ! $insideRoot($events) || ! $insideRoot($resultFile)
+        || getenv('WP_CAREGRID_TEST_CONTROLLED') !== '1'
+        || strtolower((string) getenv('WP_CAREGRID_TEST_CONTROLLED_SITE_UUID')) !== $siteUuid) {
+        exit(2);
+    }
+
+    add_filter('pre_http_request', static function ($pre, array $args, string $url) use ($apiGate, $entered, $events, $job, $siteUuid, $waitFor) {
+        if (strtolower((string) parse_url($url, PHP_URL_HOST)) !== 'app.caregrid.test') {
+            return new WP_Error('controlled_poll_test_denied', 'Unexpected test API host.');
+        }
+        $method = strtoupper((string) ($args['method'] ?? 'GET'));
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        $query = (string) parse_url($url, PHP_URL_QUERY);
+        $response = static fn (int $code, array $body): array => [
+            'headers' => ['content-type' => 'application/json'],
+            'body' => wp_json_encode($body),
+            'response' => ['code' => $code, 'message' => 'test'],
+            'cookies' => [],
+            'filename' => null,
+        ];
+        if ($method === 'GET' && str_ends_with($path, '/jobs')) {
+            if ($query !== 'execution_mode=controlled') {
+                return new WP_Error('controlled_poll_test_denied', 'Controlled runner did not use the bounded execution mode.');
+            }
+            touch($entered);
+            file_put_contents($events, wp_json_encode(['method' => 'GET', 'mode' => 'controlled', 'pid' => getmypid()])."\n", FILE_APPEND | LOCK_EX);
+            if (! $waitFor($apiGate)) {
+                return new WP_Error('controlled_poll_test_timeout', 'Test gate timed out.');
+            }
+
+            return $response(200, ['jobs' => [$job], 'poll_interval' => 300, 'website_uuid' => $siteUuid, 'synthetic_site' => true, 'controlled_execution' => true]);
+        }
+        if ($method === 'POST' && preg_match('#/jobs/([0-9a-f-]{36})/result$#i', $path, $match)) {
+            file_put_contents($events, wp_json_encode(['method' => 'POST', 'mode' => 'controlled', 'uuid' => $match[1], 'pid' => getmypid()])."\n", FILE_APPEND | LOCK_EX);
+
+            return $response(202, ['accepted' => true]);
+        }
+
+        return $response(200, []);
+    }, 10, 3);
+
+    touch($ready);
+    if (! $waitFor($start)) {
+        exit(3);
+    }
+    $plugin = Plugin::instance();
+    $plugin->reset();
+    $runner = new JobRunner($plugin->api(), $plugin->registry(), $plugin->jobs(), $plugin->connection());
+    $summary = $runner->poll(controlledExecution: true);
+    $write($resultFile, ['summary' => $summary, 'pid' => getmypid(), 'poll_scheduled' => wp_next_scheduled(\WPCareGrid\Connector\Core\Scheduler::POLL) !== false]);
+    exit(0);
+}
+
 fwrite(STDERR, "Unknown test worker mode.\n");
 exit(2);

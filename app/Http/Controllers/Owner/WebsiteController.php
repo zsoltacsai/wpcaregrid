@@ -54,7 +54,7 @@ class WebsiteController extends Controller
 
     public function show(Website $website, SiteHealth $health, SecurityScanner $security): View
     {
-        $website->load(['customer', 'subscription', 'activeConnector', 'inventory']);
+        $website->load(['customer.syntheticFixture', 'syntheticFixture', 'subscription', 'activeConnector', 'inventory']);
         $backups = $website->backups()->latest('id')->limit(5)->get();
 
         return view('owner.websites.show', [

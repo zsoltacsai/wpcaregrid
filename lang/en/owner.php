@@ -15,6 +15,7 @@ return [
     'reset' => 'Reset',
     'results' => ':count results',
     'never' => 'Never',
+    'synthetic_fixture_badge' => 'TEST / SYNTHETIC',
     'optional' => 'optional',
 
     'tiers' => [

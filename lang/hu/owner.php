@@ -1,6 +1,7 @@
 <?php
 
 return [
+    'synthetic_fixture_badge' => 'TESZT / SZINTETIKUS',
     'integrations' => [
         'szamlazz_agent' => [
             'description' => 'A Számlázz.hu Számla Agent API-kulcs biztonságos tárolása. A mentés nem engedélyezi a számlakiállítást.',

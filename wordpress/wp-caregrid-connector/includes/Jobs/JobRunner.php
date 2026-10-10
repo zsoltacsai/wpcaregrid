@@ -7,7 +7,9 @@ use WPCareGrid\Connector\Api\Client;
 use WPCareGrid\Connector\Backups\Maintenance;
 use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Core\Connection;
+use WPCareGrid\Connector\Core\ControlledExecution;
 use WPCareGrid\Connector\Core\Lock;
+use WPCareGrid\Connector\Core\Scheduler;
 use WPCareGrid\Connector\Core\Settings;
 use WPCareGrid\Connector\Security\Logger;
 
@@ -30,9 +32,13 @@ final class JobRunner
     ) {}
 
     /** @return array{executed: int, delivered: int} */
-    public function poll(): array
+    public function poll(bool $controlledExecution = false): array
     {
         $summary = ['executed' => 0, 'delivered' => 0];
+
+        if ($controlledExecution !== ControlledExecution::authorized()) {
+            return $summary;
+        }
 
         if (! Settings::is_connected() || ! $this->lock()) {
             return $summary;
@@ -46,7 +52,7 @@ final class JobRunner
 
             $summary['delivered'] += $this->flush_outbox();
 
-            $response = $this->api->get('jobs');
+            $response = $this->api->get($controlledExecution ? 'jobs?execution_mode=controlled' : 'jobs');
 
             if ($response->is_revoked()) {
                 $this->connection->handle_revocation();
@@ -62,6 +68,7 @@ final class JobRunner
 
             Settings::update(['last_poll_at' => gmdate('c'), 'last_success_at' => gmdate('c'), 'last_error' => null]);
             $this->connection->apply_schedule($response->data);
+            Scheduler::sync_poll_schedule();
             if (is_array($response->data['admin_access'] ?? null)) {
                 AdminAccess::reconcile($response->data['admin_access']);
             }

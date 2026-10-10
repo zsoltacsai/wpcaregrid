@@ -13,6 +13,8 @@ use App\Connector\PairConnector;
 use App\Connector\RecordJobResult;
 use App\Http\Controllers\Controller;
 use App\Models\Connector;
+use App\Models\Website;
+use App\SyntheticFixtures\SyntheticFixturePolicy;
 use App\Websites\ConnectorStatus;
 use App\Websites\WebsiteStatus;
 use Illuminate\Http\JsonResponse;
@@ -49,7 +51,7 @@ class ConnectorController extends Controller
             // Returned exactly once; the server keeps only its hash.
             'credential' => $credential,
             'capabilities' => $connector->capabilities,
-            ...$this->schedule(),
+            ...$this->schedule($connector->website),
         ], 201);
     }
 
@@ -104,7 +106,7 @@ class ConnectorController extends Controller
             'latest_connector_version' => config('connector.latest_version'),
             'connector_outdated' => $connector->isOutdated(),
             'admin_access' => app(AdminAccessService::class)->liveFor($website),
-            ...$this->schedule(),
+            ...$this->schedule($website),
         ]);
     }
 
@@ -119,7 +121,9 @@ class ConnectorController extends Controller
     public function jobs(Request $request, JobQueue $queue): JsonResponse
     {
         $connector = $this->connector($request);
-        $jobs = $queue->deliver($connector);
+        $data = $request->validate(['execution_mode' => ['nullable', Rule::in(['controlled'])]]);
+        $controlledExecution = ($data['execution_mode'] ?? null) === 'controlled';
+        $jobs = $queue->deliver($connector, $controlledExecution);
 
         $connector->forceFill(['last_successful_poll_at' => now()])->save();
 
@@ -127,7 +131,7 @@ class ConnectorController extends Controller
             'jobs' => $jobs->map->toConnectorArray()->all(),
             // Admin sessions the site may keep; it ends any other CareGrid session.
             'admin_access' => app(AdminAccessService::class)->liveFor($connector->website),
-            ...$this->schedule(),
+            ...$this->schedule($connector->website),
         ]);
     }
 
@@ -182,12 +186,17 @@ class ConnectorController extends Controller
         return $request->attributes->get('connector');
     }
 
-    /** @return array<string, int> */
-    private function schedule(): array
+    /** @return array<string, int|bool|string|null> */
+    private function schedule(?Website $website = null): array
     {
+        $policy = $website ? app(SyntheticFixturePolicy::class) : null;
+
         return [
             'heartbeat_interval' => config('connector.heartbeat_interval'),
             'poll_interval' => config('connector.poll_interval'),
+            'website_uuid' => $website?->uuid,
+            'synthetic_site' => $website ? $website->syntheticFixture()->exists() : false,
+            'controlled_execution' => $website ? $policy->controlledExecutionAllowed($website) : false,
         ];
     }
 }

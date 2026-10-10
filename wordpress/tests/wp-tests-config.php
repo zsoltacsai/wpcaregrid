@@ -56,6 +56,15 @@ define('WP_DEFAULT_THEME', 'twentytwentyfive');
 define('WP_CAREGRID_TESTING', true);
 define('WP_CAREGRID_API_URL', 'https://app.caregrid.test/api/v1/connector');
 
+if (getenv('APP_ENV') === 'testing' && getenv('WP_CAREGRID_TEST_CONTROLLED') === '1') {
+    $controlledSite = (string) getenv('WP_CAREGRID_TEST_CONTROLLED_SITE_UUID');
+    if (! preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iD', $controlledSite)) {
+        exit("Invalid controlled execution test identity.\n");
+    }
+    define('WP_CAREGRID_CONTROLLED_EXECUTION', true);
+    define('WP_CAREGRID_CONTROLLED_SITE_UUID', strtolower($controlledSite));
+}
+
 $GLOBALS['table_prefix'] = 'wp_';
 
 // No mail server in tests (pluggable function, defined before WordPress loads it).

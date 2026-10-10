@@ -56,6 +56,7 @@ final class WebsiteDirectory
         return $this->query($filters)
             ->with(['customer', 'subscription', 'activeConnector', 'inventory'])
             ->withExists('connectors')
+            ->withExists('syntheticFixture')
             ->selectRaw(BackupState::LATEST_STATUS_SQL.' as latest_backup_status')
             ->paginate(self::PER_PAGE)
             ->withQueryString();

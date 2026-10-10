@@ -1,7 +1,8 @@
 <x-layouts.owner :title="$customer->fullName()">
     <x-operator.page-header :title="$customer->fullName()" :lead="$customer->company_name" :eyebrow="__('owner.customers.title')">
         <x-slot:actions>
-            @if ($customer->active && $customer->websites->isNotEmpty() && strtoupper($customer->country_code) === 'HU')
+            @if ($customer->syntheticFixture)<x-ui.status-badge tone="warning">{{ __('owner.synthetic_fixture_badge') }}</x-ui.status-badge>@endif
+            @if (! $customer->syntheticFixture && $customer->active && $customer->websites->isNotEmpty() && strtoupper($customer->country_code) === 'HU')
                 <x-ui.button :href="route('owner.offers.create', ['customer' => $customer->uuid])" variant="secondary" size="sm">{{ __('owner.offers.new') }}</x-ui.button>
             @endif
             <x-ui.status-badge :tone="$customer->active ? 'positive' : 'neutral'">{{ __('owner.customers.states.'.($customer->active ? 'active' : 'inactive')) }}</x-ui.status-badge>

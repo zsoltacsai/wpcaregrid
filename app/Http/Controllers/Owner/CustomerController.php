@@ -49,7 +49,7 @@ class CustomerController extends Controller
 
     public function show(Customer $customer, SiteHealth $health): View
     {
-        $customer->load(['subscriptions' => fn ($q) => $q->with('billingInvoices')->latest('id'), 'websites.activeConnector', 'websites.inventory', 'websites.subscription', 'websites.customer', 'user']);
+        $customer->load(['syntheticFixture', 'subscriptions' => fn ($q) => $q->with('billingInvoices')->latest('id'), 'websites.activeConnector', 'websites.inventory', 'websites.subscription', 'websites.customer', 'user']);
         $identity = $customer->latestBillingIdentity();
         $vatHistory = VatValidation::query()
             ->whereHas('billingIdentity', fn ($query) => $query->where('customer_id', $customer->id))

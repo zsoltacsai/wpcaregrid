@@ -142,6 +142,142 @@ final class PollLockConcurrencyTest extends TestCase
         $this->assertSame($uuid, array_values($posts)[0]['uuid']);
     }
 
+    public function test_controlled_runner_uses_same_atomic_lock_and_reports_one_harmless_job(): void
+    {
+        $this->http->on('POST pair', $this->pair_response([
+            'synthetic_site' => true,
+            'controlled_execution' => true,
+            'website_uuid' => self::WEBSITE,
+        ]));
+        $paired = $this->plugin()->pairing()->pair(self::PAIRING_CODE);
+        $this->assertTrue($paired['ok']);
+        $uuid = wp_generate_uuid4();
+        $job = $this->job('SITE_HEALTH', [], $uuid);
+        $startGate = $this->harness.'/controlled-start';
+        $apiGate = $this->harness.'/controlled-api-release';
+        $events = $this->harness.'/controlled-events.jsonl';
+        $workers = [];
+
+        for ($i = 0; $i < 2; $i++) {
+            $base = $this->harness.'/controlled-'.$i;
+            $workers[] = $this->startWorker([
+                'mode' => 'controlled_poll',
+                'site_uuid' => self::WEBSITE,
+                'ready' => $base.'.ready',
+                'start_gate' => $startGate,
+                'api_gate' => $apiGate,
+                'entered' => $base.'.entered',
+                'events' => $events,
+                'result_file' => $base.'.result',
+                'job' => $job,
+            ]);
+        }
+
+        try {
+            $this->waitForFiles(array_column(array_column($workers, 'config'), 'ready'));
+            touch($startGate);
+            $this->waitForAnyFiles(array_column(array_column($workers, 'config'), 'entered'));
+
+            $deadline = microtime(true) + 8;
+            while (microtime(true) < $deadline) {
+                $entered = count(array_filter($workers, static fn (array $worker): bool => is_file($worker['config']['entered'])));
+                $finished = count(array_filter($workers, static fn (array $worker): bool => is_file($worker['config']['result_file'])));
+                if ($entered === 2 || $finished >= 1) {
+                    break;
+                }
+                usleep(10000);
+            }
+        } finally {
+            touch($apiGate);
+        }
+
+        foreach ($workers as $worker) {
+            $this->waitForFiles([$worker['config']['result_file']]);
+            $this->finishWorker($worker['process']);
+        }
+
+        $lines = is_file($events) ? array_filter(explode("\n", trim((string) file_get_contents($events))) ) : [];
+        $eventsRead = array_map(static fn (string $line): array => json_decode($line, true, 8, JSON_THROW_ON_ERROR), $lines);
+        $gets = array_values(array_filter($eventsRead, static fn (array $event): bool => ($event['method'] ?? null) === 'GET'));
+        $posts = array_values(array_filter($eventsRead, static fn (array $event): bool => ($event['method'] ?? null) === 'POST'));
+        $this->assertCount(1, $gets, 'Only one controlled runner owns the poll lock and reaches WebsiteJob polling.');
+        $this->assertSame('controlled', $gets[0]['mode']);
+        $this->assertCount(1, $posts, 'Only the lock owner reports the harmless result.');
+        $this->assertSame($uuid, $posts[0]['uuid']);
+        foreach ($workers as $worker) {
+            $result = json_decode((string) file_get_contents($worker['config']['result_file']), true, 8, JSON_THROW_ON_ERROR);
+            $this->assertFalse($result['poll_scheduled'], 'The synthetic site has no automatic WP-Cron poll event.');
+        }
+    }
+
+    public function test_killed_controlled_runner_releases_only_by_expiry_then_redelivers_once(): void
+    {
+        $this->http->on('POST pair', $this->pair_response([
+            'synthetic_site' => true,
+            'controlled_execution' => true,
+            'website_uuid' => self::WEBSITE,
+        ]));
+        $this->assertTrue($this->plugin()->pairing()->pair(self::PAIRING_CODE)['ok']);
+
+        $uuid = wp_generate_uuid4();
+        $job = $this->job('SITE_HEALTH', [], $uuid);
+        $events = $this->harness.'/controlled-kill-events.jsonl';
+        $firstStart = $this->harness.'/controlled-kill-first-start';
+        $firstApiGate = $this->harness.'/controlled-kill-first-api';
+        $firstBase = $this->harness.'/controlled-kill-first';
+        $first = $this->startWorker([
+            'mode' => 'controlled_poll', 'site_uuid' => self::WEBSITE,
+            'ready' => $firstBase.'.ready', 'start_gate' => $firstStart, 'api_gate' => $firstApiGate,
+            'entered' => $firstBase.'.entered', 'events' => $events,
+            'result_file' => $firstBase.'.result', 'job' => $job,
+        ]);
+        $this->waitForFiles([$first['config']['ready']]);
+        touch($firstStart);
+        $this->waitForFiles([$first['config']['entered']]);
+        $firstPid = proc_get_status($first['process']['handle'])['pid'];
+        proc_terminate($first['process']['handle'], 9);
+        $deadline = microtime(true) + 10;
+        do {
+            $firstStatus = proc_get_status($first['process']['handle']);
+            if (! $firstStatus['running']) {
+                break;
+            }
+            usleep(10000);
+        } while (microtime(true) < $deadline);
+        $this->assertFalse($firstStatus['running'], 'The isolated OS runner must be killable externally.');
+        fclose($first['process']['pipes'][1]);
+        fclose($first['process']['pipes'][2]);
+        proc_close($first['process']['handle']);
+
+        $expired = $this->readLockDirectly();
+        $this->assertMatchesRegularExpression('/^\d{10}:[a-f0-9]{64}$/D', $expired);
+        preg_match('/^\d{10}:([a-f0-9]{64})$/D', $expired, $owner);
+        $this->writeLockDirectly(sprintf('%010d:%s', time() - Lock::TTL - 1, $owner[1]));
+
+        $secondStart = $this->harness.'/controlled-kill-second-start';
+        $secondApiGate = $this->harness.'/controlled-kill-second-api';
+        $secondBase = $this->harness.'/controlled-kill-second';
+        $second = $this->startWorker([
+            'mode' => 'controlled_poll', 'site_uuid' => self::WEBSITE,
+            'ready' => $secondBase.'.ready', 'start_gate' => $secondStart, 'api_gate' => $secondApiGate,
+            'entered' => $secondBase.'.entered', 'events' => $events,
+            'result_file' => $secondBase.'.result', 'job' => $job,
+        ]);
+        $this->waitForFiles([$second['config']['ready']]);
+        touch($secondStart);
+        $this->waitForFiles([$second['config']['entered']]);
+        touch($secondApiGate);
+        $this->waitForFiles([$second['config']['result_file']]);
+        $this->finishWorker($second['process']);
+
+        $lines = array_filter(explode("\n", trim((string) file_get_contents($events))));
+        $eventsRead = array_map(static fn (string $line): array => json_decode($line, true, 8, JSON_THROW_ON_ERROR), $lines);
+        $posts = array_values(array_filter($eventsRead, static fn (array $event): bool => ($event['method'] ?? null) === 'POST'));
+        $this->assertCount(1, $posts, 'The terminated process did not report; exactly one redelivered execution reported its result.');
+        $this->assertSame($uuid, $posts[0]['uuid']);
+        $this->assertNotSame($firstPid, $posts[0]['pid']);
+    }
+
     /** @return list<int> Winner count for each iteration. */
     private function runLoopRace(int $iterations, int $workersCount, bool $expired): array
     {
@@ -273,6 +409,10 @@ final class PollLockConcurrencyTest extends TestCase
             'WP_CAREGRID_TEST_ROOT' => $this->root,
             'WP_CAREGRID_TEST_MYSQL' => (string) getenv('WP_CAREGRID_TEST_MYSQL'),
         ];
+        if (($config['mode'] ?? null) === 'controlled_poll') {
+            $environment['WP_CAREGRID_TEST_CONTROLLED'] = '1';
+            $environment['WP_CAREGRID_TEST_CONTROLLED_SITE_UUID'] = (string) ($config['site_uuid'] ?? '');
+        }
         $process = proc_open(
             [PHP_BINARY, dirname(__DIR__).'/Support/poll-lock-process-worker.php', $configPath],
             [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],

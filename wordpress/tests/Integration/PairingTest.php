@@ -28,6 +28,36 @@ final class PairingTest extends TestCase
         $this->assertNotFalse(wp_next_scheduled(Scheduler::HEARTBEAT));
     }
 
+    public function test_controlled_schedule_is_accepted_only_for_the_paired_site_and_missing_flags_clear_state(): void
+    {
+        $this->http->on('POST pair', $this->pair_response());
+        $this->plugin()->pairing()->pair(self::PAIRING_CODE);
+
+        $this->assertFalse(Settings::get('synthetic_site'));
+        $this->assertFalse(Settings::get('controlled_execution'));
+
+        $connection = $this->plugin()->connection();
+        $connection->apply_schedule([
+            'website_uuid' => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            'synthetic_site' => true,
+            'controlled_execution' => true,
+        ]);
+        $this->assertFalse(Settings::get('synthetic_site'));
+        $this->assertFalse(Settings::get('controlled_execution'));
+
+        $connection->apply_schedule([
+            'website_uuid' => self::WEBSITE,
+            'synthetic_site' => true,
+            'controlled_execution' => true,
+        ]);
+        $this->assertTrue(Settings::get('synthetic_site'));
+        $this->assertTrue(Settings::get('controlled_execution'));
+
+        $connection->apply_schedule(['website_uuid' => self::WEBSITE]);
+        $this->assertFalse(Settings::get('synthetic_site'));
+        $this->assertFalse(Settings::get('controlled_execution'));
+    }
+
     public function test_pairing_request_carries_the_code_and_site_facts_only(): void
     {
         $this->http->on('POST pair', $this->pair_response());
