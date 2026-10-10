@@ -13,7 +13,8 @@ final class Deactivator
     public static function deactivate(): void
     {
         Scheduler::unschedule();
-        delete_option('wp_caregrid_poll_lock');
+        // A plugin deactivation request is not the poll-lock owner. Leave any
+        // active lease intact; it will expire naturally if its process died.
         AdminAccess::end_all('deactivated');
     }
 }
