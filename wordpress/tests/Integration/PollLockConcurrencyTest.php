@@ -113,7 +113,7 @@ final class PollLockConcurrencyTest extends TestCase
         try {
             $this->waitForFiles(array_column($workers, 'ready'));
             touch($startGate);
-            $this->waitForAnyFiles(array_column(array_column($workers, 'config'), 'entered'));
+            $this->waitForAnyFiles(array_column(array_column($workers, 'config'), 'entered'), 20, $workers);
 
             $deadline = microtime(true) + 8;
             while (microtime(true) < $deadline) {
@@ -180,7 +180,7 @@ final class PollLockConcurrencyTest extends TestCase
         try {
             $this->waitForFiles(array_column(array_column($workers, 'config'), 'ready'));
             touch($startGate);
-            $this->waitForAnyFiles(array_column(array_column($workers, 'config'), 'entered'));
+            $this->waitForAnyFiles(array_column(array_column($workers, 'config'), 'entered'), 20, $workers);
 
             $deadline = microtime(true) + 8;
             while (microtime(true) < $deadline) {
@@ -497,7 +497,7 @@ final class PollLockConcurrencyTest extends TestCase
         $this->fail('Timed out waiting for test-process synchronization files: '.implode(', ', $diagnostics));
     }
 
-    private function waitForAnyFiles(array $paths, int $timeout = 20): void
+    private function waitForAnyFiles(array $paths, int $timeout = 20, array $workers = []): void
     {
         $deadline = microtime(true) + $timeout;
         do {
@@ -509,7 +509,24 @@ final class PollLockConcurrencyTest extends TestCase
             usleep(10000);
         } while (microtime(true) < $deadline);
 
-        $this->fail('Timed out waiting for any Connector poll worker to enter the API gate.');
+        $processDiagnostics = [];
+        foreach ($workers as $worker) {
+            $handle = $worker['process']['handle'] ?? null;
+            if (! is_resource($handle)) {
+                continue;
+            }
+            $status = proc_get_status($handle);
+            $stderr = stream_get_contents($worker['process']['pipes'][2]);
+            $processDiagnostics[] = [
+                'pid' => $status['pid'] ?? null,
+                'running' => $status['running'] ?? null,
+                'exitcode' => $status['exitcode'] ?? null,
+                'stderr' => substr((string) $stderr, 0, 2000),
+                'result_file' => $worker['config']['result_file'] ?? null,
+            ];
+        }
+
+        $this->fail('Timed out waiting for any Connector poll worker to enter the API gate. Processes: '.wp_json_encode($processDiagnostics));
     }
 
     private function finishWorker(array $process): void
