@@ -565,6 +565,7 @@ return [
         'backup_queued' => 'Backup requested. It runs when the site next checks in.',
         'scan_queued' => 'Security scan requested.',
         'generate_pairing_code' => 'Generate pairing code',
+        'download_synthetic_connector' => 'Download M8 Connector package',
         'pairing_code_once' => 'One-time Connector pairing code. Copy it now; this code is shown only once.',
         'pairing_code_expires' => 'Expires at :time.',
     ],

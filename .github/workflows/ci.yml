@@ -62,6 +62,16 @@ jobs:
           find app bootstrap config database lang routes tests wordpress/wp-caregrid-connector wordpress/tests -name '*.php' -print0 \
             | xargs -0 -n 50 -P 4 sh -c 'for f; do php -l "$f" > /dev/null || exit 255; done' sh
 
+      - name: Connector package version and source consistency
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          base="$EVENT_BASE"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then base="$(git merge-base origin/main HEAD)"; fi
+          php scripts/check-connector-release.php "$base"
+          bash scripts/tests/connector-release-version-gate-test.sh
+
       - name: Code style (Pint)
         run: vendor/bin/pint --test
 
@@ -301,6 +311,12 @@ jobs:
       - name: Install WordPress and test dependencies
         working-directory: wordpress
         run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Build the reviewed Connector release artifact
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress
+          php artisan connector:package
+          echo "WP_CAREGRID_CONNECTOR_PACKAGE=$GITHUB_WORKSPACE/storage/app/private/connector/wp-caregrid-connector-$(php -r 'echo json_decode(file_get_contents("wordpress/wp-caregrid-connector/release.json"), true)["version"];').zip" >> "$GITHUB_ENV"
 
       - name: Connector tests (real WordPress)
         working-directory: wordpress

@@ -183,7 +183,7 @@ SECURITY_REMEDIATION_BACKUP_MAX_AGE=60
 SECURITY_REMEDIATION_ALLOW_DISABLE_PLUGIN=false
 ```
 
-Needs the scheduler (`security:monitor`, `security:schedule`, `security:vulnerabilities:sync`) and connector 0.4.0 on the sites (`CONNECTOR_LATEST_VERSION=0.4.0`).
+Needs the scheduler (`security:monitor`, `security:schedule`, `security:vulnerabilities:sync`) and a current Connector on the sites; the advertised minimum/latest release is derived from `wordpress/wp-caregrid-connector/release.json`.
 
 ## Limitations
 

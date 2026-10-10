@@ -59,6 +59,9 @@
                         <x-ui.button type="submit" size="sm" variant="secondary">{{ __('owner.websites.generate_pairing_code') }}</x-ui.button>
                     </form>
                 @endif
+                @if ($canDownloadSyntheticConnector)
+                    <a class="inline-flex min-h-9 items-center rounded-md border border-line px-3 text-sm font-medium text-primary hover:bg-surface" href="{{ route('owner.websites.connector-package', $website) }}">{{ __('owner.websites.download_synthetic_connector') }}</a>
+                @endif
                 <form method="POST" action="{{ route('owner.websites.backups.store', $website) }}">
                     @csrf
                     <x-ui.button type="submit" size="sm" variant="secondary" icon="archive">{{ __('owner.websites.run_backup') }}</x-ui.button>

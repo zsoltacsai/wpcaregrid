@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Owner;
 use App\Backups\BackupReason;
 use App\Backups\BackupRefused;
 use App\Backups\BackupService;
+use App\Connector\ConnectorPackageArtifact;
 use App\Connector\PairingCodes;
 use App\Http\Controllers\Controller;
 use App\Models\ConnectorPairingCode;
@@ -27,6 +28,8 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use RuntimeException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
  * Every website, with Unified Site Health (App\SiteHealth\SiteHealth, the
@@ -71,6 +74,7 @@ class WebsiteController extends Controller
             'latestBackup' => BackupState::fromStatus($backups->first()?->status),
             'events' => $website->events()->with('actorUser')->latest('id')->limit(15)->get(),
             'canIssuePairingCode' => $fixtures->ownerPairingAllowed($website),
+            'canDownloadSyntheticConnector' => $fixtures->ownerPairingAllowed($website),
             'pairingCode' => $this->flashedPairingCode($website),
         ]);
     }
@@ -97,6 +101,26 @@ class WebsiteController extends Controller
                 'code' => $code,
                 'expires_at' => $expiresAt->toIso8601String(),
             ]);
+    }
+
+    /** Private package delivery for the exact configured M8 fixture only. */
+    public function connectorPackage(Website $website, SyntheticFixturePolicy $fixtures, ConnectorPackageArtifact $artifact): BinaryFileResponse
+    {
+        abort_unless($fixtures->ownerPairingAllowed($website), 404);
+
+        try {
+            $package = $artifact->verify();
+        } catch (RuntimeException) {
+            abort(404);
+        }
+
+        $response = response()->download($package['path'], "wp-caregrid-connector-{$package['version']}.zip");
+        $response->headers->set('X-Connector-Version', $package['version']);
+        $response->headers->set('X-Connector-Source-SHA256', $package['source_sha256']);
+        $response->headers->set('X-Connector-Package-SHA256', $package['package_sha256']);
+        $response->headers->set('Cache-Control', 'private, no-store');
+
+        return $response;
     }
 
     public function backup(Request $request, Website $website, BackupService $backups): RedirectResponse

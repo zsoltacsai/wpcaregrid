@@ -95,7 +95,7 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 
 | Item | State | Check |
 | --- | --- | --- |
-| Connector 0.4.1 package built | NOT CONFIGURED | `php artisan connector:package` on the server |
+| Connector 0.4.2 package built and verified | READY | `php artisan connector:package`; CI checks release metadata, runtime manifest, and controlled runner membership |
 | Tested in real WordPress (SQLite and MySQL) | READY | CI wordpress job; locally 169 tests on both |
 | Symlink containment, path traversal, archive extraction | READY | strict mode in CI: never skipped |
 | HTTPS-only connector API in production | READY | `CONNECTOR_REQUIRE_HTTPS` defaults on in production (also when left empty) |

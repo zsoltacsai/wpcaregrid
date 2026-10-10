@@ -119,7 +119,7 @@ Every model is bound by UUID. Nested models use scoped bindings (a backup or acc
 **Website detail** (`/operator/websites/{uuid}`), sections:
 
 - **Overview:** customer, company, email, country, plan and subscription status, website type and status, connector version and state, last heartbeat, WordPress, PHP, WooCommerce, last verified backup, pending updates, security state, health findings.
-- **Connector:** Connected / Stale / Disconnected / Revoked / Not connected, `last_seen_at`, `last_successful_poll_at`, version, capabilities, "Connector update required" when older than `CONNECTOR_LATEST_VERSION`. Re-pair and Disconnect (with confirmation) with `websites.manage`. The credential is never shown; only its hash exists.
+- **Connector:** Connected / Stale / Disconnected / Revoked / Not connected, `last_seen_at`, `last_successful_poll_at`, version, capabilities, "Connector update required" when older than the canonical Connector release in `wordpress/wp-caregrid-connector/release.json`. Re-pair and Disconnect (with confirmation) with `websites.manage`. The credential is never shown; only its hash exists.
 - **WordPress, Plugins, Themes:** installed and available versions, one Update button per item the site reports as updatable (`updates.run`), update history and last result (`updates.view`), licenses with "View details" (`licenses.view`).
 - **WooCommerce:** version and state from the inventory.
 - **Backups** (`backups.view`): schedule, retention, storage provider name, history with verification time, errors, expiry; "Request backup" (`backups.run`); "Restore" (`backups.restore`).

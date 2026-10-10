@@ -707,7 +707,7 @@ trap 'exit 143' TERM
 
 main() {
     local requested_ref fetched_tip env_mode app_url_value db_name timestamp backup_path gate_probe migration_status
-    local previous_connector_version current_connector_version cache_file cache_dir
+    local cache_file cache_dir
     local worker
 
     (( $# == 1 )) || fail 'Usage: scripts/deploy-staging.sh <full-commit-sha>'
@@ -754,8 +754,6 @@ main() {
     env_mode="$(php artisan config:show app.env --no-interaction 2>/dev/null | awk 'NF { value = $NF } END { print value }')"
     app_url_value="$(php artisan config:show app.url --no-interaction 2>/dev/null | awk 'NF { value = $NF } END { print value }')"
     [[ "$env_mode" == 'production' && "$app_url_value" == 'https://staging.wpcaregrid.com' ]] || fail 'The environment is not the expected production-mode staging configuration.'
-    previous_connector_version="$(php artisan config:show connector.latest_version --no-interaction 2>/dev/null | awk 'NF { value = $NF } END { print value }')"
-    [[ -n "$previous_connector_version" ]] || fail 'Could not read the current connector package version.'
 
     requested_ref="$1"
     log "Fetching the staging branch ${DEPLOY_BRANCH}."
@@ -849,14 +847,8 @@ main() {
 
     log 'Rebuilding Laravel production caches while Nginx remains gated.'
     rebuild_caches
-    current_connector_version="$(php artisan config:show connector.latest_version --no-interaction 2>/dev/null | awk 'NF { value = $NF } END { print value }')"
-    [[ -n "$current_connector_version" ]] || fail 'Could not read the deployed connector package version.'
-    if [[ "$current_connector_version" != "$previous_connector_version" ]]; then
-        log 'Connector version changed; rebuilding its private ZIP package.'
-        php artisan connector:package
-    else
-        log 'Connector version is unchanged; keeping the existing private package.'
-    fi
+    log 'Building or verifying the immutable Connector package from the deployed source.'
+    php artisan connector:package
     php artisan about --only=environment >/dev/null
     check_system_health allow-scheduler-pending || fail 'Deployment-critical application checks failed.'
     php artisan schedule:list >/dev/null

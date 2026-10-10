@@ -7,6 +7,43 @@ use WPCareGrid\Connector\Tests\Support\TestCase;
 
 final class ControlledRunnerEntrypointTest extends TestCase
 {
+    public function test_runner_php_file_refuses_direct_http_execution(): void
+    {
+        if (PHP_OS_FAMILY === 'Windows' || ! function_exists('proc_open')) {
+            $this->environment_limitation('The direct HTTP guard check requires a local POSIX PHP process.');
+        }
+        $socket = stream_socket_server('tcp://127.0.0.1:0', $errorCode, $errorMessage);
+        $this->assertIsResource($socket, $errorMessage);
+        $address = stream_socket_get_name($socket, false);
+        fclose($socket);
+        $port = (int) substr((string) strrchr((string) $address, ':'), 1);
+        $server = proc_open([PHP_BINARY, '-S', "127.0.0.1:{$port}", '-t', WP_PLUGIN_DIR], [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, WP_PLUGIN_DIR, null, ['bypass_shell' => true]);
+        $this->assertIsResource($server);
+
+        try {
+            $deadline = microtime(true) + 5;
+            do {
+                $probe = @fsockopen('127.0.0.1', $port, $errorCode, $errorMessage, 0.1);
+                if (is_resource($probe)) {
+                    fclose($probe);
+                    break;
+                }
+                usleep(20_000);
+            } while (microtime(true) < $deadline);
+
+            $body = @file_get_contents("http://127.0.0.1:{$port}/wp-caregrid-connector/bin/caregrid-controlled-poll.php", false, stream_context_create(['http' => ['timeout' => 3, 'ignore_errors' => true]]));
+            $status = $http_response_header[0] ?? '';
+            $this->assertStringContainsString('404', $status);
+            $this->assertSame('', (string) $body);
+        } finally {
+            proc_terminate($server, 15);
+            foreach ($pipes as $pipe) {
+                fclose($pipe);
+            }
+            proc_close($server);
+        }
+    }
+
     public function test_project_local_php_entrypoint_bootstraps_wordpress_and_reports_one_harmless_job(): void
     {
         if (PHP_OS_FAMILY === 'Windows' || ! function_exists('proc_open')) {

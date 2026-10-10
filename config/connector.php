@@ -10,10 +10,12 @@
 |
 */
 
+$release = json_decode((string) @file_get_contents(base_path('wordpress/wp-caregrid-connector/release.json')), true);
+
 return [
 
-    // Newest connector release; older connectors are flagged as outdated.
-    'latest_version' => env('CONNECTOR_LATEST_VERSION', '0.4.1'),
+    // Canonical release metadata lives with the distributable plugin source.
+    'latest_version' => is_array($release) && is_string($release['version'] ?? null) ? $release['version'] : '0.0.0',
 
     // Refuse plain-HTTP connector requests (on by default in production). An empty
     // CONNECTOR_REQUIRE_HTTPS= counts as not set, so the production default stays.

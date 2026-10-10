@@ -62,6 +62,7 @@ Route::prefix('owner')->name('owner.')->group(function () {
 
         Route::get('/websites', [WebsiteController::class, 'index'])->middleware('can:owner.websites.view')->name('websites.index');
         Route::get('/websites/{website}', [WebsiteController::class, 'show'])->middleware('can:owner.websites.view')->name('websites.show');
+        Route::get('/websites/{website}/connector-package', [WebsiteController::class, 'connectorPackage'])->middleware('can:owner.websites.operate')->name('websites.connector-package');
         Route::post('/websites/{website}/pairing-code', [WebsiteController::class, 'pairingCode'])->middleware(['can:owner.websites.operate', 'throttle:owner-sensitive'])->name('websites.pairing-code');
         // Through BackupService and SecurityScanService, exactly as in the operator console.
         Route::post('/websites/{website}/backups', [WebsiteController::class, 'backup'])->middleware(['can:owner.websites.operate', 'throttle:owner-external'])->name('websites.backups.store');

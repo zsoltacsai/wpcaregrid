@@ -97,7 +97,9 @@ class AccountConnectorTest extends TestCase
 
         $this->actingAs($customer->user)->get(route('account.connector.download'))
             ->assertOk()
-            ->assertDownload('wp-caregrid-connector-'.config('connector.latest_version').'.zip');
+            ->assertDownload('wp-caregrid-connector-'.config('connector.latest_version').'.zip')
+            ->assertHeader('X-Connector-Version', config('connector.latest_version'))
+            ->assertHeader('Cache-Control', 'no-store, private');
     }
 
     /** @return array<string, array{string, bool}> */

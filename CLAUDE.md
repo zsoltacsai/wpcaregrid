@@ -386,7 +386,7 @@ Unknown future Stripe statuses are logged and not guessed.
 
 ## 14. WordPress Connector
 
-Current Connector version: **0.4.1**
+Current Connector version: **0.4.2** (canonical metadata: `wordpress/wp-caregrid-connector/release.json`)
 
 Communication:
 - outbound HTTPS only

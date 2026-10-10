@@ -196,11 +196,13 @@ Presence (`connector:update-presence`): connected, `stale` after 45 minutes with
 ## Development
 
 ```sh
-php artisan connector:package                           # builds storage/app/private/connector/wp-caregrid-connector-<version>.zip
+php artisan connector:package                           # builds or verifies the immutable private release ZIP
 php artisan connector:queue-job <website-uuid> UPDATE_PLUGIN --payload='{"plugin":"akismet/akismet.php"}'
 ```
 
-The plugin header version must match `CONNECTOR_LATEST_VERSION`, or packaging fails.
+`wordpress/wp-caregrid-connector/release.json` is the canonical Connector version (`0.4.2`). The WordPress plugin header is checked against it. The server derives its advertised version from this file; no `.env` override exists. CI rejects distributable Connector changes without a semantic version increase. Packaging embeds a per-file SHA-256 manifest and writes a private sidecar containing the release and ZIP SHA-256. Same-version artifacts are immutable: a source mismatch fails and requires a version bump. Deployment always builds or verifies the package from the exact deployed source.
+
+Customers download the private ZIP from their authenticated account. The exact configured M8 synthetic fixture also has a private Owner-only package download. For that fixture, the supported update path is WordPress Admin → Plugins → Add New Plugin → Upload Plugin, using the downloaded versioned ZIP. WordPress replaces plugin files while retaining the Connector's database options; no pairing reset or direct server file copy is used. Verify the response's `X-Connector-Version` and `X-Connector-Package-SHA256` headers against the release report before upload.
 
 Plugin tests run inside a real WordPress (from Composer) on SQLite; only outbound HTTP is faked:
 
@@ -222,6 +224,7 @@ then upload the ZIP (Plugins → Add New → Upload Plugin), activate, and pair 
 | Version | Changes |
 | --- | --- |
 | 0.4.1 | File restore containment check normalises Windows paths (`PathGuard::contained()`), as the security scanner already did: on Windows hosts every restored file was refused as unsafe. No change on Linux. |
+| 0.4.2 | Adds the project-local controlled poll runner and immutable package manifest; release metadata is canonical and package upgrades preserve the normal WordPress pairing state. |
 | 0.4.0 | Security scanning, quarantine and controlled file repair (SECURITY_ENGINE.md). |
 
 ## Future capabilities
