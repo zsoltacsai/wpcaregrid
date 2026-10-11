@@ -8,7 +8,7 @@ use WPCareGrid\Connector\Core\Plugin;
  * Plugin Name:       WP CareGrid Connector
  * Plugin URI:        https://wpcaregrid.com
  * Description:       Connects this website to WP CareGrid for maintenance: inventory, health checks, approved updates and security scans. Uses a dedicated site credential; no WordPress, hosting or database password is needed.
- * Version:           0.4.4
+ * Version:           0.4.5
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Author:            WP CareGrid
