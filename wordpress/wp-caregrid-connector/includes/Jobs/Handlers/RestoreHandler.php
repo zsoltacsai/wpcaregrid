@@ -120,7 +120,9 @@ final class RestoreHandler implements JobHandler
                 $failureStage = 'file_staging';
                 $this->progress($uuid, $destructiveMutationStarted, $failureStage);
                 $files = new FileRestorer;
-                $files->extract($paths['files'], TempDir::file($uuid, 'files-staging'));
+                $filesStaging = TempDir::file($uuid, 'files-staging');
+                $files->extract($paths['files'], $filesStaging);
+                $files->preflight($filesStaging);
                 $this->fault_hooks?->reach('files_prepared', $uuid);
             }
 

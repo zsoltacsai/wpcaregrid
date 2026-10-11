@@ -7,6 +7,7 @@ use WPCareGrid\Connector\Backups\BackupFailure;
 use WPCareGrid\Connector\Backups\BackupIndex;
 use WPCareGrid\Connector\Backups\DatabaseDumper;
 use WPCareGrid\Connector\Backups\Downloader;
+use WPCareGrid\Connector\Backups\FilePolicy;
 use WPCareGrid\Connector\Backups\Maintenance;
 use WPCareGrid\Connector\Backups\PathGuard;
 use WPCareGrid\Connector\Backups\Sink;
@@ -20,6 +21,7 @@ use WPCareGrid\Connector\Jobs\Handlers\RestoreHandler;
 use WPCareGrid\Connector\Jobs\JobRegistry;
 use WPCareGrid\Connector\Jobs\JobRunner;
 use WPCareGrid\Connector\Tests\Support\FakeBackupServer;
+use WPCareGrid\Connector\Tests\Support\FilesystemManifest;
 use WPCareGrid\Connector\Tests\Support\OneShotRestoreFault;
 use WPCareGrid\Connector\Tests\Support\RestoreHarnessGuard;
 use WPCareGrid\Connector\Tests\Support\RestoreVariantIndex;
@@ -80,6 +82,146 @@ final class RestoreTest extends TestCase
         $this->assertSame([], $this->temp_files());
     }
 
+    public function test_file_restore_does_not_follow_predictable_temporary_sidecar_symlink(): void
+    {
+        $target = WP_CONTENT_DIR.'/uploads/m8-sidecar-link/fixture.txt';
+        $this->put($target, 'backup version');
+        [$backup, $objects] = $this->backup('BACKUP_FILES');
+
+        $outside = sys_get_temp_dir().'/caregrid-sidecar-outside-'.wp_generate_password(6, false).'.txt';
+        file_put_contents($outside, 'outside sentinel');
+        $this->created[] = $outside;
+        file_put_contents($target, 'live version');
+        $sidecar = $target.'.caregrid-restore';
+        $this->symlink_or_skip($outside, $sidecar);
+
+        $result = $this->restore($backup, 'files', $objects);
+
+        $this->assertSame('success', $result['status'], wp_json_encode($result['error']));
+        $this->assertSame('backup version', file_get_contents($target));
+        $this->assertSame('outside sentinel', file_get_contents($outside));
+        $this->assertTrue(is_link($sidecar), 'The predictable legacy sidecar is never opened or replaced.');
+        $this->assertSame([], $this->temp_files());
+    }
+
+    public function test_redacted_wp_config_archive_entry_never_replaces_the_live_file(): void
+    {
+        $path = ABSPATH.'wp-config.php';
+        $hadConfig = is_file($path);
+        $original = $hadConfig ? file_get_contents($path) : null;
+        file_put_contents($path, "<?php\n/* local test config sentinel */\n");
+
+        try {
+            $result = $this->restore_crafted_archive(static function (TarWriter $tar): void {
+                $tar->add_string('root/wp-config.php', "<?php\n/* removed-by-wp-caregrid */\n", time());
+            });
+
+            $this->assertSame('success', $result['status'], wp_json_encode($result['error']));
+            $this->assertSame("<?php\n/* local test config sentinel */\n", file_get_contents($path));
+            $this->assertSame(1, $result['data']['restored']['files']['skipped']);
+        } finally {
+            if ($hadConfig && is_string($original)) {
+                file_put_contents($path, $original);
+            } else {
+                @unlink($path);
+            }
+        }
+    }
+
+    public function test_unwritable_destination_is_refused_before_database_mutation(): void
+    {
+        $this->requires_mysql();
+        $directory = WP_CONTENT_DIR.'/uploads/m8-unwritable-destination';
+        $target = $directory.'/fixture.txt';
+        $this->put($target, 'before');
+        update_option('m8_unwritable_restore_marker', 'before');
+        [$backup, $objects] = $this->backup('BACKUP_FULL');
+        file_put_contents($target, 'after');
+        update_option('m8_unwritable_restore_marker', 'after');
+        chmod($directory, 0555);
+
+        try {
+            $result = $this->restore($backup, 'full', $objects);
+            $this->assertSame('failed', $result['status']);
+            $this->assertSame('RESTORE_FILES_FAILED', $result['result_code']);
+            $this->assertFalse($result['error']['details']['destructive_mutation_started']);
+            $this->assertSame('file_staging', $result['error']['details']['failure_stage']);
+            $this->assertSame('preflight', $result['error']['details']['operation']);
+            $this->assertSame('permission_denied', $result['error']['details']['error_category']);
+            $this->assertSame('after', get_option('m8_unwritable_restore_marker'));
+            $this->assertSame('after', file_get_contents($target));
+            $this->assertSame([], $this->temp_files());
+        } finally {
+            chmod($directory, 0755);
+        }
+    }
+
+    public function test_full_restore_matches_a_deterministic_filesystem_manifest_and_is_idempotent(): void
+    {
+        $this->requires_mysql();
+        $this->put(WP_CONTENT_DIR.'/uploads/m8-file-manifest/nested/media.txt', 'media baseline');
+        $this->put(WP_PLUGIN_DIR.'/m8-fixture-plugin/nested/plugin-state.php', '<?php return "baseline";');
+        $this->put(ABSPATH.'.htaccess', "# m8 root fixture\n");
+        $expected = $this->capture_restore_manifest();
+        update_option('m8_file_manifest_marker', 'baseline');
+        [$backup, $objects] = $this->backup('BACKUP_FULL');
+
+        file_put_contents(WP_CONTENT_DIR.'/uploads/m8-file-manifest/nested/media.txt', 'mutated media');
+        unlink(WP_PLUGIN_DIR.'/m8-fixture-plugin/nested/plugin-state.php');
+        file_put_contents(WP_PLUGIN_DIR.'/m8-fixture-plugin/nested/plugin-state.php', '<?php return "mutated";');
+        update_option('m8_file_manifest_marker', 'mutated');
+
+        foreach ([1, 2] as $attempt) {
+            $result = $this->restore($backup, 'full', $objects);
+            $this->assertSame('success', $result['status'], wp_json_encode($result['error']));
+            $this->assertSame('RESTORED', $result['result_code']);
+            wp_cache_flush();
+            $this->assertSame('baseline', get_option('m8_file_manifest_marker'));
+            $this->assertSame($expected, $this->capture_restore_manifest(), 'Restore attempt '.$attempt.' matches every restorable manifest entry.');
+        }
+    }
+
+    public function test_compensating_full_restore_applies_the_verified_pre_restore_filesystem_manifest(): void
+    {
+        $this->requires_mysql();
+        $this->with_harness_environment(function (): void {
+            $directory = WP_CONTENT_DIR.'/uploads/m8-compensation-manifest/nested';
+            $target = $directory.'/state.txt';
+            $this->put($target, 'primary baseline');
+            update_option('m8_compensation_manifest_marker', 'primary');
+            [$primary, $primaryObjects] = $this->backup('BACKUP_FULL');
+            $primaryDownloads = $this->server->downloads;
+
+            file_put_contents($target, 'pre-restore safety state');
+            $this->put($directory.'/safety-only.txt', 'safety state');
+            update_option('m8_compensation_manifest_marker', 'safety');
+            $expectedSafetyFilesystem = $this->capture_restore_manifest();
+            [$safety, $safetyObjects] = $this->backup('BACKUP_FULL');
+            $safetyDownloads = $this->server->downloads;
+
+            file_put_contents($target, 'live damaged state');
+            update_option('m8_compensation_manifest_marker', 'live');
+            $fault = new OneShotRestoreFault('before_file_apply', 'HARNESS_FILE_APPLY_FAILURE');
+            $this->server->downloads = $primaryDownloads;
+            $failed = $this->restore_with_fault($primary, $primaryObjects, $fault);
+
+            $this->assertSame('failed', $failed['status']);
+            $this->assertSame('HARNESS_FILE_APPLY_FAILURE', $failed['result_code']);
+            $this->assertTrue($failed['error']['details']['destructive_mutation_started']);
+            $this->assertSame('file_apply', $failed['error']['details']['failure_stage']);
+            $this->assertSame('live damaged state', file_get_contents($target), 'The injected stop happens before normal file application.');
+
+            $this->server->downloads = $safetyDownloads;
+            $compensation = $this->restore($safety, 'full', $safetyObjects);
+            $this->assertSame('success', $compensation['status'], wp_json_encode($compensation['error']));
+            $this->assertSame('RESTORED', $compensation['result_code']);
+            wp_cache_flush();
+            $this->assertSame('safety', get_option('m8_compensation_manifest_marker'));
+            $this->assertSame($expectedSafetyFilesystem, $this->capture_restore_manifest());
+            $this->assertSame([], $this->temp_files());
+        });
+    }
+
     public function test_database_restore_keeps_the_connector_connected(): void
     {
         $this->requires_mysql();
@@ -104,7 +246,7 @@ final class RestoreTest extends TestCase
         $this->assertTrue($result['data']['destructive_mutation_started']);
     }
 
-    public function test_file_copy_failure_after_database_swap_reports_destructive_boundary(): void
+    public function test_file_destination_type_conflict_is_rejected_before_database_swap(): void
     {
         $this->requires_mysql();
         $target = WP_CONTENT_DIR.'/uploads/m8-auto-recovery/failure.txt';
@@ -122,12 +264,15 @@ final class RestoreTest extends TestCase
 
         $this->assertSame('failed', $result['status']);
         $this->assertSame('RESTORE_FILES_FAILED', $result['result_code']);
-        $this->assertTrue($result['error']['details']['destructive_mutation_started']);
-        $this->assertSame('file_apply', $result['error']['details']['failure_stage']);
+        $this->assertFalse($result['error']['details']['destructive_mutation_started']);
+        $this->assertSame('file_staging', $result['error']['details']['failure_stage']);
+        $this->assertSame('preflight', $result['error']['details']['operation']);
+        $this->assertSame('wp-content/uploads/m8-auto-recovery/failure.txt', $result['error']['details']['relative_path']);
+        $this->assertSame('destination_type_conflict', $result['error']['details']['error_category']);
         wp_cache_flush();
-        $this->assertSame('baseline-db', get_option('caregrid_restore_marker'), 'The DB table swap completed before file copy failed.');
-        $this->assertNull(get_post($post), 'The backed-up DB state is live.');
-        $this->assertDirectoryExists($target, 'The controlled obstruction remains until explicit recovery.');
+        $this->assertSame('mutated-db', get_option('caregrid_restore_marker'), 'A known file destination conflict is found before the DB table swap.');
+        $this->assertNotNull(get_post($post), 'The live database remains unchanged.');
+        $this->assertDirectoryExists($target, 'The controlled obstruction remains unchanged.');
         $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
     }
 
@@ -844,6 +989,46 @@ final class RestoreTest extends TestCase
         $this->plugin()->runner()->poll();
 
         return $this->posted_result($job['uuid']) ?? $this->fail('No result posted.');
+    }
+
+    private function restore_with_fault(string $backup, array $objects, OneShotRestoreFault $fault): array
+    {
+        $plugin = $this->plugin();
+        $registry = new JobRegistry(['RESTORE' => new RestoreHandler($plugin->downloader(), $plugin->health(), $plugin->jobs(), null, $fault)]);
+        $runner = new JobRunner($plugin->api(), $registry, $plugin->jobs(), $plugin->connection());
+        $plugin->set('registry', $registry);
+        $plugin->set('runner', $runner);
+        $job = $this->job('RESTORE', ['restore_uuid' => wp_generate_uuid4(), 'backup_uuid' => $backup, 'scope' => 'full', 'objects' => $objects]);
+        $this->serve_jobs($job);
+        $runner->poll();
+
+        return $this->posted_result($job['uuid']) ?? $this->fail('No injected restore result was posted.');
+    }
+
+    private function capture_restore_manifest(): array
+    {
+        $manifest = [];
+        foreach (FilesystemManifest::capture(WP_CONTENT_DIR) as $path => $entry) {
+            $manifest['wp-content/'.$path] = $entry;
+        }
+
+        foreach (FilePolicy::ROOT_FILES as $name) {
+            $path = ABSPATH.$name;
+            if (! is_file($path) || is_link($path)) {
+                continue;
+            }
+            $mode = fileperms($path);
+            $size = filesize($path);
+            $sha256 = hash_file('sha256', $path);
+            if ($mode === false || $size === false || $sha256 === false) {
+                throw new \RuntimeException('A selected root file could not be fingerprinted.');
+            }
+            $manifest['root/'.$name] = ['type' => 'file', 'size' => $size, 'sha256' => $sha256, 'mode' => $mode & 0777];
+        }
+
+        ksort($manifest, SORT_STRING);
+
+        return $manifest;
     }
 
     /** A files archive built by hand, registered in the index as if this site made it. */
