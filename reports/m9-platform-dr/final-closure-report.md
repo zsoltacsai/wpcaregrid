@@ -24,7 +24,12 @@ Local checks on the candidate source before remote CI:
 
 ## Remote CI
 
-Pending at report creation. This section must be updated with the workflow run ID, candidate SHA, exact jobs and result before any closure decision.
+The first remote run, `38173867682` on candidate `99fcfa6f594e618a55577a6aff0058c11242a7fe`, exposed two fixable issues:
+
+- Manual workflow dispatch left `EVENT_BASE` empty, while this checkout did not contain `origin/main`; the Connector release check therefore exited before evaluating the intended M9 base. The CI workflow now accepts an explicit optional `connector_release_base` input for manual maintenance-branch runs. Push and pull-request behavior is unchanged.
+- The SQLite and MySQL suites both showed that the production-local-storage refusal test changed Laravel's already-resolved runtime environment instead of setting the explicit deployment identity. The test now leaves `APP_ENV=testing` intact and sets `platform.deployment_environment=production`, exercising the actual fail-closed branch. Focused local validation after this correction: 12 passed, 51 assertions.
+
+Both Connector jobs passed in the first remote run. The complete corrected remote run is pending and must be recorded here before any closure decision.
 
 ## Guarded staging validation
 
@@ -32,7 +37,7 @@ Not run. Repository deployment documentation reports no staging server access ha
 
 ## Required actions before closure
 
-1. Provision/configure a dedicated private platform S3 bucket with separate least-privilege credentials using the approved secret mechanism.
+1. Owner reports the Hetzner S3 API is configured. Verify the dedicated private platform-backup bucket, bucket-scoped separate credential, and successful staging write/readback independently; do not infer these from API configuration alone.
 2. Store the current APP_KEY in an independent restricted vault and verify retrieval without exposing the key; record an Owner attestation only.
 3. Establish and independently verify the staging SSH host identity/access path. Do not use `ssh-keyscan` output as trusted identity without an independent fingerprint source.
 4. Run remote CI for the exact candidate commit.

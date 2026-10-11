@@ -202,8 +202,14 @@ class PlatformDatabaseBackupTest extends TestCase
 
     public function test_production_local_platform_backup_is_refused(): void
     {
-        app()->detectEnvironment(fn () => 'production');
-        config(['platform_backup.disk' => 'platform_backups', 'platform_backup.storage_driver' => 'local']);
+        config([
+            'platform.deployment_environment' => 'production',
+            'platform_backup.disk' => 'platform_backups',
+            'platform_backup.storage_driver' => 'local',
+            'filesystems.disks.platform_backups.driver' => 'local',
+        ]);
+
+        $this->assertSame('testing', app()->environment(), 'The test must retain the test runtime while simulating a production deployment identity.');
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('independently managed remote storage');

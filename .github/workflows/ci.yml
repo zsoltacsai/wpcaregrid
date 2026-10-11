@@ -12,6 +12,11 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+    inputs:
+      connector_release_base:
+        description: Base revision for Connector release validation when dispatching a maintenance branch
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -67,7 +72,7 @@ jobs:
 
       - name: Connector package version and source consistency
         env:
-          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || inputs.connector_release_base }}
         run: |
           set -euo pipefail
           base="$EVENT_BASE"
