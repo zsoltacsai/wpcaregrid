@@ -77,7 +77,11 @@ authorized WordPress setting change, correctly causing a new fingerprint.
 
 The historical schema-1 baseline recorded 159 options; current WordPress
 records 158. It did not preserve option names, so the one-row difference is
-non-reconstructable from that artifact alone. The old hash must not be
+non-reconstructable from that artifact alone. A read-only replay of the
+retained fixture MySQL ROW binlogs reconstructed the baseline and current
+option-name sets; the sole difference was WordPress's
+`_transient_doing_cron`. The reconstructed current set exactly matched a
+fresh SQL option-name query. The old hash must not be
 compared byte-for-byte with schema 2, nor should an option be fabricated to
 make counts equal.
 
