@@ -138,6 +138,7 @@ final class FileRestorer
                 if ($forceSkip) {
                     $this->add_plan($entry, 'skip', 'excluded', false, 'not_applicable', false, null, 'outside_restore_scope');
                     $this->plan_tree($staging, $entry, true);
+
                     continue;
                 }
 
@@ -159,6 +160,7 @@ final class FileRestorer
                 if (file_exists($target) && ! is_dir($target)) {
                     $this->add_plan($entry, 'mkdir', 'file', true, 'type_conflict', true, false, 'destination_type_conflict');
                     $this->plan_tree($staging, $entry);
+
                     continue;
                 }
 
@@ -173,21 +175,25 @@ final class FileRestorer
 
             if ($forceSkip) {
                 $this->add_plan($entry, 'skip', 'excluded', false, 'not_applicable', false, null, 'outside_restore_scope');
+
                 continue;
             }
 
             if ($target === null) {
                 $this->add_plan($entry, 'skip', 'excluded', false, 'not_applicable', false, null, 'outside_restore_scope');
+
                 continue;
             }
 
             if (is_link($target) || ! $this->safe($target)) {
                 $this->add_plan($entry, 'skip', 'symlink_or_unsafe', file_exists($target) || is_link($target), 'not_checked', false, null, 'unsafe_destination');
+
                 continue;
             }
 
             if (file_exists($target) && ! is_file($target)) {
                 $this->add_plan($entry, 'replace', 'directory_or_special', true, 'type_conflict', true, false, 'destination_type_conflict');
+
                 continue;
             }
 
@@ -195,6 +201,7 @@ final class FileRestorer
             $sourceHash = $this->sha256_file($source, $hashWarning);
             if (! is_string($sourceHash)) {
                 $this->add_plan($entry, 'replace', file_exists($target) ? 'file' : 'missing', file_exists($target), 'unreadable_source', true, false, $this->error_category($hashWarning));
+
                 continue;
             }
 
@@ -203,6 +210,7 @@ final class FileRestorer
             $destinationHash = $exists ? $this->sha256_file($target, $destinationWarning) : null;
             if ($exists && ! is_string($destinationHash)) {
                 $this->add_plan($entry, 'replace', 'file', true, 'unreadable_destination', true, false, $this->error_category($destinationWarning), $sourceHash);
+
                 continue;
             }
 
@@ -302,11 +310,13 @@ final class FileRestorer
                     if ($plan['failure_reason'] === 'unsafe_destination') {
                         $this->stats['unsafe']++;
                     }
+
                     continue;
                 }
                 if ($target === null && in_array($entry, ['wp-content', 'root'], true) && $plan['operation'] === 'noop') {
                     $this->stats['noop']++;
                     $this->apply_tree($staging, $entry);
+
                     continue;
                 }
                 if ($plan['operation'] === 'mkdir') {
