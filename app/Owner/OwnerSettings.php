@@ -4,6 +4,7 @@ namespace App\Owner;
 
 use App\Models\User;
 use App\Pricing\CurrencySuggestion;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
@@ -36,6 +37,19 @@ final class OwnerSettings
         'mail.scheme' => ['group' => 'mail', 'type' => 'nullable_string', 'default' => null],
         'mail.from_address' => ['group' => 'mail', 'type' => 'string', 'default' => 'noreply@wpcaregrid.com'],
         'mail.from_name' => ['group' => 'mail', 'type' => 'string', 'default' => 'WP CareGrid'],
+        'backups.primary.enabled' => ['group' => 'backups', 'type' => 'boolean', 'default' => false],
+        'backups.primary.frequency' => ['group' => 'backups', 'type' => 'string', 'default' => '12h'],
+        'backups.primary.storage_driver' => ['group' => 'backups', 'type' => 'string', 'default' => 'local'],
+        'backups.primary.endpoint' => ['group' => 'backups', 'type' => 'nullable_string', 'default' => null],
+        'backups.primary.region' => ['group' => 'backups', 'type' => 'string', 'default' => 'us-east-1'],
+        'backups.primary.bucket' => ['group' => 'backups', 'type' => 'nullable_string', 'default' => null],
+        'backups.primary.path_style' => ['group' => 'backups', 'type' => 'boolean', 'default' => false],
+        'backups.retention.daily' => ['group' => 'backups', 'type' => 'integer', 'default' => 7],
+        'backups.retention.weekly' => ['group' => 'backups', 'type' => 'integer', 'default' => 4],
+        'backups.retention.monthly' => ['group' => 'backups', 'type' => 'integer', 'default' => 12],
+        'backups.secondary.enabled' => ['group' => 'backups', 'type' => 'boolean', 'default' => false],
+        'backups.secondary.frequency' => ['group' => 'backups', 'type' => 'string', 'default' => 'daily'],
+        'backups.app_key_escrow_attested' => ['group' => 'backups', 'type' => 'boolean', 'default' => false],
     ];
 
     /** @return array<string, mixed> */
@@ -113,6 +127,21 @@ final class OwnerSettings
                 'mail.from_address' => ['required', 'email:rfc', 'max:255'],
                 'mail.from_name' => ['required', 'string', 'max:120', 'not_regex:/[\x00-\x1F\x7F]/'],
             ],
+            'backups' => [
+                'backups.primary.enabled' => ['required', 'boolean'],
+                'backups.primary.frequency' => ['required', Rule::in(['6h', '12h', 'daily', 'weekly'])],
+                'backups.primary.storage_driver' => ['sometimes', 'required', Rule::in(['local', 's3'])],
+                'backups.primary.endpoint' => ['sometimes', 'nullable', 'string', 'max:253', 'not_regex:/[\x00-\x20\x7F]/'],
+                'backups.primary.region' => ['sometimes', 'required', 'string', 'max:64', 'regex:/\A[a-z0-9][a-z0-9-]*\z/D'],
+                'backups.primary.bucket' => ['sometimes', 'nullable', 'string', 'max:63', 'regex:/\A(?=.{3,63}\z)(?![0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\z)(?!.*\.\.)(?!.*\.-)(?!.*-\.)(?!.*-\z)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\z/D'],
+                'backups.primary.path_style' => ['sometimes', 'required', 'boolean'],
+                'backups.retention.daily' => ['required', 'integer', 'between:7,365'],
+                'backups.retention.weekly' => ['required', 'integer', 'between:4,104'],
+                'backups.retention.monthly' => ['required', 'integer', 'between:12,120'],
+                'backups.secondary.enabled' => ['required', 'boolean'],
+                'backups.secondary.frequency' => ['required', Rule::in(['6h', '12h', 'daily', 'weekly'])],
+                'backups.app_key_escrow_attested' => ['required', 'boolean'],
+            ],
             default => [],
         };
 
@@ -130,7 +159,9 @@ final class OwnerSettings
         foreach ($ids as $index => $id) {
             $temporaryId = 'setting_'.$index;
             $temporaryIds[$id] = $temporaryId;
-            $validationInput[$temporaryId] = $input[$id] ?? null;
+            if (array_key_exists($id, $input)) {
+                $validationInput[$temporaryId] = $input[$id];
+            }
             $label = __('owner.settings.'.$group.'.'.substr($id, strlen($group) + 1));
             $attributeNames[$temporaryId] = $label;
             $attributeNames[$temporaryId.'.*'] = $label;
@@ -173,12 +204,28 @@ final class OwnerSettings
             }
         }
 
+        if ($group === 'backups') {
+            $deploymentEnvironment = (string) (config('platform.deployment_environment') ?: app()->environment());
+            $storageDriver = $validated['backups.primary.storage_driver']
+                ?? $input['backups.primary.storage_driver']
+                ?? $this->default('backups.primary.storage_driver');
+            if (in_array($deploymentEnvironment, ['staging', 'production'], true)
+                && $storageDriver !== 's3') {
+                throw ValidationException::withMessages(['settings' => __('owner.platform_backups.remote_storage_required')]);
+            }
+            $endpoint = $validated['backups.primary.endpoint'] ?? null;
+            if (filled($endpoint) && ! $this->safePlatformBackupEndpoint((string) $endpoint)) {
+                throw ValidationException::withMessages(['settings' => __('owner.platform_backups.invalid_endpoint')]);
+            }
+        }
+
         $normalized = [];
         foreach ($validated as $id => $value) {
             $normalized[$id] = match (self::DEFINITIONS[$id]['type']) {
                 'integer' => (int) $value,
                 'nullable_string' => $value === '' ? null : $value,
                 'array' => array_values($value),
+                'boolean' => (bool) $value,
                 default => $value,
             };
         }
@@ -190,29 +237,36 @@ final class OwnerSettings
     public function updateGroup(string $group, array $input, ?User $actor): array
     {
         $validated = $this->validateGroup($group, $input);
-        $before = $this->group($group);
         $changed = [];
-
-        DB::transaction(function () use ($validated, $before, $group, $actor, &$changed): void {
-            foreach ($validated as $id => $value) {
-                if ($this->hasStored($id) && $before[$id] === $value) {
-                    continue;
+        $lock = Cache::lock('owner-settings:update:'.$group, 15);
+        if (! $lock->get()) {
+            throw ValidationException::withMessages(['settings' => __('owner.settings.validation.concurrent_update')]);
+        }
+        try {
+            $before = $this->group($group);
+            DB::transaction(function () use ($validated, $before, $group, $actor, &$changed): void {
+                foreach ($validated as $id => $value) {
+                    if ($this->hasStored($id) && $before[$id] === $value) {
+                        continue;
+                    }
+                    $changed[] = $id;
+                    DB::table('owner_settings')->upsert([[
+                        'id' => $id,
+                        'value' => json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                        'updated_at' => now(),
+                        'created_at' => now(),
+                    ]], ['id'], ['value', 'updated_at']);
+                    $data = ['group' => $group, 'setting' => $id];
+                    if (self::DEFINITIONS[$id]['audit_values'] ?? true) {
+                        $data['previous'] = $this->auditValue($before[$id]);
+                        $data['new'] = $this->auditValue($value);
+                    }
+                    AdminAudit::record($actor, 'owner_setting.updated', 'owner_setting', $id, $data);
                 }
-                $changed[] = $id;
-                DB::table('owner_settings')->upsert([[
-                    'id' => $id,
-                    'value' => json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                    'updated_at' => now(),
-                    'created_at' => now(),
-                ]], ['id'], ['value', 'updated_at']);
-                $data = ['group' => $group, 'setting' => $id];
-                if (self::DEFINITIONS[$id]['audit_values'] ?? true) {
-                    $data['previous'] = $this->auditValue($before[$id]);
-                    $data['new'] = $this->auditValue($value);
-                }
-                AdminAudit::record($actor, 'owner_setting.updated', 'owner_setting', $id, $data);
-            }
-        });
+            });
+        } finally {
+            $lock->release();
+        }
 
         if ($changed !== []) {
             $this->storedValuesCache = null;
@@ -235,6 +289,19 @@ final class OwnerSettings
             'owner_settings.general.country' => $general['general.country'],
             'owner_settings.pricing.enabled_currencies' => $this->get('pricing.enabled_currencies'),
             'owner_settings.pricing.default_international_currency' => $this->get('pricing.default_international_currency'),
+            'platform_backup.enabled' => (bool) $this->get('backups.primary.enabled'),
+            'platform_backup.storage_driver' => (string) $this->get('backups.primary.storage_driver'),
+            'platform_backup.owner_frequency' => (string) $this->get('backups.primary.frequency'),
+            'platform_backup.retention.daily' => (int) $this->get('backups.retention.daily'),
+            'platform_backup.retention.weekly' => (int) $this->get('backups.retention.weekly'),
+            'platform_backup.retention.monthly' => (int) $this->get('backups.retention.monthly'),
+            'platform_backup.retention_days.daily' => (int) $this->get('backups.retention.daily'),
+            'platform_backup.retention_days.weekly' => (int) $this->get('backups.retention.weekly') * 7,
+            'platform_backup.retention_days.monthly' => (int) $this->get('backups.retention.monthly') * 30,
+            'platform_backup.s3.endpoint' => $this->get('backups.primary.endpoint'),
+            'platform_backup.s3.region' => (string) $this->get('backups.primary.region'),
+            'platform_backup.s3.bucket' => $this->get('backups.primary.bucket'),
+            'platform_backup.s3.path_style' => (bool) $this->get('backups.primary.path_style'),
         ]);
         date_default_timezone_set((string) $general['general.timezone']);
         app()->setLocale((string) $localization['localization.default_language']);
@@ -298,6 +365,7 @@ final class OwnerSettings
                     'string' => is_string($value),
                     'nullable_string' => $value === null || is_string($value),
                     'integer' => is_int($value),
+                    'boolean' => is_bool($value),
                     'array' => is_array($value) && array_is_list($value) && $value !== []
                         && in_array('HUF', $value, true)
                         && collect($value)->every(fn (mixed $item) => is_string($item) && in_array($item, self::CURRENCIES, true))
@@ -356,6 +424,12 @@ final class OwnerSettings
         return match ($id) {
             'general.business_name' => config('app.name', 'WP CareGrid'),
             'general.support_email' => null,
+            'backups.primary.enabled' => (bool) config('platform_backup.enabled', false),
+            'backups.primary.storage_driver' => (string) config('platform_backup.storage_driver', 'local'),
+            'backups.primary.endpoint' => config('filesystems.disks.platform_backups.endpoint'),
+            'backups.primary.region' => (string) config('filesystems.disks.platform_backups.region', 'us-east-1'),
+            'backups.primary.bucket' => config('filesystems.disks.platform_backups.bucket'),
+            'backups.primary.path_style' => (bool) config('filesystems.disks.platform_backups.use_path_style_endpoint', false),
             'general.timezone' => config('app.timezone', 'UTC'),
             'general.country' => 'HU',
             'localization.default_language' => in_array(config('app.locale'), ['hu', 'en'], true) ? config('app.locale') : 'en',
@@ -397,6 +471,33 @@ final class OwnerSettings
         }
 
         return true;
+    }
+
+    private function safePlatformBackupEndpoint(string $endpoint): bool
+    {
+        $parts = parse_url($endpoint);
+        if (! is_array($parts)
+            || ! isset($parts['scheme'], $parts['host'])
+            || isset($parts['user'])
+            || isset($parts['pass'])
+            || isset($parts['query'])
+            || isset($parts['fragment'])
+            || ! in_array($parts['path'] ?? '', ['', '/'], true)) {
+            return false;
+        }
+
+        $scheme = strtolower((string) $parts['scheme']);
+        $host = strtolower(rtrim((string) $parts['host'], '.'));
+        $environment = (string) (config('platform.deployment_environment') ?: app()->environment());
+        if (in_array($environment, ['staging', 'production'], true)) {
+            return $scheme === 'https'
+                && (! isset($parts['port']) || (int) $parts['port'] === 443)
+                && ($host === 'your-objectstorage.com' || str_ends_with($host, '.your-objectstorage.com'))
+                && filter_var($host, FILTER_VALIDATE_IP) === false;
+        }
+
+        return in_array($scheme, ['http', 'https'], true)
+            && (! isset($parts['port']) || in_array((int) $parts['port'], [80, 443, 9000, 9001], true));
     }
 
     private function auditValue(mixed $value): ?string

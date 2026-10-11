@@ -71,6 +71,12 @@ enum JobType: string
         return in_array($this, [self::UpdatePlugin, self::UpdateTheme, self::UpdateCore, self::Restore, ...self::securityChanges()], true);
     }
 
+    /** Jobs safe to poll while the SaaS is in platform recovery mode. */
+    public function isSafeDuringPlatformRecovery(): bool
+    {
+        return in_array($this, [self::GetInventory, self::SiteHealth, self::LicenseCheck], true);
+    }
+
     /** @return list<self> Security jobs that change a file or plugin on the site. */
     public static function securityChanges(): array
     {

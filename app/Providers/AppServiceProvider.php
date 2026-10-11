@@ -21,6 +21,8 @@ use App\Operator\Permission;
 use App\Owner\IntegrationCredentials;
 use App\Owner\OwnerAbility;
 use App\Owner\OwnerSettings;
+use App\Platform\DisasterRecovery\PlatformBackupS3BucketProbe;
+use App\Platform\DisasterRecovery\PlatformBackupS3BucketProber;
 use App\Pricing\PricingCatalog;
 use App\Pricing\PricingOverrides;
 use App\Security\EngineScanner;
@@ -46,6 +48,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        $this->app->bind(PlatformBackupS3BucketProber::class, PlatformBackupS3BucketProbe::class);
         $this->app->bind(VatNumberProvider::class, ViesSoapProvider::class);
         $this->app->bind(InvoiceProvider::class, fn ($app) => new SzamlazzDryRunProvider($app->make(SzamlazzResponseParser::class)));
         $this->app->bind(InvoiceSubmissionProvider::class, SzamlazzAgentProvider::class);
@@ -192,6 +195,9 @@ class AppServiceProvider extends ServiceProvider
             Limit::perMinute(20)->by('owner-sensitive:'.$request->user()?->id),
             Limit::perHour(200)->by('owner-sensitive:'.$request->user()?->id),
         ]);
+
+        RateLimiter::for('owner-platform-backup', fn (Request $request) => Limit::perHour(2)->by('owner-platform-backup:'.$request->user('owner')?->id));
+        RateLimiter::for('owner-platform-s3-probe', fn (Request $request) => Limit::perMinute(2)->by('owner-platform-s3-probe:'.$request->user('owner')?->id));
         // Calls that reach Stripe or a website: fewer.
         RateLimiter::for('owner-external', fn (Request $request) => Limit::perMinute(5)->by('owner-external:'.$request->user()?->id));
         RateLimiter::for('owner-settings-mail', fn (Request $request) => [

@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\DB;
 /** Fixed, application-supported service credentials. Values are never returned to views. */
 final class IntegrationCredentials
 {
-    /** @var array<string, array{label: string, config: list<string>, runtime_supported?: bool, description_key?: string, credential_label_key?: string, save_label_key?: string, replace_label_key?: string, clear_label_key?: string, provider_id?: string}> */
+    /** @var array<string, array{label: string, config: list<string>, runtime_supported?: bool, runtime_resolved?: bool, description_key?: string, credential_label_key?: string, save_label_key?: string, replace_label_key?: string, clear_label_key?: string, provider_id?: string}> */
     public const FIELDS = [
         'stripe_publishable' => ['label' => 'Stripe publishable key', 'config' => ['services.stripe.key']],
         'stripe_secret' => ['label' => 'Stripe secret key', 'config' => ['services.stripe.secret']],
@@ -16,6 +16,8 @@ final class IntegrationCredentials
         'cloudflare_api_token' => ['label' => 'Cloudflare API token', 'config' => ['services.cloudflare.api_token']],
         's3_access' => ['label' => 'S3-compatible storage access key (Hetzner)', 'config' => ['backup.providers.s3.key']],
         's3_secret' => ['label' => 'S3-compatible storage secret key (Hetzner)', 'config' => ['backup.providers.s3.secret']],
+        'platform_backup_s3_access_key' => ['label' => 'Platform Backup S3 access key', 'config' => ['filesystems.disks.platform_backups.key'], 'runtime_resolved' => true, 'description_key' => 'owner.integrations.platform_backup_s3.description'],
+        'platform_backup_s3_secret_key' => ['label' => 'Platform Backup S3 secret key', 'config' => ['filesystems.disks.platform_backups.secret'], 'runtime_resolved' => true],
         's3_sse_c' => ['label' => 'S3 SSE-C encryption key', 'config' => ['backup.providers.s3.sse_customer_key']],
         'smtp_password' => ['label' => 'SMTP password', 'config' => ['mail.mailers.smtp.password']],
         'postmark' => ['label' => 'Postmark API key', 'runtime_supported' => false, 'config' => ['services.postmark.key']],
@@ -74,6 +76,30 @@ final class IntegrationCredentials
         DB::table('integration_credentials')->where('id', $id)->delete();
     }
 
+    /** Resolve a fixed credential at operation time, preferring its encrypted Owner value. */
+    public function resolve(string $id): ?string
+    {
+        abort_unless(isset(self::FIELDS[$id]), 404);
+
+        $stored = DB::table('integration_credentials')->where('id', $id)->value('value');
+        if (is_string($stored)) {
+            try {
+                return Crypt::decryptString($stored);
+            } catch (\Throwable $exception) {
+                throw new \RuntimeException('A stored integration credential cannot be decrypted. Verify that APP_KEY has not changed.', previous: $exception);
+            }
+        }
+
+        foreach (self::FIELDS[$id]['config'] as $path) {
+            $value = config($path);
+            if (is_string($value) && $value !== '') {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
     /** Apply stored values only to the fixed config paths; called at runtime, never when building config cache. */
     public function apply(): void
     {
@@ -87,7 +113,7 @@ final class IntegrationCredentials
 
         foreach (DB::table('integration_credentials')->get(['id', 'value']) as $credential) {
             $field = self::FIELDS[$credential->id] ?? null;
-            if (! $field) {
+            if (! $field || ($field['runtime_resolved'] ?? false)) {
                 continue;
             }
 

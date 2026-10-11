@@ -79,6 +79,9 @@ final class OwnerSettingsController extends Controller
     public function update(string $section, Request $request, OwnerSettings $settings, SzamlazzBillingSettings $billingSettings): RedirectResponse
     {
         abort_unless(in_array($section, OwnerSettings::GROUPS, true), 404);
+        if ($section === 'backups') {
+            return back()->withErrors(['settings' => __('owner.settings.validation.read_only')])->withInput([]);
+        }
         try {
             if ($section === 'billing_tax') {
                 $billingSettings->publish((array) $request->input('settings', []), $request->user('owner'));

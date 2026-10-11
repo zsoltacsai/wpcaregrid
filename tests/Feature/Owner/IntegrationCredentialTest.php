@@ -7,6 +7,7 @@ use App\Models\Customer;
 use App\Models\User;
 use App\Operator\Permission;
 use App\Owner\IntegrationCredentials;
+use App\Platform\DisasterRecovery\PlatformBackupStorage;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -95,6 +96,134 @@ class IntegrationCredentialTest extends TestCase
             ->assertOk()
             ->assertSee(__('owner.integrations.environment_managed'))
             ->assertDontSee($secret);
+    }
+
+    public function test_app_key_readiness_shows_only_status_and_never_the_key_or_derived_value(): void
+    {
+        $this->asOwner();
+        $key = str_repeat('APP_KEY_SECRET_MARKER', 2);
+        $key = substr($key, 0, 32);
+        config(['app.key' => $key]);
+
+        $this->get(route('owner.integrations.index'))
+            ->assertOk()
+            ->assertSee(__('owner.integrations.app_key.configured'))
+            ->assertDontSee($key)
+            ->assertDontSee(hash('sha256', $key));
+
+        config(['app.key' => null]);
+        $this->get(route('owner.integrations.index'))
+            ->assertOk()
+            ->assertSee(__('owner.integrations.app_key.missing'))
+            ->assertSee(__('owner.integrations.app_key.missing_warning'))
+            ->assertDontSee($key);
+    }
+
+    public function test_app_key_is_not_an_owner_credential_field_or_audited_value(): void
+    {
+        $this->asOwner();
+        $key = 'base64:APP_KEY_MUST_NOT_BE_ACCEPTED';
+
+        $this->get(route('owner.integrations.index'))->assertOk()
+            ->assertDontSee('name="app_key"', false)
+            ->assertDontSee($key);
+        $this->post(route('owner.integrations.store'), ['id' => 'app_key', 'value' => $key])
+            ->assertSessionHasErrors('id');
+
+        $this->assertDatabaseMissing('integration_credentials', ['id' => 'app_key']);
+        $this->assertDatabaseMissing('admin_audit_events', ['event' => 'integration_credential.updated']);
+        $this->assertStringNotContainsString($key, json_encode(AdminAuditEvent::query()->get()->toArray()));
+    }
+
+    public function test_platform_backup_credentials_are_dedicated_encrypted_and_resolved_fresh_for_each_operation(): void
+    {
+        $this->asOwner();
+        config([
+            'platform_backup.storage_driver' => 's3',
+            'filesystems.disks.platform_backups.driver' => 's3',
+            'filesystems.disks.platform_backups.endpoint' => 'https://fsn1.your-objectstorage.com',
+            'filesystems.disks.platform_backups.region' => 'fsn1',
+            'filesystems.disks.platform_backups.bucket' => 'm9-platform-test-bucket',
+            'filesystems.disks.platform_backups.key' => 'platform-env-access',
+            'filesystems.disks.platform_backups.secret' => 'platform-env-secret',
+            'backup.providers.s3.key' => 'customer-access-must-not-be-used',
+            'backup.providers.s3.secret' => 'customer-secret-must-not-be-used',
+            'owner_integration_credentials.environment_fallbacks.platform_backup_s3_access_key' => true,
+            'owner_integration_credentials.environment_fallbacks.platform_backup_s3_secret_key' => true,
+        ]);
+        $credentials = app(IntegrationCredentials::class);
+        $accessKey = 'm9-platform-owner-access-'.str_repeat('a', 24);
+        $secretKey = 'm9-platform-owner-secret-'.str_repeat('b', 24);
+        $replacement = 'm9-platform-owner-replacement-'.str_repeat('c', 20);
+
+        $this->get(route('owner.integrations.index'))
+            ->assertOk()
+            ->assertSee(__('owner.integrations.platform_backup_s3.title'))
+            ->assertSee(__('owner.integrations.platform_backup_s3.description'));
+        $this->post(route('owner.integrations.store'), ['id' => 'platform_backup_s3_access_key', 'value' => $accessKey])
+            ->assertRedirect(route('owner.integrations.index'))
+            ->assertDontSee($accessKey);
+        $this->post(route('owner.integrations.store'), ['id' => 'platform_backup_s3_secret_key', 'value' => $secretKey])
+            ->assertRedirect(route('owner.integrations.index'))
+            ->assertDontSee($secretKey);
+
+        foreach ([
+            'platform_backup_s3_access_key' => $accessKey,
+            'platform_backup_s3_secret_key' => $secretKey,
+        ] as $id => $plain) {
+            $stored = DB::table('integration_credentials')->where('id', $id)->sole()->value;
+            $this->assertNotSame($plain, $stored);
+            $this->assertSame($plain, Crypt::decryptString($stored));
+            $this->assertStringNotContainsString($plain, (string) $stored);
+        }
+
+        // The generic boot-time credential applier must not freeze platform secrets
+        // into config; the dedicated resolver reads the current encrypted row.
+        $credentials->apply();
+        $this->assertSame('platform-env-access', config('filesystems.disks.platform_backups.key'));
+        $this->assertSame('platform-env-secret', config('filesystems.disks.platform_backups.secret'));
+
+        $configuration = app(PlatformBackupStorage::class)->configuration();
+        $this->assertSame($accessKey, $configuration['key']);
+        $this->assertSame($secretKey, $configuration['secret']);
+        $this->assertNotSame(config('backup.providers.s3.key'), $configuration['key']);
+        $this->assertNotSame(config('backup.providers.s3.secret'), $configuration['secret']);
+
+        $this->post(route('owner.integrations.store'), ['id' => 'platform_backup_s3_access_key', 'value' => $replacement])
+            ->assertRedirect(route('owner.integrations.index'))
+            ->assertDontSee($replacement);
+        $this->assertSame($replacement, app(PlatformBackupStorage::class)->configuration()['key']);
+        $this->get(route('owner.integrations.index'))->assertDontSee($accessKey)->assertDontSee($secretKey)->assertDontSee($replacement);
+
+        $this->delete(route('owner.integrations.destroy', 'platform_backup_s3_access_key'))
+            ->assertRedirect(route('owner.integrations.index'));
+        $this->assertSame('platform-env-access', app(PlatformBackupStorage::class)->configuration()['key']);
+        $this->assertSame(['owner_managed' => false, 'environment_fallback' => true], $credentials->configured()['platform_backup_s3_access_key']);
+        $this->assertDatabaseHas('admin_audit_events', ['event' => 'integration_credential.cleared', 'subject_key' => 'platform_backup_s3_access_key']);
+        $this->assertDatabaseHas('integration_credentials', ['id' => 'platform_backup_s3_secret_key']);
+    }
+
+    public function test_customer_s3_credentials_cannot_satisfy_missing_platform_backup_credentials(): void
+    {
+        config([
+            'platform_backup.storage_driver' => 's3',
+            'filesystems.disks.platform_backups.driver' => 's3',
+            'filesystems.disks.platform_backups.endpoint' => 'https://fsn1.your-objectstorage.com',
+            'filesystems.disks.platform_backups.region' => 'fsn1',
+            'filesystems.disks.platform_backups.bucket' => 'm9-platform-test-bucket',
+            'filesystems.disks.platform_backups.key' => null,
+            'filesystems.disks.platform_backups.secret' => null,
+            'backup.providers.s3.key' => 'customer-access',
+            'backup.providers.s3.secret' => 'customer-secret',
+        ]);
+
+        $this->assertFalse(app(PlatformBackupStorage::class)->configured());
+        try {
+            app(PlatformBackupStorage::class)->configuration();
+            $this->fail('Customer backup credentials must not satisfy the platform destination.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('Dedicated platform backup S3 credentials are not configured.', $exception->getMessage());
+        }
     }
 
     public function test_smtp_environment_fallback_owner_override_and_clear_use_the_runtime_mailer_config(): void
@@ -306,6 +435,9 @@ class IntegrationCredentialTest extends TestCase
         foreach (IntegrationCredentials::FIELDS as $id => $field) {
             $value = 'test-only-'.str_pad((string) count($expected), 48, 'x');
             $credentials->store($id, $value);
+            if ($field['runtime_resolved'] ?? false) {
+                continue;
+            }
             foreach ($field['config'] as $path) {
                 $expected[$path] = $value;
             }
@@ -328,8 +460,11 @@ class IntegrationCredentialTest extends TestCase
             $this->actingAs($user, 'owner');
             $this->get(route('owner.integrations.index'))->assertRedirect(route('owner.login'));
             $this->post(route('owner.integrations.store'), ['id' => 'stripe_secret', 'value' => $secret])->assertRedirect(route('owner.login'));
+            $this->post(route('owner.integrations.store'), ['id' => 'platform_backup_s3_secret_key', 'value' => $secret])->assertRedirect(route('owner.login'));
             $this->delete(route('owner.integrations.destroy', 'stripe_secret'))->assertRedirect(route('owner.login'));
+            $this->delete(route('owner.integrations.destroy', 'platform_backup_s3_secret_key'))->assertRedirect(route('owner.login'));
             $this->assertDatabaseMissing('integration_credentials', ['id' => 'stripe_secret']);
+            $this->assertDatabaseMissing('integration_credentials', ['id' => 'platform_backup_s3_secret_key']);
             auth('owner')->logout();
         }
     }

@@ -18,6 +18,7 @@
         ['route' => 'owner.content.index', 'active' => 'owner.content.*', 'label' => __('owner.nav.content'), 'icon' => 'list'],
         ['route' => 'owner.seo.index', 'active' => 'owner.seo.*', 'label' => __('owner.nav.seo'), 'icon' => 'search'],
         ['route' => 'owner.system', 'active' => 'owner.system', 'label' => __('owner.nav.system'), 'icon' => 'cog'],
+        ['route' => 'owner.platform-backups.index', 'active' => 'owner.platform-backups.*', 'label' => __('owner.nav.platform_backups'), 'icon' => 'shield'],
         ['route' => 'owner.settings.index', 'active' => 'owner.settings.*', 'label' => __('owner.nav.settings'), 'icon' => 'cog'],
         ['route' => 'owner.integrations.index', 'active' => 'owner.integrations.*', 'label' => __('owner.nav.integrations'), 'icon' => 'key'],
         ['route' => 'owner.dns.cloudflare.index', 'active' => 'owner.dns.cloudflare.*', 'label' => __('owner.nav.dns'), 'icon' => 'globe'],

@@ -20,6 +20,7 @@ final class AdminAudit
         'price.created', 'price.updated', 'price.published', 'price.draft_discarded',
         'customer.updated', 'customer.vat_rechecked', 'customer.vat_review_resolved',
         'synthetic_fixture.provisioned',
+        'platform_backup.manual_requested', 'platform_backup.configuration_updated', 'platform_backup.disabled', 'platform_backup.escrow_attested', 'platform_backup.escrow_revoked', 'platform_backup.s3_connection_tested',
         'operator.invited', 'operator.invitation_resent', 'operator.permissions_changed', 'operator.disabled', 'operator.enabled',
         'stripe.verified',
         'integration_credential.updated', 'integration_credential.cleared',

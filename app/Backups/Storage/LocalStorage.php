@@ -6,7 +6,7 @@ namespace App\Backups\Storage;
  * A directory on the WP CareGrid server. For development and tests only:
  * it is not remote storage and must not be used in production.
  */
-final class LocalStorage implements BackupStorage
+final class LocalStorage implements IncompleteUploadListable, ListableBackupStorage
 {
     use HashesStreams;
 
@@ -71,6 +71,53 @@ final class LocalStorage implements BackupStorage
         }
         @rmdir(dirname($path));
         @rmdir(dirname($path, 2));
+    }
+
+    public function listKeys(): iterable
+    {
+        if (! is_dir($this->root)) {
+            return [];
+        }
+        $keys = [];
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($this->root, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::LEAVES_ONLY,
+        );
+        foreach ($iterator as $file) {
+            if (! $file->isFile() || $file->isLink()) {
+                continue;
+            }
+            $key = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen(rtrim($this->root, DIRECTORY_SEPARATOR)) + 1));
+            try {
+                $keys[] = ObjectKey::assert($key);
+            } catch (\InvalidArgumentException) {
+                // Unknown files are deliberately not surfaced as backup objects.
+            }
+        }
+
+        return $keys;
+    }
+
+    public function listIncompleteUploads(): iterable
+    {
+        if (! is_dir($this->root)) {
+            return [];
+        }
+        $uploads = [];
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($this->root, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::LEAVES_ONLY,
+        );
+        foreach ($iterator as $file) {
+            if ($file->isFile() && ! $file->isLink() && str_ends_with($file->getFilename(), '.part')) {
+                $uploads[] = [
+                    'object_key' => str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen(rtrim($this->root, DIRECTORY_SEPARATOR)) + 1)),
+                    'initiated_at' => date(DATE_ATOM, $file->getMTime()),
+                ];
+            }
+        }
+
+        return $uploads;
     }
 
     private function path(string $key): string

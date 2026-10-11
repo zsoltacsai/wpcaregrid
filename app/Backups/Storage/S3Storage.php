@@ -18,7 +18,7 @@ use Aws\S3\S3Client;
  * - Larger objects are uploaded in parts. S3 then only knows a checksum of
  *   checksums, so verification streams the object back and hashes it.
  */
-final class S3Storage implements BackupStorage
+final class S3Storage implements IncompleteUploadListable, ListableBackupStorage
 {
     use HashesStreams;
 
@@ -130,6 +130,60 @@ final class S3Storage implements BackupStorage
         } catch (AwsException $e) {
             throw $this->unavailable($e);
         }
+    }
+
+    public function listKeys(): iterable
+    {
+        $providerPrefix = trim((string) ($this->config['prefix'] ?? ''), '/');
+        $params = ['Bucket' => $this->config['bucket']];
+        if ($providerPrefix !== '') {
+            $params['Prefix'] = $providerPrefix.'/';
+        }
+        $keys = [];
+        try {
+            foreach ($this->client()->getPaginator('ListObjectsV2', $params) as $page) {
+                foreach ($page['Contents'] ?? [] as $object) {
+                    $key = (string) ($object['Key'] ?? '');
+                    if ($providerPrefix !== '') {
+                        $key = substr($key, strlen($providerPrefix) + 1);
+                    }
+                    try {
+                        $keys[] = ObjectKey::assert($key);
+                    } catch (\InvalidArgumentException) {
+                        // Unrecognized keys are not treated as backup objects and are never modified.
+                    }
+                }
+            }
+        } catch (AwsException $e) {
+            throw $this->unavailable($e);
+        }
+
+        return $keys;
+    }
+
+    public function listIncompleteUploads(): iterable
+    {
+        $providerPrefix = trim((string) ($this->config['prefix'] ?? ''), '/');
+        $params = ['Bucket' => $this->config['bucket']];
+        if ($providerPrefix !== '') {
+            $params['Prefix'] = $providerPrefix.'/';
+        }
+        $uploads = [];
+        try {
+            foreach ($this->client()->getPaginator('ListMultipartUploads', $params) as $page) {
+                foreach ($page['Uploads'] ?? [] as $upload) {
+                    $key = (string) ($upload['Key'] ?? '');
+                    if ($providerPrefix !== '') {
+                        $key = substr($key, strlen($providerPrefix) + 1);
+                    }
+                    $uploads[] = ['object_key' => $key, 'initiated_at' => isset($upload['Initiated']) ? (string) $upload['Initiated'] : null];
+                }
+            }
+        } catch (AwsException $e) {
+            throw $this->unavailable($e);
+        }
+
+        return $uploads;
     }
 
     private function key(string $key): string
