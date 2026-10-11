@@ -45,3 +45,11 @@ Google Drive remains optional secondary storage. No OAuth client, consent-screen
 - Remote CI: not run.
 - Staging/production deployment or provider action: none.
 - M8 evidence and restore gates: unchanged.
+
+## 2026-10-12 guarded release status
+
+The implementation was merged and deployed to staging as `21ff3396a34c0a16ac08f38eda52c1cefb6196e3`; the exact executable candidate passed CI runs `38179799857`, `38180431165`, and `38181025531` (all five jobs). Staging SSH used strict host checking after the Owner-confirmed ED25519 fingerprint matched.
+
+The deployed Owner page currently reports the dedicated platform S3 destination and its separate platform credentials as **not configured**. The existing customer S3 credential is configured but must not be reused. No bucket probe, provider write/readback, or platform backup was run. APP_KEY is configured, but escrow and retrieval are not attested. Restore gates remain OFF; active restores, pending WebsiteJobs, and failed Laravel jobs are all zero. Both staging workers and the scheduler are healthy. The prior status above is retained as the pre-deployment snapshot; this section is the later verified state.
+
+**Next Owner actions:** provision a private platform-backup bucket and bucket-scoped credential distinct from customer storage; enter the endpoint, bucket, and new credentials directly in Owner Console → Infrastructure → Platform Backups; then test the connection. Store the current APP_KEY in an independent vault, verify retrieval, and record the non-secret attestation in the same page. Do not send any credential or APP_KEY value through chat.

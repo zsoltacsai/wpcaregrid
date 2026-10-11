@@ -57,3 +57,35 @@ No provider resources, customer data, billing, staging or production were change
 ## Closure decision
 
 **M9 is not closed yet.** Engineering changes are committed and remote CI is green, but independent APP_KEY escrow and dedicated-bucket/credential isolation remain unverified. Staging SSH identity/access is also not established. Do not enable platform backup scheduling or declare recovery readiness until these gates are evidenced.
+
+## 2026-10-12 guarded staging release update
+
+This dated addendum preserves the preceding report as historical evidence and records the later staging validation. It does not close M9.
+
+### Repository and CI
+
+- Implementation commit: `2ec891c5f49a5c28f952ee5155c1e0bf36774cbc` (`Add owner-managed platform backup destination controls`).
+- PR #2 merged into `claude/ecstatic-wozniak-oemyuf` as executable candidate `21ff3396a34c0a16ac08f38eda52c1cefb6196e3`.
+- CI run `38179799857` passed all five jobs for the exact implementation commit after the manual workflow dispatch supplied the real primary-branch base SHA. PR CI `38180431165` and primary-branch CI `38181025531` also passed all five jobs; the latter covered the exact deployed merge SHA.
+- The earlier CI dispatch `38179161870` failed only because an empty manual base input fell back to nonexistent `origin/main` in this repository. The rerun used `f007e19bde7ffbceed0f468466b3eebb72013f07`; no source workaround or check suppression was used.
+
+### SSH identity and staging deployment
+
+- Host `stg1.wpcaregrid.com`, algorithm ED25519, fingerprint `SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`.
+- Trust source: fingerprint explicitly confirmed by the Owner in this task; the SSH-presented key matched it. SSH used `StrictHostKeyChecking=yes`; no TOFU bypass was used.
+- Previous staging SHA: `f007e19bde7ffbceed0f468466b3eebb72013f07`. Deployed SHA: `21ff3396a34c0a16ac08f38eda52c1cefb6196e3`.
+- Guarded deploy completed successfully on 2026-10-11 UTC. It created and gzip-validated `/home/deploy/private-backups/wpcaregrid-pre-deploy-20261011T224501Z.sql.gz`, applied pending platform-backup migrations, rebuilt production caches, restarted only the configured Laravel workers, resumed the guarded scheduler, and passed the deployment smoke checks.
+- Staging checkout is clean at the deployed SHA. `system:check` reports application, database, queue, scheduler, Stripe, Cloudflare, backup storage, mail, and safety OK. Existing warnings remain: one website is not reporting in and no security scan has completed yet.
+- `wpcaregrid-default` and `wpcaregrid-backups` are RUNNING. Read-only state checks: `active_restores=0`, `pending_website_jobs=0`, `failed_laravel_jobs=0`; `backup.restore.enabled=false` and `synthetic_fixtures.restore_enabled=false`.
+
+### Owner Console and remaining gates
+
+- The Owner Platform Backups page loads at `/owner/infrastructure/platform-backups` and distinguishes system backups from customer-site backups.
+- The dedicated platform destination is **Not configured**; storage remains the local/test-only driver. Platform-specific access key and secret are **Not configured anywhere**. The separate customer S3-compatible credential is configured on the Service Credentials page, but it is not reused for platform backups.
+- No dedicated bucket identity/private-access check, provider connection test, synthetic upload/readback, or platform database backup was performed. The connection-test and manual-backup controls are disabled until the dedicated destination is configured. No provider resource was created or changed.
+- APP_KEY is configured, but the Owner escrow attestation is unchecked and recovery retrieval has not been verified. No key value or fingerprint was read, copied, or recorded.
+- Recovery readiness remains **Not configured**; no platform backup history exists. Scheduling remains disabled. Google Drive, automatic retention deletion, provider immutability/versioning and cross-provider replication remain deferred as previously specified.
+
+### Decision
+
+**M9 remains open — Owner action required.** The code is integrated, CI is green, and staging deployment is complete. Before the staging backup E2E can run, the Owner must provision a distinct private platform-backup bucket and separate restricted credential, enter those values directly in Owner Console → Infrastructure → Platform Backups (never chat), and verify a connection. Separately, the Owner must escrow the existing APP_KEY in an independent vault, test retrieval, then record the non-secret attestation in that page. After those actions, continue with the synthetic platform-backup write/readback/integrity/decrypt/import validation. Do not enable scheduling or declare M9 closed before all mandatory checks pass.
