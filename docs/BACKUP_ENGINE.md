@@ -73,6 +73,13 @@ Every backup also has a `manifest.json`. Every backup belongs to exactly one web
 - **Not included:** WordPress core (`wp-admin`, `wp-includes`, `wp-*.php`). Core is reinstalled for the version recorded in the manifest. Nothing outside the installation is included.
 - **Symlinks are never followed.** They are counted as skipped (`skipped.symlinks`), like excluded, too-large and unreadable files.
 
+### Restore file semantics
+
+- The restore applies regular-file bytes and creates required directories for entries allowed by `standard-1`. It does not restore file ownership, group, mode, timestamps, ACLs, or extended attributes; new/replaced files use the Connector process defaults. Existing directories are not chmodded.
+- Files created after the backup are preserved. Restore does not delete paths absent from the archive.
+- Before the database swap, the Connector builds a path-guarded file plan. Existing regular files with the same SHA-256 and existing directories that need no guaranteed metadata change are `noop`; they are not rewritten and need no parent write permission. A differing or missing destination requires the corresponding write permission and fails preflight if unavailable.
+- The plan is rechecked during file application. A path whose type or content changed since planning fails closed. Protected paths and symlinks remain outside the write path.
+
 ### Database backup
 
 - Made locally, from a second connection that uses the credentials in `wp-config.php`, inside one consistent snapshot (`START TRANSACTION WITH CONSISTENT SNAPSHOT`).

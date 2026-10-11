@@ -7,6 +7,7 @@ use WPCareGrid\Connector\Backups\BackupFailure;
 use WPCareGrid\Connector\Backups\BackupIndex;
 use WPCareGrid\Connector\Backups\DatabaseDumper;
 use WPCareGrid\Connector\Backups\Downloader;
+use WPCareGrid\Connector\Backups\FileRestorer;
 use WPCareGrid\Connector\Backups\FilePolicy;
 use WPCareGrid\Connector\Backups\Maintenance;
 use WPCareGrid\Connector\Backups\PathGuard;
@@ -156,6 +157,211 @@ final class RestoreTest extends TestCase
         }
     }
 
+    public function test_identical_file_in_unwritable_parent_is_a_noop_and_full_restore_succeeds(): void
+    {
+        $this->requires_mysql();
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Unix directory write permissions are required.');
+        }
+
+        $directory = WP_CONTENT_DIR.'/mu-plugins/m8-identical-protected-'.wp_generate_password(6, false);
+        $target = $directory.'/m8-safety.php';
+        $this->put($target, '<?php return "stable fixture";');
+        $this->cleanup_later($directory);
+        update_option('m8_identical_protected_marker', 'before');
+        [$backup, $objects] = $this->backup('BACKUP_FULL');
+        $before = stat($target);
+        chmod($directory, 0555);
+        clearstatcache(true, $directory);
+        if (is_writable($directory)) {
+            chmod($directory, 0755);
+            $this->markTestSkipped('The current test user can write to a mode-0555 directory.');
+        }
+
+        try {
+            update_option('m8_identical_protected_marker', 'after');
+            $result = $this->restore($backup, 'full', $objects);
+
+            $this->assertSame('success', $result['status'], wp_json_encode($result['error']));
+            $this->assertGreaterThan(0, $result['data']['restored']['file_plan']['operations']['noop'] ?? 0);
+            wp_cache_flush();
+            $this->assertSame('before', get_option('m8_identical_protected_marker'));
+            $this->assertSame('<?php return "stable fixture";', file_get_contents($target));
+            clearstatcache(true, $target);
+            $after = stat($target);
+            $this->assertSame($before['ino'], $after['ino'], 'A no-op must not replace the protected file.');
+            $this->assertSame($before['mtime'], $after['mtime'], 'A no-op must not rewrite the protected file.');
+            $this->assertFalse(is_writable($directory));
+        } finally {
+            chmod($directory, 0755);
+        }
+    }
+
+    public function test_different_file_in_unwritable_parent_fails_preflight_before_database_swap(): void
+    {
+        $this->requires_mysql();
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Unix directory write permissions are required.');
+        }
+
+        $directory = WP_CONTENT_DIR.'/mu-plugins/m8-different-protected-'.wp_generate_password(6, false);
+        $target = $directory.'/m8-safety.php';
+        $this->put($target, 'archive version');
+        $this->cleanup_later($directory);
+        update_option('m8_different_protected_marker', 'before');
+        [$backup, $objects] = $this->backup('BACKUP_FULL');
+        file_put_contents($target, 'different live version');
+        update_option('m8_different_protected_marker', 'after');
+        chmod($directory, 0555);
+        clearstatcache(true, $directory);
+        if (is_writable($directory)) {
+            chmod($directory, 0755);
+            $this->markTestSkipped('The current test user can write to a mode-0555 directory.');
+        }
+
+        try {
+            $result = $this->restore($backup, 'full', $objects);
+            $this->assertSame('failed', $result['status']);
+            $this->assertSame('RESTORE_FILES_FAILED', $result['result_code']);
+            $this->assertFalse($result['error']['details']['destructive_mutation_started']);
+            $this->assertSame('file_staging', $result['error']['details']['failure_stage']);
+            $this->assertSame('preflight', $result['error']['details']['operation']);
+            $this->assertSame('wp-content/mu-plugins/'.basename($directory).'/m8-safety.php', $result['error']['details']['relative_path']);
+            $this->assertSame('permission_denied', $result['error']['details']['error_category']);
+            $this->assertGreaterThan(0, $result['error']['details']['restore_plan']['operations']['replace'] ?? 0);
+            wp_cache_flush();
+            $this->assertSame('after', get_option('m8_different_protected_marker'));
+            $this->assertSame('different live version', file_get_contents($target));
+            $this->assertSame([], $this->temp_files());
+        } finally {
+            chmod($directory, 0755);
+        }
+    }
+
+    public function test_missing_file_in_unwritable_parent_fails_preflight_before_database_swap(): void
+    {
+        $this->requires_mysql();
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Unix directory write permissions are required.');
+        }
+
+        $directory = WP_CONTENT_DIR.'/mu-plugins/m8-missing-protected-'.wp_generate_password(6, false);
+        $target = $directory.'/m8-safety.php';
+        $this->put($target, 'archive version');
+        $this->cleanup_later($directory);
+        update_option('m8_missing_protected_marker', 'before');
+        [$backup, $objects] = $this->backup('BACKUP_FULL');
+        unlink($target);
+        update_option('m8_missing_protected_marker', 'after');
+        chmod($directory, 0555);
+        clearstatcache(true, $directory);
+        if (is_writable($directory)) {
+            chmod($directory, 0755);
+            $this->markTestSkipped('The current test user can write to a mode-0555 directory.');
+        }
+
+        try {
+            $result = $this->restore($backup, 'full', $objects);
+            $this->assertSame('failed', $result['status']);
+            $this->assertSame('RESTORE_FILES_FAILED', $result['result_code']);
+            $this->assertFalse($result['error']['details']['destructive_mutation_started']);
+            $this->assertSame('preflight', $result['error']['details']['operation']);
+            $this->assertSame('wp-content/mu-plugins/'.basename($directory).'/m8-safety.php', $result['error']['details']['relative_path']);
+            $this->assertSame('permission_denied', $result['error']['details']['error_category']);
+            $this->assertGreaterThan(0, $result['error']['details']['restore_plan']['operations']['create'] ?? 0);
+            wp_cache_flush();
+            $this->assertSame('after', get_option('m8_missing_protected_marker'));
+            $this->assertFileDoesNotExist($target);
+        } finally {
+            chmod($directory, 0755);
+        }
+    }
+
+    public function test_restore_plan_classifies_noop_replace_and_create_before_mutation(): void
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Unix directory write permissions are required.');
+        }
+
+        $folder = 'm8-plan-'.wp_generate_password(6, false);
+        $liveDirectory = WP_CONTENT_DIR.'/mu-plugins/'.$folder;
+        $liveFile = $liveDirectory.'/same.php';
+        $staging = TempDir::ensure().'/plan-'.wp_generate_uuid4();
+        $stagedDirectory = $staging.'/wp-content/mu-plugins/'.$folder;
+        wp_mkdir_p($stagedDirectory);
+        $this->cleanup_later($liveDirectory);
+        $this->cleanup_later($staging);
+        $this->put($liveFile, 'same bytes');
+        file_put_contents($stagedDirectory.'/same.php', 'same bytes');
+        chmod($liveDirectory, 0555);
+        clearstatcache(true, $liveDirectory);
+        if (is_writable($liveDirectory)) {
+            chmod($liveDirectory, 0755);
+            $this->markTestSkipped('The current test user can write to a mode-0555 directory.');
+        }
+
+        try {
+            $restorer = new FileRestorer;
+            $restorer->preflight($staging);
+            $plan = array_column($restorer->plan(), null, 'path');
+            $same = $plan['wp-content/mu-plugins/'.$folder.'/same.php'];
+            $this->assertSame('noop', $same['operation']);
+            $this->assertSame('identical', $same['comparison']);
+            $this->assertFalse($same['mutation_required']);
+            $this->assertNull($same['permission_allowed']);
+            $this->assertSame(hash('sha256', 'same bytes'), $same['source_sha256']);
+            $this->assertSame($same['source_sha256'], $same['destination_sha256']);
+
+            file_put_contents($stagedDirectory.'/same.php', 'different archive bytes');
+            file_put_contents($stagedDirectory.'/missing.php', 'new archive bytes');
+            $blocked = new FileRestorer;
+            try {
+                $blocked->preflight($staging);
+                $this->fail('Changed and missing files under a protected parent must fail preflight.');
+            } catch (BackupFailure $failure) {
+                $this->assertSame('RESTORE_FILES_FAILED', $failure->error_code);
+                $this->assertSame('preflight', $failure->details['operation']);
+                $this->assertSame('permission_denied', $failure->details['error_category']);
+            }
+
+            $blockedPlan = array_column($blocked->plan(), null, 'path');
+            $replace = $blockedPlan['wp-content/mu-plugins/'.$folder.'/same.php'];
+            $create = $blockedPlan['wp-content/mu-plugins/'.$folder.'/missing.php'];
+            $this->assertSame('replace', $replace['operation']);
+            $this->assertTrue($replace['mutation_required']);
+            $this->assertFalse($replace['permission_allowed']);
+            $this->assertSame('permission_denied', $replace['failure_reason']);
+            $this->assertSame('create', $create['operation']);
+            $this->assertTrue($create['mutation_required']);
+            $this->assertFalse($create['permission_allowed']);
+            $this->assertSame('permission_denied', $create['failure_reason']);
+            $this->assertSame('same bytes', file_get_contents($liveFile), 'Planning never mutates the live file.');
+            $this->assertFileDoesNotExist($liveDirectory.'/missing.php');
+        } finally {
+            chmod($liveDirectory, 0755);
+        }
+    }
+
+    public function test_writable_identical_file_is_not_rewritten(): void
+    {
+        $target = WP_CONTENT_DIR.'/uploads/m8-identical-writable-'.wp_generate_password(6, false).'.txt';
+        $this->put($target, 'unchanged bytes');
+        [$backup, $objects] = $this->backup('BACKUP_FILES');
+        chmod($target, 0600);
+        clearstatcache(true, $target);
+        $before = stat($target);
+
+        $result = $this->restore($backup, 'files', $objects);
+
+        $this->assertSame('success', $result['status'], wp_json_encode($result['error']));
+        $this->assertGreaterThan(0, $result['data']['restored']['file_plan']['operations']['noop'] ?? 0);
+        clearstatcache(true, $target);
+        $after = stat($target);
+        $this->assertSame($before['ino'], $after['ino']);
+        $this->assertSame($before['mtime'], $after['mtime']);
+        $this->assertSame(0600, $after['mode'] & 0777, 'File modes are not restored; a no-op leaves the live mode untouched.');
+    }
+
     public function test_full_restore_matches_a_deterministic_filesystem_manifest_and_is_idempotent(): void
     {
         $this->requires_mysql();
@@ -292,6 +498,7 @@ final class RestoreTest extends TestCase
         wp_cache_flush();
         $this->assertSame('full-before', get_option('caregrid_restore_marker'));
         $this->assertSame('full v1', file_get_contents(WP_CONTENT_DIR.'/uploads/restore-me/full.txt'));
+        $this->assertGreaterThan(0, $result['data']['restored']['files']['files']);
     }
 
     public function test_only_backups_this_site_made_are_restored(): void

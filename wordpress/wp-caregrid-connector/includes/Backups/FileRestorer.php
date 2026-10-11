@@ -18,7 +18,18 @@ use WPCareGrid\Connector\Core\Lock;
  */
 final class FileRestorer
 {
-    public array $stats = ['files' => 0, 'dirs' => 0, 'skipped' => 0, 'unsafe' => 0];
+    public array $stats = ['files' => 0, 'dirs' => 0, 'noop' => 0, 'skipped' => 0, 'unsafe' => 0];
+
+    /** @var list<array{path: string, operation: string, destination_type: string, exists: bool, comparison: string, mutation_required: bool, permission_allowed: ?bool, failure_reason: ?string, source_sha256?: string, destination_sha256?: string}> */
+    private array $restore_plan = [];
+
+    /** @var array<string, array> */
+    private array $plan_by_path = [];
+
+    private bool $plan_ready = false;
+
+    /** @var array<string, true> */
+    private array $visited = [];
 
     public function extract(string $archive, string $staging): void
     {
@@ -51,16 +62,66 @@ final class FileRestorer
 
     public function apply(string $staging): void
     {
-        $this->copy_tree($staging, '');
+        if (! $this->plan_ready) {
+            throw new BackupFailure('RESTORE_PLAN_MISSING', 'The restore plan was not prepared.');
+        }
+
+        $this->visited = [];
+        $this->apply_tree($staging, '');
+        foreach ($this->restore_plan as $entry) {
+            if ($entry['operation'] !== 'skip' && ! isset($this->visited[$entry['path']])) {
+                throw $this->apply_failure('apply_plan', $entry['path'], 'restore_plan_changed');
+            }
+        }
     }
 
     /** Refuse known destination conflicts before RestoreHandler swaps database tables. */
     public function preflight(string $staging): void
     {
-        $this->check_tree($staging, '');
+        $this->restore_plan = [];
+        $this->plan_by_path = [];
+        $this->plan_ready = false;
+        $this->plan_tree($staging, '');
+        usort($this->restore_plan, static fn (array $left, array $right): int => strcmp($left['path'], $right['path']));
+        $this->plan_by_path = array_column($this->restore_plan, null, 'path');
+        $this->plan_ready = true;
+
+        foreach ($this->restore_plan as $entry) {
+            if ($entry['failure_reason'] !== null && $entry['mutation_required']) {
+                if ($entry['failure_reason'] === 'unsafe_parent') {
+                    throw new BackupFailure('UNSAFE_PATH', 'An unsafe restore destination was refused.', [
+                        'operation' => 'preflight',
+                        'relative_path' => $entry['path'],
+                        'error_category' => 'unsafe_parent',
+                        'restore_plan' => $this->plan_summary(),
+                    ]);
+                }
+                throw new BackupFailure('RESTORE_FILES_FAILED', 'A file could not be restored.', [
+                    'operation' => 'preflight',
+                    'relative_path' => $entry['path'],
+                    'error_category' => $entry['failure_reason'],
+                    'restore_plan' => $this->plan_summary(),
+                ]);
+            }
+        }
     }
 
-    private function check_tree(string $staging, string $relative): void
+    /** @return list<array> */
+    public function plan(): array
+    {
+        return $this->restore_plan;
+    }
+
+    /** @return array{entries: int, operations: array<string, int>} */
+    public function plan_summary(): array
+    {
+        $operations = array_count_values(array_column($this->restore_plan, 'operation'));
+        ksort($operations, SORT_STRING);
+
+        return ['entries' => count($this->restore_plan), 'operations' => $operations];
+    }
+
+    private function plan_tree(string $staging, string $relative, bool $forceSkip = false): void
     {
         $dir = $relative === '' ? $staging : $staging.'/'.$relative;
 
@@ -74,96 +135,244 @@ final class FileRestorer
             $target = FilePolicy::restore_target($entry);
 
             if (is_dir($source)) {
-                if ($target !== null && ! is_link($target)) {
-                    if ((file_exists($target) && ! is_dir($target))) {
-                        throw $this->apply_failure('preflight', $entry, 'destination_type_conflict');
-                    }
-                    if (! is_dir($target)) {
-                        $this->assert_parent_writable($target, $entry);
-                    }
+                if ($forceSkip) {
+                    $this->add_plan($entry, 'skip', 'excluded', false, 'not_applicable', false, null, 'outside_restore_scope');
+                    $this->plan_tree($staging, $entry, true);
+                    continue;
                 }
-                if ($target !== null || $entry === 'wp-content' || $entry === 'root') {
-                    $this->check_tree($staging, $entry);
+
+                if ($target === null) {
+                    $structuralRoot = in_array($entry, ['wp-content', 'root'], true);
+                    $this->add_plan($entry, $structuralRoot ? 'noop' : 'skip', $structuralRoot ? 'directory' : 'excluded', $structuralRoot, 'not_applicable', false, null, $structuralRoot ? null : 'outside_restore_scope');
+                    $this->plan_tree($staging, $entry, ! $structuralRoot);
+
+                    continue;
                 }
+
+                if (is_link($target)) {
+                    $this->add_plan($entry, 'skip', 'symlink', true, 'not_checked', false, null, 'unsafe_destination');
+                    $this->plan_tree($staging, $entry, true);
+
+                    continue;
+                }
+
+                if (file_exists($target) && ! is_dir($target)) {
+                    $this->add_plan($entry, 'mkdir', 'file', true, 'type_conflict', true, false, 'destination_type_conflict');
+                    $this->plan_tree($staging, $entry);
+                    continue;
+                }
+
+                $exists = is_dir($target);
+                $operation = $exists ? 'noop' : 'mkdir';
+                [$permission, $failure] = $exists ? [null, null] : $this->parent_writable($target);
+                $this->add_plan($entry, $operation, $exists ? 'directory' : 'missing', $exists, 'not_applicable', ! $exists, $permission, $failure);
+                $this->plan_tree($staging, $entry);
 
                 continue;
             }
 
-            if ($target === null || is_link($target) || ! $this->safe($target)) {
-                continue;
-            }
-            if (file_exists($target) && ! is_file($target)) {
-                throw $this->apply_failure('preflight', $entry, 'destination_type_conflict');
-            }
-
-            $this->assert_parent_writable($target, $entry);
-        }
-    }
-
-    private function assert_parent_writable(string $target, string $relative): void
-    {
-        $parent = dirname($target);
-        if (! $this->safe($parent)) {
-            throw new BackupFailure('UNSAFE_PATH', 'An unsafe restore destination was refused.', [
-                'operation' => 'preflight',
-                'relative_path' => $relative,
-                'error_category' => 'unsafe_parent',
-            ]);
-        }
-        $ancestor = $parent;
-        while (! is_dir($ancestor)) {
-            if (is_file($ancestor) || is_link($ancestor)) {
-                throw $this->apply_failure('preflight', $relative, 'destination_not_directory');
-            }
-            $next = dirname($ancestor);
-            if ($next === $ancestor) {
-                throw $this->apply_failure('preflight', $relative, 'destination_parent_missing');
-            }
-            $ancestor = $next;
-        }
-
-        if (! is_writable($ancestor)) {
-            throw $this->apply_failure('preflight', $relative, 'permission_denied');
-        }
-    }
-
-    private function copy_tree(string $staging, string $relative): void
-    {
-        $dir = $relative === '' ? $staging : $staging.'/'.$relative;
-
-        foreach ((array) scandir($dir) as $item) {
-            if ($item === '.' || $item === '..') {
-                continue;
-            }
-
-            $entry = $relative === '' ? $item : $relative.'/'.$item;
-            $source = $dir.'/'.$item;
-            $target = FilePolicy::restore_target($entry);
-            Lock::refresh();
-
-            if (is_dir($source)) {
-                if ($target !== null && ! is_dir($target) && ! is_link($target) && $this->safe($target)) {
-                    wp_mkdir_p($target);
-                    $this->stats['dirs']++;
-                }
-                // Descend even when the directory itself maps to nothing (e.g. "root/").
-                if ($target !== null || $entry === 'wp-content' || $entry === 'root') {
-                    $this->copy_tree($staging, $entry);
-                }
-
+            if ($forceSkip) {
+                $this->add_plan($entry, 'skip', 'excluded', false, 'not_applicable', false, null, 'outside_restore_scope');
                 continue;
             }
 
             if ($target === null) {
-                $this->stats['skipped']++;
-
+                $this->add_plan($entry, 'skip', 'excluded', false, 'not_applicable', false, null, 'outside_restore_scope');
                 continue;
             }
 
             if (is_link($target) || ! $this->safe($target)) {
-                $this->stats['unsafe']++;
+                $this->add_plan($entry, 'skip', 'symlink_or_unsafe', file_exists($target) || is_link($target), 'not_checked', false, null, 'unsafe_destination');
+                continue;
+            }
+
+            if (file_exists($target) && ! is_file($target)) {
+                $this->add_plan($entry, 'replace', 'directory_or_special', true, 'type_conflict', true, false, 'destination_type_conflict');
+                continue;
+            }
+
+            $hashWarning = null;
+            $sourceHash = $this->sha256_file($source, $hashWarning);
+            if (! is_string($sourceHash)) {
+                $this->add_plan($entry, 'replace', file_exists($target) ? 'file' : 'missing', file_exists($target), 'unreadable_source', true, false, $this->error_category($hashWarning));
+                continue;
+            }
+
+            $exists = is_file($target);
+            $destinationWarning = null;
+            $destinationHash = $exists ? $this->sha256_file($target, $destinationWarning) : null;
+            if ($exists && ! is_string($destinationHash)) {
+                $this->add_plan($entry, 'replace', 'file', true, 'unreadable_destination', true, false, $this->error_category($destinationWarning), $sourceHash);
+                continue;
+            }
+
+            $same = $exists && hash_equals($sourceHash, (string) $destinationHash);
+            $operation = ! $exists ? 'create' : ($same ? 'noop' : 'replace');
+            [$permission, $failure] = $operation === 'noop' ? [null, null] : $this->parent_writable($target);
+            $this->add_plan(
+                $entry,
+                $operation,
+                $exists ? 'file' : 'missing',
+                $exists,
+                ! $exists ? 'missing' : ($same ? 'identical' : 'different'),
+                $operation !== 'noop',
+                $permission,
+                $failure,
+                $sourceHash,
+                $destinationHash
+            );
+        }
+    }
+
+    private function add_plan(
+        string $path,
+        string $operation,
+        string $destinationType,
+        bool $exists,
+        string $comparison,
+        bool $mutationRequired,
+        ?bool $permissionAllowed,
+        ?string $failureReason,
+        ?string $sourceHash = null,
+        ?string $destinationHash = null
+    ): void {
+        $item = [
+            'path' => PathGuard::relative($path),
+            'operation' => $operation,
+            'destination_type' => $destinationType,
+            'exists' => $exists,
+            'comparison' => $comparison,
+            'mutation_required' => $mutationRequired,
+            'permission_allowed' => $permissionAllowed,
+            'failure_reason' => $failureReason,
+        ];
+        if ($sourceHash !== null) {
+            $item['source_sha256'] = $sourceHash;
+        }
+        if ($destinationHash !== null) {
+            $item['destination_sha256'] = $destinationHash;
+        }
+        $this->restore_plan[] = $item;
+    }
+
+    /** @return array{?bool, ?string} */
+    private function parent_writable(string $target): array
+    {
+        $parent = dirname($target);
+        if (! $this->safe($parent)) {
+            return [false, 'unsafe_parent'];
+        }
+        $ancestor = $parent;
+        while (! is_dir($ancestor)) {
+            if (is_file($ancestor) || is_link($ancestor)) {
+                return [false, 'destination_not_directory'];
+            }
+            $next = dirname($ancestor);
+            if ($next === $ancestor) {
+                return [false, 'destination_parent_missing'];
+            }
+            $ancestor = $next;
+        }
+
+        return is_writable($ancestor) ? [true, null] : [false, 'permission_denied'];
+    }
+
+    private function apply_tree(string $staging, string $relative): void
+    {
+        $dir = $relative === '' ? $staging : $staging.'/'.$relative;
+
+        foreach ((array) scandir($dir) as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+
+            $entry = $relative === '' ? $item : $relative.'/'.$item;
+            $source = $dir.'/'.$item;
+            $target = FilePolicy::restore_target($entry);
+            $plan = $this->plan_by_path[$entry] ?? null;
+            if ($plan === null) {
+                throw $this->apply_failure('apply_plan', $entry, 'restore_plan_changed');
+            }
+            $this->visited[$entry] = true;
+            Lock::refresh();
+
+            if (is_dir($source)) {
+                if ($plan['operation'] === 'skip') {
+                    $this->stats['skipped']++;
+                    if ($plan['failure_reason'] === 'unsafe_destination') {
+                        $this->stats['unsafe']++;
+                    }
+                    continue;
+                }
+                if ($target === null && in_array($entry, ['wp-content', 'root'], true) && $plan['operation'] === 'noop') {
+                    $this->stats['noop']++;
+                    $this->apply_tree($staging, $entry);
+                    continue;
+                }
+                if ($plan['operation'] === 'mkdir') {
+                    if (file_exists($target) || is_link($target)) {
+                        throw $this->apply_failure('mkdir', $entry, 'restore_plan_changed');
+                    }
+                    $warning = null;
+                    $created = $this->capture_warning(static fn () => wp_mkdir_p($target), $warning);
+                    if (! $created || ! is_dir($target) || is_link($target)) {
+                        throw $this->apply_failure('mkdir', $entry, $this->error_category($warning));
+                    }
+                    $this->stats['dirs']++;
+                } elseif ($plan['operation'] === 'noop') {
+                    if (! is_dir($target) || is_link($target)) {
+                        throw $this->apply_failure('directory_check', $entry, 'restore_plan_changed');
+                    }
+                    $this->stats['noop']++;
+                } else {
+                    throw $this->apply_failure('apply_plan', $entry, 'restore_plan_changed');
+                }
+                $this->apply_tree($staging, $entry);
 
                 continue;
+            }
+
+            if ($plan['operation'] === 'skip') {
+                $this->stats['skipped']++;
+                if ($plan['failure_reason'] === 'unsafe_destination') {
+                    $this->stats['unsafe']++;
+                }
+
+                continue;
+            }
+
+            if ($plan['operation'] === 'noop') {
+                $sourceWarning = null;
+                $sourceHash = $this->sha256_file($source, $sourceWarning);
+                $targetWarning = null;
+                $targetHash = is_file($target) && ! is_link($target) ? $this->sha256_file($target, $targetWarning) : null;
+                if (! is_string($sourceHash) || ! is_string($targetHash)
+                    || ! hash_equals((string) $plan['source_sha256'], $sourceHash)
+                    || ! hash_equals($sourceHash, $targetHash)) {
+                    throw $this->apply_failure('noop_check', $entry, 'restore_plan_changed');
+                }
+                $this->stats['noop']++;
+
+                continue;
+            }
+
+            if (! in_array($plan['operation'], ['create', 'replace'], true) || is_link($target) || ! $this->safe($target)) {
+                throw $this->apply_failure('destination_check', $entry, 'restore_plan_changed');
+            }
+            $sourceWarning = null;
+            $sourceHash = $this->sha256_file($source, $sourceWarning);
+            if (! is_string($sourceHash) || ! hash_equals((string) $plan['source_sha256'], $sourceHash)) {
+                throw $this->apply_failure('source_check', $entry, 'restore_plan_changed');
+            }
+            $exists = is_file($target);
+            $currentTargetHash = null;
+            if ($plan['operation'] === 'replace' && $exists) {
+                $targetWarning = null;
+                $currentTargetHash = $this->sha256_file($target, $targetWarning);
+            }
+            if (($plan['operation'] === 'create' && (file_exists($target) || is_link($target)))
+                || ($plan['operation'] === 'replace' && (! is_string($currentTargetHash) || ! hash_equals((string) $plan['destination_sha256'], $currentTargetHash)))) {
+                throw $this->apply_failure('destination_check', $entry, 'restore_plan_changed');
             }
 
             $this->replace_file($source, $target, $entry);
@@ -311,6 +520,13 @@ final class FileRestorer
             $warning === null || $warning === '' => 'operation_failed',
             default => 'filesystem_error',
         };
+    }
+
+    private function sha256_file(string $path, ?string &$warning): ?string
+    {
+        $hash = $this->capture_warning(static fn () => hash_file('sha256', $path), $warning);
+
+        return is_string($hash) ? $hash : null;
     }
 
     private function apply_failure(string $operation, string $relative, string $category): BackupFailure

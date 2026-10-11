@@ -178,7 +178,7 @@ final class RestoreHandler implements JobHandler
             $checks = $this->post_checks();
             $health = $this->health->run();
             $passed = ! in_array(false, array_column($checks, 'passed'), true) && $health['status'] !== 'critical';
-            $data = ['post_checks' => $checks, 'health' => $health, 'restored' => ['scope' => $payload['scope'], 'backup_uuid' => $payload['backup_uuid'], 'files' => $files?->stats], 'wordpress_version' => $this->version_on_disk(), 'destructive_mutation_started' => $destructiveMutationStarted, 'failure_stage' => $failureStage];
+            $data = ['post_checks' => $checks, 'health' => $health, 'restored' => ['scope' => $payload['scope'], 'backup_uuid' => $payload['backup_uuid'], 'files' => $files?->stats, 'file_plan' => $files?->plan_summary()], 'wordpress_version' => $this->version_on_disk(), 'destructive_mutation_started' => $destructiveMutationStarted, 'failure_stage' => $failureStage];
 
             Logger::info('restore.finished', ['restore' => $uuid, 'passed' => $passed]);
 
