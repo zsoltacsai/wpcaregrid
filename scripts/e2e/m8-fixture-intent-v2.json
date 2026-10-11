@@ -1,0 +1,126 @@
+{
+  "intent_version": 1,
+  "classification": "M8 SYNTHETIC TEST FIXTURE",
+  "url": "https://m8-e2e.staging.wpcaregrid.com/",
+  "site_uuid": "01a12784-ffc5-735b-9064-b2ccb2039ff0",
+  "connector_version": "0.4.2",
+  "theme": "twentytwentyfive",
+  "theme_version": "1.5",
+  "expected_plugins": [
+    {
+      "slug": "wp-caregrid-connector/wp-caregrid-connector.php",
+      "version": "0.4.2"
+    }
+  ],
+  "expected_tables": [
+    "m8_commentmeta",
+    "m8_comments",
+    "m8_links",
+    "m8_options",
+    "m8_postmeta",
+    "m8_posts",
+    "m8_term_relationships",
+    "m8_term_taxonomy",
+    "m8_termmeta",
+    "m8_terms",
+    "m8_usermeta",
+    "m8_users"
+  ],
+  "strict_options": [
+    "active_plugins",
+    "blog_public",
+    "blogdescription",
+    "blogname",
+    "gmt_offset",
+    "home",
+    "page_for_posts",
+    "page_on_front",
+    "permalink_structure",
+    "show_on_front",
+    "siteurl",
+    "stylesheet",
+    "template",
+    "timezone_string",
+    "wp_page_for_privacy_policy"
+  ],
+  "expected_option_values": {
+    "blogname": "WP CareGrid M8 E2E Fixture",
+    "blogdescription": "M8 VPS Baseline",
+    "wp_page_for_privacy_policy": "3"
+  },
+  "expected_content": [
+    {
+      "id": 1,
+      "type": "post",
+      "status": "publish",
+      "slug": "hello-world",
+      "content_sha256": "01a4f5d1bb06f7b58aa738268df2413b42b0aac6c5acf483268836d388d7ebdc"
+    },
+    {
+      "id": 2,
+      "type": "page",
+      "status": "publish",
+      "slug": "sample-page",
+      "content_sha256": "4a659647ca74daeab2c0a686ca8b21cb7306583a36ea139604d3565188df03c2"
+    },
+    {
+      "id": 3,
+      "type": "page",
+      "status": "draft",
+      "slug": "privacy-policy",
+      "content_sha256": "4b3875e73221a77d04ef4fecff95d3fe92d85560db400cc4e07260bb73965f20"
+    },
+    {
+      "id": 4,
+      "type": "post",
+      "status": "publish",
+      "slug": "m8-baseline-post-a",
+      "content_sha256": "fd91f3d11ed94d55c417ea43a3fd61e3be00f2aa5de4dc228205416487e2e565"
+    },
+    {
+      "id": 5,
+      "type": "post",
+      "status": "publish",
+      "slug": "m8-baseline-post-b",
+      "content_sha256": "d94b6c9b451518235c79880b64b9be31b7d0525ed44cd2ef985cac879a97009a"
+    },
+    {
+      "id": 6,
+      "type": "post",
+      "status": "publish",
+      "slug": "m8-baseline-post-c",
+      "content_sha256": "8298e1bf8a662cf7ac857bf77c6c8f72f1ea4993dd1ac82c05a8e7fdbbc0e6f8"
+    },
+    {
+      "id": 7,
+      "type": "page",
+      "status": "publish",
+      "slug": "m8-baseline-page-one",
+      "content_sha256": "e52172722ae1a984d718dc9ed92826a5c9b71a53a7bb700ddf56fc002c19221c"
+    },
+    {
+      "id": 8,
+      "type": "page",
+      "status": "publish",
+      "slug": "m8-baseline-page-two",
+      "content_sha256": "f190061bff4602446b90e89c9fb8983353b166f876ad2951347d5a3d45b363f7"
+    }
+  ],
+  "expected_media": [
+    {
+      "path": "m8-e2e/m8-included-a.txt",
+      "size": 33,
+      "sha256": "82065876288885a4bd917211054fc79bbabec73c43867fb5ae03da3dae8fd14a"
+    },
+    {
+      "path": "m8-e2e/m8-included-b.txt",
+      "size": 33,
+      "sha256": "5da3865744361759eb4b5fdf57133bb8fd91c9a919507358896442fb7def1ba1"
+    },
+    {
+      "path": "m8-e2e/m8-included-c.txt",
+      "size": 33,
+      "sha256": "139c42b0798fd705f6cc23dbcff5260003ad70700fdfe716648fceb2940b132c"
+    }
+  ]
+}

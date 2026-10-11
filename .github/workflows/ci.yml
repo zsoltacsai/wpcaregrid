@@ -59,8 +59,11 @@ jobs:
 
       - name: PHP syntax (application, tests, connector)
         run: |
-          find app bootstrap config database lang routes tests wordpress/wp-caregrid-connector wordpress/tests -name '*.php' -print0 \
+          find app bootstrap config database lang routes tests scripts/e2e wordpress/wp-caregrid-connector wordpress/tests -name '*.php' -print0 \
             | xargs -0 -n 50 -P 4 sh -c 'for f; do php -l "$f" > /dev/null || exit 255; done' sh
+
+      - name: M8 fixture fingerprint contract
+        run: php scripts/e2e/test-fingerprint-v2.php
 
       - name: Connector package version and source consistency
         env:
