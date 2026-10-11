@@ -5,6 +5,7 @@ namespace App\Console\Commands\Platform;
 use App\Events\Platform\PlatformRecoverySignal;
 use App\Models\PlatformDatabaseBackup;
 use App\Platform\DisasterRecovery\PlatformBackupCryptography;
+use App\Platform\DisasterRecovery\PlatformBackupStorage;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
@@ -15,7 +16,7 @@ final class ReconcilePlatformDatabaseBackups extends Command
 
     protected $description = 'Read-only reconciliation of platform database backup records and stored artifacts.';
 
-    public function handle(PlatformBackupCryptography $cryptography): int
+    public function handle(PlatformBackupCryptography $cryptography, PlatformBackupStorage $platformStorage): int
     {
         $report = ['generated_at' => now()->toIso8601String(), 'mode' => 'read-only', 'disks' => [], 'anomalies' => []];
         $diskNames = PlatformDatabaseBackup::query()->distinct()->pluck('storage_disk')
@@ -26,7 +27,7 @@ final class ReconcilePlatformDatabaseBackups extends Command
 
         foreach ($diskNames as $diskName) {
             try {
-                $disk = Storage::disk($diskName);
+                $disk = $diskName === 'platform_backups' ? $platformStorage->disk() : Storage::disk($diskName);
                 $prefix = trim((string) config('platform_backup.prefix'), '/');
                 $listed = array_fill_keys($disk->allFiles($prefix), true);
                 $expected = [];

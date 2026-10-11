@@ -9,6 +9,17 @@ return [
         'pairing_code_expires' => 'Lejárat: :time.',
     ],
     'integrations' => [
+        'app_key' => [
+            'title' => 'Alkalmazástitkosítási kulcs (APP_KEY)',
+            'configured' => 'Beállítva. Az érték itt szándékosan nem jelenik meg.',
+            'missing' => 'KRITIKUS — Hiányzik',
+            'missing_warning' => 'A titkosított szolgáltatói hitelesítő adatok és a katasztrófa-helyreállítás nem tekinthetők késznek. Ne hozz létre új kulcsot a böngészőből.',
+            'never_displayed' => 'Csak a beállítottság látható. A kulcs, részlete, hash-e és ujjlenyomata nem jelenik meg.',
+        ],
+        'platform_backup_s3' => [
+            'title' => 'Platformmentés S3-hitelesítő adatai',
+            'description' => 'Ezek a külön hitelesítő adatok kizárólag a WP CareGrid platform katasztrófa-helyreállítási adatbázismentéseihez használhatók. Nem azonosak az ügyfél-webhelyek mentési vagy más S3-integrációs adataival.',
+        ],
         'szamlazz_agent' => [
             'description' => 'A Számlázz.hu Számla Agent API-kulcs biztonságos tárolása. A mentés nem engedélyezi a számlakiállítást.',
             'credential_label' => 'Agent API-kulcs',
@@ -26,10 +37,13 @@ return [
         'last_verified' => 'Utoljára ellenőrzött mentés', 'next_scheduled' => 'Következő ütemezett időpont', 'utc' => 'UTC; az időablakok ismétlésbiztosak.',
         'disk' => 'Beállított tárhelylemez: :disk', 'rpo_notice' => 'Az egészséges állapothoz 24 órán belüli ellenőrzött mentés és tulajdonosi APP_KEY-tárolási igazolás szükséges.',
         'configuration' => 'Ütemezés és megőrzés', 'no_auto_delete' => 'A megőrzési értékek lejárati célokat határoznak meg. Az automatikus törlés ki van kapcsolva.',
+        'destination_configuration' => 'Külön platform S3-célhely', 'storage_driver' => 'Tárolási cél', 'endpoint' => 'S3-végpont', 'region' => 'S3-régió', 'bucket' => 'Privát bucket', 'path_style' => 'Path-style kérések használata',
+        'connection_test' => 'Szolgáltatói kapcsolat ellenőrzése', 'connection_not_tested' => 'A szolgáltatói kapcsolatot még nem ellenőriztük.', 'connection_outdated' => 'A célhely az utolsó ellenőrzés óta megváltozott. Ellenőrizd az aktuális célhelyet.', 'connection_passed' => 'Az S3 bucket hozzáférés-ellenőrzése sikeres. Ez a bucket elérését vizsgálja; a mentés ellenőrzése külön folyamat.', 'connection_failed' => 'Az S3 bucket hozzáférés-ellenőrzése sikertelen. A részleteket titokmentes auditbejegyzés tartalmazza.', 'connection_last' => 'Utolsó szolgáltatói ellenőrzés', 'connection_result_passed' => 'Sikeres', 'connection_result_failed' => 'Sikertelen', 'destination_must_be_disabled' => 'A célhely módosítása előtt kapcsold ki a platformmentés ütemezését.', 'destination_help' => 'Ezek a beállítások kizárólag a WP CareGrid platform adatbázismentéseire vonatkoznak. Az ügyfél-webhelyek mentési tárhelyét nem módosítják. Mentés után a célhely azonosítójának módosítása tiltott, amíg nincs ellenőrzött migrációs eljárás.',
+        'remote_storage_required' => 'Staging és production környezetben a dedikált S3-célhelyet kell használni.', 'invalid_endpoint' => 'Staging/production esetén HTTPS Hetzner Object Storage végpontot adj meg. Local/test környezetben tesztvégpont használható.', 'destination_immutable' => 'Már létezik platformmentés. A célhely nem módosítható, amíg nincs ellenőrzött migrációs eljárás.',
         'primary_frequency' => 'Elsődleges mentési gyakoriság', 'primary_enabled' => 'Ütemezett elsődleges S3-mentések engedélyezése', 'disable_warning' => 'A kikapcsolás leállítja az új ütemezéseket, de a meglévő mentéseket megőrzi.',
         'retention' => 'Megőrzési célok (automatikus törlés nélkül)', 'retention_classes' => ['daily' => 'Napi napok', 'weekly' => 'Heti hetek', 'monthly' => 'Havi hónapok'],
         'secondary_destination' => 'Opcionális Google Drive-másolat', 'drive_unavailable' => 'A Google Drive nincs csatlakoztatva vagy engedélyezve; külön OAuth-beállítást igényel.',
-        'app_key_escrow' => 'APP_KEY-helyreállítási igazolás', 'escrow_attestation' => 'Megerősítem, hogy a telepített APP_KEY jóváhagyott, független tárban van, és a helyreállítási hozzáférést ellenőriztük.',
+        'app_key_escrow' => 'APP_KEY-helyreállítási igazolás', 'app_key_status' => 'Alkalmazástitkosítási kulcs', 'app_key_missing' => 'Az APP_KEY hiányzik. Nem igazolható a külső tárolása, és a titkosított hitelesítő adatok sem tekinthetők elérhetőnek.', 'escrow_verified_by' => 'A külső kulcstárolást a(z) :owner azonosítójú tulajdonos igazolta ekkor: :at.', 'escrow_attestation' => 'Megerősítem, hogy a jelenlegi APP_KEY már független, jóváhagyott tárolóban van, a visszakeresést ellenőriztem, a kulcsot nem szabad ide beírni, elvesztése pedig visszaállíthatatlanná teheti a titkosított hitelesítő adatokat.',
         'confirmation' => 'Megerősítő kifejezés, ha szükséges', 'confirmation_help' => 'Kikapcsoláshoz: DISABLE PLATFORM BACKUPS; kulcstárolás igazolásához: APP KEY ESCROW CONFIRMED.',
         'warning_ack' => 'Tudomásul veszem, hogy a mentések kikapcsolása csökkenti a helyreállítási védelmet, a meglévő mentéseket viszont nem törli.', 'save' => 'Beállítások mentése',
         'manual_backup' => 'Kézi platform-adatbázismentés', 'manual_warning' => 'A normál, ellenőrzött mentési folyamatba helyezi a kérést. Az ismételt kérések összevonódnak.',
@@ -41,7 +55,8 @@ return [
         'run_confirmation_required' => 'A sorba állításhoz pontosan ezt írd be: RUN PLATFORM BACKUP.',
         'disable_confirmation_required' => 'Kikapcsoláshoz a pontos kifejezés és a figyelmeztetés elfogadása szükséges.',
         'escrow_confirmation_required' => 'A kulcstárolás igazolásához a pontos megerősítő kifejezés szükséges.',
-        'states' => ['healthy' => 'Egészséges', 'degraded' => 'Csökkentett', 'stale' => 'Elavult', 'unavailable' => 'Nem elérhető', 'verification_failed' => 'Ellenőrzés sikertelen', 'reconciliation_required' => 'Egyeztetés szükséges', 'not_configured' => 'Nincs beállítva', 'configured' => 'Beállítva; ellenőrzött mentésre vár'],
+        'app_key_missing' => 'Az alkalmazástitkosítási kulcs hiányzik. A meglévő infrastruktúrakulcsot biztonságosan kell visszaállítani; ezen a felületen nem hozható létre és nem cserélhető.',
+        'states' => ['healthy' => 'Egészséges', 'degraded' => 'Csökkentett', 'critical' => 'Kritikus', 'stale' => 'Elavult', 'unavailable' => 'Nem elérhető', 'verification_failed' => 'Ellenőrzés sikertelen', 'reconciliation_required' => 'Egyeztetés szükséges', 'not_configured' => 'Nincs beállítva', 'configured' => 'Beállítva; ellenőrzött mentésre vár'],
         'frequencies' => ['6h' => '6 óránként', '12h' => '12 óránként', 'daily' => 'Naponta', 'weekly' => 'Hetente'],
     ],
     'invoice_intents' => [

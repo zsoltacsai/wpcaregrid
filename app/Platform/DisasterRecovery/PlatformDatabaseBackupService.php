@@ -9,13 +9,15 @@ use App\Owner\OwnerSettings;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Symfony\Component\Process\Process;
 
 final class PlatformDatabaseBackupService
 {
-    public function __construct(private readonly PlatformBackupCryptography $cryptography) {}
+    public function __construct(
+        private readonly PlatformBackupCryptography $cryptography,
+        private readonly PlatformBackupStorage $storage,
+    ) {}
 
     public function create(string $retentionClass = 'daily'): PlatformDatabaseBackup
     {
@@ -38,15 +40,16 @@ final class PlatformDatabaseBackupService
         }
 
         $deploymentEnvironment = (string) (config('platform.deployment_environment') ?: app()->environment());
-        $backupDisk = (string) config('platform_backup.disk');
-        $configuredDiskDriver = config("filesystems.disks.{$backupDisk}.driver");
-        $declaredStorageDriver = (string) config('platform_backup.storage_driver');
+        $backupDisk = (string) config('platform_backup.disk', 'platform_backups');
+        $diskConfiguration = $this->storage->configuration();
+        $configuredDiskDriver = $diskConfiguration['driver'] ?? null;
+        $declaredStorageDriver = $this->storage->driver();
 
         if (! in_array($deploymentEnvironment, ['local', 'testing', 'staging', 'production'], true)) {
             throw new RuntimeException('Platform database backup requires an explicitly recognized deployment environment.');
         }
-        if ($configuredDiskDriver !== $declaredStorageDriver) {
-            throw new RuntimeException('Platform database backup disk driver does not match its declared storage driver.');
+        if ($backupDisk !== 'platform_backups' || $configuredDiskDriver !== $declaredStorageDriver) {
+            throw new RuntimeException('Platform backup disk does not match the dedicated platform storage configuration.');
         }
         if (in_array($deploymentEnvironment, ['staging', 'production'], true) && $configuredDiskDriver === 'local') {
             throw new RuntimeException('Deployed platform backups must use an independently managed remote storage disk.');
@@ -136,8 +139,9 @@ final class PlatformDatabaseBackupService
             if ($stream === false) {
                 throw new RuntimeException('Could not read completed platform database backup.');
             }
+            $disk = $this->storage->disk();
             try {
-                if (! Storage::disk($backup->storage_disk)->put($backup->object_key, $stream, ['visibility' => 'private'])) {
+                if (! $disk->put($backup->object_key, $stream, ['visibility' => 'private'])) {
                     throw new RuntimeException('Platform backup destination did not accept the artifact.');
                 }
             } finally {
@@ -164,7 +168,7 @@ final class PlatformDatabaseBackupService
                 'table_manifest' => $this->tableManifest($connectionName),
             ]);
             $manifest['manifest_hmac'] = $this->cryptography->signManifest($manifest, $encryption['key_id']);
-            if (! Storage::disk($backup->storage_disk)->put($backup->manifest_object_key, json_encode($manifest, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT), ['visibility' => 'private'])) {
+            if (! $disk->put($backup->manifest_object_key, json_encode($manifest, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT), ['visibility' => 'private'])) {
                 throw new RuntimeException('Platform backup destination did not accept the authenticated manifest.');
             }
 
@@ -202,7 +206,7 @@ final class PlatformDatabaseBackupService
     /** Verifies the stored bytes and gzip stream; SQL import is performed by the isolated recovery drill. */
     public function verify(PlatformDatabaseBackup $backup): bool
     {
-        $disk = Storage::disk($backup->storage_disk);
+        $disk = $this->storage->disk($backup->storage_disk);
         if (! $disk->exists($backup->object_key)) {
             $this->markVerificationFailure($backup, 'OBJECT_MISSING');
 

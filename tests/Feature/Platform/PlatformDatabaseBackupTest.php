@@ -230,12 +230,20 @@ class PlatformDatabaseBackupTest extends TestCase
         app(PlatformDatabaseBackupService::class)->create();
     }
 
-    public function test_backup_refuses_storage_driver_declaration_mismatch(): void
+    public function test_s3_platform_backup_refuses_without_dedicated_credentials(): void
     {
-        config(['platform_backup.storage_driver' => 's3']);
+        config([
+            'platform_backup.storage_driver' => 's3',
+            'filesystems.disks.platform_backups.driver' => 's3',
+            'filesystems.disks.platform_backups.endpoint' => 'https://fsn1.your-objectstorage.com',
+            'filesystems.disks.platform_backups.region' => 'fsn1',
+            'filesystems.disks.platform_backups.bucket' => 'platform-private-bucket',
+            'filesystems.disks.platform_backups.key' => null,
+            'filesystems.disks.platform_backups.secret' => null,
+        ]);
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('does not match its declared storage driver');
+        $this->expectExceptionMessage('Dedicated platform backup S3 credentials are not configured.');
         app(PlatformDatabaseBackupService::class)->create();
     }
 

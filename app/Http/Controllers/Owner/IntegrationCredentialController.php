@@ -18,6 +18,9 @@ class IntegrationCredentialController extends Controller
         return view('owner.integrations', [
             'fields' => IntegrationCredentials::FIELDS,
             'configured' => $credentials->configured(),
+            // Pass only a boolean. Never expose the configured key or a derived
+            // value from it to the view, response, audit log, or browser.
+            'appKeyConfigured' => filled(config('app.key')),
         ]);
     }
 

@@ -3,8 +3,25 @@
     <p class="mb-5 max-w-3xl text-sm text-muted">{{ __('owner.integrations.warning') }}</p>
     <p class="mb-5 max-w-3xl rounded-md border border-line bg-surface p-3 text-sm text-muted">{{ __('owner.integrations.runtime_note') }}</p>
 
+    <section class="mb-5 max-w-3xl rounded-md border {{ $appKeyConfigured ? 'border-positive/30 bg-positive/5' : 'border-danger/40 bg-danger/5' }} p-4" aria-label="{{ __('owner.integrations.app_key.title') }}">
+        <h2 class="font-semibold">{{ __('owner.integrations.app_key.title') }}</h2>
+        @if ($appKeyConfigured)
+            <p class="mt-1 text-sm">{{ __('owner.integrations.app_key.configured') }}</p>
+        @else
+            <p class="mt-1 text-sm font-semibold text-danger-ink">{{ __('owner.integrations.app_key.missing') }}</p>
+            <p class="mt-1 text-sm text-danger-ink">{{ __('owner.integrations.app_key.missing_warning') }}</p>
+        @endif
+        <p class="mt-2 text-xs text-muted">{{ __('owner.integrations.app_key.never_displayed') }}</p>
+    </section>
+
     <div class="space-y-4">
         @foreach ($fields as $id => $field)
+            @if ($id === 'platform_backup_s3_access_key')
+                <section class="rounded-md border border-primary/30 bg-primary/5 p-5">
+                    <h2 class="font-semibold">{{ __('owner.integrations.platform_backup_s3.title') }}</h2>
+                    <p class="mt-1 text-sm text-muted">{{ __('owner.integrations.platform_backup_s3.description') }}</p>
+                </section>
+            @endif
             <section class="rounded-md border border-line bg-surface p-5">
                 @php($runtimeSupported = $field['runtime_supported'] ?? true)
                 <div class="flex flex-wrap items-center justify-between gap-3">

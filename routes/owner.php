@@ -125,6 +125,7 @@ Route::prefix('owner')->name('owner.')->group(function () {
             Route::get('/', [PlatformBackupsController::class, 'index'])->name('index');
             Route::put('/settings', [PlatformBackupsController::class, 'update'])->middleware('throttle:owner-sensitive')->name('settings.update');
             Route::post('/run', [PlatformBackupsController::class, 'run'])->middleware(['throttle:owner-sensitive', 'throttle:owner-platform-backup'])->name('run');
+            Route::post('/test-connection', [PlatformBackupsController::class, 'testConnection'])->middleware(['throttle:owner-sensitive', 'throttle:owner-platform-s3-probe'])->name('test-connection');
         });
 
         // The controller validates the explicit section allowlist after auth so
