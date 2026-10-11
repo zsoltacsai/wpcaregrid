@@ -17,10 +17,14 @@ Artisan::command('inspire', function () {
 // Websites whose connector stopped reporting in.
 Schedule::command('connector:update-presence')->everyTenMinutes()->withoutOverlapping()->onOneServer();
 
-// Backups: queue due scheduled backups, time out stuck ones, apply retention.
+// Customer backups: queue due runs and time out stuck work. Platform database
+// backups use their own persisted Owner schedule and never run retention deletes.
 Schedule::command('backup:schedule')->hourly()->withoutOverlapping()->onOneServer();
 Schedule::command('backup:monitor')->everyTenMinutes()->withoutOverlapping()->onOneServer();
 Schedule::command('backup:retention')->dailyAt('03:30')->withoutOverlapping()->onOneServer();
+// Owner-managed cadence is evaluated from the database-backed settings on each
+// invocation. A unique UTC slot row bounds catch-up and prevents duplicate dispatch.
+Schedule::command('platform:database-backup-schedule')->everyTenMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer();
 
 // Admin access: unused tokens and ended sessions expire server-side.
 Schedule::command('admin-access:expire')->everyMinute()->withoutOverlapping()->onOneServer();

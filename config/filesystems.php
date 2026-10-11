@@ -61,6 +61,22 @@ return [
             'report' => false,
         ],
 
+        'platform_backups' => [
+            'driver' => env('PLATFORM_DB_BACKUP_DRIVER', 'local'),
+            'root' => env('PLATFORM_DB_BACKUP_LOCAL_ROOT', storage_path('app/private/platform-database-backups')),
+            'key' => env('PLATFORM_DB_BACKUP_S3_KEY'),
+            'secret' => env('PLATFORM_DB_BACKUP_S3_SECRET'),
+            'region' => env('PLATFORM_DB_BACKUP_S3_REGION', 'us-east-1'),
+            'bucket' => env('PLATFORM_DB_BACKUP_S3_BUCKET'),
+            'endpoint' => env('PLATFORM_DB_BACKUP_S3_ENDPOINT'),
+            'use_path_style_endpoint' => (bool) env('PLATFORM_DB_BACKUP_S3_PATH_STYLE', false),
+            'visibility' => 'private',
+            'options' => ['ServerSideEncryption' => env('PLATFORM_DB_BACKUP_S3_ENCRYPTION', 'AES256')],
+            'permissions' => ['file' => 0600, 'dir' => 0700],
+            'throw' => true,
+            'report' => false,
+        ],
+
     ],
 
     /*

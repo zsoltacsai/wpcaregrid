@@ -32,6 +32,10 @@ final class JobQueue
     {
         $payload = $type->validatePayload($payload);
 
+        if (config('platform.recovery_mode') && ! $type->isSafeDuringPlatformRecovery()) {
+            throw ConnectorError::jobNotAllowed('platform recovery mode is active');
+        }
+
         if ($reason = $this->refusal($website, $website->activeConnector, $type, $payload)) {
             throw ConnectorError::jobNotAllowed($reason);
         }
@@ -79,6 +83,13 @@ final class JobQueue
             // Pairing's initial health, inventory, and license checks use the
             // normal Connector poll. Destructive fixture jobs remain hidden.
             $query->whereIn('type', [JobType::GetInventory, JobType::SiteHealth, JobType::LicenseCheck]);
+        }
+
+        if (config('platform.recovery_mode')) {
+            $query->whereIn('type', array_map(fn (JobType $type) => $type->value, array_filter(
+                JobType::cases(),
+                fn (JobType $type) => $type->isSafeDuringPlatformRecovery(),
+            )));
         }
 
         $jobs = $query->limit($controlledExecution ? 1 : config('connector.jobs_per_poll'))->get();

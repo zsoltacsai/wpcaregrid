@@ -11,7 +11,7 @@ use phpseclib3\Net\SFTP;
  * so verification reads the object back in pieces and hashes it. Uploads
  * go to a ".part" name and are renamed when complete.
  */
-final class SftpStorage implements BackupStorage
+final class SftpStorage implements IncompleteUploadListable, ListableBackupStorage
 {
     use HashesStreams;
 
@@ -88,6 +88,94 @@ final class SftpStorage implements BackupStorage
         $sftp->delete($path, false);
         $sftp->rmdir(dirname($path));
         $sftp->rmdir(dirname($path, 2));
+    }
+
+    public function listKeys(): iterable
+    {
+        $sftp = $this->connection();
+        $root = rtrim((string) $this->config['root'], '/');
+        $keys = [];
+        $walk = function (string $directory) use (&$walk, &$keys, $sftp, $root): void {
+            $entries = $sftp->nlist($directory);
+            if (! is_array($entries)) {
+                throw new StorageUnavailable('SFTP backup listing failed.');
+            }
+            foreach ($entries as $entry) {
+                $name = is_array($entry) ? (string) ($entry['filename'] ?? '') : (string) $entry;
+                if ($name === '' || $name === '.' || $name === '..') {
+                    continue;
+                }
+                $path = $directory.'/'.$name;
+                $stat = $sftp->lstat($path);
+                if (! is_array($stat)) {
+                    continue;
+                }
+                $type = ((int) ($stat['mode'] ?? 0)) & 0170000;
+                if ($type === 0040000) {
+                    $walk($path);
+                } elseif ($type === 0100000 && str_starts_with($path, $root.'/')) {
+                    $key = substr($path, strlen($root) + 1);
+                    try {
+                        $keys[] = ObjectKey::assert($key);
+                    } catch (\InvalidArgumentException) {
+                        // Ignore files outside the documented backup object format.
+                    }
+                }
+            }
+        };
+        if ($sftp->is_dir($root)) {
+            $walk($root);
+        }
+
+        return $keys;
+    }
+
+    public function listIncompleteUploads(): iterable
+    {
+        $uploads = [];
+        foreach ($this->listRecursiveFiles() as [$path, $stat]) {
+            if (str_ends_with($path, '.part')) {
+                $uploads[] = ['object_key' => substr($path, strlen(rtrim((string) $this->config['root'], '/')) + 1), 'initiated_at' => isset($stat['mtime']) ? date(DATE_ATOM, (int) $stat['mtime']) : null];
+            }
+        }
+
+        return $uploads;
+    }
+
+    /** @return iterable<array{0: string, 1: array<string, mixed>}> */
+    private function listRecursiveFiles(): iterable
+    {
+        $sftp = $this->connection();
+        $root = rtrim((string) $this->config['root'], '/');
+        $files = [];
+        $walk = function (string $directory) use (&$walk, &$files, $sftp): void {
+            $entries = $sftp->nlist($directory);
+            if (! is_array($entries)) {
+                throw new StorageUnavailable('SFTP backup listing failed.');
+            }
+            foreach ($entries as $entry) {
+                $name = is_array($entry) ? (string) ($entry['filename'] ?? '') : (string) $entry;
+                if ($name === '' || $name === '.' || $name === '..') {
+                    continue;
+                }
+                $path = $directory.'/'.$name;
+                $stat = $sftp->lstat($path);
+                if (! is_array($stat)) {
+                    continue;
+                }
+                $type = ((int) ($stat['mode'] ?? 0)) & 0170000;
+                if ($type === 0040000) {
+                    $walk($path);
+                } elseif ($type === 0100000) {
+                    $files[] = [$path, $stat];
+                }
+            }
+        };
+        if ($sftp->is_dir($root)) {
+            $walk($root);
+        }
+
+        return $files;
     }
 
     private function path(string $key): string

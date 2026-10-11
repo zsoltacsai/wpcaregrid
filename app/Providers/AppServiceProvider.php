@@ -192,6 +192,8 @@ class AppServiceProvider extends ServiceProvider
             Limit::perMinute(20)->by('owner-sensitive:'.$request->user()?->id),
             Limit::perHour(200)->by('owner-sensitive:'.$request->user()?->id),
         ]);
+
+        RateLimiter::for('owner-platform-backup', fn (Request $request) => Limit::perHour(2)->by('owner-platform-backup:'.$request->user('owner')?->id));
         // Calls that reach Stripe or a website: fewer.
         RateLimiter::for('owner-external', fn (Request $request) => Limit::perMinute(5)->by('owner-external:'.$request->user()?->id));
         RateLimiter::for('owner-settings-mail', fn (Request $request) => [

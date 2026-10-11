@@ -12,6 +12,7 @@ use App\Http\Controllers\Owner\InvoiceIntentTaxReviewController;
 use App\Http\Controllers\Owner\LoginController;
 use App\Http\Controllers\Owner\OperatorController;
 use App\Http\Controllers\Owner\OwnerSettingsController;
+use App\Http\Controllers\Owner\PlatformBackupsController;
 use App\Http\Controllers\Owner\PricingController;
 use App\Http\Controllers\Owner\RecoveryOfferController;
 use App\Http\Controllers\Owner\SeoController;
@@ -119,6 +120,12 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::post('/seo/{section}/{locale}/discard', [ContentController::class, 'discard'])->middleware(['can:owner.seo.manage', 'throttle:owner-sensitive'])->name('seo.discard');
 
         Route::get('/system', SystemController::class)->middleware('can:owner.system.view')->name('system');
+
+        Route::prefix('infrastructure/platform-backups')->name('platform-backups.')->middleware('can:owner.platform_backups.manage')->group(function () {
+            Route::get('/', [PlatformBackupsController::class, 'index'])->name('index');
+            Route::put('/settings', [PlatformBackupsController::class, 'update'])->middleware('throttle:owner-sensitive')->name('settings.update');
+            Route::post('/run', [PlatformBackupsController::class, 'run'])->middleware(['throttle:owner-sensitive', 'throttle:owner-platform-backup'])->name('run');
+        });
 
         // The controller validates the explicit section allowlist after auth so
         // invalid section probes cannot bypass the Owner login redirect.

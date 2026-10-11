@@ -154,6 +154,7 @@ jobs:
               echo "DB_USERNAME=caregrid_ci"
               echo "DB_PASSWORD=$db_password"
               echo "DB_URL="
+              echo "M9_MYSQL_VERIFY_PASSWORD=$MYSQL_ROOT_PASSWORD"
             } >> "$GITHUB_ENV"
           fi
 
