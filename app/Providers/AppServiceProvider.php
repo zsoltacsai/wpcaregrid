@@ -15,6 +15,8 @@ use App\Invoicing\Providers\SzamlazzAgentProvider;
 use App\Invoicing\Providers\SzamlazzDryRunProvider;
 use App\Invoicing\Providers\SzamlazzResponseParser;
 use App\Models\User;
+use App\Monitoring\PublicAddressLookup;
+use App\Monitoring\SystemPublicAddressLookup;
 use App\Offers\OfferPaymentGateway;
 use App\Offers\StripeOfferPaymentGateway;
 use App\Operator\Permission;
@@ -49,6 +51,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(PlatformBackupS3BucketProber::class, PlatformBackupS3BucketProbe::class);
+        $this->app->bind(PublicAddressLookup::class, SystemPublicAddressLookup::class);
         $this->app->bind(VatNumberProvider::class, ViesSoapProvider::class);
         $this->app->bind(InvoiceProvider::class, fn ($app) => new SzamlazzDryRunProvider($app->make(SzamlazzResponseParser::class)));
         $this->app->bind(InvoiceSubmissionProvider::class, SzamlazzAgentProvider::class);

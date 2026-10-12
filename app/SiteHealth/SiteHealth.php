@@ -6,6 +6,7 @@ use App\Backups\BackupPolicy;
 use App\Backups\BackupStatus;
 use App\Connector\HealthStatus;
 use App\Connector\Presence;
+use App\Models\MonitoringResult;
 use App\Models\Website;
 
 /**
@@ -36,6 +37,22 @@ final class SiteHealth
             $this->backupsDimension($website),
             $this->updates($website),
             $this->security($website),
+            $this->monitoring($website, 'website.http', Dimension::Availability),
+            $this->monitoring($website, 'website.tls', Dimension::Tls),
+        ]);
+    }
+
+    private function monitoring(Website $website, string $checkId, Dimension $dimension): DimensionResult
+    {
+        $result = MonitoringResult::query()->where('check_id', $checkId)->where('scope', 'website')
+            ->where('subject_type', 'website')->where('subject_id', $website->uuid)->first();
+        if (! $result || $result->fresh_until?->isPast()) {
+            return new DimensionResult($dimension, HealthStatus::Unknown, 'MONITORING_NOT_FRESH');
+        }
+
+        return new DimensionResult($dimension, $result->state, $result->reason_code, [
+            'observed_at' => $result->observed_at?->toIso8601String(),
+            'fresh_until' => $result->fresh_until?->toIso8601String(),
         ]);
     }
 

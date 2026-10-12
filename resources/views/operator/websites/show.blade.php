@@ -39,6 +39,7 @@
             @if ($website->syntheticFixture)<x-ui.status-badge tone="warning">{{ __('owner.synthetic_fixture_badge') }}</x-ui.status-badge>@endif
             <x-ui.status-badge :tone="$health->tone()">{{ $health->label() }}</x-ui.status-badge>
             <x-ui.status-badge :tone="$connectorState->tone()">{{ $connectorState->label() }}</x-ui.status-badge>
+            <a class="inline-flex h-9 items-center rounded-sm border border-line px-3 text-sm font-medium hover:border-primary" href="{{ route('operator.websites.monitoring', $website) }}">{{ __('m10.site_incidents') }}</a>
         </x-slot:actions>
     </x-operator.page-header>
 

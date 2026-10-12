@@ -5,6 +5,7 @@ use App\Http\Controllers\Operator\AdminAccessController;
 use App\Http\Controllers\Operator\BackupController;
 use App\Http\Controllers\Operator\DashboardController;
 use App\Http\Controllers\Operator\LoginController;
+use App\Http\Controllers\Operator\MonitoringController;
 use App\Http\Controllers\Operator\SecurityController;
 use App\Http\Controllers\Operator\SecurityFindingController;
 use App\Http\Controllers\Operator\SecurityIncidentController;
@@ -31,6 +32,7 @@ Route::prefix('operator')->name('operator.')->group(function () {
 
         Route::get('/websites', [WebsiteController::class, 'index'])->middleware('can:operator.websites.view')->name('websites.index');
         Route::get('/websites/{website}', [WebsiteController::class, 'show'])->middleware('can:operator.websites.view')->name('websites.show');
+        Route::get('/websites/{website}/monitoring', [MonitoringController::class, 'website'])->middleware('can:operator.websites.view')->name('websites.monitoring');
         Route::post('/websites/{website}/pairing-code', [WebsiteController::class, 'pairingCode'])->middleware(['can:operator.websites.manage', 'throttle:operator-connector'])->name('websites.pairing-code');
         Route::post('/websites/{website}/disconnect', [WebsiteController::class, 'disconnect'])->middleware(['can:operator.websites.manage', 'throttle:operator-connector'])->name('websites.disconnect');
 

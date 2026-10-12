@@ -9,6 +9,8 @@ enum Dimension: string
     case Backups = 'backups';
     case Updates = 'updates';
     case Security = 'security';
+    case Availability = 'availability';
+    case Tls = 'tls';
 
     public function label(): string
     {
