@@ -1,5 +1,44 @@
 # M10 — Monitoring, Alerting & Infrastructure Health: Closure Report
 
+## Final Owner validation continuation — 2026-10-12
+
+This section supersedes the provisional status and pending-owner-action statements below. The earlier sections remain as historical evidence and are not rewritten. The live SMTP and authenticated maintenance-window gates have now passed. PR #16 still requires this final evidence update to pass exact-head CI and merge before M10 can be declared closed.
+
+**Current status:** staging validation passed; PR #16 final evidence integration is pending. **Do not declare M10 closed until PR #16 is merged and the final closure evidence is present on the primary branch.**
+
+### Release, CI, and deployment
+
+- The maintenance submit-control correction was merged through PR #17. Merge commit and resulting primary SHA: `33c961f07c541cd243a411e1310aa9236383e6fb`.
+- PR #17 exact-head CI run `38296720170` passed all five jobs. Post-merge primary CI run `38298060346` passed all five jobs, including server MySQL concurrency, server SQLite, Connector MySQL, Connector SQLite, and quality/security/build.
+- PR #16 head before this final report update: `87d0360f4e2e2287e2e4ab9958b5c087f16caf2d`; exact-head CI run `38295706375` passed all five jobs. Updating this report creates a new head and requires a new exact-head CI run before merge.
+- Staging was deployed by the guarded script to exact SHA `33c961f07c541cd243a411e1310aa9236383e6fb` using strict SSH host-key verification. The pre-deploy database backup is retained at `/home/deploy/private-backups/wpcaregrid-pre-deploy-20261012T194100Z.sql.gz`. No migration was pending. Workers restarted with new PIDs, scheduler resumed and became healthy, and deployment HTTP/security smoke checks passed. Staging checkout is detached, clean, and at the target SHA.
+- Connector remains 0.4.5. No production deployment occurred.
+
+### SMTP alert delivery
+
+- After the Owner configured SMTP through the approved credential path, the actual M10 alert outbox path delivered one opening email and one recovery email for the synthetic M8 monitor signal. Both delivery rows reached `sent` with one attempt and no failure code (opening at 19:13:04 UTC; recovery at 19:15:04 UTC).
+- The authoritative `provider.mail` observation recovered to `healthy` / `monitoring.ok` with recent verification and no recent failure. No credentials, recipients, or raw provider response are included.
+
+### Authenticated maintenance-window UI drill
+
+- The Owner Console button defect was confirmed in the live DOM: the shared button component defaulted to `type="button"`, so the maintenance form did not submit. PR #17 fixed the component prop/rendering, kept the ordinary button default, set the maintenance form button to submit, and added targeted render plus controller/audit regressions. The same source/test patch is present in PR #16; after PR #17 merged, this runtime fix was deployed through the guarded staging workflow.
+- An initial UI submission returned HTTP 422 because its start time had become more than one minute past; validation rejected it and created no window or audit record. The retry used a future UTC interval and succeeded through the authenticated Owner UI.
+- Owner audit event `monitoring.maintenance_created` recorded website scope, check family `website`, and the exact synthetic site `01a12784-ffc5-735b-9064-b2ccb2039ff0`. Window ID 1 ran from 19:46 to 19:56 UTC for reason `M10 authenticated maintenance-window E2E`.
+- During the active window, three normal synthetic monitoring samples opened `website.http` incident 11 at 19:46:17 UTC. Its transition recorded `delivery_suppressed=true`, `suppression_reason=maintenance`, and zero alert-delivery rows. The critical observation and incident were still persisted, proving monitoring continued while notification delivery was suppressed.
+- After natural expiry, active maintenance-window count returned to zero. Two healthy observations resolved the incident at 19:56:39 UTC with `delivery_suppressed=false`; the in-app recovery was sent and the recovery email reached `sent` at 19:56:41 UTC after one attempt, with no failure code. This proves alert delivery resumed after the window and no suppression remained.
+
+### Post-drill health and residual findings
+
+- A transient `monitoring.pipeline` stale incident appeared during post-deployment probe catch-up. The normal `monitoring:run` path observed the refreshed probe completion, and the pipeline returned to `healthy` / `monitoring.ok` after its required two healthy observations at 19:58:37 UTC. The incident resolved and its recovery delivery completed; it is not active now.
+- Final Owner Console state: no active maintenance window; no active `website.http` or `monitoring.pipeline` incident. The remaining visible findings are WordPress Site Health `attention` (seven findings) and stale vulnerability feed; the security-scan freshness state remains unknown. These are correctly represented residual signals, not falsely healthy, and do not indicate an M10 implementation defect.
+- Final read-only runtime checks: `system:check` passed application, database, queue, scheduler, Connector API, Stripe configuration, Cloudflare DNS, backup storage, mail configuration, and safety checks. Monitoring dispatch, pipeline, worker, and `provider.mail` observations were healthy. Global restore and synthetic restore were both `false`; active restores, active WebsiteJobs, active maintenance windows, queued Laravel jobs, and failed Laravel jobs were all zero. Staging HEAD is `33c961f07c541cd243a411e1310aa9236383e6fb` and the worktree is clean.
+
+### Current closure gates
+
+- Passed: SMTP delivery and `provider.mail` recovery; authenticated Owner maintenance creation/audit; suppression while observations continue; post-expiry delivery recovery; PR #17 and post-merge primary CI; guarded staging deploy and health; restore gates off; no active jobs, restores, or windows.
+- Pending: commit this final evidence update to PR #16, run all five CI jobs for its exact new head, merge PR #16, then record its merge SHA and final primary SHA in the closure report. This pending integration is the only remaining closure step; it is not an Owner infrastructure action.
+- Focused local `tests/Feature/Monitoring` validation for the current closure regression: **22 tests, 93 assertions, 1 skipped, 0 failures**. The skip is the concurrent first-failure test, which requires an explicitly named local MySQL test database; no migrations were run against an unspecified local database. The PR and post-merge remote MySQL suites passed.
+
 **Assessment time:** 2026-10-12 17:22 UTC
 **Status:** Functionally implemented and deployed; closure remains conditional on Owner-controlled staging operations below.
 
