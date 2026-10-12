@@ -75,7 +75,7 @@
                 {{ __('owner.platform_backups.connection_not_tested') }}
             @endif
         </p>
-        <p class="mt-1 text-xs text-muted">{{ __('owner.platform_backups.connection_passed') }}</p>
+        <p class="mt-1 text-xs text-muted">{{ __('owner.platform_backups.connection_explainer') }}</p>
         <form method="POST" action="{{ route('owner.platform-backups.test-connection') }}" class="mt-3">
             @csrf
             <button class="rounded border border-line-strong px-4 py-2 text-sm font-semibold" @disabled(! $configured)>{{ __('owner.platform_backups.connection_test') }}</button>
