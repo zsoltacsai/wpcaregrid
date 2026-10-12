@@ -23,11 +23,14 @@ final class PlatformBackupsController extends Controller
     {
         $disk = (string) config('platform_backup.disk', 'platform_backups');
         $configured = $this->primaryConfigured($platformStorage);
+        $providerConfigured = $platformStorage->configured()
+            && $platformStorage->driver() === 's3';
+        $encryptionKeyConfigured = $this->artifactEncryptionKeyConfigured();
         $destination = $settings->group('backups');
         $latest = PlatformDatabaseBackup::query()->where('status', 'verified')->latest('verified_at')->first();
         $ageHours = $latest?->verified_at?->diffInHours(now());
         $storageAvailable = false;
-        if ($configured && $latest) {
+        if ($providerConfigured && $latest) {
             try {
                 $storageAvailable = $platformStorage->disk($latest->storage_disk)->exists($latest->object_key);
             } catch (\Throwable) {
@@ -47,8 +50,9 @@ final class PlatformBackupsController extends Controller
             && data_get($lastConnectionTest->data, 'region') === $destination['backups.primary.region']
             && data_get($lastConnectionTest->data, 'endpoint_host') === $currentEndpointHost
             && data_get($lastConnectionTest->data, 'path_style') === $destination['backups.primary.path_style'];
-        $readiness = ! $configured ? 'not_configured' : match (true) {
+        $readiness = ! $providerConfigured ? 'not_configured' : match (true) {
             ! $appKeyConfigured => 'critical',
+            ! $encryptionKeyConfigured => 'encryption_key_missing',
             ! $latest => 'stale',
             $ageHours >= 24 => 'stale',
             ! $storageAvailable => 'unavailable',
@@ -60,6 +64,8 @@ final class PlatformBackupsController extends Controller
             'settings' => $destination,
             'backups' => PlatformDatabaseBackup::query()->with('deliveries')->latest('created_for_backup_at')->limit(25)->get(),
             'configured' => $configured,
+            'providerConfigured' => $providerConfigured,
+            'encryptionKeyConfigured' => $encryptionKeyConfigured,
             'readiness' => $readiness,
             'latestVerified' => $latest,
             'nextRun' => $this->nextRun((string) $settings->get('backups.primary.frequency')),
@@ -71,7 +77,7 @@ final class PlatformBackupsController extends Controller
             'appKeyConfigured' => $appKeyConfigured,
             'lastEscrowAttestation' => $lastEscrowAttestation,
             'secondaryState' => 'not_configured',
-            'destinationState' => ! $configured ? 'not_configured' : ($latest ? ($storageAvailable ? 'healthy' : 'unavailable') : 'configured'),
+            'destinationState' => ! $providerConfigured ? 'not_configured' : ($latest ? ($storageAvailable ? 'healthy' : 'unavailable') : 'configured'),
         ]);
     }
 
@@ -204,14 +210,22 @@ final class PlatformBackupsController extends Controller
     /** @param array<string, mixed> $settingsOverride */
     private function primaryConfigured(PlatformBackupStorage $storage, array $settingsOverride = []): bool
     {
-        $keyId = (string) config('platform_backup.encryption.current_key_id');
-        $key = config('platform_backup.encryption.keys.'.$keyId);
-
-        $decodedKey = is_string($key) ? base64_decode($key, true) : false;
-
         return $storage->configured($settingsOverride)
             && $storage->driver($settingsOverride) === 's3'
-            && filled($keyId)
+            && $this->artifactEncryptionKeyConfigured();
+    }
+
+    private function artifactEncryptionKeyConfigured(): bool
+    {
+        if (! extension_loaded('sodium')) {
+            return false;
+        }
+
+        $keyId = (string) config('platform_backup.encryption.current_key_id');
+        $key = config('platform_backup.encryption.keys.'.$keyId);
+        $decodedKey = is_string($key) ? base64_decode($key, true) : false;
+
+        return preg_match('/\A[a-zA-Z0-9._-]{1,64}\z/', $keyId) === 1
             && is_string($decodedKey)
             && strlen($decodedKey) === SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES;
     }

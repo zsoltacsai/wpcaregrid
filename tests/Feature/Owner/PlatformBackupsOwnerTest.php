@@ -12,10 +12,12 @@ use App\Owner\OwnerSettings;
 use App\Platform\DisasterRecovery\PlatformBackupS3BucketProber;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\ActsAsOwner;
 use Tests\TestCase;
 
@@ -170,6 +172,135 @@ final class PlatformBackupsOwnerTest extends TestCase
         $this->get(route('owner.platform-backups.index'))
             ->assertOk()
             ->assertSee(__('owner.platform_backups.connection_outdated'));
+    }
+
+    public function test_provider_probe_is_available_without_artifact_encryption_key_while_backup_remains_blocked(): void
+    {
+        Queue::fake();
+        $owner = $this->asOwner();
+        config([
+            'platform.deployment_environment' => 'staging',
+            'filesystems.disks.platform_backups.driver' => 's3',
+            'filesystems.disks.platform_backups.key' => 'platform-access-marker',
+            'filesystems.disks.platform_backups.secret' => 'platform-secret-marker',
+            'owner_integration_credentials.environment_fallbacks.platform_backup_s3_access_key' => true,
+            'owner_integration_credentials.environment_fallbacks.platform_backup_s3_secret_key' => true,
+            'backup.providers.s3.key' => null,
+            'backup.providers.s3.secret' => null,
+            'platform_backup.encryption.current_key_id' => '',
+            'platform_backup.encryption.keys' => [],
+            'queue.default' => 'database',
+            'queue.connections.database.driver' => 'database',
+            'queue.connections.database.queue' => 'default',
+        ]);
+        $this->saveS3Destination($owner, enabled: true);
+
+        $response = $this->get(route('owner.platform-backups.index'))
+            ->assertOk()
+            ->assertSee('id="platform-backup-connection-test"', false)
+            ->assertSee(__('owner.platform_backups.encryption_key_missing'))
+            ->assertSee(__('owner.platform_backups.states.encryption_key_missing'))
+            ->assertSee(__('owner.platform_backups.states.configured'))
+            ->assertSee('id="platform-backup-request"', false);
+        $html = $response->getContent();
+        $this->assertDoesNotMatchRegularExpression('/<button\b[^>]*id="platform-backup-connection-test"[^>]*\sdisabled(?:\s|>)/', $html);
+        $this->assertMatchesRegularExpression('/<button\b[^>]*id="platform-backup-request"[^>]*\sdisabled(?:\s|>)/', $html);
+
+        $probe = $this->mock(PlatformBackupS3BucketProber::class);
+        $probe->shouldReceive('headBucket')->once()->with(Mockery::on(function (array $configuration): bool {
+            $this->assertSame('m9-platform-provider-test', $configuration['bucket']);
+            $this->assertSame('platform-access-marker', $configuration['key']);
+            $this->assertSame('platform-secret-marker', $configuration['secret']);
+
+            return true;
+        }));
+        $this->post(route('owner.platform-backups.test-connection'))
+            ->assertRedirect(route('owner.platform-backups.index'))
+            ->assertSessionHas('status', __('owner.platform_backups.connection_passed'));
+        $this->assertDatabaseHas('admin_audit_events', ['event' => 'platform_backup.s3_connection_tested']);
+
+        $this->post(route('owner.platform-backups.run'), ['confirmation' => 'RUN PLATFORM BACKUP'])->assertStatus(409);
+        Queue::assertNothingPushed();
+    }
+
+    #[DataProvider('missingProviderPrerequisites')]
+    public function test_provider_probe_button_is_disabled_when_its_own_configuration_is_incomplete(string $missing): void
+    {
+        $owner = $this->asOwner();
+        config([
+            'filesystems.disks.platform_backups.driver' => 's3',
+            'filesystems.disks.platform_backups.key' => 'platform-access-marker',
+            'filesystems.disks.platform_backups.secret' => 'platform-secret-marker',
+            'owner_integration_credentials.environment_fallbacks.platform_backup_s3_access_key' => true,
+            'owner_integration_credentials.environment_fallbacks.platform_backup_s3_secret_key' => true,
+        ]);
+        $settings = [
+            'backups.primary.enabled' => false,
+            'backups.primary.frequency' => '12h',
+            'backups.primary.storage_driver' => 's3',
+            'backups.primary.endpoint' => 'https://fsn1.your-objectstorage.com',
+            'backups.primary.region' => 'fsn1',
+            'backups.primary.bucket' => 'm9-platform-provider-test',
+            'backups.primary.path_style' => false,
+            'backups.retention.daily' => 7,
+            'backups.retention.weekly' => 4,
+            'backups.retention.monthly' => 12,
+            'backups.secondary.enabled' => false,
+            'backups.secondary.frequency' => 'daily',
+            'backups.app_key_escrow_attested' => false,
+        ];
+        if ($missing === 'endpoint') {
+            $settings['backups.primary.endpoint'] = null;
+        } elseif ($missing === 'bucket') {
+            $settings['backups.primary.bucket'] = null;
+        } elseif ($missing === 'driver') {
+            $settings['backups.primary.storage_driver'] = 'local';
+        } elseif ($missing === 'access_key') {
+            config(['filesystems.disks.platform_backups.key' => null]);
+        } elseif ($missing === 'secret_key') {
+            config(['filesystems.disks.platform_backups.secret' => null]);
+        }
+        app(OwnerSettings::class)->updateGroup('backups', $settings, $owner);
+        if ($missing === 'region') {
+            DB::table('owner_settings')->where('id', 'backups.primary.region')->update(['value' => json_encode('')]);
+            app()->forgetInstance(OwnerSettings::class);
+        }
+
+        $response = $this->get(route('owner.platform-backups.index'))
+            ->assertOk()
+            ->assertSee(__('owner.platform_backups.connection_not_configured'));
+        $this->assertMatchesRegularExpression('/<button\b[^>]*id="platform-backup-connection-test"[^>]*\sdisabled(?:\s|>)/', $response->getContent());
+    }
+
+    public static function missingProviderPrerequisites(): array
+    {
+        return [
+            'endpoint' => ['endpoint'],
+            'region' => ['region'],
+            'bucket' => ['bucket'],
+            'driver' => ['driver'],
+            'access key' => ['access_key'],
+            'secret key' => ['secret_key'],
+        ];
+    }
+
+    private function saveS3Destination(User $owner, bool $enabled): void
+    {
+        app(OwnerSettings::class)->updateGroup('backups', [
+            'backups.primary.enabled' => $enabled,
+            'backups.primary.frequency' => '12h',
+            'backups.primary.storage_driver' => 's3',
+            'backups.primary.endpoint' => 'https://fsn1.your-objectstorage.com',
+            'backups.primary.region' => 'fsn1',
+            'backups.primary.bucket' => 'm9-platform-provider-test',
+            'backups.primary.path_style' => false,
+            'backups.retention.daily' => 7,
+            'backups.retention.weekly' => 4,
+            'backups.retention.monthly' => 12,
+            'backups.secondary.enabled' => false,
+            'backups.secondary.frequency' => 'daily',
+            'backups.app_key_escrow_attested' => true,
+        ], $owner);
     }
 
     public function test_failed_s3_probe_is_audited_without_provider_message_or_credentials(): void
