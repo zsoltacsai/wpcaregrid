@@ -1,0 +1,35 @@
+# M10 execution backlog
+
+Priority: P0 = required for M10 closure; P1 = recommended production hardening; P2 = deferred. All work remains unimplemented in this planning task. Exact file/class names must be revalidated against the implementation branch before coding.
+
+| ID / track | Priority and dependencies | Scope | Acceptance criteria and tests | Evidence / approval |
+|---|---|---|---|---|
+| A1 Monitoring contract | P0; first | Freeze stable check IDs, normalized result/event contract, canonical reason codes and compatibility map to existing `HealthStatus`/`Presence`. | Schema validation, unknown-code behavior, compatibility tests proving Site Health unchanged for existing dimensions. | Reviewed ADR; no Owner decision. |
+| A2 Monitoring persistence | P0; A1 | Latest result, transition, incident, outbox, maintenance models/migrations in a single shared model. | MySQL uniqueness/concurrency and retention tests; tenant scope tests; no secret-bearing fields. | Migration review and schema diff. |
+| A3 Result evaluator/state engine | P0; A1-A2 | Deterministic state/freshness, debounce, severity and incident lifecycle. | Unit/property tests for thresholds, duplicate evaluations, retries, clock boundaries, stale->unknown, resolve/reopen. | Test report; no Owner decision. |
+| A4 Pipeline self-monitor | P0; A2-A3 | Scheduler tick, last due/completed, queued/failed checks and outbox age. | Simulate stopped scheduler/worker and prove stale pipeline alert can be emitted through independent channel. | Requires Owner decision for independent external monitor activation; internal checks can ship first. |
+| B1 Bounded probe service | P0; A1-A3 | Public website HTTP/TLS/DNS probes with SSRF/egress controls, timeouts, limits and splay. | Fake server, TLS fixture, redirect/DNS-rebinding/private-IP tests, rate/concurrency tests; no arbitrary URL API. | Security review mandatory. |
+| B2 Probe scheduling | P0; B1, A2 | Batched unique UTC slots, bounded queues, backpressure, retry policy and per-tenant limits. | 100/1,000/10,000-site load model; duplicate/overlap and downtime catch-up tests. | SRE capacity acceptance. |
+| C1 Connector/runtime adapters | P0; A3 | Consume presence, health, inventory, version/capabilities and safe supported runtime metrics. | stale/delayed/disconnected, unsupported field and stale payload tests; preserve Connector protocol compatibility. | Connector contract review; no version bump unless Connector source changes. |
+| D1 Platform infrastructure adapters | P0; A3 | Adapt `SystemStatus`, existing scheduler heartbeat, queue, DB, storage and M9 backup/reconciliation evidence. | Fake DB/queue/storage outcomes; configured vs reachable distinction; no active mutation in probes. Current queue check does not prove worker liveness and current heartbeat does not prove individual scheduled task completion. | M9 evidence linked, not rewritten. |
+| D2 Worker/task liveness | P0; D1, A2 | Emit bounded worker-loop pulses by queue/role and completion timestamps for selected monitored scheduled tasks; mark stale based on configured grace and deployment pause state. | Idle worker remains observably alive; stopped worker becomes stale; no heartbeat after shutdown; rolling deployment suppresses false alarms; tests verify role isolation and timeout. | Process metadata limited to role/version/last pulse; never expose PID/path in customer UX. |
+| E1 Existing domain adapters | P0; A3 | BackupPolicy/BackupStatus and SecurityPosture/scan/incident events into unified results. | Prove no duplicate eligibility or security policy logic; plan-tier and stale/failed cases. | Existing source-of-truth contract. |
+| F1 Notifications | P0; A2-A3 | In-app incident views plus idempotent transactional email outbox. | Concurrent send, mail failure, duplicate retry, redaction, owner/operator recipient tests. | Customer email remains off absent product approval. |
+| F2 Noise controls | P0; A3,F1 | Dedupe, correlation, cooldown, flapping, maintenance overlay and recovery confirmation. | 3-failure/2-success, alert storms, shared provider and maintenance tests. | Owner selects any deviation from defaults. |
+| G1 Owner UI | P0; D1,F1-F2 | Infrastructure Health, incidents, provider states, history, maintenance and audit. | Owner-only route tests; stale/unknown distinction; pagination and safe evidence. | UI review; no new restore action. |
+| G2 Operator UI | P0; C1,E1,F1-F2 | Site incidents/timeline with scoped permissions. | Cross-tenant denial, permission matrix, acknowledgement audit. | Operator permission review. |
+| G3 Customer-safe aggregate | P1; G2, product policy | Optional coarse customer health display. | No internal evidence disclosure; notification policy test. | Product Owner approval required before exposing or emailing. |
+| H1 Retention/aggregation | P0; A2-F2 | Result/transition/outbox cleanup and non-destructive aggregation. | Never remove open incident; bounded deletes; MySQL volume test. | Retention/security review. |
+| H2 Security hardening | P0; B1-F2 | SSRF, tenant isolation, evidence redaction, abuse throttles, secret scan. | Adversarial request and authorization tests; CI quality/secrets. | AppSec sign-off. |
+| I1 Local/CI validation | P0; all above | Unit, feature, MySQL concurrency, fake HTTP/TLS, frontend/build, Connector compatibility. | All required CI jobs pass exact candidate SHA; provider mocks clearly separated from live provider tests. | CI run/status. |
+| I2 Staging rollout | P0; I1 | Guarded deploy, synthetic target only, healthy/failing/recovery/maintenance scenarios, no customer notifications. | Repeated staging E2E and rollback/recovery checks; no production rollout. | Strict host identity, predeploy backup, Owner release approval. |
+| I3 Closure evidence | P0; I2 | Commit closure report after staging evidence; exact deployed SHA and CI references. | All closure gates documented with pass/fail/skip and live state. | Normal release workflow; M10 closes only after report merged. |
+| J1 External monitor | P1 / launch dependency decision | Independent external check/dead-man service, destination and alert route. | Demonstrate detects app/VPS unavailability independent of primary host. | Owner selects provider/cost and access model; not needed for local feature implementation. |
+| J2 Domain expiry / advanced uptime | P2 | Registrar APIs, SLA analytics, predictive AI, external chat integrations. | Separate milestone/product scope. | Not M10. |
+
+## Recommended build order
+
+1. A1 and agree reason codes/state/freshness; 2. A2-A3 persistence and deterministic transitions; 3. D1/E1 adapters to existing sources (quickly deliver platform/site value before active probes); 4. C1 Connector freshness; 5. A4 self-monitor; 6. B1-B2 safe public HTTP/TLS probes; 7. F1-F2 incident delivery/noise; 8. G1-G2 UI; 9. H1-H2 hardening/retention; 10. I1 CI, I2 staging, I3 closure.
+
+Do not parallelize database model/UI/probe code until the A1 contract is reviewed: stable identity and status semantics are the shared dependency.
+
