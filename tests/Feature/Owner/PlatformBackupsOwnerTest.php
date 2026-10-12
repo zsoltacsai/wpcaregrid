@@ -41,7 +41,10 @@ final class PlatformBackupsOwnerTest extends TestCase
         $this->asOwner();
 
         $response = $this->get(route('owner.platform-backups.index'))->assertOk()
-            ->assertSee('Platform Backups')->assertSee('Stale');
+            ->assertSee('Platform Backups')->assertSee('Stale')
+            ->assertSee(__('owner.platform_backups.connection_not_tested'))
+            ->assertSee(__('owner.platform_backups.connection_explainer'))
+            ->assertDontSee(__('owner.platform_backups.connection_passed'));
 
         $response->assertDontSee('PLATFORM_ACCESS_SECRET_MARKER', false)
             ->assertDontSee('PLATFORM_SECRET_SECRET_MARKER', false)
