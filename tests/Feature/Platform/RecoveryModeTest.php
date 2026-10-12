@@ -59,41 +59,44 @@ class RecoveryModeTest extends TestCase
     public function test_queue_quarantine_requires_recovery_mode_and_preserves_payload_with_checksum(): void
     {
         config(['platform.recovery_mode' => false, 'queue.default' => 'database']);
-        DB::table('jobs')->insert([
+        $existingJobs = DB::table('jobs')->count();
+        $jobId = DB::table('jobs')->insertGetId([
             'queue' => 'default', 'payload' => '{"displayName":"MailJob","data":{"command":"serialized"}}',
             'attempts' => 0, 'reserved_at' => null, 'available_at' => 100, 'created_at' => 90,
         ]);
 
         $this->artisan('platform:recovery-quarantine-queue --confirm-workers-stopped')->assertFailed();
-        $this->assertDatabaseCount('jobs', 1);
+        $this->assertDatabaseCount('jobs', $existingJobs + 1);
         $this->assertDatabaseCount('platform_recovery_quarantined_jobs', 0);
 
         config(['platform.recovery_mode' => true]);
         $this->artisan('platform:recovery-quarantine-queue')->assertFailed();
-        $this->assertDatabaseCount('jobs', 1);
+        $this->assertDatabaseCount('jobs', $existingJobs + 1);
         $this->artisan('platform:recovery-quarantine-queue --confirm-workers-stopped')
             ->assertSuccessful()
-            ->expectsOutputToContain('Quarantined 1 Laravel queue jobs and 0 destructive WebsiteJobs');
+            ->expectsOutputToContain('Quarantined '.($existingJobs + 1).' Laravel queue jobs and 0 destructive WebsiteJobs');
 
         $this->assertDatabaseCount('jobs', 0);
-        $quarantined = DB::table('platform_recovery_quarantined_jobs')->sole();
+        $this->assertDatabaseCount('platform_recovery_quarantined_jobs', $existingJobs + 1);
+        $quarantined = DB::table('platform_recovery_quarantined_jobs')->where('original_job_id', $jobId)->sole();
         $this->assertSame(hash('sha256', $quarantined->payload), $quarantined->payload_sha256);
         $this->assertSame('default', $quarantined->queue);
 
         $this->artisan('platform:recovery-quarantine-queue --confirm-workers-stopped')->assertSuccessful()->expectsOutputToContain('Quarantined 0 Laravel queue jobs');
-        $this->assertDatabaseCount('platform_recovery_quarantined_jobs', 1);
+        $this->assertDatabaseCount('platform_recovery_quarantined_jobs', $existingJobs + 1);
     }
 
     public function test_queue_quarantine_refuses_reserved_jobs_even_after_operator_confirmation(): void
     {
         config(['platform.recovery_mode' => true, 'queue.default' => 'database']);
+        $existingJobs = DB::table('jobs')->count();
         DB::table('jobs')->insert([
             'queue' => 'default', 'payload' => '{"displayName":"LongRunningJob"}',
             'attempts' => 1, 'reserved_at' => now()->timestamp, 'available_at' => now()->timestamp, 'created_at' => now()->timestamp,
         ]);
 
         $this->artisan('platform:recovery-quarantine-queue --confirm-workers-stopped')->assertFailed();
-        $this->assertDatabaseCount('jobs', 1);
+        $this->assertDatabaseCount('jobs', $existingJobs + 1);
         $this->assertDatabaseCount('platform_recovery_quarantined_jobs', 0);
     }
 
@@ -107,10 +110,13 @@ class RecoveryModeTest extends TestCase
             'requested_by' => 'test',
         ]);
         config(['platform.recovery_mode' => true, 'queue.default' => 'database']);
+        $existingJobs = DB::table('jobs')->count();
 
-        $this->artisan('platform:recovery-quarantine-queue --confirm-workers-stopped')->expectsOutputToContain('Quarantined 0 Laravel queue jobs and 1 destructive WebsiteJobs')->assertSuccessful();
+        $this->artisan('platform:recovery-quarantine-queue --confirm-workers-stopped')->expectsOutputToContain('Quarantined '.$existingJobs.' Laravel queue jobs and 1 destructive WebsiteJobs')->assertSuccessful();
         $this->assertSame(JobStatus::Cancelled, $job->refresh()->status);
         $this->assertSame('PLATFORM_RECOVERY_QUARANTINED', $job->error['code']);
+        $this->assertDatabaseCount('jobs', 0);
+        $this->assertDatabaseCount('platform_recovery_quarantined_jobs', $existingJobs);
         $quarantined = DB::table('platform_recovery_quarantined_website_jobs')->sole();
         $this->assertSame($job->uuid, $quarantined->job_uuid);
         $this->assertSame(hash('sha256', $quarantined->payload), $quarantined->payload_sha256);
