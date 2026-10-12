@@ -4,6 +4,7 @@ namespace Tests\Feature\Monitoring;
 
 use App\Connector\HealthStatus;
 use App\Models\MonitoringIncident;
+use App\Models\MonitoringMaintenanceWindow;
 use App\Models\MonitoringResult;
 use App\Models\User;
 use App\Models\Website;
@@ -35,6 +36,20 @@ final class MonitoringConsoleTest extends TestCase
             ->assertOk()->assertSee(__('m10.active_incidents'))
             ->assertSee(MonitoringReason::label('database.unavailable'))
             ->assertSee('platform.database');
+    }
+
+    public function test_owner_maintenance_form_renders_a_submit_button(): void
+    {
+        $this->asOwner();
+
+        $response = $this->get(route('owner.monitoring.index'))
+            ->assertOk()
+            ->assertSee(__('m10.create_maintenance'));
+
+        $matched = preg_match('/<button\b(?=[^>]*\bdata-testid="maintenance-window-submit")[^>]*>/s', $response->getContent(), $matches);
+
+        $this->assertSame(1, $matched);
+        $this->assertMatchesRegularExpression('/\btype="submit"/', $matches[0]);
     }
 
     public function test_expired_healthy_observation_is_displayed_as_unknown_not_healthy(): void
@@ -85,5 +100,29 @@ final class MonitoringConsoleTest extends TestCase
         ]);
 
         $this->actingAs($operator, 'operator')->get(route('operator.websites.monitoring', $website))->assertForbidden();
+    }
+
+    public function test_owner_can_create_site_scoped_maintenance_window(): void
+    {
+        $this->asOwner();
+        $website = Website::factory()->create();
+
+        $this->post(route('owner.monitoring.maintenance.store'), [
+            'scope' => 'website',
+            'website_uuid' => $website->uuid,
+            'check_family' => 'website',
+            'reason' => 'M10 staging maintenance test',
+            'starts_at' => now()->format('Y-m-d\\TH:i'),
+            'ends_at' => now()->addMinutes(20)->format('Y-m-d\\TH:i'),
+        ])->assertRedirect(route('owner.monitoring.index'));
+
+        $window = MonitoringMaintenanceWindow::query()->where('subject_id', $website->uuid)->firstOrFail();
+        $this->assertSame('website', $window->scope->value);
+        $this->assertSame('website', $window->check_family);
+        $this->assertDatabaseHas('admin_audit_events', [
+            'event' => 'monitoring.maintenance_created',
+            'subject_type' => 'maintenance_window',
+            'subject_key' => (string) $window->id,
+        ]);
     }
 }
