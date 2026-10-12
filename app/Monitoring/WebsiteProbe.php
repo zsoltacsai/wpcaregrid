@@ -21,6 +21,10 @@ final class WebsiteProbe
     {
         $started = microtime(true);
         try {
+            if (! function_exists('curl_init')) {
+                throw new \DomainException('monitoring.transport_unavailable');
+            }
+
             $origin = PublicOrigin::resolve($website->url, $this->addressLookup);
             $initialHost = $origin->host;
             $tlsDue = ! MonitoringResult::query()
@@ -34,14 +38,7 @@ final class WebsiteProbe
 
             while (true) {
                 $path = ($uri->getPath() ?: '/').($uri->getQuery() !== '' ? '?'.$uri->getQuery() : '');
-                $options = [
-                    'allow_redirects' => false,
-                    'connect_timeout' => 3,
-                    'timeout' => 8,
-                    'stream' => true,
-                    'verify' => true,
-                    'proxy' => '',
-                    'curl' => $origin->curlResolve() + ($tlsDue ? [CURLOPT_CERTINFO => true] : []),
+                $options = $this->pinnedRequestOptions($origin, $tlsDue) + [
                     'progress' => static function (int $downloadTotal, int $downloaded): void {
                         if ($downloaded > 65536) {
                             throw new \DomainException('monitoring.response_too_large');
@@ -115,6 +112,7 @@ final class WebsiteProbe
                 defined('CURLE_PEER_FAILED_VERIFICATION') ? constant('CURLE_PEER_FAILED_VERIFICATION') : 60,
             ]);
             $reason = match (true) {
+                $exception instanceof \DomainException && $exception->getMessage() === 'monitoring.transport_unavailable' => MonitoringReason::MONITORING_SOURCE_UNVERIFIED,
                 $exception instanceof \DomainException && str_contains($exception->getMessage(), 'redirect') => MonitoringReason::HTTP_REDIRECT_FAILURE,
                 $exception instanceof \DomainException && str_contains($exception->getMessage(), 'response_too_large') => MonitoringReason::HTTP_RESPONSE_TOO_LARGE,
                 $curlError === $callbackAbortCode => MonitoringReason::HTTP_RESPONSE_TOO_LARGE,
@@ -128,8 +126,8 @@ final class WebsiteProbe
                 scope: MonitoringScope::Website,
                 subjectType: 'website',
                 subjectId: (string) $website->uuid,
-                state: $reason === MonitoringReason::HTTP_TIMEOUT ? HealthStatus::Attention : HealthStatus::Critical,
-                severity: $reason === MonitoringReason::HTTP_TIMEOUT ? MonitoringSeverity::Warning : MonitoringSeverity::Critical,
+                state: $reason === MonitoringReason::MONITORING_SOURCE_UNVERIFIED ? HealthStatus::Unknown : ($reason === MonitoringReason::HTTP_TIMEOUT ? HealthStatus::Attention : HealthStatus::Critical),
+                severity: $reason === MonitoringReason::MONITORING_SOURCE_UNVERIFIED ? null : ($reason === MonitoringReason::HTTP_TIMEOUT ? MonitoringSeverity::Warning : MonitoringSeverity::Critical),
                 reasonCode: $reason,
                 source: 'active_probe',
                 evidence: ['error_category' => $reason, 'latency_ms' => (int) round((microtime(true) - $started) * 1000)],
@@ -148,6 +146,21 @@ final class WebsiteProbe
                 ));
             }
         }
+    }
+
+    /** @return array<string, mixed> */
+    private function pinnedRequestOptions(PublicOrigin $origin, bool $tlsDue): array
+    {
+        // Guzzle's streaming option selects StreamHandler, which cannot apply CURLOPT_RESOLVE.
+        // Omit it so Guzzle uses cURL and keeps every request pinned to the validated address.
+        return [
+            'allow_redirects' => false,
+            'connect_timeout' => 3,
+            'timeout' => 8,
+            'verify' => true,
+            'proxy' => '',
+            'curl' => $origin->curlResolve() + ($tlsDue ? [CURLOPT_CERTINFO => true] : []),
+        ];
     }
 
     /** @param list<array<string, string>> $certificateInfo */
