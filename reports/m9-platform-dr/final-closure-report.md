@@ -120,3 +120,52 @@ This addendum records the subsequent provider-test fix and staging result. Earli
 - Platform artifact encryption readiness is **not configured**: current key ID absent, key material invalid/absent, while Sodium is available. Owner Console reports **Encryption key missing** and explicitly blocks manual backup. Do not bypass this gate or create a throwaway key. Configure the stable key ID and encryption keyring in the approved secret-management channel, independently escrow/recover it, and verify readiness without disclosing values.
 - No platform backup, upload/readback, decrypt/import drill, or recurring schedule was run/enabled in this validation. The next safe technical phase, after artifact-key configuration and validation, is one controlled manual platform DB backup → remote readback/hash verification → isolated decrypt/import and schema/data checks. Only then reassess M9 closure.
 - Decision: provider-test blocker resolved; M9 remains open for the platform artifact-encryption-key Owner prerequisite and the backup/recovery validation gates. Estimated progress is approximately 95%; this is a planning estimate, not a substitute for the remaining evidence.
+
+## 2026-10-12 final artifact-key, S3 backup and recovery validation
+
+This addendum records the completed M9 staging closure. Previous entries are preserved as historical evidence and remain accurate for their original timestamps.
+
+### Key readiness and safety
+
+- Platform artifact encryption uses libsodium secretstream with the already Owner-approved 32-byte key, selected by key ID `m9-staging-2026-10`. The existing key was recovered from Apple Passwords and compared through a protected local check; no key was generated or shown in chat, terminal output, UI, logs or this report.
+- The key is configured on staging only. Configuration validation confirmed the current key ID resolves from the keyring, the raw key length is valid, and encrypt/decrypt roundtrip passed. APP_KEY remains separate; its Owner attestation and retrieval check remain recorded at `2026-10-12T06:07:55Z`.
+- The temporary local transfer file and exact staging transfer/helper files were deleted after successful validation. The live staging `.env` key configuration and the approved Apple Passwords copy remain. The verifier account is restricted to the `wpcg_m9_dr_stage_` schema prefix; no source database access was granted to it. The isolated import schema was dropped after verification.
+
+### Diagnosed attempts and fixes
+
+Three failed manual attempts are retained as failed `platform_database_backups`/delivery records in staging history:
+
+| Backup UUID | UTC | Root cause | Corrective action |
+| --- | --- | --- | --- |
+| `01a12f70-e989-7311-a8fb-745adce6e2a2` | 09:28:11 | The manual job ran on the default queue; its long-running worker had stale configuration and did not see the valid artifact key. | Confirmed queue idle, then restarted only `wpcaregrid-default`; no eligibility or crypto check was bypassed. |
+| `01a12f73-00b6-73bc-b04b-6379319e7450` | 09:30:28 | The platform S3 configuration inherited the local filesystem root as an S3 object-key prefix. | PR #9 added an empty S3 root. Merged as `28be14326af5be768dab3d0b6c89fbc968f497cf`; CI run `38230580473` passed all five jobs. |
+| `01a12f81-60d1-7280-bafe-442c90146947` | 09:46:10 | With the object path corrected, Hetzner returned HTTP 400 `InvalidArgument` because the generic platform disk sent SSE-S3 `AES256`. Hetzner's supported-actions documentation lists SSE-C as its supported object encryption type; the artifact is already client-side authenticated-encrypted. | PR #10 clears provider-specific SSE options for the platform disk and removes the unused SSE-S3 setting. Merged as `3eeba893d6b63ae7ca81ac0caf56e0d745134f85`; CI run `38232461266` passed all five jobs. A staging 1 MiB PUT/readback/hash/delete probe passed after deployment. |
+
+The three queue `failed_jobs` entries were individually forgotten after their IDs and causes had been captured in task evidence; this addendum preserves that evidence alongside the corresponding failed backup records. The failed backup and delivery records remain in Owner history; no failed job was retried. No object or manifest was uploaded by these failed attempts.
+
+### Approved S3 destination and deployment
+
+- Owner Console confirmed the dedicated private platform bucket `wpcaregrid`, endpoint `https://fsn1.your-objectstorage.com`, region `fsn1`, owner-managed platform credential, and schedule OFF. The platform destination/credential is separate from the customer backup destination/credential. No credential values are recorded.
+- Strict SSH host-key checking was used for both deployments; the Owner-approved ED25519 fingerprint matched `SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`.
+- PR #9 merged SHA `28be14326af5be768dab3d0b6c89fbc968f497cf` deployed through `scripts/deploy-staging.sh`; protected pre-deploy backup: `/home/deploy/private-backups/wpcaregrid-pre-deploy-20261012T094431Z.sql.gz`.
+- PR #10 merged SHA `3eeba893d6b63ae7ca81ac0caf56e0d745134f85` deployed through the guarded script; protected pre-deploy backup: `/home/deploy/private-backups/wpcaregrid-pre-deploy-20261012T100151Z.sql.gz`. Both deployments found no pending migrations and restarted the configured workers through the deployment procedure.
+- Final staging checkout is clean at `3eeba893d6b63ae7ca81ac0caf56e0d745134f85`. `wpcaregrid-default` and `wpcaregrid-backups` are RUNNING. Application, database, queue, scheduler, Connector API, backup storage and safety checks are OK. The existing no-security-scan warning remains unrelated; no security remediation was enabled.
+
+### Successful manual backup and remote integrity
+
+- Exactly one manual request succeeded through Owner Console → Infrastructure → Platform Backups; recurring backups remained disabled.
+- Backup UUID: `01a12f91-4b6c-70f9-83cc-81263cee3a4c`; source environment `staging`; DB engine/version MySQL `8.4.11`; storage disk `platform_backups`; retention class `daily`; status and verification `verified`.
+- Encrypted object: `platform-database/2026/10/12/38376888-5ec2-40e7-b263-7789abbd6a98.sql.gz.enc`; size `60,117` bytes; SHA-256 `9e1eee92f4f22b565808431ebb633180f1df837ae58f1ba1714bb5b0046286f6`.
+- Manifest sidecar: `platform-database/2026/10/12/38376888-5ec2-40e7-b263-7789abbd6a98.sql.gz.enc.manifest.json`. The isolated verifier independently read both objects from S3, matched remote byte count and SHA-256 to the backup record and manifest, validated manifest HMAC, backup UUID and key ID. The authenticated manifest identifies key ID `m9-staging-2026-10`; it contains no key material.
+- Listing the date-scoped object prefix showed exactly the artifact and its manifest. The separate ephemeral provider probe object was deleted successfully. No failed attempt created an object. The encrypted artifact is not in the public webroot.
+- The verification method recorded by the application is `stored-object-sha256-gzip-and-disposable-mysql-import`. The verifier downloaded and hashed remote ciphertext, authenticated/decrypted it, checked gzip, imported it into a disposable MySQL 8.4.11 database, compared the complete table set and configured critical-table row counts to the signed manifest, and dropped the isolated schema. No source rows or backup contents were printed. The verifier reported zero remaining schemas under the dedicated disposable prefix.
+- Application temporary dump, gzip, ciphertext, verifier plaintext and disposable database configuration files were cleaned. The encrypted artifact and manifest remain in the dedicated bucket as the recovery point.
+- The backup record's optional `release_sha` field is null because staging does not currently populate `APP_RELEASE_SHA`; the exact deployed source SHA is recorded above and remains identifiable independently. No backup row or manifest was manually edited.
+
+### Final state and decision
+
+- Owner Console shows Recovery readiness **Healthy**, Primary S3 **Healthy**, and the successful backup as the last verified backup. Scheduled backup checkbox remains OFF; next schedule slot is informational only.
+- Queue pending/delayed/reserved: `0`; failed Laravel jobs: `0`; active platform backups: `0`. Backup history contains three terminal failed records and one verified record. Both Laravel workers and scheduler are healthy.
+- Google Drive remains unconfigured and optional. No provider versioning/Object Lock, cross-region replication, or recurring schedule was enabled. No production, customer, billing, Stripe, Cloudflare or WordPress-site resource was changed. No WordPress backup or restore was run.
+- Security review: artifact encryption and independent escrow are verified; S3 traffic used the dedicated bucket credential; manifests are authenticated; the verifier has isolated-prefix privileges only; temporary plaintext and helper copies were removed; scheduled generation remains OFF. Residual infrastructure risks documented earlier (same-provider/account failure domain, optional Drive, and provider immutability choices) remain recommendations and are not falsely claimed as tested.
+- **M9 decision: CLOSED.** Mandatory staging backup, remote readback/integrity and isolated MySQL recovery validation passed. Next milestone: M10 — Monitoring, Alerting & Infrastructure Health.
