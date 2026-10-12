@@ -3,7 +3,7 @@
     variant: primary (green action) | secondary | ghost | inverse-outline (on dark)
     size: sm | md | lg
 --}}
-@props(['href' => null, 'variant' => 'primary', 'size' => 'md', 'icon' => null])
+@props(['href' => null, 'variant' => 'primary', 'size' => 'md', 'icon' => null, 'type' => 'button'])
 
 @php
     $variants = [
@@ -31,7 +31,7 @@
         @if ($icon)<x-ui.icon :name="$icon" class="size-4" />@endif
     </a>
 @else
-    <button {{ $attributes->merge(['type' => 'button', 'class' => $classes]) }}>
+    <button type="{{ $type }}" {{ $attributes->merge(['class' => $classes]) }}>
         {{ $slot }}
         @if ($icon)<x-ui.icon :name="$icon" class="size-4" />@endif
     </button>

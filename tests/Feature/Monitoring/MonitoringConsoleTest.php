@@ -44,7 +44,7 @@ final class MonitoringConsoleTest extends TestCase
 
         $this->get(route('owner.monitoring.index'))
             ->assertOk()
-            ->assertSee('<button type="submit"', false)
+            ->assertSee('<button type="submit" data-testid="maintenance-window-submit"', false)
             ->assertSee(__('m10.create_maintenance'));
     }
 
