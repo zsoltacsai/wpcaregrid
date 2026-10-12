@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Platform;
 
+use App\Owner\OwnerSettings;
 use App\Platform\DisasterRecovery\PlatformBackupCryptography;
 use App\Platform\DisasterRecovery\PlatformDatabaseBackupService;
 use Illuminate\Database\Schema\Blueprint;
@@ -128,6 +129,36 @@ class PlatformDatabaseBackupTest extends TestCase
         @unlink($restorePath);
         @unlink($compressed);
         @unlink($ciphertext);
+    }
+
+    public function test_manual_backup_can_run_while_recurring_schedule_is_disabled(): void
+    {
+        config(['platform_backup.enabled' => false]);
+        app(OwnerSettings::class)->updateGroup('backups', [
+            'backups.primary.enabled' => false,
+            'backups.primary.frequency' => '12h',
+            'backups.retention.daily' => 7,
+            'backups.retention.weekly' => 4,
+            'backups.retention.monthly' => 12,
+            'backups.secondary.enabled' => false,
+            'backups.secondary.frequency' => 'daily',
+            'backups.app_key_escrow_attested' => false,
+        ], null);
+
+        $backup = app(PlatformDatabaseBackupService::class)->createManual('daily');
+
+        $this->assertSame('stored', $backup->status);
+        $this->assertFalse(app(OwnerSettings::class)->get('backups.primary.enabled'));
+    }
+
+    public function test_automatic_backup_creation_still_refuses_while_recurring_schedule_is_disabled(): void
+    {
+        config(['platform_backup.enabled' => false]);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Platform database backups are disabled.');
+
+        app(PlatformDatabaseBackupService::class)->create('daily');
     }
 
     public function test_platform_backup_verification_rejects_missing_object_and_hash_mismatch(): void

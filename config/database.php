@@ -64,6 +64,27 @@ return [
             ]) : [],
         ],
 
+        // Platform-backup import verification uses a dedicated account whose
+        // grants are limited to the disposable wpcg_m9_dr_* schemas.
+        'm9_platform_verify' => [
+            'driver' => 'mysql',
+            'host' => env('PLATFORM_DB_BACKUP_VERIFY_DB_HOST', '127.0.0.1'),
+            'port' => env('PLATFORM_DB_BACKUP_VERIFY_DB_PORT', '3306'),
+            'database' => env('PLATFORM_DB_BACKUP_VERIFY_DB_DATABASE', 'information_schema'),
+            'username' => env('PLATFORM_DB_BACKUP_VERIFY_DB_USERNAME', ''),
+            'password' => env('PLATFORM_DB_BACKUP_VERIFY_DB_PASSWORD', ''),
+            'unix_socket' => env('PLATFORM_DB_BACKUP_VERIFY_DB_SOCKET', ''),
+            'charset' => env('DB_CHARSET', 'utf8mb4'),
+            'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                Mysql::ATTR_SSL_CA => env('PLATFORM_DB_BACKUP_VERIFY_DB_SSL_CA'),
+            ]) : [],
+        ],
+
         'mariadb' => [
             'driver' => 'mariadb',
             'url' => env('DB_URL'),

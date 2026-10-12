@@ -39,6 +39,13 @@ final class PlatformBackupsOwnerTest extends TestCase
             'owner_integration_credentials.environment_fallbacks.platform_backup_s3_secret_key' => true,
             'platform_backup.encryption.current_key_id' => 'test-v1',
             'platform_backup.encryption.keys.test-v1' => base64_encode(str_repeat('x', 32)),
+            'platform_backup.verification_connection' => 'm9_platform_verify',
+            'platform_backup.verification_database_prefix' => 'wpcg_m9_dr_test_',
+            'platform_backup.verification_isolated' => true,
+            'database.connections.m9_platform_verify' => array_merge(config('database.connections.mysql'), [
+                'driver' => 'mysql', 'host' => '127.0.0.1', 'database' => 'information_schema',
+                'username' => 'm9_verify_test', 'password' => 'test-only-verifier-password',
+            ]),
         ]);
         $this->asOwner();
 
@@ -106,6 +113,13 @@ final class PlatformBackupsOwnerTest extends TestCase
             'filesystems.disks.platform_backups.secret' => 'env-platform-secret-value',
             'platform_backup.encryption.current_key_id' => 'test-v1',
             'platform_backup.encryption.keys.test-v1' => base64_encode(str_repeat('x', 32)),
+            'platform_backup.verification_connection' => 'm9_platform_verify',
+            'platform_backup.verification_database_prefix' => 'wpcg_m9_dr_test_',
+            'platform_backup.verification_isolated' => true,
+            'database.connections.m9_platform_verify' => array_merge(config('database.connections.mysql'), [
+                'driver' => 'mysql', 'host' => '127.0.0.1', 'database' => 'information_schema',
+                'username' => 'm9_verify_test', 'password' => 'test-only-verifier-password',
+            ]),
             'owner_integration_credentials.environment_fallbacks.platform_backup_s3_access_key' => true,
             'owner_integration_credentials.environment_fallbacks.platform_backup_s3_secret_key' => true,
         ]);
@@ -415,6 +429,13 @@ final class PlatformBackupsOwnerTest extends TestCase
             'filesystems.disks.platform_backups.secret' => 'test-secret',
             'platform_backup.encryption.current_key_id' => 'test-v1',
             'platform_backup.encryption.keys.test-v1' => base64_encode(str_repeat('x', 32)),
+            'platform_backup.verification_connection' => 'm9_platform_verify',
+            'platform_backup.verification_database_prefix' => 'wpcg_m9_dr_test_',
+            'platform_backup.verification_isolated' => true,
+            'database.connections.m9_platform_verify' => array_merge(config('database.connections.mysql'), [
+                'driver' => 'mysql', 'host' => '127.0.0.1', 'database' => 'information_schema',
+                'username' => 'm9_verify_test', 'password' => 'test-only-verifier-password',
+            ]),
             'queue.default' => 'database',
             'queue.connections.database.driver' => 'database',
             'queue.connections.database.queue' => 'default',
@@ -438,7 +459,7 @@ final class PlatformBackupsOwnerTest extends TestCase
         $this->assertDatabaseHas('admin_audit_events', ['event' => 'platform_backup.manual_requested']);
     }
 
-    public function test_manual_backup_refuses_when_persisted_owner_setting_is_disabled_even_if_config_is_stale_enabled(): void
+    public function test_manual_backup_is_allowed_without_enabling_recurring_schedule(): void
     {
         Queue::fake();
         config([
@@ -452,6 +473,13 @@ final class PlatformBackupsOwnerTest extends TestCase
             'filesystems.disks.platform_backups.secret' => 'test-secret',
             'platform_backup.encryption.current_key_id' => 'test-v1',
             'platform_backup.encryption.keys.test-v1' => base64_encode(str_repeat('x', 32)),
+            'platform_backup.verification_connection' => 'm9_platform_verify',
+            'platform_backup.verification_database_prefix' => 'wpcg_m9_dr_test_',
+            'platform_backup.verification_isolated' => true,
+            'database.connections.m9_platform_verify' => array_merge(config('database.connections.mysql'), [
+                'driver' => 'mysql', 'host' => '127.0.0.1', 'database' => 'information_schema',
+                'username' => 'm9_verify_test', 'password' => 'test-only-verifier-password',
+            ]),
             'queue.default' => 'database',
             'queue.connections.database.driver' => 'database',
             'queue.connections.database.queue' => 'default',
@@ -469,6 +497,71 @@ final class PlatformBackupsOwnerTest extends TestCase
         ], auth('owner')->user());
         $this->assertFalse(app(OwnerSettings::class)->get('backups.primary.enabled'));
 
+        $this->post(route('owner.platform-backups.run'), ['confirmation' => 'RUN PLATFORM BACKUP'])
+            ->assertRedirect(route('owner.platform-backups.index'));
+        Queue::assertPushed(PlatformDatabaseBackupJob::class, 1);
+        $this->assertFalse(app(OwnerSettings::class)->get('backups.primary.enabled'));
+        $this->assertDatabaseHas('admin_audit_events', ['event' => 'platform_backup.manual_requested']);
+    }
+
+    public function test_manual_backup_is_blocked_when_disposable_mysql_verifier_is_not_configured(): void
+    {
+        Queue::fake();
+        config([
+            'platform_backup.storage_driver' => 's3',
+            'filesystems.disks.platform_backups.driver' => 's3',
+            'filesystems.disks.platform_backups.endpoint' => 'https://fsn1.your-objectstorage.com',
+            'filesystems.disks.platform_backups.region' => 'fsn1',
+            'filesystems.disks.platform_backups.bucket' => 'platform-private-bucket',
+            'filesystems.disks.platform_backups.key' => 'test-access',
+            'filesystems.disks.platform_backups.secret' => 'test-secret',
+            'platform_backup.encryption.current_key_id' => 'test-v1',
+            'platform_backup.encryption.keys.test-v1' => base64_encode(str_repeat('x', 32)),
+            'platform_backup.verification_connection' => null,
+            'platform_backup.verification_database_prefix' => '',
+            'platform_backup.verification_isolated' => false,
+            'queue.default' => 'database',
+            'queue.connections.database.driver' => 'database',
+            'queue.connections.database.queue' => 'default',
+        ]);
+        $this->asOwner();
+
+        $this->get(route('owner.platform-backups.index'))->assertOk()->assertSee(__('owner.platform_backups.states.verification_not_configured'));
+        $this->post(route('owner.platform-backups.run'), ['confirmation' => 'RUN PLATFORM BACKUP'])->assertStatus(409);
+        Queue::assertNothingPushed();
+    }
+
+    public function test_manual_backup_is_blocked_when_verifier_reuses_the_application_database_identity(): void
+    {
+        Queue::fake();
+        config([
+            'platform_backup.storage_driver' => 's3',
+            'platform_backup.source_connection' => 'mysql',
+            'database.connections.mysql.username' => 'shared-user',
+            'filesystems.disks.platform_backups.driver' => 's3',
+            'filesystems.disks.platform_backups.endpoint' => 'https://fsn1.your-objectstorage.com',
+            'filesystems.disks.platform_backups.region' => 'fsn1',
+            'filesystems.disks.platform_backups.bucket' => 'platform-private-bucket',
+            'filesystems.disks.platform_backups.key' => 'test-access',
+            'filesystems.disks.platform_backups.secret' => 'test-secret',
+            'platform_backup.encryption.current_key_id' => 'test-v1',
+            'platform_backup.encryption.keys.test-v1' => base64_encode(str_repeat('x', 32)),
+            'platform_backup.verification_connection' => 'm9_platform_verify',
+            'platform_backup.verification_database_prefix' => 'wpcg_m9_dr_test_',
+            'platform_backup.verification_isolated' => true,
+            'database.connections.m9_platform_verify' => array_merge(config('database.connections.mysql'), [
+                'driver' => 'mysql', 'host' => '127.0.0.1', 'database' => 'information_schema',
+                'username' => 'shared-user', 'password' => 'test-only-verifier-password',
+            ]),
+            'queue.default' => 'database',
+            'queue.connections.database.driver' => 'database',
+            'queue.connections.database.queue' => 'default',
+        ]);
+        $this->asOwner();
+
+        $this->get(route('owner.platform-backups.index'))
+            ->assertOk()
+            ->assertSee(__('owner.platform_backups.states.verification_not_configured'));
         $this->post(route('owner.platform-backups.run'), ['confirmation' => 'RUN PLATFORM BACKUP'])->assertStatus(409);
         Queue::assertNothingPushed();
     }

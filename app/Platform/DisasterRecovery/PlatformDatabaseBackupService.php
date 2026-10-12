@@ -21,21 +21,31 @@ final class PlatformDatabaseBackupService
 
     public function create(string $retentionClass = 'daily'): PlatformDatabaseBackup
     {
+        return $this->createWithMode($retentionClass, false);
+    }
+
+    public function createManual(string $retentionClass = 'daily'): PlatformDatabaseBackup
+    {
+        return $this->createWithMode($retentionClass, true);
+    }
+
+    private function createWithMode(string $retentionClass, bool $manualRun): PlatformDatabaseBackup
+    {
         $lock = Cache::lock('platform-database-backup:create', (int) config('platform_backup.timeout', 3600) + 300);
         if (! $lock->get()) {
             throw new RuntimeException('Another platform database backup is already in progress.');
         }
         try {
-            return $this->createLocked($retentionClass);
+            return $this->createLocked($retentionClass, $manualRun);
         } finally {
             $lock->release();
         }
     }
 
-    private function createLocked(string $retentionClass): PlatformDatabaseBackup
+    private function createLocked(string $retentionClass, bool $manualRun): PlatformDatabaseBackup
     {
         $backupSettings = app(OwnerSettings::class)->group('backups');
-        if (! (bool) $backupSettings['backups.primary.enabled']) {
+        if (! $manualRun && ! (bool) $backupSettings['backups.primary.enabled']) {
             throw new RuntimeException('Platform database backups are disabled.');
         }
 
