@@ -8,12 +8,22 @@ use App\Connector\JobStatus;
 use App\Connector\JobType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
 use Tests\Concerns\PairsConnectors;
 use Tests\TestCase;
 
 class RecoveryModeTest extends TestCase
 {
     use PairsConnectors, RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // The tests below exercise database rows directly. Keep unrelated
+        // queued notifications/jobs from fixture setup out of the jobs table.
+        Queue::fake();
+    }
 
     public function test_platform_recovery_mode_holds_site_changing_jobs_and_only_delivers_read_only_jobs(): void
     {
