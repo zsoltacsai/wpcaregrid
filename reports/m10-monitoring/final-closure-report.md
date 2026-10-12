@@ -2,15 +2,15 @@
 
 ## Final Owner validation continuation — 2026-10-12
 
-This section supersedes the provisional status and pending-owner-action statements below. The earlier sections remain as historical evidence and are not rewritten. The live SMTP and authenticated maintenance-window gates have now passed. PR #16 still requires this final evidence update to pass exact-head CI and merge before M10 can be declared closed.
+This section supersedes the provisional status and pending-owner-action statements below. The earlier sections remain as historical evidence and are not rewritten. The live SMTP and authenticated maintenance-window gates, exact-head CI, merge, and post-merge CI have all passed.
 
-**Current status:** staging validation passed; PR #16 final evidence integration is pending. **Do not declare M10 closed until PR #16 is merged and the final closure evidence is present on the primary branch.**
+**Verdict: A — M10 CLOSED.** The final evidence is present on the primary branch. The primary SHA at closure integration was `139705b952d8c3b2062415f52d6fe3af1c591cff`; this report-only follow-up records that completed state. The current primary branch SHA after this evidence update is reported in the final task response.
 
 ### Release, CI, and deployment
 
 - The maintenance submit-control correction was merged through PR #17. Merge commit and resulting primary SHA: `33c961f07c541cd243a411e1310aa9236383e6fb`.
 - PR #17 exact-head CI run `38296720170` passed all five jobs. Post-merge primary CI run `38298060346` passed all five jobs, including server MySQL concurrency, server SQLite, Connector MySQL, Connector SQLite, and quality/security/build.
-- PR #16 head before this final report update: `87d0360f4e2e2287e2e4ab9958b5c087f16caf2d`; exact-head CI run `38295706375` passed all five jobs. Updating this report creates a new head and requires a new exact-head CI run before merge.
+- Final closure PR #16 head: `243cedc67140dd755b3b58b76e0c52e1587b0552`; exact-head CI run `38301504636` passed all five jobs. PR #16 merged as `139705b952d8c3b2062415f52d6fe3af1c591cff` on 2026-10-12 20:11:09 UTC. Post-merge primary CI run `38302556871` passed all five jobs.
 - Staging was deployed by the guarded script to exact SHA `33c961f07c541cd243a411e1310aa9236383e6fb` using strict SSH host-key verification. The pre-deploy database backup is retained at `/home/deploy/private-backups/wpcaregrid-pre-deploy-20261012T194100Z.sql.gz`. No migration was pending. Workers restarted with new PIDs, scheduler resumed and became healthy, and deployment HTTP/security smoke checks passed. Staging checkout is detached, clean, and at the target SHA.
 - Connector remains 0.4.5. No production deployment occurred.
 
@@ -36,8 +36,12 @@ This section supersedes the provisional status and pending-owner-action statemen
 ### Current closure gates
 
 - Passed: SMTP delivery and `provider.mail` recovery; authenticated Owner maintenance creation/audit; suppression while observations continue; post-expiry delivery recovery; PR #17 and post-merge primary CI; guarded staging deploy and health; restore gates off; no active jobs, restores, or windows.
-- Pending: commit this final evidence update to PR #16, run all five CI jobs for its exact new head, merge PR #16, then record its merge SHA and final primary SHA in the closure report. This pending integration is the only remaining closure step; it is not an Owner infrastructure action.
+- Passed: the authenticated Owner UI drill, SMTP alert delivery and provider recovery, PR #16 exact-head CI and merge, post-merge primary CI, guarded staging deployment and health checks, restore gates OFF, and clean runtime/job state. There are no unresolved critical/high M10 implementation defects or remaining Owner closure actions.
 - Focused local `tests/Feature/Monitoring` validation for the current closure regression: **22 tests, 93 assertions, 1 skipped, 0 failures**. The skip is the concurrent first-failure test, which requires an explicitly named local MySQL test database; no migrations were run against an unspecified local database. The PR and post-merge remote MySQL suites passed.
+
+**Final M10 state:** Connector 0.4.5; approved M10 staging runtime SHA `33c961f07c541cd243a411e1310aa9236383e6fb`; global and synthetic restore gates OFF; active restores, WebsiteJobs, maintenance windows, queued jobs, and failed Laravel jobs all zero; monitoring pipeline, dispatch, workers, and provider.mail healthy. The vulnerability feed remains stale, WordPress Site Health remains attention with seven findings, and no completed security scan is available. These findings remain visible as degraded/unknown signals and are not launch blockers for M10. No production or customer mutation occurred.
+
+**Next milestone:** M11 — Subscription Lifecycle, Billing & Transactional Email. Begin with the planning-only phase required by the roadmap.
 
 **Assessment time:** 2026-10-12 17:22 UTC
 **Status:** Functionally implemented and deployed; closure remains conditional on Owner-controlled staging operations below.
