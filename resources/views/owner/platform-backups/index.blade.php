@@ -65,7 +65,9 @@
     <section class="mt-6 rounded-md border border-line bg-surface p-4 sm:p-6">
         <h2 class="text-base font-semibold">{{ __('owner.platform_backups.connection_test') }}</h2>
         <p class="mt-1 text-sm text-muted">
-            @if ($lastConnectionTest && $connectionTestMatchesCurrentDestination)
+            @if (! $providerConfigured)
+                {{ __('owner.platform_backups.connection_not_configured') }}
+            @elseif ($lastConnectionTest && $connectionTestMatchesCurrentDestination)
                 {{ __('owner.platform_backups.connection_last') }}:
                 {{ data_get($lastConnectionTest->data, 'result') === 'passed' ? __('owner.platform_backups.connection_result_passed') : __('owner.platform_backups.connection_result_failed') }}
                 · {{ $lastConnectionTest->created_at?->toIso8601String() }}
@@ -78,17 +80,20 @@
         <p class="mt-1 text-xs text-muted">{{ __('owner.platform_backups.connection_explainer') }}</p>
         <form method="POST" action="{{ route('owner.platform-backups.test-connection') }}" class="mt-3">
             @csrf
-            <button class="rounded border border-line-strong px-4 py-2 text-sm font-semibold" @disabled(! $configured)>{{ __('owner.platform_backups.connection_test') }}</button>
+            <button id="platform-backup-connection-test" class="rounded border border-line-strong px-4 py-2 text-sm font-semibold" @disabled(! $providerConfigured)>{{ __('owner.platform_backups.connection_test') }}</button>
         </form>
     </section>
 
     <section class="mt-6 rounded-md border border-warning/30 bg-warning/5 p-4 sm:p-6">
         <h2 class="text-base font-semibold">{{ __('owner.platform_backups.manual_backup') }}</h2>
         <p class="mt-1 text-sm text-muted">{{ __('owner.platform_backups.manual_warning') }}</p>
+        @if (! $encryptionKeyConfigured)
+            <p role="status" class="mt-2 text-sm text-warning-ink">{{ __('owner.platform_backups.encryption_key_missing') }}</p>
+        @endif
         <form method="POST" action="{{ route('owner.platform-backups.run') }}" class="mt-4 flex flex-wrap items-end gap-3">
             @csrf
             <label class="block text-sm"><span>{{ __('owner.platform_backups.type_confirmation') }}</span><input name="confirmation" required autocomplete="off" class="mt-1 block w-full rounded border-line bg-canvas"></label>
-            <button class="rounded bg-primary px-4 py-2 text-sm font-semibold text-white" @disabled(! $configured || ! $settings['backups.primary.enabled'])>{{ __('owner.platform_backups.request_backup') }}</button>
+            <button id="platform-backup-request" class="rounded bg-primary px-4 py-2 text-sm font-semibold text-white" @disabled(! $configured || ! $settings['backups.primary.enabled'])>{{ __('owner.platform_backups.request_backup') }}</button>
         </form>
     </section>
 
