@@ -3,10 +3,16 @@
 namespace Tests\Feature\Monitoring;
 
 use App\Connector\HealthStatus;
+use App\Models\MonitoringAlertDelivery;
+use App\Models\MonitoringIncident;
 use App\Models\MonitoringResult;
+use App\Models\MonitoringTransition;
 use App\Models\PlatformBackupDelivery;
 use App\Models\PlatformDatabaseBackup;
+use App\Models\User;
+use App\Models\Website;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -53,5 +59,32 @@ final class MonitoringInfrastructureTest extends TestCase
         $this->assertSame(HealthStatus::Attention, $result->state);
         $this->assertTrue($result->evidence['primary_verified']);
         $this->assertTrue($result->evidence['reconciliation_required']);
+    }
+
+    public function test_stale_monitoring_pipeline_opens_once_and_recovers_after_confirmed_fresh_probes(): void
+    {
+        Queue::fake();
+        User::factory()->create(['role' => User::ROLE_OWNER, 'email_verified_at' => now()]);
+        Website::factory()->create();
+        Cache::put('monitoring.last_probe_completed_at', now()->subMinutes(20)->toIso8601String(), now()->addHour());
+
+        $this->artisan('monitoring:run')->assertSuccessful();
+        $this->artisan('monitoring:run')->assertSuccessful();
+
+        $incident = MonitoringIncident::query()
+            ->where('check_id', 'monitoring.pipeline')
+            ->where('subject_id', 'probe-worker')
+            ->firstOrFail();
+        $this->assertSame('open', $incident->status);
+        $this->assertSame(1, MonitoringTransition::query()->where('incident_id', $incident->id)->where('event_type', 'opened')->count());
+        $this->assertSame(1, MonitoringAlertDelivery::query()->where('incident_id', $incident->id)->where('channel', 'in_app')->count());
+
+        Cache::put('monitoring.last_probe_completed_at', now()->toIso8601String(), now()->addHour());
+        $this->artisan('monitoring:run')->assertSuccessful();
+        $this->artisan('monitoring:run')->assertSuccessful();
+
+        $this->assertSame('resolved', $incident->refresh()->status);
+        $this->assertSame(2, MonitoringTransition::query()->where('incident_id', $incident->id)->count());
+        $this->assertSame(2, MonitoringAlertDelivery::query()->where('incident_id', $incident->id)->where('channel', 'in_app')->count());
     }
 }
