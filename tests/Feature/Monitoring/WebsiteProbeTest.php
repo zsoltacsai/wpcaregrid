@@ -6,6 +6,7 @@ use App\Connector\HealthStatus;
 use App\Models\MonitoringResult;
 use App\Models\Website;
 use App\Monitoring\PublicAddressLookup;
+use App\Monitoring\PublicOrigin;
 use App\Monitoring\WebsiteProbe;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -14,6 +15,25 @@ use Tests\TestCase;
 final class WebsiteProbeTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_dns_pinned_probe_does_not_select_guzzles_stream_handler(): void
+    {
+        $this->assertTrue(function_exists('curl_init'));
+        $origin = PublicOrigin::resolve('https://example.com', new class implements PublicAddressLookup
+        {
+            public function addresses(string $host): array
+            {
+                return ['93.184.216.34'];
+            }
+        });
+        $probe = app(WebsiteProbe::class);
+        $requestOptions = (new \ReflectionMethod($probe, 'pinnedRequestOptions'))->invoke($probe, $origin, true);
+
+        $this->assertArrayNotHasKey('stream', $requestOptions);
+        $this->assertArrayHasKey('curl', $requestOptions);
+        $this->assertSame(['example.com:443:93.184.216.34'], $requestOptions['curl'][CURLOPT_RESOLVE]);
+        $this->assertTrue($requestOptions['curl'][CURLOPT_CERTINFO]);
+    }
 
     public function test_redirect_dns_rebinding_to_private_ip_is_blocked_before_followup_request(): void
     {
