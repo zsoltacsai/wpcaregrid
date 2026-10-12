@@ -71,7 +71,6 @@ return [
             'endpoint' => env('PLATFORM_DB_BACKUP_S3_ENDPOINT'),
             'use_path_style_endpoint' => (bool) env('PLATFORM_DB_BACKUP_S3_PATH_STYLE', false),
             'visibility' => 'private',
-            'options' => ['ServerSideEncryption' => env('PLATFORM_DB_BACKUP_S3_ENCRYPTION', 'AES256')],
             'permissions' => ['file' => 0600, 'dir' => 0700],
             'throw' => true,
             'report' => false,
