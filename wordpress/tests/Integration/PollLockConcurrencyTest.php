@@ -338,6 +338,7 @@ final class PollLockConcurrencyTest extends TestCase
         $resultPrefix = $this->harness.'/'.$run.'-result-';
         $donePrefix = $this->harness.'/'.$run.'-done-';
         $workers = [];
+        $workerFailures = [];
 
         for ($id = 0; $id < $workersCount; $id++) {
             $workers[] = $this->startWorker([
@@ -387,11 +388,18 @@ final class PollLockConcurrencyTest extends TestCase
                     @touch($goPrefix.$iteration);
                 }
             }
+            foreach ($workers as $worker) {
+                try {
+                    $this->finishWorker($worker['process']);
+                } catch (\Throwable $error) {
+                    $workerFailures[] = $error;
+                }
+            }
             $this->clearLockDirectly();
         }
 
-        foreach ($workers as $worker) {
-            $this->finishWorker($worker['process']);
+        if ($workerFailures !== []) {
+            throw $workerFailures[0];
         }
 
         return $winners;
@@ -541,15 +549,25 @@ final class PollLockConcurrencyTest extends TestCase
             usleep(10000);
         } while (microtime(true) < $deadline);
 
-        if ($status['running']) {
+        $timedOut = $status['running'];
+        if ($timedOut) {
             proc_terminate($handle, 15);
-            $this->fail('Connector lock worker exceeded its bounded runtime.');
+            $deadline = microtime(true) + 5;
+            do {
+                $status = proc_get_status($handle);
+                if (! $status['running']) {
+                    break;
+                }
+                usleep(10000);
+            } while (microtime(true) < $deadline);
         }
         $stderr = stream_get_contents($process['pipes'][2]);
         fclose($process['pipes'][1]);
         fclose($process['pipes'][2]);
         $closed = proc_close($handle);
         $exit = $closed >= 0 ? $closed : (int) ($status['exitcode'] ?? -1);
+        $this->assertFalse($status['running'], 'Connector lock worker could not be stopped after exceeding its bounded runtime.');
+        $this->assertFalse($timedOut, 'Connector lock worker exceeded its bounded runtime.');
         $this->assertSame(0, $exit, 'Connector lock worker failed: '.$stderr);
     }
 

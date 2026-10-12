@@ -70,7 +70,17 @@ $write = static function (string $path, array $data) use ($insideRoot): void {
     if (! $insideRoot($path)) {
         throw new RuntimeException('Invalid test result path.');
     }
-    file_put_contents($path, wp_json_encode($data, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), LOCK_EX);
+    $temporary = $path.'.tmp-'.getmypid().'-'.bin2hex(random_bytes(6));
+    $json = wp_json_encode($data, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    if (file_put_contents($temporary, $json, LOCK_EX) !== strlen($json)) {
+        @unlink($temporary);
+        throw new RuntimeException('Could not write the complete test-process result.');
+    }
+    chmod($temporary, 0600);
+    if (! rename($temporary, $path)) {
+        @unlink($temporary);
+        throw new RuntimeException('Could not publish the test-process result atomically.');
+    }
 };
 
 if ($mode === 'loop') {
