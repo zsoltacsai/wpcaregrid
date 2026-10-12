@@ -53,6 +53,10 @@ final class PlatformBackupStorage
             // S3 adapter, `root` becomes an object-key prefix, so inheriting
             // that filesystem path would create invalid remote object keys.
             'root' => '',
+            // Platform artifacts are authenticated-encrypted before upload.
+            // Do not inherit provider-specific SSE headers: Hetzner's S3 API
+            // supports SSE-C, not the generic SSE-S3 AES256 option.
+            'options' => [],
             'key' => $key,
             'secret' => $secret,
             'bucket' => $bucket,
