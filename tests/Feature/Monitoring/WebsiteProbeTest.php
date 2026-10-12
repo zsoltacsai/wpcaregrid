@@ -5,6 +5,7 @@ namespace Tests\Feature\Monitoring;
 use App\Connector\HealthStatus;
 use App\Models\MonitoringResult;
 use App\Models\Website;
+use App\Monitoring\MonitoringEvidence;
 use App\Monitoring\PublicAddressLookup;
 use App\Monitoring\PublicOrigin;
 use App\Monitoring\WebsiteProbe;
@@ -52,6 +53,7 @@ final class WebsiteProbeTest extends TestCase
         }
 
         $this->assertTrue($truncated);
+        MonitoringEvidence::assertSafe(['response_truncated' => $truncated]);
     }
 
     public function test_redirect_dns_rebinding_to_private_ip_is_blocked_before_followup_request(): void
@@ -99,6 +101,9 @@ final class WebsiteProbeTest extends TestCase
         $result = MonitoringResult::query()->where('check_id', 'website.http')->firstOrFail();
         $this->assertSame(HealthStatus::Attention, $result->state);
         $this->assertSame(1, $result->consecutive_failures);
+        $this->assertSame('http.bad_status', $result->reason_code);
+        $this->assertSame(503, $result->evidence['http_status']);
+        $this->assertFalse($result->evidence['response_truncated']);
         $this->assertSame(now()->addMinutes(5)->timestamp, $result->next_check_at?->timestamp);
     }
 }

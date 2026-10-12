@@ -11,7 +11,7 @@ final class MonitoringEvidence
         'latency_ms', 'last_heartbeat_at', 'last_probe_completed_at', 'managed_site_count',
         'oldest_age_seconds', 'open_findings', 'presence', 'primary_verified', 'problem_count', 'probes_queued', 'pulse_age_seconds',
         'queue', 'queue_depth_supported', 'queue_driver', 'reconciliation_required', 'recent_failure',
-        'recently_verified', 'redirects', 'recovery_health', 'scan_status', 'site_health_reason',
+        'recently_verified', 'redirects', 'recovery_health', 'response_truncated', 'scan_status', 'site_health_reason',
         'scenario', 'verified_backup_available', 'encryption_key_configured',
     ];
 
