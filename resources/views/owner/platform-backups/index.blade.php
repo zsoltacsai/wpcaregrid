@@ -93,7 +93,7 @@
         <form method="POST" action="{{ route('owner.platform-backups.run') }}" class="mt-4 flex flex-wrap items-end gap-3">
             @csrf
             <label class="block text-sm"><span>{{ __('owner.platform_backups.type_confirmation') }}</span><input name="confirmation" required autocomplete="off" class="mt-1 block w-full rounded border-line bg-canvas"></label>
-            <button id="platform-backup-request" class="rounded bg-primary px-4 py-2 text-sm font-semibold text-white" @disabled(! $configured || ! $settings['backups.primary.enabled'])>{{ __('owner.platform_backups.request_backup') }}</button>
+            <button id="platform-backup-request" class="rounded bg-primary px-4 py-2 text-sm font-semibold text-white" @disabled(! $configured)>{{ __('owner.platform_backups.request_backup') }}</button>
         </form>
     </section>
 

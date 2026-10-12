@@ -29,7 +29,7 @@ final class PlatformDatabaseBackupJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(PlatformDatabaseBackupService $backups): void
     {
-        $backup = $backups->create('daily');
+        $backup = $backups->createManual('daily');
         if (! $backups->verify($backup)) {
             event(new PlatformRecoverySignal('platform_db_backup_verification_failed', ['backup_uuid' => $backup->uuid, 'reason' => 'manual_verification_failed']));
             throw new RuntimeException('Manual platform database backup failed verification.');

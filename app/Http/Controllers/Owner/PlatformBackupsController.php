@@ -53,6 +53,7 @@ final class PlatformBackupsController extends Controller
         $readiness = ! $providerConfigured ? 'not_configured' : match (true) {
             ! $appKeyConfigured => 'critical',
             ! $encryptionKeyConfigured => 'encryption_key_missing',
+            ! $this->mysqlVerificationConfigured() => 'verification_not_configured',
             ! $latest => 'stale',
             $ageHours >= 24 => 'stale',
             ! $storageAvailable => 'unavailable',
@@ -146,9 +147,7 @@ final class PlatformBackupsController extends Controller
     public function run(Request $request, PlatformBackupStorage $platformStorage): RedirectResponse
     {
         abort_unless($request->input('confirmation') === 'RUN PLATFORM BACKUP', 422, __('owner.platform_backups.run_confirmation_required'));
-        // The persisted Owner setting is authoritative. A long-lived process may
-        // have stale config after an operator changes the schedule.
-        abort_unless((bool) app(OwnerSettings::class)->get('backups.primary.enabled'), 409, __('owner.platform_backups.disabled'));
+        // A one-off, Owner-confirmed backup is independent of recurring scheduling.
         abort_unless($this->primaryConfigured($platformStorage), 409, __('owner.platform_backups.not_ready'));
         abort_unless(config('queue.connections.'.config('queue.default').'.driver') !== 'sync', 409, __('owner.platform_backups.async_queue_required'));
         PlatformDatabaseBackupJob::dispatch()->onQueue((string) config('queue.connections.'.config('queue.default').'.queue', 'default'));
@@ -212,7 +211,31 @@ final class PlatformBackupsController extends Controller
     {
         return $storage->configured($settingsOverride)
             && $storage->driver($settingsOverride) === 's3'
-            && $this->artifactEncryptionKeyConfigured();
+            && $this->artifactEncryptionKeyConfigured()
+            && $this->mysqlVerificationConfigured();
+    }
+
+    private function mysqlVerificationConfigured(): bool
+    {
+        $connectionName = (string) config('platform_backup.verification_connection');
+        $connection = $connectionName === '' ? null : config("database.connections.{$connectionName}");
+        $sourceName = (string) (config('platform_backup.source_connection') ?: config('database.default'));
+        $source = config("database.connections.{$sourceName}");
+        $prefix = (string) config('platform_backup.verification_database_prefix');
+        $database = strtolower((string) ($connection['database'] ?? ''));
+        $sourceDatabase = strtolower((string) ($source['database'] ?? ''));
+
+        return is_array($connection)
+            && ($connection['driver'] ?? null) === 'mysql'
+            && $connectionName !== $sourceName
+            && $database === 'information_schema'
+            && $database !== $sourceDatabase
+            && filled($connection['host'] ?? null)
+            && filled($connection['username'] ?? null)
+            && filled($connection['password'] ?? null)
+            && ($connection['username'] ?? null) !== ($source['username'] ?? null)
+            && (bool) config('platform_backup.verification_isolated')
+            && preg_match('/^wpcg_m9_dr_[A-Za-z0-9_]{0,32}$/', $prefix) === 1;
     }
 
     private function artifactEncryptionKeyConfigured(): bool
