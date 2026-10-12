@@ -36,6 +36,10 @@ Schedule::command('security:schedule')->hourly()->withoutOverlapping()->onOneSer
 Schedule::command('security:vulnerabilities:sync')->dailyAt('04:10')->withoutOverlapping()->onOneServer()
     ->when(fn () => config('security.vulnerabilities.source') === 'wordfence' && config('security.vulnerabilities.feed_url'));
 
+// Monitoring is a single bounded dispatcher; probe jobs are site-unique and queued.
+Schedule::command('monitoring:run')->everyFiveMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer();
+Schedule::command('monitoring:deliver-alerts')->everyMinute()->timezone('UTC')->withoutOverlapping()->onOneServer();
+
 // Owner system page: proof that the scheduler runs (a timestamp, nothing else).
 Schedule::call(fn () => Cache::forever(SystemStatus::SCHEDULER_HEARTBEAT, now()->toIso8601String()))
     ->everyMinute()->name('system:scheduler-heartbeat')->onOneServer();

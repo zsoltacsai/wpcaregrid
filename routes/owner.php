@@ -10,6 +10,7 @@ use App\Http\Controllers\Owner\InternalPlanController;
 use App\Http\Controllers\Owner\InvoiceIntentController;
 use App\Http\Controllers\Owner\InvoiceIntentTaxReviewController;
 use App\Http\Controllers\Owner\LoginController;
+use App\Http\Controllers\Owner\MonitoringController;
 use App\Http\Controllers\Owner\OperatorController;
 use App\Http\Controllers\Owner\OwnerSettingsController;
 use App\Http\Controllers\Owner\PlatformBackupsController;
@@ -120,6 +121,8 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::post('/seo/{section}/{locale}/discard', [ContentController::class, 'discard'])->middleware(['can:owner.seo.manage', 'throttle:owner-sensitive'])->name('seo.discard');
 
         Route::get('/system', SystemController::class)->middleware('can:owner.system.view')->name('system');
+        Route::get('/monitoring', [MonitoringController::class, 'index'])->middleware('can:owner.system.view')->name('monitoring.index');
+        Route::post('/monitoring/maintenance', [MonitoringController::class, 'storeMaintenance'])->middleware(['can:owner.system.view', 'throttle:owner-sensitive'])->name('monitoring.maintenance.store');
 
         Route::prefix('infrastructure/platform-backups')->name('platform-backups.')->middleware('can:owner.platform_backups.manage')->group(function () {
             Route::get('/', [PlatformBackupsController::class, 'index'])->name('index');

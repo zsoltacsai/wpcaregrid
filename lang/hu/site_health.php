@@ -5,6 +5,8 @@ return [
     'title' => 'Weboldal állapota',
 
     'dimensions' => [
+        'availability' => 'Webhely elérhetősége',
+        'tls' => 'TLS-tanúsítvány',
         'connector' => 'Kapcsolat',
         'wordpress' => 'WordPress',
         'backups' => 'Mentések',
