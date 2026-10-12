@@ -35,6 +35,25 @@ final class WebsiteProbeTest extends TestCase
         $this->assertTrue($requestOptions['curl'][CURLOPT_CERTINFO]);
     }
 
+    public function test_large_response_limit_marks_intentional_abort_as_truncation(): void
+    {
+        $probe = app(WebsiteProbe::class);
+        $truncated = false;
+        $callback = (new \ReflectionMethod($probe, 'progressCallback'))->invokeArgs($probe, [&$truncated]);
+
+        $callback(100000, 65536);
+        $this->assertFalse($truncated);
+
+        try {
+            $callback(100000, 65537);
+            $this->fail('Expected the bounded response callback to abort an oversized body.');
+        } catch (\DomainException $exception) {
+            $this->assertSame('monitoring.response_too_large', $exception->getMessage());
+        }
+
+        $this->assertTrue($truncated);
+    }
+
     public function test_redirect_dns_rebinding_to_private_ip_is_blocked_before_followup_request(): void
     {
         $website = Website::factory()->create(['url' => 'https://example.com']);

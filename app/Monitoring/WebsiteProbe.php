@@ -38,23 +38,38 @@ final class WebsiteProbe
 
             while (true) {
                 $path = ($uri->getPath() ?: '/').($uri->getQuery() !== '' ? '?'.$uri->getQuery() : '');
+                $responseStatus = null;
+                $responseLocation = null;
+                $responseBodyTruncated = false;
                 $options = $this->pinnedRequestOptions($origin, $tlsDue) + [
-                    'progress' => static function (int $downloadTotal, int $downloaded): void {
-                        if ($downloaded > 65536) {
-                            throw new \DomainException('monitoring.response_too_large');
-                        }
+                    'on_headers' => static function ($response) use (&$responseStatus, &$responseLocation): void {
+                        $responseStatus = $response->getStatusCode();
+                        $responseLocation = $response->getHeaderLine('Location') ?: null;
                     },
+                    'progress' => $this->progressCallback($responseBodyTruncated),
                     'on_stats' => static function ($stats) use (&$certificateInfo): void {
                         $certificateInfo = $stats->getHandlerStats()['certinfo'] ?? [];
                     },
                 ];
-                $response = Http::withOptions($options)
-                    ->withHeaders(['Range' => 'bytes=0-0', 'User-Agent' => 'WP-CareGrid-Monitor/1.0'])
-                    ->get($origin->url($path));
+                try {
+                    $response = Http::withOptions($options)
+                        ->withHeaders(['Range' => 'bytes=0-0', 'User-Agent' => 'WP-CareGrid-Monitor/1.0'])
+                        ->get($origin->url($path));
 
-                $status = $response->status();
-                $location = $response->header('Location');
-                $response->toPsrResponse()->getBody()->close();
+                    $status = $response->status();
+                    $location = $response->header('Location');
+                    $response->toPsrResponse()->getBody()->close();
+                } catch (\Throwable $requestException) {
+                    // Many healthy WordPress pages ignore Range. Once the status and
+                    // headers are received, stop the body at the cap but evaluate the
+                    // actual HTTP response instead of declaring the site unreachable.
+                    if (! $responseBodyTruncated || $responseStatus === null) {
+                        throw $requestException;
+                    }
+
+                    $status = $responseStatus;
+                    $location = $responseLocation;
+                }
                 if ($status >= 300 && $status < 400 && $status !== 304 && (! is_string($location) || $location === '')) {
                     throw new \DomainException('monitoring.redirect_refused');
                 }
@@ -87,7 +102,7 @@ final class WebsiteProbe
                     severity: $healthy ? null : ($state === HealthStatus::Attention ? MonitoringSeverity::Warning : MonitoringSeverity::Critical),
                     reasonCode: $reason,
                     source: 'active_probe',
-                    evidence: ['http_status' => $status, 'latency_ms' => $latency, 'redirects' => $redirects],
+                    evidence: ['http_status' => $status, 'latency_ms' => $latency, 'redirects' => $redirects, 'response_truncated' => $responseBodyTruncated],
                     freshnessSeconds: 600,
                     failureThreshold: 3,
                     recoveryThreshold: 2,
@@ -134,6 +149,7 @@ final class WebsiteProbe
                 freshnessSeconds: 600,
                 failureThreshold: 3,
                 recoveryThreshold: 2,
+                nextCheckSeconds: 300,
             ));
             if ($reason === MonitoringReason::HTTP_TLS_FAILED) {
                 $message = strtolower($exception->getMessage());
@@ -161,6 +177,16 @@ final class WebsiteProbe
             'proxy' => '',
             'curl' => $origin->curlResolve() + ($tlsDue ? [CURLOPT_CERTINFO => true] : []),
         ];
+    }
+
+    private function progressCallback(bool &$responseBodyTruncated): \Closure
+    {
+        return static function (int $downloadTotal, int $downloaded) use (&$responseBodyTruncated): void {
+            if ($downloaded > 65536) {
+                $responseBodyTruncated = true;
+                throw new \DomainException('monitoring.response_too_large');
+            }
+        };
     }
 
     /** @param list<array<string, string>> $certificateInfo */
