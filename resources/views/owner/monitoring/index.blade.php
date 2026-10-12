@@ -44,7 +44,7 @@
                 <label class="text-xs">{{ __('m10.reason') }}<input name="reason" required minlength="8" maxlength="255" class="mt-1 w-full rounded border-line"></label>
                 <label class="text-xs">{{ __('m10.starts_utc') }}<input type="datetime-local" name="starts_at" required class="mt-1 w-full rounded border-line"></label>
                 <label class="text-xs">{{ __('m10.ends_utc') }}<input type="datetime-local" name="ends_at" required class="mt-1 w-full rounded border-line"></label>
-                <div class="sm:col-span-2"><x-ui.button>{{ __('m10.create_maintenance') }}</x-ui.button><p class="mt-2 text-xs text-muted">{{ __('m10.maintenance_limit') }}</p></div>
+                <div class="sm:col-span-2"><x-ui.button type="submit">{{ __('m10.create_maintenance') }}</x-ui.button><p class="mt-2 text-xs text-muted">{{ __('m10.maintenance_limit') }}</p></div>
             </form>
             @if ($errors->any())<ul class="mt-3 text-sm text-danger">@foreach ($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul>@endif
         </x-operator.section>

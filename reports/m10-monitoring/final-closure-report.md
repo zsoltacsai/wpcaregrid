@@ -89,3 +89,13 @@ The M10 engineering implementation and staging monitoring core are functionally 
 
 **M10 implementation:** functionally complete. **M10 closure:** not yet complete.
 **Next milestone:** M11 — Subscription Lifecycle, Billing & Transactional Email, after the M10 Owner actions and closure review.
+
+## Addendum — final Owner validation continuation (2026-10-12)
+
+The Owner authenticated to the staging Owner Console and the maintenance-window form was exercised against the exact M8 synthetic website. This exposed a UI defect that the earlier direct-controller feature test did not cover: the form used the shared `x-ui.button` component, whose default HTML type is `button`, so clicking it did not submit the form. No maintenance window was created by the failed UI attempt, and no synthetic monitoring signal was triggered during that attempt.
+
+The closure branch now explicitly renders this form button as `type="submit"` and adds a regression asserting the Owner page renders a submit button. This is a narrow staging-runtime Blade fix, not deployed. The authenticated live UI drill remains pending until this closure PR can pass exact-head CI and enter the normal release path.
+
+Post-fix local `tests/Feature/Monitoring` suite: **21 passed, 1 skipped, 92 assertions**. Broader `--filter=Monitoring` run: **36 passed, 1 skipped, 109 assertions**. The skip is the simultaneous-first-failure concurrency test, which requires an explicitly named local MySQL test database; no migrations were run against an unspecified database. An initial Windows-shell attempt could not find PHP; WSL was used. The first WSL boot attempt lacked `APP_KEY`; the successful runs used an ephemeral dummy test key and a temporary empty `.env`, removed automatically on exit. No staging key was read or used.
+
+The latest previously checked PR #16 head was `8505feb7bb37e002042192b64636f56805a10fb0`; exact-head Actions run `38285990264` was blocked before jobs started by GitHub account payment/spending-limit policy. PR #16 remains unmerged. Since the submit-button fix is runtime view code, staging must be updated through the reviewed release flow before the authenticated UI drill can be marked passed. SMTP alert delivery also remains failed as recorded above; this task did not change SMTP credentials or claim recovery.

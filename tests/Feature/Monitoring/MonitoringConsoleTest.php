@@ -38,6 +38,16 @@ final class MonitoringConsoleTest extends TestCase
             ->assertSee('platform.database');
     }
 
+    public function test_owner_maintenance_form_renders_a_submit_button(): void
+    {
+        $this->asOwner();
+
+        $this->get(route('owner.monitoring.index'))
+            ->assertOk()
+            ->assertSee('<button type="submit"', false)
+            ->assertSee(__('m10.create_maintenance'));
+    }
+
     public function test_expired_healthy_observation_is_displayed_as_unknown_not_healthy(): void
     {
         $this->asOwner();
