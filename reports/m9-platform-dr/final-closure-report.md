@@ -89,3 +89,34 @@ This dated addendum preserves the preceding report as historical evidence and re
 ### Decision
 
 **M9 remains open — Owner action required.** The code is integrated, CI is green, and staging deployment is complete. Before the staging backup E2E can run, the Owner must provision a distinct private platform-backup bucket and separate restricted credential, enter those values directly in Owner Console → Infrastructure → Platform Backups (never chat), and verify a connection. Separately, the Owner must escrow the existing APP_KEY in an independent vault, test retrieval, then record the non-secret attestation in that page. After those actions, continue with the synthetic platform-backup write/readback/integrity/decrypt/import validation. Do not enable scheduling or declare M9 closed before all mandatory checks pass.
+
+## 2026-10-12 provider-test blocker release and staging validation
+
+This addendum records the subsequent provider-test fix and staging result. Earlier entries remain unchanged as historical evidence of the state at the time they were written.
+
+### Root cause and behavior
+
+- The Owner page had used the complete primary-backup readiness predicate for both the provider connection probe and backup execution. That predicate also requires a valid platform artifact-encryption key. On staging the S3 destination and dedicated credentials were present, but the artifact key ID/key were not, so the connection-test control was disabled for an unrelated prerequisite.
+- Runtime code now separates provider connectivity readiness from backup readiness. The test control requires the dedicated S3 driver, endpoint, region, bucket and platform-specific credentials. Manual backup still requires the valid artifact-encryption key and the existing full readiness checks; the server endpoint also remains fail-closed.
+- After deployment the already-open browser tab still displayed the old response until reloaded. The refreshed page showed the provider test enabled and the manual backup explicitly unavailable because the encryption key is missing. This was stale rendered UI, not a second server-side condition.
+
+### Implementation, regression tests and CI
+
+- Provider-gating implementation commit: `3ab887dd9fa210ee003082a8bc1969ef257825bc`; PR #5 merged as primary candidate `357dddfc8574e2626fd4f04259c1378a67624c25`.
+- PR #5 implementation CI run `38213323620` passed all five jobs. Local disposable Laravel validation: focused suite 65 passed, 1 skipped, 1,136 assertions; complete suite 1,067 passed, 23 skipped, 15,774 assertions. Local Connector MySQL suite: 202 tests, 1,775 assertions, 3 documented skips; the poll-lock process test was repeated five times (8 tests/229 assertions each).
+- The first CI on PR #5's merge commit, `38214100570`, exposed a separate Connector MySQL test-harness race: child-process JSON output could be read before its write completed, and cleanup could remove the shared lock row before all child processes exited. Test-only correction commit `0087d569c2c64dcae1b64f8103cbad16b7f62674` publishes results with same-directory atomic rename and reaps workers before shared-lock cleanup.
+- PR #6 CI run `38215692665` passed all five jobs. PR #6 was merged normally into `claude/ecstatic-wozniak-oemyuf` as `f63c47322da48ae37893ed604dfcbd6458f7ca7b`; primary-branch CI run `38216421542` passed all five jobs for that exact SHA. No force push or history rewrite was used.
+
+### Guarded staging deployment and provider test
+
+- Trusted staging identity was rechecked immediately before deploy: `stg1.wpcaregrid.com`, ED25519, `SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`. SSH used strict host-key checking.
+- Guarded deployment completed on 2026-10-12. Previous SHA: `22947f27c57113d128f65bc3238ed41efb56d4ed`. Deployed SHA: `f63c47322da48ae37893ed604dfcbd6458f7ca7b`. The deploy created `/home/deploy/private-backups/wpcaregrid-pre-deploy-20261012T071935Z.sql.gz`, found no pending migrations, rebuilt production caches, resumed the guarded scheduler, and restarted the two Laravel workers through the deploy procedure.
+- Post-deploy checks: clean checkout at the deployed SHA; both workers RUNNING; no pending migrations; app/database/queue/scheduler/Connector API and safety checks OK; `/up` and public health routes returned 200. Both `backup.restore.enabled` and `synthetic_fixtures.restore_enabled` remain false. Active restores 0, active WebsiteJobs 0, failed Laravel jobs 0. Scheduled platform backups remain disabled.
+- Owner Console showed endpoint host `fsn1.your-objectstorage.com`, region `fsn1`, bucket `wpcaregrid`, path-style false, dedicated access/secret credentials configured (values not read or exposed). The authorized, non-destructive bucket connection probe passed at `2026-10-12T07:22:59Z`. The matching audit event `platform_backup.s3_connection_tested` records `result=passed`, `error_code=null`, and the expected endpoint host/region/bucket/path-style. The probe is a bucket-access check; it did not create, upload, read back or delete an object.
+
+### Remaining M9 closure gates
+
+- APP_KEY is configured and the Owner Console records escrow/retrieval attestation (`Owner ID 1`, `2026-10-12T06:07:55Z`). No key value was read or copied.
+- Platform artifact encryption readiness is **not configured**: current key ID absent, key material invalid/absent, while Sodium is available. Owner Console reports **Encryption key missing** and explicitly blocks manual backup. Do not bypass this gate or create a throwaway key. Configure the stable key ID and encryption keyring in the approved secret-management channel, independently escrow/recover it, and verify readiness without disclosing values.
+- No platform backup, upload/readback, decrypt/import drill, or recurring schedule was run/enabled in this validation. The next safe technical phase, after artifact-key configuration and validation, is one controlled manual platform DB backup → remote readback/hash verification → isolated decrypt/import and schema/data checks. Only then reassess M9 closure.
+- Decision: provider-test blocker resolved; M9 remains open for the platform artifact-encryption-key Owner prerequisite and the backup/recovery validation gates. Estimated progress is approximately 95%; this is a planning estimate, not a substitute for the remaining evidence.
