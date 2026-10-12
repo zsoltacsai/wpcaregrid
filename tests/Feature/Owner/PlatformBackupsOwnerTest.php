@@ -144,6 +144,7 @@ final class PlatformBackupsOwnerTest extends TestCase
             $this->assertSame('m9-platform-private-test', $configuration['bucket']);
             $this->assertSame('fsn1', $configuration['region']);
             $this->assertSame('https://fsn1.your-objectstorage.com', $configuration['endpoint']);
+            $this->assertSame('', $configuration['root']);
             $this->assertTrue($configuration['use_path_style_endpoint']);
             $this->assertSame('env-platform-access-secret', $configuration['key']);
             $this->assertSame('env-platform-secret-value', $configuration['secret']);

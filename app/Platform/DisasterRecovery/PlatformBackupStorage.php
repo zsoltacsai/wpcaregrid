@@ -49,6 +49,10 @@ final class PlatformBackupStorage
 
         return array_merge($base, [
             'driver' => 's3',
+            // The base disk's root is the local-only backup directory. On an
+            // S3 adapter, `root` becomes an object-key prefix, so inheriting
+            // that filesystem path would create invalid remote object keys.
+            'root' => '',
             'key' => $key,
             'secret' => $secret,
             'bucket' => $bucket,
