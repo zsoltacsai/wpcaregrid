@@ -42,10 +42,14 @@ final class MonitoringConsoleTest extends TestCase
     {
         $this->asOwner();
 
-        $this->get(route('owner.monitoring.index'))
+        $response = $this->get(route('owner.monitoring.index'))
             ->assertOk()
-            ->assertSee('<button type="submit" data-testid="maintenance-window-submit"', false)
             ->assertSee(__('m10.create_maintenance'));
+
+        $matched = preg_match('/<button\b(?=[^>]*\bdata-testid="maintenance-window-submit")[^>]*>/s', $response->getContent(), $matches);
+
+        $this->assertSame(1, $matched);
+        $this->assertMatchesRegularExpression('/\btype="submit"/', $matches[0]);
     }
 
     public function test_expired_healthy_observation_is_displayed_as_unknown_not_healthy(): void
