@@ -26,7 +26,9 @@ class M11LifecycleValidationTest extends TestCase
         parent::setUp();
         Mail::fake();
         config([
-            'app.env' => 'staging',
+            // Staging intentionally runs with APP_ENV=production. The exact
+            // deployment identity, not APP_ENV, is the staging boundary.
+            'app.env' => 'production',
             'app.deployment_environment' => 'staging',
             'app.url' => 'https://staging.wpcaregrid.com',
             'app.deployment_hostname' => 'stg1.wpcaregrid.com',
@@ -39,6 +41,7 @@ class M11LifecycleValidationTest extends TestCase
 
     public function test_harness_is_owner_only_and_fails_closed_outside_exact_staging_identity(): void
     {
+        $this->assertSame('production', config('app.env'));
         $this->get(route('owner.billing.m11-lifecycle-validation.index'))->assertRedirect(route('owner.login'));
         $owner = $this->owner();
         $this->actingAs($owner, 'owner');

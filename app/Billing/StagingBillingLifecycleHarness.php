@@ -40,8 +40,7 @@ final class StagingBillingLifecycleHarness
 
     public function available(): bool
     {
-        return config('app.env') === 'staging'
-            && app(StagingIdentity::class)->allowsCurrentDeployment()
+        return app(StagingIdentity::class)->allowsCurrentDeployment()
             && config('services.stripe.mode') === 'test'
             && str_starts_with((string) config('services.stripe.secret'), 'sk_test_')
             && is_string(config('services.stripe.webhook_secret'))
