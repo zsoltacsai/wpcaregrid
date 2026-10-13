@@ -93,6 +93,10 @@ Route::middleware(['auth', 'customer'])->prefix('account')->name('account.')->gr
 
     Route::get('/subscription', [SubscriptionController::class, 'index'])->name('subscription');
     Route::get('/subscriptions/{subscription}', [SubscriptionController::class, 'show'])->name('subscriptions.show');
+    Route::post('/subscriptions/{subscription}/cancel', [SubscriptionController::class, 'cancel'])->middleware('throttle:account')->name('subscriptions.cancel');
+    Route::post('/subscriptions/{subscription}/reactivate', [SubscriptionController::class, 'reactivate'])->middleware('throttle:account')->name('subscriptions.reactivate');
+    Route::post('/subscriptions/{subscription}/change', [SubscriptionController::class, 'change'])->middleware('throttle:account')->name('subscriptions.change');
+    Route::post('/billing/payment-method', [SubscriptionController::class, 'paymentMethodPortal'])->middleware('throttle:account')->name('billing.payment-method');
 
     Route::get('/billing', BillingController::class)->name('billing');
 

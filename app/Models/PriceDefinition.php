@@ -6,6 +6,7 @@ use App\Pricing\PriceKey;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * A technical price managed in the owner area (docs/PRICING_ADMIN.md). The
@@ -56,5 +57,15 @@ class PriceDefinition extends Model
     public function draftAuthor(): BelongsTo
     {
         return $this->belongsTo(User::class, 'draft_updated_by');
+    }
+
+    public function versions(): HasMany
+    {
+        return $this->hasMany(PriceDefinitionVersion::class)->orderByDesc('version');
+    }
+
+    public function currentVersion(): BelongsTo
+    {
+        return $this->belongsTo(PriceDefinitionVersion::class, 'current_version_id');
     }
 }

@@ -47,3 +47,7 @@ Schedule::call(fn () => Cache::forever(SystemStatus::SCHEDULER_HEARTBEAT, now()-
 // Internal plans (PROBONO) and recovery offers follow their dates.
 Schedule::command('internal-plans:sync')->hourly()->withoutOverlapping()->onOneServer();
 Schedule::command('offers:expire')->hourly()->withoutOverlapping()->onOneServer();
+Schedule::command('stripe:webhooks:drain')->everyMinute()->timezone('UTC')->withoutOverlapping()->onOneServer();
+Schedule::command('billing:emails:drain')->everyMinute()->timezone('UTC')->withoutOverlapping()->onOneServer();
+Schedule::command('stripe:subscriptions:reconcile --limit=100')->everyFifteenMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer();
+Schedule::command('billing:subscriptions:expire-grace')->hourly()->timezone('UTC')->withoutOverlapping()->onOneServer();

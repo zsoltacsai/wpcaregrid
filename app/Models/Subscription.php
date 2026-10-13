@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Billing\InternalPlan;
+use App\Billing\SubscriptionEntitlements;
 use App\Billing\SubscriptionStatus;
 use App\Pricing\BillingInterval;
 use App\Pricing\Currency;
@@ -68,6 +69,11 @@ class Subscription extends Model
             'activated_at' => 'datetime',
             'activation_notified_at' => 'datetime',
             'stripe_synced_at' => 'datetime',
+            'grace_started_at' => 'datetime',
+            'grace_ends_at' => 'datetime',
+            'grace_expired_at' => 'datetime',
+            'pending_change_effective_at' => 'datetime',
+            'last_reconciled_at' => 'datetime',
             'metadata' => 'array',
         ];
     }
@@ -105,12 +111,19 @@ class Subscription extends Model
 
     public function grantsAccess(): bool
     {
-        if (! $this->status->grantsAccess()) {
-            return false;
+        return app(SubscriptionEntitlements::class)->allows($this);
+    }
+
+    public function beginPaymentGrace(Carbon $failedAt): void
+    {
+        if ($this->grace_started_at !== null) {
+            return;
         }
 
-        // An internal plan also stops at its end date, without waiting for the scheduled sync.
-        return ! $this->isInternal() || $this->internalWindowOpen();
+        $this->forceFill([
+            'grace_started_at' => $failedAt,
+            'grace_ends_at' => $failedAt->copy()->addDays(7),
+        ])->save();
     }
 
     /** Whether "now" is inside the internal plan's optional start and end dates. */

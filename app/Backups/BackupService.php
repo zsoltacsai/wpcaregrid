@@ -34,7 +34,7 @@ class BackupService
      */
     public function request(Website $website, BackupReason $reason, string $actor, ?BackupType $type = null, array $attributes = []): Backup
     {
-        $decision = $this->policy->for($website);
+        $decision = $this->policy->for($website, $reason);
         $type ??= $decision->type;
 
         if ($refusal = $this->refusal($website, $decision, $type, $reason)) {

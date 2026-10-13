@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Billing\CheckoutDiscountSnapshot;
 use App\Billing\SubscriptionBillingSnapshot;
 use App\Checkout\CheckoutStatus;
+use App\Models\BillingEmailOutbox;
 use App\Models\BillingInvoice;
 use App\Models\CheckoutIntent;
 use App\Models\Promotion;
@@ -364,6 +365,7 @@ class BillingSnapshotTest extends TestCase
         $this->subscription($intent, ['discounts' => [['source' => ['coupon' => ['id' => 'coupon_unknown']]]]])->assertStatus(204);
         $this->assertNull(Subscription::sole()->current_recurring_amount);
 
+        BillingEmailOutbox::query()->where('subscription_id', Subscription::sole()->id)->delete();
         Subscription::query()->delete();
         $intent = $this->intent(['stripe_checkout_session_id' => 'cs_snapshot_2']);
         $this->subscription($intent, ['discounts' => [[

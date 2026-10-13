@@ -155,7 +155,7 @@ final class JobQueue
 
         return match (true) {
             ! $connector?->isActive() || $connector->website_id !== $website->id => 'website is not connected',
-            ! $website->allowsServiceOperations() => 'subscription is not active',
+            ! $website->allowsServiceOperations($type === JobType::Restore ? 'restore' : 'service') => 'subscription is not active',
             ! $connector->can($capability) => "connector does not support {$capability->value}",
             // An internal plan that excludes backups (PROBONO): no backup or restore job is ever queued or
             // handed out, whatever created it. Checked again at delivery, so a job queued before the

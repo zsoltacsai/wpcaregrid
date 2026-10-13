@@ -9,6 +9,8 @@ use App\Models\MonitoringResult;
 use App\Models\MonitoringTransition;
 use App\Models\PlatformBackupDelivery;
 use App\Models\PlatformDatabaseBackup;
+use App\Models\StripeWebhookInbox;
+use App\Models\Subscription;
 use App\Models\User;
 use App\Models\Website;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -86,5 +88,38 @@ final class MonitoringInfrastructureTest extends TestCase
         $this->assertSame('resolved', $incident->refresh()->status);
         $this->assertSame(2, MonitoringTransition::query()->where('incident_id', $incident->id)->count());
         $this->assertSame(2, MonitoringAlertDelivery::query()->where('incident_id', $incident->id)->where('channel', 'in_app')->count());
+    }
+
+    public function test_normal_customer_payment_failure_is_not_reported_as_platform_billing_outage(): void
+    {
+        Queue::fake();
+        Subscription::factory()->create(['status' => 'past_due', 'grace_started_at' => now(), 'grace_ends_at' => now()->addDays(7)]);
+
+        $this->artisan('monitoring:run')->assertSuccessful();
+
+        $result = MonitoringResult::query()->where('check_id', 'billing.lifecycle')->firstOrFail();
+        $this->assertSame(HealthStatus::Healthy, $result->state);
+        $this->assertSame(0, $result->evidence['failed_webhooks']);
+    }
+
+    public function test_failed_billing_webhook_is_visible_to_m10_monitoring(): void
+    {
+        Queue::fake();
+        StripeWebhookInbox::query()->create([
+            'stripe_event_id' => 'evt_billing_monitor_failed',
+            'type' => 'invoice.paid',
+            'livemode' => false,
+            'payload' => json_encode(['id' => 'evt_billing_monitor_failed'], JSON_THROW_ON_ERROR),
+            'status' => 'failed',
+            'attempts' => 2,
+            'last_error_category' => 'ProviderTimeout',
+        ]);
+
+        $this->artisan('monitoring:run')->assertSuccessful();
+
+        $result = MonitoringResult::query()->where('check_id', 'billing.lifecycle')->firstOrFail();
+        $this->assertSame(HealthStatus::Attention, $result->state);
+        $this->assertSame('billing.webhook_failed', $result->reason_code);
+        $this->assertSame(1, $result->evidence['failed_webhooks']);
     }
 }

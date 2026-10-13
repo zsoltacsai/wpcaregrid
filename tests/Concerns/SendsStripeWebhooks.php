@@ -16,11 +16,12 @@ trait SendsStripeWebhooks
     }
 
     /** @param  array<string, mixed>  $object */
-    protected function stripeEvent(string $type, array $object, ?string $eventId = null, ?int $created = null, ?string $secret = null): TestResponse
+    protected function stripeEvent(string $type, array $object, ?string $eventId = null, ?int $created = null, ?string $secret = null, bool $livemode = false): TestResponse
     {
         $payload = json_encode([
             'id' => $eventId ?? 'evt_'.Str::random(20),
             'object' => 'event',
+            'livemode' => $livemode,
             'type' => $type,
             'created' => $created ?? time(),
             'data' => ['object' => $object],

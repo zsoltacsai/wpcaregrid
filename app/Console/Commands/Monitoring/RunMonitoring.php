@@ -44,6 +44,7 @@ final class RunMonitoring extends Command
         $this->storageProvider($engine);
         $this->mailProvider($engine);
         $this->stripeProvider($engine);
+        $this->billingLifecycle($engine);
         $this->security($engine);
         $this->pipeline($engine);
 
@@ -259,6 +260,41 @@ final class RunMonitoring extends Command
             $failed ? MonitoringReason::PROVIDER_STRIPE_DEGRADED : ($ok ? MonitoringReason::MONITORING_OK : MonitoringReason::MONITORING_SOURCE_UNVERIFIED),
             'owner_price_verification', ['recently_verified' => $ok, 'problem_count' => $recent ? (int) ($verification['problems'] ?? 0) : null],
             $at, 3600, 1, 1,
+        ));
+    }
+
+    private function billingLifecycle(MonitoringEngine $engine): void
+    {
+        $required = ['stripe_webhook_inbox', 'subscriptions', 'subscription_operations', 'invoice_issuance_attempts', 'billing_email_outbox'];
+        if (collect($required)->contains(fn (string $table) => ! Schema::hasTable($table))) {
+            $engine->record(new MonitoringObservation(
+                'billing.lifecycle', MonitoringScope::Platform, 'platform', 'billing', HealthStatus::Unknown,
+                null, MonitoringReason::MONITORING_SOURCE_UNVERIFIED, 'billing_domain', ['source_schema_ready' => false], now(), 900, 1, 1, false,
+            ));
+
+            return;
+        }
+
+        $counts = [
+            'failed_webhooks' => DB::table('stripe_webhook_inbox')->where('status', 'failed')->count(),
+            'failed_reconciliations' => DB::table('subscriptions')->where('reconciliation_status', 'failed')->count(),
+            'operations_needing_reconciliation' => DB::table('subscription_operations')->where('status', 'reconciliation_required')->count(),
+            'invoice_outcomes_unknown' => DB::table('invoice_issuance_attempts')->whereIn('status', ['submission_started', 'reconciliation_required'])->count(),
+            'email_delivery_failures' => DB::table('billing_email_outbox')->whereIn('status', ['failed', 'delivery_unknown'])->count(),
+        ];
+        $reason = match (true) {
+            $counts['failed_webhooks'] > 0 => MonitoringReason::BILLING_WEBHOOK_FAILED,
+            $counts['failed_reconciliations'] > 0 || $counts['operations_needing_reconciliation'] > 0 => MonitoringReason::BILLING_RECONCILIATION_FAILED,
+            $counts['invoice_outcomes_unknown'] > 0 => MonitoringReason::BILLING_INVOICE_PROVIDER_UNAVAILABLE,
+            $counts['email_delivery_failures'] > 0 => MonitoringReason::BILLING_MAIL_FAILED,
+            default => MonitoringReason::MONITORING_OK,
+        };
+        $degraded = $reason !== MonitoringReason::MONITORING_OK;
+        $engine->record(new MonitoringObservation(
+            'billing.lifecycle', MonitoringScope::Platform, 'platform', 'billing',
+            $degraded ? HealthStatus::Attention : HealthStatus::Healthy,
+            $degraded ? MonitoringSeverity::Warning : null,
+            $reason, 'billing_domain', $counts, now(), 900, 2, 2,
         ));
     }
 

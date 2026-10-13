@@ -49,5 +49,9 @@ return [
         'security.scan_overdue' => 'Elmaradt biztonsági vizsgálat', 'security.findings_open' => 'A biztonsági találatok figyelmet igényelnek', 'security.feed_stale' => 'Elavult sérülékenységi adatforrás',
         'security.critical_findings' => 'Kritikus biztonsági találatok', 'provider.s3_unavailable' => 'A platformmentés-tárhely ellenőrzése elmaradt',
         'provider.mail_unavailable' => 'Sikertelen e-mail-kézbesítés', 'provider.stripe_degraded' => 'Gyengült Stripe-integráció',
+        'billing.webhook_failed' => 'Egy Stripe számlázási webhook feldolgozásra vár',
+        'billing.reconciliation_failed' => 'Egy előfizetés Stripe-egyeztetést igényel',
+        'billing.invoice_provider_unavailable' => 'Egy számlázói eredmény egyeztetésre vár',
+        'billing.mail_failed' => 'Egy számlázási e-mail-kézbesítés felülvizsgálatra vár',
     ],
 ];

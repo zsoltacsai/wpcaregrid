@@ -17,6 +17,7 @@ final readonly class Price
         public bool $active,
         // Stripe Price IDs this price used before: still recognised for existing subscriptions, never charged anew.
         public array $retiredStripePriceIds = [],
+        public ?string $version = null,
     ) {}
 
     public function hasStripePrice(): bool

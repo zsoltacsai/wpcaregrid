@@ -121,6 +121,11 @@ class Customer extends Model
         return $this->hasMany(BillingInvoice::class)->latest('stripe_created_at');
     }
 
+    public function billingEmailOutbox(): HasMany
+    {
+        return $this->hasMany(BillingEmailOutbox::class)->latest('id');
+    }
+
     public function billingIdentities(): HasMany
     {
         return $this->hasMany(CustomerBillingIdentity::class)->orderByDesc('version');
@@ -136,7 +141,11 @@ class Customer extends Model
     {
         $granting = array_filter(SubscriptionStatus::cases(), fn (SubscriptionStatus $status) => $status->grantsAccess());
 
-        return $this->subscriptions()->whereIn('status', array_map(fn ($status) => $status->value, $granting))
+        return $this->subscriptions()->where(function ($query) use ($granting) {
+            $query->whereIn('status', array_map(fn ($status) => $status->value, $granting))
+                ->orWhere(fn ($grace) => $grace->where('status', SubscriptionStatus::PastDue->value)
+                    ->whereNotNull('grace_ends_at')->where('grace_ends_at', '>', now()));
+        })
             // An internal plan counts only inside its optional start and end dates.
             ->where(fn ($q) => $q->whereNull('internal_plan')->orWhere(fn ($i) => $i
                 ->where(fn ($s) => $s->whereNull('internal_starts_at')->orWhere('internal_starts_at', '<=', now()))

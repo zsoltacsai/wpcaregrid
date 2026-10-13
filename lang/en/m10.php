@@ -72,5 +72,9 @@ return [
         'provider.s3_unavailable' => 'Platform backup storage has not been recently verified',
         'provider.mail_unavailable' => 'Mail delivery has failed',
         'provider.stripe_degraded' => 'Stripe integration is degraded',
+        'billing.webhook_failed' => 'A Stripe billing webhook needs processing',
+        'billing.reconciliation_failed' => 'A subscription needs Stripe reconciliation',
+        'billing.invoice_provider_unavailable' => 'An invoice provider outcome needs reconciliation',
+        'billing.mail_failed' => 'A billing email delivery outcome needs review',
     ],
 ];

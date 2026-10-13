@@ -136,6 +136,25 @@ final class PriceEditor
                 'draft_updated_by' => null,
             ])->save();
 
+            $version = $definition->versions()->max('version') + 1;
+            $priceVersion = $definition->versions()->create([
+                'version' => $version,
+                'snapshot' => [
+                    'product_type' => $definition->product_type,
+                    'tier' => $definition->tier,
+                    'interval' => $definition->interval,
+                    'market' => $definition->market,
+                    'currency' => $definition->currency,
+                    'amount' => $definition->amount,
+                    'stripe_price_id' => $definition->stripe_price_id,
+                    'active' => $definition->active,
+                    'retired_stripe_price_ids' => $definition->retired_stripe_price_ids ?? [],
+                ],
+                'published_by' => $owner->id,
+                'published_at' => $definition->published_at,
+            ]);
+            $definition->forceFill(['current_version_id' => $priceVersion->id])->save();
+
             AdminAudit::record($owner, 'price.published', 'price', $key->value(), [
                 'price' => $key->value(),
                 'amount' => $draft['amount'],

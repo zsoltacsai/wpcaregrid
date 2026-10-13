@@ -47,6 +47,7 @@ final class PricingOverrides
                 'stripe_price_id' => $definition['stripe_price_id'],
                 'active' => (bool) $definition['active'],
                 'retired_stripe_price_ids' => (array) ($definition['retired_stripe_price_ids'] ?? []),
+                'pricing_version' => (string) ($definition['pricing_version'] ?? ''),
             ];
 
             $index = $this->find($config['prices'], $row);
@@ -79,8 +80,11 @@ final class PricingOverrides
         try {
             return Cache::rememberForever(self::CACHE_KEY, fn () => PriceDefinition::published()
                 ->orderBy('id')
-                ->get(['product_type', 'tier', 'interval', 'market', 'currency', 'amount', 'stripe_price_id', 'active', 'retired_stripe_price_ids'])
-                ->map(fn (PriceDefinition $definition) => $definition->only(['product_type', 'tier', 'interval', 'market', 'currency', 'amount', 'stripe_price_id', 'active', 'retired_stripe_price_ids']))
+                ->get(['id', 'product_type', 'tier', 'interval', 'market', 'currency', 'amount', 'stripe_price_id', 'active', 'retired_stripe_price_ids', 'current_version_id'])
+                ->map(fn (PriceDefinition $definition) => [
+                    ...$definition->only(['product_type', 'tier', 'interval', 'market', 'currency', 'amount', 'stripe_price_id', 'active', 'retired_stripe_price_ids']),
+                    'pricing_version' => $definition->current_version_id ? 'published:'.$definition->current_version_id : 'published:'.$definition->id,
+                ])
                 ->all());
         } catch (QueryException $e) {
             Log::warning('Published prices could not be read; config/pricing.php is used.', ['error' => $e->getMessage()]);

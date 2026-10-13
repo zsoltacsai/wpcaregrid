@@ -3,6 +3,12 @@
 namespace App\Providers;
 
 use App\Backups\Storage\StorageManager;
+use App\Billing\PaymentMethodPortalGateway;
+use App\Billing\StripeApiSubscriptionReader;
+use App\Billing\StripePaymentMethodPortalGateway;
+use App\Billing\StripeSubscriptionManagementGateway;
+use App\Billing\StripeSubscriptionReader;
+use App\Billing\SubscriptionManagementGateway;
 use App\Checkout\CheckoutGateway;
 use App\Checkout\PromotionGateway;
 use App\Checkout\StripeCheckoutGateway;
@@ -72,6 +78,20 @@ class AppServiceProvider extends ServiceProvider
 
         // One set of storage connections per request or queue job.
         $this->app->scoped(StorageManager::class);
+
+        $this->app->bind(SubscriptionManagementGateway::class, fn () => new StripeSubscriptionManagementGateway(
+            config('services.stripe.secret'),
+            (bool) config('services.stripe.allow_live_mode'),
+        ));
+        $this->app->bind(PaymentMethodPortalGateway::class, fn () => new StripePaymentMethodPortalGateway(
+            config('services.stripe.secret'),
+            config('services.stripe.payment_method_portal_configuration'),
+            (bool) config('services.stripe.allow_live_mode'),
+        ));
+        $this->app->bind(StripeSubscriptionReader::class, fn () => new StripeApiSubscriptionReader(
+            config('services.stripe.secret'),
+            (bool) config('services.stripe.allow_live_mode'),
+        ));
 
         // The operator console reads findings only through this interface.
         $this->app->singleton(SecurityScanner::class, EngineScanner::class);

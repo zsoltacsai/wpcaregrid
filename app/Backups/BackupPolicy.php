@@ -20,7 +20,7 @@ class BackupPolicy
         private readonly StorageManager $storage,
     ) {}
 
-    public function for(Website $website): PolicyDecision
+    public function for(Website $website, ?BackupReason $reason = null): PolicyDecision
     {
         $subscription = $website->subscription;
         $plan = $subscription?->product_type && $subscription->plan ? $this->catalog->plan($subscription->product_type, $subscription->plan) : null;
@@ -66,7 +66,7 @@ class BackupPolicy
         $refusal = match (true) {
             $internal !== null && ! $internal->includesBackups() => 'BACKUPS_NOT_INCLUDED',
             $plan === null || $settings === [] => 'NO_BACKUP_PLAN',
-            ! $website->allowsServiceOperations() => 'SUBSCRIPTION_INACTIVE',
+            ! $website->allowsServiceOperations($reason === BackupReason::PreRestore ? 'restore' : 'service') => 'SUBSCRIPTION_INACTIVE',
             $storage === null => 'STORAGE_NOT_CONFIGURED',
             default => null,
         };

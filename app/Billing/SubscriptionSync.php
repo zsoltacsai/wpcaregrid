@@ -2,17 +2,16 @@
 
 namespace App\Billing;
 
-use App\Mail\SubscriptionActivated;
-use App\Mail\SubscriptionCanceled;
 use App\Models\BillingInvoice;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Subscription;
+use App\Models\SubscriptionOperation;
+use App\Owner\AdminAudit;
 use App\Pricing\PricingCatalog;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use UnexpectedValueException;
 
 /**
@@ -25,6 +24,7 @@ final class SubscriptionSync
         private readonly PricingCatalog $catalog,
         private readonly ProvisionCustomer $provision,
         private readonly SubscriptionBillingSnapshot $billingSnapshot,
+        private readonly QueueBillingEmail $billingEmails,
     ) {}
 
     /**
@@ -114,8 +114,25 @@ final class SubscriptionSync
 
         $stripePriceId ??= $subscription->stripe_price_id;
 
+        $scheduledChange = $subscription->pending_change_status === 'scheduled'
+            && is_string($subscription->pending_stripe_price_id)
+            && hash_equals($subscription->pending_stripe_price_id, (string) $stripePriceId);
+        $scheduledPeriodStart = $this->time($item->current_period_start ?? $stripe->current_period_start ?? null);
+        $scheduledChangeEffective = $scheduledChange
+            && $subscription->pending_change_effective_at
+            && $scheduledPeriodStart
+            && $scheduledPeriodStart->greaterThanOrEqualTo($subscription->pending_change_effective_at);
+        $awaitingPaymentChange = $subscription->pending_change_status === 'awaiting_payment'
+            && is_string($subscription->pending_stripe_price_id)
+            && hash_equals($subscription->pending_stripe_price_id, (string) $stripePriceId);
+        $deferPriceFields = $awaitingPaymentChange || ($scheduledChange && ! $scheduledChangeEffective);
+        $storedStripePriceId = $awaitingPaymentChange ? $subscription->stripe_price_id : $stripePriceId;
+
         // Plan changes made in Stripe (e.g. a later billing portal) follow the price.
-        if ($stripePriceId && ($price = $this->catalog->priceByStripeId($stripePriceId))) {
+        // An immediate CareGrid plan change remains pending until its invoice is
+        // paid; a scheduled downgrade retains old entitlements until renewal.
+        if (! $awaitingPaymentChange && ! ($scheduledChange && ! $scheduledChangeEffective)
+            && $stripePriceId && ($price = $this->catalog->priceByStripeId($stripePriceId))) {
             $subscription->fill([
                 'product_type' => $price->productType,
                 'plan' => $price->tier,
@@ -130,9 +147,10 @@ final class SubscriptionSync
         $subscription->fill([
             'billing_source' => 'stripe',
             'stripe_customer_id' => $stripe->customer ?? $subscription->stripe_customer_id,
-            'stripe_price_id' => $stripePriceId,
-            'amount' => $item->price->unit_amount ?? $subscription->amount,
-            'currency' => isset($item->price->currency) ? strtoupper($item->price->currency) : $subscription->currency,
+            'stripe_price_id' => $storedStripePriceId,
+            'pricing_version' => $deferPriceFields ? $subscription->pricing_version : ($intent?->pricing_version ?? $subscription->pricing_version),
+            'amount' => $deferPriceFields ? $subscription->amount : ($item->price->unit_amount ?? $subscription->amount),
+            'currency' => $deferPriceFields ? $subscription->currency : (isset($item->price->currency) ? strtoupper($item->price->currency) : $subscription->currency),
             'status' => $status,
             // Since Stripe API 2025-03-31 periods live on subscription items.
             'current_period_start' => $this->time($item->current_period_start ?? $stripe->current_period_start ?? null),
@@ -144,7 +162,36 @@ final class SubscriptionSync
             'stripe_synced_event_id' => $eventId,
             'billing_snapshot_confirmed_at' => $eventTime,
         ]);
-        $subscription->fill($this->billingSnapshot->fromStripe($stripe, $subscription, $item->price ?? null));
+        if (! $deferPriceFields) {
+            $subscription->fill($this->billingSnapshot->fromStripe($stripe, $subscription, $item->price ?? null));
+        }
+
+        if ($scheduledChange && ! $scheduledChangeEffective) {
+            // Stripe accepts the no-proration item update now. The SaaS retains
+            // the paid-through plan until the new billing period begins.
+            $subscription->stripe_price_id = $stripePriceId;
+        } elseif ($scheduledChangeEffective) {
+            $subscription->forceFill([
+                'plan' => $subscription->pending_plan,
+                'interval' => $subscription->pending_interval,
+                'stripe_price_id' => $subscription->pending_stripe_price_id,
+                'pricing_version' => $subscription->pending_pricing_version,
+                'pending_plan' => null,
+                'pending_interval' => null,
+                'pending_stripe_price_id' => null,
+                'pending_pricing_version' => null,
+                'pending_change_effective_at' => null,
+                'pending_change_status' => null,
+            ]);
+        }
+
+        if ($status === SubscriptionStatus::PastDue) {
+            $subscription->grace_started_at ??= $eventTime;
+            $subscription->grace_ends_at ??= $eventTime->copy()->addDays(7);
+        } elseif ($status->grantsAccess()) {
+            $subscription->grace_started_at = null;
+            $subscription->grace_ends_at = null;
+        }
 
         // A selected local promotion is only an expectation until Stripe returns its discount object.
         if ($intent?->promotion_id && ! $this->hasDiscountState($stripe) && ! $subscription->stripe_coupon_id) {
@@ -165,6 +212,34 @@ final class SubscriptionSync
         $this->recordActivation($subscription);
         $subscription->save();
 
+        if ($scheduledChangeEffective) {
+            SubscriptionOperation::query()
+                ->where('subscription_id', $subscription->id)
+                ->where('operation', 'downgrade')
+                ->whereIn('status', ['awaiting_confirmation', 'reconciliation_required'])
+                ->whereJsonContains('request_snapshot->target_stripe_price_id', $stripePriceId)
+                ->update(['status' => 'confirmed', 'confirmed_at' => now(), 'updated_at' => now()]);
+        }
+
+        if ($subscription->exists) {
+            $confirmedCancellationOperation = SubscriptionOperation::query()
+                ->where('subscription_id', $subscription->id)
+                ->whereIn('status', ['awaiting_confirmation', 'reconciliation_required'])
+                ->where('operation', (bool) ($stripe->cancel_at_period_end ?? false) ? 'cancel_at_period_end' : 'reactivate')
+                ->whereJsonContains('request_snapshot->cancel_at_period_end', (bool) ($stripe->cancel_at_period_end ?? false))
+                ->update(['status' => 'confirmed', 'confirmed_at' => now(), 'updated_at' => now()]);
+            if ($confirmedCancellationOperation > 0 && $subscription->customer) {
+                $cancelAtPeriodEnd = (bool) ($stripe->cancel_at_period_end ?? false);
+                $period = $subscription->current_period_end?->utc()->format('YmdHis') ?? 'period-unknown';
+                $this->billingEmails->enqueue(
+                    'subscription:'.$subscription->uuid.':'.($cancelAtPeriodEnd ? 'cancel-scheduled' : 'reactivated').':'.$period,
+                    $cancelAtPeriodEnd ? 'cancellation_scheduled' : 'subscription_reactivated',
+                    $subscription->customer,
+                    $subscription,
+                );
+            }
+        }
+
         // An invoice event can arrive before the subscription event. Attach
         // those Stripe-authoritative rows once the local subscription exists.
         $invoiceUpdate = ['subscription_id' => $subscription->id];
@@ -181,7 +256,12 @@ final class SubscriptionSync
             ->update($invoiceUpdate);
 
         if ($previousStatus && $previousStatus !== SubscriptionStatus::Canceled && $status === SubscriptionStatus::Canceled && $subscription->customer) {
-            Mail::to($subscription->customer->email)->queue((new SubscriptionCanceled($subscription))->afterCommit());
+            $this->billingEmails->enqueue(
+                'subscription:'.$subscription->uuid.':canceled:'.($subscription->ended_at?->utc()->format('YmdHis') ?? $eventTime->utc()->format('YmdHis')),
+                'subscription_canceled',
+                $subscription->customer,
+                $subscription,
+            );
         }
 
         $this->notifyActivation($subscription);
@@ -245,6 +325,7 @@ final class SubscriptionSync
                 'billing_source' => 'stripe',
                 'checkout_intent_id' => $intent->id,
                 'stripe_price_id' => $intent->stripe_price_id,
+                'pricing_version' => $intent->pricing_version,
                 'product_type' => $intent->product_type,
                 'plan' => $intent->plan,
                 'interval' => $intent->interval,
@@ -266,6 +347,7 @@ final class SubscriptionSync
             'stripe_subscription_id' => $stripeSubscriptionId,
             'billing_source' => 'stripe',
             'stripe_price_id' => $stripePriceId,
+            'pricing_version' => $price->version,
             'product_type' => $price->productType,
             'plan' => $price->tier,
             'interval' => $price->interval,
@@ -355,7 +437,15 @@ final class SubscriptionSync
 
         if ($subscription->activated_at && ! $subscription->activation_notified_at && $customer) {
             $subscription->forceFill(['activation_notified_at' => now()])->save();
-            Mail::to($customer->email)->queue((new SubscriptionActivated($subscription))->afterCommit());
+            AdminAudit::record(null, 'billing.subscription_activated', 'subscription', $subscription->uuid, [
+                'customer_uuid' => $customer->uuid,
+            ]);
+            $this->billingEmails->enqueue(
+                'subscription:'.$subscription->uuid.':activated:'.$subscription->activated_at->utc()->format('YmdHis'),
+                'subscription_activated',
+                $customer,
+                $subscription,
+            );
         }
     }
 

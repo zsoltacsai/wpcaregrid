@@ -80,6 +80,14 @@ final class MonitoringReason
 
     public const PROVIDER_STRIPE_DEGRADED = 'provider.stripe_degraded';
 
+    public const BILLING_WEBHOOK_FAILED = 'billing.webhook_failed';
+
+    public const BILLING_RECONCILIATION_FAILED = 'billing.reconciliation_failed';
+
+    public const BILLING_INVOICE_PROVIDER_UNAVAILABLE = 'billing.invoice_provider_unavailable';
+
+    public const BILLING_MAIL_FAILED = 'billing.mail_failed';
+
     public const MONITORING_STALE = 'monitoring.pipeline_stale';
 
     public const MONITORING_SOURCE_UNVERIFIED = 'monitoring.source_unverified';

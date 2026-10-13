@@ -38,6 +38,8 @@ return [
         'secret' => env('STRIPE_SECRET'),
         'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
         'allow_live_mode' => (bool) env('STRIPE_ALLOW_LIVE_MODE', false),
+        'mode' => env('STRIPE_MODE', env('STRIPE_ALLOW_LIVE_MODE', false) ? 'live' : 'test'),
+        'payment_method_portal_configuration' => env('STRIPE_PAYMENT_METHOD_PORTAL_CONFIGURATION'),
     ],
 
     'cloudflare' => [

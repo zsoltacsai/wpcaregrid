@@ -121,6 +121,9 @@ return [
         ],
     ],
     'customers' => [
+        'billing_emails' => 'Legutóbbi számlázási e-mail-kézbesítések',
+        'pending_change' => 'Függő előfizetés-módosítás',
+        'reconciliation' => 'Stripe-egyeztetés',
         'vat' => [
             'queue' => 'Adószám-ellenőrzések',
             'queue_empty' => 'Nincs függőben lévő adószám-ellenőrzés.',

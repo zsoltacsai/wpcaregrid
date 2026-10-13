@@ -6,6 +6,7 @@ use App\Checkout\CheckoutGateway;
 use App\Models\AdminAuditEvent;
 use App\Models\CheckoutIntent;
 use App\Models\PriceDefinition;
+use App\Models\PriceDefinitionVersion;
 use App\Pricing\BillingInterval;
 use App\Pricing\Exceptions\PriceInactive;
 use App\Pricing\PlanTier;
@@ -117,6 +118,7 @@ class PricingAdminTest extends TestCase
 
         $intent = CheckoutIntent::sole();
         $this->assertSame([1999000, 'HUF', 'price_business_2027'], [$intent->amount, $intent->currency, $intent->stripe_price_id]);
+        $this->assertStringStartsWith('published:', $intent->pricing_version);
     }
 
     /** @return array<string, array{0: array<string, mixed>, 1: string}> */
@@ -164,6 +166,7 @@ class PricingAdminTest extends TestCase
         $this->asOwner();
         $this->draft([]);
         $this->publish();
+        $firstVersion = PriceDefinition::sole()->current_version_id;
         $this->draft(['amount' => '20990', 'stripe_price_id' => 'price_business_2028']);
         $this->publish();
 
@@ -174,6 +177,15 @@ class PricingAdminTest extends TestCase
         }
         $this->assertSame('price_business_2028', $this->businessMonthly()->stripePriceId);
         $this->assertSame(['price_wordpress_business_monthly_HUF', 'price_business_2027'], PriceDefinition::sole()->retired_stripe_price_ids);
+        $versions = PriceDefinitionVersion::where('price_definition_id', PriceDefinition::sole()->id)->orderBy('version')->get();
+        $this->assertCount(2, $versions);
+        $this->assertSame($firstVersion, $versions[0]->id);
+        $this->assertSame([1999000, 'price_business_2027'], [
+            $versions[0]->snapshot['amount'], $versions[0]->snapshot['stripe_price_id'],
+        ]);
+        $this->assertSame(2, $versions[1]->version);
+        $this->expectException(\LogicException::class);
+        $versions[0]->update(['snapshot' => []]);
 
         // A retired Price ID cannot be given to another price.
         $this->draft(['stripe_price_id' => 'price_business_2027'], 'wordpress.secure.monthly.hu')->assertSessionHasErrors('stripe_price_id');

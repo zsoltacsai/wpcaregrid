@@ -118,6 +118,10 @@ final class PricingCatalog
                 stripePriceId: $price['stripe_price_id'] ?? null,
                 active: (bool) ($price['active'] ?? true),
                 retiredStripePriceIds: array_values(array_filter((array) ($price['retired_stripe_price_ids'] ?? []), 'is_string')),
+                version: $price['pricing_version'] ?? 'config-'.substr(hash('sha256', implode('|', [
+                    $price['product_type'], $price['plan'], $price['interval'], $price['market'],
+                    $price['currency'], (string) $price['amount'], (string) ($price['stripe_price_id'] ?? ''),
+                ])), 0, 32),
             );
         }
 

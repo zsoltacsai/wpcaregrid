@@ -115,6 +115,25 @@
                                 <td class="px-2 py-2 font-mono text-xs">{{ $subscription->nextBillingDate()?->format('Y-m-d') ?? ($subscription->cancel_at_period_end ? __('owner.customers.cancels') : '—') }}</td>
                                 <td class="px-2 py-2 text-xs">{{ $customer->websites->firstWhere('subscription_id', $subscription->id)?->host() ?? '—' }}</td>
                             </tr>
+                            @if ($subscription->pending_change_status || $subscription->reconciliation_status !== 'pending')
+                                <tr>
+                                    <td colspan="6" class="px-2 pb-3 text-xs text-muted">
+                                        @if ($subscription->pending_change_status)
+                                            {{ __('owner.customers.pending_change') }}:
+                                            {{ $subscription->pending_plan ? __('owner.tiers.'.$subscription->pending_plan) : '—' }}
+                                            · {{ $subscription->pending_interval ?? '—' }}
+                                            · {{ $subscription->pending_change_status }}
+                                            · {{ $subscription->pending_change_effective_at?->format('Y-m-d') ?? '—' }}
+                                            <br>
+                                        @endif
+                                        {{ __('owner.customers.reconciliation') }}: {{ $subscription->reconciliation_status }}
+                                        · {{ $subscription->last_reconciled_at?->format('Y-m-d H:i') ?? '—' }}
+                                        @if ($subscription->reconciliation_error_category)
+                                            · {{ $subscription->reconciliation_error_category }}
+                                        @endif
+                                    </td>
+                                </tr>
+                            @endif
                         @endforeach
                     </tbody>
                 </table>
@@ -137,6 +156,19 @@
             @endforeach
         @endif
     </x-operator.section>
+
+    @if ($customer->billingEmailOutbox->isNotEmpty())
+        <x-operator.section :title="__('owner.customers.billing_emails')" id="customer-billing-emails" class="mt-4">
+            <ul class="divide-y divide-line text-xs">
+                @foreach ($customer->billingEmailOutbox as $delivery)
+                    <li class="flex flex-wrap items-center justify-between gap-2 py-2">
+                        <span>{{ $delivery->created_at?->format('Y-m-d H:i') }} · {{ $delivery->notification }}</span>
+                        <span>{{ $delivery->status }}{{ $delivery->failure_category ? ' · '.$delivery->failure_category : '' }}</span>
+                    </li>
+                @endforeach
+            </ul>
+        </x-operator.section>
+    @endif
 
     @php
         $internal = $customer->subscriptions->filter(fn ($s) => $s->isInternal());
