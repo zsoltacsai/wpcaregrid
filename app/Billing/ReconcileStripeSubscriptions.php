@@ -72,11 +72,35 @@ final class ReconcileStripeSubscriptions
                             return 'skipped';
                         }
 
-                        $before = [$locked->status?->value, $locked->stripe_price_id, $locked->cancel_at_period_end, $locked->current_period_end?->timestamp];
+                        $before = [
+                            $locked->status?->value,
+                            $locked->getRawOriginal('plan'),
+                            $locked->getRawOriginal('interval'),
+                            $locked->stripe_price_id,
+                            $locked->cancel_at_period_end,
+                            $locked->current_period_end?->timestamp,
+                            $locked->pending_change_status,
+                            $locked->getRawOriginal('pending_plan'),
+                            $locked->getRawOriginal('pending_interval'),
+                            $locked->pending_stripe_price_id,
+                            $locked->pending_change_effective_at?->timestamp,
+                        ];
                         $eventTime = max(now()->timestamp, ($locked->stripe_synced_at?->timestamp ?? 0) + 1);
                         $this->sync->apply($remote, $eventTime, 'reconcile_'.bin2hex(random_bytes(12)), $providerScheduleConfirmed);
                         $locked->refresh();
-                        $after = [$locked->status?->value, $locked->stripe_price_id, $locked->cancel_at_period_end, $locked->current_period_end?->timestamp];
+                        $after = [
+                            $locked->status?->value,
+                            $locked->getRawOriginal('plan'),
+                            $locked->getRawOriginal('interval'),
+                            $locked->stripe_price_id,
+                            $locked->cancel_at_period_end,
+                            $locked->current_period_end?->timestamp,
+                            $locked->pending_change_status,
+                            $locked->getRawOriginal('pending_plan'),
+                            $locked->getRawOriginal('pending_interval'),
+                            $locked->pending_stripe_price_id,
+                            $locked->pending_change_effective_at?->timestamp,
+                        ];
                         $locked->forceFill([
                             'reconciliation_status' => 'healthy',
                             'last_reconciled_at' => now(),

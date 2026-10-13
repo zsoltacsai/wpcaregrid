@@ -186,7 +186,7 @@ class StripeSubscriptionReconciliationTest extends TestCase
         $periodEnd = now()->addYear();
         $subscription = Subscription::factory()->for($customer)->create([
             'billing_source' => 'stripe', 'product_type' => ProductType::WordPress, 'plan' => PlanTier::Basic,
-            'interval' => BillingInterval::Annual, 'stripe_price_id' => $annual->stripePriceId,
+            'interval' => BillingInterval::Annual, 'stripe_price_id' => $monthly->stripePriceId,
             'pending_plan' => PlanTier::Basic, 'pending_interval' => BillingInterval::Monthly,
             'pending_stripe_price_id' => $monthly->stripePriceId, 'pending_pricing_version' => $monthly->version,
             'pending_change_effective_at' => $periodEnd, 'pending_change_status' => 'scheduled',
@@ -290,6 +290,7 @@ class StripeSubscriptionReconciliationTest extends TestCase
         $result = app(ReconcileStripeSubscriptions::class)->run(subscriptionId: $subscription->id);
 
         $this->assertSame(1, $result['reconciled']);
+        $this->assertSame(0, $result['changed']);
         $this->assertSame('scheduled', $subscription->fresh()->pending_change_status);
         $this->assertSame(BillingInterval::Annual, $subscription->fresh()->interval);
     }
