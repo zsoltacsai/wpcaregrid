@@ -17,6 +17,8 @@ class FakeSubscriptionManagementGateway implements SubscriptionManagementGateway
 
     public ?Throwable $failure = null;
 
+    public ?string $scheduleId = 'sub_sched_test';
+
     /** @var Closure():void|null */
     public ?Closure $duringPriceChange = null;
 
@@ -50,6 +52,6 @@ class FakeSubscriptionManagementGateway implements SubscriptionManagementGateway
 
         return $immediate
             ? ['request_id' => 'req_price_123', 'invoice_id' => 'in_test_change']
-            : ['request_id' => 'req_price_123', 'invoice_id' => null, 'schedule_id' => 'sub_sched_test'];
+            : array_filter(['request_id' => 'req_price_123', 'invoice_id' => null, 'schedule_id' => $this->scheduleId], static fn ($value) => $value !== null);
     }
 }
