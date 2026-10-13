@@ -12,6 +12,7 @@ use App\Owner\AdminAudit;
 use App\SyntheticFixtures\StagingIdentity;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -168,6 +169,8 @@ final class StagingBillingLifecycleHarness
         $expiry = $subscription->grace_ends_at?->copy()->addSecond();
         abort_unless($expiry !== null, 500);
 
+        $queue = Queue::getFacadeRoot();
+        Queue::fake();
         try {
             Carbon::setTestNow($expiry);
             $exit = Artisan::call('billing:subscriptions:expire-grace', [
@@ -180,6 +183,7 @@ final class StagingBillingLifecycleHarness
             $this->simulatedState = $this->state($subscription);
         } finally {
             Carbon::setTestNow();
+            Queue::swap($queue);
         }
 
         // Restore the synthetic account to the provider's real TEST-mode

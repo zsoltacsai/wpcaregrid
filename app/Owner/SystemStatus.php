@@ -116,7 +116,10 @@ final class SystemStatus
         $driver = (string) config("queue.connections.{$connection}.driver");
         $failed = $this->safeCount(fn () => DB::table((string) config('queue.failed.table', 'failed_jobs'))->count());
         $oldest = $driver === 'database'
-            ? $this->safe(fn () => DB::table((string) config("queue.connections.{$connection}.table", 'jobs'))->whereNull('reserved_at')->min('available_at'))
+            ? $this->safe(fn () => DB::table((string) config("queue.connections.{$connection}.table", 'jobs'))
+                ->whereNull('reserved_at')
+                ->where('available_at', '<=', now()->timestamp)
+                ->min('available_at'))
             : null;
         $waiting = $oldest ? (int) now()->diffInMinutes(CarbonImmutable::createFromTimestamp((int) $oldest), true) : 0;
 
