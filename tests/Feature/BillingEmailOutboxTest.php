@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Billing\QueueBillingEmail;
+use App\Billing\SubscriptionStatus;
 use App\Jobs\ProcessBillingEmailOutboxJob;
 use App\Mail\BillingLifecycleNotice;
 use App\Models\BillingEmailOutbox;
@@ -60,6 +61,62 @@ final class BillingEmailOutboxTest extends TestCase
         Mail::assertSent(BillingLifecycleNotice::class, function (BillingLifecycleNotice $mail): bool {
             return str_contains($mail->render(), 'Basic (monthly)');
         });
+    }
+
+    public function test_grace_expiry_notice_is_cancelled_after_payment_recovery_before_delivery(): void
+    {
+        Mail::fake();
+        Queue::fake();
+        $customer = Customer::factory()->withUser()->create();
+        $subscription = Subscription::factory()->for($customer)->create([
+            'status' => SubscriptionStatus::PastDue,
+            'grace_started_at' => now()->subDays(8),
+            'grace_ends_at' => now()->subDay(),
+            'grace_expired_at' => now()->subDay(),
+        ]);
+        $row = app(QueueBillingEmail::class)->enqueue(
+            'subscription:'.$subscription->uuid.':grace-expired:'.now()->subDay()->utc()->format('YmdHis'),
+            'billing_action_required',
+            $customer,
+            $subscription,
+        );
+
+        $subscription->forceFill([
+            'status' => SubscriptionStatus::Active,
+            'grace_started_at' => null,
+            'grace_ends_at' => null,
+        ])->save();
+        $this->assertSame(SubscriptionStatus::Active, $subscription->fresh()->status);
+
+        (new ProcessBillingEmailOutboxJob($row->id))->handle();
+
+        $this->assertSame('cancelled', $row->fresh()->status);
+        Mail::assertNothingSent();
+    }
+
+    public function test_action_required_notice_is_sent_only_for_an_unpaid_expired_grace(): void
+    {
+        Mail::fake();
+        Queue::fake();
+        $customer = Customer::factory()->withUser()->create();
+        $subscription = Subscription::factory()->for($customer)->create([
+            'status' => SubscriptionStatus::PastDue,
+            'last_payment_status' => 'failed',
+            'grace_started_at' => now()->subDays(8),
+            'grace_ends_at' => now()->subDay(),
+            'grace_expired_at' => now()->subDay(),
+        ]);
+        $row = app(QueueBillingEmail::class)->enqueue(
+            'subscription:'.$subscription->uuid.':grace-expired:'.now()->subDay()->utc()->format('YmdHis'),
+            'billing_action_required',
+            $customer,
+            $subscription,
+        );
+
+        (new ProcessBillingEmailOutboxJob($row->id))->handle();
+
+        $this->assertSame('sent', $row->fresh()->status);
+        Mail::assertSent(BillingLifecycleNotice::class, 1);
     }
 
     public function test_expired_delivery_lease_becomes_unknown_and_is_not_redispatched(): void

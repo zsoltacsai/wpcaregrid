@@ -212,6 +212,10 @@ final class SubscriptionSync
         $this->recordActivation($subscription);
         $subscription->save();
 
+        if ($status->grantsAccess()) {
+            $this->billingEmails->cancelPendingActionRequired($subscription);
+        }
+
         if ($scheduledChangeEffective) {
             SubscriptionOperation::query()
                 ->where('subscription_id', $subscription->id)

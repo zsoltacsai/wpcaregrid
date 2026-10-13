@@ -12,6 +12,7 @@ use App\Models\Subscription;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Tests\Concerns\ActsAsOwner;
 use Tests\Concerns\SendsStripeWebhooks;
@@ -122,6 +123,7 @@ class M11LifecycleValidationTest extends TestCase
 
     public function test_grace_expiry_is_scoped_to_the_one_synthetic_subscription_and_retains_restore_entitlement(): void
     {
+        Queue::fake();
         [$customer, $subscription] = $this->syntheticSubscription('contact+m11-expiry@zsoltacsai.com');
         $other = Customer::factory()->create(['email' => 'other@company.example']);
         $otherSubscription = Subscription::factory()->for($other)->create([
@@ -146,6 +148,16 @@ class M11LifecycleValidationTest extends TestCase
         $this->assertDatabaseHas('admin_audit_events', [
             'event' => 'billing.grace_expired',
             'subject_key' => $subscription->uuid,
+        ]);
+        $this->assertDatabaseHas('billing_email_outbox', [
+            'subscription_id' => $subscription->id,
+            'notification' => 'billing_action_required',
+            'status' => 'cancelled',
+        ]);
+        $this->assertDatabaseMissing('billing_email_outbox', [
+            'subscription_id' => $subscription->id,
+            'notification' => 'billing_action_required',
+            'status' => 'pending',
         ]);
     }
 

@@ -17,6 +17,7 @@ use App\Owner\StatusCheck;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route as Router;
 use Tests\Concerns\CreatesBackups;
@@ -307,6 +308,29 @@ class ProductionHardeningTest extends TestCase
         Artisan::call('system:check', ['--json' => true]);
         $queue = collect(json_decode(Artisan::output(), true))->firstWhere('check', 'queue');
         $this->assertSame('ERROR', $queue['level']);
+    }
+
+    public function test_system_check_ignores_database_jobs_scheduled_for_the_future(): void
+    {
+        config([
+            'queue.default' => 'database',
+            'queue.connections.backups.retry_after' => 4000,
+            'backup.transfer.connection' => 'backups',
+            'backup.transfer.timeout' => 3600,
+        ]);
+        DB::table('jobs')->insert([
+            'queue' => 'default',
+            'payload' => '{}',
+            'attempts' => 0,
+            'reserved_at' => null,
+            'available_at' => now()->addDays(7)->timestamp,
+            'created_at' => now()->addDays(7)->timestamp,
+        ]);
+
+        Artisan::call('system:check', ['--json' => true]);
+        $queue = collect(json_decode(Artisan::output(), true))->firstWhere('check', 'queue');
+
+        $this->assertSame('OK', $queue['level']);
     }
 
     public function test_production_requires_https_and_a_real_application_url(): void

@@ -52,4 +52,16 @@ final class QueueBillingEmail
 
         return $outbox;
     }
+
+    public function cancelPendingActionRequired(Subscription $subscription): int
+    {
+        return BillingEmailOutbox::query()
+            ->where('subscription_id', $subscription->id)
+            ->where('notification', 'billing_action_required')
+            ->where('status', 'pending')
+            ->update([
+                'status' => 'cancelled',
+                'updated_at' => now(),
+            ]);
+    }
 }

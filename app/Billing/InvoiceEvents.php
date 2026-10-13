@@ -79,6 +79,12 @@ final class InvoiceEvents
         }
 
         $subscription->save();
+        if ($wasInGrace || $subscription->status->grantsAccess()) {
+            // A payment recovery supersedes any grace-expiry action notice
+            // that has not started delivery yet. The queued job also checks
+            // subscription state before claiming its outbox row.
+            $this->billingEmails->cancelPendingActionRequired($subscription);
+        }
         $planChangeConfirmed = $this->planChanges->confirmPaidInvoice($subscription, $invoice);
         if ($planChangeConfirmed) {
             $subscription->refresh();
