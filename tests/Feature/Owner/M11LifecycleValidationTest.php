@@ -136,7 +136,11 @@ class M11LifecycleValidationTest extends TestCase
 
         $this->runScenario($customer, 'grace_expiry')->assertSessionHas('status');
 
-        $this->assertNotNull($subscription->refresh()->grace_expired_at);
+        // The harness captures expiry in its simulated snapshot, then processes
+        // a signed paid-invoice recovery to return the test account to its real
+        // provider state. Recovery clears the current grace-cycle marker so a
+        // later grace period can expire independently.
+        $this->assertNull($subscription->refresh()->grace_expired_at);
         $this->assertSame(SubscriptionStatus::Active, $subscription->status);
         $this->assertTrue($customer->fresh()->hasActiveSubscription());
         $this->assertTrue(app(SubscriptionEntitlements::class)->allows($subscription->fresh(), 'restore'));

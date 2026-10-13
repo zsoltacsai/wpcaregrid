@@ -685,6 +685,39 @@ class SubscriptionLifecycleTest extends TestCase
         ]);
     }
 
+    /** @return array<string, array{string}> */
+    public static function graceRecoveryEventOrders(): array
+    {
+        return [
+            'subscription status first' => ['subscription_first'],
+            'paid invoice first' => ['invoice_first'],
+        ];
+    }
+
+    #[DataProvider('graceRecoveryEventOrders')]
+    public function test_recovery_clears_previous_grace_expiry_in_either_event_order(string $order): void
+    {
+        $intent = $this->intent();
+        $this->completeCheckout($intent);
+        $this->subscriptionEvent('customer.subscription.created', 'past_due', $intent, created: now()->subMinute()->timestamp);
+        $subscription = Subscription::sole();
+        $subscription->forceFill(['grace_expired_at' => now()->subSecond()])->save();
+
+        if ($order === 'invoice_first') {
+            $this->stripeEvent('invoice.paid', $this->invoice($intent, ['id' => 'in_grace_recovered', 'amount_paid' => 1899000]), 'evt_grace_paid_first', now()->timestamp)->assertStatus(204);
+            $this->subscriptionEvent('customer.subscription.updated', 'active', $intent, created: now()->addSecond()->timestamp, eventId: 'evt_grace_active_second')->assertStatus(204);
+        } else {
+            $this->subscriptionEvent('customer.subscription.updated', 'active', $intent, created: now()->timestamp, eventId: 'evt_grace_active_first')->assertStatus(204);
+            $this->stripeEvent('invoice.paid', $this->invoice($intent, ['id' => 'in_grace_recovered', 'amount_paid' => 1899000]), 'evt_grace_paid_second', now()->addSecond()->timestamp)->assertStatus(204);
+        }
+
+        $subscription->refresh();
+        $this->assertSame(SubscriptionStatus::Active, $subscription->status);
+        $this->assertNull($subscription->grace_started_at);
+        $this->assertNull($subscription->grace_ends_at);
+        $this->assertNull($subscription->grace_expired_at);
+    }
+
     public function test_cancellation_at_period_end_and_deletion(): void
     {
         $intent = $this->intent();

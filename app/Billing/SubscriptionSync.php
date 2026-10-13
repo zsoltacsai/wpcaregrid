@@ -213,6 +213,7 @@ final class SubscriptionSync
         } elseif ($status->grantsAccess()) {
             $subscription->grace_started_at = null;
             $subscription->grace_ends_at = null;
+            $subscription->grace_expired_at = null;
         }
 
         // A selected local promotion is only an expectation until Stripe returns its discount object.

@@ -47,6 +47,7 @@ final class InvoiceEvents
         $subscription->fill(['last_payment_status' => 'paid', 'last_payment_at' => $snapshot->paid_at ?? now()]);
         $subscription->grace_started_at = null;
         $subscription->grace_ends_at = null;
+        $subscription->grace_expired_at = null;
 
         // A completed renewal invoice is the best Stripe-authoritative record
         // of the amount billed for the current cycle (exclusive of Stripe tax).
