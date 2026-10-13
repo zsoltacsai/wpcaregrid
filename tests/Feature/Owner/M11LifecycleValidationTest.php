@@ -32,7 +32,7 @@ class M11LifecycleValidationTest extends TestCase
             'app.deployment_hostname' => 'stg1.wpcaregrid.com',
             'services.stripe.mode' => 'test',
             'services.stripe.secret' => 'sk_test_m11_fixture',
-            'services.stripe.webhook_secret' => 'whsec_m11_fixture',
+            'services.stripe.webhook_secret' => 'whsec_test_m11_fixture',
         ]);
         $this->useWebhookSecret();
     }
