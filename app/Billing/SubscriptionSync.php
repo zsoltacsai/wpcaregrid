@@ -31,7 +31,7 @@ final class SubscriptionSync
      * Apply a Stripe subscription object from a customer.subscription.* event.
      * An event older than the last one applied is ignored.
      */
-    public function apply(object $stripe, int $eventCreated, ?string $eventId = null): ?Subscription
+    public function apply(object $stripe, int $eventCreated, ?string $eventId = null, ?bool $providerScheduleConfirmed = null): ?Subscription
     {
         $status = SubscriptionStatus::fromStripe($stripe->status ?? null);
 
@@ -115,6 +115,7 @@ final class SubscriptionSync
         $stripePriceId ??= $subscription->stripe_price_id;
 
         $scheduledChange = $subscription->pending_change_status === 'scheduled'
+            && $providerScheduleConfirmed !== false
             && is_string($subscription->pending_stripe_price_id)
             && hash_equals($subscription->pending_stripe_price_id, (string) $stripePriceId);
         $scheduledPeriodStart = $this->time($item->current_period_start ?? $stripe->current_period_start ?? null);
@@ -127,6 +128,7 @@ final class SubscriptionSync
             && hash_equals($subscription->pending_stripe_price_id, (string) $stripePriceId);
         $deferPriceFields = $awaitingPaymentChange || ($scheduledChange && ! $scheduledChangeEffective);
         $storedStripePriceId = $awaitingPaymentChange ? $subscription->stripe_price_id : $stripePriceId;
+        $unconfirmedTargetPriceId = $subscription->pending_stripe_price_id;
 
         // Plan changes made in Stripe (e.g. a later billing portal) follow the price.
         // An immediate CareGrid plan change remains pending until its invoice is
@@ -162,6 +164,21 @@ final class SubscriptionSync
             'stripe_synced_event_id' => $eventId,
             'billing_snapshot_confirmed_at' => $eventTime,
         ]);
+        $unconfirmedSchedule = in_array($subscription->pending_change_status, ['scheduled', 'reconciliation_required'], true)
+            && $providerScheduleConfirmed === false;
+        if ($unconfirmedSchedule) {
+            // The remote subscription is authoritative. If its scheduled price
+            // has no matching attached schedule, stop displaying the stale
+            // pending change and retain the discrepancy in the operation audit.
+            $subscription->forceFill([
+                'pending_plan' => null,
+                'pending_interval' => null,
+                'pending_stripe_price_id' => null,
+                'pending_pricing_version' => null,
+                'pending_change_effective_at' => null,
+                'pending_change_status' => null,
+            ]);
+        }
         if (! $deferPriceFields) {
             $subscription->fill($this->billingSnapshot->fromStripe($stripe, $subscription, $item->price ?? null));
         }
@@ -211,6 +228,32 @@ final class SubscriptionSync
 
         $this->recordActivation($subscription);
         $subscription->save();
+
+        if ($unconfirmedSchedule) {
+            $operation = SubscriptionOperation::query()
+                ->where('subscription_id', $subscription->id)
+                ->where('operation', 'downgrade')
+                ->whereIn('status', ['awaiting_confirmation', 'confirmed', 'reconciliation_required'])
+                ->whereJsonContains('request_snapshot->target_stripe_price_id', (string) $unconfirmedTargetPriceId)
+                ->latest('id')
+                ->first();
+            if ($operation) {
+                $snapshot = $operation->request_snapshot;
+                $snapshot['provider_truth_resolution'] = [
+                    'result' => 'schedule_not_confirmed',
+                    'checked_at' => $eventTime->toIso8601String(),
+                ];
+                $operation->forceFill([
+                    'status' => 'reconciliation_required',
+                    'error_category' => 'ProviderScheduleMissing',
+                    'request_snapshot' => $snapshot,
+                ])->save();
+            }
+            AdminAudit::record(null, 'billing.subscription_schedule_unconfirmed', 'subscription', $subscription->uuid, [
+                'operation_uuid' => $operation?->uuid,
+                'error_category' => 'ProviderScheduleMissing',
+            ]);
+        }
 
         if ($status->grantsAccess()) {
             $this->billingEmails->cancelPendingActionRequired($subscription);

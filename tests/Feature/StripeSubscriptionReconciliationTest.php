@@ -8,9 +8,14 @@ use App\Billing\SubscriptionStatus;
 use App\Events\Platform\PlatformRecoverySignal;
 use App\Models\BillingEmailOutbox;
 use App\Models\BillingInvoice;
+use App\Models\Customer;
 use App\Models\Subscription;
 use App\Models\SubscriptionOperation;
+use App\Pricing\BillingInterval;
 use App\Pricing\PlanTier;
+use App\Pricing\PriceSelection;
+use App\Pricing\PricingCatalog;
+use App\Pricing\ProductType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
 use Tests\TestCase;
@@ -166,6 +171,196 @@ class StripeSubscriptionReconciliationTest extends TestCase
         $this->assertSame('failed', $subscription->fresh()->reconciliation_status);
         $this->assertSame('UnexpectedValueException', $subscription->fresh()->reconciliation_error_category);
         Event::assertDispatched(PlatformRecoverySignal::class, fn ($event) => $event->type === 'billing.reconciliation_failed');
+    }
+
+    public function test_reconciliation_resolves_a_pending_downgrade_when_stripe_has_no_matching_schedule(): void
+    {
+        foreach (config('pricing.prices') as $index => $price) {
+            config(["pricing.prices.{$index}.stripe_price_id" => "price_test_m11_{$index}"]);
+        }
+        app()->forgetInstance(PricingCatalog::class);
+        $catalog = app(PricingCatalog::class);
+        $customer = Customer::factory()->create(['country_code' => 'HU']);
+        $annual = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Annual), 'HU', 'HUF');
+        $monthly = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly), 'HU', 'HUF');
+        $periodEnd = now()->addYear();
+        $subscription = Subscription::factory()->for($customer)->create([
+            'billing_source' => 'stripe', 'product_type' => ProductType::WordPress, 'plan' => PlanTier::Basic,
+            'interval' => BillingInterval::Annual, 'stripe_price_id' => $annual->stripePriceId,
+            'pending_plan' => PlanTier::Basic, 'pending_interval' => BillingInterval::Monthly,
+            'pending_stripe_price_id' => $monthly->stripePriceId, 'pending_pricing_version' => $monthly->version,
+            'pending_change_effective_at' => $periodEnd, 'pending_change_status' => 'scheduled',
+            'stripe_synced_at' => now()->subHour(),
+        ]);
+        $operation = SubscriptionOperation::create([
+            'subscription_id' => $subscription->id, 'customer_id' => $customer->id,
+            'operation' => 'downgrade', 'operation_key' => 'provider-truth-missing-schedule-'.$subscription->id,
+            'status' => 'awaiting_confirmation',
+            'request_snapshot' => ['target_plan' => 'basic', 'target_interval' => 'monthly', 'target_stripe_price_id' => $monthly->stripePriceId, 'scheduled' => true],
+        ]);
+        $this->app->instance(StripeSubscriptionReader::class, new class($subscription, $monthly->stripePriceId) implements StripeSubscriptionReader
+        {
+            public function __construct(private Subscription $subscription, private string $priceId) {}
+
+            public function retrieve(string $stripeSubscriptionId): object
+            {
+                return (object) [
+                    'id' => $stripeSubscriptionId,
+                    'customer' => $this->subscription->stripe_customer_id,
+                    'status' => 'active',
+                    'cancel_at_period_end' => false,
+                    'schedule' => null,
+                    'metadata' => (object) [],
+                    'items' => (object) ['data' => [(object) [
+                        'price' => (object) ['id' => $this->priceId, 'unit_amount' => 899000, 'currency' => 'huf'],
+                        'current_period_start' => now()->timestamp,
+                        'current_period_end' => now()->addMonth()->timestamp,
+                    ]]],
+                ];
+            }
+        });
+
+        $result = app(ReconcileStripeSubscriptions::class)->run(subscriptionId: $subscription->id);
+
+        $this->assertSame(1, $result['changed']);
+        $this->assertSame(BillingInterval::Monthly, $subscription->fresh()->interval);
+        $this->assertSame($monthly->stripePriceId, $subscription->fresh()->stripe_price_id);
+        $this->assertNull($subscription->fresh()->pending_change_status);
+        $this->assertSame('reconciliation_required', $operation->fresh()->status);
+        $this->assertSame('ProviderScheduleMissing', $operation->fresh()->error_category);
+        $this->assertSame('schedule_not_confirmed', data_get($operation->fresh()->request_snapshot, 'provider_truth_resolution.result'));
+        $this->assertDatabaseHas('admin_audit_events', [
+            'event' => 'billing.subscription_schedule_unconfirmed',
+            'subject_key' => $subscription->uuid,
+        ]);
+    }
+
+    public function test_reconciliation_preserves_pending_downgrade_when_matching_stripe_schedule_is_attached(): void
+    {
+        foreach (config('pricing.prices') as $index => $price) {
+            config(["pricing.prices.{$index}.stripe_price_id" => "price_test_m11_{$index}"]);
+        }
+        app()->forgetInstance(PricingCatalog::class);
+        $catalog = app(PricingCatalog::class);
+        $customer = Customer::factory()->create(['country_code' => 'HU']);
+        $annual = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Annual), 'HU', 'HUF');
+        $monthly = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly), 'HU', 'HUF');
+        $periodEnd = now()->addYear();
+        $subscription = Subscription::factory()->for($customer)->create([
+            'billing_source' => 'stripe', 'product_type' => ProductType::WordPress, 'plan' => PlanTier::Basic,
+            'interval' => BillingInterval::Annual, 'stripe_price_id' => $annual->stripePriceId,
+            'pending_plan' => PlanTier::Basic, 'pending_interval' => BillingInterval::Monthly,
+            'pending_stripe_price_id' => $monthly->stripePriceId, 'pending_pricing_version' => $monthly->version,
+            'pending_change_effective_at' => $periodEnd, 'pending_change_status' => 'scheduled',
+            'stripe_synced_at' => now()->subHour(),
+        ]);
+        $operation = SubscriptionOperation::create([
+            'subscription_id' => $subscription->id, 'customer_id' => $customer->id,
+            'operation' => 'downgrade', 'operation_key' => 'provider-truth-valid-schedule-'.$subscription->id,
+            'status' => 'awaiting_confirmation',
+            'request_snapshot' => ['target_plan' => 'basic', 'target_interval' => 'monthly', 'target_stripe_price_id' => $monthly->stripePriceId, 'scheduled' => true, 'provider_schedule_id' => 'sub_sched_test'],
+        ]);
+        $schedule = (object) [
+            'id' => 'sub_sched_test', 'status' => 'active', 'subscription' => $subscription->stripe_subscription_id,
+            'metadata' => (object) ['caregrid_operation_uuid' => $operation->uuid, 'caregrid_target_price_id' => $monthly->stripePriceId],
+            'phases' => ['data' => [(object) [
+                'start_date' => $periodEnd->timestamp,
+                'items' => ['data' => [(object) ['price' => $monthly->stripePriceId]]],
+            ]]],
+        ];
+        $this->app->instance(StripeSubscriptionReader::class, new class($subscription, $annual->stripePriceId, $schedule) implements StripeSubscriptionReader
+        {
+            public function __construct(private Subscription $subscription, private string $priceId, private object $schedule) {}
+
+            public function retrieve(string $stripeSubscriptionId): object
+            {
+                return (object) [
+                    'id' => $stripeSubscriptionId, 'customer' => $this->subscription->stripe_customer_id,
+                    'status' => 'active', 'cancel_at_period_end' => false, 'schedule' => $this->schedule,
+                    'metadata' => (object) [],
+                    'items' => (object) ['data' => [(object) [
+                        'price' => (object) ['id' => $this->priceId, 'unit_amount' => 8990000, 'currency' => 'huf'],
+                        'current_period_start' => now()->timestamp,
+                        'current_period_end' => $this->subscription->current_period_end->timestamp,
+                    ]]],
+                ];
+            }
+        });
+
+        $result = app(ReconcileStripeSubscriptions::class)->run(subscriptionId: $subscription->id);
+
+        $this->assertSame(1, $result['reconciled']);
+        $this->assertSame('scheduled', $subscription->fresh()->pending_change_status);
+        $this->assertSame(BillingInterval::Annual, $subscription->fresh()->interval);
+    }
+
+    public function test_reconciliation_rejects_schedules_with_wrong_target_or_effective_boundary(): void
+    {
+        foreach (config('pricing.prices') as $index => $price) {
+            config(["pricing.prices.{$index}.stripe_price_id" => "price_test_m11_{$index}"]);
+        }
+        app()->forgetInstance(PricingCatalog::class);
+        $catalog = app(PricingCatalog::class);
+        $annual = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Annual), 'HU', 'HUF');
+        $monthly = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly), 'HU', 'HUF');
+
+        foreach (['target_price', 'effective_boundary'] as $mismatch) {
+            $customer = Customer::factory()->create(['country_code' => 'HU']);
+            $periodEnd = now()->addYear();
+            $subscription = Subscription::factory()->for($customer)->create([
+                'billing_source' => 'stripe', 'product_type' => ProductType::WordPress, 'plan' => PlanTier::Basic,
+                'interval' => BillingInterval::Annual, 'stripe_price_id' => $annual->stripePriceId,
+                'pending_plan' => PlanTier::Basic, 'pending_interval' => BillingInterval::Monthly,
+                'pending_stripe_price_id' => $monthly->stripePriceId, 'pending_pricing_version' => $monthly->version,
+                'pending_change_effective_at' => $periodEnd, 'pending_change_status' => 'scheduled',
+                'stripe_synced_at' => now()->subHour(),
+            ]);
+            $operation = SubscriptionOperation::create([
+                'subscription_id' => $subscription->id, 'customer_id' => $customer->id,
+                'operation' => 'downgrade', 'operation_key' => 'provider-truth-bad-schedule-'.$mismatch.'-'.$subscription->id,
+                'status' => 'awaiting_confirmation',
+                'request_snapshot' => [
+                    'target_plan' => 'basic', 'target_interval' => 'monthly',
+                    'target_stripe_price_id' => $monthly->stripePriceId, 'scheduled' => true,
+                    'provider_schedule_id' => 'sub_sched_'.$mismatch,
+                ],
+            ]);
+            $schedule = (object) [
+                'id' => 'sub_sched_'.$mismatch, 'status' => 'active',
+                'subscription' => $subscription->stripe_subscription_id,
+                'metadata' => (object) [
+                    'caregrid_operation_uuid' => $operation->uuid,
+                    'caregrid_target_price_id' => $monthly->stripePriceId,
+                ],
+                'phases' => ['data' => [(object) [
+                    'start_date' => $mismatch === 'effective_boundary' ? $periodEnd->copy()->addDay()->timestamp : $periodEnd->timestamp,
+                    'items' => ['data' => [(object) ['price' => $mismatch === 'target_price' ? $annual->stripePriceId : $monthly->stripePriceId]]],
+                ]]],
+            ];
+            $this->app->instance(StripeSubscriptionReader::class, new class($subscription, $annual->stripePriceId, $schedule) implements StripeSubscriptionReader
+            {
+                public function __construct(private Subscription $subscription, private string $priceId, private object $schedule) {}
+
+                public function retrieve(string $stripeSubscriptionId): object
+                {
+                    return (object) [
+                        'id' => $stripeSubscriptionId, 'customer' => $this->subscription->stripe_customer_id,
+                        'status' => 'active', 'cancel_at_period_end' => false, 'schedule' => $this->schedule,
+                        'metadata' => (object) [],
+                        'items' => (object) ['data' => [(object) [
+                            'price' => (object) ['id' => $this->priceId, 'unit_amount' => 8990000, 'currency' => 'huf'],
+                            'current_period_start' => now()->timestamp,
+                            'current_period_end' => $this->subscription->current_period_end->timestamp,
+                        ]]],
+                    ];
+                }
+            });
+
+            app(ReconcileStripeSubscriptions::class)->run(subscriptionId: $subscription->id);
+
+            $this->assertNull($subscription->fresh()->pending_change_status, $mismatch);
+            $this->assertSame('reconciliation_required', $operation->fresh()->status, $mismatch);
+        }
     }
 
     public function test_bounded_reconciliation_advances_past_the_first_batch(): void

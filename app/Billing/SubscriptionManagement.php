@@ -110,7 +110,9 @@ final class SubscriptionManagement
                     'pending_stripe_price_id' => $target->stripePriceId,
                     'pending_pricing_version' => $target->version,
                     'pending_change_effective_at' => $effectiveAt,
-                    'pending_change_status' => $scheduled ? 'scheduled' : 'awaiting_payment',
+                    // A requested downgrade is not provider-confirmed until Stripe
+                    // returns the schedule identity below.
+                    'pending_change_status' => $scheduled ? 'awaiting_confirmation' : 'awaiting_payment',
                 ])->save();
 
                 return $operationRow;
@@ -146,6 +148,9 @@ final class SubscriptionManagement
                 (string) $row->uuid,
                 'subscription-change-'.$row->uuid,
             );
+            if ($scheduled && (! is_string($response['schedule_id'] ?? null) || $response['schedule_id'] === '')) {
+                throw new \UnexpectedValueException('Stripe did not confirm the requested subscription schedule.');
+            }
             DB::transaction(function () use ($row, $response): void {
                 $operation = SubscriptionOperation::query()->whereKey($row->id)->lockForUpdate()->firstOrFail();
                 $snapshot = $operation->request_snapshot;
@@ -163,6 +168,12 @@ final class SubscriptionManagement
                     'submitted_at' => $operation->submitted_at ?? now(),
                     'lease_expires_at' => null,
                 ])->save();
+                if (is_string($response['schedule_id'] ?? null) && $response['schedule_id'] !== '') {
+                    Subscription::query()->whereKey($operation->subscription_id)
+                        ->where('pending_change_status', 'awaiting_confirmation')
+                        ->where('pending_stripe_price_id', data_get($operation->request_snapshot, 'target_stripe_price_id'))
+                        ->update(['pending_change_status' => 'scheduled', 'updated_at' => now()]);
+                }
             }, attempts: 3);
             AdminAudit::record($userId ? User::find($userId) : null, 'billing.subscription_change_requested', 'subscription', $subscription->uuid, [
                 'operation' => $operation,

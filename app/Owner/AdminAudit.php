@@ -36,6 +36,7 @@ final class AdminAudit
         'dns.infrastructure.applied', 'dns.infrastructure.failed',
         'coupon.created', 'coupon.updated', 'coupon.activated', 'coupon.deactivated', 'coupon.deleted', 'coupon.redeemed',
         'billing.subscription_change_confirmed',
+        'billing.subscription_schedule_unconfirmed',
         'billing.subscription_change_requested', 'billing.subscription_change_failed', 'billing.cancellation_scheduled', 'billing.reactivation_requested',
         'billing.subscription_activated', 'billing.payment_failure', 'billing.grace_started', 'billing.grace_expired', 'billing.payment_recovered', 'billing.payment_received',
         'billing.m11_validation_run',

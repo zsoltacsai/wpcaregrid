@@ -76,7 +76,8 @@ class SubscriptionController extends Controller
                 $request->user()->id,
             );
 
-            if ($operation->status === 'awaiting_confirmation') {
+            if ($operation->status === 'awaiting_confirmation'
+                && ($operation->operation !== 'downgrade' || is_string(data_get($operation->request_snapshot, 'provider_schedule_id')))) {
                 return back()->with('status', $operation->operation === 'downgrade'
                     ? __('account.subscription.change_scheduled')
                     : __('account.subscription.change_awaiting_payment'));

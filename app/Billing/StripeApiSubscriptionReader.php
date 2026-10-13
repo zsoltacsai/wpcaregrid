@@ -25,7 +25,7 @@ final class StripeApiSubscriptionReader implements StripeSubscriptionReader
         }
 
         return (new StripeClient($this->secret))->subscriptions->retrieve($stripeSubscriptionId, [
-            'expand' => ['latest_invoice', 'latest_invoice.lines.data.price'],
+            'expand' => ['latest_invoice', 'latest_invoice.lines.data.price', 'schedule'],
         ]);
     }
 }

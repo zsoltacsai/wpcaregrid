@@ -235,6 +235,9 @@ class SubscriptionManagementTest extends TestCase
             'current_period_end' => now()->addMonths(8),
         ]);
         $gateway = new FakeSubscriptionManagementGateway;
+        $gateway->duringPriceChange = function () use ($subscription): void {
+            $this->assertSame('awaiting_confirmation', $subscription->fresh()->pending_change_status);
+        };
         $this->app->instance(SubscriptionManagementGateway::class, $gateway);
 
         $operation = app(SubscriptionManagement::class)->changePlan($subscription, $customer, ProductType::WordPress, PlanTier::Business, BillingInterval::Annual);
@@ -325,6 +328,33 @@ class SubscriptionManagementTest extends TestCase
         $this->assertSame($operation->id, $result->id);
         $this->assertDatabaseCount('billing_email_outbox', 0);
         $this->assertCount(0, $gateway->priceChanges);
+    }
+
+    public function test_scheduled_change_without_a_schedule_id_fails_closed(): void
+    {
+        $this->configureStripePriceIds();
+        $catalog = app(PricingCatalog::class);
+        $customer = Customer::factory()->create(['country_code' => 'HU']);
+        $current = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Annual), 'HU', 'HUF');
+        $subscription = Subscription::factory()->for($customer)->create([
+            'billing_source' => 'stripe', 'product_type' => ProductType::WordPress, 'plan' => PlanTier::Basic,
+            'interval' => BillingInterval::Annual, 'stripe_price_id' => $current->stripePriceId,
+            'current_period_end' => now()->addYear(),
+        ]);
+        $gateway = new FakeSubscriptionManagementGateway;
+        $gateway->scheduleId = null;
+        $this->app->instance(SubscriptionManagementGateway::class, $gateway);
+
+        try {
+            app(SubscriptionManagement::class)->changePlan($subscription, $customer, ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly);
+            $this->fail('A scheduled change without a provider schedule must not be accepted.');
+        } catch (\UnexpectedValueException $exception) {
+            $this->assertSame('Stripe did not confirm the requested subscription schedule.', $exception->getMessage());
+        }
+
+        $this->assertSame('reconciliation_required', $subscription->fresh()->pending_change_status);
+        $this->assertSame('reconciliation_required', SubscriptionOperation::query()->sole()->status);
+        $this->assertDatabaseCount('billing_email_outbox', 0);
     }
 
     private function configureStripePriceIds(): void
