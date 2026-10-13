@@ -4,9 +4,9 @@ namespace Tests\Feature;
 
 use App\Checkout\CheckoutStatus;
 use App\Checkout\StripeWebhookHandler;
+use App\Jobs\ProcessBillingEmailOutboxJob;
 use App\Mail\AccountActivation;
-use App\Mail\PaymentConfirmation;
-use App\Mail\SubscriptionActivated;
+use App\Models\BillingEmailOutbox;
 use App\Models\BillingInvoice;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
@@ -46,8 +46,8 @@ class StripeSubscriptionConcurrencyTest extends TestCase
 
         $this->assertConvergedSubscription($intent);
         $this->assertQueuedMailableCount(AccountActivation::class, 1);
-        $this->assertQueuedMailableCount(SubscriptionActivated::class, 1);
-        $this->assertQueuedMailableCount(PaymentConfirmation::class, 0);
+        $this->assertBillingEmailCount('subscription_activated', 1);
+        $this->assertQueuedBillingOutboxJobs(1);
     }
 
     public function test_subscription_and_paid_invoice_webhooks_racing_converge_with_one_invoice(): void
@@ -73,8 +73,9 @@ class StripeSubscriptionConcurrencyTest extends TestCase
         $this->assertSame('paid', $invoice->invoice_status);
         $this->assertNotNull($invoice->payment_confirmation_notified_at);
         $this->assertQueuedMailableCount(AccountActivation::class, 1);
-        $this->assertQueuedMailableCount(SubscriptionActivated::class, 1);
-        $this->assertQueuedMailableCount(PaymentConfirmation::class, 1);
+        $this->assertBillingEmailCount('subscription_activated', 1);
+        $this->assertBillingEmailCount('payment_received', 1);
+        $this->assertQueuedBillingOutboxJobs(2);
     }
 
     private function requireIndependentMysqlProcesses(): void
@@ -277,6 +278,28 @@ class StripeSubscriptionConcurrencyTest extends TestCase
         });
 
         $this->assertCount($expected, $matches, "Expected {$expected} queued {$mailable} message(s).");
+    }
+
+    private function assertBillingEmailCount(string $notification, int $expected): void
+    {
+        $rows = BillingEmailOutbox::query()->where('notification', $notification)->get();
+        $this->assertCount($expected, $rows, "Expected {$expected} {$notification} outbox record(s).");
+        $this->assertSame(
+            $expected,
+            $rows->where('status', 'pending')->count(),
+            "Expected {$expected} pending {$notification} outbox record(s).",
+        );
+    }
+
+    private function assertQueuedBillingOutboxJobs(int $expected): void
+    {
+        $queuedJobs = DB::table('jobs')->get(['payload'])->filter(function (object $job): bool {
+            $payload = json_decode($job->payload, true);
+
+            return ($payload['displayName'] ?? null) === ProcessBillingEmailOutboxJob::class;
+        });
+
+        $this->assertCount($expected, $queuedJobs, 'Expected one queued delivery job per pending billing email outbox row.');
     }
 
     private function checkoutCompletedEvent(CheckoutIntent $intent): array
