@@ -48,6 +48,8 @@ class FakeSubscriptionManagementGateway implements SubscriptionManagementGateway
             ($this->duringPriceChange)();
         }
 
-        return ['request_id' => 'req_price_123', 'invoice_id' => 'in_test_change'];
+        return $immediate
+            ? ['request_id' => 'req_price_123', 'invoice_id' => 'in_test_change']
+            : ['request_id' => 'req_price_123', 'invoice_id' => null, 'schedule_id' => 'sub_sched_test'];
     }
 }

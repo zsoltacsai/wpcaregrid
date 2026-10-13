@@ -68,12 +68,12 @@ return [
         'cancellation_scheduled' => ['subject' => 'Subscription cancellation scheduled', 'body' => 'Your :plan subscription will remain active until the end of the paid period, then it will end.'],
         'subscription_reactivated' => ['subject' => 'Subscription reactivated', 'body' => 'Your request to keep the :plan subscription active was confirmed.'],
         'upgrade_completed' => ['subject' => 'Plan change confirmed', 'body' => 'Your :plan plan change was confirmed after payment.'],
-        'downgrade_scheduled' => ['subject' => 'Plan change scheduled', 'body' => 'Your :plan plan change is scheduled for the next renewal. Your current access remains until then.'],
+        'downgrade_scheduled' => ['subject' => 'Plan change scheduled', 'body' => 'Your :plan (:interval) plan change is scheduled for the next renewal. Your current access remains until then.'],
         'payment_recovered' => ['subject' => 'Payment issue resolved', 'body' => 'Payment for your :plan subscription was confirmed and service access is active.'],
         'grace_started' => ['subject' => 'Action needed for your subscription payment', 'body' => 'We could not collect payment for :plan. Your account remains available during the payment grace period.'],
         'grace_reminder' => ['subject' => 'Reminder: subscription payment needs attention', 'body' => 'Please update the payment method for :plan before the grace period ends.'],
         'invoice_available' => ['subject' => 'Your invoice is available', 'body' => 'A billing document for :plan is available in your account.'],
         'billing_action_required' => ['subject' => 'Billing action required', 'body' => 'Please review the billing details for :plan in your account.'],
     ],
-
+    'billing_intervals' => ['monthly' => 'monthly', 'annual' => 'annual'],
 ];

@@ -13,6 +13,7 @@ use App\Pricing\PriceSelection;
 use App\Pricing\PricingCatalog;
 use App\Pricing\ProductType;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use LogicException;
 use Throwable;
@@ -22,6 +23,7 @@ final class SubscriptionManagement
     public function __construct(
         private readonly SubscriptionManagementGateway $gateway,
         private readonly PricingCatalog $catalog,
+        private readonly QueueBillingEmail $billingEmails,
     ) {}
 
     public function changePlan(
@@ -118,6 +120,11 @@ final class SubscriptionManagement
         }
 
         if (! in_array($row->status, ['requested', 'processing'], true)) {
+            if ($scheduled && in_array($row->status, ['awaiting_confirmation', 'confirmed'], true)
+                && is_string(data_get($row->request_snapshot, 'provider_schedule_id'))) {
+                $this->queueScheduledChangeEmail($row, $subscription, $customer, $productType, $tier, $interval, $effectiveAt);
+            }
+
             return $row;
         }
 
@@ -144,6 +151,9 @@ final class SubscriptionManagement
                 $snapshot = $operation->request_snapshot;
                 if (is_string($response['invoice_id'] ?? null) && $response['invoice_id'] !== '') {
                     $snapshot['provider_invoice_id'] = $response['invoice_id'];
+                }
+                if (is_string($response['schedule_id'] ?? null) && $response['schedule_id'] !== '') {
+                    $snapshot['provider_schedule_id'] = $response['schedule_id'];
                 }
 
                 $operation->forceFill([
@@ -196,7 +206,33 @@ final class SubscriptionManagement
             return $row->refresh();
         }
 
+        if ($scheduled) {
+            $this->queueScheduledChangeEmail($row, $subscription, $customer, $productType, $tier, $interval, $effectiveAt);
+        }
+
         return $row->refresh();
+    }
+
+    private function queueScheduledChangeEmail(
+        SubscriptionOperation $operation,
+        Subscription $subscription,
+        Customer $customer,
+        ProductType $productType,
+        PlanTier $tier,
+        BillingInterval $interval,
+        ?Carbon $effectiveAt,
+    ): void {
+        $this->billingEmails->enqueue(
+            'subscription:'.$subscription->uuid.':change-scheduled:'.$operation->uuid,
+            'downgrade_scheduled',
+            $customer,
+            $subscription,
+            payload: [
+                'plan_name' => $this->catalog->plan($productType, $tier)->name,
+                'interval' => $interval->value,
+                'effective_at' => $effectiveAt?->toIso8601String(),
+            ],
+        );
     }
 
     public function cancelAtPeriodEnd(Subscription $subscription, Customer $customer, ?int $userId = null): SubscriptionOperation

@@ -42,6 +42,26 @@ final class BillingEmailOutboxTest extends TestCase
         Mail::assertSent(BillingLifecycleNotice::class, 1);
     }
 
+    public function test_scheduled_change_notice_names_the_target_billing_interval(): void
+    {
+        Mail::fake();
+        $customer = Customer::factory()->withUser()->create();
+        $subscription = Subscription::factory()->for($customer)->create();
+        $row = app(QueueBillingEmail::class)->enqueue(
+            'subscription:test:change-scheduled',
+            'downgrade_scheduled',
+            $customer,
+            $subscription,
+            payload: ['plan_name' => 'Basic', 'interval' => 'monthly'],
+        );
+
+        (new ProcessBillingEmailOutboxJob($row->id))->handle();
+
+        Mail::assertSent(BillingLifecycleNotice::class, function (BillingLifecycleNotice $mail): bool {
+            return str_contains($mail->render(), 'Basic (monthly)');
+        });
+    }
+
     public function test_expired_delivery_lease_becomes_unknown_and_is_not_redispatched(): void
     {
         Queue::fake();

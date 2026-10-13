@@ -78,7 +78,12 @@ class ProcessBillingEmailOutboxJob implements ShouldBeUnique, ShouldQueue
                     ? new PaymentFailed($subscription, $row->billingInvoice->money('amount_due'))
                     : throw new \RuntimeException('Failed invoice details are unavailable.'),
                 'subscription_canceled' => $subscription ? new SubscriptionCanceled($subscription) : throw new \RuntimeException('Billing email subscription is unavailable.'),
-                default => new BillingLifecycleNotice($customer, $row->notification, $subscription?->planName()),
+                default => new BillingLifecycleNotice(
+                    $customer,
+                    $row->notification,
+                    data_get($row->payload, 'plan_name') ?: $subscription?->planName(),
+                    data_get($row->payload, 'interval'),
+                ),
             };
             Mail::to($customer->email)->send($mailable);
             BillingEmailOutbox::query()->whereKey($row->id)->where('status', 'processing')->update([
