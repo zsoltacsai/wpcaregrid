@@ -7,6 +7,7 @@ use App\Billing\SubscriptionStatus;
 use App\Checkout\CheckoutStatus;
 use App\Mail\AccountActivation;
 use App\Mail\SubscriptionActivated;
+use App\Models\AdminAuditEvent;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Promotion;
@@ -639,6 +640,49 @@ class SubscriptionLifecycleTest extends TestCase
         $this->stripeEvent('invoice.paid', $this->invoice($intent, ['id' => 'in_recovered', 'amount_paid' => 1899000]))->assertStatus(204);
         $this->assertNull($subscription->refresh()->grace_started_at);
         $this->assertNull($subscription->grace_ends_at);
+    }
+
+    /** @return array<string, array{string}> */
+    public static function graceFailureEventOrders(): array
+    {
+        return [
+            'subscription status first' => ['subscription_first'],
+            'invoice failure first' => ['invoice_first'],
+        ];
+    }
+
+    #[DataProvider('graceFailureEventOrders')]
+    public function test_invoice_failure_and_past_due_status_record_one_grace_transition(string $order): void
+    {
+        $intent = $this->intent();
+        $this->completeCheckout($intent);
+        $this->subscriptionEvent('customer.subscription.created', 'active', $intent, created: now()->subMinutes(2)->timestamp);
+
+        if ($order === 'invoice_first') {
+            $this->stripeEvent('invoice.payment_failed', $this->invoice($intent, ['id' => 'in_grace_order']), 'evt_grace_invoice_first', now()->timestamp)->assertStatus(204);
+            $this->subscriptionEvent('customer.subscription.updated', 'past_due', $intent, created: now()->addSecond()->timestamp, eventId: 'evt_grace_status_second')->assertStatus(204);
+        } else {
+            $this->subscriptionEvent('customer.subscription.updated', 'past_due', $intent, created: now()->timestamp, eventId: 'evt_grace_status_first')->assertStatus(204);
+            $this->stripeEvent('invoice.payment_failed', $this->invoice($intent, ['id' => 'in_grace_order']), 'evt_grace_invoice_second', now()->addSecond()->timestamp)->assertStatus(204);
+        }
+
+        $subscription = Subscription::sole();
+        $this->assertSame(604800, $subscription->grace_ends_at->timestamp - $subscription->grace_started_at->timestamp);
+        $this->assertSame(1, AdminAuditEvent::query()
+            ->where('event', 'billing.grace_started')
+            ->where('subject_type', 'subscription')
+            ->where('subject_key', $subscription->uuid)
+            ->count());
+        $this->assertSame(1, $subscription->customer->billingEmailOutbox()->where('notification', 'grace_started')->count());
+        $this->assertSame(1, $subscription->customer->billingEmailOutbox()->where('notification', 'payment_failed')->count());
+        $this->assertDatabaseHas('billing_email_outbox', [
+            'event_key' => 'subscription:'.$subscription->uuid.':grace-started:'.$subscription->grace_started_at->utc()->format('YmdHis'),
+            'notification' => 'grace_started',
+        ]);
+        $this->assertDatabaseHas('billing_email_outbox', [
+            'event_key' => 'invoice:in_grace_order:payment-failed',
+            'notification' => 'payment_failed',
+        ]);
     }
 
     public function test_cancellation_at_period_end_and_deletion(): void

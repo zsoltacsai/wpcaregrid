@@ -202,6 +202,11 @@ final class SubscriptionSync
             ]);
         }
 
+        // An invoice.payment_failed event can establish the grace window before
+        // Stripe's companion subscription.updated event arrives. Preserve that
+        // transition so this second provider event does not audit it twice.
+        $graceWasAlreadyStarted = $subscription->grace_started_at !== null;
+
         if ($status === SubscriptionStatus::PastDue) {
             $subscription->grace_started_at ??= $eventTime;
             $subscription->grace_ends_at ??= $eventTime->copy()->addDays(7);
@@ -318,9 +323,11 @@ final class SubscriptionSync
             && $previousStatus !== SubscriptionStatus::PastDue
             && $subscription->customer
             && $subscription->grace_started_at) {
-            AdminAudit::record(null, 'billing.grace_started', 'subscription', $subscription->uuid, [
-                'grace_ends_at' => $subscription->grace_ends_at?->toIso8601String(),
-            ]);
+            if (! $graceWasAlreadyStarted) {
+                AdminAudit::record(null, 'billing.grace_started', 'subscription', $subscription->uuid, [
+                    'grace_ends_at' => $subscription->grace_ends_at?->toIso8601String(),
+                ]);
+            }
             $this->billingEmails->enqueue(
                 'subscription:'.$subscription->uuid.':grace-started:'.$subscription->grace_started_at->utc()->format('YmdHis'),
                 'grace_started',
