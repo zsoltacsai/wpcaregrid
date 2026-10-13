@@ -2,12 +2,14 @@
 
 namespace App\Jobs;
 
+use App\Billing\SubscriptionStatus;
 use App\Mail\BillingLifecycleNotice;
 use App\Mail\PaymentConfirmation;
 use App\Mail\PaymentFailed;
 use App\Mail\SubscriptionActivated;
 use App\Mail\SubscriptionCanceled;
 use App\Models\BillingEmailOutbox;
+use App\Models\Subscription;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -41,8 +43,37 @@ class ProcessBillingEmailOutboxJob implements ShouldBeUnique, ShouldQueue
     public function handle(): void
     {
         $claimed = DB::transaction(function (): ?BillingEmailOutbox {
+            $row = BillingEmailOutbox::query()->whereKey($this->outboxId)->first();
+            if (! $row) {
+                return null;
+            }
+
+            // Keep the lock order consistent with the Stripe webhook path:
+            // subscription first, then outbox. A stale grace-expiry notice
+            // must not be sent after payment recovery or another state change.
+            $subscription = null;
+            if ($row->notification === 'billing_action_required') {
+                $subscription = $row->subscription_id
+                    ? Subscription::query()->whereKey($row->subscription_id)->lockForUpdate()->first()
+                    : null;
+            }
+
             $row = BillingEmailOutbox::query()->whereKey($this->outboxId)->lockForUpdate()->first();
             if (! $row || $row->status !== 'pending' || $row->next_attempt_at?->isFuture()) {
+                return null;
+            }
+
+            if ($row->notification === 'billing_action_required'
+                && (! $subscription
+                    || $subscription->status !== SubscriptionStatus::PastDue
+                    || ! $subscription->grace_expired_at
+                    || ! $subscription->grace_started_at
+                    || $subscription->last_payment_status === 'paid')) {
+                $row->forceFill([
+                    'status' => 'cancelled',
+                    'updated_at' => now(),
+                ])->save();
+
                 return null;
             }
 
