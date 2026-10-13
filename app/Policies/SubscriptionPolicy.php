@@ -13,4 +13,11 @@ class SubscriptionPolicy
             && $subscription->customer_id !== null
             && $subscription->customer_id === $user->customer->id;
     }
+
+    public function manage(User $user, Subscription $subscription): bool
+    {
+        return $this->view($user, $subscription)
+            && $subscription->billing_source === 'stripe'
+            && ! $subscription->isInternal();
+    }
 }

@@ -75,7 +75,7 @@ class RestoreService
     /** Why this restore may not be requested, or null. */
     public function refusal(Website $website, Backup $backup, BackupType $scope, ?int $ignoreRestoreId = null): ?string
     {
-        $decision = $this->policy->for($website);
+        $decision = $this->policy->for($website, BackupReason::PreRestore);
         $connector = $website->activeConnector;
 
         return match (true) {

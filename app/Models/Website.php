@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Billing\SubscriptionEntitlements;
 use App\Connector\HealthStatus;
 use App\Connector\Presence;
 use App\Pricing\ProductType;
@@ -139,10 +140,11 @@ class Website extends Model
     }
 
     /** Paid connector operations need an active plan for this site and an active customer. */
-    public function allowsServiceOperations(): bool
+    public function allowsServiceOperations(string $capability = 'service'): bool
     {
         return $this->customer?->active === true
-            && $this->subscription?->grantsAccess() === true;
+            && $this->subscription !== null
+            && app(SubscriptionEntitlements::class)->allows($this->subscription, $capability);
     }
 
     /** Synthetic fixture access is separate from paid-plan service access. */

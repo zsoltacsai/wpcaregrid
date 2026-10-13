@@ -105,6 +105,7 @@ final class StartCheckout
                 'amount' => $price->money->amount,
                 'tax_treatment' => $market->taxTreatment->value,
                 'stripe_price_id' => $price->stripePriceId,
+                'pricing_version' => $price->version,
                 'promotion_id' => $promotion?->id,
                 'promotion_code' => $promotion?->code,
                 'browser_session_hash' => $sessionHash,

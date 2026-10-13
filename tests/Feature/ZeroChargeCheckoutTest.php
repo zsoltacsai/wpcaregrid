@@ -7,7 +7,6 @@ use App\Checkout\CheckoutStatus;
 use App\Checkout\StripeCheckoutGateway;
 use App\Mail\AccountActivation;
 use App\Mail\PaymentConfirmation;
-use App\Mail\SubscriptionActivated;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Promotion;
@@ -160,8 +159,9 @@ class ZeroChargeCheckoutTest extends TestCase
         $subscription->refresh();
         $this->assertTrue($subscription->grantsAccess());
         $this->assertSame('paid', $subscription->last_payment_status);
-        Mail::assertQueued(SubscriptionActivated::class, 1);
+        $this->assertDatabaseHas('billing_email_outbox', ['notification' => 'subscription_activated']);
         Mail::assertNotQueued(PaymentConfirmation::class);
+        $this->assertDatabaseMissing('billing_email_outbox', ['notification' => 'payment_received']);
         $this->assertSame(1, Subscription::count());
         $this->assertSame(1, Customer::count());
     }
@@ -175,7 +175,7 @@ class ZeroChargeCheckoutTest extends TestCase
             'parent' => ['subscription_details' => ['subscription' => 'sub_p', 'metadata' => ['checkout_intent' => $intent->uuid]]],
         ])->assertStatus(204);
 
-        Mail::assertQueued(PaymentConfirmation::class, 1);
+        $this->assertDatabaseHas('billing_email_outbox', ['event_key' => 'invoice:in_p:payment-received', 'notification' => 'payment_received']);
     }
 
     public function test_a_hundred_percent_coupon_obeys_the_same_rules_as_any_other(): void

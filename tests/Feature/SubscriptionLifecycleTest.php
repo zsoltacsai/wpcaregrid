@@ -2,17 +2,16 @@
 
 namespace Tests\Feature;
 
+use App\Billing\SubscriptionEntitlements;
 use App\Billing\SubscriptionStatus;
 use App\Checkout\CheckoutStatus;
 use App\Mail\AccountActivation;
-use App\Mail\PaymentConfirmation;
-use App\Mail\PaymentFailed;
 use App\Mail\SubscriptionActivated;
-use App\Mail\SubscriptionCanceled;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Promotion;
 use App\Models\StripeEvent;
+use App\Models\StripeWebhookInbox;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Pricing\BillingInterval;
@@ -23,6 +22,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Mail\Events\MessageSent;
 use Illuminate\Mail\MailManager;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Mail;
@@ -136,7 +136,7 @@ class SubscriptionLifecycleTest extends TestCase
         $this->assertFalse($customer->hasActiveSubscription());
 
         Mail::assertQueued(AccountActivation::class, fn ($mail) => $mail->hasTo('anna.kovacs@company.example'));
-        Mail::assertNotQueued(SubscriptionActivated::class);
+        $this->assertDatabaseCount('billing_email_outbox', 0);
     }
 
     public function test_subscription_event_activates_access_and_announces_it_once(): void
@@ -153,7 +153,8 @@ class SubscriptionLifecycleTest extends TestCase
         $this->assertNotNull($subscription->activated_at);
         $this->assertTrue($subscription->customer->hasActiveSubscription());
 
-        Mail::assertQueued(SubscriptionActivated::class, 1);
+        $this->assertDatabaseHas('billing_email_outbox', ['notification' => 'subscription_activated']);
+        $this->assertDatabaseCount('billing_email_outbox', 1);
     }
 
     public function test_events_in_reverse_order_resolve_to_one_customer_and_subscription(): void
@@ -173,7 +174,8 @@ class SubscriptionLifecycleTest extends TestCase
         $this->assertSame(Customer::sole()->id, $subscription->customer_id);
         $this->assertSame($intent->id, $subscription->checkout_intent_id);
         Mail::assertQueued(AccountActivation::class, 1);
-        Mail::assertQueued(SubscriptionActivated::class, 1);
+        $this->assertDatabaseCount('billing_email_outbox', 1);
+        $this->assertDatabaseHas('billing_email_outbox', ['notification' => 'subscription_activated']);
     }
 
     public function test_concurrent_webhook_provisioning_recovers_from_customer_and_user_email_races(): void
@@ -388,6 +390,58 @@ class SubscriptionLifecycleTest extends TestCase
         $this->assertArrayNotHasKey('payload', $event->getAttributes());
     }
 
+    public function test_signed_webhook_payload_is_durably_encrypted_before_processing(): void
+    {
+        $intent = $this->intent();
+        $this->completeCheckout($intent, eventId: 'evt_inbox');
+
+        $receipt = StripeWebhookInbox::sole();
+        $stored = DB::table('stripe_webhook_inbox')->where('id', $receipt->id)->value('payload');
+
+        $this->assertSame('evt_inbox', $receipt->stripe_event_id);
+        $this->assertSame(StripeWebhookInbox::STATUS_PROCESSED, $receipt->status);
+        $this->assertSame(1, $receipt->attempts);
+        $this->assertNotSame($stored, $receipt->payload, 'The database value must be encrypted, not plaintext JSON.');
+        $this->assertStringContainsString('checkout.session.completed', $receipt->payload);
+        $this->assertNotNull($receipt->processed_at);
+    }
+
+    public function test_live_mode_event_is_refused_by_test_mode_configuration(): void
+    {
+        config(['services.stripe.secret' => 'sk_test_M11_fake']);
+
+        $this->stripeEvent('invoice.paid', ['id' => 'in_test'], eventId: 'evt_wrong_mode', livemode: true)
+            ->assertStatus(400);
+
+        $this->assertDatabaseCount('stripe_webhook_inbox', 0);
+        $this->assertDatabaseCount('stripe_events', 0);
+    }
+
+    public function test_failed_signed_event_remains_in_retryable_inbox_and_redelivery_succeeds(): void
+    {
+        $intent = $this->intent();
+        $failing = true;
+        Subscription::creating(function () use (&$failing) {
+            if ($failing) {
+                throw new \RuntimeException('Database unavailable.');
+            }
+        });
+
+        $this->completeCheckout($intent, eventId: 'evt_durable_retry')->assertStatus(500);
+        $receipt = StripeWebhookInbox::sole();
+        $this->assertSame(StripeWebhookInbox::STATUS_FAILED, $receipt->status);
+        $this->assertSame(1, $receipt->attempts);
+        $this->assertSame('RuntimeException', $receipt->last_error_category);
+        $this->assertStringNotContainsString('Database unavailable', $receipt->last_error_category);
+        $this->assertDatabaseCount('stripe_events', 0);
+
+        $failing = false;
+        $this->completeCheckout($intent, eventId: 'evt_durable_retry')->assertStatus(204);
+        $this->assertSame(StripeWebhookInbox::STATUS_PROCESSED, $receipt->refresh()->status);
+        $this->assertSame(2, $receipt->attempts);
+        $this->assertDatabaseCount('stripe_events', 1);
+    }
+
     // --- Payment not (yet) confirmed ----------------------------------------
 
     public function test_a_paid_checkout_redeems_its_promotion_once(): void
@@ -540,10 +594,11 @@ class SubscriptionLifecycleTest extends TestCase
 
         $subscription = Subscription::sole();
         $this->assertSame($local, $subscription->status);
-        $this->assertSame($local->grantsAccess(), $subscription->customer->hasActiveSubscription());
+        $expectedAccess = $local->grantsAccess() || $local === SubscriptionStatus::PastDue;
+        $this->assertSame($expectedAccess, $subscription->customer->hasActiveSubscription());
     }
 
-    public function test_past_due_and_unpaid_remove_access(): void
+    public function test_past_due_grants_fixed_grace_then_unpaid_restricts_access(): void
     {
         $intent = $this->intent();
         $this->completeCheckout($intent);
@@ -552,11 +607,38 @@ class SubscriptionLifecycleTest extends TestCase
         $this->assertTrue($customer->hasActiveSubscription());
 
         $this->subscriptionEvent('customer.subscription.updated', 'past_due', $intent, created: now()->subMinute()->timestamp);
-        $this->assertFalse($customer->hasActiveSubscription());
+        $subscription = Subscription::sole();
+        $this->assertTrue($customer->hasActiveSubscription());
+        $this->assertNotNull($subscription->grace_started_at);
+        $this->assertSame($subscription->grace_started_at->copy()->addDays(7)->timestamp, $subscription->grace_ends_at->timestamp);
+
+        Carbon::setTestNow($subscription->grace_ends_at->copy()->addSecond());
+        $this->assertFalse($customer->fresh()->hasActiveSubscription());
+        $this->assertFalse($subscription->fresh()->grantsAccess());
+        $this->assertTrue(app(SubscriptionEntitlements::class)->allows($subscription->fresh(), 'restore'));
+        Carbon::setTestNow();
 
         $this->subscriptionEvent('customer.subscription.updated', 'unpaid', $intent);
         $this->assertFalse($customer->hasActiveSubscription());
         $this->assertSame(SubscriptionStatus::Unpaid, Subscription::sole()->status);
+    }
+
+    public function test_duplicate_failed_payment_does_not_extend_grace_and_paid_invoice_clears_it(): void
+    {
+        $intent = $this->intent();
+        $this->completeCheckout($intent);
+        $this->subscriptionEvent('customer.subscription.created', 'past_due', $intent);
+        $subscription = Subscription::sole();
+        $startedAt = $subscription->grace_started_at->copy();
+        $endsAt = $subscription->grace_ends_at->copy();
+
+        $this->stripeEvent('invoice.payment_failed', $this->invoice($intent, ['id' => 'in_failed_again']))->assertStatus(204);
+        $this->assertTrue($subscription->refresh()->grace_started_at->equalTo($startedAt));
+        $this->assertTrue($subscription->grace_ends_at->equalTo($endsAt));
+
+        $this->stripeEvent('invoice.paid', $this->invoice($intent, ['id' => 'in_recovered', 'amount_paid' => 1899000]))->assertStatus(204);
+        $this->assertNull($subscription->refresh()->grace_started_at);
+        $this->assertNull($subscription->grace_ends_at);
     }
 
     public function test_cancellation_at_period_end_and_deletion(): void
@@ -577,7 +659,7 @@ class SubscriptionLifecycleTest extends TestCase
         $this->assertNotNull($subscription->canceled_at);
         $this->assertNotNull($subscription->ended_at);
         $this->assertFalse($subscription->customer->hasActiveSubscription());
-        Mail::assertQueued(SubscriptionCanceled::class, 1);
+        $this->assertDatabaseHas('billing_email_outbox', ['notification' => 'subscription_canceled']);
     }
 
     public function test_unknown_stripe_status_is_ignored(): void
@@ -615,7 +697,7 @@ class SubscriptionLifecycleTest extends TestCase
         $subscription = Subscription::sole();
         $this->assertSame('paid', $subscription->last_payment_status);
         $this->assertNotNull($subscription->last_payment_at);
-        Mail::assertQueued(PaymentConfirmation::class, fn ($mail) => $mail->amount->format() === "18,990\u{00A0}Ft");
+        $this->assertDatabaseHas('billing_email_outbox', ['event_key' => 'invoice:in_test_1:payment-received', 'notification' => 'payment_received']);
     }
 
     public function test_failed_payment_does_not_grant_or_provision_anything(): void
@@ -633,7 +715,7 @@ class SubscriptionLifecycleTest extends TestCase
         $this->stripeEvent('invoice.payment_failed', $this->invoice($intent, ['id' => 'in_test_2']))->assertStatus(204);
 
         $this->assertSame('failed', Subscription::sole()->last_payment_status);
-        Mail::assertQueued(PaymentFailed::class, 1);
+        $this->assertDatabaseHas('billing_email_outbox', ['event_key' => 'invoice:in_test_2:payment-failed', 'notification' => 'payment_failed']);
     }
 
     // --- Identity ----------------------------------------------------------

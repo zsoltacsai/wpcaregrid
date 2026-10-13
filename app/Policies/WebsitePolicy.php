@@ -39,7 +39,7 @@ class WebsitePolicy
 
     public function restore(User $user, Website $website): bool
     {
-        return $this->backup($user, $website);
+        return $this->view($user, $website) && $website->allowsServiceOperations('restore');
     }
 
     /** Opening WordPress admin is a paid action for the site's own plan. */

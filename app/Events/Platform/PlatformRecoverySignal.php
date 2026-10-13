@@ -19,6 +19,8 @@ final readonly class PlatformRecoverySignal
 
     public const SECRET_RECOVERY_PREREQUISITE_MISSING = 'secret_recovery_prerequisite_missing';
 
+    public const BILLING_RECONCILIATION_FAILED = 'billing.reconciliation_failed';
+
     /** @param array<string, scalar|null> $context */
     public function __construct(public string $type, public array $context = []) {}
 }

@@ -2,11 +2,13 @@
 
 namespace Tests\Feature\Account;
 
+use App\Billing\SubscriptionManagementGateway;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Subscription;
 use App\Models\Website;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Fakes\FakeSubscriptionManagementGateway;
 use Tests\TestCase;
 
 /** A customer must never reach another customer's records. */
@@ -40,6 +42,16 @@ class AuthorizationTest extends TestCase
 
         $this->actingAs($this->alice->user)->get(route('account.subscriptions.show', $bobsPlan))->assertForbidden();
         $this->actingAs($this->bob->user)->get(route('account.subscriptions.show', $bobsPlan))->assertOk();
+    }
+
+    public function test_customer_cannot_cancel_another_customers_subscription(): void
+    {
+        $gateway = new FakeSubscriptionManagementGateway;
+        $this->app->instance(SubscriptionManagementGateway::class, $gateway);
+        $bobsPlan = Subscription::factory()->for($this->bob)->create(['billing_source' => 'stripe']);
+
+        $this->actingAs($this->alice->user)->post(route('account.subscriptions.cancel', $bobsPlan))->assertForbidden();
+        $this->assertSame([], $gateway->calls);
     }
 
     public function test_unassigned_subscription_is_not_visible_to_anyone(): void

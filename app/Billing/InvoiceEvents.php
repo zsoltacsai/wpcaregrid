@@ -5,8 +5,6 @@ namespace App\Billing;
 use App\Checkout\CheckoutStatus;
 use App\Checkout\PromotionReservations;
 use App\Invoicing\InvoiceIntentWorkflow;
-use App\Mail\PaymentConfirmation;
-use App\Mail\PaymentFailed;
 use App\Models\BillingInvoice;
 use App\Models\Customer;
 use App\Models\Subscription;
@@ -16,7 +14,6 @@ use App\Pricing\Money;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 
 /**
  * invoice.paid and invoice.payment_failed. These record the payment and
@@ -30,11 +27,14 @@ final class InvoiceEvents
         private readonly ProvisionCustomer $provision,
         private readonly PromotionReservations $reservations,
         private readonly InvoiceIntentWorkflow $invoiceIntents,
+        private readonly SubscriptionPlanChangeConfirmation $planChanges,
+        private readonly QueueBillingEmail $billingEmails,
     ) {}
 
     public function paid(object $invoice, int $eventCreated = 0, ?string $eventId = null): void
     {
         $subscription = $this->subscriptionFor($invoice, paymentConfirmed: true);
+        $wasInGrace = $subscription?->grace_started_at !== null;
 
         [$snapshot, $applied, $notifyPayment] = $this->persist($invoice, $subscription, $eventCreated ?: time(), 'paid', $eventId);
         if (! $subscription || ! $applied) {
@@ -45,6 +45,8 @@ final class InvoiceEvents
         $this->invoiceIntents->recordPaidInvoice($snapshot, $eventId);
 
         $subscription->fill(['last_payment_status' => 'paid', 'last_payment_at' => $snapshot->paid_at ?? now()]);
+        $subscription->grace_started_at = null;
+        $subscription->grace_ends_at = null;
 
         // A completed renewal invoice is the best Stripe-authoritative record
         // of the amount billed for the current cycle (exclusive of Stripe tax).
@@ -77,6 +79,19 @@ final class InvoiceEvents
         }
 
         $subscription->save();
+        $planChangeConfirmed = $this->planChanges->confirmPaidInvoice($subscription, $invoice);
+        if ($planChangeConfirmed) {
+            $subscription->refresh();
+            if ($subscription->customer) {
+                $this->billingEmails->enqueue(
+                    'subscription:'.$subscription->uuid.':plan-change-confirmed:'.$snapshot->stripe_invoice_id,
+                    'upgrade_completed',
+                    $subscription->customer,
+                    $subscription,
+                    $snapshot,
+                );
+            }
+        }
 
         if ($intent = $subscription->checkoutIntent) {
             if ($intent->canMoveTo(CheckoutStatus::Completed)) {
@@ -98,9 +113,21 @@ final class InvoiceEvents
         }
         $customer = $subscription?->customer;
 
+        if ($notifyPayment) {
+            AdminAudit::record(null, $wasInGrace ? 'billing.payment_recovered' : 'billing.payment_received', 'subscription', $subscription->uuid, [
+                'stripe_invoice_id' => $snapshot->stripe_invoice_id,
+            ]);
+        }
+
         if ($notifyPayment && $subscription && $customer && (int) ($invoice->amount_paid ?? 0) > 0) {
             $subscription->setRelation('customer', $customer);
-            Mail::to($customer->email)->queue((new PaymentConfirmation($subscription, $this->money($invoice, 'amount_paid')))->afterCommit());
+            $this->billingEmails->enqueue(
+                'invoice:'.$snapshot->stripe_invoice_id.':payment-received',
+                $wasInGrace ? 'payment_recovered' : 'payment_received',
+                $customer,
+                $subscription,
+                $snapshot,
+            );
         }
     }
 
@@ -114,10 +141,26 @@ final class InvoiceEvents
             return;
         }
 
+        $firstGraceFailure = $subscription->grace_started_at === null;
         $subscription->update(['last_payment_status' => 'failed']);
+        $subscription->beginPaymentGrace(Carbon::createFromTimestamp($eventCreated ?: time()));
+
+        if ($notifyFailure) {
+            AdminAudit::record(null, 'billing.payment_failure', 'subscription', $subscription->uuid, [
+                'stripe_invoice_id' => $invoice->id,
+            ]);
+        }
+        if ($firstGraceFailure) {
+            AdminAudit::record(null, 'billing.grace_started', 'subscription', $subscription->uuid, [
+                'grace_ends_at' => $subscription->fresh()->grace_ends_at?->toIso8601String(),
+            ]);
+        }
 
         if ($notifyFailure && $subscription->customer) {
-            Mail::to($subscription->customer->email)->queue((new PaymentFailed($subscription, $this->money($invoice, 'amount_due')))->afterCommit());
+            $invoiceRow = BillingInvoice::where('stripe_invoice_id', $invoice->id)->first();
+            if ($invoiceRow) {
+                $this->billingEmails->enqueue('invoice:'.$invoiceRow->stripe_invoice_id.':payment-failed', 'payment_failed', $subscription->customer, $subscription, $invoiceRow);
+            }
         }
     }
 

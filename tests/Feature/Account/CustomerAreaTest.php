@@ -71,7 +71,7 @@ class CustomerAreaTest extends TestCase
             ->assertSee('399,000')
             ->assertSee('25 Sep 2026 – 25 Sep 2027')
             ->assertSee('Ends on 25 Sep 2027')
-            ->assertSee('Manage subscription');
+            ->assertSee(__('account.subscription.manage_note'));
     }
 
     public function test_billing_and_profile_pages(): void

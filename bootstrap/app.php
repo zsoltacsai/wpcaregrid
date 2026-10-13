@@ -32,6 +32,7 @@ return Application::configure(basePath: dirname(__DIR__))
             Route::middleware('web')->group(__DIR__.'/../routes/owner.php');
         },
     )
+    ->withCommands()
     ->withMiddleware(function (Middleware $middleware): void {
         // Security headers and HTTPS redirect on every response (config/http.php).
         $middleware->append(SecurityHeaders::class);
