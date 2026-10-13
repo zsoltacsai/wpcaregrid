@@ -100,3 +100,8 @@ The existing synthetic account with a Business-to-Basic downgrade scheduled for 
 **C — M11 VALIDATION BLOCKER REMAINS.**
 
 The release and automated regression coverage are healthy, but mandatory staging evidence for annual-to-monthly scheduling and the isolated failure/grace/recovery/expiry/reconciliation scenarios is incomplete. M11 is not closed. Stripe TEST mode and the live Számlázz.hu safety gate remain in effect; production deployment is not authorized by this report.
+
+## Closure evidence CI
+
+- PR #19 closure-report commit `50b191cbc1642c1e4e3c81715894f4a1d026da10` passed exact-SHA CI run `38393776604` on 2026-10-13. All five jobs passed: quality/secrets, server SQLite, server MySQL (including required process-concurrency gate), Connector SQLite, and Connector MySQL.
+- This report documents an open milestone; green CI does not substitute for the missing staging lifecycle evidence listed above.
