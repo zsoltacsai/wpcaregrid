@@ -4,8 +4,10 @@ namespace Tests\Feature;
 
 use App\Billing\SubscriptionManagement;
 use App\Billing\SubscriptionManagementGateway;
+use App\Models\BillingEmailOutbox;
 use App\Models\Customer;
 use App\Models\Subscription;
+use App\Models\SubscriptionOperation;
 use App\Pricing\BillingInterval;
 use App\Pricing\PlanTier;
 use App\Pricing\PriceSelection;
@@ -242,6 +244,87 @@ class SubscriptionManagementTest extends TestCase
         $this->assertSame($subscription->current_period_end->timestamp, $subscription->fresh()->pending_change_effective_at->timestamp);
         $this->assertSame(PlanTier::Secure, $subscription->fresh()->plan);
         $this->assertFalse($gateway->priceChanges[0]['immediate']);
+
+        $eventKey = 'subscription:'.$subscription->uuid.':change-scheduled:'.$operation->uuid;
+        $this->assertDatabaseHas('billing_email_outbox', [
+            'event_key' => $eventKey,
+            'customer_id' => $customer->id,
+            'notification' => 'downgrade_scheduled',
+        ]);
+        $outbox = BillingEmailOutbox::where('event_key', $eventKey)->sole();
+        $this->assertSame('annual', $outbox->payload['interval']);
+        $this->assertSame($subscription->current_period_end->toIso8601String(), $outbox->payload['effective_at']);
+
+        $retry = app(SubscriptionManagement::class)->changePlan($subscription, $customer, ProductType::WordPress, PlanTier::Business, BillingInterval::Annual);
+        $this->assertSame($operation->id, $retry->id);
+        $this->assertSame(1, BillingEmailOutbox::where('event_key', $eventKey)->count());
+        $this->assertCount(1, $gateway->priceChanges);
+    }
+
+    public function test_annual_to_monthly_change_is_deferred_and_queues_one_interval_specific_notice(): void
+    {
+        $this->configureStripePriceIds();
+        $catalog = app(PricingCatalog::class);
+        $customer = Customer::factory()->create(['country_code' => 'HU']);
+        $current = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Annual), 'HU', 'HUF');
+        $target = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly), 'HU', 'HUF');
+        $subscription = Subscription::factory()->for($customer)->create([
+            'billing_source' => 'stripe', 'product_type' => ProductType::WordPress, 'plan' => PlanTier::Basic,
+            'interval' => BillingInterval::Annual, 'stripe_price_id' => $current->stripePriceId,
+            'current_period_end' => now()->addYear(),
+        ]);
+        $gateway = new FakeSubscriptionManagementGateway;
+        $this->app->instance(SubscriptionManagementGateway::class, $gateway);
+
+        $operation = app(SubscriptionManagement::class)->changePlan($subscription, $customer, ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly);
+
+        $this->assertSame('downgrade', $operation->operation);
+        $this->assertSame('awaiting_confirmation', $operation->fresh()->status);
+        $this->assertSame('scheduled', $subscription->fresh()->pending_change_status);
+        $this->assertSame(BillingInterval::Annual, $subscription->fresh()->interval);
+        $this->assertSame(BillingInterval::Monthly->value, $subscription->fresh()->pending_interval);
+        $this->assertSame($subscription->current_period_end->timestamp, $subscription->fresh()->pending_change_effective_at->timestamp);
+        $this->assertFalse($gateway->priceChanges[0]['immediate']);
+
+        $email = BillingEmailOutbox::where('notification', 'downgrade_scheduled')->sole();
+        $this->assertSame('monthly', $email->payload['interval']);
+        $this->assertSame($target->stripePriceId, $subscription->fresh()->pending_stripe_price_id);
+    }
+
+    public function test_legacy_pending_change_without_provider_schedule_does_not_send_scheduled_notice(): void
+    {
+        $this->configureStripePriceIds();
+        $catalog = app(PricingCatalog::class);
+        $customer = Customer::factory()->create(['country_code' => 'HU']);
+        $current = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Annual), 'HU', 'HUF');
+        $target = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly), 'HU', 'HUF');
+        $periodEnd = now()->addYear();
+        $subscription = Subscription::factory()->for($customer)->create([
+            'billing_source' => 'stripe', 'product_type' => ProductType::WordPress, 'plan' => PlanTier::Basic,
+            'interval' => BillingInterval::Annual, 'stripe_price_id' => $current->stripePriceId,
+            'current_period_end' => $periodEnd, 'pending_plan' => PlanTier::Basic,
+            'pending_interval' => BillingInterval::Monthly, 'pending_stripe_price_id' => $target->stripePriceId,
+            'pending_change_effective_at' => $periodEnd, 'pending_change_status' => 'scheduled',
+        ]);
+        $operationKey = hash('sha256', implode('|', [
+            $subscription->uuid, 'downgrade', $target->stripePriceId, $periodEnd->utc()->format('YmdHis'),
+        ]));
+        $operation = SubscriptionOperation::create([
+            'subscription_id' => $subscription->id, 'customer_id' => $customer->id,
+            'operation' => 'downgrade', 'operation_key' => $operationKey,
+            'status' => 'awaiting_confirmation',
+            'request_snapshot' => ['target_plan' => 'basic', 'target_interval' => 'monthly', 'scheduled' => true],
+        ]);
+        $gateway = new FakeSubscriptionManagementGateway;
+        $this->app->instance(SubscriptionManagementGateway::class, $gateway);
+
+        $result = app(SubscriptionManagement::class)->changePlan(
+            $subscription, $customer, ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly,
+        );
+
+        $this->assertSame($operation->id, $result->id);
+        $this->assertDatabaseCount('billing_email_outbox', 0);
+        $this->assertCount(0, $gateway->priceChanges);
     }
 
     private function configureStripePriceIds(): void

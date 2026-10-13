@@ -13,6 +13,7 @@ final class BillingLifecycleNotice extends Mailable
         private readonly Customer $customer,
         private readonly string $notification,
         private readonly ?string $plan,
+        private readonly ?string $interval = null,
     ) {}
 
     public function envelope(): Envelope
@@ -24,7 +25,10 @@ final class BillingLifecycleNotice extends Mailable
     {
         return new Content(markdown: 'mail.billing_lifecycle_notice', with: [
             'name' => $this->customer->first_name,
-            'message' => __('emails.lifecycle.'.$this->notification.'.body', ['plan' => $this->plan ?? '']),
+            'message' => __('emails.lifecycle.'.$this->notification.'.body', [
+                'plan' => $this->plan ?? '',
+                'interval' => $this->interval ? __('emails.billing_intervals.'.$this->interval) : '',
+            ]),
             'url' => route('account.subscription'),
             'action' => __('emails.lifecycle.action'),
         ]);
