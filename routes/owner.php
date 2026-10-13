@@ -10,6 +10,7 @@ use App\Http\Controllers\Owner\InternalPlanController;
 use App\Http\Controllers\Owner\InvoiceIntentController;
 use App\Http\Controllers\Owner\InvoiceIntentTaxReviewController;
 use App\Http\Controllers\Owner\LoginController;
+use App\Http\Controllers\Owner\M11LifecycleValidationController;
 use App\Http\Controllers\Owner\MonitoringController;
 use App\Http\Controllers\Owner\OperatorController;
 use App\Http\Controllers\Owner\OwnerSettingsController;
@@ -145,6 +146,8 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::get('/billing/invoice-intents/{invoiceIntent}', [InvoiceIntentController::class, 'show'])->middleware('can:owner.billing.invoices.view')->name('billing.invoice-intents.show');
         Route::post('/billing/invoice-intents/{invoiceIntent}/tax-review', [InvoiceIntentTaxReviewController::class, 'store'])->middleware(['can:owner.billing.invoices.view', 'throttle:owner-sensitive'])->name('billing.invoice-intents.tax-review');
         Route::post('/billing/invoice-intents/{invoiceIntent}/reconcile', [InvoiceIntentController::class, 'reconcile'])->middleware(['can:owner.billing.invoices.view', 'throttle:owner-sensitive'])->name('billing.invoice-intents.reconcile');
+        Route::get('/billing/m11-lifecycle-validation', [M11LifecycleValidationController::class, 'index'])->middleware('can:owner.billing.lifecycle_validation.manage')->name('billing.m11-lifecycle-validation.index');
+        Route::post('/billing/m11-lifecycle-validation', [M11LifecycleValidationController::class, 'run'])->middleware(['can:owner.billing.lifecycle_validation.manage', 'throttle:owner-sensitive'])->name('billing.m11-lifecycle-validation.run');
         Route::get('/billing/synthetic-szamlazz-test', [SyntheticSzamlazzTestController::class, 'index'])->middleware('can:owner.billing.synthetic_tests.manage')->name('billing.synthetic-szamlazz-test.index');
         Route::post('/billing/synthetic-szamlazz-test', [SyntheticSzamlazzTestController::class, 'store'])->middleware(['can:owner.billing.synthetic_tests.manage', 'throttle:owner-external'])->name('billing.synthetic-szamlazz-test.store');
         Route::post('/billing/synthetic-szamlazz-test/{run}/submit', [SyntheticSzamlazzTestController::class, 'submit'])->middleware(['can:owner.billing.synthetic_tests.manage', 'throttle:owner-external'])->name('billing.synthetic-szamlazz-test.submit');

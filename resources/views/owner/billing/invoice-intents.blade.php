@@ -4,6 +4,9 @@
     @can('owner.billing.synthetic_tests.manage')
         <p class="mb-5 text-sm"><a class="underline" href="{{ route('owner.billing.synthetic-szamlazz-test.index') }}">{{ __('owner.synthetic_invoice_test.title') }}</a></p>
     @endcan
+    @can('owner.billing.lifecycle_validation.manage')
+        <p class="mb-5 text-sm"><a class="underline" href="{{ route('owner.billing.m11-lifecycle-validation.index') }}">{{ __('owner.m11_lifecycle_validation.title') }}</a></p>
+    @endcan
     <nav class="mb-4 flex gap-4 text-sm" aria-label="{{ __('owner.invoice_intents.queue_navigation') }}">
         <a class="underline" href="{{ route('owner.billing.invoice-intents.index') }}">{{ __('owner.invoice_intents.all_intents') }}</a>
         <a class="underline" href="{{ route('owner.billing.invoice-intents.index', ['tax_review' => 1]) }}">{{ __('owner.invoice_intents.tax_review_queue') }}</a>

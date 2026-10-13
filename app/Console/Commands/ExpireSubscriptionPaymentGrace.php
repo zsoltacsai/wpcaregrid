@@ -11,16 +11,19 @@ use Illuminate\Support\Facades\DB;
 
 final class ExpireSubscriptionPaymentGrace extends Command
 {
-    protected $signature = 'billing:subscriptions:expire-grace {--limit=500}';
+    protected $signature = 'billing:subscriptions:expire-grace {--limit=500} {--subscription= : Restrict expiry to one subscription UUID}';
 
     protected $description = 'Record subscription payment grace expiry without deleting customer data';
 
     public function handle(QueueBillingEmail $emails): int
     {
         $limit = max(1, min(2000, (int) $this->option('limit')));
+        $subscriptionUuid = $this->option('subscription');
         $ids = Subscription::query()->where('status', SubscriptionStatus::PastDue)
             ->whereNotNull('grace_ends_at')->where('grace_ends_at', '<=', now())
-            ->whereNull('grace_expired_at')->orderBy('id')->limit($limit)->pluck('id');
+            ->whereNull('grace_expired_at')
+            ->when(is_string($subscriptionUuid) && $subscriptionUuid !== '', fn ($query) => $query->where('uuid', $subscriptionUuid))
+            ->orderBy('id')->limit($limit)->pluck('id');
         $expired = 0;
 
         foreach ($ids as $id) {

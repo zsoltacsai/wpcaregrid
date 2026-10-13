@@ -18,6 +18,8 @@ regexes = [
   '''pk_test_PUBLISHABLE_456''',
   '''whsec_WEBHOOK_SECRET_789''',
   '''whsec_test[A-Za-z0-9_]*''',
+    # Historical M11 test placeholder introduced before it was renamed to the standard dummy form.
+    '''whsec_m11_fixture''',
   '''AKIA_STORAGE_KEY''',
   '''STORAGE_SECRET_VALUE''',
   '''SMTP_PASSWORD_VALUE''',
