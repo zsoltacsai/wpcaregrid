@@ -35,6 +35,7 @@ enum OwnerAbility: string
     case IntegrationsManage = 'integrations.manage';
     case BillingInvoicesView = 'billing.invoices.view';
     case BillingSyntheticTestsManage = 'billing.synthetic_tests.manage';
+    case BillingLifecycleValidationManage = 'billing.lifecycle_validation.manage';
     case SettingsManage = 'settings.manage';
     case DnsManage = 'dns.manage';
 

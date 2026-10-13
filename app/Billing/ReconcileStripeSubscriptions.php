@@ -18,7 +18,7 @@ final class ReconcileStripeSubscriptions
     ) {}
 
     /** @return array{checked:int,reconciled:int,changed:int,failed:int,skipped:int} */
-    public function run(int $limit = 100): array
+    public function run(int $limit = 100, ?int $subscriptionId = null): array
     {
         $result = ['checked' => 0, 'reconciled' => 0, 'changed' => 0, 'failed' => 0, 'skipped' => 0];
         $limit = max(1, min(500, $limit));
@@ -26,6 +26,7 @@ final class ReconcileStripeSubscriptions
         Subscription::query()
             ->where('billing_source', 'stripe')
             ->whereNotNull('stripe_subscription_id')
+            ->when($subscriptionId !== null, fn ($query) => $query->whereKey($subscriptionId))
             // Prioritize never-reconciled and least-recently-reconciled rows.
             // Ordering only by ID permanently starves rows beyond the limit.
             ->orderBy('last_reconciled_at')
