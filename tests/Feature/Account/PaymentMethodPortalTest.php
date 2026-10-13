@@ -58,6 +58,31 @@ class PaymentMethodPortalTest extends TestCase
             ->assertSessionHasErrors('subscription');
     }
 
+    public function test_portal_failure_shows_a_safe_error_on_the_subscription_page(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['stripe_customer_id' => 'cus_own_customer']);
+        Subscription::factory()->for($customer)->create([
+            'billing_source' => 'stripe',
+            'stripe_customer_id' => 'cus_own_customer',
+        ]);
+        $gateway = new class implements PaymentMethodPortalGateway
+        {
+            public function createSession(string $stripeCustomerId, string $returnUrl): string
+            {
+                throw new \RuntimeException('private provider detail');
+            }
+        };
+        $this->app->instance(PaymentMethodPortalGateway::class, $gateway);
+
+        $this->actingAs($customer->user)
+            ->from(route('account.subscription'))
+            ->followingRedirects()
+            ->post(route('account.billing.payment-method'))
+            ->assertOk()
+            ->assertSee(__('account.subscription.payment_method_unavailable'))
+            ->assertDontSee('private provider detail');
+    }
+
     public function test_customer_subscription_page_offers_payment_method_management_without_changing_plan_controls(): void
     {
         $customer = Customer::factory()->withUser()->create(['stripe_customer_id' => 'cus_own_customer']);
