@@ -104,6 +104,9 @@
                     @if (session('backup_error'))
                         <x-account.notice tone="danger" class="mb-6">{{ session('backup_error') }}</x-account.notice>
                     @endif
+                    @if ($errors->has('subscription'))
+                        <x-account.notice tone="danger" class="mb-6">{{ $errors->first('subscription') }}</x-account.notice>
+                    @endif
 
                     {{ $slot }}
                 </div>
