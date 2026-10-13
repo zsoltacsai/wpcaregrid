@@ -701,7 +701,10 @@ class SubscriptionLifecycleTest extends TestCase
         $this->completeCheckout($intent);
         $this->subscriptionEvent('customer.subscription.created', 'past_due', $intent, created: now()->subMinute()->timestamp);
         $subscription = Subscription::sole();
-        $subscription->forceFill(['grace_expired_at' => now()->subSecond()])->save();
+        $subscription->forceFill([
+            'last_payment_status' => 'failed',
+            'grace_expired_at' => now()->subSecond(),
+        ])->save();
 
         if ($order === 'invoice_first') {
             $this->stripeEvent('invoice.paid', $this->invoice($intent, ['id' => 'in_grace_recovered', 'amount_paid' => 1899000]), 'evt_grace_paid_first', now()->timestamp)->assertStatus(204);
@@ -716,6 +719,12 @@ class SubscriptionLifecycleTest extends TestCase
         $this->assertNull($subscription->grace_started_at);
         $this->assertNull($subscription->grace_ends_at);
         $this->assertNull($subscription->grace_expired_at);
+        $this->assertSame(1, $subscription->customer->billingEmailOutbox()->where('notification', 'payment_recovered')->count());
+        $this->assertDatabaseHas('admin_audit_events', [
+            'event' => 'billing.payment_recovered',
+            'subject_type' => 'subscription',
+            'subject_key' => $subscription->uuid,
+        ]);
     }
 
     public function test_cancellation_at_period_end_and_deletion(): void
