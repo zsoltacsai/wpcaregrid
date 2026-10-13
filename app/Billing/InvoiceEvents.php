@@ -34,7 +34,12 @@ final class InvoiceEvents
     public function paid(object $invoice, int $eventCreated = 0, ?string $eventId = null): void
     {
         $subscription = $this->subscriptionFor($invoice, paymentConfirmed: true);
-        $wasInGrace = $subscription?->grace_started_at !== null;
+        // SubscriptionSync clears the access grace window as soon as Stripe
+        // reports the subscription active. Preserve recovery semantics when
+        // invoice.paid arrives after that status event by consulting the last
+        // recorded payment outcome as well.
+        $wasInGrace = $subscription?->grace_started_at !== null
+            || $subscription?->last_payment_status === 'failed';
 
         [$snapshot, $applied, $notifyPayment] = $this->persist($invoice, $subscription, $eventCreated ?: time(), 'paid', $eventId);
         if (! $subscription || ! $applied) {
