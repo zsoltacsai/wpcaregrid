@@ -64,7 +64,9 @@ The required exact-SHA CI, normal merge, guarded staging deployment, additive mi
 - `system:check`: application, database, queue, scheduler, Connector API, Stripe, Cloudflare, backup storage, mail, safety switches, and privacy-retention safety are OK. Privacy status is `SAFE / DISABLED BY POLICY`; security scanner remains WARNING because no completed security scan exists.
 - Both required Supervisor workers restarted with new PIDs and are RUNNING; scheduler heartbeat recovered.
 - Staging homepage and `/up` return HTTP 200. The public/guest request to `/owner/privacy-requests` redirects with 302, as expected for authentication-protected Owner routes. The live browser session available during validation was on an unrelated WordPress site, so no authenticated Owner UI walkthrough is claimed. Owner authorization, tenant isolation, and read-only behavior are covered by the green automated suites.
-- No privacy request or provider-deletion task was created, and no export, erasure, retention deletion, or provider API mutation was performed.
+- A rollback-only service-level staging exercise used a synthetic `.invalid` customer inside one database transaction. It created and idempotently replayed an access case, transitioned it to `review_pending`, created and idempotently replayed an internal provider task, confirmed the task remained `pending`, and confirmed the destructive-retention gate was OFF. The transaction was explicitly rolled back; a subsequent read-only check found zero matching synthetic customers and zero privacy requests/provider tasks. No provider client was invoked.
+- No privacy request or provider task was left persisted. No export, erasure, retention deletion, or provider API mutation was performed.
+- A Windows shell redirection during final HTTP checks briefly created an untracked regular file named `NUL` in the staging checkout. Its exact type/path were inspected, the exact file was removed, and a follow-up verified the staging checkout is clean.
 - Global/customer restore gates and M8 runtime configuration were not changed by this release.
 
 ### Final disposition
