@@ -29,7 +29,11 @@ return [
             'masked' => 'Beállítva; a mentett kulcs rejtett.',
         ],
     ],
-    'nav' => ['billing_invoices' => 'Számlázási előkészítések', 'platform_backups' => 'Platformmentések'],
+    'nav' => ['billing_invoices' => 'Számlázási előkészítések', 'platform_backups' => 'Platformmentések', 'privacy_requests' => 'Adatvédelmi kérelmek'],
+    'audit' => ['events' => ['privacy' => [
+        'request' => ['created' => 'Adatvédelmi ügy rögzítve', 'status_changed' => 'Adatvédelmi ügy állapota módosítva'],
+        'provider_task' => ['created' => 'Szolgáltatói egyeztetési feladat rögzítve', 'status_changed' => 'Szolgáltatói feladat állapota módosítva'],
+    ]]],
     'platform_backups' => [
         'title' => 'Platformmentések',
         'lead' => 'A WP CareGrid platform adatbázisának katasztrófa-helyreállítása. A felület nem teszi láthatóvá a mentések tartalmát vagy a szolgáltatói hitelesítő adatokat.',

@@ -16,6 +16,7 @@ use App\Http\Controllers\Owner\OperatorController;
 use App\Http\Controllers\Owner\OwnerSettingsController;
 use App\Http\Controllers\Owner\PlatformBackupsController;
 use App\Http\Controllers\Owner\PricingController;
+use App\Http\Controllers\Owner\PrivacyRequestController;
 use App\Http\Controllers\Owner\RecoveryOfferController;
 use App\Http\Controllers\Owner\SellerTaxProfileController;
 use App\Http\Controllers\Owner\SeoController;
@@ -123,6 +124,8 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::post('/seo/{section}/{locale}/discard', [ContentController::class, 'discard'])->middleware(['can:owner.seo.manage', 'throttle:owner-sensitive'])->name('seo.discard');
 
         Route::get('/system', SystemController::class)->middleware('can:owner.system.view')->name('system');
+        Route::get('/privacy-requests', [PrivacyRequestController::class, 'index'])->middleware('can:owner.privacy.requests.view')->name('privacy-requests.index');
+        Route::get('/privacy-requests/{privacyRequest}', [PrivacyRequestController::class, 'show'])->middleware('can:owner.privacy.requests.view')->name('privacy-requests.show');
         Route::get('/monitoring', [MonitoringController::class, 'index'])->middleware('can:owner.system.view')->name('monitoring.index');
         Route::post('/monitoring/maintenance', [MonitoringController::class, 'storeMaintenance'])->middleware(['can:owner.system.view', 'throttle:owner-sensitive'])->name('monitoring.maintenance.store');
 

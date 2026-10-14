@@ -101,6 +101,11 @@ class Customer extends Model
         return $this->hasMany(Website::class);
     }
 
+    public function privacyRequests(): HasMany
+    {
+        return $this->hasMany(PrivacyRequest::class);
+    }
+
     public function syntheticFixture(): HasOne
     {
         return $this->hasOne(SyntheticSiteFixture::class);

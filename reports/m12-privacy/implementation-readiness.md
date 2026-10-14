@@ -2,11 +2,13 @@
 
 Planning baseline: `856f7a03d7624158eb5cf9719fdec4776fbf6893` on `claude/ecstatic-wozniak-oemyuf`, re-fetched 2026-10-14 and unchanged. This document authorizes no runtime work; it classifies later engineering work. Exact legal/accounting decisions are in `final-decision-register.md`.
 
+Wave 1 implementation is being developed separately from that original planning baseline. Its verified source base is the planning PR merge `0ac10ad59d300e9e85528509f2d5bbeab5da97a6` on `claude/ecstatic-wozniak-oemyuf`; the implementation branch has not yet merged or deployed. See `wave1-implementation-report.md` for the in-progress evidence and limits. This does not change any legal/accounting decision or authorize destructive retention.
+
 ## Waves
 
 | Wave | Readiness | Scope safe to implement | Dependencies / blocked scope |
 |---|---|---|---|
-| 1 — Foundation | READY NOW | Data classification/purpose registry schema; privacy request and audit models; policy registry; tenant-scoped authorization; provider/contract fact registry; Owner controls with read-only defaults; synthetic fixtures; monitoring event definitions | Legal basis and roles remain labels `pending_review`; no customer-facing compliance claims or delete action |
+| 1 — Foundation | IN PROGRESS — implementation branch only | Data classification/purpose registry; privacy request/task/audit models; retention-policy metadata; tenant-scoped policy; technical provider fact registry; read-only Owner privacy case views; fail-closed retention status | Not complete until exact-SHA CI, review/merge and synthetic staging validation. Legal basis, controller/processor roles, retention periods, provider regions/contracts/deletion facts remain unverified; no customer-facing compliance claims or delete action |
 | 2 — Export / rectification | PARTIALLY BLOCKED | Allowlisted export assembler, JSON/CSV/index, secret/tenant exclusion, private temporary artifact and expiry; current-profile correction audit | Legal review L4 must define releasable scope, identity proof, exceptions and response workflow before a production customer-facing export is declared complete |
 | 3 — Legal documents / acceptance | PARTIALLY BLOCKED | Immutable version/locale/effective-date/publication machinery, acceptance ledger, legacy `unknown` state, preview and audit | Approved legal content and reacceptance rules (L4/L5) required before publish, force acceptance or claim agreement |
 | 4 — Retention dry-run | READY NOW | Versioned policy lookup, eligibility discovery, dry-run preview, counts/reasons, audit, metrics, exclusion checks | Store durations as `unapproved`/unset; no destructive provider calls; exact schedules wait for L3/C1–C4 |
