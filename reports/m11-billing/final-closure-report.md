@@ -241,3 +241,14 @@ This is a read-only staging verification. It records the Owner-published seller 
 **B — M11 FUNCTIONALLY COMPLETE, OWNER/AUTHORIZED ACCOUNTING ACTION REMAINS.** The factual seller profile gate is now satisfied, but no approved per-invoice accounting/tax decision exists. The application has no approved executable tax-decision record to apply, and its current review workflow records proposals only; it does not approve them or unblock issuance. Therefore the required next Owner/accountant action is to provide an authorized, auditable tax decision through the supported accounting approval path. Until then, InvoiceIntent 16 remains fail-closed, provider readiness is not claimed, and live invoice issuance stays OFF.
 
 No staging data was changed during this verification. No invoice was issued, no provider was called, no real-money transaction occurred, and no production/customer resource was modified.
+
+## Follow-up after Owner tax-mode change — 2026-10-14
+
+A subsequent read-only check of staging Owner Console → Settings → Billing & Tax supersedes the tax-mode observation above, but not the accounting-gate conclusion:
+
+- Tax configuration mode is now **Approved rules**. The same saved UI state explicitly says **“none configured; remains blocked”**; the immutable configuration history shows this mode in versions v7 and v8.
+- The selected default provider code is **EUFAD37**. The UI labels provider tax codes as document-format options only and explicitly states that selecting a code does not approve its use.
+- Therefore this verifies that the Owner changed the mode and selected a provider code; it does **not** verify a persisted approved accounting rule applicable to InvoiceIntent 16. The application still presents the tax gate as blocked. No assumption is made that the accountant’s advice was saved as an executable approval.
+- Provider remains **Disabled**, dry run **Enabled**, and invoice issuance **Disabled**. No invoice intent was reprocessed and no provider call was made.
+
+**Decision remains B — M11 FUNCTIONALLY COMPLETE, OWNER/AUTHORIZED ACCOUNTING ACTION REMAINS.** The mode change alone does not clear the application’s explicit “none configured; remains blocked” condition. M11 cannot be marked closed from this state.
