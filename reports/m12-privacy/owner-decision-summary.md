@@ -4,6 +4,8 @@
 
 ## Owner decision — RET-01 through RET-33 accepted — 2026-10-14
 
+Implementation records the accepted defaults in version-1 report-only policy rows with Owner approval separate from every compliance review. The technical decision reference is stored per version; legal/accounting/security references remain unset until qualified review exists. See `wave4-implementation-report.md` for implementation status and source coverage.
+
 The Owner responded **ACCEPT ALL RECOMMENDED TECHNICAL/PRODUCT DEFAULTS**. Every RET default is therefore **OWNER_APPROVED** as an initial product/engineering default, subject to the row-specific review state below. This approval is not legal advice, accounting approval, statutory retention determination, or permission to delete/anonymize/provider-delete data. See `final-decision-register.md` for the complete decision register and `retention-defaults-questionnaire.md` for individual rationale and response detail.
 
 | IDs | Accepted defaults | Remaining state |

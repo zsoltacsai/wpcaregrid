@@ -19,6 +19,10 @@ Wave 4 is planned as a deterministic report-only evaluator. The planning baselin
 
 No Wave 4 task includes W7 destructive execution. Legal/accounting review and Owner default acceptance are prerequisites for activating the affected policy values, but do not block implementing the evaluator with explicit blocked states.
 
+### Wave 4 implementation evidence update — 2026-10-14
+
+Implementation is underway on fresh branch `codex/m12-wave4-retention-engine`, based on verified remote primary `3e48d488ed1fa01f39ef412ebc65e25fb7f1f14d`. Added a versioned policy schema with separate review states, RET-01…RET-33 seed values, deterministic UTC evaluator, aggregate-only source scanner, Owner-only draft/preview/reporting-activation flow, audit events and health visibility. This remains non-destructive. Account closure, exports, synthetic tagging, application logs and provider object state remain explicitly partial/unknown. Exact CI, merge, staging and final evidence are pending; see `wave4-implementation-report.md`.
+
 | Phase / task | Status | Objective / likely components | Dependencies / migration | Tests and evidence | Rollback / approval gate |
 |---|---|---|---|---|---|
 | A1/A2 — W1 implementation slice | IMPLEMENTED — formal closure held for Owner review | Technical classification/purpose registry; request and provider-task state records; append-only event history; retention-policy metadata; tenant-scoped policy; Owner read-only case console and safe-status check | Additive tables; no deletion/export/provider client | `PrivacyFoundationTest`, Owner/SystemStatus tests, MySQL separate-process idempotency gate, CI run `38590540024`, staging migration/system checks and rollback-only synthetic lifecycle in `wave1-implementation-report.md` | No request execution, export, deletion, provider API call, duration, lawful basis or legal conclusion; retention gate remains OFF. Owner review and authenticated Owner-view evidence remain before formal closure. |

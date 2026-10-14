@@ -8,6 +8,7 @@ use App\Privacy\RetentionAction;
 use App\Privacy\RetentionApprovalStatus;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
+use LogicException;
 
 /** Versioned policy metadata. No scheduler or deletion executor consumes this model in Wave 1. */
 class PrivacyRetentionPolicy extends Model
@@ -21,16 +22,46 @@ class PrivacyRetentionPolicy extends Model
         return ['uuid'];
     }
 
+    protected static function booted(): void
+    {
+        static::updating(function (self $policy): void {
+            if ($policy->getOriginal('activated_at') === null) {
+                return;
+            }
+
+            // An activated version may only advance its lifecycle to superseded.
+            // Its policy value, approvals, references, and preview binding are immutable.
+            if ($policy->isDirty([
+                'policy_key', 'version', 'category_code', 'trigger_code', 'duration_value', 'duration_unit',
+                'setting_type', 'technical_value', 'action', 'legal_review_reference', 'accounting_review_reference',
+                'security_review_reference', 'owner_decision_reference', 'legal_review_status',
+                'accounting_review_status', 'security_review_status', 'owner_approval_status', 'compliance_lock',
+                'effective_at', 'owner_approved_by', 'owner_approved_at', 'active_preview_hash',
+            ])) {
+                throw new LogicException('Activated retention policy versions are immutable; create a new version.');
+            }
+        });
+    }
+
     protected function casts(): array
     {
         return [
             'duration_value' => 'integer',
+            'technical_value' => 'array',
             'action' => RetentionAction::class,
             'approval_status' => RetentionApprovalStatus::class,
             'effective_at' => 'datetime',
             'reviewed_at' => 'datetime',
             'enabled' => 'boolean',
+            'compliance_lock' => 'boolean',
+            'owner_approved_at' => 'datetime',
+            'activated_at' => 'datetime',
         ];
+    }
+
+    public function isImmutableForReporting(): bool
+    {
+        return $this->activated_at !== null || $this->enabled;
     }
 
     public function isExecutable(DestructiveRetentionGate $gate): bool
