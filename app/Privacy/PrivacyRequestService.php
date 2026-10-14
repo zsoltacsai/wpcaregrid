@@ -10,12 +10,71 @@ use App\Owner\AdminAudit;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 use LogicException;
 
 /** Creates and transitions privacy cases without exporting or erasing customer data. */
 final class PrivacyRequestService
 {
+    /** Restrict customer-area access without cancelling billing or erasing data. */
+    public function restrictAccountAccess(PrivacyRequest $privacyRequest, User $actor): PrivacyRequest
+    {
+        $this->authorizeOwner($actor);
+
+        return DB::transaction(function () use ($privacyRequest, $actor): PrivacyRequest {
+            $case = PrivacyRequest::query()->whereKey($privacyRequest->getKey())->lockForUpdate()->firstOrFail();
+            if ($case->request_type !== PrivacyRequestType::AccountClosure || ! in_array($case->status, [PrivacyRequestStatus::Requested, PrivacyRequestStatus::ManualReview], true)) {
+                throw new LogicException('Only an open account-closure case can restrict access.');
+            }
+
+            $customer = Customer::query()->whereKey($case->customer_id)->lockForUpdate()->firstOrFail();
+            if (! $customer->active) {
+                throw ValidationException::withMessages(['closure' => 'The customer account is already inactive; an Owner must review its original suspension state before changing access.']);
+            }
+            if ($customer->activeSubscriptions()->exists()) {
+                throw ValidationException::withMessages(['closure' => 'Cancel or end active subscriptions through the separate billing workflow before restricting account access.']);
+            }
+
+            $from = $case->status;
+            $customer->forceFill(['active' => false])->save();
+            $case->forceFill(['status' => PrivacyRequestStatus::AccessRestricted, 'lock_version' => $case->lock_version + 1])->save();
+            $this->recordEvent($case, 'account_access_restricted', $from, PrivacyRequestStatus::AccessRestricted, $actor, ['reason_code' => 'owner_closure']);
+            AdminAudit::record($actor, 'privacy.account_access.restricted', 'customer', $customer->uuid, ['privacy_request' => $case->uuid]);
+
+            return $case->refresh();
+        }, attempts: 3);
+    }
+
+    /** Reopen a reversibly closed account before any separate erasure workflow. */
+    public function restoreAccountAccess(PrivacyRequest $privacyRequest, User $actor): PrivacyRequest
+    {
+        $this->authorizeOwner($actor);
+
+        return DB::transaction(function () use ($privacyRequest, $actor): PrivacyRequest {
+            $case = PrivacyRequest::query()->whereKey($privacyRequest->getKey())->lockForUpdate()->firstOrFail();
+            if ($case->request_type !== PrivacyRequestType::AccountClosure || $case->status !== PrivacyRequestStatus::AccessRestricted) {
+                throw new LogicException('Only an access-restricted account-closure case can be reopened.');
+            }
+
+            $customer = Customer::query()->whereKey($case->customer_id)->lockForUpdate()->firstOrFail();
+            if ($customer->privacyRequests()->where('request_type', PrivacyRequestType::Erasure->value)->where('active_request_key', 'active')->exists()) {
+                throw ValidationException::withMessages(['closure' => 'Resolve the separate active erasure request before reopening account access.']);
+            }
+
+            $customer->forceFill(['active' => true])->save();
+            $case->forceFill([
+                'status' => PrivacyRequestStatus::Cancelled,
+                'active_request_key' => null,
+                'lock_version' => $case->lock_version + 1,
+            ])->save();
+            $this->recordEvent($case, 'account_access_restored', PrivacyRequestStatus::AccessRestricted, PrivacyRequestStatus::Cancelled, $actor, ['reason_code' => 'owner_reopen']);
+            AdminAudit::record($actor, 'privacy.account_access.restored', 'customer', $customer->uuid, ['privacy_request' => $case->uuid]);
+
+            return $case->refresh();
+        }, attempts: 3);
+    }
+
     public function create(
         Customer $customer,
         PrivacyRequestType $type,
@@ -106,6 +165,10 @@ final class PrivacyRequestService
             $case = PrivacyRequest::query()->whereKey($privacyRequest->getKey())->lockForUpdate()->firstOrFail();
             $current = $case->status;
 
+            if ($case->request_type === PrivacyRequestType::AccountClosure && in_array($next, [PrivacyRequestStatus::CoolingOff, PrivacyRequestStatus::RetentionAnalysis], true)) {
+                throw new LogicException('Account closure does not start the separate erasure cooling-off or retention-analysis workflow.');
+            }
+
             if (! $current->canTransitionTo($next)) {
                 throw new LogicException("Privacy request {$case->uuid} cannot go from {$current->value} to {$next->value}.");
             }
@@ -117,7 +180,7 @@ final class PrivacyRequestService
             if ($next === PrivacyRequestStatus::Verified) {
                 $attributes['identity_verified_at'] = now();
             }
-            if (in_array($next, [PrivacyRequestStatus::ReviewPending, PrivacyRequestStatus::BlockedPolicy, PrivacyRequestStatus::ManualReview], true)) {
+            if (in_array($next, [PrivacyRequestStatus::ReviewPending, PrivacyRequestStatus::BlockedPolicy, PrivacyRequestStatus::BlockedLegal, PrivacyRequestStatus::BlockedAccounting, PrivacyRequestStatus::ManualReview], true)) {
                 $attributes['reviewed_at'] = now();
                 $attributes['reviewed_by_user_id'] = $actor?->id;
             }
@@ -187,6 +250,13 @@ final class PrivacyRequestService
 
         if (! $allowCustomer || $actor->isOperator() || ! $actor->customer()->whereKey($customer->id)->exists()) {
             throw new AuthorizationException('A privacy request actor may access only their own customer case.');
+        }
+    }
+
+    private function authorizeOwner(User $actor): void
+    {
+        if (! $actor->isOwner() || $actor->customer()->exists()) {
+            throw new AuthorizationException('Account access closure requires an authenticated Owner.');
         }
     }
 }

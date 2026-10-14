@@ -17,7 +17,45 @@
         </dl>
     </section>
 
+    @if ($privacyRequest->request_type === \App\Privacy\PrivacyRequestType::AccountClosure)
+        <section class="mt-5 rounded-md border border-line bg-surface p-5">
+            <h2 class="font-semibold">{{ __('privacy.owner.account_access') }}</h2>
+            <p class="mt-2 text-sm text-muted">{{ __('privacy.owner.account_access_notice') }}</p>
+            @can('owner.privacy.requests.manage')
+                @if (in_array($privacyRequest->status, [\App\Privacy\PrivacyRequestStatus::Requested, \App\Privacy\PrivacyRequestStatus::ManualReview], true))
+                    @if ($privacyRequest->customer?->activeSubscriptions()->exists())
+                        <p class="mt-3 text-sm text-warning-ink">{{ __('privacy.owner.active_subscription_blocks_closure') }}</p>
+                    @else
+                        <form class="mt-3" method="POST" action="{{ route('owner.privacy-requests.restrict-account-access', $privacyRequest) }}">
+                            @csrf
+                            <button class="rounded-sm bg-surface-inverse px-4 py-2 text-sm font-semibold text-white">{{ __('privacy.owner.restrict_account_access') }}</button>
+                        </form>
+                    @endif
+                @elseif ($privacyRequest->status === \App\Privacy\PrivacyRequestStatus::AccessRestricted)
+                    <form class="mt-3" method="POST" action="{{ route('owner.privacy-requests.restore-account-access', $privacyRequest) }}">
+                        @csrf
+                        <button class="rounded-sm border border-line-strong px-4 py-2 text-sm">{{ __('privacy.owner.restore_account_access') }}</button>
+                    </form>
+                @endif
+            @endcan
+        </section>
+    @endif
+
     <section class="mt-5 rounded-md border border-line bg-surface p-5">
+        @can('owner.privacy.requests.manage')
+            @php
+                $nextStatuses = array_filter(\App\Privacy\PrivacyRequestStatus::cases(), fn ($status) => $privacyRequest->status->canTransitionTo($status)
+                    && ! in_array($status, [\App\Privacy\PrivacyRequestStatus::Verified, \App\Privacy\PrivacyRequestStatus::Failed, \App\Privacy\PrivacyRequestStatus::Completed], true)
+                    && ! ($privacyRequest->request_type === \App\Privacy\PrivacyRequestType::AccountClosure && in_array($status, [\App\Privacy\PrivacyRequestStatus::CoolingOff, \App\Privacy\PrivacyRequestStatus::RetentionAnalysis], true)));
+            @endphp
+            @if (count($nextStatuses))
+                <form class="mb-5 flex flex-wrap items-end gap-3 border-b border-line pb-5" method="POST" action="{{ route('owner.privacy-requests.transition', $privacyRequest) }}">
+                    @csrf
+                    <label class="text-sm">Record a non-destructive state change<select name="status" required class="mt-1 block rounded-sm border border-line-strong px-3 py-2">@foreach ($nextStatuses as $nextStatus)<option value="{{ $nextStatus->value }}">{{ __('privacy.request_statuses.'.$nextStatus->value) }}</option>@endforeach</select></label>
+                    <button class="rounded-sm border border-line-strong px-4 py-2 text-sm">Save state</button>
+                </form>
+            @endif
+        @endcan
         <h2 class="font-semibold">{{ __('privacy.owner.provider_tasks') }}</h2>
         <div class="mt-3 overflow-x-auto">
             <table class="w-full text-left text-sm">

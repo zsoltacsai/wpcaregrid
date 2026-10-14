@@ -22,6 +22,7 @@ final class AdminAudit
         'synthetic_fixture.provisioned',
         'monitoring.maintenance_created',
         'privacy.request.created', 'privacy.request.status_changed', 'privacy.provider_task.created', 'privacy.provider_task.status_changed',
+        'privacy.closure.impact_previewed', 'privacy.account_access.restricted', 'privacy.account_access.restored',
         'privacy.retention.draft_created', 'privacy.retention.preview_created', 'privacy.retention.reporting_activated',
         'privacy.retention.owner_approval_recorded', 'privacy.retention.locked_change_denied',
         'platform_backup.manual_requested', 'platform_backup.configuration_updated', 'platform_backup.disabled', 'platform_backup.escrow_attested', 'platform_backup.escrow_revoked', 'platform_backup.s3_connection_tested',

@@ -7,9 +7,16 @@ enum PrivacyRequestStatus: string
     case Requested = 'requested';
     case IdentityVerificationRequired = 'identity_verification_required';
     case Verified = 'verified';
+    case CoolingOff = 'cooling_off';
+    case RetentionAnalysis = 'retention_analysis';
     case ReviewPending = 'review_pending';
     case BlockedPolicy = 'blocked_policy';
+    case BlockedLegal = 'blocked_legal';
+    case BlockedAccounting = 'blocked_accounting';
+    case AccessRestricted = 'access_restricted';
     case ManualReview = 'manual_review';
+    case Failed = 'failed';
+    case Completed = 'completed';
     case Cancelled = 'cancelled';
 
     /** Wave 1 deliberately has no processing/completed state: no export or erasure executor exists. */
@@ -18,11 +25,16 @@ enum PrivacyRequestStatus: string
         return match ($this) {
             self::Requested => [self::IdentityVerificationRequired, self::ReviewPending, self::Cancelled, self::ManualReview],
             self::IdentityVerificationRequired => [self::Verified, self::Cancelled, self::ManualReview],
-            self::Verified => [self::ReviewPending, self::BlockedPolicy, self::Cancelled, self::ManualReview],
-            self::ReviewPending => [self::BlockedPolicy, self::Cancelled, self::ManualReview],
-            self::BlockedPolicy => [self::ReviewPending, self::Cancelled, self::ManualReview],
-            self::ManualReview => [self::ReviewPending, self::BlockedPolicy, self::Cancelled],
-            self::Cancelled => [],
+            self::Verified => [self::CoolingOff, self::ReviewPending, self::BlockedPolicy, self::BlockedLegal, self::BlockedAccounting, self::Cancelled, self::ManualReview],
+            self::CoolingOff => [self::RetentionAnalysis, self::ReviewPending, self::BlockedPolicy, self::BlockedLegal, self::BlockedAccounting, self::Cancelled, self::ManualReview],
+            self::RetentionAnalysis => [self::ReviewPending, self::BlockedPolicy, self::BlockedLegal, self::BlockedAccounting, self::Cancelled, self::ManualReview],
+            self::ReviewPending => [self::BlockedPolicy, self::BlockedLegal, self::BlockedAccounting, self::Cancelled, self::ManualReview],
+            self::BlockedPolicy, self::BlockedLegal, self::BlockedAccounting => [self::ReviewPending, self::Cancelled, self::ManualReview],
+            self::ManualReview => [self::ReviewPending, self::BlockedPolicy, self::BlockedLegal, self::BlockedAccounting, self::Cancelled],
+            // Access restriction is reversible through the dedicated Owner workflow, not a generic status transition.
+            self::AccessRestricted => [],
+            // Terminal labels are reserved for later waves; Wave 5 exposes no transition into them.
+            self::Cancelled, self::Failed, self::Completed => [],
         };
     }
 
@@ -33,6 +45,6 @@ enum PrivacyRequestStatus: string
 
     public function isActive(): bool
     {
-        return $this !== self::Cancelled;
+        return ! in_array($this, [self::Cancelled, self::Failed, self::Completed], true);
     }
 }

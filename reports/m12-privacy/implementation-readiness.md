@@ -40,6 +40,10 @@ Report-only implementation is underway on `codex/m12-wave4-retention-engine` fro
 
 ## Destructive gate
 
+### Reusable decision protocol
+
+For each new M12 decision, classify it as technical, Owner product policy, legal/privacy, accounting/tax, security policy, provider fact, or already resolved. Resolve routine technical choices with the safest reversible, tenant-safe, fail-closed design without asking the Owner. Collect genuinely new Owner/legal/accounting/security choices in one consolidated questionnaire; continue non-destructive work with explicit provisional states when the answer is not needed to design safely. Verify provider facts rather than inferring them. Never turn an Owner product decision into legal or accounting approval.
+
 `M12_DESTRUCTIVE_RETENTION_ENABLED=false` at code default, environment default, and UI default. A false or missing value must prevent irreversible app and provider deletion. No Owner UI action may override it. Later activation requires a separately reviewed change with: approved policy records and references; accountant exceptions; counsel sign-off; reviewed dry-run evidence; successful synthetic staging deletion; per-provider confirmation; tombstone replay after restoring a pre-erasure snapshot; recovery/rollback plan; explicit dual review and audit. Planning completion does not satisfy any of these gates.
 
 ## Recommended execution order
@@ -55,3 +59,7 @@ The earlier “Wave 4 implementation update” and “Wave 4 report-only retenti
 - Staging runtime remains the Wave 4 code SHA `6aa3b9bb2308f29148dbffae546f4eaa8a496a76`; later primary advances were report-only and did not require redeployment.
 - The engine stays report-only, source coverage is `PARTIAL`, and `M12_DESTRUCTIVE_RETENTION_ENABLED=false`. Legal/accounting/security review values remain provisional; this does not authorize deletion, anonymization, or provider calls.
 - Next recommended non-destructive implementation: Wave 5 erasure orchestration foundations (impact graph, request state/review workflow, provider-task status modeling) strictly report-only/no-op, with all unresolved legal/accounting/provider facts represented as explicit blockers. Wave 2/3 legal-dependent customer-facing export and legal-document publication remain gated by their stated reviews. Before starting the next wave, apply the global decision protocol and collect any new Owner/legal/accounting/security questions in one consolidated questionnaire.
+
+## Wave 5 Owner decision resolution — 2026-10-14
+
+ER-01 is OWNER_APPROVED as **HYBRID**. ER-08 is OWNER_APPROVED as **SEPARATE ERASURE REQUEST REQUIRED**. See `wave5-owner-questionnaire.md` and `final-decision-register.md`. The implementation slot is non-destructive: separately typed closure and erasure cases, an aggregate-only impact preview, and a typed anonymization plan with review blockers. The preview does not revoke access, alter billing/subscriptions, mutate customer or site data, delete backups, or call providers. Legal/accounting/security review and provider facts remain pending. Destructive retention remains OFF.

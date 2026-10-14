@@ -43,3 +43,10 @@ This is a product/operations review, not a legal or accounting questionnaire. Re
 ## Requested Owner response
 
 Review and approve, revise, or reject the proposed defaults above. No response is needed to start non-destructive Wave 1 planning/engineering. The exact legal/accounting choices remain in the separate handoffs; this summary intentionally does not repeat them.
+
+## Wave 5 Owner decisions recorded — 2026-10-14
+
+- **ER-01: OWNER_APPROVED — Hybrid closure model.** Preserve required relational identity/history; future profile anonymization and physical deletion are separate, policy-gated actions.
+- **ER-08: OWNER_APPROVED — A separate erasure request is required.** Account closure alone does not start the erasure cooling-off period. The account-closure case may separately restrict customer-area access after service-granting subscriptions have ended; an Owner can restore access through the audited closure workflow before a separate active erasure request exists.
+- These are product decisions, not legal/accounting approvals. They do not authorize billing cancellation, Connector/site changes, identity revocation, anonymization, deletion, backup deletion, or provider deletion.
+- Existing legal/accounting handoffs remain authoritative; no further Owner product-policy question blocks the non-destructive Wave 5 foundation.

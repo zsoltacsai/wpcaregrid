@@ -131,3 +131,12 @@ These recommendations do not choose a legal basis, legal duration, controller/pr
 **Wait:** provider-dependent claims for P1–P9; legally approved purpose/role/basis/content/schedules for L1–L10; accounting data boundary and schedule for C1–C4.
 
 **Destructive gate:** `M12_DESTRUCTIVE_RETENTION_ENABLED=false`. It remains OFF until approved rules are recorded, dry-run output is reviewed, staging synthetic deletion/reconciliation succeeds, tombstone restore replay is proven, and a separate Owner authorization is recorded. No planning approval enables it.
+
+## M12 Wave 5 Owner decisions — 2026-10-14
+
+| ID | Category | Owner disposition | Effect | Remaining review |
+|---|---|---|---|---|
+| ER-01 | Owner product policy | **OWNER_APPROVED — HYBRID** | Preserve internal/relational references; any later anonymization or physical deletion is separately scoped and gated | Legal/accounting exceptions remain pending under L3/L4 and C1–C4 |
+| ER-08 | Owner product policy | **OWNER_APPROVED — SEPARATE ERASURE REQUEST REQUIRED** | Account closure does not itself start erasure or the erasure cooling-off window | Legal statutory request timing remains under L3/L4 |
+
+This is product approval only. It does not approve legal/accounting retention, authorize access suspension or service cancellation, or enable anonymization, deletion, backup deletion, or provider calls. `M12_DESTRUCTIVE_RETENTION_ENABLED=false` remains mandatory.
