@@ -120,6 +120,15 @@ PHP);
                     $process->stop(1);
                 }
             }
+            DB::purge('mysql');
+            $requestId = DB::table('privacy_requests')
+                ->where('idempotency_hash', hash('sha256', 'privacy-request-concurrent-key-0001'))
+                ->value('id');
+            if ($requestId !== null) {
+                DB::table('privacy_provider_tasks')->where('privacy_request_id', $requestId)->delete();
+                DB::table('privacy_request_events')->where('privacy_request_id', $requestId)->delete();
+                DB::table('privacy_requests')->where('id', $requestId)->delete();
+            }
             foreach (glob($directory.DIRECTORY_SEPARATOR.'*') ?: [] as $path) {
                 @unlink($path);
             }

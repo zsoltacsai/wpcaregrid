@@ -30,6 +30,8 @@ The focused privacy/Owner/system checks passed locally: **35 tests, 1,025 assert
 
 The first full local suite run with a 512 MB PHP memory limit reported 1,189 passed, 2 failed, 1 error and 26 skipped. One failure was the expected system-check count after adding the privacy health item; that test contract was corrected and the focused ProductionHardening test now passes. The remaining two failures and one error are Windows environment limitations: POSIX `0600` file mode assertion (Windows reports a different mode) and a Bash deployment smoke test whose Windows path was not translated for `/bin/bash`; the smoke helper also prints `command -v` errors on Windows. These unrelated portability cases require Linux CI confirmation. This report will be updated after full rerun and exact-SHA CI.
 
+The first exact-SHA Linux CI dispatch (run `38588358397`) exposed a cleanup defect in the new MySQL process-concurrency test: Laravel's `DatabaseMigrations` teardown correctly refused to roll back the privacy migration after the test created its synthetic request. The privacy migration guard remains intact; the test now removes only the request created with its fixed test idempotency key, including its related event/task rows, in `finally` before teardown. A rerun is required before merge.
+
 ## Not yet validated
 
 - Full CI on the implementation commit, including the MySQL separate-process race gate.
