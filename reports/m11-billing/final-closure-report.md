@@ -252,3 +252,52 @@ A subsequent read-only check of staging Owner Console → Settings → Billing &
 - Provider remains **Disabled**, dry run **Enabled**, and invoice issuance **Disabled**. No invoice intent was reprocessed and no provider call was made.
 
 **Decision remains B — M11 FUNCTIONALLY COMPLETE, OWNER/AUTHORIZED ACCOUNTING ACTION REMAINS.** The mode change alone does not clear the application’s explicit “none configured; remains blocked” condition. M11 cannot be marked closed from this state.
+
+## Final M11 accounting validation continuation — 2026-10-14
+
+This append records the outcome after the Owner supplied the approved evidence for this one synthetic staging validation. Earlier provisional blocker reports remain intact as historical evidence; this continuation supersedes their status for InvoiceIntent 16 only. No broader tax rule or customer classification is inferred.
+
+### Seller and accounting decision
+
+- The Owner-managed seller profile registry now has current version **v3**, complete and verified, with AAM status confirmed and AAM evidence present. The factual identity values are omitted from this report. The seller profile was published through the existing registry service and audited; prior immutable versions remain preserved.
+- The Owner-approved evidence reference **REF2610-ZTA-HU**, effective **2026-10-14**, is recorded for the approved staging validation. The approved treatment is **AAM**, scoped to this synthetic Hungarian individual case and InvoiceIntent 16 only.
+- Billing tax configuration is version **v9**, remains **manual per-invoice review**, selects the current seller profile and AAM document code, and does not create a global tax rule. Per-intent approval is separately recorded through the existing tax-review workflow.
+- The signed-in Owner authorization and relevant `owner.billing.invoices.view`, `owner.settings.manage`, and `owner.customers.manage` gates were checked. The application service/controller path recorded the expected Owner audit events. No direct database row edits were used.
+
+### InvoiceIntent 16 and snapshots
+
+- InvoiceIntent 16 moved from the previously recorded `blocked_seller_profile` state to **`dry_run_validated`** after seller/tax snapshot refresh and the approved per-intent decision.
+- Tax review status is **approved**; the decision is limited to AAM for this specific validation scenario. The intent remains unique for its source Stripe invoice.
+- Buyer and seller snapshots are present and immutable. Safe snapshot hashes recorded by the workflow: buyer `4d957e0efe9630bd1e0a9649e0e9cd46b97b98fa39ab8780b7097c7d8696934c`; seller `fa0f5ab5853ebf98376ae1e0fd9d5ccec4179035a80d30552bdc505cc267f153`; approved tax decision `91d58a1de8e403eae5e37bad3ca40bcefab7a76bb8f334dc785bd58aae47c0cf`.
+- Buyer snapshot immutability was additionally checked live through the existing Owner `CustomerController::update` path. A harmless city-field change created a new customer profile version; the InvoiceIntent commercial snapshot hash remained unchanged. The current profile was then restored through the same controller, producing the expected second version. The final current city matches its original value and the frozen intent snapshot is unchanged. The two immutable profile versions and their Owner audit events are retained as test evidence; no email, name, street, or tax identifier is reproduced here.
+- Seller snapshot immutability passed its automated regression (`prepared invoice keeps the seller snapshot after a later profile version is published`). No live seller-profile mutation was made because this profile schema contains factual identity, address, effective-period, verification, and tax-evidence fields, with no field shown to be harmless and non-tax; changing those would falsify staging seller/accounting facts. Existing immutable seller versions were preserved.
+
+### Provider readiness and safety
+
+- The real local invoice dry-run/payload validator completed with **`LOCAL_VALIDATION_PASSED`**, no errors, and provider-ready state. The payload was validated locally through the normal invoice workflow; it was not submitted to Számlázz.hu.
+- Staging flags after validation: provider enabled **false**, dry run **true**, invoice issuance enabled **false**. No issuance attempt was created and no provider call occurred. No live invoice or real-money transaction occurred.
+- No actual provider test submission was made because independently verified TEST identity was not available and is not required for this local readiness result.
+
+### Stripe webhook replay and idempotency
+
+- The exact persisted Stripe TEST event `evt_1UQN3AIotueNMW7smEj5Kejh` was replayed through the normal supported receipt and webhook-handler paths, retaining its original event ID. The acceptance endpoint returned 204 and the handler recognized the event as already processed.
+- Before/after commercial state matched exactly (snapshot hash `8e76e11f51e21baae96d444eff875b0b592f13977b97773b2872b95d5a844cf3`). The durable event remained unique; counts for inbox receipts, attempts, customers, subscriptions, invoices, intents, billing identities, and email outbox were unchanged. Intent 16 remained `dry_run_validated`; there was no duplicate provider preparation or email.
+- This replay is test-mode idempotency evidence only; no Stripe LIVE access or billing mutation occurred.
+
+### Final staging health
+
+- Staging release and primary branch are both **`bb3b88d7846992ac35f52fa1842b868d23d3af4b`**. The release branch's exact-head CI run **38557975339** completed successfully with all five mandatory jobs green.
+- Final read-only `system:check`: application, database, queue, scheduler, Connector API, Stripe, Cloudflare DNS, backup storage, mail, and safety switches all **OK**. Security scanner remains **WARNING** because no completed scan exists; it is not represented as healthy.
+- Supervisor is active; both `backups` and `database` queue workers are running. `queue:failed` reports no failed jobs; the queue table was empty in the exact-case read-only check. No pending webhook receipts or invoice work were present at that check.
+- Live Számlázz issuance remains OFF. No production endpoint, production billing provider, customer website, or provider resource was changed.
+
+### Local validation for this continuation
+
+- Relevant M11 PHPUnit group: **57 tests, 56 passed, 0 failed, 1 skipped, 422 assertions**. The single skip is `InvoiceIntentConcurrencyTest::test_independent_mysql_processes_create_only_one_intent_for_the_same_paid_invoice`, which requires MySQL and `pcntl`; this local run used the configured in-memory SQLite database. The merged release's exact-head CI run 38557975339 includes the Server MySQL/concurrency gate and passed.
+- The initial local run had two Owner-view failures because this isolated worktree had no generated Vite manifest. `npm ci` completed with zero reported vulnerabilities, `npm run build` generated the manifest, and the full focused PHPUnit rerun above passed. This was a local test-environment prerequisite; no product code was changed.
+- Focused files: InvoiceIntent workflow, tax review, tax approval, snapshot refresh, concurrency, Owner seller-profile management, Owner billing settings, billing snapshots, and Számlázz local dry-run provider tests.
+- No executable code, test, migration, CI, deployment, or runtime configuration changed in this continuation. Report-only CI/merge evidence is recorded in the final follow-up once available.
+
+### Current decision
+
+**M11 functional/accounting validation is complete for the authorized synthetic scenario.** Final closure is pending the append-only report-only commit/PR and its required exact-SHA CI/merge. The scanner warning remains a visible operational finding; it does not indicate a billing-path defect. Provider issuance remains disabled.
