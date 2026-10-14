@@ -301,3 +301,7 @@ This append records the outcome after the Owner supplied the approved evidence f
 ### Current decision
 
 **M11 functional/accounting validation is complete for the authorized synthetic scenario.** Final closure is pending the append-only report-only commit/PR and its required exact-SHA CI/merge. The scanner warning remains a visible operational finding; it does not indicate a billing-path defect. Provider issuance remains disabled.
+
+## Report-only closure CI and merge evidence — 2026-10-14
+
+The accounting-validation appendix above was merged in PR **#36**. Its exact PR head `ce1cc0127f2bca3f19ecb6034f2072a6d5a53c2f` passed all five CI jobs in run **38572642837** (Quality/security/build, Connector MySQL, Connector SQLite, Server MySQL including process concurrency, Server SQLite). PR #36 merge commit was `56b4f2e3ddeb93919045e48cb386401ab9ba11ab`; the primary branch pointed to that SHA immediately after the merge. This report-only change did not alter runtime code and did not require a staging redeploy.
