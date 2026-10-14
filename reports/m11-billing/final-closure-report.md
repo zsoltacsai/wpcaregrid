@@ -180,3 +180,35 @@ The release and automated regression coverage are healthy, but mandatory staging
 - This continuation's seller-profile implementation is in a separate isolated worktree based on primary SHA `20728d1165d0168a7fc3117d07722c4f87105984`. Exact-SHA remote CI, merge, and staging deployment are not yet evidenced by this appendix and must be recorded only after they occur.
 - Owner/accountant must provide and verify the factual seller identity and evidence, and the authorized accounting reviewer must supply the applicable tax decision. Until then, the existing InvoiceIntent remains blocked and the provider must not be called.
 - Provisional continuation verdict: **B — M11 FUNCTIONALLY COMPLETE, OWNER/AUTHORIZED ACCOUNTING ACTION REMAINS.** The Stripe positive path is valid, seller-profile management and deterministic completeness are implemented and test-backed, but truthful seller data and an approved tax decision remain external prerequisites for invoice readiness. This does not close M11.
+
+## Seller profile release and staging result — 2026-10-14
+
+This append supersedes the prior continuation's provisional release status; it does not alter or reinterpret earlier billing, restore, or M8 evidence.
+
+### GitHub release
+
+- PR #31, **Add Owner-managed seller tax profiles**, merged normally.
+- Implementation head: `5e8486b9187603096d1d199b588c7c213d5e29f7`.
+- Merge commit / primary branch SHA: `d28db7bddd6e19bf268982c7fdaf486e3d8823fa`.
+- Exact-head CI run `38540480691`: all five required jobs passed — Quality (lint, dependencies, build and secrets), Server SQLite, Server MySQL (including process concurrency), Connector WordPress SQLite, and Connector WordPress MySQL.
+- The suite's M8 fixture and Connector artifact checks also passed. No Connector source or version change was included.
+
+### Guarded staging deployment
+
+- Staging SSH used `StrictHostKeyChecking=yes`, `HostKeyAlgorithms=ssh-ed25519`, and the pinned key matching the approved fingerprint `SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`.
+- The first shell invocation was rejected because the tracked script has mode 0644; it did not start or mutate staging. The repository runbook specifies invoking it with `bash`, which was then used.
+- Guarded deploy pinned the previous clean staging SHA `20728d1165d0168a7fc3117d07722c4f87105984`, created and retained `/home/deploy/private-backups/wpcaregrid-pre-deploy-20261014T092240Z.sql.gz`, found no pending migrations, and completed on exact merge SHA `d28db7bddd6e19bf268982c7fdaf486e3d8823fa`.
+- Post-deploy system checks passed for application, database, queue, scheduler, Connector API, Stripe, Cloudflare, backup storage, mail, and safety. The security scanner remains visibly `WARNING` because no completed scan exists; this is not represented as healthy.
+- Both Supervisor workers restarted with new PIDs and are RUNNING. Queue count and failed-job count were both zero. The repository is clean at the deployed SHA. Homepage, `/up`, pricing, HU routes, Owner guest-auth redirect, and protected-path checks passed in the deployment smoke test.
+- The new Owner seller-profile POST route is registered. Read-only runtime configuration confirms `provider_enabled=false`, `dry_run=true`, and `issuance_enabled=false`.
+
+### Staging billing state and remaining gate
+
+- Read-only state check found zero seller profiles. InvoiceIntent 16 remains `blocked_seller_profile` with reason `seller_profile_missing`; its existing snapshot was not edited or re-prepared. Queue jobs and failed jobs remain zero.
+- No seller identity, address, registration, VAT/AAM classification, evidence reference, or tax decision was entered or inferred. The form requires legal name, establishment country, address line 1, postal code, city, and address country. Evidence is required for a `verified` seller-facts status or `confirmed` AAM status. Tax/accounting approval remains a separate gate and was not supplied.
+- No provider request, invoice dry-run call, live invoice, Stripe charge, production action, customer-site mutation, or restoration occurred during this continuation. Stripe positive-path evidence remains TEST-only and historical; no event replay was run in this continuation. Automated webhook idempotency tests passed in the full suite.
+- The factual seller profile and authorized accounting decision are still required before an immutable invoice snapshot can be prepared and provider payload/readiness validated. M11 is therefore **not closed**.
+
+### Final continuation verdict
+
+**B — M11 FUNCTIONALLY COMPLETE, OWNER/AUTHORIZED ACCOUNTING ACTION REMAINS.** The Owner-managed seller profile path is implemented, test-backed, merged, CI-validated, and deployed. Truthful seller facts/evidence and the separate accounting decision remain unavailable, so the existing InvoiceIntent stays blocked and Számlázz.hu is not called. The next action is for the Owner/accountant to enter and verify those factual values in Owner Console → Settings → Billing & Tax and provide the approved tax decision through an authorized, auditable accounting path. The application remains fail-closed until that decision exists; no tax result is inferred.
