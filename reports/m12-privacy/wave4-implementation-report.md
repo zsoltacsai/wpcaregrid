@@ -98,3 +98,11 @@ This append-only section records the completed release and staging verification.
 - No anonymization, retention cleanup, backup deletion, or provider deletion API exists in the Wave 4 execution path. Staging validation confirmed the destructive gate remains false, actual deletions remain zero, and no restore was active.
 - No legal, accounting, or security review state was changed to approved. Missing qualified approvals remain explicit blockers on any hypothetical future destructive action; Wave 4 has no destructive action pathway.
 - Wave 4 engineering, required exact-head CI, merge, guarded staging deployment, and authenticated report-only Owner UI validation are complete. The final closure-evidence report commit/PR and its exact-head CI are tracked after this implementation merge; this report-only change does not require another staging deployment.
+
+## Final report merge and primary CI — 2026-10-14
+
+- Closure-evidence report commit: `11bd9c479c1b8cda8a654d2bbee40d0e4567b28e`.
+- Closure-evidence PR #47: <https://github.com/zsoltacsai/wpcaregrid/pull/47>; exact-head CI run `38626335226` passed all five required jobs (Quality/security/build `116066316136`, Server SQLite `116066316437`, Server MySQL `116066316556`, Connector SQLite `116066316474`, Connector MySQL `116066316571`).
+- PR #47 merge commit and final verified primary SHA: `95325f5874496f5f8d78262e420973029eac5efd`.
+- Post-merge primary CI run `38628455720` passed all five jobs on that exact SHA: Quality/security/build `116073602214`, Server SQLite `116073602483`, Server MySQL `116073604210`, Connector MySQL `116073602983`, Connector SQLite `116073603033`. The MySQL suite, process-concurrency gate, system check, and HTTP smoke test passed.
+- These report-only commits did not change executable code or staging runtime; no deployment was repeated after the report update.
