@@ -212,3 +212,32 @@ This append supersedes the prior continuation's provisional release status; it d
 ### Final continuation verdict
 
 **B — M11 FUNCTIONALLY COMPLETE, OWNER/AUTHORIZED ACCOUNTING ACTION REMAINS.** The Owner-managed seller profile path is implemented, test-backed, merged, CI-validated, and deployed. Truthful seller facts/evidence and the separate accounting decision remain unavailable, so the existing InvoiceIntent stays blocked and Számlázz.hu is not called. The next action is for the Owner/accountant to enter and verify those factual values in Owner Console → Settings → Billing & Tax and provide the approved tax decision through an authorized, auditable accounting path. The application remains fail-closed until that decision exists; no tax result is inferred.
+
+## Final Owner accounting-gate verification — 2026-10-14
+
+This is a read-only staging verification. It records the Owner-published seller profile and the remaining accounting gate without changing InvoiceIntent 16 or provider settings.
+
+### Seller identity profile
+
+- Owner Console → Settings → Billing & Tax showed the current immutable profile as **v1, Verified, HU**, with all required identity/address fields complete.
+- No legal name, address, registration identifier, or evidence-reference value is reproduced here. The application’s seller-profile registry requires a non-empty evidence reference before it accepts a profile with verified status; the UI’s published Verified state therefore confirms that the profile passed that application rule.
+- This verifies factual seller identity completeness only. It does not establish AAM/VAT status or approve a tax treatment.
+
+### Accounting decision and InvoiceIntent 16
+
+- The billing configuration remains **Manual per-invoice review** and the Owner Console shows **no approved tax rules configured**. The page explicitly says selecting a provider tax code does not approve its use and that per-invoice decisions remain blocked pending accountant/tax-counsel approval.
+- The current default provider tax-code setting is only a document-format choice; it is not evidence of an approved accounting decision.
+- InvoiceIntent 16 remains **Blocked: seller profile**, reason **No effective seller tax profile was available**. It has a buyer snapshot, no seller snapshot, no tax-review proposal, local validation not run, and zero retries. The stored eligibility result was not re-evaluated during this verification because the required approved accounting decision is absent.
+- No intent status or snapshot was changed. No provider payload was generated, no dry-run/provider call was made, and no Számlázz.hu request was sent.
+
+### Safety and staging health observed
+
+- Számlázz.hu gates in Billing & Tax: provider **Disabled**, dry run **Enabled**, invoice issuance **Disabled**. Live invoice issuance remains OFF.
+- Owner System showed application, database, queue, scheduler, Connector API, Stripe, Cloudflare DNS, backup storage, mail, and safety checks healthy. Stripe mode was **Test**; live restore was **Off**. Queue reported zero failed jobs; database reported zero pending migrations. Security scanner remained **Unknown** because no completed scan exists.
+- The Owner Console page showed the staging hostname and an application environment label of production; this was observed as configuration metadata and was not changed. No production endpoint or production billing provider was accessed.
+
+### Decision
+
+**B — M11 FUNCTIONALLY COMPLETE, OWNER/AUTHORIZED ACCOUNTING ACTION REMAINS.** The factual seller profile gate is now satisfied, but no approved per-invoice accounting/tax decision exists. The application has no approved executable tax-decision record to apply, and its current review workflow records proposals only; it does not approve them or unblock issuance. Therefore the required next Owner/accountant action is to provide an authorized, auditable tax decision through the supported accounting approval path. Until then, InvoiceIntent 16 remains fail-closed, provider readiness is not claimed, and live invoice issuance stays OFF.
+
+No staging data was changed during this verification. No invoice was issued, no provider was called, no real-money transaction occurred, and no production/customer resource was modified.
