@@ -231,6 +231,7 @@ final class InvoiceEvents
             ?? ($statusOverride === 'paid' ? now() : null);
         $attributes = [
             'subscription_id' => $subscription?->id,
+            'billing_identity_id' => $subscription?->billing_identity_id,
             'customer_id' => $subscription?->customer_id ?? Customer::where('stripe_customer_id', $stripeCustomerId ?? '')->value('id'),
             'stripe_customer_id' => $stripeCustomerId,
             'stripe_payment_intent_id' => $this->idOf($invoice->payment_intent ?? null),
@@ -291,6 +292,12 @@ final class InvoiceEvents
         if (! $row) {
             try {
                 $row = BillingInvoice::create(['stripe_invoice_id' => $id, ...$attributes]);
+                if ($subscription?->billing_identity_id) {
+                    // The foreign key is guarded on the model; bind the verified
+                    // immutable identity through the trusted webhook path.
+                    $row->billing_identity_id = $subscription->billing_identity_id;
+                    $row->save();
+                }
             } catch (UniqueConstraintViolationException $exception) {
                 if (! str_contains($exception->getMessage(), 'billing_invoices_stripe_invoice_id_unique')
                     && ! str_contains($exception->getMessage(), 'billing_invoices.stripe_invoice_id')) {
@@ -335,7 +342,9 @@ final class InvoiceEvents
         }
 
         if ($row->exists && $row->wasRecentlyCreated === false && $row->getKey()) {
-            $row->fill($attributes)->save();
+            $row->fill($attributes);
+            $row->billing_identity_id ??= $subscription?->billing_identity_id;
+            $row->save();
         }
 
         return [$row, true, $notifyPayment || $notifyFailure];

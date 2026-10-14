@@ -15,6 +15,10 @@ return [
 
     'title' => 'Complete your order',
     'lead' => 'Confirm your plan and details. Payment is handled by Stripe.',
+    'identity' => [
+        'required' => 'Complete your billing details before continuing to payment.',
+        'incomplete' => 'Add the required billing details before you can continue to payment.',
+    ],
     'tax_note' => 'Prices are per website. This is the final price; no VAT is added.',
 
     'plan_heading' => 'Plan',
@@ -26,6 +30,14 @@ return [
         'email_hint' => 'Order confirmation and onboarding instructions are sent here.',
         'first_name' => 'First name',
         'last_name' => 'Last name',
+        'customer_type' => 'Billing as',
+        'billing_name' => 'Billing name',
+        'company_name' => 'Company name',
+        'tax_id' => 'Tax number (optional)',
+        'address_line1' => 'Street address',
+        'address_line2' => 'Address line 2',
+        'postal_code' => 'Postal code',
+        'city' => 'City',
         'country' => 'Billing country',
         'country_hint' => 'Your price and currency depend on your billing country.',
         'currency' => 'Price currency',

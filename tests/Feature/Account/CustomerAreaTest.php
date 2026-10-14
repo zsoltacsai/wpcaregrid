@@ -109,4 +109,31 @@ class CustomerAreaTest extends TestCase
         $this->assertSame('cus_known', $parameters['customer']);
         $this->assertArrayNotHasKey('customer_email', $parameters);
     }
+
+    public function test_incomplete_billing_profile_continues_to_the_selected_checkout_after_valid_save(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['billing_address' => null]);
+        $this->actingAs($customer->user);
+        $profileUrl = route('account.profile', ['continue_checkout' => 1, 'product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual']);
+
+        $this->get($profileUrl)->assertOk()
+            ->assertSee(__('account.profile.checkout_required'))
+            ->assertSee('name="continue_checkout" value="1"', false);
+
+        $this->from($profileUrl)->put(route('account.profile.update'), [
+            'continue_checkout' => '1', 'product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual',
+            'first_name' => $customer->first_name, 'last_name' => $customer->last_name,
+            'customer_type' => 'individual', 'country_code' => 'HU',
+            'address_line1' => '', 'postal_code' => '', 'city' => '',
+        ])->assertSessionHasErrors(['address_line1', 'postal_code', 'city']);
+
+        $this->from($profileUrl)->put(route('account.profile.update'), [
+            'continue_checkout' => '1', 'product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual',
+            'first_name' => $customer->first_name, 'last_name' => $customer->last_name,
+            'customer_type' => 'individual', 'country_code' => 'HU',
+            'address_line1' => 'Teszt utca 9.', 'postal_code' => '1024', 'city' => 'Budapest',
+        ])->assertRedirect(route('checkout.show', ['product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual']));
+
+        $this->assertSame('Teszt utca 9.', $customer->fresh()->billing_address['line1']);
+    }
 }

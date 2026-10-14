@@ -22,6 +22,10 @@
         </x-operator.section>
 
         <x-operator.section :title="__('owner.customers.sections.billing')" id="customer-billing">
+            <p class="mb-3 text-sm {{ $billingIdentityComplete ? 'text-accent-ink' : 'text-warning-ink' }}">
+                {{ $billingIdentityComplete ? __('owner.customers.billing_identity_complete') : __('owner.customers.billing_identity_incomplete', ['fields' => collect($billingIdentityMissing)->map(fn ($field) => __('checkout.fields.'.$field))->join(', ')]) }}
+                · {{ $billingIdentity ? __('owner.customers.billing_snapshot_present') : __('owner.customers.billing_snapshot_missing') }}
+            </p>
             <dl class="grid grid-cols-[minmax(0,140px)_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
                 <dt class="text-muted">{{ __('owner.customers.fields.company') }}</dt><dd class="break-words">{{ $customer->company_name ?: '—' }}</dd>
                 <dt class="text-muted">{{ __('owner.customers.fields.tax_id') }}</dt><dd class="font-mono text-xs break-all">{{ $maskedVatIdentifier }}</dd>

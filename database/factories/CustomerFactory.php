@@ -17,6 +17,7 @@ class CustomerFactory extends Factory
             'last_name' => fake()->lastName(),
             'country_code' => 'HU',
             'customer_type' => 'individual',
+            'billing_address' => ['line1' => 'Teszt utca 1.', 'postal_code' => '1011', 'city' => 'Budapest'],
             'active' => true,
         ];
     }

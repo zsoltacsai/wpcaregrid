@@ -12,6 +12,7 @@
         <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.provider') }}</dt><dd>{{ $intent->provider }}</dd></div>
         <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.status') }}</dt><dd>{{ $intent->status->label() }}</dd></div>
         <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.blocked_reason') }}</dt><dd>{{ $intent->blocked_reason ? __('owner.invoice_intents.reasons.'.$intent->blocked_reason) : '—' }}</dd></div>
+        <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.identity_snapshot') }}</dt><dd>{{ isset($billingIdentitySnapshot['id']) ? __('owner.invoice_intents.snapshot_present') : __('owner.invoice_intents.snapshot_missing') }}</dd></div>
         <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.dry_run_result') }}</dt><dd>{{ $intent->dry_run_result['validation'] ?? __('owner.invoice_intents.not_run') }}</dd></div>
         <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.retry_count') }}</dt><dd>{{ $intent->retry_count }}</dd></div>
         <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.error_category') }}</dt><dd>{{ $intent->last_error_category ?? '—' }}</dd></div>

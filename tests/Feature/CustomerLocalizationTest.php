@@ -251,6 +251,7 @@ class CustomerLocalizationTest extends TestCase
         $this->in('hu')->post(route('checkout.store'), [
             'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly',
             'email' => 'anna@company.example', 'first_name' => 'Anna', 'last_name' => 'Kovács', 'country' => 'HU',
+            'customer_type' => 'individual', 'address_line1' => 'Teszt utca 1.', 'postal_code' => '1011', 'city' => 'Budapest',
             // Forged presentation fields: none of them is read.
             'currency' => 'EUR', 'amount' => 1, 'stripe_price_id' => 'price_evil', 'market' => 'eu', 'locale' => 'en',
         ])->assertSessionHasErrors('checkout');
@@ -258,6 +259,7 @@ class CustomerLocalizationTest extends TestCase
         $this->in('en')->post(route('checkout.store'), [
             'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly',
             'email' => 'anna@company.example', 'first_name' => 'Anna', 'last_name' => 'Kovács', 'country' => 'DE',
+            'customer_type' => 'individual', 'address_line1' => 'Test Street 1', 'postal_code' => '10115', 'city' => 'Berlin',
             'currency' => 'EUR', 'amount' => 1, 'stripe_price_id' => 'price_evil', 'market' => 'hu', 'locale' => 'en',
         ])->assertStatus(303);
 

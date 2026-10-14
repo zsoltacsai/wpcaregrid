@@ -6,6 +6,8 @@ use App\Mail\AccountActivation;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\User;
+use App\Tax\BillingIdentityCompleteness;
+use App\Tax\CustomerBillingIdentityService;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -29,6 +31,11 @@ use UnexpectedValueException;
  */
 final class ProvisionCustomer
 {
+    public function __construct(
+        private readonly CustomerBillingIdentityService $billingIdentities,
+        private readonly BillingIdentityCompleteness $billingCompleteness,
+    ) {}
+
     public function forIntent(CheckoutIntent $intent, ?string $stripeCustomerId): Customer
     {
         $intentCustomer = $intent->customer;
@@ -67,6 +74,14 @@ final class ProvisionCustomer
 
         if ($intent->customer_id !== $customer->id) {
             $intent->customer()->associate($customer)->save();
+            $intent->refresh();
+        }
+
+        // Bind the invoice identity to the exact details accepted before this
+        // Checkout, rather than whichever profile happens to be current later.
+        if ($this->billingCompleteness->missingForIntent($intent) === []) {
+            $this->billingIdentities->snapshotFromCheckoutIntent($customer, $intent);
+            $intent->refresh();
         }
 
         $this->ensureUser($customer);

@@ -57,6 +57,7 @@ class CouponManagementTest extends TestCase
         return $this->withCookie(config('session.cookie'), str_repeat('b', 40))->post(route('checkout.store'), $overrides + [
             'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly',
             'email' => 'customer@company.example', 'first_name' => 'Anna', 'last_name' => 'Kovács', 'country' => 'HU', 'currency' => 'HUF',
+            'customer_type' => 'individual', 'address_line1' => 'Teszt utca 1.', 'postal_code' => '1011', 'city' => 'Budapest',
         ]);
     }
 

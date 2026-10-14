@@ -436,6 +436,10 @@ return [
         'empty' => 'No customers match.',
         'no_subscription' => 'No subscription',
         'no_websites' => 'No websites yet.',
+        'billing_identity_complete' => 'Billing profile complete',
+        'billing_identity_incomplete' => 'Billing profile incomplete: :fields',
+        'billing_snapshot_present' => 'identity snapshot exists',
+        'billing_snapshot_missing' => 'no identity snapshot yet',
         'website_count' => '{0} No websites|{1} 1 website|[2,*] :count websites',
         'filters' => [
             'subscription' => 'Subscription',
@@ -1200,6 +1204,7 @@ return [
         'created' => 'Created',
         'updated' => 'Updated',
         'billing_snapshot' => 'Frozen billing information', 'billing_name' => 'Legal billing name', 'company' => 'Company',
+        'identity_snapshot' => 'Customer identity snapshot', 'snapshot_present' => 'Present', 'snapshot_missing' => 'Missing',
         'billing_country' => 'Billing country', 'customer_type' => 'Customer classification', 'tax_identifier' => 'Tax identifier (masked)',
         'seller_profile' => 'Seller profile snapshot', 'billing_tax_configuration' => 'Billing tax configuration version',
         'proposed_provider_tax_code' => 'Proposed provider tax code', 'provider_readiness' => 'Provider gates: :provider_enabled; :dry_run; :issuance_enabled',

@@ -7,6 +7,7 @@ use App\Models\Customer;
 use App\Pricing\Exceptions\PricingException;
 use App\Pricing\PriceSelection;
 use App\Pricing\PricingCatalog;
+use App\Tax\BillingIdentityCompleteness;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -23,6 +24,7 @@ final class StartCheckout
         private readonly CheckoutGateway $gateway,
         private readonly PromotionReservations $reservations,
         private readonly CheckoutOfferResolver $offers,
+        private readonly BillingIdentityCompleteness $billingIdentity,
     ) {}
 
     /**
@@ -46,6 +48,19 @@ final class StartCheckout
                 taxId: $account->taxIdentifier(),
                 billingAddress: $account->billing_address,
             );
+        }
+        $missingIdentity = $this->billingIdentity->missingForCheckoutDetails([
+            'first_name' => $customer->firstName,
+            'last_name' => $customer->lastName,
+            'customer_type' => $customer->customerType,
+            'company_name' => $customer->companyName,
+            'country' => $customer->country,
+            'address_line1' => $customer->billingAddress['line1'] ?? null,
+            'postal_code' => $customer->billingAddress['postal_code'] ?? null,
+            'city' => $customer->billingAddress['city'] ?? null,
+        ]);
+        if ($missingIdentity !== []) {
+            throw new BillingIdentityIncomplete($missingIdentity);
         }
         $customer = new CustomerDetails(
             email: Customer::normalizeEmail($customer->email),
@@ -80,7 +95,7 @@ final class StartCheckout
             ->latest('id')
             ->first();
 
-        if ($existing?->isReusable()) {
+        if ($existing?->isReusable() && $this->sameBillingIdentity($existing, $customer)) {
             return $existing;
         }
 
@@ -149,5 +164,26 @@ final class StartCheckout
         $this->reservations->setExpiry($intent, $session->expiresAt);
 
         return $intent;
+    }
+
+    private function sameBillingIdentity(CheckoutIntent $intent, CustomerDetails $customer): bool
+    {
+        return Customer::normalizeEmail($intent->email) === Customer::normalizeEmail($customer->email)
+            && $intent->first_name === $customer->firstName
+            && $intent->last_name === $customer->lastName
+            && strtoupper($intent->country) === strtoupper($customer->country)
+            && $intent->customer_type === $customer->customerType
+            && $intent->company_name === $customer->companyName
+            && $intent->taxIdentifier() === $customer->taxId
+            && $this->canonicalBillingAddress($intent->billing_address) === $this->canonicalBillingAddress($customer->billingAddress);
+    }
+
+    /** @param array<string, mixed>|null $address @return array<string, mixed> */
+    private function canonicalBillingAddress(?array $address): array
+    {
+        $address ??= [];
+        ksort($address, SORT_STRING);
+
+        return $address;
     }
 }

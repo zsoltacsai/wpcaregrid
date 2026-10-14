@@ -200,6 +200,10 @@ return [
     'profile' => [
         'title' => 'Profil',
         'lead' => 'Az elérhetőségei és a számlázási adatai. Az e-mail-címe egyben a belépési neve is; a módosításához lépjen kapcsolatba velünk.',
+        'complete' => 'A számlázási profil teljes, a fizetéshez használható.',
+        'incomplete' => 'Hiányzó számlázási adatok: :fields. Fizetős rendelés előtt pótolja őket.',
+        'checkout_required' => 'A kiválasztott csomag folytatásához adja meg a hiányzó számlázási adatokat.',
+        'checkout_missing' => 'Kötelező adatok: :fields.',
         'first_name' => 'Keresztnév',
         'last_name' => 'Vezetéknév',
         'email' => 'E-mail-cím',
