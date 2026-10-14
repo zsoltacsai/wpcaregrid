@@ -29,7 +29,7 @@ return [
             'masked' => 'Beállítva; a mentett kulcs rejtett.',
         ],
     ],
-    'nav' => ['billing_invoices' => 'Számlázási előkészítések', 'platform_backups' => 'Platformmentések', 'privacy_requests' => 'Adatvédelmi kérelmek'],
+    'nav' => ['billing_invoices' => 'Számlázási előkészítések', 'platform_backups' => 'Platformmentések', 'privacy_requests' => 'Adatvédelmi kérelmek', 'privacy_retention' => 'Adatvédelem és megőrzés'],
     'audit' => ['events' => ['privacy' => [
         'request' => ['created' => 'Adatvédelmi ügy rögzítve', 'status_changed' => 'Adatvédelmi ügy állapota módosítva'],
         'provider_task' => ['created' => 'Szolgáltatói egyeztetési feladat rögzítve', 'status_changed' => 'Szolgáltatói feladat állapota módosítva'],

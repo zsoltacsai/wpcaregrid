@@ -19,6 +19,7 @@
         ['route' => 'owner.seo.index', 'active' => 'owner.seo.*', 'label' => __('owner.nav.seo'), 'icon' => 'search'],
         ['route' => 'owner.system', 'active' => 'owner.system', 'label' => __('owner.nav.system'), 'icon' => 'cog'],
         ['route' => 'owner.privacy-requests.index', 'active' => 'owner.privacy-requests.*', 'label' => __('owner.nav.privacy_requests'), 'icon' => 'shield'],
+        ['route' => 'owner.privacy-retention.index', 'active' => 'owner.privacy-retention.*', 'label' => __('owner.nav.privacy_retention'), 'icon' => 'shield'],
         ['route' => 'owner.monitoring.index', 'active' => 'owner.monitoring.*', 'label' => __('m10.title'), 'icon' => 'activity'],
         ['route' => 'owner.platform-backups.index', 'active' => 'owner.platform-backups.*', 'label' => __('owner.nav.platform_backups'), 'icon' => 'shield'],
         ['route' => 'owner.settings.index', 'active' => 'owner.settings.*', 'label' => __('owner.nav.settings'), 'icon' => 'cog'],

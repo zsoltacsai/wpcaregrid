@@ -12,6 +12,10 @@ Remote primary was independently fetched and verified at `133c0ff7d6118c043f9d59
 
 ## Waves
 
+### Wave 4 implementation update — 2026-10-14
+
+Report-only implementation is underway on `codex/m12-wave4-retention-engine` from verified primary `3e48d488ed1fa01f39ef412ebc65e25fb7f1f14d`. The foundation now has versioned RET-01…RET-33 policy rows, separate Owner/compliance review fields, aggregate source scanning, a pure UTC evaluator, Owner draft/preview/reporting-activation routes, and a privacy/retention settings page. No destructive code or provider deletion path was added. PHP 8.4/PHPUnit are available through a disposable WSL checkout. Focused Wave 4 and relevant regression suites pass; the full local SQLite suite has documented MySQL/S3/SFTP skips and one connector packaging test that requires `.git` metadata, so exact-head remote CI remains required. See `wave4-implementation-report.md`. Guarded staging evidence is still pending.
+
 | Wave | Readiness | Scope safe to implement | Dependencies / blocked scope |
 |---|---|---|---|
 | 1 — Foundation | IMPLEMENTATION COMPLETE — FORMAL CLOSURE HELD | Data classification/purpose registry; privacy request/task/audit models; retention-policy metadata; tenant-scoped policy; technical provider fact registry; read-only Owner privacy case views; fail-closed retention status. Staging migration and health checks passed; rollback-only synthetic request/task lifecycle passed with zero persisted test rows. | Owner review of the potential inadvertent unrelated-admin access and authenticated Owner-view evidence remain. Legal basis, controller/processor roles, retention periods, provider regions/contracts/deletion facts remain unverified; no customer-facing compliance claims or delete action. |

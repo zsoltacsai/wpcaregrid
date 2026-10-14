@@ -2,6 +2,10 @@
 
 > **Wave 4 planning addendum — 2026-10-14:** The new Owner defaults questionnaire is authoritative for report-only retention defaults RET-01 through RET-33. Earlier A/L/C register items remain historical and in force unless explicitly superseded by a reviewed decision. Wave 4 planning does not approve a legal/accounting period or authorize destructive retention. See `retention-defaults-questionnaire.md` and `wave4-retention-engine-plan.md`.
 
+## Wave 4 implementation record — 2026-10-14
+
+RET-01…RET-33 Owner-approved technical defaults are represented as v1 report-only policy records by the Wave 4 migration. The implementation keeps `approval_status=pending_review`, legal/accounting/security states independent, and all qualified-review references unset. This is not a new legal/accounting approval and authorizes no deletion. See `wave4-implementation-report.md`.
+
 ## Wave 4 Owner acceptance — 2026-10-14
 
 The Owner accepted all recommended technical/product defaults RET-01 through RET-33. This is not legal or accounting approval. Each item and its full rationale are preserved in `retention-defaults-questionnaire.md`; this table is the current register summary.

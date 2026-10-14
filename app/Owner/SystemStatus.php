@@ -14,6 +14,7 @@ use App\Models\Website;
 use App\Operator\ConnectorState;
 use App\Pricing\PricingCatalog;
 use App\Privacy\DestructiveRetentionGate;
+use App\Privacy\RetentionSourceScanner;
 use App\Security\ScanStatus;
 use App\Security\Vulnerabilities\VulnerabilitySource;
 use Carbon\CarbonImmutable;
@@ -61,11 +62,23 @@ final class SystemStatus
     private function privacyRetentionGate(): StatusCheck
     {
         $enabled = app(DestructiveRetentionGate::class)->enabled();
+        try {
+            $coverage = app(RetentionSourceScanner::class)->scan()['coverage'];
+            $pendingReviews = DB::table('privacy_retention_policies')->whereIn('legal_review_status', ['wait_legal', 'provisional'])
+                ->orWhereIn('accounting_review_status', ['wait_accounting', 'provisional'])
+                ->orWhereIn('security_review_status', ['wait_security', 'provisional'])->count();
+        } catch (Throwable) {
+            $coverage = 'UNKNOWN';
+            $pendingReviews = 0;
+        }
 
         return new StatusCheck('privacy_retention', $enabled ? HealthStatus::Attention : HealthStatus::Healthy, $enabled
             ? __('owner.system.summaries.privacy_retention_requires_review')
             : __('owner.system.summaries.privacy_retention_disabled'), [
                 __('owner.system.details.privacy_retention_gate') => $enabled ? __('owner.system.values.on') : __('owner.system.values.off'),
+                __('owner.system.details.privacy_retention_mode') => 'REPORT ONLY',
+                __('owner.system.details.privacy_retention_coverage') => $coverage,
+                __('owner.system.details.privacy_retention_pending_reviews') => (string) $pendingReviews,
             ]);
     }
 
