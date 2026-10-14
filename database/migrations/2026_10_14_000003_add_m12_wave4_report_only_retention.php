@@ -43,7 +43,7 @@ return new class extends Migration
             $table->foreignId('created_by')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamp('activated_at')->nullable();
             $table->timestamps();
-            $table->index(['policy_id', 'policy_version', 'evaluated_at']);
+            $table->index(['policy_id', 'policy_version', 'evaluated_at'], 'prp_policy_version_eval_idx');
         });
 
         $now = '2026-10-14 00:00:00';
