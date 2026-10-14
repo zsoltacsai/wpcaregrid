@@ -78,6 +78,7 @@ return [
             'issued' => 'Kiállítva (jövőbeli fázis számára fenntartva)', 'failed' => 'Előkészítés sikertelen',
         ],
         'billing_snapshot' => 'Rögzített számlázási adatok', 'billing_name' => 'Számlázási név', 'company' => 'Cégnév',
+        'identity_snapshot' => 'Ügyfél számlázási adatpillanatképe', 'snapshot_present' => 'Elérhető', 'snapshot_missing' => 'Hiányzik',
         'billing_country' => 'Számlázási ország', 'customer_type' => 'Ügyféltípus', 'tax_identifier' => 'Adóazonosító (kitakarva)',
         'seller_profile' => 'Rögzített eladói profil', 'billing_tax_configuration' => 'Számlázási adóbeállítás verziója',
         'proposed_provider_tax_code' => 'Javasolt szolgáltatói adókód',
@@ -121,6 +122,10 @@ return [
         ],
     ],
     'customers' => [
+        'billing_identity_complete' => 'A számlázási profil teljes',
+        'billing_identity_incomplete' => 'A számlázási profil hiányos: :fields',
+        'billing_snapshot_present' => 'van adatpillanatkép',
+        'billing_snapshot_missing' => 'még nincs adatpillanatkép',
         'billing_emails' => 'Legutóbbi számlázási e-mail-kézbesítések',
         'pending_change' => 'Függő előfizetés-módosítás',
         'reconciliation' => 'Stripe-egyeztetés',

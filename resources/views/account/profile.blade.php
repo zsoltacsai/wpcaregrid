@@ -3,10 +3,32 @@
 
     @php $address = $customer->billing_address ?? []; @endphp
 
+    @if ($continueCheckout)
+        <x-account.panel class="mb-4">
+            <p role="status" class="text-sm text-primary">{{ __('account.profile.checkout_required') }}</p>
+            <p class="mt-2 text-sm text-muted">{{ __('account.profile.checkout_missing', ['fields' => collect($missingBillingFields)->map(fn ($field) => __('checkout.fields.'.$field))->join(', ')]) }}</p>
+        </x-account.panel>
+    @elseif ($missingBillingFields !== [])
+        <x-account.panel class="mb-4">
+            <p role="status" class="text-sm text-warning-ink">{{ __('account.profile.incomplete', ['fields' => collect($missingBillingFields)->map(fn ($field) => __('checkout.fields.'.$field))->join(', ')]) }}</p>
+        </x-account.panel>
+    @else
+        <x-account.panel class="mb-4">
+            <p role="status" class="text-sm text-primary">{{ __('account.profile.complete') }}</p>
+        </x-account.panel>
+    @endif
+
     <x-account.panel>
         <form id="profile-form" method="POST" action="{{ route('account.profile.update') }}" class="grid gap-5" novalidate x-data="{ type: @js(old('customer_type', $customer->customer_type ?? 'individual')) }">
             @csrf
             @method('PUT')
+
+            @if ($continueCheckout && $checkoutSelection)
+                <input type="hidden" name="continue_checkout" value="1">
+                <input type="hidden" name="product" value="{{ $checkoutSelection->productType->value }}">
+                <input type="hidden" name="plan" value="{{ $checkoutSelection->tier->value }}">
+                <input type="hidden" name="interval" value="{{ $checkoutSelection->interval->value }}">
+            @endif
 
             <x-form.field name="email" type="email" :label="__('account.profile.email')" :value="$customer->email" disabled class="sm:max-w-md" />
 
@@ -35,10 +57,10 @@
             <x-form.select name="country_code" :label="__('account.profile.country')" :hint="__('account.profile.country_hint')" :options="__('countries')" :selected="$customer->country_code" autocomplete="country" class="sm:max-w-md" />
 
             <div class="grid gap-5 sm:grid-cols-2">
-                <x-form.field name="address_line1" :label="__('account.profile.address_line1')" :value="$address['line1'] ?? null" autocomplete="address-line1" optional maxlength="150" />
+                <x-form.field name="address_line1" :label="__('account.profile.address_line1')" :value="$address['line1'] ?? null" autocomplete="address-line1" :optional="!$continueCheckout" @if($continueCheckout) required @endif maxlength="150" />
                 <x-form.field name="address_line2" :label="__('account.profile.address_line2')" :value="$address['line2'] ?? null" autocomplete="address-line2" optional maxlength="150" />
-                <x-form.field name="postal_code" :label="__('account.profile.postal_code')" :value="$address['postal_code'] ?? null" autocomplete="postal-code" optional maxlength="20" />
-                <x-form.field name="city" :label="__('account.profile.city')" :value="$address['city'] ?? null" autocomplete="address-level2" optional maxlength="100" />
+                <x-form.field name="postal_code" :label="__('account.profile.postal_code')" :value="$address['postal_code'] ?? null" autocomplete="postal-code" :optional="!$continueCheckout" @if($continueCheckout) required @endif maxlength="20" />
+                <x-form.field name="city" :label="__('account.profile.city')" :value="$address['city'] ?? null" autocomplete="address-level2" :optional="!$continueCheckout" @if($continueCheckout) required @endif maxlength="100" />
             </div>
 
             <x-ui.button type="submit" size="lg" class="self-start">{{ __('account.profile.save') }}</x-ui.button>

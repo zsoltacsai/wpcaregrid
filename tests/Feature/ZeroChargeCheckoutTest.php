@@ -100,7 +100,7 @@ class ZeroChargeCheckoutTest extends TestCase
         $this->coupon('100', 'forever');
 
         $this->withCookie(config('session.cookie'), str_repeat('z', 40))->post(route('checkout.store'), [
-            'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly', 'email' => 'zero@company.example', 'first_name' => 'Zoe', 'last_name' => 'Zero', 'country' => 'HU', 'currency' => 'HUF',
+            'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly', 'email' => 'zero@company.example', 'first_name' => 'Zoe', 'last_name' => 'Zero', 'customer_type' => 'individual', 'country' => 'HU', 'address_line1' => 'Teszt utca 1.', 'postal_code' => '1011', 'city' => 'Budapest', 'currency' => 'HUF',
             'promotion_code' => 'freeupdate', 'amount' => 0, 'total' => 0, 'stripe_price_id' => 'price_free',
         ])->assertStatus(303);
 
@@ -185,7 +185,7 @@ class ZeroChargeCheckoutTest extends TestCase
         $this->coupon('100', 'forever', ['max_redemptions' => 1, 'times_redeemed' => 1]);
 
         $this->withCookie(config('session.cookie'), str_repeat('z', 40))->post(route('checkout.store'), [
-            'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly', 'email' => 'zero@company.example', 'first_name' => 'Zoe', 'last_name' => 'Zero', 'country' => 'HU', 'currency' => 'HUF', 'promotion_code' => 'FREEUPDATE',
+            'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly', 'email' => 'zero@company.example', 'first_name' => 'Zoe', 'last_name' => 'Zero', 'customer_type' => 'individual', 'country' => 'HU', 'address_line1' => 'Teszt utca 1.', 'postal_code' => '1011', 'city' => 'Budapest', 'currency' => 'HUF', 'promotion_code' => 'FREEUPDATE',
         ])->assertSessionHasErrors(['promotion_code' => __('checkout.promotion_errors.used_up')]);
 
         $this->assertSame([], $gateway->created);

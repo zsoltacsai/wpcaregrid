@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Checkout\BillingIdentityIncomplete;
 use App\Checkout\CheckoutGateway;
 use App\Checkout\CheckoutOfferResolver;
 use App\Checkout\CheckoutStatus;
@@ -22,6 +23,7 @@ use App\Pricing\Exceptions\MarketNotAvailable;
 use App\Pricing\Exceptions\PricingException;
 use App\Pricing\PriceSelection;
 use App\Pricing\PricingCatalog;
+use App\Tax\BillingIdentityCompleteness;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -33,7 +35,7 @@ class CheckoutController extends Controller
     /** Session key holding the UUIDs of intents started in this browser session. */
     private const SESSION_INTENTS = 'checkout.intents';
 
-    public function show(Request $request, PricingCatalog $pricing, ExistingCustomerCurrencyLock $currencyLock): View|RedirectResponse
+    public function show(Request $request, PricingCatalog $pricing, ExistingCustomerCurrencyLock $currencyLock, BillingIdentityCompleteness $billingIdentity): View|RedirectResponse
     {
         try {
             $selection = PriceSelection::fromInput(
@@ -47,12 +49,20 @@ class CheckoutController extends Controller
 
         $display = app(DisplayCurrency::class);
         $account = $request->user()?->customer;
+        if ($account && ! $billingIdentity->customerIsComplete($account)) {
+            return redirect()->route('account.profile', [
+                'continue_checkout' => 1,
+                'product' => $selection->productType->value,
+                'plan' => $selection->tier->value,
+                'interval' => $selection->interval->value,
+            ])->with('checkout_identity_required', true);
+        }
         try {
             $lockedCurrency = $account ? $currencyLock->forCustomer($account) : null;
         } catch (AmbiguousCustomerCurrency $e) {
             return redirect(app(MarketingRoutes::class)->pricing())->with('checkout_error', $e->customerMessage());
         }
-        $billingCountry = old('country', $request->user()?->customer?->country_code ?? 'HU');
+        $billingCountry = old('country', $account?->country_code ?? 'HU');
         $currency = $display->selected();
         if ($lockedCurrency !== null) {
             $currency = $lockedCurrency;
@@ -102,7 +112,7 @@ class CheckoutController extends Controller
             'priceMatrix' => $priceMatrix,
             'freeMonths' => $offer->freeMonthsOnAnnual(),
             'countries' => __('countries'),
-            'account' => $request->user()?->customer,
+            'account' => $account,
             // Countries whose market has prices; the page warns about the rest
             // before submitting. The server checks again.
             'purchasableCountries' => collect(array_keys(__('countries')))
@@ -118,12 +128,23 @@ class CheckoutController extends Controller
         try {
             $intent = $startCheckout->handle(
                 $request->selection(),
-                $request->customer(),
+                $request->customer($request->user()?->customer),
                 $request->validated('promotion_code'),
                 $request->session()->getId(),
                 $request->user()?->customer,
                 $request->validated('currency'),
             );
+        } catch (BillingIdentityIncomplete $e) {
+            if ($customer = $request->user()?->customer) {
+                return redirect()->route('account.profile', [
+                    'continue_checkout' => 1,
+                    'product' => $request->validated('product'),
+                    'plan' => $request->validated('plan'),
+                    'interval' => $request->validated('interval'),
+                ])->with('checkout_identity_required', true);
+            }
+
+            return back()->withInput()->withErrors(['billing_identity' => __('checkout.identity.incomplete')]);
         } catch (MarketNotAvailable $e) {
             return back()->withInput()->withErrors(['country' => $e->customerMessage()]);
         } catch (PricingException $e) {

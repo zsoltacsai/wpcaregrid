@@ -5,11 +5,16 @@ namespace Tests\Feature;
 use App\Billing\SubscriptionEntitlements;
 use App\Billing\SubscriptionStatus;
 use App\Checkout\CheckoutStatus;
+use App\Invoicing\InvoiceIntentStatus;
+use App\Invoicing\InvoiceIntentWorkflow;
 use App\Mail\AccountActivation;
 use App\Mail\SubscriptionActivated;
 use App\Models\AdminAuditEvent;
+use App\Models\BillingInvoice;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
+use App\Models\CustomerBillingIdentity;
+use App\Models\InvoiceIntent;
 use App\Models\Promotion;
 use App\Models\StripeEvent;
 use App\Models\StripeWebhookInbox;
@@ -27,6 +32,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\SendsStripeWebhooks;
@@ -53,7 +59,9 @@ class SubscriptionLifecycleTest extends TestCase
             'email' => 'Anna.Kovacs@Company.example',
             'first_name' => 'Anna',
             'last_name' => 'Kovács',
+            'customer_type' => 'individual',
             'country' => 'HU',
+            'billing_address' => ['line1' => 'Teszt utca 1.', 'postal_code' => '1011', 'city' => 'Budapest'],
             'product_type' => 'wordpress',
             'plan' => 'business',
             'interval' => 'monthly',
@@ -123,6 +131,12 @@ class SubscriptionLifecycleTest extends TestCase
         $this->assertSame('anna.kovacs@company.example', $customer->email, 'Email is normalised.');
         $this->assertSame('cus_test_1', $customer->stripe_customer_id);
         $this->assertSame('HU', $customer->country_code);
+        $identity = $customer->latestBillingIdentity();
+        $this->assertInstanceOf(CustomerBillingIdentity::class, $identity);
+        $this->assertSame($identity->id, $intent->billing_identity_id);
+        $this->assertSame($identity->id, $subscription->billing_identity_id);
+        $this->assertSame('Anna Kovács', $identity->legal_name);
+        $this->assertSame('Teszt utca 1.', $identity->address_line1);
 
         $user = $customer->user;
         $this->assertNotNull($user);
@@ -775,14 +789,32 @@ class SubscriptionLifecycleTest extends TestCase
 
     public function test_invoice_paid_records_the_payment(): void
     {
+        Queue::fake();
         $intent = $this->intent();
         $this->completeCheckout($intent);
 
-        $this->stripeEvent('invoice.paid', $this->invoice($intent))->assertStatus(204);
+        $this->stripeEvent('invoice.paid', $this->invoice($intent), eventId: 'evt_invoice_identity_snapshot')->assertStatus(204);
+        $this->stripeEvent('invoice.paid', $this->invoice($intent), eventId: 'evt_invoice_identity_snapshot')->assertStatus(204);
 
         $subscription = Subscription::sole();
+        $customer = Customer::sole();
+        $identity = $customer->latestBillingIdentity();
+        $invoice = BillingInvoice::sole();
+        $invoiceIntent = InvoiceIntent::sole();
+        app(InvoiceIntentWorkflow::class)->prepare($invoiceIntent->id);
+        $invoiceIntent->refresh();
+
         $this->assertSame('paid', $subscription->last_payment_status);
         $this->assertNotNull($subscription->last_payment_at);
+        $this->assertNotNull($identity);
+        $this->assertSame($identity->id, $intent->fresh()->billing_identity_id);
+        $this->assertSame($identity->id, $subscription->billing_identity_id);
+        $this->assertSame($identity->id, $invoice->billing_identity_id);
+        $this->assertSame($identity->id, $invoiceIntent->billing_identity_id);
+        $this->assertArrayHasKey('billing_identity', $invoiceIntent->commercial_snapshot);
+        $this->assertNotSame(InvoiceIntentStatus::BlockedIdentity, $invoiceIntent->status);
+        $this->assertNotSame('billing_identity_missing', $invoiceIntent->blocked_reason);
+        $this->assertSame(1, InvoiceIntent::query()->count(), 'Duplicate payment delivery creates only one invoice intent.');
         $this->assertDatabaseHas('billing_email_outbox', ['event_key' => 'invoice:in_test_1:payment-received', 'notification' => 'payment_received']);
     }
 

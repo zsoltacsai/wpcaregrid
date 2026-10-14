@@ -59,7 +59,11 @@ class CheckoutTest extends TestCase
                 'email' => 'customer@company.example',
                 'first_name' => 'Anna',
                 'last_name' => 'Kovács',
+                'customer_type' => 'individual',
                 'country' => 'HU',
+                'address_line1' => 'Teszt utca 1.',
+                'postal_code' => '1011',
+                'city' => 'Budapest',
                 'currency' => 'HUF',
             ]);
     }
@@ -251,6 +255,48 @@ class CheckoutTest extends TestCase
         $this->assertSame('final_price_no_vat_added', $intent->tax_treatment);
         $this->assertSame('price_wordpress_business_monthly_HUF', $intent->stripe_price_id);
         $this->assertNotNull($intent->uuid);
+        $this->assertSame('individual', $intent->customer_type);
+        $this->assertSame(['line1' => 'Teszt utca 1.', 'line2' => null, 'postal_code' => '1011', 'city' => 'Budapest'], $intent->billing_address);
+    }
+
+    public function test_guest_checkout_requires_complete_billing_identity_before_any_checkout_side_effect(): void
+    {
+        $this->submit(['address_line1' => '   '])->assertSessionHasErrors('address_line1');
+
+        $this->assertDatabaseCount('checkout_intents', 0);
+        $this->assertDatabaseCount('customers', 0);
+        $this->assertSame([], $this->gateway->created);
+    }
+
+    public function test_company_billing_identity_is_persisted_before_stripe_and_tax_id_remains_optional(): void
+    {
+        $this->submit([
+            'customer_type' => 'company',
+            'company_name' => 'Synthetic Test Kft',
+            'tax_id' => '',
+        ])->assertStatus(303);
+
+        $intent = CheckoutIntent::sole();
+        $this->assertSame('company', $intent->customer_type);
+        $this->assertSame('Synthetic Test Kft', $intent->company_name);
+        $this->assertNull($intent->taxIdentifier());
+        $this->assertSame(1, count($this->gateway->created));
+    }
+
+    public function test_logged_in_incomplete_profile_is_sent_to_profile_and_cannot_start_checkout(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['billing_address' => null]);
+        $this->actingAs($customer->user)
+            ->get(route('checkout.show', ['product' => 'wordpress', 'plan' => 'basic', 'interval' => 'annual']))
+            ->assertRedirect(route('account.profile', ['continue_checkout' => 1, 'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'annual']))
+            ->assertSessionHas('checkout_identity_required');
+
+        $this->actingAs($customer->user)->post(route('checkout.store'), [
+            'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'annual', 'country' => 'HU', 'currency' => 'HUF',
+        ])->assertRedirect(route('account.profile', ['continue_checkout' => 1, 'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'annual']));
+
+        $this->assertDatabaseCount('checkout_intents', 0);
+        $this->assertSame([], $this->gateway->created);
     }
 
     public function test_submitted_price_id_and_amount_are_ignored(): void

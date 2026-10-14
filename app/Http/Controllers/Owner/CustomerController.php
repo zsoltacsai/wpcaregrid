@@ -14,6 +14,7 @@ use App\Owner\CustomerDirectory;
 use App\Pricing\PlanTier;
 use App\Pricing\ProductType;
 use App\SiteHealth\SiteHealth;
+use App\Tax\BillingIdentityCompleteness;
 use App\Tax\CustomerBillingIdentityService;
 use App\Tax\Vat\VatIdentifierMasker;
 use Illuminate\Contracts\View\View;
@@ -47,7 +48,7 @@ class CustomerController extends Controller
         ]);
     }
 
-    public function show(Customer $customer, SiteHealth $health): View
+    public function show(Customer $customer, SiteHealth $health, BillingIdentityCompleteness $billingCompleteness): View
     {
         $customer->load(['syntheticFixture', 'billingEmailOutbox' => fn ($q) => $q->latest('id')->limit(10), 'subscriptions' => fn ($q) => $q->with('billingInvoices')->latest('id'), 'websites.activeConnector', 'websites.inventory', 'websites.subscription', 'websites.customer', 'user']);
         $identity = $customer->latestBillingIdentity();
@@ -67,6 +68,8 @@ class CustomerController extends Controller
             'audit' => AdminAuditEvent::with('actor')->where('subject_type', 'customer')->where('subject_key', $customer->uuid)->latest('id')->limit(10)->get(),
             'countries' => (array) __('countries'),
             'billingIdentity' => $identity,
+            'billingIdentityComplete' => $billingCompleteness->customerIsComplete($customer),
+            'billingIdentityMissing' => $billingCompleteness->missingForCustomer($customer),
             'vatHistory' => $vatHistory,
             'reviewCases' => $reviewCases,
             'latestVatValidation' => $latestVatValidation,

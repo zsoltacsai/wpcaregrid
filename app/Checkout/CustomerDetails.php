@@ -2,13 +2,10 @@
 
 namespace App\Checkout;
 
-/**
- * Who is buying. Only the first four fields are collected today; the rest
- * are placeholders for company billing in a later milestone.
- */
+/** Validated identity details persisted on the CheckoutIntent before redirecting to Stripe. */
 final readonly class CustomerDetails
 {
-    /** @param  array<string, string>|null  $billingAddress */
+    /** @param  array<string, string|null>|null  $billingAddress */
     public function __construct(
         public string $email,
         public string $firstName,

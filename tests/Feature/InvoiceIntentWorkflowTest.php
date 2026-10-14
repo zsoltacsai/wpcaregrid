@@ -13,6 +13,7 @@ use App\Models\InvoiceIntentFollowUpMarker;
 use App\Models\SellerTaxProfile;
 use App\Models\User;
 use App\Models\VatValidation;
+use App\Tax\CustomerBillingIdentityService;
 use App\Tax\SellerTaxProfileRegistry;
 use App\Tax\SellerTaxProfileStatus;
 use App\Tax\Vat\VatValidationStatus;
@@ -120,6 +121,44 @@ class InvoiceIntentWorkflowTest extends TestCase
         $this->assertSame('billing_identity_customer_mismatch', $fresh->blocked_reason);
         $this->assertArrayNotHasKey('billing_identity', $fresh->commercial_snapshot);
         $this->assertNull($fresh->billing_identity_id);
+    }
+
+    public function test_prepared_invoice_keeps_the_checkout_identity_after_customer_profile_changes(): void
+    {
+        Queue::fake();
+        $customer = Customer::factory()->create();
+        $identity = $this->identity($customer, [
+            'customer_type' => 'individual',
+            'legal_name' => 'Anna Kovacs',
+            'country_code' => 'HU',
+            'address_line1' => 'Test Street 1',
+            'postal_code' => '1011',
+            'city' => 'Budapest',
+        ]);
+        $invoice = $this->invoice('in_profile_change_immutable', 'paid', [
+            'customer_id' => $customer->id,
+            'billing_identity_id' => $identity->id,
+        ]);
+        $intent = app(InvoiceIntentWorkflow::class)->recordPaidInvoice($invoice, 'evt_profile_change_immutable');
+        $this->assertNotNull($intent);
+
+        app(InvoiceIntentWorkflow::class)->prepare($intent->id);
+        $before = $intent->fresh()->commercial_snapshot['billing_identity'];
+
+        $customer->update([
+            'first_name' => 'Other', 'last_name' => 'Person',
+            'billing_address' => ['line1' => 'New Street 2', 'postal_code' => '2020', 'city' => 'Szeged'],
+        ]);
+        app(CustomerBillingIdentityService::class)->snapshotProfile($customer, [
+            'customer_type' => 'individual', 'legal_name' => 'Other Person', 'country_code' => 'HU',
+            'billing_address' => $customer->billing_address,
+        ]);
+
+        $after = $intent->fresh()->commercial_snapshot['billing_identity'];
+        $this->assertSame($before, $after);
+        $this->assertSame('Anna Kovacs', $after['legal_name']);
+        $this->assertSame('Test Street 1', $after['address_line1']);
+        $this->assertNotSame('Other Person', $after['legal_name']);
     }
 
     public function test_matching_identity_without_seller_profile_stays_blocked_without_assuming_aam(): void

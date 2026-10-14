@@ -3,6 +3,12 @@
 namespace App\Http\Controllers\Account;
 
 use App\Http\Controllers\Controller;
+use App\Pricing\BillingInterval;
+use App\Pricing\Exceptions\InvalidPriceSelection;
+use App\Pricing\PlanTier;
+use App\Pricing\PriceSelection;
+use App\Pricing\ProductType;
+use App\Tax\BillingIdentityCompleteness;
 use App\Tax\CustomerBillingIdentityService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
@@ -16,7 +22,7 @@ use Illuminate\Validation\Rule;
  */
 class ProfileController extends Controller
 {
-    public function edit(Request $request): View
+    public function edit(Request $request, BillingIdentityCompleteness $completeness): View
     {
         $customer = $request->attributes->get('customer');
         $identity = $customer->latestBillingIdentity();
@@ -31,26 +37,62 @@ class ProfileController extends Controller
             }
         }
 
-        return view('account.profile', compact('customer', 'identity', 'history', 'lastSuccessful', 'countries'));
+        $continueCheckout = $request->boolean('continue_checkout');
+        $checkoutSelection = null;
+        if ($continueCheckout) {
+            try {
+                $checkoutSelection = PriceSelection::fromInput(
+                    $request->query('product'),
+                    $request->query('plan'),
+                    $request->query('interval'),
+                );
+            } catch (InvalidPriceSelection) {
+                $continueCheckout = false;
+            }
+        }
+        $missingBillingFields = $completeness->missingForCustomer($customer);
+
+        return view('account.profile', compact('customer', 'identity', 'history', 'lastSuccessful', 'countries', 'continueCheckout', 'checkoutSelection', 'missingBillingFields'));
     }
 
-    public function update(Request $request, CustomerBillingIdentityService $identities): RedirectResponse
+    public function update(Request $request, CustomerBillingIdentityService $identities, BillingIdentityCompleteness $completeness): RedirectResponse
     {
         $customer = $request->attributes->get('customer');
         $this->authorize('update', $customer);
 
-        $validated = $request->validate([
+        $continueCheckout = $request->boolean('continue_checkout');
+        foreach (['first_name', 'last_name', 'company_name', 'address_line1', 'address_line2', 'postal_code', 'city'] as $field) {
+            $value = $request->input($field);
+            if (is_string($value)) {
+                $request->merge([$field => trim(preg_replace('/\\s+/u', ' ', $value) ?? $value)]);
+            }
+        }
+        if (is_string($request->input('country_code'))) {
+            $request->merge(['country_code' => strtoupper($request->input('country_code'))]);
+        }
+        if (is_string($request->input('tax_id'))) {
+            $request->merge(['tax_id' => trim($request->input('tax_id'))]);
+        }
+        $rules = [
             'first_name' => ['required', 'string', 'max:100'],
             'last_name' => ['required', 'string', 'max:100'],
             'customer_type' => ['required', Rule::in(['individual', 'company'])],
             'company_name' => ['nullable', 'required_if:customer_type,company', 'string', 'max:150'],
             'country_code' => ['required', 'string', Rule::in(array_keys(__('countries')))],
             'tax_id' => ['nullable', 'string', 'max:50'],
-            'address_line1' => ['nullable', 'string', 'max:150'],
+            'address_line1' => [$continueCheckout ? 'required' : 'nullable', 'string', 'max:150'],
             'address_line2' => ['nullable', 'string', 'max:150'],
-            'postal_code' => ['nullable', 'string', 'max:20'],
-            'city' => ['nullable', 'string', 'max:100'],
-        ]);
+            'postal_code' => [$continueCheckout ? 'required' : 'nullable', 'string', 'max:20'],
+            'city' => [$continueCheckout ? 'required' : 'nullable', 'string', 'max:100'],
+        ];
+        if ($continueCheckout) {
+            $rules += [
+                'product' => ['required', Rule::enum(ProductType::class)],
+                'plan' => ['required', Rule::enum(PlanTier::class)],
+                'interval' => ['required', Rule::enum(BillingInterval::class)],
+            ];
+        }
+        $validated = $request->validate($rules);
 
         $billingAddress = array_filter([
             'line1' => $validated['address_line1'] ?? null,
@@ -100,6 +142,14 @@ class ProfileController extends Controller
 
             $request->user()->update(['name' => $customer->fullName()]);
         });
+
+        if ($continueCheckout && $completeness->customerIsComplete($customer->fresh())) {
+            return redirect()->route('checkout.show', [
+                'product' => $validated['product'],
+                'plan' => $validated['plan'],
+                'interval' => $validated['interval'],
+            ])->with('status', __('account.profile.saved'));
+        }
 
         return redirect()->route('account.profile')->with('status', __('account.profile.saved'));
     }

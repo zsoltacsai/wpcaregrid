@@ -172,10 +172,33 @@
                         <div class="mt-4 grid gap-5">
                             <x-form.field name="email" type="email" :label="__('checkout.fields.email')" :hint="__('checkout.fields.email_hint')" :value="$account?->email" :readonly="$account !== null" x-on:input="clearPreview()" autocomplete="email" required maxlength="254" />
 
-                            <div class="grid gap-5 sm:grid-cols-2">
-                                <x-form.field name="first_name" :label="__('checkout.fields.first_name')" :value="$account?->first_name" autocomplete="given-name" required maxlength="100" />
-                                <x-form.field name="last_name" :label="__('checkout.fields.last_name')" :value="$account?->last_name" autocomplete="family-name" required maxlength="100" />
-                            </div>
+                            @if ($account)
+                                @php $accountAddress = $account->billing_address ?? []; @endphp
+                                <div class="grid gap-3 rounded-md border border-line bg-canvas p-4 text-sm sm:grid-cols-2">
+                                    <p><span class="text-muted">{{ __('checkout.fields.customer_type') }}:</span> {{ __('account.profile.customer_types.'.($account->customer_type ?? 'individual')) }}</p>
+                                    <p><span class="text-muted">{{ __('checkout.fields.billing_name') }}:</span> {{ $account->customer_type === 'company' ? $account->company_name : $account->fullName() }}</p>
+                                    <p><span class="text-muted">{{ __('checkout.fields.address_line1') }}:</span> {{ $accountAddress['line1'] ?? '' }}</p>
+                                    <p><span class="text-muted">{{ __('checkout.fields.postal_code') }} / {{ __('checkout.fields.city') }}:</span> {{ trim(($accountAddress['postal_code'] ?? '').' '.($accountAddress['city'] ?? '')) }}</p>
+                                </div>
+                            @else
+                                <div x-data="{ customerType: @js(old('customer_type', 'individual')) }">
+                                    <x-form.select name="customer_type" :label="__('checkout.fields.customer_type')" :options="__('account.profile.customer_types')" :selected="old('customer_type', 'individual')" x-model="customerType" required />
+                                    <div x-show="customerType === 'company'" @if(old('customer_type', 'individual') !== 'company') x-cloak @endif class="mt-5 grid gap-5 sm:grid-cols-2">
+                                        <x-form.field name="company_name" :label="__('checkout.fields.company_name')" :value="old('company_name')" autocomplete="organization" maxlength="150" />
+                                        <x-form.field name="tax_id" :label="__('checkout.fields.tax_id')" :value="old('tax_id')" optional maxlength="50" autocomplete="off" />
+                                    </div>
+                                </div>
+                                <div class="grid gap-5 sm:grid-cols-2">
+                                    <x-form.field name="first_name" :label="__('checkout.fields.first_name')" autocomplete="given-name" required maxlength="100" />
+                                    <x-form.field name="last_name" :label="__('checkout.fields.last_name')" autocomplete="family-name" required maxlength="100" />
+                                </div>
+                                <x-form.field name="address_line1" :label="__('checkout.fields.address_line1')" autocomplete="address-line1" required maxlength="150" />
+                                <x-form.field name="address_line2" :label="__('checkout.fields.address_line2')" autocomplete="address-line2" optional maxlength="150" />
+                                <div class="grid gap-5 sm:grid-cols-2">
+                                    <x-form.field name="postal_code" :label="__('checkout.fields.postal_code')" autocomplete="postal-code" required maxlength="20" />
+                                    <x-form.field name="city" :label="__('checkout.fields.city')" autocomplete="address-level2" required maxlength="100" />
+                                </div>
+                            @endif
 
                             <x-form.select
                                 name="country"
@@ -183,6 +206,7 @@
                                 :hint="__('checkout.fields.country_hint')"
                                 :options="$countries"
                                 :selected="$country"
+                                required
                                 x-model="country"
                                 x-on:change="syncCurrency()"
                                 autocomplete="country"

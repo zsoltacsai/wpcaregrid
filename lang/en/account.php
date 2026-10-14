@@ -188,6 +188,10 @@ return [
     'profile' => [
         'title' => 'Profile',
         'lead' => 'Your contact and billing details. Your email address is also your login; contact us to change it.',
+        'complete' => 'Your billing profile is complete and ready for checkout.',
+        'incomplete' => 'Billing details missing: :fields. Add them before starting a paid checkout.',
+        'checkout_required' => 'Add the missing billing details to continue with your selected plan.',
+        'checkout_missing' => 'Required details: :fields.',
         'first_name' => 'First name',
         'last_name' => 'Last name',
         'email' => 'Email address',

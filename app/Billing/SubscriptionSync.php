@@ -88,6 +88,10 @@ final class SubscriptionSync
             return null;
         }
 
+        if ($intent?->billing_identity_id && ! $subscription->billing_identity_id) {
+            $subscription->billing_identity_id = $intent->billing_identity_id;
+        }
+
         $sameSecondCancellation = $subscription
             && $subscription->stripe_synced_at
             && $status === SubscriptionStatus::Canceled
@@ -374,6 +378,7 @@ final class SubscriptionSync
         }
 
         $subscription->checkout_intent_id ??= $intent->id;
+        $subscription->billing_identity_id ??= $intent->billing_identity_id;
         $subscription->stripe_customer_id ??= $customer->stripe_customer_id;
         $subscription->billing_source ??= 'stripe';
 

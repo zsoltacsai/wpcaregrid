@@ -15,6 +15,10 @@ return [
 
     'title' => 'Rendelés véglegesítése',
     'lead' => 'Erősítse meg a csomagot és az adatait. A fizetést a Stripe kezeli.',
+    'identity' => [
+        'required' => 'A fizetés előtt adja meg a számlázási adatait.',
+        'incomplete' => 'A fizetés folytatásához adja meg a kötelező számlázási adatokat.',
+    ],
     'tax_note' => 'Az ár weboldalanként értendő. Ez a végleges ár; áfát nem számítunk fel.',
 
     'plan_heading' => 'Csomag',
@@ -26,6 +30,14 @@ return [
         'email_hint' => 'Ide küldjük a rendelés visszaigazolását és a weboldal csatlakoztatásához szükséges útmutatót.',
         'first_name' => 'Keresztnév',
         'last_name' => 'Vezetéknév',
+        'customer_type' => 'Számlázás típusa',
+        'billing_name' => 'Számlázási név',
+        'company_name' => 'Cégnév',
+        'tax_id' => 'Adószám (nem kötelező)',
+        'address_line1' => 'Utca, házszám',
+        'address_line2' => 'Cím második sora',
+        'postal_code' => 'Irányítószám',
+        'city' => 'Település',
         'country' => 'Számlázási ország',
         'country_hint' => 'Az ár és a pénznem a számlázási országtól függ.',
         'currency' => 'Ár pénzneme',

@@ -32,10 +32,8 @@ final class CustomerBillingIdentityService
     }
 
     /**
-     * A future webhook may explicitly snapshot a new transaction's exact intent.
-     * This method is intentionally not called by current checkout/webhook flows.
-     *
-     * @param  array<string, mixed>  $identity
+     * Snapshot the exact billing identity accepted for a confirmed Checkout.
+     * Repeated webhook delivery returns the already-linked immutable snapshot.
      */
     public function snapshotFromCheckoutIntent(Customer $customer, CheckoutIntent $intent): CustomerBillingIdentity
     {

@@ -111,7 +111,7 @@ class PricingAdminTest extends TestCase
 
         $this->post(route('checkout.store'), [
             'product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly',
-            'email' => 'buyer@company.example', 'first_name' => 'Anna', 'last_name' => 'Kovács', 'country' => 'HU',
+            'email' => 'buyer@company.example', 'first_name' => 'Anna', 'last_name' => 'Kovács', 'country' => 'HU', 'customer_type' => 'individual', 'address_line1' => 'Teszt utca 1.', 'postal_code' => '1011', 'city' => 'Budapest',
             // Tampering attempts: never trusted.
             'amount' => 1, 'currency' => 'HUF', 'stripe_price_id' => 'price_cheap', 'price' => 1,
         ])->assertRedirect();
