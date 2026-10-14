@@ -137,7 +137,9 @@ class RetentionEligibilityTest extends TestCase
             $activated->forceFill(['technical_value' => ['value' => 1, 'unit' => 'days']])->save();
             $this->fail('An activated reporting policy was mutable.');
         } catch (LogicException) {
-            $this->assertSame(['value' => 7, 'unit' => 'days'], $activated->fresh()->technical_value);
+            $persistedValue = $activated->fresh()->technical_value;
+            $this->assertSame(7, $persistedValue['value']);
+            $this->assertSame('days', $persistedValue['unit']);
         }
     }
 
