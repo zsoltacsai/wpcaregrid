@@ -21,6 +21,7 @@ final class AdminAudit
         'customer.updated', 'customer.vat_rechecked', 'customer.vat_review_resolved',
         'synthetic_fixture.provisioned',
         'monitoring.maintenance_created',
+        'privacy.request.created', 'privacy.request.status_changed', 'privacy.provider_task.created', 'privacy.provider_task.status_changed',
         'platform_backup.manual_requested', 'platform_backup.configuration_updated', 'platform_backup.disabled', 'platform_backup.escrow_attested', 'platform_backup.escrow_revoked', 'platform_backup.s3_connection_tested',
         'operator.invited', 'operator.invitation_resent', 'operator.permissions_changed', 'operator.disabled', 'operator.enabled',
         'stripe.verified',

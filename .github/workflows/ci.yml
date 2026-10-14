@@ -265,6 +265,7 @@ jobs:
             tests/Feature/StripeSubscriptionConcurrencyTest.php \
             tests/Feature/InvoiceIntentConcurrencyTest.php \
             tests/Feature/InvoiceIssuanceConcurrencyTest.php \
+            tests/Feature/Privacy/PrivacyRequestConcurrencyTest.php \
             tests/Feature/SyntheticSzamlazzTestConcurrencyTest.php \
             tests/Feature/Monitoring/MonitoringEngineConcurrencyTest.php; do
             vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings "$test"

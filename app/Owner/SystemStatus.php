@@ -13,6 +13,7 @@ use App\Models\SecurityScan;
 use App\Models\Website;
 use App\Operator\ConnectorState;
 use App\Pricing\PricingCatalog;
+use App\Privacy\DestructiveRetentionGate;
 use App\Security\ScanStatus;
 use App\Security\Vulnerabilities\VulnerabilitySource;
 use Carbon\CarbonImmutable;
@@ -53,7 +54,19 @@ final class SystemStatus
             $this->securityScanner(),
             $this->mail(),
             $this->safetySwitches(),
+            $this->privacyRetentionGate(),
         ];
+    }
+
+    private function privacyRetentionGate(): StatusCheck
+    {
+        $enabled = app(DestructiveRetentionGate::class)->enabled();
+
+        return new StatusCheck('privacy_retention', $enabled ? HealthStatus::Attention : HealthStatus::Healthy, $enabled
+            ? __('owner.system.summaries.privacy_retention_requires_review')
+            : __('owner.system.summaries.privacy_retention_disabled'), [
+                __('owner.system.details.privacy_retention_gate') => $enabled ? __('owner.system.values.on') : __('owner.system.values.off'),
+            ]);
     }
 
     private function application(): StatusCheck

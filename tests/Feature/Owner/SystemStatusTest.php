@@ -35,7 +35,25 @@ class SystemStatusTest extends TestCase
         foreach (['Application', 'Database', 'Queue', 'Scheduler', 'Connector API', 'Stripe', 'Cloudflare DNS', 'Backup storage', 'Security scanner', 'Mail'] as $name) {
             $response->assertSee($name);
         }
-        $this->assertCount(11, $this->states());
+        $this->assertCount(12, $this->states());
+        $this->assertSame(HealthStatus::Healthy, $this->states()['privacy_retention']);
+    }
+
+    public function test_disabled_privacy_retention_gate_is_visible_as_safe_and_enabled_value_requires_attention(): void
+    {
+        config()->set('privacy.destructive_retention_enabled', null);
+        $this->asOwner();
+        $this->get(route('owner.system'))->assertOk()
+            ->assertSee('Privacy retention safety')
+            ->assertSee('SAFE / DISABLED BY POLICY');
+        $this->assertSame(HealthStatus::Healthy, $this->states()['privacy_retention']);
+
+        config(['privacy.destructive_retention_enabled' => true]);
+        $this->get(route('owner.system'))->assertOk()->assertSee('The destructive retention gate is enabled.');
+        $this->assertSame(HealthStatus::Attention, $this->states()['privacy_retention']);
+
+        config(['privacy.destructive_retention_enabled' => 'true']);
+        $this->assertSame(HealthStatus::Healthy, $this->states()['privacy_retention']);
     }
 
     public function test_secret_values_are_never_shown(): void

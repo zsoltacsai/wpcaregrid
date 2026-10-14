@@ -259,14 +259,14 @@ class ProductionHardeningTest extends TestCase
 
         $this->assertSame(0, Artisan::call('system:check'));
         $table = Artisan::output();
-        foreach (['Application', 'Database', 'Queue', 'Scheduler', 'Connector API', 'Stripe', 'Cloudflare DNS', 'Backup storage', 'Security scanner', 'Mail', 'Safety switches'] as $part) {
+        foreach (['Application', 'Database', 'Queue', 'Scheduler', 'Connector API', 'Stripe', 'Cloudflare DNS', 'Backup storage', 'Security scanner', 'Mail', 'Safety switches', 'Privacy retention'] as $part) {
             $this->assertStringContainsString($part, $table);
         }
 
         Artisan::call('system:check', ['--json' => true]);
         $json = Artisan::output();
         $checks = json_decode($json, true);
-        $this->assertCount(11, $checks);
+        $this->assertCount(12, $checks);
         foreach ($checks as $check) {
             $this->assertContains($check['level'], ['OK', 'WARNING', 'ERROR', 'NOT CONFIGURED']);
         }

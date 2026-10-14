@@ -39,6 +39,7 @@ return [
         'content' => 'Content',
         'seo' => 'SEO',
         'system' => 'System',
+        'privacy_requests' => 'Privacy requests',
         'platform_backups' => 'Platform Backups',
         'integrations' => 'Service Credentials',
         'settings' => 'Settings',
@@ -167,6 +168,10 @@ return [
             'owner_settings' => [
                 'mail_test_sent' => 'Mail test accepted by the configured mail transport',
                 'mail_test_failed' => 'Mail test failed',
+            ],
+            'privacy' => [
+                'request' => ['created' => 'Privacy case recorded', 'status_changed' => 'Privacy case state changed'],
+                'provider_task' => ['created' => 'Provider reconciliation task recorded', 'status_changed' => 'Provider task state changed'],
             ],
             'coupon' => [
                 'created' => 'Coupon created',
@@ -820,6 +825,7 @@ return [
             'security_scanner' => 'Security scanner',
             'mail' => 'Mail',
             'safety' => 'Safety switches',
+            'privacy_retention' => 'Privacy retention safety',
         ],
         'switches' => [
             'remediation' => 'Security remediation',
@@ -837,6 +843,8 @@ return [
             'staging_low' => 'Only :free free for staging backups (:needed recommended).',
             'storage_local' => 'Backups go to local storage on this server, which is for development only.',
             'safety_conservative' => 'Conservative defaults: nothing changes customer sites without the documented approval.',
+            'privacy_retention_disabled' => 'SAFE / DISABLED BY POLICY. No destructive retention execution is available in this release.',
+            'privacy_retention_requires_review' => 'The destructive retention gate is enabled. Wave 1 has no executor; review configuration before any later release.',
             'safety_enabled' => 'Enabled: :switches. Make sure the documented rehearsal and approval happened.',
             'debug_in_production' => 'Debug mode is on in production.',
             'database_unreachable' => 'The database cannot be reached.',
@@ -869,6 +877,7 @@ return [
             'mail_no_from' => 'No sender address configured.',
         ],
         'details' => [
+            'privacy_retention_gate' => 'Destructive retention gate',
             'environment' => 'Environment',
             'debug' => 'Debug',
             'app_key' => 'APP_KEY',
