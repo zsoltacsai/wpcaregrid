@@ -89,6 +89,22 @@ final class InvoiceIssuanceWorkflowTest extends TestCase
         $this->assertSame(0, InvoiceIssuanceAttempt::query()->count());
     }
 
+    public function test_incomplete_seller_profile_cannot_reach_provider_even_for_a_prevalidated_intent(): void
+    {
+        $intent = $this->readyIntent(completeSeller: false);
+        config([
+            'szamlazz.provider_enabled' => true, 'szamlazz.dry_run' => false, 'szamlazz.issuance_enabled' => true,
+            'szamlazz.permitted_environments' => ['testing'], 'szamlazz.agent_api_key' => 'synthetic-test-key',
+        ]);
+        $provider = $this->mock(InvoiceSubmissionProvider::class);
+        $provider->shouldNotReceive('submit');
+
+        $result = app(InvoiceIssuanceWorkflow::class)->submit($intent->id, $this->request());
+
+        $this->assertSame('seller_profile_incomplete', $result);
+        $this->assertSame(0, InvoiceIssuanceAttempt::query()->count());
+    }
+
     public function test_synthetic_test_code_selection_cannot_satisfy_the_production_accountant_approval_gate(): void
     {
         $intent = $this->readyIntent();
@@ -112,7 +128,7 @@ final class InvoiceIssuanceWorkflowTest extends TestCase
         $this->assertSame(0, InvoiceIssuanceAttempt::query()->count());
     }
 
-    private function readyIntent(): InvoiceIntent
+    private function readyIntent(bool $completeSeller = true): InvoiceIntent
     {
         $customer = Customer::factory()->create();
         $identity = new CustomerBillingIdentity;
@@ -124,6 +140,9 @@ final class InvoiceIssuanceWorkflowTest extends TestCase
         $profile = app(SellerTaxProfileRegistry::class)->publish([
             'effective_from' => now()->toDateString(), 'effective_to' => null,
             'legal_name' => 'Synthetic Seller', 'establishment_country' => 'HU',
+            'seller_address' => $completeSeller ? [
+                'address_line1' => 'Synthetic Street 1', 'postal_code' => '1000', 'city' => 'Budapest', 'country_code' => 'HU',
+            ] : null,
             'verification_status' => SellerTaxProfileStatus::Verified, 'evidence_reference' => 'test-fixture-only',
         ]);
         $settings = app(SzamlazzBillingSettings::class);

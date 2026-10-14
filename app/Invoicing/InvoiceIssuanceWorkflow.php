@@ -10,6 +10,7 @@ use App\Models\InvoiceIntentEvent;
 use App\Models\InvoiceIssuanceAttempt;
 use App\Models\User;
 use App\Owner\AdminAudit;
+use App\Tax\SellerTaxProfileCompleteness;
 use Illuminate\Support\Facades\DB;
 
 /** Single-submit orchestration. Ambiguous outcomes are reconciled by lookup, never by resubmission. */
@@ -180,6 +181,9 @@ final class InvoiceIssuanceWorkflow
         $selectedProfile = $configuration?->configuration['seller_profile_id'] ?? null;
         if (! $profile || $profile->verification_status?->value !== 'verified' || (int) $selectedProfile !== (int) $profile->id) {
             return 'seller_configuration_unapproved';
+        }
+        if (! app(SellerTaxProfileCompleteness::class)->isComplete($profile)) {
+            return 'seller_profile_incomplete';
         }
         if ($intent->billing_identity_id === null || (int) ($snapshot['billing_identity']['id'] ?? 0) !== (int) $intent->billing_identity_id) {
             return 'billing_identity_missing';

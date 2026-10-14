@@ -161,6 +161,45 @@ class InvoiceIntentWorkflowTest extends TestCase
         $this->assertNotSame('Other Person', $after['legal_name']);
     }
 
+    public function test_prepared_invoice_keeps_the_seller_snapshot_after_a_later_profile_version_is_published(): void
+    {
+        Queue::fake();
+        $customer = Customer::factory()->create();
+        $identity = $this->identity($customer);
+        $firstProfile = app(SellerTaxProfileRegistry::class)->publish([
+            'legal_name' => 'Synthetic Seller Version One',
+            'establishment_country' => 'HU',
+            'seller_address' => ['address_line1' => 'Synthetic Street 1', 'postal_code' => '1011', 'city' => 'Budapest', 'country_code' => 'HU'],
+            'effective_from' => '2026-01-01',
+            'effective_to' => now()->toDateString(),
+            'verification_status' => SellerTaxProfileStatus::Verified,
+            'evidence_reference' => 'synthetic-seller-evidence-v1',
+        ]);
+        $intent = app(InvoiceIntentWorkflow::class)->recordPaidInvoice(
+            $this->invoice('in_seller_snapshot_immutable', 'paid', ['customer_id' => $customer->id, 'billing_identity_id' => $identity->id]),
+            'evt_seller_snapshot_immutable',
+        );
+
+        $this->assertNotNull($intent);
+        app(InvoiceIntentWorkflow::class)->prepare($intent->id);
+        $before = $intent->fresh()->commercial_snapshot['seller_tax_profile'];
+        $this->assertSame($firstProfile->id, $before['id']);
+        $this->assertSame('Synthetic Seller Version One', $before['legal_name']);
+
+        app(SellerTaxProfileRegistry::class)->publish([
+            'legal_name' => 'Synthetic Seller Version Two',
+            'establishment_country' => 'HU',
+            'seller_address' => ['address_line1' => 'Synthetic Street 2', 'postal_code' => '1022', 'city' => 'Budapest', 'country_code' => 'HU'],
+            'effective_from' => now()->addDay()->toDateString(),
+            'verification_status' => SellerTaxProfileStatus::Verified,
+            'evidence_reference' => 'synthetic-seller-evidence-v2',
+        ]);
+
+        $after = $intent->fresh()->commercial_snapshot['seller_tax_profile'];
+        $this->assertSame($before, $after);
+        $this->assertSame(InvoiceIntentStatus::BlockedTaxReview, $intent->fresh()->status);
+    }
+
     public function test_matching_identity_without_seller_profile_stays_blocked_without_assuming_aam(): void
     {
         Queue::fake();
@@ -186,6 +225,33 @@ class InvoiceIntentWorkflowTest extends TestCase
         $this->assertNull(SellerTaxProfile::query()->first());
     }
 
+    public function test_incomplete_seller_profile_is_blocked_before_tax_review_or_provider_preparation(): void
+    {
+        Queue::fake();
+        $customer = Customer::factory()->create();
+        $identity = $this->identity($customer);
+        app(SellerTaxProfileRegistry::class)->publish([
+            'effective_from' => '2026-01-01',
+            'verification_status' => SellerTaxProfileStatus::Verified,
+            'evidence_reference' => 'synthetic-incomplete-profile-evidence',
+        ]);
+        $intent = app(InvoiceIntentWorkflow::class)->recordPaidInvoice(
+            $this->invoice('in_incomplete_seller_profile', 'paid', [
+                'customer_id' => $customer->id,
+                'billing_identity_id' => $identity->id,
+            ]),
+            'evt_incomplete_seller_profile',
+        );
+
+        $this->assertNotNull($intent);
+        app(InvoiceIntentWorkflow::class)->prepare($intent->id);
+
+        $fresh = $intent->fresh();
+        $this->assertSame(InvoiceIntentStatus::BlockedSellerProfile, $fresh->status);
+        $this->assertSame('seller_profile_incomplete', $fresh->blocked_reason);
+        $this->assertArrayHasKey('seller_tax_profile', $fresh->commercial_snapshot);
+    }
+
     public function test_valid_vies_evidence_does_not_approve_tax_treatment(): void
     {
         Queue::fake();
@@ -209,6 +275,14 @@ class InvoiceIntentWorkflowTest extends TestCase
             'message_code' => 'valid',
         ])->save();
         app(SellerTaxProfileRegistry::class)->publish([
+            'legal_name' => 'Synthetic Verified Seller Ltd',
+            'establishment_country' => 'HU',
+            'seller_address' => [
+                'address_line1' => 'Synthetic Street 1',
+                'postal_code' => '1011',
+                'city' => 'Budapest',
+                'country_code' => 'HU',
+            ],
             'effective_from' => '2026-01-01',
             'verification_status' => SellerTaxProfileStatus::Verified,
             'evidence_reference' => 'test-only-seller-evidence',

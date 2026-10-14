@@ -121,6 +121,7 @@ final class InvoiceIssuanceConcurrencyTest extends TestCase
         ])->save();
         $profile = app(SellerTaxProfileRegistry::class)->publish([
             'effective_from' => now()->toDateString(), 'legal_name' => 'Synthetic Seller', 'establishment_country' => 'HU',
+            'seller_address' => ['address_line1' => 'Synthetic Street 1', 'postal_code' => '1000', 'city' => 'Budapest', 'country_code' => 'HU'],
             'verification_status' => SellerTaxProfileStatus::Verified, 'evidence_reference' => 'synthetic-evidence-only',
         ]);
         $version = app(SzamlazzBillingSettings::class)->publish([

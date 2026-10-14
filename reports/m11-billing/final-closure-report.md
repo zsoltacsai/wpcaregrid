@@ -150,3 +150,33 @@ The release and automated regression coverage are healthy, but mandatory staging
 ### Current verdict
 
 **C — M11 VALIDATION BLOCKER REMAINS.** Account B's annual-to-monthly provider schedule is now verified and the queue/email regressions are fixed, merged, CI-validated and deployed. M11 is still open because the separate Account A schedule mismatch is unresolved, the renewal-failure evidence is a signed harness fixture rather than a Stripe-originated failed payment, restricted customer page access was not directly exercised while restricted, and invoice snapshot/provider readiness still requires a valid synthetic billing identity under the existing accounting gate. No production or real-customer resource was changed, and no real-money payment occurred during this continuation.
+
+## Seller profile continuation — 2026-10-14
+
+### Architecture and implementation
+
+- The existing versioned `SellerTaxProfile` model and `SellerTaxProfileRegistry` were reused. The primary branch had no Owner workflow for publishing seller facts.
+- Added Owner-only seller profile publishing in Billing & Tax settings. The endpoint uses Owner authorization, CSRF protection, validation, throttling, immutable non-overlapping profile versions, and an audit event containing field names/status/version only. Seller identity, address, and evidence values are not copied into audit payloads or validation session input.
+- Completeness now derives from legal name, establishment country, street, postal code, city, and address country. It is kept distinct from factual verification and tax approval. Incomplete and unverified profiles fail closed; VIES or AAM status does not approve tax treatment.
+- Invoice preparation snapshots seller facts once and preserves that historical snapshot if a later profile version is published. Provider submission independently rejects an incomplete seller profile.
+- The published form explicitly requires Owner/accountant-approved facts. No company, address, registration, VAT status, or tax treatment was invented or entered in this continuation.
+
+### Current invoice state and safety boundary
+
+- The previous positive Stripe TEST checkout, paid webhook, active Basic monthly subscription, and InvoiceIntent 16 remain historical evidence as described above.
+- No staging seller profile was published because factual seller/accounting data was not supplied in this task. Required identity fields for a complete profile are legal name, establishment country, street/address line 1, postal code, city, and address country. Evidence is required by the existing registry to mark seller facts verified or AAM confirmed.
+- InvoiceIntent 16's already-created commercial snapshot is historical and was not rewritten or manually re-prepared. The current workflow also requires a separate approved tax decision (`approved_tax_decision_missing`) before invoice readiness; seller identity completeness alone cannot clear that accounting gate.
+- No Számlázz.hu request, dry-run provider call, live invoice, staging data mutation, or production/customer operation was performed. Live issuance remains OFF.
+
+### Automated validation
+
+- Full Laravel suite on PHP 8.4.26: **1,199 tests, 16,584 assertions, 0 failures, 24 skips**. Skips are environment-gated MySQL multi-process concurrency and MySQL recovery tests, plus real S3/SFTP provider cases requiring provider credentials. The disposable local suite did not claim those provider integrations or MySQL recovery as validated.
+- Focused invoice, owner seller profile, checkout, webhook, billing snapshot, and Stripe suite: **128 tests, 834 assertions, 0 failures, 2 MySQL process-concurrency skips**. The full suite above also includes the Owner settings completeness assertion.
+- Pint passed for the changed PHP files; PHP syntax checks passed; `git diff --check` passed; Composer audit reported no known advisories.
+- One initial full-suite attempt failed because a disposable `git archive` test copy lacked a committed Git `HEAD`, which disabled the Connector package dirty-source check. The test harness was corrected to create a committed disposable repository and the rerun completed with zero failures. No product-code change was made for this harness issue.
+
+### Release and remaining Owner/accounting action
+
+- This continuation's seller-profile implementation is in a separate isolated worktree based on primary SHA `20728d1165d0168a7fc3117d07722c4f87105984`. Exact-SHA remote CI, merge, and staging deployment are not yet evidenced by this appendix and must be recorded only after they occur.
+- Owner/accountant must provide and verify the factual seller identity and evidence, and the authorized accounting reviewer must supply the applicable tax decision. Until then, the existing InvoiceIntent remains blocked and the provider must not be called.
+- Provisional continuation verdict: **B — M11 FUNCTIONALLY COMPLETE, OWNER/AUTHORIZED ACCOUNTING ACTION REMAINS.** The Stripe positive path is valid, seller-profile management and deterministic completeness are implemented and test-backed, but truthful seller data and an approved tax decision remain external prerequisites for invoice readiness. This does not close M11.

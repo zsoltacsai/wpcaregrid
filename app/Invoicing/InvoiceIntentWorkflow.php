@@ -11,6 +11,7 @@ use App\Models\InvoiceIntentEvent;
 use App\Models\InvoiceIntentFollowUpMarker;
 use App\Models\SellerTaxProfile;
 use App\Models\Subscription;
+use App\Tax\SellerTaxProfileCompleteness;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -186,9 +187,15 @@ final class InvoiceIntentWorkflow
                 $intent->billing_identity_id = null;
                 $intent->status = InvoiceIntentStatus::BlockedIdentity;
                 $intent->blocked_reason = 'billing_identity_customer_mismatch';
-            } elseif (! $sellerProfile || $sellerProfile->verification_status?->value !== 'verified') {
+            } elseif (! $sellerProfile) {
                 $intent->status = InvoiceIntentStatus::BlockedSellerProfile;
-                $intent->blocked_reason = $sellerProfile ? 'seller_profile_unverified' : 'seller_profile_missing';
+                $intent->blocked_reason = 'seller_profile_missing';
+            } elseif (! app(SellerTaxProfileCompleteness::class)->isComplete($sellerProfile)) {
+                $intent->status = InvoiceIntentStatus::BlockedSellerProfile;
+                $intent->blocked_reason = 'seller_profile_incomplete';
+            } elseif ($sellerProfile->verification_status?->value !== 'verified') {
+                $intent->status = InvoiceIntentStatus::BlockedSellerProfile;
+                $intent->blocked_reason = 'seller_profile_unverified';
             } else {
                 // Phase 1 has no approved executable TaxDecision model. VIES and country are evidence only.
                 $intent->status = InvoiceIntentStatus::BlockedTaxReview;
