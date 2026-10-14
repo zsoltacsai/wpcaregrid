@@ -1,5 +1,7 @@
 # M12 final decision register
 
+> **Wave 4 planning addendum — 2026-10-14:** The new Owner defaults questionnaire is authoritative for report-only retention defaults RET-01 through RET-33. Earlier A/L/C register items remain historical and in force unless explicitly superseded by a reviewed decision. Wave 4 planning does not approve a legal/accounting period or authorize destructive retention. See `retention-defaults-questionnaire.md` and `wave4-retention-engine-plan.md`.
+
 Status date: 2026-10-14. This is a planning register, not legal or accounting approval. The audited source baseline remains `856f7a03d7624158eb5cf9719fdec4776fbf6893`; the remote primary was re-fetched and is unchanged. See `planning-baseline.md` for scope and limitations.
 
 ## A — Technical / product Owner decisions

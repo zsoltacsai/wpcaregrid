@@ -4,6 +4,12 @@ Planning baseline: `856f7a03d7624158eb5cf9719fdec4776fbf6893` on `claude/ecstati
 
 Wave 1 implementation and staging engineering validation are complete, but formal closure is held pending Owner review of a potential inadvertent unrelated-admin access during browser inspection and any authenticated Owner-view walkthrough. Implementation PR #39 merged as `dcd072a89910078bb7ebed308c88bfa6c7957ebf` and was deployed to staging on 2026-10-14. Final staging evidence was merged through PRs #40–#42; primary SHA at that point is `0a7e9f1bd5ec022dcb32800c64734a723d839e85`. Exact implementation CI run `38590540024` passed all five jobs. See `wave1-implementation-report.md` for details. This does not change any legal/accounting decision or authorize destructive retention.
 
+## Current verified planning disposition — 2026-10-14
+
+The preceding status text and historical table reflect the readiness state before Owner disposition. The Owner has now reviewed the browser-session event; no product or tenant-isolation defect was identified, no staging/customer mutation occurred, and the event is recorded as operational tooling hygiene without a legal conclusion. The hold is cleared: **Wave 1 is CLOSED** for engineering/foundation scope. See `wave1-implementation-report.md`.
+
+Remote primary was independently fetched and verified at `133c0ff7d6118c043f9d59f1d5aabd8dd1eb79df`. A fresh clean planning worktree was created from that SHA; the dirty/behind main checkout and existing M12 worktrees were preserved. Wave 4 has a complete report-only plan and 33-item defaults questionnaire. Wave 4 implementation can proceed only as report-only with unresolved policy values represented as blockers. Owner acceptance/overrides are still requested for routine technical/product defaults; legal/accounting review items remain provisional even if defaults are accepted. `M12_DESTRUCTIVE_RETENTION_ENABLED=false` remains mandatory.
+
 ## Waves
 
 | Wave | Readiness | Scope safe to implement | Dependencies / blocked scope |
