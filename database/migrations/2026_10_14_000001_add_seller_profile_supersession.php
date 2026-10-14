@@ -19,8 +19,12 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('seller_tax_profiles', function (Blueprint $table) {
+            $table->dropForeign(['supersedes_profile_id']);
+        });
+
+        Schema::table('seller_tax_profiles', function (Blueprint $table) {
             $table->dropUnique('seller_tax_profiles_supersedes_unique');
-            $table->dropConstrainedForeignId('supersedes_profile_id');
+            $table->dropColumn('supersedes_profile_id');
             $table->dropColumn('aam_evidence_reference');
         });
     }
