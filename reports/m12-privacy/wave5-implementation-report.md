@@ -70,3 +70,11 @@ To be completed after local tests, CI, merge, and synthetic staging checks. Expe
 - A rerun of the failed workflow attempt was started on the unchanged primary SHA `436585fdd18403ce3c9f40e5e83185cf87ec98c9`. The rerun completed successfully across all five mandatory jobs: Connector MySQL `116143445802`, Server SQLite `116143447176`, Quality/security/build `116143447946`, Server MySQL `116143448154`, Connector SQLite `116143504827`.
 - The transient process-harness timeout did not reproduce on retry; no code change was needed. The merged Wave 5 application and regression changes remain identical to the exact PR-head CI result.
 - Remaining closure evidence: authenticated synthetic Owner UI validation. Guest HTTP probes for the Owner closure and retention routes returned the expected 302 authentication redirects. The browser inspection was stopped when a fresh Brave window showed an unexpected state and the hostname could not be verified before page inspection. A request is pending for a manual Owner sign-in in a new private window; no credentials or account changes have been made.
+
+### Report-only merge and final primary CI — 2026-10-15
+
+- Report-only PR #51 merged with merge SHA and verified remote primary SHA `c80d5665b03d1e8ec4c456f39dc3e8bdc121d01c`. Its exact-head CI run `38649842300` passed all five required jobs.
+- Post-merge CI run `38650978542` passed all five mandatory jobs on exact primary SHA `c80d5665b03d1e8ec4c456f39dc3e8bdc121d01c`: Connector MySQL `116149394931`, Server MySQL `116149395104`, Server SQLite `116149395115`, Quality/security/build `116149395157`, and Connector SQLite `116149395226`.
+- No source/runtime changes or redeployment were made for this report-only update. The staging deployment remains the implementation merge SHA `436585fdd18403ce3c9f40e5e83185cf87ec98c9`.
+- The authenticated synthetic Owner UI exercise remains unverified and is the only outstanding Wave 5 validation item. Therefore this report does not declare Wave 5 closed. Owner decisions ER-01 (hybrid model) and ER-08 (separate erasure request required) are recorded; closure does not start erasure or its cooling-off period.
+- Destructive retention remains disabled. No deletion, anonymization, customer/provider mutation, or production change occurred.
