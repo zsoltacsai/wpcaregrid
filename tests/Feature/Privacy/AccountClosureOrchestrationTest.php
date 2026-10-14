@@ -48,12 +48,13 @@ class AccountClosureOrchestrationTest extends TestCase
         $this->assertSame('PARTIAL', $preview['coverage']);
         $this->assertSame(0, $preview['customer_backups']['deleted']);
         $fresh = $customer->fresh();
-        $this->assertSame($before, [
+        $after = [
             [$fresh->email, $fresh->first_name, $fresh->last_name, $fresh->active, $fresh->billing_address],
             [$fresh->user->email, $fresh->user->name],
             $fresh->subscriptions()->count(),
             $fresh->websites()->count(),
-        ]);
+        ];
+        $this->assertSame($this->canonicalize($before), $this->canonicalize($after));
         $this->assertDatabaseHas('admin_audit_events', ['event' => 'privacy.closure.impact_previewed']);
         $this->assertTrue($owner->isOwner());
     }
@@ -248,5 +249,20 @@ class AccountClosureOrchestrationTest extends TestCase
         $this->assertDatabaseHas('privacy_request_events', ['privacy_request_id' => $case->id, 'event_type' => 'account_access_restored']);
         $this->assertSame(SubscriptionStatus::Canceled, $activeSubscription->fresh()->status);
         $this->assertSame(0, $customer->privacyRequests()->where('request_type', PrivacyRequestType::Erasure->value)->count());
+    }
+
+    private function canonicalize(array $value): array
+    {
+        foreach ($value as $key => $item) {
+            if (is_array($item)) {
+                $value[$key] = $this->canonicalize($item);
+            }
+        }
+
+        if (! array_is_list($value)) {
+            ksort($value);
+        }
+
+        return $value;
     }
 }

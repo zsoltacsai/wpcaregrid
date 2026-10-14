@@ -18,6 +18,7 @@ Wave 5 creates request metadata, a typed anonymization plan, and a read-only agg
 - Email-release helper creates a random UUID-backed `@privacy.invalid` replacement. No anonymization code consumes it in Wave 5.
 - Backup preview uses service `ended_at` plus RET-04 (30 days), separate from active-plan retention. It reports the next technical eligibility timestamp and candidate count, plus restore, active-operation, last-recovery-point, provider, legal, and security blockers. Zero days would only make a backup technically eligible; no synchronous deletion path exists.
 - Adversarial review found that a stale but unfinished backup could otherwise be counted as a technical candidate and that the initial age calculation did not account for artifacts completed after service end. The planner now calculates only verified/expired objects, starts the retention age from the later of service end and artifact completion, and surfaces unfinished/failed/corrupt states for manual review. A regression test covers both cases.
+- The first hosted MySQL run exposed an order-sensitive test comparison for a JSON billing-address object: MySQL normalized object-key order while preserving the same data. The assertion now recursively canonicalizes associative keys before comparing snapshots. No production code defect or data mutation was involved; the updated test and full exact-head CI are being rerun.
 - Accounting evidence remains a retention exception pending qualified accounting approval. Legal/security review and provider facts remain explicitly pending.
 
 ## Owner UI
