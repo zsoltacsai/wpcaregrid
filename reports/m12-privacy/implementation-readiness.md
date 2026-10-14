@@ -45,3 +45,13 @@ Report-only implementation is underway on `codex/m12-wave4-retention-engine` fro
 ## Recommended execution order
 
 W1 is complete. The next recommended implementation is Wave 4 report-only retention eligibility, which is marked READY NOW and must remain non-destructive. Develop W2/W3/W5 plumbing only in disabled or preview-only form while L/C/D facts are collected in parallel. Do not begin W7. W6 live deletion and W8 destructive staging validation stay gated until the prerequisites above are satisfied.
+
+## Latest verified implementation disposition — 2026-10-14
+
+The earlier “Wave 4 implementation update” and “Wave 4 report-only retention eligibility” execution-order text above are historical planning snapshots. They are superseded by the final implementation and staging evidence in `wave4-implementation-report.md`.
+
+- Wave 1 remains **CLOSED**.
+- Wave 4 — retention dry-run/report-only engine — is **CLOSED**. Implementation PR #46 merged as `6aa3b9bb2308f29148dbffae546f4eaa8a496a76`, guarded deployment of that exact code SHA to staging passed, and the final docs-only primary at the time of this update is `73ad1c1e669cd70c8a47edcac04e1d10a036eea0`. Exact implementation, report-merge, and post-merge CI runs are recorded in the implementation report.
+- Staging runtime remains the Wave 4 code SHA `6aa3b9bb2308f29148dbffae546f4eaa8a496a76`; later primary advances were report-only and did not require redeployment.
+- The engine stays report-only, source coverage is `PARTIAL`, and `M12_DESTRUCTIVE_RETENTION_ENABLED=false`. Legal/accounting/security review values remain provisional; this does not authorize deletion, anonymization, or provider calls.
+- Next recommended non-destructive implementation: Wave 5 erasure orchestration foundations (impact graph, request state/review workflow, provider-task status modeling) strictly report-only/no-op, with all unresolved legal/accounting/provider facts represented as explicit blockers. Wave 2/3 legal-dependent customer-facing export and legal-document publication remain gated by their stated reviews. Before starting the next wave, apply the global decision protocol and collect any new Owner/legal/accounting/security questions in one consolidated questionnaire.

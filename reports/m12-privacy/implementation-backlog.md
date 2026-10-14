@@ -49,3 +49,9 @@ Implementation is underway on fresh branch `codex/m12-wave4-retention-engine`, b
 ## Migration and rollout order
 
 Use additive/nullable schema, verifiable backfill only, explicit `legacy_unverified`, dual-read before old-field removal, and report-only comparison against manual samples. Rollback removes routes/feature exposure but preserves request/audit/document evidence. Never rollback a published legal version in place. Provider deletion and issued accounting records are not reversible; they require separate approval and synthetic validation.
+
+## Latest Wave 4 implementation status — 2026-10-14
+
+The preceding “Wave 4 implementation evidence update” and task-status table are the implementation-time snapshot. Wave 4 tasks W4.1–W4.6 are now **COMPLETE**: typed/versioned RET-01…RET-33 policy lifecycle; report-only evaluator and aggregate source adapters; Owner policy draft/preview/reporting-only activation center; partial/unknown coverage and legal/accounting blockers; safety, authorization, concurrency and regression tests; exact-SHA CI; normal merge; guarded staging deploy; authenticated Owner UI preview; and final closure evidence. See `wave4-implementation-report.md` for SHAs, CI run IDs, health, limitations, and no-destructive-action proof.
+
+Completion is limited to the report-only Wave 4 scope. Wave 5 remains eligible only as non-destructive impact-graph/request orchestration, while legal, accounting and provider facts stay blocked as documented. No destructive retention authorization or provider deletion is implied.
