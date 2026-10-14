@@ -32,6 +32,7 @@ enum OwnerAbility: string
     case OffersManage = 'offers.manage';
     case SystemView = 'system.view';
     case PrivacyRequestsView = 'privacy.requests.view';
+    case PrivacyRequestsManage = 'privacy.requests.manage';
     case PlatformBackupsManage = 'platform_backups.manage';
     case IntegrationsManage = 'integrations.manage';
     case BillingInvoicesView = 'billing.invoices.view';

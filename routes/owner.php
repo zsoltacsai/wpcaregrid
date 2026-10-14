@@ -16,6 +16,7 @@ use App\Http\Controllers\Owner\OperatorController;
 use App\Http\Controllers\Owner\OwnerSettingsController;
 use App\Http\Controllers\Owner\PlatformBackupsController;
 use App\Http\Controllers\Owner\PricingController;
+use App\Http\Controllers\Owner\PrivacyClosureController;
 use App\Http\Controllers\Owner\PrivacyRequestController;
 use App\Http\Controllers\Owner\PrivacyRetentionController;
 use App\Http\Controllers\Owner\RecoveryOfferController;
@@ -126,6 +127,12 @@ Route::prefix('owner')->name('owner.')->group(function () {
 
         Route::get('/system', SystemController::class)->middleware('can:owner.system.view')->name('system');
         Route::get('/privacy-requests', [PrivacyRequestController::class, 'index'])->middleware('can:owner.privacy.requests.view')->name('privacy-requests.index');
+        Route::get('/privacy-requests/closure', [PrivacyClosureController::class, 'create'])->middleware('can:owner.privacy.requests.manage')->name('privacy-requests.closure');
+        Route::post('/privacy-requests/closure/preview', [PrivacyClosureController::class, 'preview'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-requests.closure.preview');
+        Route::post('/privacy-requests/closure', [PrivacyClosureController::class, 'store'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-requests.closure.store');
+        Route::post('/privacy-requests/{privacyRequest}/transition', [PrivacyRequestController::class, 'transition'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-requests.transition');
+        Route::post('/privacy-requests/{privacyRequest}/restrict-account-access', [PrivacyRequestController::class, 'restrictAccountAccess'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-requests.restrict-account-access');
+        Route::post('/privacy-requests/{privacyRequest}/restore-account-access', [PrivacyRequestController::class, 'restoreAccountAccess'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-requests.restore-account-access');
         Route::get('/privacy-requests/{privacyRequest}', [PrivacyRequestController::class, 'show'])->middleware('can:owner.privacy.requests.view')->name('privacy-requests.show');
         Route::get('/settings/privacy-retention', [PrivacyRetentionController::class, 'index'])->middleware('can:owner.settings.manage')->name('privacy-retention.index');
         Route::post('/settings/privacy-retention/{policyKey}/draft', [PrivacyRetentionController::class, 'draft'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('privacy-retention.draft');

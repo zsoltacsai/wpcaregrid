@@ -19,6 +19,13 @@
         </div>
     </section>
 
+    <section class="mb-6 rounded-md border border-line bg-surface p-5">
+        <h2 class="text-base font-semibold">Account closure & erasure cases</h2>
+        <p class="mt-1 text-sm text-muted">Closure and erasure are separate recorded requests. Preview is aggregate-only. No account, subscription, website, backup, provider, or billing state is changed.</p>
+        <a class="mt-3 inline-block rounded-sm border border-line-strong px-3 py-2 text-sm" href="{{ route('owner.privacy-requests.closure') }}">Open closure impact preview</a>
+        <p class="mt-2 text-xs text-warning-ink">Erasure is not started by account closure. Legal/accounting/security approval is pending; destructive retention is disabled.</p>
+    </section>
+
     <section class="overflow-hidden rounded-md border border-line bg-surface">
         <div class="border-b border-line p-5"><h2 class="text-base font-semibold">RET-01 through RET-33</h2><p class="mt-1 text-sm text-muted">Versions are immutable after activation for reporting. Edits create a draft; draft impact must be previewed before activation.</p></div>
         <div class="overflow-x-auto">
