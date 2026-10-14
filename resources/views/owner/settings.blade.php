@@ -212,6 +212,7 @@
                                     </div>
                                     <p class="mt-1 text-muted">{{ $row['profile']->establishment_country }} · {{ $row['profile']->effective_from?->toDateString() }} — {{ $row['profile']->effective_to?->toDateString() ?? '∞' }}</p>
                                     <p class="mt-1">{{ $row['missing_fields'] === [] ? __('owner.settings.billing_tax.seller_profile_management.complete') : __('owner.settings.billing_tax.seller_profile_management.incomplete', ['fields' => implode(', ', $row['missing_fields'])]) }}</p>
+                                    @if ($row['profile']->supersedes_profile_id)<p class="mt-1 text-xs text-muted">{{ __('owner.settings.billing_tax.seller_profile_management.supersedes', ['version' => $row['profile']->supersedes?->version ?? '—']) }}</p>@endif
                                 </article>
                             @empty
                                 <p class="rounded-sm bg-canvas p-3 text-sm text-muted">{{ __('owner.settings.billing_tax.seller_profile_management.empty') }}</p>
@@ -220,30 +221,37 @@
                         <form method="POST" action="{{ route('owner.settings.seller-profiles.store') }}" class="mt-5 space-y-4">
                             @csrf
                             <h4 class="text-sm font-semibold">{{ __('owner.settings.billing_tax.seller_profile_management.new_version') }}</h4>
+                            <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.supersedes_label') }}
+                                <select name="supersedes_profile_id" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    <option value="">{{ __('owner.settings.billing_tax.seller_profile_management.no_supersession') }}</option>
+                                    @foreach ($billingTaxProfiles as $profile)<option value="{{ $profile->id }}">{{ __('owner.settings.billing_tax.seller_profile_management.supersede_option', ['version' => $profile->version, 'name' => $profile->legal_name]) }}</option>@endforeach
+                                </select>
+                            </label>
+                            <p class="text-xs text-muted">{{ __('owner.settings.billing_tax.seller_profile_management.supersession_note') }}</p>
                             <div class="grid gap-4 sm:grid-cols-2">
                                 <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.legal_name') }}
-                                    <input name="legal_name" required maxlength="200" autocomplete="organization" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    <input name="legal_name" maxlength="200" autocomplete="organization" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
                                 </label>
                                 <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.establishment_country') }}
-                                    <input name="establishment_country" required maxlength="2" pattern="[A-Za-z]{2}" autocomplete="country" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    <input name="establishment_country" maxlength="2" pattern="[A-Za-z]{2}" autocomplete="country" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
                                 </label>
                                 <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.address_line1') }}
-                                    <input name="seller_address[address_line1]" required maxlength="150" autocomplete="address-line1" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    <input name="seller_address[address_line1]" maxlength="150" autocomplete="address-line1" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
                                 </label>
                                 <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.address_line2') }}
                                     <input name="seller_address[address_line2]" maxlength="150" autocomplete="address-line2" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
                                 </label>
                                 <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.postal_code') }}
-                                    <input name="seller_address[postal_code]" required maxlength="30" autocomplete="postal-code" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    <input name="seller_address[postal_code]" maxlength="30" autocomplete="postal-code" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
                                 </label>
                                 <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.city') }}
-                                    <input name="seller_address[city]" required maxlength="120" autocomplete="address-level2" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    <input name="seller_address[city]" maxlength="120" autocomplete="address-level2" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
                                 </label>
                                 <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.region') }}
                                     <input name="seller_address[region]" maxlength="120" autocomplete="address-level1" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
                                 </label>
                                 <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.address_country') }}
-                                    <input name="seller_address[country_code]" required maxlength="2" pattern="[A-Za-z]{2}" autocomplete="country" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                    <input name="seller_address[country_code]" maxlength="2" pattern="[A-Za-z]{2}" autocomplete="country" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
                                 </label>
                                 <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.aam_status') }}
                                     <select name="aam_status" required class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
@@ -257,6 +265,9 @@
                                 </label>
                                 <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.evidence_reference') }}
                                     <input name="evidence_reference" maxlength="200" autocomplete="off" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                                </label>
+                                <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.aam_evidence_reference') }}
+                                    <input name="aam_evidence_reference" maxlength="200" autocomplete="off" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
                                 </label>
                                 <label class="block text-sm font-medium">{{ __('owner.settings.billing_tax.seller_profile_management.effective_from') }}
                                     <input type="date" name="effective_from" required value="{{ now()->toDateString() }}" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">

@@ -23,21 +23,53 @@ final class SellerTaxProfileRegistry
         $aamStatus = $this->enumValue($attributes['aam_status'] ?? AamStatus::Unknown, AamStatus::class, 'aam_status');
         $verificationStatus = $this->enumValue($attributes['verification_status'] ?? SellerTaxProfileStatus::Unverified, SellerTaxProfileStatus::class, 'verification_status');
         $evidenceReference = filled($attributes['evidence_reference'] ?? null) ? trim((string) $attributes['evidence_reference']) : null;
-        if (($verificationStatus === SellerTaxProfileStatus::Verified->value || $aamStatus === AamStatus::Confirmed->value) && ! $evidenceReference) {
-            throw ValidationException::withMessages(['evidence_reference' => 'Verified seller facts require an evidence reference.']);
+        $aamEvidenceReference = filled($attributes['aam_evidence_reference'] ?? null) ? trim((string) $attributes['aam_evidence_reference']) : null;
+        if ($aamStatus === AamStatus::Confirmed->value && ! $aamEvidenceReference) {
+            throw ValidationException::withMessages(['aam_evidence_reference' => 'Confirmed AAM status requires an AAM evidence reference.']);
         }
-        $country = isset($attributes['establishment_country']) ? strtoupper(trim((string) $attributes['establishment_country'])) : null;
+        $supersedesId = isset($attributes['supersedes_profile_id']) && $attributes['supersedes_profile_id'] !== ''
+            ? (int) $attributes['supersedes_profile_id']
+            : null;
+        $country = ! $supersedesId && isset($attributes['establishment_country'])
+            ? strtoupper(trim((string) $attributes['establishment_country']))
+            : null;
         if ($country !== null && ! preg_match('/^[A-Z]{2}$/', $country)) {
             throw ValidationException::withMessages(['establishment_country' => 'Use a two-letter country code.']);
         }
 
-        return DB::transaction(function () use ($attributes, $start, $end, $aamStatus, $verificationStatus, $country, $evidenceReference) {
+        return DB::transaction(function () use ($attributes, $start, $end, $aamStatus, $verificationStatus, $country, $evidenceReference, $aamEvidenceReference, $supersedesId) {
             $this->lockRegistry();
             $profiles = SellerTaxProfile::query()->orderBy('id')->lockForUpdate()->get();
+            $superseded = $supersedesId ? $profiles->firstWhere('id', $supersedesId) : null;
+            if ($supersedesId && (! $superseded || $superseded->effective_from?->gt($start)
+                || ($superseded->effective_to && $superseded->effective_to->lt($start))
+                || $profiles->contains(fn ($profile) => (int) $profile->supersedes_profile_id === $supersedesId))) {
+                throw ValidationException::withMessages(['supersedes_profile_id' => 'Choose an effective profile version that has not already been superseded.']);
+            }
+            $supersededIds = [];
+            for ($cursor = $superseded; $cursor; $cursor = $cursor->supersedes_profile_id
+                ? $profiles->firstWhere('id', (int) $cursor->supersedes_profile_id)
+                : null) {
+                $supersededIds[] = (int) $cursor->id;
+            }
+            $identity = $superseded ? [
+                'legal_name' => $superseded->legal_name,
+                'establishment_country' => $superseded->establishment_country,
+                'seller_address' => $superseded->seller_address,
+                'verification_status' => $superseded->verification_status->value,
+                'evidence_reference' => $superseded->evidence_reference,
+            ] : $attributes;
+            if (($identity['verification_status'] ?? null) === SellerTaxProfileStatus::Verified->value
+                && ! filled($identity['evidence_reference'] ?? null)) {
+                throw ValidationException::withMessages(['evidence_reference' => 'Verified seller facts require an identity evidence reference.']);
+            }
             foreach ($profiles as $profile) {
                 $existingStart = $profile->effective_from;
                 $existingEnd = $profile->effective_to;
                 if (! $existingStart) {
+                    continue;
+                }
+                if (in_array((int) $profile->id, $supersededIds, true)) {
                     continue;
                 }
                 $overlap = ($end === null || $existingStart->lte($end))
@@ -50,14 +82,16 @@ final class SellerTaxProfileRegistry
             $profile = new SellerTaxProfile;
             $profile->forceFill([
                 'version' => ((int) SellerTaxProfile::query()->max('version')) + 1,
-                'legal_name' => $attributes['legal_name'] ?? null,
-                'establishment_country' => $country,
-                'seller_address' => $attributes['seller_address'] ?? null,
+                'supersedes_profile_id' => $supersedesId,
+                'legal_name' => $identity['legal_name'] ?? null,
+                'establishment_country' => $identity['establishment_country'] ?? $country,
+                'seller_address' => $identity['seller_address'] ?? null,
                 'aam_status' => $aamStatus,
-                'verification_status' => $verificationStatus,
+                'verification_status' => $identity['verification_status'] ?? $verificationStatus,
                 'effective_from' => $start,
                 'effective_to' => $end,
-                'evidence_reference' => $evidenceReference,
+                'evidence_reference' => $identity['evidence_reference'] ?? $evidenceReference,
+                'aam_evidence_reference' => $aamEvidenceReference,
                 'created_by' => $attributes['created_by'] ?? null,
             ]);
             $profile->save();

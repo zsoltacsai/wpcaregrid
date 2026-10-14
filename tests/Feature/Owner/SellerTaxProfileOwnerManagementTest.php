@@ -61,6 +61,44 @@ final class SellerTaxProfileOwnerManagementTest extends TestCase
         $this->assertSame(2, AdminAuditEvent::query()->where('event', 'billing_tax.seller_profile_published')->count());
     }
 
+    public function test_owner_can_publish_an_explicit_same_day_correction_without_rewriting_the_prior_profile(): void
+    {
+        $this->asOwner();
+        $firstValues = $this->profileValues();
+        $firstValues['aam_status'] = 'unknown';
+        $firstValues['effective_from'] = '2026-10-14';
+        $this->post(route('owner.settings.seller-profiles.store'), $firstValues)->assertRedirect();
+        $first = SellerTaxProfile::query()->sole();
+        $oldEvidence = $first->evidence_reference;
+        $oldAttributes = $first->getAttributes();
+
+        $correctionValues = [
+            'aam_status' => 'confirmed',
+            'verification_status' => 'verified',
+            'effective_from' => '2026-10-14',
+            'effective_to' => '',
+            'aam_evidence_reference' => 'REF2610-ZTA-HU',
+            'supersedes_profile_id' => $first->id,
+        ];
+        $this->post(route('owner.settings.seller-profiles.store'), $correctionValues)->assertRedirect()->assertSessionHas('status');
+
+        $correction = SellerTaxProfile::query()->where('version', 2)->sole();
+        $this->assertSame($first->id, $correction->supersedes_profile_id);
+        $this->assertSame('confirmed', $correction->aam_status->value);
+        $this->assertSame($first->legal_name, $correction->legal_name);
+        $this->assertSame($first->establishment_country, $correction->establishment_country);
+        $this->assertSame($first->seller_address, $correction->seller_address);
+        $this->assertSame('unknown', $first->fresh()->aam_status->value);
+        $this->assertSame($oldEvidence, $first->fresh()->evidence_reference);
+        $this->assertSame($oldEvidence, $correction->evidence_reference);
+        $this->assertSame('REF2610-ZTA-HU', $correction->aam_evidence_reference);
+        $this->assertSame($oldAttributes, $first->fresh()->getAttributes());
+
+        $audit = AdminAuditEvent::query()->where('event', 'billing_tax.seller_profile_published')->orderByDesc('id')->firstOrFail();
+        $this->assertSame($first->id, $audit->data['supersedes_profile_id']);
+        $this->assertStringNotContainsString('REF2610-ZTA-HU', json_encode($audit->data, JSON_THROW_ON_ERROR));
+    }
+
     public function test_invalid_profile_is_rejected_without_flashing_submitted_identity_values(): void
     {
         $this->asOwner();
@@ -73,6 +111,18 @@ final class SellerTaxProfileOwnerManagementTest extends TestCase
             ->assertSessionHasErrors('seller_address.city');
 
         $this->assertSame([], $response->getSession()->get('_old_input', []));
+        $this->assertSame(0, SellerTaxProfile::query()->count());
+    }
+
+    public function test_confirmed_aam_requires_a_separate_aam_evidence_reference(): void
+    {
+        $this->asOwner();
+        $values = $this->profileValues();
+        $values['aam_status'] = 'confirmed';
+
+        $this->post(route('owner.settings.seller-profiles.store'), $values)
+            ->assertSessionHasErrors('aam_evidence_reference');
+
         $this->assertSame(0, SellerTaxProfile::query()->count());
     }
 
