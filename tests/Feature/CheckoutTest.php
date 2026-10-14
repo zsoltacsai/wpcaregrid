@@ -256,7 +256,10 @@ class CheckoutTest extends TestCase
         $this->assertSame('price_wordpress_business_monthly_HUF', $intent->stripe_price_id);
         $this->assertNotNull($intent->uuid);
         $this->assertSame('individual', $intent->customer_type);
-        $this->assertSame(['line1' => 'Teszt utca 1.', 'line2' => null, 'postal_code' => '1011', 'city' => 'Budapest'], $intent->billing_address);
+        $this->assertSame('Teszt utca 1.', $intent->billing_address['line1']);
+        $this->assertNull($intent->billing_address['line2']);
+        $this->assertSame('1011', $intent->billing_address['postal_code']);
+        $this->assertSame('Budapest', $intent->billing_address['city']);
     }
 
     public function test_guest_checkout_requires_complete_billing_identity_before_any_checkout_side_effect(): void

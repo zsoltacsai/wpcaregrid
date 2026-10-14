@@ -175,6 +175,15 @@ final class StartCheckout
             && $intent->customer_type === $customer->customerType
             && $intent->company_name === $customer->companyName
             && $intent->taxIdentifier() === $customer->taxId
-            && ($intent->billing_address ?? []) === ($customer->billingAddress ?? []);
+            && $this->canonicalBillingAddress($intent->billing_address) === $this->canonicalBillingAddress($customer->billingAddress);
+    }
+
+    /** @param array<string, mixed>|null $address @return array<string, mixed> */
+    private function canonicalBillingAddress(?array $address): array
+    {
+        $address ??= [];
+        ksort($address, SORT_STRING);
+
+        return $address;
     }
 }
