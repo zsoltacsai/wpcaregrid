@@ -59,3 +59,42 @@ Local validation against an archive of the exact verified `3e48d488ed1fa01f39ef4
 - No staging deploy or staging mutation has been attempted yet. Strict SSH fingerprint verification, exact merged SHA, synthetic-only staging validation, final health checks, and final evidence merge remain pending.
 
 Record final implementation head, PR, exact-head CI run IDs, merge SHA, final primary SHA, staging SHA, synthetic staging checks and final health here before declaring Wave 4 closed.
+
+## Final closure evidence — 2026-10-14
+
+This append-only section records the completed release and staging verification. The earlier pending statements above describe the implementation-time snapshot and remain as historical evidence; this section supersedes them for final status.
+
+### Repository and CI
+
+- Verified implementation branch: `codex/m12-wave4-retention-engine`.
+- Implementation head: `e732755ce99667f83ad3d02507aaabb983065ae3`.
+- PR #46 merged normally: <https://github.com/zsoltacsai/wpcaregrid/pull/46>.
+- Merge commit and verified primary branch SHA (`claude/ecstatic-wozniak-oemyuf`): `6aa3b9bb2308f29148dbffae546f4eaa8a496a76`.
+- Exact PR-head CI run `38621754408` passed all five required jobs: Quality/security/build (`116050763894`), Server SQLite (`116050763959`), Server MySQL (`116050763632`), Connector SQLite (`116050763847`), and Connector MySQL (`116050763969`).
+- The MySQL suite passed with 1,232 tests and 17,601 assertions. Required MySQL process-concurrency checks, migration fresh/rollback/re-migrate, system check, and production-cache HTTP smoke all passed.
+- Post-merge CI run `38623714952` passed all five jobs on the exact primary merge SHA. Job IDs: Quality/security/build `116057428913`, Server SQLite `116057429056`, Server MySQL `116057429215`, Connector SQLite `116057428895`, Connector MySQL `116057428603`. The post-merge MySQL suite also passed with 1,232 tests and 17,601 assertions, including the process-concurrency gate.
+
+### Guarded staging release
+
+- Staging host key was independently scanned immediately before deployment and matched the Owner-approved Ed25519 fingerprint `SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`. SSH used `StrictHostKeyChecking=yes` and the pinned `known_hosts` file.
+- Pre-deploy staging SHA: `dcd072a89910078bb7ebed308c88bfa6c7957ebf`; the checkout was clean. The documented guarded deployment script deployed the exact green merge SHA `6aa3b9bb2308f29148dbffae546f4eaa8a496a76`.
+- The script created and retained protected pre-deploy DB backup `/home/deploy/private-backups/wpcaregrid-pre-deploy-20261014T193920Z.sql.gz` before changing runtime code.
+- Migration `2026_10_14_000003_add_m12_wave4_report_only_retention` completed successfully. Application caches rebuilt, both queue workers restarted, the scheduler resumed and reported a healthy heartbeat.
+- Post-deploy checkout HEAD is the target SHA. `/up` returned 200; deployment smoke probes passed for public routes, protected paths, and Owner-route guest authentication redirect.
+- Post-deploy `system:check --json`: application, MySQL database (zero pending migrations), queue (zero failed jobs), scheduler, Connector API, Stripe TEST, Cloudflare, backup storage, mail, safety, and privacy-retention all `OK`. Both `wpcaregrid-default` and `wpcaregrid-backups` workers were `RUNNING`. Active restores were 0. Privacy health reported `REPORT ONLY`, `PARTIAL` coverage, 29 review-gated policies, and destructive retention `false` / `Off`.
+- The existing security-scanner `WARNING` remains: no completed scan and vulnerability data is not configured. This unrelated pre-existing condition is surfaced and was not changed or represented as healthy.
+
+### Authenticated Owner Console validation
+
+- The Owner signed in manually in a newly opened isolated Codex in-app staging tab; the verified page hostname was `staging.wpcaregrid.com`, and the route displayed `Privacy & Retention · WP CareGrid Owner`.
+- The page displayed all 33 distinct RET-01…RET-33 policy keys, report-only mode, destructive retention disabled, partial source coverage, actual deletions `0`, and separate Owner/legal/accounting/security review states. Provisional legal/accounting states remained visible; no approval references were fabricated.
+- To exercise the draft → preview → reporting-only activation workflow without changing the approved policy value, a staging-only RET-04 v2 draft was created at the existing 30-day value. Its aggregate impact preview was generated at `2026-10-14 19:43:21 UTC`, marked `PARTIAL`, and reported actual deletions `0`. The same-value v2 policy was activated for reporting only. The UI confirmed: “No records were changed.”
+- The Owner UI and preview disclose counts only, not customer names, emails, site URLs, raw provider payloads, or accounting content. A database count check after the drill reported 34 policy versions/rows (33 seeded defaults plus the same-value RET-04 v2), 1 preview, 0 active restores, and 0 failed jobs. No customer or synthetic account records were created or changed for this drill; the preview used the engine's aggregate, read-only staging scans. Deterministic synthetic edge cases are covered by automated tests.
+- The report-only route exposed no customer retention controls. The reporting activation did not enqueue jobs or call provider deletion APIs.
+
+### Safety and closure conclusion
+
+- No production system was accessed or changed. No customer record, backup, invoice, Connector, Stripe resource, or provider object was mutated or deleted.
+- No anonymization, retention cleanup, backup deletion, or provider deletion API exists in the Wave 4 execution path. Staging validation confirmed the destructive gate remains false, actual deletions remain zero, and no restore was active.
+- No legal, accounting, or security review state was changed to approved. Missing qualified approvals remain explicit blockers on any hypothetical future destructive action; Wave 4 has no destructive action pathway.
+- Wave 4 engineering, required exact-head CI, merge, guarded staging deployment, and authenticated report-only Owner UI validation are complete. The final closure-evidence report commit/PR and its exact-head CI are tracked after this implementation merge; this report-only change does not require another staging deployment.
