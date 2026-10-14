@@ -9,6 +9,7 @@ use App\Models\PrivacyRetentionPreview;
 use App\Models\Subscription;
 use App\Models\Website;
 use App\Privacy\DestructiveRetentionGate;
+use App\Privacy\CanonicalJson;
 use App\Privacy\RetentionEligibilityEvaluator;
 use App\Privacy\RetentionPolicyDefaults;
 use App\Privacy\RetentionPolicyWorkflow;
@@ -38,7 +39,13 @@ class RetentionEligibilityTest extends TestCase
             $this->assertSame($definition['category'], $policy->category_code, $key.' category');
             $this->assertSame($definition['trigger'], $policy->trigger_code, $key.' trigger');
             $this->assertSame($definition['type'], $policy->setting_type, $key.' type');
-            $this->assertSame($definition['value'], $policy->technical_value, $key.' value');
+            if (is_array($definition['value'])) {
+                foreach ($definition['value'] as $valueKey => $expectedValue) {
+                    $this->assertSame($expectedValue, $policy->technical_value[$valueKey] ?? null, $key.' value '.$valueKey);
+                }
+            } else {
+                $this->assertSame($definition['value'], $policy->technical_value, $key.' value');
+            }
             $this->assertSame($definition['compliance_lock'], $policy->compliance_lock, $key.' lock');
             $this->assertSame($definition['legal'] ? 'wait_legal' : 'not_required', $policy->legal_review_status, $key.' legal state');
             $this->assertSame($definition['accounting'] ? 'wait_accounting' : 'not_required', $policy->accounting_review_status, $key.' accounting state');
@@ -64,6 +71,14 @@ class RetentionEligibilityTest extends TestCase
         $this->assertSame('ELIGIBLE_DRY_RUN', $zero['result_code']);
         $this->assertSame('REPORT_ONLY', $zero['action']);
         $this->assertArrayNotHasKey('delete', $zero);
+    }
+
+    public function test_preview_hash_serialization_is_independent_of_json_object_key_order(): void
+    {
+        $this->assertSame(
+            CanonicalJson::encode(['value' => 7, 'unit' => 'days']),
+            CanonicalJson::encode(['unit' => 'days', 'value' => 7]),
+        );
     }
 
     public function test_missing_source_and_multiple_compliance_safety_blockers_are_preserved(): void

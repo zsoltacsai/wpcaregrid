@@ -25,7 +25,7 @@ final class RetentionSourceScanner
             }
         }
         $activePolicies = array_replace($activePolicies, $overrides);
-        $policyWatermark = hash('sha256', json_encode($activePolicies, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+        $policyWatermark = hash('sha256', CanonicalJson::encode($activePolicies));
 
         if (Schema::hasTable('backups') && Schema::hasTable('subscriptions')) {
             $query = DB::table('backups as b')->join('websites as w', 'w.id', '=', 'b.website_id')

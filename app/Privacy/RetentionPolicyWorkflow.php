@@ -57,7 +57,7 @@ final class RetentionPolicyWorkflow
         $summary = $this->summary($scan);
         $sourceWatermark = hash('sha256', ($scan['watermark'] ?? 'unknown').'|'.($scan['policy_watermark'] ?? 'unknown'));
         $evaluatedAt = now('UTC');
-        $hash = hash('sha256', implode('|', [$policy->uuid, $policy->version, json_encode($policy->technical_value, JSON_THROW_ON_ERROR), $policy->effective_at?->utc()->toIso8601String(), $evaluatedAt->toIso8601String(), $sourceWatermark, json_encode($summary, JSON_THROW_ON_ERROR)]));
+        $hash = hash('sha256', implode('|', [$policy->uuid, $policy->version, CanonicalJson::encode($policy->technical_value), $policy->effective_at?->utc()->toIso8601String(), $evaluatedAt->toIso8601String(), $sourceWatermark, CanonicalJson::encode($summary)]));
         $preview = PrivacyRetentionPreview::query()->firstOrCreate(['preview_hash' => $hash], [
             'uuid' => (string) Str::uuid(), 'policy_id' => $policy->id, 'policy_version' => $policy->version,
             'evaluated_at' => $evaluatedAt, 'engine_version' => RetentionEligibilityEvaluator::ENGINE_VERSION,
@@ -88,7 +88,7 @@ final class RetentionPolicyWorkflow
             if (! hash_equals((string) $preview->source_watermark, $sourceWatermark)) {
                 throw ValidationException::withMessages(['preview' => 'Source data changed after preview. Generate a fresh preview.']);
             }
-            $expectedHash = hash('sha256', implode('|', [$locked->uuid, $locked->version, json_encode($locked->technical_value, JSON_THROW_ON_ERROR), $locked->effective_at?->utc()->toIso8601String(), $preview->evaluated_at->utc()->toIso8601String(), $sourceWatermark, json_encode($preview->summary, JSON_THROW_ON_ERROR)]));
+            $expectedHash = hash('sha256', implode('|', [$locked->uuid, $locked->version, CanonicalJson::encode($locked->technical_value), $locked->effective_at?->utc()->toIso8601String(), $preview->evaluated_at->utc()->toIso8601String(), $sourceWatermark, CanonicalJson::encode($preview->summary)]));
             if (! hash_equals((string) $preview->preview_hash, $expectedHash)) {
                 throw ValidationException::withMessages(['preview' => 'Preview does not match this immutable policy version. Generate a fresh preview.']);
             }
