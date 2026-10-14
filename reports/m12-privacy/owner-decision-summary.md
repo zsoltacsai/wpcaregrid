@@ -2,6 +2,21 @@
 
 > **Wave 4 supplement — 2026-10-14:** For retention settings, use the consolidated RET-01…RET-33 questionnaire in `retention-defaults-questionnaire.md`. The Owner may accept all recommended technical/product defaults or provide compact overrides. This does not approve legal/accounting values; compliance-locked policies remain view-only, and engineering safety guards are not Owner toggles. Wave 4 has no deletion behavior.
 
+## Owner decision — RET-01 through RET-33 accepted — 2026-10-14
+
+The Owner responded **ACCEPT ALL RECOMMENDED TECHNICAL/PRODUCT DEFAULTS**. Every RET default is therefore **OWNER_APPROVED** as an initial product/engineering default, subject to the row-specific review state below. This approval is not legal advice, accounting approval, statutory retention determination, or permission to delete/anonymize/provider-delete data. See `final-decision-register.md` for the complete decision register and `retention-defaults-questionnaire.md` for individual rationale and response detail.
+
+| IDs | Accepted defaults | Remaining state |
+|---|---|---|
+| RET-01–RET-06 | 14-day account closure delay; profile anonymization; unique non-deliverable email placeholder; 30-day post-service backup eligibility; 24-hour export link; 7-day export artifact | Legal/accounting exceptions and rights-delivery questions remain provisional where tagged; no destructive action |
+| RET-07–RET-12 | 30-day raw webhook; 365-day minimized idempotency evidence; 30-day rendered email; 180-day delivery metadata; 30-day identifying logs; provisional 365-day security/audit horizon | PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING and security review as applicable |
+| RET-13–RET-16 | 30-day synthetic staging; 30-day retry then manual review; provisional 3-year case history; separate 14-day erasure cancellation window | Review-gated periods remain provisional; provider confirmation invariant unchanged |
+| RET-17–RET-25 | Tombstone replay; destructive retention OFF; mandatory dry-run and preview approval; future batch 25 (inactive); restore/update/compensation/last-recovery-point guards; provider confirmation | Locked safety behavior is non-configurable; tombstone duration and exceptions remain review-gated |
+| RET-26–RET-27 | Separate accounting evidence from erasable profile; do not rewrite historical snapshots | PROVISIONAL / WAIT_ACCOUNTING / WAIT_LEGAL; no accounting period chosen; compliance lock required after approval |
+| RET-28–RET-33 | UTC policy effective time; immutable versioning; mandatory impact preview; category-specific rules; no tenant overrides initially; active-plan retention separate from 30-day post-service rule | Owner/product default resolved; legal/accounting category values and contract/notice review remain as tagged |
+
+`M12_DESTRUCTIVE_RETENTION_ENABLED=false` remains mandatory. The Wave 4 report-only evaluator may begin without further Owner product-policy questions. Legal/accounting review is still required before compliance activation or any destructive-retention wave.
+
 This is a product/operations review, not a legal or accounting questionnaire. Recommendations below are reversible implementation defaults; approving them does not approve legal content, a retention period, a lawful basis, or destructive deletion.
 
 | Decision | Proposed Owner default | Reason | Customer impact | Operational impact | Reversible? |

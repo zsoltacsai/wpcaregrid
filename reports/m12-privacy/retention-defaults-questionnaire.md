@@ -479,6 +479,48 @@ Reply with **ACCEPT ALL RECOMMENDED TECHNICAL/PRODUCT DEFAULTS**, or list compac
 | RET-32 | No tenant-specific overrides in initial scope | [RECOMMENDED] [OWNER PRODUCT DECISION] [LEGAL/ACCOUNTING REVIEW BEFORE FUTURE OVERRIDE] |
 | RET-33 | Preserve active-plan semantics; separate 30-day post-service policy | [RECOMMENDED] [OWNER CONFIGURABLE POST-SERVICE] [LEGAL REVIEW] [SECURITY REVIEW] |
 
+### Owner acceptance record — 2026-10-14
+
+Owner decision received: **ACCEPT ALL RECOMMENDED TECHNICAL/PRODUCT DEFAULTS**. Each row below records the accepted technical/product default separately from any outstanding compliance approval.
+
+| ID | Owner disposition | Compliance / safety disposition |
+|---|---|---|
+| RET-01 | OWNER_APPROVED — 14-day account closure cooling-off | No statutory-right conclusion; legal review only if interaction with legal deadlines is asserted |
+| RET-02 | OWNER_APPROVED — anonymize linked profile, retain opaque ID where needed | PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING for scope and exceptions |
+| RET-03 | OWNER_APPROVED — unique non-deliverable placeholder; free original email for new registration | PROVISIONAL / WAIT_LEGAL for retained linkage; security review required |
+| RET-04 | OWNER_APPROVED — 30-day post-service backup eligibility | PROVISIONAL / WAIT_LEGAL for retention/notice; not deletion authorization |
+| RET-05 | OWNER_APPROVED — 24-hour signed export link | PROVISIONAL / WAIT_LEGAL for delivery/rights procedure; SECURITY_REVIEW |
+| RET-06 | OWNER_APPROVED — 7-day maximum export artifact | PROVISIONAL / WAIT_LEGAL for request workflow; SECURITY_REVIEW |
+| RET-07 | OWNER_APPROVED — 30-day raw webhook payload | PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-08 | OWNER_APPROVED — 365-day minimized idempotency evidence | PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-09 | OWNER_APPROVED — 30-day rendered email content | PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-10 | OWNER_APPROVED — 180-day minimized delivery metadata | PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-11 | OWNER_APPROVED — 30-day identifying application logs; minimize first | PROVISIONAL / WAIT_LEGAL / SECURITY_REVIEW |
+| RET-12 | OWNER_APPROVED — provisional 365-day engineering horizon | PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW; no compliance activation |
+| RET-13 | OWNER_APPROVED — 30-day synthetic-only staging account eligibility | SECURITY_REVIEW; legal review if personal data is present |
+| RET-14 | OWNER_APPROVED — bounded 30-day retry then manual_review | PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW; provider confirmation stays mandatory |
+| RET-15 | OWNER_APPROVED — provisional 3-year minimal case history | PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-16 | OWNER_APPROVED — separate 14-day erasure-request cancellation window | PROVISIONAL / WAIT_LEGAL for interaction with rights timelines; SECURITY_REVIEW |
+| RET-17 | OWNER_APPROVED — tombstone replay enabled; no duration selected | PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW; replay safety remains locked |
+| RET-18 | OWNER_APPROVED — destructive retention OFF | LOCKED SAFETY; `M12_DESTRUCTIVE_RETENTION_ENABLED=false` |
+| RET-19 | OWNER_APPROVED — mandatory dry-run before future action | LOCKED SAFETY |
+| RET-20 | OWNER_APPROVED — Owner approval of impact preview after policy change | LOCKED SAFETY; category-specific legal/accounting review still applies |
+| RET-21 | OWNER_APPROVED — future batch default 25; inactive in Wave 4 | LOCKED OUT OF WAVE 4; no execution |
+| RET-22 | OWNER_APPROVED — active restore always blocks backup deletion | LOCKED SAFETY |
+| RET-23 | OWNER_APPROVED — active update/compensation always blocks deletion | LOCKED SAFETY |
+| RET-24 | OWNER_APPROVED — protect last verified recovery point | LOCKED SAFETY |
+| RET-25 | OWNER_APPROVED — provider confirmation required for completion | LOCKED SAFETY; provider-specific legal/accounting exceptions remain reviewable |
+| RET-26 | OWNER_APPROVED — separate accounting evidence from erasable profile; no period chosen | PROVISIONAL / WAIT_ACCOUNTING / WAIT_LEGAL; compliance-locked after qualified approval |
+| RET-27 | OWNER_APPROVED — do not rewrite immutable accounting snapshots during profile anonymization | PROVISIONAL / WAIT_ACCOUNTING / WAIT_LEGAL for scope and exceptions |
+| RET-28 | OWNER_APPROVED — explicit UTC effective time for each policy version | Category-specific legal/accounting approval remains required |
+| RET-29 | OWNER_APPROVED — mandatory immutable versioning | LOCKED ENGINEERING SAFETY |
+| RET-30 | OWNER_APPROVED — mandatory policy impact preview | LOCKED ENGINEERING SAFETY |
+| RET-31 | OWNER_APPROVED — category-specific retention rules | Category-specific legal/accounting values remain provisional |
+| RET-32 | OWNER_APPROVED — no tenant-specific overrides in initial scope | Future contractual exceptions require separate legal/accounting review |
+| RET-33 | OWNER_APPROVED — preserve active-plan semantics; separate 30-day post-service rule | PROVISIONAL / WAIT_LEGAL for existing commitments and notice; SECURITY_REVIEW |
+
+This approval is product/engineering Owner approval only. It does not approve a lawful basis, statutory duration, legal notice, accounting minimum, or destructive action. No value with a pending legal/accounting/security review may be compliance-activated or used for destructive retention until the required approval is recorded.
+
 This index is the concise response surface; the detailed decision blocks above define impact, reversibility and review dependencies. For every `[LEGAL REVIEW]` or `[ACCOUNTING REVIEW]` item, accepting the technical recommendation leaves the policy provisional until the qualified approval and reference are recorded.
 
 - **Owner-configurable operational policy:** RET-01, RET-04–RET-16 where reviews permit, RET-28 effective timestamp, and future operational category values. All bounds, versioning and impact preview remain enforced.
