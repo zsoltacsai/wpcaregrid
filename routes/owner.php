@@ -17,6 +17,7 @@ use App\Http\Controllers\Owner\OwnerSettingsController;
 use App\Http\Controllers\Owner\PlatformBackupsController;
 use App\Http\Controllers\Owner\PricingController;
 use App\Http\Controllers\Owner\RecoveryOfferController;
+use App\Http\Controllers\Owner\SellerTaxProfileController;
 use App\Http\Controllers\Owner\SeoController;
 use App\Http\Controllers\Owner\SyntheticSzamlazzTestController;
 use App\Http\Controllers\Owner\SystemController;
@@ -136,6 +137,7 @@ Route::prefix('owner')->name('owner.')->group(function () {
         // invalid section probes cannot bypass the Owner login redirect.
         Route::get('/settings/{section?}', [OwnerSettingsController::class, 'show'])->middleware('can:owner.settings.manage')->name('settings.index');
         Route::put('/settings/{section}', [OwnerSettingsController::class, 'update'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('settings.update');
+        Route::post('/settings/billing-tax/seller-profiles', [SellerTaxProfileController::class, 'store'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('settings.seller-profiles.store');
         Route::post('/settings/mail/test', [OwnerSettingsController::class, 'sendTest'])->middleware(['can:owner.settings.manage', 'throttle:owner-settings-mail'])->name('settings.mail.test');
 
         Route::get('/integrations', [IntegrationCredentialController::class, 'index'])->middleware('can:owner.integrations.manage')->name('integrations.index');

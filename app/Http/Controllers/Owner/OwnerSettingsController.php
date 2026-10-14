@@ -13,6 +13,7 @@ use App\Owner\SystemStatus;
 use App\Pricing\PriceKey;
 use App\Pricing\PricingCatalog;
 use App\Pricing\StripePriceVerifier;
+use App\Tax\SellerTaxProfileCompleteness;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -25,7 +26,7 @@ use Throwable;
 
 final class OwnerSettingsController extends Controller
 {
-    public function show(OwnerSettings $settings, IntegrationCredentials $credentials, PricingCatalog $catalog, SzamlazzBillingSettings $billingSettings, ?string $section = null): View
+    public function show(OwnerSettings $settings, IntegrationCredentials $credentials, PricingCatalog $catalog, SzamlazzBillingSettings $billingSettings, SellerTaxProfileCompleteness $sellerProfileCompleteness, ?string $section = null): View
     {
         $section ??= 'general';
         abort_unless(in_array($section, OwnerSettings::GROUPS, true), 404);
@@ -52,6 +53,8 @@ final class OwnerSettingsController extends Controller
             }
         }
 
+        $sellerProfiles = $billingSettings->sellerProfiles();
+
         return view('owner.settings', [
             'section' => $section,
             'sections' => OwnerSettings::GROUPS,
@@ -66,7 +69,11 @@ final class OwnerSettingsController extends Controller
             'billingTaxValues' => $billingSettings->values(),
             'billingTaxCurrent' => $billingSettings->current(),
             'billingTaxVersions' => $billingSettings->history(),
-            'billingTaxProfiles' => $billingSettings->sellerProfiles(),
+            'billingTaxProfiles' => $sellerProfiles,
+            'sellerProfileRows' => $sellerProfiles->map(fn ($profile) => [
+                'profile' => $profile,
+                'missing_fields' => $sellerProfileCompleteness->missingFields($profile),
+            ]),
             'billingTaxCodes' => SzamlazzTaxCodeRegistry::all(),
             'invoiceIssuanceGates' => [
                 'provider_enabled' => (bool) config('szamlazz.provider_enabled'),
