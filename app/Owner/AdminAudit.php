@@ -25,7 +25,7 @@ final class AdminAudit
         'operator.invited', 'operator.invitation_resent', 'operator.permissions_changed', 'operator.disabled', 'operator.enabled',
         'stripe.verified',
         'integration_credential.updated', 'integration_credential.cleared',
-        'billing_tax.configuration_published', 'billing_tax.seller_profile_published', 'billing_tax.review_proposed', 'billing_tax.issuance_reconciliation',
+        'billing_tax.configuration_published', 'billing_tax.seller_profile_published', 'billing_tax.review_proposed', 'billing_tax.intent_snapshot_refreshed', 'billing_tax.tax_decision_approved', 'billing_tax.local_invoice_validation', 'billing_tax.issuance_reconciliation',
         'billing_tax.synthetic_test_prepared', 'billing_tax.synthetic_test_submission_started',
         'billing_tax.synthetic_test_issued', 'billing_tax.synthetic_test_rejected',
         'billing_tax.synthetic_test_ambiguous', 'billing_tax.synthetic_test_reconciled',

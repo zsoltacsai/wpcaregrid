@@ -3,6 +3,21 @@
     @if ($intent->status === \App\Invoicing\InvoiceIntentStatus::BlockedTaxReview)
         <p class="mb-5 text-sm text-warning-ink">{{ __('owner.invoice_intents.proposal_not_approval') }}</p>
     @endif
+    @if ($canRefreshTaxSnapshot)
+        <section class="mb-5 rounded-md border border-line bg-surface p-4">
+            <p class="text-sm text-muted">{{ __('owner.invoice_intents.refresh_explainer') }}</p>
+            <form method="POST" action="{{ route('owner.billing.invoice-intents.refresh-tax-snapshot', $intent) }}" class="mt-3">
+                @csrf
+                <button class="h-10 rounded-sm border border-line-strong px-4 text-sm font-semibold text-primary">{{ __('owner.invoice_intents.refresh_snapshot') }}</button>
+            </form>
+        </section>
+    @endif
+    @if ($canRunLocalDryRun)
+        <section class="mb-5 rounded-md border border-line bg-surface p-4">
+            <p class="text-sm text-muted">{{ __('owner.invoice_intents.local_validation_explainer') }}</p>
+            <form method="POST" action="{{ route('owner.billing.invoice-intents.local-dry-run', $intent) }}" class="mt-3">@csrf<button class="h-10 rounded-sm border border-line-strong px-4 text-sm font-semibold text-primary">{{ __('owner.invoice_intents.run_local_validation') }}</button></form>
+        </section>
+    @endif
     <div class="mb-5"><a class="text-sm underline" href="{{ route('owner.billing.invoice-intents.index') }}">{{ __('owner.invoice_intents.back') }}</a></div>
     <dl class="grid gap-3 rounded-md border border-line bg-surface p-5 sm:grid-cols-2">
         <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.customer') }}</dt><dd>{{ $intent->customer?->email ?? '—' }}</dd></div>
@@ -83,6 +98,20 @@
                 <p class="mt-1 text-xs text-muted">{{ $review->created_at?->translatedFormat('j M Y H:i:s') }} · {{ $review->actor?->email ?? '—' }} · {{ __('owner.invoice_intents.configuration_version') }} {{ $review->configurationVersion?->version ?? '—' }}</p>
                 <p class="mt-2 text-sm">{{ $review->justification }}</p>
                 @if($review->basis_reference)<p class="mt-1 text-xs text-muted">{{ __('owner.invoice_intents.basis_reference') }}: {{ $review->basis_reference }}</p>@endif
+                @if ($canApproveTaxReview && $review->status === 'proposed_pending_accountant')
+                    <form method="POST" action="{{ route('owner.billing.invoice-intents.tax-review.approve', [$intent, $review]) }}" class="mt-4 space-y-3 border-t border-line pt-4">
+                        @csrf
+                        <p class="text-sm text-warning-ink">{{ __('owner.invoice_intents.approval_explainer') }}</p>
+                        <label class="block text-sm font-medium">{{ __('owner.invoice_intents.approval_authority') }}
+                            <select name="approval_authority" required class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm"><option value="accountant">{{ __('owner.invoice_intents.accountant') }}</option><option value="tax_counsel">{{ __('owner.invoice_intents.tax_counsel') }}</option></select>
+                        </label>
+                        <label class="block text-sm font-medium">{{ __('owner.invoice_intents.approval_reference') }}
+                            <input name="approval_reference" maxlength="200" required autocomplete="off" class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm">
+                        </label>
+                        <label class="flex items-start gap-2 text-sm"><input type="checkbox" name="confirm_approved_decision" value="1" required class="mt-1">{{ __('owner.invoice_intents.confirm_approved_decision') }}</label>
+                        <button class="h-10 rounded-sm border border-line-strong px-4 text-sm font-semibold text-primary">{{ __('owner.invoice_intents.record_approval') }}</button>
+                    </form>
+                @endif
             </li>
         @empty
             <li class="rounded-md border border-line bg-surface p-4 text-sm text-muted">{{ __('owner.invoice_intents.no_tax_reviews') }}</li>

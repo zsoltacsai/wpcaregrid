@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Tax\AamStatus;
 use App\Tax\SellerTaxProfileStatus;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use LogicException;
 
@@ -13,7 +14,7 @@ class SellerTaxProfile extends Model
 {
     protected $guarded = ['*'];
 
-    protected $hidden = ['legal_name', 'seller_address', 'evidence_reference'];
+    protected $hidden = ['legal_name', 'seller_address', 'evidence_reference', 'aam_evidence_reference'];
 
     protected static function booted(): void
     {
@@ -35,5 +36,10 @@ class SellerTaxProfile extends Model
     public function registrations(): HasMany
     {
         return $this->hasMany(SellerTaxRegistration::class);
+    }
+
+    public function supersedes(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'supersedes_profile_id');
     }
 }

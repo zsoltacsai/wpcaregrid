@@ -181,9 +181,9 @@ class TaxFoundationTest extends TestCase
                 'effective_from' => '2026-01-01',
                 'aam_status' => AamStatus::Confirmed,
             ]);
-            $this->fail('A confirmed seller tax fact needs an evidence reference.');
+            $this->fail('A confirmed seller tax fact needs a separate AAM evidence reference.');
         } catch (ValidationException $exception) {
-            $this->assertArrayHasKey('evidence_reference', $exception->errors());
+            $this->assertArrayHasKey('aam_evidence_reference', $exception->errors());
         }
 
         $profile = app(SellerTaxProfileRegistry::class)->publish([
@@ -191,6 +191,7 @@ class TaxFoundationTest extends TestCase
             'aam_status' => AamStatus::Confirmed,
             'verification_status' => SellerTaxProfileStatus::Verified,
             'evidence_reference' => 'accountant-letter-test-001',
+            'aam_evidence_reference' => 'accountant-aam-letter-test-001',
             'seller_address' => ['country' => 'HU'],
         ]);
 

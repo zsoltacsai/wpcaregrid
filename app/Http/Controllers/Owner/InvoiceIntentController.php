@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Owner;
 
 use App\Billing\SzamlazzBillingSettings;
 use App\Http\Controllers\Controller;
+use App\Invoicing\InvoiceIntentLocalDryRun;
 use App\Invoicing\InvoiceIntentStatus;
+use App\Invoicing\InvoiceIntentWorkflow;
 use App\Invoicing\InvoiceIssuanceWorkflow;
 use App\Invoicing\SzamlazzTaxCodeRegistry;
 use App\Models\InvoiceIntent;
@@ -54,7 +56,41 @@ final class InvoiceIntentController extends Controller
             'canProposeTaxReview' => $invoiceIntent->status === InvoiceIntentStatus::BlockedTaxReview
                 && $invoiceIntent->billing_tax_configuration_version_id !== null
                 && ($invoiceIntent->commercial_snapshot['billing_tax_configuration']['tax_configuration_mode'] ?? null) === 'manual_review',
+            'canApproveTaxReview' => $invoiceIntent->status === InvoiceIntentStatus::BlockedTaxReview
+                && $invoiceIntent->taxReviews->contains(fn ($review) => $review->status === 'proposed_pending_accountant')
+                && ($invoiceIntent->commercial_snapshot['billing_tax_configuration']['tax_configuration_mode'] ?? null) === 'manual_review',
+            'canRunLocalDryRun' => $invoiceIntent->status === InvoiceIntentStatus::ReadyForDryRun
+                && ! $invoiceIntent->issuanceAttempt,
+            'canRefreshTaxSnapshot' => in_array($invoiceIntent->status, [InvoiceIntentStatus::BlockedSellerProfile, InvoiceIntentStatus::BlockedTaxReview], true)
+                && ! $invoiceIntent->issuanceAttempt
+                && $invoiceIntent->taxReviews->isEmpty()
+                && $invoiceIntent->tax_decision_reference === null
+                && $invoiceIntent->tax_decision_version === null
+                && $invoiceIntent->dry_run_validated_at === null
+                && $invoiceIntent->refund_review_required_at === null,
         ]);
+    }
+
+    public function refreshTaxSnapshot(InvoiceIntent $invoiceIntent, InvoiceIntentWorkflow $workflow, Request $request): RedirectResponse
+    {
+        try {
+            $workflow->refreshSellerAndTaxSnapshot($invoiceIntent->id, $request->user('owner'));
+        } catch (\DomainException $exception) {
+            return back()->withErrors(['refresh' => __('owner.invoice_intents.refresh_not_allowed')]);
+        }
+
+        return back()->with('status', __('owner.invoice_intents.snapshot_refreshed'));
+    }
+
+    public function runLocalDryRun(InvoiceIntent $invoiceIntent, InvoiceIntentLocalDryRun $dryRun): RedirectResponse
+    {
+        try {
+            $dryRun->run($invoiceIntent->id, request()->user('owner'));
+        } catch (\DomainException $exception) {
+            return back()->withErrors(['dry_run' => __('owner.invoice_intents.local_validation_not_ready')]);
+        }
+
+        return back()->with('status', __('owner.invoice_intents.local_validation_finished'));
     }
 
     public function reconcile(InvoiceIntent $invoiceIntent, InvoiceIssuanceWorkflow $workflow, Request $request): RedirectResponse

@@ -11,6 +11,8 @@ use App\Models\InvoiceIntentEvent;
 use App\Models\InvoiceIntentFollowUpMarker;
 use App\Models\SellerTaxProfile;
 use App\Models\Subscription;
+use App\Models\User;
+use App\Owner\AdminAudit;
 use App\Tax\SellerTaxProfileCompleteness;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
@@ -18,6 +20,129 @@ use Illuminate\Support\Facades\DB;
 
 final class InvoiceIntentWorkflow
 {
+    /**
+     * Refresh only the seller/tax configuration portion of a blocked paid-invoice
+     * snapshot after the Owner has corrected those records. Buyer and Stripe
+     * invoice facts remain the original immutable snapshot.
+     */
+    public function refreshSellerAndTaxSnapshot(int $intentId, User $actor): InvoiceIntent
+    {
+        return DB::transaction(function () use ($intentId, $actor): InvoiceIntent {
+            $intent = InvoiceIntent::query()->lockForUpdate()->findOrFail($intentId);
+            if (! in_array($intent->status, [InvoiceIntentStatus::BlockedSellerProfile, InvoiceIntentStatus::BlockedTaxReview], true)
+                || $intent->issuanceAttempt()->exists()
+                || $intent->taxReviews()->exists()
+                || $intent->tax_decision_reference !== null
+                || $intent->tax_decision_version !== null
+                || $intent->dry_run_validated_at !== null
+                || $intent->refund_review_required_at !== null) {
+                throw new \DomainException('This invoice intent is not eligible for a seller/tax snapshot refresh.');
+            }
+
+            $invoice = BillingInvoice::query()->find($intent->billing_invoice_id);
+            if (! $invoice || $invoice->invoice_status !== 'paid' || $invoice->stripe_invoice_id !== $intent->stripe_invoice_id) {
+                throw new \DomainException('Only the matching paid Stripe invoice can be refreshed.');
+            }
+
+            $effectiveAt = $invoice->paid_at ?? $invoice->finalized_at ?? $invoice->stripe_created_at;
+            $configuration = app(SzamlazzBillingSettings::class)->current($effectiveAt);
+            $configuredSellerId = $configuration?->configuration['seller_profile_id'] ?? null;
+            $sellerProfile = $configuredSellerId
+                ? SellerTaxProfile::query()->find($configuredSellerId)
+                : $this->sellerProfileAt($effectiveAt);
+
+            $snapshot = $intent->commercial_snapshot ?? [];
+            $previousConfigurationVersion = $snapshot['billing_tax_configuration']['version'] ?? null;
+            $previousSellerVersion = $snapshot['seller_tax_profile']['version'] ?? null;
+
+            unset($snapshot['seller_tax_profile'], $snapshot['billing_tax_configuration']);
+            if ($configuration) {
+                $intent->billing_tax_configuration_version_id = $configuration->id;
+                $snapshot['billing_tax_configuration'] = [
+                    'version_id' => $configuration->id,
+                    'version' => $configuration->version,
+                    'effective_at' => $configuration->effective_at?->toIso8601String(),
+                    'tax_configuration_mode' => $configuration->configuration['tax_configuration_mode'] ?? null,
+                    'default_tax_code' => $configuration->configuration['default_tax_code'] ?? null,
+                    'selected_seller_profile_id' => $configuredSellerId,
+                ];
+            } else {
+                $intent->billing_tax_configuration_version_id = null;
+            }
+
+            if ($sellerProfile) {
+                $snapshot['seller_tax_profile'] = [
+                    'id' => $sellerProfile->id,
+                    'version' => $sellerProfile->version,
+                    'legal_name' => $sellerProfile->legal_name,
+                    'establishment_country' => $sellerProfile->establishment_country,
+                    'seller_address' => $sellerProfile->seller_address,
+                    'aam_status' => $sellerProfile->aam_status?->value,
+                    'verification_status' => $sellerProfile->verification_status?->value,
+                    'effective_from' => $sellerProfile->effective_from?->toDateString(),
+                    'effective_to' => $sellerProfile->effective_to?->toDateString(),
+                    'evidence_reference' => $sellerProfile->evidence_reference,
+                    'aam_evidence_reference' => $sellerProfile->aam_evidence_reference,
+                ];
+                $intent->seller_tax_profile_id = $sellerProfile->id;
+            } else {
+                $intent->seller_tax_profile_id = null;
+            }
+
+            $from = $intent->status;
+            $identity = $snapshot['billing_identity'] ?? null;
+            $identityRecord = $intent->billing_identity_id ? CustomerBillingIdentity::query()->find($intent->billing_identity_id) : null;
+            $identityValid = is_array($identity)
+                && (int) ($identity['id'] ?? 0) === (int) $intent->billing_identity_id
+                && $identityRecord !== null
+                && (int) $identityRecord->customer_id === (int) $intent->customer_id;
+            if (! $identityValid) {
+                $intent->status = InvoiceIntentStatus::BlockedIdentity;
+                $intent->blocked_reason = 'billing_identity_missing';
+            } elseif (! $sellerProfile) {
+                $intent->status = InvoiceIntentStatus::BlockedSellerProfile;
+                $intent->blocked_reason = 'seller_profile_missing';
+            } elseif (! app(SellerTaxProfileCompleteness::class)->isComplete($sellerProfile)) {
+                $intent->status = InvoiceIntentStatus::BlockedSellerProfile;
+                $intent->blocked_reason = 'seller_profile_incomplete';
+            } elseif ($sellerProfile->verification_status?->value !== 'verified') {
+                $intent->status = InvoiceIntentStatus::BlockedSellerProfile;
+                $intent->blocked_reason = 'seller_profile_unverified';
+            } else {
+                $intent->status = InvoiceIntentStatus::BlockedTaxReview;
+                $intent->blocked_reason = 'approved_tax_decision_missing';
+            }
+
+            $intent->commercial_snapshot = $snapshot;
+            $intent->save();
+
+            InvoiceIntentEvent::query()->create([
+                'invoice_intent_id' => $intent->id,
+                'event_type' => 'intent_seller_tax_snapshot_refreshed',
+                'from_status' => $from->value,
+                'to_status' => $intent->status->value,
+                'actor_user_id' => $actor->id,
+                'metadata' => [
+                    'configuration_version' => $configuration?->version,
+                    'seller_profile_version' => $sellerProfile?->version,
+                    'previous_configuration_version' => $previousConfigurationVersion,
+                    'previous_seller_profile_version' => $previousSellerVersion,
+                    'result_reason' => $intent->blocked_reason,
+                    'provider_called' => false,
+                ],
+                'created_at' => now(),
+            ]);
+            AdminAudit::record($actor, 'billing_tax.intent_snapshot_refreshed', 'invoice_intent', (string) $intent->id, [
+                'configuration_version' => $configuration?->version,
+                'seller_profile_version' => $sellerProfile?->version,
+                'result_status' => $intent->status->value,
+                'provider_called' => false,
+            ]);
+
+            return $intent;
+        });
+    }
+
     public function recordPaidInvoice(BillingInvoice $invoice, ?string $stripeEventId): ?InvoiceIntent
     {
         if ($invoice->invoice_status !== 'paid' || ! is_string($invoice->stripe_invoice_id) || $invoice->stripe_invoice_id === '') {
@@ -165,6 +290,7 @@ final class InvoiceIntentWorkflow
                     'effective_from' => $sellerProfile->effective_from?->toDateString(),
                     'effective_to' => $sellerProfile->effective_to?->toDateString(),
                     'evidence_reference' => $sellerProfile->evidence_reference,
+                    'aam_evidence_reference' => $sellerProfile->aam_evidence_reference,
                 ];
                 $intent->seller_tax_profile_id = $sellerProfile->id;
             }
