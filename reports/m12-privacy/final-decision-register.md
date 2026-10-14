@@ -2,6 +2,48 @@
 
 > **Wave 4 planning addendum — 2026-10-14:** The new Owner defaults questionnaire is authoritative for report-only retention defaults RET-01 through RET-33. Earlier A/L/C register items remain historical and in force unless explicitly superseded by a reviewed decision. Wave 4 planning does not approve a legal/accounting period or authorize destructive retention. See `retention-defaults-questionnaire.md` and `wave4-retention-engine-plan.md`.
 
+## Wave 4 Owner acceptance — 2026-10-14
+
+The Owner accepted all recommended technical/product defaults RET-01 through RET-33. This is not legal or accounting approval. Each item and its full rationale are preserved in `retention-defaults-questionnaire.md`; this table is the current register summary.
+
+| ID | Owner-approved technical/product default | Current compliance/safety state |
+|---|---|---|
+| RET-01 | 14-day account closure cooling-off | OWNER_APPROVED; legal review only if statutory interaction is asserted |
+| RET-02 | Anonymize linked profile; retain opaque ID where needed | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING for scope/exceptions |
+| RET-03 | Unique non-deliverable placeholder; free original email for new registration | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL; security review |
+| RET-04 | 30 days post-service backup eligibility, separate from active plan | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL; no deletion authorization |
+| RET-05 | 24-hour signed export link | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL; security review |
+| RET-06 | 7-day maximum export artifact | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL; security review |
+| RET-07 | 30-day raw webhook payload | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-08 | 365-day minimized idempotency evidence | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-09 | 30-day rendered email content | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-10 | 180-day minimized delivery metadata | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-11 | 30-day identifying application logs; minimize first | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL / SECURITY_REVIEW |
+| RET-12 | Provisional 365-day security/audit engineering horizon | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-13 | 30-day synthetic-only staging account eligibility | OWNER_APPROVED; security review; legal review if personal data exists |
+| RET-14 | Bounded 30-day provider retry, then `manual_review` | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-15 | Provisional 3-year minimal privacy case history | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING / SECURITY_REVIEW |
+| RET-16 | Separate 14-day erasure-request cancellation window | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL; security review |
+| RET-17 | Tombstone replay enabled; duration unset | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL / WAIT_ACCOUNTING; safety invariant |
+| RET-18 | Destructive retention OFF | OWNER_APPROVED; LOCKED SAFETY; `M12_DESTRUCTIVE_RETENTION_ENABLED=false` |
+| RET-19 | Dry-run mandatory before any future action | OWNER_APPROVED; LOCKED SAFETY |
+| RET-20 | Owner approval of impact preview after policy change | OWNER_APPROVED; LOCKED SAFETY; legal/accounting review still applies |
+| RET-21 | Future destructive batch default 25; inactive in Wave 4 | OWNER_APPROVED; LOCKED OUT OF WAVE 4 |
+| RET-22 | Active restore always blocks backup deletion | OWNER_APPROVED; LOCKED SAFETY |
+| RET-23 | Active update/compensation always blocks deletion | OWNER_APPROVED; LOCKED SAFETY |
+| RET-24 | Preserve last verified recovery point | OWNER_APPROVED; LOCKED SAFETY |
+| RET-25 | Provider confirmation required before completion | OWNER_APPROVED; LOCKED SAFETY; exceptions require review |
+| RET-26 | Separate accounting evidence; no period selected | OWNER_APPROVED technical separation; PROVISIONAL / WAIT_ACCOUNTING / WAIT_LEGAL; compliance-locked after approval |
+| RET-27 | Do not rewrite immutable accounting snapshots during profile anonymization | OWNER_APPROVED; PROVISIONAL / WAIT_ACCOUNTING / WAIT_LEGAL for exceptions |
+| RET-28 | Explicit UTC effective timestamp per policy version | OWNER_APPROVED; affected category approvals still required |
+| RET-29 | Mandatory immutable policy versioning | OWNER_APPROVED; LOCKED ENGINEERING SAFETY |
+| RET-30 | Mandatory impact preview before policy activation | OWNER_APPROVED; LOCKED ENGINEERING SAFETY |
+| RET-31 | Category-specific policy; no single global duration | OWNER_APPROVED; category-specific legal/accounting values provisional |
+| RET-32 | No tenant-specific overrides in initial scope | OWNER_APPROVED; any future contractual exception needs review |
+| RET-33 | Preserve active-plan semantics; separate 30-day post-service rule | OWNER_APPROVED; PROVISIONAL / WAIT_LEGAL for commitments/notice; security review |
+
+**Effect:** routine technical/product default questions for Wave 4 are resolved. The report-only evaluator may begin without another Owner product-policy question. All review-gated items remain blocked from compliance/destructive activation until qualified approval is recorded. `M12_DESTRUCTIVE_RETENTION_ENABLED=false`; this decision authorizes no deletion or anonymization.
+
 Status date: 2026-10-14. This is a planning register, not legal or accounting approval. The audited source baseline remains `856f7a03d7624158eb5cf9719fdec4776fbf6893`; the remote primary was re-fetched and is unchanged. See `planning-baseline.md` for scope and limitations.
 
 ## A — Technical / product Owner decisions
