@@ -73,3 +73,25 @@ The required exact-SHA CI, normal merge, guarded staging deployment, additive mi
 ### Final disposition
 
 Wave 1 implementation, automated regression, exact-SHA CI, normal merge, and guarded staging deployment are complete. Formal Wave 1 closure is held pending Owner review of the potential inadvertent unrelated-admin access noted above and, if desired, a safe authenticated Owner-view walkthrough. This does not close M12 and makes no legal-compliance determination. Export, erasure, retention execution, provider deletion, legal-document publication, lawful-basis selection, and retention duration remain out of scope and disabled pending the separate legal/Owner approvals defined in the M12 plan.
+
+## Owner disposition and formal Wave 1 closure — 2026-10-14 (current status)
+
+The preceding incident note and provisional final disposition are preserved as historical evidence. The Owner has now reviewed the browser-session/tooling-hygiene event and provided this operational disposition:
+
+- No WP CareGrid product defect or tenant-isolation defect has been identified.
+- No WP CareGrid staging or customer mutation occurred. The unrelated browser page was read-only, browser interaction stopped immediately, and no personal data from that page was copied into M12 reports.
+- Treat the event operationally as a browser-session/tooling-hygiene incident. This is not a legal classification and does not conclude whether a reportable personal-data breach occurred. Any formal legal classification remains **LEGAL REVIEW REQUIRED** if it is ever needed.
+
+No new technical Wave 1 blocker was identified by this disposition. The Owner review hold is cleared. **M12 Wave 1: CLOSED** (engineering/foundation scope only). This does not close M12 overall, approve legal policy, or authorize export, erasure, provider deletion, or destructive retention.
+
+### Mandatory browser validation hygiene for future work
+
+For every future browser/computer-use validation:
+
+1. Prefer a fresh, isolated browser context/profile.
+2. Before reading page content, independently verify the hostname, expected application, environment, and authenticated identity where relevant.
+3. Never read or interact with an unknown pre-existing active tab.
+4. If URL/hostname cannot be reliably verified, stop browser inspection.
+5. Use authenticated application HTTP, normal Laravel controller/service paths, approved CLI/Artisan tooling, or read-only API/database verification where appropriate.
+6. Treat browser-tool failure as a tooling/validation limitation, not automatically as a product failure.
+7. Do not copy unrelated personal data into reports or logs.

@@ -1,5 +1,7 @@
 # M12 Owner technical/product default summary
 
+> **Wave 4 supplement — 2026-10-14:** For retention settings, use the consolidated RET-01…RET-33 questionnaire in `retention-defaults-questionnaire.md`. The Owner may accept all recommended technical/product defaults or provide compact overrides. This does not approve legal/accounting values; compliance-locked policies remain view-only, and engineering safety guards are not Owner toggles. Wave 4 has no deletion behavior.
+
 This is a product/operations review, not a legal or accounting questionnaire. Recommendations below are reversible implementation defaults; approving them does not approve legal content, a retention period, a lawful basis, or destructive deletion.
 
 | Decision | Proposed Owner default | Reason | Customer impact | Operational impact | Reversible? |
