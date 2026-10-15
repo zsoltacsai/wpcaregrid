@@ -18,7 +18,9 @@
     </section>
 
     @if ($privacyRequest->exportArtifact)
-        @php($export = $privacyRequest->exportArtifact)
+        @php
+            $export = $privacyRequest->exportArtifact;
+        @endphp
         <section class="mt-5 rounded-md border border-line bg-surface p-5">
             <h2 class="font-semibold">{{ __('privacy.owner.export') }}</h2>
             <p class="mt-1 text-xs text-muted">{{ __('privacy.owner.export_not_downloadable') }}</p>
