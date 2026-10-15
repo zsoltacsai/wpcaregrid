@@ -6,6 +6,7 @@ use App\Http\Controllers\Account\BillingController;
 use App\Http\Controllers\Account\ConnectorDownloadController;
 use App\Http\Controllers\Account\DashboardController;
 use App\Http\Controllers\Account\OfferController;
+use App\Http\Controllers\Account\PrivacyController;
 use App\Http\Controllers\Account\ProfileController;
 use App\Http\Controllers\Account\SubscriptionController;
 use App\Http\Controllers\Account\VatVerificationController as AccountVatVerificationController;
@@ -110,4 +111,10 @@ Route::middleware(['auth', 'customer'])->prefix('account')->name('account.')->gr
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile');
     Route::put('/profile', [ProfileController::class, 'update'])->middleware('throttle:account')->name('profile.update');
     Route::post('/profile/vat-verification', [AccountVatVerificationController::class, 'store'])->middleware('throttle:vies-verification')->name('profile.vat-verification');
+
+    Route::get('/privacy', [PrivacyController::class, 'index'])->name('privacy.index');
+    Route::post('/privacy/export', [PrivacyController::class, 'requestExport'])->middleware('throttle:account')->name('privacy.export.request');
+    Route::post('/privacy/rectification', [PrivacyController::class, 'requestRectification'])->middleware('throttle:account')->name('privacy.rectification.request');
+    Route::post('/privacy/exports/{artifact}/link', [PrivacyController::class, 'renewLink'])->middleware('throttle:account')->name('privacy.exports.link');
+    Route::get('/privacy/exports/{artifact}/download', [PrivacyController::class, 'download'])->middleware(['signed', 'throttle:account'])->name('privacy.exports.download');
 });

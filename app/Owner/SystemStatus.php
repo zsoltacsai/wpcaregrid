@@ -56,7 +56,33 @@ final class SystemStatus
             $this->mail(),
             $this->safetySwitches(),
             $this->privacyRetentionGate(),
+            $this->privacyExports(),
         ];
+    }
+
+    private function privacyExports(): StatusCheck
+    {
+        try {
+            $failed = DB::table('privacy_export_artifacts')->whereIn('status', ['failed', 'cleanup_failed'])->count();
+            $stuck = DB::table('privacy_export_artifacts')->whereIn('status', ['queued', 'generating'])
+                ->where('updated_at', '<', now('UTC')->subMinutes(30))->count();
+            $available = DB::table('privacy_export_artifacts')->where('status', 'available')->count();
+        } catch (Throwable) {
+            return new StatusCheck('privacy_exports', HealthStatus::Unknown, __('owner.system.summaries.privacy_exports_unknown'), [
+                __('owner.system.details.privacy_exports_mode') => 'REPORT ONLY',
+            ]);
+        }
+
+        $attention = $failed > 0 || $stuck > 0;
+
+        return new StatusCheck('privacy_exports', $attention ? HealthStatus::Attention : HealthStatus::Healthy,
+            $attention ? __('owner.system.summaries.privacy_exports_attention') : __('owner.system.summaries.privacy_exports_ok'), [
+                __('owner.system.details.privacy_exports_mode') => 'REPORT ONLY',
+                __('owner.system.details.privacy_exports_failed') => (string) $failed,
+                __('owner.system.details.privacy_exports_stuck') => (string) $stuck,
+                __('owner.system.details.privacy_exports_available') => (string) $available,
+                __('owner.system.details.privacy_exports_deleted') => '0',
+            ]);
     }
 
     private function privacyRetentionGate(): StatusCheck

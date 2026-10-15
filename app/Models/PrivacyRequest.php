@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /** Non-destructive case metadata; deliberately contains no request narrative or raw identity payload. */
 class PrivacyRequest extends Model
@@ -63,5 +64,10 @@ class PrivacyRequest extends Model
     public function providerTasks(): HasMany
     {
         return $this->hasMany(PrivacyProviderTask::class);
+    }
+
+    public function exportArtifact(): HasOne
+    {
+        return $this->hasOne(PrivacyExportArtifact::class);
     }
 }

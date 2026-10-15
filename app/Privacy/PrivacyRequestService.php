@@ -10,6 +10,7 @@ use App\Owner\AdminAudit;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 use LogicException;
@@ -150,6 +151,123 @@ final class PrivacyRequestService
 
             throw $exception;
         }
+    }
+
+    /** Create and identity-verify an access/rectification case after current-password confirmation. */
+    public function createCustomerRequest(Customer $customer, PrivacyRequestType $type, string $idempotencyKey, User $actor, string $password): PrivacyRequest
+    {
+        if (! in_array($type, [PrivacyRequestType::Access, PrivacyRequestType::Rectification], true)
+            || ! $actor->customer()->whereKey($customer->id)->exists()
+            || ! Hash::check($password, (string) $actor->getAuthPassword())) {
+            throw ValidationException::withMessages(['password' => __('passwords.password')]);
+        }
+
+        $case = $this->create($customer, $type, PrivacyRequestSource::CustomerPortal, $idempotencyKey, $actor);
+
+        return DB::transaction(function () use ($case, $actor): PrivacyRequest {
+            $locked = PrivacyRequest::query()->whereKey($case->getKey())->lockForUpdate()->firstOrFail();
+            if ($locked->status === PrivacyRequestStatus::Verified) {
+                return $locked;
+            }
+            if (! in_array($locked->status, [PrivacyRequestStatus::Requested, PrivacyRequestStatus::IdentityVerificationRequired], true)) {
+                throw ValidationException::withMessages(['privacy' => 'This privacy request is already under review or complete.']);
+            }
+
+            $from = $locked->status;
+            $locked->forceFill([
+                'status' => PrivacyRequestStatus::Verified,
+                'identity_verified_at' => now('UTC'),
+                'lock_version' => $locked->lock_version + 1,
+            ])->save();
+            $this->recordEvent($locked, 'identity_verified', $from, PrivacyRequestStatus::Verified, $actor, []);
+
+            return $locked->refresh();
+        }, attempts: 3);
+    }
+
+    /** Complete a customer rectification case using only the canonical editable profile flow. */
+    public function completeRectification(PrivacyRequest $privacyRequest, Customer $customer, User $actor, array $changedFields): PrivacyRequest
+    {
+        $allowedFields = ['first_name', 'last_name', 'customer_type', 'company_name', 'country_code', 'tax_id', 'billing_address', 'locale'];
+        $fieldCodes = array_values(array_unique(array_filter($changedFields, fn ($field) => is_string($field) && in_array($field, $allowedFields, true))));
+        if ($fieldCodes === [] || ! $actor->customer()->whereKey($customer->id)->exists()) {
+            throw new AuthorizationException('A verified customer profile correction is required.');
+        }
+
+        return DB::transaction(function () use ($privacyRequest, $customer, $actor, $fieldCodes): PrivacyRequest {
+            $case = PrivacyRequest::query()->whereKey($privacyRequest->getKey())->lockForUpdate()->firstOrFail();
+            if ($case->customer_id !== $customer->id || $case->request_type !== PrivacyRequestType::Rectification || $case->status !== PrivacyRequestStatus::Verified) {
+                throw new AuthorizationException('The rectification case is not available to this customer.');
+            }
+
+            $from = $case->status;
+            $case->forceFill(['status' => PrivacyRequestStatus::Completed, 'active_request_key' => null, 'lock_version' => $case->lock_version + 1])->save();
+            $this->recordEvent($case, 'rectification_completed', $from, PrivacyRequestStatus::Completed, $actor, ['field_codes' => $fieldCodes]);
+
+            return $case->refresh();
+        }, attempts: 3);
+    }
+
+    /** Append a minimized export lifecycle event after verifying case ownership or Owner authority. */
+    public function recordExportEvent(PrivacyRequest $privacyRequest, string $eventType, ?User $actor = null, array $metadata = []): void
+    {
+        $allowedEvents = ['export_requested', 'export_queued', 'export_generating', 'export_generated', 'export_failed', 'export_cleanup_failed', 'export_downloaded', 'export_link_renewed', 'export_revoked', 'export_expired'];
+        if (! in_array($eventType, $allowedEvents, true)) {
+            throw new InvalidArgumentException('Unknown privacy export event.');
+        }
+
+        $safe = [];
+        if (isset($metadata['artifact_reference']) && is_string($metadata['artifact_reference']) && preg_match('/^[0-9a-f-]{36}$/i', $metadata['artifact_reference'])) {
+            $safe['artifact_reference'] = $metadata['artifact_reference'];
+        }
+        if (isset($metadata['failure_code']) && is_string($metadata['failure_code']) && preg_match('/^[a-z0-9_]{1,48}$/', $metadata['failure_code'])) {
+            $safe['failure_code'] = $metadata['failure_code'];
+        }
+        if (isset($metadata['download_count']) && is_int($metadata['download_count']) && $metadata['download_count'] >= 0) {
+            $safe['download_count'] = $metadata['download_count'];
+        }
+        if (isset($metadata['section_codes']) && is_array($metadata['section_codes'])) {
+            $safe['section_codes'] = array_values(array_intersect($metadata['section_codes'], ['account', 'profile', 'websites', 'subscriptions', 'billing_summary', 'privacy_requests', 'backup_metadata']));
+        }
+
+        DB::transaction(function () use ($privacyRequest, $actor, $eventType, $safe): void {
+            $case = PrivacyRequest::query()->whereKey($privacyRequest->getKey())->lockForUpdate()->firstOrFail();
+            if ($actor !== null) {
+                if ($actor->isOwner() && ! $actor->customer()->exists()) {
+                    // Authorized Owner-assisted handling.
+                } elseif ($actor->customer()->whereKey($case->customer_id)->exists() && ! $actor->isOperator()) {
+                    // Customer activity is always confined to its own case.
+                } else {
+                    throw new AuthorizationException('Privacy export activity is not available to this actor.');
+                }
+            }
+
+            PrivacyRequestEvent::create([
+                'privacy_request_id' => $case->id,
+                'actor_user_id' => $actor?->id,
+                'event_type' => $eventType,
+                'from_status' => $case->status->value,
+                'to_status' => $case->status->value,
+                'metadata' => $safe ?: null,
+            ]);
+        }, attempts: 3);
+    }
+
+    /** Mark an access case complete only after its complete, verified artifact is available. */
+    public function completeAccessExport(PrivacyRequest $privacyRequest): PrivacyRequest
+    {
+        return DB::transaction(function () use ($privacyRequest): PrivacyRequest {
+            $case = PrivacyRequest::query()->whereKey($privacyRequest->getKey())->lockForUpdate()->firstOrFail();
+            if ($case->request_type !== PrivacyRequestType::Access || $case->status !== PrivacyRequestStatus::Verified) {
+                throw new LogicException('Only a verified access case can be completed by export generation.');
+            }
+
+            $from = $case->status;
+            $case->forceFill(['status' => PrivacyRequestStatus::Completed, 'active_request_key' => null, 'lock_version' => $case->lock_version + 1])->save();
+            $this->recordEvent($case, 'export_generated', $from, PrivacyRequestStatus::Completed, null, []);
+
+            return $case->refresh();
+        }, attempts: 3);
     }
 
     /** @param array<string, scalar|null> $metadata */
