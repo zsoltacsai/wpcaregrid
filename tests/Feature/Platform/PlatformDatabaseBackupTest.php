@@ -296,6 +296,10 @@ class PlatformDatabaseBackupTest extends TestCase
         $this->artisan('platform:database-backup-reconcile')
             ->expectsOutputToContain('"state": "healthy"')
             ->assertSuccessful();
+
+        $delivery = $backup->deliveries()->where('destination_key', 'primary')->firstOrFail();
+        $this->assertSame('healthy', $delivery->reconciliation_status);
+        $this->assertNotNull($delivery->last_reconciled_at);
     }
 
     public function test_platform_backup_reconciliation_reports_missing_object_and_orphan_without_deleting(): void
