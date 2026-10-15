@@ -24,6 +24,7 @@ return [
         'billing' => 'Számlázás',
         'profile' => 'Profil',
         'privacy' => 'Adatvédelem',
+        'legal_documents' => 'Jogi dokumentumok',
         'offers' => 'Ajánlatok',
         'logout' => 'Kilépés',
         'open_menu' => 'Menü megnyitása',
@@ -277,6 +278,17 @@ return [
         'rectification_started' => 'A javítási kérelmet ellenőriztük. Frissítse adatait a profiloldalon.',
         'link_renewed' => 'Elkészült az új, 24 órás letöltési hivatkozás.',
         'export_states' => ['queued' => 'Sorban áll', 'generating' => 'Előkészítés alatt', 'available' => 'Elérhető', 'failed' => 'Felülvizsgálat szükséges', 'expired' => 'Lejárt', 'revoked' => 'Nem elérhető', 'cleanup_failed' => 'Nem elérhető — ügyfélszolgálati ellenőrzés szükséges'],
+    ],
+
+    'legal_documents' => [
+        'title' => 'Jogi dokumentumok', 'lead' => 'A jelenleg hatályos közzétett verziók és az elfogadási előzmények.',
+        'unknown_notice' => 'A régebbi fiókoknál, ahol nincs bizonyíték, az elfogadás nem rögzítettként jelenik meg. A fiók létrehozásából vagy fizetésből nem következtetünk elfogadásra.',
+        'current' => 'Hatályos dokumentumok', 'accepted' => 'Elfogadva', 'notice_only' => 'Tájékoztató', 'not_recorded' => 'Nincs rögzítve',
+        'open' => 'Hatályos verzió megtekintése', 'none' => 'Jelenleg nincs jóváhagyott és hatályos dokumentumverzió.',
+        'checkout_acceptance' => 'Ennél a verziónál a checkout folyamatban rögzítjük az elfogadást; ezen az oldalon nem következtetünk rá.',
+        'confirm_acceptance' => 'Elolvastam és elfogadom ezt a pontos verziót.', 'accept' => 'Elfogadás rögzítése',
+        'history' => 'Rögzített előzmények', 'historical' => 'Korábbi jogi dokumentum', 'accepted_at' => 'Elfogadás időpontja',
+        'open_history' => 'Elfogadott verzió megtekintése', 'no_history' => 'Ehhez a fiókhoz nincs elfogadási bejegyzés.',
     ],
 
     'websites' => [

@@ -129,7 +129,7 @@
                     <fieldset class="border-b border-line p-6 sm:p-8">
                         <legend class="sr-only">{{ __('checkout.plan_heading') }}</legend>
                         <div class="flex flex-wrap items-start justify-between gap-4">
-                            <div>
+                    <div>
                                 <p class="text-xs font-semibold tracking-[0.12em] text-muted uppercase">{{ __('checkout.plan_heading') }}</p>
                                 <p class="mt-2 text-xl font-semibold text-primary">{{ $plan->productType->label() }} {{ $plan->name }}</p>
                                 <p class="mt-1 text-sm text-muted">{{ $plan->description }}</p>
@@ -249,6 +249,12 @@
                     </fieldset>
 
                     <div class="flex flex-col gap-3 border-t border-line bg-canvas p-6 sm:p-8">
+                        @if ($termsDocument?->acceptance_mode === 'acceptance_required_before_checkout' && filled($termsDocument->approval_reference) && filled($termsDocument->content_sha256))
+                            <input type="hidden" name="terms_document_uuid" value="{{ $termsDocument->uuid }}">
+                            <input type="hidden" name="terms_content_sha256" value="{{ $termsDocument->content_sha256 }}">
+                            <label class="flex items-start gap-2 text-sm"><input class="mt-1" type="checkbox" name="terms_accepted" value="1" required @checked(old('terms_accepted'))><span>{{ __('checkout.legal.accept_terms') }} <a class="text-link underline" href="{{ route('legal.terms') }}" target="_blank" rel="noopener noreferrer">{{ $termsDocument->title }} · v{{ $termsDocument->version }}</a></span></label>
+                            @error('terms_accepted')<p role="alert" class="text-sm text-danger-ink">{{ $message }}</p>@enderror
+                        @endif
                         <x-ui.button
                             type="submit"
                             size="lg"

@@ -27,6 +27,8 @@ final class AdminAudit
         'privacy.export.owner_revoked', 'privacy.export.expired', 'privacy.export.cleanup_failed',
         'privacy.retention.draft_created', 'privacy.retention.preview_created', 'privacy.retention.reporting_activated',
         'privacy.retention.owner_approval_recorded', 'privacy.retention.locked_change_denied',
+        'legal.document.draft_created', 'legal.document.draft_updated', 'legal.document.approval_recorded',
+        'legal.document.published', 'legal.document.retired',
         'platform_backup.manual_requested', 'platform_backup.configuration_updated', 'platform_backup.disabled', 'platform_backup.escrow_attested', 'platform_backup.escrow_revoked', 'platform_backup.s3_connection_tested',
         'operator.invited', 'operator.invitation_resent', 'operator.permissions_changed', 'operator.disabled', 'operator.enabled',
         'stripe.verified',

@@ -12,7 +12,7 @@ final class CustomerPrivacyExportData
 {
     public const SCHEMA = 'privacy-export/v1';
 
-    public const INCLUDED = ['account', 'profile', 'websites', 'subscriptions', 'billing_summary', 'privacy_requests'];
+    public const INCLUDED = ['account', 'profile', 'websites', 'subscriptions', 'billing_summary', 'privacy_requests', 'legal_acceptances'];
 
     public const EXCLUDED = [
         'tax_identifiers' => 'WAIT_ACCOUNTING',
@@ -53,8 +53,11 @@ final class CustomerPrivacyExportData
                 'stripe_created_at', 'invoice_status', 'amount_paid', 'currency',
             ]);
             $privacyRequests = $lockedCustomer->privacyRequests()->orderBy('requested_at')->limit(5001)->get(['request_type', 'status', 'requested_at']);
+            $legalAcceptances = $lockedCustomer->legalDocumentAcceptances()->with('documentVersion:id,uuid,document_type,version')->orderBy('accepted_at')->limit(5001)->get([
+                'document_type', 'legal_document_version_id', 'locale', 'content_sha256', 'source', 'accepted_at',
+            ]);
 
-            foreach ([$websites, $subscriptions, $invoices, $privacyRequests] as $records) {
+            foreach ([$websites, $subscriptions, $invoices, $privacyRequests, $legalAcceptances] as $records) {
                 if ($records->count() > 5000) {
                     throw new \RuntimeException('Export exceeds the safe bounded section size.');
                 }
@@ -114,6 +117,15 @@ final class CustomerPrivacyExportData
                     'type' => $request->request_type->value,
                     'status' => $request->status->value,
                     'requested_at' => $request->requested_at?->utc()->toIso8601String(),
+                ])->values()->all(),
+                'legal_acceptances' => $legalAcceptances->map(fn ($acceptance) => [
+                    'document_type' => $acceptance->document_type,
+                    'document_version' => $acceptance->documentVersion?->version,
+                    'document_reference' => $acceptance->documentVersion?->uuid,
+                    'locale' => $acceptance->locale,
+                    'content_sha256' => $acceptance->content_sha256,
+                    'source' => $acceptance->source,
+                    'accepted_at' => $acceptance->accepted_at?->utc()->toIso8601String(),
                 ])->values()->all(),
             ];
 

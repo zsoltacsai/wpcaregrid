@@ -51,6 +51,7 @@ return [
 
     'submit' => 'Continue to payment',
     'redirect_note' => 'You will be redirected to Stripe to enter your payment details.',
+    'legal' => ['accept_terms' => 'I have read and accept the current Terms of Service.'],
     'secure_note' => 'Card details are handled by Stripe and never reach our servers.',
 
     'preview' => [

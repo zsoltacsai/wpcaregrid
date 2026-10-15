@@ -50,3 +50,10 @@ Review and approve, revise, or reject the proposed defaults above. No response i
 - **ER-08: OWNER_APPROVED — A separate erasure request is required.** Account closure alone does not start the erasure cooling-off period. The account-closure case may separately restrict customer-area access after service-granting subscriptions have ended; an Owner can restore access through the audited closure workflow before a separate active erasure request exists.
 - These are product decisions, not legal/accounting approvals. They do not authorize billing cancellation, Connector/site changes, identity revocation, anonymization, deletion, backup deletion, or provider deletion.
 - Existing legal/accounting handoffs remain authoritative; no further Owner product-policy question blocks the non-destructive Wave 5 foundation.
+
+## Wave 3 Owner decision recorded — 2026-10-15
+
+- **W3-O1: OWNER_APPROVED — Mandatory acceptance OFF by default; only a separately reviewed and explicitly published rule may activate it.**
+- This is a product/engineering default, not legal approval. It does not approve document wording, lawful basis, contract formation, controller/processor roles, DPA audience, notice versus affirmative acceptance, reacceptance triggers, or existing-customer transition.
+- Remaining W3 questionnaire choices are pending. Until resolved, no public legal text exists by default, missing locale versions do not fall back, and DPA remains unpublished pending audience and role review.
+- No customer-facing enforcement or document publication was enabled by this decision.

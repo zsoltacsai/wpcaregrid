@@ -140,3 +140,14 @@ These recommendations do not choose a legal basis, legal duration, controller/pr
 | ER-08 | Owner product policy | **OWNER_APPROVED — SEPARATE ERASURE REQUEST REQUIRED** | Account closure does not itself start erasure or the erasure cooling-off window | Legal statutory request timing remains under L3/L4 |
 
 This is product approval only. It does not approve legal/accounting retention, authorize access suspension or service cancellation, or enable anonymization, deletion, backup deletion, or provider calls. `M12_DESTRUCTIVE_RETENTION_ENABLED=false` remains mandatory.
+
+## M12 Wave 3 Owner product decision — 2026-10-15
+
+| ID | Category | Owner disposition | Effect | Remaining review |
+|---|---|---|---|---|
+| W3-O1 | Owner product policy | **OWNER_APPROVED — MANDATORY ACCEPTANCE OFF BY DEFAULT; ONLY A REVIEWED/PUBLISHED RULE MAY ACTIVATE IT** | Initial versions default to acceptance disabled; enforcement can affect checkout/account flows only after a version and its exact mode are reviewed and explicitly published | Legal review still required for wording, enforceability, acceptance/reacceptance rules and existing-customer transition |
+| W3-O2 | Owner product policy | PENDING; conservative fallback is a generic unavailable page until an effective approved locale version exists | No draft or unapproved text is exposed; no locale fallback | Owner response pending; legal text and publication remain separately gated |
+| W3-O3 | Owner product policy / legal | PENDING; DPA stays unpublished until audience and role schedule are reviewed | Avoids making an unapproved processor/controller or audience claim | Owner audience choice and qualified legal review required |
+| W3-O4 | Owner product policy | PENDING; each configured locale requires its own version, with no silent fallback | A visitor sees unavailable state for a locale without an effective version | Owner publication/localization policy remains open; legal translation review required |
+
+W3-O1 is product/engineering approval only. It does not approve legal copy or legal conclusions. No document content was published and no mandatory acceptance rule was activated. Other unanswered defaults use the least-public, fail-closed behavior above.

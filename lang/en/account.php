@@ -12,6 +12,7 @@ return [
         'billing' => 'Billing',
         'profile' => 'Profile',
         'privacy' => 'Privacy',
+        'legal_documents' => 'Legal documents',
         'offers' => 'Offers',
         'logout' => 'Log out',
         'open_menu' => 'Open menu',
@@ -265,6 +266,17 @@ return [
         'rectification_started' => 'Your correction request is verified. Update the profile fields on the profile page.',
         'link_renewed' => 'A new 24-hour download link is ready.',
         'export_states' => ['queued' => 'Queued', 'generating' => 'Preparing', 'available' => 'Available', 'failed' => 'Needs review', 'expired' => 'Expired', 'revoked' => 'Unavailable', 'cleanup_failed' => 'Unavailable — support review required'],
+    ],
+
+    'legal_documents' => [
+        'title' => 'Legal documents', 'lead' => 'Current published versions and your recorded acceptance history.',
+        'unknown_notice' => 'Older accounts without evidence are shown as not recorded. No acceptance is inferred from account creation or payment.',
+        'current' => 'Current documents', 'accepted' => 'Accepted', 'notice_only' => 'Notice only', 'not_recorded' => 'Not recorded',
+        'open' => 'View current version', 'none' => 'No approved, effective document versions are currently available.',
+        'checkout_acceptance' => 'This version is presented for acceptance in checkout; no acceptance is inferred here.',
+        'confirm_acceptance' => 'I have read and accept this exact version.', 'accept' => 'Record acceptance',
+        'history' => 'Recorded history', 'historical' => 'Historical legal document', 'accepted_at' => 'Accepted at',
+        'open_history' => 'View accepted version', 'no_history' => 'No acceptance records are available for this account.',
     ],
 
     'websites' => [

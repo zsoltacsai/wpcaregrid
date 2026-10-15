@@ -9,6 +9,7 @@ use App\Http\Controllers\Owner\IntegrationCredentialController;
 use App\Http\Controllers\Owner\InternalPlanController;
 use App\Http\Controllers\Owner\InvoiceIntentController;
 use App\Http\Controllers\Owner\InvoiceIntentTaxReviewController;
+use App\Http\Controllers\Owner\LegalDocumentController;
 use App\Http\Controllers\Owner\LoginController;
 use App\Http\Controllers\Owner\M11LifecycleValidationController;
 use App\Http\Controllers\Owner\MonitoringController;
@@ -140,6 +141,13 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::post('/settings/privacy-retention/{policyKey}/draft', [PrivacyRetentionController::class, 'draft'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('privacy-retention.draft');
         Route::post('/settings/privacy-retention/{policy}/preview', [PrivacyRetentionController::class, 'preview'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('privacy-retention.preview');
         Route::post('/settings/privacy-retention/{policy}/activate-reporting', [PrivacyRetentionController::class, 'activate'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('privacy-retention.activate');
+        Route::get('/legal-documents', [LegalDocumentController::class, 'index'])->middleware('can:owner.settings.manage')->name('legal-documents.index');
+        Route::post('/legal-documents', [LegalDocumentController::class, 'store'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('legal-documents.store');
+        Route::get('/legal-documents/{legalDocument}/edit', [LegalDocumentController::class, 'edit'])->middleware('can:owner.settings.manage')->name('legal-documents.edit');
+        Route::put('/legal-documents/{legalDocument}', [LegalDocumentController::class, 'update'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('legal-documents.update');
+        Route::post('/legal-documents/{legalDocument}/approve', [LegalDocumentController::class, 'approve'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('legal-documents.approve');
+        Route::post('/legal-documents/{legalDocument}/publish', [LegalDocumentController::class, 'publish'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('legal-documents.publish');
+        Route::post('/legal-documents/{legalDocument}/retire', [LegalDocumentController::class, 'retire'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('legal-documents.retire');
         Route::get('/monitoring', [MonitoringController::class, 'index'])->middleware('can:owner.system.view')->name('monitoring.index');
         Route::post('/monitoring/maintenance', [MonitoringController::class, 'storeMaintenance'])->middleware(['can:owner.system.view', 'throttle:owner-sensitive'])->name('monitoring.maintenance.store');
 
