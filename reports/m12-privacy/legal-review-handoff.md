@@ -51,3 +51,14 @@ Report-only retention first; async audited erasure; reversible cancel-before-exe
 ## Requested response format
 
 For each question provide: decision by purpose/category, effective date, any exception, required evidence, review cadence if applicable, and a non-secret decision reference. Explicitly mark unresolved items. Consider current Hungarian law and current EEA guidance at review time; the references in the previous handoff are starting sources, not conclusions.
+
+## Wave 7 execution-specific legal questions — 2026-10-15
+
+This addendum supplements existing topics without repeating or resolving them. No statutory periods or legal conclusions are supplied by engineering. See `wave7-owner-questionnaire.md`:
+
+- **W7-L-01:** how the RET-16 product safety/cancellation window interacts with applicable request clocks, exceptions, urgent cases, and response obligations.
+- **W7-L-02:** authority, scope, evidence, review date/expiry, release, and customer-facing treatment of legal holds in an erasure plan.
+- **W7-L-03:** lawful purpose, minimum fields, access, retention/end-of-life for the independent tombstone journal and replay evidence.
+- **W7-OP-03 / W7-OP-04 / W7-OP-05:** legal review of site-content scope, partial/provider-pending completion wording, and cancellation/reopening after irreversible action begins.
+
+Technical recommendation: unknown legal scope remains `WAIT_LEGAL`; it blocks affected destructive actions while allowing safe preview/state representation. This addendum is not legal advice or approval.

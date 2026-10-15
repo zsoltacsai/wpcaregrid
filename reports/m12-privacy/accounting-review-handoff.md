@@ -19,3 +19,13 @@ Return a record-type schedule with: record category, applicable trigger, duratio
 - Keep erasable profile data separable from immutable accounting evidence where the existing schema permits; if not, use a reviewed migration plan.
 - An unresolved accounting exception blocks completion of the affected erasure and any destructive retention eligibility, but not read-only inventory, request tracking or dry-run reporting.
 - No accounting retention periods are selected by this engineering plan.
+
+## Wave 7 execution-specific accounting questions — 2026-10-15
+
+This addendum narrows the existing schedule request to destructive execution blockers; it does not choose periods or duplicate the category schedule. See `wave7-owner-questionnaire.md`:
+
+- **W7-A-01:** which unresolved invoices, submissions/reconciliation, refunds, chargebacks/disputes, corrections/storno, and payment states block profile anonymization or account/provider deletion; what evidence releases each blocker.
+- **W7-A-02:** which current billing-identity/tax fields may be removed after immutable invoice/seller snapshots exist, and what minimum foreign-key/reconciliation linkage must remain.
+- Assess interaction with `InvoiceIntent`, billing invoice/event, versioned billing identity, seller/tax profile, payment/refund, outbox and legal acceptance references. Restrictive FKs and immutable snapshots are technical evidence, not statutory retention periods.
+
+Technical recommendation: unsettled financial states and unknown field treatment remain `WAIT_ACCOUNTING`; preserve issued invoices, seller snapshots, tax evidence and correction/refund history unchanged. Owner cannot lower an approved accounting floor. No accounting approval or period is inferred here.

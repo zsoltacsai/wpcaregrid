@@ -98,3 +98,24 @@ Qualified legal review remains required for document text, roles/DPA audience, r
 Implementation is in progress on a fresh branch from verified primary `57fe3ef74b099f5ae6844f1ba6414149cc079d54`. Per-object logical deletion tracking, read-after-delete interfaces, restore eligibility blocking, RET-24 enforcement, corrupt-artifact reconciliation, provider `unknown` state, Owner aggregate visibility, and a fail-closed tombstone-journal contract are being implemented. No provider delete API is invoked by tests or staging validation.
 
 Remaining before Wave 6 release: complete focused and full validation; inspect migrations and MySQL behavior; run exact-head CI; merge only green CI; guarded staging deploy with pinned SSH; synthetic-only status/reconciliation check; final closure report. The independent journal adapter/replay proof is still a release limitation and recovery-exit blocker, not an Owner product default. Provider/contract/region facts and qualified legal/accounting review remain pending. Wave 7 stays blocked.
+
+## Wave 7 planning status — 2026-10-15
+
+The preceding Wave6 paragraphs are historical progress snapshots. Current primary includes later Wave6 closure evidence; use `wave6-implementation-report.md` for the latest release record. The planning branch created no Wave7 runtime code.
+
+| Phase | State | Objective / dependencies | Gate and safety |
+|---|---|---|---|
+| W7-P0 — Approval/source freeze | Owner product/security defaults ACCEPTED; qualified review/provider evidence outstanding | W7-OP-01…05 and W7-SEC-01 accepted 2026-10-15; resolve W7-L-01…03, W7-A-01…02, W7-P-01; reverify current code/provider/deployment facts before any destructive implementation | Non-destructive preparation may proceed; no destructive work; accepted RET/ER defaults are not re-asked |
+| W7-P1 — Execution-plan model and preview binding | FUTURE | Reuse Wave5 requests/events, Wave4 policy versions, Wave6 journal and provider task model; additive plan/action records only if necessary | Action flags off; no provider/source mutation |
+| W7-P2 — Owner approval/reconciliation UI | FUTURE | Bind approval to exact source/policy/journal preview, re-auth, blocker/exception display | No bulk approval or generic gate toggle |
+| W7-P3 — Synthetic profile suppression | FUTURE | Isolated synthetic DB, tombstone-before-mutation, preserve accounting snapshots, prove email re-registration | No real customer or staging primary data mutation |
+| W7-P4 — Backup/provider reconciliation | FUTURE; `WAIT_FACT` | Per-object/version adapter using M8/W6 safety, last recovery point, provider readback | Unknown version/replica/lock state blocks; no delete call absent approval |
+| W7-P5 — Execution worker | NOT AUTHORIZED | Single-subject, idempotent allowlist, final source/gate check, kill switch | `M12_DESTRUCTIVE_RETENTION_ENABLED=false`; no eligibility-to-delete scheduler |
+| W7-P6 — Isolated restore/E2E and CI | FUTURE | T0/T1 restore to disposable DB, journal replay, idempotency, failures, MySQL/concurrency, exact CI | Never restore over staging primary; no production resource |
+| W7-P7 — Separate destructive enablement | NOT PART OF THIS PLANNING CHANGE | Exact SHA, reviews, provider facts, recovery proof, security and Owner approval | Separate auditable authorization; M14/M16 commercial retention excluded |
+
+Safe non-destructive preparation may proceed from a separate implementation prompt with blockers represented. Destructive execution remains disabled until every applicable action-specific approval is present.
+
+### Owner decision update — 2026-10-15
+
+W7-OP-01…05 and W7-SEC-01 are `OWNER_APPROVED` at their recommended defaults. Production execution must stay separately gated and disabled following Wave7 implementation. W7-L-01…03 remain `WAIT_LEGAL`; W7-A-01…02 remain `WAIT_ACCOUNTING`; W7-P-01 remains `WAIT_FACT`. The approval does not authorize data or provider mutation. The initial Wave7 implementation may proceed only within the safe non-destructive scope, keeping the global gate false.
