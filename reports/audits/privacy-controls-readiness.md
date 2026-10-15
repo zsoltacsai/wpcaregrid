@@ -47,3 +47,7 @@ This does not close the independent tombstone-journal/replay gate, verify provid
 - Exact-candidate CI, merge, guarded staging deployment, staging recovery proof and post-deploy health: **PENDING**. Strict SSH authentication failed with `Permission denied (publickey)`; host-key checking was not bypassed. The earlier PR #61 CI remains historical evidence only and does not validate this candidate.
 
 No provider delete, account anonymization, live billing mutation, staging primary-database restore or production mutation occurred. `M12_DESTRUCTIVE_RETENTION_ENABLED=false`; `WAIT_FACT`, `WAIT_LEGAL` and `WAIT_ACCOUNTING` remain explicit.
+
+### Journal completeness follow-up candidate — 2026-10-15
+
+The follow-up candidate adds encrypted append-only per-event commit checkpoints chained by watermark and bound to the event-object hash. Missing/corrupt event or checkpoint, orphaned event and ambiguous chain now fail closed. Local synthetic historical restore remains separate from staging proof. Exact-head CI and merge for this follow-up are pending; strict staging SSH authentication is still unavailable, so this candidate is not marked deployed or staged. Provider durability and total failure-domain separation remain `WAIT_FACT`; legal/accounting status is unchanged.

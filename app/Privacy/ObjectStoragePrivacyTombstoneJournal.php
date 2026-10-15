@@ -9,7 +9,7 @@ use RuntimeException;
 use Symfony\Component\Uid\Ulid;
 use Throwable;
 
-/** Encrypted, independently stored append-only event objects; never mutates application data. */
+/** Encrypted append-only events and commit checkpoints; never mutates application data. */
 final class ObjectStoragePrivacyTombstoneJournal implements PrivacyTombstoneJournal
 {
     private const ACTIONS = ['account_access_restricted', 'privacy_export_revoked'];
@@ -23,19 +23,14 @@ final class ObjectStoragePrivacyTombstoneJournal implements PrivacyTombstoneJour
     {
         try {
             $this->assertIndependentStorage();
-            $files = $this->disk()->allFiles($this->eventsPath());
-            $verified = 0;
-            foreach ($files as $file) {
-                $this->readEvent($file);
-                $verified++;
-            }
+            $journal = $this->readJournal();
 
             return [
                 'state' => 'ready',
                 'reason' => 'journal_integrity_verified',
-                'watermark' => $this->watermark(),
+                'watermark' => $journal['watermark'],
                 'replay_verified' => false,
-                'verified_events' => $verified,
+                'verified_events' => count($journal['events']),
             ];
         } catch (Throwable $exception) {
             return [
@@ -57,11 +52,23 @@ final class ObjectStoragePrivacyTombstoneJournal implements PrivacyTombstoneJour
         if ($disk->exists($path)) {
             $existing = $this->readEvent($path);
             $this->assertSameAction($existing, $event);
+            $journal = $this->readJournal(allowUncommitted: true);
+            if (isset($journal['committed_event_ids'][$event['event_id']])) {
+                return $existing;
+            }
+            if (count($journal['uncommitted_events']) !== 1
+                || ! isset($journal['uncommitted_events'][$event['event_id']])
+                || ($journal['watermark'] !== null && strcmp($existing['sequence'], $journal['watermark']) <= 0)) {
+                throw new RuntimeException('privacy_journal_uncommitted_event');
+            }
+            $this->writeCheckpoint($existing, $disk->get($path), $journal['watermark']);
+            $this->readJournal();
 
             return $existing;
         }
 
-        $event['sequence'] = $this->nextSequence();
+        $journal = $this->readJournal();
+        $event['sequence'] = $this->nextSequence($journal['watermark']);
         $event['schema_version'] = 1;
         $event['journaled_at'] = now('UTC')->toIso8601String();
         $keyId = (string) config('platform_backup.encryption.current_key_id');
@@ -76,25 +83,15 @@ final class ObjectStoragePrivacyTombstoneJournal implements PrivacyTombstoneJour
         }
         $verified = $this->decodeEnvelope($readback);
         $this->assertSameAction($verified, $event);
+        $this->writeCheckpoint($verified, $readback, $journal['watermark']);
+        $this->readJournal();
 
         return $verified;
     }
 
     public function watermark(): ?string
     {
-        $latest = null;
-        foreach ($this->disk()->allFiles($this->eventsPath()) as $file) {
-            $event = $this->readEvent($file);
-            $sequence = $event['sequence'] ?? null;
-            if (! is_string($sequence) || ! preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $sequence)) {
-                throw new RuntimeException('privacy_journal_unknown_watermark');
-            }
-            if ($latest === null || strcmp($sequence, $latest) > 0) {
-                $latest = $sequence;
-            }
-        }
-
-        return $latest;
+        return $this->readJournal()['watermark'];
     }
 
     public function eventsAfter(?string $snapshotWatermark): iterable
@@ -102,9 +99,9 @@ final class ObjectStoragePrivacyTombstoneJournal implements PrivacyTombstoneJour
         if ($snapshotWatermark !== null && ! preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $snapshotWatermark)) {
             throw new RuntimeException('privacy_journal_unknown_watermark');
         }
+        $journal = $this->readJournal();
         $events = [];
-        foreach ($this->disk()->allFiles($this->eventsPath()) as $file) {
-            $event = $this->readEvent($file);
+        foreach ($journal['events'] as $event) {
             if ($snapshotWatermark === null || strcmp($event['sequence'], $snapshotWatermark) > 0) {
                 $events[] = $event;
             }
@@ -126,9 +123,8 @@ final class ObjectStoragePrivacyTombstoneJournal implements PrivacyTombstoneJour
     }
 
     /** Generate a lexically monotonic ULID against the durable watermark. */
-    private function nextSequence(): string
+    private function nextSequence(?string $latest): string
     {
-        $latest = $this->watermark();
         $timeHex = sprintf('%012x', (int) now('UTC')->format('Uv'));
         $latestBinary = $latest === null ? null : Ulid::fromString($latest)->toBinary();
         $latestTimeHex = $latestBinary === null ? null : bin2hex(substr($latestBinary, 0, 6));
@@ -168,6 +164,134 @@ final class ObjectStoragePrivacyTombstoneJournal implements PrivacyTombstoneJour
         }
 
         return trim((string) config('platform_backup.prefix', 'platform-database'), '/').'/privacy-tombstones/'.$environment.'/events';
+    }
+
+    private function checkpointsPath(): string
+    {
+        return trim((string) config('platform_backup.prefix', 'platform-database'), '/').'/privacy-tombstones/'.basename(dirname($this->eventsPath())).'/commits';
+    }
+
+    /** @return array{watermark:?string,events:list<array<string,mixed>>,committed_event_ids:array<string,true>,uncommitted_events:array<string,array<string,mixed>>} */
+    private function readJournal(bool $allowUncommitted = false): array
+    {
+        $disk = $this->disk();
+        $eventFiles = $disk->allFiles($this->eventsPath());
+        $checkpointFiles = $disk->allFiles($this->checkpointsPath());
+        $eventsById = [];
+        foreach ($eventFiles as $file) {
+            $event = $this->readEvent($file);
+            if (isset($eventsById[$event['event_id']]) || isset($eventsById['sequence:'.$event['sequence']])) {
+                throw new RuntimeException('privacy_journal_integrity_failed');
+            }
+            $eventsById[$event['event_id']] = $event;
+            $eventsById['sequence:'.$event['sequence']] = $event;
+        }
+
+        $checkpoints = [];
+        foreach ($checkpointFiles as $file) {
+            $checkpoint = $this->readCheckpoint($file);
+            if (isset($checkpoints[$checkpoint['sequence']])) {
+                throw new RuntimeException('privacy_journal_integrity_failed');
+            }
+            $checkpoints[$checkpoint['sequence']] = $checkpoint;
+        }
+        ksort($checkpoints, SORT_STRING);
+
+        $watermark = null;
+        $committed = [];
+        $committedIds = [];
+        foreach ($checkpoints as $sequence => $checkpoint) {
+            if ($checkpoint['previous_sequence'] !== $watermark) {
+                throw new RuntimeException('privacy_journal_ordering_ambiguous');
+            }
+            $event = $eventsById[$checkpoint['event_id']] ?? null;
+            if (! is_array($event)) {
+                throw new RuntimeException('privacy_journal_object_unavailable');
+            }
+            $eventPath = $this->eventsPath().'/'.$checkpoint['event_id'].'.json.enc';
+            $eventBytes = $disk->get($eventPath);
+            if (! is_string($eventBytes)
+                || $event['sequence'] !== $sequence
+                || ! hash_equals($checkpoint['event_hash'], hash('sha256', $eventBytes))
+                || isset($committedIds[$checkpoint['event_id']])) {
+                throw new RuntimeException('privacy_journal_integrity_failed');
+            }
+            $committed[] = $event;
+            $committedIds[$checkpoint['event_id']] = true;
+            $watermark = $sequence;
+        }
+
+        $uncommitted = [];
+        foreach ($eventFiles as $file) {
+            $event = $this->readEvent($file);
+            if (! isset($committedIds[$event['event_id']])) {
+                $uncommitted[$event['event_id']] = $event;
+            }
+        }
+        if ($uncommitted !== [] && ! $allowUncommitted) {
+            throw new RuntimeException('privacy_journal_uncommitted_event');
+        }
+
+        return [
+            'watermark' => $watermark,
+            'events' => $committed,
+            'committed_event_ids' => $committedIds,
+            'uncommitted_events' => $uncommitted,
+        ];
+    }
+
+    private function writeCheckpoint(array $event, mixed $eventBytes, ?string $previousSequence): void
+    {
+        if (! is_string($eventBytes) || ! is_string($event['sequence'] ?? null)) {
+            throw new RuntimeException('privacy_journal_integrity_failed');
+        }
+        $checkpoint = [
+            'schema_version' => 1,
+            'sequence' => $event['sequence'],
+            'previous_sequence' => $previousSequence,
+            'event_id' => $event['event_id'],
+            'event_hash' => hash('sha256', $eventBytes),
+        ];
+        $path = $this->checkpointsPath().'/'.$event['sequence'].'.json.enc';
+        $disk = $this->disk();
+        if ($disk->exists($path)) {
+            throw new RuntimeException('privacy_journal_integrity_failed');
+        }
+        $keyId = (string) config('platform_backup.encryption.current_key_id');
+        $envelope = $this->cryptography->encryptJournalRecord(json_encode($checkpoint, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES), $keyId);
+        $serialized = json_encode($envelope, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        if (! $disk->put($path, $serialized, ['visibility' => 'private'])) {
+            throw new RuntimeException('privacy_journal_write_failed');
+        }
+        $readback = $disk->get($path);
+        if (! is_string($readback) || ! hash_equals(hash('sha256', $serialized), hash('sha256', $readback))) {
+            throw new RuntimeException('privacy_journal_readback_failed');
+        }
+        $this->readCheckpoint($path);
+    }
+
+    private function readCheckpoint(string $path): array
+    {
+        $bytes = $this->disk()->get($path);
+        if (! is_string($bytes)) {
+            throw new RuntimeException('privacy_journal_object_unavailable');
+        }
+        $checkpoint = $this->decodeEnvelope($bytes);
+        $sequence = $checkpoint['sequence'] ?? null;
+        $previousSequence = $checkpoint['previous_sequence'] ?? null;
+        if (($checkpoint['schema_version'] ?? null) !== 1
+            || ! is_string($sequence)
+            || ! preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $sequence)
+            || ($previousSequence !== null && (! is_string($previousSequence) || ! preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $previousSequence)))
+            || ! is_string($checkpoint['event_id'] ?? null)
+            || ! preg_match('/\A[a-f0-9]{64}\z/', $checkpoint['event_id'])
+            || ! is_string($checkpoint['event_hash'] ?? null)
+            || ! preg_match('/\A[a-f0-9]{64}\z/', $checkpoint['event_hash'])
+            || basename($path) !== $sequence.'.json.enc') {
+            throw new RuntimeException('privacy_journal_unsupported_event');
+        }
+
+        return $checkpoint;
     }
 
     private function validateEvent(array $event): array

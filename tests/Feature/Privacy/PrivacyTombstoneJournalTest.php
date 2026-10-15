@@ -99,6 +99,56 @@ class PrivacyTombstoneJournalTest extends TestCase
         $journal->append($event);
     }
 
+    public function test_missing_committed_event_object_blocks_journal_readiness_and_replay_reads(): void
+    {
+        $journal = $this->journal();
+        $event = [
+            'event_id' => hash('sha256', 'missing-event-object'),
+            'subject_uuid' => (string) Str::uuid(),
+            'tenant_uuid' => null,
+            'scope' => 'customer_account',
+            'action' => 'account_access_restricted',
+            'request_uuid' => (string) Str::uuid(),
+            'effective_at' => now('UTC')->toIso8601String(),
+        ];
+        $event['tenant_uuid'] = $event['subject_uuid'];
+        $committed = $journal->append($event);
+        $eventPath = 'platform-database/privacy-tombstones/testing/events/'.$event['event_id'].'.json.enc';
+        Storage::disk('platform_backups')->delete($eventPath);
+
+        $this->assertSame('blocked', $journal->readiness()['state']);
+        $this->assertSame('privacy_journal_object_unavailable', $journal->readiness()['reason']);
+        $this->expectException(RuntimeException::class);
+        iterator_to_array((function () use ($journal) {
+            yield from $journal->eventsAfter(null);
+        })());
+    }
+
+    public function test_orphaned_event_is_blocked_until_idempotent_append_finishes_its_checkpoint(): void
+    {
+        $journal = $this->journal();
+        $event = [
+            'event_id' => hash('sha256', 'orphan-event'),
+            'subject_uuid' => (string) Str::uuid(),
+            'tenant_uuid' => null,
+            'scope' => 'customer_account',
+            'action' => 'account_access_restricted',
+            'request_uuid' => (string) Str::uuid(),
+            'effective_at' => now('UTC')->toIso8601String(),
+        ];
+        $event['tenant_uuid'] = $event['subject_uuid'];
+        $committed = $journal->append($event);
+        Storage::disk('platform_backups')->delete('platform-database/privacy-tombstones/testing/commits/'.$committed['sequence'].'.json.enc');
+
+        $this->assertSame('blocked', $journal->readiness()['state']);
+        $this->assertSame('privacy_journal_uncommitted_event', $journal->readiness()['reason']);
+        $recovered = $journal->append($event);
+
+        $this->assertSame($committed['sequence'], $recovered['sequence']);
+        $this->assertSame('ready', $journal->readiness()['state']);
+        $this->assertSame($committed['sequence'], $journal->watermark());
+    }
+
     private function journal(): ObjectStoragePrivacyTombstoneJournal
     {
         $storage = new class implements PrivacyTombstoneObjectStore
