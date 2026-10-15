@@ -6,6 +6,8 @@ use App\Events\Platform\PlatformRecoverySignal;
 use App\Models\PlatformBackupDelivery;
 use App\Models\PlatformDatabaseBackup;
 use App\Owner\OwnerSettings;
+use App\Privacy\PrivacyTombstoneJournal;
+use App\Privacy\PrivacyTombstoneReplayApplier;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -128,10 +130,21 @@ final class PlatformDatabaseBackupService
 
         try {
             $rawPath = $work.DIRECTORY_SEPARATOR.($driver === 'sqlite' ? 'database.sqlite' : 'database.sql');
-            if ($driver === 'sqlite') {
-                $this->snapshotSqlite($connection, $rawPath);
-            } else {
-                $this->snapshotMysql($connectionName, $connection->getConfig(), $connection->getDatabaseName(), $rawPath);
+            $snapshotLock = Cache::lock(PrivacyTombstoneReplayApplier::SNAPSHOT_LOCK, (int) config('platform_backup.timeout', 3600) + 300);
+            if (! $snapshotLock->get()) {
+                throw new RuntimeException('A privacy action or another recovery snapshot is already in progress.');
+            }
+            try {
+                $journal = app(PrivacyTombstoneJournal::class);
+                $journalStatus = $journal->readiness();
+                $journalWatermark = ($journalStatus['state'] ?? null) === 'ready' ? $journal->watermark() : null;
+                if ($driver === 'sqlite') {
+                    $this->snapshotSqlite($connection, $rawPath);
+                } else {
+                    $this->snapshotMysql($connectionName, $connection->getConfig(), $connection->getDatabaseName(), $rawPath);
+                }
+            } finally {
+                $snapshotLock->release();
             }
             chmod($rawPath, 0600);
 
@@ -175,6 +188,11 @@ final class PlatformDatabaseBackupService
                 'size_bytes' => $size,
                 'sha256' => $sha256,
                 'encryption' => $encryption,
+                'privacy_journal' => [
+                    'state' => ($journalStatus['state'] ?? null) === 'ready' ? 'verified' : 'blocked',
+                    'watermark' => $journalWatermark,
+                    'reason' => (string) ($journalStatus['reason'] ?? 'unknown'),
+                ],
                 'table_manifest' => $this->tableManifest($connectionName),
             ]);
             $manifest['manifest_hmac'] = $this->cryptography->signManifest($manifest, $encryption['key_id']);
@@ -444,6 +462,63 @@ final class PlatformDatabaseBackupService
             }
             @unlink($decompressedPath);
         }
+    }
+
+    /** Return only the watermark from the authenticated manifest bound to this backup object. */
+    public function recoverySnapshotWatermark(PlatformDatabaseBackup $backup): ?string
+    {
+        $disk = $this->storage->disk($backup->storage_disk);
+        if (! $disk->exists($backup->object_key) || ! $disk->exists($backup->manifest_object_key)) {
+            throw new RuntimeException('privacy_restore_manifest_unavailable');
+        }
+
+        try {
+            $manifest = json_decode($disk->get($backup->manifest_object_key), true, flags: JSON_THROW_ON_ERROR);
+        } catch (\Throwable $exception) {
+            throw new RuntimeException('privacy_restore_manifest_invalid', previous: $exception);
+        }
+        if (! is_array($manifest)
+            || ($manifest['backup_uuid'] ?? null) !== $backup->uuid
+            || ($manifest['object_key'] ?? null) !== $backup->object_key
+            || ! $this->cryptography->verifyManifest($manifest)) {
+            throw new RuntimeException('privacy_restore_manifest_integrity_failed');
+        }
+
+        $stream = $disk->readStream($backup->object_key);
+        if (! is_resource($stream)) {
+            throw new RuntimeException('privacy_restore_backup_unavailable');
+        }
+        $hash = hash_init('sha256');
+        $bytes = 0;
+        try {
+            while (! feof($stream)) {
+                $chunk = fread($stream, 1024 * 1024);
+                if ($chunk === false) {
+                    throw new RuntimeException('privacy_restore_backup_unavailable');
+                }
+                if ($chunk !== '') {
+                    hash_update($hash, $chunk);
+                    $bytes += strlen($chunk);
+                }
+            }
+        } finally {
+            fclose($stream);
+        }
+        if (! is_string($manifest['sha256'] ?? null)
+            || ! is_int($manifest['size_bytes'] ?? null)
+            || $bytes !== $manifest['size_bytes']
+            || ! hash_equals($manifest['sha256'], hash_final($hash))) {
+            throw new RuntimeException('privacy_restore_backup_integrity_failed');
+        }
+
+        $journal = $manifest['privacy_journal'] ?? null;
+        $watermark = is_array($journal) ? ($journal['watermark'] ?? null) : null;
+        if (! is_array($journal) || ($journal['state'] ?? null) !== 'verified'
+            || ($watermark !== null && (! is_string($watermark) || ! preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $watermark)))) {
+            throw new RuntimeException('privacy_restore_watermark_unverified');
+        }
+
+        return $watermark;
     }
 
     private function snapshotSqlite($connection, string $destination): void

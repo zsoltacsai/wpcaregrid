@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Owner\AdminAudit;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -31,6 +32,7 @@ final class PrivacyExportService
         private readonly PrivacyRequestService $requests,
         private readonly PrivacyExportPolicy $policy,
         private readonly CustomerPrivacyExportData $data,
+        private readonly PrivacyTombstoneJournal $tombstones,
     ) {}
 
     public function request(Customer $customer, User $actor, string $password): PrivacyExportArtifact
@@ -319,20 +321,39 @@ final class PrivacyExportService
         if (! $owner->isOwner() || $owner->customer()->exists()) {
             throw new AuthorizationException('Owner authorization is required.');
         }
-        $revoking = DB::transaction(function () use ($artifact, $owner): PrivacyExportArtifact {
-            $locked = PrivacyExportArtifact::query()->whereKey($artifact->id)->lockForUpdate()->firstOrFail();
-            if (! in_array($locked->status, [PrivacyExportStatus::Available, PrivacyExportStatus::Failed, PrivacyExportStatus::CleanupFailed], true)) {
-                throw ValidationException::withMessages(['privacy' => 'This export cannot be revoked in its current state.']);
-            }
-            if ($locked->storage_disk !== 'local' || ($locked->storage_path && $locked->storage_path !== $locked->expectedStoragePath())) {
-                throw ValidationException::withMessages(['privacy' => 'The export storage reference needs manual review before cleanup.']);
-            }
-            $locked->forceFill(['status' => PrivacyExportStatus::Revoked, 'download_expires_at' => now('UTC'), 'failure_code' => null])->save();
-            $this->requests->recordExportEvent($locked->privacyRequest, 'export_revoked', $owner, ['artifact_reference' => $locked->uuid]);
-            AdminAudit::record($owner, 'privacy.export.owner_revoked', 'privacy_export', $locked->uuid, []);
+        $lock = Cache::lock(PrivacyTombstoneReplayApplier::SNAPSHOT_LOCK, (int) config('platform_backup.timeout', 3600) + 300);
+        $lock->block(30);
+        $effectiveAt = now('UTC')->toIso8601String();
+        try {
+            $revoking = DB::transaction(function () use ($artifact, $owner, $effectiveAt): PrivacyExportArtifact {
+                $locked = PrivacyExportArtifact::query()->whereKey($artifact->id)->lockForUpdate()->firstOrFail();
+                if (! in_array($locked->status, [PrivacyExportStatus::Available, PrivacyExportStatus::Failed, PrivacyExportStatus::CleanupFailed], true)) {
+                    throw ValidationException::withMessages(['privacy' => 'This export cannot be revoked in its current state.']);
+                }
+                if ($locked->storage_disk !== 'local' || ($locked->storage_path && $locked->storage_path !== $locked->expectedStoragePath())) {
+                    throw ValidationException::withMessages(['privacy' => 'The export storage reference needs manual review before cleanup.']);
+                }
+                $request = $locked->privacyRequest;
+                $customer = $request->customer;
+                $this->tombstones->append([
+                    'event_id' => hash('sha256', 'privacy:export_revoked:'.$locked->uuid),
+                    'subject_uuid' => $customer->uuid,
+                    'tenant_uuid' => $customer->uuid,
+                    'scope' => 'customer_account',
+                    'action' => 'privacy_export_revoked',
+                    'request_uuid' => $request->uuid,
+                    'artifact_uuid' => $locked->uuid,
+                    'effective_at' => $effectiveAt,
+                ]);
+                $locked->forceFill(['status' => PrivacyExportStatus::Revoked, 'download_expires_at' => now('UTC'), 'failure_code' => null])->save();
+                $this->requests->recordExportEvent($locked->privacyRequest, 'export_revoked', $owner, ['artifact_reference' => $locked->uuid]);
+                AdminAudit::record($owner, 'privacy.export.owner_revoked', 'privacy_export', $locked->uuid, []);
 
-            return $locked->refresh();
-        }, attempts: 3);
+                return $locked->refresh();
+            }, attempts: 3);
+        } finally {
+            $lock->release();
+        }
 
         $cleanupSucceeded = true;
         try {

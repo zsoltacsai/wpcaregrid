@@ -68,11 +68,14 @@ final class SystemStatus
 
         return new StatusCheck('privacy_restore_safety', $state['state'] === 'ready' ? HealthStatus::Healthy : HealthStatus::Attention,
             $state['state'] === 'ready'
-                ? 'Privacy restore journal replay is verified.'
+                ? 'Independent privacy journal integrity is verified; restore replay is required whenever recovery mode is active.'
                 : 'Platform recovery must remain quarantined until independent tombstone replay is verified.', [
                     'recovery safety' => strtoupper($state['state']),
                     'blocker' => $state['reason'],
                     'recovery mode' => $state['recovery_mode'] ? 'ON' : 'OFF',
+                    'replay required' => $state['replay_required'] ? 'YES' : 'NO',
+                    'replay verified' => $state['replay_verified'] ? 'YES' : 'NO',
+                    'journal watermark' => $state['journal_watermark'] ?? 'empty',
                     'destructive retention' => 'OFF',
                 ]);
     }

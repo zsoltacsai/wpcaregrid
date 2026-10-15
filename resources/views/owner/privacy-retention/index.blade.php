@@ -42,7 +42,8 @@
         </div>
         <div class="mt-4 rounded-sm border border-warning/30 bg-warning-soft p-3 text-sm">
             <strong>Privacy restore safety: {{ strtoupper($restoreSafety['state']) }}</strong>
-            <div>Reason: <code>{{ $restoreSafety['reason'] }}</code>. Independent tombstone journal: {{ strtoupper($restoreSafety['journal_state']) }}. Keep platform recovery mode, workers and customer-facing operation quarantined until an independent journal is configured, replayed and verified.</div>
+            <div>Reason: <code>{{ $restoreSafety['reason'] }}</code>. Independent encrypted journal integrity: {{ strtoupper($restoreSafety['journal_state']) }} · verified events: {{ $restoreSafety['verified_events'] }} · watermark: <code>{{ $restoreSafety['journal_watermark'] ?? 'empty' }}</code>.</div>
+            <div>Recovery quarantine: {{ $restoreSafety['recovery_mode'] ? 'ACTIVE' : 'INACTIVE' }} · replay required: {{ $restoreSafety['replay_required'] ? 'YES' : 'NO' }} · replay verified for this recovery: {{ $restoreSafety['replay_verified'] ? 'YES' : 'NO' }} · destructive retention: OFF.</div>
         </div>
         <details class="mt-3 text-sm"><summary class="cursor-pointer">Provider facts (unknowns remain explicit)</summary>
             @foreach ($providerFacts as $provider => $facts)
