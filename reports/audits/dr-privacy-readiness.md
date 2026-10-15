@@ -66,3 +66,9 @@ This establishes a staging-context database-rollback independence proof for the 
 ### Journal completeness follow-up release evidence — 2026-10-15
 
 The encrypted append-only checkpoint chain and missing-object failure injection are merged in PR #65 at `31ee480be741ab818471e5781a27bbaa8afe2ade`. Exact PR-head run `38788096639` and post-merge primary run `38789787609` both passed all five mandatory GitHub Actions jobs. This improves logical detection of selectively missing journal entries; it does not prove S3 Object Lock/versioning or survival of deletion of the entire namespace/provider failure domain. Staging deployment and historical recovery proof remain unverified because strict SSH user authentication is rejected; maintain quarantine.
+
+### Wave 7 erasure replay checkpoint — 2026-10-16
+
+Wave 7 PR #69 merged at 342f50cd94345dddcb5e5449d22040f3fad187d2 after exact-head GitHub Actions run 38815372947 passed all five required jobs, including MySQL process concurrency. The exact primary was guarded-deployed to staging with strict pinned host-key checking and post-deploy health checks. The deployment migration added execution-plan/action/circuit-breaker state; no production or primary staging customer row was anonymized or deleted.
+
+A local synthetic T0/T1/restore/replay test uses a real copied SQLite T0 database and independent journal test storage. It verified privacy suppression is restored after replay, repeat replay is idempotent, original email can be reused without inherited associations, and invoice snapshot hash is unchanged. Staging post-deploy global/action gates were read back false. However, a Wave 7 staging-context anonymization/replay proof has NOT been run; deployed staging is production-mode and lacks PHPUnit. Do not treat local proof as staging recovery evidence. Provider deletion/versioning, legal and accounting gates remain WAIT_FACT, WAIT_LEGAL, and WAIT_ACCOUNTING. Production destructive execution remains disabled.
