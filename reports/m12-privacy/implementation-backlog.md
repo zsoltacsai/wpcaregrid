@@ -69,6 +69,10 @@ Owner resolved ER-01 as **HYBRID** and ER-08 as **SEPARATE ERASURE REQUEST REQUI
 | W2.3 Authenticated repeat download and audit | IMPLEMENTED; Owner Q-W2-01 approved | Reusable 24-hour signed link, authenticated tenant checks, successful downloads audited. Expiry/tenant/integrity tests pass. |
 | W2.4 Current-profile rectification | IMPLEMENTED; local regression passes | Canonical profile editor and versioned billing identity; historical invoice evidence immutable; field-code-only audit. |
 | W2.5 Customer/Owner views, health, and support controls | IMPLEMENTED; local regression passes | Localized customer status and Owner retry/revoke; aggregate health with no PII. |
-| W2.6 Release and staging closure | PENDING | Exact-head mandatory CI, normal merge, strict guarded staging deployment, synthetic staging E2E, final report merge. See `wave2-implementation-report.md`. |
+| W2.6 Release and staging closure | COMPLETE | PR #54 merged as `8406af8e8584ddc3d1b4fd9ca19af3e878bd3498`; exact-head and post-merge five-job CI passed; guarded staging deploy and rollback-only synthetic export/rectification integration checks passed. Final evidence is in `wave2-implementation-report.md`. |
 
 No Wave 2 code deletes customer/accounting source data, anonymizes accounts, deletes backups, or invokes provider deletion. Final legal and accounting review remains explicitly pending.
+
+### Wave 2 release disposition — 2026-10-15
+
+W2.1–W2.6 are complete for the explicitly partial, non-destructive engineering scope. The 24-hour link is repeatable and each successful download is audited. Staging checks verified encrypted artifact generation/readback, repeat download, tenant denial, audit count, 24-hour expiry, canonical rectification, and immutable historical invoice snapshot behavior. Synthetic records were rolled back and the temporary archive removed. Exact PR and post-merge CI, primary/runtime SHA, staging health, and remaining legal/accounting limits are recorded in `wave2-implementation-report.md`. This closure does not authorize source deletion, anonymization, backup/provider deletion, or legal-completeness claims.
