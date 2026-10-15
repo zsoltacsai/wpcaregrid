@@ -18,6 +18,8 @@ variables:
 
 .php84:
   image: php:8.4-cli-bookworm
+  rules:
+    - when: always
   before_script:
     - apt-get update -qq
     - >-
