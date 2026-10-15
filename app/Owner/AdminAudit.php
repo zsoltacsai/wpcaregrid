@@ -27,6 +27,8 @@ final class AdminAudit
         'privacy.journal.replay_event_applied', 'privacy.journal.replay_event_blocked',
         'privacy.export.started', 'privacy.export.generated', 'privacy.export.failed', 'privacy.export.owner_retry',
         'privacy.export.owner_revoked', 'privacy.export.expired', 'privacy.export.cleanup_failed',
+        'privacy.erasure.preview_created', 'privacy.erasure.preview_invalidated', 'privacy.erasure.plan.owner_approved', 'privacy.erasure.plan.cancelled',
+        'privacy.erasure.action.blocked', 'privacy.erasure.synthetic_executed', 'privacy.erasure.partial', 'privacy.erasure.circuit_open', 'privacy.erasure.circuit_reset',
         'privacy.retention.draft_created', 'privacy.retention.preview_created', 'privacy.retention.reporting_activated',
         'privacy.retention.owner_approval_recorded', 'privacy.retention.locked_change_denied',
         'legal.document.draft_created', 'legal.document.draft_updated', 'legal.document.approval_recorded',

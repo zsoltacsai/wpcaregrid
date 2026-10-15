@@ -18,6 +18,7 @@ use App\Http\Controllers\Owner\OwnerSettingsController;
 use App\Http\Controllers\Owner\PlatformBackupsController;
 use App\Http\Controllers\Owner\PricingController;
 use App\Http\Controllers\Owner\PrivacyClosureController;
+use App\Http\Controllers\Owner\PrivacyExecutionPlanController;
 use App\Http\Controllers\Owner\PrivacyRequestController;
 use App\Http\Controllers\Owner\PrivacyRetentionController;
 use App\Http\Controllers\Owner\RecoveryOfferController;
@@ -136,6 +137,10 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::post('/privacy-requests/{privacyRequest}/restore-account-access', [PrivacyRequestController::class, 'restoreAccountAccess'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-requests.restore-account-access');
         Route::post('/privacy-requests/{privacyRequest}/exports/retry', [PrivacyRequestController::class, 'retryExport'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-requests.exports.retry');
         Route::post('/privacy-requests/{privacyRequest}/exports/revoke', [PrivacyRequestController::class, 'revokeExport'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-requests.exports.revoke');
+        Route::post('/privacy-requests/{privacyRequest}/execution-plans', [PrivacyExecutionPlanController::class, 'create'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-execution-plans.create');
+        Route::get('/privacy-requests/{privacyRequest}/execution-plans/{plan}', [PrivacyExecutionPlanController::class, 'show'])->middleware('can:owner.privacy.requests.view')->name('privacy-execution-plans.show');
+        Route::post('/privacy-requests/{privacyRequest}/execution-plans/{plan}/approve', [PrivacyExecutionPlanController::class, 'approve'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-execution-plans.approve');
+        Route::post('/privacy-requests/{privacyRequest}/execution-plans/{plan}/cancel', [PrivacyExecutionPlanController::class, 'cancel'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-execution-plans.cancel');
         Route::get('/privacy-requests/{privacyRequest}', [PrivacyRequestController::class, 'show'])->middleware('can:owner.privacy.requests.view')->name('privacy-requests.show');
         Route::get('/settings/privacy-retention', [PrivacyRetentionController::class, 'index'])->middleware('can:owner.settings.manage')->name('privacy-retention.index');
         Route::post('/settings/privacy-retention/{policyKey}/draft', [PrivacyRetentionController::class, 'draft'])->middleware(['can:owner.settings.manage', 'throttle:owner-sensitive'])->name('privacy-retention.draft');

@@ -183,6 +183,13 @@ final class PrivacyTombstoneReplayApplier
                     $outcome = in_array($artifact->status, [PrivacyExportStatus::Expired, PrivacyExportStatus::Queued, PrivacyExportStatus::Generating], true) ? 'already_applied' : 'blocked';
                     $blocker = $outcome === 'blocked' ? 'privacy_export_state_unknown' : null;
                 }
+            } elseif ($action === 'profile_anonymized' && $case->request_type === PrivacyRequestType::Erasure) {
+                if ($customer->activeSubscriptions()->exists()) {
+                    $blocker = 'billing_reconciliation_required';
+                } else {
+                    $changed = DB::transaction(fn (): bool => app(PrivacyProfileAnonymizer::class)->apply($customer), attempts: 3);
+                    $outcome = $changed ? 'applied' : 'already_applied';
+                }
             } else {
                 $blocker = 'unsupported_privacy_action';
             }

@@ -12,7 +12,7 @@ use Throwable;
 /** Encrypted append-only events and commit checkpoints; never mutates application data. */
 final class ObjectStoragePrivacyTombstoneJournal implements PrivacyTombstoneJournal
 {
-    private const ACTIONS = ['account_access_restricted', 'privacy_export_revoked'];
+    private const ACTIONS = ['account_access_restricted', 'privacy_export_revoked', 'profile_anonymized'];
 
     public function __construct(
         private readonly PrivacyTombstoneObjectStore $storage,

@@ -32,3 +32,17 @@ For every qualified review, record only safe metadata: `review_type`, approved c
 - Provider facts: W7-P-01, including bucket versioning/Object Lock/lifecycle/version-delete behavior and external copy scope.
 - Safety lock: `M12_DESTRUCTIVE_RETENTION_ENABLED=false`; no generic Owner setting may override it in Wave7.
 - No deletion, anonymization, provider deletion, or customer-site mutation has been performed.
+
+## Safe implementation candidate update — 2026-10-16
+
+| Area | Candidate evidence | Current state |
+|---|---|---|
+| Execution plan and actions | Immutable versioned records, deterministic preview hash, current-source fingerprint, action blockers and idempotency key | IMPLEMENTED; exact-head CI pending |
+| Owner approval | Owner-only routes, password re-authentication, typed exact-hash confirmation, stale-source invalidation, pre-execution cancellation | IMPLEMENTED; staging validation pending |
+| Profile anonymization | Field allowlist, non-deliverable email replacement, auth/session/token and Connector/pairing revocation | Synthetic isolated test path only; all real execution gates OFF |
+| Journal/replay | Minimized profile suppression event appended/read back/integrity checked before mutation; actual T0 SQLite restore then replay; repeated replay idempotent | LOCAL SYNTHETIC TEST PASS; staging proof pending |
+| Accounting evidence | Invoice snapshot content hash unchanged in synthetic test | PROTECTED IN LOCAL TEST; WAIT_ACCOUNTING remains |
+| Backups/providers | Reconciliation preparation only; no destructive adapter/call | WAIT_FACT; no provider deletion |
+| Release | Local focused tests pass; related suite has zero failures; full local suite has one unrelated WSL gitdir packaging failure | EXACT-HEAD CI, merge, guarded deploy and isolated staging E2E pending |
+
+No evidence in this update resolves W7-L-01…03 (`WAIT_LEGAL`), W7-A-01…02 (`WAIT_ACCOUNTING`), or W7-P-01 (`WAIT_FACT`). `M12_DESTRUCTIVE_RETENTION_ENABLED=false` and all action gates remain mandatory.

@@ -38,6 +38,7 @@ final class PrivacyRequestController extends Controller
             'exportArtifact',
             'providerTasks:id,uuid,privacy_request_id,provider,scope_code,status,attempts,error_category,last_attempted_at,reconciled_at',
             'events:id,privacy_request_id,event_type,from_status,to_status,metadata,created_at',
+            'executionPlans:id,uuid,privacy_request_id,version,state,preview_hash,blocker_codes,owner_approval_status,approved_at,created_at',
         ]);
 
         return view('owner.privacy.show', compact('privacyRequest'));
