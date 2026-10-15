@@ -57,3 +57,7 @@ Review and approve, revise, or reject the proposed defaults above. No response i
 - This is a product/engineering default, not legal approval. It does not approve document wording, lawful basis, contract formation, controller/processor roles, DPA audience, notice versus affirmative acceptance, reacceptance triggers, or existing-customer transition.
 - Remaining W3 questionnaire choices are pending. Until resolved, no public legal text exists by default, missing locale versions do not fall back, and DPA remains unpublished pending audience and role review.
 - No customer-facing enforcement or document publication was enabled by this decision.
+
+## Wave 3 release status — 2026-10-15
+
+Wave 3 engineering and staging release are complete. PR #56 merged to primary as `8fb5be08108ec81c2de3a28c1ee11890554771a9`; exact PR-head CI passed all five jobs (run #220 / `38715011808`) and that primary SHA is on staging. No legal copy was published or acceptance requirement enabled. W3-O2/O3/O4 remain pending and fail closed; qualified legal review is still needed before publication or enforcement. Full evidence and residual security-scanner warning are in `wave3-implementation-report.md`.
