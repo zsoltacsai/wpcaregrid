@@ -36,3 +36,9 @@
 ## Safety statement
 
 No production recovery, staging provider deletion, customer backup deletion, customer account/site mutation, or live billing mutation was performed for this evidence. Automated deletion tests use local temporary files only. No claim of physical erasure is made. The global gate remains `M12_DESTRUCTIVE_RETENTION_ENABLED=false`; Wave 7 destructive execution is not started.
+
+## Release update — 2026-10-15
+
+Wave 6 PR #60 is merged and staged at `a6e79bd381319ee2e18c90fd464cdbaf9cef4908`. PR #61 (`39e2ed9951c1d8b56821b4e08dcc63830fa180fe`) clarified that `platform:database-backup-reconcile` persists reconciliation metadata and added a regression assertion; it passed all five exact-head GitHub Actions jobs in run `38768895991` (attempt 3), then merged as `1a45951475a292ecc06c9547a4fd4b94ae5eab77`. The primary branch now points to that merge SHA. The #61 help-text/test-only change was not separately deployed; staging runtime remains #60's SHA.
+
+The exact-head run totals were 2,936 tests, 39,848 assertions, 46 environment/opt-in skips, and zero failures. The skips are documented in `reports/m12-privacy/wave6-implementation-report.md`. Staging readiness remains blocked for independent tombstone-journal configuration and verified replay; the recovery quarantine is intentionally retained. No provider deletion or production/customer mutation occurred.

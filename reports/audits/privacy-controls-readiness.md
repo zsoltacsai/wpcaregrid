@@ -31,3 +31,9 @@
 ## Future audit contributions
 
 This evidence can inform M14 AppSec/tenant-isolation and CI supply-chain review, M15 DR/billing/privacy/operational-safety review, and M17 production readiness. Those audits remain open and must independently verify the deployed system, provider contracts, and operational recovery process.
+
+## Release update — 2026-10-15
+
+The M12 Wave 6 release correction for the platform-backup reconciliation command is merged at primary SHA `1a45951475a292ecc06c9547a4fd4b94ae5eab77`. Its exact PR head passed GitHub Actions run `38768895991` with all five mandatory jobs green. The change makes the command's persisted reconciliation status/timestamp behavior explicit and covers it with a regression assertion. No staging invocation of that state-writing command was made; staging verification used the read-only storage reconciler.
+
+This does not close the independent tombstone-journal/replay gate, verify provider-side physical deletion/versioning, or resolve legal/accounting questions. Destructive retention remains disabled; no deletion, anonymization, or provider API mutation occurred.
