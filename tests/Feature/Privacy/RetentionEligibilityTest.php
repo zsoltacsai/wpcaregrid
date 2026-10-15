@@ -10,10 +10,12 @@ use App\Models\Subscription;
 use App\Models\Website;
 use App\Privacy\CanonicalJson;
 use App\Privacy\DestructiveRetentionGate;
+use App\Privacy\PrivacyTombstoneJournal;
 use App\Privacy\RetentionEligibilityEvaluator;
 use App\Privacy\RetentionPolicyDefaults;
 use App\Privacy\RetentionPolicyWorkflow;
 use App\Privacy\RetentionSourceScanner;
+use App\Privacy\UnavailablePrivacyTombstoneJournal;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
@@ -207,6 +209,7 @@ class RetentionEligibilityTest extends TestCase
     public function test_locked_safety_policy_cannot_be_changed_and_owner_page_is_read_only_for_nonowners(): void
     {
         $this->withoutVite();
+        $this->app->instance(PrivacyTombstoneJournal::class, new UnavailablePrivacyTombstoneJournal);
         $owner = $this->asOwner();
         try {
             app(RetentionPolicyWorkflow::class)->createDraft('RET-18', false, $owner);
