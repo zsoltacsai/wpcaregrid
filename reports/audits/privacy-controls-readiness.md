@@ -64,3 +64,13 @@ This supersedes the staging-unverified status above; the earlier candidate histo
 - **Residual gates:** S3 versioning was unset/never enabled, Object Lock was not configured and lifecycle rule count was zero in read-only provider inspection. Do not claim physical deletion or immutability; provider failure-domain/deletion facts remain `WAIT_FACT`. Legal and accounting remain `WAIT_LEGAL` / `WAIT_ACCOUNTING`. Wave 7 remains gated, and no irreversible anonymization/deletion action is implemented by this replay path.
 
 Wave 6 staging validation is complete for the implemented non-destructive suppression/replay scope. This evidence does not claim a complete production DR audit or legal/accounting approval.
+
+### Wave 7 safe execution evidence — 2026-10-16
+
+Status: PARTIAL for Wave 7 staging evidence; no production execution authority.
+
+- Execution plan/action models, preview hash/source binding, Owner password re-authentication and typed approval, stale-source invalidation, pre-action cancellation, and durable circuit breaker: IMPLEMENTED and merged in PR #69.
+- Synthetic profile suppression, non-deliverable email release, authentication/session/token and Connector/pairing revocation, independent journal-before-mutation, actual local T0 SQLite restore/replay, repeat replay, re-registration isolation and invoice snapshot hash check: LOCAL SYNTHETIC PASS (7 tests, 65 assertions).
+- PR #69 exact head b9865b011d2a1360ebba9569043069278801142b passed GitHub Actions run 38815372947 (5/5 mandatory jobs) and merged as 342f50cd94345dddcb5e5449d22040f3fad187d2. Exact primary was guarded-deployed to staging; staging health passed except the existing visible security scanner WARNING.
+- Staging global/action destructive gates were verified false. The required isolated staging synthetic T0/T1/replay proof was NOT RUN: production-mode staging has no PHPUnit installation and the synthetic service refuses non-testing runtime. No primary staging/customer data was mutated. Keep this control status partial pending a separately provisioned isolated test runtime.
+- Legal W7-L-01…03 remain WAIT_LEGAL; accounting W7-A-01…02 remain WAIT_ACCOUNTING; provider W7-P-01 remains WAIT_FACT. No provider delete API, production anonymization, or destructive retention was enabled.

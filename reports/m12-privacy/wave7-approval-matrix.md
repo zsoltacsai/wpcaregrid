@@ -46,3 +46,7 @@ For every qualified review, record only safe metadata: `review_type`, approved c
 | Release | Local focused tests pass; related suite has zero failures; full local suite has one unrelated WSL gitdir packaging failure | EXACT-HEAD CI, merge, guarded deploy and isolated staging E2E pending |
 
 No evidence in this update resolves W7-L-01…03 (`WAIT_LEGAL`), W7-A-01…02 (`WAIT_ACCOUNTING`), or W7-P-01 (`WAIT_FACT`). `M12_DESTRUCTIVE_RETENTION_ENABLED=false` and all action gates remain mandatory.
+
+## Release evidence update — 2026-10-16
+
+PR #69 implementation head b9865b011d2a1360ebba9569043069278801142b passed all five required jobs in GitHub Actions run 38815372947 and merged as 342f50cd94345dddcb5e5449d22040f3fad187d2. Exact primary is deployed to staging; health and false global/action gates were verified. Local synthetic anonymization and actual T0 restore/replay passed. Isolated staging synthetic E2E remains NOT RUN, so this matrix does not mark Wave 7 release/closure complete. Legal W7-L-01…03 remain WAIT_LEGAL, accounting W7-A-01…02 remain WAIT_ACCOUNTING, and provider W7-P-01 remains WAIT_FACT. No provider deletion or production destructive execution is authorized.

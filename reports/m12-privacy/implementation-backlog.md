@@ -123,3 +123,7 @@ W7-OP-01…05 and W7-SEC-01 are `OWNER_APPROVED` at their recommended defaults. 
 ### Safe implementation candidate update — 2026-10-16
 
 P1 execution-plan/action records and exact preview binding, P2 Owner per-plan approval/re-auth/cancel UI, and synthetic-only P3 profile suppression plus independent-journal restore replay foundation are implemented on a fresh branch from planning merge `fb6ee0413e91862ed0dce27f302309fce268edad`. P4 remains preparation/reconciliation only (`WAIT_FACT`); P5 has no production execution worker/path and production gates remain false. Focused tests pass. Exact-SHA CI, guarded staging deploy and isolated staging synthetic proof remain pending; full Wave 7 closure is not claimed. See `wave7-safe-implementation-report.md`.
+
+### Wave 7 release update — 2026-10-16
+
+PR #69 merged as 342f50cd94345dddcb5e5449d22040f3fad187d2 after five-job exact-head CI run 38815372947 passed. That exact primary was guarded-deployed to staging with strict host-key checking; migrations, cache/build, worker/scheduler recovery, smoke tests and post-deploy health passed. All global/action destructive gates were verified false. Local T0/T1/restore/replay synthetic proof passed. Isolated staging synthetic proof remains pending because staging uses production-mode configuration and has no PHPUnit installation; maintain the testing-only mutation guard and leave Wave 7 closure pending. See wave7-safe-implementation-report.md.
