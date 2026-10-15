@@ -155,3 +155,16 @@ W3-O1 is product/engineering approval only. It does not approve legal copy or le
 ## Wave 3 release disposition — 2026-10-15
 
 W3.6 engineering/release validation is complete: PR #56 merged as `8fb5be08108ec81c2de3a28c1ee11890554771a9`, exact-head CI run #220 passed all five required jobs, and the exact primary SHA was guarded-deployed to staging. See `wave3-implementation-report.md` for local test counts, migration, health, worker and route evidence. No legal text was published and no acceptance enforcement was activated. W3-O2/O3/O4 and counsel review remain publication/configuration gates, not release defects in the non-publishing machinery. This record does not claim post-merge CI; GitHub returned no status/workflow run for the merge SHA when checked.
+
+## M12 Wave 7 Owner product/security decisions — 2026-10-15
+
+| ID | Category | Owner disposition | Effect | Remaining review |
+|---|---|---|---|---|
+| W7-OP-01 | Owner product policy | **OWNER_APPROVED — per-subject explicit Owner approval, recent re-auth, preview binding, typed confirmation, no bulk approval** | Approval invalidates if its source or policy changes; no unattended action | Qualified legal/accounting/provider gates remain separate |
+| W7-OP-02 | Owner product policy | **OWNER_APPROVED — eligibility may be automatic; irreversible execution may not be unattended** | Scheduler/eligibility cannot start deletion | Legal/accounting/security implementation review remains |
+| W7-OP-03 | Owner product policy | **OWNER_APPROVED — customer WordPress site content is outside ordinary account erasure** | Site/content/backups need separate scoped authority | Legal review and provider facts for any separate action |
+| W7-OP-04 | Owner product policy | **OWNER_APPROVED — pending/unknown/failed/retained provider actions cannot be reported as complete** | Partial and reconciliation states remain visible | Legal review of customer-facing wording |
+| W7-OP-05 | Owner product policy | **OWNER_APPROVED — cancellation only before first irreversible action; reopening links a new case; retries require reconciliation** | No rollback promise after action starts | Legal/accounting exceptions remain |
+| W7-SEC-01 | Owner/security policy | **OWNER_APPROVED — production destructive execution stays separately gated and disabled after Wave7 implementation** | Separate exact-SHA enablement and stop authority required | Qualified legal/accounting approvals and provider facts remain mandatory |
+
+This Owner decision does **not** resolve W7-L-01…03 (`WAIT_LEGAL`), W7-A-01…02 (`WAIT_ACCOUNTING`), or W7-P-01 (`WAIT_FACT`). It authorizes no deletion, anonymization, provider deletion, or runtime mutation. `M12_DESTRUCTIVE_RETENTION_ENABLED=false` remains mandatory.

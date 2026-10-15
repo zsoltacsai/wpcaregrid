@@ -61,3 +61,9 @@ Review and approve, revise, or reject the proposed defaults above. No response i
 ## Wave 3 release status — 2026-10-15
 
 Wave 3 engineering and staging release are complete. PR #56 merged to primary as `8fb5be08108ec81c2de3a28c1ee11890554771a9`; exact PR-head CI passed all five jobs (run #220 / `38715011808`) and that primary SHA is on staging. No legal copy was published or acceptance requirement enabled. W3-O2/O3/O4 remain pending and fail closed; qualified legal review is still needed before publication or enforcement. Full evidence and residual security-scanner warning are in `wave3-implementation-report.md`.
+
+## Wave 7 Owner decision — 2026-10-15
+
+The Owner accepted recommended product/security defaults W7-OP-01…05 and W7-SEC-01. Per-subject approval and recent re-authentication are required; eligibility may be automatic but irreversible execution may not be; website content is outside ordinary account erasure; provider-pending/unknown work cannot be called complete; cancellation/reopen/retry follows the approved questionnaire; production destructive execution remains separately gated and disabled after Wave7 implementation.
+
+Unresolved: W7-L-01…03 `WAIT_LEGAL`; W7-A-01…02 `WAIT_ACCOUNTING`; W7-P-01 `WAIT_FACT`. This Owner decision is not legal/accounting/provider approval and authorizes no deletion, anonymization, provider API call, or staging/production mutation. `M12_DESTRUCTIVE_RETENTION_ENABLED=false` remains mandatory.

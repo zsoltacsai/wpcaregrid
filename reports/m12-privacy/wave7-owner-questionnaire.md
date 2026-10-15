@@ -4,6 +4,21 @@
 **Authority:** current primary `697048bb490e2b5e43c4427d520aa28e09d4dcde`; Wave 7 planning branch.
 **Global safety state:** `M12_DESTRUCTIVE_RETENTION_ENABLED=false`.
 
+## Owner decision disposition — 2026-10-15
+
+The Owner accepted the recommended defaults for **W7-OP-01, W7-OP-02, W7-OP-03, W7-OP-04, W7-OP-05, and W7-SEC-01** as product/engineering/security defaults. This is not legal, accounting, or provider approval.
+
+| ID | Disposition | Recorded approved default |
+|---|---|---|
+| W7-OP-01 | `OWNER_APPROVED` | One explicit Owner approval per subject/action plan, recent re-authentication, exact preview hash, typed confirmation, no bulk approval; invalidate approval if source or policy changes. |
+| W7-OP-02 | `OWNER_APPROVED` | Eligibility discovery may be automatic; irreversible execution may not be unattended and requires a separately approved per-subject plan/action. |
+| W7-OP-03 | `OWNER_APPROVED` | Customer WordPress site content, remote site mutation, and site backups are outside ordinary account erasure; each needs separate scoped authority/approval. |
+| W7-OP-04 | `OWNER_APPROVED` | No generic completion while required actions/providers are pending, unknown, failed, retained, or unverified; expose partial/reconciliation outcomes. |
+| W7-OP-05 | `OWNER_APPROVED` | Cancel only before the first irreversible action; after start, no rollback promise. Reopening creates a linked case; retries use reconciled idempotency and Owner review. |
+| W7-SEC-01 | `OWNER_APPROVED` | Production destructive execution remains separately gated and disabled after Wave7 implementation; later exact-SHA enablement requires its own approvals, evidence, and stop authority. |
+
+Still open and unchanged: **W7-L-01…03 = `WAIT_LEGAL`; W7-A-01…02 = `WAIT_ACCOUNTING`; W7-P-01 = `WAIT_FACT`.** Owner approval does not weaken qualified legal/accounting requirements or resolve unknown provider behavior. No deletion, anonymization, provider deletion, or staging/production mutation is authorized. `M12_DESTRUCTIVE_RETENTION_ENABLED=false` remains mandatory.
+
 This questionnaire contains only decisions not already settled by the RET-01…RET-33, ER-01/ER-08, Wave 2, Wave 3, or Wave 6 decisions. Replies may use `ACCEPT RECOMMENDED DEFAULTS` and compact IDs. Acceptance of a product default is not legal, accounting, security, or provider approval. Review-gated items remain blocked until a qualified, attributable approval or verified provider fact is recorded. The implementation may build safe, non-destructive preparation and reconciliation while those reviews remain open.
 
 ## Resolved and not asked again

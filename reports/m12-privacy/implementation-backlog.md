@@ -105,7 +105,7 @@ The preceding Wave6 paragraphs are historical progress snapshots. Current primar
 
 | Phase | State | Objective / dependencies | Gate and safety |
 |---|---|---|---|
-| W7-P0 — Approval/source freeze | PLANNED; review evidence outstanding | Resolve W7-OP-01…05, W7-SEC-01, W7-L-01…03, W7-A-01…02, W7-P-01; reverify current code/provider/deployment facts before implementation | No destructive work; accepted RET/ER defaults are not re-asked |
+| W7-P0 — Approval/source freeze | Owner product/security defaults ACCEPTED; qualified review/provider evidence outstanding | W7-OP-01…05 and W7-SEC-01 accepted 2026-10-15; resolve W7-L-01…03, W7-A-01…02, W7-P-01; reverify current code/provider/deployment facts before any destructive implementation | Non-destructive preparation may proceed; no destructive work; accepted RET/ER defaults are not re-asked |
 | W7-P1 — Execution-plan model and preview binding | FUTURE | Reuse Wave5 requests/events, Wave4 policy versions, Wave6 journal and provider task model; additive plan/action records only if necessary | Action flags off; no provider/source mutation |
 | W7-P2 — Owner approval/reconciliation UI | FUTURE | Bind approval to exact source/policy/journal preview, re-auth, blocker/exception display | No bulk approval or generic gate toggle |
 | W7-P3 — Synthetic profile suppression | FUTURE | Isolated synthetic DB, tombstone-before-mutation, preserve accounting snapshots, prove email re-registration | No real customer or staging primary data mutation |
@@ -115,3 +115,7 @@ The preceding Wave6 paragraphs are historical progress snapshots. Current primar
 | W7-P7 — Separate destructive enablement | NOT PART OF THIS PLANNING CHANGE | Exact SHA, reviews, provider facts, recovery proof, security and Owner approval | Separate auditable authorization; M14/M16 commercial retention excluded |
 
 Safe non-destructive preparation may proceed from a separate implementation prompt with blockers represented. Destructive execution remains disabled until every applicable action-specific approval is present.
+
+### Owner decision update — 2026-10-15
+
+W7-OP-01…05 and W7-SEC-01 are `OWNER_APPROVED` at their recommended defaults. Production execution must stay separately gated and disabled following Wave7 implementation. W7-L-01…03 remain `WAIT_LEGAL`; W7-A-01…02 remain `WAIT_ACCOUNTING`; W7-P-01 remains `WAIT_FACT`. The approval does not authorize data or provider mutation. The initial Wave7 implementation may proceed only within the safe non-destructive scope, keeping the global gate false.
