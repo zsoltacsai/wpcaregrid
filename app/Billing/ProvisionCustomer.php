@@ -5,6 +5,8 @@ namespace App\Billing;
 use App\Mail\AccountActivation;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
+use App\Models\LegalDocumentAcceptance;
+use App\Models\LegalDocumentVersion;
 use App\Models\User;
 use App\Tax\BillingIdentityCompleteness;
 use App\Tax\CustomerBillingIdentityService;
@@ -85,6 +87,7 @@ final class ProvisionCustomer
         }
 
         $this->ensureUser($customer);
+        $this->recordCheckoutLegalAcceptance($intent, $customer);
 
         return $customer;
     }
@@ -143,5 +146,32 @@ final class ProvisionCustomer
         }
 
         $customer->user()->associate($user)->save();
+    }
+
+    private function recordCheckoutLegalAcceptance(CheckoutIntent $intent, Customer $customer): void
+    {
+        if (! $intent->legal_document_version_id || ! $intent->legal_document_sha256 || ! $intent->legal_accepted_at) {
+            return;
+        }
+
+        $user = $customer->user;
+        $document = LegalDocumentVersion::query()->find($intent->legal_document_version_id);
+        if (! $user || ! $document || $document->document_type !== 'terms_of_service'
+            || $document->acceptance_mode !== 'acceptance_required_before_checkout'
+            || ! hash_equals((string) $document->content_sha256, (string) $intent->legal_document_sha256)) {
+            throw new UnexpectedValueException('Checkout legal acceptance evidence does not match its immutable document version.');
+        }
+
+        LegalDocumentAcceptance::query()->firstOrCreate(
+            ['user_id' => $user->id, 'legal_document_version_id' => $document->id],
+            [
+                'customer_id' => $customer->id,
+                'document_type' => $document->document_type,
+                'locale' => $document->locale,
+                'content_sha256' => $intent->legal_document_sha256,
+                'source' => 'checkout',
+                'accepted_at' => $intent->legal_accepted_at,
+            ],
+        );
     }
 }

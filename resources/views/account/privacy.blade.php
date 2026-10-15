@@ -4,6 +4,7 @@
     <x-account.panel class="mb-4">
         <p class="text-sm text-muted">{{ __('account.privacy.scope_notice') }}</p>
         <p class="mt-2 text-xs text-muted">{{ __('account.privacy.safety_notice') }}</p>
+        <a class="mt-3 inline-block text-sm text-link underline" href="{{ route('account.legal-documents.index') }}">{{ __('account.legal_documents.title') }}</a>
     </x-account.panel>
 
     <div class="grid gap-4 lg:grid-cols-2">

@@ -91,6 +91,11 @@ class Customer extends Model
         return $this->belongsTo(User::class);
     }
 
+    public function legalDocumentAcceptances(): HasMany
+    {
+        return $this->hasMany(LegalDocumentAcceptance::class);
+    }
+
     public function subscriptions(): HasMany
     {
         return $this->hasMany(Subscription::class);

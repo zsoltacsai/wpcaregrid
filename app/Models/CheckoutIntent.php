@@ -49,6 +49,7 @@ class CheckoutIntent extends Model
             'stripe_checkout_expires_at' => 'datetime',
             'completed_at' => 'datetime',
             'cancelled_at' => 'datetime',
+            'legal_accepted_at' => 'datetime',
         ];
     }
 
@@ -70,6 +71,11 @@ class CheckoutIntent extends Model
     public function promotion(): BelongsTo
     {
         return $this->belongsTo(Promotion::class);
+    }
+
+    public function legalDocumentVersion(): BelongsTo
+    {
+        return $this->belongsTo(LegalDocumentVersion::class, 'legal_document_version_id');
     }
 
     /** New writes use encryption; legacy intent snapshots remain readable without backfill. */

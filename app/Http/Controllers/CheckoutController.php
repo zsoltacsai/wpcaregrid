@@ -13,8 +13,10 @@ use App\Checkout\PromotionRejected;
 use App\Checkout\StartCheckout;
 use App\Http\Requests\PromotionPreviewRequest;
 use App\Http\Requests\StartCheckoutRequest;
+use App\Legal\LegalDocumentCatalog;
 use App\Localization\MarketingRoutes;
 use App\Models\CheckoutIntent;
+use App\Models\LegalDocumentVersion;
 use App\Pricing\BillingInterval;
 use App\Pricing\DisplayCurrency;
 use App\Pricing\Exceptions\AmbiguousCustomerCurrency;
@@ -35,7 +37,7 @@ class CheckoutController extends Controller
     /** Session key holding the UUIDs of intents started in this browser session. */
     private const SESSION_INTENTS = 'checkout.intents';
 
-    public function show(Request $request, PricingCatalog $pricing, ExistingCustomerCurrencyLock $currencyLock, BillingIdentityCompleteness $billingIdentity): View|RedirectResponse
+    public function show(Request $request, PricingCatalog $pricing, ExistingCustomerCurrencyLock $currencyLock, BillingIdentityCompleteness $billingIdentity, LegalDocumentCatalog $legalDocuments): View|RedirectResponse
     {
         try {
             $selection = PriceSelection::fromInput(
@@ -120,6 +122,7 @@ class CheckoutController extends Controller
                     ? in_array('HUF', $display->available(), true)
                     : $pricing->defaultInternationalCurrency() !== null)
                 ->values(),
+            'termsDocument' => $legalDocuments->current('terms_of_service', app()->getLocale()),
         ]);
     }
 
@@ -133,6 +136,8 @@ class CheckoutController extends Controller
                 $request->session()->getId(),
                 $request->user()?->customer,
                 $request->validated('currency'),
+                $request->validated('terms_document_uuid') ? LegalDocumentVersion::query()->where('uuid', $request->validated('terms_document_uuid'))->firstOrFail() : null,
+                $request->validated('terms_accepted') === true || $request->validated('terms_accepted') === '1',
             );
         } catch (BillingIdentityIncomplete $e) {
             if ($customer = $request->user()?->customer) {

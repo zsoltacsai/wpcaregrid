@@ -12,6 +12,7 @@
         ['route' => 'account.billing', 'active' => 'account.billing', 'label' => __('account.nav.billing'), 'icon' => 'credit-card'],
         ['route' => 'account.profile', 'active' => 'account.profile*', 'label' => __('account.nav.profile'), 'icon' => 'user'],
         ['route' => 'account.privacy.index', 'active' => 'account.privacy.*', 'label' => __('account.nav.privacy'), 'icon' => 'shield'],
+        ['route' => 'account.legal-documents.index', 'active' => 'account.legal-documents.*', 'label' => __('account.nav.legal_documents'), 'icon' => 'list'],
     ];
 
     // Custom offers appear in the menu only for a customer who has been sent one.

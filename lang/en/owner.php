@@ -42,6 +42,7 @@ return [
         'privacy_requests' => 'Privacy requests',
         'platform_backups' => 'Platform Backups',
         'privacy_retention' => 'Privacy & Retention',
+        'legal_documents' => 'Legal documents',
         'integrations' => 'Service Credentials',
         'settings' => 'Settings',
         'dns' => 'DNS / Cloudflare',

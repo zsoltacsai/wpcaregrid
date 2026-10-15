@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\Checkout\CustomerDetails;
+use App\Legal\LegalDocumentCatalog;
 use App\Models\Customer;
 use App\Pricing\BillingInterval;
 use App\Pricing\PlanTier;
@@ -27,6 +28,15 @@ class StartCheckoutRequest extends FormRequest
             'currency' => ['required', 'string', Rule::in(array_keys((array) config('pricing.currencies')))],
             'promotion_code' => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_-]+$/'],
         ];
+
+        $terms = app(LegalDocumentCatalog::class)->current('terms_of_service', app()->getLocale());
+        if ($terms?->acceptance_mode === 'acceptance_required_before_checkout') {
+            $rules += [
+                'terms_document_uuid' => ['required', 'uuid', Rule::in([$terms->uuid])],
+                'terms_content_sha256' => ['required', 'string', Rule::in([(string) $terms->content_sha256])],
+                'terms_accepted' => ['required', 'accepted'],
+            ];
+        }
 
         if ($this->user()?->customer instanceof Customer) {
             return $rules + ['country' => ['required', 'string', Rule::in(array_keys(__('countries')))]];

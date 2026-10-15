@@ -19,11 +19,13 @@ use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\CurrencyController;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\LegacyMarketingRedirectController;
+use App\Http\Controllers\LegalDocumentController;
 use App\Http\Controllers\LocaleController;
 use App\Http\Controllers\PricingController;
 use App\Http\Controllers\RobotsController;
 use App\Http\Controllers\SitemapController;
 use App\Http\Controllers\StripeWebhookController;
+use App\Http\Middleware\EnsureCurrentLegalAcceptance;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', [LegacyMarketingRedirectController::class, 'home'])->name('legacy.home');
@@ -31,6 +33,13 @@ Route::get('/pricing', [LegacyMarketingRedirectController::class, 'pricing'])->n
 
 Route::get('/robots.txt', RobotsController::class)->name('robots');
 Route::get('/sitemap.xml', SitemapController::class)->name('sitemap');
+
+// Public legal routes resolve only approved, published, effective versions.
+Route::get('/terms', [LegalDocumentController::class, 'current'])->defaults('type', 'terms_of_service')->name('legal.terms');
+Route::get('/privacy', [LegalDocumentController::class, 'current'])->defaults('type', 'privacy_notice')->name('legal.privacy');
+Route::get('/cookie-policy', [LegalDocumentController::class, 'current'])->defaults('type', 'cookie_notice')->name('legal.cookies');
+Route::get('/dpa', [LegalDocumentController::class, 'current'])->defaults('type', 'dpa')->name('legal.dpa');
+Route::get('/legal/history/{uuid}', [LegalDocumentController::class, 'historical'])->whereUuid('uuid')->name('legal.history');
 
 Route::prefix('{locale}')->where(['locale' => 'en|hu'])->group(function () {
     Route::get('/', HomeController::class)->defaults('locale', 'en')->name('home');
@@ -73,7 +82,7 @@ Route::get('/staff/activate/{token}', [StaffActivationController::class, 'show']
 Route::post('/staff/activate', [StaffActivationController::class, 'store'])->middleware('throttle:login')->name('staff.activate.store');
 
 // Customer area. Every model is loaded by UUID and authorised by a policy.
-Route::middleware(['auth', 'customer'])->prefix('account')->name('account.')->group(function () {
+Route::middleware(['auth', 'customer', EnsureCurrentLegalAcceptance::class])->prefix('account')->name('account.')->group(function () {
     Route::get('/', DashboardController::class)->name('dashboard');
 
     Route::get('/websites', [WebsiteController::class, 'index'])->name('websites.index');
@@ -113,6 +122,8 @@ Route::middleware(['auth', 'customer'])->prefix('account')->name('account.')->gr
     Route::post('/profile/vat-verification', [AccountVatVerificationController::class, 'store'])->middleware('throttle:vies-verification')->name('profile.vat-verification');
 
     Route::get('/privacy', [PrivacyController::class, 'index'])->name('privacy.index');
+    Route::get('/legal-documents', [App\Http\Controllers\Account\LegalDocumentController::class, 'index'])->name('legal-documents.index');
+    Route::post('/legal-documents/{legalDocument}/accept', [App\Http\Controllers\Account\LegalDocumentController::class, 'accept'])->middleware('throttle:account')->name('legal-documents.accept');
     Route::post('/privacy/export', [PrivacyController::class, 'requestExport'])->middleware('throttle:account')->name('privacy.export.request');
     Route::post('/privacy/rectification', [PrivacyController::class, 'requestRectification'])->middleware('throttle:account')->name('privacy.rectification.request');
     Route::post('/privacy/exports/{artifact}/link', [PrivacyController::class, 'renewLink'])->middleware('throttle:account')->name('privacy.exports.link');

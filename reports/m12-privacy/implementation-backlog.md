@@ -76,3 +76,16 @@ No Wave 2 code deletes customer/accounting source data, anonymizes accounts, del
 ### Wave 2 release disposition — 2026-10-15
 
 W2.1–W2.6 are complete for the explicitly partial, non-destructive engineering scope. The 24-hour link is repeatable and each successful download is audited. Staging checks verified encrypted artifact generation/readback, repeat download, tenant denial, audit count, 24-hour expiry, canonical rectification, and immutable historical invoice snapshot behavior. Synthetic records were rolled back and the temporary archive removed. Exact PR and post-merge CI, primary/runtime SHA, staging health, and remaining legal/accounting limits are recorded in `wave2-implementation-report.md`. This closure does not authorize source deletion, anonymization, backup/provider deletion, or legal-completeness claims.
+
+## Wave 3 implementation status — 2026-10-15
+
+| Task | Status | Evidence / remaining gates |
+|---|---|---|
+| W3.1 Legal document catalogue and immutable locale versions | IMPLEMENTED | Draft/approved/published/retired lifecycle; sanitized content; immutable checksum and UTC effective time. |
+| W3.2 Owner lifecycle and review-reference workflow | IMPLEMENTED | Owner-only routes, explicit publish/retire confirmation, audited safe metadata. The app does not verify external legal review. |
+| W3.3 Public legal routes and customer history | IMPLEMENTED | Effective published-only resolver, no locale fallback, non-indexable public rendering, append-only version-bound acceptance ledger. |
+| W3.4 Conditional checkout/account acceptance | IMPLEMENTED, DEFAULT OFF | Exact version/checksum binding; acceptance mode remains disabled unless a reviewed version is explicitly published. Verified paid checkout provisions ledger evidence. |
+| W3.5 Privacy export and regression coverage | IMPLEMENTED | Customer's own acceptance evidence added to explicit export allowlist; focused feature tests added. |
+| W3.6 CI, guarded staging validation and report merge | PENDING | Requires exact-head green CI, safe staging release, synthetic-only UI/route verification and final report merge. No legal publication is required or permitted by this engineering task. |
+
+Qualified legal review remains required for document text, roles/DPA audience, reacceptance triggers and existing-customer transition. This is a publication/activation gate, not a blocker to the non-destructive versioning machinery.

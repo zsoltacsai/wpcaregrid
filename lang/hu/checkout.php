@@ -51,6 +51,7 @@ return [
 
     'submit' => 'Tovább a fizetéshez',
     'redirect_note' => 'A fizetési adatok megadásához átirányítjuk a Stripe oldalára.',
+    'legal' => ['accept_terms' => 'Elolvastam és elfogadom a hatályos szerződési feltételeket.'],
     'secure_note' => 'A kártyaadatokat a Stripe kezeli, azok soha nem jutnak el a mi szervereinkre.',
 
     'preview' => [

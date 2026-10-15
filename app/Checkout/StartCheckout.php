@@ -2,13 +2,16 @@
 
 namespace App\Checkout;
 
+use App\Legal\LegalDocumentCatalog;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
+use App\Models\LegalDocumentVersion;
 use App\Pricing\Exceptions\PricingException;
 use App\Pricing\PriceSelection;
 use App\Pricing\PricingCatalog;
 use App\Tax\BillingIdentityCompleteness;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Resolve the price on the server, record the intent, then create the
@@ -34,8 +37,17 @@ final class StartCheckout
      * @throws PromotionRejected when the code is unknown or not valid for the price
      * @throws CheckoutUnavailable when Stripe cannot be used
      */
-    public function handle(PriceSelection $selection, CustomerDetails $customer, ?string $promotionCode, string $browserSessionId, ?Customer $account = null, ?string $currency = null): CheckoutIntent
+    public function handle(PriceSelection $selection, CustomerDetails $customer, ?string $promotionCode, string $browserSessionId, ?Customer $account = null, ?string $currency = null, ?LegalDocumentVersion $legalDocument = null, bool $legalAccepted = false): CheckoutIntent
     {
+        $currentTerms = app(LegalDocumentCatalog::class)->current('terms_of_service', app()->getLocale());
+        $checkoutAcceptanceRequired = $currentTerms?->acceptance_mode === 'acceptance_required_before_checkout';
+        if ($checkoutAcceptanceRequired && (! $legalAccepted || $legalDocument?->id !== $currentTerms?->id
+            || ! hash_equals((string) $currentTerms?->content_sha256, (string) $legalDocument?->content_sha256))) {
+            throw ValidationException::withMessages(['terms_accepted' => 'The current Terms version must be explicitly accepted before checkout.']);
+        }
+        if (! $checkoutAcceptanceRequired && $legalDocument !== null) {
+            throw ValidationException::withMessages(['terms_document_uuid' => 'This Terms version is not currently required for checkout.']);
+        }
         // A logged-in customer buys for their own account and email.
         if ($account) {
             $customer = new CustomerDetails(
@@ -91,6 +103,7 @@ final class StartCheckout
             ->where('plan', $selection->tier->value)
             ->where('interval', $selection->interval->value)
             ->where('promotion_id', $promotion?->id)
+            ->where('legal_document_version_id', $legalDocument?->id)
             ->where('created_at', '>=', now()->subMinutes(self::REUSE_WINDOW_MINUTES))
             ->latest('id')
             ->first();
@@ -99,7 +112,7 @@ final class StartCheckout
             return $existing;
         }
 
-        $intent = DB::transaction(function () use ($account, $customer, $price, $market, $promotion, $sessionHash) {
+        $intent = DB::transaction(function () use ($account, $customer, $price, $market, $promotion, $sessionHash, $legalDocument, $legalAccepted) {
             $intent = CheckoutIntent::create([
                 'status' => CheckoutStatus::Pending,
                 'customer_id' => $account?->id,
@@ -123,6 +136,9 @@ final class StartCheckout
                 'pricing_version' => $price->version,
                 'promotion_id' => $promotion?->id,
                 'promotion_code' => $promotion?->code,
+                'legal_document_version_id' => $legalAccepted ? $legalDocument?->id : null,
+                'legal_document_sha256' => $legalAccepted ? $legalDocument?->content_sha256 : null,
+                'legal_accepted_at' => $legalAccepted ? now('UTC') : null,
                 'browser_session_hash' => $sessionHash,
             ]);
 
