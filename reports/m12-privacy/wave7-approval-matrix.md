@@ -1,0 +1,34 @@
+# M12 Wave 7 — Approval and Evidence Matrix
+
+No row below is currently authorized for destructive execution. The classification “engineering-ready” means only that a safe plan or blocked-state representation can be implemented.
+
+| Action / source | Technical preparation | Owner product approval | Legal | Accounting/tax | Provider fact | Security | Current execution disposition |
+|---|---|---|---|---|---|---|---|
+| Close account / restrict access | Existing reversible Wave5 path | ER-01/08 approved; per-case operation follows existing controls | Existing review for notice/rights remains | Check active billing before restriction | N/A | Existing Owner authorization | Current reversible closure path only; not erasure |
+| Anonymize user/customer current profile | Preview exists; field-level executor not implemented | W7-OP-01/02/04 unresolved | W7-L-01, L-02, L-03 plus existing legal handoff | W7-A-01/02 | Not applicable to local profile fields | Re-auth, authorization, session/credential revocation review | BLOCKED; no mutation |
+| Release original email for re-registration | RET-03 approved technical target; uniqueness/FK graph requires implementation | Per-subject plan | Legal approval of identifier removal and residual linkage | Check billing identity/snapshot links | N/A | Prove no reversible mapping or message path | BLOCKED pending legal/accounting/security; no email change |
+| Revoke local session/reset/pairing/admin credentials | Existing session/pairing patterns require source-specific audit | Per-subject plan | Scope/rights review | Ensure no billing operator access dependency | Credential-holder contract/scope if external | Credential inventory, idempotency, lockout check | BLOCKED except existing user-request/security controls |
+| Delete generated privacy export | Wave2 expiry/revoke exists; cleanup path can be inspected | Existing approved 24h link/7d artifact policy | Final export workflow/scope review | N/A | Verify local storage state | Verify revoked links cannot resurrect via restore | Existing export lifecycle only; Wave7 may not run cleanup |
+| Delete customer WordPress backup objects | M8 per-object deletion and safety predicates; Wave6 reconciliation | RET-04/22/23/24/33 approved; W7-OP-03/04 | W7-L-01/02/03 and customer authority | W7-A-01/02 where billing history applies | W7-P-01, per bucket/version/replica | Journal, restore/update/final-recovery guards | BLOCKED; no provider call, no physical-deletion claim |
+| Delete customer website/site content or remote Connector data | No generalized erasure executor; separate site offboarding needed | W7-OP-03 | Customer authority/contract scope | Check any service record | Provider/remote API facts | Verify ownership, credentials, quarantine and no cross-tenant targeting | OUT OF ACCOUNT ERASURE; separate explicit authorization required |
+| Delete platform backup artifact | M9 platform backup management exists; no Wave7 execution | Separate Owner policy and recovery-copy approval | Legal retention/holds | Accounting/incident relevance | S3 version/lifecycle/object lock facts | Minimum recovery points, key/journal recovery | WAIT_LEGAL / WAIT_FACT / WAIT_SECURITY; no action |
+| Retain/remove billing identity/history | Read-only impact graph and restrictive FKs | Cannot override compliance-locked policy | Determine erasable current fields and roles | W7-A-01/02 plus accounting handoff | Stripe/Számlázz behavior where relevant | Access/minimization review | WAIT_ACCOUNTING + WAIT_LEGAL; snapshots immutable |
+| Delete Stripe webhook raw payload | Encrypted raw inbox + minimized event table identified | RET-07/08 technical defaults accepted | Purpose/retention validation | Billing reconciliation/idempotency schedule | Verify Stripe event semantics, no delete API assumption | Preserve replay safety; no secrets in logs | WAIT_LEGAL / WAIT_ACCOUNTING / WAIT_SECURITY; no purge |
+| Delete rendered email body / retain delivery metadata | Outbox and JSON payload identified | RET-09/10 technical defaults accepted | Purpose and recipient linkage review | Invoice evidence boundary | SMTP provider facts where external copy exists | Pending delivery and replay suppression | WAIT_LEGAL / WAIT_ACCOUNTING / WAIT_FACT; no cleanup |
+| Delete app logs / audit/security data | Only observed sources may be planned; source coverage partial | RET-11/12 technical defaults accepted | Retention, rights, hold | Accounting/audit relevance | External logging providers not yet fully verified | Incident evidence and integrity rules | WAIT_LEGAL / WAIT_SECURITY / WAIT_FACT; no purge |
+| Delete staging/test records | Require trustworthy synthetic tag and environment proof | RET-13 accepted | Legal scope only if production data present | No real financial evidence | TEST provider scope | Isolation/no production links | Synthetic-only, scoped future test; unknown records blocked |
+| Provider deletion task dispatch | Task metadata service exists; no provider-delete client in privacy task path | W7-OP-04 / W7-OP-05 | Applicable scope and hold review | Financial holds | Verified per-provider capability and absence semantics | Least privilege, credentials, retry/idempotency | WAIT_FACT and all category approvals; no API call |
+| Tombstone write/replay | Wave6 independent object journal/replay exists | Wave7 action-specific plan | W7-L-03 | Ensure no accounting payload | Storage durability/keys remain factual gate | Integrity, key recovery, quarantine | Recovery suppression foundation exists; future per-action integration must be tested; no Wave7 mutation |
+
+## Required approval evidence record
+
+For every qualified review, record only safe metadata: `review_type`, approved category/scope, status, effective UTC date, reviewer role/organization, non-secret reference ID, policy version, and any floor/exception. Do not store the full confidential advice by default. A review state is separate from Owner product acceptance and technical configuration.
+
+## Current gate summary
+
+- Owner product decisions still requested: W7-OP-01…05; W7-SEC-01.
+- Legal waits: W7-L-01…03 and existing Wave7-relevant items in `legal-review-handoff.md`.
+- Accounting waits: W7-A-01…02 and existing itemized retention schedule in `accounting-review-handoff.md`.
+- Provider facts: W7-P-01, including bucket versioning/Object Lock/lifecycle/version-delete behavior and external copy scope.
+- Safety lock: `M12_DESTRUCTIVE_RETENTION_ENABLED=false`; no generic Owner setting may override it in Wave7.
+- No deletion, anonymization, provider deletion, or customer-site mutation has been performed.
