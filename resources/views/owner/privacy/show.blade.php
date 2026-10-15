@@ -17,6 +17,23 @@
         </dl>
     </section>
 
+    @if ($privacyRequest->request_type->value === 'erasure')
+        <section class="mt-5 rounded-md border border-line bg-surface p-5">
+            <h2 class="text-base font-semibold">Erasure execution plans</h2>
+            <p class="mt-1 text-sm text-muted">Versioned preview and Owner review only. Legal, accounting and provider facts remain separate blockers. No execution endpoint is available.</p>
+            @can('owner.privacy.requests.manage')
+                <form class="mt-4" method="POST" action="{{ route('owner.privacy-execution-plans.create', $privacyRequest) }}">@csrf<x-ui.button type="submit" size="sm">Generate blocked execution preview</x-ui.button></form>
+            @endcan
+            @if ($privacyRequest->executionPlans->isNotEmpty())
+                <ul class="mt-4 space-y-2">
+                    @foreach ($privacyRequest->executionPlans as $plan)
+                        <li><a class="font-mono text-link underline" href="{{ route('owner.privacy-execution-plans.show', [$privacyRequest, $plan]) }}">v{{ $plan->version }} · {{ strtoupper($plan->state->value) }} · {{ $plan->preview_hash }}</a></li>
+                    @endforeach
+                </ul>
+            @endif
+        </section>
+    @endif
+
     @if ($privacyRequest->exportArtifact)
         @php
             $export = $privacyRequest->exportArtifact;

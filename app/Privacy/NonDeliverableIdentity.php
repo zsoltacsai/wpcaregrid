@@ -11,4 +11,14 @@ final class NonDeliverableIdentity
     {
         return 'deleted+'.Str::uuid().'@privacy.invalid';
     }
+
+    /** Stable restore-safe alias derived only from the opaque customer UUID, never from the prior address. */
+    public static function forSubject(string $customerUuid): string
+    {
+        if (! Str::isUuid($customerUuid)) {
+            throw new \InvalidArgumentException('A valid opaque customer UUID is required.');
+        }
+
+        return 'deleted+'.str_replace('-', '', strtolower($customerUuid)).'@privacy.invalid';
+    }
 }

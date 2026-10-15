@@ -70,4 +70,9 @@ class PrivacyRequest extends Model
     {
         return $this->hasOne(PrivacyExportArtifact::class);
     }
+
+    public function executionPlans(): HasMany
+    {
+        return $this->hasMany(PrivacyErasureExecutionPlan::class, 'privacy_request_id')->orderByDesc('version');
+    }
 }

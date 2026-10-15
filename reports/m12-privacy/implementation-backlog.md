@@ -119,3 +119,7 @@ Safe non-destructive preparation may proceed from a separate implementation prom
 ### Owner decision update — 2026-10-15
 
 W7-OP-01…05 and W7-SEC-01 are `OWNER_APPROVED` at their recommended defaults. Production execution must stay separately gated and disabled following Wave7 implementation. W7-L-01…03 remain `WAIT_LEGAL`; W7-A-01…02 remain `WAIT_ACCOUNTING`; W7-P-01 remains `WAIT_FACT`. The approval does not authorize data or provider mutation. The initial Wave7 implementation may proceed only within the safe non-destructive scope, keeping the global gate false.
+
+### Safe implementation candidate update — 2026-10-16
+
+P1 execution-plan/action records and exact preview binding, P2 Owner per-plan approval/re-auth/cancel UI, and synthetic-only P3 profile suppression plus independent-journal restore replay foundation are implemented on a fresh branch from planning merge `fb6ee0413e91862ed0dce27f302309fce268edad`. P4 remains preparation/reconciliation only (`WAIT_FACT`); P5 has no production execution worker/path and production gates remain false. Focused tests pass. Exact-SHA CI, guarded staging deploy and isolated staging synthetic proof remain pending; full Wave 7 closure is not claimed. See `wave7-safe-implementation-report.md`.
