@@ -92,7 +92,7 @@ quality:
         sleep 2
       done
       [ "$downloaded" = true ]
-      tar -xz -C /tmp gitleaks
+      tar -xzf "$archive" -C /tmp gitleaks
       /tmp/gitleaks detect --source=. --config=.gitleaks.toml --redact --no-banner --verbose
 
 server:
