@@ -828,6 +828,7 @@ return [
             'mail' => 'Mail',
             'safety' => 'Safety switches',
             'privacy_retention' => 'Privacy retention safety',
+            'privacy_restore_safety' => 'Privacy restore safety',
             'privacy_exports' => 'Privacy exports',
         ],
         'switches' => [
