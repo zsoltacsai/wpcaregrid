@@ -132,6 +132,10 @@ final class RestoreTest extends TestCase
     public function test_unwritable_destination_is_refused_before_database_mutation(): void
     {
         $this->requires_mysql();
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Unix directory write permissions are required.');
+        }
+
         $directory = WP_CONTENT_DIR.'/uploads/m8-unwritable-destination';
         $target = $directory.'/fixture.txt';
         $this->put($target, 'before');
@@ -140,6 +144,11 @@ final class RestoreTest extends TestCase
         file_put_contents($target, 'after');
         update_option('m8_unwritable_restore_marker', 'after');
         chmod($directory, 0555);
+        clearstatcache(true, $directory);
+        if (is_writable($directory)) {
+            chmod($directory, 0755);
+            $this->markTestSkipped('The current test user can write to a mode-0555 directory.');
+        }
 
         try {
             $result = $this->restore($backup, 'full', $objects);

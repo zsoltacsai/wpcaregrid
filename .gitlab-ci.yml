@@ -203,5 +203,5 @@ wordpress:
         MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=mysql --user=root --execute="CREATE DATABASE IF NOT EXISTS wordpress CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
         export WP_CAREGRID_TEST_MYSQL='root:ci-root-password@mysql/wordpress'
       fi
-      php -d display_errors=1 -d memory_limit=512M vendor/bin/phpunit --display-skipped --debug
+      php -d display_errors=1 -d memory_limit=512M vendor/bin/phpunit --display-skipped
 
