@@ -116,3 +116,19 @@ This section records work on a fresh implementation branch from the currently ve
 ## Current release disposition
 
 Implementation candidate validation is not yet complete. Do not declare Wave 6 closed until exact-candidate CI is green, the candidate is merged, and guarded staging deployment plus isolated staging recovery evidence pass. If staging SSH authentication remains unavailable, keep the release status open and report the infrastructure/Owner gate without weakening strict host verification.
+
+## Independent journal / replay release evidence — 2026-10-15
+
+This section supersedes the candidate validation status above for PR #63 only. It records verified merge and CI evidence; staging deployment and staging recovery proof remain open.
+
+- Verified primary branch: `claude/ecstatic-wozniak-oemyuf`.
+- Verified starting primary SHA: `b673f5adbec9a23a968b7ee70c5f4df529991422`.
+- Implementation candidate head: `46bdf7777d9c6fb699ba7512f71a741d2dbe8cf7` (PR #63).
+- PR #63 merged normally at merge SHA and resulting primary SHA `190067caebdb818a652b381be36e04d221881165`.
+- Exact-head GitHub Actions run `38781589645` for candidate `46bdf7777d9c6fb699ba7512f71a741d2dbe8cf7`: all five required jobs passed (Quality/security/build; Server SQLite; Server MySQL; Connector SQLite; Connector MySQL). Server SQLite: 1,272 tests, 18,292 assertions, 19 documented environment/opt-in skips, 0 failures. Server MySQL: 1,272 tests, 18,490 assertions, 0 skips, 0 failures; the required process-concurrency gate also passed. Connector and quality jobs passed. The earlier candidate run `38780545880` exposed one stale UI-test assumption about the exact blocked-journal reason; both SQLite and MySQL failed only that assertion. The regression test now injects the unavailable adapter explicitly; the corrected exact-head run is green.
+- Additional local rerun of `RetentionEligibilityTest.php`: 14 tests, 410 assertions, 0 failures. The isolated test that failed in the first Actions run passed after the deterministic adapter setup (1 test, 10 assertions).
+- Current primary was re-fetched after merge and is `190067caebdb818a652b381be36e04d221881165`. The merge contains the independent encrypted object-storage journal, authenticated backup-manifest watermark binding, replay applier, quarantine readiness checks, regression tests, and implementation evidence described above.
+- Staging was not deployed or mutated. A strict SSH attempt to `stg1.wpcaregrid.com` with the approved host-key verification failed at user authentication (`Permission denied (publickey)`). The current staging runtime SHA therefore remains unverified; the previously known `a6e79bd381319ee2e18c90fd464cdbaf9cef4908` is historical context only, not a current-state claim. No host-key checking was weakened.
+- The local synthetic historical restore proof remains the verified T0/T1/restore/replay/idempotency evidence. Staging-context recovery proof, staging health, and deployment remain pending SSH access. Do not declare Wave 6 closed until those staging gates pass.
+- Provider-specific S3 versioning/Object Lock/delete-marker and failure-domain facts remain `WAIT_FACT`. Qualified legal and accounting decisions remain `WAIT_LEGAL` / `WAIT_ACCOUNTING`. These were not converted into approvals.
+- `M12_DESTRUCTIVE_RETENTION_ENABLED=false` remains in force. No deletion, anonymization, provider deletion API, live Stripe call, production mutation, or primary staging DB restore occurred.
