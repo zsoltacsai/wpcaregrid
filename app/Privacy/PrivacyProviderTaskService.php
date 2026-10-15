@@ -108,8 +108,8 @@ final class PrivacyProviderTaskService
             }
 
             $attributes = ['status' => $next];
-            if ($next === PrivacyProviderTaskStatus::Failed) {
-                $attributes['error_category'] = $errorCategory ?? 'unspecified';
+            if (in_array($next, [PrivacyProviderTaskStatus::Failed, PrivacyProviderTaskStatus::Unknown], true)) {
+                $attributes['error_category'] = $errorCategory ?? ($next === PrivacyProviderTaskStatus::Unknown ? 'provider_state_unknown' : 'unspecified');
                 $attributes['attempts'] = $locked->attempts + 1;
                 $attributes['last_attempted_at'] = now();
             }

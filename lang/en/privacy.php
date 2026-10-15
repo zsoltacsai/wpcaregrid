@@ -6,7 +6,7 @@ return [
         'requested' => 'Requested', 'identity_verification_required' => 'Identity verification required', 'verified' => 'Identity verified',
         'cooling_off' => 'Cooling-off period', 'retention_analysis' => 'Retention analysis (report only)', 'review_pending' => 'Review pending', 'blocked_policy' => 'Blocked by policy review', 'blocked_legal' => 'Blocked pending legal review', 'blocked_accounting' => 'Blocked pending accounting review', 'access_restricted' => 'Customer access restricted', 'manual_review' => 'Manual review', 'failed' => 'Failed', 'completed' => 'Completed', 'cancelled' => 'Cancelled',
     ],
-    'provider_task_statuses' => ['pending' => 'Pending', 'requested' => 'Requested', 'confirmed' => 'Confirmed', 'retained_legal' => 'Retained pending review', 'failed' => 'Failed', 'manual_review' => 'Manual review'],
+    'provider_task_statuses' => ['pending' => 'Pending', 'requested' => 'Requested', 'confirmed' => 'Confirmed', 'retained_legal' => 'Retained pending review', 'failed' => 'Failed', 'manual_review' => 'Manual review', 'unknown' => 'Unknown; manual reconciliation required'],
     'gate_states' => ['SAFE_DISABLED_BY_POLICY' => 'SAFE / DISABLED BY POLICY', 'REQUIRES_REVIEW' => 'Enabled — requires review'],
     'fact_statuses' => ['unverified' => 'Unverified', 'unreviewed' => 'Not reviewed'],
     'providers' => ['stripe' => 'Stripe', 'szamlazz' => 'Számlázz.hu', 'object_storage' => 'Object storage', 'mail' => 'Mail provider', 'hosting' => 'Hosting', 'cloudflare' => 'Cloudflare', 'other' => 'Other'],

@@ -2,7 +2,7 @@
 
 namespace App\Jobs;
 
-use App\Backups\BackupObjectName;
+use App\Backups\BackupDeletion;
 use App\Backups\BackupPolicy;
 use App\Backups\BackupService;
 use App\Backups\BackupStatus;
@@ -175,16 +175,9 @@ class TransferBackup implements ShouldBeUnique, ShouldQueue
         $backup->transitionTo(BackupStatus::Corrupt, ['error_code' => $code, 'error_message' => 'The stored backup did not match what was uploaded.', 'failed_at' => now(), 'completed_at' => now()]);
         AuditLog::record($backup->website, 'backup.corrupt', $backup, data: ['code' => $code]);
 
-        // Unusable objects are removed; the record stays.
-        try {
-            $storage = app(StorageManager::class)->provider((string) $backup->storage_provider);
-            foreach (BackupObjectName::cases() as $name) {
-                $storage->delete($backup->objectKey($name));
-            }
-            $backup->forceFill(['objects_deleted_at' => now()])->save();
-        } catch (\Throwable) {
-            // Retried by backup:monitor.
-        }
+        // Cleanup is recorded for explicit reconciliation. A provider call
+        // must never be represented as confirmed absence without read-back.
+        app(BackupDeletion::class)->recordUnusableArtifactReconciliation($backup);
 
         File::deleteDirectory($this->stagingDirectory($backup));
         $backups->settled($backup);

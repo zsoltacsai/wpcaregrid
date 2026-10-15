@@ -29,7 +29,7 @@ use Illuminate\Console\Command;
 class BackupAdmin extends Command
 {
     protected $signature = 'backup:admin {action : list|show|run|retry|verify|delete} {uuid : Website or backup UUID}
-        {--type= : files|database|full (run)} {--confirm-only-backup : Allow deleting the only verified backup}';
+        {--type= : files|database|full (run)} {--confirm-only-backup : Legacy confirmation; cannot override last-recovery-point protection}';
 
     protected $description = 'Operator actions on backups';
 
@@ -64,12 +64,15 @@ class BackupAdmin extends Command
     private function show(Backup $backup): int
     {
         $this->components->twoColumnDetail('Website', $backup->website->uuid);
-        foreach (['type', 'reason', 'status', 'error_code', 'storage_provider', 'storage_path', 'total_size', 'created_at', 'verified_at', 'expires_at', 'objects_deleted_at'] as $field) {
+        foreach (['type', 'reason', 'status', 'deletion_state', 'error_code', 'storage_provider', 'storage_path', 'total_size', 'created_at', 'verified_at', 'expires_at', 'objects_deleted_at'] as $field) {
             $value = $backup->{$field};
             $this->components->twoColumnDetail($field, (string) ($value instanceof \BackedEnum ? $value->value : $value));
         }
         foreach ($backup->objects as $object) {
             $this->components->twoColumnDetail("object {$object->name}", "{$object->status} {$object->size} B sha256:{$object->sha256} ({$object->verification_method})");
+        }
+        foreach ($backup->objectDeletions as $deletion) {
+            $this->components->twoColumnDetail("deletion {$deletion->object_name}", "{$deletion->state}; response={$deletion->provider_response_state}; verification={$deletion->verification_state}; attempts={$deletion->attempts}");
         }
         $this->newLine();
         $this->table(['Time', 'Event', 'Actor', 'Data'], $backup->website->events()->where('backup_id', $backup->id)->oldest('id')->get()
@@ -131,7 +134,7 @@ class BackupAdmin extends Command
     private function delete(BackupDeletion $deletion, Backup $backup): int
     {
         $deletion->remove($backup, BackupStatus::Deleted, 'operator', (bool) $this->option('confirm-only-backup'));
-        $this->components->info("Deleted the stored objects of {$backup->uuid}; the record is kept.");
+        $this->components->info("The logical storage keys of {$backup->uuid} are absent after read-back; provider versions/replicas are not verified. The record is kept.");
 
         return self::SUCCESS;
     }

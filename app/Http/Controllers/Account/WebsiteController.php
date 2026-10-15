@@ -75,7 +75,7 @@ class WebsiteController extends Controller
             'jobs' => $website->jobs()->with('backup')->latest('id')->limit(10)->get(),
             'canPair' => request()->user()->can('pair', $website),
             'latestBackup' => $website->backups()->latest('id')->first(),
-            'latestVerified' => $website->backups()->verified()->whereNull('objects_deleted_at')->latest('verified_at')->first(),
+            'latestVerified' => $website->backups()->usableRecoveryPoint()->latest('verified_at')->first(),
             'backupPolicy' => app(BackupPolicy::class)->for($website),
             'canBackup' => request()->user()->can('backup', $website),
             'canAdminAccess' => request()->user()->can('adminAccess', $website) && $website->isConnected(),

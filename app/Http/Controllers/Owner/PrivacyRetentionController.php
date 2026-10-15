@@ -3,8 +3,12 @@
 namespace App\Http\Controllers\Owner;
 
 use App\Http\Controllers\Controller;
+use App\Models\BackupObjectDeletion;
+use App\Models\PrivacyProviderTask;
 use App\Models\PrivacyRetentionPolicy;
 use App\Models\PrivacyRetentionPreview;
+use App\Privacy\PrivacyProviderFactRegistry;
+use App\Privacy\PrivacyRestoreSafety;
 use App\Privacy\RetentionPolicyDefaults;
 use App\Privacy\RetentionPolicyWorkflow;
 use Illuminate\Http\RedirectResponse;
@@ -13,7 +17,7 @@ use Illuminate\View\View;
 
 final class PrivacyRetentionController extends Controller
 {
-    public function index(): View
+    public function index(PrivacyRestoreSafety $restoreSafety): View
     {
         $policies = PrivacyRetentionPolicy::query()->orderBy('policy_key')->orderByDesc('version')->get()
             ->groupBy('policy_key')->map(fn ($items) => $items->first());
@@ -26,6 +30,10 @@ final class PrivacyRetentionController extends Controller
             'definitions' => RetentionPolicyDefaults::all(),
             'previews' => $previews,
             'destructiveEnabled' => false,
+            'backupDeletionStates' => BackupObjectDeletion::query()->selectRaw('state, count(*) as total')->groupBy('state')->orderBy('state')->get(),
+            'providerTaskStates' => PrivacyProviderTask::query()->selectRaw('provider, status, count(*) as total')->groupBy('provider', 'status')->orderBy('provider')->orderBy('status')->get(),
+            'providerFacts' => PrivacyProviderFactRegistry::all(),
+            'restoreSafety' => $restoreSafety->status(),
         ]);
     }
 

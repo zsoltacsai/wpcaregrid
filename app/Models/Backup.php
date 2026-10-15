@@ -69,6 +69,11 @@ class Backup extends Model
         return $this->hasMany(BackupObject::class);
     }
 
+    public function objectDeletions(): HasMany
+    {
+        return $this->hasMany(BackupObjectDeletion::class);
+    }
+
     /** The BACKUP_* job that makes this backup. */
     public function job(): HasOne
     {
@@ -83,6 +88,14 @@ class Backup extends Model
     public function scopeVerified(Builder $query): void
     {
         $query->where('status', BackupStatus::Verified);
+    }
+
+    /** A verified, non-expired logical recovery point not undergoing deletion reconciliation. */
+    public function scopeUsableRecoveryPoint(Builder $query): void
+    {
+        $query->where('status', BackupStatus::Verified)
+            ->whereNull('objects_deleted_at')
+            ->where(fn (Builder $builder) => $builder->whereNull('deletion_state')->orWhere('deletion_state', 'not_requested'));
     }
 
     /**
@@ -115,6 +128,7 @@ class Backup extends Model
     {
         return $this->status === BackupStatus::Verified
             && $this->objects_deleted_at === null
+            && in_array($this->deletion_state ?? 'not_requested', ['not_requested', ''], true)
             && ($this->expires_at === null || $this->expires_at->isFuture());
     }
 }

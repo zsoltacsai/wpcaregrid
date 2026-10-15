@@ -6,7 +6,7 @@ namespace App\Backups\Storage;
  * A directory on the WP CareGrid server. For development and tests only:
  * it is not remote storage and must not be used in production.
  */
-final class LocalStorage implements IncompleteUploadListable, ListableBackupStorage
+final class LocalStorage implements IncompleteUploadListable, InspectableBackupStorage, ListableBackupStorage
 {
     use HashesStreams;
 
@@ -71,6 +71,49 @@ final class LocalStorage implements IncompleteUploadListable, ListableBackupStor
         }
         @rmdir(dirname($path));
         @rmdir(dirname($path, 2));
+    }
+
+    public function presence(string $key): ObjectPresence
+    {
+        $path = $this->path($key);
+        clearstatcache(true, $path);
+        $root = rtrim($this->root, DIRECTORY_SEPARATOR);
+        if (! is_dir($root) || ! is_readable($root)) {
+            return ObjectPresence::Unknown;
+        }
+
+        $relativeParent = ltrim(substr(dirname($path), strlen($root)), DIRECTORY_SEPARATOR);
+        $cursor = $root;
+        foreach (array_filter(explode(DIRECTORY_SEPARATOR, $relativeParent), fn (string $part) => $part !== '') as $part) {
+            if (! is_readable($cursor)) {
+                return ObjectPresence::Unknown;
+            }
+            $next = $cursor.DIRECTORY_SEPARATOR.$part;
+            if (is_link($next)) {
+                return ObjectPresence::Unknown;
+            }
+            if (! file_exists($next)) {
+                return ObjectPresence::Absent;
+            }
+            if (! is_dir($next) || ! is_readable($next)) {
+                return ObjectPresence::Unknown;
+            }
+            $cursor = $next;
+        }
+
+        if (is_link($path)) {
+            return ObjectPresence::Unknown;
+        }
+
+        if (is_file($path)) {
+            return ObjectPresence::Present;
+        }
+
+        if (file_exists($path)) {
+            return ObjectPresence::Unknown;
+        }
+
+        return ObjectPresence::Absent;
     }
 
     public function listKeys(): iterable

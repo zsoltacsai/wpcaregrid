@@ -89,3 +89,8 @@ W2.1–W2.6 are complete for the explicitly partial, non-destructive engineering
 | W3.6 CI, guarded staging validation and report merge | IMPLEMENTATION/RELEASE COMPLETE | PR #56 exact-head five-job CI green; merged to primary and strict-host-key deployed to staging. Runtime routes/migration/health/workers verified read-only. Report-only closure evidence was merged in PR #57; no legal publication or enforcement. |
 
 Qualified legal review remains required for document text, roles/DPA audience, reacceptance triggers and existing-customer transition. This is a publication/activation gate, not a blocker to the non-destructive versioning machinery.
+## Wave 6 status — 2026-10-15
+
+Implementation is in progress on a fresh branch from verified primary `57fe3ef74b099f5ae6844f1ba6414149cc079d54`. Per-object logical deletion tracking, read-after-delete interfaces, restore eligibility blocking, RET-24 enforcement, corrupt-artifact reconciliation, provider `unknown` state, Owner aggregate visibility, and a fail-closed tombstone-journal contract are being implemented. No provider delete API is invoked by tests or staging validation.
+
+Remaining before Wave 6 release: complete focused and full validation; inspect migrations and MySQL behavior; run exact-head CI; merge only green CI; guarded staging deploy with pinned SSH; synthetic-only status/reconciliation check; final closure report. The independent journal adapter/replay proof is still a release limitation and recovery-exit blocker, not an Owner product default. Provider/contract/region facts and qualified legal/accounting review remain pending. Wave 7 stays blocked.

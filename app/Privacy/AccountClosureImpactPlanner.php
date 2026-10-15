@@ -99,7 +99,7 @@ final class AccountClosureImpactPlanner
             ->join('websites as w', 'w.id', '=', 'b.website_id')
             ->leftJoin('subscriptions as s', 's.id', '=', 'w.subscription_id')
             ->where('w.customer_id', $customer->id)
-            ->whereNull('b.objects_deleted_at');
+            ->whereNull('b.objects_deleted_at')->where(fn ($q) => $q->whereNull('b.deletion_state')->orWhere('b.deletion_state', 'not_requested'));
         $days = $this->duration('RET-04');
         $candidateQuery = clone $query;
         $candidateQuery->whereNotNull('s.ended_at')->whereIn('b.status', ['verified', 'expired']);
@@ -146,7 +146,8 @@ final class AccountClosureImpactPlanner
                         ->join('websites as other_websites', 'other_websites.id', '=', 'other.website_id')
                         ->where('other_websites.customer_id', $customer->id)
                         ->whereColumn('other.website_id', 'b.website_id')->whereColumn('other.id', '<>', 'b.id')
-                        ->where('other.status', 'verified')->whereNotNull('other.verified_at')->whereNull('other.objects_deleted_at');
+                        ->where('other.status', 'verified')->whereNotNull('other.verified_at')->whereNull('other.objects_deleted_at')
+                        ->where(fn ($q) => $q->whereNull('other.deletion_state')->orWhere('other.deletion_state', 'not_requested'));
                 })->count();
         }
 

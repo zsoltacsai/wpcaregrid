@@ -217,6 +217,8 @@ class RetentionEligibilityTest extends TestCase
 
         $this->get(route('owner.privacy-retention.index'))->assertOk()
             ->assertSee('REPORT ONLY')->assertSee('DISABLED BY POLICY')->assertSee('WAIT_LEGAL')->assertSee('RET-33');
+        $this->get(route('owner.privacy-retention.index'))->assertSee('Privacy restore safety: BLOCKED')
+            ->assertSee('independent_journal_not_configured')->assertSee('physical_version_state_unverified');
         $this->get(route('owner.privacy-retention.index'))->assertDontSee('READY_TO_DELETE');
     }
 

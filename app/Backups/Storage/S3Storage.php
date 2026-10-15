@@ -18,7 +18,7 @@ use Aws\S3\S3Client;
  * - Larger objects are uploaded in parts. S3 then only knows a checksum of
  *   checksums, so verification streams the object back and hashes it.
  */
-final class S3Storage implements IncompleteUploadListable, ListableBackupStorage
+final class S3Storage implements IncompleteUploadListable, InspectableBackupStorage, ListableBackupStorage
 {
     use HashesStreams;
 
@@ -128,6 +128,23 @@ final class S3Storage implements IncompleteUploadListable, ListableBackupStorage
         try {
             $this->client()->deleteObject(['Bucket' => $this->config['bucket'], 'Key' => $this->key($key)]);
         } catch (AwsException $e) {
+            throw $this->unavailable($e);
+        }
+    }
+
+    public function presence(string $key): ObjectPresence
+    {
+        try {
+            $this->client()->headObject(['Bucket' => $this->config['bucket'], 'Key' => $this->key($key)] + $this->encryptionParameters());
+
+            return ObjectPresence::Present;
+        } catch (AwsException $e) {
+            if ($e->getStatusCode() === 404) {
+                // This is logical-key absence only. Versioning/delete-marker and
+                // Object Lock facts require independent provider verification.
+                return ObjectPresence::Absent;
+            }
+
             throw $this->unavailable($e);
         }
     }
