@@ -151,3 +151,7 @@ This is product approval only. It does not approve legal/accounting retention, a
 | W3-O4 | Owner product policy | PENDING; each configured locale requires its own version, with no silent fallback | A visitor sees unavailable state for a locale without an effective version | Owner publication/localization policy remains open; legal translation review required |
 
 W3-O1 is product/engineering approval only. It does not approve legal copy or legal conclusions. No document content was published and no mandatory acceptance rule was activated. Other unanswered defaults use the least-public, fail-closed behavior above.
+
+## Wave 3 release disposition — 2026-10-15
+
+W3.6 engineering/release validation is complete: PR #56 merged as `8fb5be08108ec81c2de3a28c1ee11890554771a9`, exact-head CI run #220 passed all five required jobs, and the exact primary SHA was guarded-deployed to staging. See `wave3-implementation-report.md` for local test counts, migration, health, worker and route evidence. No legal text was published and no acceptance enforcement was activated. W3-O2/O3/O4 and counsel review remain publication/configuration gates, not release defects in the non-publishing machinery. This record does not claim post-merge CI; GitHub returned no status/workflow run for the merge SHA when checked.

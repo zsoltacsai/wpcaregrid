@@ -86,6 +86,6 @@ W2.1–W2.6 are complete for the explicitly partial, non-destructive engineering
 | W3.3 Public legal routes and customer history | IMPLEMENTED | Effective published-only resolver, no locale fallback, non-indexable public rendering, append-only version-bound acceptance ledger. |
 | W3.4 Conditional checkout/account acceptance | IMPLEMENTED, DEFAULT OFF | Exact version/checksum binding; acceptance mode remains disabled unless a reviewed version is explicitly published. Verified paid checkout provisions ledger evidence. |
 | W3.5 Privacy export and regression coverage | IMPLEMENTED | Customer's own acceptance evidence added to explicit export allowlist; focused feature tests added. |
-| W3.6 CI, guarded staging validation and report merge | PENDING | Requires exact-head green CI, safe staging release, synthetic-only UI/route verification and final report merge. No legal publication is required or permitted by this engineering task. |
+| W3.6 CI, guarded staging validation and report merge | IMPLEMENTATION/RELEASE COMPLETE; closure evidence PR pending | PR #56 exact-head five-job CI green; merged to primary and strict-host-key deployed to staging. Runtime routes/migration/health/workers verified read-only. Final report-only closure evidence is being prepared; no legal publication or enforcement. |
 
 Qualified legal review remains required for document text, roles/DPA audience, reacceptance triggers and existing-customer transition. This is a publication/activation gate, not a blocker to the non-destructive versioning machinery.
