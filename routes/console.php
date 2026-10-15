@@ -22,6 +22,8 @@ Schedule::command('connector:update-presence')->everyTenMinutes()->withoutOverla
 Schedule::command('backup:schedule')->hourly()->withoutOverlapping()->onOneServer();
 Schedule::command('backup:monitor')->everyTenMinutes()->withoutOverlapping()->onOneServer();
 Schedule::command('backup:retention')->dailyAt('03:30')->withoutOverlapping()->onOneServer();
+// Temporary encrypted privacy export artifacts only; this never touches source records.
+Schedule::command('privacy:exports-expire --limit=100')->everyFifteenMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer();
 // Owner-managed cadence is evaluated from the database-backed settings on each
 // invocation. A unique UTC slot row bounds catch-up and prevents duplicate dispatch.
 Schedule::command('platform:database-backup-schedule')->everyTenMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer();

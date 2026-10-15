@@ -35,8 +35,9 @@ class SystemStatusTest extends TestCase
         foreach (['Application', 'Database', 'Queue', 'Scheduler', 'Connector API', 'Stripe', 'Cloudflare DNS', 'Backup storage', 'Security scanner', 'Mail'] as $name) {
             $response->assertSee($name);
         }
-        $this->assertCount(12, $this->states());
+        $this->assertCount(13, $this->states());
         $this->assertSame(HealthStatus::Healthy, $this->states()['privacy_retention']);
+        $this->assertSame(HealthStatus::Healthy, $this->states()['privacy_exports']);
     }
 
     public function test_disabled_privacy_retention_gate_is_visible_as_safe_and_enabled_value_requires_attention(): void

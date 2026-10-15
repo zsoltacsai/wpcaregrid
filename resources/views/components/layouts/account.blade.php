@@ -11,6 +11,7 @@
         ['route' => 'account.subscription', 'active' => 'account.subscription*', 'label' => __('account.nav.subscription'), 'icon' => 'refresh'],
         ['route' => 'account.billing', 'active' => 'account.billing', 'label' => __('account.nav.billing'), 'icon' => 'credit-card'],
         ['route' => 'account.profile', 'active' => 'account.profile*', 'label' => __('account.nav.profile'), 'icon' => 'user'],
+        ['route' => 'account.privacy.index', 'active' => 'account.privacy.*', 'label' => __('account.nav.privacy'), 'icon' => 'shield'],
     ];
 
     // Custom offers appear in the menu only for a customer who has been sent one.

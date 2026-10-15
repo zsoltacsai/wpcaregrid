@@ -4,9 +4,11 @@ namespace App\Http\Controllers\Owner;
 
 use App\Http\Controllers\Controller;
 use App\Models\PrivacyRequest;
+use App\Privacy\PrivacyExportService;
 use App\Privacy\PrivacyProviderFactRegistry;
 use App\Privacy\PrivacyRequestService;
 use App\Privacy\PrivacyRequestStatus;
+use App\Privacy\PrivacyRequestType;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request as HttpRequest;
@@ -33,11 +35,28 @@ final class PrivacyRequestController extends Controller
     {
         $privacyRequest->load([
             'customer:id,uuid',
+            'exportArtifact',
             'providerTasks:id,uuid,privacy_request_id,provider,scope_code,status,attempts,error_category,last_attempted_at,reconciled_at',
             'events:id,privacy_request_id,event_type,from_status,to_status,metadata,created_at',
         ]);
 
         return view('owner.privacy.show', compact('privacyRequest'));
+    }
+
+    public function retryExport(HttpRequest $request, PrivacyRequest $privacyRequest, PrivacyExportService $exports): RedirectResponse
+    {
+        abort_unless($privacyRequest->request_type === PrivacyRequestType::Access && $privacyRequest->exportArtifact, 404);
+        $exports->retry($privacyRequest->exportArtifact, $request->user('owner'));
+
+        return redirect()->route('owner.privacy-requests.show', $privacyRequest)->with('status', 'The privacy export was safely queued for a bounded retry.');
+    }
+
+    public function revokeExport(HttpRequest $request, PrivacyRequest $privacyRequest, PrivacyExportService $exports): RedirectResponse
+    {
+        abort_unless($privacyRequest->request_type === PrivacyRequestType::Access && $privacyRequest->exportArtifact, 404);
+        $exports->revoke($privacyRequest->exportArtifact, $request->user('owner'));
+
+        return redirect()->route('owner.privacy-requests.show', $privacyRequest)->with('status', 'The temporary encrypted export was revoked. Source customer data was unchanged.');
     }
 
     public function transition(HttpRequest $request, PrivacyRequest $privacyRequest, PrivacyRequestService $service): RedirectResponse

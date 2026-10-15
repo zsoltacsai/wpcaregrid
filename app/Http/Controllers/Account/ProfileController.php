@@ -3,16 +3,23 @@
 namespace App\Http\Controllers\Account;
 
 use App\Http\Controllers\Controller;
+use App\Localization\Locales;
+use App\Models\Customer;
+use App\Models\PrivacyRequest;
 use App\Pricing\BillingInterval;
 use App\Pricing\Exceptions\InvalidPriceSelection;
 use App\Pricing\PlanTier;
 use App\Pricing\PriceSelection;
 use App\Pricing\ProductType;
+use App\Privacy\PrivacyRequestService;
+use App\Privacy\PrivacyRequestStatus;
+use App\Privacy\PrivacyRequestType;
 use App\Tax\BillingIdentityCompleteness;
 use App\Tax\CustomerBillingIdentityService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
@@ -51,11 +58,21 @@ class ProfileController extends Controller
             }
         }
         $missingBillingFields = $completeness->missingForCustomer($customer);
+        $rectificationRequest = null;
+        if ($request->filled('privacy_request')) {
+            $rectificationRequest = $customer->privacyRequests()
+                ->where('uuid', $request->query('privacy_request'))
+                ->where('request_type', PrivacyRequestType::Rectification->value)
+                ->where('status', PrivacyRequestStatus::Verified->value)
+                ->firstOrFail();
+        }
 
-        return view('account.profile', compact('customer', 'identity', 'history', 'lastSuccessful', 'countries', 'continueCheckout', 'checkoutSelection', 'missingBillingFields'));
+        $locales = Locales::supported();
+
+        return view('account.profile', compact('customer', 'identity', 'history', 'lastSuccessful', 'countries', 'continueCheckout', 'checkoutSelection', 'missingBillingFields', 'rectificationRequest', 'locales'));
     }
 
-    public function update(Request $request, CustomerBillingIdentityService $identities, BillingIdentityCompleteness $completeness): RedirectResponse
+    public function update(Request $request, CustomerBillingIdentityService $identities, BillingIdentityCompleteness $completeness, PrivacyRequestService $privacyRequests): RedirectResponse
     {
         $customer = $request->attributes->get('customer');
         $this->authorize('update', $customer);
@@ -74,6 +91,8 @@ class ProfileController extends Controller
             $request->merge(['tax_id' => trim($request->input('tax_id'))]);
         }
         $rules = [
+            'privacy_request' => ['sometimes', 'nullable', 'uuid'],
+            'locale' => ['sometimes', 'string', Rule::in(Locales::codes())],
             'first_name' => ['required', 'string', 'max:100'],
             'last_name' => ['required', 'string', 'max:100'],
             'customer_type' => ['required', Rule::in(['individual', 'company'])],
@@ -109,39 +128,84 @@ class ProfileController extends Controller
             'country_code' => strtoupper($validated['country_code']),
             'tax_id' => $validated['tax_id'] ?? null,
             'billing_address' => $billingAddress,
+            'locale' => $validated['locale'] ?? (Locales::isSupported($request->user()->locale) ? $request->user()->locale : Locales::default()),
         ];
 
-        $identityChanged = $customer->first_name !== $nextProfile['first_name']
-            || $customer->last_name !== $nextProfile['last_name']
-            || $customer->customer_type !== $nextProfile['customer_type']
-            || $customer->company_name !== $nextProfile['company_name']
-            || strtoupper($customer->country_code) !== $nextProfile['country_code']
-            || $customer->taxIdentifier() !== $nextProfile['tax_id']
-            || $customer->tax_id !== null
-            || ($customer->billing_address ?? null) !== $nextProfile['billing_address'];
+        $rectification = null;
+        if (filled($validated['privacy_request'] ?? null)) {
+            $rectification = $customer->privacyRequests()->where('uuid', $validated['privacy_request'])->firstOrFail();
+            abort_unless($rectification->request_type === PrivacyRequestType::Rectification && $rectification->status === PrivacyRequestStatus::Verified, 404);
+        }
 
-        DB::transaction(function () use ($customer, $request, $nextProfile, $identityChanged, $identities) {
-            $customer->update([
+        $changedFields = DB::transaction(function () use ($customer, $request, $nextProfile, $identities, $privacyRequests, $rectification): array {
+            $lockedCustomer = Customer::query()->whereKey($customer->id)->lockForUpdate()->firstOrFail();
+            $lockedRectification = null;
+            if ($rectification) {
+                $lockedRectification = PrivacyRequest::query()->whereKey($rectification->id)->lockForUpdate()->firstOrFail();
+                abort_unless($lockedRectification->customer_id === $lockedCustomer->id
+                    && $lockedRectification->request_type === PrivacyRequestType::Rectification
+                    && $lockedRectification->status === PrivacyRequestStatus::Verified, 404);
+            }
+
+            $changedFields = [];
+            foreach ([
+                'first_name' => $nextProfile['first_name'],
+                'last_name' => $nextProfile['last_name'],
+                'customer_type' => $nextProfile['customer_type'],
+                'company_name' => $nextProfile['company_name'],
+                'country_code' => $nextProfile['country_code'],
+                'tax_id' => $nextProfile['tax_id'],
+                'billing_address' => $nextProfile['billing_address'],
+                'locale' => $nextProfile['locale'],
+            ] as $field => $value) {
+                $current = match ($field) {
+                    'tax_id' => $lockedCustomer->taxIdentifier(),
+                    'locale' => $request->user()->locale,
+                    default => $lockedCustomer->{$field},
+                };
+                if ($field === 'country_code') {
+                    $current = strtoupper((string) $current);
+                }
+                if ($current !== $value) {
+                    $changedFields[] = $field;
+                }
+            }
+
+            $identityChanged = array_intersect($changedFields, [
+                'first_name', 'last_name', 'customer_type', 'company_name', 'country_code', 'tax_id', 'billing_address',
+            ]) !== [] || $lockedCustomer->tax_id !== null;
+            $lockedCustomer->update([
                 ...$nextProfile,
                 'tax_id' => null,
                 'tax_identifier_encrypted' => $nextProfile['tax_id'],
             ]);
 
             if ($identityChanged) {
-                $identities->snapshotProfile($customer, [
-                    'customer_type' => $customer->customer_type,
-                    'company_name' => $customer->company_name,
-                    'legal_name' => $customer->customer_type === 'company'
-                        ? $customer->company_name
-                        : trim($customer->first_name.' '.$customer->last_name),
-                    'country_code' => $customer->country_code,
-                    'tax_id' => $customer->taxIdentifier(),
-                    'billing_address' => $customer->billing_address,
+                $identities->snapshotProfile($lockedCustomer, [
+                    'customer_type' => $lockedCustomer->customer_type,
+                    'company_name' => $lockedCustomer->company_name,
+                    'legal_name' => $lockedCustomer->customer_type === 'company'
+                        ? $lockedCustomer->company_name
+                        : trim($lockedCustomer->first_name.' '.$lockedCustomer->last_name),
+                    'country_code' => $lockedCustomer->country_code,
+                    'tax_id' => $lockedCustomer->taxIdentifier(),
+                    'billing_address' => $lockedCustomer->billing_address,
                 ]);
             }
 
-            $request->user()->update(['name' => $customer->fullName()]);
+            $request->user()->update(['name' => $lockedCustomer->fullName(), 'locale' => $nextProfile['locale']]);
+            if ($lockedRectification && $changedFields !== []) {
+                $privacyRequests->completeRectification($lockedRectification, $lockedCustomer, $request->user(), $changedFields);
+            }
+
+            return $changedFields;
         });
+
+        Cookie::queue(Locales::cookie($nextProfile['locale']));
+
+        if ($rectification && $changedFields === []) {
+            return redirect()->route('account.profile', ['privacy_request' => $rectification->uuid])->withErrors(['privacy_request' => __('account.privacy.no_profile_changes')]);
+        }
 
         if ($continueCheckout && $completeness->customerIsComplete($customer->fresh())) {
             return redirect()->route('checkout.show', [
@@ -149,6 +213,10 @@ class ProfileController extends Controller
                 'plan' => $validated['plan'],
                 'interval' => $validated['interval'],
             ])->with('status', __('account.profile.saved'));
+        }
+
+        if ($rectification && $changedFields !== []) {
+            return redirect()->route('account.profile')->with('status', __('account.profile.rectification_saved'));
         }
 
         return redirect()->route('account.profile')->with('status', __('account.profile.saved'));

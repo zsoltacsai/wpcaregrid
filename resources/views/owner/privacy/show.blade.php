@@ -17,6 +17,40 @@
         </dl>
     </section>
 
+    @if ($privacyRequest->exportArtifact)
+        @php($export = $privacyRequest->exportArtifact)
+        <section class="mt-5 rounded-md border border-line bg-surface p-5">
+            <h2 class="font-semibold">{{ __('privacy.owner.export') }}</h2>
+            <p class="mt-1 text-xs text-muted">{{ __('privacy.owner.export_not_downloadable') }}</p>
+            <dl class="mt-4 grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                <div><dt class="text-xs text-muted">{{ __('privacy.owner.export_status') }}</dt><dd>{{ __('account.privacy.export_states.'.$export->status->value) }}</dd></div>
+                <div><dt class="text-xs text-muted">{{ __('privacy.owner.export_coverage') }}</dt><dd>{{ __('privacy.owner.export_partial') }}</dd></div>
+                <div><dt class="text-xs text-muted">{{ __('privacy.owner.export_size') }}</dt><dd>{{ $export->package_size ? number_format($export->package_size).' bytes' : '—' }}</dd></div>
+                <div><dt class="text-xs text-muted">{{ __('privacy.owner.export_generated_at') }}</dt><dd>{{ $export->generated_at?->utc()->format('Y-m-d H:i:s').' UTC' ?? '—' }}</dd></div>
+                <div><dt class="text-xs text-muted">{{ __('privacy.owner.export_expires_at') }}</dt><dd>{{ $export->expires_at?->utc()->format('Y-m-d H:i:s').' UTC' ?? '—' }}</dd></div>
+                <div><dt class="text-xs text-muted">{{ __('privacy.owner.export_link_expires_at') }}</dt><dd>{{ $export->download_expires_at?->utc()->format('Y-m-d H:i:s').' UTC' ?? '—' }}</dd></div>
+                <div><dt class="text-xs text-muted">{{ __('privacy.owner.export_download_count') }}</dt><dd>{{ $export->download_count }}</dd></div>
+                @if ($export->failure_code)
+                    <div><dt class="text-xs text-muted">{{ __('privacy.owner.export_failure_code') }}</dt><dd>{{ $export->failure_code }}</dd></div>
+                @endif
+            </dl>
+            <div class="mt-4 text-xs text-muted">
+                <p>{{ __('privacy.owner.export_included') }}: {{ collect($export->included_sections ?? [])->join(', ') ?: '—' }}</p>
+                <p class="mt-1">{{ __('privacy.owner.export_excluded') }}: {{ collect(array_keys($export->excluded_sections ?? []))->join(', ') ?: '—' }}</p>
+            </div>
+            @can('owner.privacy.requests.manage')
+                <div class="mt-5 flex flex-wrap gap-3 border-t border-line pt-4">
+                    @if ($export->status === \App\Privacy\PrivacyExportStatus::Failed && $export->attempts < 3)
+                        <form method="POST" action="{{ route('owner.privacy-requests.exports.retry', $privacyRequest) }}">@csrf<x-ui.button type="submit" size="sm">{{ __('privacy.owner.export_retry') }}</x-ui.button></form>
+                    @endif
+                    @if (in_array($export->status, [\App\Privacy\PrivacyExportStatus::Available, \App\Privacy\PrivacyExportStatus::Failed, \App\Privacy\PrivacyExportStatus::CleanupFailed], true))
+                        <form method="POST" action="{{ route('owner.privacy-requests.exports.revoke', $privacyRequest) }}">@csrf<x-ui.button type="submit" size="sm" variant="secondary">{{ __('privacy.owner.export_revoke') }}</x-ui.button></form>
+                    @endif
+                </div>
+            @endcan
+        </section>
+    @endif
+
     @if ($privacyRequest->request_type === \App\Privacy\PrivacyRequestType::AccountClosure)
         <section class="mt-5 rounded-md border border-line bg-surface p-5">
             <h2 class="font-semibold">{{ __('privacy.owner.account_access') }}</h2>

@@ -3,6 +3,13 @@
 
     @php $address = $customer->billing_address ?? []; @endphp
 
+    @if ($rectificationRequest)
+        <x-account.panel class="mb-4">
+            <p class="text-sm text-primary">{{ __('account.privacy.rectification_notice') }}</p>
+            <input type="hidden" form="profile-form" name="privacy_request" value="{{ $rectificationRequest->uuid }}">
+        </x-account.panel>
+    @endif
+
     @if ($continueCheckout)
         <x-account.panel class="mb-4">
             <p role="status" class="text-sm text-primary">{{ __('account.profile.checkout_required') }}</p>
@@ -55,6 +62,8 @@
             </div>
 
             <x-form.select name="country_code" :label="__('account.profile.country')" :hint="__('account.profile.country_hint')" :options="__('countries')" :selected="$customer->country_code" autocomplete="country" class="sm:max-w-md" />
+
+            <x-form.select name="locale" :label="__('account.profile.language')" :options="$locales" :selected="old('locale', auth()->user()->locale ?? app()->getLocale())" class="sm:max-w-md" />
 
             <div class="grid gap-5 sm:grid-cols-2">
                 <x-form.field name="address_line1" :label="__('account.profile.address_line1')" :value="$address['line1'] ?? null" autocomplete="address-line1" :optional="!$continueCheckout" @if($continueCheckout) required @endif maxlength="150" />

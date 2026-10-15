@@ -59,3 +59,16 @@ Completion is limited to the report-only Wave 4 scope. Wave 5 remains eligible o
 ## Wave 5 decision and implementation update — 2026-10-14
 
 Owner resolved ER-01 as **HYBRID** and ER-08 as **SEPARATE ERASURE REQUEST REQUIRED**. Non-destructive implementation may proceed without another product-policy question. The first slice adds an `account_closure` request type while keeping `erasure` distinct, adds cooling-off/review labels without any transition to execution/completion, and provides an aggregate-only Owner impact preview plus a typed future anonymization plan. No migration is required for the existing string-backed request type/status columns. Remaining legal/accounting/provider facts stay blocked; Wave 7 destructive work is not included.
+
+## Wave 2 implementation status — 2026-10-15
+
+| Task | Status | Evidence / remaining gates |
+|---|---|---|
+| W2.1 Customer export request and allowlisted data assembler | IMPLEMENTED; focused local tests pass | Existing privacy request lifecycle, explicit JSON sections/manifest, partial coverage, category registry checks, sensitive/accounting exclusions. Legal review still owns final response scope. |
+| W2.2 Encrypted package generation, private storage, integrity, expiry | IMPLEMENTED; local tests pass | Unique/overlap-locked job, bounded output, encrypted local artifact, readback/hash verification, bounded temporary-artifact expiry command. |
+| W2.3 Authenticated repeat download and audit | IMPLEMENTED; Owner Q-W2-01 approved | Reusable 24-hour signed link, authenticated tenant checks, successful downloads audited. Expiry/tenant/integrity tests pass. |
+| W2.4 Current-profile rectification | IMPLEMENTED; local regression passes | Canonical profile editor and versioned billing identity; historical invoice evidence immutable; field-code-only audit. |
+| W2.5 Customer/Owner views, health, and support controls | IMPLEMENTED; local regression passes | Localized customer status and Owner retry/revoke; aggregate health with no PII. |
+| W2.6 Release and staging closure | PENDING | Exact-head mandatory CI, normal merge, strict guarded staging deployment, synthetic staging E2E, final report merge. See `wave2-implementation-report.md`. |
+
+No Wave 2 code deletes customer/accounting source data, anonymizes accounts, deletes backups, or invokes provider deletion. Final legal and accounting review remains explicitly pending.
