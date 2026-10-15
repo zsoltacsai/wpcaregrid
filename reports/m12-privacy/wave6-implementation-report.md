@@ -83,3 +83,19 @@ The broad local regression run preceded only the final completed-delete idempote
 ## Release disposition
 
 Pending validation. No Wave 7 destructive retention is started. No GDPR compliance claim is made.
+
+## Final release and GitHub Actions evidence — 2026-10-15
+
+This section supersedes the earlier provisional release disposition above; the earlier evidence remains preserved as history.
+
+- Wave 6 implementation PR #60 was merged to `claude/ecstatic-wozniak-oemyuf` at `a6e79bd381319ee2e18c90fd464cdbaf9cef4908`. The same SHA was deployed to staging on 2026-10-15; the post-deploy checks recorded healthy application/database/queue/scheduler/Connector/Stripe/backup-storage/mail/privacy-retention/export status, zero failed or reserved jobs, zero active mutating WebsiteJobs, HTTP 200 and valid TLS. Destructive retention and recovery mode were both OFF.
+- The read-only `backup:reconcile-storage` staging check reported S3 healthy, 24 listed objects and zero anomalies. `privacy:restore-readiness --json` remained blocked with `independent_journal_not_configured`; recovery remained quarantined. No provider deletion or customer data mutation was performed.
+- Audit found that `platform:database-backup-reconcile` persists delivery reconciliation status and timestamp despite its former “read-only” description. It was not run against staging. PR #61 corrected the command description and added a regression assertion for those writes; the command does not delete provider objects.
+- PR #61 head `39e2ed9951c1d8b56821b4e08dcc63830fa180fe` passed exact-SHA GitHub Actions run #248, run ID `38768895991`, attempt 3. All five mandatory jobs passed: Quality; Server SQLite; Server MySQL; Connector SQLite; Connector MySQL. The run URL is https://github.com/zsoltacsai/wpcaregrid/actions/runs/38768895991.
+- Test summaries from that run: Server SQLite 1,266 tests / 18,237 assertions / 19 skips; Server MySQL 1,266 / 18,435 / 0 skips; Connector SQLite 202 / 1,401 / 24 skips; Connector MySQL 202 / 1,775 / 3 skips. Combined: **2,936 tests, 39,848 assertions, 46 skips, 0 failures**. Skips are environment/opt-in cases: SQLite-only suites omit MySQL-specific database and process-concurrency cases (including the MySQL 8.4 dump-import drill); Connector SQLite omits MySQL integration/poll-lock cases; Connector MySQL omits one test meaningful only without MySQL and two opt-in real worker-kill tests requiring the 900-second poll-lock TTL. MySQL server CI ran its required concurrency gate successfully. Quality passed syntax/style/dependency/build/secret-scan checks. No post-merge workflow run was returned for merge SHA `1a45951475a292ecc06c9547a4fd4b94ae5eab77`; the exact PR-head run above is green.
+- PR #61 merged normally at merge SHA `1a45951475a292ecc06c9547a4fd4b94ae5eab77`. Verified primary branch SHA is the same merge SHA. PR #61 only changes the operator-facing command description and regression coverage; it does not change reconciliation behavior. Staging runtime remains `a6e79bd381319ee2e18c90fd464cdbaf9cef4908`; this help-text/test-only correction was not separately deployed.
+- The corrected command’s state-writing behavior is now explicit and regression-tested. Staging validation intentionally continues to use the read-only reconciler only.
+
+## Current disposition
+
+Wave 6 implementation and exact-head CI are merged and green. Wave 6 is **not fully closed**: independent tombstone-journal/provider recovery facts, the replay applier and synthetic historical-restore replay proof remain outstanding. Recovery readiness correctly remains blocked/quarantined until those prerequisites exist. Provider-side S3/SFTP deletion/versioning/immutability facts remain unverified; legal/accounting decisions remain `WAIT_LEGAL` / `WAIT_ACCOUNTING`. No destructive retention or deletion was enabled.
