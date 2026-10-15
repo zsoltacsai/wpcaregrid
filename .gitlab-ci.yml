@@ -200,7 +200,8 @@ wordpress:
       if [ "$DB_ENGINE" = mysql ]; then
         for attempt in $(seq 1 60); do mysqladmin ping -h mysql -uroot -p"$MYSQL_ROOT_PASSWORD" --silent && break; sleep 2; done
         mysqladmin ping -h mysql -uroot -p"$MYSQL_ROOT_PASSWORD" --silent
+        MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=mysql --user=root --execute="CREATE DATABASE IF NOT EXISTS wordpress CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
         export WP_CAREGRID_TEST_MYSQL='root:ci-root-password@mysql/wordpress'
       fi
-      vendor/bin/phpunit --display-skipped
+      php -d display_errors=1 vendor/bin/phpunit --display-skipped
 
