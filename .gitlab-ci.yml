@@ -145,7 +145,7 @@ server:
         mysqladmin ping -h mysql -uroot -p"$MYSQL_ROOT_PASSWORD" --silent
         db_password="$(openssl rand -hex 32)"
         MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=mysql --user=root --execute="CREATE DATABASE IF NOT EXISTS caregrid_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER 'caregrid_ci'@'%' IDENTIFIED BY '${db_password}'; GRANT ALL PRIVILEGES ON caregrid_test.* TO 'caregrid_ci'@'%';"
-        export DB_CONNECTION=mysql DB_HOST=mysql DB_PORT=3306 DB_DATABASE=caregrid_test DB_USERNAME=caregrid_ci DB_PASSWORD="$db_password" DB_URL= M9_MYSQL_VERIFY_PASSWORD="$MYSQL_ROOT_PASSWORD"
+        export DB_CONNECTION=mysql DB_HOST=mysql DB_PORT=3306 DB_DATABASE=caregrid_test DB_USERNAME=caregrid_ci DB_PASSWORD="$db_password" DB_URL= M9_MYSQL_VERIFY_PASSWORD="$MYSQL_ROOT_PASSWORD" CAREGRID_CI_MYSQL_SERVICE_HOST=mysql
       else
         touch database/ci.sqlite
         export DB_DATABASE="$CI_PROJECT_DIR/database/ci.sqlite"

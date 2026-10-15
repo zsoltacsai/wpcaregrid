@@ -21,11 +21,14 @@ final class MonitoringEngineConcurrencyTest extends TestCase
         $host = strtolower((string) (getenv('DB_HOST') ?: '127.0.0.1'));
         $databaseUrl = (string) (getenv('DB_URL') ?: '');
         $isDedicatedTestDatabase = preg_match('/(^|[_-])(test|testing)([_-]|$)/i', $database) === 1;
+        $isApprovedCiServiceHost = strtolower((string) (getenv('CI') ?: '')) === 'true'
+            && strtolower((string) (getenv('CAREGRID_CI_MYSQL_SERVICE_HOST') ?: '')) === $host
+            && $database === 'caregrid_test';
 
         if (strtolower((string) (getenv('APP_ENV') ?: 'testing')) !== 'testing'
             || $connection !== 'mysql'
             || ! $isDedicatedTestDatabase
-            || ! in_array($host, ['localhost', '127.0.0.1', '::1'], true)
+            || (! in_array($host, ['localhost', '127.0.0.1', '::1'], true) && ! $isApprovedCiServiceHost)
             || $databaseUrl !== '') {
             $this->markTestSkipped('Requires an explicitly named local MySQL test database; migrations were not run.');
         }
