@@ -40,7 +40,6 @@ variables:
       files:
         - composer.lock
         - wordpress/composer.lock
-        - package-lock.json
     paths:
       - .cache/composer/
       - node_modules/
