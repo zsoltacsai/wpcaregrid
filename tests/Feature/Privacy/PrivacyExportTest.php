@@ -10,6 +10,7 @@ use App\Privacy\PrivacyExportStatus;
 use App\Privacy\PrivacyRequestService;
 use App\Privacy\PrivacyRequestStatus;
 use App\Privacy\PrivacyRequestType;
+use App\Privacy\PrivacyTombstoneJournal;
 use App\Tax\CustomerBillingIdentityService;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -17,19 +18,48 @@ use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Tests\Concerns\ActsAsOwner;
 use Tests\TestCase;
 use ZipArchive;
 
 class PrivacyExportTest extends TestCase
 {
-    use RefreshDatabase;
+    use ActsAsOwner, RefreshDatabase;
 
     protected function setUp(): void
     {
         parent::setUp();
         Storage::fake('local');
         Queue::fake();
+        $this->app->instance(PrivacyTombstoneJournal::class, new class implements PrivacyTombstoneJournal
+        {
+            public array $events = [];
+
+            public function readiness(): array
+            {
+                return ['state' => 'ready', 'reason' => 'test_journal', 'watermark' => $this->watermark(), 'replay_verified' => false, 'verified_events' => count($this->events)];
+            }
+
+            public function append(array $event): array
+            {
+                $event['sequence'] = (string) Str::ulid();
+                $this->events[] = $event;
+
+                return $event;
+            }
+
+            public function watermark(): ?string
+            {
+                return $this->events === [] ? null : end($this->events)['sequence'];
+            }
+
+            public function eventsAfter(?string $snapshotWatermark): iterable
+            {
+                return array_values(array_filter($this->events, static fn (array $event): bool => $snapshotWatermark === null || strcmp($event['sequence'], $snapshotWatermark) > 0));
+            }
+        });
     }
 
     public function test_customer_export_is_encrypted_partial_reusable_and_audited_per_download(): void
@@ -205,5 +235,23 @@ class PrivacyExportTest extends TestCase
         $event = $case->events()->where('event_type', 'rectification_completed')->firstOrFail();
         $this->assertSame(['first_name', 'billing_address', 'locale'], $event->metadata['field_codes']);
         $this->assertStringNotContainsString('Corrected', json_encode($event->metadata));
+    }
+
+    public function test_owner_export_revocation_is_recorded_in_independent_journal(): void
+    {
+        $owner = $this->asOwner();
+        $customer = Customer::factory()->withUser()->create();
+        $service = app(PrivacyExportService::class);
+        $artifact = $service->request($customer, $customer->user, 'password-123456');
+        $service->generate($artifact->uuid);
+        $artifact->refresh();
+
+        $service->revoke($artifact, $owner);
+
+        $this->assertSame(PrivacyExportStatus::Revoked, $artifact->fresh()->status);
+        $journal = app(PrivacyTombstoneJournal::class);
+        $this->assertSame('privacy_export_revoked', $journal->events[0]['action']);
+        $this->assertSame($artifact->uuid, $journal->events[0]['artifact_uuid']);
+        $this->assertSame($customer->uuid, $journal->events[0]['subject_uuid']);
     }
 }

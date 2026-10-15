@@ -2,9 +2,12 @@
 
 namespace Tests\Feature\Privacy;
 
+use App\Models\PrivacyTombstoneReplaySession;
 use App\Privacy\PrivacyRestoreSafety;
 use App\Privacy\PrivacyTombstoneJournal;
+use App\Privacy\UnavailablePrivacyTombstoneJournal;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class PrivacyRestoreSafetyTest extends TestCase
@@ -13,6 +16,7 @@ class PrivacyRestoreSafetyTest extends TestCase
 
     public function test_missing_independent_tombstone_journal_blocks_recovery_readiness(): void
     {
+        $this->app->instance(PrivacyTombstoneJournal::class, new UnavailablePrivacyTombstoneJournal);
         config(['platform.recovery_mode' => true]);
 
         $status = app(PrivacyRestoreSafety::class)->status();
@@ -31,7 +35,17 @@ class PrivacyRestoreSafetyTest extends TestCase
         {
             public function readiness(): array
             {
-                return ['state' => 'ready', 'reason' => 'available', 'watermark' => 'snapshot-42', 'replay_verified' => false];
+                return ['state' => 'ready', 'reason' => 'available', 'watermark' => '01JAB0M5W0B7H9K6Q1M2V3X4YZ', 'replay_verified' => false, 'verified_events' => 0];
+            }
+
+            public function append(array $event): array
+            {
+                return $event;
+            }
+
+            public function watermark(): ?string
+            {
+                return '01JAB0M5W0B7H9K6Q1M2V3X4YZ';
             }
 
             public function eventsAfter(?string $snapshotWatermark): iterable
@@ -49,7 +63,17 @@ class PrivacyRestoreSafetyTest extends TestCase
         {
             public function readiness(): array
             {
-                return ['state' => 'ready', 'reason' => 'verified', 'watermark' => 'snapshot-42', 'replay_verified' => true];
+                return ['state' => 'ready', 'reason' => 'verified', 'watermark' => '01JAB0M5W0B7H9K6Q1M2V3X4YZ', 'replay_verified' => false, 'verified_events' => 0];
+            }
+
+            public function append(array $event): array
+            {
+                return $event;
+            }
+
+            public function watermark(): ?string
+            {
+                return '01JAB0M5W0B7H9K6Q1M2V3X4YZ';
             }
 
             public function eventsAfter(?string $snapshotWatermark): iterable
@@ -57,6 +81,20 @@ class PrivacyRestoreSafetyTest extends TestCase
                 return [];
             }
         });
+
+        $recoveryId = (string) Str::uuid();
+        $sourceBackupUuid = (string) Str::uuid();
+        config([
+            'platform.recovery_mode' => true,
+            'platform.recovery_id' => $recoveryId,
+            'platform.recovery_source_backup_uuid' => $sourceBackupUuid,
+            'platform.recovery_snapshot_watermark' => null,
+        ]);
+        PrivacyTombstoneReplaySession::query()->create([
+            'recovery_id' => $recoveryId, 'source_backup_uuid' => $sourceBackupUuid, 'snapshot_watermark' => null,
+            'ending_watermark' => '01JAB0M5W0B7H9K6Q1M2V3X4YZ',
+            'status' => 'complete', 'verification_status' => 'verified', 'started_at' => now('UTC'), 'completed_at' => now('UTC'),
+        ]);
 
         $this->assertSame('ready', app(PrivacyRestoreSafety::class)->status()['state']);
     }

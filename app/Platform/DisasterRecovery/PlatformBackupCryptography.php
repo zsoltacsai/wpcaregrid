@@ -154,6 +154,78 @@ final class PlatformBackupCryptography
         }
     }
 
+    /** Encrypts a small recovery record with the externally configured platform key ring. */
+    public function encryptJournalRecord(string $plainText, ?string $keyId = null): array
+    {
+        $keyId ??= (string) config('platform_backup.encryption.current_key_id');
+        $master = $this->key($keyId);
+        $key = sodium_crypto_generichash('wpcg-privacy-journal-v1', $master, SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES);
+        sodium_memzero($master);
+        [$state, $header] = sodium_crypto_secretstream_xchacha20poly1305_init_push($key);
+        try {
+            $ciphertext = sodium_crypto_secretstream_xchacha20poly1305_push($state, $plainText, '', SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_FINAL);
+
+            return [
+                'version' => 1,
+                'algorithm' => 'libsodium-secretstream-xchacha20poly1305',
+                'key_id' => $keyId,
+                'header' => base64_encode($header),
+                'ciphertext' => base64_encode($ciphertext),
+            ];
+        } finally {
+            sodium_memzero($state);
+            sodium_memzero($key);
+        }
+    }
+
+    /** Authenticates and decrypts one independent journal record. */
+    public function decryptJournalRecord(array $record): string
+    {
+        if (($record['version'] ?? null) !== 1
+            || ($record['algorithm'] ?? null) !== 'libsodium-secretstream-xchacha20poly1305'
+            || ! is_string($record['key_id'] ?? null)
+            || ! is_string($record['header'] ?? null)
+            || ! is_string($record['ciphertext'] ?? null)) {
+            throw new RuntimeException('Unsupported privacy journal record format.');
+        }
+        $header = base64_decode($record['header'], true);
+        $ciphertext = base64_decode($record['ciphertext'], true);
+        if (! is_string($header) || strlen($header) !== SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_HEADERBYTES
+            || ! is_string($ciphertext) || strlen($ciphertext) < SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_ABYTES) {
+            throw new RuntimeException('Invalid privacy journal record encoding.');
+        }
+        $master = $this->key($record['key_id']);
+        $key = sodium_crypto_generichash('wpcg-privacy-journal-v1', $master, SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES);
+        sodium_memzero($master);
+        $state = null;
+        try {
+            $state = sodium_crypto_secretstream_xchacha20poly1305_init_pull($header, $key);
+            $pulled = sodium_crypto_secretstream_xchacha20poly1305_pull($state, $ciphertext);
+            if (! is_array($pulled) || ($pulled[1] ?? null) !== SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_FINAL) {
+                throw new RuntimeException('Privacy journal record integrity verification failed.');
+            }
+
+            return $pulled[0];
+        } finally {
+            if (is_string($state)) {
+                sodium_memzero($state);
+            }
+            sodium_memzero($key);
+        }
+    }
+
+    public function journalKeyAvailable(?string $keyId = null): bool
+    {
+        try {
+            $key = $this->key($keyId ?? (string) config('platform_backup.encryption.current_key_id'));
+            sodium_memzero($key);
+
+            return true;
+        } catch (RuntimeException) {
+            return false;
+        }
+    }
+
     private function key(string $keyId): string
     {
         if (! extension_loaded('sodium') || $keyId === '' || ! preg_match('/\A[a-zA-Z0-9._-]{1,64}\z/', $keyId)) {

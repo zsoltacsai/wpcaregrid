@@ -5,6 +5,7 @@ namespace Tests\Feature\Platform;
 use App\Owner\OwnerSettings;
 use App\Platform\DisasterRecovery\PlatformBackupCryptography;
 use App\Platform\DisasterRecovery\PlatformDatabaseBackupService;
+use App\Privacy\PrivacyTombstoneJournal;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
@@ -44,6 +45,28 @@ class PlatformDatabaseBackupTest extends TestCase
                 'foreign_key_constraints' => true,
             ],
         ]);
+        $this->app->instance(PrivacyTombstoneJournal::class, new class implements PrivacyTombstoneJournal
+        {
+            public function readiness(): array
+            {
+                return ['state' => 'ready', 'reason' => 'test_journal', 'watermark' => $this->watermark(), 'replay_verified' => false, 'verified_events' => 1];
+            }
+
+            public function append(array $event): array
+            {
+                return $event;
+            }
+
+            public function watermark(): ?string
+            {
+                return '01JAB0M5W0B7H9K6Q1M2V3X4YZ';
+            }
+
+            public function eventsAfter(?string $snapshotWatermark): iterable
+            {
+                return [];
+            }
+        });
         DB::purge('m9_source');
         Schema::connection('m9_source')->create('recovery_probe', function (Blueprint $table): void {
             $table->unsignedInteger('id')->primary();
@@ -88,6 +111,9 @@ class PlatformDatabaseBackupTest extends TestCase
         $this->assertGreaterThan(0, $backup->size_bytes);
         $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $backup->sha256);
         $this->assertSame(['recovery_probe'], $backup->manifest['table_manifest']['tables']);
+        $this->assertSame('verified', $backup->manifest['privacy_journal']['state']);
+        $this->assertSame('01JAB0M5W0B7H9K6Q1M2V3X4YZ', $backup->manifest['privacy_journal']['watermark']);
+        $this->assertSame($backup->manifest['privacy_journal']['watermark'], $service->recoverySnapshotWatermark($backup));
         $externalManifest = json_decode(Storage::disk('platform_backups')->get($backup->manifest_object_key), true, flags: JSON_THROW_ON_ERROR);
         $this->assertSame($backup->uuid, $externalManifest['backup_uuid']);
         $this->assertSame($backup->sha256, $externalManifest['sha256']);
@@ -171,6 +197,12 @@ class PlatformDatabaseBackupTest extends TestCase
 
         $mismatch = $service->create();
         Storage::disk('platform_backups')->put($mismatch->object_key, 'not-the-original-object');
+        try {
+            $service->recoverySnapshotWatermark($mismatch);
+            $this->fail('Recovery watermark extraction must reject a backup whose stored bytes do not match its signed manifest.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('privacy_restore_backup_integrity_failed', $exception->getMessage());
+        }
         $this->assertFalse($service->verify($mismatch));
         $this->assertSame('SIZE_OR_HASH_MISMATCH', $mismatch->fresh()->failure_code);
     }
@@ -214,6 +246,9 @@ class PlatformDatabaseBackupTest extends TestCase
         $this->assertFalse($service->verify($backup));
         $this->assertSame('MANIFEST_AUTHENTICATION_FAILED', $backup->fresh()->failure_code);
         $this->assertNotSame('verified', $backup->fresh()->status);
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('privacy_restore_manifest_integrity_failed');
+        $service->recoverySnapshotWatermark($backup);
     }
 
     public function test_platform_backup_crypto_round_trips_streamed_artifacts(): void

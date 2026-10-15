@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Owner\AdminAudit;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
@@ -18,33 +19,51 @@ use LogicException;
 /** Creates and transitions privacy cases without exporting or erasing customer data. */
 final class PrivacyRequestService
 {
+    public function __construct(private readonly PrivacyTombstoneJournal $tombstones) {}
+
     /** Restrict customer-area access without cancelling billing or erasing data. */
     public function restrictAccountAccess(PrivacyRequest $privacyRequest, User $actor): PrivacyRequest
     {
         $this->authorizeOwner($actor);
 
-        return DB::transaction(function () use ($privacyRequest, $actor): PrivacyRequest {
-            $case = PrivacyRequest::query()->whereKey($privacyRequest->getKey())->lockForUpdate()->firstOrFail();
-            if ($case->request_type !== PrivacyRequestType::AccountClosure || ! in_array($case->status, [PrivacyRequestStatus::Requested, PrivacyRequestStatus::ManualReview], true)) {
-                throw new LogicException('Only an open account-closure case can restrict access.');
-            }
+        $lock = Cache::lock(PrivacyTombstoneReplayApplier::SNAPSHOT_LOCK, (int) config('platform_backup.timeout', 3600) + 300);
+        $lock->block(30);
+        $effectiveAt = now('UTC')->toIso8601String();
+        try {
+            return DB::transaction(function () use ($privacyRequest, $actor, $effectiveAt): PrivacyRequest {
+                $case = PrivacyRequest::query()->whereKey($privacyRequest->getKey())->lockForUpdate()->firstOrFail();
+                if ($case->request_type !== PrivacyRequestType::AccountClosure || ! in_array($case->status, [PrivacyRequestStatus::Requested, PrivacyRequestStatus::ManualReview], true)) {
+                    throw new LogicException('Only an open account-closure case can restrict access.');
+                }
 
-            $customer = Customer::query()->whereKey($case->customer_id)->lockForUpdate()->firstOrFail();
-            if (! $customer->active) {
-                throw ValidationException::withMessages(['closure' => 'The customer account is already inactive; an Owner must review its original suspension state before changing access.']);
-            }
-            if ($customer->activeSubscriptions()->exists()) {
-                throw ValidationException::withMessages(['closure' => 'Cancel or end active subscriptions through the separate billing workflow before restricting account access.']);
-            }
+                $customer = Customer::query()->whereKey($case->customer_id)->lockForUpdate()->firstOrFail();
+                if (! $customer->active) {
+                    throw ValidationException::withMessages(['closure' => 'The customer account is already inactive; an Owner must review its original suspension state before changing access.']);
+                }
+                if ($customer->activeSubscriptions()->exists()) {
+                    throw ValidationException::withMessages(['closure' => 'Cancel or end active subscriptions through the separate billing workflow before restricting account access.']);
+                }
 
-            $from = $case->status;
-            $customer->forceFill(['active' => false])->save();
-            $case->forceFill(['status' => PrivacyRequestStatus::AccessRestricted, 'lock_version' => $case->lock_version + 1])->save();
-            $this->recordEvent($case, 'account_access_restricted', $from, PrivacyRequestStatus::AccessRestricted, $actor, ['reason_code' => 'owner_closure']);
-            AdminAudit::record($actor, 'privacy.account_access.restricted', 'customer', $customer->uuid, ['privacy_request' => $case->uuid]);
+                $from = $case->status;
+                $this->tombstones->append([
+                    'event_id' => hash('sha256', 'privacy:account_access_restricted:'.$case->uuid),
+                    'subject_uuid' => $customer->uuid,
+                    'tenant_uuid' => $customer->uuid,
+                    'scope' => 'customer_account',
+                    'action' => 'account_access_restricted',
+                    'request_uuid' => $case->uuid,
+                    'effective_at' => $effectiveAt,
+                ]);
+                $customer->forceFill(['active' => false])->save();
+                $case->forceFill(['status' => PrivacyRequestStatus::AccessRestricted, 'lock_version' => $case->lock_version + 1])->save();
+                $this->recordEvent($case, 'account_access_restricted', $from, PrivacyRequestStatus::AccessRestricted, $actor, ['reason_code' => 'owner_closure']);
+                AdminAudit::record($actor, 'privacy.account_access.restricted', 'customer', $customer->uuid, ['privacy_request' => $case->uuid]);
 
-            return $case->refresh();
-        }, attempts: 3);
+                return $case->refresh();
+            }, attempts: 3);
+        } finally {
+            $lock->release();
+        }
     }
 
     /** Reopen a reversibly closed account before any separate erasure workflow. */
@@ -52,28 +71,34 @@ final class PrivacyRequestService
     {
         $this->authorizeOwner($actor);
 
-        return DB::transaction(function () use ($privacyRequest, $actor): PrivacyRequest {
-            $case = PrivacyRequest::query()->whereKey($privacyRequest->getKey())->lockForUpdate()->firstOrFail();
-            if ($case->request_type !== PrivacyRequestType::AccountClosure || $case->status !== PrivacyRequestStatus::AccessRestricted) {
-                throw new LogicException('Only an access-restricted account-closure case can be reopened.');
-            }
+        $lock = Cache::lock(PrivacyTombstoneReplayApplier::SNAPSHOT_LOCK, (int) config('platform_backup.timeout', 3600) + 300);
+        $lock->block(30);
+        try {
+            return DB::transaction(function () use ($privacyRequest, $actor): PrivacyRequest {
+                $case = PrivacyRequest::query()->whereKey($privacyRequest->getKey())->lockForUpdate()->firstOrFail();
+                if ($case->request_type !== PrivacyRequestType::AccountClosure || $case->status !== PrivacyRequestStatus::AccessRestricted) {
+                    throw new LogicException('Only an access-restricted account-closure case can be reopened.');
+                }
 
-            $customer = Customer::query()->whereKey($case->customer_id)->lockForUpdate()->firstOrFail();
-            if ($customer->privacyRequests()->where('request_type', PrivacyRequestType::Erasure->value)->where('active_request_key', 'active')->exists()) {
-                throw ValidationException::withMessages(['closure' => 'Resolve the separate active erasure request before reopening account access.']);
-            }
+                $customer = Customer::query()->whereKey($case->customer_id)->lockForUpdate()->firstOrFail();
+                if ($customer->privacyRequests()->where('request_type', PrivacyRequestType::Erasure->value)->where('active_request_key', 'active')->exists()) {
+                    throw ValidationException::withMessages(['closure' => 'Resolve the separate active erasure request before reopening account access.']);
+                }
 
-            $customer->forceFill(['active' => true])->save();
-            $case->forceFill([
-                'status' => PrivacyRequestStatus::Cancelled,
-                'active_request_key' => null,
-                'lock_version' => $case->lock_version + 1,
-            ])->save();
-            $this->recordEvent($case, 'account_access_restored', PrivacyRequestStatus::AccessRestricted, PrivacyRequestStatus::Cancelled, $actor, ['reason_code' => 'owner_reopen']);
-            AdminAudit::record($actor, 'privacy.account_access.restored', 'customer', $customer->uuid, ['privacy_request' => $case->uuid]);
+                $customer->forceFill(['active' => true])->save();
+                $case->forceFill([
+                    'status' => PrivacyRequestStatus::Cancelled,
+                    'active_request_key' => null,
+                    'lock_version' => $case->lock_version + 1,
+                ])->save();
+                $this->recordEvent($case, 'account_access_restored', PrivacyRequestStatus::AccessRestricted, PrivacyRequestStatus::Cancelled, $actor, ['reason_code' => 'owner_reopen']);
+                AdminAudit::record($actor, 'privacy.account_access.restored', 'customer', $customer->uuid, ['privacy_request' => $case->uuid]);
 
-            return $case->refresh();
-        }, attempts: 3);
+                return $case->refresh();
+            }, attempts: 3);
+        } finally {
+            $lock->release();
+        }
     }
 
     public function create(

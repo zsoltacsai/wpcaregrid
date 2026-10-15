@@ -13,6 +13,7 @@ use App\Privacy\PrivacyRequestService;
 use App\Privacy\PrivacyRequestSource;
 use App\Privacy\PrivacyRequestStatus;
 use App\Privacy\PrivacyRequestType;
+use App\Privacy\PrivacyTombstoneJournal;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -25,6 +26,38 @@ use Tests\TestCase;
 class AccountClosureOrchestrationTest extends TestCase
 {
     use ActsAsOwner, RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->app->instance(PrivacyTombstoneJournal::class, new class implements PrivacyTombstoneJournal
+        {
+            private array $events = [];
+
+            public function readiness(): array
+            {
+                return ['state' => 'ready', 'reason' => 'test_journal', 'watermark' => $this->watermark(), 'replay_verified' => false, 'verified_events' => count($this->events)];
+            }
+
+            public function append(array $event): array
+            {
+                $event['sequence'] = str_pad((string) (count($this->events) + 1), 26, '0', STR_PAD_LEFT);
+                $this->events[] = $event;
+
+                return $event;
+            }
+
+            public function watermark(): ?string
+            {
+                return $this->events === [] ? null : end($this->events)['sequence'];
+            }
+
+            public function eventsAfter(?string $snapshotWatermark): iterable
+            {
+                return array_values(array_filter($this->events, static fn (array $event): bool => $snapshotWatermark === null || strcmp($event['sequence'], $snapshotWatermark) > 0));
+            }
+        });
+    }
 
     public function test_owner_preview_is_aggregate_only_and_does_not_mutate_customer_or_related_records(): void
     {

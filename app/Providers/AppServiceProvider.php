@@ -33,8 +33,10 @@ use App\Platform\DisasterRecovery\PlatformBackupS3BucketProbe;
 use App\Platform\DisasterRecovery\PlatformBackupS3BucketProber;
 use App\Pricing\PricingCatalog;
 use App\Pricing\PricingOverrides;
+use App\Privacy\ObjectStoragePrivacyTombstoneJournal;
+use App\Privacy\PlatformBackupPrivacyTombstoneObjectStore;
 use App\Privacy\PrivacyTombstoneJournal;
-use App\Privacy\UnavailablePrivacyTombstoneJournal;
+use App\Privacy\PrivacyTombstoneObjectStore;
 use App\Security\EngineScanner;
 use App\Security\SecurityScanner;
 use App\Security\Vulnerabilities\NoVulnerabilitySource;
@@ -58,7 +60,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->app->bind(PrivacyTombstoneJournal::class, UnavailablePrivacyTombstoneJournal::class);
+        $this->app->bind(PrivacyTombstoneJournal::class, ObjectStoragePrivacyTombstoneJournal::class);
+        $this->app->bind(PrivacyTombstoneObjectStore::class, PlatformBackupPrivacyTombstoneObjectStore::class);
         $this->app->bind(PlatformBackupS3BucketProber::class, PlatformBackupS3BucketProbe::class);
         $this->app->bind(PublicAddressLookup::class, SystemPublicAddressLookup::class);
         $this->app->bind(VatNumberProvider::class, ViesSoapProvider::class);

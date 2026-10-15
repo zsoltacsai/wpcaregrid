@@ -23,6 +23,8 @@ final class AdminAudit
         'monitoring.maintenance_created',
         'privacy.request.created', 'privacy.request.status_changed', 'privacy.provider_task.created', 'privacy.provider_task.status_changed',
         'privacy.closure.impact_previewed', 'privacy.account_access.restricted', 'privacy.account_access.restored',
+        'privacy.journal.replay_started', 'privacy.journal.replay_completed', 'privacy.journal.replay_blocked', 'privacy.journal.replay_failed',
+        'privacy.journal.replay_event_applied', 'privacy.journal.replay_event_blocked',
         'privacy.export.started', 'privacy.export.generated', 'privacy.export.failed', 'privacy.export.owner_retry',
         'privacy.export.owner_revoked', 'privacy.export.expired', 'privacy.export.cleanup_failed',
         'privacy.retention.draft_created', 'privacy.retention.preview_created', 'privacy.retention.reporting_activated',
