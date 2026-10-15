@@ -14,7 +14,7 @@ final class ReconcilePlatformDatabaseBackups extends Command
 {
     protected $signature = 'platform:database-backup-reconcile';
 
-    protected $description = 'Read-only reconciliation of platform database backup records and stored artifacts.';
+    protected $description = 'Reconcile platform backup artifacts and persist delivery status; does not delete provider objects.';
 
     public function handle(PlatformBackupCryptography $cryptography, PlatformBackupStorage $platformStorage): int
     {
