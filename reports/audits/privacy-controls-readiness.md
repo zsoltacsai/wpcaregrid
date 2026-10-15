@@ -48,6 +48,6 @@ This does not close the independent tombstone-journal/replay gate, verify provid
 
 No provider delete, account anonymization, live billing mutation, staging primary-database restore or production mutation occurred. `M12_DESTRUCTIVE_RETENTION_ENABLED=false`; `WAIT_FACT`, `WAIT_LEGAL` and `WAIT_ACCOUNTING` remain explicit.
 
-### Journal completeness follow-up candidate — 2026-10-15
+### Journal completeness follow-up release evidence — 2026-10-15
 
-The follow-up candidate adds encrypted append-only per-event commit checkpoints chained by watermark and bound to the event-object hash. Missing/corrupt event or checkpoint, orphaned event and ambiguous chain now fail closed. Local synthetic historical restore remains separate from staging proof. Exact-head CI and merge for this follow-up are pending; strict staging SSH authentication is still unavailable, so this candidate is not marked deployed or staged. Provider durability and total failure-domain separation remain `WAIT_FACT`; legal/accounting status is unchanged.
+PR #65 adds encrypted append-only per-event commit checkpoints chained by watermark and bound to the event-object hash. Missing/corrupt event or checkpoint, orphaned event and ambiguous chain now fail closed. It merged at primary SHA `31ee480be741ab818471e5781a27bbaa8afe2ade`; exact PR-head run `38788096639` and post-merge run `38789787609` passed all five mandatory jobs. Local synthetic historical restore remains separate from staging proof. Strict staging SSH authentication remains unavailable, so the release is not marked deployed or staged. Provider durability and total failure-domain separation remain `WAIT_FACT`; legal/accounting status is unchanged.
