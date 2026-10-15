@@ -59,6 +59,28 @@ class PrivacyTombstoneReplayTest extends TestCase
         $this->assertDatabaseHas('privacy_tombstone_replay_events', ['replay_session_id' => $session->id, 'blocker_code' => 'billing_reconciliation_required']);
     }
 
+    public function test_replay_blocks_a_cross_tenant_event_and_keeps_quarantine_blocked(): void
+    {
+        config(['platform.recovery_mode' => true]);
+        $customer = Customer::factory()->withUser()->create();
+        $case = app(PrivacyRequestService::class)->create($customer, PrivacyRequestType::AccountClosure, PrivacyRequestSource::Support, 'replay-tenant-synthetic-0001');
+        $event = $this->event($customer->uuid, $case->uuid);
+        $event['tenant_uuid'] = (string) Str::uuid();
+        $journal = $this->journal([$event]);
+        $this->app->instance(PrivacyTombstoneJournal::class, $journal);
+
+        $session = app(PrivacyTombstoneReplayApplier::class)->replay((string) Str::uuid(), null);
+
+        $this->assertSame('blocked', $session->status);
+        $this->assertSame(1, $session->events_blocked);
+        $this->assertTrue($customer->fresh()->active);
+        $this->assertSame(PrivacyRequestStatus::Requested, $case->fresh()->status);
+        $this->assertDatabaseHas('privacy_tombstone_replay_events', [
+            'replay_session_id' => $session->id,
+            'blocker_code' => 'tenant_scope_mismatch',
+        ]);
+    }
+
     private function event(string $subjectUuid, string $requestUuid): array
     {
         return [

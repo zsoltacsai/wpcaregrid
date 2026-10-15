@@ -117,6 +117,12 @@ This section records work on a fresh implementation branch from the currently ve
 
 Implementation candidate validation is not yet complete. Do not declare Wave 6 closed until exact-candidate CI is green, the candidate is merged, and guarded staging deployment plus isolated staging recovery evidence pass. If staging SSH authentication remains unavailable, keep the release status open and report the infrastructure/Owner gate without weakening strict host verification.
 
+## Journal completeness follow-up candidate — 2026-10-15
+
+Independent review found that deriving the latest journal watermark only from listed event objects cannot detect a missing latest event object. The follow-up candidate adds a separate encrypted append-only commit checkpoint for each journal event. Each checkpoint binds the event sequence, event ID, exact stored-event hash and preceding watermark. Readiness/replay now require a complete checkpoint chain, verify every referenced event object and reject orphaned event objects. A selectively missing event or checkpoint therefore blocks replay; an interrupted event-only append may be completed only by retrying the same idempotent event when it is the sole latest orphan.
+
+Focused tests cover missing committed objects, interrupted append recovery, encrypted event integrity, checkpoint ordering, idempotency conflict, tenant-scope mismatch and repeated replay. The focused Journal/Replay/HistoricalRestore/RestoreSafety suite passed **11 tests / 66 assertions / 0 skips**. The full local Privacy plus platform DB-backup regression passed **79 tests / 935 assertions / 1 skip**; the skip is the MySQL 8.4 import drill requiring the isolated CI MySQL service. Exact-head CI for this follow-up is pending. No staging or production state was mutated; staging SSH still rejects the configured user key, and strict host-key verification was not bypassed.
+
 ## Independent journal / replay release evidence — 2026-10-15
 
 This section supersedes the candidate validation status above for PR #63 only. It records verified merge and CI evidence; staging deployment and staging recovery proof remain open.
