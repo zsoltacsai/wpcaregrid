@@ -63,6 +63,13 @@ Validation, CI, merge, staging deployment, health, and synthetic staging checks 
 - `git diff --check`: passed. Local secret-pattern scan: no matches in changed source/report areas. Gitleaks is not installed locally; the required full-history Gitleaks scan remains part of exact-head CI.
 - CI, guarded staging deployment, staging health, and synthetic staging validation: **pending**.
 
+### Exact-SHA CI blocker
+
+- Implementation commit: `bab68052cc8795f3ea6d7a24d5e1844200c4f7fc`.
+- GitHub Actions run **#228 / 38730339504** was created for this exact PR head. All five required jobs failed before executing any steps (`steps=[]`). GitHub's check annotation states: **“The job was not started because recent account payments have failed or your spending limit needs to be increased.”** This is an account-level CI billing/spending gate, not a test/code failure. No payment, billing limit, or account setting was changed.
+- The authorized GitLab fallback project `fountainbridge-group/wpcaregrid` (project 87658222) currently has only its unrelated README-only initial `main` commit (`9940694c2759882dff96c74ad901d62ca96ad9cb`), no CI configuration file, and no pipeline history. It has no common commit ancestry with the verified GitHub candidate baseline, so it cannot validate the identical candidate SHA/tree under the existing gates. No GitLab branch or alternate CI configuration was created.
+- Because no mandatory CI job ran green, PR #60 remains unmerged and no staging deployment or staging mutation was performed. The verified starting staging runtime remains the known baseline `8fb5be08108ec81c2de3a28c1ee11890554771a9`; current staging state was not independently re-read after the CI block.
+
 The broad local regression run preceded only the final completed-delete idempotency no-op and Pint formatting; the focused 33-test rerun covers those final changes. No provider deletion API, backup deletion, customer mutation, production action, or staging mutation has been performed in this task.
 
 ## Remaining blockers / gates

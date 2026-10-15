@@ -77,6 +77,10 @@ No Wave 2 code deletes customer/accounting source data, anonymizes accounts, del
 
 W2.1–W2.6 are complete for the explicitly partial, non-destructive engineering scope. The 24-hour link is repeatable and each successful download is audited. Staging checks verified encrypted artifact generation/readback, repeat download, tenant denial, audit count, 24-hour expiry, canonical rectification, and immutable historical invoice snapshot behavior. Synthetic records were rolled back and the temporary archive removed. Exact PR and post-merge CI, primary/runtime SHA, staging health, and remaining legal/accounting limits are recorded in `wave2-implementation-report.md`. This closure does not authorize source deletion, anonymization, backup/provider deletion, or legal-completeness claims.
 
+## Wave 6 release gate — blocked on account-level CI
+
+Wave 6 implementation is on PR #60 at candidate `bab68052cc8795f3ea6d7a24d5e1844200c4f7fc`. GitHub Actions run #228 / `38730339504` could not start any required job because of the account payment/spending-limit error. The GitLab fallback repository currently has no CI configuration and no shared candidate ancestry. Keep the PR open; do not merge or deploy until the exact candidate CI gate runs green. No Wave 7 destructive execution is authorized.
+
 ## Wave 3 implementation status — 2026-10-15
 
 | Task | Status | Evidence / remaining gates |
