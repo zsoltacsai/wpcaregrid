@@ -26,7 +26,7 @@ variables:
       DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends
       ca-certificates curl git gnupg unzip zip openssl python3 python3-venv default-mysql-client
       libcurl4-openssl-dev libicu-dev libpng-dev libjpeg62-turbo-dev
-      libfreetype6-dev libzip-dev libsodium-dev libxml2-dev
+      libfreetype6-dev libzip-dev libsodium-dev libxml2-dev libonig-dev
     - docker-php-ext-configure gd --with-freetype --with-jpeg
     - docker-php-ext-install -j"$(nproc)" bcmath curl gd intl mbstring mysqli pcntl pdo_mysql pdo_sqlite posix sodium zip
     - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
