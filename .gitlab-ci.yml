@@ -1,0 +1,207 @@
+# CI-only GitLab fallback. GitHub Actions remains the source of truth.
+# This pipeline intentionally mirrors .github/workflows/ci.yml; see docs/CI_FALLBACK.md.
+stages:
+  - quality
+  - server
+  - connector
+
+variables:
+  GIT_DEPTH: "0"
+  PHP_VERSION: "8.4"
+  NODE_VERSION: "22"
+  COMPOSER_CACHE_DIR: "$CI_PROJECT_DIR/.cache/composer"
+  MYSQL_ROOT_PASSWORD: "ci-root-password"
+  # Update to the GitHub PR target base SHA when preparing each fallback candidate.
+  WPCG_RELEASE_BASE_SHA: "57fe3ef74b099f5ae6844f1ba6414149cc079d54"
+  CAREGRID_TEST_REQUIRE_SERVICES: "1"
+  WP_CAREGRID_TEST_STRICT: "1"
+
+.php84:
+  image: php:8.4-cli-bookworm
+  rules:
+    - when: always
+  before_script:
+    - apt-get update -qq
+    - >-
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends
+      ca-certificates curl git gnupg unzip zip openssl python3 python3-venv default-mysql-client
+      libcurl4-openssl-dev libicu-dev libpng-dev libjpeg62-turbo-dev
+      libfreetype6-dev libzip-dev libsodium-dev libxml2-dev libonig-dev libsqlite3-dev
+    - printf 'memory_limit=256M\n' > /usr/local/etc/php/conf.d/99-ci-memory.ini
+    - docker-php-ext-configure gd --with-freetype --with-jpeg
+    - docker-php-ext-install -j"$(nproc)" bcmath curl gd intl mbstring mysqli pcntl pdo_mysql pdo_sqlite posix sodium zip
+    - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    - DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends nodejs
+    - node --version | grep -E '^v22\.'
+    - curl -fsSL https://getcomposer.org/installer -o /tmp/composer-setup.php
+    - php /tmp/composer-setup.php --2 --install-dir=/usr/local/bin --filename=composer
+    - composer --version
+  cache:
+    key:
+      files:
+        - composer.lock
+        - wordpress/composer.lock
+    paths:
+      - .cache/composer/
+      - node_modules/
+  interruptible: true
+
+quality:
+  extends: .php84
+  stage: quality
+  timeout: 20m
+  script:
+    - |
+      if git ls-files | grep -E '(^|/)\.env$|(^|/)\.env\.(production|backup)$|\.sqlite$|\.sqlite3$|(^|/)id_(rsa|ed25519|ecdsa)$|\.pem$|\.p12$|(^|/)auth\.json$|^public/hot$|^storage/.+\.key$'; then
+        echo "Local or secret files are tracked."
+        exit 1
+      fi
+    - composer validate --strict --no-check-publish
+    - composer validate --strict --no-check-publish --working-dir=wordpress
+    - composer install --no-interaction --prefer-dist --no-progress
+    - find app bootstrap config database lang routes tests scripts/e2e wordpress/wp-caregrid-connector wordpress/tests -name '*.php' -print0 | xargs -0 -n 50 -P 4 sh -c 'for f; do php -l "$f" > /dev/null || exit 255; done' sh
+    - php scripts/e2e/test-fingerprint-v2.php
+    - |
+      set -eu
+      base="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-${WPCG_RELEASE_BASE_SHA:-${CI_COMMIT_BEFORE_SHA:-}}}"
+      if [ -z "$base" ] || echo "$base" | grep -qE '^0+$'; then
+        echo "WPCG_RELEASE_BASE_SHA or a valid merge-request/push base SHA is required."
+        exit 1
+      fi
+      git cat-file -e "$base^{commit}"
+      git merge-base --is-ancestor "$base" "$CI_COMMIT_SHA"
+      php scripts/check-connector-release.php "$base"
+      bash scripts/tests/connector-release-version-gate-test.sh
+    - vendor/bin/pint --test
+    - composer audit --locked --no-interaction
+    - composer audit --locked --no-interaction --working-dir=wordpress
+    - npm ci
+    - npm run build
+    - npm audit --audit-level=high
+    - |
+      set -eu
+      version=8.21.2
+      archive=/tmp/gitleaks.tar.gz
+      url="https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz"
+      downloaded=false
+      for attempt in 1 2 3 4 5; do
+        rm -f "$archive"
+        if curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 --max-time 120 -fsSL "$url" -o "$archive" && gzip -t "$archive"; then
+          downloaded=true
+          break
+        fi
+        sleep 2
+      done
+      [ "$downloaded" = true ]
+      tar -xzf "$archive" -C /tmp gitleaks
+      /tmp/gitleaks detect --source=. --config=.gitleaks.toml --redact --no-banner --verbose
+
+server:
+  extends: .php84
+  stage: server
+  timeout: 30m
+  parallel:
+    matrix:
+      - DB_ENGINE: [sqlite, mysql]
+  services:
+    - name: mysql:8.4
+      alias: mysql
+  script:
+    - composer install --no-interaction --prefer-dist --no-progress
+    - npm ci
+    - npm run build
+    - |
+      set -eu
+      python3 -m venv /tmp/caregrid-ci-moto
+      /tmp/caregrid-ci-moto/bin/pip install --disable-pip-version-check 'moto[server]==5.1.*'
+      export PATH="/tmp/caregrid-ci-moto/bin:$PATH"
+      moto_server --help >/dev/null
+      id -u | grep -qx 0 || { echo 'SFTP integration setup requires a root container runner.'; exit 1; }
+      apt-get install -y -qq --no-install-recommends openssh-server
+      useradd --create-home --shell /bin/bash caregrid-sftp
+      usermod -p '*' caregrid-sftp
+      dir=/tmp/caregrid-sftp
+      mkdir -p "$dir"
+      ssh-keygen -q -t ed25519 -N '' -f "$dir/client"
+      install -d -m 700 -o caregrid-sftp -g caregrid-sftp /home/caregrid-sftp/.ssh /home/caregrid-sftp/storage
+      install -m 600 -o caregrid-sftp -g caregrid-sftp "$dir/client.pub" /home/caregrid-sftp/.ssh/authorized_keys
+      ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/caregrid_test_host_ed25519
+      cp /etc/ssh/caregrid_test_host_ed25519.pub "$dir/host.pub"
+      printf '%s\n' 'Port 2222' 'ListenAddress 127.0.0.1' 'HostKey /etc/ssh/caregrid_test_host_ed25519' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'PubkeyAuthentication yes' 'UsePAM no' 'AllowUsers caregrid-sftp' 'Subsystem sftp internal-sftp' 'PidFile /run/caregrid-test-sshd.pid' > /etc/ssh/caregrid_test_sshd_config
+      mkdir -p /run/sshd
+      /usr/sbin/sshd -t -f /etc/ssh/caregrid_test_sshd_config
+      /usr/sbin/sshd -f /etc/ssh/caregrid_test_sshd_config
+      export CAREGRID_TEST_SFTP_HOST=127.0.0.1
+      export CAREGRID_TEST_SFTP_PORT=2222
+      export CAREGRID_TEST_SFTP_USER=caregrid-sftp
+      export CAREGRID_TEST_SFTP_KEY="$dir/client"
+      export CAREGRID_TEST_SFTP_HOST_KEY="$dir/host.pub"
+      export CAREGRID_TEST_SFTP_ROOT=/home/caregrid-sftp/storage
+      export CACHE_STORE=array
+      cp .env.example .env
+      php artisan key:generate --force
+      if [ "$DB_ENGINE" = mysql ]; then
+        for attempt in $(seq 1 60); do mysqladmin ping -h mysql -uroot -p"$MYSQL_ROOT_PASSWORD" --silent && break; sleep 2; done
+        mysqladmin ping -h mysql -uroot -p"$MYSQL_ROOT_PASSWORD" --silent
+        db_password="$(openssl rand -hex 32)"
+        MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=mysql --user=root --execute="CREATE DATABASE IF NOT EXISTS caregrid_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER 'caregrid_ci'@'%' IDENTIFIED BY '${db_password}'; GRANT ALL PRIVILEGES ON caregrid_test.* TO 'caregrid_ci'@'%';"
+        export DB_CONNECTION=mysql DB_HOST=mysql DB_PORT=3306 DB_DATABASE=caregrid_test DB_USERNAME=caregrid_ci DB_PASSWORD="$db_password" DB_URL= M9_MYSQL_VERIFY_PASSWORD="$MYSQL_ROOT_PASSWORD" CAREGRID_CI_MYSQL_SERVICE_HOST=mysql
+      else
+        touch database/ci.sqlite
+        export DB_DATABASE="$CI_PROJECT_DIR/database/ci.sqlite"
+      fi
+      php artisan migrate --force
+      php artisan migrate:rollback --force
+      php artisan migrate --force
+      if php artisan migrate:status | grep -q Pending; then exit 1; fi
+      php artisan config:cache
+      php artisan route:cache
+      php artisan view:cache
+      php artisan event:cache
+      php artisan optimize:clear
+      if [ "$DB_ENGINE" = mysql ]; then
+        vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings
+        for test in tests/Feature/BillingIdentityConcurrencyTest.php tests/Feature/ViesReviewConcurrencyTest.php tests/Feature/PromotionReservationConcurrencyTest.php tests/Feature/StripeSubscriptionConcurrencyTest.php tests/Feature/InvoiceIntentConcurrencyTest.php tests/Feature/InvoiceIssuanceConcurrencyTest.php tests/Feature/Privacy/PrivacyRequestConcurrencyTest.php tests/Feature/SyntheticSzamlazzTestConcurrencyTest.php tests/Feature/Monitoring/MonitoringEngineConcurrencyTest.php; do
+          vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings "$test"
+        done
+      else
+        unset DB_DATABASE
+        vendor/bin/phpunit -c phpunit.xml --display-skipped --display-warnings
+      fi
+      php artisan migrate:fresh --force
+      php artisan system:check
+      php artisan config:cache
+      php artisan route:cache
+      php artisan view:cache
+      php artisan serve --host=127.0.0.1 --port=8000 >/tmp/caregrid-serve.log 2>&1 &
+      server_pid=$!
+      trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+      for attempt in $(seq 1 50); do curl -fsS http://127.0.0.1:8000/up >/dev/null && break; sleep 0.2; done
+      php tests/smoke/http-smoke.php http://localhost:8000
+      php artisan optimize:clear
+
+wordpress:
+  extends: .php84
+  stage: connector
+  timeout: 30m
+  parallel:
+    matrix:
+      - DB_ENGINE: [sqlite, mysql]
+  services:
+    - name: mysql:8.4
+      alias: mysql
+  script:
+    - composer install --no-interaction --prefer-dist --no-progress
+    - php artisan connector:package
+    - export WP_CAREGRID_CONNECTOR_PACKAGE="$CI_PROJECT_DIR/storage/app/private/connector/wp-caregrid-connector-$(php -r 'echo json_decode(file_get_contents("wordpress/wp-caregrid-connector/release.json"), true)["version"];').zip"
+    - cd wordpress && composer install --no-interaction --prefer-dist --no-progress
+    - |
+      set -eu
+      if [ "$DB_ENGINE" = mysql ]; then
+        for attempt in $(seq 1 60); do mysqladmin ping -h mysql -uroot -p"$MYSQL_ROOT_PASSWORD" --silent && break; sleep 2; done
+        mysqladmin ping -h mysql -uroot -p"$MYSQL_ROOT_PASSWORD" --silent
+        MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=mysql --user=root --execute="CREATE DATABASE IF NOT EXISTS wordpress CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+        export WP_CAREGRID_TEST_MYSQL='root:ci-root-password@mysql/wordpress'
+      fi
+      php -d display_errors=1 -d memory_limit=512M vendor/bin/phpunit --display-skipped
+

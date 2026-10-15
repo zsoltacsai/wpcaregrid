@@ -93,7 +93,7 @@ final class RunWebsiteProbe implements ShouldBeUnique, ShouldQueue
             'connector_report', ['health_status' => $health->value, 'finding_count' => count($findingStatuses)], $website->health_checked_at, 3600,
         ));
 
-        $backup = $website->backups()->verified()->whereNull('objects_deleted_at')->latest('verified_at')->first();
+        $backup = $website->backups()->usableRecoveryPoint()->latest('verified_at')->first();
         $backupDimension = $siteHealth->for($website)->dimension(Dimension::Backups);
         $latestBackup = $website->backups()->latest('id')->first();
         $backupReason = match (true) {

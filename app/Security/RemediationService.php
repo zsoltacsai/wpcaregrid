@@ -94,7 +94,7 @@ class RemediationService
         }
 
         // A recent verified full backup counts; otherwise make one and wait for it.
-        $recent = $finding->website->backups()->verified()->where('type', BackupType::Full)->whereNull('objects_deleted_at')
+        $recent = $finding->website->backups()->usableRecoveryPoint()->where('type', BackupType::Full)
             ->where('verified_at', '>=', now()->subMinutes((int) config('security.remediation.backup_max_age_minutes')))->latest('verified_at')->first();
 
         if ($recent) {

@@ -11,12 +11,15 @@ use App\Backups\BackupStatus;
 use App\Backups\BackupType;
 use App\Backups\Retention;
 use App\Backups\Storage\BackupStorage;
+use App\Backups\Storage\InspectableBackupStorage;
 use App\Backups\Storage\LocalStorage;
+use App\Backups\Storage\ObjectPresence;
 use App\Backups\Storage\StorageManager;
 use App\Backups\Storage\StorageUnavailable;
 use App\Backups\Storage\Verification;
 use App\Jobs\TransferBackup;
 use App\Models\Backup;
+use App\Models\BackupObjectDeletion;
 use App\Models\WebsiteEvent;
 use App\Pricing\PlanTier;
 use App\Pricing\ProductType;
@@ -151,7 +154,9 @@ class TransferAndRetentionTest extends TestCase
         $this->assertSame(BackupStatus::Corrupt, $backup->status);
         $this->assertSame($code, $backup->error_code);
         $this->assertNull($backup->verified_at);
-        $this->assertNotNull($backup->objects_deleted_at, 'Unusable objects are removed; the record stays.');
+        $this->assertNull($backup->objects_deleted_at, 'Unverified provider cleanup must not be recorded as complete.');
+        $this->assertSame('reconciliation_required', $backup->deletion_state);
+        $this->assertSame(3, BackupObjectDeletion::where('backup_id', $backup->id)->where('state', 'reconciliation_required')->count());
         $this->assertTrue(WebsiteEvent::where('event', 'backup.corrupt')->exists());
     }
 
@@ -284,7 +289,7 @@ class TransferAndRetentionTest extends TestCase
         $this->assertSame(5, $website->backups()->verified()->count());
     }
 
-    public function test_the_only_verified_backup_needs_explicit_confirmation_to_delete(): void
+    public function test_the_only_verified_recovery_point_cannot_be_deleted_even_with_legacy_confirmation(): void
     {
         $website = $this->backupReadySite()['website'];
         $only = $this->verifiedBackup($website);
@@ -298,9 +303,104 @@ class TransferAndRetentionTest extends TestCase
         $this->artisan('backup:admin', ['action' => 'delete', 'uuid' => $only->uuid])->assertFailed();
         $this->assertSame(BackupStatus::Verified, $only->refresh()->status);
 
-        $this->artisan('backup:admin', ['action' => 'delete', 'uuid' => $only->uuid, '--confirm-only-backup' => true])->assertSuccessful();
-        $this->assertSame(BackupStatus::Deleted, $only->refresh()->status);
-        $this->assertTrue(WebsiteEvent::where('event', 'backup.deleted')->where('actor', 'operator')->exists());
+        $this->artisan('backup:admin', ['action' => 'delete', 'uuid' => $only->uuid, '--confirm-only-backup' => true])->assertFailed();
+        $this->assertSame(BackupStatus::Verified, $only->refresh()->status);
+        $this->assertSame('not_requested', $only->deletion_state);
+        $this->assertFalse(WebsiteEvent::where('event', 'backup.deleted')->where('actor', 'operator')->exists());
+    }
+
+    public function test_a_verified_backup_on_another_destination_does_not_protect_this_destination_last_point(): void
+    {
+        $website = $this->backupReadySite()['website'];
+        $onlyLocal = $this->verifiedBackup($website);
+        $otherDestination = $this->verifiedBackup($website, at: now()->subMinute());
+        $otherDestination->forceFill(['storage_provider' => 'sftp'])->save();
+
+        try {
+            app(BackupDeletion::class)->remove($onlyLocal, BackupStatus::Deleted, 'operator');
+            $this->fail('A backup on another destination protected the only local recovery point.');
+        } catch (BackupRefused $e) {
+            $this->assertSame('ONLY_VERIFIED_BACKUP', $e->errorCode);
+        }
+    }
+
+    public function test_partial_object_delete_is_persisted_and_backup_cannot_be_restored(): void
+    {
+        $website = $this->backupReadySite()['website'];
+        $backup = $this->verifiedBackup($website, at: now()->subDays(2));
+        $this->verifiedBackup($website);
+        $local = new LocalStorage($this->storageRoot);
+        $this->useStorage(new class($local, $backup) implements InspectableBackupStorage
+        {
+            public function __construct(private LocalStorage $local, private Backup $backup) {}
+
+            public function name(): string
+            {
+                return 'local';
+            }
+
+            public function put(string $key, $stream, int $size, string $sha256): void
+            {
+                $this->local->put($key, $stream, $size, $sha256);
+            }
+
+            public function verify(string $key, int $size, string $sha256): Verification
+            {
+                return $this->local->verify($key, $size, $sha256);
+            }
+
+            public function readRange(string $key, int $offset, int $length): string
+            {
+                return $this->local->readRange($key, $offset, $length);
+            }
+
+            public function delete(string $key): void
+            {
+                $this->local->delete($key);
+            }
+
+            public function presence(string $key): ObjectPresence
+            {
+                return str_ends_with($key, 'database.sql.gz') ? ObjectPresence::Present : $this->local->presence($key);
+            }
+        });
+
+        try {
+            app(BackupDeletion::class)->remove($backup, BackupStatus::Expired, 'retention');
+            $this->fail('A partial object deletion was reported as complete.');
+        } catch (BackupRefused $exception) {
+            $this->assertSame('DELETION_RECONCILIATION_REQUIRED', $exception->errorCode);
+        }
+
+        $backup->refresh();
+        $this->assertSame(BackupStatus::Verified, $backup->status);
+        $this->assertSame('partially_deleted', $backup->deletion_state);
+        $this->assertNull($backup->objects_deleted_at);
+        $this->assertFalse($backup->isRestorable());
+        $this->assertSame(2, $backup->objectDeletions()->where('state', 'provider_confirmed')->count());
+        $this->assertSame(1, $backup->objectDeletions()->where('state', 'reconciliation_required')->count());
+        $this->assertTrue(WebsiteEvent::where('event', 'backup.deletion_partial')->where('backup_id', $backup->id)->exists());
+    }
+
+    public function test_successful_read_after_delete_records_logical_absence_per_object(): void
+    {
+        $website = $this->backupReadySite()['website'];
+        $backup = $this->verifiedBackup($website, at: now()->subDays(2));
+        $this->verifiedBackup($website);
+
+        app(BackupDeletion::class)->remove($backup, BackupStatus::Expired, 'retention');
+
+        $this->assertSame(BackupStatus::Expired, $backup->refresh()->status);
+        $this->assertSame('provider_confirmed', $backup->deletion_state);
+        $this->assertNotNull($backup->objects_deleted_at);
+        $this->assertSame(3, $backup->objectDeletions()->where('state', 'provider_confirmed')->count());
+        $this->assertSame(3, $backup->objectDeletions()->where('verification_state', 'logical_absence_verified')->count());
+        $attempts = $backup->objectDeletions()->sum('attempts');
+
+        app(BackupDeletion::class)->remove($backup, BackupStatus::Expired, 'retention-retry');
+
+        $this->assertSame($attempts, $backup->objectDeletions()->sum('attempts'));
+        $this->assertSame(BackupStatus::Expired, $backup->refresh()->status);
     }
 
     public function test_operator_can_request_and_retry_backups(): void

@@ -20,6 +20,38 @@
     </section>
 
     <section class="mb-6 rounded-md border border-line bg-surface p-5">
+        <h2 class="text-base font-semibold">Backup deletion & provider reconciliation</h2>
+        <p class="mt-1 text-sm text-muted">Read-only status. Customer-site backups and platform database backups are separate recovery planes. A provider acknowledgement is not physical-erasure proof; S3 versioning, Object Lock, replicas and provider retention remain unverified.</p>
+        <div class="mt-3 grid gap-4 md:grid-cols-2">
+            <div>
+                <h3 class="text-sm font-semibold">Customer backup object states</h3>
+                @forelse ($backupDeletionStates as $state)
+                    <div class="mt-1 text-sm"><code>{{ $state->state }}</code>: {{ $state->total }}</div>
+                @empty
+                    <p class="mt-1 text-sm text-muted">No per-object deletion requests recorded.</p>
+                @endforelse
+            </div>
+            <div>
+                <h3 class="text-sm font-semibold">Provider task states</h3>
+                @forelse ($providerTaskStates as $state)
+                    <div class="mt-1 text-sm"><code>{{ $state->provider }} / {{ $state->status }}</code>: {{ $state->total }}</div>
+                @empty
+                    <p class="mt-1 text-sm text-muted">No provider reconciliation tasks recorded.</p>
+                @endforelse
+            </div>
+        </div>
+        <div class="mt-4 rounded-sm border border-warning/30 bg-warning-soft p-3 text-sm">
+            <strong>Privacy restore safety: {{ strtoupper($restoreSafety['state']) }}</strong>
+            <div>Reason: <code>{{ $restoreSafety['reason'] }}</code>. Independent tombstone journal: {{ strtoupper($restoreSafety['journal_state']) }}. Keep platform recovery mode, workers and customer-facing operation quarantined until an independent journal is configured, replayed and verified.</div>
+        </div>
+        <details class="mt-3 text-sm"><summary class="cursor-pointer">Provider facts (unknowns remain explicit)</summary>
+            @foreach ($providerFacts as $provider => $facts)
+                <div class="mt-2 border-t border-line pt-2"><strong>{{ $provider }}</strong> · delete: {{ $facts['deletion_capability_status'] }} · verification: {{ $facts['deletion_verification_status'] }} · version/lock: {{ $facts['version_retention_status'] }} · region: {{ $facts['region_status'] }} · contract: {{ $facts['contract_status'] }}</div>
+            @endforeach
+        </details>
+    </section>
+
+    <section class="mb-6 rounded-md border border-line bg-surface p-5">
         <h2 class="text-base font-semibold">Account closure & erasure cases</h2>
         <p class="mt-1 text-sm text-muted">Closure and erasure are separate recorded requests. Preview is aggregate-only. No account, subscription, website, backup, provider, or billing state is changed.</p>
         <a class="mt-3 inline-block rounded-sm border border-line-strong px-3 py-2 text-sm" href="{{ route('owner.privacy-requests.closure') }}">Open closure impact preview</a>

@@ -6,7 +6,7 @@ return [
         'requested' => 'Kérelmezve', 'identity_verification_required' => 'Személyazonosság ellenőrzése szükséges', 'verified' => 'Személyazonosság ellenőrizve',
         'cooling_off' => 'Elállási időszak', 'retention_analysis' => 'Megőrzési elemzés (csak jelentés)', 'review_pending' => 'Felülvizsgálatra vár', 'blocked_policy' => 'Szabályzati felülvizsgálat blokkolja', 'blocked_legal' => 'Jogi felülvizsgálatra vár', 'blocked_accounting' => 'Könyvelői felülvizsgálatra vár', 'access_restricted' => 'Ügyfél-hozzáférés korlátozva', 'manual_review' => 'Kézi felülvizsgálat', 'failed' => 'Sikertelen', 'completed' => 'Befejezve', 'cancelled' => 'Visszavonva',
     ],
-    'provider_task_statuses' => ['pending' => 'Függőben', 'requested' => 'Kérve', 'confirmed' => 'Megerősítve', 'retained_legal' => 'Felülvizsgálatig megőrizve', 'failed' => 'Sikertelen', 'manual_review' => 'Kézi felülvizsgálat'],
+    'provider_task_statuses' => ['pending' => 'Függőben', 'requested' => 'Kérve', 'confirmed' => 'Megerősítve', 'retained_legal' => 'Felülvizsgálatig megőrizve', 'failed' => 'Sikertelen', 'manual_review' => 'Kézi felülvizsgálat', 'unknown' => 'Ismeretlen; kézi egyeztetés szükséges'],
     'gate_states' => ['SAFE_DISABLED_BY_POLICY' => 'BIZTONSÁGOS / SZABÁLYZAT SZERINT KIKAPCSOLVA', 'REQUIRES_REVIEW' => 'Bekapcsolva — ellenőrzés szükséges'],
     'fact_statuses' => ['unverified' => 'Nincs ellenőrizve', 'unreviewed' => 'Nincs felülvizsgálva'],
     'providers' => ['stripe' => 'Stripe', 'szamlazz' => 'Számlázz.hu', 'object_storage' => 'Objektumtár', 'mail' => 'Levelezési szolgáltató', 'hosting' => 'Tárhelyszolgáltató', 'cloudflare' => 'Cloudflare', 'other' => 'Egyéb'],

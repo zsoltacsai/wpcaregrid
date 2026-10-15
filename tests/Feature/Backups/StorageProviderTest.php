@@ -4,8 +4,10 @@ namespace Tests\Feature\Backups;
 
 use App\Backups\Storage\BackupStorage;
 use App\Backups\Storage\ChecksumMismatch;
+use App\Backups\Storage\InspectableBackupStorage;
 use App\Backups\Storage\LocalStorage;
 use App\Backups\Storage\ObjectKey;
+use App\Backups\Storage\ObjectPresence;
 use App\Backups\Storage\S3Storage;
 use App\Backups\Storage\SftpStorage;
 use App\Backups\Storage\StorageManager;
@@ -30,6 +32,13 @@ use Tests\TestCase;
 class StorageProviderTest extends TestCase
 {
     private const KEY = '01a0da4e-2cb8-7171-a360-8a68030cc999/01a0da4f-0000-7000-8000-000000000001/files.tar.gz';
+
+    public function test_local_storage_presence_is_unknown_when_the_storage_root_is_unavailable(): void
+    {
+        $storage = new LocalStorage(sys_get_temp_dir().'/wpcg-unavailable-'.bin2hex(random_bytes(8)));
+
+        $this->assertSame(ObjectPresence::Unknown, $storage->presence(self::KEY));
+    }
 
     public static function providers(): array
     {
@@ -57,6 +66,9 @@ class StorageProviderTest extends TestCase
 
         $storage->delete(self::KEY);
         $this->assertSame('MISSING', $storage->verify(self::KEY, 1, str_repeat('0', 64))->failure);
+        if ($storage instanceof InspectableBackupStorage) {
+            $this->assertSame(ObjectPresence::Absent, $storage->presence(self::KEY));
+        }
     }
 
     #[DataProvider('providers')]

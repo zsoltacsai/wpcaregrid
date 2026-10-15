@@ -26,6 +26,7 @@ use App\Http\Controllers\RobotsController;
 use App\Http\Controllers\SitemapController;
 use App\Http\Controllers\StripeWebhookController;
 use App\Http\Middleware\EnsureCurrentLegalAcceptance;
+use App\Http\Middleware\EnsurePlatformRecoveryQuarantine;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', [LegacyMarketingRedirectController::class, 'home'])->name('legacy.home');
@@ -50,7 +51,7 @@ Route::prefix('{locale}')->where(['locale' => 'en|hu'])->group(function () {
 Route::post('/locale', LocaleController::class)->middleware('throttle:60,1')->name('locale.update');
 Route::post('/currency', CurrencyController::class)->middleware('throttle:60,1')->name('currency.update');
 
-Route::controller(CheckoutController::class)->prefix('checkout')->name('checkout.')->group(function () {
+Route::controller(CheckoutController::class)->prefix('checkout')->name('checkout.')->middleware(EnsurePlatformRecoveryQuarantine::class)->group(function () {
     // The query string carries only the logical selection (product, plan, interval).
     Route::get('/', 'show')->name('show');
     Route::post('/promotion-preview', 'preview')->middleware('throttle:checkout-preview')->name('promotion-preview');
@@ -60,7 +61,7 @@ Route::controller(CheckoutController::class)->prefix('checkout')->name('checkout
 });
 
 // Signed by Stripe, so it is exempt from CSRF (see bootstrap/app.php).
-Route::post('/stripe/webhook', StripeWebhookController::class)->name('stripe.webhook');
+Route::post('/stripe/webhook', StripeWebhookController::class)->middleware(EnsurePlatformRecoveryQuarantine::class)->name('stripe.webhook');
 
 // Authentication. Accounts are created after a confirmed purchase, so there
 // is no public registration; activation sets the first password.
@@ -82,7 +83,7 @@ Route::get('/staff/activate/{token}', [StaffActivationController::class, 'show']
 Route::post('/staff/activate', [StaffActivationController::class, 'store'])->middleware('throttle:login')->name('staff.activate.store');
 
 // Customer area. Every model is loaded by UUID and authorised by a policy.
-Route::middleware(['auth', 'customer', EnsureCurrentLegalAcceptance::class])->prefix('account')->name('account.')->group(function () {
+Route::middleware(['auth', 'customer', EnsureCurrentLegalAcceptance::class, EnsurePlatformRecoveryQuarantine::class])->prefix('account')->name('account.')->group(function () {
     Route::get('/', DashboardController::class)->name('dashboard');
 
     Route::get('/websites', [WebsiteController::class, 'index'])->name('websites.index');

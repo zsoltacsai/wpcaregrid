@@ -21,13 +21,19 @@ class RestoreRequestConcurrencyTest extends TestCase
         $connection = (string) (getenv('DB_CONNECTION') ?: 'sqlite');
         $database = (string) (getenv('DB_DATABASE') ?: ':memory:');
         $host = strtolower((string) (getenv('DB_HOST') ?: '127.0.0.1'));
+        $databaseUrl = (string) (getenv('DB_URL') ?: '');
+        $isDedicatedTestDatabase = preg_match('/(^|[_-])(test|testing)([_-]|$)/i', $database) === 1;
+        $isApprovedCiServiceHost = strtolower((string) (getenv('CI') ?: '')) === 'true'
+            && strtolower((string) (getenv('CAREGRID_CI_MYSQL_SERVICE_HOST') ?: '')) === $host
+            && $database === 'caregrid_test';
 
         if (strtolower((string) (getenv('APP_ENV') ?: 'testing')) !== 'testing'
             || $connection !== 'mysql'
-            || preg_match('/(^|[_-])(test|testing)([_-]|$)/i', $database) !== 1
-            || ! in_array($host, ['localhost', '127.0.0.1', '::1'], true)
+            || ! $isDedicatedTestDatabase
+            || (! in_array($host, ['localhost', '127.0.0.1', '::1'], true) && ! $isApprovedCiServiceHost)
+            || $databaseUrl !== ''
             || ! function_exists('pcntl_fork')) {
-            $this->markTestSkipped('Requires an explicitly named loopback MySQL test database and PCNTL.');
+            $this->markTestSkipped('Requires an explicitly named local MySQL test database and PCNTL.');
         }
 
         parent::setUp();

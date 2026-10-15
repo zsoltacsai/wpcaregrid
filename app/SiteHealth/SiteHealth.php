@@ -79,7 +79,7 @@ final class SiteHealth
         }
 
         $latest = $website->backups()->where('reason', 'scheduled')->latest('id')->first();
-        $verified = $website->backups()->verified()->whereNull('objects_deleted_at')->latest('verified_at')->first();
+        $verified = $website->backups()->usableRecoveryPoint()->latest('verified_at')->first();
         $allowed = ['daily' => 2, 'weekly' => 8, 'monthly' => 32][$policy->frequency] ?? 32;
 
         return match (true) {

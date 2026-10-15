@@ -31,7 +31,7 @@ class Retention
             return [];
         }
 
-        $verified = $website->backups()->verified()->whereNull('objects_deleted_at')
+        $verified = $website->backups()->usableRecoveryPoint()
             ->orderByDesc('verified_at')->orderByDesc('id')->get()->values();
 
         $protected = $this->protectedIds($website);

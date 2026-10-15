@@ -237,11 +237,20 @@ class PrivacyFoundationTest extends TestCase
             $this->assertArrayNotHasKey('retention_days', $categories[$category]);
         }
 
-        foreach (PrivacyProviderFactRegistry::all() as $facts) {
+        foreach (PrivacyProviderFactRegistry::all() as $provider => $facts) {
             $this->assertSame('unverified', $facts['region_status']);
             $this->assertSame('unverified', $facts['contract_status']);
-            $this->assertSame('unverified', $facts['deletion_capability_status']);
             $this->assertSame('unreviewed', $facts['transfer_review_status']);
+            $this->assertArrayHasKey('deletion_verification_status', $facts);
+            $this->assertArrayHasKey('version_retention_status', $facts);
+            $this->assertArrayHasKey('test_mode_status', $facts);
+            if ($provider === 'object_storage') {
+                $this->assertSame('logical_delete_api_implemented', $facts['deletion_capability_status']);
+                $this->assertSame('logical_key_readback_implemented; physical_version_state_unverified', $facts['deletion_verification_status']);
+                $this->assertSame('unverified', $facts['version_retention_status']);
+            } else {
+                $this->assertSame('unverified', $facts['deletion_capability_status']);
+            }
         }
     }
 

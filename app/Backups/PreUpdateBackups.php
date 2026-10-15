@@ -32,15 +32,18 @@ class PreUpdateBackups
     /** @param  array<string, mixed>  $payload  Already validated. */
     public function queueUpdate(Website $website, JobType $type, array $payload, string $requestedBy): WebsiteJob
     {
-        if (! $this->policy->for($website)->preUpdateRequired) {
-            return $this->jobs->queue($website, $type, $payload, $requestedBy, ['status' => JobStatus::Queued]);
-        }
-
         return DB::transaction(function () use ($website, $type, $payload, $requestedBy) {
-            $job = $this->jobs->queue($website, $type, $payload, $requestedBy, ['status' => JobStatus::Waiting]);
+            // Share the same website lock used by restore and backup deletion
+            // so an update cannot appear after deletion has checked dependencies.
+            $lockedWebsite = Website::query()->whereKey($website->id)->lockForUpdate()->firstOrFail();
+            if (! $this->policy->for($lockedWebsite)->preUpdateRequired) {
+                return $this->jobs->queue($lockedWebsite, $type, $payload, $requestedBy, ['status' => JobStatus::Queued]);
+            }
+
+            $job = $this->jobs->queue($lockedWebsite, $type, $payload, $requestedBy, ['status' => JobStatus::Waiting]);
 
             try {
-                $backup = app(BackupService::class)->request($website, BackupReason::PreUpdate, $requestedBy, BackupType::Full, [
+                $backup = app(BackupService::class)->request($lockedWebsite, BackupReason::PreUpdate, $requestedBy, BackupType::Full, [
                     'update_job_id' => $job->id,
                     'update_target' => $this->target($website, $type, $payload),
                 ]);

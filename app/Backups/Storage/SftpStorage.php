@@ -11,7 +11,7 @@ use phpseclib3\Net\SFTP;
  * so verification reads the object back in pieces and hashes it. Uploads
  * go to a ".part" name and are renamed when complete.
  */
-final class SftpStorage implements IncompleteUploadListable, ListableBackupStorage
+final class SftpStorage implements IncompleteUploadListable, InspectableBackupStorage, ListableBackupStorage
 {
     use HashesStreams;
 
@@ -86,8 +86,31 @@ final class SftpStorage implements IncompleteUploadListable, ListableBackupStora
         $sftp = $this->connection();
         $path = $this->path($key);
         $sftp->delete($path, false);
-        $sftp->rmdir(dirname($path));
-        $sftp->rmdir(dirname($path, 2));
+        // Keep the empty directories so presence() can list the parent and
+        // distinguish an absent logical key from an inaccessible directory.
+    }
+
+    public function presence(string $key): ObjectPresence
+    {
+        $sftp = $this->connection();
+        $path = $this->path($key);
+        $parent = dirname($path);
+        if (! $sftp->is_dir($parent)) {
+            return ObjectPresence::Unknown;
+        }
+        $entries = $sftp->nlist($parent);
+        if (! is_array($entries)) {
+            return ObjectPresence::Unknown;
+        }
+        $filename = basename($path);
+        foreach ($entries as $entry) {
+            $name = is_array($entry) ? (string) ($entry['filename'] ?? '') : (string) $entry;
+            if ($name === $filename) {
+                return ObjectPresence::Present;
+            }
+        }
+
+        return ObjectPresence::Absent;
     }
 
     public function listKeys(): iterable

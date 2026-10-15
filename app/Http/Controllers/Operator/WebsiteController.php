@@ -72,7 +72,7 @@ class WebsiteController extends Controller
             'connectorState' => $connectorState,
             'security' => $security->summaries([$website])[$website->id],
             'securityConfigured' => $security->isConfigured(),
-            'latestVerified' => $website->backups()->verified()->whereNull('objects_deleted_at')->latest('verified_at')->first(),
+            'latestVerified' => $website->backups()->usableRecoveryPoint()->latest('verified_at')->first(),
             'backups' => $backups,
             // Offered only for verified backups of this website while its connector reports in;
             // RestoreService checks all of it again (and more) when the restore is requested.

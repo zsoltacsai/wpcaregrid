@@ -25,6 +25,16 @@ class RecoveryModeTest extends TestCase
         Queue::fake();
     }
 
+    public function test_recovery_mode_quarantines_customer_billing_and_webhook_http_paths_but_keeps_owner_access(): void
+    {
+        $this->withoutVite();
+        config(['platform.recovery_mode' => true]);
+
+        $this->get('/checkout')->assertStatus(503)->assertHeader('Retry-After', '300');
+        $this->post('/stripe/webhook', [])->assertStatus(503);
+        $this->get('/owner/login')->assertOk();
+    }
+
     public function test_platform_recovery_mode_holds_site_changing_jobs_and_only_delivers_read_only_jobs(): void
     {
         $site = $this->pairedWebsite();

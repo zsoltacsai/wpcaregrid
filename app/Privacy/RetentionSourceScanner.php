@@ -32,14 +32,15 @@ final class RetentionSourceScanner
                 ->join('subscriptions as s', 's.id', '=', 'w.subscription_id')->whereNotNull('s.ended_at');
             $watermarks[] = 'backups:'.(clone $query)->count().':'.((clone $query)->max('b.updated_at') ?: 'empty');
             $postServiceDays = $this->durationValue($activePolicies, 'RET-04');
-            $eligible = $postServiceDays === null ? 0 : (clone $query)->where('s.ended_at', '<=', $now->copy()->subDays($postServiceDays))->whereNull('b.objects_deleted_at')->count();
+            $eligible = $postServiceDays === null ? 0 : (clone $query)->where('s.ended_at', '<=', $now->copy()->subDays($postServiceDays))->whereNull('b.objects_deleted_at')->where(fn ($q) => $q->whereNull('b.deletion_state')->orWhere('b.deletion_state', 'not_requested'))->count();
             $activeRestore = DB::table('backup_restores as r')->join('backups as b', 'b.id', '=', 'r.backup_id')
                 ->join('websites as w', 'w.id', '=', 'b.website_id')->join('subscriptions as s', 's.id', '=', 'w.subscription_id')
                 ->whereNotNull('s.ended_at')->whereIn('r.status', ['awaiting_safety_backup', 'queued', 'restoring'])->count();
-            $lastRecoveryPoint = (clone $query)->where('b.status', 'verified')->whereNotNull('b.verified_at')->whereNull('b.objects_deleted_at')
+            $lastRecoveryPoint = (clone $query)->where('b.status', 'verified')->whereNotNull('b.verified_at')->whereNull('b.objects_deleted_at')->where(fn ($q) => $q->whereNull('b.deletion_state')->orWhere('b.deletion_state', 'not_requested'))
                 ->whereNotExists(function ($subquery): void {
                     $subquery->selectRaw('1')->from('backups as other')->whereColumn('other.website_id', 'b.website_id')
-                        ->whereColumn('other.id', '<>', 'b.id')->where('other.status', 'verified')->whereNotNull('other.verified_at')->whereNull('other.objects_deleted_at');
+                        ->whereColumn('other.id', '<>', 'b.id')->where('other.status', 'verified')->whereNotNull('other.verified_at')->whereNull('other.objects_deleted_at')
+                        ->where(fn ($q) => $q->whereNull('other.deletion_state')->orWhere('other.deletion_state', 'not_requested'));
                 })->count();
             $activeOperations = DB::table('website_jobs as j')->join('websites as w', 'w.id', '=', 'j.website_id')
                 ->join('subscriptions as s', 's.id', '=', 'w.subscription_id')->whereNotNull('s.ended_at')
