@@ -35,7 +35,7 @@ class SystemStatusTest extends TestCase
         foreach (['Application', 'Database', 'Queue', 'Scheduler', 'Connector API', 'Stripe', 'Cloudflare DNS', 'Backup storage', 'Security scanner', 'Mail'] as $name) {
             $response->assertSee($name);
         }
-        $this->assertCount(13, $this->states());
+        $this->assertCount(14, $this->states());
         $this->assertSame(HealthStatus::Healthy, $this->states()['privacy_retention']);
         $this->assertSame(HealthStatus::Healthy, $this->states()['privacy_exports']);
     }
