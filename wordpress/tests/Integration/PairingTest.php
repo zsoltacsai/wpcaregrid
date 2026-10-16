@@ -149,6 +149,42 @@ final class PairingTest extends TestCase
         $this->assertFalse(Settings::is_connected());
     }
 
+    public function test_lost_pairing_response_preserves_existing_local_credential_until_new_pair_succeeds(): void
+    {
+        $this->pair();
+        $original = (new CredentialStore)->get();
+        $this->http->on('POST pair', new \WP_Error('http_request_failed', 'cURL error 28: Operation timed out'));
+
+        $lost = $this->plugin()->pairing()->pair(self::PAIRING_CODE);
+
+        $this->assertFalse($lost['ok']);
+        $this->assertSame($original, (new CredentialStore)->get());
+        $this->assertTrue(Settings::is_connected());
+
+        // The Owner can issue a fresh one-time code; re-pair replaces the old
+        // server token, and the plugin commits the new token only on response.
+        $replacement = 'cgc_'.str_repeat('R', 48);
+        $this->http->on('POST pair', $this->pair_response(['credential' => $replacement]));
+        $recovered = $this->plugin()->pairing()->pair('WXYZ-1234-ABCD');
+
+        $this->assertTrue($recovered['ok']);
+        $this->assertSame($replacement, (new CredentialStore)->get());
+        $this->assertTrue(Settings::is_connected());
+    }
+
+    public function test_connector_api_bounds_json_responses_before_decoding_or_trusting_them(): void
+    {
+        $this->pair();
+        $this->http->on('GET jobs', ['status' => 200, 'body' => ['padding' => str_repeat('x', 2 * 1024 * 1024 + 1)]]);
+
+        $response = $this->plugin()->api()->get('jobs');
+
+        $this->assertSame(502, $response->status);
+        $this->assertSame('RESPONSE_TOO_LARGE', $response->error_code);
+        $request = $this->http->api_requests('GET jobs')[0];
+        $this->assertSame(2097153, $request['args']['limit_response_size']);
+    }
+
     public function test_only_https_api_addresses_are_allowed(): void
     {
         $this->assertTrue(Client::is_allowed_url('https://wpcaregrid.com/api/v1/connector/pair'));

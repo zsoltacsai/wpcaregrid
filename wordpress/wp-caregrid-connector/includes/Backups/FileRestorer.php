@@ -33,31 +33,73 @@ final class FileRestorer
 
     public function extract(string $archive, string $staging): void
     {
-        wp_mkdir_p($staging);
+        if (is_link($staging) || (! is_dir($staging) && ! wp_mkdir_p($staging)) || ! is_dir($staging) || is_link($staging)
+            || ! PathGuard::contained($staging, $staging)) {
+            throw new BackupFailure('UNSAFE_PATH', 'The private restore staging directory is unsafe.');
+        }
         @chmod($staging, 0700);
 
         (new TarReader($archive))->each(function (string $name, string $type, int $size, callable $read) use ($staging) {
             $target = PathGuard::join($staging, $name);
 
             if ($type === 'dir') {
-                wp_mkdir_p($target);
+                $this->ensure_staging_directory($staging, $name);
 
                 return;
             }
 
-            wp_mkdir_p(dirname($target));
-            $out = @fopen($target, 'wb');
+            $directory = dirname($name);
+            $this->ensure_staging_directory($staging, $directory === '.' ? '' : $directory);
+            if (is_link($target) || file_exists($target) || ! PathGuard::contained($staging, $target)
+                || PathGuard::has_symlink_component($staging, $target)) {
+                throw new BackupFailure('UNSAFE_PATH', 'An unsafe or duplicate restore staging path was refused.');
+            }
+            // Exclusive creation prevents overwrite/following a final-component symlink.
+            $out = @fopen($target, 'x+b');
             if (! $out) {
                 throw new BackupFailure('INSUFFICIENT_DISK_SPACE', 'A file could not be extracted.');
             }
+            @chmod($target, 0600);
             while (($data = $read()) !== '') {
                 if (fwrite($out, $data) !== strlen($data)) {
                     fclose($out);
+                    @unlink($target);
                     throw new BackupFailure('INSUFFICIENT_DISK_SPACE', 'A file could not be extracted.');
                 }
             }
             fclose($out);
         });
+    }
+
+    /** Create staging parents one component at a time and recheck each resolution. */
+    private function ensure_staging_directory(string $staging, string $relative): void
+    {
+        if (is_link($staging) || ! is_dir($staging) || ! PathGuard::contained($staging, $staging)) {
+            throw new BackupFailure('UNSAFE_PATH', 'The private restore staging directory is unsafe.');
+        }
+
+        $current = realpath($staging);
+        if ($current === false) {
+            throw new BackupFailure('UNSAFE_PATH', 'The private restore staging directory is unavailable.');
+        }
+
+        if ($relative === '') {
+            return;
+        }
+
+        foreach (explode('/', PathGuard::relative($relative)) as $part) {
+            $current .= DIRECTORY_SEPARATOR.$part;
+            if (is_link($current) || (file_exists($current) && ! is_dir($current))) {
+                throw new BackupFailure('UNSAFE_PATH', 'An unsafe restore staging path was refused.');
+            }
+            if (! is_dir($current) && ! @mkdir($current, 0700)) {
+                throw new BackupFailure('INSUFFICIENT_DISK_SPACE', 'A restore staging directory could not be created.');
+            }
+            if (is_link($current) || ! PathGuard::contained($staging, $current)
+                || PathGuard::has_symlink_component($staging, $current)) {
+                throw new BackupFailure('UNSAFE_PATH', 'An unsafe restore staging path was refused.');
+            }
+        }
     }
 
     public function apply(string $staging): void
@@ -476,6 +518,13 @@ final class FileRestorer
             if (is_link($target) || ((file_exists($target)) && ! is_file($target))) {
                 throw $this->apply_failure('destination_check', $relative, 'destination_type_conflict');
             }
+            if (! $this->safe($parent) || ! $this->safe($target)) {
+                throw new BackupFailure('UNSAFE_PATH', 'An unsafe restore destination was refused.', [
+                    'operation' => 'destination_check',
+                    'relative_path' => $relative,
+                    'error_category' => 'unsafe_parent',
+                ]);
+            }
 
             $renameWarning = null;
             $renamed = $this->capture_warning(static fn () => rename($temporary, $target), $renameWarning);
@@ -552,10 +601,13 @@ final class FileRestorer
     private function safe(string $target): bool
     {
         $normalized = rtrim(wp_normalize_path($target), '/');
-        $root = rtrim(wp_normalize_path(ABSPATH), '/');
+        $contentRoot = rtrim(wp_normalize_path(WP_CONTENT_DIR), '/');
+        $siteRoot = rtrim(wp_normalize_path(ABSPATH), '/');
+        $root = str_starts_with($normalized.'/', $contentRoot.'/') ? WP_CONTENT_DIR
+            : (dirname($target) === rtrim(ABSPATH, '/') ? ABSPATH : null);
 
-        return $normalized === $root
-            || PathGuard::contained(WP_CONTENT_DIR, $target)
-            || (dirname($target) === rtrim(ABSPATH, '/') && PathGuard::contained(ABSPATH, $target));
+        return is_string($root)
+            && PathGuard::contained($root, $target)
+            && ! PathGuard::has_symlink_component($root, $target);
     }
 }

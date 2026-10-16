@@ -10,7 +10,7 @@ final class RestApiCheck implements Check
 {
     public function run(): Finding
     {
-        $response = wp_remote_get(rest_url(), ['timeout' => 10, 'sslverify' => apply_filters('https_local_ssl_verify', false)]);
+        $response = wp_remote_get(rest_url(), ['timeout' => 10, 'redirection' => 0, 'limit_response_size' => 1048576, 'sslverify' => apply_filters('https_local_ssl_verify', false)]);
 
         if (is_wp_error($response)) {
             return new Finding('rest_api', Finding::UNKNOWN, 'REST API', 'Loopback request not possible: '.$response->get_error_code());

@@ -10,6 +10,7 @@ use App\Connector\InventoryIngest;
 use App\Connector\JobQueue;
 use App\Connector\JobStatus;
 use App\Connector\PairConnector;
+use App\Connector\PayloadBounds;
 use App\Connector\RecordJobResult;
 use App\Http\Controllers\Controller;
 use App\Models\Connector;
@@ -30,6 +31,7 @@ class ConnectorController extends Controller
 {
     public function pair(Request $request, PairConnector $pairing): JsonResponse
     {
+        PayloadBounds::assert($request, 16 * 1024, 8, 64, 8 * 1024);
         $data = $request->validate([
             'pairing_code' => ['required', 'string', 'max:32'],
             'installation_id' => ['required', 'string', 'regex:/^[A-Za-z0-9-]{16,64}$/'],
@@ -57,6 +59,7 @@ class ConnectorController extends Controller
 
     public function heartbeat(Request $request, HealthIngest $health): JsonResponse
     {
+        PayloadBounds::assert($request, 128 * 1024, 12, 2048, 96 * 1024);
         $connector = $this->connector($request);
 
         $data = $request->validate([
@@ -112,6 +115,7 @@ class ConnectorController extends Controller
 
     public function inventory(Request $request, InventoryIngest $ingest): JsonResponse
     {
+        PayloadBounds::assert($request, 4 * 1024 * 1024, 12, 30000, 3 * 1024 * 1024);
         $connector = $this->connector($request);
         $ingest->store($connector, $request->all());
 
@@ -137,6 +141,7 @@ class ConnectorController extends Controller
 
     public function result(Request $request, string $job, RecordJobResult $results): JsonResponse
     {
+        PayloadBounds::assert($request, 4 * 1024 * 1024, 16, 20000, 3 * 1024 * 1024);
         $connector = $this->connector($request);
 
         if (! preg_match('/^[0-9a-f-]{36}$/i', $job)) {

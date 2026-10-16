@@ -145,6 +145,20 @@ class BackupFlowTest extends TestCase
         }
     }
 
+    public function test_oversized_manifest_is_refused_before_backup_finalization(): void
+    {
+        $site = $this->backupReadySite();
+        $backup = app(BackupService::class)->request($site['website'], BackupReason::Manual, 'test', BackupType::Files);
+        $this->pollJobs($site);
+
+        $response = $this->uploadBackup($site, $backup, ['files' => 'FILES'], ['unrecognized' => str_repeat('x', 2 * 1024 * 1024)]);
+
+        $response->assertStatus(413)->assertJsonPath('error.code', 'PAYLOAD_TOO_LARGE');
+        $this->assertSame(BackupStatus::Uploading, $backup->refresh()->status);
+        $this->assertSame(0, $backup->objects()->where('name', 'manifest')->count());
+        $this->assertSame(0, WebsiteEvent::where('event', 'backup.uploaded')->count());
+    }
+
     public function test_failed_job_fails_the_backup_with_its_reason(): void
     {
         $site = $this->backupReadySite();

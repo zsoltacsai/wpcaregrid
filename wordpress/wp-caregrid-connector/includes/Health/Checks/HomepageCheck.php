@@ -10,7 +10,9 @@ final class HomepageCheck implements Check
 {
     public function run(): Finding
     {
-        $response = wp_remote_get(home_url('/'), ['timeout' => 10, 'redirection' => 3, 'sslverify' => apply_filters('https_local_ssl_verify', false)]);
+        // Probe only the configured site URL. Do not follow a site-controlled
+        // redirect to an unrelated/internal destination or buffer an arbitrary body.
+        $response = wp_remote_get(home_url('/'), ['timeout' => 10, 'redirection' => 0, 'limit_response_size' => 1048576, 'sslverify' => apply_filters('https_local_ssl_verify', false)]);
 
         if (is_wp_error($response)) {
             // Many hosts block loopback requests; that is not a site failure.

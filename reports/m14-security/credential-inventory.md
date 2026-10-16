@@ -38,3 +38,7 @@ This dated addendum refines the earlier Connector row from current source at pri
 | Stripe webhook signing secret | services.stripe.webhook_secret; signature verified by Stripe SDK; no values inspected. | Verify timestamp tolerance, TEST mode, endpoint rotation procedure and whether dual-secret overlap is supported. External dashboard rotation remains an operational action. |
 
 Do not claim full host compromise is mitigated by plugin DB encryption: a compromised WordPress runtime or salts can use/decrypt the bearer. Explicit revocation/re-pair is the recovery boundary. See m14-2-credential-lifecycle-plan.md.
+
+## M14.2 implementation validation update — 2026-10-16
+
+Local regression evidence now includes lost pairing response recovery, fresh-code re-pair, server-side previous-token revocation, plugin encrypted-option persistence, response-size bounds, and Stripe single-secret cutover/stale timestamp rejection. The Connector release version is `0.4.6`; no plaintext credential, key value, or customer identifier is included in these reports. The mechanism remains a one-time credential returned once, hash-only on the server and encrypted at rest by the plugin. No overlapping token rotation or periodic expiry is claimed. Exact-head CI, staging synthetic pairing and post-deploy health remain pending.

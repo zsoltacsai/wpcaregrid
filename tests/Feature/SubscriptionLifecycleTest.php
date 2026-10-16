@@ -112,6 +112,44 @@ class SubscriptionLifecycleTest extends TestCase
         $this->stripeEvent('invoice.paid', ['id' => 'in_1'])->assertStatus(500);
     }
 
+    public function test_declared_oversized_webhook_body_is_rejected_before_body_read(): void
+    {
+        $this->withServerVariables(['CONTENT_LENGTH' => (string) (2 * 1024 * 1024 + 1)])
+            ->call('POST', route('stripe.webhook'))
+            ->assertStatus(413);
+
+        $this->assertDatabaseCount('stripe_webhook_inbox', 0);
+    }
+
+    public function test_stale_signed_webhook_is_rejected_before_inbox_persistence(): void
+    {
+        $this->stripeEvent('invoice.paid', ['id' => 'in_stale'], eventId: 'evt_stale_signature', signatureTimestamp: time() - 900)
+            ->assertStatus(400);
+
+        $this->assertSame(0, StripeWebhookInbox::where('stripe_event_id', 'evt_stale_signature')->count());
+    }
+
+    public function test_secret_rotation_is_a_single_secret_cutover_and_old_secret_is_rejected(): void
+    {
+        config(['services.stripe.webhook_secret' => 'whsec_rotated']);
+
+        $this->stripeEvent('invoice.paid', ['id' => 'in_rotation'], eventId: 'evt_rotation', secret: 'whsec_previous')
+            ->assertStatus(400);
+        $this->assertSame(0, StripeWebhookInbox::where('stripe_event_id', 'evt_rotation')->count());
+
+        $this->stripeEvent('invoice.paid', ['id' => 'in_rotation'], eventId: 'evt_rotation', secret: 'whsec_rotated')
+            ->assertStatus(204);
+        $this->assertSame(1, StripeWebhookInbox::where('stripe_event_id', 'evt_rotation')->count());
+    }
+
+    public function test_oversized_signed_webhook_is_rejected_before_inbox_persistence(): void
+    {
+        $this->stripeEvent('invoice.paid', ['id' => 'in_oversized', 'padding' => str_repeat('x', 2 * 1024 * 1024)], eventId: 'evt_oversized')
+            ->assertStatus(413);
+
+        $this->assertSame(0, StripeWebhookInbox::where('stripe_event_id', 'evt_oversized')->count());
+    }
+
     // --- Confirmed payment -------------------------------------------------
 
     public function test_paid_checkout_creates_customer_user_and_subscription(): void

@@ -13,7 +13,7 @@ final class PathGuard
     /** A safe relative path ("wp-content/uploads/a.jpg"), or an exception. */
     public static function relative(string $path): string
     {
-        if ($path === '' || strlen($path) > 4096 || str_contains($path, "\0") || str_contains($path, '\\')
+        if ($path === '' || strlen($path) > 4096 || preg_match('/[\x00-\x1f\x7f]/', $path) || str_contains($path, '\\')
             || str_starts_with($path, '/') || preg_match('#^[A-Za-z]:#', $path)) {
             throw new BackupFailure('UNSAFE_PATH', 'An unsafe path was refused.');
         }
@@ -64,5 +64,31 @@ final class PathGuard
         $real_root = rtrim(wp_normalize_path($real_root), '/');
 
         return $real === $real_root || str_starts_with($real.'/', $real_root.'/');
+    }
+
+    /** Refuse any linked component, including links that resolve back inside the root. */
+    public static function has_symlink_component(string $root, string $path): bool
+    {
+        $realRoot = realpath($root);
+        if ($realRoot === false || ! self::contained($root, $path)) {
+            return true;
+        }
+
+        $normalizedRoot = rtrim(wp_normalize_path($realRoot), '/');
+        $normalizedPath = wp_normalize_path($path);
+        $relative = ltrim(substr($normalizedPath, strlen($normalizedRoot)), '/');
+        $current = $realRoot;
+
+        foreach (explode('/', $relative) as $part) {
+            if ($part === '') {
+                continue;
+            }
+            $current .= DIRECTORY_SEPARATOR.$part;
+            if (is_link($current)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

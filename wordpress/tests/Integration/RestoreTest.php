@@ -3,6 +3,7 @@
 namespace WPCareGrid\Connector\Tests\Integration;
 
 use WPCareGrid\Connector\Auth\CredentialStore;
+use WPCareGrid\Connector\Backups\ArchiveBudget;
 use WPCareGrid\Connector\Backups\BackupFailure;
 use WPCareGrid\Connector\Backups\BackupIndex;
 use WPCareGrid\Connector\Backups\DatabaseDumper;
@@ -13,6 +14,7 @@ use WPCareGrid\Connector\Backups\Maintenance;
 use WPCareGrid\Connector\Backups\PathGuard;
 use WPCareGrid\Connector\Backups\Sink;
 use WPCareGrid\Connector\Backups\SqlImporter;
+use WPCareGrid\Connector\Backups\TarReader;
 use WPCareGrid\Connector\Backups\TarWriter;
 use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Backups\Uploader;
@@ -127,6 +129,124 @@ final class RestoreTest extends TestCase
                 @unlink($path);
             }
         }
+    }
+
+    public function test_archive_rejects_duplicate_and_case_colliding_paths_before_live_mutation(): void
+    {
+        $target = WP_CONTENT_DIR.'/uploads/m14-archive-collision/sentinel.txt';
+        $this->put($target, 'live sentinel');
+
+        $result = $this->restore_crafted_archive(static function (TarWriter $tar): void {
+            $tar->add_string('wp-content/uploads/m14-archive-collision/sentinel.txt', 'first', time());
+            $tar->add_string('wp-content/uploads/m14-archive-collision/sentinel.txt', 'second', time());
+        });
+
+        $this->assertSame('failed', $result['status']);
+        $this->assertSame('RESTORE_ARCHIVE_INVALID', $result['error']['code']);
+        $this->assertSame('live sentinel', file_get_contents($target));
+
+        $caseCollision = $this->restore_crafted_archive(static function (TarWriter $tar): void {
+            $tar->add_string('wp-content/uploads/m14-archive-collision/Sentinel.txt', 'first', time());
+            $tar->add_string('wp-content/uploads/m14-archive-collision/sentinel.txt', 'second', time());
+        });
+
+        $this->assertSame('failed', $caseCollision['status']);
+        $this->assertSame('RESTORE_ARCHIVE_INVALID', $caseCollision['error']['code']);
+        $this->assertSame('live sentinel', file_get_contents($target));
+
+        $parentChildCollision = $this->restore_crafted_archive(static function (TarWriter $tar): void {
+            $tar->add_string('wp-content/uploads/m14-archive-collision/node', 'file', time());
+            $tar->add_string('wp-content/uploads/m14-archive-collision/node/child.txt', 'child', time());
+        });
+
+        $this->assertSame('failed', $parentChildCollision['status']);
+        $this->assertSame('RESTORE_ARCHIVE_INVALID', $parentChildCollision['error']['code']);
+        $this->assertSame('live sentinel', file_get_contents($target));
+    }
+
+    public function test_tar_reader_enforces_archive_entry_and_path_depth_ceilings(): void
+    {
+        $path = TempDir::ensure().'/limits-'.wp_generate_uuid4().'.tar.gz';
+        $this->created[] = $path;
+        $sink = new Sink($path, true);
+        $tar = new TarWriter($sink);
+        $tar->add_string('one.txt', 'one', time());
+        $tar->add_string('two.txt', 'two', time());
+        $tar->finish();
+        $sink->close();
+
+        try {
+            (new TarReader($path, maxEntries: 1))->each(static fn () => null);
+            $this->fail('An archive above the configured entry ceiling was accepted.');
+        } catch (BackupFailure $failure) {
+            $this->assertSame('RESTORE_ARCHIVE_INVALID', $failure->error_code);
+        }
+
+        try {
+            (new TarReader($path, maxMemberBytes: 2))->each(static fn () => null);
+            $this->fail('An archive above the configured individual-member ceiling was accepted.');
+        } catch (BackupFailure $failure) {
+            $this->assertSame('RESTORE_ARCHIVE_INVALID', $failure->error_code);
+        }
+
+        try {
+            (new TarReader($path, maxArchiveBytes: 1))->each(static fn () => null);
+            $this->fail('An archive above the configured encoded-size ceiling was accepted.');
+        } catch (BackupFailure $failure) {
+            $this->assertSame('RESTORE_ARCHIVE_INVALID', $failure->error_code);
+        }
+
+        $pax = TempDir::ensure().'/pax-'.wp_generate_uuid4().'.tar.gz';
+        $this->created[] = $pax;
+        $sink = new Sink($pax, true);
+        $tar = new TarWriter($sink);
+        $tar->add_string(str_repeat('x', 120), 'long path', time());
+        $tar->finish();
+        $sink->close();
+
+        try {
+            (new TarReader($pax, maxPaxBytes: 8))->each(static fn () => null);
+            $this->fail('An archive above the configured PAX metadata ceiling was accepted.');
+        } catch (BackupFailure $failure) {
+            $this->assertSame('RESTORE_ARCHIVE_INVALID', $failure->error_code);
+        }
+
+        $deep = TempDir::ensure().'/depth-'.wp_generate_uuid4().'.tar.gz';
+        $this->created[] = $deep;
+        $sink = new Sink($deep, true);
+        $tar = new TarWriter($sink);
+        $tar->add_string('a/b/c.txt', 'deep', time());
+        $tar->finish();
+        $sink->close();
+
+        try {
+            (new TarReader($deep, maxPathDepth: 2))->each(static fn () => null);
+            $this->fail('An archive above the configured path-depth ceiling was accepted.');
+        } catch (BackupFailure $failure) {
+            $this->assertSame('RESTORE_ARCHIVE_INVALID', $failure->error_code);
+        }
+    }
+
+    public function test_archive_writer_budget_bounds_members_expansion_path_depth_and_pax_metadata(): void
+    {
+        foreach ([
+            [new ArchiveBudget(maxEntries: 0), 'wp-content/a.txt', 'dir', 0],
+            [new ArchiveBudget(maxExpandedBytes: 3), 'wp-content/a.txt', 'file', 4],
+            [new ArchiveBudget(maxMemberBytes: 3), 'wp-content/a.txt', 'file', 4],
+            [new ArchiveBudget(maxPathDepth: 2), 'wp-content/a/b.txt', 'file', 1],
+            [new ArchiveBudget(maxPaxBytes: 8), 'wp-content/'.str_repeat('x', 110), 'file', 1],
+        ] as [$budget, $path, $type, $size]) {
+            try {
+                $budget->record($path, $type, $size);
+                $this->fail('An archive writer budget overrun was accepted for '.$path);
+            } catch (BackupFailure $failure) {
+                $this->assertSame('BACKUP_ARCHIVE_LIMIT_EXCEEDED', $failure->error_code);
+            }
+        }
+
+        $budget = new ArchiveBudget(maxEntries: 2, maxExpandedBytes: 4, maxPathDepth: 3, maxPaxBytes: 1024);
+        $budget->record('wp-content', 'dir', 0);
+        $budget->record('wp-content/a.txt', 'file', 4);
     }
 
     public function test_unwritable_destination_is_refused_before_database_mutation(): void
@@ -588,9 +708,41 @@ final class RestoreTest extends TestCase
         $this->assertFileDoesNotExist($outside.'/owned.php');
     }
 
+    public function test_restore_rechecks_a_destination_parent_changed_to_a_symlink_after_preflight(): void
+    {
+        $relative = 'wp-content/uploads/m14-symlink-race/owned.php';
+        $archive = TempDir::ensure().'/race-'.wp_generate_uuid4().'.tar.gz';
+        $staging = TempDir::ensure().'/race-stage-'.wp_generate_uuid4();
+        $outside = sys_get_temp_dir().'/caregrid-race-outside-'.wp_generate_password(6, false);
+        $link = WP_CONTENT_DIR.'/uploads/m14-symlink-race';
+        $this->created = array_merge($this->created, [$archive, $staging, $outside, $link]);
+        mkdir($outside);
+
+        $sink = new Sink($archive, true);
+        $tar = new TarWriter($sink);
+        $tar->add_string($relative, '<?php synthetic();', time());
+        $tar->finish();
+        $sink->close();
+
+        $restorer = new FileRestorer;
+        $restorer->extract($archive, $staging);
+        $restorer->preflight($staging);
+        $this->symlink_or_skip($outside, $link);
+
+        try {
+            $restorer->apply($staging);
+            $this->fail('A destination-parent symlink introduced after preflight must stop restore.');
+        } catch (BackupFailure $failure) {
+            $this->assertSame('RESTORE_FILES_FAILED', $failure->error_code);
+        }
+
+        $this->assertFileDoesNotExist($outside.'/owned.php');
+        $this->assertTrue(is_link($link));
+    }
+
     public function test_path_guard(): void
     {
-        foreach (['../x', 'a/../../x', '/etc/passwd', 'C:/Windows/x', 'a\\..\\x', "a\0b", '', 'a//b', './a'] as $bad) {
+        foreach (['../x', 'a/../../x', '/etc/passwd', 'C:/Windows/x', 'a\\..\\x', "a\0b", "a\nb", "a\tb", '', 'a//b', './a'] as $bad) {
             try {
                 PathGuard::relative($bad);
                 $this->fail("Accepted: {$bad}");
