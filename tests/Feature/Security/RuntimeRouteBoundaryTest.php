@@ -61,23 +61,33 @@ class RuntimeRouteBoundaryTest extends TestCase
             }
 
             $this->assertContains('web', $middleware, $name.' must use browser session and CSRF middleware');
-            if (!in_array($name, ['logout', 'operator.logout', 'owner.logout'], true)) {
-                $this->assertNotEmpty(array_filter($middleware, fn ($item) => is_string($item) && str_starts_with($item, 'throttle:')), $name.' must be throttled');
+            if (in_array($name, ['logout', 'operator.logout', 'owner.logout'], true)) {
+                continue;
             }
+            $this->assertNotEmpty(array_filter($middleware, fn ($item) => is_string($item) && str_starts_with($item, 'throttle:')), $name.' must be throttled');
 
-            if (str_starts_with($uri, 'owner/') && !in_array($name, ['owner.login.store', 'owner.logout'], true)) {
+            if (str_starts_with($uri, 'owner/')) {
+                if (in_array($name, ['owner.login.store', 'owner.logout'], true)) {
+                    continue;
+                }
                 $this->assertContains('auth:owner', $middleware, $name);
                 $this->assertContains('owner', $middleware, $name);
                 $this->assertCount(1, array_filter($middleware, fn ($item) => is_string($item) && str_starts_with($item, 'can:owner.')), $name);
             }
 
-            if (str_starts_with($uri, 'operator/') && !in_array($name, ['operator.login.store', 'operator.logout'], true)) {
+            if (str_starts_with($uri, 'operator/')) {
+                if (in_array($name, ['operator.login.store', 'operator.logout'], true)) {
+                    continue;
+                }
                 $this->assertContains('auth:operator', $middleware, $name);
                 $this->assertContains('operator', $middleware, $name);
                 $this->assertCount(1, array_filter($middleware, fn ($item) => is_string($item) && str_starts_with($item, 'can:operator.')), $name);
             }
 
-            if (str_starts_with($uri, 'account/') && !in_array($name, ['account.activate.store'], true)) {
+            if (str_starts_with($uri, 'account/')) {
+                if ($name === 'account.activate.store') {
+                    continue;
+                }
                 $this->assertContains('auth', $middleware, $name);
                 $this->assertContains('customer', $middleware, $name);
             }
