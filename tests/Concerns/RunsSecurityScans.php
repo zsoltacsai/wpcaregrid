@@ -29,6 +29,12 @@ trait RunsSecurityScans
 
     protected function requestScan(array $site, ScanType $type = ScanType::Full, string $actor = 'operator:1'): SecurityScan
     {
+        // Security-scan fixtures require a current capability snapshot. A prior
+        // scan may outlive the dynamic evidence TTL while a test advances time.
+        $this->withHeaders($this->connectorHeaders($site))
+            ->postJson(route('api.v1.connector.inventory'), $this->inventoryPayload())
+            ->assertSuccessful();
+
         return app(SecurityScanService::class)->request($site['website']->refresh(), $type, $actor);
     }
 
