@@ -67,6 +67,32 @@ class OwnerAccessTest extends TestCase
         $this->assertGuest('owner');
     }
 
+    public function test_synthetic_owner_can_walk_sensitive_console_surfaces_without_leaking_secrets(): void
+    {
+        $this->asOwner();
+
+        config(['services.stripe.secret' => 'sk_test_unit']);
+        config(['backup.providers.s3.secret' => 'STORAGE_SECRET_VALUE']);
+
+        $pages = [
+            route('owner.dashboard'),
+            route('owner.privacy-requests.index'),
+            route('owner.privacy-retention.index'),
+            route('owner.operators.index'),
+            route('owner.integrations.index'),
+            route('owner.settings.index'),
+            route('owner.legal-documents.index'),
+            route('owner.pricing.index'),
+        ];
+
+        foreach ($pages as $page) {
+            $response = $this->get($page)->assertOk()->assertHeader('X-Robots-Tag', 'noindex, nofollow');
+            $html = $response->getContent();
+            $this->assertStringNotContainsString('sk_test_unit', $html, "Secret leaked on {$page}");
+            $this->assertStringNotContainsString('STORAGE_SECRET_VALUE', $html, "Secret leaked on {$page}");
+        }
+    }
+
     /** @return array<string, array{0: string}> */
     public static function nonOwners(): array
     {

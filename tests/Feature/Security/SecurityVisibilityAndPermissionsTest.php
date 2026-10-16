@@ -5,6 +5,7 @@ namespace Tests\Feature\Security;
 use App\Connector\HealthStatus;
 use App\Models\SecurityFinding;
 use App\Models\SecurityIncident;
+use App\Models\SecurityIncidentEvent;
 use App\Models\SecurityQuarantine;
 use App\Models\SecurityRemediation;
 use App\Models\SecurityScan;
@@ -46,7 +47,7 @@ class SecurityVisibilityAndPermissionsTest extends TestCase
     }
 
     /** A site with a vulnerability, a confirmed suspicious file, an operator note, an incident and a remediation. */
-    private function busySite(): array
+    private function busySite(string $url = 'https://company.example'): array
     {
         File::ensureDirectoryExists($this->storageRoot.'-feed');
         $feed = $this->storageRoot.'-feed/v.json';
@@ -55,10 +56,12 @@ class SecurityVisibilityAndPermissionsTest extends TestCase
         WordfenceFeed::import($feed.'.download', WordfenceFeed::indexPathFor($feed));
         config(['security.vulnerabilities.source' => 'wordfence', 'security.vulnerabilities.feed_path' => $feed]);
 
-        $site = $this->securitySite();
+        $site = $this->securitySite($url);
         $scan = $this->requestScan($site, ScanType::Full);
         $this->reportScan($site, $scan, [$this->suspiciousFile('wp-content/uploads/2026/secret-shell.php', 'high', 'medium', 'PHP_REQUEST_EXECUTION', str_repeat('f', 64))]);
-        $file = SecurityFinding::where('type', 'suspicious_file')->sole();
+        $file = SecurityFinding::where('website_id', $site['website']->id)
+            ->where('type', 'suspicious_file')
+            ->sole();
         app(FindingDecisions::class)->decide($file, FindingStatus::Confirmed, $this->operator([Permission::SecurityManage]), 'OPERATOR-NOTE-customer-must-not-see');
         $incident = app(IncidentService::class)->open($site['website'], 'INCIDENT-TITLE-internal', null, 'operator:1', [$file]);
         app(IncidentService::class)->note($incident, 'operator:1', 'INCIDENT-NOTE-internal');
@@ -287,5 +290,45 @@ class SecurityVisibilityAndPermissionsTest extends TestCase
         $this->get(route('operator.websites.security', $site['website']))->assertOk()
             ->assertSee('&lt;img src=x onerror=alert(1)&gt;', false)
             ->assertDontSee('<img src=x onerror=alert(1)>', false);
+    }
+
+    public function test_operator_foreign_security_objects_are_rejected_before_mutation(): void
+    {
+        $mine = $this->busySite('https://operator-mine.example');
+        $other = $this->busySite('https://operator-foreign.example');
+        $foreignFinding = SecurityFinding::query()->where('website_id', $other['website']->id)->firstOrFail();
+        $foreignIncident = SecurityIncident::query()->where('website_id', $other['website']->id)->oldest('id')->firstOrFail();
+        $this->asOperator(Permission::cases());
+
+        $before = [
+            'findings' => SecurityFinding::count(),
+            'incidents' => SecurityIncident::count(),
+            'events' => SecurityIncidentEvent::count(),
+            'remediations' => SecurityRemediation::count(),
+            'scans' => SecurityScan::count(),
+            'foreign_finding_status' => $foreignFinding->status,
+            'foreign_incident_status' => $foreignIncident->status,
+        ];
+
+        $attempts = [
+            fn () => $this->get(route('operator.websites.security.incidents.show', [$mine['website'], $foreignIncident]))->assertNotFound(),
+            fn () => $this->post(route('operator.websites.security.incidents.notes', [$mine['website'], $foreignIncident]), ['note' => 'cross tenant'])->assertNotFound(),
+            fn () => $this->post(route('operator.websites.security.findings.status', [$mine['website'], $foreignFinding]), ['status' => 'confirmed'])->assertNotFound(),
+            fn () => $this->post(route('operator.websites.security.findings.remediate', [$mine['website'], $foreignFinding]), ['confirmation' => 'operator-foreign.example'])->assertNotFound(),
+            fn () => $this->post(route('operator.websites.security.incidents.admin-access', [$mine['website'], $foreignIncident]))->assertNotFound(),
+        ];
+
+        foreach ($attempts as $attempt) {
+            $attempt();
+        }
+
+        $this->assertCount(5, $attempts);
+        $this->assertSame($before['findings'], SecurityFinding::count());
+        $this->assertSame($before['incidents'], SecurityIncident::count());
+        $this->assertSame($before['events'], SecurityIncidentEvent::count());
+        $this->assertSame($before['remediations'], SecurityRemediation::count());
+        $this->assertSame($before['scans'], SecurityScan::count());
+        $this->assertSame($before['foreign_finding_status'], $foreignFinding->fresh()->status);
+        $this->assertSame($before['foreign_incident_status'], $foreignIncident->fresh()->status);
     }
 }

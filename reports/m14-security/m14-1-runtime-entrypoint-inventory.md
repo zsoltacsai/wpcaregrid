@@ -1,5 +1,11 @@
 # M14.1 Runtime Entrypoint Inventory
 
+## Current-source reconciliation — 2026-10-16
+
+The earlier generation header below is retained as historical provenance. A fresh read-only `php artisan route:list --json` against strict-SSH staging runtime `e4659f30140669c9e229c8e583d35e6bb377a979` returned **236 routes**, unchanged from the recorded baseline: GET/HEAD 95, POST 126, PUT 13, DELETE 2. There are 141 state-changing route entries: 130 browser, 10 Connector API, and one signed Stripe webhook. The route-level source/control reconciliation is in [`m14-1-route-control-reconciliation.md`](m14-1-route-control-reconciliation.md).
+
+The method-only behavior labels in this historical inventory are not handler-side-effect evidence. Use the reconciliation document for the explicit CSRF exception and transport classification. It marks unresolved route-specific object-scope/positive-negative behavior evidence PARTIAL rather than inferring it from middleware.
+
 Generated from `php artisan route:list --json`, `php artisan list --raw`, and `php artisan schedule:list` on 2026-10-16 using the merged executable source `37f31d0ddd6cc8c62221a5cac20e39b69e6fe45a` in an isolated WSL-native checkout. No live application secrets or environment values were read or recorded.
 
 Runtime route count: **236**. Console command output includes Laravel and project commands (**158 listed command entries**); project source contains **36 command classes**. Schedule output: **19 recurring tasks**. Queue inventory: **9 job classes**. These counts complement—not replace—the per-route table below.

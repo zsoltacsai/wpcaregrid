@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Operator\Permission;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class OperatorAuthenticationTest extends TestCase
@@ -40,6 +41,41 @@ class OperatorAuthenticationTest extends TestCase
         $this->assertTrue(Auth::guard('operator')->check());
         $this->assertSame($operator->id, Auth::guard('operator')->id());
         $this->assertFalse(Auth::guard('web')->check(), 'Signing in as an operator does not sign in to the customer area.');
+    }
+
+    public function test_permission_revocation_is_observed_on_the_next_request_in_the_existing_session(): void
+    {
+        $operator = $this->operatorWithPassword([Permission::WebsitesView, Permission::BackupsView]);
+        $this->get(route('operator.login'));
+        $this->post(route('operator.login.store'), ['email' => $operator->email, 'password' => 'operator-password-1'])
+            ->assertRedirect(route('operator.dashboard'));
+
+        $this->get(route('operator.backups.index'))->assertOk();
+
+        DB::table('users')->where('id', $operator->id)->update([
+            'operator_permissions' => json_encode([Permission::WebsitesView->value]),
+        ]);
+
+        // Force the next HTTP request to rehydrate the guard principal from its persisted session.
+        Auth::forgetGuards();
+        $this->get(route('operator.backups.index'))->assertForbidden();
+        $this->get(route('operator.websites.index'))->assertOk();
+    }
+
+    public function test_operator_disable_is_observed_on_the_next_request_in_the_existing_session(): void
+    {
+        $operator = $this->operatorWithPassword();
+        $this->get(route('operator.login'));
+        $this->post(route('operator.login.store'), ['email' => $operator->email, 'password' => 'operator-password-1'])
+            ->assertRedirect(route('operator.dashboard'));
+
+        $this->get(route('operator.dashboard'))->assertOk();
+
+        DB::table('users')->where('id', $operator->id)->update(['operator_disabled_at' => now()]);
+        Auth::forgetGuards();
+
+        $this->get(route('operator.dashboard'))->assertRedirect(route('operator.login'));
+        $this->assertGuest('operator');
     }
 
     public function test_wrong_password_and_non_operators_get_the_same_refusal(): void

@@ -18,6 +18,7 @@ use App\Privacy\SyntheticPrivacyAnonymizationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Tests\Concerns\ActsAsOwner;
 use Tests\TestCase;
 
@@ -193,6 +194,14 @@ class ErasureExecutionPlanTest extends TestCase
 
         $this->assertTrue($breaker->status()['is_open']);
         $this->assertContains('CIRCUIT_BREAKER_OPEN', app(PrivacyExecutionAuthorization::class)->blockers($plan, $action));
+
+        try {
+            $breaker->reset($owner, 'wrong-password', 'RESET PRIVACY EXECUTION CIRCUIT');
+            $this->fail('A circuit reset without valid recent password confirmation was accepted.');
+        } catch (ValidationException) {
+            $this->assertTrue($breaker->status()['is_open']);
+            $this->assertDatabaseMissing('admin_audit_events', ['event' => 'privacy.erasure.circuit_reset']);
+        }
 
         $breaker->reset($owner, 'circuit-owner-password', 'RESET PRIVACY EXECUTION CIRCUIT');
 

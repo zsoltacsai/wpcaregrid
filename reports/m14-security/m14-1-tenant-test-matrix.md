@@ -18,3 +18,14 @@ All rows require two customers/tenants with distinct users and at least one vali
 | Metrics/audit | cross-tenant event detail or PII label injection | aggregate/no PII/no foreign event | audit and monitoring tests | structured payload assertions and log capture |
 
 For each row run positive own-tenant control beside negative foreign-object request; otherwise a blanket denial can falsely pass. Verify `DB::after` hashes or precise related-row snapshots and fake external adapters.
+
+## Continuation audit status — 2026-10-16
+
+The current runtime route list is unchanged at 236 routes. The per-route source/control manifest is [`m14-1-route-control-reconciliation.md`](m14-1-route-control-reconciliation.md), which explicitly marks object-scope behavior as unproven unless a test supplies it. Existing automated positive/negative evidence is representative rather than a full matrix:
+
+- Owner/Operator/Customer role crossover is generated across registered account/console routes by `tests/Feature/AuthorizationMatrixTest.php`.
+- A valid foreign backup paired with an owned website is rejected for Operator restore in `tests/Feature/Operator/OperatorSecurityTest.php`, with no `BackupRestore` row created.
+- A foreign admin-access request cannot be revoked through a different website in the same suite, and its status remains unchanged.
+- Website/account, billing, privacy, restore and Connector scopes have domain-specific tests, but not every object/action combination below has both a valid own-tenant positive control and a foreign valid-identifier denial with every applicable side-effect assertion.
+
+**Disposition remains PARTIAL.** No exhaustive two-tenant action count is claimed. Missing evidence includes full valid-object coverage across backup object download, restore, billing/invoice private links, privacy cases/exports, security findings/incidents, Connector job/object references, provider tasks, direct service/job entries and queue/external/storage/mail/audit zero-side-effect assertions. Do not promote AS-03 to PASS based on 403/404 alone or on the route crossover test.

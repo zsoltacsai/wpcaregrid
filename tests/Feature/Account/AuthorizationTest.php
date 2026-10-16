@@ -7,6 +7,7 @@ use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Subscription;
 use App\Models\Website;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Fakes\FakeSubscriptionManagementGateway;
 use Tests\TestCase;
@@ -112,6 +113,26 @@ class AuthorizationTest extends TestCase
         $this->assertSame($this->alice->user_id, $alice->user_id);
         $this->assertSame('business', $alice->subscriptions()->sole()->plan->value);
         $this->assertSame('Bob Store', $this->bob->refresh()->company_name);
+    }
+
+    public function test_customer_profile_change_without_csrf_is_rejected_before_mutation(): void
+    {
+        $this->app->bind(PreventRequestForgery::class, fn ($app) => new class($app, $app['encrypter']) extends PreventRequestForgery
+        {
+            protected function runningUnitTests()
+            {
+                return false;
+            }
+        });
+
+        $this->actingAs($this->alice->user)->put(route('account.profile.update'), [
+            'first_name' => 'Changed without a token',
+            'last_name' => 'Customer',
+            'customer_type' => 'individual',
+            'country_code' => 'HU',
+        ])->assertStatus(419);
+
+        $this->assertNotSame('Changed without a token', $this->alice->refresh()->first_name);
     }
 
     public function test_checkout_details_of_another_browser_are_not_exposed(): void
