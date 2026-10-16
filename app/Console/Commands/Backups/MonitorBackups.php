@@ -32,7 +32,7 @@ class MonitorBackups extends Command
             });
 
         Backup::where('status', BackupStatus::Uploaded)->where('uploaded_at', '<', now()->subHour())
-            ->each(fn (Backup $backup) => TransferBackup::dispatch($backup->id));
+            ->each(fn (Backup $backup) => TransferBackup::dispatch(...TransferBackup::snapshot($backup)));
 
         // A transfer whose worker died (timeout, restart, crash) leaves the backup "verifying".
         // Past the job timeout no worker can still be on it: hand it over again. Objects
@@ -41,7 +41,7 @@ class MonitorBackups extends Command
         Backup::where('status', BackupStatus::Verifying)->where('updated_at', '<', $abandonedBefore)
             ->each(function (Backup $backup) {
                 $backup->transitionTo(BackupStatus::Uploaded);
-                TransferBackup::dispatch($backup->id);
+                TransferBackup::dispatch(...TransferBackup::snapshot($backup));
                 $this->components->warn("Transfer handed over again: {$backup->uuid}");
             });
 
