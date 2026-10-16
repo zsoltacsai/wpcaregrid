@@ -89,3 +89,24 @@ This supersedes the earlier “staging proof not run” status above. It closes 
 ### Wave 8 final M12 planning crosswalk — 2026-10-16
 
 Planning only; no new runtime evidence or audit completion is asserted here. The canonical 36-row M12 engineering crosswalk is `reports/m12-privacy/wave8-closure-matrix.md`; it separates PASS from PARTIAL and records staging scope, restore scope, tenant evidence, audit references and remaining actions. Wave 8 plans an integrated synthetic lifecycle E2E, current regression/CI run, cleanup verification and refreshed privacy-controls evidence. The latest Wave 7 synthetic restore proof uses an isolated local fake journal namespace for the anonymization event; it does not establish S3 durability or physical deletion. External legal/accounting/provider gates remain open, production destructive gates remain OFF, and M14/M15/M17 audits remain incomplete. The current scanner warning (“no completed security scan”) is retained as an M14 AppSec residual.
+
+### Wave 8 final privacy-engineering evidence refresh — 2026-10-16
+
+This supersedes planning-only status for the tested engineering controls while preserving earlier evidence. Wave 8 plan PR #73 merged at `57cdf9aac2ef0339ded74036181a469d9d11cbeb`; exact-head GitHub Actions run `38847059091` passed all five required jobs, including Server MySQL process/concurrency. The deployed executable staging SHA remains `19e31d7204a59e08211c4dd9e313b9cccbb01611`; subsequent primary changes are documentation only.
+
+| Technical control | Wave 8 disposition | Evidence boundary |
+|---|---|---|
+| Access/export and rectification | PASS | Current focused staging MySQL tests plus Wave 2 staging and billing snapshot evidence; legal scope remains WAIT_LEGAL. |
+| Legal version/acceptance infrastructure | PASS / WAIT_LEGAL | Workflow is tested; no text published and enforcement remains OFF. |
+| Retention policy and report-only preview | PASS | Current evaluator/preview suite; coverage remains visibly partial/unknown where sources are unsupported; no execution. |
+| Closure, erasure plan, approval binding and re-auth | PASS | Current focused tests and Wave 7 exact-preview/stale-approval staging proof. |
+| Synthetic anonymization, auth revocation and email reuse | PASS — synthetic only | Wave 7 isolated MySQL proof; real subjects remain disabled pending applicable approvals. |
+| Backup/provider reconciliation | WAIT_FACT for destructive action | Technical states and fake/reconciliation tests pass; no production provider deletion/absence claim. |
+| Independent tombstone/replay/quarantine | PASS for tested engineering scope | Wave 6 staging object-storage replay plus Wave 7 isolated MySQL anonymization replay. Wave 7's anonymization proof used local fake journal storage; provider durability remains WAIT_FACT. |
+| Accounting immutability | PASS / WAIT_ACCOUNTING | 16-table Wave 6 and nine-table Wave 7 fingerprints unchanged; retention/identity exceptions remain unresolved. |
+| Tenant isolation and Owner authorization | PASS for tested privacy paths | Exact CI, focused MySQL tests and Wave 2/6/7 staging evidence. Broader M14 audit remains open. |
+| Audit and monitoring | PASS for implemented events/aggregate health | Focused and full CI evidence; no PII in intended aggregate labels. Production monitoring/audit retention approval remains open. |
+| Production destructive execution | DISABLED | All six normal-staging gates were read false before and after Wave 8. |
+| General security scan | M14_RESIDUAL | Staging continues to show “no completed security scan.” Do not suppress; complete/triage in M14 AppSec. |
+
+Wave 8 focused staging validation ran 70 tests / 899 assertions with no failure, error or skip in a private `APP_ENV=testing` runtime using a disposable MySQL 8.4.11 database. The runtime and DB credentials/resources were removed and absence verified. No production or ordinary staging customer data was mutated. This matrix is a technical-controls audit contribution, not blanket GDPR compliance or a completed M14/M15/M17 audit. Keep W7-L-01…03 `WAIT_LEGAL`, W7-A-01…02 `WAIT_ACCOUNTING`, and W7-P-01 `WAIT_FACT`.

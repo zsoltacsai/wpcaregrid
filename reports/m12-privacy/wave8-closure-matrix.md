@@ -56,3 +56,64 @@ Baseline: primary `d415ef3a483b2e80a775b4a11960ad7051396b29`, branch `claude/ecs
 | **Total requirements** | **36** |
 
 `PARTIAL` rows include intentionally blocked legal publication/customer response scope and unverified broader integration; they are not counted as passed. Wave 5's code/Owner preview evidence exists, but its explicit report disposition is stale/contradictory; the row remains PARTIAL until the Wave 8 evidence-reconciliation step records the latest Owner walkthrough. The status table intentionally groups the detailed L/C/P review IDs in the external gate matrix.
+
+## Execution reconciliation — 2026-10-16
+
+This section supersedes the planning baseline, its current-count table, and the remaining-action column above for the evidence actually obtained during Wave 8. Historical descriptions are retained. The authoritative branch is `claude/ecstatic-wozniak-oemyuf`; Wave 8 planning PR #73 merged at `57cdf9aac2ef0339ded74036181a469d9d11cbeb`. The executable staging SHA is `19e31d7204a59e08211c4dd9e313b9cccbb01611`; primary advances after that SHA are report-only. Five-job Actions run `38847059091` passed on the exact planning head, whose executable tree matches staging. It ran the complete configured Server SQLite/MySQL and Connector SQLite/MySQL suites plus the quality/security/build gate. Server MySQL included the required process/concurrency gate.
+
+The 70-test isolated staging run (899 assertions; 0 failures, 0 errors, 0 skips) exercised the current deployed source under a private `APP_ENV=testing` runtime and disposable MySQL 8.4.11 database. Two SQLite-only restore tests were omitted from that host run because `pdo_sqlite` is unavailable; both are covered by the mandatory Server SQLite CI job and current Wave 7 MySQL restore evidence. The earlier Wave 7 isolated staging run on the same executable SHA contributes genuine T0/T1/replay, anonymization, email reuse, table fingerprint, failure-injection and cleanup evidence. Neither fake-journal Wave 7 evidence nor this run proves S3 durability or provider physical deletion.
+
+| ID | Current status | Current evidence / disposition |
+|---|---|---|
+| M12-01 | PASS | Wave 1 closure report; exact five-job CI; privacy foundation tests in current 70-test MySQL run. |
+| M12-02 | PASS | Wave 2 staging report, `PrivacyExportTest`, export route tests in current run; legal response scope remains provisional separately. |
+| M12-03 | PASS | Wave 2 rectification evidence; billing snapshot CI and Wave 7 nine-table fingerprint invariance. |
+| M12-04 | PASS | Wave 3 Owner workflow evidence and `LegalDocumentWorkflowTest`; no legal text was published. |
+| M12-05 | PASS | Acceptance infrastructure tested; enforcement remains OFF and no acceptance was fabricated. Legal review stays external. |
+| M12-06 | PASS | Wave 4 policy version/default tests; approved engineering defaults remain distinct from compliance approval. |
+| M12-07 | PASS | Evaluator/preview reports partial or unknown source coverage truthfully; current tests confirm no mutation. Coverage itself remains PARTIAL by design. |
+| M12-08 | PASS | Wave 5 Owner preview/addendum plus current account-closure orchestration tests supersede the older “no closure verdict” statement. |
+| M12-09 | PASS | Current plan tests and Wave 7 exact-preview/approval staging proof. |
+| M12-10 | PASS | Wave 7 isolated staging proof, reused; mutation remained synthetic-only. |
+| M12-11 | WAIT_FACT | Technical state/reconciliation is tested; provider physical/versioned deletion facts remain unknown and deletion stays disabled. |
+| M12-12 | PASS | M9 platform-backup separation and CI/restore evidence; no account-level retention rule or destructive platform deletion was applied. Provider durability limits remain in M12-36. |
+| M12-13 | WAIT_FACT | Request acceptance is not provider deletion; provider-specific physical absence remains unverified. |
+| M12-14 | PASS | Wave 6 staging journal/replay used the configured object-storage adapter; Wave 7 replay added the anonymization event using isolated fake storage. S3/account failure-domain guarantees remain explicitly unclaimed. |
+| M12-15 | PASS | Wave 6 staging replay and Wave 7 genuine MySQL T0/T1/replay with second replay idempotent. |
+| M12-16 | PASS | Wave 6 quarantine/readiness evidence plus Wave 7 replay proof; normal mutation remained gated until verified replay. Production DR audit remains open. |
+| M12-17 | PASS | Wave 7 same-second source fingerprint fix and stale-approval rejection; exact preview binding is tested. |
+| M12-18 | PASS | Wave 7 Owner-equivalent test approval, typed confirmation and recent authentication; no bulk approval control. |
+| M12-19 | PASS | All six normal staging values read false both before and after Wave 8; code defaults/tests fail closed. |
+| M12-20 | PASS | Circuit-breaker injection leaves synthetic subject unchanged; current focused suite and Wave 7 report. |
+| M12-21 | PASS | Wave 6 16-table and Wave 7 nine-table fingerprints unchanged; billing/snapshot regressions passed in exact CI. Retention duration is separately WAIT_ACCOUNTING. |
+| M12-22 | PASS | Wave 7 original synthetic email reuse and graph isolation proof; no old private associations inherited. |
+| M12-23 | PASS | Export/plan/replay tenant tests, Wave 7 cross-tenant injection, current CI and focused MySQL suite. No cross-tenant mutation observed. |
+| M12-24 | PASS | Request/export/preview/approval/journal/replay audit tests and reports; audit payload minimization remains covered. |
+| M12-25 | PASS | Read-only staging health passed for privacy/recovery components; scanner warning is separately carried to M14. |
+| M12-26 | PASS | Focused 70-test run plus Wave 7 failure injections cover stale approval, journal failure/corruption, tenant mismatch, missing fixture and open breaker. Provider facts remain separately WAIT_FACT. |
+| M12-27 | PASS | Exact CI MySQL process/concurrency gate passed; privacy request concurrency also ran in the current focused staging run. Broader races are mapped in the regression report and future M15 audit. |
+| M12-28 | PASS | Scenarios A–O are supported by current focused Wave 8 staging tests, the exact full-suite CI and accepted current Wave 2–7 staging proofs; there was no single monolithic all-scenarios transaction. See the scenario evidence mapping below. |
+| M12-29 | PASS | Exact planning-head run `38847059091`, all five required jobs green; current executable source tree equals deployed SHA. |
+| M12-30 | PASS | Prior authenticated W3/W4/W5/W7 Owner walkthroughs plus current Owner route/authorization feature tests. No direct-delete or bulk-approval route is exercised or exposed by tested workflow. |
+| M12-31 | PASS | Wave 2 customer export/rectification, Wave 5 closure and current account/export route tests. User-facing language remains neutral and no legal-completeness claim is made. |
+| M12-32 | PASS | Wave 8 private runtime, disposable DB/user and test config removed; absence verified. Wave 7 cleanup independently recorded. |
+| M12-33 | PARTIAL — M14_RESIDUAL | Privacy-specific authorization/tenant/synthetic protections passed; staging still reports “no completed security scan.” Keep warning visible and complete broad scan/triage in M14. |
+| M12-34 | WAIT_LEGAL | Legal approval/publication and legal-response scope remain external; no legal copy or acceptance mandate was activated. |
+| M12-35 | WAIT_ACCOUNTING | Exact accounting retention/exception values remain external; immutable evidence is protected and not rewritten. |
+| M12-36 | WAIT_FACT | Provider versioning, Object Lock, replicas, credential scope and verified physical absence remain unknown; no destructive provider API was called. |
+
+### Reconciled status counts
+
+| Status | Count |
+|---|---:|
+| PASS | 30 |
+| PARTIAL / M14_RESIDUAL | 1 |
+| MISSING | 0 |
+| STALE | 0 |
+| WAIT_LEGAL | 1 |
+| WAIT_ACCOUNTING | 1 |
+| WAIT_FACT | 3 |
+| NOT_APPLICABLE | 0 |
+| **Total requirements** | **36** |
+
+M12-11 is separately `WAIT_FACT` because the row covers customer-backup deletion reconciliation while provider semantics remain an execution prerequisite. M12-13 and M12-36 also remain provider-fact gated. This is not an additional independent unresolved fact count; the same W7-P-01 boundary applies to each affected requirement. The single M14 scanner residual is not represented as a missing M12 engineering control. The scenario table in `wave8-e2e-matrix.md` states the reused/current evidence behind M12-28. No M12 engineering row is MISSING or STALE. The report-only closure PR and its exact-head CI are still required before the final M12 closure record is merged.

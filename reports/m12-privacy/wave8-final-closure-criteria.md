@@ -47,3 +47,9 @@ No GDPR certification or legal opinion; no accounting/tax approval; no provider 
 - Before M15 pilot: DR/restore, billing/subscription/invoice, technical privacy-control and operational-safety audits.
 - M17: final production-readiness audit on an exact release SHA.
 - M16 handles pricing/CRO/customer communication for future backup packages; WordPress Basic monthly+3 monthly, Business weekly+8 weekly+3 monthly, Secure daily+14 daily+8 weekly+3 monthly; WooCommerce Basic weekly+8 weekly+3 monthly, Business daily+14 daily+8 weekly+3 monthly, Secure daily+30 daily+12 weekly+6 monthly; pre-update safety backups remain separate. Wave8 only checks M12 primitives do not conflict; it does not implement these policies.
+
+## Wave 8 execution reconciliation — 2026-10-16
+
+Current evidence: plan PR #73 merged at `57cdf9aac2ef0339ded74036181a469d9d11cbeb`; staging executable SHA `19e31d7204a59e08211c4dd9e313b9cccbb01611` remains current and differs from the new primary only by documentation. Exact-head CI run `38847059091` passed all five required jobs. A private staging-host `APP_ENV=testing` MySQL runtime passed 70 focused tests / 899 assertions with no failures, errors or skips. Existing Wave 2–7 evidence, called out scenario by scenario in `wave8-e2e-matrix.md`, covers the synthetic export/rectification, closure, anonymization, email-reuse and restore/replay paths. The final exact-head CI and merge of the closure report remain required. No staging redeploy is needed for report-only changes.
+
+The previous planning limitation about Wave 5 is resolved by the later 2026-10-15 authenticated Owner UI validation appended to `wave5-implementation-report.md`, corroborated by current Wave 8 account-closure tests. Earlier statements are preserved as historical and explicitly superseded.
