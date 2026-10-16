@@ -298,7 +298,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { database: sqlite, php: '8.3' }
           - { database: sqlite, php: '8.4' }
           - { database: mysql, php: '8.4' }
           - { database: mariadb, php: '8.4' }

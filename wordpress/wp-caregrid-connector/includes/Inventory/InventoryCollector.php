@@ -2,8 +2,8 @@
 
 namespace WPCareGrid\Connector\Inventory;
 
-use WPCareGrid\Connector\Licenses\LicenseDetector;
 use WPCareGrid\Connector\Compatibility\EnvironmentFacts;
+use WPCareGrid\Connector\Licenses\LicenseDetector;
 
 /**
  * What is installed, and what can be updated. Names, versions and update
