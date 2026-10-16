@@ -42,7 +42,8 @@ final class CapabilitySnapshotStore
                     ->where('website_id', $website->id)
                     ->latest('id')
                     ->limit(50)
-                    ->select('id');
+                    ->pluck('id')
+                    ->all();
                 CapabilityTransition::query()->where('website_id', $website->id)->whereNotIn('id', $retainedIds)->delete();
             }
 

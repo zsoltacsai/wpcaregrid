@@ -5,6 +5,7 @@ namespace Tests\Feature\Compatibility;
 use App\Compatibility\Capability;
 use App\Compatibility\CapabilityEvaluator;
 use App\Compatibility\CapabilityReadiness;
+use App\Compatibility\CapabilitySnapshotStore;
 use App\Connector\ConnectorError;
 use App\Connector\JobQueue;
 use App\Connector\JobType;
@@ -73,6 +74,26 @@ final class CapabilityReadinessTest extends TestCase
 
         $this->refreshCapabilityEvidence($website);
         $this->assertSame('BLOCK', $website->fresh()->capabilitySnapshot->status(Capability::UpdateReady)->value);
+    }
+
+    public function test_capability_transition_history_retains_only_the_latest_fifty_rows(): void
+    {
+        $site = $this->pairedWebsite();
+        $website = $site['website'];
+        $connector = $website->activeConnector;
+
+        for ($index = 0; $index < 55; $index++) {
+            $capabilities = $connector->capabilities;
+            if ($index % 2 === 0) {
+                $capabilities = array_values(array_diff($capabilities, ['inventory']));
+            } else {
+                $capabilities[] = 'inventory';
+            }
+            $connector->update(['capabilities' => $capabilities]);
+            app(CapabilitySnapshotStore::class)->refresh($website->fresh(), $connector->fresh(), $this->inventoryPayload()['compatibility']);
+        }
+
+        $this->assertSame(50, $website->capabilityTransitions()->count());
     }
 
     public function test_high_impact_action_requires_a_recent_compatibility_check_without_queue_side_effect(): void
