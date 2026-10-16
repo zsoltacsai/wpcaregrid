@@ -26,3 +26,12 @@
 ## Test layers
 
 Unit capability mapping; feature-level preflight against synthetic fixture; Connector integration across SQLite/MySQL harnesses; process/concurrency tests for restore and duplicate jobs; isolated staging smoke; manual operator walkthrough for diagnostics. OQ-01–OQ-03 are approved boundaries, not passing compatibility evidence. No real destructive provider APIs or production secrets.
+# M14.3 planning reconciliation — 2026-10-16
+
+M14.2 now supplies adversarial archive, payload, redirect/egress, path containment and restore race/failure evidence. M14.3 should reuse those lower-level tests and add capability classification/effect assertions; do not duplicate M14.2 security tests as if they were new compatibility coverage.
+
+The current staging synthetic fixture is paired at Connector 0.4.5 while source release is 0.4.6. Do not re-pair/upgrade it during planning. Add an isolated 0.4.5 vs 0.4.6 per-capability fixture; high-risk operations requiring protections introduced in 0.4.6 remain UNKNOWN/BLOCK absent equivalence proof, while unrelated read/monitor capabilities can be supported-old if evidence permits.
+
+Use the versioned, operation-specific fixture inventory in [M14.3 fixture matrix](m14-3-fixture-matrix.md). Numeric WordPress/PHP/MySQL/MariaDB bounds are TBD from actual fixtures. The expected baseline is standard single-site layout only. Multisite and Bedrock/custom/unresolved symlink roots are expected unsupported initial-launch conditions, not security vulnerabilities. Low disk tests use a quota/fault abstraction, never host exhaustion. Fake network tests distinguish DNS/TLS/timeout/403/406/413/429 and preserve existing M14.2 egress policy.
+
+Every fixture must record exact fact set, policy/evaluator version, expected capability/reason vector, mutation boundary, cleanup method and cleanup verification. CI green is not host-support evidence; staging fixture success is not M15 pilot proof.
