@@ -23,8 +23,7 @@ final class TarReader
         private readonly int $maxPaxBytes = ArchiveLimits::MAX_PAX_BYTES,
         private readonly int $maxMemberBytes = ArchiveLimits::MAX_MEMBER_BYTES,
         private readonly int $maxArchiveBytes = ArchiveLimits::MAX_ARCHIVE_BYTES,
-    )
-    {
+    ) {
         $archiveBytes = @filesize($path);
         if ($archiveBytes === false || $archiveBytes > $this->maxArchiveBytes) {
             throw new BackupFailure('RESTORE_ARCHIVE_INVALID', 'The archive exceeds the supported size limit.');

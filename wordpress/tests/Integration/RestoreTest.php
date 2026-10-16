@@ -3,9 +3,9 @@
 namespace WPCareGrid\Connector\Tests\Integration;
 
 use WPCareGrid\Connector\Auth\CredentialStore;
+use WPCareGrid\Connector\Backups\ArchiveBudget;
 use WPCareGrid\Connector\Backups\BackupFailure;
 use WPCareGrid\Connector\Backups\BackupIndex;
-use WPCareGrid\Connector\Backups\ArchiveBudget;
 use WPCareGrid\Connector\Backups\DatabaseDumper;
 use WPCareGrid\Connector\Backups\Downloader;
 use WPCareGrid\Connector\Backups\FilePolicy;
@@ -14,8 +14,8 @@ use WPCareGrid\Connector\Backups\Maintenance;
 use WPCareGrid\Connector\Backups\PathGuard;
 use WPCareGrid\Connector\Backups\Sink;
 use WPCareGrid\Connector\Backups\SqlImporter;
-use WPCareGrid\Connector\Backups\TarWriter;
 use WPCareGrid\Connector\Backups\TarReader;
+use WPCareGrid\Connector\Backups\TarWriter;
 use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Backups\Uploader;
 use WPCareGrid\Connector\Core\Lock;
