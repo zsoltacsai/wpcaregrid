@@ -49,7 +49,7 @@
             @endforeach
         </div>
 
-        <div class="flex flex-wrap items-center gap-3">
+        <div class="flex flex-col items-start gap-3 md:flex-row md:flex-wrap md:items-center">
             <x-pricing.currency-selector :catalog="$catalog" />
             <div role="group" aria-label="{{ __('pricing.billing_label') }}" class="inline-grid grid-cols-2 rounded-md border border-line bg-surface p-1">
                 @foreach (BillingInterval::cases() as $interval)
