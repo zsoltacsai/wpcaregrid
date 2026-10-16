@@ -124,7 +124,7 @@ class TransferAndRetentionTest extends TestCase
         $this->uploadBackup($site, $backup, ['files' => 'SYNTHETIC FILES'])->assertStatus(202);
         $job = TransferBackup::forBackup($backup->refresh());
 
-        $backup->forceFill(['storage_provider' => 'changed-after-enqueue'])->save();
+        $backup->forceFill(['storage_provider' => 'alternate'])->save();
 
         $job->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
 
