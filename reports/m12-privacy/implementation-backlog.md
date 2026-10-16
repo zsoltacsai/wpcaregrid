@@ -166,3 +166,7 @@ This current addendum supersedes older “M12 pending implementation” snapshot
 | Commercial backup package/GFS redesign | OUT OF M12; M14/M16 | No Wave 8 implementation. |
 
 No M12 engineering task remains pending after final report merge. External reviews and future audits are carried to their proper milestones; they do not imply compliance or authorize destructive action. `M12_DESTRUCTIVE_RETENTION_ENABLED=false`. Do not begin M13 until the final M12 closure report is merged.
+
+### Final M12 Wave 8 closure — 2026-10-16
+
+The report-only final M12 closure is merged in PR #74. Exact-head Actions run `38853885996` passed 5/5 mandatory jobs and PR #74 merged at `d823a2fa46ac47bb0d8d017698f45af536698839`, which was fetched and verified as primary immediately after merge. Wave 8 evidence is complete for the engineering scope; M12 is closed as an engineering milestone. External legal/accounting/provider work remains assigned to qualified review/fact gathering, broad scanner/AppSec work to M14, DR/billing/privacy/operational audits to M15, and final production readiness to M17. Production destructive execution remains disabled. The closure is not GDPR certification. No M13 work began.
