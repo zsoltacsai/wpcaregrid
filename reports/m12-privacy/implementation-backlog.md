@@ -127,3 +127,23 @@ P1 execution-plan/action records and exact preview binding, P2 Owner per-plan ap
 ### Wave 7 release update — 2026-10-16
 
 PR #69 merged as 342f50cd94345dddcb5e5449d22040f3fad187d2 after five-job exact-head CI run 38815372947 passed. That exact primary was guarded-deployed to staging with strict host-key checking; migrations, cache/build, worker/scheduler recovery, smoke tests and post-deploy health passed. All global/action destructive gates were verified false. Local T0/T1/restore/replay synthetic proof passed. Isolated staging synthetic proof remains pending because staging uses production-mode configuration and has no PHPUnit installation; maintain the testing-only mutation guard and leave Wave 7 closure pending. See wave7-safe-implementation-report.md.
+
+## Wave 8 final M12 validation update — 2026-10-16 (authoritative latest status)
+
+This addendum supersedes the older Wave 6/7 pending snapshots above while preserving them as history. Baseline primary: `d415ef3a483b2e80a775b4a11960ad7051396b29`. Latest known executable staging SHA: `19e31d7204a59e08211c4dd9e313b9cccbb01611`; reverify before execution.
+
+| Order | Wave 8 task | Planned state | Required evidence / safety |
+|---|---|---|---|
+| 0 | Reconcile current primary, report status and deployment lineage | PLANNED | Fresh exact-primary worktree; preserve dirty local checkout; resolve Wave5 final-status inconsistency from later authenticated Owner UI evidence |
+| 1 | Read-only staging baseline and gate read-back | PLANNED | Strict pinned SSH; exact SHA/health/workers/journal/recovery; all six normal staging destructive flags false before/after |
+| 2 | Authenticated Owner/customer UI review | PLANNED | Verify hostname, environment, application and identity; read-only only; no publication or forced acceptance |
+| 3 | Scenarios A–F: account/export/rectification/legal/retention/closure | PLANNED | Synthetic/disposable runtime; truthful status, private partial exports, no source deletion |
+| 4 | Scenarios G–K: anonymization/email reuse/accounting/backups/provider | PLANNED | Trusted synthetic marker, one subject, fake provider, isolated journal, immutable accounting hashes |
+| 5 | Scenarios L–N: historical restore/replay/failures/tenant isolation | PLANNED | Genuine T0 into a separate recovery DB; quarantine until verified replay; repeat replay idempotent |
+| 6 | Scenario O cleanup and post-run health | PLANNED | Verify runtime/DB/user/artifact/queue/worker absence; normal staging remains healthy and gates OFF |
+| 7 | Closure report, matrix and audit refresh | PLANNED | Report-only PR, exact-head CI, normal merge; no redeploy for report-only evidence |
+| F | Code-defect contingency | CONDITIONAL ONLY | Minimal fix + regression; full exact-SHA CI; guarded deploy only for runtime changes; affected integrated E2E rerun |
+
+The current closure matrix has 36 requirements: 15 PASS, 17 PARTIAL, 1 WAIT_LEGAL, 1 WAIT_ACCOUNTING and 2 WAIT_FACT. No new Owner policy decision is needed. The staging warning “no completed security scan” remains visible and is carried to M14 AppSec; it is not silently waived or expanded into Wave 8 general hardening.
+
+Wave 8 planning creates no runtime feature or destructive authority. `M12_DESTRUCTIVE_RETENTION_ENABLED=false`; all action-specific production/staging gates stay OFF. No M13 work begins.
