@@ -27,3 +27,14 @@
 3. Keep separate test/staging/production identities, and avoid reusing customer backup credentials for platform backups.
 4. For credentials that encrypt stored values (APP_KEY), plan explicit key versioning, re-encryption and disaster recovery before change.
 5. Verify new credential capability minimally, then revoke old credentials and record actor/time/scope without value.
+
+## M14.2 Connector / webhook source reconciliation — 2026-10-16
+
+This dated addendum refines the earlier Connector row from current source at primary 18ed2da5b0862b701ba19da6ef40b183ed6c44fb; it does not establish deployed secret values.
+
+| Credential | Current verified source model | M14.2 work |
+|---|---|---|
+| Connector site bearer | cgc_ plus 48-character Str::random; Laravel stores SHA-256 only and returns raw value once. Connector stores libsodium secretbox ciphertext in a non-autoloaded WordPress option using a key derived from the secure-auth salt. One Connector belongs to one website; middleware checks active state and exact website UUID. | Test entropy/issue/response-loss/re-pair/revoke/disconnect/in-flight behavior; token absent from logs, UI, exceptions, server plaintext and artifacts. No standalone rotation/overlap API was found; no periodic expiry assumed. |
+| Stripe webhook signing secret | services.stripe.webhook_secret; signature verified by Stripe SDK; no values inspected. | Verify timestamp tolerance, TEST mode, endpoint rotation procedure and whether dual-secret overlap is supported. External dashboard rotation remains an operational action. |
+
+Do not claim full host compromise is mitigated by plugin DB encryption: a compromised WordPress runtime or salts can use/decrypt the bearer. Explicit revocation/re-pair is the recovery boundary. See m14-2-credential-lifecycle-plan.md.
