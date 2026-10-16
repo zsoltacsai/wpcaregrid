@@ -37,3 +37,11 @@
 ## Launch blockers
 
 Any cross-tenant disclosure, mutation, queued action, object download or external effect is `BLOCKED_CRITICAL`, blocks M14 closure and M15 entry. No passing audit should rely only on UI filtering or tenant IDs supplied by a caller.
+
+## M14.1 source-review addendum — 2026-10-16
+
+The verified primary for this review is `039a9ce555909243cd36ff5bd77352d43821915d`; staging executable last verified by strict SSH is `a335162936afa2933e348fe7b04956e98e45c5a3`. No cross-tenant defect was confirmed by this source review, but no runtime test was executed here. Existing foreign valid backup/admin-access and UUID route tests are useful evidence, not a complete domain matrix.
+
+`TransferBackup` serializes an integer backup ID and globally reloads it with `Backup::find()`. Its processing follows the selected backup’s current website and backup-object relations. Treat this as a required stale/reparented-object job-boundary test, not as a demonstrated IDOR: prove in MySQL/process tests that stale/deleted/reparented source state cannot cause a cross-tenant or wrong-object storage effect. See [`m14-1-tenant-test-matrix.md`](m14-1-tenant-test-matrix.md).
+
+Expanded Laravel route inventory remains a required implementation artifact. Static source declarations total 235 across web/Owner/Operator/API route files; PHP CLI was not available to produce `route:list` during planning.

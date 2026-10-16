@@ -69,3 +69,15 @@ The matrix above is the planning disposition. At execution, every finding must b
 | AS-15 | weak headers/cookie configuration enables script/session abuse | session theft or click/script attack | actual staging header capture; CSP staged rollout and cookie tests | M14 if high risk unresolved; M15/M17 |
 | AS-16 | system reports healthy despite no scanner/feed coverage | false security assurance and undetected known exposure | completed scan with real coverage and documented feed freshness | M14 closure and M15 gate; M17 scan recheck |
 | AS-17 | mutable action/download/deploy path is compromised | arbitrary code or secret exfiltration | pin/verify tooling, ruleset proof, exact SHA and rollback audit | M14/M15 if trust chain uncertain; M17 |
+
+## M14.1 source-review addendum — 2026-10-16
+
+This addendum supersedes no historical evidence and does not upgrade static observations to tested PASS. Verified source baseline: primary `039a9ce555909243cd36ff5bd77352d43821915d`; staging executable `a335162936afa2933e348fe7b04956e98e45c5a3` over the approved strict-SSH host key. No runtime changes or staging actions were made.
+
+- AS-01 remains `PARTIAL`. The reset callback rotates `remember_token` but source review did not find application `AuthenticateSession`/`logoutOtherDevices` use or explicit session-row revocation. Multi-guard stale-session proof is required before classifying this as a vulnerability.
+- AS-02/AS-03 remain `PARTIAL`. Explicit Owner/Operator abilities and representative scoped-binding/foreign-object tests are present; complete direct-service, job, Connector and two-tenant matrices remain required.
+- AS-04 remains `PARTIAL`. Bootstrap exposes only the Stripe webhook CSRF exception; enumerate expanded runtime routes and verify every state-changing browser endpoint.
+- AS-05 remains `PARTIAL`. Blade escaping, a legal HTML sanitizer and safe JSON-LD serialization are observed; hostile Owner/provider/site content and all raw sinks need adversarial tests.
+- AS-08 remains `PARTIAL`. Named limits cover major auth, checkout, Connector, Owner, Operator and customer write classes. Effective multi-node cache behavior and complete route-to-limiter coverage are not established by source defaults.
+
+The detailed implementation and test plan is in [`m14-1-plan.md`](m14-1-plan.md), with evidence boundaries in [`m14-1-findings.md`](m14-1-findings.md). Route declaration counts (235 source declarations) are not expanded runtime counts because PHP CLI was unavailable.
