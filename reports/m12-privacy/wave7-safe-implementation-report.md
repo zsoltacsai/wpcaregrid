@@ -1,6 +1,6 @@
 # M12 Wave 7 — Safe Implementation Report
 
-**Status: implementation merged and guarded-deployed; isolated staging synthetic E2E remains pending.** This report records engineering evidence only. Production destructive execution remains disabled. No production or staging customer data has been mutated, and no real provider deletion API has been called.
+**Latest status (2026-10-16): isolated staging synthetic T0/T1/restore/replay validation passed; production destructive execution remains disabled.** This continuation supersedes the earlier pending-validation statements retained below as history. It records engineering evidence only; it does not establish legal/accounting approval or production execution authority.
 
 ## Baseline and decisions
 
@@ -44,3 +44,33 @@
 - The isolated local historical T0/T1/restore/replay test is passing, but it is not staging recovery evidence.
 - Qualified legal/accounting approvals and provider versioning/deletion facts remain unresolved by design. Those blockers remain visible and cannot be overridden by Owner approval.
 - Production destructive gates remain OFF. No production destructive capability is authorized by this report.
+
+### Final staging validation continuation — 2026-10-16
+
+This section records the continuation that closed the isolated Wave 7 staging-validation gap. Earlier interim statements above remain as historical release evidence and are superseded by this section where they say the staging E2E was still pending.
+
+#### SSH recovery and exact source
+
+- The previously reported SSH TCP timeout recovered. Cause of the outage was not established. SSH authentication succeeded with `StrictHostKeyChecking=yes`; the pinned `stg1.wpcaregrid.com` Ed25519 key fingerprint matched the approved `SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`.
+- The code defect found by the first isolated attempt was same-second stale-preview approval: source freshness depended on database timestamps with second precision. That attempt affected only the disposable synthetic row, produced no valid T0/replay evidence, and did not touch the primary staging database.
+- PR #71 (`e48e91379300af67ad6eeceaac37df1a914109f8`) added an HMAC fingerprint over persisted customer/login state without persisting raw profile or credential values. It added a same-second regression proving stale approved plans are invalidated before anonymization. Exact-head GitHub Actions run `38839245477` passed all five mandatory jobs, including MySQL process concurrency; PR #71 merged as `19e31d7204a59e08211c4dd9e313b9cccbb01611`.
+- Exact run log totals: server SQLite **1,283 tests / 18,413 assertions / 19 documented skips**; server MySQL **1,283 / 18,611 / 0 skips**; Connector SQLite **202 / 1,401 / 24 documented skips**; Connector MySQL **202 / 1,775 / 3 documented skips**. Quality/security/build and the required MySQL process-concurrency gate passed.
+- The authoritative primary and guarded-deployed staging SHA are both `19e31d7204a59e08211c4dd9e313b9cccbb01611`. The deployed checkout was clean. Only the existing missing-completed-security-scan warning remained in `system:check`.
+
+#### Isolated runtime and T0/T1/replay evidence
+
+- Reused the previously prepared `/home/deploy/wpcaregrid-wave7-e2e-20261016a6fhqw/` runtime after inspection. It was owner `deploy`, mode `0700`, private/unrouted, exact deployed source, `APP_ENV=testing`, `APP_DEBUG=false`, separate APP_KEY, sync queue, array mail, and no Nginx, Supervisor, cron, scheduler, or normal-worker registration. No provider credentials or provider mutation path were available.
+- The disposable MySQL 8.4.11 databases were `wpcg_wave7_e2e_20261016a6fhqw` and `wpcg_wave7_rec_20261016a6fhqw`; the test user was scoped to those databases. The test used the real journal/encryption/replay services with a test-only local fake object-storage disk and the isolated `platform-database/wave7-e2e-20261016a6fhqw/privacy-tombstones/testing` namespace. No event was written to the normal staging journal or S3 provider.
+- The T0 state was captured with `mysqldump` from the disposable source DB. MySQL version: `8.4.11`; artifact size: `212,913` bytes; SHA-256: `ab4c78a716f04d761eb03ba7ca381e9b9ca07ff965eca1999e45fb75b95e733c`. T0 journal watermark was empty (`null`). T1 journal sequence: `01M518Q8GWSZTZCX0XS146ZKM3`.
+- Plan version 1 was approved with typed confirmation and invalidated after a bound source fact changed. Fresh plan version 2 was approved against preview hash `f7eb31db45b637b80785514e130c4690912da4e4a15e0abdfe259b5687c2f42e`. The synthetic anonymization service committed/read back/verified the journal entry before profile mutation. The action completed for the synthetic subject while the overall case correctly remained `partial` with `WAIT_LEGAL`, `WAIT_ACCOUNTING` and `WAIT_FACT` blockers.
+- The T1 action changed only the synthetic account's mutable identity/authentication state and revoked its Connector/pairing access. The original synthetic email was released and re-registered on a new account. In the recovery database the new identity had zero websites, subscriptions, privacy requests, execution plans, provider tasks and invoice associations. No backup object or WordPress site content was deleted.
+- Nine immutable accounting/billing evidence table fingerprints matched before and after the T1 mutation and replay. The genuine T0 dump was imported into the separate recovery database; before replay, the original synthetic T0 identity was present and the T1 anonymization was absent. The independent journal event remained available. Replay completed and restored privacy-safe identity/auth suppression; replaying a second time reported the event already applied. Billing/provider side effects were not invoked.
+- Staging-context focused tests passed: plan/journal/replay suite **13 tests, 79 assertions**; synthetic guard-injection suite **4 tests, 12 assertions**; genuine MySQL restore/replay E2E **1 test, 74 assertions**. Total: **18 tests, 165 assertions, 0 failures, 0 skips**. The checks covered stale same-second approval, journal integrity/missing-event handling, cross-tenant replay, circuit breaker, missing synthetic fixture, journal write failure before mutation, cross-subject retargeting, and repeat replay.
+- Read-only schedule inventory showed existing `backup:retention` (plan-specific customer backup retention) and `privacy:exports-expire` (temporary export artifacts only), with no account-erasure/anonymization executor. The isolated runtime had no scheduler process or registration. No scheduler command was invoked.
+
+#### Cleanup and final safety state
+
+- Removed both disposable MySQL databases, the scoped MySQL test user, the isolated runtime (including T0 artifact and encrypted test journal objects), and temporary test files. Verified both database names/user absent, runtime path absent, and zero Nginx/Supervisor/cron references. No isolated worker or scheduled task remained.
+- Post-cleanup staging SHA remained `19e31d7204a59e08211c4dd9e313b9cccbb01611`; checkout clean; both normal Supervisor workers running. Application, DB, queue, scheduler, Connector API, Stripe, Cloudflare, backup storage, mail, privacy retention, restore safety and export checks passed. The existing security scanner warning remained visible.
+- Re-read normal staging configuration after cleanup: global destructive retention, profile anonymization, backup deletion, provider deletion, bulk execution, and synthetic execution were all `false`. No provider deletion API was called. No production or ordinary staging customer record was mutated.
+- W7-L-01…03 remain `WAIT_LEGAL`; W7-A-01…02 remain `WAIT_ACCOUNTING`; W7-P-01 remains `WAIT_FACT`. Wave 7 validation closes only for the synthetic-safe engineering scope; Wave 8 and production destructive execution remain out of scope.
