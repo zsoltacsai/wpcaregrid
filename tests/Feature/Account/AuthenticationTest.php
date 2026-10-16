@@ -117,6 +117,33 @@ class AuthenticationTest extends TestCase
         Notification::assertCount(1);
     }
 
+    public function test_password_reset_limit_is_per_account_across_ips_and_fair_to_shared_ip_users(): void
+    {
+        Notification::fake();
+        $first = Customer::factory()->withUser()->create(['email' => 'first@company.example'])->user;
+        $second = Customer::factory()->withUser()->create(['email' => 'second@company.example'])->user;
+
+        foreach (range(1, 3) as $attempt) {
+            $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.10'])
+                ->post(route('password.email'), ['email' => $first->email])
+                ->assertSessionHas('status', __('account.auth.link_sent'));
+            $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.10'])
+                ->post(route('password.email'), ['email' => $second->email])
+                ->assertSessionHas('status', __('account.auth.link_sent'));
+        }
+
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.11'])
+            ->post(route('password.email'), ['email' => $first->email])
+            ->assertStatus(429)
+            ->assertDontSee($first->email);
+
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.11'])
+            ->post(route('password.email'), ['email' => $second->email])
+            ->assertSessionHas('status', __('account.auth.link_sent'));
+
+        Notification::assertCount(7);
+    }
+
     public function test_password_can_be_reset_with_a_valid_token_only(): void
     {
         config(['session.driver' => 'database']);
