@@ -2,9 +2,11 @@
 
 namespace App\Console\Commands;
 
+use App\Auth\SessionRevoker;
 use App\Mail\StaffInvitation;
 use App\Models\User;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
@@ -42,8 +44,11 @@ class ManageOwner extends Command
         if ($this->option('remove')) {
             $wasOwner = $user?->isOwner() === true;
             if ($wasOwner) {
-                $user->forceFill(['role' => null])->save();
-                Password::broker('staff_invitations')->deleteToken($user);
+                DB::transaction(function () use ($user) {
+                    $user->forceFill(['role' => null])->save();
+                    app(SessionRevoker::class)->revoke($user);
+                    Password::broker('staff_invitations')->deleteToken($user);
+                });
             }
             $this->info($wasOwner ? "Owner access removed from {$email}." : "No owner login {$email}.");
 

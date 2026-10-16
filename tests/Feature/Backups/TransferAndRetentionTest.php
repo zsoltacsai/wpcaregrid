@@ -47,6 +47,33 @@ class TransferAndRetentionTest extends TestCase
 
     /* ----- Transfer and verification ----- */
 
+    public function test_queued_transfer_is_a_no_op_when_the_backup_was_deleted(): void
+    {
+        $site = $this->backupReadySite();
+        Queue::fake();
+        $backup = app(BackupService::class)->request($site['website'], BackupReason::Manual, 'test', BackupType::Files);
+        $backupId = $backup->id;
+
+        $backup->delete();
+        (new TransferBackup($backupId))->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+
+        $this->assertDatabaseMissing('backups', ['id' => $backupId]);
+        $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $site['website']->id]);
+    }
+
+    public function test_queued_transfer_is_a_no_op_when_backup_is_no_longer_uploaded(): void
+    {
+        $site = $this->backupReadySite();
+        Queue::fake();
+        $backup = app(BackupService::class)->request($site['website'], BackupReason::Manual, 'test', BackupType::Files);
+        $backup->forceFill(['status' => BackupStatus::Verified])->save();
+
+        (new TransferBackup($backup->id))->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+
+        $this->assertSame(BackupStatus::Verified, $backup->refresh()->status);
+        $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $site['website']->id]);
+    }
+
     public function test_storage_outage_is_retried_then_fails_without_a_false_green(): void
     {
         $site = $this->backupReadySite();

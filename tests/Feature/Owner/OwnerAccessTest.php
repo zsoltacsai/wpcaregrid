@@ -51,6 +51,7 @@ class OwnerAccessTest extends TestCase
 
     public function test_an_owner_signs_in_and_out_on_the_owner_login(): void
     {
+        config(['session.driver' => 'database']);
         $owner = $this->owner(['email' => 'owner@wpcaregrid.example', 'password' => 'owner-password-123']);
 
         $this->get(route('owner.login'))->assertOk()->assertSee('Owner sign-in')->assertSee('noindex, nofollow', false);

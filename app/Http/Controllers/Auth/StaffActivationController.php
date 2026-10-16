@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers\Auth;
 
+use App\Auth\SessionRevoker;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
@@ -41,11 +43,15 @@ class StaffActivationController extends Controller
         $status = $eligible ? Password::broker('staff_invitations')->reset(
             [...$request->only('password', 'password_confirmation', 'token'), 'email' => $email],
             function (User $user, string $password) {
-                $user->forceFill([
-                    'password' => $password,
-                    'remember_token' => Str::random(60),
-                    'email_verified_at' => $user->email_verified_at ?? now(),
-                ])->save();
+                DB::transaction(function () use ($user, $password) {
+                    $user->forceFill([
+                        'password' => $password,
+                        'remember_token' => Str::random(60),
+                        'email_verified_at' => $user->email_verified_at ?? now(),
+                    ])->save();
+
+                    app(SessionRevoker::class)->revoke($user);
+                });
             },
         ) : Password::INVALID_USER;
 

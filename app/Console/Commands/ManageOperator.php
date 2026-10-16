@@ -2,9 +2,11 @@
 
 namespace App\Console\Commands;
 
+use App\Auth\SessionRevoker;
 use App\Models\User;
 use App\Operator\Permission;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
@@ -54,7 +56,12 @@ class ManageOperator extends Command
         }
 
         if ($this->option('disable')) {
-            $user?->forceFill(['role' => null, 'operator_permissions' => null])->save();
+            if ($user) {
+                DB::transaction(function () use ($user) {
+                    $user->forceFill(['role' => null, 'operator_permissions' => null])->save();
+                    app(SessionRevoker::class)->revoke($user);
+                });
+            }
             $this->info($user ? "Operator access removed from {$email}." : "No login {$email}.");
 
             return self::SUCCESS;
@@ -73,7 +80,10 @@ class ManageOperator extends Command
             ->diff($this->option('revoke'))
             ->unique()->sort()->values()->all();
 
-        $user->forceFill(['role' => User::ROLE_OPERATOR, 'operator_permissions' => $permissions])->save();
+        DB::transaction(function () use ($user, $permissions) {
+            $user->forceFill(['role' => User::ROLE_OPERATOR, 'operator_permissions' => $permissions])->save();
+            app(SessionRevoker::class)->revoke($user);
+        });
 
         $this->info("Operator {$email}: ".($permissions ? implode(', ', $permissions) : 'no permissions'));
         if ($password) {

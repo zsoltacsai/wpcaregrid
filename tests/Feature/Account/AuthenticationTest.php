@@ -8,9 +8,11 @@ use App\Models\Customer;
 use App\Models\User;
 use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class AuthenticationTest extends TestCase
@@ -38,6 +40,17 @@ class AuthenticationTest extends TestCase
 
         $this->assertAuthenticated();
         $this->assertNotSame($before, session()->getId());
+    }
+
+    public function test_database_session_rows_are_associated_with_authenticated_users(): void
+    {
+        config(['session.driver' => 'database']);
+        $user = $this->customer()->user;
+
+        $this->post(route('login'), ['email' => $user->email, 'password' => 'password-123456'])
+            ->assertRedirect(route('account.dashboard'));
+
+        $this->assertDatabaseHas('sessions', ['user_id' => $user->id]);
     }
 
     public function test_wrong_password_is_rejected(): void
@@ -106,14 +119,26 @@ class AuthenticationTest extends TestCase
 
     public function test_password_can_be_reset_with_a_valid_token_only(): void
     {
+        config(['session.driver' => 'database']);
         $user = $this->customer()->user;
-        $token = Password::createToken($user);
 
         $this->post(route('password.update'), ['token' => 'invalid', 'email' => $user->email, 'password' => 'new-password-123', 'password_confirmation' => 'new-password-123'])
             ->assertSessionHasErrors('email');
 
+        $token = Password::createToken($user);
+        $parallelSessionId = Str::random(40);
+        DB::table('sessions')->insert([
+            'id' => $parallelSessionId,
+            'user_id' => $user->id,
+            'payload' => base64_encode(serialize([])),
+            'last_activity' => now()->timestamp,
+        ]);
+
         $this->post(route('password.update'), ['token' => $token, 'email' => $user->email, 'password' => 'new-password-123', 'password_confirmation' => 'new-password-123'])
             ->assertRedirect(route('login'));
+
+        $this->assertDatabaseMissing('sessions', ['id' => $parallelSessionId]);
+        $this->assertGuest();
 
         $this->post(route('login'), ['email' => $user->email, 'password' => 'new-password-123'])->assertRedirect(route('account.dashboard'));
 
