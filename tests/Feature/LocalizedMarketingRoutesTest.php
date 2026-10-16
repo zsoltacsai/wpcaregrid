@@ -89,6 +89,19 @@ class LocalizedMarketingRoutesTest extends TestCase
         $this->assertStringNotContainsString('action="https://wpcaregrid.com/locale"', $hungarianPricing);
     }
 
+    public function test_pricing_controls_stack_at_narrow_widths_to_keep_localized_rows_stable(): void
+    {
+        $html = $this->get('/en/pricing')->assertOk()->getContent();
+
+        $this->assertStringContainsString(
+            'flex flex-col items-start gap-3 md:flex-row md:flex-wrap md:items-center',
+            $html,
+        );
+        $this->assertStringContainsString('role="group" aria-label="Billing period"', $html);
+        $this->assertStringContainsString('data-price="monthly"', $html);
+        $this->assertStringContainsString('data-price="annual"', $html);
+    }
+
     public function test_legacy_get_urls_redirect_permanently_to_configured_origin_and_keep_only_safe_query_data(): void
     {
         $this->get('https://attacker.example/?utm_source=campaign&token=secret&session_id=cs_test_secret')
