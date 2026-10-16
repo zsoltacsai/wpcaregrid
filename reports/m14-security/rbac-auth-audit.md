@@ -2,6 +2,14 @@
 
 **Status:** source foundations present; end-to-end authorization review remains `PARTIAL`.
 
+## M14.1 final audit closure addendum — 2026-10-16
+
+This addendum supersedes the earlier M14.1 `PARTIAL` disposition, while preserving the earlier observations as historical. The 236-row route reconciliation covers 122 Owner routes and 32 Operator routes with exact guard/role/ability mapping. Data-driven authorization evidence covers Owner/non-Owner/customer/operator console boundaries, all declared Operator ability values, representative allowed/denied action paths, and stale authorization after both permission revocation and Operator disablement during an active session. A disposable synthetic Owner walkthrough covered overview, privacy/retention, staff/roles, integration/settings and sensitive forms; secret values remain masked and sensitive actions retain CSRF/current-password confirmation as applicable.
+
+Recent-auth negative evidence verifies wrong/missing password confirmation and wrong typed confirmation/preview binding for the existing erasure approval, circuit-breaker reset and credential-sensitive flows. The application uses action-time current-password verification for these actions; no independent time-limited reusable re-auth grant was found, so expired/other-session grant cases are not applicable to the current mechanism. Password reset invalidates persisted sessions; role/permission changes are rechecked on active sessions.
+
+**AS-02: PASS_WITH_MEDIUM_RESIDUAL for M14.1.** No role crossover or privilege-escalation defect was found. Residual is broader independent penetration coverage of direct service/async paths, not a known authorization bypass. M14.2 may begin after the M14.1 closure PR is merged.
+
 ## Continuation reconciliation — 2026-10-16
 
 Current source is on primary `b6b6047a2da54de660730e3fc08c6fe2bdc1fa3e`; executable staging remains `e4659f30140669c9e229c8e583d35e6bb377a979`. Route-level middleware and current 236-row inventory are recorded in [`m14-1-route-control-reconciliation.md`](m14-1-route-control-reconciliation.md).

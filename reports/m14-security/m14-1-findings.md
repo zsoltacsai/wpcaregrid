@@ -21,6 +21,21 @@ Live staging read-only health checks remained green for application, DB, queue, 
 
 **Current closure status: C — audit closure incomplete.** Open evidence gaps are not reclassified as medium-only residuals. AS-16 is M14.7 carry-forward and does not itself block M14.1 closure.
 
+## Final M14.1 closure continuation — 2026-10-16
+
+The preceding C status is historical and superseded by the evidence below. No application/runtime code changed in this continuation; changes are security tests, route/audit reconciliation and evidence reports. No production or customer mutation occurred.
+
+| Evidence item | Result |
+|---|---|
+| Runtime route/control manifest | 236 / 236 rows reconciled; 141 state-changing: 130 browser, 10 Connector API, one signed webhook. |
+| Tenant matrix | 38 valid foreign-object attempts across represented tenant-bound action classes; all denied. The three added matrices contribute 15 attempts and 20 grouped zero-side-effect invariants. |
+| Owner/Operator | Owner 122 and Operator 32 route contracts reconciled; non-owner/customer/operator crossover denied; permission and account disablement after login rechecked; synthetic Owner Console walkthrough completed. |
+| CSRF / API boundaries | 130 browser mutators classified/protected by CSRF boundary; 10 Connector API mutators use authenticated API controls; one Stripe webhook uses signature verification plus event idempotency. |
+| Output sinks | Relevant raw Blade, JSON, script, attribute, Owner-managed content, site/plugin/theme, security finding/message, audit and provider error output paths classified; hostile payload suites cover custom sanitizers/serialization. |
+| Limiting | 27 definitions / 31 middleware forms mapped; 12 classes behavior-probed; 15 specialized aliases have no individual fairness/429 probe and remain a documented medium residual. |
+
+No new Critical or High finding was confirmed. New Medium finding F-14.1-03 is limited to behavioral breadth for the 15 specialized limiter aliases; the source/control map and high-risk-class behavior are present. AS-16 remains M14.7 carry-forward.
+
 ## Staging baseline (pre-deploy)
 
 - Strict SSH authentication succeeded for `stg1.wpcaregrid.com`; the stored Ed25519 fingerprint is `SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`.
