@@ -45,3 +45,7 @@ Reviewed with the M13.1 source changes on the implementation branch. Status belo
 | Autonomous AI remediation | NOT_PUBLISHED | No live autonomous AI claim added | Future product direction only. |
 
 The source audit is supported by `app/Marketing/MarketingClaimAuditor.php` and the read-only `marketing:claims-audit` command. Pattern matches are review candidates; they do not automatically block or rewrite content.
+
+### M13.1 staging published-content review — 2026-10-16
+
+On deployed SHA `9431db502105b51102905aefe60faee2efbcc021`, the read-only `php artisan marketing:claims-audit` command inspected built-in and currently published marketing content and reported no review-pattern matches. This is a bounded pattern audit, not legal approval or a guarantee that all claims are supported. The four rendered HU/EN home and pricing pages were separately inspected for titles, descriptions, H1, canonical, robots, language alternates, Open Graph, Twitter and structured data. The existing staging security-scanner warning remains an M14 residual and was not hidden or reclassified.
