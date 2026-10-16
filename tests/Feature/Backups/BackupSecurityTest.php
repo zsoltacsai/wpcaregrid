@@ -10,6 +10,9 @@ use App\Models\Backup;
 use App\Models\BackupRestore;
 use App\Models\WebsiteJob;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Log;
 use Tests\Concerns\CreatesBackups;
 use Tests\TestCase;
@@ -111,6 +114,56 @@ class BackupSecurityTest extends TestCase
 
         $this->assertSame(0, BackupRestore::count());
         $this->assertSame(1, Backup::count());
+    }
+
+    public function test_foreign_website_action_matrix_is_denied_without_side_effects(): void
+    {
+        Queue::fake();
+        Mail::fake();
+
+        $owner = $this->backupReadySite('https://owner.example');
+        $foreign = $this->backupReadySite('https://foreign.example');
+        $backup = $this->verifiedBackup($owner['website']);
+        $ownerUser = $owner['website']->customer->user;
+        $foreignUser = $foreign['website']->customer->user;
+
+        // Establish the positive side of the matrix with real, valid objects.
+        $this->actingAs($ownerUser)->get(route('account.websites.show', $owner['website']))->assertOk();
+        $this->actingAs($ownerUser)->get(route('account.websites.backups.index', $owner['website']))->assertOk();
+
+        $before = [
+            'backups' => Backup::count(),
+            'restores' => BackupRestore::count(),
+            'website_jobs' => WebsiteJob::count(),
+            'connectors' => DB::table('connectors')->count(),
+            'admin_access_requests' => DB::table('admin_access_requests')->count(),
+            'website' => $owner['website']->fresh()->only(['active_connector_id', 'customer_id', 'url']),
+        ];
+
+        $attempts = [
+            fn () => $this->actingAs($foreignUser)->get(route('account.websites.show', $owner['website']))->assertForbidden(),
+            fn () => $this->actingAs($foreignUser)->get(route('account.websites.backups.index', $owner['website']))->assertForbidden(),
+            fn () => $this->actingAs($foreignUser)->post(route('account.websites.backups.store', $owner['website']))->assertForbidden(),
+            fn () => $this->actingAs($foreignUser)->get(route('account.websites.backups.restore', [$owner['website'], $backup]))->assertForbidden(),
+            fn () => $this->actingAs($foreignUser)->post(route('account.websites.backups.restore.store', [$owner['website'], $backup]), ['scope' => 'full', 'confirmation' => 'owner.example', 'understood' => '1'])->assertForbidden(),
+            fn () => $this->actingAs($foreignUser)->post(route('account.websites.pairing-code', $owner['website']))->assertForbidden(),
+            fn () => $this->actingAs($foreignUser)->post(route('account.websites.disconnect', $owner['website']), ['confirm' => '1'])->assertForbidden(),
+            fn () => $this->actingAs($foreignUser)->post(route('account.websites.admin-access.maintenance', $owner['website']))->assertForbidden(),
+        ];
+
+        foreach ($attempts as $attempt) {
+            $attempt();
+        }
+
+        $this->assertCount(8, $attempts);
+        $this->assertSame($before['backups'], Backup::count());
+        $this->assertSame($before['restores'], BackupRestore::count());
+        $this->assertSame($before['website_jobs'], WebsiteJob::count());
+        $this->assertSame($before['connectors'], DB::table('connectors')->count());
+        $this->assertSame($before['admin_access_requests'], DB::table('admin_access_requests')->count());
+        $this->assertSame($before['website'], $owner['website']->fresh()->only(['active_connector_id', 'customer_id', 'url']));
+        Queue::assertNothingPushed();
+        Mail::assertNothingOutgoing();
     }
 
     public function test_customers_cannot_delete_backups(): void
