@@ -43,6 +43,7 @@ class RuntimeRouteBoundaryTest extends TestCase
                 $this->assertSame('stripe/webhook', $uri);
                 $this->assertContains('web', $middleware);
                 $this->assertSame(StripeWebhookController::class, $route->getActionName());
+
                 continue;
             }
 
@@ -61,6 +62,7 @@ class RuntimeRouteBoundaryTest extends TestCase
             }
 
             $this->assertContains('web', $middleware, $name.' must use browser session and CSRF middleware');
+
             if (in_array($name, [
                 'logout',
                 'operator.logout',
