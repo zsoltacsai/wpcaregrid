@@ -9,6 +9,7 @@ use App\Backups\RestoreStatus;
 use App\Backups\Storage\StorageManager;
 use App\Backups\Storage\StorageUnavailable;
 use App\Connector\ConnectorError;
+use App\Connector\PayloadBounds;
 use App\Http\Controllers\Controller;
 use App\Models\Connector;
 use Illuminate\Http\JsonResponse;
@@ -64,6 +65,7 @@ class BackupController extends Controller
 
     public function finalize(Request $request, string $backup): JsonResponse
     {
+        PayloadBounds::assert($request, 512 * 1024, 8, 512, 256 * 1024);
         $record = $this->uploads->uploadable($this->connector($request), $backup);
         $manifest = $request->input('manifest');
 

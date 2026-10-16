@@ -34,7 +34,7 @@ final class ConnectorPackageArtifactTest extends TestCase
     {
         $this->artisan('connector:package')->assertSuccessful();
         $package = app(ConnectorPackageArtifact::class)->verify();
-        $this->assertSame('0.4.5', $package['version']);
+        $this->assertSame('0.4.6', $package['version']);
         $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $package['package_sha256']);
 
         $zip = new ZipArchive;
@@ -94,8 +94,8 @@ final class ConnectorPackageArtifactTest extends TestCase
         config(['synthetic_fixtures.site_uuid' => $fixture->uuid]);
 
         $response = $this->actingAs($owner, 'owner')->get(route('owner.websites.connector-package', $fixture));
-        $response->assertOk()->assertDownload('wp-caregrid-connector-0.4.5.zip')
-            ->assertHeader('X-Connector-Version', '0.4.5')
+        $response->assertOk()->assertDownload('wp-caregrid-connector-0.4.6.zip')
+            ->assertHeader('X-Connector-Version', '0.4.6')
             ->assertHeader('Cache-Control', 'no-store, private');
         $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', (string) $response->headers->get('X-Connector-Source-SHA256'));
         $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', (string) $response->headers->get('X-Connector-Package-SHA256'));

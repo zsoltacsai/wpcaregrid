@@ -12,3 +12,7 @@
 | Rotation | one configured webhook_secret visible; no dual-secret support evidenced | Stripe TEST rotation sequence; overlap only if application supports it, otherwise controlled cutover/retry |
 
 Current signature verification, mode guard, unique event ID, encrypted inbox, durable retry and event idempotency are substantial controls. Timestamp boundary, secret rotation, raw request limits and all worker races still need explicit proof. No webhook vulnerability is confirmed. Stripe TEST only; no live charge.
+
+## Implementation evidence update — 2026-10-16
+
+The verifier now sets Stripe's 300-second timestamp tolerance explicitly and rejects payloads over 2 MiB; the controller also rejects a declared oversized body before reading it and maps oversize to HTTP 413. Regressions verify stale signed events and oversized raw/declared bodies are rejected before inbox insertion, and a single-secret cutover rejects the old secret while accepting the newly configured secret. Existing signature, TEST/LIVE mode, unique inbox, transactional idempotency, redrive and MySQL concurrency coverage remains. Focused/full local SQLite tests pass. Full server MySQL/process CI and isolated Stripe TEST staging validation remain pending. No Stripe LIVE endpoint or charge was used.

@@ -40,12 +40,17 @@ final class CleanSource
     /** @throws QuarantineFailure */
     private static function fetch(string $url): string
     {
-        $response = wp_remote_get($url, ['timeout' => 30, 'redirection' => 0, 'limit_response_size' => self::MAX_SIZE]);
+        $response = wp_remote_get($url, ['timeout' => 30, 'redirection' => 0, 'sslverify' => true, 'limit_response_size' => self::MAX_SIZE + 1]);
 
         if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
             throw new QuarantineFailure('SOURCE_UNAVAILABLE', 'The clean file could not be downloaded from WordPress.org.');
         }
 
-        return (string) wp_remote_retrieve_body($response);
+        $body = (string) wp_remote_retrieve_body($response);
+        if (strlen($body) > self::MAX_SIZE) {
+            throw new QuarantineFailure('SOURCE_UNAVAILABLE', 'The clean file exceeds the supported download limit.');
+        }
+
+        return $body;
     }
 }

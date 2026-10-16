@@ -78,6 +78,18 @@ final class JobsTest extends TestCase
         $this->assertSame('fail', $homepage['status']);
     }
 
+    public function test_loopback_health_probes_do_not_follow_redirects_or_buffer_unbounded_bodies(): void
+    {
+        $this->plugin()->health()->run();
+
+        $probes = array_values(array_filter($this->http->requests, fn (array $request) => $request['path'] === null));
+        $this->assertNotEmpty($probes);
+        foreach ($probes as $probe) {
+            $this->assertSame(0, $probe['args']['redirection'] ?? null);
+            $this->assertSame(1048576, $probe['args']['limit_response_size'] ?? null);
+        }
+    }
+
     public function test_unsupported_job_types_are_refused(): void
     {
         $jobs = [];

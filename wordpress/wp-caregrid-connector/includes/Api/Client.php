@@ -16,6 +16,10 @@ use WPCareGrid\Connector\Security\Logger;
  */
 final class Client
 {
+    private const MAX_JSON_RESPONSE_BYTES = 2097152;
+
+    private const MAX_RAW_RESPONSE_BYTES = 8388608;
+
     public function __construct(private readonly CredentialStore $credentials) {}
 
     public function post(string $path, array $body = [], bool $authenticated = true): Response
@@ -37,7 +41,7 @@ final class Client
     /** Download raw bytes (a restore chunk). */
     public function get_raw(string $path): Response
     {
-        return $this->request('GET', $path, [], true, ['timeout' => 120]);
+        return $this->request('GET', $path, [], true, ['timeout' => 120, 'max_response_bytes' => self::MAX_RAW_RESPONSE_BYTES]);
     }
 
     /** @param  array{raw?: string, headers?: array, timeout?: int}  $options */
@@ -69,6 +73,7 @@ final class Client
             $headers['X-CareGrid-Website'] = $website;
         }
 
+        $maxResponseBytes = max(1, (int) ($options['max_response_bytes'] ?? (isset($options['raw']) ? 1048576 : self::MAX_JSON_RESPONSE_BYTES)));
         $response = wp_remote_request(
             $url,
             [
@@ -78,6 +83,7 @@ final class Client
                 'timeout' => (int) ($options['timeout'] ?? 20),
                 'redirection' => 0,
                 'sslverify' => true,
+                'limit_response_size' => $maxResponseBytes + 1,
             ]
         );
 
@@ -89,6 +95,12 @@ final class Client
 
         $status = (int) wp_remote_retrieve_response_code($response);
         $raw = (string) wp_remote_retrieve_body($response);
+        $content_length = wp_remote_retrieve_header($response, 'content-length');
+        if (strlen($raw) > $maxResponseBytes || (is_scalar($content_length) && ctype_digit((string) $content_length) && (int) $content_length > $maxResponseBytes)) {
+            Logger::warning('api.response_too_large', ['path' => $path, 'status' => $status]);
+
+            return new Response(502, [], 'RESPONSE_TOO_LARGE', 'The WP CareGrid response exceeded the supported size.');
+        }
         $type = (string) wp_remote_retrieve_header($response, 'content-type');
         $is_json = str_contains($type, 'json') || ($type === '' && str_starts_with(ltrim($raw), '{'));
         $data = $is_json ? json_decode($raw, true) : null;

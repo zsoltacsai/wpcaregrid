@@ -16,7 +16,7 @@ trait SendsStripeWebhooks
     }
 
     /** @param  array<string, mixed>  $object */
-    protected function stripeEvent(string $type, array $object, ?string $eventId = null, ?int $created = null, ?string $secret = null, bool $livemode = false): TestResponse
+    protected function stripeEvent(string $type, array $object, ?string $eventId = null, ?int $created = null, ?string $secret = null, bool $livemode = false, ?int $signatureTimestamp = null): TestResponse
     {
         $payload = json_encode([
             'id' => $eventId ?? 'evt_'.Str::random(20),
@@ -26,7 +26,7 @@ trait SendsStripeWebhooks
             'created' => $created ?? time(),
             'data' => ['object' => $object],
         ]);
-        $timestamp = time();
+        $timestamp = $signatureTimestamp ?? time();
         $signature = hash_hmac('sha256', "{$timestamp}.{$payload}", $secret ?? $this->webhookSecret);
 
         return $this->call('POST', route('stripe.webhook'), [], [], [], [

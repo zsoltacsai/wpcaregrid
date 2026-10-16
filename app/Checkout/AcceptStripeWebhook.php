@@ -10,10 +10,16 @@ use UnexpectedValueException;
 /** Verifies the Stripe signature and mode before accepting any event effects. */
 final class AcceptStripeWebhook
 {
+    public const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
+
     public function __construct(private readonly ProcessStripeWebhookInbox $inbox) {}
 
     public function accept(string $payload, string $signature): int
     {
+        if (strlen($payload) > self::MAX_PAYLOAD_BYTES) {
+            return 413;
+        }
+
         $secret = config('services.stripe.webhook_secret');
 
         if (! $secret) {
@@ -23,7 +29,9 @@ final class AcceptStripeWebhook
         }
 
         try {
-            $event = Webhook::constructEvent($payload, $signature, $secret);
+            // Stripe's signed timestamp is part of freshness protection; keep
+            // the SDK's documented five-minute tolerance explicit.
+            $event = Webhook::constructEvent($payload, $signature, $secret, 300);
         } catch (SignatureVerificationException|UnexpectedValueException) {
             return 400;
         }

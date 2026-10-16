@@ -61,7 +61,7 @@ final class Checksums
             return $cached['sums'] ?: null;
         }
 
-        $response = wp_remote_get(sprintf(self::PLUGIN_URL, rawurlencode($slug), rawurlencode($version)), ['timeout' => 15, 'redirection' => 0]);
+        $response = wp_remote_get(sprintf(self::PLUGIN_URL, rawurlencode($slug), rawurlencode($version)), ['timeout' => 15, 'redirection' => 0, 'sslverify' => true, 'limit_response_size' => 10485760]);
         $body = is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200 ? null : json_decode(wp_remote_retrieve_body($response), true);
 
         $clean = [];
@@ -87,7 +87,7 @@ final class Checksums
      */
     private static function fetch_core(string $version, string $locale): ?array
     {
-        $response = wp_remote_get(self::CORE_URL.'?'.http_build_query(['version' => $version, 'locale' => $locale], '', '&'), ['timeout' => 15, 'redirection' => 0]);
+        $response = wp_remote_get(self::CORE_URL.'?'.http_build_query(['version' => $version, 'locale' => $locale], '', '&'), ['timeout' => 15, 'redirection' => 0, 'sslverify' => true, 'limit_response_size' => 10485760]);
         if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
             return null;
         }

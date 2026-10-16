@@ -144,7 +144,7 @@ try {
         pairing_code = $state.pairing_code
         installation_id = [guid]::NewGuid().ToString()
         site_url = $WpUrl
-        connector_version = '0.4.5'
+        connector_version = '0.4.6'
         wp_version = '7.1.2'
         php_version = '8.3.33'
         capabilities = @()
@@ -163,7 +163,7 @@ try {
         pairing_code = $state.pairing_code
         installation_id = [guid]::NewGuid().ToString()
         site_url = 'https://different.invalid'
-        connector_version = '0.4.5'
+        connector_version = '0.4.6'
         capabilities = @()
     }
     if ([int]$mismatch.StatusCode -ne 422 -or $mismatch.Content -notmatch 'SITE_URL_MISMATCH') { throw "Site URL mismatch returned HTTP $($mismatch.StatusCode) without the expected refusal." }
@@ -176,7 +176,7 @@ try {
         pairing_code = $state.pairing_code
         installation_id = [guid]::NewGuid().ToString()
         site_url = $WpUrl
-        connector_version = '0.4.5'
+        connector_version = '0.4.6'
         capabilities = @()
     }
     if ([int]$expired.StatusCode -ne 422 -or $expired.Content -notmatch 'INVALID_PAIRING_CODE') { throw "Expired pairing code returned HTTP $($expired.StatusCode) without the expected refusal." }
@@ -189,7 +189,7 @@ try {
     if ($firstPoll.executed -lt 2 -or $firstPoll.delivered -lt 2) { throw 'The plugin did not execute and deliver the initial inventory and health jobs.' }
     $synced = Invoke-LocalPhp $Fixture 'inspect' | ConvertFrom-Json
     if (-not $synced.heartbeat_recorded -or -not $synced.connector_last_heartbeat_at -or -not $synced.website_last_seen_at) { throw 'Laravel did not persist the real heartbeat timestamps.' }
-    if ($synced.wordpress_version -ne '7.1.2' -or $synced.php_version -ne '8.3.33' -or $synced.connector_version -ne '0.4.5') { throw 'Heartbeat version facts were not persisted from the isolated WordPress runtime.' }
+    if ($synced.wordpress_version -ne '7.1.2' -or $synced.php_version -ne '8.3.33' -or $synced.connector_version -ne '0.4.6') { throw 'Heartbeat version facts were not persisted from the isolated WordPress runtime.' }
     if (-not $synced.health_checked_at -or $synced.health_findings_count -lt 1) { throw 'The actual Site Health job report was not persisted.' }
     if ($synced.inventory_row_count -ne 1 -or -not $synced.connector_last_inventory_at -or -not $synced.inventory_collected_at) { throw 'Laravel did not persist exactly one timestamped inventory record.' }
     if ($synced.inventory_core.version -ne '7.1.2' -or $synced.inventory_php_version -ne '8.3.33') { throw 'Persisted inventory core/PHP versions do not match the local WordPress runtime.' }

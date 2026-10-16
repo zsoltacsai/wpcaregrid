@@ -20,7 +20,7 @@ final class Sink
 
     private int $raw = 0;
 
-    public function __construct(private readonly string $path, bool $compress)
+    public function __construct(private readonly string $path, bool $compress, private readonly ?int $maxOutputBytes = null)
     {
         TempDir::create($path);
         $this->handle = fopen($path, 'wb');
@@ -61,10 +61,25 @@ final class Sink
         return ['path' => $this->path, 'size' => $this->size, 'sha256' => hash_final($this->hash), 'compression' => $this->compression(), 'uncompressed_size' => $this->raw];
     }
 
+    /** Close and remove a partial archive after a bounded-build failure. */
+    public function abort(): void
+    {
+        if (is_resource($this->handle)) {
+            fclose($this->handle);
+        }
+        if (is_file($this->path) || is_link($this->path)) {
+            @unlink($this->path);
+        }
+    }
+
     private function out(string $bytes): void
     {
         if ($bytes === '') {
             return;
+        }
+
+        if ($this->maxOutputBytes !== null && strlen($bytes) > $this->maxOutputBytes - $this->size) {
+            throw new BackupFailure('BACKUP_ARCHIVE_LIMIT_EXCEEDED', 'The site backup exceeds the supported archive-size limit.');
         }
 
         $written = fwrite($this->handle, $bytes);

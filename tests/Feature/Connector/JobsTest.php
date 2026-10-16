@@ -6,8 +6,10 @@ use App\Connector\ConnectorError;
 use App\Connector\JobQueue;
 use App\Connector\JobStatus;
 use App\Connector\JobType;
+use App\Connector\PayloadBounds;
 use App\Models\WebsiteJob;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\PairsConnectors;
@@ -182,6 +184,40 @@ class JobsTest extends TestCase
         $this->withHeaders($this->connectorHeaders($site))->postJson($url, ['status' => 'running', 'result_code' => 'OK'])->assertStatus(422);
         $this->withHeaders($this->connectorHeaders($site))->postJson($url, ['status' => 'success', 'result_code' => 'lower case'])->assertStatus(422);
         $this->withHeaders($this->connectorHeaders($site))->postJson($url, ['status' => 'failed', 'result_code' => 'X', 'error' => ['code' => 'X']])->assertStatus(422);
+    }
+
+    public function test_result_payload_depth_is_bounded_before_job_state_changes(): void
+    {
+        $site = $this->pairedWebsite();
+        $job = $this->withHeaders($this->connectorHeaders($site))->getJson(route('api.v1.connector.jobs'))->json('jobs.0');
+        $nested = 'leaf';
+        for ($i = 0; $i < 40; $i++) {
+            $nested = ['node' => $nested];
+        }
+
+        $this->withHeaders($this->connectorHeaders($site))
+            ->postJson(route('api.v1.connector.jobs.result', $job['uuid']), [
+                'status' => 'success', 'result_code' => 'OK', 'data' => ['nested' => $nested],
+            ])
+            ->assertStatus(422)->assertJsonPath('error.code', 'INVALID_REQUEST');
+
+        $this->assertSame(JobStatus::Delivered, $site['website']->jobs()->where('uuid', $job['uuid'])->value('status'));
+        $this->assertNull($site['website']->jobs()->where('uuid', $job['uuid'])->value('result_code'));
+    }
+
+    public function test_declared_oversized_content_length_is_rejected_before_body_read(): void
+    {
+        $request = Request::create('/api/v1/connector/result', 'POST', [], [], [], [
+            'CONTENT_LENGTH' => '1025',
+        ], '');
+
+        try {
+            PayloadBounds::assert($request, 1024, 4, 16, 512);
+            $this->fail('The declared body ceiling must be checked before reading content.');
+        } catch (ConnectorError $error) {
+            $this->assertSame('PAYLOAD_TOO_LARGE', $error->errorCode);
+            $this->assertSame(413, $error->status);
+        }
     }
 
     public function test_health_and_license_results_update_the_website(): void
