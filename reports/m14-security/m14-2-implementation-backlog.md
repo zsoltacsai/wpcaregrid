@@ -14,3 +14,7 @@ Planning only; observations are validation needs unless a reproducible defect co
 | M14.2-08 P0 Integrated closure | cross-wave regression | M14 audit evidence, release/package fixtures | package version only if code changes | five required CI gates, exact SHA, synthetic staging, cleanup, gates false, no Critical/High |
 
 Potential Stripe TEST dashboard access for rotation rehearsal is EXTERNAL_ACTION, not a planning blocker. No Owner design decision is required. M14.3 owns general compatibility UX; M14.7 owns full scan campaign.
+
+## Final evidence — 2026-10-16
+
+Exact-head implementation CI passed and the guarded staging source is `c5e0edabd8bd1661f72eb20330c5ca2f4375b9c5`. Isolated synthetic test-runtime results, post-health, all six false M12 gates, and cleanup verification are in [M14.2 closure report](m14-2-closure-report.md). AS-16 remains M14.7 carry-forward. This milestone does not close M14.3 compatibility work, M14.7 security scanning, M15, or production readiness.

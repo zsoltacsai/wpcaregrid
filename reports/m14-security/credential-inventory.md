@@ -42,3 +42,7 @@ Do not claim full host compromise is mitigated by plugin DB encryption: a compro
 ## M14.2 implementation validation update — 2026-10-16
 
 Local regression evidence now includes lost pairing response recovery, fresh-code re-pair, server-side previous-token revocation, plugin encrypted-option persistence, response-size bounds, and Stripe single-secret cutover/stale timestamp rejection. The Connector release version is `0.4.6`; no plaintext credential, key value, or customer identifier is included in these reports. The mechanism remains a one-time credential returned once, hash-only on the server and encrypted at rest by the plugin. No overlapping token rotation or periodic expiry is claimed. Exact-head CI, staging synthetic pairing and post-deploy health remain pending.
+
+## M14.2 credential evidence closure — 2026-10-16
+
+The Connector plugin release at the merged implementation is 0.4.6, API v1. Existing re-pair/revocation and response-loss regressions passed in CI and isolated synthetic tests. Stripe webhook freshness/body-size/single-secret cutover checks also passed; no secret values were read into these reports. The deployed synthetic M8 site still reports Connector 0.4.5; no live token replacement was attempted without a reversible recovery path. See [M14.2 closure report](m14-2-closure-report.md). No token overlap/periodic expiry or live Stripe rotation is claimed.

@@ -15,3 +15,7 @@ Close only after evidence proves:
 11. M14.1, M8/M9, M11/M12 and M13 regressions remain green. No unresolved Critical/High M14.2 defect.
 
 Closure is not penetration-test certification, M14.7 scan completion, launch approval, M15 authorization or production destructive enablement. Preserve “No completed security scan yet” until AS-16 evidence exists.
+
+## Final status — 2026-10-16
+
+Implementation, exact-head CI, guarded staging deployment, isolated synthetic staging tests, post-test health/gate readback, and cleanup are complete as detailed in [M14.2 closure report](m14-2-closure-report.md). The package passed real WordPress Connector tests in CI at 0.4.6. The staging synthetic paired site remains at 0.4.5 because a safe reversible upgrade/re-pair path was unavailable; the closure report classifies this as a bounded validation limitation. All M12 destructive gates are false. AS-16 remains `M14.7_CARRY_FORWARD`.

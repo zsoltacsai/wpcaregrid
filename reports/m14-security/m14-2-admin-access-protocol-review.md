@@ -20,3 +20,7 @@ Separate admin-access limiter, hashed one-time token, row lock, failed-attempt t
 | Re-pair/disconnect with active session | Session ends; old token cannot claim/end another site |
 
 Inspect escaping/host binding for reported admin_access_url; it is flow metadata, not authority or an outbound fetch target. Keep M14.1 Owner/customer authorization, CSRF and recent-auth controls. Staging uses isolated synthetic WordPress only, with no real admin session.
+
+## Final implementation evidence — 2026-10-16
+
+Server-side admin-access behavior (tenant-bound one-time claim, replay handling, revocation, and related Connector auth flows) is included in green exact-head Server SQLite/MySQL CI and the isolated staging synthetic suite. No real WordPress admin session or credential was created. The paired M8 synthetic staging site remains on Connector 0.4.5 and was not re-paired. See [closure report](m14-2-closure-report.md) for the explicit validation limitation.

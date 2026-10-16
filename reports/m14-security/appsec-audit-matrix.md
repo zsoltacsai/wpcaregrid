@@ -122,3 +122,15 @@ The M14.2 implementation candidate is under validation on `codex/m14-2-connector
 The Connector site-health probes are intentionally same-site checks using configured `home_url()` / `rest_url()`, carry no Connector bearer, now disable redirects and cap response bodies. Server-side website probing continues to use `PublicOrigin` / `SafeRedirect`. Fixed WordPress.org checksum/remediation hosts use verified TLS, disabled redirects and bounded bodies. `WP_CAREGRID_API_URL` remains deployment configuration (never a request/job field); the API client requires HTTPS except explicit loopback development configuration, sends bearer only to that configured URL, disables redirects and bounds responses. Destination/rebinding evidence is limited to these source controls and fake-HTTP tests; no live hostile-DNS or external network probing was performed.
 
 AS-16 remains `M14.7_CARRY_FORWARD` and the staging warning remains visible. M12 destructive and synthetic gates were not changed by this implementation work.
+
+## M14.2 final implementation and staging closure — 2026-10-16
+
+M14.2 implementation PR #90 merged as `c5e0edabd8bd1661f72eb20330c5ca2f4375b9c5`; exact candidate CI `38961580730` passed all five required jobs. Guarded staging deployment installed that exact SHA. Isolated staging synthetic validation passed 98 tests / 808 assertions; health and all six M12 gates were read back after cleanup, and the temporary runtime, DB and test user were verified absent. Details and the explicit residual are in [M14.2 closure report](m14-2-closure-report.md).
+
+The Connector/webhook portions of AS-06, AS-09, AS-10, AS-11 and AS-13 are implemented and validated for the M14.2 scope. No Critical/High defect was found. The connected synthetic staging WordPress site remains on Connector 0.4.5; the 0.4.6 package passed both real-WordPress CI jobs, but a live staging re-pair/upgrade was not attempted without a safe reversible WP administration path. Broader hosting compatibility remains M14.3, and full scan/independent AppSec work remains M14.7. Preserve the visible scanner warning.
+
+## M14.2 Connector-scope reconciliation — 2026-10-16
+
+The Connector credential, payload, archive, egress, and webhook portions of the existing AS-06/09/10/11/13 review are closed for this milestone on PR #90 and deployed SHA `c5e0edabd8bd1661f72eb20330c5ca2f4375b9c5`. Evidence: five green required CI jobs, real WordPress Connector 0.4.6 suites on SQLite/MySQL, 98/808 isolated staging synthetic Laravel assertions, healthy post-cleanup staging, and all M12 gates false. The no-hostile-live-DNS probe and staging paired fixture at 0.4.5 remain explicitly limited; the latter was not re-paired without a safe recovery path. This scoped M14.2 closure does not claim broader M14 audit completion.
+
+AS-16 remains `M14.7_CARRY_FORWARD`; the visible warning “No completed security scan yet” is intentionally preserved and is not a blocker to this M14.2 scope. No penetration-test certification or production authorization is claimed.

@@ -22,6 +22,10 @@ Server production HTTPS is required by default. Plugin client verifies TLS, disa
 
 M14.2 must prove valid foreign backup/object/admin attempts have zero side effects; revoked token fails on all paths; payload size/depth limits; duplicate/concurrent finalize and claim; and fresh scope immediately before effects. Request-signing is not recommended by default: TLS + high-entropy bearer + exact-site binding is the current model; add nonce/signature only for a demonstrated residual threat.
 
+## Final implementation evidence — 2026-10-16
+
+The implementation candidate and exact-head CI are recorded in [closure report](m14-2-closure-report.md). Existing exact-site authorization, job/backup/admin scope, pairing replacement, revocation, replay/idempotency and payload boundary tests passed in CI and in the isolated staging synthetic test runtime. GitHub Connector 0.4.6 tests ran against real WordPress on SQLite and MySQL. The connected synthetic M8 staging fixture remains 0.4.5; no live pairing replacement was attempted. No customer site, real provider deletion endpoint, or live Stripe operation was used.
+
 ## Implementation evidence update — 2026-10-16
 
 Connector release source is now `0.4.6` (API remains v1). Added regressions cover lost pairing response/re-pair credential state, API response byte ceiling, bounded ingress payloads and finalize body size. Existing route-level active-credential, exact website/job/backup/admin scope, pairing replacement, disconnect revocation, one-time claim and idempotent result/finalize tests remain in force. Plugin code explicitly disables redirects on the central API client and caps JSON/raw responses. Full WordPress SQLite and MySQL suites passed with the generated `0.4.6` package; see `m14-2-findings.md` for exact counts and skips. These results are local; exact CI and synthetic staging validation remain pending.
