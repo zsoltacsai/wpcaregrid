@@ -43,3 +43,19 @@ This backlog starts only after planning approval. All runtime work must be on a 
 M13-03 client-side consent and marketing analytics foundation is implemented in the M13.2 candidate. The GA4 Measurement ID remains unset and the feature flag defaults off. Checkout accepted/redirected, paid completion, subscription activation, product activation, and operations events are not exported. Owner property setup and qualified review remain external follow-up; they do not require enabling collection to validate the technical foundation.
 
 Do not implement GFS backup tier content until M14 entitlements and M16 pricing presentation are complete.
+
+## M13.3 and final M13 disposition — 2026-10-16
+
+M13-01 through M13-10 are engineering-complete. M13.3 established a repeatable desktop/mobile lab baseline, corrected the measured mobile EN pricing control-row layout shift, and remeasured the deployed exact SHA. The complete evidence and exact-head CI/staging lineage are in `cwv-performance-baseline.md` and `m13-final-engineering-closure.md`.
+
+| Backlog item | Final status | Evidence / boundary |
+|---|---|---|
+| M13-01 to M13-06 | CLOSED | SEO routes, localized metadata, claims, sitemap/robots, schema, pricing catalogue alignment and staging crawl remain green. |
+| M13-07 | CLOSED (engineering) | Consent-aware client funnel contract and staging isolation are tested. GA4 property/ID and legal review remain external; collection stays disabled. |
+| M13-08 | CLOSED for current P0 scope | HU/EN home/pricing explain current scope. No thin feature pages or future backup schedules were published. Optional content requires later evidence and prioritization. |
+| M13-09 | CLOSED | Lab baseline recorded; measured EN pricing CLS issue fixed and remeasured on staging. Field CWV is unavailable and remains an M17 recheck. |
+| M13-10 | CLOSED for deterministic regression | Route, localized metadata, sitemap, noindex, schema and pricing invariants are covered by existing tests and staging checks. |
+| M13-11 | OPTIONAL / FUTURE | Add informational pages only when real customer/search evidence supports ongoing HU/EN maintenance. |
+| M13-12 | EXTERNAL_SETUP / FUTURE | GA4 property/access and any reporting setup remain external, gated by authorization and qualified retention/purpose review. No custom warehouse is planned. |
+
+M13 is engineering-closed once the report-only closure PR merges. This does not mean GDPR compliance certification, production analytics activation, public launch, or completion of M14/M15/M16/M17.
