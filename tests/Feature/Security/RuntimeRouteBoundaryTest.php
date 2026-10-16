@@ -77,7 +77,7 @@ class RuntimeRouteBoundaryTest extends TestCase
                 $this->assertCount(1, array_filter($middleware, fn ($item) => is_string($item) && str_starts_with($item, 'can:operator.')), $name);
             }
 
-            if (str_starts_with($uri, 'account/') && ! in_array($name, ['account.activate.store'], true)) {
+            if (str_starts_with($uri, 'account/') && !in_array($name, ['account.activate.store'], true)) {
                 $this->assertContains('auth', $middleware, $name);
                 $this->assertContains('customer', $middleware, $name);
             }
