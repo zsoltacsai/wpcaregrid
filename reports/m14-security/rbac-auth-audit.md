@@ -2,6 +2,16 @@
 
 **Status:** source foundations present; end-to-end authorization review remains `PARTIAL`.
 
+## Continuation reconciliation — 2026-10-16
+
+Current source is on primary `b6b6047a2da54de660730e3fc08c6fe2bdc1fa3e`; executable staging remains `e4659f30140669c9e229c8e583d35e6bb377a979`. Route-level middleware and current 236-row inventory are recorded in [`m14-1-route-control-reconciliation.md`](m14-1-route-control-reconciliation.md).
+
+Existing evidence includes declared Owner and Operator route contracts (guard, role middleware, one named ability, and mutator throttling), broad cross-area route denial in `AuthorizationMatrixTest`, Owner/Operator separation, a live Operator-disable session test, and service-level current-password checks for privacy execution approval and circuit-breaker reset. This supports source-level reconciliation and selected behavior only.
+
+A new test candidate in `OperatorAuthenticationTest` rehydrates an existing authenticated session after removing one Operator permission, then requires immediate denial while retaining the unrelated allowed ability. A customer profile mutation now has a CSRF rejection-before-write regression, complementing existing Owner credential/settings and Operator mutation CSRF tests. `RuntimeRouteBoundaryTest` asserts every mutator has a browser/API/signature boundary and expected limiter, with explicit logout/webhook exceptions. These tests are pending exact-head CI and are not yet evidence of a pass.
+
+**AS-02 remains PARTIAL** until the new test runs and direct service/job paths, every permission/action combination, role removal/re-auth invalidation, sensitive confirmation failures, and object-scope outcomes are reconciled. Current-password confirmation is checked at action time in the two privacy services inspected; no reusable recent-auth grant was found there. The complete requested negative matrix (expired/different session/guard/password changed/stale tab/bound approval changed) has not been established for every sensitive action. Do not infer those properties from one password check.
+
 ## Roles and authority
 
 | Role | View | Request | Approve | Execute | Override | See secrets | Impersonate |

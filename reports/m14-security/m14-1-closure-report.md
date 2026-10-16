@@ -56,3 +56,15 @@ No unresolved Critical/High defect was identified in the focused M14.1 implement
 ## Carry-forward boundaries
 
 This report closes the focused M14.1 implementation/evidence contribution with the B disposition. It does not close M14, certify a complete AppSec or tenant-isolation audit, authorize M15, or claim M17 readiness. Do not start M14.2/M15 until this disposition is reviewed and the remaining M14.1 audit work is accepted or completed under the M14 closure criteria. M12 privacy/legal/accounting/provider gates retain their existing independent states.
+
+## M14.1 final authorization / tenant-isolation continuation — 2026-10-16
+
+**Current disposition: C — M14.1 AUDIT CLOSURE INCOMPLETE.** This continuation supersedes the earlier B disposition for current closure decisions. It does not reopen F-14.1-01 or F-14.1-02, and it does not require the M14.7 scanner to close M14.1.
+
+Verified current primary is `b6b6047a2da54de660730e3fc08c6fe2bdc1fa3e`; PR #87 is merged and its exact-head run `38906850904` is green. The current deployed executable staging SHA remains `e4659f30140669c9e229c8e583d35e6bb377a979`. Strict SSH host-key verification succeeded. The staging checkout is clean and `system:check --json` reports application, database, queue, scheduler, Connector API, Stripe TEST, Cloudflare, backup storage, mail, privacy retention, restore readiness and export checks healthy. The scanner warning is still present and remains M14.7 carry-forward.
+
+The runtime now has a checked-in 236-row source/control manifest and deterministic test candidates for route boundaries, active-session Operator permission revocation, and customer CSRF rejection-before-mutation. Staging reports 236 routes, including 141 state-changing entries: 130 browser, 10 Connector API, and one Stripe webhook. Fresh staging config readback confirms all six M12 privacy execution gates are false. No staging mutation or provider call was made.
+
+Closure remains blocked by evidence gaps the task explicitly does not permit treating as medium-only residuals: the complete two-tenant valid-object/action matrix with zero-side-effect proofs; exhaustive object scope and positive/negative mapping for every route row; broad stale/revoked permission and recent-auth negative matrix; per-limiter effectiveness/bypass/fairness proof; complete relevant XSS sink review; and authenticated Owner Console walkthrough. The current authenticated browser showed the Owner overview, but the detailed Privacy & Retention page required a fresh Owner sign-in and was not inspected. New tests are not validated until exact-head CI runs. For these reasons neither A nor B is supported by the available evidence.
+
+No production deployment, M14.2 work, M15 work, destructive privacy execution, or production destructive-provider call occurred. M12 global, profile anonymization, customer backup deletion, provider deletion, bulk execution and normal-staging synthetic gates remain false.

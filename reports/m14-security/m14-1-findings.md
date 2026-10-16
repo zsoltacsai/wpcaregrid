@@ -9,6 +9,18 @@ Baseline: planning merge `37f31d0ddd6cc8c62221a5cac20e39b69e6fe45a` on `codex/m1
 | F-14.1-03 | **Shared rate-limit cache behavior — tested; route coverage remains PARTIAL** | Staging uses shared database cache. A bounded two-independent-process check observed a shared counter (`1`, then `1→2`) and cleanup to `0`; the temporary staging suite also passed on the exact deployed source. | Shared-store behavior is demonstrated for the exercised limiter/counter. This does not prove every sensitive/expensive route has correct limiter attachment, key dimensions, or abuse response. | Keep route-to-limiter completeness and broad enumeration-neutral 429 assertions open for the later M14 security audit. Do not treat this finding as a distributed-cache defect. |
 | F-14.1-04 | **PASS — expanded runtime inventory generated; reconciliation PARTIAL** | `m14-1-runtime-entrypoint-inventory.md`: 236 runtime routes, 36 project command classes, 19 scheduled entries, 9 job classes, plus event/listener scan. | Runtime expansion is now evidenced; it does not itself establish authorization, tenant binding, CSRF, re-auth, limiter and test coverage for every mutator. | Preserve the inventory as current for SHA `e4659f30140669c9e229c8e583d35e6bb377a979`; complete per-entry control/test reconciliation in M14 AppSec work. |
 
+## Final authorization / tenant-isolation continuation — 2026-10-16
+
+The fresh route/control export at staging SHA `e4659f30140669c9e229c8e583d35e6bb377a979` is in [`m14-1-route-control-reconciliation.md`](m14-1-route-control-reconciliation.md). It confirms 236 routes and maps all 141 state-changing registrations: 130 browser, 10 Connector API, one Stripe webhook. The route inventory is unchanged. The sole CSRF exemption is explicit and the webhook controller delegates to signature-verifying `AcceptStripeWebhook`; Connector mutations use `connector.auth` except initial pairing, which uses its dedicated limiter.
+
+The source audit and sampled tests surfaced **no new confirmed Critical, High, or Medium vulnerability in the inspected paths**, but this is not a full adversarial sweep. No finding is marked resolved by route-source metadata. Existing representative foreign-object denial, role crossover, Owner/Operator ability contracts, CSRF rejection, limiter behavior and output escaping remain bounded to their specific tests. The complete two-tenant object/action matrix and zero-side-effect coverage remain open.
+
+Added continuation-only test candidates: `RuntimeRouteBoundaryTest` (route boundary/limiter/exception invariants) and an active-session Operator permission-revocation test. They are not yet validated by exact-head CI. No product/runtime fix was identified or made in this continuation.
+
+Live staging read-only health checks remained green for application, DB, queue, scheduler, Connector, Stripe TEST, Cloudflare, backup storage, mail, privacy retention/restore and export. The scanner warning remains visible. All six M12 privacy execution gates were read back false. The authenticated Owner overview was observed, but the detailed Privacy & Retention route redirected to sign-in and its sensitive forms were not reviewed. No staging state was changed.
+
+**Current closure status: C — audit closure incomplete.** Open evidence gaps are not reclassified as medium-only residuals. AS-16 is M14.7 carry-forward and does not itself block M14.1 closure.
+
 ## Staging baseline (pre-deploy)
 
 - Strict SSH authentication succeeded for `stg1.wpcaregrid.com`; the stored Ed25519 fingerprint is `SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`.

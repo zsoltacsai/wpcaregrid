@@ -14,3 +14,9 @@ Limiter definitions are in `app/Providers/AppServiceProvider.php`; route attachm
 | System/job/commands | not HTTP-throttled; queue uniqueness/locks vary | job ID/domain key | bounded batch/page/body/time, concurrency and retry amplification; separate from request throttling |
 
 `config/cache.php` defaults to database cache, but the staging/environment cache selection and multi-instance shared-store behavior are deployment facts. Test key isolation across Owner/Operator/customer and verify limits return a useful 429 without revealing account existence. Apply per-route coverage rather than adding one blanket limiter to all reads.
+
+## Current runtime attachment reconciliation — 2026-10-16
+
+Fresh runtime route-list output from staging SHA `e4659f30140669c9e229c8e583d35e6bb377a979` confirms **141** state-changing route entries and **31 distinct `throttle:*` route middleware strings**. The 141 divide into 130 browser, 10 Connector API, and one signed Stripe webhook entry. All except four have an attached throttle: the three logout endpoints (session teardown only) and `stripe.webhook` (provider signature validation plus event idempotency). All 10 Connector API mutations have a dedicated connector/API limiter; `/pair` uses IP limits before a connector exists, and the other nine use connector authentication before per-connector limits.
+
+This closes the **source attachment inventory** portion of AS-08. It does not close limiter effectiveness, fairness, enumeration-neutral response, alternate-path bypass, cost/body limits, or cross-worker scope for every limiter. The one shared-store process test remains evidence for only the exercised limiter. AS-08 therefore remains `PARTIAL` pending the behavioral abuse matrix.

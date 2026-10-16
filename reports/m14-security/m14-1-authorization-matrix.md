@@ -17,3 +17,9 @@ Status codes: `OBSERVED` = code evidence; `PARTIAL` = tests exist but matrix inc
 Route inventory baseline: source declarations `web=68`, `owner=122`, `operator=32`, `api=13`; expanded route list is a required first implementation artifact because PHP CLI was unavailable in planning. All 122 Owner and 32 Operator declarations must map to exact abilities; route count alone is not proof.
 
 Acceptance: unauthorized valid foreign object attempts return repository-consistent 403/404, produce no state change or side effect, and disclose no foreign attributes. UI filtering is never accepted as authorization.
+
+## Current runtime mapping — 2026-10-16
+
+The staging route list at executable SHA `e4659f30140669c9e229c8e583d35e6bb377a979` still contains 236 routes. The expanded per-route inventory, including current method, URI, route name, declared guard/role/ability, route-object placeholders, transport boundary, limiter, re-auth note, side-effect classification, existing test suite references and per-row disposition, is [`m14-1-route-control-reconciliation.md`](m14-1-route-control-reconciliation.md).
+
+This makes route declarations enumerable and source-mapped. It does **not** mean every row has route-specific behavior tests: the manifest explicitly marks behavior/object-scope gaps. `AuthorizationMatrixTest` supplies broad wrong-role/anonymous denial across account/Operator/Owner routes; it does not supply valid foreign object IDs for each route. Existing focused foreign-object tests cover selected Operator backup-restore and admin-access cases. AS-02/AS-03 therefore remain `PARTIAL` until exhaustive action and side-effect evidence is added.
