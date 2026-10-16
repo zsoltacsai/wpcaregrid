@@ -49,3 +49,7 @@ The source audit is supported by `app/Marketing/MarketingClaimAuditor.php` and t
 ### M13.1 staging published-content review — 2026-10-16
 
 On deployed SHA `9431db502105b51102905aefe60faee2efbcc021`, the read-only `php artisan marketing:claims-audit` command inspected built-in and currently published marketing content and reported no review-pattern matches. This is a bounded pattern audit, not legal approval or a guarantee that all claims are supported. The four rendered HU/EN home and pricing pages were separately inspected for titles, descriptions, H1, canonical, robots, language alternates, Open Graph, Twitter and structured data. The existing staging security-scanner warning remains an M14 residual and was not hidden or reclassified.
+
+### M13.3 final published-content review — 2026-10-16
+
+On deployed SHA `a335162936afa2933e348fe7b04956e98e45c5a3`, the read-only `php artisan marketing:claims-audit` inspected built-in and currently published copy and reported **no review-pattern matches**. The M13.3 change was limited to responsive pricing layout and introduced no marketing claim or copy changes; therefore the claim-family statuses above did not change. The bounded audit is not a complete claim certification. The staging security-scanner warning remains an M14 residual.
