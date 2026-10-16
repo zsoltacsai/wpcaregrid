@@ -73,4 +73,6 @@ This engineering milestone does **not** certify GDPR compliance, approve legal t
 
 ## Final release evidence
 
-Append exact-head report PR CI, merge SHA, final primary SHA, post-merge gate/status reconciliation, and final verdict here after the report-only closure PR merges. No staging redeploy is required for this documentation-only closure.
+The report-only closure PR is #74, head `a49acc7d640c88d1488a58f4913d54c33c5af7f8`. Exact-head GitHub Actions run `38853885996` passed all five required jobs. The Server MySQL job's full suite and required process/concurrency gate passed; the quality job's full-history Gitleaks scan passed. PR #74 merged normally at `d823a2fa46ac47bb0d8d017698f45af536698839`. Immediately after merge, remote primary `claude/ecstatic-wozniak-oemyuf` was fetched and verified at that SHA; closure report and matrices were present. The executable staging SHA remained `19e31d7204a59e08211c4dd9e313b9cccbb01611`, and no redeploy was required.
+
+**Wave 8 verdict: A — M12 ENGINEERING CLOSED, EXTERNAL APPROVAL / PRODUCTION ENABLEMENT GATES REMAIN.** The final status is the report-only merge plus all evidence recorded above; all six normal-staging destructive switches were false before and after validation. W7-L-01…03 remain `WAIT_LEGAL`, W7-A-01…02 remain `WAIT_ACCOUNTING`, and W7-P-01 remains `WAIT_FACT`. The M14 scanner residual and M15/M17 audit work remain open. This verdict does not certify GDPR compliance or enable destructive execution.
