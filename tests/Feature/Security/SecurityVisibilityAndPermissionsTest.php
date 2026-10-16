@@ -4,8 +4,8 @@ namespace Tests\Feature\Security;
 
 use App\Connector\HealthStatus;
 use App\Models\SecurityFinding;
-use App\Models\SecurityIncidentEvent;
 use App\Models\SecurityIncident;
+use App\Models\SecurityIncidentEvent;
 use App\Models\SecurityQuarantine;
 use App\Models\SecurityRemediation;
 use App\Models\SecurityScan;
