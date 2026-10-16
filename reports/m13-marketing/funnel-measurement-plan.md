@@ -1,36 +1,25 @@
-# Funnel Measurement Plan
+# M13.2 Funnel Measurement
 
-## Funnel
+## Client marketing sequence
 
-1. Landing page (`page_view`, segmented only by locale and page family)
-2. Pricing page / plan view (`pricing_view`)
-3. Plan and billing interval selection (`plan_selected`, optional `billing_cycle_selected`)
-4. Checkout started (`checkout_started`, after server accepts/creates the intent)
-5. Redirect to Stripe (`checkout_redirected`)
-6. Checkout completed (`checkout_completed`, authoritative Stripe webhook only)
-7. Subscription activated (`subscription_activated`, authoritative local lifecycle state)
-8. Product activation: pairing, connected site, first verified backup (prefer internal aggregate operations reporting, not GA4)
+1. Canonical public page view: `page_view` with page family, locale, and query-free canonical path.
+2. Pricing page exposure: one `pricing_view` per page load.
+3. Plan CTA intent: `plan_selected` with product type, tier, and current billing interval. This records selection intent only; it does not claim that server checkout validation succeeded.
+4. Deliberate interval changes: `billing_cycle_selected`; initial default selection emits nothing.
+5. Checkout: no client event is emitted for checkout creation or Stripe redirect. Current checkout POST is server-validated and redirects directly to Stripe, while the only implemented external adapter is client-side and there is no approved consent/anonymous-state linkage to authoritative server outcomes. Do not infer success from a click or return page.
+6. Paid completion and subscription activation: authoritative webhook/server lifecycle events stay internal.
+7. Pairing, connected sites, and first verified backups: remain internal product/operations signals; do not export identity, site, pairing, backup, or security data to GA4.
 
-There is no public self-registration route; the lifecycle starts through purchase and account activation. Do not emit `registration_started` unless product flow changes.
+## Attribution and reporting
 
-## Attribution handling
+- M13.2 does not persist UTMs, click IDs, arbitrary query strings, or referrers. Attribution persistence is deferred to qualified privacy/legal review.
+- No cross-domain Stripe attribution or identity stitching is implemented.
+- If external setup and policy review later authorize collection, start with GA4 standard reports. Search Console covers search performance. Do not build a custom warehouse or Owner analytics dashboard without demonstrated need.
+- Keep marketing intent, authoritative billing conversion, product activation, and operational health as separate measures.
 
-- Preserve a bounded allowlist of campaign parameters already accepted by legacy redirects (`utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, click IDs) only after privacy/legal review.
-- Do not persist arbitrary query strings or pass campaign values into canonical URLs.
-- Avoid carrying attribution into Stripe metadata unless reviewed, minimal and necessary. Do not include PII or custom text.
-- Browser Stripe return is not payment confirmation. Server webhook idempotency and subscription state remain authoritative; analytics must never write into billing state.
-- Cross-domain attribution is not needed until a measurement property and desired user journey are selected. If later used, configure/test with Stripe domains without exposing session identifiers.
+## Acceptance evidence
 
-## Reporting
-
-Start with GA4 standard reports/explorations if approved and sufficient. Do not build a custom warehouse or Owner analytics dashboard without demonstrated need. A simple periodic report can show landing→pricing→checkout→activation by locale/product category, with minimum sample/identity protection. Search Console covers search visibility; GA4 is not a substitute for product operations monitoring.
-
-## Acceptance checks
-
-- event sequence corresponds to the actual server state transitions;
-- webhook duplicate/replay cannot duplicate counted conversion;
-- no event includes payment/session/account/site identifier;
-- staging/non-production never contaminates the launch property;
-- consent gate prevents optional collection until approved state;
-- no pageview duplicates on form validation/redirect/back navigation;
-- dashboard/reporting definitions distinguish marketing conversions from activation and operational metrics.
+- Fake-sink contract tests verify allowlisted event names/parameters, consent gating, page-view deduplication, pricing event order, and withdrawal.
+- Laravel tests verify that the eligible host/configuration is required to render an enabled context, while staging/invalid configuration remain disabled.
+- Checkout code, payment truth, Stripe webhook handling, and subscription lifecycle are not modified by analytics instrumentation.
+- A future server-confirmed `checkout_started`/`checkout_redirected` export requires a reviewed architecture for consent continuity and deduplication before implementation.

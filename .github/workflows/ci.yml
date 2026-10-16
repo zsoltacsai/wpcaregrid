@@ -98,6 +98,9 @@ jobs:
           npm ci
           npm run build
 
+      - name: Marketing analytics contract tests (fake sink; no network)
+        run: npm test
+
       - name: npm advisories (high and critical)
         run: npm audit --audit-level=high
 
