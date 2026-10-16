@@ -166,6 +166,7 @@ final class ErasureExecutionPlanService
         return hash('sha256', CanonicalJson::encode([
             'customer_uuid' => $customer->uuid,
             'customer_updated_at' => $customer->updated_at?->copy()->utc()->toIso8601String(),
+            'customer_state_fingerprint' => $this->customerStateFingerprint($customer),
             'customer_active' => (bool) $customer->active,
             'user_id' => $customer->user_id,
             'request_uuid' => $case->uuid,
@@ -177,6 +178,25 @@ final class ErasureExecutionPlanService
             'journal' => ['state' => $readiness['state'] ?? 'blocked', 'watermark' => $readiness['watermark'] ?? null],
             'impact_counts' => $impact['retained_relations'] ?? [],
         ]));
+    }
+
+    /**
+     * Bind approvals to the exact persisted customer and login state. Timestamps
+     * are second-precision on supported databases, so they cannot detect every
+     * profile change on their own. HMAC keeps PII and credentials out of stored
+     * preview fingerprints while still making same-second edits observable.
+     */
+    private function customerStateFingerprint(Customer $customer): string
+    {
+        $key = (string) config('app.key');
+        if ($key === '') {
+            throw new LogicException('An application key is required to fingerprint private customer state.');
+        }
+
+        return hash_hmac('sha256', CanonicalJson::encode([
+            'customer' => $customer->getAttributes(),
+            'user' => $customer->user()->first()?->getAttributes(),
+        ]), $key);
     }
 
     /** @return list<array{code:string,scope:string,target_type:string,target_reference:string,blockers:list<string>}> */
