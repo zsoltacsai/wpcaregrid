@@ -31,3 +31,34 @@ All scenarios are planned, not executed. Execute only after Wave 8 implementatio
 ## Non-claims
 
 Scenario completion is technical test evidence only. It does not approve legal copy, acceptance enforcement, retention duration, physical object erasure, production anonymization, or a provider's delete semantics.
+
+## Execution evidence reconciliation — 2026-10-16
+
+The original table records intended assertions. This section records which evidence is current and whether it was newly exercised in Wave 8 or safely reused. “PASS — reused” means current exact executable source, prior staging report, or current CI/feature suite directly covers the stated safety property; it does not imply that all fifteen scenarios ran as one monolithic staging transaction. Current executable source on staging is `19e31d7204a59e08211c4dd9e313b9cccbb01611`. Exact five-job CI run `38847059091` is on a later report-only tree with the same executable source. The fresh Wave 8 disposable staging runtime ran 70 focused MySQL tests / 899 assertions with no failures, errors or skips. Wave 7 contributed a separate genuine MySQL T0/T1/replay run (18 tests / 165 assertions).
+
+| ID | Result | Current evidence |
+|---|---|---|
+| A | PASS — reused + focused | `AccountClosureOrchestrationTest`, Wave 5 synthetic Owner preview and later Owner validation; closure remains distinct from erasure. No billing or site-content mutation. |
+| B | PASS — focused + reused | Current `PrivacyExportTest` and account route tests; Wave 2 staging export and repeat-download audit evidence. Expiry/revocation are covered by current export tests and replay protections. |
+| C | PASS — reused | Wave 2 rectification staging evidence, current billing snapshot CI and Wave 7 immutable accounting fingerprints. |
+| D | PASS — focused + reused | Current `LegalDocumentWorkflowTest`; Wave 3 Owner workflow verification. No legal text published, no fabricated acceptance and enforcement remains OFF. |
+| E | PASS — focused + reused | Current `RetentionEligibilityTest`, Wave 4 preview report and all six gates read false before/after; eligibility remains report-only. |
+| F | PASS — focused + reused | Current closure and `ErasureExecutionPlanTest`; Wave 7 stale-approval and exact-preview MySQL proof. WAIT states remain in the resulting plan. |
+| G | PASS — reused | Wave 7 synthetic-only staging MySQL proof: journal-before-mutation, profile/auth suppression and no real provider call. Journal namespace was local fake storage, not S3 durability evidence. |
+| H | PASS — reused | Wave 7 staging email release/re-registration graph check; no website, subscription, privacy, plan, provider-task or invoice association inherited. |
+| I | PASS — reused + CI | Wave 6 16-table and Wave 7 nine-table fingerprints unchanged; current Server MySQL billing/snapshot suites passed. |
+| J | PASS — focused + reused | Current retention/backup tests, Wave 6 restore/reconciliation report, Wave 4 blockers; no real object deletion. Provider fact remains WAIT_FACT. |
+| K | PASS — focused + reused | Provider task/reconciliation tests and Wave 6/7 reports cover pending/unknown/partial behavior. No provider physical absence claim or destructive call. |
+| L | PASS — reused | Wave 6 staging object-storage suppression replay plus Wave 7 staging-context genuine MySQL T0 restore, T1 anonymization, external test journal, replay, second replay, unchanged accounting hashes and verified cleanup. Wave 7's test journal was isolated local fake storage. |
+| M | PASS — focused + reused | Current focused tests plus Wave 7 injections: journal write/missing/corrupt evidence, missing synthetic fixture, tenant mismatch, stale approval, circuit breaker, replay idempotency. Provider outage remains an external fact gate. |
+| N | PASS — focused + reused | Current privacy/Owner/customer authorization suites and CI; Wave 2 export denial and Wave 7 cross-tenant replay denial. No cross-tenant access/mutation observed. |
+| O | PASS — new | Wave 8 temporary runtime, disposable database/user and external test config removed; absence verified; normal staging health and all six gates rechecked. No test S3 journal object was written. |
+
+The current focused run executed the privacy/account, export, rectification, legal, retention, closure, plan, journal/replay and request-concurrency test set against a private disposable MySQL 8.4.11 database. It excluded two SQLite-only restore tests because the staging host has no `pdo_sqlite`; both ran in the mandatory Server SQLite CI job and restore behavior is also covered by current Wave 7 MySQL staging evidence. The private run used no normal queue, scheduler, external mail, Stripe mutation, provider deletion or customer record. The 5/5 full CI jobs, including MySQL process/concurrency, passed on exact planning head `9c1f00d8266bc500934e4b1bb214827ce6d2b9dd` before it merged as `57cdf9aac2ef0339ded74036181a469d9d11cbeb`.
+
+### Scope boundaries
+
+- Owner interfaces were previously checked in separate authenticated staging sessions across Waves 3–7; current Owner route authorization/rendering tests passed in the private MySQL run. A fresh all-sections browser walkthrough remains a separate manual observation if the Owner elects to perform it; no browser inspection was made while the isolated tab was at sign-in.
+- The 15 scenarios are satisfied by a traceable evidence set, not by a single fixture flowing through all features. The M12 closure report must preserve this distinction.
+- Broad staging security scanning remains open for M14. The visible “no completed security scan” warning is retained.
+- WAIT_LEGAL, WAIT_ACCOUNTING and WAIT_FACT do not turn technical test results into approval or physical deletion evidence.

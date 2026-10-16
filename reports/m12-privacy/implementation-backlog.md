@@ -147,3 +147,22 @@ This addendum supersedes the older Wave 6/7 pending snapshots above while preser
 The current closure matrix has 36 requirements: 15 PASS, 17 PARTIAL, 1 WAIT_LEGAL, 1 WAIT_ACCOUNTING and 2 WAIT_FACT. No new Owner policy decision is needed. The staging warning “no completed security scan” remains visible and is carried to M14 AppSec; it is not silently waived or expanded into Wave 8 general hardening.
 
 Wave 8 planning creates no runtime feature or destructive authority. `M12_DESTRUCTIVE_RETENTION_ENABLED=false`; all action-specific production/staging gates stay OFF. No M13 work begins.
+
+## Wave 8 final validation disposition — 2026-10-16
+
+This current addendum supersedes older “M12 pending implementation” snapshots while preserving historical milestones. Planning PR #73 merged at `57cdf9aac2ef0339ded74036181a469d9d11cbeb`; no executable source changed after staging SHA `19e31d7204a59e08211c4dd9e313b9cccbb01611`. Exact-head GitHub Actions run `38847059091` passed all five mandatory jobs, including MySQL process/concurrency. The private staging-host focused M12 suite passed 70 tests / 899 assertions on disposable MySQL 8.4.11; Wave 6/7 staging evidence supplies the genuine restore/replay, synthetic-only anonymization, email reuse and accounting immutability proofs. All temporary resources were removed and verified absent.
+
+| Work item | Current status | Carry-forward |
+|---|---|---|
+| M12 Wave 1–7 engineering foundations | CLOSED with the evidence scopes in each wave report | Preserve all action-specific fail-closed blockers. |
+| Wave 8 final regression, evidence reconciliation and staging validation | VALIDATED; closure record is awaiting report-only PR merge and exact-head CI | Merge final report, then post-merge verify primary and gates. |
+| Qualified legal review / publication / response commitments | WAIT_LEGAL | Owner/legal review; no publication or enforcement until approved. |
+| Accounting schedules and identity exceptions | WAIT_ACCOUNTING | Accountant approval; do not invent a retention duration. |
+| Provider deletion/versioning/durability semantics | WAIT_FACT | Dated provider/contract/config evidence; keep physical deletion unavailable. |
+| Broad security scan and AppSec review | M14_RESIDUAL | Complete and triage in M14; keep current warning visible. |
+| DR, billing, privacy-control and operational-safety audit | M15_AUDIT_REQUIRED | Perform before M15 pilot. |
+| Final production-readiness review | M17_RECHECK_REQUIRED | Recheck exact release SHA in M17. |
+| Production destructive execution | DISABLED / separately authorized future milestone | All six normal-staging gates remain false. |
+| Commercial backup package/GFS redesign | OUT OF M12; M14/M16 | No Wave 8 implementation. |
+
+No M12 engineering task remains pending after final report merge. External reviews and future audits are carried to their proper milestones; they do not imply compliance or authorize destructive action. `M12_DESTRUCTIVE_RETENTION_ENABLED=false`. Do not begin M13 until the final M12 closure report is merged.

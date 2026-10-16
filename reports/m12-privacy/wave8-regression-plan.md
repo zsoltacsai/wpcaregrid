@@ -48,3 +48,13 @@ GitHub Actions is primary. Exact candidate SHA/tree must pass all five required 
 ## Failure treatment
 
 Detect → diagnose → root-cause fix → regression test → exact-SHA CI → guarded deploy (runtime fix only) → rerun affected E2E. Stop immediately for customer/production mutation risk, tenant leak, compromised journal/restore safety, gate bypass, financial snapshot change, or uncontrolled deletion. If a flaky concurrency failure repeats, find and repair the synchronization/root cause instead of suppressing assertions or increasing timeouts without evidence.
+
+## Wave 8 execution results — 2026-10-16
+
+This section records validation on the exact executable source in staging, `19e31d7204a59e08211c4dd9e313b9cccbb01611`. The code tree was unchanged by planning PR #73, which merged as `57cdf9aac2ef0339ded74036181a469d9d11cbeb`.
+
+- Exact planning-head GitHub Actions run `38847059091`: 5/5 mandatory jobs passed. Server SQLite 1,283 tests / 18,413 assertions / 19 documented skips; Server MySQL 1,283 / 18,611 / 0 skips and the required process/concurrency gate; Connector SQLite 202 / 1,401 / 24 documented skips; Connector MySQL 202 / 1,775 / 3 documented skips; Quality/security/build passed.
+- Private staging runtime, disposable MySQL 8.4.11, focused M12 tests: 70 tests / 899 assertions / 0 errors / 0 failures / 0 skips. Two SQLite-only restore test files were not run on the staging host because `pdo_sqlite` is absent; mandatory SQLite CI and the Wave 7 genuine MySQL restore evidence cover that behavior.
+- The staging warning “no completed security scan” remains visible. No repeated concurrency flake was observed. Test counts are per CI job, not unique across database variants.
+
+The matrix/reports identify the Wave 2–7 staging evidence reused for each scenario rather than claiming a single combined transaction. Temporary-runtime cleanup and post-run staging health/gate read-back passed. No runtime code was changed. Final exact-head CI of the documentation-only closure report remains to be run by its PR.
