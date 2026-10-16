@@ -5,8 +5,12 @@
 - M13.1 planning merge: `8d3604099361bca074dfc46fd6bb7a857f588906`.
 - M13.2 implementation baseline: `eaa8f0b27bd020084216d42367cc1d86980b8e76`.
 - Implementation branch: `codex/m13-analytics-consent-funnel`.
+- Implementation candidate: `bed531a2b8209557072d118e855efe3d54cd2d41` (PR #79).
+- Exact-head GitHub Actions run: `38869056939`, all 5 required jobs passed.
+- Implementation merge and deployed primary: `cc8acede6faea076b14a264dccabca75df15a76e`.
 - M13.1 executable staging baseline observed before this implementation: `9431db502105b51102905aefe60faee2efbcc021`.
-- Candidate, CI, merge, and post-deploy evidence will be added after exact-head validation and guarded staging deployment. This report does not claim those steps are complete.
+- Staging deployed SHA: `cc8acede6faea076b14a264dccabca75df15a76e`; checkout is clean.
+- The post-deploy closure report will be merged separately; it is documentation-only and does not require another deployment.
 
 ## Architecture
 
@@ -30,7 +34,19 @@ Google Consent Mode-compatible defaults deny analytics and all advertising categ
 - Laravel analytics-policy feature suite: 5 tests, 29 assertions passed. It covers explicit reviewed-policy authorization, exact production host/config eligibility, invalid Measurement ID, non-production behavior, localized preferences, and query-free analytics context.
 - Frontend production build succeeded.
 - Project-wide Pint passed (944 PHP files).
-- M13.1 SEO plus checkout, Stripe isolation, and subscription lifecycle regression: 109 passed, 1 existing MySQL-connection isolation test skipped, 820 assertions. The skip is explicitly scoped to independent MySQL connections and is covered by the required MySQL CI gate.
+- M13.1 SEO plus checkout, Stripe isolation, and subscription lifecycle regression: 109 passed, 1 existing MySQL-connection isolation test skipped, 820 assertions. The skip is scoped to independent MySQL connections and is covered by the required MySQL CI gate.
+- Both Composer validations/audits passed; npm audit reported 0 vulnerabilities; `git diff --check` passed.
+
+## Exact-head CI evidence
+
+GitHub Actions run `38869056939` passed all required jobs on candidate `bed531a2…`:
+
+- Server SQLite: 1,296 tests, 18,668 assertions, 19 documented engine/environment skips.
+- Server MySQL 8.4: 1,296 tests, 18,866 assertions, 0 skips; all nine required MySQL process/concurrency test files passed.
+- Connector SQLite: 202 tests, 1,401 assertions, 24 MySQL-specific skips.
+- Connector MySQL: 202 tests, 1,775 assertions, 3 documented skips.
+- Quality/security/build: Pint, PHP syntax, Composer validation/audits, frontend build, Node analytics contract (9/9), npm audit (0 vulnerabilities), and full-history secret scan passed.
+- Both Server jobs passed the production-cache HTTP smoke suite (77 checks).
 
 ## External setup and residuals
 
@@ -39,6 +55,20 @@ Google Consent Mode-compatible defaults deny analytics and all advertising categ
 - Search Console verification/submission remains a separate external action; M13.1 technical sitemap readiness is unaffected.
 - The existing staging `security_scanner` warning (“No completed security scan yet.”) remains an M14 security audit carry-forward.
 
-## Deployment evidence
+## Staging deployment and validation evidence
 
-Pending implementation exact-head CI, merge, guarded staging deployment, HU/EN preference interaction checks, no-Google-network proof, SEO smoke, health check, and post-deploy M12 gate readback. M12 destructive/privacy gates must remain false throughout. Production analytics is not activated by this implementation.
+- Strict SSH host-key verification used the approved Ed25519 fingerprint `SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`. The guarded staging script pinned baseline `9431db502105b51102905aefe60faee2efbcc021`, created its protected pre-deploy database backup, deployed exact primary SHA `cc8acede…`, found no pending migrations, rebuilt dependencies/assets/caches, restarted both workers, observed a healthy scheduler heartbeat, and passed all final health and HTTP smoke checks.
+- Post-deploy `system:check`: application, MySQL, queue, scheduler, Connector, Stripe TEST, Cloudflare, backup storage, mail, safety, privacy retention, restore readiness, and privacy exports are OK. Both workers are RUNNING; failed jobs are zero. Existing `security_scanner` WARNING (“No completed security scan yet.”) remains visible as an M14 carry-forward.
+- Staging analytics config readback: `enabled=false`, `policy_authorized=false`, Measurement ID empty, technical version `technical-v1`.
+- All six M12 privacy/destructive gates read false after deployment: destructive retention, profile anonymization, backup deletion, provider deletion, bulk execution, and synthetic profile anonymization.
+- In a disposable headless Edge context, HU and EN pages rendered `enabled=false` and empty Measurement ID. Reject, grant, withdrawal, reload, and locale switch persisted the expected states. Requests to `googletagmanager.com`, `google-analytics.com`, and `analytics.google.com`: **0**.
+- Four staging marketing routes (`/en/`, `/hu/`, `/en/pricing`, `/hu/pricing`) returned 200 with localized titles/descriptions, one H1, parseable JSON-LD, and `noindex, nofollow`. Staging sitemap returned 404 and contained no staging hostname. The live application continues to serve public canonical paths for its own noindex staging responses.
+- No paid checkout or billing mutation was performed. Client fake-sink tests exercise funnel event order; authoritative checkout/payment outcomes remain internal and unchanged.
+
+## Closure disposition
+
+- M13.2 implementation is merged and deployed to staging at cc8acede6faea076b14a264dccabca75df15a76e; staging validation passed. This report-only closure PR records evidence and does not require redeployment.
+- GA4 property/stream ownership and Measurement ID remain external setup. Collection remains disabled until separately configured and authorized.
+- Consent wording, purpose, applicable legal policy, and analytics retention remain WAIT_LEGAL; no legal conclusion is claimed.
+- The staging security-scanner warning remains an M14 carry-forward. M13.3 and M14 have not started.
+- M12_DESTRUCTIVE_RETENTION_ENABLED=false; no destructive M12 behavior was enabled or changed.
