@@ -29,3 +29,9 @@ Planning baseline primary: `62fc2a74f2b0720e61b73d70c449639363a0eead`. Backlog i
 - **P2:** 1 (M14-17).
 
 Each P0 remains required unless evidence proves a row not applicable and the audit report records why.
+
+## M14.1 planning refinement — 2026-10-16
+
+Execute M14.1 in this order: (1) expanded route/command authorization inventory; (2) two-tenant customer/Owner/Operator/Connector object matrix; (3) queued-job and command stale-object/relation tests; (4) password reset/activation session revocation and concurrent one-time token tests; (5) recent-auth, CSRF and role-revocation matrix; (6) route-to-limiter coverage and shared-cache verification; (7) targeted output/log/resource-abuse checks; (8) focused plus full regression and exact-SHA CI; (9) guarded synthetic staging proof and audit refresh. Detailed acceptance and test plans are in `reports/m14-security/m14-1-*.md`.
+
+Planning review added a P0 password-reset session-revocation validation gap (not a confirmed exploit) and a P1 queued-backup stale-object validation gap (not a confirmed IDOR). Code changes are conditional on reproducible defects. PHP CLI was unavailable during planning, so the expanded runtime route inventory remains an explicit first task. This pass changed documentation only; it did not change runtime behavior or staging.

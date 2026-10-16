@@ -41,3 +41,13 @@ Require recent password confirmation for high-impact Owner changes: secret repla
 ## M14 acceptance
 
 Complete role/action matrix; no Owner/Operator crossover; no customer admin access by implication; all state-changing web routes CSRF-protected; secrets never returned after save; reset/session/reauth tests pass on MySQL concurrency path; missing role or recent-auth fails closed.
+
+## M14.1 source-review addendum — 2026-10-16
+
+Verified baseline: primary `039a9ce555909243cd36ff5bd77352d43821915d`; staging executable `a335162936afa2933e348fe7b04956e98e45c5a3`, verified using strict SSH with the approved ED25519 fingerprint. No staging mutation occurred.
+
+Source review confirms separate `web`, `owner`, and `operator` session guards; successful customer login and activation regenerate the session; customer logout invalidates it; Owner/Operator invalid-role middleware clears the session; Owner and Operator routes use explicit abilities. These controls remain `PARTIAL` pending every-route and stale-session tests.
+
+New P0 test gap: `PasswordResetController` rotates the password and `remember_token`, but no application `AuthenticateSession`/`logoutOtherDevices` use or explicit all-session deletion was found. Whether existing sessions survive the reset must be tested across all three guards before calling this a confirmed defect. See [`m14-1-auth-session-reauth-plan.md`](m14-1-auth-session-reauth-plan.md) and [`m14-1-findings.md`](m14-1-findings.md).
+
+Effective session/cache settings are environment-dependent; source defaults (database sessions/cache) do not prove staging’s live topology. Verify read-only in implementation, and test recent-auth binding, session fixation, concurrent reset token use, CSRF, role revocation and shared rate-limit counters on the MySQL process gate.
