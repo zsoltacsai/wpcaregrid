@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Security;
 
+use App\Http\Controllers\StripeWebhookController;
 use Illuminate\Foundation\Http\Kernel;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Route;
@@ -41,7 +42,7 @@ class RuntimeRouteBoundaryTest extends TestCase
             if ($name === 'stripe.webhook') {
                 $this->assertSame('stripe/webhook', $uri);
                 $this->assertContains('web', $middleware);
-                $this->assertSame(\App\Http\Controllers\StripeWebhookController::class, $route->getActionName());
+                $this->assertSame(StripeWebhookController::class, $route->getActionName());
                 continue;
             }
 
