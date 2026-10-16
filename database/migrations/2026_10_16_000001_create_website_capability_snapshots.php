@@ -13,6 +13,7 @@ return new class extends Migration
             $table->foreignId('website_id')->unique()->constrained()->cascadeOnDelete();
             $table->foreignId('connector_id')->nullable()->constrained()->nullOnDelete();
             $table->string('connector_version', 32)->nullable();
+            $table->string('connector_capabilities_hash', 64)->nullable();
             $table->string('wordpress_version', 32)->nullable();
             $table->string('php_version', 32)->nullable();
             $table->string('policy_version', 64);

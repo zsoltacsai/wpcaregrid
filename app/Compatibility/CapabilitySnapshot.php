@@ -52,7 +52,16 @@ class CapabilitySnapshot extends Model
         return $connector !== null
             && (int) $this->connector_id === (int) $connector->id
             && $this->connector_version === $connector->connector_version
+            && $this->connector_capabilities_hash === $this->capabilitiesHash($connector)
             && $this->wordpress_version === $website->wordpress_version
             && $this->php_version === $website->php_version;
+    }
+
+    private function capabilitiesHash(Connector $connector): string
+    {
+        $capabilities = array_values(array_unique(array_filter($connector->capabilities ?? [], 'is_string')));
+        sort($capabilities, SORT_STRING);
+
+        return hash('sha256', json_encode($capabilities, JSON_THROW_ON_ERROR));
     }
 }

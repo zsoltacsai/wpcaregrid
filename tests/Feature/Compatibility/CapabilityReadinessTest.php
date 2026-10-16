@@ -60,6 +60,21 @@ final class CapabilityReadinessTest extends TestCase
         $this->assertSame('BLOCK', $results[Capability::AdminAccessReady->value]['status']);
     }
 
+    public function test_connector_capability_changes_invalidate_the_evaluated_snapshot(): void
+    {
+        $site = $this->pairedWebsite();
+        $website = $site['website'];
+        $before = $website->jobs()->count();
+        $connector = $website->activeConnector;
+        $connector->update(['capabilities' => array_values(array_diff($connector->capabilities, ['updates']))]);
+
+        $this->assertSame('COMPATIBILITY_UNKNOWN_OR_STALE', app(CapabilityReadiness::class)->refusal($website->fresh(), JobType::UpdatePlugin));
+        $this->assertSame($before, $website->jobs()->count());
+
+        $this->refreshCapabilityEvidence($website);
+        $this->assertSame('BLOCK', $website->fresh()->capabilitySnapshot->status(Capability::UpdateReady)->value);
+    }
+
     public function test_high_impact_action_requires_a_recent_compatibility_check_without_queue_side_effect(): void
     {
         $site = $this->pairedWebsite();

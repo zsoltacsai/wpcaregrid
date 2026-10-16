@@ -2,6 +2,7 @@
 
 namespace Tests\Concerns;
 
+use App\Compatibility\CapabilitySnapshotStore;
 use App\Models\SecurityScan;
 use App\Models\WebsiteJob;
 use App\Security\ScanType;
@@ -21,6 +22,7 @@ trait RunsSecurityScans
     {
         $site = $this->consoleSite($url);
         $site['website']->activeConnector->update(['capabilities' => [...$site['website']->activeConnector->capabilities, 'security_scan', 'security_quarantine', 'security_remediate']]);
+        app(CapabilitySnapshotStore::class)->refresh($site['website']->fresh(), $site['website']->activeConnector()->first(), $this->inventoryPayload()['compatibility']);
 
         return ['website' => $site['website']->refresh(), 'credential' => $site['credential']];
     }

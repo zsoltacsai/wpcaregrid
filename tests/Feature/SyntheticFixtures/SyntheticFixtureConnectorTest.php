@@ -114,6 +114,11 @@ final class SyntheticFixtureConnectorTest extends TestCase
         ]])->assertCreated();
         $site = ['website' => $website->refresh(), 'credential' => $pair->json('credential')];
 
+        // Complete the harmless inventory preflight before requesting a backup.
+        // The operation-time compatibility gate correctly refuses a site with
+        // no current capability snapshot.
+        $this->withHeaders($this->connectorHeaders($site))->postJson(route('api.v1.connector.inventory'), $this->inventoryPayload())->assertSuccessful();
+
         $backup = app(BackupService::class)->request($website, BackupReason::Manual, 'operator:m8-test');
         $ordinaryPoll = $this->withHeaders($this->connectorHeaders($site))
             ->getJson(route('api.v1.connector.jobs'))
