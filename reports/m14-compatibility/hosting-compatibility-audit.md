@@ -1,6 +1,6 @@
 # M14 Hosting Compatibility Audit — Planning Baseline
 
-**Status:** `PARTIAL`; documented operational assumptions exist, but user-host support boundaries and cross-host compatibility audit are incomplete.
+**Status:** `PARTIAL`; initial support boundaries are Owner-approved, but capability implementation, fixtures and cross-host compatibility audit remain incomplete.
 
 ## Source facts observed
 
@@ -14,7 +14,9 @@
 
 ## Compatibility boundary recommendation
 
-Keep support claims capability-based. A host/site is supported for a specific operation only when the corresponding preflight passes; `unknown` must block that operation or return manual review, not imply support. Begin M14 with the tested baseline—PHP 8.4 server/Laravel 13, supported SQL drivers exercised by CI, WordPress Connector capability level—and document that actual WordPress host requirements are per-operation. Do not infer universal provider, shell, WP-CLI, filesystem, or network behavior. Recommend single-site WordPress as initial supported scope; require explicit Owner decision and dedicated network-level tests before declaring Multisite or Bedrock supported.
+OQ-01 approved a capability-specific support model on 2026-10-16. A host/site is supported for a specific operation only when versioned compatibility/preflight fixtures and runtime checks prove that capability; unknown restore/write compatibility fails closed. Begin from the tested server baseline (PHP 8.4/Laravel 13, CI-exercised SQL drivers and Connector capability level), but do not infer universal provider, shell, WP-CLI, filesystem or network behavior.
+
+OQ-02 and OQ-03 approved the following initial-launch boundary: standard WordPress layouts are the support baseline; Multisite/network installations, Bedrock, Composer-managed layouts, arbitrary custom document roots and unresolved symlinked/custom-root installations are not supported. Detect and report these configurations where possible. Block restore, destructive, filesystem-wide, network-wide or other mutating operations whenever scope/canonical root cannot be proven. Safe, limited read-only diagnostics may remain available only when demonstrated not to imply support. Reconsider excluded layouts only in a future milestone after the dedicated fixture and recovery evidence described in the Owner decision register passes.
 
 ## Required capability areas
 
@@ -22,7 +24,7 @@ Keep support claims capability-based. A host/site is supported for a specific op
 |---|---|---|
 | PHP/server runtime | PHP 8.4 CI and staging; supported extensions enumerated in CI | define minimum PHP/extensions from dependency/platform metadata; test missing extension and PHP limits; distinguish server runtime from customer host |
 | Database | MySQL 8.4 and SQLite CI; MariaDB appears in backup fixtures/docs | identify supported MySQL/MariaDB versions/engines/charset/size; test import/transaction/locking differences; PostgreSQL not assumed |
-| WordPress | Connector package supports capability exchange, inventory, backups, restore, updates, security workflows | test minimum/latest supported WordPress and PHP, multisite topology and plugin conflicts; no blanket “all hosts” claim |
+| WordPress | Connector package supports capability exchange, inventory, backups, restore, updates, security workflows | define versioned per-capability tested matrix; standard single-site baseline only; no blanket “all hosts” claim |
 | Filesystem | connector path guard, hashes, staged restore, permissions preflight | writable root/content paths, symlinks, ownership, case-sensitive paths, atomic rename and open_basedir fixtures |
 | Disk/resources | system check measures staging free space; Connector scanner time/memory budgets | compute per-operation headroom for largest archive + parallel jobs; memory/time/process ceilings; disk-full recovery |
 | HTTPS/network | production Connector HTTPS default; monitoring pinned DNS; WordPress site initiates polling | TLS chain, outbound 443 to fixed service/providers, restricted outbound support, proxy behavior, DNS changes and timeout tests |
@@ -30,12 +32,12 @@ Keep support claims capability-based. A host/site is supported for a specific op
 | PHP functions/extensions | CI requires curl, zip, sodium, pdo_mysql, intl, gd, openssl, fileinfo, pcntl and others | map runtime vs test-only requirements; avoid unsupported shell functions; `disable_functions` and extension failure fixtures |
 | Security plugins/WAF | no universal compatibility matrix located | document WAF/proxy/plugin blocks, request/body caps, REST restrictions and allowlist diagnostics using fake hosts |
 | Reverse proxy/TLS | trusted proxy and HTTPS config exist | validate correct client IP and scheme behind known proxy; never trust wildcard unless proxy-only topology is proven |
-| Multisite | manifest boolean exists | status `NOT VERIFIED`; deny/limit network restore until site/network scope tested, including subsite IDs and network-wide operations |
-| Bedrock/custom docroot | no support contract or fixture found | status `NOT VERIFIED`; do not promise; define roots/bootstrap/config discovery and symlink behavior before support |
+| Multisite | manifest boolean exists; does not prove safe network operation | `UNSUPPORTED` for initial launch; detect and report; block restore, destructive, filesystem-wide and network-wide operations with unproven scope; limited diagnostics only if demonstrably safe |
+| Bedrock/custom docroot | no support contract or fixture found | `UNSUPPORTED` for initial launch; detect non-standard layout; block mutation/restore unless canonical root boundaries are proven; never guess roots or follow symlinks outside the allowed root |
 
-## Owner decisions and non-decisions
+## Owner decision application and remaining external gates
 
-Owner should decide commercial/launch support boundaries for Multisite, Bedrock/custom docroots and allowed hosting profiles after the compatibility evidence is prepared. Engineering sets explicit safe requirements and operation-level preflight. No manual exception should force a destructive/restore action past an unknown capability.
+The initial support policy is approved under OQ-01–OQ-03; it is not a claim that compatibility is already implemented or that any untested host is supported. Engineering must prove each reported capability with runtime checks and versioned fixtures. No manual exception may force a destructive/restore action past an unknown capability. Qualified legal/accounting minima and physical provider deletion semantics remain separate `WAIT_LEGAL`, `WAIT_ACCOUNTING` and `WAIT_FACT` gates where applicable.
 
 ## M14 deliverables
 

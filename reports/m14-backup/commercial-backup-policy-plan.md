@@ -28,14 +28,16 @@ These are a planned target model only; do not expose as current commercial promi
 | Retention | Class/count/date eligibility calculation | deterministic, reportable and versioned; is not a provider deletion confirmation |
 | Protection | Active restore/update dependency, last verified recovery point, safety point, hold | protected object cannot become executable candidate |
 | Deletion eligibility | Candidate after all blockers/recovery checks | preview and explicit action approval; global/customer/provider gates remain OFF by default |
-| Post-service retention | backups after cancellation/offboarding | WAIT_LEGAL / WAIT_ACCOUNTING and Owner decision; no invented duration |
+| Post-service retention | backups after cancellation/offboarding | WAIT_LEGAL / WAIT_ACCOUNTING; no invented duration; OQ-04 does not set a period |
 | Safety backup | pre-update or pre-remediation recovery point | separate from package quota, survives routine retention until dependency clears |
 | Provider deletion | request/reconciliation with actual provider semantics | WAIT_FACT until version/delete-marker/lifecycle and absence evidence are verified |
 
 ## Owner configuration principles
 
-Owner configuration must not silently redefine what the customer bought. Recommend only safe, audited overrides that **extend** recovery protection or add an approved safety copy. Reducing retention below package entitlement or legal/accounting floors must be impossible. Any policy reduction must preview its candidate impact and remain blocked by holds, restores, last-good points, accounting/legal waits and provider unknowns. Need Owner decision on whether Owner may extend retention or change cadence per tenant, and whether those changes have commercial/pricing implications.
+OQ-04 was approved on 2026-10-16. Owner configuration may extend recovery protection above purchased entitlement (for example, additional retained recovery points, longer approved retention or additional safety protection), but may not reduce below purchased entitlement, the protected last-known-good point, active restore requirements, safety-backup requirements, the system safety floor or any future legal/accounting minimum. A policy reduction requires an impact preview, can create eligibility only, and never synchronously deletes backups. Restore, safety, legal, accounting, privacy and provider gates remain in force. Purchased entitlement is the minimum contractual/product floor; Owner preference cannot override system safety. Any commercial/pricing implications of extensions remain separate product/accounting decisions.
+
+This decision does not set post-service retention duration or resolve legal/accounting schedules. Those remain `WAIT_LEGAL` / `WAIT_ACCOUNTING`; provider physical-deletion semantics remain `WAIT_FACT`.
 
 ## Migration/rollout work for M14 implementation
 
-Versioned catalogue migration/backfill from existing pricing frequency; conservative defaults for existing accounts; never translate null retention env into zero. Dual-read reconciliation, migration rollback, stale job policy version checks and no mass delete on deployment. CI fixture asserts plan vs checkout vs connector entitlement and all six GFS combinations. Start in report/preview mode; execution is separate, remains disabled under M12 and provider facts.
+Versioned catalogue migration/backfill from existing pricing frequency; conservative defaults for existing accounts; never translate null retention env into zero. Dual-read reconciliation, migration rollback, stale job policy version checks and no mass delete on deployment. CI fixture asserts plan vs checkout vs connector entitlement and all six GFS combinations. Apply the approved extension-only override policy with impact preview and safety floors. Start in report/preview mode; execution is separate, remains disabled under M12 and unresolved provider facts.

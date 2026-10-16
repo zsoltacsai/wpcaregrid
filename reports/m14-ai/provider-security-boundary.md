@@ -23,3 +23,7 @@ M14 provider configuration is infrastructure groundwork only. It does not author
 - no provider key exposure in logs/Owner page after entry;
 - no provider default just because a key is configured;
 - no AI call while configuration or authorization is missing/ambiguous.
+
+## Owner decision application — 2026-10-16
+
+OQ-05 approves Owner-only configuration groundwork for OpenAI, Anthropic and Google Gemini under the boundaries above. It does not approve customer-data egress, feature enablement, a default provider, autonomous operations, or “AI-powered” marketing. Provider states must remain distinct: `CONFIGURED`, `ENABLED`, `HEALTHY`, `DEFAULT` and `AUTHORIZED_FOR_FEATURE`. A non-customer health/test probe must use fixed safe input. Separate purpose, data classification, security, privacy/legal/vendor and applicable tenant/customer approvals are required before any customer data transfer.

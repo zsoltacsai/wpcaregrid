@@ -9,8 +9,8 @@
 5. **Connector/webhook/archive safety:** token lifecycle and request scope/replay model documented and tested; no unsafe archive path, symlink or unbounded expansion; Stripe callback authentic/idempotent.
 6. **Security scan:** at least one current completed staging scan with scanner/feed/coverage evidence and all findings triaged. Critical/High unresolved blocks; never suppress “no completed security scan” without completion evidence.
 7. **Operational safety:** all destructive/action gates inventoried, missing config fails closed, job-time checks, circuit breaker and audit logs verified; M12 gates remain false.
-8. **Backup entitlement:** canonical versioned M14 GFS policy domain and Owner workflow match approved policy; old customer entitlements safely migrated; package cadence/retention/protection/deletion remain distinct. If a product decision is unresolved, the affected feature remains blocked and M14 is `B`/not closed until its promised engineering scope is explicitly deferred by Owner.
-9. **AI provider boundary:** provider config/credential lifecycle disabled by default, separate from feature authorization; no customer-data egress without a separate approved purpose/contract/data review.
+8. **Backup entitlement:** canonical versioned M14 GFS policy domain and Owner workflow match approved OQ-04; Owner overrides extend protection only and cannot reduce below purchased entitlement, last-known-good, active-restore, safety, system or future approved legal/accounting floors. Policy reductions show impact preview and create eligibility only; old customer entitlements migrate safely; cadence/retention/protection/deletion remain distinct. Post-service duration and legal/accounting minima remain `WAIT_LEGAL` / `WAIT_ACCOUNTING` and cannot be invented.
+9. **AI provider boundary:** implement only the OQ-05-approved Owner-only configuration groundwork for OpenAI, Anthropic and Google Gemini. Secret lifecycle is encrypted/write-only/masked/revocable; `CONFIGURED`, `ENABLED`, `HEALTHY`, `DEFAULT` and `AUTHORIZED_FOR_FEATURE` remain separate. No default, AI feature, autonomous action, AI marketing claim or customer-data egress is enabled. Customer-data transfer requires a separately approved purpose, data classification, security, privacy/legal/vendor and applicable tenant/customer authorization.
 10. **Release/staging:** focused and full mandatory CI green on exact SHA; MySQL process/concurrency gate required; guarded staging rollout/health passes; staging uses isolated synthetic fixtures; no production deploy.
 11. **Audit disposition:** required audits final status is one of `PASS`, `PASS_WITH_MEDIUM_RISKS`, `PARTIAL_FUTURE_SCOPE`, `BLOCKED_HIGH`, `BLOCKED_CRITICAL`. No Critical/High unresolved; medium risks named and explicitly accepted; M15 blockers explicit.
 
@@ -24,6 +24,10 @@
 - pilot scope/consent/customer-authority and operational response not documented.
 
 DR/restore, billing/subscription/invoice, technical privacy-controls and operational safety audits remain required before/during M15 as their planned scope dictates; M14 evidence may contribute but does not automatically close them.
+
+## Owner decision status
+
+OQ-01–OQ-05 were approved on 2026-10-16 and are recorded in [the decision register](owner-questionnaire.md). These approvals remove the corresponding product-policy decisions as blockers to M14.1 and later implementation within the stated bounds. They do not satisfy compatibility/security evidence, resolve `WAIT_LEGAL`, `WAIT_ACCOUNTING` or `WAIT_FACT`, authorize customer-data transfer to AI providers, authorize destructive production behavior, or authorize M15.
 
 ## M17 carry-forward
 

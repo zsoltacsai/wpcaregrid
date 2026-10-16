@@ -1,43 +1,45 @@
-# M14 Owner Decisions — Consolidated Questionnaire
+# M14 Owner Decision Register
 
-These decisions affect specific M14 product/compatibility waves. Safe P0 AppSec and tenant-isolation work can proceed now. Recommended defaults below are not approvals and do not change support, backup, privacy or AI behavior.
+**Record status:** all five decisions approved on 2026-10-16.
+**Evidence:** Owner response to the M14 Owner Decisions record in this task, following review of planning PR #83.
+**Scope:** planning and implementation scope only. These decisions do not authorize production destructive execution, customer-data transfer to AI providers, or unsupported hosting claims.
 
-## OQ-01 — Initial WordPress hosting support boundary
+## OQ-01 — Initial WordPress hosting support — APPROVED
 
-- **Recommended default:** support only installation layouts and host capabilities covered by published, versioned fixtures; show per-operation preflight and block unknown restore/write capability.
-- **Alternatives:** broad “most WordPress hosts” support with exceptions; or a narrower named-host/managed-host list.
-- **Impact:** scope of compatibility matrix, preflight rules, support burden and truthful restore claims.
-- **Security consequence:** broad support without path/network/filesystem evidence expands SSRF, path and data-loss exposure.
-- **Roadmap consequence:** needed before M14.3 compatibility acceptance; not a prerequisite for M14.1 AppSec fixes.
+Use an evidence-based, capability-specific support model. A capability is supported only when versioned compatibility/preflight fixtures and runtime checks prove it. Keep distinct states such as `MONITORING_READY`, `UPDATE_READY`, `BACKUP_READY`, `RESTORE_READY`, `SECURITY_SCAN_READY` and `ADMIN_ACCESS_READY`. Unknown restore/write compatibility fails closed. Warnings may remain non-blocking only where the affected capability can operate safely.
 
-## OQ-02 — Multisite support
+**Implementation consequence:** define and test each capability independently; do not treat an ordinary-looking WordPress installation as supported without evidence.
 
-- **Recommended default:** treat Multisite/network-wide operations as unsupported until dedicated network-level fixtures and restore/recovery tests pass; detect and block ambiguous destructive or restore scope.
-- **Alternatives:** support selected Multisite cases with explicit constraints; or defer all Multisite support beyond M14.
-- **Impact:** affects site identity, backup consistency, shared plugins/users, network tables and restore blast radius. A manifest boolean alone is insufficient evidence.
-- **Security consequence:** one subsite action could affect the entire network; scope errors can cross customer/site boundaries.
-- **Roadmap consequence:** decision gates M14.3 support claims and relevant Connector work.
+## OQ-02 — WordPress Multisite — APPROVED, UNSUPPORTED FOR INITIAL LAUNCH
 
-## OQ-03 — Bedrock and custom document roots
+Detect Multisite reliably, present an explicit compatibility state, and make no Multisite support claim. Block restore, destructive, filesystem-wide and network-wide operations whenever scope safety is unproven. Do not treat a subsite as an independent ordinary installation when shared network state is involved. Read-only diagnostics may remain only where demonstrated safe and clearly limited.
 
-- **Recommended default:** no support claim until canonical root discovery and symlink/bootstrap fixtures prove backup, restore and Connector access boundaries.
-- **Alternatives:** support a named Bedrock layout; support arbitrary custom roots with operator-managed configuration; defer.
-- **Impact:** limits eligible hosting layouts and onboarding diagnostics.
-- **Security consequence:** root confusion and symlink escapes can expose or overwrite files outside WordPress.
-- **Roadmap consequence:** decision required before declaring compatibility for those installations.
+Reconsider support only in a future milestone after network-level backup, restore, scope/tenant, plugin/theme, users/uploads and recovery fixtures pass.
 
-## OQ-04 — Owner backup-policy overrides
+## OQ-03 — Bedrock/custom document roots — APPROVED, UNSUPPORTED FOR INITIAL LAUNCH
 
-- **Recommended default:** Owner may extend recovery protection (more retained points/additional safety copy) but cannot reduce customer entitlement, verified recovery floor, or any eventual legal/accounting minimum; policy reductions preview blockers and never delete immediately.
-- **Alternatives:** no per-customer override; or allow downward overrides only after explicit customer/contract policy.
-- **Impact:** affects support flexibility, storage cost, package contract and subscription migration.
-- **Security consequence:** reducing retention or removing last-good points can create data-loss and compliance risk.
-- **Roadmap consequence:** needed before M14.4 Owner policy UI/domain is finalized; product plan remains unimplemented until approved.
+Bedrock, arbitrary custom document roots, Composer-managed WordPress layouts and unresolved symlinked/custom-root installations are outside the initial supported baseline. Detect non-standard layouts where possible, explain the limitation, block mutation/restore if canonical root boundaries cannot be proven, never guess filesystem roots, and prevent symlink/root escape. Standard supported WordPress layouts remain the baseline.
 
-## OQ-05 — AI provider configuration scope
+Future support requires canonical-root discovery and fixture-based backup/restore/filesystem evidence.
 
-- **Recommended default:** M14 may add Owner-only, encrypted, write-only provider configuration and health check with no customer data, no feature enablement and no default provider; keep all AI behavior off until separate purpose/legal/privacy authorization.
-- **Alternatives:** defer all provider configuration; or choose one provider for a specifically scoped future internal feature after security/privacy review.
-- **Impact:** determines M14.5 scope, secret lifecycle and external provider setup.
-- **Security consequence:** configuration must not grant data egress or autonomous action authority.
-- **Roadmap consequence:** provider choice and any real data flow remain future authorized work; M14 does not imply an AI feature or marketing claim.
+## OQ-04 — Owner backup-policy overrides — APPROVED
+
+An Owner may extend recovery protection above purchased entitlement, including additional retained recovery points, longer approved retention or additional safety protection. An Owner may not reduce below the purchased entitlement, protected last-known-good point, active restore requirement, safety-backup requirement, system safety floor or any future legal/accounting minimum.
+
+Every policy reduction must show an impact preview, must never synchronously delete backups, and may create eligibility only. Restore, safety, legal, accounting, privacy and provider gates continue to block affected actions. Purchased entitlement is the minimum contractual/product floor; Owner preference cannot override system safety. Commercial/pricing consequences of extensions remain separate product/accounting decisions.
+
+Post-service retention duration remains unresolved; this decision sets no legal or accounting period.
+
+## OQ-05 — AI provider configuration — APPROVED, CONFIGURATION GROUNDWORK ONLY
+
+M14 may implement Owner-only configuration groundwork for **OpenAI, Anthropic and Google Gemini**: provider registry; encrypted secret storage; write-only secret entry; masked configured state; replace/revoke; safe health/test connection; provider availability/configuration status; and audit events that exclude secrets.
+
+Configuration must not choose a default provider, enable an AI feature, send customer/site data, security findings, backups, code/content or credentials, enable autonomous remediation or update/restore/security actions, or support an “AI-powered” marketing claim. Keep `CONFIGURED`, `ENABLED`, `HEALTHY`, `DEFAULT` and `AUTHORIZED_FOR_FEATURE` separate. Configuration does not imply enablement, and enablement does not authorize customer-data transfer.
+
+No customer data may leave WP CareGrid until a future feature has a separately approved purpose, data classification, Owner/product authorization, security review, privacy/legal/vendor review, and tenant/customer authorization where required.
+
+## Decision and safety boundary
+
+OQ-01 through OQ-05 are `OWNER_APPROVED`. They resolve the Owner/product choices recorded here; they do not resolve qualified external facts or approvals. Post-service retention duration remains `WAIT_LEGAL` / `WAIT_ACCOUNTING`; provider physical-deletion semantics remain `WAIT_FACT`.
+
+The following remain false: `M12_DESTRUCTIVE_RETENTION_ENABLED`, profile anonymization execution, customer backup deletion, provider deletion, bulk destructive execution and normal-staging synthetic execution. No decision in this register authorizes production destructive execution, customer-data egress to AI providers, or work in M15.
