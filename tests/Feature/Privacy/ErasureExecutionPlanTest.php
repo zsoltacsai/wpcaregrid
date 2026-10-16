@@ -4,7 +4,9 @@ namespace Tests\Feature\Privacy;
 
 use App\Models\Customer;
 use App\Models\PrivacyErasureExecutionPlan;
+use App\Models\SyntheticSiteFixture;
 use App\Models\User;
+use App\Models\Website;
 use App\Privacy\ErasureExecutionPlanService;
 use App\Privacy\PrivacyErasureCircuitBreakerService;
 use App\Privacy\PrivacyExecutionAuthorization;
@@ -12,6 +14,7 @@ use App\Privacy\PrivacyRequestService;
 use App\Privacy\PrivacyRequestSource;
 use App\Privacy\PrivacyRequestType;
 use App\Privacy\PrivacyTombstoneJournal;
+use App\Privacy\SyntheticPrivacyAnonymizationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
@@ -117,6 +120,55 @@ class ErasureExecutionPlanTest extends TestCase
         $this->assertSame('invalidated', $result->state->value);
         $this->assertNull($result->approved_at);
         $this->assertNotNull($result->invalidated_at);
+    }
+
+    public function test_approved_preview_is_invalidated_when_profile_changes_within_same_timestamp_second(): void
+    {
+        Carbon::setTestNow('2026-10-16 02:30:00 UTC');
+
+        try {
+            config([
+                'platform.deployment_environment' => 'testing',
+                'privacy.synthetic_profile_anonymization_enabled' => true,
+            ]);
+            $owner = $this->asOwner();
+            [$customer, $case] = $this->customerAndErasureCase();
+            $website = Website::factory()->for($customer)->create();
+            SyntheticSiteFixture::query()->create([
+                'purpose' => 'same-second-preview-staleness',
+                'environment' => 'testing',
+                'customer_id' => $customer->id,
+                'website_id' => $website->id,
+                'enabled' => true,
+                'backup_restore_entitled' => false,
+                'created_by_user_id' => $owner->id,
+            ]);
+
+            $plans = app(ErasureExecutionPlanService::class);
+            $plan = $plans->createPreview($case, $owner);
+            $plan = $plans->approve(
+                $plan,
+                $owner,
+                'password',
+                'APPROVE '.$plan->uuid.' '.$plan->preview_hash,
+                $plan->preview_hash,
+            );
+            $action = $plan->actions()->where('action_code', 'ANONYMIZE_CURRENT_PROFILE')->firstOrFail();
+            $originalEmail = $customer->email;
+            $timestampBefore = $customer->updated_at?->format('Y-m-d H:i:s');
+
+            $customer->forceFill(['first_name' => 'ChangedWithinSameSecond'])->save();
+
+            $this->assertSame($timestampBefore, $customer->fresh()->updated_at?->format('Y-m-d H:i:s'));
+            $attempt = app(SyntheticPrivacyAnonymizationService::class)->execute($plan, $action, $owner, $plan->preview_hash);
+
+            $this->assertSame('invalidated', $plan->fresh()->state->value);
+            $this->assertSame('blocked', $attempt->state->value);
+            $this->assertSame($originalEmail, $customer->fresh()->email);
+            $this->assertSame('ChangedWithinSameSecond', $customer->fresh()->first_name);
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     public function test_operator_cannot_create_owner_plan(): void
