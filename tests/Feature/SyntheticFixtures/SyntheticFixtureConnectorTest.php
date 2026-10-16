@@ -108,7 +108,7 @@ final class SyntheticFixtureConnectorTest extends TestCase
         app(StorageManager::class)->set('local', new LocalStorage($root));
 
         $code = app(PairingCodes::class)->issue($website);
-        $pair = $this->pair($code, $website->url, ['capabilities' => [
+        $pair = $this->pair($code, $website->url, ['connector_version' => config('connector.latest_version'), 'capabilities' => [
             'inventory', 'health', 'updates', 'license_check', 'backup_files', 'backup_database',
             'backup_full', 'restore_files', 'restore_database', 'restore_full',
         ]])->assertCreated();
