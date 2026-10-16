@@ -14,8 +14,8 @@
 return [
 
     'meta' => [
-        'title' => 'WP CareGrid – WordPress Maintenance, Backups & Security',
-        'description' => 'WordPress and WooCommerce maintenance, backups, security checks and functional verification for businesses.',
+        'title' => 'WordPress Operations and Maintenance | WP CareGrid',
+        'description' => 'Manage WordPress and WooCommerce updates, backups, security checks and site health from one operations platform.',
     ],
 
     'skip_link' => 'Skip to content',
@@ -154,8 +154,8 @@ return [
 
     'activity' => [
         'eyebrow' => 'Activity log',
-        'title' => 'Everything is logged.',
-        'lead' => 'Every backup, update and check is recorded with its date and result, so you can see what was done on your site and when.',
+        'title' => 'See recorded site activity.',
+        'lead' => 'Supported backups, updates and checks are recorded with available dates and results, so you can review activity for your site.',
         'frame_title' => 'Activity log',
         'caption' => 'Example activity log entries (demo data).',
     ],
@@ -172,11 +172,11 @@ return [
             ],
             'broken_update' => [
                 'question' => 'What happens if an update breaks my website?',
-                'answer' => 'A backup is made before updates. If a check after an update fails, we restore the last working state where possible and investigate the cause before trying the update again.',
+                'answer' => 'A pre-update backup is created where the plan and site setup support it. If a post-update check fails, we review the available backup and recovery options; restore capability depends on the backup and hosting environment.',
             ],
             'backup_location' => [
                 'question' => 'Where are backups stored?',
-                'answer' => 'Backups are stored remotely, separate from your hosting server, so a problem with the server does not affect the backups.',
+                'answer' => 'Backup storage is configured separately from the website hosting for supported plans. Storage location and recovery options depend on the service configuration; a separate copy does not guarantee restoration in every hosting environment.',
             ],
             'backup_frequency' => [
                 'question' => 'How often are backups made?',

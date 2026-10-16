@@ -139,7 +139,8 @@ class SeoIndexingTest extends TestCase
         foreach ($urls as $url) {
             $this->get($url)
                 ->assertOk()
-                ->assertSee('<meta name="robots" content="noindex, nofollow">', false);
+                ->assertSee('<meta name="robots" content="noindex, nofollow">', false)
+                ->assertDontSee('<script type="application/ld+json">', false);
         }
     }
 

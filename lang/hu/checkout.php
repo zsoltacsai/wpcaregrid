@@ -3,8 +3,8 @@
 return [
 
     'meta' => [
-        'pricing_title' => 'Árak – WP CareGrid',
-        'pricing_description' => 'WordPress- és WooCommerce-karbantartási csomagok. Fizethet havonta, vagy évente – ekkor két hónap ingyenes.',
+        'pricing_title' => 'WordPress- és WooCommerce-csomagok, árak | WP CareGrid',
+        'pricing_description' => 'Hasonlítsa össze a jelenlegi WordPress- és WooCommerce-karbantartási csomagokat, szolgáltatásokat és fizetési lehetőségeket.',
         'checkout_title' => 'Rendelés – WP CareGrid',
         'success_title' => 'Rendelés állapota – WP CareGrid',
         'cancel_title' => 'Rendelés megszakítva – WP CareGrid',

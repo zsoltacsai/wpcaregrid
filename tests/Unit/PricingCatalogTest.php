@@ -149,7 +149,9 @@ class PricingCatalogTest extends TestCase
     {
         foreach (ProductType::cases() as $type) {
             $this->assertSame(
-                ['Essential maintenance for smaller WordPress sites.', 'Regular maintenance for business websites.', 'Extra security and faster response.'],
+                $type === ProductType::WooCommerce
+                    ? ['Core maintenance for smaller WooCommerce stores.', 'Regular maintenance for active WooCommerce stores.', 'Expanded maintenance and security checks for WooCommerce stores.']
+                    : ['Essential maintenance for smaller WordPress sites.', 'Regular maintenance for business websites.', 'Extra security and faster response.'],
                 array_map(fn ($plan) => $plan->description, $this->catalog()->plans($type)),
             );
         }

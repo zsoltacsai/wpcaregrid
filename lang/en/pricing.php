@@ -68,9 +68,9 @@ return [
             'secure' => ['name' => 'Secure', 'description' => 'Extra security and faster response.'],
         ],
         'woocommerce' => [
-            'basic' => ['name' => 'Basic', 'description' => 'Essential maintenance for smaller WordPress sites.'],
-            'business' => ['name' => 'Business', 'description' => 'Regular maintenance for business websites.'],
-            'secure' => ['name' => 'Secure', 'description' => 'Extra security and faster response.'],
+            'basic' => ['name' => 'Basic', 'description' => 'Core maintenance for smaller WooCommerce stores.'],
+            'business' => ['name' => 'Business', 'description' => 'Regular maintenance for active WooCommerce stores.'],
+            'secure' => ['name' => 'Secure', 'description' => 'Expanded maintenance and security checks for WooCommerce stores.'],
         ],
     ],
 
