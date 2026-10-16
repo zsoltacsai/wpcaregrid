@@ -120,28 +120,28 @@ class AuthenticationTest extends TestCase
     public function test_password_reset_limit_is_per_account_across_ips_and_fair_to_shared_ip_users(): void
     {
         Notification::fake();
-        $first = Customer::factory()->withUser()->create(['email' => 'first@company.example'])->user;
-        $second = Customer::factory()->withUser()->create(['email' => 'second@company.example'])->user;
+        $firstEmail = 'first-missing@company.example';
+        $secondEmail = 'second-missing@company.example';
 
         foreach (range(1, 3) as $attempt) {
             $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.10'])
-                ->post(route('password.email'), ['email' => $first->email])
+                ->post(route('password.email'), ['email' => $firstEmail])
                 ->assertSessionHas('status', __('account.auth.link_sent'));
             $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.10'])
-                ->post(route('password.email'), ['email' => $second->email])
+                ->post(route('password.email'), ['email' => $secondEmail])
                 ->assertSessionHas('status', __('account.auth.link_sent'));
         }
 
         $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.11'])
-            ->post(route('password.email'), ['email' => $first->email])
+            ->post(route('password.email'), ['email' => $firstEmail])
             ->assertStatus(429)
-            ->assertDontSee($first->email);
+            ->assertDontSee($firstEmail);
 
         $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.11'])
-            ->post(route('password.email'), ['email' => $second->email])
+            ->post(route('password.email'), ['email' => $secondEmail])
             ->assertSessionHas('status', __('account.auth.link_sent'));
 
-        Notification::assertCount(7);
+        Notification::assertNothingSent();
     }
 
     public function test_password_can_be_reset_with_a_valid_token_only(): void

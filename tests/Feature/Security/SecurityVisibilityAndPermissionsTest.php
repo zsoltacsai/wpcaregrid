@@ -295,7 +295,7 @@ class SecurityVisibilityAndPermissionsTest extends TestCase
         $mine = $this->busySite('https://operator-mine.example');
         $other = $this->busySite('https://operator-foreign.example');
         $foreignFinding = SecurityFinding::query()->where('website_id', $other['website']->id)->firstOrFail();
-        $foreignIncident = SecurityIncident::query()->where('website_id', $other['website']->id)->firstOrFail();
+        $foreignIncident = SecurityIncident::query()->where('website_id', $other['website']->id)->oldest('id')->firstOrFail();
         $this->asOperator(Permission::cases());
 
         $before = [

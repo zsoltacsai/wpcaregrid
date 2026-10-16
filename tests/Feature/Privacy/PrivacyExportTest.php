@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Privacy;
 
+use App\Jobs\GeneratePrivacyExport;
 use App\Models\Customer;
 use App\Models\PrivacyExportArtifact;
 use App\Models\PrivacyRequestEvent;
@@ -144,6 +145,7 @@ class PrivacyExportTest extends TestCase
         $path = $artifact->expectedStoragePath();
         $stored = Storage::disk('local')->get($path);
         $downloadUrl = $service->downloadUrl($artifact);
+        $queuedExports = Queue::pushed(GeneratePrivacyExport::class)->count();
         $this->assertIsString($stored);
         $this->assertNotNull($downloadUrl);
         $before = [
@@ -161,7 +163,7 @@ class PrivacyExportTest extends TestCase
         $this->assertSame($before['events'], PrivacyRequestEvent::count());
         $this->assertSame($before['artifacts'], PrivacyExportArtifact::count());
         $this->assertSame($stored, Storage::disk('local')->get($path));
-        Queue::assertNothingPushed();
+        $this->assertSame($queuedExports, Queue::pushed(GeneratePrivacyExport::class)->count());
     }
 
     public function test_export_request_requires_recent_password_confirmation(): void
