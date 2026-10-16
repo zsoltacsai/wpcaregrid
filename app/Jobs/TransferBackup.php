@@ -40,8 +40,13 @@ class TransferBackup implements ShouldBeUnique, ShouldQueue
 
     public int $timeout;
 
-    public function __construct(public int $backupId)
-    {
+    /** @param list<int>|null $expectedObjectIds */
+    public function __construct(
+        public int $backupId,
+        public ?int $expectedWebsiteId = null,
+        public ?string $expectedStorageProvider = null,
+        public ?array $expectedObjectIds = null,
+    ) {
         $this->tries = max(1, (int) config('backup.transfer.tries'));
         $this->timeout = (int) config('backup.transfer.timeout');
 
@@ -50,6 +55,22 @@ class TransferBackup implements ShouldBeUnique, ShouldQueue
             $this->onConnection($connection);
             $this->onQueue((string) config('backup.transfer.queue'));
         }
+    }
+
+    public static function forBackup(Backup $backup): self
+    {
+        return new self(...self::snapshot($backup));
+    }
+
+    /** @return array{int, int, string, list<int>} */
+    public static function snapshot(Backup $backup): array
+    {
+        return [
+            (int) $backup->id,
+            (int) $backup->website_id,
+            (string) $backup->storage_provider,
+            $backup->objects()->orderBy('id')->pluck('id')->map(fn ($id): int => (int) $id)->all(),
+        ];
     }
 
     public function uniqueId(): string
@@ -71,10 +92,26 @@ class TransferBackup implements ShouldBeUnique, ShouldQueue
 
     public function handle(StorageManager $storages, BackupService $backups, Retention $retention): void
     {
-        $backup = Backup::find($this->backupId);
+        // Reject legacy jobs lacking their enqueue-time scope snapshot.
+        if ($this->expectedWebsiteId === null || $this->expectedStorageProvider === null || $this->expectedObjectIds === null) {
+            return;
+        }
+
+        $backup = Backup::whereKey($this->backupId)
+            ->where('website_id', $this->expectedWebsiteId)
+            ->where('storage_provider', $this->expectedStorageProvider)
+            ->first();
 
         if (! $backup || $backup->status !== BackupStatus::Uploaded) {
             return; // Already handled, or not ready: nothing to do twice.
+        }
+
+        $currentObjectIds = $backup->objects()->orderBy('id')->pluck('id')->map(fn ($id): int => (int) $id)->all();
+        $expectedObjectIds = $this->expectedObjectIds;
+        sort($currentObjectIds);
+        sort($expectedObjectIds);
+        if ($currentObjectIds !== $expectedObjectIds || $currentObjectIds === []) {
+            return; // Dependency set changed after enqueue; leave for reconciliation.
         }
 
         $backup->transitionTo(BackupStatus::Verifying, ['transfer_attempts' => $backup->transfer_attempts + 1]);
@@ -141,7 +178,14 @@ class TransferBackup implements ShouldBeUnique, ShouldQueue
     /** Anything unexpected: the backup must not stay in "verifying". */
     public function failed(?\Throwable $e): void
     {
-        $backup = Backup::find($this->backupId);
+        if ($this->expectedWebsiteId === null || $this->expectedStorageProvider === null || $this->expectedObjectIds === null) {
+            return;
+        }
+
+        $backup = Backup::whereKey($this->backupId)
+            ->where('website_id', $this->expectedWebsiteId)
+            ->where('storage_provider', $this->expectedStorageProvider)
+            ->first();
 
         if ($backup && $backup->status->inProgress()) {
             if ($backup->status === BackupStatus::Verifying || $backup->status === BackupStatus::Uploaded) {

@@ -205,7 +205,7 @@ class BackupUploads
 
             AuditLog::record($backup->website, 'backup.uploaded', $backup, data: ['size' => $backup->total_size]);
 
-            TransferBackup::dispatch($backup->id)->afterCommit();
+            TransferBackup::dispatch(...TransferBackup::snapshot($backup))->afterCommit();
 
             return $backup;
         });

@@ -55,7 +55,7 @@ class TransferAndRetentionTest extends TestCase
         $backupId = $backup->id;
 
         $backup->delete();
-        (new TransferBackup($backupId))->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+        (new TransferBackup($backupId, (int) $site['website']->id, (string) $backup->storage_provider, []))->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
 
         $this->assertDatabaseMissing('backups', ['id' => $backupId]);
         $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $site['website']->id]);
@@ -68,9 +68,81 @@ class TransferAndRetentionTest extends TestCase
         $backup = app(BackupService::class)->request($site['website'], BackupReason::Manual, 'test', BackupType::Files);
         $backup->forceFill(['status' => BackupStatus::Verified])->save();
 
-        (new TransferBackup($backup->id))->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+        TransferBackup::forBackup($backup)->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
 
         $this->assertSame(BackupStatus::Verified, $backup->refresh()->status);
+        $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $site['website']->id]);
+    }
+
+    public function test_queued_transfer_does_not_follow_a_backup_reparented_to_another_website(): void
+    {
+        $siteA = $this->backupReadySite('https://tenant-a.example');
+        $siteB = $this->backupReadySite('https://tenant-b.example');
+        Queue::fake();
+        $backup = app(BackupService::class)->request($siteA['website'], BackupReason::Manual, 'test', BackupType::Files);
+        $this->pollJobs($siteA);
+        $this->uploadBackup($siteA, $backup, ['files' => 'SYNTHETIC TENANT A'])->assertStatus(202);
+
+        $job = TransferBackup::forBackup($backup->refresh());
+
+        $backup->forceFill(['website_id' => $siteB['website']->id])->save();
+
+        $job->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+
+        $this->assertSame(BackupStatus::Uploaded, $backup->refresh()->status);
+        $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $siteB['website']->id]);
+    }
+
+    public function test_queued_transfer_is_a_no_op_when_the_object_dependency_set_changes(): void
+    {
+        $siteA = $this->backupReadySite('https://tenant-a.example');
+        $siteB = $this->backupReadySite('https://tenant-b.example');
+        Queue::fake();
+
+        $backup = app(BackupService::class)->request($siteA['website'], BackupReason::Manual, 'test', BackupType::Files);
+        $this->pollJobs($siteA);
+        $this->uploadBackup($siteA, $backup, ['files' => 'SYNTHETIC TENANT A'])->assertStatus(202);
+        $job = TransferBackup::forBackup($backup->refresh());
+
+        $otherBackup = app(BackupService::class)->request($siteB['website'], BackupReason::Manual, 'test', BackupType::Files);
+        $object = $backup->objects()->firstOrFail();
+        $object->forceFill(['backup_id' => $otherBackup->id])->save();
+
+        $job->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+
+        $this->assertSame(BackupStatus::Uploaded, $backup->refresh()->status);
+        $this->assertSame($otherBackup->id, $object->refresh()->backup_id);
+        $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $siteA['website']->id]);
+    }
+
+    public function test_queued_transfer_is_a_no_op_when_the_storage_provider_changes(): void
+    {
+        $site = $this->backupReadySite();
+        Queue::fake();
+        $backup = app(BackupService::class)->request($site['website'], BackupReason::Manual, 'test', BackupType::Files);
+        $this->pollJobs($site);
+        $this->uploadBackup($site, $backup, ['files' => 'SYNTHETIC FILES'])->assertStatus(202);
+        $job = TransferBackup::forBackup($backup->refresh());
+
+        $backup->forceFill(['storage_provider' => 'alternate'])->save();
+
+        $job->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+
+        $this->assertSame(BackupStatus::Uploaded, $backup->refresh()->status);
+        $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $site['website']->id]);
+    }
+
+    public function test_legacy_transfer_without_enqueue_scope_is_a_safe_no_op(): void
+    {
+        $site = $this->backupReadySite();
+        Queue::fake();
+        $backup = app(BackupService::class)->request($site['website'], BackupReason::Manual, 'test', BackupType::Files);
+        $this->pollJobs($site);
+        $this->uploadBackup($site, $backup, ['files' => 'SYNTHETIC FILES'])->assertStatus(202);
+
+        (new TransferBackup($backup->id))->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+
+        $this->assertSame(BackupStatus::Uploaded, $backup->refresh()->status);
         $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $site['website']->id]);
     }
 
@@ -107,14 +179,14 @@ class TransferAndRetentionTest extends TestCase
         $this->uploadBackup($site, $backup, ['files' => 'FILES'])->assertStatus(202);
         Queue::assertPushed(TransferBackup::class);
 
-        $job = new TransferBackup($backup->id);
+        $job = TransferBackup::forBackup($backup);
         $job->withFakeQueueInteractions();
         $job->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
         $job->assertReleased(60);
         $this->assertSame(BackupStatus::Uploaded, $backup->refresh()->status, 'Waiting for another attempt, not verified.');
 
         // Last attempt: the backup fails and says why.
-        $last = (new TransferBackup($backup->id))->withFakeQueueInteractions();
+        $last = TransferBackup::forBackup($backup)->withFakeQueueInteractions();
         $last->job->attempts = 3;
         $last->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
         $backup->refresh();
