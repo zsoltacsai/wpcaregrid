@@ -42,3 +42,18 @@ The initial support policy is approved under OQ-01–OQ-03; it is not a claim th
 ## M14 deliverables
 
 Versioned capability registry; harmless preflight with per-capability `SUPPORTED`, `UNSUPPORTED`, `UNKNOWN`, `BLOCKED`; customer-safe actionable wording; Operator diagnostics with private internals redacted to customer; reproducible compatibility fixtures; no false “all hosts” restore promise. M15 DR audit must independently verify live restore/recovery across the actual pilot host set.
+# M14.3 planning reconciliation — 2026-10-16
+
+This addendum supersedes assumptions below that treat the proposed compatibility matrix as implemented behavior. M14.3 is planning-only; no runtime controls are marked PASS by this audit update.
+
+Verified source is primary `94b9fbafe2c2ab89d81b677af82d0d3d956c0175`; latest verified executable staging is `c5e0edabd8bd1661f72eb20330c5ca2f4375b9c5`. Connector source/package is 0.4.6/API v1; the connected synthetic staging fixture reports 0.4.5 and was left untouched. M14.2 now provides payload bounds, safe outbound behavior, archive/path/race guards and staged restore recovery; M14.3 must consume these primitives, not duplicate them.
+
+Current support disposition remains **PARTIAL / not yet implementation evidence**. Existing Connector heartbeat/pairing facts include Connector/WP/PHP versions, advertised job capabilities, health and polling; inventory includes WooCommerce. Backup manifests already carry DB engine/version/charset/prefix, site Multisite bit, artifact sizes and hashes. `JobRegistry` suppresses DB/full backup/restore capabilities when DB dumping is unavailable. `DiskSpace` has a 50 MiB margin and unknown free space does not prove sufficient capacity. These are useful evidence points, but there is no canonical persisted policy-versioned per-operation capability vector or operation-time compatibility decision.
+
+Confirmed source discrepancy: packaged Connector is 0.4.6 but `config/connector.php` defaults `latest_version` to 0.4.1; staging system status reports 0.4.6, consistent with an environment override. Reconcile this before version-driven customer diagnostics. The 0.4.5 staging fixture is not globally unsupported merely because it is old; classify per capability, and do not grant high-risk PASS where 0.4.6 M14.2 guarantees are required but unproven.
+
+Evidence-based version envelope is not yet established. Connector header declares WordPress >=6.4 and PHP >=8.1; real WordPress test dependency uses WP 7.1.x and PHP ^8.2, while local E2E exercises WP 7.1.2/PHP 8.3.33. These do not establish complete supported ranges. Laravel server PHP 8.4/MySQL CI is not customer-host compatibility evidence. MySQL/MariaDB are the supported Connector DB paths; exact customer version bounds remain fixture-derived.
+
+Approved OQ-02/OQ-03 boundaries remain: detect Multisite, Bedrock/Composer/custom root and unresolved root symlink where possible; block affected mutation/restore when unsupported or root uncertain. A standard single-site fixture is the only initial launch baseline until fixture results prove a wider envelope. Final detailed plan/matrices: [M14.3 plan](m14-3-plan.md), [capability domain](m14-3-capability-domain.md), [support matrix](m14-3-support-matrix.md), [preflight matrix](m14-3-preflight-test-matrix.md), [restore matrix](m14-3-restore-readiness-matrix.md), [fixture matrix](m14-3-fixture-matrix.md).
+
+No customer host was changed. M12 destructive gates remain false. AS-16 warning remains M14.7 carry-forward. Owner decisions OQ-01–03 are already approved; no new Owner decision is needed for the planned implementation.
