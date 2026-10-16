@@ -179,7 +179,7 @@ class HungarianContentTest extends TestCase
         $this->assertStringContainsString('Basic', $pricing);
         $this->assertStringNotContainsString('Monthly', $pricing);
         $this->assertStringNotContainsString('Choose', $pricing);
-        $this->assertStringContainsString('<title>Árak – WP CareGrid</title>', $pricing);
+        $this->assertStringContainsString('<title>WordPress- és WooCommerce-csomagok, árak | WP CareGrid</title>', $pricing);
 
         $checkout = $this->get('/checkout?product=wordpress&plan=business&interval=monthly')->assertOk()->getContent();
         $this->assertStringContainsString('Rendelés véglegesítése', $checkout);

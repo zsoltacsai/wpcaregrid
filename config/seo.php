@@ -8,4 +8,6 @@ return [
     */
     'indexing_enabled' => env('SEO_INDEXING_ENABLED', false),
     'production_host' => env('SEO_INDEXING_PRODUCTION_HOST', ''),
+    // Optional approved same-host social image. Empty means no image tags.
+    'social_image' => env('SEO_SOCIAL_IMAGE_URL', ''),
 ];

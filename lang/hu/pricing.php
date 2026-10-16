@@ -71,9 +71,9 @@ return [
             'secure' => ['name' => 'Secure', 'description' => 'Fokozott biztonság és gyorsabb reagálás.'],
         ],
         'woocommerce' => [
-            'basic' => ['name' => 'Basic', 'description' => 'Alapvető karbantartás kisebb WordPress-oldalakhoz.'],
-            'business' => ['name' => 'Business', 'description' => 'Rendszeres karbantartás céges weboldalakhoz.'],
-            'secure' => ['name' => 'Secure', 'description' => 'Fokozott biztonság és gyorsabb reagálás.'],
+            'basic' => ['name' => 'Basic', 'description' => 'Alapvető karbantartás kisebb WooCommerce-webáruházakhoz.'],
+            'business' => ['name' => 'Business', 'description' => 'Rendszeres karbantartás aktív WooCommerce-webáruházakhoz.'],
+            'secure' => ['name' => 'Secure', 'description' => 'Bővített karbantartás és biztonsági ellenőrzések WooCommerce-webáruházakhoz.'],
         ],
     ],
 

@@ -13,8 +13,8 @@ class HomepageTest extends TestCase
     {
         $response = $this->get('/en/')
             ->assertOk()
-            ->assertSee('<title>WP CareGrid – WordPress Maintenance, Backups &amp; Security</title>', false)
-            ->assertSee('<meta name="description" content="WordPress and WooCommerce maintenance, backups, security checks and functional verification for businesses.">', false)
+            ->assertSee('<title>WordPress Operations and Maintenance | WP CareGrid</title>', false)
+            ->assertSee('<meta name="description" content="Manage WordPress and WooCommerce updates, backups, security checks and site health from one operations platform.">', false)
             ->assertSee('WordPress maintained. Website working.');
 
         $this->assertSame(1, substr_count($response->getContent(), '<h1'));
@@ -71,7 +71,7 @@ class HomepageTest extends TestCase
             'For stores, we check more.',
             'Need more than maintenance?',
             'Up and running in four steps.',
-            'Everything is logged.',
+            'See recorded site activity.',
             'Frequently asked questions',
             'Keep your WordPress maintained.',
             '&copy; '.now()->year.' WP CareGrid',

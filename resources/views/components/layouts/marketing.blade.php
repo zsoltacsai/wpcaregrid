@@ -1,61 +1,51 @@
 {{--
-    seo: optional App\Content\ContentValues of a "seo.*" section (owner-managed
-    title, description, canonical URL, robots, Open Graph text). It only
-    changes this page's own tags. preview: a signed owner draft preview.
+    seo: optional App\Content\ContentValues for this page's localized metadata.
+    preview: a signed Owner draft preview, always rendered noindex.
 --}}
-@props(['title' => null, 'description' => null, 'seo' => null, 'preview' => false, 'indexable' => false, 'localeForm' => null, 'alternates' => []])
+@props(['title' => null, 'description' => null, 'seo' => null, 'preview' => false, 'indexable' => false, 'localeForm' => null, 'alternates' => [], 'structuredDataType' => null, 'faqs' => [], 'faqTitle' => null])
 
 @php
-    $title = filled($seo['title'] ?? null) ? $seo['title'] : $title;
-    $description = filled($seo['description'] ?? null) ? $seo['description'] : $description;
-    $canonicalPath = match (request()->route()?->getName()) {
-        'home' => '/'.(string) request()->route('locale').'/',
-        'pricing' => '/'.(string) request()->route('locale').'/pricing',
-        default => request()->getPathInfo(),
-    };
-    $canonicalFallback = app(\App\Seo\CanonicalUrl::class)->forPath($canonicalPath);
-    $canonicalOverride = $seo['canonical_url'] ?? null;
-    $canonical = $canonicalFallback;
-    if (filled($canonicalOverride)) {
-        if (is_string($canonicalOverride) && hash_equals($canonicalFallback, $canonicalOverride)
-            && \App\Content\SafeUrl::isOwnHost($canonicalOverride)) {
-            $canonical = $canonicalOverride;
-        } elseif (request()->routeIs('home', 'pricing')) {
-            \Illuminate\Support\Facades\Log::warning('Ignored SEO canonical override that does not match the localized route.', [
-                'route' => request()->route()?->getName(),
-                'locale' => app()->getLocale(),
-            ]);
-        }
-    }
-    $mayIndex = app(\App\Seo\IndexingPolicy::class)->allowsPublicMarketingIndexing($indexable, request());
-    $requestedRobots = in_array($seo['robots'] ?? null, \App\Content\Schema\ContentSchema::ROBOTS, true) ? $seo['robots'] : null;
-    $robots = $preview
-        ? 'noindex,nofollow'
-        : (! $mayIndex
-            ? (str_starts_with((string) $requestedRobots, 'noindex,') ? $requestedRobots : 'noindex,nofollow')
-            : ($requestedRobots ?? 'index,follow'));
+    $metadata = app(\App\Seo\MarketingMetadataFactory::class)->make(
+        request(), $title, $description, $seo, $indexable, $preview, $alternates,
+        $structuredDataType, $faqs, $faqTitle,
+    );
 @endphp
 
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
+<html lang="{{ $metadata->locale }}">
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
 
-        <title>{{ $title }}</title>
-        <meta name="description" content="{{ $description }}">
-        <meta name="robots" content="{{ str_replace(',', ', ', $robots) }}">
-        <link rel="canonical" href="{{ $canonical }}">
-        @foreach ($alternates as $language => $url)
+        <title>{{ $metadata->title }}</title>
+        <meta name="description" content="{{ $metadata->description }}">
+        <meta name="robots" content="{{ str_replace(',', ', ', $metadata->robots) }}">
+        <link rel="canonical" href="{{ $metadata->canonical }}">
+        @foreach ($metadata->alternates as $language => $url)
             <link rel="alternate" hreflang="{{ $language }}" href="{{ $url }}">
         @endforeach
 
         <meta property="og:type" content="website">
         <meta property="og:site_name" content="WP CareGrid">
-        <meta property="og:title" content="{{ filled($seo['og_title'] ?? null) ? $seo['og_title'] : $title }}">
-        <meta property="og:description" content="{{ filled($seo['og_description'] ?? null) ? $seo['og_description'] : $description }}">
-        <meta property="og:url" content="{{ $canonical }}">
-        <meta property="og:locale" content="{{ str_replace('-', '_', app()->getLocale()) }}">
+        <meta property="og:title" content="{{ $metadata->openGraphTitle }}">
+        <meta property="og:description" content="{{ $metadata->openGraphDescription }}">
+        <meta property="og:url" content="{{ $metadata->canonical }}">
+        <meta property="og:locale" content="{{ $metadata->openGraphLocale }}">
+        @foreach ($metadata->openGraphAlternates as $locale)
+            <meta property="og:locale:alternate" content="{{ $locale === 'hu' ? 'hu_HU' : 'en_US' }}">
+        @endforeach
+        @if ($metadata->socialImage)
+            <meta property="og:image" content="{{ $metadata->socialImage }}">
+        @endif
+        <meta name="twitter:card" content="{{ $metadata->twitterCard }}">
+        <meta name="twitter:title" content="{{ $metadata->openGraphTitle }}">
+        <meta name="twitter:description" content="{{ $metadata->openGraphDescription }}">
+        @if ($metadata->socialImage)
+            <meta name="twitter:image" content="{{ $metadata->socialImage }}">
+        @endif
+        @if ($metadata->structuredData !== [])
+            <script type="application/ld+json">@json($metadata->structuredData, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)</script>
+        @endif
 
         <meta name="theme-color" content="#F6F6F2">
         <link rel="icon" href="{{ asset('favicon.svg') }}" type="image/svg+xml">

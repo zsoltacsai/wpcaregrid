@@ -27,3 +27,21 @@ Do not use: “100% secure”, “hack-proof”, “guaranteed recovery”, “z
 ## Lightweight control
 
 Keep this version-controlled table as the claim register. Each substantive public claim should link to a test, configuration, operating evidence, or approved product rule; record last review and limitation when claims are revised. Owner-published copy should be included in release review because source defaults are not necessarily the live published version.
+
+## M13.1 built-in copy review
+
+Reviewed with the M13.1 source changes on the implementation branch. Status below applies to built-in HU/EN defaults only; current Owner-published staging content still requires the read-only `marketing:claims-audit` review and authenticated visual review before closure.
+
+| Claim family | Built-in HU/EN status | Evidence / visible location | Limitation / next action |
+|---|---|---|---|
+| WordPress and WooCommerce operations | SUPPORTED | Home and pricing copy; current feature and pricing catalogue | Scope remains plan-specific. |
+| Separate backup storage | QUALIFIED | Localized home FAQ describes configured separate storage | Do not infer provider versioning, immutable retention or universal outage protection. |
+| Backup verification | QUALIFIED | Existing backup verification and readiness implementation | Verification does not guarantee a successful restore. |
+| Recovery after update | QUALIFIED | Localized FAQ describes pre-update backup where supported and environment-dependent recovery options | Hosting compatibility and available recovery point apply. |
+| Activity history | QUALIFIED | Home activity section says supported actions are recorded | Does not claim every action is logged. |
+| Update and security checks | QUALIFIED | Plan catalogue and home copy | Cadence and coverage depend on plan; scan completion warning remains an M14 residual. |
+| GDPR compliance / physical erasure | NOT_PUBLISHED | Prohibited by M12 closure boundary; destructive execution remains off | WAIT_LEGAL / WAIT_ACCOUNTING / WAIT_FACT remain unresolved. |
+| Future backup retention schedules | FUTURE_ONLY | No future GFS schedule added as current copy | M14 implementation and M16 pricing presentation remain dependencies. |
+| Autonomous AI remediation | NOT_PUBLISHED | No live autonomous AI claim added | Future product direction only. |
+
+The source audit is supported by `app/Marketing/MarketingClaimAuditor.php` and the read-only `marketing:claims-audit` command. Pattern matches are review candidates; they do not automatically block or rewrite content.

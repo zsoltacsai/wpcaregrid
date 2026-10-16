@@ -3,8 +3,8 @@
 return [
 
     'meta' => [
-        'pricing_title' => 'Pricing – WP CareGrid',
-        'pricing_description' => 'WordPress and WooCommerce maintenance plans. Pay monthly, or annually and get two months free.',
+        'pricing_title' => 'WordPress and WooCommerce Plans and Pricing | WP CareGrid',
+        'pricing_description' => 'Compare current WordPress and WooCommerce maintenance plans, included features and billing options.',
         'checkout_title' => 'Checkout – WP CareGrid',
         'success_title' => 'Order status – WP CareGrid',
         'cancel_title' => 'Checkout cancelled – WP CareGrid',

@@ -16,8 +16,8 @@
 return [
 
     'meta' => [
-        'title' => 'WP CareGrid – WordPress-karbantartás, mentések és biztonság',
-        'description' => 'WordPress- és WooCommerce-karbantartás, mentések, biztonsági ellenőrzések és funkcionális ellenőrzés vállalkozásoknak.',
+        'title' => 'WordPress-üzemeltetés és karbantartás | WP CareGrid',
+        'description' => 'WordPress- és WooCommerce-frissítések, mentések, biztonsági ellenőrzések és webhelyállapot egyetlen üzemeltetési platformon.',
     ],
 
     'skip_link' => 'Ugrás a tartalomhoz',
@@ -156,8 +156,8 @@ return [
 
     'activity' => [
         'eyebrow' => 'Tevékenységnapló',
-        'title' => 'Minden naplózva van.',
-        'lead' => 'Minden mentést, frissítést és ellenőrzést rögzítünk a dátumával és az eredményével, így látható, mi történt az oldalán, és mikor.',
+        'title' => 'A rögzített webhelytevékenységek áttekinthetők.',
+        'lead' => 'A támogatott mentések, frissítések és ellenőrzések elérhető dátummal és eredménnyel jelennek meg, így áttekintheti a webhelyén végzett műveleteket.',
         'frame_title' => 'Tevékenységnapló',
         'caption' => 'Példa tevékenységnapló-bejegyzések (demóadatok).',
     ],
@@ -174,11 +174,11 @@ return [
             ],
             'broken_update' => [
                 'question' => 'Mi történik, ha egy frissítés elrontja a weboldalamat?',
-                'answer' => 'A frissítések előtt mentés készül. Ha a frissítés utáni ellenőrzés hibát jelez, lehetőség szerint visszaállítjuk az utolsó működő állapotot, és kivizsgáljuk az okát, mielőtt újra megpróbálnánk a frissítést.',
+                'answer' => 'A frissítés előtti mentés ott készül el, ahol ezt a csomag és a webhely beállítása támogatja. Ha az ellenőrzés hibát jelez, áttekintjük az elérhető mentési és helyreállítási lehetőségeket; a visszaállítás a mentéstől és a tárhelykörnyezettől is függ.',
             ],
             'backup_location' => [
                 'question' => 'Hol tárolják a mentéseket?',
-                'answer' => 'A mentéseket távoli helyen, a tárhelyszervertől elkülönítve tároljuk, így a szerverrel kapcsolatos probléma nem érinti a mentéseket.',
+                'answer' => 'A támogatott csomagok mentései a webhely tárhelyétől elkülönített, beállított tárolóba kerülnek. A tárolási hely és a helyreállítási lehetőségek a szolgáltatás beállításaitól függenek; az elkülönített másolat sem garantál minden tárhelykörnyezetben visszaállítást.',
             ],
             'backup_frequency' => [
                 'question' => 'Milyen gyakran készül mentés?',
