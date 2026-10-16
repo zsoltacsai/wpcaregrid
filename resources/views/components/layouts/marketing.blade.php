@@ -5,6 +5,9 @@
 @props(['title' => null, 'description' => null, 'seo' => null, 'preview' => false, 'indexable' => false, 'localeForm' => null, 'alternates' => [], 'structuredDataType' => null, 'faqs' => [], 'faqTitle' => null])
 
 @php
+    $analyticsAvailability = app(\App\Marketing\Analytics\MarketingAnalyticsPolicy::class)->forRequest(request());
+    $analyticsPageFamily = request()->routeIs('home') ? 'home' : (request()->routeIs('pricing') ? 'pricing' : '');
+    $analyticsPageTrackable = $indexable && ! $preview && $analyticsPageFamily !== '';
     $metadata = app(\App\Seo\MarketingMetadataFactory::class)->make(
         request(), $title, $description, $seo, $indexable, $preview, $alternates,
         $structuredDataType, $faqs, $faqTitle,
@@ -55,6 +58,18 @@
         @vite(['resources/css/app.css', 'resources/js/app.js'])
     </head>
     <body class="min-h-screen">
+        <div
+            data-marketing-analytics
+            data-enabled="{{ $analyticsAvailability->enabled && $analyticsPageTrackable ? 'true' : 'false' }}"
+            data-measurement-id="{{ $analyticsAvailability->enabled && $analyticsPageTrackable ? $analyticsAvailability->measurementId : '' }}"
+            data-consent-version="{{ $analyticsAvailability->consentVersion }}"
+            data-page-family="{{ $analyticsPageTrackable ? $analyticsPageFamily : '' }}"
+            data-locale="{{ $metadata->locale }}"
+            data-canonical-path="{{ parse_url($metadata->canonical, PHP_URL_PATH) }}"
+            data-canonical-location="{{ $metadata->canonical }}"
+            hidden
+            aria-hidden="true"
+        ></div>
         <a
             href="#main"
             class="sr-only rounded-sm bg-primary px-4 py-2 text-sm font-medium text-white focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[60]"
@@ -73,6 +88,10 @@
         <main id="main" tabindex="-1" class="overflow-x-clip focus:outline-none">
             {{ $slot }}
         </main>
+
+        @unless ($preview)
+            <x-marketing.analytics-preferences />
+        @endunless
 
         <x-site.footer />
     </body>

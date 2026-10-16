@@ -1,29 +1,23 @@
-# Consent and Measurement Plan
+# M13.2 Consent and Measurement
 
-## Audited state
+## Implemented technical behavior
 
-No cookie banner/consent manager, consent persistence, Google Consent Mode call, GA4/GTM script, or third-party analytics integration was found in source. Existing session and locale cookies are not an analytics consent system. M12 cookie handoff records legal classification as unresolved. Do not infer which cookies legally require consent or choose a legal basis.
+- `MARKETING_ANALYTICS_ENABLED` and the separate `MARKETING_ANALYTICS_POLICY_AUTHORIZED` gate both default to false. An unset or invalid GA4 Measurement ID disables external collection. Configuration alone therefore cannot turn on collection without the separately reviewed policy gate.
+- Server eligibility requires `APP_ENV=production`, enabled configuration, a valid `G-...` ID, and exact agreement among request host, `APP_URL` host, and the configured production SEO host. Only the four indexable marketing pages receive an enabled client context. Staging/local/testing are ineligible.
+- The marketing preference UI is localized in HU/EN, has equally prominent allow/reject choices, a persistent preferences entry point, and a later withdrawal action. Copy explicitly remains pending qualified privacy/legal review; this is not a compliance claim.
+- Consent is stored in local storage as only `{state, version}`. Missing, malformed, blocked, or stale-version state resolves to UNKNOWN and sends nothing. Choice persistence failure fails closed.
+- Google’s library is not requested until a valid explicit grant and eligible production configuration. Before script load the adapter queues denied Google consent defaults; after grant it enables only `analytics_storage`. Advertising categories remain denied. Automatic page views, Google signals, ad personalization, URL passthrough, and referrer data are disabled.
+- Withdrawal stops subsequent app events and updates loaded Google consent to denied. Re-grant updates analytics consent without loading a duplicate script. Previously collected vendor data is outside this control and is not promised to be deleted.
+- The preferences controls and analytics adapter do not gate or alter checkout, authentication, billing, SEO, or other application behavior.
 
-## Safe technical architecture
+## Legal and external boundaries
 
-- Analytics configuration must be empty/disabled by default, especially on local, CI and staging.
-- Load no analytics/advertising scripts before the configured, reviewed consent decision; keep core page, checkout and authentication behavior independent of analytics.
-- Model categories independently where the approved policy requires them. Google Consent Mode has separate `analytics_storage`, `ad_storage`, `ad_user_data`, and `ad_personalization` settings; technical availability does not establish legal requirements.
-- Persist only the minimum consent choice, policy/version reference, timestamp and preference needed by approved policy. Do not store sensitive content or use analytics identifiers as authentication.
-- Withdrawal must update the runtime gate and prevent subsequent optional requests; test reload, navigation and locale change.
-- Script allowlist/CSP and vendor destination inventory should be reviewed by M14 AppSec when third-party tags are introduced.
-- No Owner UI toggle that casually changes legal consent behavior. Policy copy and jurisdictional choices remain reviewed/configured separately.
+- The implementation uses explicit opt-in as the fail-closed engineering default; it does not determine legal requirements, jurisdictional behavior, cookie classifications, or legal basis.
+- **WAIT_LEGAL / qualified review:** final localized wording, purpose/legal basis, regions/policy, analytics data retention, cookie/privacy notice alignment, and whether future server-side aggregate conversion export is permitted.
+- **OWNER_ACTION / EXTERNAL_SETUP:** choose/create the GA4 property and web stream; provide the production Measurement ID through deployment configuration; confirm account ownership/access and production hostname. Without those actions, production collection remains disabled.
+- Google Search Console verification and sitemap submission remain separate external actions. No account or API credential is stored in source.
+- No UTM values, arbitrary query strings, full referrers, click IDs, or checkout identity are persisted or transmitted in M13.2. Attribution is deferred pending review.
 
-## Consent Mode decision boundary
+## Verification
 
-If Google tooling is adopted, implement the default state and updates only after the Owner/legal policy questionnaire is complete. Regional configuration, whether denied-state pings are sent, ad features, and retention are policy decisions. Keep the library adapter capable of passing explicit states but default all optional storage off. Google documentation describes the technical consent types and expressly does not substitute for legal advice: [consent types](https://support.google.com/analytics/answer/12334711?hl=en), [consent management](https://support.google.com/analytics/answer/12329599?hl=en).
-
-## External gates
-
-- **Owner action:** create/select GA4 property and stream, provide measurement ID through secret-safe deployment config, identify Search Console property, grant access, and decide whether production measurement is desired at launch.
-- **Legal review:** consent wording/category and regional behavior; analytics data purpose and retention; cookie notice consistency. M12 `WAIT_LEGAL` remains open as applicable.
-- **No repository secret:** property IDs are config, not source literals; credentials/API tokens are never committed.
-
-## Environment separation
-
-Recommended: analytics entirely disabled on staging and all non-production. If a later explicit test needs a separate staging stream, use separate config, mark debug traffic, and never send customer data. CI uses a fake sink/assertions only. Verify no production Measurement ID in staging markup/network trace.
+Node fake-sink tests cover event validation, consent states/versioning, one page view, pricing events, withdrawal/re-grant, disabled configuration, and late script-load cancellation without network access. Laravel feature tests cover production host/config eligibility, staging and invalid-ID fail-closed behavior, localized copy, and query-free canonical context. The staging deployment has no analytics configuration enabled; final staging verification must confirm that the rendered context and network remain disabled.

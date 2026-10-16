@@ -25,7 +25,13 @@ export default function pricingTable({ productLines, productLine, interval, curr
         },
 
         setInterval(interval) {
+            if (!['monthly', 'annual'].includes(interval) || interval === this.interval) {
+                return;
+            }
             this.interval = interval;
+            window.dispatchEvent(new CustomEvent('caregrid:billing-cycle-selected', {
+                detail: { product_type: this.productLine, billing_interval: interval },
+            }));
         },
 
         /** Arrow/Home/End navigation between tabs, per the WAI-ARIA tabs pattern. */

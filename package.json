@@ -4,7 +4,8 @@
     "type": "module",
     "scripts": {
         "build": "vite build",
-        "dev": "vite"
+        "dev": "vite",
+        "test": "node --test tests/js/marketing-analytics.test.js"
     },
     "devDependencies": {
         "@playwright/test": "^1.63.0",

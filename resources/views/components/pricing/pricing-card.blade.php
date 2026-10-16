@@ -69,6 +69,10 @@
         :variant="$plan->highlighted ? 'primary' : 'secondary'"
         size="lg"
         class="mt-6 w-full"
+        data-marketing-plan
+        data-product-type="{{ $plan->productType->value }}"
+        data-plan-tier="{{ $plan->tier->value }}"
+        x-bind:data-billing-interval="interval"
     >
         {{ $plan->cta ?? __('pricing.choose', ['plan' => $plan->name]) }}<span class="sr-only"> ({{ $plan->productType->label() }})</span>
     </x-ui.button>

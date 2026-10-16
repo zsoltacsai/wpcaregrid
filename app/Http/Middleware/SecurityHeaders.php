@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Marketing\Analytics\MarketingAnalyticsPolicy;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Vite;
@@ -17,6 +18,8 @@ use Symfony\Component\HttpFoundation\Response;
  */
 class SecurityHeaders
 {
+    public function __construct(private readonly MarketingAnalyticsPolicy $analyticsPolicy) {}
+
     public function handle(Request $request, Closure $next): Response
     {
         if (config('http.force_https') && ! $request->isSecure() && ! $request->is('up')) {
@@ -47,21 +50,26 @@ class SecurityHeaders
         }
 
         if ($csp && ! $headers->has('Content-Security-Policy')) {
-            $headers->set($csp === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only', self::policy($nonce));
+            $headers->set($csp === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only', self::policy(
+                $nonce,
+                $this->analyticsPolicy->mayAddGoogleToContentSecurityPolicy($request),
+            ));
         }
 
         return $response;
     }
 
-    public static function policy(?string $nonce): string
+    public static function policy(?string $nonce, bool $allowGoogleAnalytics = false): string
     {
+        $googleScript = $allowGoogleAnalytics ? ' https://www.googletagmanager.com' : '';
+        $googleConnect = $allowGoogleAnalytics ? ' https://www.google-analytics.com https://region1.google-analytics.com https://analytics.google.com' : '';
         $directives = [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-eval'".($nonce ? " 'nonce-{$nonce}'" : ''),
+            "script-src 'self' 'unsafe-eval'".($nonce ? " 'nonce-{$nonce}'" : '').$googleScript,
             "style-src 'self' 'unsafe-inline'",
             "img-src 'self' data:",
             "font-src 'self' data:",
-            "connect-src 'self'",
+            "connect-src 'self'".$googleConnect,
             "form-action 'self' https:",
             "frame-ancestors 'self'",
             "base-uri 'self'",
