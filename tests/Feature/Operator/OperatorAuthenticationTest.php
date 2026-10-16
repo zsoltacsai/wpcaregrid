@@ -28,6 +28,7 @@ class OperatorAuthenticationTest extends TestCase
 
     public function test_operator_signs_in_on_the_operator_guard_and_the_session_is_regenerated(): void
     {
+        config(['session.driver' => 'database']);
         $operator = $this->operatorWithPassword();
         $this->get(route('operator.login'));
         $before = session()->getId();
