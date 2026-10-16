@@ -51,3 +51,9 @@ Source review confirms separate `web`, `owner`, and `operator` session guards; s
 New P0 test gap: `PasswordResetController` rotates the password and `remember_token`, but no application `AuthenticateSession`/`logoutOtherDevices` use or explicit all-session deletion was found. Whether existing sessions survive the reset must be tested across all three guards before calling this a confirmed defect. See [`m14-1-auth-session-reauth-plan.md`](m14-1-auth-session-reauth-plan.md) and [`m14-1-findings.md`](m14-1-findings.md).
 
 Effective session/cache settings are environment-dependent; source defaults (database sessions/cache) do not prove staging’s live topology. Verify read-only in implementation, and test recent-auth binding, session fixation, concurrent reset token use, CSRF, role revocation and shared rate-limit counters on the MySQL process gate.
+
+## M14.1 final validation addendum — 2026-10-16
+
+Password-reset session revocation is now fixed and tested; exact implementation SHA `e4659f30140669c9e229c8e583d35e6bb377a979` is deployed to staging. The required exact-head CI MySQL process/concurrency gate passed 15 tests / 161 assertions. The temporary isolated staging suite passed 261 tests / 3,320 assertions across selected Account, Operator, OwnerAccess, Security and TransferAndRetention coverage. A two-process staging shared-cache counter check passed for the exercised limiter.
+
+The overall RBAC/auth audit remains `PARTIAL`: these results do not document every role × route × direct-service combination, every state-changing route’s CSRF behavior, every recent-auth/stale-role scenario, or complete route-to-limiter coverage. Keep those controls open for M14 audit work; the scanner warning is also still open. No claim of a full penetration test is made.
