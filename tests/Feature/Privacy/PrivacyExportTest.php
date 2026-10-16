@@ -132,6 +132,38 @@ class PrivacyExportTest extends TestCase
         $service->download($artifact->fresh(), $other, $other->user);
     }
 
+    public function test_foreign_signed_export_download_and_link_renewal_have_no_side_effects(): void
+    {
+        $owner = Customer::factory()->withUser()->create();
+        $foreign = Customer::factory()->withUser()->create();
+        $service = app(PrivacyExportService::class);
+        $artifact = $service->request($owner, $owner->user, 'password-123456');
+        $service->generate($artifact->uuid);
+        $artifact->refresh();
+
+        $path = $artifact->expectedStoragePath();
+        $stored = Storage::disk('local')->get($path);
+        $downloadUrl = $service->downloadUrl($artifact);
+        $this->assertIsString($stored);
+        $this->assertNotNull($downloadUrl);
+        $before = [
+            'downloads' => $artifact->download_count,
+            'events' => PrivacyRequestEvent::count(),
+            'artifacts' => PrivacyExportArtifact::count(),
+        ];
+
+        $this->actingAs($foreign->user)->get($downloadUrl)->assertNotFound();
+        $this->actingAs($foreign->user)->post(route('account.privacy.exports.link', $artifact), [
+            'current_password' => 'password-123456',
+        ])->assertNotFound();
+
+        $this->assertSame($before['downloads'], $artifact->fresh()->download_count);
+        $this->assertSame($before['events'], PrivacyRequestEvent::count());
+        $this->assertSame($before['artifacts'], PrivacyExportArtifact::count());
+        $this->assertSame($stored, Storage::disk('local')->get($path));
+        Queue::assertNothingPushed();
+    }
+
     public function test_export_request_requires_recent_password_confirmation(): void
     {
         $customer = Customer::factory()->withUser()->create();

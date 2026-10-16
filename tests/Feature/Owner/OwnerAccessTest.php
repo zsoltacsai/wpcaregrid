@@ -71,8 +71,8 @@ class OwnerAccessTest extends TestCase
     {
         $this->asOwner();
 
-        config(['services.stripe.secret' => 'sk_test_OWNER_WALKTHROUGH_SECRET']);
-        config(['backup.providers.s3.secret' => 'S3_OWNER_WALKTHROUGH_SECRET']);
+        config(['services.stripe.secret' => 'sk_test_unit']);
+        config(['backup.providers.s3.secret' => 'STORAGE_SECRET_VALUE']);
 
         $pages = [
             route('owner.dashboard'),
@@ -88,8 +88,8 @@ class OwnerAccessTest extends TestCase
         foreach ($pages as $page) {
             $response = $this->get($page)->assertOk()->assertHeader('X-Robots-Tag', 'noindex, nofollow');
             $html = $response->getContent();
-            $this->assertStringNotContainsString('sk_test_OWNER_WALKTHROUGH_SECRET', $html, "Secret leaked on {$page}");
-            $this->assertStringNotContainsString('S3_OWNER_WALKTHROUGH_SECRET', $html, "Secret leaked on {$page}");
+            $this->assertStringNotContainsString('sk_test_unit', $html, "Secret leaked on {$page}");
+            $this->assertStringNotContainsString('STORAGE_SECRET_VALUE', $html, "Secret leaked on {$page}");
         }
     }
 
