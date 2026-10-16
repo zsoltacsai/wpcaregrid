@@ -3,7 +3,10 @@
 namespace App\Http\Controllers\Account;
 
 use App\Backups\BackupPolicy;
+use App\Connector\ConnectorError;
 use App\Connector\DisconnectWebsite;
+use App\Connector\JobQueue;
+use App\Connector\JobType;
 use App\Connector\PairingCodes;
 use App\Http\Controllers\Controller;
 use App\Models\Website;
@@ -72,6 +75,7 @@ class WebsiteController extends Controller
             'website' => $website,
             'connector' => $website->activeConnector,
             'inventory' => $website->inventory,
+            'capabilitySnapshot' => $website->capabilitySnapshot,
             'jobs' => $website->jobs()->with('backup')->latest('id')->limit(10)->get(),
             'canPair' => request()->user()->can('pair', $website),
             'latestBackup' => $website->backups()->latest('id')->first(),
@@ -81,6 +85,23 @@ class WebsiteController extends Controller
             'canAdminAccess' => request()->user()->can('adminAccess', $website) && $website->isConnected(),
             'pairingCode' => $this->flashedPairingCode(),
         ]);
+    }
+
+    public function requestCompatibilityCheck(Request $request, Website $website, JobQueue $jobs): RedirectResponse
+    {
+        $this->authorize('view', $website);
+
+        if ($website->jobs()->where('type', JobType::GetInventory)->whereIn('status', ['queued', 'delivered'])->exists()) {
+            return redirect()->route('account.websites.show', $website)->with('status', __('compatibility.check_pending'));
+        }
+
+        try {
+            $jobs->queue($website, JobType::GetInventory, requestedBy: 'customer:'.$request->user()->id);
+        } catch (ConnectorError) {
+            return redirect()->route('account.websites.show', $website)->with('compatibility_error', __('compatibility.check_unavailable'));
+        }
+
+        return redirect()->route('account.websites.show', $website)->with('status', __('compatibility.check_requested'));
     }
 
     /**

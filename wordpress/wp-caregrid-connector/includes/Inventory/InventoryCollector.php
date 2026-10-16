@@ -3,6 +3,7 @@
 namespace WPCareGrid\Connector\Inventory;
 
 use WPCareGrid\Connector\Licenses\LicenseDetector;
+use WPCareGrid\Connector\Compatibility\EnvironmentFacts;
 
 /**
  * What is installed, and what can be updated. Names, versions and update
@@ -22,6 +23,7 @@ final class InventoryCollector
             'plugins' => $this->plugins(),
             'themes' => $this->themes(),
             'woocommerce' => self::woocommerce(),
+            'compatibility' => (new EnvironmentFacts)->collect(),
             'collected_at' => gmdate('c'),
         ];
     }

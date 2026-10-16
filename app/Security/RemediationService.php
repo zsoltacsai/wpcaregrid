@@ -7,6 +7,7 @@ use App\Backups\BackupRefused;
 use App\Backups\BackupService;
 use App\Backups\BackupStatus;
 use App\Backups\BackupType;
+use App\Compatibility\CapabilityReadiness;
 use App\Connector\Capability;
 use App\Connector\ConnectorError;
 use App\Connector\JobQueue;
@@ -120,6 +121,10 @@ class RemediationService
         $website = $finding->website;
         $connector = $website->activeConnector;
         $capability = $type === RemediationType::QuarantineFile || $type === RemediationType::RestoreQuarantinedFile ? Capability::SecurityQuarantine : Capability::SecurityRemediate;
+
+        if ($readiness = app(CapabilityReadiness::class)->refusal($website, $type->jobType())) {
+            return $readiness;
+        }
 
         return match (true) {
             ! $by->hasOperatorPermission(Permission::SecurityRemediate) => 'NOT_AUTHORIZED',

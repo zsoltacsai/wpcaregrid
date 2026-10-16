@@ -90,6 +90,7 @@ Route::middleware(['auth', 'customer', EnsureCurrentLegalAcceptance::class, Ensu
     Route::get('/websites/new', [WebsiteController::class, 'create'])->name('websites.create');
     Route::post('/websites', [WebsiteController::class, 'store'])->middleware('throttle:account')->name('websites.store');
     Route::get('/websites/{website}', [WebsiteController::class, 'show'])->name('websites.show');
+    Route::post('/websites/{website}/compatibility-check', [WebsiteController::class, 'requestCompatibilityCheck'])->middleware('throttle:6,1')->name('websites.compatibility-check');
     Route::post('/websites/{website}/pairing-code', [WebsiteController::class, 'pairingCode'])->middleware('throttle:10,1')->name('websites.pairing-code');
     Route::post('/websites/{website}/disconnect', [WebsiteController::class, 'disconnect'])->middleware('throttle:account')->name('websites.disconnect');
     Route::post('/websites/{website}/admin-access', [AdminAccessController::class, 'maintenance'])->middleware('throttle:admin-access')->name('websites.admin-access.maintenance');

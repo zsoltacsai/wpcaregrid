@@ -7,8 +7,10 @@ use App\AdminAccess\ActorType;
 use App\AdminAccess\AdminAccessService;
 use App\Backups\BackupPolicy;
 use App\Backups\RestoreService;
+use App\Connector\ConnectorError;
 use App\Connector\DisconnectWebsite;
 use App\Connector\HealthStatus;
+use App\Connector\JobQueue;
 use App\Connector\JobType;
 use App\Connector\PairingCodes;
 use App\Http\Controllers\Controller;
@@ -69,6 +71,7 @@ class WebsiteController extends Controller
             'subscription' => $website->subscription,
             'connector' => $website->activeConnector,
             'inventory' => $website->inventory,
+            'capabilitySnapshot' => $website->capabilitySnapshot,
             'connectorState' => $connectorState,
             'security' => $security->summaries([$website])[$website->id],
             'securityConfigured' => $security->isConfigured(),
@@ -89,6 +92,21 @@ class WebsiteController extends Controller
             'events' => $can(Permission::AuditView) ? $website->events()->with('actorUser')->latest('id')->limit(20)->get() : collect(),
             'pairingCode' => $this->flashedPairingCode(),
         ]);
+    }
+
+    public function requestCompatibilityCheck(Request $request, Website $website, JobQueue $jobs): RedirectResponse
+    {
+        if ($website->jobs()->where('type', JobType::GetInventory)->whereIn('status', ['queued', 'delivered'])->exists()) {
+            return redirect()->route('operator.websites.show', $website)->with('status', __('compatibility.check_pending'));
+        }
+
+        try {
+            $jobs->queue($website, JobType::GetInventory, requestedBy: 'operator:'.$request->user()->id);
+        } catch (ConnectorError) {
+            return redirect()->route('operator.websites.show', $website)->with('compatibility_error', __('compatibility.check_unavailable'));
+        }
+
+        return redirect()->route('operator.websites.show', $website)->with('status', __('compatibility.check_requested'));
     }
 
     /** Re-pair: a new one-time pairing code, shown once. The current connector keeps working until it is used. */

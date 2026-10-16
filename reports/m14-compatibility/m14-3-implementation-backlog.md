@@ -2,7 +2,7 @@
 
 | ID | Priority | Capability | Dependency | Files/systems | Expected change | Migration? | Connector/version/API | Fixture | Staging check | Rollback | Acceptance |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| M143-01 | P0 | policy/version facts | M14.1/2 closed | `config/connector.php`, Connector version tests, policy | reconcile 0.4.1 default drift; canonical policy/reason/status enums | no | no protocol change | version matrix incl 0.4.5/0.4.6 | system/version status readback | revert config/evaluator integration | source default and staging override consistent; tests distinguish stale/old |
+| M143-01 | P0 | policy/version facts | M14.1/2 closed | `config/connector.php`, Connector version tests, policy | verify canonical release metadata relationship; add policy/reason/status enums | no | no protocol change | version matrix incl 0.4.5/0.4.6/0.4.7 | system/version status readback | revert evaluator integration | config source and package release remain consistent; classify old/current/newer per capability |
 | M143-02 | P0 | fact contract | M143-01 | heartbeat/inventory, validation bounds | additive factual layout/Multisite/runtime/disk/DB/scheduling evidence; no support verdict | no | likely 0.4.7, API v1 additive | malformed/missing/new-old payloads | synthetic site heartbeat only | old Connector maps absent facts UNKNOWN | no unbounded or secret data |
 | M143-03 | P0 | capability domain | M143-01/02 | one evaluator/service + persistence | eight capability vector, versioned policy, UNKNOWN-safe latest snapshot and bounded transition history | likely one schema migration | additive payload only | unit truth tables | diagnostics show version/time | disable reads; snapshots harmless | migration never PASSes a site |
 | M143-04 | P0 | harmless preflight | M143-02/03 | Connector safe probes, server collector | onboarding/deep/operation check cost tiers; read-only metadata and disposable temp probe only | uses M143-03 storage | likely 0.4.7 | standard, missing fact/ext, filesystem | no customer site; disposable synthetic only | disable deep preflight | no live-content probe mutation; bounded checks |
@@ -14,4 +14,14 @@
 
 ## Review and release
 
-Expected 3 focused implementation PRs; each exact-head requires existing five mandatory CI jobs, with Connector SQLite/MySQL and MySQL/process coverage where applicable. If executable source changes, guarded exact-SHA staging deploy and only synthetic operation validation are required. M14.3 does not merge/deploy as part of this planning task.
+### Execution status — 2026-10-17
+
+The implementation candidate is on `codex/m14-3-capability-preflight`, based on planning merge `80642e369e86e022f2a2f9d32b6b54d4f2eb28a9`. Eight capability values, PASS/WARN/BLOCK/UNKNOWN, policy/evaluator versioning, snapshot persistence and transition history, bounded factual Connector 0.4.7 inventory, customer/Operator diagnostics, and operation gates are implemented in the candidate. This is not closure evidence until exact-head CI and guarded staging validation pass.
+
+Local evidence to date: focused Laravel compatibility/job/restore/admin/package suites pass at 80 tests / 702 assertions; changed-file Pint passes 24 files; Connector SQLite real-WordPress integration passes 210 tests / 1,442 assertions with 25 environment-dependent skips. The server SQLite full suite was stopped at 488/1,332 because WSL execution on the Windows-mounted worktree was unusually slow; exact-head CI must run it to completion. Server MySQL/MariaDB, Connector MySQL/MariaDB, exact-head CI, and staging checks remain pending.
+
+High-impact Connector actions require a capability snapshot checked within `COMPATIBILITY_OPERATION_TTL_SECONDS` (default 300 seconds); the delivery path checks again. An older result fails closed and requires a fresh compatibility inventory request before retry. A queued operation cannot use a snapshot that aged beyond this window. The ordinary inventory/compatibility request is the preflight mechanism; it does not itself dispatch a site mutation.
+
+The release workflow now covers server SQLite/MySQL/MariaDB and Connector SQLite on PHP 8.2/8.3/8.4 plus Connector MySQL 8.4 and MariaDB 10.11. Pending green exact CI is the evidence gate for those tested branches; the Connector-declared PHP 8.1 and WordPress 6.4 minima remain declared-but-not-fixture-tested and therefore are not promoted to tested support.
+
+M14-08 and M14-09 remain OPEN pending the complete fixture matrix, exact-head CI, staging validation, cleanup, health and gate readback. M14-12 remains M14.4; M14-15 remains M14.7; M14-16 remains overall M14 closure. No production deployment or destructive-gate change is authorized by this work.

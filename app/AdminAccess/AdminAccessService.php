@@ -2,6 +2,7 @@
 
 namespace App\AdminAccess;
 
+use App\Compatibility\CapabilityReadiness;
 use App\Connector\Capability;
 use App\Connector\ConnectorError;
 use App\Connector\JobStatus;
@@ -80,7 +81,7 @@ class AdminAccessService
     {
         $connector = $website->activeConnector;
 
-        return match (true) {
+        $refusal = match (true) {
             // Customers only for their own websites (the policy checks this too).
             $actor === ActorType::Customer && ($user?->customer === null || $user->customer->id !== $website->customer_id || $user->isOperator()) => 'NOT_AUTHORIZED',
             // Operators: an operator login with the permission for this level, checked
@@ -97,6 +98,8 @@ class AdminAccessService
             $website->adminAccessRequests()->where('created_at', '>', now()->subHour())->count() >= (int) config('admin_access.max_requests_per_hour') => 'TOO_MANY_REQUESTS',
             default => null,
         };
+
+        return $refusal ?? app(CapabilityReadiness::class)->refusal($website, JobType::CreateAdminSession);
     }
 
     /**

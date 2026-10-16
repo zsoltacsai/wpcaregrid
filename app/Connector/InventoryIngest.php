@@ -2,6 +2,7 @@
 
 namespace App\Connector;
 
+use App\Compatibility\CapabilitySnapshotStore;
 use App\Models\Connector;
 use App\Models\WebsiteInventory;
 use App\Websites\AuditLog;
@@ -53,6 +54,31 @@ final class InventoryIngest
             "{$prefix}woocommerce.active" => ['required_with:'.$prefix.'woocommerce', 'boolean'],
             "{$prefix}woocommerce.version" => $version,
             "{$prefix}collected_at" => ['nullable', 'date'],
+            "{$prefix}compatibility" => ['nullable', 'array:schema_version,multisite,layout,root_symlink,filesystem,disk_free_bytes,database,extensions,php_limits,cron'],
+            "{$prefix}compatibility.schema_version" => ['required_with:'.$prefix.'compatibility', 'integer', 'min:1', 'max:10'],
+            "{$prefix}compatibility.multisite" => ['required_with:'.$prefix.'compatibility', 'boolean'],
+            "{$prefix}compatibility.layout" => ['required_with:'.$prefix.'compatibility', Rule::in(['standard', 'multisite', 'bedrock', 'custom', 'unknown'])],
+            "{$prefix}compatibility.root_symlink" => ['required_with:'.$prefix.'compatibility', 'boolean'],
+            "{$prefix}compatibility.filesystem" => ['required_with:'.$prefix.'compatibility', 'array:read_root,read_content,writable_root,writable_content,write_probe,rename_probe'],
+            "{$prefix}compatibility.filesystem.read_root" => ['required_with:'.$prefix.'compatibility', 'boolean'],
+            "{$prefix}compatibility.filesystem.read_content" => ['required_with:'.$prefix.'compatibility', 'boolean'],
+            "{$prefix}compatibility.filesystem.writable_root" => ['nullable', 'boolean'],
+            "{$prefix}compatibility.filesystem.writable_content" => ['nullable', 'boolean'],
+            "{$prefix}compatibility.filesystem.write_probe" => ['nullable', 'boolean'],
+            "{$prefix}compatibility.filesystem.rename_probe" => ['nullable', 'boolean'],
+            "{$prefix}compatibility.disk_free_bytes" => ['nullable', 'integer', 'min:0', 'max:'.PHP_INT_MAX],
+            "{$prefix}compatibility.database" => ['required_with:'.$prefix.'compatibility', 'array:engine,version,charset,standard_prefix'],
+            "{$prefix}compatibility.database.engine" => ['required_with:'.$prefix.'compatibility', Rule::in(['mysql', 'mariadb', 'unsupported', 'unknown'])],
+            "{$prefix}compatibility.database.version" => ['nullable', 'string', 'max:64'],
+            "{$prefix}compatibility.database.charset" => ['nullable', 'string', 'max:32'],
+            "{$prefix}compatibility.database.standard_prefix" => ['nullable', 'boolean'],
+            "{$prefix}compatibility.extensions" => ['required_with:'.$prefix.'compatibility', 'array:curl,openssl,sodium,zlib,mysqli'],
+            "{$prefix}compatibility.extensions.*" => ['boolean'],
+            "{$prefix}compatibility.php_limits" => ['nullable', 'array:memory_bytes,max_execution_seconds'],
+            "{$prefix}compatibility.php_limits.memory_bytes" => ['nullable', 'integer', 'min:0', 'max:'.PHP_INT_MAX],
+            "{$prefix}compatibility.php_limits.max_execution_seconds" => ['nullable', 'integer', 'min:0', 'max:86400'],
+            "{$prefix}compatibility.cron" => ['nullable', 'array:wp_cron_disabled'],
+            "{$prefix}compatibility.cron.wp_cron_disabled" => ['nullable', 'boolean'],
         ];
     }
 
@@ -77,6 +103,8 @@ final class InventoryIngest
         $connector->update(['last_inventory_at' => now()]);
         $website->update(['wordpress_version' => $data['core']['version'], 'php_version' => $data['php_version']]);
         $this->recordNewlyExpired($record, $previous);
+
+        app(CapabilitySnapshotStore::class)->refresh($website->fresh(), $connector->fresh(), $data['compatibility'] ?? null);
 
         return $record;
     }

@@ -3,6 +3,7 @@
 namespace App\Connector;
 
 use App\Backups\PreUpdateBackups;
+use App\Compatibility\CapabilityReadiness;
 use App\Models\Connector;
 use App\Models\Website;
 use App\Models\WebsiteJob;
@@ -144,16 +145,18 @@ final class JobQueue
         $capability = $type->requiredCapability($payload);
 
         if ($website->syntheticFixture()->exists()) {
-            return match (true) {
+            $refusal = match (true) {
                 ! $connector?->isActive() || $connector->website_id !== $website->id => 'website is not connected',
                 ! app(SyntheticFixturePolicy::class)->jobAllowed($website, $type) => 'synthetic test job is not enabled for this site',
                 ! $connector->can($capability) => "connector does not support {$capability->value}",
                 $type === JobType::Restore && $connector->presence() !== Presence::Connected => 'connector is not currently reporting in',
                 default => null,
             };
+
+            return $refusal ?? app(CapabilityReadiness::class)->refusal($website, $type, $payload);
         }
 
-        return match (true) {
+        $refusal = match (true) {
             ! $connector?->isActive() || $connector->website_id !== $website->id => 'website is not connected',
             ! $website->allowsServiceOperations($type === JobType::Restore ? 'restore' : 'service') => 'subscription is not active',
             ! $connector->can($capability) => "connector does not support {$capability->value}",
@@ -170,5 +173,7 @@ final class JobQueue
             in_array($type, JobType::securityChanges(), true) && $type !== JobType::SecurityRestoreQuarantine && ! config('security.remediation.enabled') => 'security remediation is not enabled',
             default => null,
         };
+
+        return $refusal ?? app(CapabilityReadiness::class)->refusal($website, $type, $payload);
     }
 }

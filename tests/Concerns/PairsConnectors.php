@@ -2,6 +2,7 @@
 
 namespace Tests\Concerns;
 
+use App\Compatibility\CapabilitySnapshotStore;
 use App\Connector\PairingCodes;
 use App\Models\Customer;
 use App\Models\Subscription;
@@ -40,8 +41,25 @@ trait PairsConnectors
         $website = $this->websiteWithPlan($url);
         $code = app(PairingCodes::class)->issue($website);
         $credential = $this->pair($code, $url)->assertCreated()->json('credential');
+        $website->activeConnector->update(['connector_version' => config('connector.latest_version')]);
+        $this->refreshCapabilityEvidence($website->fresh());
 
         return ['website' => $website->refresh(), 'credential' => $credential];
+    }
+
+    protected function refreshCapabilityEvidence(Website $website, ?array $facts = null): void
+    {
+        $facts ??= [
+            'schema_version' => 1, 'multisite' => false, 'layout' => 'standard', 'root_symlink' => false,
+            'filesystem' => ['read_root' => true, 'read_content' => true, 'writable_root' => true, 'writable_content' => true, 'write_probe' => true, 'rename_probe' => true],
+            'disk_free_bytes' => 1073741824,
+            'database' => ['engine' => 'mysql', 'version' => '8.4.0', 'charset' => 'utf8mb4', 'standard_prefix' => true],
+            'extensions' => ['curl' => true, 'openssl' => true, 'sodium' => true, 'zlib' => true, 'mysqli' => true],
+            'php_limits' => ['memory_bytes' => 268435456, 'max_execution_seconds' => 120],
+            'cron' => ['wp_cron_disabled' => false],
+        ];
+
+        app(CapabilitySnapshotStore::class)->refresh($website->fresh(), $website->activeConnector()->first(), $facts);
     }
 
     /** @param  array{website: Website, credential: string}  $site */
@@ -76,6 +94,15 @@ trait PairsConnectors
                 ['stylesheet' => 'twentytwentyfive', 'name' => 'Twenty Twenty-Five', 'version' => '1.2', 'active' => true, 'update_available' => false],
             ],
             'woocommerce' => ['installed' => false, 'active' => false, 'version' => null],
+            'compatibility' => [
+                'schema_version' => 1, 'multisite' => false, 'layout' => 'standard', 'root_symlink' => false,
+                'filesystem' => ['read_root' => true, 'read_content' => true, 'writable_root' => true, 'writable_content' => true, 'write_probe' => true, 'rename_probe' => true],
+                'disk_free_bytes' => 1073741824,
+                'database' => ['engine' => 'mysql', 'version' => '8.4.0', 'charset' => 'utf8mb4', 'standard_prefix' => true],
+                'extensions' => ['curl' => true, 'openssl' => true, 'sodium' => true, 'zlib' => true, 'mysqli' => true],
+                'php_limits' => ['memory_bytes' => 268435456, 'max_execution_seconds' => 120],
+                'cron' => ['wp_cron_disabled' => false],
+            ],
         ];
     }
 }

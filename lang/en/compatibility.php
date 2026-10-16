@@ -1,0 +1,35 @@
+<?php
+
+return [
+    'title' => 'Site capability checks',
+    'lead' => 'These checks describe which operations current site evidence supports. They do not guarantee recovery or authorize an operation.',
+    'status' => ['PASS' => 'Ready', 'WARN' => 'Ready with a note', 'BLOCK' => 'Not available', 'UNKNOWN' => 'Check needed'],
+    'capabilities' => [
+        'CONNECTION_READY' => 'Connector connection', 'MONITORING_READY' => 'Monitoring', 'UPDATE_READY' => 'Updates',
+        'BACKUP_READY' => 'Backups', 'RESTORE_READY' => 'Restore readiness', 'SECURITY_SCAN_READY' => 'Security scanning capability',
+        'SECURITY_REMEDIATION_READY' => 'Security remediation', 'ADMIN_ACCESS_READY' => 'Temporary admin access',
+    ],
+    'reasons' => [
+        'CHECK_REQUIRED' => 'A current check is required.', 'FACT_STALE' => 'The last check is out of date. Run a new check.',
+        'CONNECTOR_OFFLINE' => 'The site Connector is not currently reporting in.', 'CONNECTOR_UNSUPPORTED' => 'Update the site Connector to a supported release.',
+        'CONNECTOR_UPDATE_RECOMMENDED' => 'A newer Connector release is available.', 'CONNECTOR_NEWER_UNKNOWN' => 'This newer Connector version has not been evaluated yet.',
+        'RUNTIME_VERSION_UNSUPPORTED' => 'This PHP or WordPress version is below the declared minimum.', 'RUNTIME_VERSION_UNTESTED' => 'This PHP or WordPress version has not been covered by the current compatibility fixtures.',
+        'PHP_EXTENSION_MISSING' => 'A PHP extension required for this operation is unavailable.',
+        'CONNECTOR_CAPABILITY_MISSING' => 'The installed Connector does not provide this operation.', 'FACT_MISSING' => 'The site has not provided the information needed for this check.',
+        'FACT_STALE' => 'The site information needs to be checked again.', 'FACT_MALFORMED' => 'The site information could not be validated.',
+        'MULTISITE_UNSUPPORTED' => 'This operation is not supported for WordPress Multisite.', 'CUSTOM_LAYOUT_UNSUPPORTED' => 'This site layout is not supported for this operation.',
+        'CANONICAL_ROOT_UNKNOWN' => 'The site file layout could not be confirmed.', 'ROOT_SYMLINK_UNRESOLVED' => 'The site file layout could not be safely confirmed.',
+        'FILESYSTEM_READ_UNAVAILABLE' => 'Required site files could not be read.', 'FILESYSTEM_WRITE_UNAVAILABLE' => 'Required site files are not writable.',
+        'FILESYSTEM_RENAME_UNAVAILABLE' => 'Required file replacement could not be confirmed.', 'DISK_SPACE_INSUFFICIENT' => 'Available temporary storage is insufficient.',
+        'DISK_SPACE_UNKNOWN' => 'Available temporary storage could not be checked.', 'DB_ENGINE_UNSUPPORTED' => 'The database engine is not supported for this operation.',
+        'DB_VERSION_UNKNOWN' => 'Database compatibility could not be confirmed.', 'BACKUP_NOT_VERIFIED' => 'A verified recovery point is not available.',
+        'BACKUP_OBJECT_MISSING' => 'A required recovery file is missing.', 'RESTORE_CONFLICT' => 'Another site operation is in progress.',
+        'SCANNER_UNAVAILABLE' => 'The required scanning capability is unavailable.', 'SCANNER_NOT_RUN' => 'A scan has not been run.',
+        'SAFETY_GATE_CLOSED' => 'A required safety check is not satisfied.',
+    ],
+    'last_checked' => 'Last checked', 'not_checked' => 'Not checked', 'operator_details' => 'Technical details',
+    'connector_version' => 'Connector version', 'wordpress_version' => 'WordPress version', 'php_version' => 'PHP version',
+    'policy_version' => 'Policy / evaluator', 'layout' => 'Detected layout', 'disk_free' => 'Available temporary storage',
+    'request_check' => 'Run site compatibility check', 'check_requested' => 'A site check has been queued.',
+    'check_pending' => 'A site check is already waiting for the Connector.', 'check_unavailable' => 'The check could not be queued. Confirm the Connector is connected and the service is active.',
+];

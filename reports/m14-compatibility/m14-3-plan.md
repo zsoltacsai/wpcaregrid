@@ -54,6 +54,10 @@ Unit tests for fact validation and capability rules; feature tests for route/job
 
 ## Boundaries / handoffs
 
+### Superseding implementation-source reconciliation
+
+The planning text above that describes `connector.latest_version` defaulting to `0.4.1` is superseded. Inspection of the authoritative primary and merged planning SHA shows that `config/connector.php` already reads the version from the canonical Connector `release.json`, with no environment override. F01 was a stale-source finding, not runtime drift. M14.3 should test the single-source relationship and should not change runtime version configuration.
+
 - M14.4 owns commercial backup/GFS entitlements and extension-only retention controls; M14.3 only reports backup capability/readiness.
 - M14.7 owns completed scanner campaign. `SECURITY_SCAN_READY` is not `SCAN_COMPLETED` and never means no vulnerabilities.
 - M15 independently validates actual pilot hosts and DR; fixture success is not production-host evidence.
