@@ -59,7 +59,9 @@ class SecurityVisibilityAndPermissionsTest extends TestCase
         $site = $this->securitySite($url);
         $scan = $this->requestScan($site, ScanType::Full);
         $this->reportScan($site, $scan, [$this->suspiciousFile('wp-content/uploads/2026/secret-shell.php', 'high', 'medium', 'PHP_REQUEST_EXECUTION', str_repeat('f', 64))]);
-        $file = SecurityFinding::where('type', 'suspicious_file')->sole();
+        $file = SecurityFinding::where('website_id', $site['website']->id)
+            ->where('type', 'suspicious_file')
+            ->sole();
         app(FindingDecisions::class)->decide($file, FindingStatus::Confirmed, $this->operator([Permission::SecurityManage]), 'OPERATOR-NOTE-customer-must-not-see');
         $incident = app(IncidentService::class)->open($site['website'], 'INCIDENT-TITLE-internal', null, 'operator:1', [$file]);
         app(IncidentService::class)->note($incident, 'operator:1', 'INCIDENT-NOTE-internal');
