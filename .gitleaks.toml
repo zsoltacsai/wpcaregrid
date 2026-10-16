@@ -22,6 +22,8 @@ regexes = [
     '''whsec_m11_fixture''',
   '''AKIA_STORAGE_KEY''',
   '''STORAGE_SECRET_VALUE''',
+  # Synthetic Owner Console walkthrough marker from M14.1 tests; exact value only.
+  '''S3_OWNER_WALKTHROUGH_SECRET''',
   '''SMTP_PASSWORD_VALUE''',
   '''FEED_KEY_VALUE''',
   # Connector test harness (wordpress/tests): fixed pairing credential and
