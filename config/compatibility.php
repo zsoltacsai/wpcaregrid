@@ -10,7 +10,7 @@ return [
     'minimum_read_connector' => env('COMPATIBILITY_MINIMUM_READ_CONNECTOR', '0.4.5'),
     'minimum_mutating_connector' => env('COMPATIBILITY_MINIMUM_MUTATING_CONNECTOR', '0.4.6'),
     'declared_minimum_php' => '8.1',
-    'tested_php_branches' => ['8.2', '8.3', '8.4'],
+    'tested_php_branches' => ['8.3', '8.4'],
     'declared_minimum_wordpress' => '6.4',
     'tested_wordpress_branches' => ['7.1'],
     'tested_mysql_branches' => ['8.4'],

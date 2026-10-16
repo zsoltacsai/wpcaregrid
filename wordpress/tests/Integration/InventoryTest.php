@@ -2,6 +2,7 @@
 
 namespace WPCareGrid\Connector\Tests\Integration;
 
+use WPCareGrid\Connector\Compatibility\EnvironmentFacts;
 use WPCareGrid\Connector\Tests\Support\TestCase;
 
 final class InventoryTest extends TestCase
@@ -62,10 +63,10 @@ final class InventoryTest extends TestCase
         try {
             $canonicalRoot = realpath($root);
             $this->assertIsString($canonicalRoot);
-            $this->assertSame('standard', \WPCareGrid\Connector\Compatibility\EnvironmentFacts::classifyLayout($canonicalRoot, realpath($root.'/wp-content') ?: '', false));
-            $this->assertSame('custom', \WPCareGrid\Connector\Compatibility\EnvironmentFacts::classifyLayout($canonicalRoot, realpath($root.'/separate-content') ?: '', false));
-            $this->assertSame('multisite', \WPCareGrid\Connector\Compatibility\EnvironmentFacts::classifyLayout($canonicalRoot, realpath($root.'/wp-content') ?: '', true));
-            $this->assertSame('unknown', \WPCareGrid\Connector\Compatibility\EnvironmentFacts::classifyLayout('', '', false));
+            $this->assertSame('standard', EnvironmentFacts::classifyLayout($canonicalRoot, realpath($root.'/wp-content') ?: '', false));
+            $this->assertSame('custom', EnvironmentFacts::classifyLayout($canonicalRoot, realpath($root.'/separate-content') ?: '', false));
+            $this->assertSame('multisite', EnvironmentFacts::classifyLayout($canonicalRoot, realpath($root.'/wp-content') ?: '', true));
+            $this->assertSame('unknown', EnvironmentFacts::classifyLayout('', '', false));
         } finally {
             rmdir($root.'/wp-content');
             rmdir($root.'/separate-content');
