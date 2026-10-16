@@ -14,3 +14,7 @@ M14.1 may close only when all applicable criteria have current evidence on the e
 - Updated audit matrices distinguish tested PASS from source-observed PARTIAL and carry-forward work.
 
 Not M14.1 closure claims: full pentest, full dependency/scanner campaign, deep Connector SSRF/payload/credential audits, filesystem/archive safety, production DR audit, M15 pilot authorization or M17 readiness.
+
+## M14.1 final closure disposition — 2026-10-16
+
+Focused implementation, exact-SHA CI and guarded staging validation are complete on `e4659f30140669c9e229c8e583d35e6bb377a979`; see [`m14-1-closure-report.md`](../m14-security/m14-1-closure-report.md). Disposition is **B — functionally complete, non-critical audit residual remains**. The password-reset session revocation and stale queued backup-scope findings are fixed and validated. The exhaustive route-to-control mapping and two-tenant audit are not complete, and the staging security scanner still reports no completed scan. These residuals remain M14 work; no full AppSec/tenant audit or M14 closure is claimed.
