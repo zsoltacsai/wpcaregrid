@@ -16,3 +16,7 @@ Current signature verification, mode guard, unique event ID, encrypted inbox, du
 ## Implementation evidence update — 2026-10-16
 
 The verifier now sets Stripe's 300-second timestamp tolerance explicitly and rejects payloads over 2 MiB; the controller also rejects a declared oversized body before reading it and maps oversize to HTTP 413. Regressions verify stale signed events and oversized raw/declared bodies are rejected before inbox insertion, and a single-secret cutover rejects the old secret while accepting the newly configured secret. Existing signature, TEST/LIVE mode, unique inbox, transactional idempotency, redrive and MySQL concurrency coverage remains. Focused/full local SQLite tests pass. Full server MySQL/process CI and isolated Stripe TEST staging validation remain pending. No Stripe LIVE endpoint or charge was used.
+
+## Final validation supersession — 2026-10-16
+
+Server MySQL CI passed 1,323 tests / 19,697 assertions; the required process/concurrency gate passed 15 / 161; exact-head five-job CI was green. Private staging synthetic suites passed with Stripe keys absent and no live Stripe mutation. Earlier pending-CI wording is historical; no Stripe TEST dashboard rotation or external charge was performed. See [closure report](m14-2-closure-report.md).

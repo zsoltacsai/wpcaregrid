@@ -14,3 +14,7 @@ Source search found six relevant Connector/plugin HTTP request call sites: centr
 ## Implementation evidence update — 2026-10-16
 
 Current Connector egress remains separated by trust class: the API client uses the deployment-configured `WP_CAREGRID_API_URL`, requires HTTPS except an explicit loopback development opt-in, verifies TLS, sends the bearer only on that request, sets redirects to zero and bounds response size; homepage/REST probes target the configured same-site URL without a bearer and now set redirects to zero plus a 1 MiB response cap; checksum and clean-source calls use fixed WordPress.org HTTPS endpoints, explicit TLS verification, zero redirects and 10 MiB caps. Fake-HTTP tests assert response caps and no redirects. Laravel website probes retain `PublicOrigin` address resolution and `SafeRedirect` validation. No real hostile DNS, private-address or cloud-metadata connection was attempted; source/fake-transport evidence is not a live network test. Exact CI and staging checks remain pending.
+
+## Final validation supersession — 2026-10-16
+
+Exact-head CI run `38961580730` passed and the isolated exact-source staging synthetic suites completed; post-deploy health was green. There was no hostile external DNS/private-network probe and no real provider call. The earlier pending-CI wording is historical and superseded by [closure report](m14-2-closure-report.md); the live-network-probe limitation remains explicit.

@@ -17,3 +17,7 @@ Disposable WordPress fixtures must test POSIX/Windows traversal, absolute and lo
 ## Implementation evidence update — 2026-10-16
 
 Writer and reader now share explicit archive ceilings for entry count (100,000), encoded size (64 GiB), expanded size (60 GiB), member size (1 GiB), path depth (64), total path components (300,000) and PAX metadata (8 MiB). Writer budget failures abort and remove partial output. Restore extraction rejects unsafe staging roots/components, creates files exclusively, enforces private modes and rechecks destination containment/symlinks immediately before live rename. Tests cover configured over-limit boundaries, exact and case collisions, file/child collisions, control characters, and a parent changed to an outside symlink after preflight with no outside write. Full WordPress SQLite/MySQL suites pass. Resource-specific disk-full/permission variants remain covered by existing tests where supported; no arbitrary Windows/hosting claim is made. Two opt-in 900-second hard-kill tests are documented skips.
+
+## Final validation evidence — 2026-10-16
+
+Exact-head CI run `38961580730`, staging deployment, post-deploy health, gate readback, and verified cleanup are complete; see [M14.2 closure report](m14-2-closure-report.md). Two opt-in 900-second worker-kill tests remain documented skips. No unsupported hosting or Windows guarantee is claimed.

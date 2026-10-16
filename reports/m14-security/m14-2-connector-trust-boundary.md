@@ -20,3 +20,7 @@
 4. Recheck tenant, Connector, job, backup and restore relationships at effect time.
 5. Customer storage credentials never cross the Connector boundary.
 6. Unknown filesystem/provider capability fails closed for the affected mutation.
+
+## Final evidence cross-reference — 2026-10-16
+
+The deployed Connector package release is 0.4.6, API v1. CI and the isolated synthetic staging results are in [M14.2 closure report](m14-2-closure-report.md). The connected synthetic M8 staging fixture still reports 0.4.5; it was deliberately not re-paired without a safe reversible WordPress admin path. No live credential was exposed or rotated.

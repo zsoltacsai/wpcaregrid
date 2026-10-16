@@ -63,3 +63,9 @@ Ordered M14.2 batches are credential/pairing lifecycle; request scope and payloa
 ## M14.2 implementation continuation — 2026-10-16
 
 M14-04 through M14-07 are now in implementation validation on the fresh branch based on planning-merged primary `bec597c76e668a81c699171c684c0e5e8866d14a`. Server/plugin payload bounding, Connector egress response/redirect handling, Stripe payload/timestamp controls and archive/resource/restore-path hardening have code and local regression coverage. Local full Laravel SQLite and Connector WordPress SQLite/MySQL results are recorded in `reports/m14-security/m14-2-findings.md`. Do not mark M14.2 complete until exact-head required CI (including server MySQL and process/concurrency), merge, guarded exact-SHA staging deploy, isolated synthetic validation, post-deploy health/gate readback, cleanup verification and final closure report are complete. M14-08 and later work remain out of scope; AS-16 remains M14.7_CARRY_FORWARD.
+
+## M14.2 completion reconciliation — 2026-10-16
+
+M14.2 implementation and its isolated validation are closed with the staging paired-site version limitation documented; see [M14.2 closure report](../m14-security/m14-2-closure-report.md). PR #90 is merged; current primary and executable staging SHA are `c5e0edabd8bd1661f72eb20330c5ca2f4375b9c5`; exact-head CI `38961580730` passed. Connector release 0.4.6 passed the real WordPress SQLite/MySQL jobs. Staging synthetic backend tests passed 98 / 808, test runtime/schema/user were removed and verified absent, and all six M12 gates remained false. No unsafe re-pair of the existing synthetic WordPress site was attempted.
+
+M14.3 hosting compatibility/preflight and M14.7 scan/independent security review remain future scope. The warning “No completed security scan yet” is preserved. No M15 or production activity is authorized by this closure.
