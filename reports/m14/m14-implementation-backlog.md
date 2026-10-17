@@ -100,3 +100,7 @@ The target matrix remains exactly as approved and is not an active/public promis
 ## M14-13 implementation status — 2026-10-17
 
 M14.5 is implemented in PRs #102 and #103 and deployed to staging at `3debba99c677b68465cf439733f440442fbd0f22`. Exact-head CI runs 39017126211 and 39020595623 passed 7/7; merged-SHA CI 39021792985 passed 7/7 including MySQL/process concurrency. Registry/credential state, generation-bound metadata health probes, Owner security and zero-egress tests are complete for this milestone. No AI product feature, provider default, feature authorization or customer-data transfer is enabled. Closure documentation is in `reports/m14-ai/m14-5-closure-report.md`. M14.6, M14.7 and M14.8 remain separate work.
+
+## M14-10 staging evidence and documentation status — 2026-10-17
+
+The owner reports successful exact-SHA staging deployment of `be427a17320ca7aba9ec292d2c288813df5f7c07` from baseline `3debba99c677b68465cf439733f440442fbd0f22`; merged-primary CI run `39051589381` passed 7/7, and the receipt/runtime SHA and smoke/health evidence are recorded in [the M14.6 closure report](../m14-supply-chain/m14-6-closure-report.md). Earlier failed deployment attempts and guarded recovery remain recorded as failures. Staging validation is complete. PR #117 is the documentation closeout; its merge and successful exact merged-primary CI establish formal closure. M14.7 must not begin before that merge and CI result. No production deployment or Dependabot merge occurred.
