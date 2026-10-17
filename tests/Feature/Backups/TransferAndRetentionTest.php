@@ -55,7 +55,7 @@ class TransferAndRetentionTest extends TestCase
         $backupId = $backup->id;
 
         $backup->delete();
-        (new TransferBackup($backupId, (int) $site['website']->id, (string) $backup->storage_provider, []))->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+        (new TransferBackup($backupId, (int) $site['website']->id, (string) $backup->storage_provider, []))->handle(app(StorageManager::class), app(BackupService::class));
 
         $this->assertDatabaseMissing('backups', ['id' => $backupId]);
         $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $site['website']->id]);
@@ -68,7 +68,7 @@ class TransferAndRetentionTest extends TestCase
         $backup = app(BackupService::class)->request($site['website'], BackupReason::Manual, 'test', BackupType::Files);
         $backup->forceFill(['status' => BackupStatus::Verified])->save();
 
-        TransferBackup::forBackup($backup)->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+        TransferBackup::forBackup($backup)->handle(app(StorageManager::class), app(BackupService::class));
 
         $this->assertSame(BackupStatus::Verified, $backup->refresh()->status);
         $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $site['website']->id]);
@@ -87,7 +87,7 @@ class TransferAndRetentionTest extends TestCase
 
         $backup->forceFill(['website_id' => $siteB['website']->id])->save();
 
-        $job->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+        $job->handle(app(StorageManager::class), app(BackupService::class));
 
         $this->assertSame(BackupStatus::Uploaded, $backup->refresh()->status);
         $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $siteB['website']->id]);
@@ -108,7 +108,7 @@ class TransferAndRetentionTest extends TestCase
         $object = $backup->objects()->firstOrFail();
         $object->forceFill(['backup_id' => $otherBackup->id])->save();
 
-        $job->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+        $job->handle(app(StorageManager::class), app(BackupService::class));
 
         $this->assertSame(BackupStatus::Uploaded, $backup->refresh()->status);
         $this->assertSame($otherBackup->id, $object->refresh()->backup_id);
@@ -126,7 +126,7 @@ class TransferAndRetentionTest extends TestCase
 
         $backup->forceFill(['storage_provider' => 'alternate'])->save();
 
-        $job->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+        $job->handle(app(StorageManager::class), app(BackupService::class));
 
         $this->assertSame(BackupStatus::Uploaded, $backup->refresh()->status);
         $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $site['website']->id]);
@@ -140,7 +140,7 @@ class TransferAndRetentionTest extends TestCase
         $this->pollJobs($site);
         $this->uploadBackup($site, $backup, ['files' => 'SYNTHETIC FILES'])->assertStatus(202);
 
-        (new TransferBackup($backup->id))->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+        (new TransferBackup($backup->id))->handle(app(StorageManager::class), app(BackupService::class));
 
         $this->assertSame(BackupStatus::Uploaded, $backup->refresh()->status);
         $this->assertDatabaseMissing('website_events', ['event' => 'backup.verified', 'website_id' => $site['website']->id]);
@@ -181,14 +181,14 @@ class TransferAndRetentionTest extends TestCase
 
         $job = TransferBackup::forBackup($backup);
         $job->withFakeQueueInteractions();
-        $job->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+        $job->handle(app(StorageManager::class), app(BackupService::class));
         $job->assertReleased(60);
         $this->assertSame(BackupStatus::Uploaded, $backup->refresh()->status, 'Waiting for another attempt, not verified.');
 
         // Last attempt: the backup fails and says why.
         $last = TransferBackup::forBackup($backup)->withFakeQueueInteractions();
         $last->job->attempts = 3;
-        $last->handle(app(StorageManager::class), app(BackupService::class), app(Retention::class));
+        $last->handle(app(StorageManager::class), app(BackupService::class));
         $backup->refresh();
         $this->assertSame(BackupStatus::Failed, $backup->status);
         $this->assertSame('STORAGE_UNAVAILABLE', $backup->error_code);
@@ -343,7 +343,7 @@ class TransferAndRetentionTest extends TestCase
 
     /* ----- Retention ----- */
 
-    public function test_retention_count_keeps_the_newest(): void
+    public function test_legacy_count_retention_reports_candidates_without_mutating_or_deleting_backups(): void
     {
         $this->setUpBackups(['retention_count' => 2]);
         $website = $this->backupReadySite()['website'];
@@ -351,14 +351,15 @@ class TransferAndRetentionTest extends TestCase
         $middle = $this->verifiedBackup($website, at: now()->subDays(2));
         $new = $this->verifiedBackup($website, at: now()->subDay());
 
-        $this->assertSame([$old->uuid], app(Retention::class)->apply($website));
+        $this->assertSame([$old->uuid], app(Retention::class)->preview($website));
 
-        $this->assertSame(BackupStatus::Expired, $old->refresh()->status);
-        $this->assertNotNull($old->objects_deleted_at);
-        $this->assertFileDoesNotExist($this->storageRoot.'/'.$old->storage_path.'files.tar.gz');
+        $this->assertSame(BackupStatus::Verified, $old->refresh()->status);
+        $this->assertNull($old->objects_deleted_at);
+        $this->assertFileExists($this->storageRoot.'/'.$old->storage_path.'files.tar.gz');
         $this->assertSame(BackupStatus::Verified, $middle->refresh()->status);
         $this->assertSame(BackupStatus::Verified, $new->refresh()->status);
-        $this->assertTrue(WebsiteEvent::where('event', 'backup.expired')->where('backup_id', $old->id)->exists());
+        $this->assertFalse(WebsiteEvent::where('event', 'backup.expired')->where('backup_id', $old->id)->exists());
+        $this->assertSame(0, BackupObjectDeletion::where('backup_id', $old->id)->count());
         $this->assertNotNull(Backup::find($old->id), 'Metadata is kept.');
     }
 
@@ -371,10 +372,24 @@ class TransferAndRetentionTest extends TestCase
         // Failed backups do not count as a replacement.
         $website->backups()->create(['type' => BackupType::Full, 'reason' => BackupReason::Scheduled, 'status' => BackupStatus::Failed, 'requested_by' => 'test']);
 
-        app(Retention::class)->apply($website);
+        $this->assertSame([$ancient->uuid], app(Retention::class)->preview($website));
 
-        $this->assertSame(BackupStatus::Expired, $ancient->refresh()->status);
+        $this->assertSame(BackupStatus::Verified, $ancient->refresh()->status);
         $this->assertSame(BackupStatus::Verified, $newest->refresh()->status);
+        $this->assertNull($ancient->objects_deleted_at);
+        $this->assertFileExists($this->storageRoot.'/'.$ancient->storage_path.'files.tar.gz');
+    }
+
+    public function test_legacy_retention_days_do_not_make_new_verified_backups_expire(): void
+    {
+        $this->setUpBackups(['retention_days' => 1]);
+        $site = $this->backupReadySite();
+        $backup = app(BackupService::class)->request($site['website'], BackupReason::Manual, 'test', BackupType::Files);
+
+        $verified = $this->makeVerifiedBackupThroughApi($site, $backup, ['files' => 'FILES']);
+
+        $this->assertSame(BackupStatus::Verified, $verified->status);
+        $this->assertNull($verified->expires_at, 'Legacy retention days are comparison-only and must not expire new points.');
     }
 
     public function test_without_retention_values_nothing_is_deleted(): void
@@ -384,8 +399,53 @@ class TransferAndRetentionTest extends TestCase
             $this->verifiedBackup($website, at: now()->subDays(100 + $day));
         }
 
-        $this->assertSame([], app(Retention::class)->apply($website));
+        $this->assertSame([], app(Retention::class)->preview($website));
         $this->assertSame(5, $website->backups()->verified()->count());
+    }
+
+    public static function legacy_retention_inputs(): array
+    {
+        return [
+            'null means no legacy policy' => [null, null, 0],
+            'count only is comparison input' => [2, null, 4],
+            'days only is comparison input' => [null, 7, 5],
+            'both values are comparison input' => [2, 7, 5],
+            'numeric zero is clamped for comparison but never deletion' => [0, null, 5],
+        ];
+    }
+
+    #[DataProvider('legacy_retention_inputs')]
+    public function test_scheduled_legacy_retention_is_report_only_for_every_legacy_configuration(?int $count, ?int $days, int $expectedCandidates): void
+    {
+        $this->setUpBackups(array_filter([
+            'retention_count' => $count,
+            'retention_days' => $days,
+        ], fn ($value) => $value !== null));
+        $website = $this->backupReadySite()['website'];
+        $backups = [];
+        foreach (range(1, 6) as $day) {
+            $backups[] = $this->verifiedBackup($website, at: now()->subDays(100 + $day));
+        }
+        Queue::fake();
+        $deletion = \Mockery::mock(BackupDeletion::class);
+        $deletion->shouldNotReceive('remove');
+        $this->app->instance(BackupDeletion::class, $deletion);
+        $provider = \Mockery::mock(BackupStorage::class);
+        $provider->shouldNotReceive('delete');
+        app(StorageManager::class)->set('local', $provider);
+
+        $this->artisan('backup:retention')->assertSuccessful()
+            ->expectsOutputToContain('no backups were deleted');
+
+        $this->assertSame($expectedCandidates, count(app(Retention::class)->preview($website)));
+        foreach ($backups as $backup) {
+            $this->assertSame(BackupStatus::Verified, $backup->refresh()->status);
+            $this->assertNull($backup->objects_deleted_at);
+            $this->assertFileExists($this->storageRoot.'/'.$backup->storage_path.'files.tar.gz');
+        }
+        $this->assertSame(0, BackupObjectDeletion::count());
+        $this->assertSame(0, WebsiteEvent::whereIn('event', ['backup.expired', 'backup.deleted'])->count());
+        Queue::assertNothingPushed();
     }
 
     public function test_the_only_verified_recovery_point_cannot_be_deleted_even_with_legacy_confirmation(): void

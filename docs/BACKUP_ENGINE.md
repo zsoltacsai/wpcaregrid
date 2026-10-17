@@ -196,11 +196,7 @@ Business rules never live in the connector.
 | WooCommerce Basic / Business / Secure | weekly / daily / daily |
 
 - **Scheduling:** `backup:schedule` runs hourly and queues one scheduled backup per website and window (`daily:2026-09-25`, `weekly:2026-W39`, `monthly:2026-09`, UTC). A unique `(website_id, schedule_window)` index makes duplicates impossible. Websites whose connector is not reporting in are skipped.
-- **Retention** is set per plan through `BACKUP_RETENTION_{PRODUCT}_{TIER}_COUNT` / `_DAYS`. **No values are set: until they are, nothing is deleted.** When set:
-  - `retention_count` keeps the newest N verified backups;
-  - `retention_days` expires verified backups older than N days;
-  - the newest verified backup is never expired, nor one a restore or a waiting update depends on;
-  - expiring deletes the stored objects, keeps the record (`expired`) and writes an audit event.
+- **Legacy retention** values may be supplied through `BACKUP_RETENTION_{PRODUCT}_{TIER}_COUNT` / `_DAYS`, but are comparison inputs only. `backup:retention` reports the points those values would select; it never changes backup state or deletes customer/provider objects. New verified backups do not receive an expiry from these values. The future commercial GFS policy and any separately authorized deletion executor are not part of this legacy command.
 - **Manual backups** ("Backup now"): only for the website owner with an active plan and a connected site. At most one in progress, and one per 60 minutes (`BACKUP_MANUAL_COOLDOWN_MINUTES`). Always queued; never run inside the web request.
 
 ## Pre-update backups
