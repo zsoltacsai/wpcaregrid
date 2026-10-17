@@ -2,9 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Backups\SubscriptionBackupEntitlementRecorder;
 use App\Billing\SubscriptionEntitlements;
 use App\Billing\SubscriptionStatus;
-use App\Backups\SubscriptionBackupEntitlementRecorder;
 use App\Checkout\CheckoutStatus;
 use App\Invoicing\InvoiceIntentStatus;
 use App\Invoicing\InvoiceIntentWorkflow;
