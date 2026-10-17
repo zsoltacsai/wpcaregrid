@@ -1152,6 +1152,7 @@ return [
             'boundary' => 'Adding an API credential does not enable AI functionality. This configuration does not send customer or site data to the provider.',
             'configured' => 'Configured · Owner managed',
             'last_checked' => 'Last checked',
+            'test_connection' => 'Test connection',
             'new_secret' => 'API credential',
             'replace_secret' => 'Replacement API credential',
             'current_password' => 'Confirm with your current Owner password',

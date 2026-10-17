@@ -33,6 +33,7 @@ return [
             'boundary' => 'Az API-hitelesítő adat megadása nem kapcsol be MI-funkciót. Ez a beállítás nem küld ügyfél- vagy webhelyadatot a szolgáltatónak.',
             'configured' => 'Beállítva · tulajdonos kezeli',
             'last_checked' => 'Utolsó ellenőrzés',
+            'test_connection' => 'Kapcsolat tesztelése',
             'new_secret' => 'API-hitelesítő adat',
             'replace_secret' => 'Új API-hitelesítő adat',
             'current_password' => 'Megerősítés a jelenlegi tulajdonosi jelszóval',

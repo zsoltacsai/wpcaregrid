@@ -28,6 +28,12 @@
                     @if ($provider['state']['checked_at'])
                         <p class="mt-1 text-xs text-muted">{{ __('owner.integrations.ai.last_checked') }}: <time datetime="{{ $provider['state']['checked_at'] }}">{{ $provider['state']['checked_at'] }} UTC</time></p>
                     @endif
+                    @if ($provider['state']['configured'])
+                        <form method="POST" action="{{ route('owner.integrations.ai.health', $providerId) }}" class="mt-3">
+                            @csrf
+                            <button type="submit" class="h-9 rounded-sm border border-line-strong px-3 text-sm font-medium">{{ __('owner.integrations.ai.test_connection') }}</button>
+                        </form>
+                    @endif
                     <form method="POST" action="{{ route('owner.integrations.store') }}" class="mt-4 grid gap-3 sm:grid-cols-2">
                         @csrf
                         <input type="hidden" name="id" value="{{ $provider['credential_id'] }}">
