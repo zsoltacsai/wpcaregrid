@@ -19,10 +19,13 @@
 ## Deployment and source-to-runtime
 
 - Unit/shell harness for SHA parser/type/ancestry, fixed origin, branch-tip check, clean checkout and post-validation target identity.
+- Release-authorizer offline matrix: exact branch-tip push success; parent SHA; PR-head event; wrong branch/workflow; queued/in-progress/canceled/failure; missing/duplicate required job; failed MySQL concurrency step; incomplete pagination; malformed/oversized/API timeout/redirect. No token header or customer data is sent.
+- Rollback: explicit `--rollback` only; target must be an ancestor of current baseline and fetched branch and match the root-owned `approved-rollback-sha`; malformed, missing, symlinked, wrongly owned/mode or mismatched approval fails closed.
+- Deployment receipt fixtures: exact runtime SHA; all three lock hashes; release version and Connector source/package sidecar binding; Vite manifest digest; no `.env` sentinel; mode 0600; safe private directory; duplicate receipt refusal.
 - Process-level staging MySQL tests: lock contention, competing deploys, backup integrity, scheduler pause/resume, gate, worker coordination, migration failure and recovery. MySQL/process is required; SQLite is not a concurrency substitute.
 - Host test after F02: privilege boundary blocks arbitrary root from Composer/npm/Artisan; helper accepts only enumerated safe action/arguments.
 - Fault matrix: wrong origin/host key/key scope; dirty baseline; short/nonancestor target; dependency/network/disk failure; Vite failure; pending/partial migration; worker/scheduler/health failure; rollback failure.
-- Verify exact merged SHA CI, exact deployed runtime HEAD, Connector SHA, receipt content/redaction, no customer mutation and staging only.
+- Verify exact merged SHA CI, exact deployed runtime HEAD, Connector SHA, receipt content/redaction, no customer mutation and staging only. Forward promotion must be current primary tip; PR-head/parent/sibling green runs are insufficient.
 
 ## Test layers and acceptance
 
