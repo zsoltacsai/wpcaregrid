@@ -2,15 +2,15 @@
 
 GFS = daily/weekly/monthly recovery-point classes. This is a proposed domain model derived from roadmap target schedules, not a statement of live deployed retention.
 
-## Model semantics
+## Model semantics (refined after runtime source audit)
 
-- Every backup belongs to a site and a class/slot, with creation/completion time, integrity status, entitlement version, source Connector version and dependency references.
-- Selection retains the newest verified recovery point in each required class/window; unverified/incomplete artifacts are not advertised as usable points.
+- Every backup belongs to one site. Current backup rows do not contain entitlement version, GFS class/slot, or reasoned protection links; those are implementation gaps, not existing facts. Proposed origin metadata records request-time catalogue/policy version and slot.
+- Selection retains the newest complete, verified, usable recovery point inside each required UTC class/window; unverified/incomplete/corrupt artifacts are not usable points. Missing coverage is a recovery gap.
 - Pre-update and pre-remediation safety backups remain separate protected points until linked operation completion and review; they are not consumed by ordinary package quota.
 - Active restore sources, compensation points, last verified recovery point, incident holds and unresolved privacy/legal/accounting/provider blockers are excluded from any deletion candidate.
 - Retention calculation produces eligibility and reason codes. It does not call provider deletion. Provider deletion remains a distinct approval, task, request, verification and reconciliation sequence.
-- Use UTC slot identities, unique per site/class/window, idempotent scheduling, bounded catch-up, and policy-version snapshot. Restore locks/retention workers serialize selection and execution.
-- Deletion can only remove after all policy, recovery, legal/accounting, tenant and provider requirements are resolved; unknown means blocked.
+- Use UTC daily `YYYY-MM-DD`, ISO week `YYYY-Www` (Monday start), and month `YYYY-MM`. The rolling set includes current slot and preceding N−1 slots. One backup can satisfy multiple logical class reasons only within its natural day/week/month; never duplicate the physical object. Existing hourly schedule is per site/window and current-window only; GFS-aware idempotency is future work.
+- Selection/evaluation is distinct from deletion. Proposed output includes `KEEP`, `ELIGIBLE`, `BLOCKED`, `UNKNOWN` plus recovery gaps. Unknown means not eligible. M14.4 rollout must ensure the existing `backup:retention` path cannot mutate while new logic is shadow/report-only.
 
 ## Roadmap target matrix (not active)
 
@@ -23,7 +23,7 @@ GFS = daily/weekly/monthly recovery-point classes. This is a proposed domain mod
 | WooCommerce Business | daily | 14 daily + 8 weekly + 3 monthly |
 | WooCommerce Secure | daily | 30 daily + 12 weekly + 6 monthly |
 
-Each row also has separate pre-update safety backups. Do not map this model onto current `retention_count`/`retention_days` env values without a migration and an explicit policy decision.
+Each row also has separate pre-update safety backups. These are target policy only, not active customer promise. Current `config/backup.php` count/day values default null; null means no configured expiry, numeric zero is clamped to one, and deployed env values were not established. Do not map target onto current values without migration. Current `Retention::apply()` may call provider deletion if values are configured, so first batch must contain the legacy side effect.
 
 ## Approved Owner override boundary and remaining gates
 
@@ -36,3 +36,9 @@ Remaining boundaries:
 3. S3/SFTP versioning, delete-marker, Object Lock, lifecycle and physical absence remain `WAIT_FACT` until provider evidence is recorded.
 
 OQ-04 is a product-policy decision; it is not legal/accounting approval and does not authorize backup deletion or production destructive execution.
+
+## Source separation and gates
+
+The customer site backup engine (`app/Backups`, `backups`/`backup_objects`, S3/SFTP customer artifacts) is separate from `config/platform_backup.php` and platform DB disaster-recovery retention. The M12 privacy gate is also a separate domain; do not reuse it implicitly as the customer commercial retention gate.
+
+Legacy `backup:retention` currently has an execution path to `BackupDeletion::remove()` for configured retention. The live staging setting could not be verified in this planning pass; operational state is unknown. Future M14.4 work must make the legacy path report-only/default-off gated before shadow GFS and verify zero provider calls. S3 versioning/delete-marker/Object Lock/lifecycle and physical absence, and SFTP semantics remain `WAIT_FACT`; post-service duration and accounting minima remain `WAIT_LEGAL` / `WAIT_ACCOUNTING`.

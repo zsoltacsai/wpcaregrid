@@ -82,3 +82,9 @@ M14-08 (hosting compatibility/preflight) and M14-09 (restore readiness/conflict 
 M14.3 disposition is **B — functionally complete, non-critical host-evidence residual remains**. Claims are constrained to the tested envelope; declared PHP 8.1 and WordPress 6.4 minima and specialized host fixtures remain UNKNOWN/NOT TESTED and block affected high-impact operations until verified. The staging Connector 0.4.5 fixture remains unchanged.
 
 M14-12 (commercial GFS/backup entitlement) remains M14.4; M14-15 and AS-16 (full security scan and independent review) remain M14.7; M14-16 overall M14 closure remains open; M15 must independently validate pilot hosts and DR. All six M12 privacy/destructive gates remain false. No production destructive functionality was enabled.
+
+## M14.4 planning — 2026-10-17
+
+M14-12 planning is documented on the review branch `codex/m14-4-commercial-backup-plan` (baseline primary `db272400513882bae8fa8d2ab15d0996cd34dcc7`). Source audit confirms `config/pricing.php`/`PricingCatalog` owns canonical six plan identities and cadence, while `config/backup.php` keeps nullable env-driven count/day retention. `backup:retention` is scheduled daily and can reach `BackupDeletion::remove()` when those values are configured. Source defaults are null; deployed staging values were not available for read-only verification. This is a P0 M14.4 cutover gate: contain the legacy effect before shadow GFS; no dual mutating authority. New GFS remains preview/report-only and cannot call provider deletion.
+
+The target matrix remains exactly as approved and is not an active/public promise. OQ-04 is approved; no new Owner decision is required for policy-v1 engineering. `WAIT_LEGAL`, `WAIT_ACCOUNTING`, and `WAIT_FACT` remain fail-closed for post-service/deletion. See `reports/m14-backup/m14-4-*.md`. This is planning only: no runtime changes, deletion enablement, deployment, M14.5 or M15 work.
