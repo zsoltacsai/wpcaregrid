@@ -69,6 +69,10 @@ class AuthorizationMatrixTest extends TestCase
     /** A URL for the route with placeholder parameters (authentication runs before binding). */
     private function url(Route $route): string
     {
+        if ($route->getName() === 'owner.integrations.ai.health') {
+            return '/owner/integrations/ai/openai/health';
+        }
+
         return '/'.preg_replace('/\{[^}]+\}/', '00000000-0000-4000-8000-000000000000', $route->uri());
     }
 

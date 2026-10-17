@@ -2,6 +2,9 @@
 
 namespace App\Providers;
 
+use App\AiProviders\GuzzleProviderHealthTransport;
+use App\AiProviders\ProviderHealthTransport;
+use App\AiProviders\ProviderRegistry;
 use App\Backups\Storage\StorageManager;
 use App\Billing\PaymentMethodPortalGateway;
 use App\Billing\StripeApiSubscriptionReader;
@@ -44,6 +47,7 @@ use App\Security\Vulnerabilities\VulnerabilitySource;
 use App\Security\Vulnerabilities\WordfenceFeed;
 use App\Tax\Vat\VatNumberProvider;
 use App\Tax\Vat\ViesSoapProvider;
+use GuzzleHttp\Client;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
@@ -60,6 +64,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        $this->app->bind(ProviderHealthTransport::class, fn ($app) => new GuzzleProviderHealthTransport(
+            new Client,
+            $app->make(ProviderRegistry::class),
+        ));
         $this->app->bind(PrivacyTombstoneJournal::class, ObjectStoragePrivacyTombstoneJournal::class);
         $this->app->bind(PrivacyTombstoneObjectStore::class, PlatformBackupPrivacyTombstoneObjectStore::class);
         $this->app->bind(PlatformBackupS3BucketProber::class, PlatformBackupS3BucketProbe::class);
@@ -223,6 +231,10 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('owner-sensitive', fn (Request $request) => [
             Limit::perMinute(20)->by('owner-sensitive:'.$request->user()?->id),
             Limit::perHour(200)->by('owner-sensitive:'.$request->user()?->id),
+        ]);
+        RateLimiter::for('owner-ai-health', fn (Request $request) => [
+            Limit::perMinute(2)->by('owner-ai-health:'.$request->user('owner')?->id),
+            Limit::perHour(10)->by('owner-ai-health:'.$request->user('owner')?->id),
         ]);
 
         RateLimiter::for('owner-platform-backup', fn (Request $request) => Limit::perHour(2)->by('owner-platform-backup:'.$request->user('owner')?->id));

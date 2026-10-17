@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Owner\AiProviderHealthController;
 use App\Http\Controllers\Owner\BackupRetentionPolicyController;
 use App\Http\Controllers\Owner\CloudflareDnsController;
 use App\Http\Controllers\Owner\ContentController;
@@ -178,6 +179,10 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::get('/integrations', [IntegrationCredentialController::class, 'index'])->middleware('can:owner.integrations.manage')->name('integrations.index');
         Route::post('/integrations', [IntegrationCredentialController::class, 'store'])->middleware(['can:owner.integrations.manage', 'throttle:owner-sensitive'])->name('integrations.store');
         Route::delete('/integrations/{id}', [IntegrationCredentialController::class, 'destroy'])->middleware(['can:owner.integrations.manage', 'throttle:owner-sensitive'])->name('integrations.destroy');
+        Route::post('/integrations/ai/{provider}/health', [AiProviderHealthController::class, 'check'])
+            ->whereIn('provider', ['openai', 'anthropic', 'google_gemini'])
+            ->middleware(['can:owner.integrations.manage', 'throttle:owner-ai-health'])
+            ->name('integrations.ai.health');
 
         Route::get('/billing/invoice-intents', [InvoiceIntentController::class, 'index'])->middleware('can:owner.billing.invoices.view')->name('billing.invoice-intents.index');
         Route::get('/billing/invoice-intents/{invoiceIntent}', [InvoiceIntentController::class, 'show'])->middleware('can:owner.billing.invoices.view')->name('billing.invoice-intents.show');
