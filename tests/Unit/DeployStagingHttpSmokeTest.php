@@ -30,7 +30,7 @@ class DeployStagingHttpSmokeTest extends TestCase
         $baselineCapture = strpos($main, '    capture_baseline_sha || fail');
         $baselineSmoke = strpos($main, '    pre_deploy_smoke || fail');
         $targetPin = strpos($main, '    pin_target_sha "$requested_ref" "$fetched_tip"');
-        $backup = strpos($main, '    sudo -n mysqldump');
+        $backup = strpos($main, '    privileged db-dump | gzip -c');
         $schedulerMutation = strpos($main, "    install_scheduler_guard\n");
         $beforeGate = strpos($main, "    assert_baseline_unchanged || fail 'The live checkout changed before the deployment gate");
         $beforeCheckout = strpos($main, "    assert_baseline_unchanged || fail 'The live checkout changed before the target code switch.");

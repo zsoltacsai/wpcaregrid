@@ -12,9 +12,7 @@ readonly GATE_DIR='/var/lib/wpcaregrid'
 readonly GATE_FILE="${GATE_DIR}/deploy-maintenance"
 readonly SCHEDULER_LOCK_FILE="${GATE_DIR}/scheduler.lock"
 readonly SCHEDULER_PAUSE_FILE="${GATE_DIR}/scheduler-paused"
-readonly SCHEDULER_WRAPPER='/usr/local/bin/wpcaregrid-scheduler'
-readonly LEGACY_SCHEDULER_CRON='* * * * * cd /var/www/wpcaregrid && php artisan schedule:run >> /dev/null 2>&1'
-readonly GUARDED_SCHEDULER_CRON="* * * * * ${SCHEDULER_WRAPPER} >> /dev/null 2>&1"
+readonly DEPLOY_PRIV_HELPER='/usr/local/sbin/wpcaregrid-deploy-priv'
 # Always install the scheduler wrapper from the application checkout being deployed,
 # even when the reviewed deploy script is invoked from a protected temporary copy.
 readonly SCRIPT_DIR="${APP_DIR}/scripts"
@@ -29,12 +27,22 @@ MIGRATIONS_PENDING=0
 SCHEDULER_LOCK_HELD=0
 TEMP_BACKUP=''
 CHECK_REPORT=''
-CRON_TEMP=''
-CRON_TEMP_OUTPUT=''
 declare -A OLD_WORKER_PIDS=()
 
 log() {
     printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"
+}
+
+privileged() {
+    sudo -n "$DEPLOY_PRIV_HELPER" "$@"
+}
+
+assert_privilege_boundary() {
+    local sudo_listing command_lines
+
+    sudo_listing="$(sudo -n -l 2>&1)" || return 1
+    command_lines="$(grep -E '^[[:space:]]*\(' <<<"$sudo_listing" | sed 's/^[[:space:]]*//')"
+    [[ "$command_lines" == "(root) NOPASSWD: ${DEPLOY_PRIV_HELPER} *" ]]
 }
 
 fail() {
@@ -88,7 +96,7 @@ pin_target_sha() {
 }
 
 worker_status() {
-    sudo -n supervisorctl status "$1"
+    privileged worker status "$1"
 }
 
 worker_pid() {
@@ -108,7 +116,7 @@ workers_running() {
 }
 
 install_scheduler_guard() {
-    local wrapper_source current_cron cron_started_at attempt
+    local wrapper_source cron_started_at attempt
 
     wrapper_source="${SCRIPT_DIR}/run-scheduler.sh"
     [[ -f "$wrapper_source" ]] || fail 'The repository scheduler wrapper is missing beside the deployment script.'
@@ -116,42 +124,17 @@ install_scheduler_guard() {
     command -v flock >/dev/null || fail 'The flock utility is required for scheduler/deployment coordination.'
     command -v pgrep >/dev/null || fail 'The pgrep utility is required to drain a legacy scheduler process safely.'
 
-    sudo -n install -d -o root -g root -m 0755 "$GATE_DIR"
+    privileged gate-dir-init
     if [[ ! -e "$SCHEDULER_LOCK_FILE" ]]; then
-        sudo -n install -o deploy -g www-data -m 0660 /dev/null "$SCHEDULER_LOCK_FILE"
+        privileged scheduler-lock-init
     fi
     [[ -f "$SCHEDULER_LOCK_FILE" && ! -L "$SCHEDULER_LOCK_FILE" ]] || fail 'The scheduler lock path must be a regular file, not a symlink.'
     [[ "$(stat -c '%U:%G:%a' "$SCHEDULER_LOCK_FILE")" == 'deploy:www-data:660' ]] || fail 'The scheduler lock must be deploy:www-data mode 0660.'
-    sudo -n -u www-data test -r "$SCHEDULER_LOCK_FILE" || fail 'www-data cannot read the scheduler lock file.'
+    privileged scheduler-lock-check || fail 'The scheduler lock ownership or mode is invalid.'
 
     # Replace the installed wrapper atomically so cron never sees a partial script.
-    sudo -n install -o root -g root -m 0755 "$wrapper_source" "${SCHEDULER_WRAPPER}.new"
-    sudo -n mv -f -- "${SCHEDULER_WRAPPER}.new" "$SCHEDULER_WRAPPER"
-
-    current_cron="$(sudo -n crontab -u www-data -l 2>/dev/null)" || fail 'Could not read the www-data crontab.'
-    if grep -Fxq "$GUARDED_SCHEDULER_CRON" <<<"$current_cron"; then
-        [[ "$(grep -Fc 'schedule:run' <<<"$current_cron")" == '0' ]] || fail 'A second unguarded schedule:run crontab entry exists.'
-        log 'The www-data scheduler already uses the guarded wrapper.'
-        return 0
-    fi
-
-    [[ "$(grep -Fc "$LEGACY_SCHEDULER_CRON" <<<"$current_cron")" == '1' ]] || fail 'The existing www-data scheduler crontab does not match the reviewed legacy entry.'
-    [[ "$(grep -Fc 'schedule:run' <<<"$current_cron")" == '1' ]] || fail 'Expected exactly one Laravel scheduler crontab entry.'
-    CRON_TEMP="$(mktemp /tmp/wpcaregrid-crontab.XXXXXX)"
-    CRON_TEMP_OUTPUT="${CRON_TEMP}.new"
-    chmod 0600 "$CRON_TEMP"
-    printf '%s\n' "$current_cron" >"$CRON_TEMP"
-    awk -v old="$LEGACY_SCHEDULER_CRON" -v new="$GUARDED_SCHEDULER_CRON" \
-        '$0 == old { print new; changed++; next } { print } END { if (changed != 1) exit 1 }' \
-        "$CRON_TEMP" >"$CRON_TEMP_OUTPUT" || fail 'Could not safely replace the reviewed scheduler crontab entry.'
-    chmod 0600 "$CRON_TEMP_OUTPUT"
-    sudo -n crontab -u www-data "$CRON_TEMP_OUTPUT"
-    current_cron="$(sudo -n crontab -u www-data -l 2>/dev/null)" || fail 'Could not verify the updated www-data crontab.'
-    grep -Fxq "$GUARDED_SCHEDULER_CRON" <<<"$current_cron" || fail 'The guarded scheduler crontab entry was not installed.'
-    [[ "$(grep -Fc 'schedule:run' <<<"$current_cron")" == '0' ]] || fail 'The old direct schedule:run entry remains active.'
-    rm -f -- "$CRON_TEMP" "$CRON_TEMP_OUTPUT"
-    CRON_TEMP=''
-    CRON_TEMP_OUTPUT=''
+    privileged scheduler-install || fail 'Could not safely install the fixed scheduler wrapper.'
+    privileged scheduler-cron-ensure || fail 'The www-data crontab did not match the reviewed scheduler entry.'
 
     # Cron reloads user crontabs asynchronously. Do not proceed until its log
     # proves it invoked the wrapper at least once; all of this happens while the
@@ -159,7 +142,7 @@ install_scheduler_guard() {
     cron_started_at="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
     log 'Waiting for cron to observe the guarded scheduler crontab.'
     for attempt in {1..75}; do
-        if sudo -n journalctl -u cron --since "$cron_started_at" -o cat --no-pager 2>/dev/null | grep -Fq "$SCHEDULER_WRAPPER"; then
+        if privileged cron-seen "$cron_started_at" 2>/dev/null; then
             log 'Cron invoked the guarded scheduler wrapper.'
             return 0
         fi
@@ -170,7 +153,7 @@ install_scheduler_guard() {
 }
 
 acquire_scheduler_guard() {
-    local attempt scheduler_probe
+    local attempt
 
     (( SCHEDULER_LOCK_HELD )) && return 0
     exec 8<>"$SCHEDULER_LOCK_FILE" || fail 'Could not open the scheduler/deployment lock.'
@@ -187,19 +170,18 @@ acquire_scheduler_guard() {
     done
     pgrep -u www-data -f 'artisan schedule:run' >/dev/null && fail 'A legacy or active scheduler process did not exit after the exclusive lock was acquired.'
 
-    scheduler_probe="$(sudo -n -u www-data "$SCHEDULER_WRAPPER" 2>&1)" || fail 'The guarded scheduler wrapper failed its deployment-lock probe.'
-    [[ "$scheduler_probe" == 'wpcaregrid scheduler skipped: deployment guard active' ]] || fail 'The scheduler wrapper did not prove that it skips Laravel while the deployment lock is held.'
+    privileged scheduler-probe || fail 'The guarded scheduler wrapper failed its deployment-lock probe.'
     log 'Scheduler wrapper probe confirmed no Laravel bootstrap while deployment lock is held.'
 }
 
 pause_scheduler() {
-    sudo -n install -o root -g root -m 0644 /dev/null "$SCHEDULER_PAUSE_FILE"
+    privileged scheduler-pause
     log 'Persistent scheduler pause marker installed.'
 }
 
 resume_scheduler() {
     (( SCHEDULER_LOCK_HELD )) || fail 'Cannot resume the scheduler without holding the deployment lock.'
-    sudo -n rm -f -- "$SCHEDULER_PAUSE_FILE"
+    privileged scheduler-resume
     flock -u 8
     SCHEDULER_LOCK_HELD=0
     exec 8>&-
@@ -237,7 +219,7 @@ start_workers() {
     for worker in "${WORKERS[@]}"; do
         output="$(worker_status "$worker")" || return 1
         if [[ "$output" =~ ^${worker}[[:space:]]+STOPPED([[:space:]]|$) ]]; then
-            sudo -n supervisorctl start "$worker" >/dev/null || return 1
+            privileged worker start "$worker" >/dev/null || return 1
         elif [[ ! "$output" =~ ^${worker}[[:space:]]+RUNNING([[:space:]]|$) ]]; then
             return 1
         fi
@@ -301,8 +283,7 @@ exit($failed ? 1 : 0);
 }
 
 configure_runtime_cache_acls() {
-    sudo -n setfacl -k bootstrap/cache storage/framework/views || return 1
-    sudo -n setfacl -m 'd:u::rwx,d:u:deploy:rwx,d:u:www-data:rwx,d:g::---,d:m::rwx,d:o::---' bootstrap/cache storage/framework/views
+    privileged cache-acl
 }
 
 runtime_cache_access_ok() {
@@ -310,16 +291,16 @@ runtime_cache_access_ok() {
 
     cache_dir='bootstrap/cache'
     while IFS= read -r -d '' file; do
-        sudo -n -u www-data test -r "$file" || return 1
-        sudo -n -u nobody test ! -r "$file" || return 1
+        privileged file-check www-data read "$file" || return 1
+        privileged file-check nobody not-readable "$file" || return 1
     done < <(find "$cache_dir" -maxdepth 1 -type f -name '*.php' -print0)
 
     cache_dir='storage/framework/views'
     while IFS= read -r -d '' file; do
-        sudo -n -u www-data test -r "$file" || return 1
+        privileged file-check www-data read "$file" || return 1
     done < <(find "$cache_dir" -maxdepth 1 -type f -name '*.php' -print0)
 
-    sudo -n -u www-data test -r public/build/manifest.json
+    privileged file-check www-data read public/build/manifest.json
 }
 
 normalize_tracked_checkout_permissions() {
@@ -378,10 +359,10 @@ runtime_source_access_ok() {
 
     for path in "${runtime_paths[@]}"; do
         [[ -f "$path" ]] || { log "Required runtime file is missing: ${path}"; return 1; }
-        sudo -n -u www-data test -r "$path" || { log "PHP-FPM cannot read required runtime file: ${path}"; return 1; }
+        privileged file-check www-data read "$path" || { log "PHP-FPM cannot read required runtime file: ${path}"; return 1; }
         directory="$(dirname -- "$path")"
         while [[ "$directory" != '.' ]]; do
-            sudo -n -u www-data test -x "$directory" || { log "PHP-FPM cannot traverse required runtime directory: ${directory}"; return 1; }
+            privileged file-check www-data execute "$directory" || { log "PHP-FPM cannot traverse required runtime directory: ${directory}"; return 1; }
             directory="$(dirname -- "$directory")"
         done
     done
@@ -397,7 +378,7 @@ runtime_source_access_ok() {
             *) continue ;;
         esac
         [[ -f "$path" && ! -L "$path" ]] || continue
-        sudo -n -u www-data test -r "$path" || { log "PHP-FPM cannot read tracked runtime source: ${path}"; return 1; }
+        privileged file-check www-data read "$path" || { log "PHP-FPM cannot read tracked runtime source: ${path}"; return 1; }
     done < <(git ls-files -z)
 
     log 'PHP-FPM can read representative runtime files and all tracked PHP/shell source files.'
@@ -523,14 +504,13 @@ rebuild_caches() {
         for file in "${cache_files[@]}"; do
             case "$(stat -c '%U' "$file")" in
                 deploy) chmod 0600 "$file" || return 1 ;;
-                www-data) sudo -n chmod 0600 "$file" || return 1 ;;
+                www-data) ;;
                 *) return 1 ;;
             esac
-            sudo -n setfacl -b "$file" || return 1
-            sudo -n setfacl -m u:www-data:r--,g::--- "$file" || return 1
-            sudo -n -u www-data test -r "$file" || return 1
+            privileged cache-file-secure "$file" || return 1
+            privileged file-check www-data read "$file" || return 1
             if [[ "$cache_dir" == 'bootstrap/cache' ]]; then
-                sudo -n -u nobody test ! -r "$file" || return 1
+                privileged file-check nobody not-readable "$file" || return 1
             fi
         done
     done
@@ -539,7 +519,7 @@ rebuild_caches() {
 }
 
 release_gate() {
-    sudo -n rm -f -- "$GATE_FILE"
+    privileged gate-off
 }
 
 mark_gate_released() {
@@ -590,7 +570,7 @@ stop_workers_for_rollback() {
     for worker in "${WORKERS[@]}"; do
         output="$(worker_status "$worker")" || return 1
         if [[ "$output" =~ ^${worker}[[:space:]]+RUNNING([[:space:]]|$) ]]; then
-            sudo -n supervisorctl stop "$worker" || return 1
+            privileged worker stop "$worker" || return 1
         elif [[ ! "$output" =~ ^${worker}[[:space:]]+STOPPED([[:space:]]|$) ]]; then
             return 1
         fi
@@ -611,14 +591,14 @@ recover_after_failure() {
     # A failure or signal can occur after the marker is removed for smoke
     # checks. Reinstall it before doing any recovery work.
     GATE_ACTIVE=1
-    sudo -n install -o root -g root -m 0644 /dev/null "$GATE_FILE" || return 1
+    privileged gate-on || return 1
 
     if (( CODE_SWITCHED )); then
         stop_workers_for_rollback || return 1
         rollback_code_to_baseline || return 1
     else
         [[ -r bootstrap/cache/config.php ]] || return 1
-        sudo -n -u www-data test -r bootstrap/cache/config.php || return 1
+        privileged file-check www-data read bootstrap/cache/config.php || return 1
     fi
 
     php artisan migrate:status --no-interaction | grep -q 'Pending' && return 1
@@ -642,7 +622,7 @@ recover_after_failure() {
         smoke_contract=pre_deploy_smoke
     fi
     if ! "$smoke_contract" || ! runtime_cache_access_ok || ! workers_running; then
-        sudo -n install -o root -g root -m 0644 /dev/null "$GATE_FILE" || return 1
+        privileged gate-on || return 1
         php artisan down --retry=60 || true
         return 1
     fi
@@ -683,13 +663,11 @@ on_exit() {
     trap - EXIT
     [[ -n "$TEMP_BACKUP" ]] && rm -f -- "$TEMP_BACKUP"
     [[ -n "$CHECK_REPORT" ]] && rm -f -- "$CHECK_REPORT"
-    [[ -n "$CRON_TEMP" ]] && rm -f -- "$CRON_TEMP"
-    [[ -n "$CRON_TEMP_OUTPUT" ]] && rm -f -- "$CRON_TEMP_OUTPUT"
 
     if (( status != 0 && GATE_ACTIVE )); then
         log "Deployment failed with status ${status}."
         if ! recover_after_failure; then
-            sudo -n install -o root -g root -m 0644 /dev/null "$GATE_FILE" || log 'Could not confirm the Nginx gate marker; inspect it immediately.' >&2
+            privileged gate-on || log 'Could not confirm the Nginx gate marker; inspect it immediately.' >&2
             php artisan down --retry=60 >/dev/null 2>&1 || log 'Laravel maintenance mode could not be confirmed; the Nginx gate remains the request control.' >&2
             log "Fail-closed: Nginx gate remains active at ${GATE_FILE}; follow the manual recovery steps in docs/DEPLOYMENT.md."
         fi
@@ -712,29 +690,27 @@ main() {
 
     (( $# == 1 )) || fail 'Usage: scripts/deploy-staging.sh <full-commit-sha>'
     [[ "$(id -un)" == 'deploy' ]] || fail 'Run this script as the deploy user.'
+    assert_privilege_boundary || fail 'The staging deploy sudo policy is not the reviewed helper-only rule.'
     [[ "$(pwd -P)" == "$APP_DIR" ]] || fail "Run from ${APP_DIR}."
     [[ -d .git && -f artisan && -f composer.json ]] || fail 'Expected Laravel Git application was not found.'
     [[ "$(git remote get-url origin)" == "$ORIGIN_URL" ]] || fail 'The configured origin is not the staging deploy-key repository.'
     [[ -f .env && "$(stat -c '%U:%G:%a' .env)" == 'deploy:deploy:600' ]] || fail '.env must remain deploy:deploy mode 0600.'
     ! git ls-files --error-unmatch .env >/dev/null 2>&1 || fail '.env must not be tracked by Git.'
     [[ -w storage && -w bootstrap/cache ]] || fail 'deploy must be able to write storage/ and bootstrap/cache/.'
-    sudo -n -u www-data test -w storage || fail 'www-data must retain its storage/ write access.'
-    sudo -n -u www-data test -w bootstrap/cache || fail 'www-data must retain its bootstrap/cache/ write access.'
+    privileged file-check www-data write storage || fail 'www-data must retain its storage/ write access.'
+    privileged file-check www-data write bootstrap/cache || fail 'www-data must retain its bootstrap/cache/ write access.'
     [[ -r bootstrap/cache/config.php ]] || fail 'The existing production config cache is missing; repair it before deploying.'
     command -v setfacl >/dev/null || fail 'setfacl is required to preserve private but readable Laravel bootstrap caches.'
-    sudo -n -u nobody test ! -r bootstrap/cache/config.php || fail 'The existing config cache is readable by unrelated users; repair its ACL before deploying.'
+    privileged file-check nobody not-readable bootstrap/cache/config.php || fail 'The existing config cache is readable by unrelated users; repair its ACL before deploying.'
     for cache_dir in bootstrap/cache storage/framework/views; do
         while IFS= read -r -d '' cache_file; do
-            sudo -n -u www-data test -r "$cache_file" || fail "www-data cannot read ${cache_file}."
+            privileged file-check www-data read "$cache_file" || fail "www-data cannot read ${cache_file}."
         done < <(find "$cache_dir" -maxdepth 1 -type f -name '*.php' -print0)
     done
     [[ ! -e "$GATE_FILE" ]] || fail "A previous deployment gate exists at ${GATE_FILE}; inspect and recover it before retrying."
     [[ ! -e "$SCHEDULER_PAUSE_FILE" ]] || fail "A previous scheduler pause marker exists at ${SCHEDULER_PAUSE_FILE}; inspect and recover it before retrying."
     [[ "$(git status --porcelain --untracked-files=all)" == '' ]] || fail 'The repository has tracked or untracked changes; deploy only from a clean checkout.'
-    sudo -n true || fail 'Non-interactive sudo is required.'
-    sudo -n nginx -t >/dev/null || fail 'Nginx configuration is invalid.'
-    sudo -n nginx -T 2>/dev/null | grep -Fq 'if (-f /var/lib/wpcaregrid/deploy-maintenance)' || fail 'The staging Nginx deployment gate is not configured.'
-    sudo -n systemctl is-active --quiet cron || fail 'The cron scheduler service is not active.'
+    privileged preflight || fail 'The narrow deploy privilege helper preflight failed.'
     [[ -d "$BACKUP_DIR" && "$(stat -c '%U:%a' "$BACKUP_DIR")" == 'deploy:700' ]] || fail 'The protected staging database backup directory must be deploy-owned mode 0700.'
     exec 9>"${BACKUP_DIR}/.deploy.lock"
     command -v flock >/dev/null || fail 'The flock utility is required to prevent concurrent deployments.'
@@ -764,14 +740,14 @@ main() {
     assert_baseline_unchanged || fail 'The live checkout changed after baseline capture and before backup.'
 
     db_name="$(php -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); echo config("database.connections.mysql.database");' 2>/dev/null)"
-    [[ "$db_name" =~ ^[A-Za-z0-9_]+$ ]] || fail 'Could not resolve a safe MySQL database name from Laravel configuration.'
-    sudo -n mysql -NBe 'SELECT 1' >/dev/null || fail 'Local MySQL administrative access is unavailable for the pre-deploy backup.'
+    [[ "$db_name" == 'wpcaregrid' ]] || fail 'The application database does not match the staging-only privileged backup allowlist.'
+    privileged db-ping || fail 'Local MySQL administrative access is unavailable for the pre-deploy backup.'
     timestamp="$(date -u +'%Y%m%dT%H%M%SZ')"
     backup_path="${BACKUP_DIR}/wpcaregrid-pre-deploy-${timestamp}.sql.gz"
     [[ ! -e "$backup_path" ]] || fail 'A pre-deploy backup already exists with this timestamp.'
     TEMP_BACKUP="$(mktemp "${BACKUP_DIR}/.wpcaregrid-pre-deploy-${timestamp}.XXXXXX")"
     log 'Creating the protected pre-deploy database backup.'
-    sudo -n mysqldump --single-transaction --routines --triggers --databases "$db_name" | gzip -c >"$TEMP_BACKUP"
+    privileged db-dump | gzip -c >"$TEMP_BACKUP"
     gzip -t "$TEMP_BACKUP"
     chmod 600 "$TEMP_BACKUP"
     mv -- "$TEMP_BACKUP" "$backup_path"
@@ -780,11 +756,11 @@ main() {
 
     assert_baseline_unchanged || fail 'The live checkout changed before the deployment gate was installed.'
     install_scheduler_guard
-    sudo -n install -d -o root -g root -m 0755 "$GATE_DIR"
+    privileged gate-dir-init
     acquire_scheduler_guard
     GATE_ACTIVE=1
     pause_scheduler
-    sudo -n install -o root -g root -m 0644 /dev/null "$GATE_FILE"
+    privileged gate-on
     gate_probe="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}/up")"
     [[ "$gate_probe" == '503' ]] || fail "Nginx deployment gate returned ${gate_probe}, expected controlled HTTP 503."
     log 'Nginx gate verified: requests receive HTTP 503 before PHP-FPM.'
@@ -793,12 +769,12 @@ main() {
     mark_gate_released
 
     GATE_ACTIVE=1
-    sudo -n install -o root -g root -m 0644 /dev/null "$GATE_FILE"
+    privileged gate-on
     php artisan down --retry=60
     log 'Laravel maintenance mode enabled behind the Nginx gate.'
 
     WORKERS_MAY_BE_STOPPED=1
-    sudo -n supervisorctl stop "${WORKERS[@]}"
+    privileged worker stop-all
     for worker in "${WORKERS[@]}"; do
         [[ "$(worker_status "$worker")" =~ ^${worker}[[:space:]]+STOPPED([[:space:]]|$) ]] || fail "${worker} did not stop cleanly."
         log "$worker stopped before the code transition."
@@ -815,10 +791,8 @@ main() {
     umask 022
     composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
     umask 077
-    if sudo -n -u www-data find vendor -type f -name '*.php' ! -readable -print -quit | grep -q .; then
-        fail 'PHP-FPM cannot read one or more Composer PHP files.'
-    fi
-    sudo -n -u www-data test -r vendor/autoload.php || fail 'PHP-FPM cannot read the Composer autoloader.'
+    privileged vendor-readable || fail 'PHP-FPM cannot read one or more Composer PHP files.'
+    privileged file-check www-data read vendor/autoload.php || fail 'PHP-FPM cannot read the Composer autoloader.'
 
     log 'Building frontend assets.'
     umask 022
@@ -828,7 +802,7 @@ main() {
     [[ -f public/build/manifest.json ]] || fail 'Vite build did not produce public/build/manifest.json.'
     find public/build -type d -exec chmod 0755 {} +
     find public/build -type f -exec chmod 0644 {} +
-    sudo -n -u www-data test -r public/build/manifest.json || fail 'PHP-FPM cannot read the Vite manifest.'
+    privileged file-check www-data read public/build/manifest.json || fail 'PHP-FPM cannot read the Vite manifest.'
     if [[ -d node_modules ]]; then
         [[ ! -L node_modules && "$(realpath -e -- node_modules)" == "${APP_DIR}/node_modules" ]] || fail 'Refusing to remove an unexpected node_modules path.'
         rm -rf -- "${APP_DIR}/node_modules"
@@ -856,12 +830,12 @@ main() {
     php artisan up
     log 'Laravel is live behind the Nginx gate; restarting workers onto the deployed code.'
     php artisan queue:restart
-    sudo -n supervisorctl start "${WORKERS[@]}"
+    privileged worker start-all
     wait_for_restarted_workers || fail 'Expected Supervisor workers did not restart with new PIDs.'
     WORKERS_MAY_BE_STOPPED=0
 
     [[ "$(stat -c '%U:%G:%a' .env)" == 'deploy:deploy:600' ]] || fail '.env ownership or mode changed unexpectedly.'
-    [[ -r bootstrap/cache/config.php ]] && sudo -n -u www-data test -r bootstrap/cache/config.php || fail 'PHP-FPM cannot read the rebuilt production config cache.'
+    [[ -r bootstrap/cache/config.php ]] && privileged file-check www-data read bootstrap/cache/config.php || fail 'PHP-FPM cannot read the rebuilt production config cache.'
     normalize_tracked_checkout_permissions || fail 'Could not normalize tracked checkout permissions after build steps.'
     runtime_source_access_ok || fail 'PHP-FPM cannot read all representative runtime files.'
     [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || fail 'The deployed Git HEAD changed unexpectedly.'
@@ -873,7 +847,7 @@ main() {
     release_gate
     if ! post_deploy_smoke || ! runtime_cache_access_ok || ! workers_running; then
         log 'Final staging HTTP/security or runtime-cache permission check failed; closing the Nginx gate again.' >&2
-        sudo -n install -o root -g root -m 0644 /dev/null "$GATE_FILE"
+        privileged gate-on
         php artisan down --retry=60 || true
         fail 'Final staging HTTP/security smoke failed.'
     fi

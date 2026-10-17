@@ -1,28 +1,28 @@
 # M14.6 — CI/CD Supply-Chain and Deployment Trust Plan
 
 **Audit type:** read-only planning, source audit and staging/GitHub state review.
-**Audited primary:** `claude/ecstatic-wozniak-oemyuf` at `291f486db41ecc5dcc9c152db5ef0b35d634b404`.
+**Audited primary:** `claude/ecstatic-wozniak-oemyuf` at `291f486db41ecc5dcc9c152db5ef0b35d634b404`; planning PR #105 merged as `b16f2c53e7b6763bdfd7bcfea4d5162807bc06ad`.
 **Staging readback:** `3debba99c677b68465cf439733f440442fbd0f22`, clean working tree, expected origin.
 **Repository:** public `zsoltacsai/wpcaregrid`; default branch is the deployed authoritative branch.
-**Disposition:** **D — confirmed High release/deployment trust-chain blockers**. No control or setting was changed.
+**Disposition:** **D — M146-F02 remains a confirmed High blocker.** M146-F01 was closed by active ruleset `25300175`; staging sudoers remains broad pending PR #106 and explicit host cutover.
 
 ## Executive result
 
 The CI workflow is a single non-deploying workflow with seven required validation results, a workflow-wide `contents: read` token, no `pull_request_target`, no deployment credentials, and no artifact upload/download path. Fork pull requests therefore run untrusted code in a read-only/no-repository-secret boundary. The MySQL process/concurrency test set is inside Server MySQL and is part of that job.
 
-Two confirmed High control failures interrupt the intended source-to-staging trust chain:
+At initial audit, two confirmed High control failures interrupted the intended source-to-staging trust chain. F01 is now closed; F02 remains open:
 
-1. GitHub API readback says the authoritative branch is `protected: false`; repository rulesets are empty. The deploy script accepts a full SHA if it is an ancestor of the fetched authoritative branch tip, and the manual staging command does not query a reviewed PR or exact-SHA GitHub check result. A principal with branch write access can push a commit directly and have it deployed without enforced review or required checks.
-2. Staging `sudo -l` for `deploy` returns `(ALL : ALL) ALL` and `NOPASSWD: ALL`. Target commit code is executed by Composer post-autoload scripts, `npm run build`, Artisan migrations and package/cache commands as `deploy`; those processes inherit an unrestricted non-interactive root path. A malicious or compromised release can therefore cross the application/deployment-user boundary to root on staging.
+1. **Closed 2026-10-17:** repository ruleset `25300175` now requires PRs and seven exact checks, blocks force push and deletion, requires conversation resolution, and has no bypass actors. The branch API reports `protected:true`; no direct-push probe was attempted. Only the owner is push-capable, so approval count is zero and independent review remains a residual.
+2. **Still open:** staging `sudo -l` for `deploy` returns `(ALL : ALL) ALL` and `NOPASSWD: ALL`. Target Composer/npm/Artisan code runs as deploy and can therefore reach staging root. PR #106 prepares a fixed-operation helper/controller conversion, but no helper or sudoers change has been installed.
 
-These are confirmed control-path findings, not proof that either was exploited. Their combination meets the task's High-path definition. Before executable M14.6 hardening can close, require PR/check enforcement on the authoritative branch and remove broad deploy-user root access through a tightly scoped privileged helper/allowlist that does not grant target-controlled build/migration code arbitrary root.
+These are confirmed control-path findings, not proof that either was exploited. F01's direct-push/check-bypass route is mechanically closed by effective GitHub rules. F02 still blocks all new target-code deployment and all remaining M14.6 work until the reviewed helper is installed, broad sudo is removed, and required-operation/arbitrary-sudo probes prove the new boundary.
 
 ## Verified baseline and constraints
 
 - M14.5 closure PR #104 merged to the authoritative branch at `291f486…`; closure exact-head run `39023730830` passed 7/7 (baseline supplied and checked against current primary).
 - Connector release metadata is `0.4.7`, API v1 (source `wordpress/wp-caregrid-connector/release.json` and repository compatibility evidence).
 - Current executable staging SHA read over strict host-key-checked SSH is `3debba99…`; staging `origin` is `git@github.com-wpcaregrid:zsoltacsai/wpcaregrid.git`; status is clean.
-- No action in this audit contacted production or changed repository/host settings.
+- No production host was contacted. The only repository setting change was the F01-specific ruleset; no staging host setting has yet changed.
 - Security gates remain fail-closed: M12 destructive retention and all related deletion/anonymization/synthetic gates false; M14.4 `backup:retention` report-only; M14.5 has no product AI feature/default/provider authorization.
 
 ## Recommended implementation sequence

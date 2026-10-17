@@ -1,13 +1,14 @@
 # GitHub Settings Audit — Read-only
 
-Readback date: 2026-10-17. Repository `zsoltacsai/wpcaregrid` (owner type personal account), public. No setting was changed.
+Readback date: 2026-10-17. Repository `zsoltacsai/wpcaregrid` (owner type personal account), public. Ruleset `25300175` was added specifically to remediate M146-F01; no unrelated setting was changed.
 
 | Setting | Observed result | Implication |
 |---|---|---|
 | Default branch | `claude/ecstatic-wozniak-oemyuf` | This is the deployed authoritative branch; protect it explicitly. `main` is not an adequate substitute. |
-| Repository rulesets | `GET /repos/.../rulesets` returns `[]` | No repository-level ruleset observed. Owner is a user account; organization ruleset endpoint returns 404. |
-| Classic branch protection | `GET /branches/claude/ecstatic-wozniak-oemyuf` returns `protected:false`; protection endpoint 404 | No enforced PR review, required status checks, force-push restriction or deletion protection is present through classic branch protection. Direct push by repository writers is possible. This is M146-F01. |
-| Required checks | None enforced by branch protection/ruleset | CI produces Quality, Server SQLite, Server MySQL, Server MariaDB, Connector SQLite, Connector MySQL and Connector MariaDB. Their existence does not make them required. MySQL process/concurrency is embedded in Server MySQL. |
+| Repository rulesets | Before: `[]`. After: active ruleset `25300175`, target `refs/heads/claude/ecstatic-wozniak-oemyuf`, `bypass_actors:[]`, `current_user_can_bypass:"never"` | Ruleset applies the release controls to the deployed branch and repository owner/admin. |
+| Classic branch protection | Before: branch `protected:false`; after: branch API `protected:true` with effective ruleset | PR path required; force-push and deletion blocked; administrators are not bypass actors. Direct push was not attempted; effective API readback is the safe proof. |
+| Required checks | Seven exact contexts required with strict up-to-date policy | Quality; Server SQLite, MySQL, MariaDB; Connector SQLite, MySQL, MariaDB. MySQL process/concurrency remains inside mandatory Server MySQL. |
+| PR approval | Required approvals: 0 | Collaborator readback lists only the owner with push permission. Zero is deliberate to avoid an impossible sole-maintainer merge rule; independent review remains a M14.7/M17 residual. Conversation resolution is required. |
 | Actions policy | `enabled:true`, `allowed_actions:"all"`, `sha_pinning_required:false` | Any action source can be referenced; full SHA policy is not enforced server-side. Pin and static-test in repo. |
 | Merge methods | Merge, squash and rebase all enabled | Do not alter in this planning pass. Exact merged primary SHA must receive its own successful CI regardless of method. |
 | Auto-delete head branches | `false` | No routine head-branch deletion on merge. Not a release bypass. |
@@ -20,6 +21,6 @@ GitHub’s public-fork event documentation says secrets other than `GITHUB_TOKEN
 
 GitHub documents that fork PR caches are scoped to the pull-request merge ref and cannot be consumed by the base branch/other PRs. The current `setup-node` cache is npm download cache keyed from the lockfile; it is not a trusted build artifact and contains no secrets. Continue treating restored cache data as untrusted and do not cache `node_modules`, secrets or executable build output: [dependency caching reference](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching).
 
-## Required administrative resolution before M14.6 closure
+## M146-F01 readback evidence
 
-Create an active ruleset/classic protection targeting exactly `claude/ecstatic-wozniak-oemyuf`: PR required; named seven checks required; stale approvals/checks handled; force push and deletion blocked; bypass set to the smallest emergency actor set with audit; no direct push for routine changes. Verify by read-only API/UI after application and test rejection using a non-admin staging/test branch workflow. If administrators must bypass for emergencies, require incident record, exact SHA CI, and immediate post-incident review. Required check names must not be renamed without simultaneous ruleset migration.
+Effective rule readback returned `deletion`, `non_fast_forward`, `pull_request`, and `required_status_checks`; all seven contexts matched current successful workflow evidence. No bypass actor is configured. No unsafe direct-push attempt was made. Exact merged-primary CI run `39027391253` passed on `b16f2c53e7b6763bdfd7bcfea4d5162807bc06ad`. The sole-maintainer approval residual does not restore the direct-push or missing-check path.
