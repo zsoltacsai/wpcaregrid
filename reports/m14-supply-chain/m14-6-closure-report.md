@@ -12,6 +12,7 @@
 - Exact-SHA release authorization/provenance PR #115 candidate `417cf46791b1b13f392454842b7daaebe4d69b7b` passed run `39036319661`, 7/7, including the MySQL process/concurrency gate.
 - PR #115 merged as `7d78bd8a44f71178fabc576767bda07a5f75d95d`.
 - Merged-primary SHA `7d78bd8a44f71178fabc576767bda07a5f75d95d` passed run `39037273263`, 7/7. The exact-target release verifier independently returned that run ID and seven successful mandatory checks.
+- PR #116's documentation/evidence candidate `77c8d79a922686097f3f729e5675b8af22fc7f84` passed exact-head CI run `39038373087`, 7/7; its merge is the current primary `9439ecbb3ec8b1cf5ad8daa20fa37168add6e97b`. Corrected post-merge CI run `39039308572` completed successfully on that exact SHA, 7/7, including the Server MySQL process/concurrency gate.
 
 ## High-finding containment
 
@@ -23,7 +24,9 @@
 
 M146-F10's source fix is merged, but the deployed root-owned helper still needs a separate, explicit root/admin update before the reviewed controller can deploy target code. PR #115's helper source at merged SHA `7d78bd8a44f71178fabc576767bda07a5f75d95d` has SHA-256 `7a764d921195b1ce051dd6099c2eace3c24ce587318c3bda9992e1a835bfa910`. It has not been installed on staging.
 
-The Owner selected the platform-console process for this privileged installation. No platform-console control/session is available in this execution environment; browser inspection showed only the staging application and no host console. No SSH authentication workaround, host-key change, sudo broadening, or helper installation was attempted. The latest known executable staging SHA remains `3debba99c677b68465cf439733f440442fbd0f22`. The current staging browser displayed a temporary-unavailable page; no authenticated host readback was made in this turn.
+The Owner selected the platform-console process for this privileged installation. No platform-console control/session is available in this execution environment; the open browser shows only the staging application, and no approved root/SSH path is available here. The generic local SSH key is not an authorized credential and was not tried. No host-key change, sudo broadening, or helper installation was attempted. The latest known executable staging SHA remains `3debba99c677b68465cf439733f440442fbd0f22`; the current host HEAD remains unknown.
+
+Public HTTP was rechecked on 2026-10-17: `/`, `/owner/login`, and `/robots.txt` return 503 while `/up` returns 200. The 503 response has `Retry-After: 60` and `Cache-Control: no-cache, private`. This is consistent with Laravel maintenance mode but is not enough to establish root cause; no host markers, deployment process/lock, services, Nginx/PHP-FPM state, or logs have been read. No recovery action was attempted. A sanitized, staged Owner action packet is in [m14-6-owner-staging-action.md](m14-6-owner-staging-action.md); it starts with read-only diagnosis and separates diagnosis from helper replacement and gated recovery.
 
 Therefore no new target-controlled Composer/npm/Artisan deployment ran after the reviewed helper update became available. Exact merged-SHA staging validation, post-deploy health, deployment receipt from that candidate, and staging fault-injection evidence remain pending. M14.6 cannot close until an authorized platform-console session installs and verifies the reviewed helper, then the exact merged candidate is deployed through the protected controller and all post-deploy checks pass.
 
@@ -44,11 +47,15 @@ Therefore no new target-controlled Composer/npm/Artisan deployment ran after the
 - M14.5 has no default provider, no AI product feature enabled, zero authorized AI feature paths, and no customer-data AI egress authorization.
 - M14.7 and M14.8 remain separate handoffs. M14.7 must include the workflow, dependency, artifact, secret-exposure, and deployment-origin attack paths; M14.8 must confirm the exact-SHA and host privilege evidence remains current.
 
+## Dependabot sequencing
+
+The controlled dependency sweep has **not started**. Dependency PR merges remain frozen until exact-authoritative-SHA staging validation and M14.6 closure are complete, as required by the release-lineage policy. No dependency PR was merged as part of this evidence update.
+
 ## Completion required
 
-1. Use the authorized platform-console process to install the exact reviewed helper source/hash above and the corresponding narrow sudoers state; retain an independent administrative recovery path.
-2. Read back helper ownership/mode/hash, `sudo -n -l`, and denied arbitrary-root probes; verify allowed helper operations.
-3. Recheck staging health and safety gates before deployment.
-4. Use the protected controller from the merged primary tip; verify exact SHA, origin, all seven exact-SHA CI checks, and no dirty checkout.
-5. Deploy staging only, verify runtime HEAD and receipt, perform required non-destructive fault injection/health checks, and verify cleanup and all six M12 gates.
+1. Run the packet's read-only staging diagnosis and return only its non-secret classifications; establish the actual 503 cause and whether a deployment is active before recovery.
+2. Once safe to proceed, use the authorized platform-console process to install the exact reviewed helper source/hash and verify owner/mode, existing narrow sudoers state, `visudo -c`, helper-positive operations, and all ten denial probes. Keep an independent recovery route; never restore broad sudo.
+3. Recover the 503 only through the documented gated recovery sequence after reviewing host state; prove public and application health, workers, scheduler, locks, current SHA, and all safety gates.
+4. Re-read current primary and exact-SHA CI, then deploy only the exact authoritative primary tip through the protected controller.
+5. Verify runtime HEAD, private receipt, non-destructive fault injection, post-deploy health, cleanup, and all six M12 gates.
 6. Reconcile findings and publish the final closure report/PR only after the evidence is complete.
