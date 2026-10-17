@@ -14,4 +14,13 @@ No runtime/workflow/host change was made in planning. Priority order addresses c
 | M146-08 | P1 — deploy host and rollback resilience | Strong exact SHA, origin, clean tree, locks, DB dump and fail-closed migration handling; process-fault coverage not comprehensive. | shell harness/tests, deployment docs, staging. | Add deterministic fake/process tests and staging failure fixtures. No automatic data rollback. | Full matrix passes; gate remains closed whenever recovery is uncertain. |
 | M146-09 | P2 — update/advisory governance | Composer/npm audits run; no Dependabot config or exception lifecycle found. | `.github/dependabot.yml`, dependency review checklist. | PR-only action/Composer/npm updates, no auto-merge; finite advisory exception template. | Lockfile diff and audit evidence reviewed; no indefinite allowlist. |
 
-No new Owner commercial decision is needed. F01/F02 admin changes are implemented; helper upgrades still require an explicit root/admin install path. M146-F10 currently blocks staging release validation. M14.7 attack paths remain separate.
+No new Owner commercial decision is needed. F01/F02 admin changes are implemented; helper upgrades still require an explicit root/admin install path. M14.7 attack paths remain separate.
+
+
+## Implementation status after High containment
+
+- **M146-01 / F01:** closed by active branch ruleset `25300175` on `claude/ecstatic-wozniak-oemyuf`; seven required checks and strict PR path read back; no bypass actors; administrator enforcement active; single eligible maintainer means zero approval-count requirement (independent review remains a documented residual).
+- **M146-02 / F02:** closed on staging by removing unrestricted sudoers and system `sudo` group membership, installing root-owned fixed-operation helper and narrow sudoers grant; nine harmless arbitrary-root probes denied and required helper operations worked.
+- **M146-F10:** the fail-closed status parser defect was fixed in PR #107 (`6da254b97267abc7e93a8c3e376b1e0087a7454c`), merged as `dfaa2a9e4209cea310ef2241e58b1fe84e30c3e8`; exact-head CI run `39031728761` passed all seven jobs, including the MySQL process/concurrency gate. The merged-primary exact-SHA run is pending.
+- **M146-03..06:** PR B candidate adds verified full-SHA Actions refs, static policy/source checks, Gitleaks 8.30.0 checksum-verified safe extraction, and Moto exact version. PR exact-head CI and merge remain pending.
+- **M146-07..08:** exact merged-SHA authorization/receipt/fault-injection and staging release validation remain later implementation work; no staging target release is authorized until merged-primary CI is green and the trusted helper v2 is installed through the reviewed root/admin procedure.

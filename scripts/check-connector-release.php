@@ -18,8 +18,8 @@ if (! is_array($release) || ! is_string($release['version'] ?? null)
 }
 
 $base = $argv[1] ?? '';
-if ($base === '') {
-    fwrite(STDERR, "A base Git revision is required for Connector release validation.\n");
+if (! preg_match('/\A[0-9a-fA-F]{40}\z/D', $base)) {
+    fwrite(STDERR, "A full 40-character commit SHA is required for Connector release validation.\n");
     exit(2);
 }
 $run = static function (array $command) use ($root): array {
@@ -40,6 +40,10 @@ $run = static function (array $command) use ($root): array {
 };
 
 try {
+    [$objectType] = $run(['git', 'cat-file', '-t', $base]);
+    if (trim($objectType) !== 'commit') {
+        throw new RuntimeException('Base revision must identify a commit object.');
+    }
     try {
         [$baseRelease] = $run(['git', 'show', $base.':wordpress/wp-caregrid-connector/release.json']);
         $previous = json_decode($baseRelease, true);

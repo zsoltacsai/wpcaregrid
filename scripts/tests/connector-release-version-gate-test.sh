@@ -20,6 +20,14 @@ git -C "$temporary" config user.email 'release-gate@example.test'
 git -C "$temporary" add .
 git -C "$temporary" commit -qm 'Base Connector release'
 base="$(git -C "$temporary" rev-parse HEAD)"
+tree="$(git -C "$temporary" rev-parse HEAD^{tree})"
+multiline="$(printf '%s\n--output=/tmp/injected' "$base")"
+for invalid in '-' 'main' '0123' "$multiline" "$tree"; do
+    if php "$temporary/scripts/check-connector-release.php" "$invalid" >/dev/null 2>&1; then
+        echo 'Connector release gate accepted a non-SHA base argument.' >&2
+        exit 1
+    fi
+done
 
 printf '%s\n' '<?php return "changed without version bump";' > "$temporary/wordpress/wp-caregrid-connector/includes/example.php"
 cat > "$temporary/wordpress/wp-caregrid-connector/release.json" <<'JSON'

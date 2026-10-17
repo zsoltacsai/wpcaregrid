@@ -20,7 +20,7 @@ The MySQL server job has the strict process/concurrency suite (currently nine na
 |---|---|---|
 | Composer install and scripts | Root `composer.json`/`composer.lock`; `wordpress/composer.json`/lock. CI and staging run `composer install`; root post-autoload invokes Laravel package discovery; plugin allowlist is explicit. | Dependency install and scripts execute repository/dependency code. Root/Connector locks are committed and installs are lock-respecting. Staging runs this as `deploy` with observed unrestricted NOPASSWD sudo (F02). |
 | npm build | `package.json`, `package-lock.json`, `.npmrc`; CI and staging use `npm ci`, then `npm run build`. `.npmrc` sets `ignore-scripts=true`; explicit project build still executes Vite. | Registry packages are integrity-locked; nine package entries declare install scripts but npm config suppresses their lifecycle execution. First-party `build` script is intended. Staging context inherits deploy user's broad sudo. |
-| Python test service | CI installs `moto[server]==5.1.*` through pipx. | Moving patch and transitive package resolution; no secret or deploy authority. |
+| Python test service | CI installs `moto[server]==5.2.4` exactly through pipx in the implementation candidate. | Moving patch and transitive package resolution; no secret or deploy authority. |
 | OS/service setup | CI apt installs `openssh-server`; GitHub Actions services use `mysql:8.4` and `mariadb:10.11`. | Ubuntu signed repository and moving service image tags on ephemeral test runner. |
 | Connector packaging | `app/Console/Commands/PackageConnector.php`, `app/Connector/ConnectorPackageArtifact.php`, `release.json`; CI builds/checks private ZIP; deploy rebuilds/verifies exact deployed source. | ZIP includes per-file manifest; sidecar records source revision/source SHA-256/package SHA-256; same-version changed source fails. Package is not an Actions artifact. |
 | Staging deployment | `scripts/deploy-staging.sh`, documented manual invocation from `/var/www/wpcaregrid` by `deploy`, exact full SHA argument. | Fixed branch and expected SSH origin; clean baseline, SHA, ancestry, deployment and scheduler locks, DB backup, service gates, pinned code checkout, rollback. Target Composer/npm/Artisan code executes as deploy. Target commit cannot rewrite already-running shell script, but it supplies build/migration/package code and the installed scheduler wrapper after checks. |
@@ -29,3 +29,8 @@ The MySQL server job has the strict process/concurrency suite (currently nine na
 | Git hooks / Docker / custom actions | No tracked `.github/actions`, Dockerfile/Compose, Dependabot, CODEOWNERS, or hook framework found by inventory. | No additional tracked execution mechanism identified. Host-side Git config/hooks remain part of external verification. |
 
 No PR artifact is downloaded by another run, used as deployment input, or served to customers. A change that introduces such a channel requires a new threat-model review.
+
+
+## Candidate implementation delta
+
+Remote Actions are full-SHA pinned with version comments. CI adds repository-owned action/workflow policy tests, locked-source checks, deterministic archive-verifier and secret-path tests, and Gitleaks archive verification before execution. The workflow remains read-only (`contents: read`), GitHub-hosted ephemeral, with no secrets or deployment. Exact-head full matrix is pending.
