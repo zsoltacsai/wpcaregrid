@@ -4,6 +4,7 @@ namespace App\Backups;
 
 use App\Connector\JobStatus;
 use App\Models\Backup;
+use App\Models\BackupProtectionHold;
 use App\Models\BackupRestore;
 use App\Models\SubscriptionBackupEntitlement;
 use App\Models\Website;
@@ -23,7 +24,7 @@ final class GfsRetentionEvaluator
     ];
 
     /** @return array<string, mixed> */
-    public function evaluate(Website $website, ?CarbonImmutable $at = null): array
+    public function evaluate(Website $website, ?CarbonImmutable $at = null, ?array $ownerPolicyOverride = null): array
     {
         $at = ($at ?? CarbonImmutable::now())->utc();
         $snapshot = $website->subscription?->backupEntitlements()
@@ -51,10 +52,19 @@ final class GfsRetentionEvaluator
         }
         $usable = $points->filter(fn (Backup $backup) => $this->usable($backup))->values();
 
+        $ownerPolicy = $ownerPolicyOverride ?? [
+            'daily_recovery_points' => $website->subscription?->backupOwnerPolicy?->daily_recovery_points,
+            'weekly_recovery_points' => $website->subscription?->backupOwnerPolicy?->weekly_recovery_points,
+            'monthly_recovery_points' => $website->subscription?->backupOwnerPolicy?->monthly_recovery_points,
+            'version' => $website->subscription?->backupOwnerPolicy?->version ?? 0,
+        ];
+        $effective = [];
         foreach (self::CLASSES as $class => $definition) {
             $count = $policy[$class];
+            $effective[$class] = max($count, (int) ($ownerPolicy[$definition['field']] ?? $count));
+            $count = $effective[$class];
             $required[$class] = $count === 0 ? [] : $this->slots($class, $count, $at);
-            foreach ($required[$class] as $slot) {
+            foreach ($required[$class] as $slotIndex => $slot) {
                 $point = $usable
                     ->filter(fn (Backup $backup) => $this->slotFor($class, CarbonImmutable::instance($backup->verified_at)->utc()) === $slot)
                     ->sort(function (Backup $left, Backup $right): int {
@@ -72,6 +82,9 @@ final class GfsRetentionEvaluator
 
                 $satisfied[$class][$slot] = $point->uuid;
                 $reasons[$point->uuid][] = $definition['reason'];
+                if ($slotIndex >= (int) $snapshot->{$definition['field']}) {
+                    $reasons[$point->uuid][] = BackupProtectionReason::OwnerExtension->value;
+                }
             }
             $satisfied[$class] ??= [];
         }
@@ -119,6 +132,19 @@ final class GfsRetentionEvaluator
             }
         }
 
+        $activeHolds = BackupProtectionHold::query()
+            ->where('website_id', $website->id)
+            ->whereIn('backup_id', $points->pluck('id'))
+            ->whereNull('released_at')
+            ->orderBy('id')
+            ->get(['id', 'backup_id', 'reason_code', 'source_code', 'held_at', 'updated_at']);
+        foreach ($activeHolds as $hold) {
+            $backup = $points->firstWhere('id', $hold->backup_id);
+            if ($backup) {
+                $reasons[$backup->uuid][] = $hold->reason_code;
+            }
+        }
+
         // Unresolved external requirements never produce an eligible-to-delete state.
         $waitReasons = ['WAIT_LEGAL', 'WAIT_ACCOUNTING', 'WAIT_FACT'];
         $protected = [];
@@ -148,6 +174,7 @@ final class GfsRetentionEvaluator
                 $snapshot->monthly_recovery_points,
                 $snapshot->effective_at?->utc()->toIso8601String(),
             ],
+            'owner_policy' => [$ownerPolicy['version'] ?? 0, $effective],
             'at_slots' => $required,
             'points' => $points->map(fn (Backup $backup) => [
                 $backup->id,
@@ -170,6 +197,7 @@ final class GfsRetentionEvaluator
             ])->all(),
             'restore_dependencies' => $activeRestores->map(fn (BackupRestore $restore) => [$restore->id, $restore->backup_id, $restore->safety_backup_id, $restore->status->value, $restore->updated_at?->utc()->toIso8601String()])->all(),
             'active_jobs' => $activeJobs->map(fn (WebsiteJob $job) => [$job->backup_id, $job->type->value, $job->status->value, $job->updated_at?->utc()->toIso8601String()])->all(),
+            'active_holds' => $activeHolds->map(fn (BackupProtectionHold $hold) => [$hold->id, $hold->backup_id, $hold->reason_code, $hold->source_code, $hold->held_at?->utc()->toIso8601String(), $hold->updated_at?->utc()->toIso8601String()])->all(),
         ];
 
         return [
@@ -178,6 +206,7 @@ final class GfsRetentionEvaluator
             'catalogue_version' => $snapshot->catalogue_version,
             'entitlement_snapshot_id' => $snapshot->id,
             'policy' => ['daily' => $policy['DAILY'], 'weekly' => $policy['WEEKLY'], 'monthly' => $policy['MONTHLY']],
+            'effective_policy' => ['daily' => $effective['DAILY'], 'weekly' => $effective['WEEKLY'], 'monthly' => $effective['MONTHLY']],
             'evaluated_at' => $at->toIso8601String(),
             'required_slots' => $required,
             'satisfied_slots' => $satisfied,

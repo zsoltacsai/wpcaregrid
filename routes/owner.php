@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Owner\BackupRetentionPolicyController;
 use App\Http\Controllers\Owner\CloudflareDnsController;
 use App\Http\Controllers\Owner\ContentController;
 use App\Http\Controllers\Owner\CouponController;
@@ -71,6 +72,10 @@ Route::prefix('owner')->name('owner.')->group(function () {
 
         Route::get('/websites', [WebsiteController::class, 'index'])->middleware('can:owner.websites.view')->name('websites.index');
         Route::get('/websites/{website}', [WebsiteController::class, 'show'])->middleware('can:owner.websites.view')->name('websites.show');
+        Route::get('/backup-policies', [BackupRetentionPolicyController::class, 'index'])->middleware('can:owner.backup_policies.manage')->name('backup-policies.index');
+        Route::post('/backup-policies/{subscription}/preview', [BackupRetentionPolicyController::class, 'preview'])->middleware(['can:owner.backup_policies.manage', 'throttle:owner-sensitive'])->name('backup-policies.preview');
+        Route::get('/backup-policies/previews/{preview}', [BackupRetentionPolicyController::class, 'showPreview'])->middleware('can:owner.backup_policies.manage')->name('backup-policies.previews.show');
+        Route::post('/backup-policies/previews/{preview}/confirm', [BackupRetentionPolicyController::class, 'confirm'])->middleware(['can:owner.backup_policies.manage', 'throttle:owner-sensitive'])->name('backup-policies.confirm');
         Route::get('/websites/{website}/connector-package', [WebsiteController::class, 'connectorPackage'])->middleware('can:owner.websites.operate')->name('websites.connector-package');
         Route::post('/websites/{website}/pairing-code', [WebsiteController::class, 'pairingCode'])->middleware(['can:owner.websites.operate', 'throttle:owner-sensitive'])->name('websites.pairing-code');
         // Through BackupService and SecurityScanService, exactly as in the operator console.

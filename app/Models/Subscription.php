@@ -108,6 +108,11 @@ class Subscription extends Model
         return $this->hasMany(SubscriptionBackupEntitlement::class);
     }
 
+    public function backupOwnerPolicy(): HasOne
+    {
+        return $this->hasOne(BackupOwnerPolicy::class);
+    }
+
     /** An internal plan (PROBONO): no Stripe subscription, no public tier, no price. */
     public function isInternal(): bool
     {
