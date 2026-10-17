@@ -42,4 +42,8 @@ No customer data may leave WP CareGrid until a future feature has a separately a
 
 OQ-01 through OQ-05 are `OWNER_APPROVED`. They resolve the Owner/product choices recorded here; they do not resolve qualified external facts or approvals. Post-service retention duration remains `WAIT_LEGAL` / `WAIT_ACCOUNTING`; provider physical-deletion semantics remain `WAIT_FACT`.
 
+### M14.5 engineering interpretation — 2026-10-17
+
+The approved boundary is implemented as exactly three source-owned provider entries (`openai`, `anthropic`, `google_gemini`) with fixed official metadata endpoints and no custom URL. The proposed explicit probes are bodyless model metadata GETs; no static marker is required. Provider/account cost is not claimed to be zero based on endpoint documentation. The Owner current-password-confirmation requirement for AI key create/replace/remove, health-generation concurrency handling, no environment fallback, and runtime-resolved-only storage are engineering controls within OQ-05; no new Owner decision is requested. Customer-data processing by AI remains `NOT AUTHORIZED / FUTURE REVIEW REQUIRED`.
+
 The following remain false: `M12_DESTRUCTIVE_RETENTION_ENABLED`, profile anonymization execution, customer backup deletion, provider deletion, bulk destructive execution and normal-staging synthetic execution. No decision in this register authorizes production destructive execution, customer-data egress to AI providers, or work in M15.

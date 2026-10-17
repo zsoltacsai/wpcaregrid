@@ -1,29 +1,18 @@
-# M14 AI Provider Security Boundary
+# M14 AI provider security boundary
 
-## Data and authority boundary
+This M14.5 design refines the earlier boundary note. See [zero-data-egress contract](m14-5-zero-data-egress-contract.md), [credential lifecycle](m14-5-credential-lifecycle.md), and [Owner security matrix](m14-5-owner-security-matrix.md) for implementation-ready rules.
 
-M14 provider configuration is infrastructure groundwork only. It does not authorize customer site inventory, backup content, code, database data, credentials, security findings, billing data, privacy requests, free-form prompts or logs to leave WP CareGrid. No provider key grants the holder additional tenant or application authority.
+## M14.5 permitted operation
 
-## Required controls before any future feature
+Only an explicit Owner request may cause a provider health probe. The probe sends the stored provider credential in the provider's documented authentication mechanism to a fixed official HTTPS metadata-list endpoint. It has no body and accepts no arbitrary payload. The model metadata response is bounded, minimally checked, discarded, and never displayed or stored. Cost/account quota is not claimed to be zero. No customer or site data, security/backup data, code/content, logs, PII or other credentials may leave WP CareGrid.
 
-1. Data-flow inventory and purpose approval; classify each input and explicitly exclude secrets, credentials, backup archives and unnecessary identifiers.
-2. Separate provider secret storage from feature authorization. Secrets are encrypted, masked after save, least privileged, replaceable and revocable.
-3. Fixed HTTPS provider origins; never accept tenant-supplied endpoint URLs. SSRF egress policy, redirect policy and response bounds are mandatory.
-4. Explicit per-feature enablement, tenant eligibility, user/Owner authorization, retention/deletion policy and human approval for site changes.
-5. No provider response is executable code or trusted instruction. Validate output against a narrow schema and treat model output as untrusted.
-6. Prompt/data minimization, no model training/data retention claims without contractual evidence, region/subprocessor review and legal/privacy review before personal data transfer.
-7. Audit metadata only: provider/model/version, feature, purpose, status and opaque correlation ID. Avoid prompt/response content unless separately justified and protected.
-8. Timeouts, retry budgets, circuit breaker, cost/token ceiling, queue isolation and fail-closed unavailable state.
+## Must remain absent
 
-## Prohibited M14 implications
+- default provider, model preference, routing or fallback;
+- completion/chat/embedding/moderation, streaming, tools, file upload or AI feature client;
+- customer/site/security/backup/operations data path to a provider;
+- AI enablement, feature authorization, autonomous actions or “AI-powered” claim;
+- arbitrary provider URL, host, proxy or endpoint;
+- Operator/Customer visibility of credentials or even provider status.
 
-- no “AI-powered” or autonomous marketing claim;
-- no automatic remediation/update/restore from model output;
-- no use of customer data to test credentials;
-- no provider key exposure in logs/Owner page after entry;
-- no provider default just because a key is configured;
-- no AI call while configuration or authorization is missing/ambiguous.
-
-## Owner decision application — 2026-10-16
-
-OQ-05 approves Owner-only configuration groundwork for OpenAI, Anthropic and Google Gemini under the boundaries above. It does not approve customer-data egress, feature enablement, a default provider, autonomous operations, or “AI-powered” marketing. Provider states must remain distinct: `CONFIGURED`, `ENABLED`, `HEALTHY`, `DEFAULT` and `AUTHORIZED_FOR_FEATURE`. A non-customer health/test probe must use fixed safe input. Separate purpose, data classification, security, privacy/legal/vendor and applicable tenant/customer approvals are required before any customer data transfer.
+Future AI work requires its own purpose/data classification, provider and vendor review, privacy/legal approval, security review, tenant/customer authorization and human approval model. Configuration alone provides none of these.
