@@ -34,6 +34,10 @@ Planning baseline primary: `62fc2a74f2b0720e61b73d70c449639363a0eead`. Backlog i
 
 Each P0 remains required unless evidence proves a row not applicable and the audit report records why.
 
+## M14.6 supply-chain audit carry-forward — 2026-10-17
+
+M14.6 planning audit is documented under `reports/m14-supply-chain/m14-6-*.md`. Read-only GitHub settings show the deployed authoritative branch is unprotected, has no repository ruleset, and does not require any of its seven CI result checks. Read-only staging evidence shows deploy has unrestricted `NOPASSWD: ALL` while target-controlled Composer/npm/Artisan build and migration code runs as deploy. These are confirmed High control-path findings M146-F01 and M146-F02; M14.6 closure and staging promotion must wait for reviewed branch enforcement and a least-privilege deployment boundary. Planning made no setting/runtime/workflow changes. Full M14.7 scanning and M14.8 closure remain separate.
+
 ## M14.1 planning refinement — 2026-10-16
 
 Execute M14.1 in this order: (1) expanded route/command authorization inventory; (2) two-tenant customer/Owner/Operator/Connector object matrix; (3) queued-job and command stale-object/relation tests; (4) password reset/activation session revocation and concurrent one-time token tests; (5) recent-auth, CSRF and role-revocation matrix; (6) route-to-limiter coverage and shared-cache verification; (7) targeted output/log/resource-abuse checks; (8) focused plus full regression and exact-SHA CI; (9) guarded synthetic staging proof and audit refresh. Detailed acceptance and test plans are in `reports/m14-security/m14-1-*.md`.
