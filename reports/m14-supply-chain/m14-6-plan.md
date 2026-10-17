@@ -4,7 +4,7 @@
 **Audited primary:** `claude/ecstatic-wozniak-oemyuf` at `291f486db41ecc5dcc9c152db5ef0b35d634b404`; planning PR #105 merged as `b16f2c53e7b6763bdfd7bcfea4d5162807bc06ad`.
 **Staging readback:** `3debba99c677b68465cf439733f440442fbd0f22`, clean working tree, expected origin.
 **Repository:** public `zsoltacsai/wpcaregrid`; default branch is the deployed authoritative branch.
-**Disposition:** M146-F01 and M146-F02 are closed with direct GitHub/staging readback. PR #106 merged as `854a26832d864146fc493e75225cf6438ed932b9`; root helper v1 and helper-only sudo policy are installed. First deployment attempt failed closed on a confirmed Supervisor status-handling defect (M146-F10); baseline restored and healthy, no code switch. M14.6 remains in progress.
+**Disposition at planning time:** M146-F01 and M146-F02 were closed with direct GitHub/staging readback. PR #106 merged as `854a26832d864146fc493e75225cf6438ed932b9`; root helper v1 and helper-only sudo policy were installed. The first deployment attempt failed closed on a confirmed Supervisor status-handling defect (M146-F10); baseline was restored and healthy with no code switch. This planning report is historical; later final staging validation and the formal-closeout condition are recorded in the [M14.6 closure report](m14-6-closure-report.md).
 
 ## Executive result
 

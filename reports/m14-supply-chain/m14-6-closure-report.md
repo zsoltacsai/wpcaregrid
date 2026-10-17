@@ -1,6 +1,6 @@
-# M14.6 Closure Report — Staging Validation Complete; Documentation Pending
+# M14.6 Closure Report — Staging Validation and Formal Closeout
 
-**Status:** The owner reports successful staging deployment and validation of the exact merged primary SHA `be427a17320ca7aba9ec292d2c288813df5f7c07`. The evidence record has been reconciled in this documentation-only PR and awaits review/merge. M14.6 is therefore **not formally closed yet**. No production deployment occurred.
+**Status:** Staging validation is complete based on owner-supplied evidence for exact merged primary SHA `be427a17320ca7aba9ec292d2c288813df5f7c07`. This report is the documentation closeout. Formal closure is established when PR #117 is merged and exact merged-primary CI passes; GitHub records the merge SHA and run. No production deployment occurred.
 
 ## Release identity and CI evidence
 
@@ -69,4 +69,4 @@ The controlled dependency sweep has not started. Dependabot PRs remain unmerged,
 
 ## Closure decision
 
-**Staging validation: complete, based on owner-supplied evidence. Documentation closure: pending review and merge of this documentation-only PR.** Once reviewed and merged, M14.6 is ready for its M14.7 handoff, subject to the recorded residuals. Do not begin M14.7 before this closure PR is reviewed/merged. No production action is authorized by this report.
+**Staging validation: complete, based on owner-supplied evidence. Formal documentation closure: PR #117 merge plus successful exact merged-primary CI.** After that evidence is present, M14.6 is ready for the M14.7 handoff, subject to the recorded residuals. Do not begin M14.7 before this closure PR is merged and merged-primary CI passes. No production action is authorized by this report.

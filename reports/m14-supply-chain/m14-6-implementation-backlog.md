@@ -27,4 +27,4 @@ No new Owner commercial decision is needed. F01/F02 admin changes are implemente
 
 ## Staging closure status — 2026-10-17
 
-Owner-reported exact-SHA staging validation is complete for target `be427a17320ca7aba9ec292d2c288813df5f7c07`, baseline `3debba99c677b68465cf439733f440442fbd0f22`, receipt `release-20261017T175616.507178Z-be427a17320ca7aba9ec292d2c288813df5f7c07.json`, and merged-primary CI `39051589381` (7/7). **Documentation closure remains pending review/merge of the closure PR.** See the closure report for scope, residuals and attribution. No Dependabot PR was merged.
+Owner-reported exact-SHA staging validation is complete for target `be427a17320ca7aba9ec292d2c288813df5f7c07`, baseline `3debba99c677b68465cf439733f440442fbd0f22`, receipt `release-20261017T175616.507178Z-be427a17320ca7aba9ec292d2c288813df5f7c07.json`, and merged-primary CI `39051589381` (7/7). PR #117 is the documentation closeout; its merge and successful exact merged-primary CI establish formal milestone closure. See the closure report for scope, residuals and attribution. No Dependabot PR was merged.
