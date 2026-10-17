@@ -6,8 +6,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
+import subprocess
 import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +18,122 @@ from pathlib import Path
 APPLICATION = Path("/var/www/wpcaregrid")
 RECEIPTS = Path("/home/deploy/private-backups/deployment-receipts")
 LOCKFILES = ("composer.lock", "wordpress/composer.lock", "package-lock.json")
+
+
+class ReceiptFailure(ValueError):
+    """A safe, stable receipt failure category without external error text."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def connector_revision_matches_release_history(application, source_revision, target_sha, mode):
+    if not isinstance(source_revision, str) or not re.fullmatch(r"[0-9a-f]{40}", source_revision):
+        return False
+    git = "/usr/bin/git" if Path("/usr/bin/git").is_file() else shutil.which("git")
+    if not git:
+        return False
+    environment = {"PATH": str(Path(git).parent), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    if os.name == "nt" and os.environ.get("SystemRoot"):
+        environment["SystemRoot"] = os.environ["SystemRoot"]
+    try:
+        result = subprocess.run(
+            [git, "-C", str(application), "merge-base", "--is-ancestor", source_revision, target_sha],
+            check=False, capture_output=True, timeout=5, env=environment,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    related = result.returncode == 0
+    if not related and (result.returncode != 1 or mode != "rollback"):
+        return False
+    if not related:
+        try:
+            reverse = subprocess.run(
+                [git, "-C", str(application), "merge-base", "--is-ancestor", target_sha, source_revision],
+                check=False, capture_output=True, timeout=5, env=environment,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        if reverse.returncode != 0:
+            return False
+    try:
+        source_tree = subprocess.run(
+            [git, "-C", str(application), "rev-parse", "--verify", f"{source_revision}:wordpress/wp-caregrid-connector"],
+            check=True, capture_output=True, text=True, timeout=5, env=environment,
+        ).stdout.strip()
+        target_tree = subprocess.run(
+            [git, "-C", str(application), "rev-parse", "--verify", f"{target_sha}:wordpress/wp-caregrid-connector"],
+            check=True, capture_output=True, text=True, timeout=5, env=environment,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return bool(re.fullmatch(r"[0-9a-f]{40}", source_tree) and source_tree == target_tree)
+
+
+def verify_connector_artifact(application, package, version, source_revision, source_sha256):
+    try:
+        with zipfile.ZipFile(package, "r") as archive:
+            entries = archive.infolist()
+            if len(entries) > 1001 or sum(entry.file_size for entry in entries) > 16 * 1024 * 1024:
+                return False
+            names = [entry.filename for entry in entries]
+            if len(names) != len(set(names)):
+                return False
+            if any(name.startswith("/") or "\\" in name or ".." in Path(name).parts for name in names):
+                return False
+            manifest_name = "wp-caregrid-connector/package-manifest.json"
+            if names.count(manifest_name) != 1:
+                return False
+            manifest = json.loads(archive.read(manifest_name))
+            if not isinstance(manifest, dict):
+                return False
+            files = manifest.get("files")
+            if (manifest.get("schema") != 1 or manifest.get("version") != version
+                    or manifest.get("source_revision") != source_revision
+                    or manifest.get("source_sha256") != source_sha256
+                    or not isinstance(files, dict) or not files):
+                return False
+            ordered_files = {}
+            for relative in sorted(files):
+                expected_hash = files[relative]
+                relative_path = Path(relative)
+                if (not isinstance(relative, str) or not isinstance(expected_hash, str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+                        or relative_path.is_absolute() or ".." in relative_path.parts
+                        or "\\" in relative):
+                    return False
+                archive_name = f"wp-caregrid-connector/{relative}"
+                if names.count(archive_name) != 1:
+                    return False
+                info = archive.getinfo(archive_name)
+                if (info.external_attr >> 16) & 0o170000 == 0o120000:
+                    return False
+                contents = archive.read(archive_name)
+                if hashlib.sha256(contents).hexdigest() != expected_hash:
+                    return False
+                current = application / "wordpress/wp-caregrid-connector" / relative_path
+                if current.is_symlink() or not current.is_file() or sha256_file(current) != expected_hash:
+                    return False
+                ordered_files[relative] = expected_hash
+            expected_names = {manifest_name, *(f"wp-caregrid-connector/{path}" for path in ordered_files)}
+            if set(names) != expected_names:
+                return False
+            source_digest = hashlib.sha256(json.dumps(ordered_files, separators=(",", ":"), ensure_ascii=True).encode("utf-8")).hexdigest()
+            if source_digest != source_sha256:
+                return False
+            current_root = application / "wordpress/wp-caregrid-connector"
+            current_names = set()
+            for current in current_root.rglob("*"):
+                if current.is_symlink():
+                    return False
+                if current.is_file():
+                    relative = current.relative_to(current_root).as_posix()
+                    if not re.search(r"(^|/)(?:\.git|tests?|fixtures?)(?:/|$)|(^|/)\.env(?:\.|$)|\.(?:sqlite|sqlite3|log|zip)$", relative, re.IGNORECASE):
+                        current_names.add(relative)
+            return current_names == set(ordered_files)
+    except Exception:
+        return False
 
 
 def sha256_file(path):
@@ -67,10 +186,14 @@ def receipt_data(application, *, baseline_sha, target_sha, workflow_run_id, mode
     sidecar_path = regular_file(application, f"storage/app/private/connector/wp-caregrid-connector-{version}.zip.manifest.json")
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     package_hash = sha256_file(package)
-    if not isinstance(sidecar, dict) or sidecar.get("version") != version or sidecar.get("source_revision") != target_sha or sidecar.get("package_sha256") != package_hash:
-        raise ValueError("Connector source/package provenance does not match the release")
+    source_revision = sidecar.get("source_revision") if isinstance(sidecar, dict) else None
+    if not isinstance(sidecar, dict) or sidecar.get("version") != version or sidecar.get("package_sha256") != package_hash:
+        raise ReceiptFailure("connector_provenance_invalid")
     if not re.fullmatch(r"[0-9a-f]{64}", str(sidecar.get("source_sha256", ""))):
-        raise ValueError("Connector source fingerprint is invalid")
+        raise ReceiptFailure("connector_provenance_invalid")
+    if (not verify_connector_artifact(application, package, version, source_revision, sidecar["source_sha256"])
+            or not connector_revision_matches_release_history(application, source_revision, target_sha, mode)):
+        raise ReceiptFailure("connector_provenance_invalid")
 
     timestamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     return {
@@ -87,6 +210,7 @@ def receipt_data(application, *, baseline_sha, target_sha, workflow_run_id, mode
         "migrations": migrations,
         "connector": {
             "version": version,
+            "source_revision": source_revision,
             "source_sha256": sidecar["source_sha256"],
             "package_sha256": package_hash,
         },
@@ -181,8 +305,14 @@ def main():
             health="passed",
         )
         receipt = write_receipt(data)
+    except ReceiptFailure as error:
+        print(f"Deployment receipt could not be safely written ({error.code}).", file=__import__("sys").stderr)
+        return 1
+    except OSError:
+        print("Deployment receipt could not be safely written (receipt_storage_failed).", file=__import__("sys").stderr)
+        return 1
     except Exception:
-        print("Deployment receipt could not be safely written.", file=__import__("sys").stderr)
+        print("Deployment receipt could not be safely written (receipt_validation_failed).", file=__import__("sys").stderr)
         return 1
     print(receipt.name)
     return 0
