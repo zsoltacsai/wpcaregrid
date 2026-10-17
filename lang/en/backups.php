@@ -148,6 +148,8 @@ return [
             'uploaded' => 'Backup uploaded',
             'verified' => 'Backup verified',
             'failed' => 'Backup failed',
+            'recovery_gap' => 'A required recovery point is missing',
+            'recovery_gap_resolved' => 'Required recovery points are available again',
             'corrupt' => 'Backup failed verification',
             'expired' => 'Backup expired',
             'deleted' => 'Backup deleted',

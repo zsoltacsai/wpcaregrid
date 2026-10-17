@@ -148,6 +148,8 @@ return [
             'uploaded' => 'Mentés feltöltve',
             'verified' => 'Mentés ellenőrizve',
             'failed' => 'Mentés sikertelen',
+            'recovery_gap' => 'Egy szükséges visszaállítási pont hiányzik',
+            'recovery_gap_resolved' => 'A szükséges visszaállítási pontok ismét elérhetők',
             'corrupt' => 'A mentés ellenőrzése sikertelen',
             'expired' => 'Mentés lejárt',
             'deleted' => 'Mentés törölve',

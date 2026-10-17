@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands\Backups;
 
+use App\Backups\BackupGfsShadowStore;
 use App\Backups\Retention;
 use App\Models\Website;
 use Illuminate\Console\Command;
@@ -12,16 +13,21 @@ class ApplyRetention extends Command
 
     protected $description = 'Report legacy backup retention candidates without deleting backups (run daily)';
 
-    public function handle(Retention $retention): int
+    public function handle(Retention $retention, BackupGfsShadowStore $gfs): int
     {
-        $count = 0;
-        Website::whereHas('backups')->chunkById(100, function ($websites) use ($retention, &$count) {
+        $legacyCandidates = 0;
+        $recoveryGaps = 0;
+        $blockedCandidates = 0;
+        Website::whereHas('backups')->chunkById(100, function ($websites) use ($retention, $gfs, &$legacyCandidates, &$recoveryGaps, &$blockedCandidates) {
             foreach ($websites as $website) {
-                $count += count($retention->preview($website));
+                $legacyCandidates += count($retention->preview($website));
+                $evaluation = $gfs->evaluate($website);
+                $recoveryGaps += $evaluation->missing_slot_count;
+                $blockedCandidates += count($evaluation->result['blocked_candidates'] ?? []);
             }
         });
 
-        $this->components->info("Reported {$count} legacy retention candidate(s); no backups were deleted.");
+        $this->components->info("Shadow report: {$legacyCandidates} legacy comparison candidate(s), {$recoveryGaps} GFS recovery gap(s), {$blockedCandidates} blocked GFS candidate(s); no backups were deleted.");
 
         return self::SUCCESS;
     }

@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\Log;
 final class AuditLog
 {
     public const EVENTS = [
-        'backup.requested', 'backup.started', 'backup.uploaded', 'backup.verified', 'backup.failed',
+        'backup.requested', 'backup.started', 'backup.uploaded', 'backup.verified', 'backup.failed', 'backup.recovery_gap', 'backup.recovery_gap_resolved',
         'backup.corrupt', 'backup.expired', 'backup.deleted', 'backup.deletion_requested', 'backup.deletion_partial', 'backup.deletion_reconciliation_required',
         'restore.requested', 'restore.queued', 'restore.started', 'restore.completed', 'restore.failed',
         'restore.recovery_requested', 'restore.recovery_started', 'restore.recovery_completed', 'restore.recovery_failed', 'restore.manual_recovery_required',
