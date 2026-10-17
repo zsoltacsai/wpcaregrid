@@ -102,9 +102,32 @@ def worker(action, name):
     if name not in WORKERS or action not in {"status", "start", "stop"}:
         raise ValueError("unsupported worker operation")
     result = run(["/usr/bin/supervisorctl", action, name], check=False, stdout=subprocess.PIPE)
+    output = result.stdout or ""
+    if action == "status":
+        sys.stdout.write(normalize_worker_status(name, output))
+        return
     if result.returncode:
         raise ValueError("worker operation failed")
-    sys.stdout.write(result.stdout or "")
+    sys.stdout.write(output)
+
+
+def normalize_worker_status(name, output):
+    """Normalize one fixed Supervisor status line, including STOPPED exit codes."""
+    lines = output.splitlines()
+    if len(lines) != 1:
+        raise ValueError("unexpected worker status response")
+    line = lines[0].strip()
+    running = re.fullmatch(
+        rf"{re.escape(name)}\s+RUNNING\s+pid\s+(\d+)(?:,\s+uptime\s+.+)?",
+        line,
+    )
+    if running:
+        return f"{name} RUNNING pid {running.group(1)}\n"
+    states = "STOPPED|STARTING|BACKOFF|STOPPING|EXITED|FATAL|UNKNOWN"
+    state = re.fullmatch(rf"{re.escape(name)}\s+({states})(?:\s+.*)?", line)
+    if state:
+        return f"{name} {state.group(1)}\n"
+    raise ValueError("unexpected worker status response")
 
 
 def scheduler_lock_init():

@@ -4,25 +4,25 @@
 **Audited primary:** `claude/ecstatic-wozniak-oemyuf` at `291f486db41ecc5dcc9c152db5ef0b35d634b404`; planning PR #105 merged as `b16f2c53e7b6763bdfd7bcfea4d5162807bc06ad`.
 **Staging readback:** `3debba99c677b68465cf439733f440442fbd0f22`, clean working tree, expected origin.
 **Repository:** public `zsoltacsai/wpcaregrid`; default branch is the deployed authoritative branch.
-**Disposition:** **D — M146-F02 remains a confirmed High blocker.** M146-F01 was closed by active ruleset `25300175`; staging sudoers remains broad pending PR #106 and explicit host cutover.
+**Disposition:** M146-F01 and M146-F02 are closed with direct GitHub/staging readback. PR #106 merged as `854a26832d864146fc493e75225cf6438ed932b9`; root helper v1 and helper-only sudo policy are installed. First deployment attempt failed closed on a confirmed Supervisor status-handling defect (M146-F10); baseline restored and healthy, no code switch. M14.6 remains in progress.
 
 ## Executive result
 
 The CI workflow is a single non-deploying workflow with seven required validation results, a workflow-wide `contents: read` token, no `pull_request_target`, no deployment credentials, and no artifact upload/download path. Fork pull requests therefore run untrusted code in a read-only/no-repository-secret boundary. The MySQL process/concurrency test set is inside Server MySQL and is part of that job.
 
-At initial audit, two confirmed High control failures interrupted the intended source-to-staging trust chain. F01 is now closed; F02 remains open:
+At initial audit, two confirmed High control failures interrupted the intended source-to-staging trust chain. Both are now closed; the subsequent guarded deploy surfaced a separate fail-closed control defect:
 
 1. **Closed 2026-10-17:** repository ruleset `25300175` now requires PRs and seven exact checks, blocks force push and deletion, requires conversation resolution, and has no bypass actors. The branch API reports `protected:true`; no direct-push probe was attempted. Only the owner is push-capable, so approval count is zero and independent review remains a residual.
-2. **Still open:** staging `sudo -l` for `deploy` returns `(ALL : ALL) ALL` and `NOPASSWD: ALL`. Target Composer/npm/Artisan code runs as deploy and can therefore reach staging root. PR #106 prepares a fixed-operation helper/controller conversion, but no helper or sudoers change has been installed.
+2. **Closed 2026-10-17:** staging broad sudoers rule removed and deploy removed from `sudo` group. `sudo -n -l` now lists only the fixed root helper; arbitrary command probes and harmless target-code fixture are denied. The reviewed controller attempt stopped before code switch and helper status handling treated a valid STOPPED state as an error. M146-F10 tracks the correction.
 
-These are confirmed control-path findings, not proof that either was exploited. F01's direct-push/check-bypass route is mechanically closed by effective GitHub rules. F02 still blocks all new target-code deployment and all remaining M14.6 work until the reviewed helper is installed, broad sudo is removed, and required-operation/arbitrary-sudo probes prove the new boundary.
+These are confirmed control-path findings, not proof that either was exploited. F01's direct-push/check-bypass route is mechanically closed by effective GitHub rules. F01/F02 are closed. M146-F10 blocks further staging release validation until a reviewed helper correction is installed via a separate root/admin path; general CI supply-chain work may proceed.
 
 ## Verified baseline and constraints
 
 - M14.5 closure PR #104 merged to the authoritative branch at `291f486…`; closure exact-head run `39023730830` passed 7/7 (baseline supplied and checked against current primary).
 - Connector release metadata is `0.4.7`, API v1 (source `wordpress/wp-caregrid-connector/release.json` and repository compatibility evidence).
 - Current executable staging SHA read over strict host-key-checked SSH is `3debba99…`; staging `origin` is `git@github.com-wpcaregrid:zsoltacsai/wpcaregrid.git`; status is clean.
-- No production host was contacted. The only repository setting change was the F01-specific ruleset; no staging host setting has yet changed.
+- No production host was contacted. Repository setting change is limited to the F01-specific ruleset. Staging host changes are limited to installing the reviewed helper/controller and replacing broad deploy sudo with the helper-only rule; no application release switch completed.
 - Security gates remain fail-closed: M12 destructive retention and all related deletion/anonymization/synthetic gates false; M14.4 `backup:retention` report-only; M14.5 has no product AI feature/default/provider authorization.
 
 ## Recommended implementation sequence
@@ -41,4 +41,4 @@ Detailed source and state evidence is in the companion inventory, action pin, de
 
 ## Scope boundary
 
-This is not M14.7, M15, a full scanner campaign, a production release, or an authorization to change settings. The high findings are escalation conditions for M14.6 implementation review. No workflow/runtime code, deployment setting, production setting, or credential was changed or rotated.
+This is not M14.7, M15, a full scanner campaign, or a production release. The M14.6-authorized F01 ruleset and F02 staging privilege boundary are now changed and read back. No production setting or credential was changed or rotated; the first app deployment attempt failed before code switch and staging is healthy on its baseline.
