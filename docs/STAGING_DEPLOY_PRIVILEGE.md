@@ -45,4 +45,4 @@ Before any new target-controlled code executes on staging, retain evidence of:
 6. successful harmless target-code fixture attempting only `sudo -n id` and observing denial;
 7. independent recovery access remains available.
 
-This repository document is not proof of live host state. M146-F02 was closed by the recorded staging sudo/helper readback and negative probes. The subsequent reviewed helper revision requires a separate root/admin installation and revalidation before target-controlled deployment; that staging validation is tracked by M146-F10 and does not reopen F02 unless new evidence contradicts the prior privilege-boundary proof.
+This repository document is not proof of live host state. M146-F02 was closed by the recorded staging sudo/helper readback and negative probes. The later helper-status fix and receipt-provenance fix were deployed on the staging target reported in the M14.6 closure report. Future root-helper revisions still require a separate reviewed root/admin installation and revalidation; ordinary target deployment must not install or replace the helper.

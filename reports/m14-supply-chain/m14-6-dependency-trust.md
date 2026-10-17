@@ -22,7 +22,9 @@ No direct Git URLs, arbitrary HTTP package sources, local path workspaces, or no
 No dependency-review action is currently configured. Do not add one until public-repository/account support, permissions and data behavior are verified; lock-diff review plus current audit gates are a sufficient initial M14 control. No formal SBOM is required now: preserve lockfiles, test/audit outputs and Connector source/package checksums. Revisit formal SPDX/CycloneDX if a consumer or M17 requirement emerges. No SDK or new dependency is proposed.
 
 
-## Candidate implementation policy (pending exact-head CI)
+## Implemented policy and current CI evidence
+
+The policy changes were merged in PR #108. Its exact-head CI and exact merged-primary run `39034312524` (attempt 2) passed 7/7; the latest M14.6 target run `39051589381` passed 7/7. This confirms the required CI execution, not that every external registry/toolchain input is immutable. The classifications and bounded-moving residuals below remain applicable.
 
 Moto is narrowed to exact `5.2.4`; pipx still resolves its transitive packages from PyPI without a committed hash lock, an accepted residual with no new package manager. Root and WordPress Composer manifests have no custom repositories; both locks have HTTPS package sources. The root Composer plugin allowlist remains explicit and the WordPress harness denies plugins. All npm `resolved` entries are from `https://registry.npmjs.org/`; `.npmrc` continues to suppress package lifecycle scripts. Composer/Node/PHP and hosted Ubuntu/service-image policy remains maintained, deliberate bounded movement.
 
