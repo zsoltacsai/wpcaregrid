@@ -13,7 +13,7 @@ final class InventoryTest extends TestCase
         $file = $this->install_plugin('caregrid-sample', '1.0.0');
         activate_plugin($file);
         $this->offer_plugin_update($file, '1.2.0', 'https://vendor.example/caregrid-sample.zip');
-        $this->offer_core_update('7.1.3');
+        $this->offer_core_update('7.2.0');
         $job = $this->job('GET_INVENTORY');
         $this->serve_jobs($job);
 
@@ -30,7 +30,7 @@ final class InventoryTest extends TestCase
         // The harness deliberately places writable wp-content outside the
         // read-only Composer WordPress root, so it is correctly classified custom.
         $this->assertSame('custom', $inventory['compatibility']['layout']);
-        $this->assertSame(['version' => '7.1.2', 'update_available' => true, 'latest_version' => '7.1.3'], $inventory['core']);
+        $this->assertSame(['version' => '7.1.3', 'update_available' => true, 'latest_version' => '7.2.0'], $inventory['core']);
         $this->assertSame(PHP_VERSION, $inventory['php_version']);
         $this->assertSame(['installed' => false, 'active' => false, 'version' => null], $inventory['woocommerce']);
 
