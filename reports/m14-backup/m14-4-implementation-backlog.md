@@ -1,6 +1,10 @@
 # M14.4 ordered implementation backlog
 
-All work below is proposed, not implemented. No item authorizes backup deletion.
+## Implementation status
+
+PR #96 closed M144-01 retention containment; PR #97 implemented M144-02/03 entitlement catalogue/snapshots; PR #98 implemented M144-04/05/06/07 GFS shadow evaluator, protection and scheduler comparison; PR #99 implemented M144-08/09/10 Owner extension, preview and desired post-service setting. All four executable PRs merged with exact-head 7/7 CI. Exact-SHA staging shadow and transactional synthetic Owner preview/reduction evidence is complete and cleanup verified. Only report PR merge/CI evidence remains; no destructive work is authorized. See [closure report](m14-4-closure-report.md).
+
+No item authorizes backup deletion.
 
 | ID | Priority | Domain / dependency | Files/systems | Migration? / code | Destructive? | Tests | Staging / rollback | Acceptance |
 |---|---|---|---|---|---|---|---|---|

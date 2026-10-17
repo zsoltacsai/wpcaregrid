@@ -1,5 +1,7 @@
 # M14.4 backup protection matrix
 
+**Implementation evidence:** additive hold reasons are represented in the GFS shadow evaluator and source fingerprint; Owner extension-only changes are applied through PR #99 (`29bdd9489eafd6581d9d5b9bc5d7a12fe26b4209`). Feature tests cover multiple simultaneous reasons and stale previews. No reason or Owner policy can invoke deletion.
+
 Protection is additive and reasoned; no boolean-only `protected` field is authoritative. A point with any active reason is not an eligibility candidate. Releasing one reason never removes another.
 
 | Reason | Source / scope | Release condition | Owner removable? | Customer removable? | Legal/accounting dependency | Eligibility effect |

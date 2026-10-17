@@ -1,5 +1,7 @@
 # M14.4 migration and legacy cutover plan
 
+**Implementation evidence:** four M14.4 migrations were applied on staging at exact SHA `29bdd9489eafd6581d9d5b9bc5d7a12fe26b4209`. They add entitlement snapshots/origin link, GFS shadow evaluations, Owner policy/previews, and protection holds. The migrations and bounded preview-only backfill do not create deletion candidates or call providers. Staging pending migrations: zero.
+
 ## Source-to-domain mapping
 
 | Existing source | Current meaning | Planned mapping | Safety rule |

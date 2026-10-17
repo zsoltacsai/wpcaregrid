@@ -1,6 +1,8 @@
-# M14.4 eventual closure criteria
+# M14.4 closure criteria and evidence status
 
-M14.4 may close only after all applicable evidence is merged. This planning report does not mark any runtime item complete.
+Implementation lineage and staging readback are recorded in [the M14.4 closure report](m14-4-closure-report.md). Runtime criteria are implemented and exact-head CI passed on PRs #96–#99. Synthetic staging shadow evaluation, transactional Owner preview/extension/reduction, fail-closed checks, and rollback/cleanup passed. The Owner route/render/access flow is covered by authenticated HTTP feature tests.
+
+M14.4 may close after this evidence report is merged with exact-head CI green. Interactive visual inspection was not performed because staging authentication is a manual user action; it is not a missing implementation or security test.
 
 - Canonical six-plan entitlement catalogue, immutable versioning and effective-dated subscription snapshots are implemented; unknown accounts map to review/protected, not Basic.
 - Checkout/Stripe canonical product-price mapping, subscription transitions, entitlement snapshot and schedule decision contract tests agree; replay/out-of-order event remains idempotent.

@@ -1,6 +1,8 @@
 # M14.4 test plan
 
-All tests planned here; none were executed in this planning-only change. All deletion/provider assertions use fakes and assert zero provider calls.
+**Execution status:** PRs #96–#99 each passed the exact-head seven-job GitHub Actions matrix. PR #99 includes Server SQLite/MySQL/MariaDB, Connector WordPress SQLite/MySQL/MariaDB, Quality, and the required MySQL process/concurrency gate. Runtime scenarios are covered by `TransferAndRetentionTest`, `GfsRetentionTest`, `BackupRetentionPolicyTest`, entitlement and billing lifecycle tests. See [closure report](m14-4-closure-report.md). Staging-only authenticated Owner preview/shadow walkthrough remains pending.
+
+All deletion/provider assertions use fakes and assert zero provider calls.
 
 ## Domain and plan fixtures
 
