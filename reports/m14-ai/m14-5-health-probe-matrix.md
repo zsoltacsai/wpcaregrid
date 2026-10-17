@@ -28,3 +28,7 @@ These prove metadata endpoint authentication only; none generates model content.
 | provider model list lacks inference access | still metadata `HEALTHY` only | yes | UI explains credential probe does not prove feature/model access |
 
 Probe is explicit Owner action only. Proposed transport ceiling: 3 s connect, 8 s total, 64 KiB response, zero automatic retries. No real account/key needed for CI or staging; fake HTTP transport must emulate statuses, malformed and slow/oversized responses, redirect and concurrency races.
+
+## Implementation evidence addendum — 2026-10-17
+
+M14.5 executable work is merged and deployed to staging at `3debba99c677b68465cf439733f440442fbd0f22`. PR #102 exact CI 39017126211 and PR #103 exact CI 39020595623 each passed all 7 required jobs; merged-SHA run 39021792985 also passed all 7, including MySQL process/concurrency. The staging fake-provider transaction passed and was rolled back. There were no real provider credentials, real vendor calls, or customer-data egress. No AI feature/default/feature authorization exists. See [closure report](m14-5-closure-report.md) for full bounded evidence and limitations.

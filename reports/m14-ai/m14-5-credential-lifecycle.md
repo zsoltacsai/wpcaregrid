@@ -27,3 +27,7 @@ Environment fallback is expressly disabled for all AI IDs, regardless of `owner_
 Reuse Owner Integrations. GET exposes boolean configured state and normalized health metadata only. Input always blank, including refresh; no last-four/prefix/suffix/length. Mutations are Owner-only with CSRF, current-password recent confirmation using existing pattern and `owner-sensitive`; probe uses Owner ability plus a dedicated low-frequency per-Owner throttle. Save, replace, remove, probe are distinct audited actions. Audit metadata allowlist: provider ID, action/result enum, opaque generation and timestamp; no body/headers/raw message.
 
 On removal say “Remove from WP CareGrid”; separately advise the Owner to revoke/delete the provider key in that provider's account if desired. Health failure does not erase the key. `HEALTHY` status is tied to the current generation and ages to stale/unknown for display after seven days; no cron refresh.
+
+## Implementation evidence addendum — 2026-10-17
+
+M14.5 executable work is merged and deployed to staging at `3debba99c677b68465cf439733f440442fbd0f22`. PR #102 exact CI 39017126211 and PR #103 exact CI 39020595623 each passed all 7 required jobs; merged-SHA run 39021792985 also passed all 7, including MySQL process/concurrency. The staging fake-provider transaction passed and was rolled back. There were no real provider credentials, real vendor calls, or customer-data egress. No AI feature/default/feature authorization exists. See [closure report](m14-5-closure-report.md) for full bounded evidence and limitations.

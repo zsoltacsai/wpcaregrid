@@ -17,3 +17,7 @@
 Owner-facing provider names, configured/not configured, not tested, healthy, credential rejected, unavailable, timed out, save/replace/remove/test labels and the “configuration does not enable AI / no customer data is sent” notice must use the existing English and Hungarian localization architecture. Customer surfaces receive no AI status or provider control.
 
 Existing ability `owner.integrations.manage` and Owner Integrations page are the smallest fitting boundary. The route currently uses Owner ability and `owner-sensitive`; re-auth is a new planned control for AI credential create/replace/remove, not a current property. No Customer or Operator provider visibility is justified. The generic Owner page should get no broad AI controls beyond key lifecycle and explicit test.
+
+## Implementation evidence addendum — 2026-10-17
+
+M14.5 executable work is merged and deployed to staging at `3debba99c677b68465cf439733f440442fbd0f22`. PR #102 exact CI 39017126211 and PR #103 exact CI 39020595623 each passed all 7 required jobs; merged-SHA run 39021792985 also passed all 7, including MySQL process/concurrency. The staging fake-provider transaction passed and was rolled back. There were no real provider credentials, real vendor calls, or customer-data egress. No AI feature/default/feature authorization exists. See [closure report](m14-5-closure-report.md) for full bounded evidence and limitations.

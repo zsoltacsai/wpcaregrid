@@ -12,3 +12,7 @@
 | M145-06 P1 | Zero-data egress and security closure | M145-01..05 | tests/docs/audit/staging checklist | No | sentinel, secret-leak, auth/CSRF, response abuse, generation race suite | fake only in automated/staging checks | all 7 mandatory CI jobs; MySQL process test where needed | exact merged SHA, strict host pin, fake transport, cleanup | all secrets/customer sentinels absent; no feature/client/default; six M12 gates false |
 
 Expected sequence: two focused executable PRs (M145-01/02; M145-03/04), optional third if boundaries warrant, then documentation/evidence closure PR. Connector changes, Connector version bump, API version bump, new SDK/dependency, provider default, and feature client are not expected. Any new HTTP package must be separately justified; Laravel HTTP client is preferred.
+
+## Implementation evidence addendum — 2026-10-17
+
+M14.5 executable work is merged and deployed to staging at `3debba99c677b68465cf439733f440442fbd0f22`. PR #102 exact CI 39017126211 and PR #103 exact CI 39020595623 each passed all 7 required jobs; merged-SHA run 39021792985 also passed all 7, including MySQL process/concurrency. The staging fake-provider transaction passed and was rolled back. There were no real provider credentials, real vendor calls, or customer-data egress. No AI feature/default/feature authorization exists. See [closure report](m14-5-closure-report.md) for full bounded evidence and limitations.
