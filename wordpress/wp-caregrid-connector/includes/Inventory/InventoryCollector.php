@@ -2,6 +2,7 @@
 
 namespace WPCareGrid\Connector\Inventory;
 
+use WPCareGrid\Connector\Compatibility\EnvironmentFacts;
 use WPCareGrid\Connector\Licenses\LicenseDetector;
 
 /**
@@ -22,6 +23,7 @@ final class InventoryCollector
             'plugins' => $this->plugins(),
             'themes' => $this->themes(),
             'woocommerce' => self::woocommerce(),
+            'compatibility' => (new EnvironmentFacts)->collect(),
             'collected_at' => gmdate('c'),
         ];
     }

@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use App\Billing\SubscriptionEntitlements;
+use App\Compatibility\CapabilitySnapshot;
+use App\Compatibility\CapabilityTransition;
 use App\Connector\HealthStatus;
 use App\Connector\Presence;
 use App\Pricing\ProductType;
@@ -86,6 +88,16 @@ class Website extends Model
     public function inventory(): HasOne
     {
         return $this->hasOne(WebsiteInventory::class);
+    }
+
+    public function capabilitySnapshot(): HasOne
+    {
+        return $this->hasOne(CapabilitySnapshot::class);
+    }
+
+    public function capabilityTransitions(): HasMany
+    {
+        return $this->hasMany(CapabilityTransition::class);
     }
 
     public function backups(): HasMany

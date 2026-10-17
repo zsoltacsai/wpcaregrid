@@ -2,6 +2,7 @@
 
 namespace Tests\Concerns;
 
+use App\Compatibility\CapabilitySnapshotStore;
 use App\Models\SecurityScan;
 use App\Models\WebsiteJob;
 use App\Security\ScanType;
@@ -21,12 +22,22 @@ trait RunsSecurityScans
     {
         $site = $this->consoleSite($url);
         $site['website']->activeConnector->update(['capabilities' => [...$site['website']->activeConnector->capabilities, 'security_scan', 'security_quarantine', 'security_remediate']]);
+        app(CapabilitySnapshotStore::class)->refresh($site['website']->fresh(), $site['website']->activeConnector()->first(), $this->inventoryPayload()['compatibility']);
 
         return ['website' => $site['website']->refresh(), 'credential' => $site['credential']];
     }
 
     protected function requestScan(array $site, ScanType $type = ScanType::Full, string $actor = 'operator:1'): SecurityScan
     {
+        // Security-scan fixtures require a current capability snapshot. A prior
+        // scan may outlive the dynamic evidence TTL while a test advances time.
+        // An unpaired fixture has no credential and must reach the normal refusal.
+        if (isset($site['credential'])) {
+            $this->withHeaders($this->connectorHeaders($site))
+                ->postJson(route('api.v1.connector.inventory'), $this->inventoryPayload())
+                ->assertSuccessful();
+        }
+
         return app(SecurityScanService::class)->request($site['website']->refresh(), $type, $actor);
     }
 

@@ -95,6 +95,8 @@
             @endif
         </x-operator.section>
 
+        <x-compatibility.summary :website="$website" :snapshot="$capabilitySnapshot" :operator="true" :request-route="route('operator.websites.compatibility-check', $website)" />
+
         {{-- Connector --}}
         <x-operator.section :title="__('operator.detail.sections.connector')" id="connector">
             <dl class="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2 lg:grid-cols-4">

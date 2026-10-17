@@ -2,6 +2,7 @@
 
 namespace App\Backups;
 
+use App\Compatibility\CapabilityReadiness;
 use App\Connector\ConnectorError;
 use App\Connector\JobQueue;
 use App\Connector\JobStatus;
@@ -78,7 +79,7 @@ class RestoreService
         $decision = $this->policy->for($website, BackupReason::PreRestore);
         $connector = $website->activeConnector;
 
-        return match (true) {
+        $refusal = match (true) {
             $backup->website_id !== $website->id => 'BACKUP_NOT_FOUND',
             ! $decision->restoreAllowed => 'RESTORE_NOT_AVAILABLE',
             ! $decision->eligible => $decision->refusal,
@@ -90,6 +91,12 @@ class RestoreService
             $website->restores()->whereIn('status', $this->activeStatusValues())->when($ignoreRestoreId, fn ($query) => $query->whereKeyNot($ignoreRestoreId))->exists() => 'RESTORE_IN_PROGRESS',
             default => null,
         };
+
+        if ($refusal !== null) {
+            return $refusal;
+        }
+
+        return app(CapabilityReadiness::class)->restoreRefusal($website, $backup, $scope->value);
     }
 
     /** The safety backup settled: queue the original restore, or stop. */

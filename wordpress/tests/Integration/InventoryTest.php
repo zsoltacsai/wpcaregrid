@@ -2,6 +2,7 @@
 
 namespace WPCareGrid\Connector\Tests\Integration;
 
+use WPCareGrid\Connector\Compatibility\EnvironmentFacts;
 use WPCareGrid\Connector\Tests\Support\TestCase;
 
 final class InventoryTest extends TestCase
@@ -23,7 +24,12 @@ final class InventoryTest extends TestCase
         $this->assertSame('INVENTORY_COLLECTED', $result['result_code']);
         $inventory = $result['data']['inventory'];
 
-        $this->assertSame(['core', 'php_version', 'plugins', 'themes', 'woocommerce', 'collected_at'], array_keys($inventory));
+        $this->assertSame(['core', 'php_version', 'plugins', 'themes', 'woocommerce', 'compatibility', 'collected_at'], array_keys($inventory));
+        $this->assertSame(1, $inventory['compatibility']['schema_version']);
+        $this->assertFalse($inventory['compatibility']['multisite']);
+        // The harness deliberately places writable wp-content outside the
+        // read-only Composer WordPress root, so it is correctly classified custom.
+        $this->assertSame('custom', $inventory['compatibility']['layout']);
         $this->assertSame(['version' => '7.1.2', 'update_available' => true, 'latest_version' => '7.1.3'], $inventory['core']);
         $this->assertSame(PHP_VERSION, $inventory['php_version']);
         $this->assertSame(['installed' => false, 'active' => false, 'version' => null], $inventory['woocommerce']);
@@ -46,6 +52,26 @@ final class InventoryTest extends TestCase
         $this->assertSame(['stylesheet', 'name', 'version', 'active', 'update_available', 'new_version'], array_keys($themes['twentytwentyfive']));
 
         deactivate_plugins($file);
+    }
+
+    public function test_layout_classifier_identifies_standard_custom_and_multisite_fixtures(): void
+    {
+        $root = sys_get_temp_dir().'/wp-caregrid-layout-fixture-'.bin2hex(random_bytes(6));
+        mkdir($root.'/wp-content', 0700, true);
+        mkdir($root.'/separate-content', 0700, true);
+
+        try {
+            $canonicalRoot = realpath($root);
+            $this->assertIsString($canonicalRoot);
+            $this->assertSame('standard', EnvironmentFacts::classifyLayout($canonicalRoot, realpath($root.'/wp-content') ?: '', false));
+            $this->assertSame('custom', EnvironmentFacts::classifyLayout($canonicalRoot, realpath($root.'/separate-content') ?: '', false));
+            $this->assertSame('multisite', EnvironmentFacts::classifyLayout($canonicalRoot, realpath($root.'/wp-content') ?: '', true));
+            $this->assertSame('unknown', EnvironmentFacts::classifyLayout('', '', false));
+        } finally {
+            rmdir($root.'/wp-content');
+            rmdir($root.'/separate-content');
+            rmdir($root);
+        }
     }
 
     public function test_inventory_contains_no_settings_content_or_package_urls(): void

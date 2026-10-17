@@ -102,6 +102,7 @@
                 <p class="text-sm text-muted">{{ __('connector.account.health_none') }}</p>
             @endif
         </x-account.panel>
+        <x-compatibility.summary class="lg:col-span-2" :website="$website" :snapshot="$capabilitySnapshot" :request-route="route('account.websites.compatibility-check', $website)" />
     </div>
 
     <x-admin-access.panel class="mt-6" :website="$website" :can-open="$canAdminAccess" />

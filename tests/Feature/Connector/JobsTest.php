@@ -60,7 +60,7 @@ class JobsTest extends TestCase
         $this->assertSame(['uuid', 'type', 'payload', 'created_at', 'attempt'], array_keys($jobs[0]));
         $this->assertSame(1, $jobs[0]['attempt']);
         $this->assertSame(3, WebsiteJob::where('status', 'delivered')->count());
-        $this->assertNotNull($site['website']->activeConnector->last_successful_poll_at);
+        $this->assertNotNull($site['website']->activeConnector()->firstOrFail()->last_successful_poll_at);
     }
 
     /** @return array<string, array{JobType, array<string, mixed>}> */

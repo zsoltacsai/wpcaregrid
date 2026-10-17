@@ -108,11 +108,16 @@ final class SyntheticFixtureConnectorTest extends TestCase
         app(StorageManager::class)->set('local', new LocalStorage($root));
 
         $code = app(PairingCodes::class)->issue($website);
-        $pair = $this->pair($code, $website->url, ['capabilities' => [
+        $pair = $this->pair($code, $website->url, ['connector_version' => config('connector.latest_version'), 'capabilities' => [
             'inventory', 'health', 'updates', 'license_check', 'backup_files', 'backup_database',
             'backup_full', 'restore_files', 'restore_database', 'restore_full',
         ]])->assertCreated();
         $site = ['website' => $website->refresh(), 'credential' => $pair->json('credential')];
+
+        // Complete the harmless inventory preflight before requesting a backup.
+        // The operation-time compatibility gate correctly refuses a site with
+        // no current capability snapshot.
+        $this->withHeaders($this->connectorHeaders($site))->postJson(route('api.v1.connector.inventory'), $this->inventoryPayload())->assertSuccessful();
 
         $backup = app(BackupService::class)->request($website, BackupReason::Manual, 'operator:m8-test');
         $ordinaryPoll = $this->withHeaders($this->connectorHeaders($site))

@@ -13,3 +13,7 @@
 | M143-F09 | VALIDATION GAP | Current preflight docs describe broad fixtures/statuses but lack evidence-linked operation vectors, exact freshness, DB/Connector version policy and persisted evidence design. | Supersede with M14.3 matrices; do not mark runtime controls PASS during planning. |
 
 No confirmed hosting-induced Critical/High defect was found in this planning review. This is not a full execution or independent security scan. No runtime changes were made.
+
+## Implementation source reconciliation — M14.3 execution
+
+The F01 statement above is superseded by direct inspection of the authoritative implementation baseline and the planning-merge source. At both `94b9fbafe2c2ab89d81b677af82d0d3d956c0175` and planning merge `80642e369e86e022f2a2f9d32b6b54d4f2eb28a9`, `config/connector.php` derives `latest_version` from `wordpress/wp-caregrid-connector/release.json`; the source default is not `0.4.1`, and no `CONNECTOR_LATEST_VERSION` override is supported. The earlier planning finding was a stale-source observation and is not a confirmed defect. M14.3 adds a regression assertion that the configured release matches the package metadata. Do not create a runtime configuration change for F01.

@@ -51,6 +51,7 @@ trait CreatesBackups
     {
         $site = $this->pairedWebsite($url);
         $site['website']->activeConnector->update(['capabilities' => ['inventory', 'health', 'updates', 'license_check', 'backup_files', 'backup_database', 'backup_full', 'restore_files', 'restore_database', 'restore_full']]);
+        $this->refreshCapabilityEvidence($site['website']);
         $site['website']->jobs()->delete();
 
         return ['website' => $site['website']->refresh(), 'credential' => $site['credential']];
@@ -146,6 +147,8 @@ trait CreatesBackups
             $total += $name === 'manifest' ? 0 : strlen($bytes);
         }
         $backup->forceFill(['total_size' => $total])->save();
+
+        $this->refreshCapabilityEvidence($website);
 
         return $backup->refresh();
     }

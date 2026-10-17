@@ -32,6 +32,7 @@ Route::prefix('operator')->name('operator.')->group(function () {
 
         Route::get('/websites', [WebsiteController::class, 'index'])->middleware('can:operator.websites.view')->name('websites.index');
         Route::get('/websites/{website}', [WebsiteController::class, 'show'])->middleware('can:operator.websites.view')->name('websites.show');
+        Route::post('/websites/{website}/compatibility-check', [WebsiteController::class, 'requestCompatibilityCheck'])->middleware(['can:operator.websites.view', 'throttle:operator-action'])->name('websites.compatibility-check');
         Route::get('/websites/{website}/monitoring', [MonitoringController::class, 'website'])->middleware('can:operator.websites.view')->name('websites.monitoring');
         Route::post('/websites/{website}/pairing-code', [WebsiteController::class, 'pairingCode'])->middleware(['can:operator.websites.manage', 'throttle:operator-connector'])->name('websites.pairing-code');
         Route::post('/websites/{website}/disconnect', [WebsiteController::class, 'disconnect'])->middleware(['can:operator.websites.manage', 'throttle:operator-connector'])->name('websites.disconnect');

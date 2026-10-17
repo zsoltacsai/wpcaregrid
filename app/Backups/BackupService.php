@@ -2,6 +2,7 @@
 
 namespace App\Backups;
 
+use App\Compatibility\CapabilitySnapshotStore;
 use App\Connector\ConnectorError;
 use App\Connector\JobQueue;
 use App\Connector\JobStatus;
@@ -149,6 +150,16 @@ class BackupService
     /** A backup reached verified, failed or corrupt: release or block what depends on it. */
     public function settled(Backup $backup): void
     {
+        $snapshot = $backup->website->capabilitySnapshot;
+        if ($snapshot) {
+            app(CapabilitySnapshotStore::class)->refresh(
+                $backup->website,
+                $backup->website->activeConnector,
+                $snapshot->facts,
+                $snapshot->checked_at,
+            );
+        }
+
         app(PreUpdateBackups::class)->backupSettled($backup);
         app(RestoreService::class)->safetyBackupSettled($backup);
         app(RemediationService::class)->backupSettled($backup);

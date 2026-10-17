@@ -410,6 +410,7 @@ class AdminAccessTest extends TestCase
             'capabilities' => ['inventory', 'health', 'updates', 'license_check', 'admin_access'],
             'admin_access_url' => rtrim($url, '/').'/wp-login.php?action=wp_caregrid_access',
         ]);
+        $this->refreshCapabilityEvidence($site['website']);
         $site['website']->jobs()->delete();
 
         return ['website' => $site['website']->refresh(), 'credential' => $site['credential']];
