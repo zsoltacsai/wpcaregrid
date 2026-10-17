@@ -19,6 +19,11 @@
             <div><dt class="text-xs text-muted">Desired post-service duration</dt><dd>{{ $preview->proposed_values['desired_post_service_days'] }} days · preference only, not legal approval</dd></div>
         </dl>
         <p class="mt-2 text-sm">Protected points: {{ count($preview->impact['points_still_protected_for_other_reasons'] ?? []) }} remain protected by other reasons. {{ count($preview->impact['points_losing_only_owner_extension'] ?? []) }} lose only the Owner-extension reason. {{ count($preview->impact['would_become_future_candidates'] ?? []) }} may become candidates for future cleanup.</p>
+        <div class="mt-4 grid gap-4 lg:grid-cols-3 text-xs">
+            <div><h3 class="font-semibold">Points losing only Owner extension</h3><ul class="mt-2 space-y-1 font-mono">@forelse ($preview->impact['points_losing_only_owner_extension'] ?? [] as $uuid)<li>{{ $uuid }}</li>@empty<li>None</li>@endforelse</ul></div>
+            <div><h3 class="font-semibold">Points retained for other reasons</h3><ul class="mt-2 space-y-1 font-mono">@forelse ($preview->impact['points_still_protected_for_other_reasons'] ?? [] as $point)<li>{{ $point['backup_uuid'] }} · {{ implode(', ', $point['reasons']) }}</li>@empty<li>None</li>@endforelse</ul></div>
+            <div><h3 class="font-semibold">May become future candidates</h3><ul class="mt-2 space-y-1 font-mono">@forelse ($preview->impact['would_become_future_candidates'] ?? [] as $uuid)<li>{{ $uuid }}</li>@empty<li>None</li>@endforelse</ul></div>
+        </div>
         <p class="mt-2 text-sm">These are future eligibility descriptions only. No backup will be deleted or queued by confirmation.</p>
         <p class="mt-2 text-sm font-medium">Cleanup remains blocked: WAIT_LEGAL · WAIT_ACCOUNTING · WAIT_FACT.</p>
     </section>
