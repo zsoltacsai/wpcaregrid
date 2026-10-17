@@ -63,9 +63,15 @@ def main():
             raise AssertionError(f"unsafe application path accepted: {relative}")
 
     controller = CONTROLLER.read_text(encoding="utf-8")
-    direct_privilege = [line.strip() for line in controller.splitlines() if "sudo -n" in line and "DEPLOY_PRIV_HELPER" not in line]
+    direct_privilege = [
+        line.strip()
+        for line in controller.splitlines()
+        if "sudo -n" in line and "DEPLOY_PRIV_HELPER" not in line and "sudo -n -l" not in line
+    ]
     assert not direct_privilege, f"generic sudo operation remains: {direct_privilege}"
     assert "sudo -n \"$DEPLOY_PRIV_HELPER\" \"$@\"" in controller
+    assert 'sudo_listing="$(sudo -n -l 2>&1)"' in controller
+    assert '[[ "$command_lines" == "(root) NOPASSWD: ${DEPLOY_PRIV_HELPER} *" ]]' in controller
     assert "install.*DEPLOY_PRIV_HELPER" not in controller
 
     print("deploy privilege policy passed: fixed operation allowlist, path validation, no generic sudo calls")

@@ -12,7 +12,6 @@ readonly GATE_DIR='/var/lib/wpcaregrid'
 readonly GATE_FILE="${GATE_DIR}/deploy-maintenance"
 readonly SCHEDULER_LOCK_FILE="${GATE_DIR}/scheduler.lock"
 readonly SCHEDULER_PAUSE_FILE="${GATE_DIR}/scheduler-paused"
-readonly SCHEDULER_WRAPPER='/usr/local/bin/wpcaregrid-scheduler'
 readonly DEPLOY_PRIV_HELPER='/usr/local/sbin/wpcaregrid-deploy-priv'
 # Always install the scheduler wrapper from the application checkout being deployed,
 # even when the reviewed deploy script is invoked from a protected temporary copy.
@@ -36,6 +35,14 @@ log() {
 
 privileged() {
     sudo -n "$DEPLOY_PRIV_HELPER" "$@"
+}
+
+assert_privilege_boundary() {
+    local sudo_listing command_lines
+
+    sudo_listing="$(sudo -n -l 2>&1)" || return 1
+    command_lines="$(grep -E '^[[:space:]]*\(' <<<"$sudo_listing" | sed 's/^[[:space:]]*//')"
+    [[ "$command_lines" == "(root) NOPASSWD: ${DEPLOY_PRIV_HELPER} *" ]]
 }
 
 fail() {
@@ -683,6 +690,7 @@ main() {
 
     (( $# == 1 )) || fail 'Usage: scripts/deploy-staging.sh <full-commit-sha>'
     [[ "$(id -un)" == 'deploy' ]] || fail 'Run this script as the deploy user.'
+    assert_privilege_boundary || fail 'The staging deploy sudo policy is not the reviewed helper-only rule.'
     [[ "$(pwd -P)" == "$APP_DIR" ]] || fail "Run from ${APP_DIR}."
     [[ -d .git && -f artisan && -f composer.json ]] || fail 'Expected Laravel Git application was not found.'
     [[ "$(git remote get-url origin)" == "$ORIGIN_URL" ]] || fail 'The configured origin is not the staging deploy-key repository.'
