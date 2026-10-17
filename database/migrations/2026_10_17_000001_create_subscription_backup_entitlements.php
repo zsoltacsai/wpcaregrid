@@ -29,8 +29,8 @@ return new class extends Migration
             $table->char('source_key', 64)->unique();
             $table->timestamp('created_at');
 
-            $table->index(['subscription_id', 'effective_at']);
-            $table->index(['subscription_id', 'resolution', 'effective_at']);
+            $table->index(['subscription_id', 'effective_at'], 'sub_backup_entitlements_effective_idx');
+            $table->index(['subscription_id', 'resolution', 'effective_at'], 'sub_backup_entitlements_resolution_effective_idx');
         });
 
         Schema::table('backups', function (Blueprint $table) {
