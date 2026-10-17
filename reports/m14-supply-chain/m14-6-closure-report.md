@@ -58,7 +58,7 @@ The existence of the successful final attempt does not erase or relabel the prio
 ## Safety and handoff state
 
 - No production deployment occurred; no application credential rotation occurred.
-- All six M12 gates remain reported false: destructive retention, profile anonymization, customer-backup deletion, provider deletion, bulk destructive execution, and normal-staging synthetic execution.
+- The latest previously recorded M12 readback showed all six gates false: destructive retention, profile anonymization, customer-backup deletion, provider deletion, bulk destructive execution, and normal-staging synthetic execution. A new post-deploy readback was not included in the Owner evidence supplied for this documentation task, so this report does not claim a fresh six-gate check.
 - Legacy scheduled `backup:retention` remains report/comparison-only; customer-backup deletion and provider deletion remain disabled.
 - M14.5 still has no default provider, no AI product feature enabled, zero authorized AI feature paths, and no customer-data AI egress authorization. No real AI credential was introduced into CI/deployment by this work.
 - M14.7 and M14.8 remain separate handoffs. M14.7 should include the workflow, dependency, artifact, secret-exposure, and deployment-origin attack paths. M14.8 should confirm that exact-SHA and host-privilege evidence remains current.
