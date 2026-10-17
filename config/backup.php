@@ -104,12 +104,11 @@ return [
     'manual_cooldown_minutes' => (int) env('BACKUP_MANUAL_COOLDOWN_MINUTES', 60),
 
     /*
-    | Per plan. Frequency comes from config/pricing.php (backup_frequency),
-    | the single source of truth for what is sold.
+    | Operational backup settings per plan. Commercial cadence, retained GFS
+    | points, manual eligibility and restore eligibility come from PricingCatalog.
     |
-    | Retention is a commercial decision and has no default: while both
-    | values are null, nothing is ever deleted. Set them per plan, e.g.
-    | BACKUP_RETENTION_WORDPRESS_BASIC_COUNT=3.
+    | Legacy count/day settings below are comparison inputs for backup:retention
+    | only. That command is report-only and does not authorize deletion.
     */
     'plans' => collect(['wordpress', 'woocommerce'])->mapWithKeys(fn (string $product) => [
         $product => collect(['basic', 'business', 'secure'])->mapWithKeys(function (string $tier) use ($product) {
@@ -119,9 +118,7 @@ return [
                 'type' => 'full',
                 'retention_count' => env("{$env}_COUNT") !== null ? (int) env("{$env}_COUNT") : null,
                 'retention_days' => env("{$env}_DAYS") !== null ? (int) env("{$env}_DAYS") : null,
-                'manual' => true,
                 'pre_update_backup' => (bool) env('BACKUP_PRE_UPDATE_REQUIRED', true),
-                'restore' => true,
             ]];
         })->all(),
     ])->all(),

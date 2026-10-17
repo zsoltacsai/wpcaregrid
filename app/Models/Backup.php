@@ -85,6 +85,11 @@ class Backup extends Model
         return $this->belongsTo(WebsiteJob::class, 'update_job_id');
     }
 
+    public function entitlementSnapshot(): BelongsTo
+    {
+        return $this->belongsTo(SubscriptionBackupEntitlement::class, 'backup_entitlement_snapshot_id');
+    }
+
     public function scopeVerified(Builder $query): void
     {
         $query->where('status', BackupStatus::Verified);

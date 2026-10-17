@@ -10,6 +10,7 @@ use App\Models\Backup;
 use App\Models\BackupObject;
 use App\Models\Website;
 use App\Models\WebsiteJob;
+use App\Pricing\PricingCatalog;
 use Illuminate\Support\Facades\File;
 use Illuminate\Testing\TestResponse;
 
@@ -33,11 +34,21 @@ trait CreatesBackups
             'backup.upload.staging_path' => $this->storageRoot.'-staging',
         ]);
 
+        $backupPlan = $plan;
+        unset($backupPlan['manual'], $backupPlan['restore']);
+
         foreach (['wordpress', 'woocommerce'] as $product) {
             foreach (['basic', 'business', 'secure'] as $tier) {
-                config(["backup.plans.{$product}.{$tier}" => $plan + config("backup.plans.{$product}.{$tier}")]);
+                config(["backup.plans.{$product}.{$tier}" => $backupPlan + config("backup.plans.{$product}.{$tier}")]);
+                if (array_key_exists('manual', $plan)) {
+                    config(["pricing.plans.{$product}.{$tier}.manual_backup_allowed" => (bool) $plan['manual']]);
+                }
+                if (array_key_exists('restore', $plan)) {
+                    config(["pricing.plans.{$product}.{$tier}.restore_eligible" => (bool) $plan['restore']]);
+                }
             }
         }
+        app()->forgetInstance(PricingCatalog::class);
     }
 
     protected function tearDownBackups(): void

@@ -77,6 +77,12 @@ return [
 
     'default_interval' => 'monthly',
 
+    // Engineering catalogue for versioned customer backup entitlements.
+    // This is not, by itself, a public commercial promise.
+    'backup_entitlements' => [
+        'version' => 'backup-entitlements-v1',
+    ],
+
     'default_international_currency' => 'EUR',
     'enabled_currencies' => ['HUF', 'EUR', 'USD', 'GBP'],
     'market_groups' => ['hu' => 'HU', 'eu' => 'INTERNATIONAL', 'gb' => 'INTERNATIONAL', 'international' => 'INTERNATIONAL'],
@@ -180,6 +186,9 @@ return [
         'wordpress' => [
             'basic' => [
                 'backup_frequency' => 'monthly',
+                'backup_recovery_points' => ['daily' => 0, 'weekly' => 0, 'monthly' => 3],
+                'manual_backup_allowed' => true,
+                'restore_eligible' => true,
                 'security_check_frequency' => 'monthly',
                 'features' => [
                     'core_plugin_theme_updates',
@@ -191,6 +200,9 @@ return [
             ],
             'business' => [
                 'backup_frequency' => 'weekly',
+                'backup_recovery_points' => ['daily' => 0, 'weekly' => 8, 'monthly' => 3],
+                'manual_backup_allowed' => true,
+                'restore_eligible' => true,
                 'security_check_frequency' => 'weekly',
                 'highlighted' => true,
                 'badge' => 'most_popular',
@@ -206,6 +218,9 @@ return [
             ],
             'secure' => [
                 'backup_frequency' => 'daily',
+                'backup_recovery_points' => ['daily' => 14, 'weekly' => 8, 'monthly' => 3],
+                'manual_backup_allowed' => true,
+                'restore_eligible' => true,
                 'security_check_frequency' => 'daily',
                 'features' => [
                     'core_plugin_theme_updates',
@@ -224,6 +239,9 @@ return [
         'woocommerce' => [
             'basic' => [
                 'backup_frequency' => 'weekly',
+                'backup_recovery_points' => ['daily' => 0, 'weekly' => 8, 'monthly' => 3],
+                'manual_backup_allowed' => true,
+                'restore_eligible' => true,
                 'security_check_frequency' => 'monthly',
                 'features' => [
                     'core_woocommerce_plugin_theme_updates',
@@ -235,6 +253,9 @@ return [
             ],
             'business' => [
                 'backup_frequency' => 'daily',
+                'backup_recovery_points' => ['daily' => 14, 'weekly' => 8, 'monthly' => 3],
+                'manual_backup_allowed' => true,
+                'restore_eligible' => true,
                 'security_check_frequency' => 'weekly',
                 'highlighted' => true,
                 'badge' => 'most_popular',
@@ -251,6 +272,9 @@ return [
             ],
             'secure' => [
                 'backup_frequency' => 'daily',
+                'backup_recovery_points' => ['daily' => 30, 'weekly' => 12, 'monthly' => 6],
+                'manual_backup_allowed' => true,
+                'restore_eligible' => true,
                 'security_check_frequency' => 'daily',
                 'features' => [
                     'core_woocommerce_plugin_theme_updates',

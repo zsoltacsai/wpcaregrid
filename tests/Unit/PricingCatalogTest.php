@@ -120,6 +120,32 @@ class PricingCatalogTest extends TestCase
         $this->assertSame(ucfirst($frequency).' remote backups', $backups[0]->label);
     }
 
+    /** @return array<string, array{string, string, string, int, int, int}> */
+    public static function backupEntitlements(): array
+    {
+        return [
+            'wordpress basic' => ['wordpress', 'basic', 'monthly', 0, 0, 3],
+            'wordpress business' => ['wordpress', 'business', 'weekly', 0, 8, 3],
+            'wordpress secure' => ['wordpress', 'secure', 'daily', 14, 8, 3],
+            'woocommerce basic' => ['woocommerce', 'basic', 'weekly', 0, 8, 3],
+            'woocommerce business' => ['woocommerce', 'business', 'daily', 14, 8, 3],
+            'woocommerce secure' => ['woocommerce', 'secure', 'daily', 30, 12, 6],
+        ];
+    }
+
+    #[DataProvider('backupEntitlements')]
+    public function test_canonical_plans_include_the_versioned_backup_entitlement(string $product, string $tier, string $cadence, int $daily, int $weekly, int $monthly): void
+    {
+        $catalog = $this->catalog();
+        $this->assertSame('backup-entitlements-v1', config('pricing.backup_entitlements.version'));
+
+        $plan = $catalog->plan(ProductType::from($product), PlanTier::from($tier));
+        $this->assertSame($cadence, $plan->backupFrequency);
+        $this->assertSame(['daily' => $daily, 'weekly' => $weekly, 'monthly' => $monthly], $plan->backupRecoveryPoints);
+        $this->assertTrue($plan->manualBackupAllowed);
+        $this->assertTrue($plan->restoreEligible);
+    }
+
     public function test_every_plan_has_a_complete_resolved_feature_list(): void
     {
         foreach (ProductType::cases() as $type) {

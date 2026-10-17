@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Backups\SubscriptionBackupEntitlementRecorder;
 use App\Billing\SubscriptionEntitlements;
 use App\Billing\SubscriptionStatus;
 use App\Checkout\CheckoutStatus;
@@ -10,6 +11,7 @@ use App\Invoicing\InvoiceIntentWorkflow;
 use App\Mail\AccountActivation;
 use App\Mail\SubscriptionActivated;
 use App\Models\AdminAuditEvent;
+use App\Models\Backup;
 use App\Models\BillingInvoice;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
@@ -34,6 +36,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
+use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\SendsStripeWebhooks;
 use Tests\TestCase;
@@ -208,6 +211,98 @@ class SubscriptionLifecycleTest extends TestCase
 
         $this->assertDatabaseHas('billing_email_outbox', ['notification' => 'subscription_activated']);
         $this->assertDatabaseCount('billing_email_outbox', 1);
+    }
+
+    public function test_active_subscription_records_effective_dated_backup_entitlement_snapshots_idempotently(): void
+    {
+        $intent = $this->intent();
+        $this->completeCheckout($intent);
+        $periodStart = now()->startOfMinute();
+        $period = ['items' => ['data' => [['current_period_start' => $periodStart->timestamp, 'current_period_end' => $periodStart->copy()->addMonth()->timestamp]]]];
+
+        $this->subscriptionEvent('customer.subscription.created', 'active', $intent, $period, $periodStart->timestamp, 'evt_entitlement_initial')->assertStatus(204);
+        $this->subscriptionEvent('customer.subscription.updated', 'active', $intent, $period, $periodStart->timestamp + 1, 'evt_entitlement_duplicate_state')->assertStatus(204);
+
+        $subscription = Subscription::sole();
+        $this->assertDatabaseCount('subscription_backup_entitlements', 1);
+        $initial = $subscription->backupEntitlements()->sole();
+        $this->assertSame('known', $initial->resolution);
+        $this->assertSame('backup-entitlements-v1', $initial->catalogue_version);
+        $this->assertSame('wordpress', $initial->product_type);
+        $this->assertSame('business', $initial->plan);
+        $this->assertSame('weekly', $initial->cadence);
+        $this->assertSame(0, $initial->daily_recovery_points);
+        $this->assertSame(8, $initial->weekly_recovery_points);
+        $this->assertSame(3, $initial->monthly_recovery_points);
+        $this->assertTrue($initial->pre_update_safety_required);
+        $this->assertTrue($initial->manual_backup_allowed);
+        $this->assertTrue($initial->restore_eligible);
+        $this->assertNotNull($initial->effective_at);
+        try {
+            $initial->forceFill(['plan' => 'secure'])->save();
+            $this->fail('An entitlement snapshot was mutated in place.');
+        } catch (LogicException $exception) {
+            $this->assertSame('Backup entitlement snapshots are immutable.', $exception->getMessage());
+        }
+
+        $nextPeriod = now()->addMonth()->startOfDay();
+        $this->subscriptionEvent(
+            'customer.subscription.updated',
+            'active',
+            $intent,
+            ['items' => ['data' => [['current_period_start' => $nextPeriod->timestamp, 'current_period_end' => $nextPeriod->copy()->addMonth()->timestamp]]]],
+            created: $nextPeriod->timestamp,
+            eventId: 'evt_entitlement_renewal',
+        )->assertStatus(204);
+
+        $this->assertDatabaseCount('subscription_backup_entitlements', 2);
+        $this->assertSame($initial->id, $initial->refresh()->id);
+        $this->assertSame('wordpress', $initial->refresh()->product_type);
+        $this->assertTrue($subscription->backupEntitlements()->latest('id')->firstOrFail()->effective_at->equalTo($nextPeriod));
+    }
+
+    public function test_unknown_backup_plan_mapping_is_snapshotted_as_unknown_not_basic(): void
+    {
+        $intent = $this->intent();
+        $this->completeCheckout($intent);
+        $this->subscriptionEvent('customer.subscription.created', 'active', $intent, eventId: 'evt_entitlement_unknown_base')->assertStatus(204);
+
+        $subscription = Subscription::sole();
+        DB::table('subscriptions')->where('id', $subscription->id)->update(['plan' => 'unmapped']);
+        $subscription = $subscription->fresh();
+        $snapshot = app(SubscriptionBackupEntitlementRecorder::class)->record($subscription, 'evt_entitlement_unknown', now()->addMinute());
+
+        $this->assertNotNull($snapshot);
+        $this->assertSame('unknown', $snapshot->resolution);
+        $this->assertSame('BACKUP_ENTITLEMENT_MAPPING_UNKNOWN', $snapshot->reason_code);
+        $this->assertNull($snapshot->plan);
+        $this->assertNull($snapshot->daily_recovery_points);
+        $this->assertSame(2, $subscription->backupEntitlements()->count());
+    }
+
+    public function test_entitlement_backfill_is_preview_only_until_explicitly_applied_and_bounded(): void
+    {
+        $intent = $this->intent();
+        $this->completeCheckout($intent);
+        $this->subscriptionEvent('customer.subscription.created', 'active', $intent, eventId: 'evt_backfill_base')->assertStatus(204);
+        $subscription = Subscription::sole();
+        DB::table('subscription_backup_entitlements')->where('subscription_id', $subscription->id)->delete();
+
+        $this->artisan('backup:entitlements:backfill', ['--limit' => 1])
+            ->expectsOutputToContain('Preview: 1 active subscription(s)')
+            ->assertSuccessful();
+        $this->assertSame(0, $subscription->backupEntitlements()->count());
+        $this->assertSame(0, Backup::count());
+
+        $this->artisan('backup:entitlements:backfill', ['--limit' => 1, '--apply' => true])
+            ->expectsOutputToContain('Recorded 1 known and 0 unknown')
+            ->assertSuccessful();
+        $snapshot = $subscription->backupEntitlements()->sole();
+        $this->assertSame('legacy_backfill', $snapshot->source_type);
+        $this->assertSame('known', $snapshot->resolution);
+        $this->assertSame(0, Backup::count());
+
+        $this->artisan('backup:entitlements:backfill', ['--limit' => 501])->assertFailed();
     }
 
     public function test_events_in_reverse_order_resolve_to_one_customer_and_subscription(): void

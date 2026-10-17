@@ -15,6 +15,7 @@ use App\Models\BackupRestore;
 use App\Models\User;
 use App\Models\WebsiteJob;
 use App\Operator\Permission;
+use App\Pricing\PricingCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\Gate;
@@ -277,13 +278,15 @@ class OperatorAuthorizationTest extends TestCase
         $this->asOperator();
 
         // The plan does not allow on-demand backups: the service refuses, the operator sees why.
-        config(['backup.plans.wordpress.business.manual' => false]);
+        config(['pricing.plans.wordpress.business.manual_backup_allowed' => false]);
+        app()->forgetInstance(PricingCatalog::class);
         $this->post(route('operator.websites.backups.store', $website))
             ->assertSessionHas('operator_error', fn ($e) => $e['code'] === 'MANUAL_NOT_ALLOWED');
         $this->assertSame(0, Backup::count());
 
         // Inactive subscription: refused too.
-        config(['backup.plans.wordpress.business.manual' => true]);
+        config(['pricing.plans.wordpress.business.manual_backup_allowed' => true]);
+        app()->forgetInstance(PricingCatalog::class);
         $website->subscription->update(['status' => 'canceled']);
         $this->post(route('operator.websites.backups.store', $website))
             ->assertSessionHas('operator_error', fn ($e) => $e['code'] === 'SUBSCRIPTION_INACTIVE');

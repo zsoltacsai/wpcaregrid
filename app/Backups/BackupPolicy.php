@@ -10,8 +10,8 @@ use Illuminate\Support\Carbon;
 
 /**
  * Backup rules for a website, from its plan. Business policy lives here,
- * never in the connector: frequency comes from the plan that was sold
- * (config/pricing.php), retention and the rest from config/backup.php.
+ * never in the connector: commercial cadence and plan entitlements come from
+ * the canonical pricing catalogue; storage and safety mechanics are separate.
  */
 class BackupPolicy
 {
@@ -79,9 +79,9 @@ class BackupPolicy
             retentionCount: isset($settings['retention_count']) ? max(1, (int) $settings['retention_count']) : null,
             retentionDays: isset($settings['retention_days']) ? max(1, (int) $settings['retention_days']) : null,
             storage: $storage,
-            manualAllowed: (bool) ($settings['manual'] ?? false),
+            manualAllowed: $plan?->manualBackupAllowed ?? false,
             preUpdateRequired: (bool) ($settings['pre_update_backup'] ?? false),
-            restoreAllowed: (bool) ($settings['restore'] ?? false) && (bool) config('backup.restore.enabled'),
+            restoreAllowed: ($plan?->restoreEligible ?? false) && (bool) config('backup.restore.enabled'),
         );
     }
 
