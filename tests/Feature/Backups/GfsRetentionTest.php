@@ -14,6 +14,7 @@ use App\Connector\JobStatus;
 use App\Connector\JobType;
 use App\Models\Backup;
 use App\Models\BackupObject;
+use App\Models\BackupProtectionHold;
 use App\Models\BackupRestore;
 use App\Models\Website;
 use App\Models\WebsiteEvent;
@@ -129,6 +130,13 @@ class GfsRetentionTest extends TestCase
             'requested_by' => 'test',
             'confirmed_at' => now(),
         ]);
+        $hold = BackupProtectionHold::query()->create([
+            'website_id' => $site['website']->id,
+            'backup_id' => $old->id,
+            'reason_code' => 'INCIDENT_HOLD',
+            'source_code' => 'test-incident',
+            'held_at' => $at,
+        ]);
         WebsiteJob::query()->create([
             'website_id' => $site['website']->id,
             'connector_id' => $site['website']->activeConnector->id,
@@ -144,8 +152,15 @@ class GfsRetentionTest extends TestCase
 
         $this->assertContains('LAST_KNOWN_GOOD', $byUuid[$current->uuid]['reasons']);
         $this->assertContains('ACTIVE_RESTORE', $byUuid[$old->uuid]['reasons']);
+        $this->assertContains('INCIDENT_HOLD', $byUuid[$old->uuid]['reasons']);
         $this->assertContains('UPDATE_DEPENDENCY', $byUuid[$old->uuid]['reasons']);
         $this->assertContains('SAFETY_BACKUP', $byUuid[$safety->uuid]['reasons']);
+
+        $hold->forceFill(['released_at' => $at->addMinute()])->save();
+        $afterRelease = app(GfsRetentionEvaluator::class)->evaluate($site['website']->refresh(), $at->addMinute());
+        $remainingReasons = collect($afterRelease['protected_backups'])->firstWhere('backup_uuid', $old->uuid)['reasons'];
+        $this->assertContains('ACTIVE_RESTORE', $remainingReasons);
+        $this->assertNotContains('INCIDENT_HOLD', $remainingReasons);
     }
 
     public function test_out_of_window_points_are_only_blocked_shadow_candidates_and_never_eligible(): void

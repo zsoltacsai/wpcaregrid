@@ -22,6 +22,7 @@ enum OwnerAbility: string
     case WebsitesView = 'websites.view';
     // Non-destructive operations through the operator services: backup, security scan.
     case WebsitesOperate = 'websites.operate';
+    case BackupPoliciesManage = 'backup_policies.manage';
     case OperatorsManage = 'operators.manage';
     case PricingManage = 'pricing.manage';
     case ContentManage = 'content.manage';

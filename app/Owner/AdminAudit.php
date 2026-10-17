@@ -31,6 +31,7 @@ final class AdminAudit
         'privacy.erasure.action.blocked', 'privacy.erasure.synthetic_executed', 'privacy.erasure.partial', 'privacy.erasure.circuit_open', 'privacy.erasure.circuit_reset',
         'privacy.retention.draft_created', 'privacy.retention.preview_created', 'privacy.retention.reporting_activated',
         'privacy.retention.owner_approval_recorded', 'privacy.retention.locked_change_denied',
+        'backup_policy.preview_created', 'backup_policy.preview_stale', 'backup_policy.extension_changed',
         'legal.document.draft_created', 'legal.document.draft_updated', 'legal.document.approval_recorded',
         'legal.document.published', 'legal.document.retired',
         'platform_backup.manual_requested', 'platform_backup.configuration_updated', 'platform_backup.disabled', 'platform_backup.escrow_attested', 'platform_backup.escrow_revoked', 'platform_backup.s3_connection_tested',
