@@ -3,8 +3,10 @@
 
 import importlib.util
 import hashlib
+import io
 import subprocess
 import tempfile
+from contextlib import redirect_stdout
 from pathlib import Path
 
 
@@ -33,8 +35,33 @@ def main():
         return subprocess.CompletedProcess(argv, 0, stdout="wpcaregrid-default RUNNING pid 42\n")
 
     module.run = fake_run
-    module.worker("status", "wpcaregrid-default")
+    output = io.StringIO()
+    with redirect_stdout(output):
+        module.worker("status", "wpcaregrid-default")
+    assert output.getvalue() == "wpcaregrid-default RUNNING pid 42\n"
     assert invocations[-1] == ["/usr/bin/supervisorctl", "status", "wpcaregrid-default"]
+
+    status_cases = (
+        (0, "wpcaregrid-default RUNNING pid 42, uptime 0:01:00\n", "wpcaregrid-default RUNNING pid 42\n"),
+        (3, "wpcaregrid-default STOPPED Oct 17 01:59 PM\n", "wpcaregrid-default STOPPED\n"),
+        (3, "wpcaregrid-default FATAL Exited too quickly\n", "wpcaregrid-default FATAL\n"),
+    )
+    for returncode, response, expected in status_cases:
+        module.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, returncode, stdout=response)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            module.worker("status", "wpcaregrid-default")
+        assert output.getvalue() == expected
+    module.run = lambda argv, **kwargs: subprocess.CompletedProcess(
+        argv, 3, stdout="unrelated-service STOPPED\n"
+    )
+    try:
+        module.worker("status", "wpcaregrid-default")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unexpected Supervisor status output was accepted")
+    module.run = fake_run
     module.dispatch(["db-dump"])
     assert invocations[-1] == ["/usr/bin/mysqldump", "--single-transaction", "--routines", "--triggers", "--databases", "wpcaregrid"]
 
