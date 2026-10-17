@@ -1,0 +1,19 @@
+# M14.4 findings register — planning audit
+
+No runtime control was changed and no provider was contacted. These are source-backed findings at primary `db272400513882bae8fa8d2ab15d0996cd34dcc7`.
+
+| ID | Classification | Finding / evidence | Risk / disposition |
+|---|---|---|---|
+| M144-F01 | DOMAIN GAP | No versioned commercial backup entitlement/GFS snapshot is present. Cadence is in `config/pricing.php`; retention is a separate nullable environment-driven `config/backup.php` setting. Backup rows have no policy snapshot/GFS slot/protection reasons. | Implement canonical versioned entitlement and shadow evaluator; do not claim target is active. |
+| M144-F02 | MIGRATION RISK | `backup:retention` is scheduled daily and `Retention::apply()` calls `BackupDeletion::remove()` when count/day config is non-null. Source defaults are null, but deployed staging/production values are unknown; no separate backup deletion gate in this path was identified. | P0: make/verify legacy path report-only or default-off gated before migration/cutover; inspect approved deployed config before executable rollout. |
+| M144-F03 | VALIDATION GAP | Live staging access could not be authenticated using available SSH key, although pinned host fingerprint matched. Reported executable SHA is closure evidence, not live readback; deployed `BACKUP_RETENTION_*` env values unknown. | Do not assert live deletion disabled or live plan state; obtain read-only authorized operational evidence before staging validation. |
+| M144-F04 | DOMAIN GAP | Current retention supports count and age cutoff but not GFS classification, slot gaps, policy version, extension-only protection, or impact preview. | Replace as authority only after shadow comparison; no dual mutating system. |
+| M144-F05 | DOMAIN GAP | Manual backups are enabled in source plan settings for all public tiers with a 60-minute site cooldown; commercial quota/slot semantics are absent. | Preserve operational behavior in shadow; decide semantics before public/active entitlement. |
+| M144-F06 | EXPECTED SAFETY BLOCK | `NULL` retention means no configured expiry; `BackupPolicy` clamps configured 0 to at least 1. | Preserve null as unknown/not configured; never map null to zero or deletion. |
+| M144-F07 | WAIT_LEGAL | Post-service legal retention minimum/hold policy unresolved. | Post-service executable eligibility blocked until qualified evidence. |
+| M144-F08 | WAIT_ACCOUNTING | Accounting retention minimum unresolved. | Same fail-closed treatment. |
+| M144-F09 | WAIT_FACT | S3 versioning/delete markers/Object Lock/lifecycle and SFTP physical-absence semantics are not established by M14.4 source audit. Existing deletion verifies logical key absence only and records provider versions unknown. | No physical-erasure claim; future provider-specific evidence and state reconciliation required. |
+| M144-F10 | DOMAIN GAP | Pricing cadence and backup retention are not one immutable effective-dated subscription entitlement snapshot. Stripe subscription model does preserve canonical product/tier, price/period/status/pending plan and idempotent event ordering. | Build snapshot following existing billing effective-time/idempotency semantics. |
+| M144-F11 | EXPECTED SAFETY BLOCK | Customer backup retention/deletion is distinct from M12 privacy destructive retention; platform DB backup retention is separate again. | Do not reuse M12 gate without explicit domain approval or platform-backup configuration. |
+
+No confirmed data-loss exploit was reproduced in this planning pass. F02 is a confirmed operational migration risk, not proof that deployed provider deletion is currently active. No new Owner decision is required for approved v1 target; future paid-customer grandfathering and manual quota presentation need product/legal review before a future catalogue version or public claim.
