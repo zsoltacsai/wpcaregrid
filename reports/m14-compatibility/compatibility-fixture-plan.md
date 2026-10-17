@@ -35,3 +35,7 @@ The current staging synthetic fixture is paired at Connector 0.4.5 while source 
 Use the versioned, operation-specific fixture inventory in [M14.3 fixture matrix](m14-3-fixture-matrix.md). Numeric WordPress/PHP/MySQL/MariaDB bounds are TBD from actual fixtures. The expected baseline is standard single-site layout only. Multisite and Bedrock/custom/unresolved symlink roots are expected unsupported initial-launch conditions, not security vulnerabilities. Low disk tests use a quota/fault abstraction, never host exhaustion. Fake network tests distinguish DNS/TLS/timeout/403/406/413/429 and preserve existing M14.2 egress policy.
 
 Every fixture must record exact fact set, policy/evaluator version, expected capability/reason vector, mutation boundary, cleanup method and cleanup verification. CI green is not host-support evidence; staging fixture success is not M15 pilot proof.
+
+## M14.3 fixture execution reconciliation — 2026-10-17
+
+The 16-fixture proposal above is not a claim that each host variant ran. Executed/reused evidence and explicit untested rows are in [M14.3 fixture results](m14-3-fixture-matrix.md). CI passed actual Connector 0.4.7 WordPress jobs on SQLite/MySQL/MariaDB and server capability tests; staging kept the pre-existing synthetic Connector 0.4.5 unchanged. Declared PHP 8.1/WP 6.4 minima, dedicated missing-extension/read-only/rename, Bedrock/root-symlink, cron replacement, and select network/cache fixtures remain UNKNOWN/NOT TESTED. They stay outside the claimed supported envelope; affected mutation/restore capability stays fail-closed.

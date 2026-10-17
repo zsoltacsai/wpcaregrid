@@ -25,3 +25,11 @@ High-impact Connector actions require a capability snapshot checked within `COMP
 The release workflow covers server SQLite/MySQL/MariaDB and Connector SQLite/MySQL/MariaDB on PHP 8.4. Attempts to add Connector PHP 8.2 and 8.3 branches failed at dependency installation because the repository's locked root test dependencies require a newer PHP runtime; neither branch is claimed tested. Pending green exact CI is the evidence gate for PHP 8.4; Connector-declared PHP 8.1 and WordPress 6.4 minima remain declared-but-not-fixture-tested and are not promoted to tested support.
 
 M14-08 and M14-09 remain OPEN pending the complete fixture matrix, exact-head CI, staging validation, cleanup, health and gate readback. M14-12 remains M14.4; M14-15 remains M14.7; M14-16 remains overall M14 closure. No production deployment or destructive-gate change is authorized by this work.
+
+### Final closure reconciliation — 2026-10-17
+
+The execution status above is historical and superseded. Implementation PR #93 merged to primary as `9e330854f0e7d5ef073db846245f7008d7ef6ec5`; exact-head candidate CI `38983714492` and merge-head CI `38984808200` passed. Guarded staging deployment and post-deploy health/gate readback passed at the same SHA. Exact evidence, totals, 0.4.5 disposition, tested support envelope, and untested edge-host boundaries are recorded in [M14.3 closure report](m14-3-closure-report.md).
+
+M143-01 through M143-09 are implemented and closed for the evidence-backed capability contract. M14-08 and M14-09 are complete for this bounded, fail-closed scope. The declared-but-untested PHP 8.1/WP 6.4 minima and specialized fixtures remain UNKNOWN/NOT TESTED and are not part of the initial supported envelope. M14-12 remains M14.4; AS-16/M14-15 remain M14.7; M14-16 remains overall M14 closure; M15 pilot-host validation remains separate.
+
+**M14.3 disposition: B — functionally complete with non-critical host-evidence residuals.** No production deployment or destructive-gate change occurred.

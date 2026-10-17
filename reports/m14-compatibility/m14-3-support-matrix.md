@@ -24,3 +24,16 @@ Keep fixture paired; do not upgrade during planning. Evaluate independent non-mu
 ## Claim policy
 
 No provider-brand support list. The product may describe capability-specific current evidence; it may not claim universal host support or guaranteed restore. M15 must independently prove actual pilot-host behavior.
+
+## Execution support envelope — 2026-10-17
+
+| Dimension | Executed fixture evidence | Initial disposition |
+|---|---|---|
+| Connector | 0.4.7 real WordPress CI in MySQL 8.4, MariaDB 10.11 and SQLite modes; 0.4.5 evaluator case and staging synthetic-site transaction probe | 0.4.7 is the current tested source. 0.4.5 is supported-old only for evidenced read/connection behavior; its staging high-impact capabilities block and missing scanner evidence is UNKNOWN. |
+| PHP | CI PHP 8.4.26 for the server and real WordPress Connector | 8.4 is the only tested customer Connector PHP branch. PHP >=8.1 remains declared but unverified. |
+| WordPress | CI WordPress 7.1.2 / 7.1.x | 7.1.x is tested. WP >=6.4 remains declared but unverified. |
+| Databases | CI service images MySQL 8.4 and MariaDB 10.11 plus SQLite harness | These exact branches/modes are exercised; no wider customer DB floor is inferred. |
+| Topology/layout | Standard fact fixture; custom, unknown and Multisite classifier/evaluator cases | Standard single-site is the baseline; Multisite/custom block affected mutation/restore. Standalone Bedrock/root-symlink fixtures remain unverified; ambiguity stays UNKNOWN/BLOCK. |
+| Resource/readiness | Standard facts, disk reserve/unknown cases, filesystem evidence, backup scopes, stale facts and restore blockers | No universal host claim; missing fresh evidence cannot grant high-impact readiness. Dedicated read-only/rename-denied quota-container cases remain UNKNOWN pending fixtures. |
+
+Merge-head CI `38984808200` passed all Server and Connector database jobs plus the MySQL process/concurrency gate. The guarded staging SHA is `9e330854f0e7d5ef073db846245f7008d7ef6ec5`. This narrows the initial evidence envelope; it does not establish the PHP 8.1/WP 6.4 minimums or provider-wide compatibility.

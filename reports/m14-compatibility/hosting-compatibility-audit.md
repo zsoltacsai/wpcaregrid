@@ -57,3 +57,18 @@ Evidence-based version envelope is not yet established. Connector header declare
 Approved OQ-02/OQ-03 boundaries remain: detect Multisite, Bedrock/Composer/custom root and unresolved root symlink where possible; block affected mutation/restore when unsupported or root uncertain. A standard single-site fixture is the only initial launch baseline until fixture results prove a wider envelope. Final detailed plan/matrices: [M14.3 plan](m14-3-plan.md), [capability domain](m14-3-capability-domain.md), [support matrix](m14-3-support-matrix.md), [preflight matrix](m14-3-preflight-test-matrix.md), [restore matrix](m14-3-restore-readiness-matrix.md), [fixture matrix](m14-3-fixture-matrix.md).
 
 No customer host was changed. M12 destructive gates remain false. AS-16 warning remains M14.7 carry-forward. Owner decisions OQ-01–03 are already approved; no new Owner decision is needed for the planned implementation.
+
+## M14.3 final engineering disposition — 2026-10-17
+
+The preceding `PARTIAL / not yet implementation evidence` and planning ranges above are historical and superseded by the merged M14.3 implementation and [closure report](m14-3-closure-report.md). Capability-specific controls are implemented and exercised through exact-head CI and guarded staging validation at executable SHA `9e330854f0e7d5ef073db846245f7008d7ef6ec5`. This is not a universal hosting claim.
+
+| Disposition | Evidence-based scope |
+|---|---|
+| `SUPPORTED BASELINE` | Tested CI fixture line: Connector 0.4.7, WordPress 7.1.x/7.1.2, customer-host PHP 8.4, MySQL 8.4 or MariaDB 10.11, standard single-site facts. PASS remains capability-specific and does not bypass authorization, entitlement, workflow, or safety checks. |
+| `SUPPORTED_WITH_WARNING` | Existing 0.4.5 synthetic staging Connector: connection PASS, monitoring WARN, high-impact operations blocked. This is one version-drift case, not a general host promise. |
+| `UNSUPPORTED` | Multisite and known custom/Bedrock-like layouts for affected mutation/restore scope, under approved OQ-02/OQ-03 boundaries. |
+| `UNKNOWN / NOT YET TESTED` | Declared PHP 8.1 and WordPress 6.4 minima, other version branches, unresolved roots/symlinks, and unexecuted edge-host fixtures. Unknown mutation/restore remains fail-closed. |
+
+No broad version range is inferred from package metadata. CI exercises PHP 8.4.26, WordPress 7.1.2/7.1.x, MySQL 8.4, and MariaDB 10.11. M143-F01 is closed as a stale-source observation: `config/connector.php` reads canonical package `release.json`, guarded by a regression test. Connector source is now 0.4.7/API v1.
+
+Exact-SHA staging health, migration, package, public-route checks, and all six M12 gates passed. The existing 0.4.5 fixture was not upgraded/re-paired. Its transaction-only evaluator probe rolled back and left no snapshot or transition rows. “No completed security scan yet” remains visible as M14.7_CARRY_FORWARD. M15 pilot-host and DR proof remains separate.

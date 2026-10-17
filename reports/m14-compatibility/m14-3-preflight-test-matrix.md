@@ -22,3 +22,9 @@
 | PF-18 | capability PASS, then disk/permission/conflict changes before restore | operation-time recheck blocks with current reason | MySQL/process + fake disk fact | no restore job or target mutation |
 
 Every test records policy/evaluator version, fixture versions, reason codes and side-effect assertions. Compatibility checks are harmless; restore/backup mutation tests run only against disposable WordPress/filesystem/database fixtures.
+
+## Final execution mapping — 2026-10-17
+
+The exact merged CI run `38984808200` passed the 15-test compatibility readiness suite, full Server SQLite/MySQL/MariaDB suites, real WordPress Connector SQLite/MySQL/MariaDB suites, and required MySQL process/concurrency gate. Staging at merged SHA `9e330854f0e7d5ef073db846245f7008d7ef6ec5` passed deploy health, migration, Connector package verification and public-route smoke. The existing `.4.5` synthetic site was inspected using a rolled-back transaction; no snapshot or transition persisted. All six M12 privacy gates were false after validation.
+
+Rows requiring unexecuted isolated host containers (PHP 8.1/WP 6.4 edge, missing-extension permutations, read-only/rename-denied fixture, specific cron replacement, Bedrock/root-symlink and Basic Auth/drop-in variants) remain UNKNOWN/NOT TESTED. They are not included in the support envelope; the evaluator fails closed where required facts are missing or unsupported.

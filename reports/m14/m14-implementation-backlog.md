@@ -74,3 +74,11 @@ M14.3 hosting compatibility/preflight and M14.7 scan/independent security review
 M14.1 and M14.2 remain closed per merged evidence above. M14.3 is now planned on verified primary `94b9fbafe2c2ab89d81b677af82d0d3d956c0175`; no M14.3 runtime changes are included in this planning branch. The planning package decomposes M14-08/09 into policy/domain and version reconciliation, additive Connector fact collection, server evaluator/persistence, operation-time backup/update/restore gating, scoped diagnostics, fixture coverage and guarded synthetic staging closure. It preserves approved OQ-01–03 boundaries and does not start M14.4, M14.7 scan campaign or M15.
 
 Confirmed source item for M14.3-A: Connector release is 0.4.6 but `config/connector.php` default `latest_version` remains 0.4.1 (staging environment reports 0.4.6). Reconcile and test before version diagnostics. No Owner decision is required. Full ordered acceptance/backlog is in [M14.3 implementation backlog](../m14-compatibility/m14-3-implementation-backlog.md) and [closure criteria](../m14-compatibility/m14-3-closure-criteria.md).
+
+## M14.3 completion and bounded carry-forward — 2026-10-17
+
+M14-08 (hosting compatibility/preflight) and M14-09 (restore readiness/conflict gating) are implemented and closed for M14.3’s evidence-backed, capability-specific support envelope. Planning PR #92 merged at `80642e369e86e022f2a2f9d32b6b54d4f2eb28a9`; implementation PR #93 merged as `9e330854f0e7d5ef073db846245f7008d7ef6ec5`; merge-head CI `38984808200` passed. The exact executable SHA is guarded-deployed to staging. See [M14.3 closure report](../m14-compatibility/m14-3-closure-report.md).
+
+M14.3 disposition is **B — functionally complete, non-critical host-evidence residual remains**. Claims are constrained to the tested envelope; declared PHP 8.1 and WordPress 6.4 minima and specialized host fixtures remain UNKNOWN/NOT TESTED and block affected high-impact operations until verified. The staging Connector 0.4.5 fixture remains unchanged.
+
+M14-12 (commercial GFS/backup entitlement) remains M14.4; M14-15 and AS-16 (full security scan and independent review) remain M14.7; M14-16 overall M14 closure remains open; M15 must independently validate pilot hosts and DR. All six M12 privacy/destructive gates remain false. No production destructive functionality was enabled.
