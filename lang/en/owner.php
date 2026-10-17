@@ -1147,6 +1147,27 @@ return [
             'missing_warning' => 'Encrypted Service Credentials and disaster recovery cannot be considered ready. Do not generate a replacement in the browser.',
             'never_displayed' => 'Only readiness is shown. The key, partial values, hashes and fingerprints are never rendered.',
         ],
+        'ai' => [
+            'title' => 'AI provider configuration',
+            'boundary' => 'Adding an API credential does not enable AI functionality. This configuration does not send customer or site data to the provider.',
+            'configured' => 'Configured · Owner managed',
+            'last_checked' => 'Last checked',
+            'new_secret' => 'API credential',
+            'replace_secret' => 'Replacement API credential',
+            'current_password' => 'Confirm with your current Owner password',
+            'password_failed' => 'The current Owner password could not be confirmed.',
+            'save' => 'Save credential',
+            'replace' => 'Replace credential',
+            'remove' => 'Remove from WP CareGrid',
+            'removed' => 'The encrypted credential copy was removed from WP CareGrid. No provider-side key action was performed.',
+            'remove_note' => 'This removes WP CareGrid’s encrypted copy only. Remove or revoke the key separately in the provider account if needed.',
+            'health' => [
+                'NOT_CONFIGURED' => 'Not configured', 'UNKNOWN' => 'Not tested', 'HEALTHY' => 'Metadata connection successful',
+                'AUTH_FAILED' => 'Credential rejected', 'RATE_LIMITED' => 'Provider rate limited the request',
+                'UNAVAILABLE' => 'Provider temporarily unavailable', 'TIMEOUT' => 'Request timed out',
+                'MISCONFIGURED' => 'Provider request could not be validated', 'ERROR' => 'Connection could not be verified',
+            ],
+        ],
     ],
 
     'dns' => [

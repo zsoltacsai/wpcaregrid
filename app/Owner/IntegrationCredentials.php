@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\DB;
 /** Fixed, application-supported service credentials. Values are never returned to views. */
 final class IntegrationCredentials
 {
-    /** @var array<string, array{label: string, config: list<string>, runtime_supported?: bool, runtime_resolved?: bool, description_key?: string, credential_label_key?: string, save_label_key?: string, replace_label_key?: string, clear_label_key?: string, provider_id?: string}> */
+    /** @var array<string, array{label: string, config: list<string>, runtime_supported?: bool, runtime_resolved?: bool, environment_fallback?: bool, description_key?: string, credential_label_key?: string, save_label_key?: string, replace_label_key?: string, clear_label_key?: string, provider_id?: string}> */
     public const FIELDS = [
         'stripe_publishable' => ['label' => 'Stripe publishable key', 'config' => ['services.stripe.key']],
         'stripe_secret' => ['label' => 'Stripe secret key', 'config' => ['services.stripe.secret']],
@@ -37,6 +37,12 @@ final class IntegrationCredentials
         'ses_access' => ['label' => 'Amazon SES access key', 'config' => ['services.ses.key', 'filesystems.disks.s3.key', 'queue.connections.sqs.key', 'cache.stores.dynamodb.key']],
         'ses_secret' => ['label' => 'Amazon SES secret key', 'config' => ['services.ses.secret', 'filesystems.disks.s3.secret', 'queue.connections.sqs.secret', 'cache.stores.dynamodb.secret']],
         'wordfence_feed' => ['label' => 'Wordfence vulnerability feed key', 'config' => ['security.vulnerabilities.feed_key']],
+        // AI provider keys are resolved only for an explicit Owner health probe.
+        // Empty config paths and the explicit no-fallback flag keep them out of
+        // environment resolution and global config hydration.
+        'ai_openai_api_key' => ['label' => 'OpenAI API key', 'config' => [], 'runtime_resolved' => true, 'environment_fallback' => false],
+        'ai_anthropic_api_key' => ['label' => 'Anthropic API key', 'config' => [], 'runtime_resolved' => true, 'environment_fallback' => false],
+        'ai_google_gemini_api_key' => ['label' => 'Google Gemini API key', 'config' => [], 'runtime_resolved' => true, 'environment_fallback' => false],
     ];
 
     /** @return array<string, array{owner_managed: bool, environment_fallback: bool}> */
@@ -48,9 +54,9 @@ final class IntegrationCredentials
 
         $result = [];
         foreach (self::FIELDS as $id => $field) {
-            $environmentFallback = array_key_exists($id, $fallbacks)
+            $environmentFallback = ($field['environment_fallback'] ?? true) && (array_key_exists($id, $fallbacks)
                 ? (bool) $fallbacks[$id]
-                : collect($field['config'])->contains(fn (string $path) => filled(config($path)));
+                : collect($field['config'])->contains(fn (string $path) => filled(config($path))));
             $result[$id] = [
                 'owner_managed' => isset($saved[$id]),
                 'environment_fallback' => $environmentFallback,
@@ -88,6 +94,10 @@ final class IntegrationCredentials
             } catch (\Throwable $exception) {
                 throw new \RuntimeException('A stored integration credential cannot be decrypted. Verify that APP_KEY has not changed.', previous: $exception);
             }
+        }
+
+        if (! (self::FIELDS[$id]['environment_fallback'] ?? true)) {
+            return null;
         }
 
         foreach (self::FIELDS[$id]['config'] as $path) {
