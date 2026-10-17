@@ -237,7 +237,7 @@ class GfsRetentionTest extends TestCase
         app(SubscriptionBackupEntitlementRecorder::class)->record(
             $site['website']->subscription->refresh(),
             'gfs-fixture-'.$product.'-'.$tier,
-            $effectiveAt ? Carbon::instance($effectiveAt) : now(),
+            $effectiveAt ? Carbon::instance($effectiveAt) : Carbon::parse('2026-10-17 00:00:00', 'UTC'),
         );
         $site['website']->refresh();
 
