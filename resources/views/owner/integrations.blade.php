@@ -14,6 +14,50 @@
         <p class="mt-2 text-xs text-muted">{{ __('owner.integrations.app_key.never_displayed') }}</p>
     </section>
 
+    <section class="mb-5 max-w-3xl rounded-md border border-line bg-surface p-5" aria-labelledby="ai-providers-heading">
+        <h2 id="ai-providers-heading" class="text-lg font-semibold">{{ __('owner.integrations.ai.title') }}</h2>
+        <p class="mt-2 text-sm text-muted">{{ __('owner.integrations.ai.boundary') }}</p>
+        <div class="mt-4 space-y-4">
+            @foreach ($aiProviders as $providerId => $provider)
+                <article class="rounded-md border border-line p-4">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <h3 class="font-semibold">{{ $provider['label'] }}</h3>
+                        <span class="text-sm">{{ $provider['state']['configured'] ? __('owner.integrations.ai.configured') : __('owner.integrations.not_configured') }}</span>
+                    </div>
+                    <p class="mt-1 text-sm text-muted">{{ __('owner.integrations.ai.health.'.$provider['state']['health_status']) }}</p>
+                    @if ($provider['state']['checked_at'])
+                        <p class="mt-1 text-xs text-muted">{{ __('owner.integrations.ai.last_checked') }}: <time datetime="{{ $provider['state']['checked_at'] }}">{{ $provider['state']['checked_at'] }} UTC</time></p>
+                    @endif
+                    <form method="POST" action="{{ route('owner.integrations.store') }}" class="mt-4 grid gap-3 sm:grid-cols-2">
+                        @csrf
+                        <input type="hidden" name="id" value="{{ $provider['credential_id'] }}">
+                        <label class="block text-sm font-medium">
+                            {{ $provider['state']['configured'] ? __('owner.integrations.ai.replace_secret') : __('owner.integrations.ai.new_secret') }}
+                            <input type="password" name="value" value="" autocomplete="new-password" spellcheck="false" maxlength="8192" required class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 font-mono text-sm text-ink">
+                        </label>
+                        <label class="block text-sm font-medium">
+                            {{ __('owner.integrations.ai.current_password') }}
+                            <input type="password" name="current_password" value="" autocomplete="current-password" required class="mt-1 block h-10 w-full rounded-sm border border-line-strong bg-surface px-3 text-sm text-ink">
+                        </label>
+                        <button type="submit" class="h-10 w-fit rounded-sm bg-primary px-4 text-sm font-semibold text-white">{{ $provider['state']['configured'] ? __('owner.integrations.ai.replace') : __('owner.integrations.ai.save') }}</button>
+                    </form>
+                    @if ($provider['state']['configured'])
+                        <form method="POST" action="{{ route('owner.integrations.destroy', $provider['credential_id']) }}" class="mt-3 flex flex-wrap items-end gap-3">
+                            @csrf
+                            @method('DELETE')
+                            <label class="block text-sm font-medium">
+                                {{ __('owner.integrations.ai.current_password') }}
+                                <input type="password" name="current_password" value="" autocomplete="current-password" required class="mt-1 block h-10 rounded-sm border border-line-strong bg-surface px-3 text-sm text-ink">
+                            </label>
+                            <button type="submit" class="h-10 text-sm font-medium text-danger-ink underline">{{ __('owner.integrations.ai.remove') }}</button>
+                        </form>
+                        <p class="mt-2 text-xs text-muted">{{ __('owner.integrations.ai.remove_note') }}</p>
+                    @endif
+                </article>
+            @endforeach
+        </div>
+    </section>
+
     <div class="space-y-4">
         @foreach ($fields as $id => $field)
             @if ($id === 'platform_backup_s3_access_key')
