@@ -1,5 +1,7 @@
 # M14.6 Findings Register
 
+Current closure evidence: PR #115 merged as `7d78bd8a44f71178fabc576767bda07a5f75d95d`; exact merged-primary CI run `39037273263` passed 7/7, including the MySQL process/concurrency gate. Local release authorization, receipt, workflow-policy, Gitleaks archive, privilege-policy, and 45-scenario deploy smoke fixtures pass. M146-F01 and M146-F02 remain closed. Staging remains at last known executable SHA `3debba99c677b68465cf439733f440442fbd0f22`; the reviewed root helper update from PR #115 is not installed because no platform-console session is available in this execution environment. M146-F10 therefore remains a staging validation blocker, not a source-code blocker. See [M14.6 Closure Report — Staging Validation Blocked](m14-6-closure-report.md).
+
 Audit baseline: primary before M14.6 planning `291f486db41ecc5dcc9c152db5ef0b35d634b404`; planning PR #105 merged `b16f2c53e7b6763bdfd7bcfea4d5162807bc06ad`; PR #106 merged `854a26832d864146fc493e75225cf6438ed932b9`; F10 fix PR #107 merged `dfaa2a9e4209cea310ef2241e58b1fe84e30c3e8`; PR #108 CI-hardening merged `6e5848fe0d02c70e7684f946c0ad80a8cfd394a1`. Staging remains on clean SHA `3debba99c677b68465cf439733f440442fbd0f22`. F01/F02 are closed by live readback; F10 source fix is merged, but host helper v1 still requires explicit root/admin installation and staging revalidation.
 
 | ID | Classification / state | Reproduction and evidence | Impact / prerequisite | Existing mitigation | Required fix / regression | Severity / blocks | Status |
