@@ -2,6 +2,7 @@
 """Unprivileged policy tests for the fixed staging deploy helper interface."""
 
 import importlib.util
+import hashlib
 import subprocess
 import tempfile
 from pathlib import Path
@@ -63,6 +64,8 @@ def main():
             raise AssertionError(f"unsafe application path accepted: {relative}")
 
     controller = CONTROLLER.read_text(encoding="utf-8")
+    wrapper_hash = hashlib.sha256((ROOT / "scripts/run-scheduler.sh").read_bytes()).hexdigest()
+    assert wrapper_hash == module.SCHEDULER_SOURCE_SHA256, "root helper wrapper hash must match the reviewed scheduler source"
     direct_privilege = [
         line.strip()
         for line in controller.splitlines()
