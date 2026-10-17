@@ -44,12 +44,18 @@ class BackupService
 
         try {
             return DB::transaction(function () use ($website, $reason, $actor, $type, $attributes, $decision) {
+                $entitlementSnapshot = $website->subscription?->backupEntitlements()
+                    ->where('effective_at', '<=', now())
+                    ->orderByDesc('effective_at')
+                    ->orderByDesc('id')
+                    ->first();
                 $backup = $website->backups()->create([
                     'type' => $type,
                     'reason' => $reason,
                     'status' => BackupStatus::Queued,
                     'storage_provider' => $decision->storage,
                     'requested_by' => $actor,
+                    'backup_entitlement_snapshot_id' => $entitlementSnapshot?->id,
                 ] + $attributes);
                 $backup->forceFill(['storage_path' => $backup->storagePrefix()])->save();
 

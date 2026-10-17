@@ -72,6 +72,15 @@ final class PricingCatalog
                 $text = "pricing.plans.{$productKey}.{$tierKey}";
                 $owner = $marketing["{$productKey}.{$tierKey}"] ?? null;
                 $features = array_map(fn (string $key) => self::feature($key, $plan), $plan['features']);
+                $backupRecoveryPoints = $plan['backup_recovery_points'] ?? null;
+                if (! is_array($backupRecoveryPoints)
+                    || array_diff(['daily', 'weekly', 'monthly'], array_keys($backupRecoveryPoints)) !== []
+                    || array_filter(['daily', 'weekly', 'monthly'], fn (string $class) => ! is_int($backupRecoveryPoints[$class]) || $backupRecoveryPoints[$class] < 0) !== []) {
+                    throw new InvalidArgumentException("Plan [{$productKey}.{$tierKey}] has invalid backup recovery-point entitlements.");
+                }
+                if (! is_bool($plan['manual_backup_allowed'] ?? null) || ! is_bool($plan['restore_eligible'] ?? null)) {
+                    throw new InvalidArgumentException("Plan [{$productKey}.{$tierKey}] has incomplete backup feature entitlements.");
+                }
 
                 if ($owner !== null) {
                     // Wording only: what a plan includes technically (backups, checks) stays in config.
@@ -86,6 +95,13 @@ final class PricingCatalog
                     description: $owner !== null ? (string) $owner['description'] : __("{$text}.description"),
                     features: $features,
                     backupFrequency: $plan['backup_frequency'],
+                    backupRecoveryPoints: [
+                        'daily' => $backupRecoveryPoints['daily'],
+                        'weekly' => $backupRecoveryPoints['weekly'],
+                        'monthly' => $backupRecoveryPoints['monthly'],
+                    ],
+                    manualBackupAllowed: $plan['manual_backup_allowed'],
+                    restoreEligible: $plan['restore_eligible'],
                     highlighted: $plan['highlighted'] ?? false,
                     badge: $owner !== null
                         ? (filled($owner['badge']) ? (string) $owner['badge'] : null)

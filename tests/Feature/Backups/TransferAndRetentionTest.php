@@ -329,6 +329,31 @@ class TransferAndRetentionTest extends TestCase
         app(BackupService::class)->request($site['website'], BackupReason::Scheduled, 'race', null, ['schedule_window' => $backups[0]->schedule_window]);
     }
 
+    public function test_backup_request_records_the_current_entitlement_origin_snapshot(): void
+    {
+        $site = $this->backupReadySite();
+        $snapshot = $site['website']->subscription->backupEntitlements()->create([
+            'resolution' => 'known',
+            'catalogue_version' => 'backup-entitlements-v1',
+            'product_type' => 'wordpress',
+            'plan' => 'business',
+            'cadence' => 'weekly',
+            'daily_recovery_points' => 0,
+            'weekly_recovery_points' => 8,
+            'monthly_recovery_points' => 3,
+            'manual_backup_allowed' => true,
+            'restore_eligible' => true,
+            'effective_at' => now()->subMinute(),
+            'source_key' => hash('sha256', 'backup-origin-snapshot'),
+            'created_at' => now(),
+        ]);
+
+        $backup = app(BackupService::class)->request($site['website'], BackupReason::Manual, 'test', BackupType::Files);
+
+        $this->assertSame($snapshot->id, $backup->backup_entitlement_snapshot_id);
+        $this->assertSame('backup-entitlements-v1', $backup->entitlementSnapshot->catalogue_version);
+    }
+
     public function test_scheduler_skips_ineligible_and_absent_sites(): void
     {
         $inactive = $this->backupReadySite('https://inactive.example');

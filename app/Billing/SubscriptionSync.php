@@ -2,6 +2,7 @@
 
 namespace App\Billing;
 
+use App\Backups\SubscriptionBackupEntitlementRecorder;
 use App\Models\BillingInvoice;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
@@ -25,6 +26,7 @@ final class SubscriptionSync
         private readonly ProvisionCustomer $provision,
         private readonly SubscriptionBillingSnapshot $billingSnapshot,
         private readonly QueueBillingEmail $billingEmails,
+        private readonly SubscriptionBackupEntitlementRecorder $backupEntitlements,
     ) {}
 
     /**
@@ -238,6 +240,11 @@ final class SubscriptionSync
 
         $this->recordActivation($subscription);
         $subscription->save();
+
+        $entitlementEffectiveAt = $subscription->wasRecentlyCreated || $scheduledChangeEffective
+            ? ($subscription->current_period_start ?? $eventTime)
+            : ($subscription->wasChanged(['product_type', 'plan']) ? $eventTime : ($subscription->current_period_start ?? $eventTime));
+        $this->backupEntitlements->record($subscription, $eventId, $entitlementEffectiveAt, 'stripe_event');
 
         if ($unconfirmedSchedule) {
             $operation = SubscriptionOperation::query()

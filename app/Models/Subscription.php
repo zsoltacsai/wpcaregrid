@@ -103,6 +103,11 @@ class Subscription extends Model
         return $this->hasMany(BillingInvoice::class)->latest('stripe_created_at');
     }
 
+    public function backupEntitlements(): HasMany
+    {
+        return $this->hasMany(SubscriptionBackupEntitlement::class);
+    }
+
     /** An internal plan (PROBONO): no Stripe subscription, no public tier, no price. */
     public function isInternal(): bool
     {

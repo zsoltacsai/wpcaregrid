@@ -15,6 +15,10 @@ final readonly class Plan
         public string $description,
         public array $features,
         public string $backupFrequency,
+        /** @var array{daily:int,weekly:int,monthly:int} */
+        public array $backupRecoveryPoints,
+        public bool $manualBackupAllowed,
+        public bool $restoreEligible,
         public bool $highlighted = false,
         public ?string $badge = null,
         // Button text written in the owner area; null: "Choose {plan}".
