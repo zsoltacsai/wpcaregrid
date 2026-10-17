@@ -287,14 +287,22 @@ Live restore is off (`BACKUP_RESTORE_ENABLED=false`) until the staging rehearsal
 
 ### Staging deployment
 
-Use the repository-controlled `scripts/deploy-staging.sh` on the staging VPS only. Run it as `deploy`, from `/var/www/wpcaregrid`, with the exact full commit SHA to deploy:
+Use the reviewed deployment controller and its co-located `scripts/verify-release-ci.py` from the same exact merged primary commit on the staging VPS only. Before a target-code deployment, place both reviewed files in a protected temporary controller directory, verify their source commit and hashes, and invoke the controller as `deploy` from `/var/www/wpcaregrid`. Do not rely on the current application checkout for the verifier: it may predate the verifier and is not the trust source for release authorization. The controller still reads the scheduler wrapper and post-deployment receipt writer from the application checkout at their documented stages. Supply the exact full commit SHA:
 
 ```sh
 cd /var/www/wpcaregrid
 bash scripts/deploy-staging.sh <full-40-character-commit-sha>
 ```
 
-With no argument, the script deploys the current tip of `claude/ecstatic-wozniak-oemyuf`. A supplied SHA must exist in that branch's fetched history; moving refs and short SHAs are rejected. The script serializes concurrent deploys, rejects dirty or untracked repository state, and never runs `git clean` or resets local changes. `.env` and `storage/` are deployment data, not release files.
+Forward deployment accepts only an exact 40-character SHA equal to the fetched tip of `claude/ecstatic-wozniak-oemyuf`. Before any backup or gate mutation, the controller requires a completed successful `push` run of `.github/workflows/ci.yml` attached to that exact SHA and verifies all seven mandatory jobs, including the MySQL process/concurrency step. The check uses unauthenticated read-only GitHub API requests and fails closed on missing, in-progress, canceled, failed, rate-limited, malformed or oversized evidence. PR-head CI, a parent SHA, an ancestor, or a feature-branch run cannot authorize a forward deploy. The script serializes concurrent deploys, rejects dirty or untracked repository state, and never runs `git clean` or resets local changes. `.env` and `storage/` are deployment data, not release files.
+
+Rollback is a separate explicit operation, never an alternate forward-target mode:
+
+```sh
+bash scripts/deploy-staging.sh --rollback <full-40-character-commit-sha>
+```
+
+The rollback target must be an ancestor of the currently deployed baseline and fetched authoritative branch tip, must have the same exact-SHA successful mandatory CI evidence, and must match the single SHA that a staging administrator previously placed in the root-owned `/var/lib/wpcaregrid/approved-rollback-sha` file (`root:root`, mode `0600`, exactly 40 lowercase hexadecimal characters plus newline). The deploy user cannot write that approval file. Updating it is a separate audited root/admin action after reviewing a known-good staging release. If the file is absent, unsafe, or mismatched, rollback is refused. Automatic code recovery after a failed deployment remains a separate fail-closed baseline-recovery path.
 
 Before the first use, the staging HTTPS server block in `/etc/nginx/sites-available/wpcaregrid` must contain this gate inside the `staging.wpcaregrid.com` TLS server only:
 
@@ -309,7 +317,7 @@ Validate the Nginx configuration and reload it after adding the gate. Do not add
 The script then follows this order:
 
 1. Verify staging identity, the protected `.env`, writable application directories, cron and active config cache. Acquire the staging deployment lock, then capture the current clean Git commit once as the immutable baseline. Check `/up`, the root page (200 or one same-origin 301 ending in 200), the guest Owner redirect and protected paths. Verify PHP 8.4, Composer 2, Node.js 22 and both Supervisor workers.
-2. Fetch the staging branch, validate the explicitly requested full target SHA is a distinct commit in that branch, recheck the baseline, and create a new gzip-verified MySQL backup in `/home/deploy/private-backups`. Existing backups are never overwritten or removed. Automated snapshot pruning is intentionally disabled; define and approve a separate retention policy before enabling any cleanup. Recheck the baseline and then install or update the scheduler wrapper, confirming cron has invoked it before deployment proceeds.
+2. Fetch the authoritative staging branch, require the forward target to equal its exact tip (or validate the separately approved rollback target), and verify the target's exact-SHA push CI and mandatory job results. Only then recheck the baseline and create a new gzip-verified MySQL backup in `/home/deploy/private-backups`. Existing backups are never overwritten or removed. Automated snapshot pruning is intentionally disabled; define and approve a separate retention policy before enabling any cleanup. Recheck the baseline and then install or update the scheduler wrapper, confirming cron has invoked it before deployment proceeds.
 3. Acquire the scheduler lock exclusively, wait for any already-running scheduler process to finish, and create the persistent scheduler pause marker. Then enable the Nginx 503 gate and Laravel maintenance mode. The scheduler pause prevents cron from booting Laravel while the config cache may be absent; the Nginx gate independently prevents web requests from reaching PHP-FPM.
 4. Stop `wpcaregrid-default` and `wpcaregrid-backups` through Supervisor. Supervisor waits for each worker's configured graceful stop interval, allowing an in-progress job to finish before application files change.
 5. Recheck that the live checkout still matches the pinned baseline, then check out the exact target SHA. Install Composer dependencies with `--no-dev`, verify PHP-FPM can read the Composer autoloader and PHP dependency files, build Vite assets, remove build-only `node_modules`, inspect whether target migrations are pending, and run migrations with `--force`.
@@ -318,6 +326,7 @@ The script then follows this order:
 7. Bring Laravel out of maintenance mode while the Nginx gate remains active. Signal `queue:restart`, start both named Supervisor programs, and require each to be `RUNNING` with a new PID. After the new config cache and workers are verified, remove the scheduler pause marker and release the exclusive lock. The wrapper can then run the normal cron tick and restore the heartbeat while HTTP remains gated.
 8. Verify migration status, scheduler availability and `system:check`. `application`, `database`, `queue`, `scheduler` and `safety` must be `OK`; any `ERROR` fails the deploy. Expected staging `WARNING` and `NOT CONFIGURED` integrations (for example Stripe, mail, connectors or backup storage) are reported but do not block deployment.
 9. Remove the Nginx gate and test the HTTPS homepage, `/up`, the guest Owner authentication redirect, `/.env` and `/.git/config`; recheck worker states before marking the gate released. The script keeps its recovery flag active through these checks and reinstalls the gate before recovery if interrupted. Any failed HTTP, permission or worker check re-engages the gate and Laravel maintenance mode.
+10. Write a machine-readable, mode-0600 receipt under `/home/deploy/private-backups/deployment-receipts/`. It records baseline/target/runtime SHA, verified workflow run ID and mode, UTC time, tool versions, lockfile hashes, migration/health result, Connector version/source/package hashes, and Vite manifest hash. It contains no `.env` values or credentials. The directory is deploy-owned operational evidence and is not itself release authorization; GitHub's exact-SHA API readback remains the authorization source.
 
 The deployment is an in-place, single-node update. It provides a controlled 503 during code, migration and cache transitions, not zero downtime. The one-minute cron continues to invoke the scheduler wrapper; its shared lock and pause marker prevent any Laravel scheduler process from starting during the config-cache transition. Queue workers are stopped so jobs cannot execute against mixed code. The approach does not provide multi-node coordination or blue/green rollback.
 

@@ -19,6 +19,7 @@ GATE_DIR = Path("/var/lib/wpcaregrid")
 GATE = GATE_DIR / "deploy-maintenance"
 SCHEDULER_LOCK = GATE_DIR / "scheduler.lock"
 SCHEDULER_PAUSE = GATE_DIR / "scheduler-paused"
+APPROVED_ROLLBACK = GATE_DIR / "approved-rollback-sha"
 SCHEDULER_SOURCE = APP / "scripts/run-scheduler.sh"
 SCHEDULER_DEST = Path("/usr/local/bin/wpcaregrid-scheduler")
 OLD_CRON = "* * * * * cd /var/www/wpcaregrid && php artisan schedule:run >> /dev/null 2>&1"
@@ -336,6 +337,25 @@ def vendor_readable():
         raise ValueError("vendor contains unreadable PHP files")
 
 
+def read_approved_rollback(path=APPROVED_ROLLBACK, expected_owner=0, expected_mode=0o600):
+    """Read one administrator-installed prior release SHA; never write it here."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != expected_owner or (expected_mode is not None and stat.S_IMODE(info.st_mode) != expected_mode) or info.st_size > 41:
+            raise ValueError("unsafe rollback authorization file")
+        content = os.read(fd, 42)
+    finally:
+        os.close(fd)
+    try:
+        value = content.decode("ascii")
+    except UnicodeDecodeError:
+        raise ValueError("invalid rollback authorization") from None
+    if not re.fullmatch(r"[0-9a-f]{40}\n", value):
+        raise ValueError("invalid rollback authorization")
+    return value[:-1]
+
+
 def dispatch(args):
     if args == ["preflight"]:
         nginx_gate_check()
@@ -348,6 +368,9 @@ def dispatch(args):
         run(["/usr/bin/systemctl", "is-active", "--quiet", "cron"])
     elif args == ["vendor-readable"]:
         vendor_readable()
+    elif len(args) == 2 and args[0] == "rollback-allowed":
+        if not re.fullmatch(r"[0-9a-f]{40}", args[1]) or read_approved_rollback() != args[1]:
+            raise ValueError("rollback target is not administrator-approved")
     elif args == ["scheduler-lock-check"]:
         import grp
         import pwd

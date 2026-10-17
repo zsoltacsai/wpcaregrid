@@ -3,24 +3,24 @@
 ## Current evidence
 
 - CI tests source commits and runs Composer/npm audits; seven checks are expected. It does not publish a deployable artifact.
-- The staging process accepts an exact full SHA, verifies object type and ancestry in the fetched authoritative branch, checks origin and clean tree, and verifies runtime `HEAD` still matches target.
+- The pre-M14.6 staging controller accepted any full SHA ancestor of the fetched authoritative branch; it did not verify merged-PR CI. Candidate PR #109 changes forward release authorization to require the target to equal the fetched branch tip and checks an unauthenticated, read-only GitHub Actions API run for that exact SHA. It requires `event=push`, the authoritative branch and workflow path, a completed successful latest run, all seven current job names with success conclusions, and the successful MySQL process/concurrency step. API redirects, errors, incomplete pagination, oversized bodies, missing jobs, canceled/running/failed runs and rate limits fail closed. No staging token is added.
 - Connector package provenance is already stronger than a version-only ZIP: `ConnectorPackageArtifact` embeds a per-file SHA-256 manifest, derives source SHA-256 and optional source revision, writes a private sidecar with package SHA-256, refuses same-version source drift, and rebuilds/verifies on the deployed source. CI currently does not upload its ZIP.
-- No durable deployment receipt or CI-run-to-deploy record is established by source readback.
+- Candidate PR #109 adds a mode-0600 JSON receipt in the deploy user's private backup directory after runtime SHA, smoke/health, worker and permission checks. It binds baseline/target/runtime SHA, exact workflow run ID, mode/time, tool versions, lock hashes, migration result, Connector version/source/package hashes, and Vite manifest digest. It reads no `.env` values. The receipt is audit evidence in a deploy-owned directory and is not itself an authorization source.
 
 ## Minimum release evidence contract
 
-For each staging release preserve, in a private append-only or access-controlled release log/receipt:
+For each staging release preserve, in a private access-controlled release receipt (which remains mutable to the deploy principal):
 
 1. repository and authoritative branch identity;
 2. PR number and reviewed merge method (or explicit emergency exception);
 3. PR head SHA and merged primary candidate SHA;
-4. exact CI run ID for the merged candidate and all seven successful job results;
+4. exact successful CI run ID for the merged candidate and all seven successful job results, including the MySQL concurrency step;
 5. root/WordPress `composer.lock` hashes, `package-lock.json` hash, tested image/tool policy identifiers, and Gitleaks version/checksum result;
 6. deployment actor/time, baseline SHA, requested SHA, origin identity, clean-tree result, and final runtime HEAD;
-7. migration status/batch, PHP/Composer/Node versions, Vite manifest digest, Connector version/source SHA/package SHA, health/smoke result and rollback disposition;
+7. migration status, PHP/Composer/Node versions, Vite manifest digest, Connector version/source SHA/package SHA, health/smoke result and forward/rollback mode;
 8. confirmation M12 gates false, M14.4 retention non-destructive, no production deploy.
 
-Never store `.env`, tokens, SSH paths/private values, database dumps, test customer data, or unredacted logs in the receipt.
+Never store `.env`, tokens, SSH paths/private values, database dumps, test customer data, provider/customer payloads, or unredacted logs in the receipt. A root administrator separately writes the one approved rollback SHA to `/var/lib/wpcaregrid/approved-rollback-sha`, root-owned mode `0600`; the deploy user cannot self-authorize a rollback target.
 
 ## Artifact and signing decisions
 

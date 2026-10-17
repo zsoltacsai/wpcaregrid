@@ -4,6 +4,7 @@
 import importlib.util
 import hashlib
 import io
+import os
 import subprocess
 import tempfile
 from contextlib import redirect_stdout
@@ -73,6 +74,7 @@ def main():
         ["file-check", "root", "read", "artisan"],
         ["cache-file-secure", "storage/framework/views/../../.env"],
         ["gate-on", "/etc/passwd"],
+        ["rollback-allowed", "../etc/passwd"],
         ["supervisorctl", "status"],
         ["run", "/bin/sh", "-c", "id"],
     ):
@@ -90,6 +92,35 @@ def main():
             except (ValueError, OSError):
                 continue
             raise AssertionError(f"unsafe application path accepted: {relative}")
+
+    with tempfile.TemporaryDirectory() as temporary:
+        approval = Path(temporary) / "approved-rollback-sha"
+        rollback_sha = "a" * 40
+        approval.write_bytes((rollback_sha + "\n").encode("ascii"))
+        approval.chmod(0o600)
+        owner = approval.stat().st_uid
+        test_mode = None if os.name == "nt" else 0o600
+        assert module.read_approved_rollback(approval, expected_owner=owner, expected_mode=test_mode) == rollback_sha
+        approval.write_bytes(b"not-a-full-sha\n")
+        try:
+            module.read_approved_rollback(approval, expected_owner=owner, expected_mode=test_mode)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("malformed rollback approval was accepted")
+        link = Path(temporary) / "approval-link"
+        link.symlink_to(approval)
+        try:
+            module.read_approved_rollback(link, expected_owner=owner, expected_mode=test_mode)
+        except (OSError, ValueError):
+            pass
+        else:
+            raise AssertionError("symlink rollback approval was accepted")
+
+    module.APPROVED_ROLLBACK = Path("/root-owned-approval-fixture")
+    module.read_approved_rollback = lambda: "a" * 40
+    module.dispatch(["rollback-allowed", "a" * 40])
+    expect_rejected(["rollback-allowed", "b" * 40])
 
     controller = CONTROLLER.read_text(encoding="utf-8")
     fixture = DENIAL_FIXTURE.read_text(encoding="utf-8")
