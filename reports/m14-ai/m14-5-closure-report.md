@@ -74,3 +74,7 @@ All six M12 switches were read before and after staging validation and remain fa
 Closure documentation PR and exact-head CI are recorded after this report is opened. This report does not claim a completed M14 audit or production readiness.
 
 Cleanup readback on exact staging SHA `3debba99c677b68465cf439733f440442fbd0f22` returned zero AI credential rows for all three fixed IDs and zero AI provider status rows after transaction rollback. The temporary validation script was absent. Post-validation M12 readback remained six of six `false`; `backup:retention` again reported no deletion; post-validation `system:check` remained green except the expected M14.7 scanner warning.
+
+## Closure PR evidence
+
+This documentation-only closure is PR #104. Its initial report commit was `e354486ac219ba001097d68843723847d99dd4cd`; exact-head mandatory CI run [39022848513](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39022848513) passed all 7 jobs. Any subsequent commit updating this closure PR supersedes that candidate and must pass its own exact-head CI before merge. The merged primary SHA is recorded in the final task status.
