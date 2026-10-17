@@ -115,6 +115,8 @@ export TARGET_FIXTURE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 printf '%s\n' '175ba57985557a8cf26ebe7b7817a03cbae3097a' >"$SMOKE_HEAD_FILE"
 
 source "$repo_root/scripts/deploy-staging.sh"
+# Sourcing the controller applies its production PATH; restore the isolated test stubs afterward.
+export PATH="$temp_dir/bin:$PATH"
 
 scenarios=0
 if (SMOKE_CASE=missing_sha capture_baseline_sha >/dev/null 2>&1); then
@@ -132,22 +134,22 @@ if (capture_baseline_sha >/dev/null 2>&1); then
     printf 'The pinned baseline was captured twice.\n' >&2; exit 1
 fi
 scenarios=$((scenarios + 1))
-if (pin_target_sha "$BASELINE_SHA" "$TARGET_FIXTURE" >/dev/null 2>&1); then
+if (pin_target_sha "$BASELINE_SHA" "$TARGET_FIXTURE" forward >/dev/null 2>&1); then
     printf 'A no-op target was accepted.\n' >&2; exit 1
 fi
 scenarios=$((scenarios + 1))
-if (pin_target_sha 'latest' "$TARGET_FIXTURE" >/dev/null 2>&1); then
+if (pin_target_sha 'latest' "$TARGET_FIXTURE" forward >/dev/null 2>&1); then
     printf 'A moving target ref was accepted.\n' >&2; exit 1
 fi
 scenarios=$((scenarios + 1))
-if (SMOKE_CASE=not_ancestor pin_target_sha "$TARGET_FIXTURE" "$TARGET_FIXTURE" >/dev/null 2>&1); then
+if (SMOKE_CASE=not_ancestor pin_target_sha "$TARGET_FIXTURE" "$TARGET_FIXTURE" forward >/dev/null 2>&1); then
     printf 'A target outside the fetched branch was accepted.\n' >&2; exit 1
 fi
 scenarios=$((scenarios + 1))
-pin_target_sha "$TARGET_FIXTURE" "$TARGET_FIXTURE"
+pin_target_sha "$TARGET_FIXTURE" "$TARGET_FIXTURE" forward
 [[ "$TARGET_SHA" == "$TARGET_FIXTURE" && "$TARGET_SHA" != "$BASELINE_SHA" ]] || exit 1
 scenarios=$((scenarios + 1))
-if (pin_target_sha "$TARGET_FIXTURE" "$TARGET_FIXTURE" >/dev/null 2>&1); then
+if (pin_target_sha "$TARGET_FIXTURE" "$TARGET_FIXTURE" forward >/dev/null 2>&1); then
     printf 'The pinned target was replaced.\n' >&2; exit 1
 fi
 scenarios=$((scenarios + 1))
