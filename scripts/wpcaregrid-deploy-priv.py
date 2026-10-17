@@ -223,7 +223,8 @@ def cron_seen(since):
         if SCHEDULER_DEST.as_posix() in line:
             found = True
             break
-    process.terminate()
+    if process.poll() is None:
+        process.terminate()
     process.wait(timeout=3)
     if not found:
         raise ValueError("scheduler invocation not observed")
