@@ -193,7 +193,7 @@ The wrapper takes a nonblocking shared `flock` on `/var/lib/wpcaregrid/scheduler
 | `connector:update-presence` | every 10 min | mark sites that stopped reporting in |
 | `backup:schedule` | hourly | queue due scheduled backups per plan |
 | `backup:monitor` | every 10 min | time out stuck uploads, hand over lost/abandoned transfers, clean staging |
-| `backup:retention` | daily 03:30 | apply per-plan retention (nothing is deleted until retention is configured) |
+| `backup:retention` | daily 03:30 | report legacy per-plan retention candidates only; never deletes customer/provider backups |
 | `admin-access:expire` | every minute | expire unused tokens and ended sessions |
 | `security:monitor` | every 10 min | time out stuck scans |
 | `security:schedule` | hourly | scheduled scans (only with `SECURITY_SCHEDULE_ENABLED=true`) |

@@ -3,10 +3,8 @@
 namespace App\Jobs;
 
 use App\Backups\BackupDeletion;
-use App\Backups\BackupPolicy;
 use App\Backups\BackupService;
 use App\Backups\BackupStatus;
-use App\Backups\Retention;
 use App\Backups\Storage\ChecksumMismatch;
 use App\Backups\Storage\StorageManager;
 use App\Backups\Storage\StorageNotConfigured;
@@ -90,7 +88,7 @@ class TransferBackup implements ShouldBeUnique, ShouldQueue
         return config('backup.transfer.backoff');
     }
 
-    public function handle(StorageManager $storages, BackupService $backups, Retention $retention): void
+    public function handle(StorageManager $storages, BackupService $backups): void
     {
         // Reject legacy jobs lacking their enqueue-time scope snapshot.
         if ($this->expectedWebsiteId === null || $this->expectedStorageProvider === null || $this->expectedObjectIds === null) {
@@ -162,17 +160,17 @@ class TransferBackup implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $decision = app(BackupPolicy::class)->for($backup->website);
         $backup->transitionTo(BackupStatus::Verified, [
             'verified_at' => now(),
             'completed_at' => now(),
-            'expires_at' => $decision->retentionDays ? now()->addDays($decision->retentionDays) : null,
+            // Legacy retention env values are comparison-only and cannot make
+            // a newly verified recovery point expire or become unrestorable.
+            'expires_at' => null,
         ]);
         File::deleteDirectory($this->stagingDirectory($backup));
 
         AuditLog::record($backup->website, 'backup.verified', $backup, data: ['size' => $backup->total_size, 'storage' => $backup->storage_provider]);
         $backups->settled($backup);
-        $retention->apply($backup->website);
     }
 
     /** Anything unexpected: the backup must not stay in "verifying". */

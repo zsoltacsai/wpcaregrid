@@ -6,24 +6,22 @@ use App\Connector\JobStatus;
 use App\Models\Backup;
 use App\Models\BackupRestore;
 use App\Models\Website;
-use Illuminate\Support\Facades\Log;
 
 /**
- * Applies the plan's retention to a website's verified backups:
+ * Reports legacy retention candidates for comparison only:
  *   - retention_count: keep the newest N verified backups;
  *   - retention_days: expire verified backups older than N days.
- * Without both values nothing is deleted. The newest verified backup is
- * never expired, nor a backup a restore or a waiting update depends on.
+ * This service is intentionally non-destructive. Legacy environment values
+ * must never authorize a customer or provider backup deletion.
  */
 class Retention
 {
     public function __construct(
         private readonly BackupPolicy $policy,
-        private readonly BackupDeletion $deletion,
     ) {}
 
-    /** @return list<string> UUIDs of the backups expired. */
-    public function apply(Website $website): array
+    /** @return list<string> UUIDs that the legacy count/day inputs would select. */
+    public function preview(Website $website): array
     {
         $decision = $this->policy->for($website);
 
@@ -36,7 +34,7 @@ class Retention
 
         $protected = $this->protectedIds($website);
         $cutoff = $decision->retentionDays ? now()->subDays($decision->retentionDays) : null;
-        $expired = [];
+        $candidates = [];
 
         foreach ($verified as $position => $backup) {
             $overCount = $decision->retentionCount !== null && $position >= $decision->retentionCount;
@@ -46,15 +44,10 @@ class Retention
                 continue;
             }
 
-            try {
-                $this->deletion->remove($backup, BackupStatus::Expired, 'retention');
-                $expired[] = $backup->uuid;
-            } catch (\Throwable $e) {
-                Log::warning('Backup retention could not expire a backup.', ['backup' => $backup->uuid, 'error' => $e->getMessage()]);
-            }
+            $candidates[] = $backup->uuid;
         }
 
-        return $expired;
+        return $candidates;
     }
 
     /** @return list<int> */
