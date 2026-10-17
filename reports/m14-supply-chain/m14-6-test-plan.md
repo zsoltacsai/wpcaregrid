@@ -37,3 +37,8 @@
 | Staging | exact merged SHA, pinned SSH, origin, receipt, gate/build/migration/worker/health and rollback-safe failure fixtures. No production or customer changes. |
 
 Maintain the current seven CI result jobs and exact check names. Every executable PR requires focused tests, full mandatory CI, `git diff --check`, Pint, Composer validation/audit, frontend build, secret scan and exact-head run; deployment release then additionally requires merged-primary exact-SHA CI. No exact totals are claimed by this planning document.
+
+
+## Candidate static security tests
+
+New local/CI scripts test mutable Action refs, forbidden `pull_request_target`, permission widening, required matrix/job drift, MySQL process-gate removal, obvious deployment inclusion, untrusted event expressions in shell, Composer repositories/HTTP sources, npm non-registry URLs, Gitleaks checksum/truncation/path traversal/symlink behavior, and tracked secret-path newline/annotation sentinels. Exact totals remain pending required CI.

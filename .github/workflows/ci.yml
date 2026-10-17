@@ -36,23 +36,28 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: ${{ env.PHP_EXTENSIONS }}
           coverage: none
           tools: composer:v2
 
+      - name: Tracked secret-path policy tests
+        run: python3 scripts/tests/repository-secret-path-policy-test.py
+
       - name: No local files, databases or keys in the repository
-        run: |
-          if git ls-files | grep -E '(^|/)\.env$|(^|/)\.env\.(production|backup)$|\.sqlite$|\.sqlite3$|(^|/)id_(rsa|ed25519|ecdsa)$|\.pem$|\.p12$|(^|/)auth\.json$|^public/hot$|^storage/.+\.key$'; then
-            echo "::error::Local or secret files are tracked (listed above)."
-            exit 1
-          fi
+        run: python3 scripts/tests/repository-secret-path-policy.py
+
+      - name: CI supply-chain policy
+        run: python3 scripts/tests/ci-supply-chain-policy-test.py
+
+      - name: Gitleaks archive verifier tests
+        run: python3 scripts/tests/gitleaks-archive-test.py
 
       - name: Validate composer files
         run: |
@@ -75,11 +80,25 @@ jobs:
 
       - name: Connector package version and source consistency
         env:
-          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || inputs.connector_release_base }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DISPATCH_BASE: ${{ inputs.connector_release_base }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          base="$EVENT_BASE"
-          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then base="$(git merge-base origin/main HEAD)"; fi
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$DISPATCH_BASE" ]]; then
+            if [[ ! "$DISPATCH_BASE" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "Connector release base must be an exact 40-character commit SHA." >&2
+              exit 1
+            fi
+            base="$DISPATCH_BASE"
+            if [[ "$(git cat-file -t "$base" 2>/dev/null || true)" != "commit" ]]; then
+              echo "Connector release base does not identify a local commit." >&2
+              exit 1
+            fi
+          else
+            base="$EVENT_BASE"
+            if [[ -z "$base" || "$base" =~ ^0+$ ]]; then base="$(git merge-base origin/main HEAD)"; fi
+          fi
           php scripts/check-connector-release.php "$base"
           bash scripts/tests/connector-release-version-gate-test.sh
 
@@ -91,7 +110,7 @@ jobs:
           composer audit --locked --no-interaction
           composer audit --locked --no-interaction --working-dir=wordpress
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -107,12 +126,14 @@ jobs:
       - name: npm advisories (high and critical)
         run: npm audit --audit-level=high
 
-      - name: Secret scan (gitleaks, full history, findings redacted)
-        env:
-          GITLEAKS_VERSION: 8.21.2
+      - name: Secret scan (Gitleaks 8.30.0, verified archive, full history)
         run: |
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP" gitleaks
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks_8.30.0_linux_x64.tar.gz"
+          curl --fail --show-error --location --max-filesize 20000000 --connect-timeout 15 --max-time 60 \
+            --output "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz"
+          python3 scripts/verify-gitleaks-archive.py "$archive" "$RUNNER_TEMP/gitleaks"
           "$RUNNER_TEMP/gitleaks" detect --source=. --config=.gitleaks.toml --redact --no-banner --verbose
 
   server:
@@ -138,9 +159,9 @@ jobs:
       # A missing S3 or SFTP test service fails the run (tests/Support/StorageServers.php).
       CAREGRID_TEST_REQUIRE_SERVICES: '1'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: ${{ env.PHP_EXTENSIONS }}
@@ -172,7 +193,7 @@ jobs:
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -185,7 +206,7 @@ jobs:
 
       - name: S3-compatible test service (moto)
         run: |
-          pipx install 'moto[server]==5.1.*'
+          pipx install 'moto[server]==5.2.4'
           # pipx links apps into its own bin directory (/opt/pipx_bin on GitHub runners).
           bin="$(pipx environment --value PIPX_BIN_DIR)"
           echo "$bin" >> "$GITHUB_PATH"
@@ -319,9 +340,9 @@ jobs:
       # Symlink containment and permission tests must run here, never be skipped.
       WP_CAREGRID_TEST_STRICT: '1'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php }}
           extensions: ${{ env.PHP_EXTENSIONS }}
