@@ -339,14 +339,26 @@ def vendor_readable():
 
 def read_approved_rollback(path=APPROVED_ROLLBACK, expected_owner=0, expected_mode=0o600):
     """Read one administrator-installed prior release SHA; never write it here."""
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    parent_path = Path(path).parent
+    parent_fd = None if os.name == "nt" else open_directory(parent_path)
     try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != expected_owner or (expected_mode is not None and stat.S_IMODE(info.st_mode) != expected_mode) or info.st_size > 41:
-            raise ValueError("unsafe rollback authorization file")
-        content = os.read(fd, 42)
+        parent_info = parent_path.lstat() if parent_fd is None else os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode):
+            raise ValueError("unsafe rollback authorization directory")
+        if parent_info.st_uid != expected_owner:
+            raise ValueError("unsafe rollback authorization directory")
+        open_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, open_flags) if parent_fd is None else os.open(Path(path).name, open_flags, dir_fd=parent_fd)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != expected_owner or (expected_mode is not None and stat.S_IMODE(info.st_mode) != expected_mode) or info.st_size > 41:
+                raise ValueError("unsafe rollback authorization file")
+            content = os.read(fd, 42)
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
     try:
         value = content.decode("ascii")
     except UnicodeDecodeError:
