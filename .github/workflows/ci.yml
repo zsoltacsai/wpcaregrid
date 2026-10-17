@@ -70,6 +70,9 @@ jobs:
       - name: M8 fixture fingerprint contract
         run: php scripts/e2e/test-fingerprint-v2.php
 
+      - name: Staging deploy privilege allowlist policy
+        run: python3 scripts/tests/deploy-privilege-policy-test.py
+
       - name: Connector package version and source consistency
         env:
           EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || inputs.connector_release_base }}

@@ -221,8 +221,8 @@ npm() { :; }
 php() { [[ "$#" == 2 && "$1" == 'artisan' && "$2" == 'connector:package' ]]; }
 worker_status() { cat "$temp_dir/$1.status"; }
 sudo() {
-    [[ "$#" == 4 && "$1" == '-n' && "$2" == 'supervisorctl' && "$3" == 'stop' ]] || return 1
-    printf '%s STOPPED\n' "$4" >"$temp_dir/$4.status"
+    [[ "$#" == 5 && "$1" == '-n' && "$2" == '/usr/local/sbin/wpcaregrid-deploy-priv' && "$3" == 'worker' && "$4" == 'stop' ]] || return 1
+    printf '%s STOPPED\n' "$5" >"$temp_dir/$5.status"
 }
 
 (
