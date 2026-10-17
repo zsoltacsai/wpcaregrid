@@ -334,6 +334,7 @@ class TransferAndRetentionTest extends TestCase
         $site = $this->backupReadySite();
         $snapshot = $site['website']->subscription->backupEntitlements()->create([
             'resolution' => 'known',
+            'source_type' => 'test_fixture',
             'catalogue_version' => 'backup-entitlements-v1',
             'product_type' => 'wordpress',
             'plan' => 'business',

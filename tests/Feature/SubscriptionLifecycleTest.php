@@ -11,6 +11,7 @@ use App\Invoicing\InvoiceIntentWorkflow;
 use App\Mail\AccountActivation;
 use App\Mail\SubscriptionActivated;
 use App\Models\AdminAuditEvent;
+use App\Models\Backup;
 use App\Models\BillingInvoice;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
@@ -291,7 +292,7 @@ class SubscriptionLifecycleTest extends TestCase
             ->expectsOutputToContain('Preview: 1 active subscription(s)')
             ->assertSuccessful();
         $this->assertSame(0, $subscription->backupEntitlements()->count());
-        $this->assertSame(0, \App\Models\Backup::count());
+        $this->assertSame(0, Backup::count());
 
         $this->artisan('backup:entitlements:backfill', ['--limit' => 1, '--apply' => true])
             ->expectsOutputToContain('Recorded 1 known and 0 unknown')
@@ -299,7 +300,7 @@ class SubscriptionLifecycleTest extends TestCase
         $snapshot = $subscription->backupEntitlements()->sole();
         $this->assertSame('legacy_backfill', $snapshot->source_type);
         $this->assertSame('known', $snapshot->resolution);
-        $this->assertSame(0, \App\Models\Backup::count());
+        $this->assertSame(0, Backup::count());
 
         $this->artisan('backup:entitlements:backfill', ['--limit' => 501])->assertFailed();
     }

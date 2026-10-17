@@ -10,6 +10,7 @@ use App\Models\Backup;
 use App\Models\BackupObject;
 use App\Models\Website;
 use App\Models\WebsiteJob;
+use App\Pricing\PricingCatalog;
 use Illuminate\Support\Facades\File;
 use Illuminate\Testing\TestResponse;
 
@@ -47,7 +48,7 @@ trait CreatesBackups
                 }
             }
         }
-        app()->forgetInstance(\App\Pricing\PricingCatalog::class);
+        app()->forgetInstance(PricingCatalog::class);
     }
 
     protected function tearDownBackups(): void
