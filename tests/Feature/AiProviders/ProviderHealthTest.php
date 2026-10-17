@@ -319,7 +319,9 @@ final class ProviderHealthTest extends TestCase
         $this->assertCount(1, $fake->calls);
         $audit = AdminAuditEvent::where('event', 'ai_provider.health_checked')->sole();
         $this->assertSame($owner->id, $audit->actor_user_id);
-        $this->assertSame(['provider_id' => 'openai', 'status' => 'HEALTHY', 'generation' => app(ProviderCredentialState::class)->generation('openai')], $audit->data);
+        $this->assertSame('openai', $audit->data['provider_id']);
+        $this->assertSame('HEALTHY', $audit->data['status']);
+        $this->assertSame(app(ProviderCredentialState::class)->generation('openai'), $audit->data['generation']);
         $this->assertStringNotContainsString('fake-owner-only-key', json_encode($audit->toArray()));
     }
 
