@@ -17,6 +17,7 @@ use App\Backups\Storage\ObjectPresence;
 use App\Backups\Storage\StorageManager;
 use App\Backups\Storage\StorageUnavailable;
 use App\Backups\Storage\Verification;
+use App\Backups\SubscriptionBackupEntitlementRecorder;
 use App\Jobs\TransferBackup;
 use App\Models\Backup;
 use App\Models\BackupObjectDeletion;
@@ -314,6 +315,7 @@ class TransferAndRetentionTest extends TestCase
     {
         $site = $this->backupReadySite();
         $site['website']->subscription->update(['product_type' => ProductType::WordPress, 'plan' => PlanTier::Secure]);
+        app(SubscriptionBackupEntitlementRecorder::class)->record($site['website']->subscription->refresh(), 'scheduler-fixture', now());
 
         $this->artisan('backup:schedule')->assertSuccessful();
         $this->artisan('backup:schedule')->assertSuccessful();
@@ -322,11 +324,37 @@ class TransferAndRetentionTest extends TestCase
         $this->assertCount(1, $backups);
         $this->assertSame(BackupReason::Scheduled, $backups[0]->reason);
         $this->assertSame('daily:'.now()->utc()->format('Y-m-d'), $backups[0]->schedule_window);
+        $this->assertNotNull($backups[0]->backup_entitlement_snapshot_id);
         $this->assertSame(1, $site['website']->jobs()->where('type', 'BACKUP_FULL')->count());
 
         // The database refuses a duplicate even if two schedulers race.
         $this->expectException(BackupRefused::class);
         app(BackupService::class)->request($site['website'], BackupReason::Scheduled, 'race', null, ['schedule_window' => $backups[0]->schedule_window]);
+    }
+
+    public function test_scheduler_does_not_dispatch_without_a_known_effective_entitlement(): void
+    {
+        $site = $this->backupReadySite();
+
+        $this->artisan('backup:schedule')->assertSuccessful();
+
+        $this->assertSame(0, $site['website']->backups()->count());
+        $this->assertSame(0, $site['website']->jobs()->whereIn('type', ['BACKUP_FILES', 'BACKUP_DATABASE', 'BACKUP_FULL'])->count());
+    }
+
+    public function test_scheduler_does_not_dispatch_when_backup_ready_is_blocked(): void
+    {
+        $site = $this->backupReadySite();
+        app(SubscriptionBackupEntitlementRecorder::class)->record($site['website']->subscription, 'blocked-capability-fixture', now());
+        $capabilities = $site['website']->capabilitySnapshot->capabilities;
+        $capabilities['BACKUP_READY']['scopes']['files']['status'] = 'BLOCK';
+        $capabilities['BACKUP_READY']['scopes']['database']['status'] = 'BLOCK';
+        $site['website']->capabilitySnapshot->forceFill(['capabilities' => $capabilities])->save();
+
+        $this->artisan('backup:schedule')->assertSuccessful();
+
+        $this->assertSame(0, $site['website']->backups()->count());
+        $this->assertSame(0, $site['website']->jobs()->whereIn('type', ['BACKUP_FILES', 'BACKUP_DATABASE', 'BACKUP_FULL'])->count());
     }
 
     public function test_backup_request_records_the_current_entitlement_origin_snapshot(): void

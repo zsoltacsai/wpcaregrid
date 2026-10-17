@@ -105,6 +105,11 @@ class Website extends Model
         return $this->hasMany(Backup::class);
     }
 
+    public function backupGfsEvaluation(): HasOne
+    {
+        return $this->hasOne(BackupGfsEvaluation::class);
+    }
+
     public function restores(): HasMany
     {
         return $this->hasMany(BackupRestore::class);
