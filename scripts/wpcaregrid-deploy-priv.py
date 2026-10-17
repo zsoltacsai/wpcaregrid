@@ -343,7 +343,7 @@ def read_approved_rollback(path=APPROVED_ROLLBACK, expected_owner=0, expected_mo
     parent_fd = None if os.name == "nt" else open_directory(parent_path)
     try:
         parent_info = parent_path.lstat() if parent_fd is None else os.fstat(parent_fd)
-        if not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode):
+        if not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode) or parent_info.st_mode & 0o022:
             raise ValueError("unsafe rollback authorization directory")
         if parent_info.st_uid != expected_owner:
             raise ValueError("unsafe rollback authorization directory")
