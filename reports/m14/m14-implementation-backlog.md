@@ -104,3 +104,9 @@ M14.5 is implemented in PRs #102 and #103 and deployed to staging at `3debba99c6
 ## M14-10 staging evidence and documentation status — 2026-10-17
 
 The owner reports successful exact-SHA staging deployment of `be427a17320ca7aba9ec292d2c288813df5f7c07` from baseline `3debba99c677b68465cf439733f440442fbd0f22`; merged-primary CI run `39051589381` passed 7/7, and the receipt/runtime SHA and smoke/health evidence are recorded in [the M14.6 closure report](../m14-supply-chain/m14-6-closure-report.md). Earlier failed deployment attempts and guarded recovery remain recorded as failures. Staging validation is complete. PR #117 is the documentation closeout; its merge and successful exact merged-primary CI establish formal closure. M14.7 must not begin before that merge and CI result. No production deployment or Dependabot merge occurred.
+
+## M14.7 planning package — 2026-10-18
+
+M14-15 / AS-16 planning has been prepared on a documentation-only branch based on verified primary b0285d36a7aa0dbfe7281282ce8c9c6116c3eb3f. See [M14.7 plan](../m14-security/m14-7-plan.md), [security test matrix](../m14-security/m14-7-test-matrix.md), and [Owner authorization register](../m14-security/m14-7-owner-decisions.md). This is a planning handoff only: implementation 0%, scan not run, no staging access, no live M12 readback. The “No completed security scan yet” warning remains open; all six gates are NOT FRESHLY VERIFIED after the latest deployment. The plan carries M146-F08, scanner/feed coverage, synthetic detection-only staging validation, relevant T01–T24 attack paths, and isolated Playwright strategy. Do not mark AS-16 complete until actual scan and coverage evidence meets the documented acceptance criteria; unavailable sources are not zero vulnerabilities. M14.8, M15, and M17 remain outside this work.
+
+The M14.7 planning package includes a findings register at [m14-7-findings.md](../m14-security/m14-7-findings.md); current M12 gate values remain unverified.

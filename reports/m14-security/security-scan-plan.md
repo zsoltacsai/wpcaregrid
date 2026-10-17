@@ -30,3 +30,7 @@ Severity uses impact, exploitability, tenant scope, data loss and blast radius. 
 ## Independent review checkpoint
 
 Schedule independent penetration testing before M17/public launch with auth, tenant isolation, Owner/Operator, Connector API, admin access, webhook, SSRF, restore and destructive endpoint scope. The M14 scan is not a substitute, and this plan does not claim that test has been commissioned or performed.
+
+## M14.7 planning handoff — 2026-10-18
+
+Planning package: [M14.7 plan](m14-7-plan.md), [test matrix](m14-7-test-matrix.md), and [Owner authorization register](m14-7-owner-decisions.md), based on primary b0285d36a7aa0dbfe7281282ce8c9c6116c3eb3f. No runtime/security scanner validation has been performed. AS-16 remains open and scanner coverage is not claimed. Latest M14.6 post-deployment six-gate readback was not supplied; current live state remains unknown. Keep all gates unchanged and require a secret-safe before/after read for any later authorized staging activity.
