@@ -1,6 +1,6 @@
 # M14 Commercial Backup Policy — Domain/Entitlement Plan
 
-**Updated after source audit at primary `db272400513882bae8fa8d2ab15d0996cd34dcc7`:** schedule/frequency is canonical in `config/pricing.php`; customer retention values are environment-driven in `config/backup.php` and default `null`. `NULL` means no configured expiry, while a numeric zero is clamped to one by `BackupPolicy`. Critically, scheduled `backup:retention` calls `Retention::apply()`, which can call `BackupDeletion::remove()` when non-null count/day values are configured. The source defaults do not establish deployed staging/production values, and staging env could not be verified in this audit. M14.4 implementation must contain this legacy path before shadow GFS rollout; it is not safe to assume it is report-only. Platform DB backup retention remains separate.
+**Implementation update at primary/staging `29bdd9489eafd6581d9d5b9bc5d7a12fe26b4209`:** PR #96 made scheduled customer `backup:retention` report/comparison-only and removed legacy count/day values as deletion authority. Exact staged config readback was `null` for all six plans. PRs #97–#99 implement the versioned entitlement catalogue, GFS shadow evaluator, additive protections, schedule comparison and Owner extension/preview. Runtime policy remains engineering-only and non-destructive. Authenticated Owner staging walkthrough and synthetic preview/shadow validation remain pending; see [closure report](m14-4-closure-report.md). Platform DB backup retention remains separate.
 
 ## Proposed domain boundary
 

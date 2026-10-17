@@ -1,4 +1,6 @@
-# M14.4 deterministic GFS algorithm (proposed)
+# M14.4 deterministic GFS algorithm
+
+**Implementation evidence:** PR #98 merged at `cfc584a34f518952f222b752900a7547fbac097c`. The evaluator and schedule comparison run in shadow/report mode only; no deletion authority exists. Deterministic six-plan, UTC-boundary, validity, protection, gap, and persistence tests passed in exact-head CI. Staging deploy is `29bdd9489eafd6581d9d5b9bc5d7a12fe26b4209`; synthetic-only staging GFS walkthrough remains pending.
 
 **Mode:** initial implementation must be report/shadow-only. This algorithm does not authorize backup/provider deletion.
 

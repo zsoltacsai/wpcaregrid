@@ -1,5 +1,9 @@
 # M14.4 — Commercial backup entitlement and retention architecture plan
 
+## Implementation status — 2026-10-17
+
+Planning PR #95 is merged. Executable PRs #96–#99 are merged and exact-head 7/7 CI passed. The final executable SHA `29bdd9489eafd6581d9d5b9bc5d7a12fe26b4209` is guarded-deployed on staging. Legacy scheduled retention is report-only; entitlement/GFS shadow policy and Owner extension preview controls are implemented. Synthetic report-only retention and transactional Owner extension/below-floor/stale-preview checks passed on the existing isolated M8 fixture and were verified clean. Closure awaits merge of the documentation-only evidence PR; no runtime work or redeploy remains.
+
 **Status:** planning/domain audit only. No runtime changes, migration, provider call, deletion, deployment, or plan publication occurred in this pass.
 
 ## Verified baseline

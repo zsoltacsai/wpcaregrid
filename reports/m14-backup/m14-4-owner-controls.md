@@ -1,4 +1,6 @@
-# M14.4 Owner protection controls plan
+# M14.4 Owner protection controls
+
+**Implementation evidence:** the Owner-only extension/preview flow is implemented in PR #99 (`29bdd9489eafd6581d9d5b9bc5d7a12fe26b4209`). Feature tests prove above-floor change, hard denial below each floor, current-password confirmation, source-fingerprint stale refusal, and Customer/Operator denial. A synthetic `wordpress.business` extension was confirmed transactionally on staging; below-floor was denied; source change made a reduction preview stale; cleanup rollback was verified. `WAIT_LEGAL`, `WAIT_ACCOUNTING`, and `WAIT_FACT` were visible. The interactive Owner browser session expired; HTTP feature tests cover Owner render/access/preview. No real Owner setting was changed.
 
 ## Scope
 

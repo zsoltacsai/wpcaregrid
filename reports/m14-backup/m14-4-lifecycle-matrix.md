@@ -1,5 +1,7 @@
 # M14.4 entitlement and backup lifecycle matrix
 
+**Implementation evidence:** effective-dated entitlement snapshots are recorded through the existing subscription lifecycle (PR #97). GFS evaluation and cadence comparison use the snapshot without deleting on upgrade, downgrade, grace or cancellation (PR #98). Exact-head CI and tests cover canonical mapping/idempotency. Staging Owner walkthrough remains pending; external deletion waits are unchanged.
+
 | Event/state | Existing source behavior | Entitlement treatment to implement | Backup/retention treatment |
 |---|---|---|---|
 | Checkout / subscription creation | Checkout price resolves via `PricingCatalog`; local row may remain pending until Stripe confirms active/trialing | Create immutable snapshot only at authoritative effective confirmation; source price ID maps to canonical product/tier | No deletion; scheduler only after service + `BACKUP_READY` + safety gates |

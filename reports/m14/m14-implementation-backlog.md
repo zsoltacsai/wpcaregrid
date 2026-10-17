@@ -1,5 +1,9 @@
 # M14 Ordered Implementation Backlog
 
+## M14.4 implementation status — 2026-10-17
+
+M14-12 implementation PRs #96–#99 are merged at `29bdd9489eafd6581d9d5b9bc5d7a12fe26b4209` and each exact-head 7-job CI run passed. PR #96 contains legacy scheduled retention; PR #97 adds versioned entitlements; PR #98 adds GFS shadow evaluation/protection/schedule comparison; PR #99 adds extension-only Owner policy preview controls. Exact merged executable SHA is deployed to staging. Synthetic report-only retention, transactional Owner extension/below-floor/stale-preview checks, rollback/cleanup, health and six-gate readback passed. M14-12 awaits only the documentation-only closure PR and its exact-head CI; M14.5–M14.8 remain separate.
+
 Planning baseline primary: `62fc2a74f2b0720e61b73d70c449639363a0eead`. Backlog is ordered by dependency and safety. No item below was implemented in this planning pass. Owner decisions OQ-01–OQ-05 were approved on 2026-10-16; see [Owner decision register](owner-questionnaire.md). Their approved boundaries are dependencies for implementation, not further pending Owner decisions.
 
 | ID | Wave / priority | Dependencies | Files / systems | Risk / migration | Owner / external action | Tests | Staging validation | Rollback / acceptance |
