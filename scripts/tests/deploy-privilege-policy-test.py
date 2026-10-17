@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 HELPER = ROOT / "scripts/wpcaregrid-deploy-priv.py"
 CONTROLLER = ROOT / "scripts/deploy-staging.sh"
+DENIAL_FIXTURE = ROOT / "scripts/tests/fixtures/deploy-sudo-denial-fixture.sh"
 spec = importlib.util.spec_from_file_location("deploy_priv", HELPER)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
@@ -64,6 +65,7 @@ def main():
             raise AssertionError(f"unsafe application path accepted: {relative}")
 
     controller = CONTROLLER.read_text(encoding="utf-8")
+    fixture = DENIAL_FIXTURE.read_text(encoding="utf-8")
     wrapper_hash = hashlib.sha256((ROOT / "scripts/run-scheduler.sh").read_bytes()).hexdigest()
     assert wrapper_hash == module.SCHEDULER_SOURCE_SHA256, "root helper wrapper hash must match the reviewed scheduler source"
     direct_privilege = [
@@ -75,6 +77,8 @@ def main():
     assert "sudo -n \"$DEPLOY_PRIV_HELPER\" \"$@\"" in controller
     assert 'sudo_listing="$(sudo -n -l 2>&1)"' in controller
     assert '[[ "$command_lines" == "(root) NOPASSWD: ${DEPLOY_PRIV_HELPER} *" ]]' in controller
+    assert "sudo -n /usr/bin/id" in fixture
+    assert "sudo -n /bin/sh" not in fixture and "rm -" not in fixture and "chmod " not in fixture
     assert "install.*DEPLOY_PRIV_HELPER" not in controller
 
     print("deploy privilege policy passed: fixed operation allowlist, path validation, no generic sudo calls")
