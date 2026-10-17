@@ -50,3 +50,7 @@ Local regression evidence now includes lost pairing response recovery, fresh-cod
 ## M14.2 credential evidence closure — 2026-10-16
 
 The Connector plugin release at the merged implementation is 0.4.6, API v1. Existing re-pair/revocation and response-loss regressions passed in CI and isolated synthetic tests. Stripe webhook freshness/body-size/single-secret cutover checks also passed; no secret values were read into these reports. The deployed synthetic M8 site still reports Connector 0.4.5; no live token replacement was attempted without a reversible recovery path. See [M14.2 closure report](m14-2-closure-report.md). No token overlap/periodic expiry or live Stripe rotation is claimed.
+
+## M14.5 implementation verification — 2026-10-17
+
+Three Owner-managed AI credential IDs are now allowlisted through `IntegrationCredentials`: OpenAI, Anthropic and Google Gemini. They use Laravel `Crypt`, are runtime-resolved only, have no configuration paths/environment fallback and are skipped by global config hydration. The AI status table stores only opaque generation and normalized health metadata. No AI credentials were present on staging; its fake-only transactional validation rolled back synthetic rows. No Connector credential scope or Operator/Customer visibility was added. M14.7 retains integrated secret-leak/SSRF/redirect/rate-abuse review. Detailed evidence: `reports/m14-ai/m14-5-closure-report.md`.

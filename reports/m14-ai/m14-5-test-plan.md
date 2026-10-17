@@ -31,3 +31,7 @@ Use deterministic barriers and MySQL process tests where transaction semantics n
 ## Full CI / staging
 
 Run mandatory 7 jobs: Quality, Server SQLite, Server MySQL, Server MariaDB, Connector WordPress SQLite/MySQL/MariaDB. Include MySQL process/concurrency suite where marked. Staging uses exact merged SHA, strict pinned SSH, synthetic Owner, fake provider transport injected through test seam, test transaction and verified cleanup. Prove save/mask, encrypted DB, replace, fake healthy/auth failure, remove, invalidation, unauthorized denials, audit redaction and zero-data sentinel. No real key, provider call, customer/site data or production deployment.
+
+## Implementation evidence addendum — 2026-10-17
+
+M14.5 executable work is merged and deployed to staging at `3debba99c677b68465cf439733f440442fbd0f22`. PR #102 exact CI 39017126211 and PR #103 exact CI 39020595623 each passed all 7 required jobs; merged-SHA run 39021792985 also passed all 7, including MySQL process/concurrency. The staging fake-provider transaction passed and was rolled back. There were no real provider credentials, real vendor calls, or customer-data egress. No AI feature/default/feature authorization exists. See [closure report](m14-5-closure-report.md) for full bounded evidence and limitations.

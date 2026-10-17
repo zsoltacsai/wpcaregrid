@@ -82,3 +82,9 @@ Prefer 2 executable PRs (credential domain/metadata, then UI+probes) followed by
 Planning branch is to be based on `0ed9025dca2ee7bfa23e9a6869b159f06c700659`, with docs-only changes and exact-head CI. Staging for implementation uses exact merged SHA, strict pinned SSH, synthetic Owner and fake HTTP transport; no real key or customer data. M14.6 reviews any dependency/workflow supply-chain impact; M14.7 includes AI secret/RBAC/CSRF/SSRF/redirect/response/rate abuse; M14.8 confirms groundwork-only/no egress/no default/no autonomous actions. M19/M20/M25/M26/M27 each require independent purpose, data-class, privacy/legal/vendor, security, tenant authorization and approval review. **No new Owner decision is required.**
 
 M14.5 is implementation-ready after planning PR review. Estimated M14.5 readiness: 100% for planning; runtime implementation remains 0%. Overall M14 milestone completion estimate after M14.4: 4/8 major milestones, 50%; this is a planning estimate, not release status.
+
+## Implementation evidence — 2026-10-17
+
+Planning PR #101 merged as `b08bd136d5be2c019e8a044b4564c5887df21eef`. Credential PR #102 merged as `7aa21be2a2f5f84ba5fc6beffdec89b058bfd570`; health PR #103 merged as `3debba99c677b68465cf439733f440442fbd0f22`. Exact-head CI runs 39017126211 and 39020595623 each passed 7/7 required jobs; merged-SHA CI 39021792985 passed 7/7 including MySQL process/concurrency.
+
+Exact merged executable SHA `3debba99c677b68465cf439733f440442fbd0f22` is deployed to staging. Fake-transport, rollback-isolated staging validation passed; no real provider key or provider request was used. See [closure report](m14-5-closure-report.md). The scanner warning remains an M14.7 carry-forward.
