@@ -1,6 +1,6 @@
 # GitHub Actions Pin Matrix
 
-Implementation candidate: eight remote `uses:` occurrences across three unique Actions. Each reference below is pinned to the reviewed official upstream commit SHA; the version text is informational. The exact SHA is authoritative. Candidate exact-head CI is pending.
+Implementation evidence: eight remote `uses:` occurrences across three unique Actions. Each reference is pinned to the reviewed official upstream commit SHA; the version text is informational. The exact SHA is authoritative. PR #108 exact-head and merged-primary CI passed 7/7 (merged-primary run `39034312524`, attempt 2); latest M14.6 target CI run `39051589381` also passed 7/7.
 
 | Action | Candidate ref / count | Reviewed upstream release mapping | Job use and secret surface | Residual trust |
 |---|---|---|---|---|

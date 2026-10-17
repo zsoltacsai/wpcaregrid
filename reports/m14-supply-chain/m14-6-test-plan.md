@@ -19,10 +19,13 @@
 ## Deployment and source-to-runtime
 
 - Unit/shell harness for SHA parser/type/ancestry, fixed origin, branch-tip check, clean checkout and post-validation target identity.
+- Release-authorizer offline matrix: exact branch-tip push success; parent SHA; PR-head event; wrong branch/workflow; queued/in-progress/canceled/failure; missing/duplicate required job; failed MySQL concurrency step; incomplete pagination; malformed/oversized/API timeout/redirect. No token header or customer data is sent.
+- Rollback: explicit `--rollback` only; target must be an ancestor of current baseline and fetched branch and match the root-owned `approved-rollback-sha`; malformed, missing, symlinked, wrongly owned/mode or mismatched approval fails closed.
+- Deployment receipt fixtures: exact runtime SHA; all three lock hashes; release version and Connector source/package sidecar binding; Vite manifest digest; no `.env` sentinel; mode 0600; safe private directory; duplicate receipt refusal.
 - Process-level staging MySQL tests: lock contention, competing deploys, backup integrity, scheduler pause/resume, gate, worker coordination, migration failure and recovery. MySQL/process is required; SQLite is not a concurrency substitute.
 - Host test after F02: privilege boundary blocks arbitrary root from Composer/npm/Artisan; helper accepts only enumerated safe action/arguments.
 - Fault matrix: wrong origin/host key/key scope; dirty baseline; short/nonancestor target; dependency/network/disk failure; Vite failure; pending/partial migration; worker/scheduler/health failure; rollback failure.
-- Verify exact merged SHA CI, exact deployed runtime HEAD, Connector SHA, receipt content/redaction, no customer mutation and staging only.
+- Verify exact merged SHA CI, exact deployed runtime HEAD, Connector SHA, receipt content/redaction, no customer mutation and staging only. Forward promotion must be current primary tip; PR-head/parent/sibling green runs are insufficient.
 
 ## Test layers and acceptance
 
@@ -36,9 +39,13 @@
 | Connector SQLite/MySQL/MariaDB | preserve all three existing Connector test matrix jobs. |
 | Staging | exact merged SHA, pinned SSH, origin, receipt, gate/build/migration/worker/health and rollback-safe failure fixtures. No production or customer changes. |
 
-Maintain the current seven CI result jobs and exact check names. Every executable PR requires focused tests, full mandatory CI, `git diff --check`, Pint, Composer validation/audit, frontend build, secret scan and exact-head run; deployment release then additionally requires merged-primary exact-SHA CI. No exact totals are claimed by this planning document.
+Maintain the current seven CI result jobs and exact check names. Every executable PR requires focused tests, full mandatory CI, `git diff --check`, Pint, Composer validation/audit, frontend build, secret scan and exact-head run; deployment release then additionally requires merged-primary exact-SHA CI. PR #118 exact-head run `39050627430` and exact merged-primary run `39051589381` passed 7/7. No per-suite test totals are inferred here.
 
 
 ## Candidate static security tests
 
-New local/CI scripts test mutable Action refs, forbidden `pull_request_target`, permission widening, required matrix/job drift, MySQL process-gate removal, obvious deployment inclusion, untrusted event expressions in shell, Composer repositories/HTTP sources, npm non-registry URLs, Gitleaks checksum/truncation/path traversal/symlink behavior, and tracked secret-path newline/annotation sentinels. Exact totals remain pending required CI.
+The repository's local/CI policy scripts cover mutable Action refs, forbidden `pull_request_target`, permission widening, required matrix/job drift, MySQL process-gate removal, obvious deployment inclusion, untrusted event expressions in shell, Composer repositories/HTTP sources, npm non-registry URLs, Gitleaks checksum/truncation/path traversal/symlink behavior, and tracked secret-path newline/annotation sentinels. The latest exact merged-primary CI run `39051589381` passed all seven required jobs. Its job-level success is recorded; this report does not infer individual test counts from the run summary.
+
+## Owner-reported staging execution evidence
+
+The owner reports exact merged-SHA deployment with exit code 0, a successful receipt/health and migrations, runtime HEAD matching `be427a17320ca7aba9ec292d2c288813df5f7c07`, the enumerated HTTP checks, workers RUNNING and markers absent. This is staging validation evidence, not evidence that every fault-injection row above was run. See the closure report for exact results and attribution.

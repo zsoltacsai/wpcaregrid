@@ -3,6 +3,9 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
+export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+unset BASH_ENV ENV CDPATH GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_SSH GIT_SSH_COMMAND GIT_ASKPASS SSH_ASKPASS SSH_AUTH_SOCK
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL='/dev/null'
 
 readonly APP_DIR='/var/www/wpcaregrid'
 readonly DEPLOY_BRANCH='claude/ecstatic-wozniak-oemyuf'
@@ -13,6 +16,7 @@ readonly GATE_FILE="${GATE_DIR}/deploy-maintenance"
 readonly SCHEDULER_LOCK_FILE="${GATE_DIR}/scheduler.lock"
 readonly SCHEDULER_PAUSE_FILE="${GATE_DIR}/scheduler-paused"
 readonly DEPLOY_PRIV_HELPER='/usr/local/sbin/wpcaregrid-deploy-priv'
+readonly CONTROLLER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # Always install the scheduler wrapper from the application checkout being deployed,
 # even when the reviewed deploy script is invoked from a protected temporary copy.
 readonly SCRIPT_DIR="${APP_DIR}/scripts"
@@ -27,6 +31,8 @@ MIGRATIONS_PENDING=0
 SCHEDULER_LOCK_HELD=0
 TEMP_BACKUP=''
 CHECK_REPORT=''
+DEPLOYMENT_MODE='forward'
+CI_RUN_ID=''
 declare -A OLD_WORKER_PIDS=()
 
 log() {
@@ -82,7 +88,7 @@ assert_baseline_unchanged() {
 }
 
 pin_target_sha() {
-    local requested_ref="$1" fetched_tip="$2" target_commit
+    local requested_ref="$1" fetched_tip="$2" target_commit mode="$3"
 
     [[ ! ${TARGET_SHA+x} ]] || return 1
     [[ -n "${BASELINE_SHA:-}" ]] || return 1
@@ -90,8 +96,16 @@ pin_target_sha() {
     valid_commit_sha "$fetched_tip" || return 1
     target_commit="$(git rev-parse --verify "${requested_ref}^{commit}")" || return 1
     valid_commit_sha "$target_commit" || return 1
-    [[ "$target_commit" != "$BASELINE_SHA" ]] || return 1
     git merge-base --is-ancestor "$target_commit" "$fetched_tip" || return 1
+    if [[ "$mode" == 'forward' ]]; then
+        [[ "$target_commit" == "$fetched_tip" && "$target_commit" != "$BASELINE_SHA" ]] || return 1
+    elif [[ "$mode" == 'rollback' ]]; then
+        [[ "$target_commit" != "$BASELINE_SHA" ]] || return 1
+        git merge-base --is-ancestor "$target_commit" "$BASELINE_SHA" || return 1
+        privileged rollback-allowed "$target_commit" || return 1
+    else
+        return 1
+    fi
     readonly TARGET_SHA="$target_commit"
 }
 
@@ -684,11 +698,18 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 main() {
-    local requested_ref fetched_tip env_mode app_url_value db_name timestamp backup_path gate_probe migration_status
+    local requested_ref fetched_tip env_mode app_url_value db_name timestamp backup_path gate_probe migration_status ci_evidence receipt_name
     local cache_file cache_dir
     local worker
 
-    (( $# == 1 )) || fail 'Usage: scripts/deploy-staging.sh <full-commit-sha>'
+    if (( $# == 1 )); then
+        requested_ref="$1"
+    elif (( $# == 2 )) && [[ "$1" == '--rollback' ]]; then
+        DEPLOYMENT_MODE='rollback'
+        requested_ref="$2"
+    else
+        fail 'Usage: scripts/deploy-staging.sh <full-commit-sha> | --rollback <full-commit-sha>'
+    fi
     [[ "$(id -un)" == 'deploy' ]] || fail 'Run this script as the deploy user.'
     assert_privilege_boundary || fail 'The staging deploy sudo policy is not the reviewed helper-only rule.'
     [[ "$(pwd -P)" == "$APP_DIR" ]] || fail "Run from ${APP_DIR}."
@@ -717,7 +738,7 @@ main() {
     flock -n 9 || fail 'Another staging deployment is already running.'
     capture_baseline_sha || fail 'Could not pin the current staging release after acquiring the deployment lock.'
     pre_deploy_smoke || fail 'The pinned baseline staging release is not healthy before deployment.'
-    command -v git >/dev/null && command -v composer >/dev/null && command -v npm >/dev/null && command -v curl >/dev/null || fail 'A required deployment tool is missing.'
+    command -v git >/dev/null && command -v composer >/dev/null && command -v npm >/dev/null && command -v curl >/dev/null && [[ -x /usr/bin/python3 ]] || fail 'A required deployment tool is missing.'
     php -r 'exit(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === 4 ? 0 : 1);' || fail 'PHP 8.4 CLI is required.'
     composer --version | grep -q 'Composer version 2\.' || fail 'Composer 2 is required.'
     node -e 'process.exit(Number(process.versions.node.split(".")[0]) === 22 ? 0 : 1)' || fail 'Node.js 22 is required.'
@@ -731,12 +752,15 @@ main() {
     app_url_value="$(php artisan config:show app.url --no-interaction 2>/dev/null | awk 'NF { value = $NF } END { print value }')"
     [[ "$env_mode" == 'production' && "$app_url_value" == 'https://staging.wpcaregrid.com' ]] || fail 'The environment is not the expected production-mode staging configuration.'
 
-    requested_ref="$1"
     log "Fetching the staging branch ${DEPLOY_BRANCH}."
     git fetch --no-tags origin "$DEPLOY_BRANCH"
     fetched_tip="$(git rev-parse FETCH_HEAD^{commit})"
-    pin_target_sha "$requested_ref" "$fetched_tip" || fail 'Supply a distinct, full commit SHA contained in the fetched staging branch.'
+    pin_target_sha "$requested_ref" "$fetched_tip" "$DEPLOYMENT_MODE" || fail 'Forward deployment requires the exact current branch tip; rollback requires a root-approved prior SHA.'
     log "Target commit: ${TARGET_SHA}"
+    ci_evidence="$(/usr/bin/env -i PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/python3 "${CONTROLLER_DIR}/verify-release-ci.py" "$TARGET_SHA")" || fail 'The exact target SHA lacks completed successful mandatory primary-push CI.'
+    CI_RUN_ID="$(/usr/bin/env -i PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["workflow_run_id"])' <<<"$ci_evidence")"
+    [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]] || fail 'The exact-target CI run identifier is invalid.'
+    log "Exact-target merged-primary CI run verified: ${CI_RUN_ID}."
     assert_baseline_unchanged || fail 'The live checkout changed after baseline capture and before backup.'
 
     db_name="$(php -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); echo config("database.connections.mysql.database");' 2>/dev/null)"
@@ -852,6 +876,15 @@ main() {
         fail 'Final staging HTTP/security smoke failed.'
     fi
     mark_gate_released
+    if ! receipt_name="$(/usr/bin/env -i PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/python3 "${SCRIPT_DIR}/write-deployment-receipt.py" --baseline "$BASELINE_SHA" --target "$TARGET_SHA" --workflow-run-id "$CI_RUN_ID" --mode "$DEPLOYMENT_MODE")"; then
+        log 'Deployment receipt failed; closing the Nginx gate before reporting failure.' >&2
+        privileged gate-on || true
+        GATE_ACTIVE=1
+        php artisan down --retry=60 || true
+        fail 'A machine-readable deployment receipt could not be recorded.'
+    fi
+    [[ "$receipt_name" =~ ^release-[0-9TZ.]+-${TARGET_SHA}\.json$ ]] || fail 'The deployment receipt filename did not match the reviewed format.'
+    log "Non-secret deployment receipt recorded: ${receipt_name}."
     log "Deployment complete at ${TARGET_SHA}."
     log "Protected database backup retained at ${backup_path}."
 }
