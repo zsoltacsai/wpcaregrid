@@ -97,7 +97,9 @@ def main():
         raise AssertionError("invalid SHA was accepted")
 
     controller = (ROOT / "scripts/deploy-staging.sh").read_text(encoding="utf-8")
-    assert "python3 \"${CONTROLLER_DIR}/verify-release-ci.py\" \"$TARGET_SHA\"" in controller
+    assert "/usr/bin/env -i PATH=" in controller
+    assert "/usr/bin/python3 \"${CONTROLLER_DIR}/verify-release-ci.py\" \"$TARGET_SHA\"" in controller
+    assert "GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL='/dev/null'" in controller
     assert "target_commit\" == \"$fetched_tip" in controller
     print("Exact-SHA release CI policy fixtures passed.")
 
