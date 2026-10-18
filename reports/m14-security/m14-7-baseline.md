@@ -29,7 +29,7 @@ Security feature coverage includes `SecurityScanTest`, `VulnerabilityAndPostureT
 ## Carry-forward findings and scope
 
 - AS-16 remains open: no completed scanner coverage evidence is asserted here.
-- M146-F08 remains open pending adversarial log-integrity test evidence.
+- M146-F08 was open at the M147-A baseline and pending adversarial log-integrity evidence then. Subsequent M147-B review closed it narrowly for the tracked secret-path checker output path; see the [M147-B closure report](m14-7-b-closure-report.md). Broader runner-command parsing is not claimed tested.
 - M14.6 single-maintainer independent-review residual remains.
 - M12 fresh post-deployment gate readback remains missing; source defaults do not substitute for it.
 - M14.6 reported one pre-existing security scanner warning. This baseline does not claim the warning was cleared.

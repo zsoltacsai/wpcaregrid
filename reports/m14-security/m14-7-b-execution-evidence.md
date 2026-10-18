@@ -80,13 +80,13 @@ The protected primary ruleset was separately read from GitHub during this task. 
 
 ## Finding disposition
 
-**M146-F08 — NOT REPRODUCIBLE for the audited tracked secret-path checker; recommend closure of this scoped validation gap.** No path output, forged annotation, environment/output modification, false success, or secret-mask manipulation was reproduced. The complete 10-name newline/control corpus passed in Linux exact-head CI run `39107517613` for source/test head `a3080a7af802f0dd96f1f6b548233b555f989399`. The workflow checker uses the same source on CI and prints only fixed redacted output. Direct GitHub runner-command interpretation was not simulated because no hostile bytes reach its output channel. Final disposition remains subject to PR review.
+**Historical pre-merge disposition:** M146-F08 was not reproducible for the audited tracked secret-path checker; the local evidence recommended closure pending PR review. No path output, forged annotation, environment/output modification, false success, or secret-mask manipulation was reproduced. The complete 10-name newline/control corpus passed in Linux exact-head CI run `39107517613` for source/test head `a3080a7af802f0dd96f1f6b548233b555f989399`. The workflow checker uses the same source on CI and prints only fixed redacted output. Direct GitHub runner-command interpretation was not simulated because no hostile bytes reach its output channel. The final Owner-approved disposition and merge evidence are recorded below.
 
 No new Critical or High finding was confirmed. M146-F08 must not be described as a confirmed exploit. Any residual concerns outside this exact path-policy output flow remain separately bounded and unverified. Independent review remains unclaimed. M12 live gates remain unverified.
 
-## Exact-head CI and PR evidence
+## Initial implementation/test-head CI snapshot (pre-final documentation and merge)
 
-PR #121 remains **OPEN / UNMERGED**. Exact PR head `a3080a7af802f0dd96f1f6b548233b555f989399` was tested by GitHub Actions run `39107517613`, conclusion **SUCCESS**, 7/7:
+At this historical snapshot PR #121 was **OPEN / UNMERGED**. Exact PR head `a3080a7af802f0dd96f1f6b548233b555f989399` was tested by GitHub Actions run `39107517613`, conclusion **SUCCESS**, 7/7:
 
 | Required check | Result |
 |---|---|
@@ -119,3 +119,9 @@ Exact-head GitHub Actions run `39108485648` completed successfully on `7d77311f1
 The Owner-approved disposition is **CLOSED — NOT REPRODUCIBLE IN THE AUDITED OUTPUT PATH; REGRESSION COVERAGE ADDED**, restricted to `scripts/tests/repository-secret-path-policy.py` handling of tracked secret-like filenames. Source inspection confirmed `git ls-files -z`, byte records split on NUL, fixed redacted output on matches, and nonzero failure. The actual subprocess test checks exact output bytes and confirms synthetic GitHub command-file paths remain absent. The full ten-case newline/control corpus passed in Linux CI run `39107517613` on the earlier test/source commit; the final documentation-only head also passed all seven mandatory jobs. No live GitHub runner command parser was invoked, and no claim is made that all workflow output channels have been exhaustively audited. M146-F08 is not a confirmed exploit.
 
 The final PR-head CI proves the final docs/test head, not a merge. The PR remains unmerged at this evidence revision; merged-primary SHA and CI must be appended only after protected merge and exact-SHA readback. No scanner, browser, staging, production, customer-site, live-feed, secret, M12 gate, or destructive activity occurred. AS-16 remains open.
+
+## Protected merge and exact merged-primary closure
+
+PR #121 merged through the protected workflow. The exact merge SHA is `0699374432afeb26e036a87477c9a0cad5c5518b`; GitHub readback confirmed `claude/ecstatic-wozniak-oemyuf` points to that commit and remains protected. Exact merged-primary Actions run `39110282933` completed successfully on that SHA with all seven required jobs passing, including the Server MySQL process/concurrency gate. The final PR-head run was `39109648655` on `e10695f1ff5cd505ae6883e1a5e5678bdd7f31bd`, also 7/7 with the same gate passing.
+
+M147-B is closed. M146-F08 is closed only for the audited tracked secret-path checker output path, as stated above. The actual GitHub runner command parser remains untested; no broader claim is made. The full milestone stage breakdown, residuals, M12 state, progress estimate, and next approvals are in the [M147-B closure report](m14-7-b-closure-report.md). No Level 3 activity occurred. AS-16 remains open and M147-C was not started.
