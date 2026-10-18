@@ -97,3 +97,26 @@ At code head `049a08bdd2377d82e7f29bce7a319c0c3768dc4c`, exact-head run [3916082
 This is evidence that the added diagnostics regression and current matrix passed once; it does not identify the earlier timeout's cause or establish that it cannot recur. CI-REL-01 therefore remains OPEN for reliability investigation. No timeout was increased to hide the symptom, and no application runtime code changed. Local PHP/Composer/Docker are unavailable, so local PHP execution was NOT RUN.
 
 Operational disposition is unchanged: PR #129 remains open/unmerged; RO-01–RO-04 were not executed; RO-05–RO-09 remain unauthorized; all six live M12 values are UNKNOWN; M147-E.2b is NOT AUTHORIZED; no staging/production, live scanner, feed, queue, backup, restore, remediation or deployment action occurred. M14.7 is not fully closed.
+## Local validation update — 2026-10-18 (PR head `1e17e5c1253b0236f733ebd312a670c7a2bd8dfe`)
+
+This addendum supersedes only the earlier statement that local PHP/Composer/Docker execution was unavailable. It records new isolated local test evidence; it does not change any operational or milestone closure status.
+
+Environment: WSL Ubuntu 24.04; PHP 8.4.26; Composer 2.10.3; PHPUnit 12.5.36 (Laravel) and 13.4.2 (Connector); rootless Docker; MariaDB 10.11.19 from the exact digest observed in the CI service logs (`sha256:0d0945c57f75b3a3b9ebe71aedaaad005fa5305054e8fca3d2e42a8c92b43b5e`). The MariaDB container was a new, disposable local instance bound to `127.0.0.1:3306`; the application/Connector tests used synthetic data and a dedicated `wordpress` test database. No staging, production, customer site, live feed, external backup, or real credential was used.
+
+| Validation | Result |
+|---|---|
+| Laravel PHPUnit, SQLite | PASS — 1,404 tests, 20,486 assertions, 25 skipped, 0 failed. Skips require separately provisioned MySQL/PCNTL, S3 `moto_server`, SFTP `sshd`, or the MySQL 8.4-specific dump test. |
+| Connector PHPUnit, MariaDB 10.11.19 | PASS — 211 tests, 1,834 assertions, 3 skipped, 0 failed. The skips are the MySQL-only restore case and two opt-in 900-second hard-kill recovery cases. |
+| CI-REL lock successor regression | PASS — 5 consecutive executions of `PollLockConcurrencyTest::test_expired_owner_cannot_release_or_refresh_successor_lease`, 1 test and 31 assertions each (155 assertions total). No timeout reproduced locally. |
+| Connector package fixture | PASS — `connector:package` generated version 0.4.7 from source revision `1e17e5c1253b0236f733ebd312a670c7a2bd8dfe`; local ZIP SHA-256 `1eb62f0617e52a2162f0d73cef6051612b27526ff811498ec3945828a97ab14e`. The initial strict Connector run failed because the required generated ZIP environment variable was absent; after generating the package as the CI workflow does, the full suite passed. This initial setup failure was not an application test failure. |
+| Pint | PASS — 1,000 files checked. |
+| Composer validation and audit | PASS — root and `wordpress/` manifests valid; no security advisories reported. |
+| npm audit / tests / build | PASS — 0 vulnerabilities; 20 tests passed, 0 failed/skipped; Vite 8.3.4 production build succeeded. `npm ci` used the committed lockfile and existing `ignore-scripts=true` policy. |
+
+CI-REL-01 remains OPEN. The exact previously failing worker-exit test passed repeatedly in this one local MariaDB environment, and the current PR exact-head CI also passed; these results reduce evidence for a deterministic defect but do not identify why the earlier CI child failed to produce its result file, nor establish that the intermittent timeout cannot recur. No lock assertion, timeout, retry policy, or application behavior was weakened. Preserve the existing timeout history and investigate further only if new failure evidence appears.
+
+Browser/cross-origin E2E was NOT RUN. The repository's Windows Connector browser harness is deliberately restricted to designated worktree paths/branches and a matching local service record, PHP runtime, and isolated Apache configuration. This validation clone is outside those allowlisted worktrees. I did not bypass that guard or start those services. Stripe/browser tests requiring public HTTPS, real Stripe, Mailpit, or external callbacks were also not run.
+
+At the time of this addendum, the PR head was `1e17e5c1253b0236f733ebd312a670c7a2bd8dfe`; exact-head run [39164201676](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39164201676) passed all seven required jobs, including the explicit Server MySQL process-concurrency gate. Any documentation commit changes the PR head and therefore requires new exact-head CI evidence before calling the updated head green.
+
+The assessment remains **PARTIAL / OWNER ACTION REQUIRED**. RO-01–RO-04 remain NOT EXECUTED / NO-GO; all six live M12 values remain UNKNOWN; M147-E.2b remains NOT AUTHORIZED. No staging/production access, SSH authentication, M12 readback, scanner, feed sync, queue, backup, restore, remediation, deployment, or PR merge occurred. M14.7 is not fully closed.
