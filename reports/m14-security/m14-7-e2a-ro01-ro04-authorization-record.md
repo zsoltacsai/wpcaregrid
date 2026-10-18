@@ -1,9 +1,13 @@
 # M147-E.2a RO-01–RO-04 — külön tulajdonosi engedélyezési rekord
 
-**Állapot: DRAFT — VÉGREHAJTÁSRA NINCS JÓVÁHAGYVA**  
-**Hatókör:** kizárólag a RO-01–RO-04 titokmentes, read-only előellenőrzésének előkészítése.  
-**Staging-hozzáférés:** ebben a rekordban nem történt.  
-**RO-00:** függetlenül egyeztetve az alábbi utólagos tulajdonosi megerősítés alapján; az eredeti RO-00 futás a korábban hibásan átírt várt fingerprint miatt nem teljesítette az akkori összehasonlítási feltételt.  
+**Állapot: DRAFT — VÉGREHAJTÁSRA NINCS JÓVÁHAGYVA**
+
+**Hatókör:** kizárólag a RO-01–RO-04 titokmentes, read-only előellenőrzésének előkészítése.
+
+**Staging-hozzáférés:** ebben a rekordban nem történt.
+
+**RO-00:** függetlenül egyeztetve az alábbi utólagos tulajdonosi megerősítés alapján; az eredeti RO-00 futás a korábban hibásan átírt várt fingerprint miatt nem teljesítette az akkori összehasonlítási feltételt.
+
 **M147-E.2b:** NEM ENGEDÉLYEZETT.
 
 ## 1. Célkörnyezet
