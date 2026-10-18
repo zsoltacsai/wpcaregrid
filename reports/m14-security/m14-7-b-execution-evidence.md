@@ -98,4 +98,24 @@ PR #121 remains **OPEN / UNMERGED**. Exact PR head `a3080a7af802f0dd96f1f6b54823
 | Connector tests in WordPress (PHP 8.4, mysql) | PASS |
 | Connector tests in WordPress (PHP 8.4, mariadb) | PASS |
 
-This CI run is attached to the implementation/test commit above. Any later PR-head change requires a new exact-head CI result. Do not merge or deploy under this stage.
+This CI run is attached to the initial implementation/test commit above. It is historical evidence for the full Linux hostile-name corpus; the final PR-head run is recorded below. Do not infer merged-primary CI from either PR-head run.
+
+## Final PR review and M146-F08 scoped disposition — 2026-10-18
+
+The Owner authorized final review and protected merge of PR #121 and approved scoped closure of M146-F08 if the evidence remained valid. The current PR is open, unmerged, targets `claude/ecstatic-wozniak-oemyuf`, and has final head `7d77311f123dbe7913d46abf77b4f0fe300c975e`. Its nine changed files are limited to the synthetic security regression test and M147-B/M14.6/M14 status evidence and documentation. The repository ruleset `25300175` is active for the authoritative branch, requires pull requests and the seven stable check contexts, requires conversation resolution, blocks deletion/non-fast-forward updates, and has no bypass actors. Required approval count is zero under the documented single-maintainer constraint; independent review is not claimed.
+
+Exact-head GitHub Actions run `39108485648` completed successfully on `7d77311f123dbe7913d46abf77b4f0fe300c975e` with all seven required jobs:
+
+| Required check | Result |
+|---|---|
+| Quality (lint, style, dependencies, build, secrets) | PASS |
+| Server tests (PHP 8.4, sqlite) | PASS |
+| Server tests (PHP 8.4, mysql) | PASS; Required MySQL process-concurrency gate PASS |
+| Server tests (PHP 8.4, mariadb) | PASS |
+| Connector tests in WordPress (PHP 8.4, sqlite) | PASS |
+| Connector tests in WordPress (PHP 8.4, mysql) | PASS |
+| Connector tests in WordPress (PHP 8.4, mariadb) | PASS |
+
+The Owner-approved disposition is **CLOSED — NOT REPRODUCIBLE IN THE AUDITED OUTPUT PATH; REGRESSION COVERAGE ADDED**, restricted to `scripts/tests/repository-secret-path-policy.py` handling of tracked secret-like filenames. Source inspection confirmed `git ls-files -z`, byte records split on NUL, fixed redacted output on matches, and nonzero failure. The actual subprocess test checks exact output bytes and confirms synthetic GitHub command-file paths remain absent. The full ten-case newline/control corpus passed in Linux CI run `39107517613` on the earlier test/source commit; the final documentation-only head also passed all seven mandatory jobs. No live GitHub runner command parser was invoked, and no claim is made that all workflow output channels have been exhaustively audited. M146-F08 is not a confirmed exploit.
+
+The final PR-head CI proves the final docs/test head, not a merge. The PR remains unmerged at this evidence revision; merged-primary SHA and CI must be appended only after protected merge and exact-SHA readback. No scanner, browser, staging, production, customer-site, live-feed, secret, M12 gate, or destructive activity occurred. AS-16 remains open.
