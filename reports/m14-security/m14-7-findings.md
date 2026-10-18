@@ -18,6 +18,14 @@ Offline planning baseline: `57b8cf02d655cb7316648785bd9a1b6b07b148e1`. No live e
 
 No new exploit finding is claimed from this offline planning review. The complete operational unknowns and per-operation risk controls are in the [E.1 readiness plan](m14-7-e1-readiness-plan.md) and [risk matrix](m14-7-e1-risk-matrix.md).
 
+## E.1 closure and CI reliability observation — 2026-10-18
+
+M147-E.1 was merged as documentation-only PR #127 at `f0bdbf5ad4c06160613fc5283a779707da28aea0`. Exact merged-primary CI run [39131255646](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39131255646) passed all seven jobs; the Server MySQL process/concurrency gate step completed successfully. The Connector MariaDB job on exact PR head `def689fb4ff0ace9e478335eb15944bbcaec5f2c` failed on attempts 1 and 2, then passed on attempt 3 without a source change. Both failures were in `PollLockConcurrencyTest::test_expired_owner_cannot_release_or_refresh_successor_lease`, waiting for a `hold-*.result` process-synchronization file (`wordpress/tests/Integration/PollLockConcurrencyTest.php:505`), with 210 tests, 1 failure and 3 skips per failed attempt. See [attempt 1](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39129828668/attempts/1) and [attempt 2](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39129828668/attempts/2); attempt 3 passed in the same run.
+
+| Finding | Classification | Evidence and uncertainty | Disposition |
+|---|---|---|---|
+| CI-REL-01 | CI reliability / concurrency-harness validation gap; not a confirmed application vulnerability | Two same-head failures timed out waiting for a subprocess synchronization result; the third run passed without source changes. This suggests intermittent process-harness timing or runner-resource sensitivity, but available logs do not identify the cause. No evidence establishes a deterministic application defect, nor proves the test is harmless. The required gate failed closed on both failed attempts. | OPEN, non-blocking for the documentation-only E.1 closure after exact-head and merged-primary 7/7 passes. Preserve the failed attempts; investigate the harness synchronization/timeout behavior in a separately scoped CI reliability change. No CI infrastructure refactor is included here. |
+
 **Planning baseline:** `b0285d36a7aa0dbfe7281282ce8c9c6116c3eb3f`. **M147-A source baseline:** planning merge `0a0d25c2da256015d5cffad5f419603593ed72b5`; implementation branch adds a local fail-closed harness and focused Node tests. This work did not run a scanner, external feed call, browser test, staging or production access. These entries distinguish source/configuration facts from operational validation and do not claim a confirmed exploit unless stated.
 
 | ID | Classification | Evidence / reproduction | Impact and prerequisites | Current control / proposed disposition | Status |
