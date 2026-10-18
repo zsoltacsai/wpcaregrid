@@ -81,3 +81,9 @@ This matrix adds the separately authorized synthetic attack-path stage. Final lo
 | Operational controls | Source-only audit for web-accessible deploy, shell, environment, gate and worker control | routes/controllers/commands inventory | PARTIALLY TESTED — source review only |
 
 A passing row is limited to explicit assertions in the referenced test. The detailed scenario matrix below distinguishes partial and untested requirements; no suite-level pass is generalized beyond its assertions.
+
+## M147-D closure verification — 2026-10-18
+
+PR #125 merged at `bc0a4e536abfd573b5b34d5e2152dcf15ad80c80`. Exact-head run [39122868939](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39122868939) and exact merged-primary run [39124920641](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39124920641) each passed all seven required jobs; the Server MySQL process/concurrency step passed in both. The local selected suites completed 471/483 passed, 12 skipped, 0 failed, 5,635 assertions. Skipped cases remain skipped; coverage rows above remain selected-path claims only. The full scenario evidence and closure disposition are in [M147-D closure report](m14-7-d-closure-report.md).
+
+M147-D is closed for bounded local synthetic attack-path validation. Browser E2E, exhaustive SSRF/DNS-rebinding, every Connector replay/order case, full incident/backup/remediation combinations, live M12 gates and operational host controls remain untested or partial. AS-16 remains open. No staging, production, customer-site, live-service, deployment or Level 3 operation occurred.
