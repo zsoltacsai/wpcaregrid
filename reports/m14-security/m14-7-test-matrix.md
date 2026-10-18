@@ -1,5 +1,21 @@
 # M14.7 Security Test and Evidence Matrix
 
+## M147-E.1 staging readiness plan — 2026-10-18
+
+Offline source review only on primary `57b8cf02d655cb7316648785bd9a1b6b07b148e1`. No staging, production, customer site, live gate, feed, scanner, backup, queue, external service, or browser was accessed or executed. The six live M12 values remain UNKNOWN. All M147-E.2 runbook scenarios below are **NOT EXECUTED — OWNER APPROVAL REQUIRED**.
+
+| Readiness area | Repository evidence | Status / future requirement |
+|---|---|---|
+| Scan authorization and orchestration | Owner/Operator scan routes and `SecurityScanService`; explicit abilities and route throttles. | Source mapped; live identities, permissions and exact target require read-only verification. |
+| Connector flow | Authenticated outbound poll/result API; website-bound credential; allowlisted `SECURITY_SCAN` jobs. | Source mapped; live version, pairing, capability and artifact fingerprint UNKNOWN. |
+| Coverage/posture | `SecurityPosture` requires latest recent completed scan and every scanner coverage state completed for Healthy. | Source rule confirmed; live posture UNKNOWN. |
+| Feed | Default source `none`; Wordfence v2 configured feed, 72-hour default freshness; scoped M147-F07 synthetic protections. | Live source/license/host/IP/DNS/freshness UNKNOWN; no live feed. |
+| Incident/backup | Scan finish calls incident detection; auto-open and auto-backup defaults true; backup request uses `BackupService`. | Side effects material; M147-F04 OPEN. No scan or real side effect. |
+| M12 gates | Six exact env-to-config mappings in `config/privacy.php`. | All six live values UNKNOWN and NOT READ; proposed future secret-safe checklist only. |
+| Recovery | Deploy procedure has guarded code rollback and pre-deploy DB backup; does not automatically restore DB or reverse migrations. | Live backup/recovery state UNKNOWN; M147-E.2 NO-GO until independently evidenced and approved. |
+
+See the [M147-E.1 readiness plan](m14-7-e1-readiness-plan.md) for the gate worksheet, sequence diagram, exact inventory, proposed test scope and go/no-go rules, [runbook](m14-7-e1-staging-runbook.md) for future procedure, and [risk matrix](m14-7-e1-risk-matrix.md) for per-operation side effects.
+
 Planning baseline was `b0285d36a7aa0dbfe7281282ce8c9c6116c3eb3f`; planning PR #119 merged at `0a0d25c2da256015d5cffad5f419603593ed72b5`. M147-A is closed by PR #120 merged at `a84d03146ac3ba0ba8c47301f61be41052903905`; its merged-primary CI run `39105703168` passed 7/7. The Owner separately approved Level 2 M147-B source/workflow analysis and disposable local synthetic adversarial filename tests only. No scanner, feed, browser, staging, production, or customer-site execution is included. Level 3 operational activity still requires separate authorization. Preserve seven mandatory CI jobs, including the MySQL process/concurrency gate within Server MySQL.
 
 ## M147-C local synthetic execution (2026-10-18)

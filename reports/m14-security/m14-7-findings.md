@@ -1,5 +1,23 @@
 # M14.7 Planning Findings and Residual Register
 
+## M147-E.1 readiness review — 2026-10-18
+
+Offline planning baseline: `57b8cf02d655cb7316648785bd9a1b6b07b148e1`. No live environment or M12 value was read. M147-E is not operationally started; M147-E.2 is **NOT EXECUTED — OWNER APPROVAL REQUIRED**.
+
+| Finding | New evidence in E.1 | Current status / effect |
+|---|---|---|
+| M147-F01 / AS-16 | Source and staging prerequisites mapped; no operational scanner result exists. | OPEN; no staging scan or live scanner coverage. |
+| M147-F02 | Exact six environment/config names confirmed in `config/privacy.php`; no live values read. | OPEN; all six live gate values UNKNOWN. |
+| M147-F03 | Config supports Wordfence v2 with environment-owned HTTPS URL/optional bearer key; scheduled sync gated on source+URL; redirects disabled and transfer bounded by M147-C scope. | OPEN; licensing, live provenance, DNS/private-address protections and runtime freshness remain unverified. |
+| M147-F04 | Source confirms scan finish may automatically open incidents and request full backup; both config defaults are true. | OPEN; side-effect combinations, routing, queue and external storage are not exhaustively validated. Future staging scenario is blocked until bounded. |
+| M147-F05 | No browser tests run in E.1. | OPEN; browser/cross-origin validation not performed. |
+| M147-F06 | No new independent-review evidence. | Preserve authoritative disposition; independent review is not claimed. |
+| M147-F07 | No new validation beyond prior narrow synthetic closure. | Keep narrow existing disposition; no live feed/SSRF claim. |
+| M147-F08 | No new penetration-test evidence. | Preserve external M17 checkpoint. |
+| M147-C-02 | No changed evidence; prior merged fix remains. | CLOSED within its prior scope. |
+
+No new exploit finding is claimed from this offline planning review. The complete operational unknowns and per-operation risk controls are in the [E.1 readiness plan](m14-7-e1-readiness-plan.md) and [risk matrix](m14-7-e1-risk-matrix.md).
+
 **Planning baseline:** `b0285d36a7aa0dbfe7281282ce8c9c6116c3eb3f`. **M147-A source baseline:** planning merge `0a0d25c2da256015d5cffad5f419603593ed72b5`; implementation branch adds a local fail-closed harness and focused Node tests. This work did not run a scanner, external feed call, browser test, staging or production access. These entries distinguish source/configuration facts from operational validation and do not claim a confirmed exploit unless stated.
 
 | ID | Classification | Evidence / reproduction | Impact and prerequisites | Current control / proposed disposition | Status |
