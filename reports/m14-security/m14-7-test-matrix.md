@@ -1,5 +1,16 @@
 # M14.7 Security Test and Evidence Matrix
 
+## M147-E.2a live preflight — 2026-10-18
+
+| Scenario | Status | Evidence / disposition |
+|---|---|---|
+| Mandatory authorization record complete before staging connection | BLOCKED | Required exact target, named operator, access method, host identity pin, execution window, operation allowlist, evidence handling, stop authority and recovery contact were not provided. Stop rule applied; no connection. |
+| Staging identity, revision, runtime, WordPress and Connector | NOT TESTED | No live access; values UNKNOWN. Repository's 0.4.7/API v1 is expectation only. |
+| Six effective M12 booleans | NOT TESTED — UNKNOWN | No gate was read or modified. All six remain UNKNOWN. |
+| Effective scanner/feed, queue/scheduler, routing, storage, disk and recovery state | NOT TESTED — UNKNOWN | No live interfaces used. No scan/feed/queue/backup/recovery operation occurred. |
+
+See [E.2a preflight evidence](m14-7-e2a-staging-preflight-evidence.md). This is an authorization-blocked attempt, not a completed read-only preflight and not scanner validation. M147-E.2b remains NO-GO / NOT AUTHORIZED.
+
 ## M147-E.1 staging readiness plan — 2026-10-18
 
 Offline source review only on primary `57b8cf02d655cb7316648785bd9a1b6b07b148e1`. No staging, production, customer site, live gate, feed, scanner, backup, queue, external service, or browser was accessed or executed. The six live M12 values remain UNKNOWN. All M147-E.2 runbook scenarios below are **NOT EXECUTED — OWNER APPROVAL REQUIRED**.

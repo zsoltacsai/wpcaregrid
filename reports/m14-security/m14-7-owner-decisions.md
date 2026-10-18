@@ -1,5 +1,9 @@
 # M14.7 Owner Decisions and Execution Authorization
 
+## M147-E.2a authorization preflight — 2026-10-18
+
+The M147-E.2a task scope did not include a completed execution authorization record. Before any staging connection, the following must be explicitly supplied and reviewed: exact approved endpoint, named operator, access method, trusted SSH/API identity pin, active start/end window and timezone, exact read-only command/interface allowlist, evidence storage/redaction method, stop authority, recovery contact, and authorization reference. The candidate hostname in planning material is not sufficient. The mandatory stop rule was followed: **NO LIVE STAGING ACCESS PERFORMED**. All live state, including each M12 gate, remains UNKNOWN. M147-E.2b is NO-GO / NOT AUTHORIZED. See [preflight evidence](m14-7-e2a-staging-preflight-evidence.md).
+
 ## M147-E.1 Level 2 authorization boundary — 2026-10-18
 
 The current Owner authorization permits **offline planning and documentation only** for staging scanner readiness: source/docs/tests review, architecture mapping, local synthetic tests only if genuinely necessary, and a planning PR. It explicitly prohibits staging SSH/API access, production/customer access, live M12 reads or changes, live feed/scanner execution, secrets, backup/restore, queue execution, incident creation, deployment, and M147-E.2/F/M14.8 work. No such prohibited activity occurred in this planning pass.

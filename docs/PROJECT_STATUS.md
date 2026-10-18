@@ -5,7 +5,13 @@
 
 Last updated: 2026-10-18
 
-## Current milestone — M14.7 M147-E.1 closed (planning only)
+## Current milestone — M147-E.2a preflight blocked before connection
+
+**Current status (2026-10-18):** M147-A/B/C/D remain CLOSED within their documented scopes. M147-E.1 is CLOSED — PLANNING ONLY. M147-E.2a's required execution authorization record was incomplete (exact target, named operator, interface, trusted identity pin, window, exact operation list, evidence handling, stop authority, recovery contact and authorization reference were not all present), so the mandatory stop rule was applied. **NO LIVE STAGING ACCESS PERFORMED.** All staging identity/runtime/configuration facts and all six live M12 gates remain UNKNOWN. Read-only preflight result: BLOCKED; M147-E.2b: NO-GO / NOT AUTHORIZED. No scan, feed request, queue action, incident, notification, backup, restore, remediation, quarantine, deployment or configuration change occurred. Details: [E.2a preflight evidence](../reports/m14-security/m14-7-e2a-staging-preflight-evidence.md). M147-F remains NOT STARTED; M14.8 remains NOT READY.
+
+The previous E.1 status summary below records the state at that planning closure and is retained as historical evidence; this section is the latest status.
+
+## Historical milestone — M14.7 M147-E.1 closed (planning only)
 
 **Current status (2026-10-18):** M147-A/B/C/D are closed within their documented scopes. M147-E.1 is **CLOSED — PLANNING ONLY** by PR #127, merged at `f0bdbf5ad4c06160613fc5283a779707da28aea0`; exact merged-primary CI run [39131255646](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39131255646) passed all seven required jobs, including the Server MySQL process/concurrency gate. This closure does not validate staging. M147-E.2 is **NOT AUTHORIZED / NOT EXECUTED**, M147-F is NOT STARTED, and M14.8 is NOT READY. All six live M12 gates remain UNKNOWN and were not read or changed. Source review confirms scan completion can write scan/finding/audit/posture state and can open an incident and request a full backup for qualifying findings; M147-F04 remains open. See the [E.1 readiness plan](../reports/m14-security/m14-7-e1-readiness-plan.md), [runbook proposal](../reports/m14-security/m14-7-e1-staging-runbook.md), [risk matrix](../reports/m14-security/m14-7-e1-risk-matrix.md), [Owner checklist](../reports/m14-security/m14-7-e1-owner-approval-checklist.md), [E.1 closure report](../reports/m14-security/m14-7-e1-closure-report.md), and [M147-D closure report](../reports/m14-security/m14-7-d-closure-report.md).
 

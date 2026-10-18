@@ -1,5 +1,9 @@
 # M14.7 Security Validation and Attack-Path Plan
 
+## M147-E.2a authorization preflight — 2026-10-18
+
+The task's mandatory pre-connection execution record was not present: exact approved target, named operator, access method, trusted host identity pin, execution window, exact read-only operation list, evidence storage/redaction method, stop authority, and recovery contact were missing. The hard stop rule was applied before connecting. **NO LIVE STAGING ACCESS PERFORMED.** The offline record is [M147-E.2a preflight evidence](m14-7-e2a-staging-preflight-evidence.md). All six live M12 values remain UNKNOWN. Decision A is BLOCKED and M147-E.2b is NO-GO / NOT AUTHORIZED. No E.2a operational check, scan, feed request, queue action, backup, restore, or configuration change is claimed.
+
 ## Current status — M147-E.1 planning (2026-10-18)
 
 Authoritative primary was fetched and verified at `57b8cf02d655cb7316648785bd9a1b6b07b148e1`. M147-A/B/C/D are closed only within their documented scopes. M147-E.1 is a Level 2 offline readiness plan; it does not authorize staging access. M147-E operational validation remains **NOT STARTED**; M147-F is **NOT STARTED**; M14.8 is **NOT READY**. All six live M12 gate values remain **UNKNOWN / NOT READ**. See [readiness plan](m14-7-e1-readiness-plan.md), [proposed runbook](m14-7-e1-staging-runbook.md), [risk matrix](m14-7-e1-risk-matrix.md), and [Owner approval checklist](m14-7-e1-owner-approval-checklist.md). M147-E.2 procedures are **NOT EXECUTED — OWNER APPROVAL REQUIRED**.

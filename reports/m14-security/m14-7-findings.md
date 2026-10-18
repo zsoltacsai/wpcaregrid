@@ -1,5 +1,19 @@
 # M14.7 Planning Findings and Residual Register
 
+## M147-E.2a preflight disposition — 2026-10-18
+
+No new vulnerability is asserted. The controlled read-only preflight was blocked before connecting because the required execution authorization record lacked the exact target approval, named operator, approved interface, identity pin, active window, command allowlist, evidence handling, stop authority, and recovery contact. **NO LIVE STAGING ACCESS PERFORMED.**
+
+| Finding | Updated evidence | Status |
+|---|---|---|
+| AS-16 / M147-F01 | No operational scanner was run; no staging identity or scan result was collected. | OPEN; operational scanner validation incomplete. |
+| M147-F02 | No live gate was read; all six remain UNKNOWN. | OPEN; effective safety state unverified. |
+| M147-F03 | No effective feed configuration or live provenance was read; no feed was contacted. | OPEN; live source/licensing/configuration/freshness and network facts unverified. |
+| M147-F04 | No scan or side effect executed; effective routing remains unknown. | OPEN; incident/backup/queue/notification combinations not validated. |
+| CI-REL-01 | No new CI reliability evidence in this preflight. | OPEN; preserve prior evidence and disposition. |
+
+The absence of authorization is a stage blocker, not evidence that a staging control is either safe or unsafe. See [E.2a preflight evidence](m14-7-e2a-staging-preflight-evidence.md). Existing scoped closures are unchanged.
+
 ## M147-E.1 readiness review — 2026-10-18
 
 Offline planning baseline: `57b8cf02d655cb7316648785bd9a1b6b07b148e1`. No live environment or M12 value was read. M147-E is not operationally started; M147-E.2 is **NOT EXECUTED — OWNER APPROVAL REQUIRED**.
