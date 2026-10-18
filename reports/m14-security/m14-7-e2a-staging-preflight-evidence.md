@@ -138,3 +138,23 @@ A helyi publikus `id_rsa.pub` frissen újraszámított SHA-256 fingerprintje: `S
 A korábban kapott `SHA256+tFo...` hibás átírás és az akkori eltérés/UNKNOWN eredmény változatlanul történeti bizonyíték. Ez a későbbi, teljes fingerprinttel végzett reconciliation nem állítja át visszamenőleg az eredeti RO-00 futás akkori kapu-eredményét PASS-ra. Az eredeti keyscan során látott host ED25519 fingerprint külön, Owner által utólag megerősített értéke változatlanul dokumentált; azóta új keyscan vagy SSH kapcsolat nem történt.
 
 A publikus RSA fingerprint egyezése **nem** bizonyítja, hogy a privát kulcs elérhető, hogy SSH autentikáció működik, vagy hogy a `deploy` fiók használata engedélyezett. Mindhárom **UNKNOWN**; privát kulcsot/agentet/credential store-t nem nyitottunk meg és nem teszteltünk. RO-01–RO-04 és RO-05–RO-09 nem futottak. Mind a hat élő M12 gate **UNKNOWN**; M147-E.2b **NO-GO / NOT AUTHORIZED**.
+
+## M14.7 full-closure evidence reconciliation — 2026-10-18 19:38 UTC
+
+No staging operation was performed during this review: no SSH connection/authentication, remote command, M12 read, scanner/feed request, queue/scheduler action, incident, notification, backup, restore, configuration change or deployment.
+
+### Host and public-key identity history
+
+Approved keyscan evidence records ED25519 fingerprint SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ. The Owner later reported independently computing this same value in the Rackforest console using ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256. The original authorization record contained a mistranscribed expected value. The prior observation is independently reconciled after execution; the original run remains FAILED against its then-supplied comparison and is not retroactively marked PASS. No new keyscan or connection occurred.
+
+Fresh local metadata-only checking of id_rsa.pub yielded 3072 SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU (RSA), exactly matching the complete RSA fingerprint in the Owner's latest record. The Owner reports this fingerprint for both server root and deploy authorized_keys. This confirms public-key fingerprint correspondence only. A local private-key file exists by metadata (2,622 bytes); its content was not read. Private-key correspondence/usability, SSH authentication and account authorization remain UNKNOWN.
+
+| Operation | Current status |
+|---|---|
+| RO-00 | Prior keyscan observation reconciled to independent Owner host-key value; original comparison-gate result remains FAILED. No new scan. |
+| RO-01–RO-04 | NOT EXECUTED / NO-GO; no current exact account, credential-use and time-window authorization. |
+| RO-05–RO-09 | NOT AUTHORIZED / NOT EXECUTED. |
+| M147-E.2b scanner execution | NO-GO / NOT AUTHORIZED. |
+| Six live M12 gates | UNKNOWN; not read. |
+
+An earlier cleanup attempt for task-specific temporary public-key evidence was rejected by local command policy. The prior report says it may remain and contains no credentials. It was neither inspected nor deleted in this review; no file from it is trusted without revalidation. A future approval must specify safe handling and cleanup.

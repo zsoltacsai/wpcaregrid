@@ -170,3 +170,7 @@ The Owner-authorized Level 2 M147-D local synthetic attack-path suites have been
 ## M147-E.2a RO-00–RO-04 authorization outcome — 2026-10-18
 
 Owner authorization covered RO-00–RO-04 for 18:00–18:30 Europe/Budapest. The unauthenticated RO-00 keyscan failed during local KEX negotiation; no host key was retrieved or compared. No authentication or remote command occurred, so RO-01–RO-04 were not executed. This is a client/tooling blocker, not evidence of a target vulnerability or unsafe server state. All live M12 gate values remain UNKNOWN and M147-E.2b remains NO-GO / NOT AUTHORIZED. No RO-05–RO-09 operation was attempted. See the [preflight evidence](m14-7-e2a-staging-preflight-evidence.md).
+
+## Current M14.7 full-closure status — 2026-10-18
+
+M147-A/B/C/D are closed within their documented bounded scopes. M147-E.1 is closed for planning only. E.2a is PARTIAL/BLOCKED: the original RO-00 comparison was reconciled with later independent Owner confirmation, but RO-01–RO-04 were not run; RO-05–RO-09 and M147-E.2b were not authorized. All six live M12 gates remain UNKNOWN. No operational scanner or live side-effect validation exists. M147-F is not started; M14.8 is not ready. Overall progress remains approximately 65% implementation, not security assurance. Full M14.7 closure is not claimed.

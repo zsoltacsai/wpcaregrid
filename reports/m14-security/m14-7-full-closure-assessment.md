@@ -1,0 +1,86 @@
+# M14.7 Full-Closure Assessment — 2026-10-18
+
+## Verdict
+
+**B — PARTIAL / OWNER ACTION REQUIRED.** Previously closed engineering stages have evidence within their stated scopes, but M14.7 is not fully closed. Operational scanner validation, fresh live M12 readback and side-effect validation have not occurred.
+
+## Repository and CI baseline
+
+- Authoritative primary: claude/ecstatic-wozniak-oemyuf
+- Primary SHA: 9e11c2035cd343b8cc1615fee4dbcf4a34c16cd9
+- PR #129: [open and unmerged](https://github.com/zsoltacsai/wpcaregrid/pull/129)
+- Reviewed head: 3a525fdfe548b0b24915a0bb6424bba8a6d9264e; base matches primary.
+- Exact-head run [39158228230](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39158228230): 7/7 success. Server MySQL required process-concurrency step passed.
+- Connector MariaDB on that run: 210 tests, 1,828 assertions, 3 skipped, 0 failed.
+- This documentation commit changes the PR head, so a new exact-head run is required before claiming current-head CI green.
+
+## Stage status
+
+| Stage | Status |
+|---|---|
+| M147-A | CLOSED within approved synthetic fixture/evidence scope. |
+| M147-B | CLOSED within audited checker scope. |
+| M147-C | CLOSED within bounded local synthetic security-engine validation. |
+| M147-D | CLOSED within bounded local synthetic attack-path validation. |
+| M147-E.1 | CLOSED — planning only. |
+| M147-E.2a | PARTIAL/BLOCKED: fingerprint reconciliation recorded, but authenticated identity and RO-01–RO-04 remain incomplete. |
+| M147-E.2b | NOT AUTHORIZED / NOT EXECUTED. |
+| M147-F | NOT STARTED. |
+| M14.8 | NOT READY. |
+
+M14.7 estimated implementation progress remains approximately 65%, not a security-assurance score.
+
+## SSH identity and authorized-operation status
+
+The latest Owner-provided RSA fingerprint SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU matches a fresh local calculation from public id_rsa.pub. The Owner reports that the same value came from Rackforest console checks of root and deploy authorized_keys. This is public-key identity evidence only.
+
+The local private-key file exists by metadata; its contents were not opened. No authentication or credential test occurred. Deploy authorization remains UNKNOWN; root is not approved.
+
+Owner independently confirmed ED25519 host fingerprint SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ in Rackforest Console and stated it matches the previous authorized keyscan observation. The original RO-00 result failed the original comparison because the supplied expected fingerprint was mistranscribed. Later Owner evidence reconciles that identity but does not retroactively change the historical result to PASS. No new connection or keyscan occurred.
+
+| Operation | Result |
+|---|---|
+| RO-00 | Historical observation reconciled; original gate result remains FAILED. |
+| RO-01–RO-04 | NOT EXECUTED / NO-GO; no new account/credential/window approval. |
+| RO-05–RO-09 | NOT AUTHORIZED / NOT EXECUTED. |
+| Six live M12 gates | UNKNOWN; not read. |
+| M147-E.2b | NO-GO / NOT AUTHORIZED. |
+
+## Local SSH client
+
+Current absolute-path Git for Windows hashes match the recorded verified package comparison: ssh.exe C84594A323EE6AFC04D9FAF614A05BE6DC9A2FAECD856268A854084FEA17FD44; ssh-keyscan.exe CD3561C764F577EFC235942CC66314889D288F619F464D6F21CF185DEAA45BB4; ssh-keygen.exe 604D127D97502B11ED2D1F6F8191BFE86F443D821322E4AB285C961D0E06F5E1. OpenSSH 10.5p1 / OpenSSL 3.5.8 supports required sntrup KEX, Curve25519 and ED25519 locally. This does not prove any network negotiation.
+
+## CI-REL-01
+
+Run [39153976426](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39153976426), head 14dec63646d293ad2fec87228b22fa2150dbb676, failed only Connector MariaDB: 210 tests, 1,824 assertions, 1 failure, 3 skips. PollLockConcurrencyTest::test_expired_owner_cannot_release_or_refresh_successor_lease timed out waiting 20 seconds for a child hold-*.result file. The database was reported healthy; logs do not show whether the child exited, stalled or was delayed. The io_uring warning/libaio fallback does not establish causality.
+
+Run [39157541326](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39157541326), head 077d5e75976cde0d0138727254bee7eb8a9ed8fb, was canceled while the Server MySQL concurrency gate was in progress; it is not a pass. Current reviewed head 3a525fdfe548b0b24915a0bb6424bba8a6d9264e passed 7/7; Connector MariaDB passed 210 tests/1,828 assertions with 3 skips and the MySQL gate passed. Earlier same-head attempts include failures followed by pass without source changes.
+
+Root cause is not established. CI-REL-01 remains OPEN as a reliability/diagnosability gap, not a confirmed application vulnerability. No code change or timeout increase is justified. A narrowly scoped future improvement should report child-process running/exit status on timeout, then repeat the MariaDB process test. Local PHP/Composer/Docker were unavailable; local PHP test reproduction was NOT RUN.
+
+## Open findings and residuals
+
+- AS-16 / M147-F01 — OPEN; no operational scanner campaign.
+- M147-F02 — OPEN; all six live M12 gates UNKNOWN.
+- M147-F03 — OPEN; live feed provenance/licensing/freshness and runtime HTTP controls unverified.
+- M147-F04 — OPEN; incident, backup, queue, notification, quarantine and remediation combinations not operationally validated.
+- M147-F05 — OPEN; browser/cross-origin validation not performed.
+- M147-F06 — OPEN; independent review not completed.
+- M147-F08 — OPEN; external M17 penetration-test checkpoint.
+- CI-REL-01 — OPEN; intermittent MariaDB process synchronization timeout, cause unproven.
+- M147-F07 — closed only within its previously tested synthetic feed-handling scope.
+- M147-C-02 — previously closed within its tested false-Healthy scope.
+- M146-F08 — closed only for the audited tracked checker-output path.
+- No new Critical/High issue was confirmed in this offline review; untested paths remain UNKNOWN, not presumed secure.
+
+## Owner decisions required
+
+Before RO-01–RO-04, complete and approve the existing draft with exact date/window, operator, target, non-root account (explicitly confirm whether deploy is authorized), existing credential-use mechanism without sharing secret values, trusted host public-key record or separately approved RO-00 retrieval, exact commands, output/time limits, evidence handling and stop authority. The draft is NOT APPROVED.
+
+RO-05–RO-09 each need a reviewed side-effect-free read method and separate scope approval. Scanner execution needs separate Level 3 authorization after all six M12 values are freshly verified false and target, fixtures, side effects, cleanup and stop conditions are bounded.
+
+## Authorization compliance
+
+This review used repository/GitHub evidence and local metadata only. No staging/production connection; Rackforest Console interaction; SSH authentication or private-key inspection; M12 read; scanner/feed/queue/scheduler/incident/notification/backup/restore/remediation/quarantine/configuration action; deployment; or PR merge occurred. Server-side fingerprints are Owner-reported, not directly read by Codex.
+
+M147-E.2b remains NO-GO. M147-F and M14.8 remain unstarted.

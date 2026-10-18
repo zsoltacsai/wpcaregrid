@@ -293,3 +293,21 @@ A helyi `id_rsa.pub` nyilvános fájl ujjlenyomatát ismét, helyben, `ssh-keyge
 Az Owner legutóbbi, „teljes szerveroldali” értékként közölt karakterlánca továbbra is `SHA256+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU`, vagyis karakterre azonos a korábban malformed/transcription error-ként megőrzött értékkel. Ez nem byte-for-byte egyezés a helyi fingerprinttel: az Owner szövegében `SHA256+` szerepel a `SHA256:` helyett, és a base64 fingerprintből hiányzik az elején levő `Cy8+`. Az Owner közlése szerint a root és deploy `authorized_keys` fájljának ujjlenyomata azonos; ez Owner-attestation, a szerverfájlokat nem olvastuk.
 
 **Disposition:** `PUBLIC KEY FINGERPRINT MATCH: NOT CONFIRMED` (az átvett karakterláncok pontos összevetése nem egyezik; a szerver kulcsának tényleges értéke ettől még UNKNOWN). Az Owner által „korrekcióként” küldött szöveg nem oldja fel az eredeti átírási hibát. A PASS rögzítéséhez az Ownernek a teljes OpenSSH-formátumú értéket kell megadnia, például `SHA256:<43 base64 karakter>`, változtatás nélkül a Rackforest konzol kimenetéből. Ne küldjön kulcsanyagot vagy credentialt. Minden korábbi és új közlés változtatás nélkül történeti bizonyítékként marad meg.
+
+## Latest local SSH and fingerprint reconciliation — 2026-10-18 19:38 UTC
+
+The local public .ssh/id_rsa.pub file was re-fingerprinted without opening or reading private-key contents. The provenance-verified Git for Windows ssh-keygen.exe returned 3072 SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU (RSA). This exactly matches the complete RSA fingerprint in the Owner's latest message; the Owner reports the same fingerprint in Rackforest Console for both root and deploy authorized_keys. **PUBLIC KEY FINGERPRINT MATCH: PASS** for the local public key versus Owner-reported server evidence. Earlier malformed strings and mismatch conclusions remain historical and are superseded for current status only by this exact-input comparison.
+
+Fresh local SHA-256 calculations for the Git for Windows tools match the previously verified official-package comparison:
+
+| Tool | Path | Size | SHA-256 |
+|---|---|---:|---|
+| ssh.exe | C:\Program Files\Git\usr\bin\ssh.exe | 960,985 | C84594A323EE6AFC04D9FAF614A05BE6DC9A2FAECD856268A854084FEA17FD44 |
+| ssh-keyscan.exe | C:\Program Files\Git\usr\bin\ssh-keyscan.exe | 526,978 | CD3561C764F577EFC235942CC66314889D288F619F464D6F21CF185DEAA45BB4 |
+| ssh-keygen.exe | C:\Program Files\Git\usr\bin\ssh-keygen.exe | 543,574 | 604D127D97502B11ED2D1F6F8191BFE86F443D821322E4AB285C961D0E06F5E1 |
+
+OpenSSH reports 10.5p1 / OpenSSL 3.5.8 and locally supports sntrup761x25519-sha512@openssh.com, curve25519-sha256 and ssh-ed25519. This proves local compatibility only, not server negotiation. Package comparison details are in [binary provenance evidence](m14-7-e2a-binary-provenance-evidence.md).
+
+Non-sensitive local metadata: .ssh/config absent; id_rsa.pub exists (584 bytes); a file named id_rsa exists (2,622 bytes); SSH_AUTH_SOCK and SSH_AGENT_PID unset; Windows ssh-agent stopped and disabled. The private file was not opened, copied or hashed. Its existence does not prove correspondence, usability or authorization; authentication/account authorization remain UNKNOWN.
+
+The older section above describing an RSA mismatch records an earlier malformed transcription. The exact full fingerprint now reconciles the public-key comparison; historical text remains intact.

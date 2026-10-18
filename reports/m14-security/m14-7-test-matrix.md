@@ -127,3 +127,15 @@ M147-D is closed for bounded local synthetic attack-path validation. Browser E2E
 | RO-05–RO-09 | NOT AUTHORIZED | Not attempted. All six live M12 gate values remain UNKNOWN. |
 
 M147-E.2b remains NO-GO / NOT AUTHORIZED.
+
+## Current M147-E.2a evidence reconciliation — 2026-10-18
+
+| Scenario | Status | Evidence / disposition |
+|---|---|---|
+| Local RSA public-key fingerprint | TESTED — PASS | Recomputed from local public id_rsa.pub; exact match to the complete Owner-provided Rackforest-console fingerprint. Server-side result is Owner-reported, not directly read by Codex. |
+| Local SSH binary identity and KEX | TESTED — PASS (local only) | Fresh hashes match verified package comparison record; local OpenSSH supports sntrup, Curve25519 and ED25519. No server negotiation. |
+| SSH credential usability / deploy authorization | UNKNOWN | Private-key file presence only by metadata; no key contents, agent identity or authentication inspected/tested. |
+| RO-00 original comparison | TESTED — FAIL; later reconciled | Original comparison against the then-supplied expected fingerprint failed. Owner later supplied independent exact match to observed keyscan value. Historical result preserved; no new keyscan. |
+| RO-01–RO-04 | NOT TESTED | No current exact account/credential/window authorization. |
+| RO-05–RO-09 and six M12 values | NOT TESTED / NOT AUTHORIZED | No read or operation occurred; six live values remain UNKNOWN. |
+| Live scanner and side-effect execution | NOT TESTED | M147-E.2b is not authorized. |

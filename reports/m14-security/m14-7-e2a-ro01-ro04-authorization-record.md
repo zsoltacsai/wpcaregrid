@@ -154,3 +154,32 @@ Kimenetkorlát/kezelés: parancsonként legfeljebb 4 KiB stdout, 2 KiB stderr, 1
 ### RO-05–RO-09 módszertani határ — nem engedélyezett
 
 Nincs végrehajtás. A hat M12 gate továbbra is **UNKNOWN**. Jelenleg nincs repository-evidenciával igazolt, mellékhatásmentes live read interfész a gate-ek és effektív scanner/feed beállítások, queue/worker/scheduler, Connector pairing, backup/notification routing és recovery metadata együttes ellenőrzéséhez. Az Artisan/WordPress bootstrapolás vagy teljes konfiguráció/log/queue dump nincs engedélyezve. A következő tervhez mezőszűrt, olvasási jogosultságú, titokmentes forrásmegállapítás szükséges; amíg ilyen módszer nincs bizonyítva és külön jóváhagyva, ezek **BLOCKED / NOT EXECUTED** maradnak. M147-E.2b továbbra is **NO-GO / NOT AUTHORIZED**.
+
+## New RO-01–RO-04 Owner authorization draft — NOT APPROVED
+
+This is a blank proposal, not execution approval. No staging connection is permitted until the Owner fills and explicitly approves every required field.
+
+| Field | Owner-approved value |
+|---|---|
+| Execution date | __________________ |
+| Start/end time and timezone | __________________ |
+| Named operator / supervisor | __________________ |
+| Exact target hostname, IP and port | stg1.wpcaregrid.com / 85.155.243.164 / 22 (reconfirm before execution) |
+| SSH account | __________________ (non-root required; prefer deploy only if explicitly authorized) |
+| Existing credential-use mechanism | __________________ (no key/token disclosure) |
+| Host-key public record source | __________________ (fingerprint alone cannot populate known_hosts; provide the public key or separately authorize new RO-00 retrieval) |
+| Local SSH executable/provenance | Git for Windows absolute-path OpenSSH; recheck recorded hashes before use |
+| Exact allowed operation list | RO-01–RO-04 only |
+| Evidence and redaction | Sanitized Markdown only; exclude credentials, raw config/environment and customer data |
+| Stop authority/contact | __________________ |
+| Authorization reference | __________________ |
+
+Only proposed commands:
+- RO-01: hostname -f; id -un; date -u +%Y-%m-%dT%H:%M:%SZ
+- RO-02: git -C /var/www/wpcaregrid rev-parse --verify HEAD
+- RO-03: php -v
+- RO-04: df -P /var/www/wpcaregrid
+
+Use strict host-key checking with a dedicated verified public-key record; no TOFU, root, sudo, agent forwarding, interactive shell, arbitrary command or credential discovery. Bound command time/output. Stop on identity mismatch, timeout, unexpected output/side effect, secret exposure or authorization uncertainty.
+
+The RSA fingerprint match is PASS for identity comparison only. A local private-key file exists by metadata but was not read or used. SSH authentication and account authorization remain UNKNOWN. RO-01–RO-04 remain NOT EXECUTED / NO-GO. RO-05–RO-09, M12 reads and M147-E.2b remain outside this draft.

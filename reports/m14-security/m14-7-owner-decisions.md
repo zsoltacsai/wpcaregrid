@@ -75,3 +75,7 @@ Not authorized: staging/production/customer access; real credentials or secrets;
 ## M147-E.2a RO-00–RO-04 authorization outcome — 2026-10-18
 
 Owner authorization covered RO-00–RO-04 for 18:00–18:30 Europe/Budapest. The unauthenticated RO-00 keyscan failed during local KEX negotiation; no host key was retrieved or compared. No authentication or remote command occurred, so RO-01–RO-04 were not executed. This is a client/tooling blocker, not evidence of a target vulnerability or unsafe server state. All live M12 gate values remain UNKNOWN and M147-E.2b remains NO-GO / NOT AUTHORIZED. No RO-05–RO-09 operation was attempted. See the [preflight evidence](m14-7-e2a-staging-preflight-evidence.md).
+
+## M14.7 full-closure authorization state — 2026-10-18
+
+Local/GitHub review and documentation reconciliation are authorized. Staging authentication and remote RO-01–RO-04 commands still require a new complete, time-bounded Owner record. The current draft leaves execution window, account, credential-use mechanism, exact command scope and evidence/stop details unapproved. Non-root deploy is a candidate only until explicitly authorized. Public RSA fingerprint correspondence and independently Owner-confirmed ED25519 host fingerprint do not authorize authentication. RO-05–RO-09, M12 gate reads, scanner execution, M147-E.2b and external side effects remain unauthorized.
