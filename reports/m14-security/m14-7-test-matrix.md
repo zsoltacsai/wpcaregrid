@@ -4,7 +4,7 @@ Planning baseline was `b0285d36a7aa0dbfe7281282ce8c9c6116c3eb3f`; planning PR #1
 
 ## M147-C local synthetic execution (2026-10-18)
 
-The Owner separately authorized M147-C Level 2 local synthetic security-engine validation. Implementation branch `codex/m147-c-security-engine-validation` was created from and remains based on authoritative primary `d863da22d3439f2fa52a9988297e7b19a4c31f36`. No live feed, external scan service, staging, production, customer site, browser, real credential, or remote backup was used.
+The Owner separately authorized M147-C Level 2 local synthetic security-engine validation. Implementation branch `codex/m147-c-security-engine-validation` was created from and remains based on authoritative primary `d863da22d3439f2fa52a9988297e7b19a4c31f36`. Candidate `1dc8c93a96640a251d0744927ff963e01a6544f9` passed exact-head run [39116313678](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39116313678), 7/7; the Server MySQL process/concurrency gate passed. This evidence-status documentation revision is validated on its own exact head. No live feed, external scan service, staging, production, customer site, browser, real credential, or remote backup was used.
 
 | Scope | Executed evidence | Result / limit |
 |---|---|---|

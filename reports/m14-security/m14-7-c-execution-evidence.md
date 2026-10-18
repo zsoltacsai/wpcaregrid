@@ -100,4 +100,4 @@ The previously used unique temporary directory `/tmp/wpcg-m147c-20261018-6f42a0c
 - M147-F05 remains open: no browser tests ran. M147-F06 remains an independent-review residual.
 - No customer data or M14.5 AI/Stripe credential/path was used. No M147-D/E/F or M14.8 work began.
 
-**Implementation source SHA:** `d863da22d3439f2fa52a9988297e7b19a4c31f36` base plus the seven-file diff on the dedicated branch. The final PR-head SHA and exact 7-job CI run will be recorded here after the PR is pushed; no prior run is substituted for final-head evidence.
+**Implementation source SHA:** `d863da22d3439f2fa52a9988297e7b19a4c31f36` base; code/test/evidence candidate `1dc8c93a96640a251d0744927ff963e01a6544f9`. Exact-head GitHub Actions run [39116313678](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39116313678) passed 7/7 on that SHA. The Server MySQL process/concurrency step passed. The evidence-only revision that records this result is separately gated by exact-head CI; its current run is shown in PR #123 checks and the final status report. No earlier run is substituted for a changed head.
