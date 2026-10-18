@@ -139,3 +139,8 @@ M147-E.2b remains NO-GO / NOT AUTHORIZED.
 | RO-01–RO-04 | NOT TESTED | No current exact account/credential/window authorization. |
 | RO-05–RO-09 and six M12 values | NOT TESTED / NOT AUTHORIZED | No read or operation occurred; six live values remain UNKNOWN. |
 | Live scanner and side-effect execution | NOT TESTED | M147-E.2b is not authorized. |
+
+
+## CI-REL-01 diagnostic regression and exact-head result — 2026-10-18
+
+The Connector process synchronization harness now records child worker running/exit status when an expected result file is absent and reports early worker exit immediately. A synthetic regression test covers the diagnostic behavior. At code head `049a08bdd2377d82e7f29bce7a319c0c3768dc4c`, exact-head CI run [39160827416](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39160827416) passed all seven jobs; the Server MySQL process-concurrency gate step passed. Connector MariaDB: 211 tests, 1,834 assertions, 3 skipped, 0 failed. Earlier MariaDB timeout and intermediate implementation/style failures remain recorded in the [full closure assessment](m14-7-full-closure-assessment.md). The timeout root cause is still unresolved; this single pass does not close CI-REL-01.
