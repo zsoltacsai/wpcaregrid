@@ -88,3 +88,12 @@ Jelenlegi döntés: **DRAFT / DEFER — NO-GO**.
 - [ ] Owner kifejezetten engedélyezi a RO-01–RO-04 végrehajtását.
 
 A jelen dokumentum nem engedélyez staging-kapcsolódást, autentikációt vagy távoli parancsot. A végrehajtás csak akkor kezdhető meg, ha a mezők kitöltöttek, a pontos scope jóváhagyott, és az új időablak aktív.
+
+
+## Owner pontosítás — SSH-fiók és credential készenlét (2026-10-18)
+
+A korábban feltételezett `deploy` SSH felhasználónév nincs megerősítve. Az Owner közlése szerint Codex korábban root hozzáférést kért, de a kérés önmagában nem bizonyít tényleges, jóváhagyott vagy sikeresen használt root belépési mechanizmust. Nincs bizonyíték arra, hogy Codex staginghez valaha SSH-val rootként, deployként vagy más fiókkal csatlakozott volna. A repositoryban említett `deploy` egy jelölt; a telepítő script futásidejű felhasználója vagy a staging→GitHub read-only deploy key nem bizonyítja a Codex kliens→staging SSH hitelesítést.
+
+A nem érzékeny lokális metaadat olvasása szerint a jelenlegi felhasználónál nincs `.ssh/config`, `SSH_AUTH_SOCK` és `SSH_AGENT_PID` nincs beállítva, a Windows `ssh-agent` szolgáltatás Stopped. Privát kulcsot, agent-identitást vagy credential store-t nem nyitottunk meg, nem másoltunk és nem teszteltünk. Ezért a hozzáférési mechanizmus és a tényleges SSH account **UNKNOWN**; **ROOT-ONLY ACCESS nincs bizonyítva**.
+
+A rekord **DRAFT / NO-GO** marad. Új staging-engedélyezéshez az Ownernek titokértékek nélkül kell megneveznie a tényleges, jóváhagyott hozzáférési mechanizmust és a fiókot. RO-01–RO-04 esetén a legkisebb jogosultságú, dedikált nem-root read-only fiók preferált; ennek létrehozása vagy konfigurálása nincs engedélyezve. Nincs staging kapcsolat, hitelesítés vagy távoli parancs.
