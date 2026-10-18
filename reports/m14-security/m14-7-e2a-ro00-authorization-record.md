@@ -1,8 +1,11 @@
 # M147-E.2a RO-00 — új Owner-engedélyezési rekord
 
-**Állapot: DRAFT — NINCS VÉGREHAJTÁSI JÓVÁHAGYÁS**  
-**Hatókör: egyetlen, előre engedélyezendő RO-00 host-key ellenőrzés**  
-**Staging-kapcsolat ebben a feladatban: NEM TÖRTÉNT**  
+**Állapot: DRAFT — NINCS VÉGREHAJTÁSI JÓVÁHAGYÁS**
+
+**Hatókör: egyetlen, előre engedélyezendő RO-00 host-key ellenőrzés**
+
+**Staging-kapcsolat ebben a feladatban: NEM TÖRTÉNT**
+
 **RO-01–RO-09 és M147-E.2b: NEM ENGEDÉLYEZETT**
 
 Ez a lap új, külön Owner-jóváhagyást igénylő végrehajtási ablak előkészítésére szolgál. Kitöltése és jóváhagyása nélkül tilos csatlakozni. A korábbi időablak nem használható fel újra.
