@@ -84,3 +84,16 @@ RO-05–RO-09 each need a reviewed side-effect-free read method and separate sco
 This review used repository/GitHub evidence and local metadata only. No staging/production connection; Rackforest Console interaction; SSH authentication or private-key inspection; M12 read; scanner/feed/queue/scheduler/incident/notification/backup/restore/remediation/quarantine/configuration action; deployment; or PR merge occurred. Server-side fingerprints are Owner-reported, not directly read by Codex.
 
 M147-E.2b remains NO-GO. M147-F and M14.8 remain unstarted.
+
+
+## CI reliability and exact-head test-harness update — 2026-10-18
+
+After the earlier timeout evidence, a narrowly scoped change was made only to `wordpress/tests/Integration/PollLockConcurrencyTest.php`: waits that own a worker now inspect the child process and fail immediately with sanitized PID/running/exit status when the worker exits without its result file; timeout output includes the same status. A regression test covers an unsupported synthetic worker mode and asserts the early-exit diagnostic. The application runtime, assertions about the lock, and 20-second synchronization bounds were not weakened.
+
+Chronology is preserved: run [39160096901](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39160096901) reproduced the MariaDB synchronization timeout before the harness change; run [39160455557](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39160455557) failed because the first patch encoded PHPUnit namespace separators incorrectly; run [39160618085](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39160618085) passed all Connector database jobs and PHP syntax but Pint found one fully-qualified-name style issue. Both implementation mistakes were corrected in subsequent commits and are retained as failed CI history.
+
+At code head `049a08bdd2377d82e7f29bce7a319c0c3768dc4c`, exact-head run [39160827416](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39160827416) passed all seven required jobs. The Server MySQL `Required MySQL process-concurrency gate` step explicitly passed. Connector MariaDB ran 211 tests, 1,834 assertions, 3 skips, 0 failures. This run did not reproduce the earlier timeout.
+
+This is evidence that the added diagnostics regression and current matrix passed once; it does not identify the earlier timeout's cause or establish that it cannot recur. CI-REL-01 therefore remains OPEN for reliability investigation. No timeout was increased to hide the symptom, and no application runtime code changed. Local PHP/Composer/Docker are unavailable, so local PHP execution was NOT RUN.
+
+Operational disposition is unchanged: PR #129 remains open/unmerged; RO-01–RO-04 were not executed; RO-05–RO-09 remain unauthorized; all six live M12 values are UNKNOWN; M147-E.2b is NOT AUTHORIZED; no staging/production, live scanner, feed, queue, backup, restore, remediation or deployment action occurred. M14.7 is not fully closed.
