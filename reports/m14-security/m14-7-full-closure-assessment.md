@@ -142,3 +142,14 @@ This addendum records the latest restricted preflight attempt. It does not chang
 - **CI-REL-01 remains OPEN.** No timeout/assertion was weakened and no reliability root cause is claimed. Follow-up should capture child-process exit/diagnostic state and runner resource metrics for any recurrence, then reproduce under bounded repeated CI-equivalent MariaDB runs before considering a fix.
 
 M14.7 remains **PARTIAL / OWNER ACTION REQUIRED**. M147-E.2b is **NOT AUTHORIZED / NOT EXECUTED**. AS-16 / M147-F01, M147-F02, M147-F03, M147-F04, M147-F05, M147-F06, M147-F08, and CI-REL-01 remain open at their documented scopes. No M12 gate value has been read. No scanner, feed sync, queue job, incident, notification, backup, restore, remediation, deployment, production access, or customer-site access occurred.
+
+
+## Exact updated-head CI reconciliation — 2026-10-19
+
+The preceding documentation update created PR-head commit `bfee9cecf28672c273fe918462a9bd92426d2a2a`.
+
+- PR-triggered exact-head run [39169331051](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39169331051) completed successfully on that SHA: Quality, Server SQLite, Server MySQL, Server MariaDB, Connector WordPress SQLite, Connector WordPress MySQL, and Connector WordPress MariaDB all passed. The Server MySQL job's **Required MySQL process-concurrency gate** step passed.
+- A separate workflow-dispatch run [39169346161](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39169346161) on the same SHA failed only in Quality's Connector package version/source consistency step. Its dispatch inputs had no event base; the checker then attempted `git merge-base origin/main HEAD` and failed because `origin/main` is absent in this repository. This is a dispatch-context/base-resolution failure, not evidence of a Connector package mismatch. The run's six other required jobs passed, including the Server MySQL gate. The PR-triggered run is the applicable exact-head result.
+- No production code, configuration, dependency, or workflow was changed by this evidence update.
+
+The updated PR exact head after this addendum requires its own PR-triggered CI; no status is inferred from the prior SHA.
