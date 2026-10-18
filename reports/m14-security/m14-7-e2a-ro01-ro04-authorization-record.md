@@ -124,3 +124,33 @@ A helyi publikus `id_rsa.pub` friss, ismételt eredménye `SHA256:Cy8+tFoYq7gsUP
 Az Owner azt állítja, hogy a root és deploy `authorized_keys` ugyanazt a fingerprintet adta. Ez nem bizonyítja, hogy a helyi privát kulcs elérhető, hogy a Codex a deploy accounttal hitelesíteni tudna, vagy hogy az account használata jóváhagyott. Ezek mind **UNKNOWN** maradnak. A `deploy` accountot csak jövőbeli, külön engedélyezett nem-root célként kezeljük; root belépés nem javasolt és nincs engedélyezve.
 
 RO-01–RO-04 továbbra is **DRAFT / NO-GO**. A továbblépés minimuma: az Owner küldje meg a teljes, pontos, OpenSSH-formátumú szerver fingerprintet; külön hagyja jóvá a `deploy` fiókot és a konkrét read-only parancslistát; rögzítsen új dátumot/időablakot, operátort, stop felelőst és evidence-kezelést. Ez a dokumentációs addendum nem engedélyez SSH-kapcsolatot vagy hitelesítést.
+
+
+## Korrigált RSA publikus fingerprint — PASS; hitelesítés továbbra is UNKNOWN (2026-10-18 19:16 UTC)
+
+A helyi publikus kulcsot frissen, kizárólag a `.ssh\id_rsa.pub` publikus fájlból számítottuk újra a Git for Windows telepítésből byte-egyezéssel igazolt `ssh-keygen.exe` eszközzel: `ssh-keygen -lf <USERPROFILE>\.ssh\id_rsa.pub -E sha256`. A lokális kimenet: `3072 SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU (RSA)`.
+
+A legutóbbi Owner-közlés teljes értéke karakterre pontosan ugyanez, és az Owner szerint ezt a Rackforest konzolon külön ellenőrizte mind a `root`, mind a `deploy` fiók szerveroldali `authorized_keys` állományához. **PUBLIC KEY FINGERPRINT MATCH: PASS** a két, egymástól függetlenül jelentett adatforrás összevetésére. A szerverfájlokat Codex nem olvasta; a Rackforest konzolos eredmény Owner által szolgáltatott bizonyíték, nem Codex közvetlen mérése.
+
+A korábbi hibás `SHA256+tFo...` átírás és az akkori nem-egyező/UNKNOWN minősítés történeti állapotként megmarad; ez az új addendum az új, teljes értékkel elvégzett egyeztetést rögzíti, nem törli vagy írja át a korábbi feljegyzést.
+
+A fingerprint-egyezés nem bizonyítja a megfelelő privát kulcs helyi rendelkezésre állását, annak használhatóságát, az SSH-hitelesítés sikerét, sem a `deploy` fiók jogosultságát. Ezek **UNKNOWN**. Privát kulcsot, agent-identitást vagy credential store-t nem vizsgáltunk és nem teszteltünk. A javasolt hozzáférés kizárólag külön jóváhagyott, nem root fiók — lehetőleg `deploy`, ha az Owner ezt kifejezetten megerősíti — sudo nélkül.
+
+### RO-01–RO-04 parancsszerződés — tervezet, nem futott
+
+Csak új Owner-jóváhagyás, azonosított credential-mechanizmus, igazolt host-key rekord, kitöltött időablak és pontos scope után; interaktív shell, sudo, Laravel/WordPress bootstrap, port-forwarding, agent forwarding és automatikus host-key felvétel nélkül:
+
+| ID | Tervezett, szó szerinti parancs | Műveletkorlát |
+|---|---|---|
+| RO-01 | `hostname -f`; `id -un`; `date -u +%Y-%m-%dT%H:%M:%SZ` | Csak host-, account- és UTC-metaadat. A `hostname -f` resolver/NSS feloldást hívhat; ha a jövőbeli engedély a hálózati resolver-hatást is kizárja, helyette külön jóváhagyott `hostname` szükséges. |
+| RO-02 | `git -C /var/www/wpcaregrid rev-parse --verify HEAD` | Git objektum-metaadat olvasása; alkalmazáskód nem indul. |
+| RO-03 | `php -v` | CLI verzió kiírása; nincs PHP alkalmazásfájl megadva. |
+| RO-04 | `df -P /var/www/wpcaregrid` | Csak a fájlrendszer kapacitásának lekérdezése. |
+
+Tervezett klienskorlátok: abszolút, provenance-ellenőrzött Git-bundled OpenSSH útvonal; dedikált, csak a korrigált host publikus kulcsát tartalmazó ideiglenes known-hosts fájl; `StrictHostKeyChecking=yes`, `GlobalKnownHostsFile=none`, `BatchMode=yes`, `UpdateHostKeys=no`, `ForwardAgent=no`, `ClearAllForwardings=yes`, egy kapcsolatpróba és legfeljebb 5 másodperces connect timeout. Jelen PR-ben nincs felhasználható nyers host-kulcs biztonságosan tárolva; a fingerprint önmagában nem elég known-hosts rekord előállításához. A jövőbeli engedélynek explicit meg kell adnia a már egyeztetett publikus hostkulcsot vagy engedélyeznie kell egy új, kizárólag hitelesítési adatot nem használó RO-00 beszerzési lépést.
+
+Kimenetkorlát/kezelés: parancsonként legfeljebb 4 KiB stdout, 2 KiB stderr, 10 másodperc össz-időkorlát; eltérő kód, timeout, váratlan sor/titok vagy side effect gyanúja azonnali STOP. Csak host/account/UTC, SHA, PHP-verzió és egyetlen kapacitássor kerülhet a jelentésbe; egyéb kimenet redaktálandó és nem kerülhet a PR-be. Parancsok, SSH-fiók, fingerprint és időablak végrehajtás előtt újra Owner által jóváhagyandó. **RO-01–RO-04: NOT EXECUTED / NO-GO.**
+
+### RO-05–RO-09 módszertani határ — nem engedélyezett
+
+Nincs végrehajtás. A hat M12 gate továbbra is **UNKNOWN**. Jelenleg nincs repository-evidenciával igazolt, mellékhatásmentes live read interfész a gate-ek és effektív scanner/feed beállítások, queue/worker/scheduler, Connector pairing, backup/notification routing és recovery metadata együttes ellenőrzéséhez. Az Artisan/WordPress bootstrapolás vagy teljes konfiguráció/log/queue dump nincs engedélyezve. A következő tervhez mezőszűrt, olvasási jogosultságú, titokmentes forrásmegállapítás szükséges; amíg ilyen módszer nincs bizonyítva és külön jóváhagyva, ezek **BLOCKED / NOT EXECUTED** maradnak. M147-E.2b továbbra is **NO-GO / NOT AUTHORIZED**.

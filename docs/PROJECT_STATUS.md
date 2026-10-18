@@ -244,3 +244,10 @@ PR #125 was merged through the active authoritative-primary ruleset at `bc0a4e53
 
 M147-A/B/C/D are closed within their documented scopes. M147-E and M147-F have not started. M14.7 is estimated at approximately 65% implementation progress, not a security-assurance score. M14.8 is not ready. AS-16 and the open findings listed in the closure report remain open. The six live M12 gate values remain UNKNOWN and were not read or changed during M147-D closure. No staging, production, customer-site, live-service, real-secret, payment, backup/restore, remediation, destructive, or deployment operation occurred.
 Local-only follow-up: the Windows OpenSSH build lacks the KEX named in the failed RO-00 attempt; a Git-bundled OpenSSH candidate advertises it but requires package-provenance verification. No retry or network contact occurred. See [local SSH diagnostics](../reports/m14-security/m14-7-e2a-local-ssh-diagnostics.md).
+
+
+## M147-E.2a RSA reconciliation — 2026-10-18 19:16 UTC
+
+A helyi publikus kulcs friss ellenőrzése `SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU` értéket adott; ez pontosan egyezik az Owner legutóbbi, teljes értékű Rackforest-console megerősítésével. A lokális adatot a helyi `id_rsa.pub` nyilvános fájlból, a provenance-ellenőrzött Git for Windows `ssh-keygen.exe -lf … -E sha256` kapcsolóival számoltuk. Az Owner külön forrásként közölte, hogy a szerveren a root és deploy `authorized_keys` ugyanazt az ujjlenyomatot adta. **PUBLIC KEY FINGERPRINT MATCH: PASS**; ez nem Codex által végzett szerverellenőrzés.
+
+A korábbi malformed `SHA256+tFo...` érték és az akkori UNKNOWN/mismatch eredmény történeti bejegyzés marad, nem írjuk át. Privátkulcs-elérhetőség, SSH-hitelesítés, `deploy` account-jogosultság, RO-01–RO-04 futás és minden M12 gate továbbra is UNKNOWN / NOT EXECUTED. M147-E.2b NO-GO / NOT AUTHORIZED. Nincs staging kapcsolat vagy remote parancs ebben az utólagos lokális ellenőrzésben.

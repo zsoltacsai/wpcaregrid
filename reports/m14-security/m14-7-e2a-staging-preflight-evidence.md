@@ -129,3 +129,12 @@ This supersedes the earlier statement that no host-key discovery was attempted: 
 ## Local SSH client diagnosis (2026-10-18)
 
 A local-only follow-up found that the Windows OpenSSH 9.5p2 KEX list excludes the method named in the failed RO-00 attempt, while a locally installed Git for Windows OpenSSH 10.5p1 client advertises it. This supports a client-build compatibility cause but does not establish the exact LibreSSL/build-time cause or the server's full KEX offer. No network connection was made during the diagnostics pass. A separately authorized retry proposal, provenance caveat, binary versions, and remaining risks are recorded in [local SSH diagnostics](m14-7-e2a-local-ssh-diagnostics.md).
+
+
+## Utólagos RSA fingerprint egyeztetés — 2026-10-18 19:16 UTC
+
+A helyi publikus `id_rsa.pub` frissen újraszámított SHA-256 fingerprintje: `SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU` (RSA, 3072 bit), a Git for Windows hivatalos release-hez byte-egyezéssel ellenőrzött `ssh-keygen.exe -lf <USERPROFILE>\.ssh\id_rsa.pub -E sha256` módszerrel. Az Owner legutóbb közölt teljes értéke pontosan azonos, és az Owner közlése szerint a Rackforest konzolon külön ellenőrizte a `root` és `deploy` `authorized_keys` kulcsát. Ezen közlések összehasonlítása alapján **PUBLIC KEY FINGERPRINT MATCH: PASS**. A szerveroldali állományokat és konzolt Codex nem vizsgálta; ez Owner által jelentett független forrás.
+
+A korábban kapott `SHA256+tFo...` hibás átírás és az akkori eltérés/UNKNOWN eredmény változatlanul történeti bizonyíték. Ez a későbbi, teljes fingerprinttel végzett reconciliation nem állítja át visszamenőleg az eredeti RO-00 futás akkori kapu-eredményét PASS-ra. Az eredeti keyscan során látott host ED25519 fingerprint külön, Owner által utólag megerősített értéke változatlanul dokumentált; azóta új keyscan vagy SSH kapcsolat nem történt.
+
+A publikus RSA fingerprint egyezése **nem** bizonyítja, hogy a privát kulcs elérhető, hogy SSH autentikáció működik, vagy hogy a `deploy` fiók használata engedélyezett. Mindhárom **UNKNOWN**; privát kulcsot/agentet/credential store-t nem nyitottunk meg és nem teszteltünk. RO-01–RO-04 és RO-05–RO-09 nem futottak. Mind a hat élő M12 gate **UNKNOWN**; M147-E.2b **NO-GO / NOT AUTHORIZED**.
