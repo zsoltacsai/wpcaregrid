@@ -104,3 +104,19 @@ An initial discarded local `ssh -G` probe mistakenly supplied the Windows hosts 
 No staging or production connection, Rackforest console interaction, SSH authentication, credential access, RO-00–RO-09 operation, M12 read, scanner/feed/queue/backup/restore/remediation/deployment action, system-wide install, PATH/registry/trust-store change, or modification of installed SSH binaries occurred. All six live M12 gates remain `UNKNOWN`; M147-E.2b remains `NO-GO / NOT AUTHORIZED`.
 
 The verified client binaries are a suitable local candidate for a **separately Owner-authorized** RO-00 attempt. This result does not authorize that attempt; a fresh target-specific execution window, host-key pin and exact operation authorization remain required.
+
+
+## Owner-authorized RO-00 attempt — 2026-10-18
+
+**Result: RO-00 FAILED — expected host-key fingerprint mismatch.** This supersedes the earlier status that no RO-00 attempt had occurred; the earlier local binary-provenance result remains intact.
+
+- Authorized window: 20:02–20:35 Europe/Budapest. Execution occurred at 20:05:27–20:05:54 CEST (18:05:27–18:05:54 UTC).
+- Target queried once, unauthenticated: `85.155.243.164:22`, ED25519 only, using the approved absolute-path Git for Windows `ssh-keyscan.exe`; exit code 0, stderr empty. No retry or alternate target/algorithm was used.
+- Fresh preflight SHA-256: `ssh-keyscan.exe` `CD3561C764F577EFC235942CC66314889D288F619F464D6F21CF185DEAA45BB4`; `ssh-keygen.exe` `604D127D97502B11ED2D1F6F8191BFE86F443D821322E4AB285C961D0E06F5E1`; both match the verified official package. Local `ssh.exe` check also matched `C84594A323EE6AFC04D9FAF614A05BE6DC9A2FAECD856268A854084FEA17FD44`, with the approved KEX and ED25519 support.
+- The response contained one standard server-banner comment and exactly one ED25519 public-key record for the approved IP/port. The public key was parsed as data and fingerprinted locally with the approved `ssh-keygen.exe`.
+- Owner-approved fingerprint: `SHA256:7eMFqVIvqAipy7heD3YlizeroorFjSw4N/Ep5Ku7irQ`.
+- Observed fingerprint: `SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`.
+- Exact comparison: **MISMATCH**. The returned key was not trusted, added to any trust store, or used for authentication. No further live operation is authorized by this result.
+- Cleanup of the task-specific temporary evidence was attempted, but the local command policy rejected deletion. The temporary directory may still contain the raw public host-key response and diagnostics; it contains no credentials. It is not a trusted host-key store. This cleanup limitation is disclosed for local owner follow-up.
+
+No SSH authentication or remote command occurred. The Rackforest browser console was not accessed. No M12 gates, application state, scanner, queue, backup, restore, configuration, or deployment operation was touched. All six live M12 values remain UNKNOWN; M147-E.2b remains NO-GO / NOT AUTHORIZED. RO-01–RO-04 remain unapproved.
