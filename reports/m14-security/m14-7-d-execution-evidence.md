@@ -89,7 +89,7 @@ No new confirmed Critical or High vulnerability was reproduced in the completed 
 
 Performed: local source review; synthetic Laravel feature tests against in-memory/disposable data; test-local HTTP/queue/storage fakes; local dependency installation from committed lockfiles; local frontend asset build needed by rendered feature tests. No WordPress/customer Connector pairing, live vulnerability feed, external payment/AI service, remote backup destination, staging/production host, real secret, backup/restore, incident, quarantine, remediation, notification or deployment was accessed or executed. No M12 gate value was read or changed. OS-level outbound firewall isolation was not separately measured; the tested integration paths used local test clients and fake transports as configured in the referenced suites.
 
-**PR and exact-head CI:** pending; this document will be finalized after the dedicated branch is pushed and GitHub reports all seven required checks on its exact head.
+**Candidate-time checkpoint:** PR and exact-head CI were pending when this execution evidence was first recorded. The later PR, exact-head CI, merge and merged-primary validation are reconciled below; this preserves the original chronology.
 
 ### Source-grounded implementation map
 
@@ -101,3 +101,7 @@ Performed: local source review; synthetic Laravel feature tests against in-memor
 - **Outbound HTTP:** onboarding URL checks and the configured Wordfence feed sync are the identified URL-related paths. Feed tests use `Http::fake`; site URL validators are exercised with synthetic URLs, without resolving or contacting those destinations. No general webhook callback or customer-controlled AI endpoint was identified in the audited route map.
 - **AI:** M14.5 exposes Owner credential configuration and fixed health probes; the inspected code contains no arbitrary inference client/action consumer. Synthetic provider transport tests do not execute an AI feature.
 - **Operational controls:** deploy/scheduler scripts and console scheduler/commands are not web-facing route handlers. Host privilege, SSH and deployment state were intentionally outside scope and remain operationally unverified.
+
+### Formal closure update — 2026-10-18
+
+PR #125 was merged through the active primary ruleset at `bc0a4e536abfd573b5b34d5e2152dcf15ad80c80`. Exact-head CI [39122868939](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39122868939) passed 7/7 on `28f92ee4238efad64345eba944531d652e194963`; merged-primary CI [39124920641](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39124920641) passed 7/7 on the merge SHA. The Required MySQL process-concurrency gate passed in both runs. M147-D is closed for the bounded local synthetic validation only; partial and untested paths and findings remain as stated above. The full formal record is in [M147-D closure report](m14-7-d-closure-report.md). No staging, production, customer, live service, secret, real side effect, M12 gate operation or deployment occurred.
