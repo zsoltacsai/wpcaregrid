@@ -115,3 +115,12 @@ Jövőbeli, külön jóváhagyott RO-01–RO-04 futáshoz a minimális előfelt�
 4. A jövőbeli engedélyezés előtt külön, offline vizsgálat hagyja jóvá a parancsok mellékhatásmentességét; nem biztonságos vagy bootstrapoló Laravel/WordPress parancs UNKNOWN/BLOCKED maradjon.
 
 Ez a kiegészítés nem engedélyez privát kulcs vizsgálatot, SSH-kapcsolatot, hitelesítést vagy távoli parancsot. A rekord **DRAFT / NO-GO** marad; M147-E.2b **NOT AUTHORIZED**.
+
+
+## RSA fingerprint újraközlés — reconciliation még nyitott (2026-10-18)
+
+A helyi publikus `id_rsa.pub` friss, ismételt eredménye `SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU`. Az Owner legutóbb közölt `SHA256+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU` értéke továbbra sem egyezik byte-for-byte; változatlanul meg kell őrizni mint történeti hibás átírást. Így a public-key fingerprint match **PASS nem adható**, és a szerveroldali teljes ujjlenyomat továbbra is UNKNOWN.
+
+Az Owner azt állítja, hogy a root és deploy `authorized_keys` ugyanazt a fingerprintet adta. Ez nem bizonyítja, hogy a helyi privát kulcs elérhető, hogy a Codex a deploy accounttal hitelesíteni tudna, vagy hogy az account használata jóváhagyott. Ezek mind **UNKNOWN** maradnak. A `deploy` accountot csak jövőbeli, külön engedélyezett nem-root célként kezeljük; root belépés nem javasolt és nincs engedélyezve.
+
+RO-01–RO-04 továbbra is **DRAFT / NO-GO**. A továbblépés minimuma: az Owner küldje meg a teljes, pontos, OpenSSH-formátumú szerver fingerprintet; külön hagyja jóvá a `deploy` fiókot és a konkrét read-only parancslistát; rögzítsen új dátumot/időablakot, operátort, stop felelőst és evidence-kezelést. Ez a dokumentációs addendum nem engedélyez SSH-kapcsolatot vagy hitelesítést.

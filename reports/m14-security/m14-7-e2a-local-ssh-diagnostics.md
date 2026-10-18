@@ -284,3 +284,12 @@ Az Owner mostani üzenetében szereplő érték szó szerint:
 A két szöveg **nem egyezik pontosan**: az OpenSSH helyi értéke `SHA256:` előtagú és az utána következő base64 érték `Cy8+` szekvenciával kezdődik; a most közölt szerveroldali szövegben a kettőspont helyett pluszjel van, és a `Cy8+` rész hiányzik. Ezért a public-key fingerprint egyezés státusza jelenleg **UNKNOWN / NEM IGAZOLT**, nem PASS. Az Owner állítása, hogy a `root` és `deploy` `authorized_keys` ugyanazt az RSA fingerprintet tartalmazza, tulajdonosi közlésként rögzíthető, de nem teszi lehetővé a helyi kulcs pontos összevetését a megadott karakterlánccal.
 
 A feloldáshoz az Owner küldje el vagy erősítse meg a teljes, pontos OpenSSH-formátumú szerveroldali RSA fingerprintet (`SHA256:<base64>`), titkos kulcsérték nélkül. Ez csak a nyilvános fingerprint-egyezést tisztázhatja; privát kulcs elérhetőségét, tényleges SSH-hitelesítést vagy fiókjogosultságot nem bizonyít.
+
+
+## RSA fingerprint újraellenőrzése — Owner-korrekció továbbra sem egyezik (2026-10-18)
+
+A helyi `id_rsa.pub` nyilvános fájl ujjlenyomatát ismét, helyben, `ssh-keygen -lf <id_rsa.pub> -E sha256` módszerrel számítottuk ki. Eredmény: `3072 SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU (RSA)`. Privát kulcsot nem nyitottunk meg vagy vizsgáltunk.
+
+Az Owner legutóbbi, „teljes szerveroldali” értékként közölt karakterlánca továbbra is `SHA256+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU`, vagyis karakterre azonos a korábban malformed/transcription error-ként megőrzött értékkel. Ez nem byte-for-byte egyezés a helyi fingerprinttel: az Owner szövegében `SHA256+` szerepel a `SHA256:` helyett, és a base64 fingerprintből hiányzik az elején levő `Cy8+`. Az Owner közlése szerint a root és deploy `authorized_keys` fájljának ujjlenyomata azonos; ez Owner-attestation, a szerverfájlokat nem olvastuk.
+
+**Disposition:** `PUBLIC KEY FINGERPRINT MATCH: NOT CONFIRMED` (az átvett karakterláncok pontos összevetése nem egyezik; a szerver kulcsának tényleges értéke ettől még UNKNOWN). Az Owner által „korrekcióként” küldött szöveg nem oldja fel az eredeti átírási hibát. A PASS rögzítéséhez az Ownernek a teljes OpenSSH-formátumú értéket kell megadnia, például `SHA256:<43 base64 karakter>`, változtatás nélkül a Rackforest konzol kimenetéből. Ne küldjön kulcsanyagot vagy credentialt. Minden korábbi és új közlés változtatás nélkül történeti bizonyítékként marad meg.
