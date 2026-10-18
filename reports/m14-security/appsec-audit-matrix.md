@@ -142,3 +142,9 @@ OQ-05 authorizes configuration groundwork for exactly OpenAI, Anthropic and Goog
 ## M14.5 implementation evidence — 2026-10-17
 
 Owner-only AI provider configuration and explicit fixed-host metadata probes are implemented in PRs #102/#103. Seven-job exact-head CI and merged-SHA CI passed; staging was validated with fake transport only. The credential field is write-only, AI credentials do not fall back to environment/config, and probe results use generation compare-and-set. Customer/site/security/backup data egress is not authorized; no AI feature/default/feature authorization exists. Carry AI credential leakage, RBAC, CSRF/rate abuse, custom endpoint rejection, redirect forwarding, response abuse and error/log injection into M14.7. AS-16 remains open for M14.7. Full evidence: `reports/m14-ai/m14-5-closure-report.md`.
+
+## M14.7 planning handoff — 2026-10-18
+
+AS-16 remains OPEN / M14.7_CARRY_FORWARD. M14.7 planning is documented in [m14-7-plan.md](m14-7-plan.md), [m14-7-test-matrix.md](m14-7-test-matrix.md), and [m14-7-owner-decisions.md](m14-7-owner-decisions.md). This does not change AS-16 to PASS: no scan was run, no feed/config state was read from staging, and current gate values were not read. The older scanner warning and current M14.6 residuals must remain explicit until validation evidence is collected.
+
+Findings disposition for this planning stage is recorded in [M14.7 findings](m14-7-findings.md); this does not close AS-16.
