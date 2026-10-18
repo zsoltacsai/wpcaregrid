@@ -5,7 +5,7 @@
     "scripts": {
         "build": "vite build",
         "dev": "vite",
-        "test": "node --test tests/js/marketing-analytics.test.js"
+        "test": "node --test tests/js/marketing-analytics.test.js scripts/m14-7/m147-a.test.mjs"
     },
     "devDependencies": {
         "@playwright/test": "^1.64.1",
