@@ -172,3 +172,71 @@ The exact credential path/method and command list must be approved before a late
 **CONDITIONAL — ADDITIONAL EVIDENCE REQUIRED.** Algorithm compatibility and strict host-key options are locally confirmed. Package provenance is only partially verified because the original installer/signature and trusted reference hashes were unavailable, and credential validity is unknown. Do not recommend or use this client for Level 3 until package provenance/integrity is independently established and a new Owner authorization names the exact execution window, target/IP, account, approved existing credential mechanism, commands, evidence handling, and stop authority.
 
 RO-00 remains uncompleted; RO-01–RO-09 were not executed in this diagnostics task. All six live M12 gates remain UNKNOWN. M147-E.2b remains NO-GO / NOT AUTHORIZED.
+
+
+## Offline provenance, credential and RO-00 readiness review — 2026-10-18
+
+**Scope:** local/offline review plus GitHub PR metadata/CI readback. No staging connection, keyscan, authentication, remote command, credential/agent inspection, M12 read, or software installation occurred.
+
+### Current decision summary
+
+| Area | Result | Evidence / blocker |
+|---|---|---|
+| Git for Windows client provenance | **PARTIALLY VERIFIED; insufficient for approval** | Local registry/package metadata, shared installation root, ACLs and file identity hashes exist. No original installer or cryptographically trusted package-manager installation record is available. Hashes identify local files only; they do not authenticate them. |
+| SSH compatibility | **PASS locally** | Absolute-path Git-bundled OpenSSH 10.5p1 reports OpenSSL 3.5.8; KEX query includes sntrup761x25519-sha512@openssh.com and curve25519-sha256. Host-key query includes ssh-ed25519. Local config expansion supports strict host-key checking and a dedicated user-known-hosts file. No server negotiation was performed. |
+| Approved `deploy` credential-access mechanism | **UNKNOWN** | No Owner-approved mechanism is evidenced. No credential path, private-key material, authentication agent, or credential store was inspected or tested. RO-00 itself needs no SSH authentication; later RO-01–RO-04 would require separate approval. |
+| Documentation | **PASS for this review package, subject to CI** | This report and the companion draft authorization record specify provenance blockers, a fail-closed future RO-00 process, and blank date/window fields. |
+| Exact-head CI | **PENDING at reviewed head; prior to this review's documentation update** | PR #129 head `99c8df55127c4ccf60d9c923d5b2989da9422345` run 39147411113 was in progress at readback. Quality and Connector SQLite/MySQL/MariaDB were successful; Server SQLite, Server MySQL, and Server MariaDB were still in progress. The MySQL concurrency step was pending, not passed. A documentation commit changes the PR head and requires a new exact-head result. |
+
+### Reliable installation provenance method
+
+The local uninstall entry (`Git`, version 2.56.0, publisher string, install path/date) and Git's bundled package-version manifest are inventory metadata, not cryptographic proof of package origin. An empty `InstallSource`, absence of an installer in the inspected Downloads pattern, and individual binaries marked `NotSigned` leave a provenance gap. The local SHA-256 values above are reproducible file identifiers, not authenticity evidence.
+
+A defensible verification of the existing installation requires a chain that binds a trusted official package to the installed files. Preferred procedure for a separately authorized offline/provenance task:
+
+1. Locate an already-present exact-version Git for Windows 2.56.0 installer or a package-manager cached artifact and its associated package metadata. Do not fetch, install, replace, or execute software as part of this review.
+2. Verify the installer's Authenticode signature status and certificate chain locally. Confirm the signer identity against an independently trusted Git for Windows publisher identity; a merely `Valid` status or display-name string alone is insufficient. Record the signer certificate thumbprint and chain result, without trusting an unverified certificate.
+3. If the package manager supplies a signed/catalog-backed artifact record, verify that record and exact package digest. A registry uninstall entry or package-version text file is not such a record.
+4. Bind the currently installed SSH tools to that verified package: compare their bytes/hashes to the corresponding files from the exact verified package payload, using an already-approved, trusted extraction/inspection method that does not run the installer. If the exact installer/package payload or a trusted signed manifest cannot be obtained locally, classify installed-file authenticity as **UNKNOWN**.
+5. If the original artifact is absent, a future Owner-approved acquisition could use only the official Git for Windows release channel, then verify the artifact's signature and independently anchored exact-version checksum/release metadata before inspecting its payload. That acquisition is outside this task and needs separate authorization. Do not trust a checksum copied from an unverified mirror or use the installed-file hash as its own reference.
+
+No official reference checksum/signature was retrieved or checked in this offline task. Therefore this installation is not approved for a new Level 3 connection yet.
+
+### Credential readiness
+
+No approved access mechanism for the existing `deploy` account could be established from the available evidence. This is **not** a finding that the credential is absent or invalid. It remains unknown. The new authorization record deliberately does not ask for a key, token, agent listing, or credential test. RO-00 is unauthenticated; any later authenticated read-only operation must name a separate, approved credential-use mechanism and must not disclose the credential.
+
+### Proposed minimal RO-00 sequence — design only, NOT EXECUTED
+
+Prerequisites: separate currently valid Owner authorization record; exact future date/window; target and trusted fingerprint freshly confirmed from the independent Rackforest Console; provenance-verified Git for Windows package; exact matching absolute paths for `ssh-keyscan.exe`, `ssh-keygen.exe`, and (only if a later authorized SSH connection is separately approved) `ssh.exe`. Use a local temporary directory with restrictive ACL. Do not rely on DNS or an SSH alias.
+
+The sequence below is a design sketch; it has not run. PowerShell should treat nonzero exit, unexpected stderr, empty output, more than one key, malformed output, or fingerprint mismatch as fatal:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$target = '85.155.243.164'
+$expected = 'SHA256:7eMFqVIvqAipy7heD3YlizeroorFjSw4N/Ep5Ku7irQ'
+$scan = 'C:\Program Files\Git\usr\bin\ssh-keyscan.exe'
+$keygen = 'C:\Program Files\Git\usr\bin\ssh-keygen.exe'
+# Allocate an access-restricted temporary directory; capture stdout and stderr separately.
+# Invoke only: & $scan -4 -T 5 -p 22 -t ed25519 $target
+# Require exit code 0 and exactly one non-empty output record.
+# Accept only host token 85.155.243.164 (or the documented [85.155.243.164]:22 form),
+# key type ssh-ed25519, and valid base64 key bytes. Reject comments/extra records.
+# Write the single candidate line to a temporary candidate file; never trust it yet.
+# Invoke: & $keygen -lf $candidateFile -E sha256
+# Require exit code 0 and exactly one parsed SHA256 fingerprint.
+# Compare the full fingerprint using ordinal exact equality to $expected.
+# On mismatch or any error: delete local temporaries, report BLOCKED, stop.
+# Only after an exact match, write a canonical
+# "85.155.243.164 ssh-ed25519 <validated-base64-key>" line into a separate
+# temporary known_hosts evidence file. Keep it local and temporary.
+```
+
+Use the literal IP for both scan and later lookup, so a hostname/IP alias cannot redirect which known-host entry is checked. Do not use implicit TOFU. Do not authenticate during RO-00. If a later operation is separately authorized, its SSH invocation must use the same verified absolute-path client, `-F none`, `-o HostKeyAlgorithms=ssh-ed25519`, `-o StrictHostKeyChecking=yes`, `-o UserKnownHostsFile=<the verified temporary file>`, `-o GlobalKnownHostsFile=NUL`, and `-o UpdateHostKeys=no`; it must fail closed if any trust file or identity is missing. RO-00 does not authorize that later connection or any remote command.
+
+### New authorization record and outstanding prerequisites
+
+The companion document [M147-E.2a RO-00 authorization record](m14-7-e2a-ro00-authorization-record.md) is a **draft**, not execution approval. It leaves the execution date and start/end window blank and also requires the Owner to identify the operator, authorization reference, client package, local execution context, evidence handling, and stop contact. It limits scope to unauthenticated RO-00 only. The existing deploy credential mechanism is explicitly UNKNOWN and is not required for RO-00.
+
+Until provenance is cryptographically established and a new record is completed and approved, recommendation is **NO-GO for a retry**. No staging operation occurred in this review; the six live M12 values remain UNKNOWN; M147-E.2b remains NO-GO / NOT AUTHORIZED.
