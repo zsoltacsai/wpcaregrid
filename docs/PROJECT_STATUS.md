@@ -5,6 +5,10 @@
 
 Last updated: 2026-10-18
 
+## Current milestone — M147-E.2a RO-00 blocked; no authenticated access
+
+**Update (2026-10-18):** Owner authorized only RO-00–RO-04 within 18:00–18:30 Europe/Budapest. RO-00 was attempted during that window using unauthenticated SSH key scanning to the approved endpoint. The local OpenSSH client failed KEX negotiation (`sntrup761x25519-sha512@openssh.com` unsupported); its compatibility option was also unsupported. No server host key/fingerprint was obtained or compared, and no authentication or remote command occurred. Per the stop rule, RO-00 is BLOCKED and RO-01–RO-04 were NOT EXECUTED. This was an unauthenticated SSH protocol contact, not authenticated staging access. All six live M12 values and all staging application/runtime state remain UNKNOWN. M147-E.2b remains NO-GO / NOT AUTHORIZED. No scanner, feed, queue, backup, restore, remediation, quarantine, deployment, or configuration operation occurred. See the [E.2a evidence](../reports/m14-security/m14-7-e2a-staging-preflight-evidence.md).
+
 ## Current milestone — M147-E.2a preflight blocked before connection
 
 **Current status (2026-10-18):** M147-A/B/C/D remain CLOSED within their documented scopes. M147-E.1 is CLOSED — PLANNING ONLY. An E.2a execution-record draft was supplied but is explicitly NOT APPROVED FOR EXECUTION; it lacks the trusted host identity pin, active time window, authorization reference/final approval, and exact reviewed command list. The mandatory stop rule was applied. **NO LIVE STAGING ACCESS PERFORMED.** All staging identity/runtime/configuration facts and all six live M12 gates remain UNKNOWN. Read-only preflight result: BLOCKED; M147-E.2b: NO-GO / NOT AUTHORIZED. No scan, feed request, queue action, incident, notification, backup, restore, remediation, quarantine, deployment or configuration change occurred. Details: [E.2a preflight evidence](../reports/m14-security/m14-7-e2a-staging-preflight-evidence.md). M147-F remains NOT STARTED; M14.8 remains NOT READY.
