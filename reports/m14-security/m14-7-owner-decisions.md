@@ -49,3 +49,7 @@ The locked-package fixture is not proof of OS-level network isolation. No app se
 ## M14-15 / AS-16 scope
 
 These decisions constrain execution of the existing M14-15 / AS-16 security-validation scope; they do not narrow or silently close it. Unavailable feeds remain unavailable rather than clean, scanner coverage remains unverified until evidenced, and no decision authorizes remediation or destructive action.
+
+## M147-C closure authorization boundary — 2026-10-18
+
+The separately granted M147-C Level 2 scope was used for local source review, synthetic feeds/responses, disposable tests, scoped fixes and documentation. PR #123 is merged at `5ec7ac4d2449d4eb95d98b108210607c40c847ce`; exact-head CI 39117328446 and merged-primary CI 39118627595 each passed 7/7. This closure does not authorize M147-D/E/F, M14.8, browser execution, staging/production, live feed, customer access, real side effects, or any Level 3 action. Six live M12 gates remain UNKNOWN. See [M147-C closure report](m14-7-c-closure-report.md).

@@ -34,3 +34,24 @@ No application service, scanner, feed, browser, external storage, or M12 live-ga
 M147-B received separate Level 2 authorization on 2026-10-18. The local Windows subprocess test passed five supported synthetic filename cases; exact Linux test/source CI run `39107517613` passed the complete 10-name newline/control corpus on `a3080a7af802f0dd96f1f6b548233b555f989399`. Final PR head `e10695f1ff5cd505ae6883e1a5e5678bdd7f31bd` passed all seven jobs in exact-head CI run `39109648655`; PR #121 merged at `0699374432afeb26e036a87477c9a0cad5c5518b`, and merged-primary CI run `39110282933` passed all seven jobs, including the MySQL process/concurrency gate. Existing CI supply-chain, exact-SHA release, deployment privilege, receipt provenance, and Gitleaks archive regression fixtures passed locally; `npm test` passed 20/20, including the M147-A harness. M146-F08 is closed only for the audited tracked secret-path checker output path; live runner command parsing was not simulated. AS-16 remains open.
 
 See the [M14.7 plan](m14-7-plan.md), [test matrix](m14-7-test-matrix.md), and [Owner authorization register](m14-7-owner-decisions.md) for acceptance and execution conditions.
+
+## M147-C closure reconciliation — 2026-10-18
+
+This section supersedes the earlier “awaiting exact-head CI / Owner review” status above. PR #123 head `141f782cd7062c76175499492bf8e199203db8c5` passed exact-head CI run [39117328446](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39117328446), 7/7, including the Server MySQL process/concurrency gate. PR #123 was then merged through the active protected primary ruleset at `5ec7ac4d2449d4eb95d98b108210607c40c847ce`. Exact merged-primary CI run [39118627595](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39118627595) passed 7/7, including that gate.
+
+| ID | Current disposition |
+|---|---|
+| M147-C-02 | CLOSED: incomplete/unavailable coverage can no longer support Healthy posture; fix and regression tests are merged and exact-SHA validated. |
+| M147-F07 | CLOSED only for the bounded code sub-scope implemented and synthetically exercised: HTTPS scheme requirement, no redirects, bounded streaming/timeouts, JSON media-type and record validation, atomic index replacement by code, and preservation on the tested HTTP/import failures. Filesystem rename failures and concurrent sync were not injected. This does not certify live feed provenance, licensing, production transport, private-address rejection or runtime freshness. |
+| M147-F01 / AS-16 | OPEN: no live/operational scanner coverage. |
+| M147-F02 | OPEN; all six live M12 gate values remain UNKNOWN because no fresh read occurred. |
+| M147-F03 | OPEN: live feed provenance, authorization, freshness and runtime configuration remain unverified. |
+| M147-F04 | OPEN: selected synthetic incident/backup path only; other side-effect combinations remain untested. |
+| M147-F05 | OPEN: browser tests were not run. |
+| M147-F06 | OPEN: independent-review residual remains; no independent review is claimed. |
+| M147-F08 | OPEN external M17 penetration-test checkpoint. |
+| M146-F08 | Remains closed only for the audited tracked secret-path checker output path. |
+
+The detailed scenario-by-scenario coverage matrix, including partial and untested cases, is in [the M147-C closure report](m14-7-c-closure-report.md). No Critical or High defect was confirmed within the bounded work; this is not a claim that untested paths are defect-free. M147-C is closed with the explicit residuals above.
+
+M147-F07 boundary clarification: the same-directory temporary index and atomic rename were source-reviewed; regression tests prove preservation for the exercised malformed/failed responses and imports. Filesystem write/rename failure, concurrent sync, host allowlisting and private-address/DNS-rebinding cases were not injected. The raw feed cache and generated index are separate files rather than a transactional pair. These limits are recorded in the closure report; the scoped code controls do not establish live-feed provenance or runtime safety.

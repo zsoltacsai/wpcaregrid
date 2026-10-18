@@ -101,3 +101,7 @@ The previously used unique temporary directory `/tmp/wpcg-m147c-20261018-6f42a0c
 - No customer data or M14.5 AI/Stripe credential/path was used. No M147-D/E/F or M14.8 work began.
 
 **Implementation source SHA:** `d863da22d3439f2fa52a9988297e7b19a4c31f36` base; code/test/evidence candidate `1dc8c93a96640a251d0744927ff963e01a6544f9`. Exact-head GitHub Actions run [39116313678](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39116313678) passed 7/7 on that SHA. The Server MySQL process/concurrency step passed. The evidence-only revision that records this result is separately gated by exact-head CI; its current run is shown in PR #123 checks and the final status report. No earlier run is substituted for a changed head.
+
+## Later CI and closure chronology — 2026-10-18
+
+The status at the top of this execution record is historical: it was written before the final PR-head run and Owner closure review. PR #123 head `141f782cd7062c76175499492bf8e199203db8c5` later passed exact-head CI run [39117328446](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39117328446), 7/7 including the Server MySQL process/concurrency gate. The PR was merged through protection at `5ec7ac4d2449d4eb95d98b108210607c40c847ce`; exact merged-primary CI run [39118627595](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39118627595) passed 7/7, including that gate. Current disposition and coverage reconciliation are in the [formal M147-C closure report](m14-7-c-closure-report.md). This addendum preserves rather than retroactively changes the original status.
