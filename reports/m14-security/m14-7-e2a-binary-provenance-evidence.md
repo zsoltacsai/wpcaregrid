@@ -1,8 +1,11 @@
 # M147-E.2a — Git for Windows SSH bináris provenance bizonyíték
 
-**Mód:** lokális provenance-ellenőrzés; staging és SSH kapcsolat nélkül  
-**Eredmény:** **C — RELEASE OR EXTRACTION PROVENANCE INCONCLUSIVE**  
-**Staging / RO-00:** nem történt  
+**Mód:** lokális provenance-ellenőrzés; staging és SSH kapcsolat nélkül
+
+**Eredmény:** **C — RELEASE OR EXTRACTION PROVENANCE INCONCLUSIVE**
+
+**Staging / RO-00:** nem történt
+
 **Installer futtatása / telepítés:** nem történt
 
 ## Ellenőrzött hivatalos kiadás
