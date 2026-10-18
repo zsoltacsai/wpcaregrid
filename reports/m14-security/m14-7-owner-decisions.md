@@ -53,3 +53,9 @@ These decisions constrain execution of the existing M14-15 / AS-16 security-vali
 ## M147-C closure authorization boundary — 2026-10-18
 
 The separately granted M147-C Level 2 scope was used for local source review, synthetic feeds/responses, disposable tests, scoped fixes and documentation. PR #123 is merged at `5ec7ac4d2449d4eb95d98b108210607c40c847ce`; exact-head CI 39117328446 and merged-primary CI 39118627595 each passed 7/7. This closure does not authorize M147-D/E/F, M14.8, browser execution, staging/production, live feed, customer access, real side effects, or any Level 3 action. Six live M12 gates remain UNKNOWN. See [M147-C closure report](m14-7-c-closure-report.md).
+
+## M147-D execution authorization — 2026-10-18
+
+The Owner explicitly authorized M147-D Level 2 local synthetic attack-path validation. Permitted for this stage: source review, disposable Laravel/WordPress fixtures and databases, synthetic tenant and role identities, mocked Connector/Stripe/fake HTTP, local fake queues/storage, regression tests, safe in-scope corrections, documentation and an unmerged PR with exact-head CI. No test may make live external-service requests.
+
+Not authorized: staging/production/customer access; real credentials or secrets; live Wordfence/other feeds; Stripe TEST/live requests; remote backup storage; real payment, incident, backup, restore, quarantine, remediation or notification; M12 gate changes; deployment; M147-E/F; M14.8. Browser tests are not expressly authorized in this stage and will not be run. The six live M12 values remain UNKNOWN and are not read or changed. The M147-D worktree baseline is `b392c5c3f4a934886b574e59ceb67d1dfe04c894`; planning-first attack paths are in [M147-D execution evidence](m14-7-d-execution-evidence.md).

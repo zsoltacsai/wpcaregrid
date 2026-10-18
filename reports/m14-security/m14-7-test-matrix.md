@@ -60,3 +60,24 @@ PR #123 head `141f782cd7062c76175499492bf8e199203db8c5` passed exact-head CI run
 The detailed M147-C matrix uses the required scenario / test / evidence / result / gap / finding columns in the [closure report](m14-7-c-closure-report.md). Results distinguish TESTED — PASS from PARTIALLY TESTED and NOT TESTED. In particular, synthetic feed and selected Connector integrity/malware rules ran; live feed, exhaustive filesystem/malware cases, all side-effect combinations, browser E2E and live M12 gate reads did not. No untested row is treated as a pass.
 
 M147-C is closed for the bounded local synthetic validation. AS-16 and M147-F01/F02/F03/F04/F05/F06/F08 remain open as described in the findings register. M147-F07 is closed only for the bounded feed-handling sub-scope; M147-C-02 is closed after merged-primary validation. No staging, production, customer or Level 3 operation occurred.
+
+## M147-D attack-path matrix — execution status
+
+This matrix adds the separately authorized synthetic attack-path stage. Final local execution status is shown below. This matrix reuses existing regression suites; M147-C evidence is not substituted for M147-D execution.
+
+| Attack path | Planned scenario | Existing test surface | Current M147-D status |
+|---|---|---|---|
+| Authentication / role boundary | Guest, customer, Operator and Owner access to role-specific surfaces; ability denial | `OwnerAccessTest`, `OperatorSecurityTest`, route-boundary tests | TESTED — PASS (selected cases) |
+| Tenant IDOR | Foreign website, nested backup, finding/incident and child-resource identifiers; assert no mutation | `BackupSecurityTest`, `SecurityVisibilityAndPermissionsTest` | TESTED — PASS (selected cases) |
+| Connector identity | Invalid/revoked credentials, wrong-site identity, cross-site job and backup operations | `PairingTest`, `ConnectorApiTest`, `JobsTest`, `BackupSecurityTest` | TESTED — PASS (selected cases) |
+| Connector replay / state | Duplicate job results, unknown/undelivered jobs, disconnect and result bounds | `JobsTest`, `ConnectorApiTest` | TESTED — PASS (selected cases) |
+| Stripe webhook | Synthetic signature rejection, replay/deduplication and mode/state transitions | Stripe webhook and lifecycle feature tests | TESTED — PASS (selected cases) |
+| CSRF / route boundary | Mutating web routes require CSRF or declared non-browser boundary and throttling | `RuntimeRouteBoundaryTest`, Owner/Operator security tests | TESTED — PASS (selected cases) |
+| XSS / hostile text | Security finding text rendered as escaped text; synthetic hostile values | `SecurityVisibilityAndPermissionsTest` | PARTIALLY TESTED |
+| Backup / restore | Foreign-site actions, connector/site binding, restore preconditions, fake queue/storage and concurrency | `BackupSecurityTest`, backup flow/restore suites | PARTIALLY TESTED (selected flows pass; local concurrency/service skips) |
+| Incident / remediation | Synthetic detection side effects, authorization, remediation gate and fake queue/storage | incident, scan, remediation suites | PARTIALLY TESTED |
+| SSRF / egress | Site URL admission and configured feed transport rejects invalid/redirect/oversize responses under fake transport | `AccountConnectorTest`, `VulnerabilityAndPostureTest` | PARTIALLY TESTED |
+| AI boundary | Owner-only provider configuration; synthetic health transport; no inference surface | AI credential and provider health suites | PARTIALLY TESTED; inference action NOT APPLICABLE to inspected M14.5 surface |
+| Operational controls | Source-only audit for web-accessible deploy, shell, environment, gate and worker control | routes/controllers/commands inventory | PARTIALLY TESTED — source review only |
+
+A passing row is limited to explicit assertions in the referenced test. The detailed scenario matrix below distinguishes partial and untested requirements; no suite-level pass is generalized beyond its assertions.
