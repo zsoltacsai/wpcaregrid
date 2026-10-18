@@ -222,6 +222,7 @@ class SecurityScanService
             'reason' => $result['reason'] ?? null,
             'source' => $this->vulnerabilities->sourceName(),
             'checked' => $result['checked'] ?? null,
+            'skipped' => $result['skipped'] ?? null,
         ], fn ($v) => $v !== null)])])->save();
     }
 
