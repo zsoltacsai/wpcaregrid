@@ -63,7 +63,7 @@ This proposal does not itself authorize a connection or the RO-01–RO-04 comman
 
 ## Local-only provenance and compatibility verification — 2026-10-18
 
-**No network request or staging connection was made in this verification.** No software, SSH configuration, PATH, registry, trust store, known_hosts file, or credential was changed.
+**No external package/source request or staging connection was made during local verification.** The authorized documentation-only PR update was performed through GitHub separately; no staging endpoint was contacted. No software, SSH configuration, PATH, registry, trust store, known_hosts file, or credential was changed.
 
 ### Exact binaries, versions, sizes, and current hashes
 
@@ -116,28 +116,41 @@ Both requested sntrup names and standard Curve25519 are present. This is local c
 
 ### Exact local diagnostic commands executed
 
-The following representative commands were run against absolute local paths; none makes a network request:
+The following PowerShell block was executed locally with explicit absolute paths. It performs no network request; `ssh -G` expands configuration only. No keyscan, SSH authentication, or remote command was run in this task.
 
 ```powershell
-& 'C:\Program Files\Git\cmd\git.exe' --version
-& 'C:\Program Files\Git\ucrt64\bin\git.exe' --version
-& 'C:\Program Files\Git\usr\bin\ssh.exe' -V
-& 'C:\Program Files\Git\usr\bin\ssh.exe' -Q kex
-& 'C:\Program Files\Git\usr\bin\ssh.exe' -Q key
-& 'C:\Program Files\Git\usr\bin\ssh.exe' -Q key-sig
-& 'C:\Program Files\Git\usr\bin\ssh.exe' -G -F none -l deploy -p 22 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=C:/Temp/wpcaregrid-ro00-known_hosts -o GlobalKnownHostsFile=NUL -o UpdateHostKeys=no -o BatchMode=yes -o IdentitiesOnly=yes 85.155.243.164
-Get-Item -LiteralPath <the five executable paths in the table>
-Get-FileHash -Algorithm SHA256 -LiteralPath <the five executable paths in the table>
-Get-AuthenticodeSignature -FilePath <the executable paths>
-Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Git_is1
-Select-String -LiteralPath 'C:\Program Files\Git\etc\package-versions.txt' -Pattern '(?i)^(git|openssh|openssl)'
+$gitCmd='C:\Program Files\Git\cmd\git.exe'
+$gitCore='C:\Program Files\Git\ucrt64\bin\git.exe'
+$ssh='C:\Program Files\Git\usr\bin\ssh.exe'
+$scan='C:\Program Files\Git\usr\bin\ssh-keyscan.exe'
+$keygen='C:\Program Files\Git\usr\bin\ssh-keygen.exe'
+$paths=@($gitCmd,$gitCore,$ssh,$scan,$keygen)
+Get-Item -LiteralPath $paths | Select-Object FullName,Length,@{n='FileVersion';e={$_.VersionInfo.FileVersion}},@{n='ProductVersion';e={$_.VersionInfo.ProductVersion}} | Format-Table -AutoSize
+Get-FileHash -Algorithm SHA256 -LiteralPath $paths | Select-Object Path,Hash | Format-Table -AutoSize
+& $gitCmd --version
+& $gitCore --version
+& $ssh -V 2>&1
+& $ssh -Q kex
+& $ssh -Q key
+& $ssh -Q key-sig
+Get-AuthenticodeSignature -FilePath $paths | Select-Object Path,Status | Format-Table -AutoSize
+Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Git_is1' | Select-Object DisplayName,DisplayVersion,Publisher,InstallLocation,InstallSource,InstallDate,UninstallString | Format-List
+Select-String -LiteralPath 'C:\Program Files\Git\etc\package-versions.txt' -Pattern '(?i)^(mingw-w64-ucrt-x86_64-git |openssh |openssl )' | ForEach-Object { $_.Line }
 icacls 'C:\Program Files\Git\usr\bin\ssh.exe'
 icacls 'C:\Program Files\Git\usr\bin\ssh-keyscan.exe'
 icacls 'C:\Program Files\Git\usr\bin'
+& $ssh -G -F none -l deploy -p 22 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=C:/Temp/wpcaregrid-ro00-known_hosts -o GlobalKnownHostsFile=NUL -o UpdateHostKeys=no -o BatchMode=yes -o IdentitiesOnly=yes 85.155.243.164 2>$null | Select-String '^(user|hostname|port|checkhostip|stricthostkeychecking|userknownhostsfile|globalknownhostsfile|updatehostkeys|batchmode|identitiesonly|kexalgorithms|hostkeyalgorithms) '
 ```
 
-The PowerShell placeholders above describe the already-run metadata queries; they are not commands to execute as written. No private key, credential, token, or SSH key material was inspected.
+Additional offline provenance checks executed:
 
+```powershell
+Select-String -LiteralPath 'C:\Program Files\Git\etc\install-options.txt' -Pattern '(?i)version|architecture|install|command|path|default'
+$downloads=Join-Path $env:USERPROFILE 'Downloads'
+Get-ChildItem -LiteralPath $downloads -File -Filter 'Git-*.exe'
+```
+
+The Downloads search covered only that directory and filename pattern; it does not prove the installer is absent from the entire machine.
 ### Future RO-00 procedure — design only, NOT EXECUTED
 
 Use the literal IP for both acquisition and subsequent connection. Do not introduce a hostname alias or rely on DNS to bind the key to a different endpoint. Before the new Owner-approved window, verify the provenance of the Git for Windows installation/package through a trusted local record or a separately approved trusted source. Confirm the exact absolute paths and KEX support again; do not assume these hashes remain current.
