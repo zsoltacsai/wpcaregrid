@@ -79,7 +79,7 @@ No staging, production, customer site, shared storage, backup, credential, or in
 
 ## CI evidence status
 
-The implementation source SHA `5dc8a4618faaff958621ccc6fde5a2795543054c` was submitted to mandatory workflow run `39103440862`. At the time this evidence was drafted, Quality and all three Connector jobs had passed, while Server SQLite and Server MySQL were still in progress; this is **not** a completed 7/7 result. The final PR-head CI must be rechecked after this documentation commit. The Server MySQL process/concurrency gate is required and must pass. No earlier SHA's CI is accepted as evidence for a later head.
+For PR head `a688d0333871f2dcb2d3e4406e8c095968ac8029`, mandatory workflow run `39103832139` attempt 1 completed with six jobs successful and Connector WordPress MariaDB failed once: `PollLockConcurrencyTest::test_expired_owner_cannot_release_or_refresh_successor_lease` timed out waiting for a synthetic process synchronization result file. The same test passed on attempt 2, which completed all seven mandatory jobs successfully on the unchanged exact SHA. Server MySQL passed its full test suite and the required process/concurrency gate on attempt 2. The gate is intentionally skipped for SQLite and MariaDB matrix entries; only the MySQL matrix entry is authoritative for that gate. The follow-up documentation update means PR #120 has a newer head; its own exact-head CI must complete 7/7 before merge. No earlier SHA's CI is accepted as evidence for the updated head.
 
 ## Findings and boundaries
 
