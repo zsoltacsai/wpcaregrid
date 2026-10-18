@@ -1,5 +1,13 @@
 # M14.7 Owner Decisions and Execution Authorization
 
+## M147-E.1 Level 2 authorization boundary — 2026-10-18
+
+The current Owner authorization permits **offline planning and documentation only** for staging scanner readiness: source/docs/tests review, architecture mapping, local synthetic tests only if genuinely necessary, and a planning PR. It explicitly prohibits staging SSH/API access, production/customer access, live M12 reads or changes, live feed/scanner execution, secrets, backup/restore, queue execution, incident creation, deployment, and M147-E.2/F/M14.8 work. No such prohibited activity occurred in this planning pass.
+
+The E.1 deliverables are [readiness plan](m14-7-e1-readiness-plan.md), [proposed staging runbook](m14-7-e1-staging-runbook.md), [side-effect risk matrix](m14-7-e1-risk-matrix.md), and [Owner approval checklist](m14-7-e1-owner-approval-checklist.md). M147-E.2 is **NOT EXECUTED — OWNER APPROVAL REQUIRED** and operational M147-E remains **NOT STARTED**. All six live M12 gate values remain **UNKNOWN / NOT READ**. Approval of this planning work is not Level 3 authorization.
+
+Offline review found that `SecurityScanService::finish()` invokes `IncidentService::openForDetection()`. `config/security.php` defaults both incident auto-open and auto-backup to true; a qualifying suspicious-file result can create incident/timeline rows and request a full backup. This effect is documented for E.2 preflight and keeps M147-F04 open. No scan, incident, backup, or notification was triggered.
+
 This register records the Owner's decisions for M14.7. M147-A, M147-B, and M147-C each have separate, bounded Level 2 approval records below. This is not blanket authorization for later M14.7 stages, staging, live feeds, or operational side effects. All work remains subject to the three authorization levels below.
 
 ## Owner decisions
