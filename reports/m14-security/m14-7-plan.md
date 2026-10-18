@@ -166,3 +166,7 @@ The Owner has separately authorized M147-D Level 2 local synthetic attack-path v
 ## M147-D validation status — 2026-10-18
 
 The Owner-authorized Level 2 M147-D local synthetic attack-path suites have been run and documented in `reports/m14-security/m14-7-d-execution-evidence.md`. Local focused result: 471 passed, 12 skipped, 0 failed, 5,635 assertions. Existing tests were reused; no runtime fix was indicated by the reviewed/tested paths. M147-D is awaiting exact-head seven-job CI and Owner review, and is not closed. Partial/not-tested scenarios remain explicit, including M147-F04 side-effect combinations, live feed/SSRF/Wordfence facts, browser E2E, exhaustive hostile rendering, and live M12 gate state. M147-E/F and M14.8 remain not started. No Level 3 activity occurred.
+
+## M147-E.2a RO-00–RO-04 authorization outcome — 2026-10-18
+
+Owner authorization covered RO-00–RO-04 for 18:00–18:30 Europe/Budapest. The unauthenticated RO-00 keyscan failed during local KEX negotiation; no host key was retrieved or compared. No authentication or remote command occurred, so RO-01–RO-04 were not executed. This is a client/tooling blocker, not evidence of a target vulnerability or unsafe server state. All live M12 gate values remain UNKNOWN and M147-E.2b remains NO-GO / NOT AUTHORIZED. No RO-05–RO-09 operation was attempted. See the [preflight evidence](m14-7-e2a-staging-preflight-evidence.md).
