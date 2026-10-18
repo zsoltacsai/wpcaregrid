@@ -24,6 +24,6 @@ Level 2 is approved narrowly for M147-A implementation and isolated local safety
 
 ## M147-A implementation evidence
 
-The implementation adds a fixed-path synthetic fixture/harness and source baseline report. Nine focused Node safety tests and nine existing JavaScript tests passed locally (18 total). The package-backed WordPress fixture was not created: required locked Composer packages were absent in the local cache and install was run with networking disabled. No app/Connector service, scanner, feed, browser, or external storage was invoked. M12 gate values were not read. The exact PR-head CI result is recorded in the implementation PR when available. This evidence does not close AS-16, M146-F08, M147-F01, or any later-stage finding.
+The implementation adds a fixed-path synthetic fixture/harness and source baseline report. Nine focused Node safety tests and nine existing JavaScript tests passed locally (18 total). The package-backed WordPress fixture was not created: required locked Composer packages were absent in the local cache and install was run with networking disabled. No app/Connector service, scanner, feed, browser, or external storage was invoked. M12 gate values were not read. Acceptance still requires a green exact-current-head CI run recorded on the implementation PR. This evidence does not close AS-16, M146-F08, M147-F01, or any later-stage finding.
 
 See the [M14.7 plan](m14-7-plan.md), [test matrix](m14-7-test-matrix.md), and [Owner authorization register](m14-7-owner-decisions.md) for acceptance and execution conditions.

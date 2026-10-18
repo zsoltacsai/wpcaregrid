@@ -2,7 +2,7 @@
 
 Planning baseline was `b0285d36a7aa0dbfe7281282ce8c9c6116c3eb3f`; planning PR #119 merged at `0a0d25c2da256015d5cffad5f419603593ed72b5`. The rows below remain future validation design. The Owner's current Level 2 approval is limited to M147-A implementation and isolated local safety testing. No scanner, feed, browser, staging, or production execution is included. Level 3 operational activity still requires separate authorization. Preserve seven mandatory CI jobs, including the MySQL process/concurrency gate within Server MySQL.
 
-M147-A Node safety suite executed locally: 9 focused tests in `scripts/m14-7/m147-a.test.mjs`, plus 9 existing marketing analytics tests: 18 passed, 0 failed, 0 skipped. These exercise synthetic temporary repositories only. The fixture itself was not created because required locked WordPress/SQLite packages were absent and package installation was deliberately offline. CI evidence for the implementation PR is pending and must be reported on the exact head.
+M147-A Node safety suite executed locally: 9 focused tests in `scripts/m14-7/m147-a.test.mjs`, plus 9 existing marketing analytics tests: 18 passed, 0 failed, 0 skipped. These exercise synthetic temporary repositories only. The fixture itself was not created because required locked WordPress/SQLite packages were absent and package installation was deliberately offline. Acceptance requires the open implementation PR's exact current head to pass all seven mandatory jobs, including the MySQL process/concurrency gate; use its latest exact-head result as the CI record.
 
 | Area | Adversarial/synthetic cases | Required evidence | Safe layer / boundary | Stop condition |
 |---|---|---|---|---|
