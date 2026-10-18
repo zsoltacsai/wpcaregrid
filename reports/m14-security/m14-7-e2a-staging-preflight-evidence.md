@@ -117,3 +117,11 @@ Offline repository evidence remains relevant only as a risk signal: E.1 records 
 No scanner, feed download/synchronization, queue job, incident, notification, backup, restore, remediation, quarantine, deployment, or configuration modification occurred. No production/customer system or secret was accessed. This report does not authorize M147-E.2b, M147-F, or M14.8.
 
 Before a future E.2a attempt, the Owner must provide a completed execution record with the exact target, named operator, approved access interface, trusted identity pin, active execution window, exact read-only operations, evidence handling, stop authority, recovery contact, and authorization reference. The reviewer must then validate each command offline for side effects before any connection. A successful read-only preflight still requires separate explicit Level 3 approval for scanner execution.
+
+## Authorized RO-00 attempt — 2026-10-18
+
+Owner authorized RO-00–RO-04 for 18:00–18:30 Europe/Budapest. During the window (observed 2026-10-18 16:00:09–16:02:15 UTC), RO-00 was attempted only via unauthenticated SSH key scanning to the approved endpoint on port 22, requesting the ED25519 host key. The server returned an SSH identification banner, but key exchange failed locally with `choose_kex: unsupported KEX method sntrup761x25519-sha512@openssh.com`. A second attempt to provide a curve25519 KEX option was rejected because this `ssh-keyscan` client does not support that option. No host key or fingerprint was obtained or compared.
+
+No SSH authentication, credential use, remote command, or authenticated staging access occurred. RO-00 is BLOCKED; RO-01–RO-04 were NOT EXECUTED under the stop rule. This was an unauthenticated SSH protocol contact only. No M12 gate, scanner, feed, queue, backup, restore, configuration, or deployment operation occurred. All six live M12 values remain UNKNOWN; M147-E.2b remains NO-GO / NOT AUTHORIZED.
+
+This supersedes the earlier statement that no host-key discovery was attempted: an authorized unauthenticated keyscan was attempted, but it did not retrieve a key. It does not change the earlier finding that no authenticated live staging access occurred.
