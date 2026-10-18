@@ -52,3 +52,11 @@ M147-A's actual merged-primary run `39105703168` passed 7/7 on `a84d03146ac3ba0b
 5. Any later approved run records exact commit, test names/count, browser/runtime versions, pass/fail/skip, sanitized artifacts, and cleanup outcome. If isolation, credentials, or sink services are absent, stop and report the limitation; do not substitute external/customer infrastructure.
 
 The Owner has approved isolated local browser-test planning and harness preparation only. The prior M14.6 statement that Playwright cases were discovered does not establish that browser-level tests ran or passed. Neither M147-A nor M147-B executes browser tests; the M147-B approval does not authorize M147-C or later stages.
+
+## M147-C final coverage and merge evidence — 2026-10-18
+
+PR #123 head `141f782cd7062c76175499492bf8e199203db8c5` passed exact-head CI run [39117328446](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39117328446) 7/7. Protected merge SHA: `5ec7ac4d2449d4eb95d98b108210607c40c847ce`. Exact merged-primary run [39118627595](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39118627595) passed 7/7. The MySQL process/concurrency gate passed in each run.
+
+The detailed M147-C matrix uses the required scenario / test / evidence / result / gap / finding columns in the [closure report](m14-7-c-closure-report.md). Results distinguish TESTED — PASS from PARTIALLY TESTED and NOT TESTED. In particular, synthetic feed and selected Connector integrity/malware rules ran; live feed, exhaustive filesystem/malware cases, all side-effect combinations, browser E2E and live M12 gate reads did not. No untested row is treated as a pass.
+
+M147-C is closed for the bounded local synthetic validation. AS-16 and M147-F01/F02/F03/F04/F05/F06/F08 remain open as described in the findings register. M147-F07 is closed only for the bounded feed-handling sub-scope; M147-C-02 is closed after merged-primary validation. No staging, production, customer or Level 3 operation occurred.
