@@ -114,3 +114,16 @@ A passing row is limited to explicit assertions in the referenced test. The deta
 PR #125 merged at `bc0a4e536abfd573b5b34d5e2152dcf15ad80c80`. Exact-head run [39122868939](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39122868939) and exact merged-primary run [39124920641](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39124920641) each passed all seven required jobs; the Server MySQL process/concurrency step passed in both. The local selected suites completed 471/483 passed, 12 skipped, 0 failed, 5,635 assertions. Skipped cases remain skipped; coverage rows above remain selected-path claims only. The full scenario evidence and closure disposition are in [M147-D closure report](m14-7-d-closure-report.md).
 
 M147-D is closed for bounded local synthetic attack-path validation. Browser E2E, exhaustive SSRF/DNS-rebinding, every Connector replay/order case, full incident/backup/remediation combinations, live M12 gates and operational host controls remain untested or partial. AS-16 remains open. No staging, production, customer-site, live-service, deployment or Level 3 operation occurred.
+
+## M147-E.2a RO-00–RO-04 execution — 2026-10-18
+
+| Scenario | Status | Evidence / disposition |
+|---|---|---|
+| RO-00 trusted SSH host-key verification | BLOCKED | Unauthenticated keyscan attempted during the approved window; local KEX negotiation failed and no key/fingerprint was retrieved or compared. No authentication occurred. |
+| RO-01 hostname, account, UTC time | NOT TESTED | Not executed after RO-00 blocked. |
+| RO-02 deployed Git HEAD | NOT TESTED | Not executed after RO-00 blocked. |
+| RO-03 PHP CLI version | NOT TESTED | Not executed after RO-00 blocked. |
+| RO-04 filesystem capacity | NOT TESTED | Not executed after RO-00 blocked. |
+| RO-05–RO-09 | NOT AUTHORIZED | Not attempted. All six live M12 gate values remain UNKNOWN. |
+
+M147-E.2b remains NO-GO / NOT AUTHORIZED.
