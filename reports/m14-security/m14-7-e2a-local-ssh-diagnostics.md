@@ -269,3 +269,18 @@ Use a local copy of the exact official x64 installer already lawfully acquired, 
 This procedure distinguishes the installer asset's authenticity from the integrity of the installed files. An authenticated official installer and matching payload hashes would establish that these three installed binaries match that official artifact; they would not by themselves verify every Git for Windows file, the current host's full integrity, or credential readiness.
 
 **Current conclusion:** Official reference material now exists (immutable official release, verified signed tag metadata, and published artifact hashes), so the reference needed for a reproducible check is identified. The current installation remains **UNKNOWN for authenticity/integrity** because there is no local installer/package to verify and no installed-vs-authenticated-payload comparison. Do not upgrade this to VERIFIED based on the observed local hashes, version labels, ACLs, or public digest alone.
+
+
+## Owner által közölt RSA ujjlenyomat — egyeztetés szükséges (2026-10-18)
+
+A helyi, kizárólag nyilvános `id_rsa.pub` fájlon futtatott fingerprint-olvasás friss eredménye:
+
+`3072 SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU (RSA)`
+
+Az Owner mostani üzenetében szereplő érték szó szerint:
+
+`SHA256+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU`
+
+A két szöveg **nem egyezik pontosan**: az OpenSSH helyi értéke `SHA256:` előtagú és az utána következő base64 érték `Cy8+` szekvenciával kezdődik; a most közölt szerveroldali szövegben a kettőspont helyett pluszjel van, és a `Cy8+` rész hiányzik. Ezért a public-key fingerprint egyezés státusza jelenleg **UNKNOWN / NEM IGAZOLT**, nem PASS. Az Owner állítása, hogy a `root` és `deploy` `authorized_keys` ugyanazt az RSA fingerprintet tartalmazza, tulajdonosi közlésként rögzíthető, de nem teszi lehetővé a helyi kulcs pontos összevetését a megadott karakterlánccal.
+
+A feloldáshoz az Owner küldje el vagy erősítse meg a teljes, pontos OpenSSH-formátumú szerveroldali RSA fingerprintet (`SHA256:<base64>`), titkos kulcsérték nélkül. Ez csak a nyilvános fingerprint-egyezést tisztázhatja; privát kulcs elérhetőségét, tényleges SSH-hitelesítést vagy fiókjogosultságot nem bizonyít.

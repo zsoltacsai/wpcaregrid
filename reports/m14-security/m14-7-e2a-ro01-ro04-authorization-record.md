@@ -97,3 +97,21 @@ A korábban feltételezett `deploy` SSH felhasználónév nincs megerősítve. A
 A nem érzékeny lokális metaadat olvasása szerint a jelenlegi felhasználónál nincs `.ssh/config`, `SSH_AUTH_SOCK` és `SSH_AGENT_PID` nincs beállítva, a Windows `ssh-agent` szolgáltatás Stopped. Privát kulcsot, agent-identitást vagy credential store-t nem nyitottunk meg, nem másoltunk és nem teszteltünk. Ezért a hozzáférési mechanizmus és a tényleges SSH account **UNKNOWN**; **ROOT-ONLY ACCESS nincs bizonyítva**.
 
 A rekord **DRAFT / NO-GO** marad. Új staging-engedélyezéshez az Ownernek titokértékek nélkül kell megneveznie a tényleges, jóváhagyott hozzáférési mechanizmust és a fiókot. RO-01–RO-04 esetén a legkisebb jogosultságú, dedikált nem-root read-only fiók preferált; ennek létrehozása vagy konfigurálása nincs engedélyezve. Nincs staging kapcsolat, hitelesítés vagy távoli parancs.
+
+
+## Owner RSA fingerprint közlése és RO-01–RO-04 előfeltételek — 2026-10-18
+
+Az Owner közlése szerint a Rackforest VPS `root` és `deploy` `authorized_keys` fájlja azonos RSA fingerprintet tartalmaz. A közölt karakterlánc: `SHA256+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU`. A helyi `id_rsa.pub` fájlról frissen számított érték: `SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU`. A két teljes érték karakterre pontosan nem egyezik; a szerveroldali közlés formátuma/átírása tisztázandó. Emiatt az egyezés nem jelölhető PASS-ként, és a hozzáférés readiness UNKNOWN marad.
+
+Még az egyezés későbbi megerősítése után is **UNKNOWN** marad:
+- a helyi megfelelő privát kulcs rendelkezésre állása (nem vizsgáltuk);
+- tényleges SSH-hitelesíthetőség (nem teszteltük);
+- a `deploy` fiók hozzáférésének és az RO-01–RO-04 műveleteknek a külön Owner-jóváhagyása.
+
+Jövőbeli, külön jóváhagyott RO-01–RO-04 futáshoz a minimális előfeltételek:
+1. Az Owner adja meg vagy erősítse meg a teljes szerveroldali fingerprintet pontos `SHA256:<base64>` alakban, és igazolja, hogy a helyi publikus kulcs az engedélyezett `deploy` fiókhoz tartozik.
+2. Az Owner kifejezetten hagyja jóvá a nem root `deploy` fiók használatát, az exact staging célt és a csak olvasási, parancsonkénti allowlistet; sudo/root jogosultság nem része a javaslatnak.
+3. Töltse ki és hagyja jóvá a friss végrehajtási dátumot/időablakot (Europe/Budapest), végrehajtót, leállítási felelőst, evidence-kezelést és engedélyezési hivatkozást.
+4. A jövőbeli engedélyezés előtt külön, offline vizsgálat hagyja jóvá a parancsok mellékhatásmentességét; nem biztonságos vagy bootstrapoló Laravel/WordPress parancs UNKNOWN/BLOCKED maradjon.
+
+Ez a kiegészítés nem engedélyez privát kulcs vizsgálatot, SSH-kapcsolatot, hitelesítést vagy távoli parancsot. A rekord **DRAFT / NO-GO** marad; M147-E.2b **NOT AUTHORIZED**.
