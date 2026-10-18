@@ -120,3 +120,14 @@ The verified client binaries are a suitable local candidate for a **separately O
 - Cleanup of the task-specific temporary evidence was attempted, but the local command policy rejected deletion. The temporary directory may still contain the raw public host-key response and diagnostics; it contains no credentials. It is not a trusted host-key store. This cleanup limitation is disclosed for local owner follow-up.
 
 No SSH authentication or remote command occurred. The Rackforest browser console was not accessed. No M12 gates, application state, scanner, queue, backup, restore, configuration, or deployment operation was touched. All six live M12 values remain UNKNOWN; M147-E.2b remains NO-GO / NOT AUTHORIZED. RO-01–RO-04 remain unapproved.
+
+
+## Utólagos tulajdonosi fingerprint-egyeztetés — 2026-10-18
+
+A tulajdonos közölte, hogy a Rackforest VPS konzolban közvetlenül futtatta a `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256` parancsot. A tulajdonos által megerősített érték:
+
+`SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`
+
+Ez pontosan egyezik az előző, engedélyezett RO-00 keyscan során megfigyelt ED25519 fingerprinttel. A korábbi Owner authorization recordban megadott összehasonlítási érték átírási hibát tartalmazott. **Az eredeti RO-00 futás a saját, akkor megadott engedélyezési feltételét nem teljesítette; a futáskor rögzített FAILED eredményt és az eredeti várt értéket megőrizzük.** A mostani állapot ezért: **RO-00 utólagosan, független tulajdonosi forrás alapján reconciled; az eredeti futás nem minősül visszamenőleg PASS-nak, és nem történt újabb kapcsolat vagy keyscan.** A Rackforest konzolt Codex nem nyitotta meg; a konzol-ellenőrzés tulajdonosi közlésként szerepel.
+
+Ez az egyeztetés kizárólag a host-key azonosítás korábbi eltérését oldja fel. Nem engedélyez RO-01–RO-04 műveleteket, hitelesítést vagy scanner-végrehajtást. Ezekhez külön, új, időablakos Owner-engedélyezési rekord szükséges. Előkészítettük a külön, még **DRAFT / NO-GO** RO-01–RO-04 adatlapot: `m14-7-e2a-ro01-ro04-authorization-record.md`. A credential-készenlét UNKNOWN marad; titok nem került megtekintésre vagy tesztelésre.
