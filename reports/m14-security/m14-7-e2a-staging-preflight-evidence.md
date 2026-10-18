@@ -125,3 +125,7 @@ Owner authorized RO-00–RO-04 for 18:00–18:30 Europe/Budapest. During the win
 No SSH authentication, credential use, remote command, or authenticated staging access occurred. RO-00 is BLOCKED; RO-01–RO-04 were NOT EXECUTED under the stop rule. This was an unauthenticated SSH protocol contact only. No M12 gate, scanner, feed, queue, backup, restore, configuration, or deployment operation occurred. All six live M12 values remain UNKNOWN; M147-E.2b remains NO-GO / NOT AUTHORIZED.
 
 This supersedes the earlier statement that no host-key discovery was attempted: an authorized unauthenticated keyscan was attempted, but it did not retrieve a key. It does not change the earlier finding that no authenticated live staging access occurred.
+
+## Local SSH client diagnosis (2026-10-18)
+
+A local-only follow-up found that the Windows OpenSSH 9.5p2 KEX list excludes the method named in the failed RO-00 attempt, while a locally installed Git for Windows OpenSSH 10.5p1 client advertises it. This supports a client-build compatibility cause but does not establish the exact LibreSSL/build-time cause or the server's full KEX offer. No network connection was made during the diagnostics pass. A separately authorized retry proposal, provenance caveat, binary versions, and remaining risks are recorded in [local SSH diagnostics](m14-7-e2a-local-ssh-diagnostics.md).
