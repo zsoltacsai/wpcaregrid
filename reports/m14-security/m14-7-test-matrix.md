@@ -4,7 +4,7 @@
 
 | Scenario | Status | Evidence / disposition |
 |---|---|---|
-| Mandatory authorization record complete before staging connection | BLOCKED | Required exact target, named operator, access method, host identity pin, execution window, operation allowlist, evidence handling, stop authority and recovery contact were not provided. Stop rule applied; no connection. |
+| Mandatory authorization record complete before staging connection | BLOCKED | Owner supplied a DRAFT / NOT APPROVED record. It still lacks the host identity pin, active window, authorization reference/final approval, and exact reviewed commands; several RO operations are explicitly blocked pending safety review. Stop rule applied; no connection. |
 | Staging identity, revision, runtime, WordPress and Connector | NOT TESTED | No live access; values UNKNOWN. Repository's 0.4.7/API v1 is expectation only. |
 | Six effective M12 booleans | NOT TESTED — UNKNOWN | No gate was read or modified. All six remain UNKNOWN. |
 | Effective scanner/feed, queue/scheduler, routing, storage, disk and recovery state | NOT TESTED — UNKNOWN | No live interfaces used. No scan/feed/queue/backup/recovery operation occurred. |

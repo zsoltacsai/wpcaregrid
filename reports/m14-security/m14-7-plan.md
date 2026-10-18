@@ -2,7 +2,7 @@
 
 ## M147-E.2a authorization preflight — 2026-10-18
 
-The task's mandatory pre-connection execution record was not present: exact approved target, named operator, access method, trusted host identity pin, execution window, exact read-only operation list, evidence storage/redaction method, stop authority, and recovery contact were missing. The hard stop rule was applied before connecting. **NO LIVE STAGING ACCESS PERFORMED.** The offline record is [M147-E.2a preflight evidence](m14-7-e2a-staging-preflight-evidence.md). All six live M12 values remain UNKNOWN. Decision A is BLOCKED and M147-E.2b is NO-GO / NOT AUTHORIZED. No E.2a operational check, scan, feed request, queue action, backup, restore, or configuration change is claimed.
+The mandatory pre-connection execution record was later supplied as a draft marked **NOT APPROVED FOR EXECUTION**. It identifies the candidate SSH account and RO-00 through RO-09 categories but lacks the trusted host fingerprint, active execution window, authorization reference/final approval, and exact reviewed commands; several operations are explicitly blocked pending method review. The hard stop rule was applied before connecting. **NO LIVE STAGING ACCESS PERFORMED.** See [M147-E.2a preflight evidence](m14-7-e2a-staging-preflight-evidence.md). All six live M12 values remain UNKNOWN. Decision A is BLOCKED and M147-E.2b is NO-GO / NOT AUTHORIZED. No E.2a operational check, scan, feed request, queue action, backup, restore, or configuration change is claimed.
 
 ## Current status — M147-E.1 planning (2026-10-18)
 

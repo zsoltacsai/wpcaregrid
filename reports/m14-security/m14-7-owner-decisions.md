@@ -2,7 +2,7 @@
 
 ## M147-E.2a authorization preflight — 2026-10-18
 
-The M147-E.2a task scope did not include a completed execution authorization record. Before any staging connection, the following must be explicitly supplied and reviewed: exact approved endpoint, named operator, access method, trusted SSH/API identity pin, active start/end window and timezone, exact read-only command/interface allowlist, evidence storage/redaction method, stop authority, recovery contact, and authorization reference. The candidate hostname in planning material is not sufficient. The mandatory stop rule was followed: **NO LIVE STAGING ACCESS PERFORMED**. All live state, including each M12 gate, remains UNKNOWN. M147-E.2b is NO-GO / NOT AUTHORIZED. See [preflight evidence](m14-7-e2a-staging-preflight-evidence.md).
+The Owner supplied a draft execution record marked **NOT APPROVED FOR EXECUTION**. It names a candidate target, SSH user/method, Owner as supervisor/stop authority/recovery contact, and RO-00 through RO-09 operation categories. The host-key fingerprint, active execution window, authorization reference/final approval, verified SSH account privileges, and exact reviewed commands remain missing; RO-05 through RO-09 are explicitly blocked pending safe-method review. Do not connect based on this draft. The mandatory stop rule was followed: **NO LIVE STAGING ACCESS PERFORMED**. All live state, including every M12 gate, remains UNKNOWN. M147-E.2b is NO-GO / NOT AUTHORIZED. See [preflight evidence](m14-7-e2a-staging-preflight-evidence.md).
 
 ## M147-E.1 Level 2 authorization boundary — 2026-10-18
 

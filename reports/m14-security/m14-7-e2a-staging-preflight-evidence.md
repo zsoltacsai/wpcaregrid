@@ -6,22 +6,39 @@ This report records the authorization preflight and offline evidence available a
 
 ## Authorization record
 
-The M147-E.2a instructions require every field below to be established before any live connection. No exact execution record supplying these fields was present in the authorized task context. The stop rule therefore applied before connecting.
+The Owner subsequently supplied an execution-record draft explicitly marked **DRAFT — NOT APPROVED FOR EXECUTION**. It clarifies candidate values but is not an authorization to connect. The stop rule therefore remains in force.
 
 | Required field | Status | Evidence / missing information |
 |---|---|---|
-| Exact staging target and endpoint | MISSING | Candidate hostname only; no exact endpoint was approved as the verified target. |
-| Named authorized operator | MISSING | No named executing identity was supplied. |
-| Approved access method | MISSING | No exact SSH/API/read-only interface was approved. |
-| Trusted host identity pin | MISSING | No expected SSH host-key fingerprint or equivalent trusted pin was supplied. |
-| Execution window and timezone | MISSING | No start/end time or timezone was supplied. |
-| Exact allowed operations | MISSING | No concrete command/interface allowlist was supplied for this execution. |
-| Evidence storage and redaction method | MISSING | No approved live-evidence storage location or handling record was supplied. |
-| Stop authority | MISSING | No named person authorized to stop the operation was supplied. |
-| Recovery contact | MISSING | No named escalation/recovery contact was supplied. |
-| Authorization reference | MISSING | No separately completed execution authorization record was provided. |
+| Exact staging target and endpoint | DRAFT / UNVERIFIED | `staging.wpcaregrid.com` is a candidate; endpoint and live identity are not verified. Application path `/var/www/wpcaregrid`, SSH user `deploy`, and port 22 are repository-documented candidates, not live facts. |
+| Named authorized operator | DRAFT / INCOMPLETE | “Codex, owner supervision” is proposed; actual SSH account and permission are explicitly unverified. |
+| Approved access method | DRAFT / NOT APPROVED | SSH is proposed, conditional on authenticated server identity. No connection authorization was issued. |
+| Trusted host identity pin | MISSING — BLOCKER | No SSH host-key fingerprint or equivalent trusted pin was supplied. |
+| Execution window and timezone | MISSING — BLOCKER | `Europe/Budapest` is specified, but start and end times are absent. |
+| Exact allowed operations | DRAFT / INCOMPLETE | RO-00 through RO-09 are named, but exact commands/interfaces are not supplied; RO-05 through RO-09 are explicitly blocked pending method review. The draft also requires operation-level approval. |
+| Evidence storage and redaction method | DRAFTED | Redacted Markdown in the GitHub PR is specified; raw secrets/configuration are prohibited. This does not itself authorize live collection. |
+| Stop authority | DRAFTED | Owner is named. |
+| Recovery contact | DRAFTED | Owner is named; recovery execution is not authorized. |
+| Authorization reference / final Owner approval | MISSING — BLOCKER | No authorization reference was issued; the record remains DRAFT / DEFER / NO-GO. |
 
-**Decision:** the missing fields are mandatory pre-connection controls. No credential discovery, host-key discovery, or alternative access path was attempted.
+**Decision:** the missing/unapproved fields are mandatory pre-connection controls. The draft itself states that it does not authorize a connection. No credential discovery, host-key discovery, or alternative access path was attempted.
+
+### Drafted operation inventory (not approved or executed)
+
+| ID | Proposed check | Draft status | Execution |
+|---|---|---|---|
+| RO-00 | SSH server identity | BLOCKED — fingerprint missing | NOT EXECUTED |
+| RO-01 | Server identity, operator and UTC time | Approval required | NOT EXECUTED |
+| RO-02 | Installed application Git SHA | Approval required | NOT EXECUTED |
+| RO-03 | PHP/runtime metadata | Approval required | NOT EXECUTED |
+| RO-04 | Free disk capacity | Approval required | NOT EXECUTED |
+| RO-05 | Six M12 effective booleans | BLOCKED — read-method safety review | NOT EXECUTED |
+| RO-06 | Effective scanner/feed/security settings | BLOCKED — exact read method needed | NOT EXECUTED |
+| RO-07 | Worker/scheduler state | BLOCKED — exact privilege and command needed | NOT EXECUTED |
+| RO-08 | WordPress/Connector identity and pairing | BLOCKED — exact target/interface needed | NOT EXECUTED |
+| RO-09 | Backup/notification routing and recovery metadata | BLOCKED — safe read interface needed | NOT EXECUTED |
+
+The draft names categories, not an executable allowlist. Each command/interface still requires offline side-effect review and operation-level approval before any future connection.
 
 ## Offline repository evidence
 
