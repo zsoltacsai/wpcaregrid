@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, readFile, readdir, realpath, rmdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -224,10 +224,10 @@ function createWpConfig(targetId) {
     const keyNames = ['AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY', 'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT'];
     const saltDefinitions = keyNames.map((name, index) => `define('${name}', '${salts[index]}');`).join('\n');
     return `<?php
-if (!defined('ABSPATH')) { define('ABSPATH', __DIR__ . '/'); }
+if (!defined('ABSPATH')) { define('ABSPATH', __DIR__ . '/wordpress/'); }
 define('WP_HOME', 'http://127.0.0.1:8318');
 define('WP_SITEURL', 'http://127.0.0.1:8318');
-define('WP_CONTENT_DIR', __DIR__ . '/wp-content');
+define('WP_CONTENT_DIR', __DIR__ . '/wordpress/wp-content');
 define('WP_CONTENT_URL', WP_SITEURL . '/wp-content');
 define('DB_DIR', __DIR__ . '/database/');
 define('DB_FILE', 'wp.sqlite');
@@ -294,6 +294,7 @@ export async function prepareFixture(root, environment = 'local-disposable') {
         catch { throw new FixtureBlockedError('FIXTURE_MARKER_INVALID'); }
         if (marker.purpose !== FIXTURE_PURPOSE || marker.repository_root !== repo || marker.repository_sha !== context.repositorySha
             || marker.branch !== context.branch || marker.environment !== 'local-disposable' || !marker.target_id) throw new FixtureBlockedError('FIXTURE_MARKER_MISMATCH');
+        await assertNoSymlinks(target);
         for (const file of [
             path.join(target, 'wordpress', 'wp-load.php'),
             path.join(target, 'wp-config.php'),
@@ -352,7 +353,35 @@ export async function prepareFixture(root, environment = 'local-disposable') {
     return { classification: 'READY', target_id: targetId, reused: false, connector_version: context.connectorVersion };
 }
 
-export async function cleanupFixture(root) {
+async function validateFixtureTree(root) {
+    const pending = [root];
+    while (pending.length) {
+        const current = pending.pop();
+        const info = await lstat(current);
+        if (info.isSymbolicLink() || await realpath(current) !== current) throw new FixtureBlockedError('FIXTURE_TREE_SYMLINK_REJECTED');
+        if (info.isDirectory()) {
+            for (const entry of await readdir(current, { withFileTypes: true })) pending.push(path.join(current, entry.name));
+        } else if (!info.isFile()) {
+            throw new FixtureBlockedError('FIXTURE_TREE_ENTRY_TYPE_REJECTED');
+        }
+    }
+}
+
+async function removeOwnedContents(directory, markerPath, operations) {
+    for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+        const child = path.join(directory, entry.name);
+        if (child === markerPath) continue;
+        const info = await lstat(child);
+        if (info.isDirectory()) {
+            await removeOwnedContents(child, markerPath, operations);
+            await operations.rmdir(child);
+        } else {
+            await operations.unlink(child);
+        }
+    }
+}
+
+export async function cleanupFixture(root, operations = { unlink, rmdir }) {
     const repo = await realpath(root);
     const target = path.join(repo, FIXTURE_RELATIVE_PATH);
     const info = await rejectSymlink(target);
@@ -364,13 +393,20 @@ export async function cleanupFixture(root) {
     let marker;
     try { marker = JSON.parse(await readFile(markerPath, 'utf8')); }
     catch { throw new FixtureBlockedError('FIXTURE_MARKER_INVALID'); }
+    const branch = runGit(repo, ['branch', '--show-current']);
+    const repositorySha = runGit(repo, ['rev-parse', 'HEAD']);
     if (marker.purpose !== FIXTURE_PURPOSE || marker.repository_root !== repo || marker.environment !== 'local-disposable'
-        || !APPROVED_BRANCH.test(marker.branch || '') || !SAFE_SHA.test(marker.repository_sha || '') || !/^m147-a-[a-f0-9-]{36}$/.test(marker.target_id || '')) {
+        || !APPROVED_BRANCH.test(marker.branch || '') || marker.branch !== branch
+        || !SAFE_SHA.test(marker.repository_sha || '') || marker.repository_sha !== repositorySha
+        || !/^m147-a-[a-f0-9-]{36}$/.test(marker.target_id || '')) {
         throw new FixtureBlockedError('FIXTURE_MARKER_MISMATCH');
     }
     const canonical = await realpath(target);
     if (canonical !== target) throw new FixtureBlockedError('FIXTURE_PATH_CANONICALIZATION_FAILED');
-    await rm(target, { recursive: true, force: false, maxRetries: 0 });
+    await validateFixtureTree(target);
+    await removeOwnedContents(target, markerPath, operations);
+    await operations.unlink(markerPath);
+    await operations.rmdir(target);
     return { classification: 'PASS', removed: true, reason: 'OWNED_FIXTURE_REMOVED' };
 }
 

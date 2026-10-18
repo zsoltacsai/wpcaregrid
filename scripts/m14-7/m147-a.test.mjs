@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -71,10 +71,12 @@ test('prepare is idempotent and cleanup removes only the marked fixture', async 
     assert.equal(second.target_id, first.target_id);
     const target = path.join(root, FIXTURE_RELATIVE_PATH);
     const marker = JSON.parse(await readFile(path.join(target, '.wpcaregrid-m147-a-fixture.json'), 'utf8'));
+    const wpConfig = await readFile(path.join(target, 'wp-config.php'), 'utf8');
+    assert.match(wpConfig, /ABSPATH', __DIR__ \. '\/wordpress\/'/);
+    assert.match(wpConfig, /WP_CONTENT_DIR', __DIR__ \. '\/wordpress\/wp-content'/);
     assert.equal(marker.environment, 'local-disposable');
     assert.match(marker.synthetic_domain, /\.example\.invalid$/);
     assert.equal(marker.connector_version, '0.4.7');
-    const wpConfig = await readFile(path.join(target, 'wp-config.php'), 'utf8');
     assert.match(wpConfig, /WP_HTTP_BLOCK_EXTERNAL', true/);
     assert.match(wpConfig, /M147_SYNTHETIC_TARGET_ID/);
     const muPlugin = await readFile(path.join(target, 'wordpress', 'wp-content', 'mu-plugins', 'm147-local-http-only.php'), 'utf8');
@@ -111,6 +113,47 @@ test('setup and cleanup refuse a fixture path redirected through a symlink', asy
     await assert.rejects(prepareFixture(root), /SYMLINK_PATH_REJECTED/);
     await assert.rejects(cleanupFixture(root), /SYMLINK_PATH_REJECTED/);
     assert.equal(await readFile(path.join(unrelated, 'keep.txt'), 'utf8'), 'unrelated synthetic sentinel');
+});
+
+test('cleanup rejects nested symlinks without touching their external target', async (t) => {
+    const root = await makeRepo();
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await prepareFixture(root);
+    const target = path.join(root, FIXTURE_RELATIVE_PATH);
+    const marker = path.join(target, '.wpcaregrid-m147-a-fixture.json');
+    const outside = path.join(root, 'outside');
+    await mkdir(outside);
+    await writeFile(path.join(outside, 'keep.txt'), 'external sentinel');
+    await symlink(outside, path.join(target, 'linked-dir'), process.platform === 'win32' ? 'junction' : 'dir');
+    await assert.rejects(cleanupFixture(root), /FIXTURE_TREE_SYMLINK_REJECTED/);
+    assert.equal(await readFile(marker, 'utf8').then(() => true), true);
+    assert.equal(await readFile(path.join(outside, 'keep.txt'), 'utf8'), 'external sentinel');
+    await import('node:fs/promises').then(({ unlink: removeLink }) => removeLink(path.join(target, 'linked-dir')));
+    assert.deepEqual(await cleanupFixture(root), { classification: 'PASS', removed: true, reason: 'OWNED_FIXTURE_REMOVED' });
+});
+
+test('partial cleanup failure retains the ownership marker and can be retried safely', async (t) => {
+    const root = await makeRepo();
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await prepareFixture(root);
+    const target = path.join(root, FIXTURE_RELATIVE_PATH);
+    const marker = path.join(target, '.wpcaregrid-m147-a-fixture.json');
+    const unrelated = path.join(root, 'storage', 'e2e', 'outside.txt');
+    await writeFile(unrelated, 'unrelated synthetic sentinel');
+    let removed = 0;
+    const failingOperations = {
+        async unlink(file) {
+            removed += 1;
+            if (removed > 1) throw new Error('deterministic cleanup fault');
+            return unlink(file);
+        },
+        async rmdir(directory) { return rmdir(directory); },
+    };
+    await assert.rejects(cleanupFixture(root, failingOperations), /deterministic cleanup fault/);
+    assert.equal(await readFile(marker, 'utf8').then(() => true), true);
+    assert.equal(await readFile(unrelated, 'utf8'), 'unrelated synthetic sentinel');
+    assert.deepEqual(await cleanupFixture(root), { classification: 'PASS', removed: true, reason: 'OWNED_FIXTURE_REMOVED' });
+    assert.equal(await readFile(unrelated, 'utf8'), 'unrelated synthetic sentinel');
 });
 
 test('synthetic identities and fake queues/storage stay in memory and reject destructive operations', async () => {
