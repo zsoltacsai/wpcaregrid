@@ -2,6 +2,7 @@
 
 namespace WPCareGrid\Connector\Tests\Integration;
 
+use PHPUnit\Framework\AssertionFailedError;
 use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Core\Settings;
 use WPCareGrid\Connector\Tests\Support\TestCase;
@@ -55,13 +56,13 @@ final class PollLockConcurrencyTest extends TestCase
         $failure = null;
         try {
             $this->waitForFiles([$worker['config']['result_file']], 20, [$worker]);
-        } catch (\PHPUnit\Framework\AssertionFailedError $error) {
+        } catch (AssertionFailedError $error) {
             $failure = $error;
         } finally {
             $this->closeWorkerWithoutAssertion($worker['process']);
         }
 
-        $this->assertInstanceOf(\PHPUnit\Framework\AssertionFailedError::class, $failure);
+        $this->assertInstanceOf(AssertionFailedError::class, $failure);
         $this->assertStringContainsString('exited before writing', $failure->getMessage());
         $this->assertStringContainsString('"running":false', $failure->getMessage());
     }
