@@ -54,9 +54,9 @@ final class SecurityPosture
     }
 
     /**
-     * The latest finished scan completed at least one scanner that actually
-     * exists, recently. A latest scan that failed (scanner unavailable,
-     * broken, timed out) leaves the state unknown, whatever came before.
+     * Every scanner explicitly included in the latest scan completed recently.
+     * Partial, unavailable, failed, or missing coverage cannot support a
+     * healthy result, whatever an earlier scan reported.
      */
     private function recentlyScanned(Website $website): bool
     {
@@ -64,9 +64,12 @@ final class SecurityPosture
             ->whereIn('status', [ScanStatus::Completed->value, ScanStatus::Partial->value, ScanStatus::Failed->value])
             ->latest('id')->first(['status', 'coverage', 'completed_at']);
 
+        $coverage = collect($latest?->coverage ?? []);
+
         return $latest !== null
-            && $latest->status !== ScanStatus::Failed
+            && $latest->status === ScanStatus::Completed
             && $latest->completed_at?->gte(now()->subDays((int) config('security.scan.fresh_for_days')))
-            && collect($latest->coverage ?? [])->contains(fn ($c) => ($c['status'] ?? null) === 'completed');
+            && $coverage->isNotEmpty()
+            && $coverage->every(fn ($scanner) => ($scanner['status'] ?? null) === 'completed');
     }
 }

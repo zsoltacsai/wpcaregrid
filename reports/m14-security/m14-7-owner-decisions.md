@@ -1,6 +1,6 @@
 # M14.7 Owner Decisions and Execution Authorization
 
-This register records the Owner's decisions for M14.7. The Owner has separately approved Level 2 implementation and isolated local safety testing for M147-A only. This is not blanket authorization for later M14.7 stages, scanner/browser execution, staging, live feeds, or operational side effects. All work remains subject to the three authorization levels below.
+This register records the Owner's decisions for M14.7. M147-A, M147-B, and M147-C each have separate, bounded Level 2 approval records below. This is not blanket authorization for later M14.7 stages, staging, live feeds, or operational side effects. All work remains subject to the three authorization levels below.
 
 ## Owner decisions
 
@@ -11,6 +11,8 @@ This register records the Owner's decisions for M14.7. The Owner has separately 
 | M147-OA-03 — Scanner side effects | Approve isolated fake side effects only. | Exercise incident auto-open and backup-request behavior with isolated test doubles, fake queues, and synthetic database records; prove effects stay scoped to synthetic fixtures. | Actual backup creation, external storage writes, and real staging incident operations are not authorized. Security remediation and plugin deactivation remain disabled. No quarantine/file repair, restore, provider deletion, destructive retention, customer notifications, external AI calls, or unintended outbound requests. | Fake-side-effect test design is **APPROVED**; execution is **NOT AUTHORIZED by the M147-A-only approval** and requires separate Level 2 approval. Real effects are **NOT AUTHORIZED**. |
 | M147-OA-04 — Independent security review | Request independent review where available. | Seek a separate qualified reviewer for the work and risk dispositions. | Do not claim independent review unless it actually occurs. If unavailable, document the limitation and carry the residual to the appropriate later milestone. Its absence does not block isolated test development. | **REQUESTED**; reviewer availability and review completion **UNVERIFIED / NOT CLAIMED**. |
 | M147-OA-05 — Browser testing | Approve isolated local browser-test planning and harness preparation. | Plan/prep security-relevant Owner and localization flows, plus Connector browser tests using the dedicated disposable local fixture and synthetic users/data. | Stripe-dependent browser tests are deferred until a separate isolated TEST environment is approved. No staging or production, real payments, live webhook configuration, customer emails, or browser-test execution is authorized by this task. | Planning/harness preparation **APPROVED**; execution is **NOT AUTHORIZED by the M147-A-only approval** and requires separate Level 2 approval; Stripe flows **DEFERRED**. |
+
+OA-02/OA-03's status cells describe the original planning/M147-A-only authorization. The separate M147-C record below subsequently approves **only** local fake-feed/parser tests and test-isolated incident/backup behavior within M147-C. It does not approve a live Wordfence feed, external network, real backup/incident operation, or browser execution.
 
 ## Mandatory M12 gate precondition
 
@@ -25,10 +27,18 @@ The Owner's 2026-10-18 M147-B authorization separately approved Level 2 source/w
 | Level | Authorization | Examples in M14.7 |
 |---|---|---|
 | 1 — Approved now | Documentation updates, local fixture design, synthetic test planning, non-destructive source analysis, and preparation of implementation-stage acceptance criteria. | Planning and source baseline work. |
-| 2 — Separately approved by stage | M147-A implementation/fixture validation and M147-B source/workflow analysis, disposable local adversarial filename tests, focused regressions, evidence and dedicated PR were separately approved and completed. | M147-A PR #120 and M147-B PR #121 are merged with exact merged-primary CI green. M147-C/D/E/F, scanner/feed/browser execution, staging, production, customer access, privileged operations, and Level 3 activity remain outside these approvals. |
+| 2 — Separately approved by stage | M147-A implementation/fixture validation, M147-B source/workflow analysis and disposable local adversarial filename tests, and M147-C local synthetic security-engine validation were separately approved by stage. M147-A PR #120 and M147-B PR #121 are merged with exact merged-primary CI green. M147-C authorization covers only the task's synthetic local scope and dedicated PR; it does not authorize M147-D/E/F or browser, staging, live-feed, production, customer, privileged, or destructive operations. |
 | 3 — Requires separate operational authorization | Staging access/scanning, real Wordfence feed configuration, credentials/secrets access, real backup or incident side effects, external Stripe TEST infrastructure, production access, customer-site access, and destructive operations. | Any staging scan or live operational integration. |
 
-Approval of Level 2 never implies approval of Level 3. M147-A and M147-B have separate, bounded Level 2 approvals. M147-C and later stages, scanner/feed/browser execution, and any activity listed under Level 3 remain unauthorized until separately approved. Items expressly approved above remain limited to their stated scope and do not override the operational gates.
+Approval of Level 2 never implies approval of Level 3. M147-A, M147-B, and M147-C have separate, bounded Level 2 approvals. M147-C authorizes only local synthetic scanner/feed code-path tests with mocked external HTTP and isolated test databases/storage/queues; it does not authorize live feed access, any external service call during test execution, browser tests, deployment, or operations against staging, production, or customer systems. M147-D and later stages remain unauthorized until separately approved. Items expressly approved above remain limited to their stated scope and do not override the operational gates.
+
+## M147-C execution authorization — 2026-10-18
+
+The Owner separately authorized M147-C Level 2 local synthetic security-engine validation. Approved work includes source inspection, inert synthetic vulnerable/patched component and file fixtures, fake vulnerability-feed responses, disposable local WordPress and test databases, mocked incident/backup dependencies, regression tests, in-scope safety fixes, documentation, and a dedicated PR with exact-head CI. Security-engine tests must make no live network calls. Dependency acquisition and GitHub CI use only their normal approved development paths.
+
+Explicitly not authorized: staging/production/customer access; live Wordfence or other feeds; live scanning services; real secrets or API keys; external backup storage; live incident, backup, restore, quarantine, remediation, or notification actions; Stripe/AI calls; browser testing; infrastructure or M12 gate changes; deployment; and M147-D/E/F or M14.8. The six live M12 gate values remain unverified. No scanner test result may be described as production coverage or a live-feed validation.
+
+The separate M147-C authorization does not extend OA-05 browser-test permission to browser execution and does not convert OA-02's live feed deferral into approval. It permits only the synthetic local scanner/feed/side-effect behavior expressly enumerated above.
 
 ## M147-A execution record
 

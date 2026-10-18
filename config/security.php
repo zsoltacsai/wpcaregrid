@@ -45,6 +45,10 @@ return [
         'feed_key' => env('SECURITY_VULNERABILITY_FEED_KEY'),
         // A feed older than this is treated as unavailable.
         'max_age_hours' => (int) env('SECURITY_VULNERABILITY_MAX_AGE_HOURS', 72),
+        // Feed downloads/imports are streamed or rejected above this bounded ceiling.
+        'max_bytes' => 64 * 1024 * 1024,
+        'connect_timeout_seconds' => 3,
+        'timeout_seconds' => 10,
     ],
 
     /*
