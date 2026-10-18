@@ -155,3 +155,10 @@ Run [39157541326](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39157541
 ### M14.7 operational closure status
 
 M147-A/B/C/D remain CLOSED within their documented bounded scopes. M147-E.1 is CLOSED — PLANNING ONLY. Staging RO-01–RO-04 remain NOT EXECUTED; RO-05–RO-09 remain NOT AUTHORIZED; all six live M12 gates remain UNKNOWN; no live scanner or operational side-effect validation exists. M147-E.2b remains NOT AUTHORIZED, M147-F is NOT STARTED, and M14.8 is NOT READY. M14.7 cannot be reported fully closed.
+
+
+## CI-REL-01 update — instrumented worker diagnostics; root cause still open (2026-10-18)
+
+The MariaDB synchronization timeout recurred on run 39160096901. The test harness was then narrowly improved to capture child-process state when a result file is missing and to fail promptly if the worker exited; a synthetic regression test verifies that diagnostic path. Runs 39160455557 and 39160618085 expose and correct, respectively, a namespace escaping mistake and a Pint style issue introduced by that patch. On exact code head 049a08bdd2377d82e7f29bce7a319c0c3768dc4c, run 39160827416 passed 7/7, including the explicit Server MySQL process-concurrency gate; Connector MariaDB passed 211 tests / 1,834 assertions / 3 skipped.
+
+**Disposition remains OPEN.** The latest run did not reproduce the timeout, but the original worker exit/stall cause remains unknown and a single successful run is insufficient to establish reliability. No application code or timeout bound was changed. Continue collecting exact-head CI evidence and investigate only if the instrumented failure recurs. The failed runs remain historical evidence, not erased or reclassified as passes.
