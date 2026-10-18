@@ -33,9 +33,9 @@ The focused test creates and indexes synthetic files in a fresh temporary Git re
 | Output/environment-command-like filename | Marker path tested; no command file was created | Newline and `GITHUB_ENV`-like case included; fake command files must remain absent |
 | Leading dash and whitespace path component | PASS | Included |
 | Unicode line separator and long valid component | PASS | Included |
-| Sensitive path detection | 5/5 synthetic indexed names rejected; only a fixed redacted count was emitted | 10/10 expected by test; exact-head CI pending |
+| Sensitive path detection | 5/5 synthetic indexed names rejected; only a fixed redacted count was emitted | PASS: all 10 synthetic indexed names rejected; only a fixed redacted count was emitted |
 | Benign annotation-like untracked-name exclusion | PASS after sensitive files were removed from the index | Included; no benign filename is printed |
-| Environment/output file mutation | Four temporary fake command-file paths remained absent | Same assertion runs on Linux CI |
+| Environment/output file mutation | Four temporary fake command-file paths remained absent | PASS: all four temporary fake command-file paths remained absent |
 
 Local command executed:
 
@@ -76,14 +76,26 @@ The following existing repository regression scripts were executed locally and e
 | M147-A harness tests | 11 passed, 0 failed, 0 skipped | Synthetic harness unit tests; not scanner execution |
 | `npm test` | 20 passed, 0 failed, 0 skipped | Existing JavaScript tests plus M147-A harness tests |
 
-These local fixtures do not establish live GitHub ruleset settings, GitHub runner command parsing, current staging host state, scanner coverage, or M12 live gate values. Exact PR-head CI and review remain pending.
+The protected primary ruleset was separately read from GitHub during this task. These tests do not directly make the GitHub Actions command parser consume malicious stdout; instead, they prove the checker emits no hostile stdout/stderr bytes. No staging host, scanner, or M12 live gate was accessed.
 
 ## Finding disposition
 
-**M146-F08 — NOT REPRODUCIBLE for the audited tracked secret-path checker; disposition pending exact Linux CI and review.** No path output, forged annotation, environment/output modification, false success, or secret-mask manipulation was reproduced. The source check and Windows local corpus support a narrowed conclusion. The complete control/newline corpus is required to pass on exact PR-head Linux CI before recommending closure of this scoped validation gap.
+**M146-F08 — NOT REPRODUCIBLE for the audited tracked secret-path checker; recommend closure of this scoped validation gap.** No path output, forged annotation, environment/output modification, false success, or secret-mask manipulation was reproduced. The complete 10-name newline/control corpus passed in Linux exact-head CI run `39107517613` for source/test head `a3080a7af802f0dd96f1f6b548233b555f989399`. The workflow checker uses the same source on CI and prints only fixed redacted output. Direct GitHub runner-command interpretation was not simulated because no hostile bytes reach its output channel. Final disposition remains subject to PR review.
 
 No new Critical or High finding was confirmed. M146-F08 must not be described as a confirmed exploit. Any residual concerns outside this exact path-policy output flow remain separately bounded and unverified. Independent review remains unclaimed. M12 live gates remain unverified.
 
 ## Exact-head CI and PR evidence
 
-Pending: the dedicated M147-B PR must remain open and unmerged. Record the final PR-head SHA, exact Actions run ID, each of the seven mandatory job results, and the Server MySQL process/concurrency step here after CI finishes. A result from an earlier SHA is not evidence for a changed head.
+PR #121 remains **OPEN / UNMERGED**. Exact PR head `a3080a7af802f0dd96f1f6b548233b555f989399` was tested by GitHub Actions run `39107517613`, conclusion **SUCCESS**, 7/7:
+
+| Required check | Result |
+|---|---|
+| Quality (lint, style, dependencies, build, secrets) | PASS; hostile filename test, frontend build, dependency checks and full-history Gitleaks passed |
+| Server tests (PHP 8.4, sqlite) | PASS |
+| Server tests (PHP 8.4, mysql) | PASS; Required MySQL process-concurrency gate PASS |
+| Server tests (PHP 8.4, mariadb) | PASS |
+| Connector tests in WordPress (PHP 8.4, sqlite) | PASS |
+| Connector tests in WordPress (PHP 8.4, mysql) | PASS |
+| Connector tests in WordPress (PHP 8.4, mariadb) | PASS |
+
+This CI run is attached to the implementation/test commit above. Any later PR-head change requires a new exact-head CI result. Do not merge or deploy under this stage.
