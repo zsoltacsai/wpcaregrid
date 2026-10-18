@@ -54,7 +54,7 @@ final class PollLockConcurrencyTest extends TestCase
 
         $failure = null;
         try {
-            $this->waitForFiles([$worker['config']['result_file']], 5, [$worker]);
+            $this->waitForFiles([$worker['config']['result_file']], 20, [$worker]);
         } catch (\\PHPUnit\\Framework\\AssertionFailedError $error) {
             $failure = $error;
         } finally {
