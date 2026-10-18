@@ -126,7 +126,7 @@ jobs:
           npm ci
           npm run build
 
-      - name: Marketing analytics contract tests (fake sink; no network)
+      - name: JavaScript contracts and M147-A safety tests (fake sinks; no network)
         run: npm test
 
       - name: npm advisories (high and critical)

@@ -3,13 +3,19 @@
 > Kept up to date at the end of every milestone (see CLAUDE.md §27).
 > A new session should read CLAUDE.md, this file and the relevant docs, then run `git status` and `git log --oneline -12`.
 
-Last updated: 2026-10-06
+Last updated: 2026-10-18
 
-## Current local milestone — Cloudflare DNS Owner integration (uncommitted)
+## Current milestone — M14.7 M147-A baseline and safe evidence harness
+
+Planning PR #119 merged at `0a0d25c2da256015d5cffad5f419603593ed72b5`; exact merged-primary CI run `39098281556` passed all seven required jobs. M147-A implementation is in progress on a dedicated branch from that SHA. The work adds a source baseline, a fixed-path disposable WordPress fixture scaffold, an allowlisted evidence format, fake in-memory side-effect adapters, and focused safety tests. The local package-backed fixture could not be prepared because locked WordPress/SQLite Composer packages were unavailable offline; the harness reports this as BLOCKED. The focused Node and existing JavaScript tests passed locally. No scanner, feed, browser, staging, production, customer data, or live M12 values were accessed. AS-16 and M146-F08 remain open; M147-B has not started. Exact implementation-PR CI is pending.
+
+The following project snapshot predates the current M14 milestones and is retained as historical context; its staging, branch, and local-work status statements are not current release evidence.
+
+## Historical local milestone — Cloudflare DNS Owner integration
 
 Implementation is in progress on `claude/ecstatic-wozniak-oemyuf` at the unchanged base `dc1409e9d109118d8f5be560c0a346e4eb504bac`. Adds encrypted Owner Integration token mapping, exact-zone allowlisting, a read-only-capable Cloudflare API adapter, validated/idempotent record planning, explicit preview/apply, protected-record safeguards, audit events, Owner UI and mocked tests. **No staging deployment or Cloudflare API call has been made, and no DNS has been changed.** After adversarial review, validation used an isolated checkout and disposable MySQL schema: 784 tests / 12,441 assertions / 6 skipped; 44 focused Cloudflare/security tests / 145 assertions; Pint 554 files; PHP syntax 22 changed/new files. The frontend build, whitespace check and local secret-pattern scan also pass. Gitleaks is unavailable in the local/isolated environment. Keep `.claude/` untouched and uncommitted.
 
-## Branch and HEAD
+## Historical branch and HEAD snapshot
 
 - Branch: `claude/ecstatic-wozniak-oemyuf` (also the main branch used for PRs)
 - Latest commit: **Add owner coupons and custom offers** (local, not pushed; `git log --oneline -3` shows its hash)
