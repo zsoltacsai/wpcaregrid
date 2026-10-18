@@ -60,3 +60,102 @@ This proposal does not itself authorize a connection or the RO-01–RO-04 comman
 * Git-bundled executables have no individual Authenticode signature; package provenance must be established before use.
 * Host-key fingerprint verification remains mandatory and independent of KEX compatibility.
 * RO-01–RO-04 were not executed. Staging identity, deployed SHA, PHP version, and disk capacity remain UNKNOWN. All six live M12 gates remain UNKNOWN. M147-E.2b remains NO-GO / NOT AUTHORIZED.
+
+## Local-only provenance and compatibility verification — 2026-10-18
+
+**No network request or staging connection was made in this verification.** No software, SSH configuration, PATH, registry, trust store, known_hosts file, or credential was changed.
+
+### Exact binaries, versions, sizes, and current hashes
+
+All paths resolve beneath `C:\Program Files\Git`; the SSH tools are from the same installation root. The main Git executable is UCRT64; `cmd\git.exe` is also present.
+
+| Binary | Absolute path | Version / backend | Bytes | SHA-256 |
+|---|---|---|---:|---|
+| Git launcher | `C:\Program Files\Git\cmd\git.exe` | Git 2.56.0.windows.1 | 29,696 | `7CD588850959546663C81077AF076835558C6A6AF33506A64A65784743DF92A1` |
+| Git executable | `C:\Program Files\Git\ucrt64\bin\git.exe` | Git 2.56.0.windows.1 | 4,398,592 | `B9DF456BE0FE7D16A6DC20D02095E2F3C4B3BCEE11DB4FD166F9481BF4F732AE` |
+| SSH client | `C:\Program Files\Git\usr\bin\ssh.exe` | OpenSSH_10.5p1; OpenSSL 3.5.8 (25 Aug 2026) | 960,985 | `C84594A323EE6AFC04D9FAF614A05BE6DC9A2FAECD856268A854084FEA17FD44` |
+| Key scanner | `C:\Program Files\Git\usr\bin\ssh-keyscan.exe` | Same Git for Windows OpenSSH installation | 526,978 | `CD3561C764F577EFC235942CC66314889D288F619F464D6F21CF185DEAA45BB4` |
+| Key utility | `C:\Program Files\Git\usr\bin\ssh-keygen.exe` | Same Git for Windows OpenSSH installation | 543,574 | `604D127D97502B11ED2D1F6F8191BFE86F443D821322E4AB285C961D0E06F5E1` |
+
+The SSH tools have no PE file-version resource and are individually Authenticode **NotSigned**. Their runtime version came from the absolute-path `ssh.exe -V`; the separate `ssh-keyscan.exe` does not support a version flag. The local package manifest labels them `openssh 10.5p1-1` and `openssl 3.5.8-1`.
+
+### Package provenance and executable integrity
+
+Local Windows uninstall metadata reports DisplayName `Git`, DisplayVersion `2.56.0`, Publisher `The Git Development Community`, InstallLocation `C:\Program Files\Git\`, and install date `20260929`; InstallSource is blank. `etc\package-versions.txt` records `mingw-w64-ucrt-x86_64-git 2.56.0.1-1`, `openssh 10.5p1-1`, and `openssl 3.5.8-1`. `etc\install-options.txt` records installation options. The inspected Downloads directory contained no `Git-*.exe` installer. No cryptographically verifiable package-manager record or original installer was available in the inspected local sources.
+
+ACL readback showed the Git `usr\bin` tree is owned by TrustedInstaller, with SYSTEM and Administrators full control and Users read/execute; the individual SSH executables inherit SYSTEM/Administrators full control and Users read/execute. This is evidence of current filesystem access controls, not proof that the installed bits match an authentic upstream release.
+
+**Provenance classification: PARTIALLY VERIFIED.** Installation identity, package component/version metadata, common installation root, ACLs, file sizes, and current SHA-256 identities are locally evidenced. Authentic installer provenance and a trusted reference hash/signature for the currently installed binaries are not. Hashes identify the observed files but do not authenticate them. The valid Microsoft signature applies to the separate Windows OpenSSH binaries, not the Git for Windows package.
+
+### Supported algorithms and strict-host-key capabilities
+
+The Git-bundled client’s local `ssh -Q kex` output was:
+
+```text
+diffie-hellman-group1-sha1
+diffie-hellman-group14-sha1
+diffie-hellman-group14-sha256
+diffie-hellman-group16-sha512
+diffie-hellman-group18-sha512
+diffie-hellman-group-exchange-sha1
+diffie-hellman-group-exchange-sha256
+ecdh-sha2-nistp256
+ecdh-sha2-nistp384
+ecdh-sha2-nistp521
+mlkem768nistp256-sha256
+curve25519-sha256
+curve25519-sha256@libssh.org
+sntrup761x25519-sha512
+sntrup761x25519-sha512@openssh.com
+mlkem768x25519-sha256
+```
+
+Both requested sntrup names and standard Curve25519 are present. This is local capability evidence; no server negotiation was attempted.
+
+`ssh -Q key` and `ssh -Q key-sig` include `ssh-ed25519`. Effective `ssh -G -F none ...` output includes `ssh-ed25519` in `HostKeyAlgorithms` and confirms the client accepts a dedicated `UserKnownHostsFile`, `StrictHostKeyChecking=yes`, `GlobalKnownHostsFile=NUL`, `UpdateHostKeys=no`, and `BatchMode=yes`. This was configuration expansion only; it did not open a connection or create the named known-hosts file.
+
+### Exact local diagnostic commands executed
+
+The following representative commands were run against absolute local paths; none makes a network request:
+
+```powershell
+& 'C:\Program Files\Git\cmd\git.exe' --version
+& 'C:\Program Files\Git\ucrt64\bin\git.exe' --version
+& 'C:\Program Files\Git\usr\bin\ssh.exe' -V
+& 'C:\Program Files\Git\usr\bin\ssh.exe' -Q kex
+& 'C:\Program Files\Git\usr\bin\ssh.exe' -Q key
+& 'C:\Program Files\Git\usr\bin\ssh.exe' -Q key-sig
+& 'C:\Program Files\Git\usr\bin\ssh.exe' -G -F none -l deploy -p 22 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=C:/Temp/wpcaregrid-ro00-known_hosts -o GlobalKnownHostsFile=NUL -o UpdateHostKeys=no -o BatchMode=yes -o IdentitiesOnly=yes 85.155.243.164
+Get-Item -LiteralPath <the five executable paths in the table>
+Get-FileHash -Algorithm SHA256 -LiteralPath <the five executable paths in the table>
+Get-AuthenticodeSignature -FilePath <the executable paths>
+Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Git_is1
+Select-String -LiteralPath 'C:\Program Files\Git\etc\package-versions.txt' -Pattern '(?i)^(git|openssh|openssl)'
+icacls 'C:\Program Files\Git\usr\bin\ssh.exe'
+icacls 'C:\Program Files\Git\usr\bin\ssh-keyscan.exe'
+icacls 'C:\Program Files\Git\usr\bin'
+```
+
+The PowerShell placeholders above describe the already-run metadata queries; they are not commands to execute as written. No private key, credential, token, or SSH key material was inspected.
+
+### Future RO-00 procedure — design only, NOT EXECUTED
+
+Use the literal IP for both acquisition and subsequent connection. Do not introduce a hostname alias or rely on DNS to bind the key to a different endpoint. Before the new Owner-approved window, verify the provenance of the Git for Windows installation/package through a trusted local record or a separately approved trusted source. Confirm the exact absolute paths and KEX support again; do not assume these hashes remain current.
+
+During that separately approved window:
+
+1. Use the absolute-path `ssh-keyscan.exe` with only ED25519, the approved IP, port 22, and a short timeout. Capture stdout and stderr separately into a temporary, access-restricted local workspace. Do not print candidate key material.
+2. Require exit code zero, exactly one well-formed `ssh-ed25519` key for the expected IP, and no error output. Reject empty, duplicate, unexpected-host, extra-key, or malformed output.
+3. Use the absolute-path `ssh-keygen.exe -lf <candidate-file> -E sha256` to derive the fingerprint locally. Compare the complete fingerprint exactly to the independently obtained Rackforest Console value. No trust-on-first-use and no authentication before this comparison.
+4. Only on an exact match, create a separate temporary known-hosts file containing that verified IP/key line. If comparison or parsing fails, do not create the trusted file and stop.
+5. For any separately approved SSH command, use the matching absolute-path `ssh.exe`, connect directly to `deploy@85.155.243.164`, and explicitly set `-F none`, `-p 22`, `-o HostKeyAlgorithms=ssh-ed25519`, `-o StrictHostKeyChecking=yes`, `-o UserKnownHostsFile=<verified-temp-file>`, `-o GlobalKnownHostsFile=NUL`, `-o UpdateHostKeys=no`, `-o BatchMode=yes`, `-o PreferredAuthentications=publickey`, `-o PasswordAuthentication=no`, `-o KbdInteractiveAuthentication=no`, `-o IdentitiesOnly=yes`, `-o IdentityAgent=none`, and `-i <separately approved existing deploy-key path>`. Set a short `ConnectTimeout` and one connection attempt. Do not include a remote command except one exact command separately authorized for RO-01–RO-04.
+
+This uses the same literal IP as the known-hosts entry, avoiding hostname/IP alias ambiguity. `-F none` avoids unexpected per-user/system SSH configuration; explicit strict checking and an isolated user-known-hosts file prevent implicit TOFU or fallback to unrelated trust stores. SSH keyscan itself does not authenticate the host; the independently trusted fingerprint comparison is the trust step.
+
+The exact credential path/method and command list must be approved before a later connection. The private key must remain unread and outside evidence. Any timeout, KEX failure, fingerprint mismatch, host identity ambiguity, credential uncertainty, or unexpected output is an immediate stop. Do not weaken the algorithm set, host-key checks, or server policy to force success.
+
+### Readiness recommendation
+
+**CONDITIONAL — ADDITIONAL EVIDENCE REQUIRED.** Algorithm compatibility and strict host-key options are locally confirmed. Package provenance is only partially verified because the original installer/signature and trusted reference hashes were unavailable, and credential validity is unknown. Do not recommend or use this client for Level 3 until package provenance/integrity is independently established and a new Owner authorization names the exact execution window, target/IP, account, approved existing credential mechanism, commands, evidence handling, and stop authority.
+
+RO-00 remains uncompleted; RO-01–RO-09 were not executed in this diagnostics task. All six live M12 gates remain UNKNOWN. M147-E.2b remains NO-GO / NOT AUTHORIZED.
