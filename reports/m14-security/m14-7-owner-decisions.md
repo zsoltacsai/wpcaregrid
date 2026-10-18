@@ -30,6 +30,12 @@ Future adversarial test design and use of a disposable local Git worktree are ap
 
 Approval of Level 2 never implies approval of Level 3. The current approval is limited to M147-A; it does not authorize M147-B or later stages. Items expressly approved above remain limited to their stated design or future-test scope and do not override the separate execution gates.
 
+## M147-A execution record
+
+Under the narrow M147-A Level 2 approval, the local-only synthetic fixture was installed, bootstrapped and health-validated, then actually cleaned up. The WordPress HTTP block and PHP process-level network restrictions were verified. The Connector was discovered but remained inactive; no Customer Connector was paired. The local fixture did not test the vulnerability feed, execute a scanner, exercise application incident/backup effects, or run browser tests. The Node fake queue/storage unit tests remain test doubles only. These results do not extend OA-02/OA-03/OA-05 execution authorization.
+
+The locked-package fixture is not proof of OS-level network isolation. No app server was started. No Wordfence feed, production/staging system, customer site, real secret, external storage, or external provider was accessed. The six M12 gate values have not been read. Independent review remains unclaimed. See [M147-A execution evidence](m14-7-a-execution-evidence.md). AS-16 and M146-F08 remain open.
+
 ## M14-15 / AS-16 scope
 
 These decisions constrain execution of the existing M14-15 / AS-16 security-validation scope; they do not narrow or silently close it. Unavailable feeds remain unavailable rather than clean, scanner coverage remains unverified until evidenced, and no decision authorizes remediation or destructive action.

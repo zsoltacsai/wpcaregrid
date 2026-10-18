@@ -24,6 +24,8 @@ Level 2 is approved narrowly for M147-A implementation and isolated local safety
 
 ## M147-A implementation evidence
 
-The implementation adds a fixed-path synthetic fixture/harness and source baseline report. Nine focused Node safety tests and nine existing JavaScript tests passed locally (18 total). The package-backed WordPress fixture was not created: required locked Composer packages were absent in the local cache and install was run with networking disabled. No app/Connector service, scanner, feed, browser, or external storage was invoked. M12 gate values were not read. Acceptance still requires a green exact-current-head CI run recorded on the implementation PR. This evidence does not close AS-16, M146-F08, M147-F01, or any later-stage finding.
+The implementation adds a fixed-path synthetic fixture/harness and source baseline report. On code source SHA `5dc8a4618faaff958621ccc6fde5a2795543054c`, the actual package-backed WordPress `7.1.3` fixture bootstrapped and passed health checks against its isolated SQLite file using the locked `aaemnnosttv/wp-sqlite-db` `1.3.3` drop-in. Connector `0.4.7` was discovered but stayed inactive. Eleven focused Node safety tests and nine existing JavaScript tests passed (20 total); fixture install, health, network-scope negatives, and actual cleanup also passed. Exact evidence is in [M147-A execution evidence](m14-7-a-execution-evidence.md).
+
+No application service, scanner, feed, browser, external storage, or M12 live-gate read occurred. Scanner coverage remains `NOT_RUN`. Exact-head CI for the source SHA was still running when recorded; a fresh exact-head 7/7 run is required for the final updated PR head. This evidence does not close AS-16, M146-F08, M147-F01, or any later-stage finding.
 
 See the [M14.7 plan](m14-7-plan.md), [test matrix](m14-7-test-matrix.md), and [Owner authorization register](m14-7-owner-decisions.md) for acceptance and execution conditions.

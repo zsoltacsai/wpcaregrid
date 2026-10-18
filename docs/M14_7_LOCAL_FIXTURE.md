@@ -1,31 +1,38 @@
 # M14.7 Local Synthetic WordPress Fixture — M147-A
 
-This document describes the M147-A disposable local WordPress scaffold and safe evidence harness. It does **not** authorize scanner execution, browser tests, staging access, production access, a live vulnerability feed, real side effects, or customer-site activity. No M14.7 scanner campaign is claimed complete.
+This is a dedicated, disposable local fixture for M147-A setup, bootstrap, and safety validation. It does **not** authorize scanner execution, browser tests, staging or production access, a live vulnerability feed, real side effects, or customer-site activity. No security scan is claimed complete.
 
-## Scope and safety properties
+## Safety boundary
 
-- The fixture path is fixed at `storage/e2e/m14-7-local-fixture` in a dedicated `codex/m14-7-*` worktree. The implementation was prepared on `codex/m14-7-baseline-harness`.
-- Setup copies the WordPress core and Connector sources from this repository's locked Composer package and Connector tree. It records their source versions and hashes in a marker.
-- The target, tenant, website, and user identifiers are synthetic. The site domain ends in `.example.invalid`; mail is a no-op; WordPress HTTP is blocked except explicitly permitted HTTP loopback ports 8317 and 8318. WordPress cron and automatic updates are disabled.
-- Setup does not start a web server, pair a Connector, contact the CareGrid application, run a scanner, or call any provider.
-- Setup and cleanup reject staging/production classifications, unknown classifications, symlinked fixture paths, unmarked directories, and markers that do not match the fixed repository/worktree. Cleanup removes only the marked fixture directory and leaves its parent and siblings intact.
-- Fake queue and storage adapters are in-memory only. Delete and restore operations always throw. These adapters are test doubles, not application queue or storage bindings.
-- Evidence records have an allowlisted schema and bounded values. Free-form payloads, secret-like values, and control sequences are rejected. Evidence records scanner coverage as `NOT_RUN` unless an explicitly authorized future stage proves otherwise.
+- Use a clean, dedicated `codex/m14-7-*` worktree and the fixed path `storage/e2e/m14-7-local-fixture` only. The fixture marker binds its target ID, synthetic identities, repository path, branch, commit, and dependency tree digests.
+- The supported environment is `local-disposable`. Staging, production, unknown classifications, wrong repository/branch/commit, unmarked paths, path escapes, symlinks, special filesystem nodes, and ownership mismatches fail closed.
+- The fixture uses synthetic tenant, website, and WordPress administrator identities. The domain ends in `.example.invalid`. It creates no CareGrid server tenant, customer Connector pairing, shared-storage binding, or real account.
+- No web server is started. WordPress outbound requests are blocked by its HTTP API filter; the PHP validation process also disables networking functions and URL wrappers. This is process-level defense in depth, not proof of an OS network namespace. Do not run unrelated code from the fixture.
+- Connector source is copied and confirmed discoverable but remains inactive. No application jobs run. Fake queue and storage adapters are in-memory test doubles; destructive methods throw.
+- No live Wordfence feed, scanner, malware specimen, remediation, backup/restore, Stripe, AI provider, customer notification, staging/production service, or external storage operation is part of M147-A.
 
-These application-level guards do not create an OS network namespace. Do not start arbitrary test code or a server from the fixture unless a separate approved harness establishes outbound network denial at the operating-system/container layer. M147-A preparation itself makes no outbound requests.
+## Locked dependencies and verified local execution
 
-## Prerequisites
+The fixture uses only lockfile-selected packages:
 
-- Node.js 22 (or a maintained Node 22 patch release).
-- Git and a clean checkout of the reviewed M147-A branch.
-- The repository's locked WordPress Composer dependencies, including `johnpbloch/wordpress-core` and `aaemnnosttv/wp-sqlite-db`.
-- PHP 8.4 with SQLite support only if a later approved local stage installs or runs WordPress.
+| Package | Version / reference |
+|---|---|
+| `johnpbloch/wordpress-core` | `7.1.3`, ref `326accad3c1f9aeef9d6e3503c24b5a5ca6ed094` |
+| `aaemnnosttv/wp-sqlite-db` | `1.3.3`, ref `6933d833c51f06746eb5af2dc8478565c985f957` |
+| Connector | `0.4.7`; source revision `9e330854f0e7d5ef073db846245f7008d7ef6ec5` |
+| PHP CLI | `8.4.26`, with PDO SQLite and SQLite3 |
+| Node.js | `v24.15.0` |
+| Composer | `2.10.2` |
 
-M147-A's own safety tests require Node.js only and use temporary synthetic Git repositories. In this execution, no PHP/Composer executable was available through the implementation environment's normal PATH. An offline Composer install using a blank temporary Composer home, network disabled, and a local package cache was attempted; the required WordPress core and locked packages were absent from that cache. No network fallback was permitted. Therefore the live scaffold was **not created** in this validation run; preflight returned `BLOCKED` for missing prerequisites. The fixture code is prepared, and this limitation is recorded rather than represented as a successful fixture execution.
+Both Composer installs used the committed lockfiles, official commit-addressed package archives over verified TLS, an isolated temporary Composer home/cache, and `--no-scripts --no-plugins --prefer-dist`. No constraints were relaxed or credentials used. The lockfile package `dist.shasum` fields are empty, so archive checksum verification is **not** claimed; integrity evidence is lock validation, fixed VCS refs, Composer's package metadata checks, and TLS.
+
+On source SHA `5dc8a4618faaff958621ccc6fde5a2795543054c`, the disposable fixture was freshly installed and separately health-validated. WordPress `7.1.3` bootstrapped against its fixture-local SQLite database; the Connector `0.4.7` was discoverable and inactive; the synthetic administrator was present; no plaintext generated password was emitted. The fixture-only database was 258,048 bytes. Dependency tree digests and the generation/target IDs are in [M147-A execution evidence](../reports/m14-security/m14-7-a-execution-evidence.md).
+
+The PHP validation invocation used `-n`, an explicit extension directory, SQLite extensions, `allow_url_fopen=0`, `allow_url_include=0`, and disabled network-capable PHP functions. Starting a service was unnecessary and none was started.
 
 ## Commands
 
-Run from the repository root on a dedicated `codex/m14-7-*` branch:
+From the repository root in the approved dedicated worktree:
 
 ```sh
 node scripts/m14-7/m147-a.mjs baseline
@@ -35,32 +42,21 @@ node scripts/m14-7/m147-a.mjs cleanup
 npm test
 ```
 
-`baseline` emits source/version references and M12 key names, not live gate values. `preflight` and `prepare` accept only the default `local-disposable` classification; passing `staging`, `production`, or any other value is blocked. Do not add an arbitrary path or URL argument. `prepare` requires the locked local WordPress/SQLite packages and creates a marked source scaffold. `cleanup` is idempotent and will refuse an unmarked or symlinked target. Preserve the marker until cleanup has been verified.
+Use only repository-provided locked dependency installation instructions to provision `wordpress/vendor`. The validation script accepts only fixed `install` and `health` modes and reads the fixed fixture paths. Do not pass a URL or arbitrary path. `prepare` does not start a server. `cleanup` requires the current marked target and exact source identity; it refuses unrecognized filesystem objects and deletes only the owned fixture contents.
 
-The scaffold is not a paired Connector browser-test environment. It does not launch either loopback service, create a CareGrid tenant in a server database, or authorize tests from `docs/CONNECTOR_E2E_LOCAL.md`. Browser tests, scanner execution, fake-feed integration, and test execution that exercises application side effects remain separate approval stages.
+For the PHP validation command and its required isolation flags, use the command recorded in the execution evidence and implementation test harness; do not substitute a normal PHP configuration that restores network functions. If a prerequisite or isolation check fails, stop before setup.
 
-## Evidence format
+## Evidence and cleanup
 
-`m147-a-evidence-v1` permits only:
+Evidence schema `m147-a-evidence-v1` is allowlisted and bounded. It records test ID/scope, source SHA, Connector version/tree digest, synthetic target ID, `local-disposable` classification, timestamp, expected/actual result, scanner coverage, cleanup result, and optional CI reference. It rejects arbitrary payloads, secret-like values, and unsafe control sequences. No credentials, account secrets, customer data, request bodies, or unnecessary file contents are recorded.
 
-- test identifier and bounded scope;
-- repository SHA, Connector version and source-tree SHA-256;
-- synthetic target identifier and `local-disposable` environment classification;
-- execution timestamp;
-- expected and actual classifications (`PASS`, `FAIL`, `BLOCKED`, `UNAVAILABLE`);
-- scanner coverage (`NOT_RUN`, `UNAVAILABLE`, `PARTIAL`, `COMPLETE`);
-- cleanup status;
-- optional GitHub Actions run ID and canonical run URL.
+Setup and health returned `PASS`. Negative checks confirmed that network-capable PHP configuration is rejected and an altered external Connector destination is rejected before WordPress boot. The actual cleanup removed only the marked fixture; the fixture root was absent afterward, its parent remained, no listeners existed on ports 8317/8318, and no fixture installer/server PHP process remained. Six unrelated pre-existing PHP processes were observed and left untouched. See the execution evidence for exact identifiers, timestamps, test counts, and limits.
 
-Evidence is written only under the fixed marked fixture's `evidence/` directory, with create-only filenames. It does not accept raw output, arbitrary request/response bodies, file contents, credentials, secret environment values, or unbounded diagnostic text. Store CI artifacts only after applying the same review and redaction rules.
-
-## Validation and limitations
-
-The focused Node suite exercises environment refusal, missing-prerequisite blocking, idempotent marked setup/cleanup against synthetic package trees, symlink and unmarked-target refusal, in-memory fake side effects, loopback URL allowlisting, and evidence schema/redaction checks. It does not run WordPress, a Connector, a scanner, a browser, a real queue/storage driver, or a provider feed. It does not verify OS-level egress isolation. No M12 gate values were read; the six M12 gates remain required fresh read-only checks before any separately authorized staging scanner validation. AS-16 and M146-F08 remain open.
+The harness does not provide OS-level network namespace isolation or execute the Connector browser harness. Connector discovery/inactive state is not a browser test. Scanner coverage remains `NOT_RUN`; no feed was configured. The six M12 gate values were not read. A fresh secret-safe read-only confirmation of all six false values remains mandatory before any separately authorized staging scanner validation. AS-16 and M146-F08 remain open.
 
 ## Troubleshooting
 
-- `BLOCKED` with `WORDPRESS_CORE_NOT_INSTALLED` or `SQLITE_DROPIN_NOT_INSTALLED`: install the repository's locked WordPress Composer dependencies using an approved local package source; do not enable network access just to make the fixture pass.
-- `UNAPPROVED_WORKTREE`: run only from the dedicated M147-A worktree/branch and verify its clean reviewed source.
-- `UNMARKED_FIXTURE_PATH_REFUSED`, `FIXTURE_MARKER_MISMATCH`, or any symlink refusal: stop and inspect the local path manually. Do not delete or overwrite it to force setup.
-- If cleanup reports a marker/path error, preserve the directory and request review; never broaden cleanup to a parent directory.
+- Missing locked `wordpress/vendor` packages: install from the committed `wordpress/composer.lock` using the approved Composer procedure. Do not switch versions, disable TLS/integrity, or use `--ignore-platform-reqs`.
+- `BLOCKED` or an isolation refusal: stop; do not bypass the check or broaden the target path.
+- Marker/path/ownership/symlink refusal: preserve the path for review. Never remove or overwrite its parent or an unmarked target.
+- Partial cleanup failure: marker preservation allows a safe retry; do not manually broaden cleanup.
