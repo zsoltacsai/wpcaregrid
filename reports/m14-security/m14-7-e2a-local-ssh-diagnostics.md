@@ -240,3 +240,32 @@ Use the literal IP for both scan and later lookup, so a hostname/IP alias cannot
 The companion document [M147-E.2a RO-00 authorization record](m14-7-e2a-ro00-authorization-record.md) is a **draft**, not execution approval. It leaves the execution date and start/end window blank and also requires the Owner to identify the operator, authorization reference, client package, local execution context, evidence handling, and stop contact. It limits scope to unauthenticated RO-00 only. The existing deploy credential mechanism is explicitly UNKNOWN and is not required for RO-00.
 
 Until provenance is cryptographically established and a new record is completed and approved, recommendation is **NO-GO for a retry**. No staging operation occurred in this review; the six live M12 values remain UNKNOWN; M147-E.2b remains NO-GO / NOT AUTHORIZED.
+
+
+## Official Git for Windows release provenance review — 2026-10-18
+
+**Public official metadata inspected; no installer or package was downloaded.** The official [Git for Windows v2.56.0.windows.1 release](https://github.com/git-for-windows/git/releases/tag/v2.56.0.windows.1) identifies an immutable release and displays its tag as signed/verified by Johannes Schindelin (GPG key ID `EDD44359093056EE`). Its asset table publishes these relevant exact digests:
+
+| Official artifact | Published SHA-256 |
+|---|---|
+| `Git-2.56.0-64-bit.exe` (matches the observed x64 installation architecture) | `bfe94e7b419b16eee9fecbd1253a98e3d4f49ba8f029630549052278ffe286a6` |
+| `PortableGit-2.56.0-64-bit.7z.exe` | `eceb5e061aa90df2f69ddd3e90f0030e1b8037a7829934bc40e4be1caa1accc1` |
+| `MinGit-2.56.0-64-bit.zip` | `064b440ff870ed5198527e8f3a92cdf5bd2fd0fedf5e718af95e3fdaddeff718` |
+
+The same release page lists ARM64 and 32-bit MinGit assets, but those are not the matching full x64 installer for the observed installation. The official release notes say v2.56.0 used OpenSSL 3.5.8, matching the locally reported backend version; version agreement alone is not file provenance. The notes also report that some x64 Git executables lost Authenticode signatures in v2.56.0 and that this was fixed in a later release. That warning concerns Authenticode evidence and makes a missing binary signature particularly unsuitable as the sole package-authenticity test; it does not itself show that these SSH tools were modified.
+
+GitHub's documented release verification procedure is `gh release verify <tag>` to check release immutability and `gh release verify-asset <tag> <local-artifact>` to verify that a local file matches the asset. GitHub documents that source archives generated on demand cannot be verified this way. These commands were **not run** because the matching installer is not present in the examined local evidence and this task does not authorize a software download. The public release page is the official reference source; the locally installed tools still have not been compared to its artifact payload.
+
+### Reproducible installed-file comparison — future authorized provenance task, NOT EXECUTED
+
+Use a local copy of the exact official x64 installer already lawfully acquired, without running it:
+
+1. Confirm the exact asset name and digest against the official [v2.56.0.windows.1 release page](https://github.com/git-for-windows/git/releases/tag/v2.56.0.windows.1). Run `gh release verify v2.56.0.windows.1 --repo git-for-windows/git` and `gh release verify-asset v2.56.0.windows.1 <local-path-to-Git-2.56.0-64-bit.exe> --repo git-for-windows/git` using an already trusted GitHub CLI. The local artifact SHA-256 must equal the published `bfe94e7b419b16eee9fecbd1253a98e3d4f49ba8f029630549052278ffe286a6`. Also inspect its Authenticode status and signer chain if signed; do not infer signer authenticity from a display name alone.
+2. Independently verify the signed tag `v2.56.0.windows.1` against an independently trusted maintainer GPG fingerprint if that is part of the local trust policy. GitHub's “Verified” badge and key ID are useful evidence, but local GPG trust still needs an independently trusted key fingerprint.
+3. With an already-installed, approved, non-executing archive inspection tool, extract the installer payload to a newly created temporary directory. Do not launch the installer or extracted executables. If a safe extractor is unavailable, stop rather than install one under this authorization.
+4. Compare byte-for-byte (or SHA-256) each installed file against its exact payload counterpart: `usr/bin/ssh.exe`, `usr/bin/ssh-keyscan.exe`, and `usr/bin/ssh-keygen.exe`. Recompute hashes immediately before comparison. A mismatch, missing file, ambiguous package path, or untrusted extractor means **FAIL/UNKNOWN** and no Level 3 use.
+5. Preserve only the installer digest, source release URL/tag, signature/verification result, tool identity/version, the three compared paths/hashes, and match outcomes. Remove the temporary extracted package after evidence capture.
+
+This procedure distinguishes the installer asset's authenticity from the integrity of the installed files. An authenticated official installer and matching payload hashes would establish that these three installed binaries match that official artifact; they would not by themselves verify every Git for Windows file, the current host's full integrity, or credential readiness.
+
+**Current conclusion:** Official reference material now exists (immutable official release, verified signed tag metadata, and published artifact hashes), so the reference needed for a reproducible check is identified. The current installation remains **UNKNOWN for authenticity/integrity** because there is no local installer/package to verify and no installed-vs-authenticated-payload comparison. Do not upgrade this to VERIFIED based on the observed local hashes, version labels, ACLs, or public digest alone.
