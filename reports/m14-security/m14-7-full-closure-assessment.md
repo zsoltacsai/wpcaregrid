@@ -36,7 +36,7 @@ The latest Owner-provided RSA fingerprint SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6
 
 The local private-key file exists by metadata; its contents were not opened. No authentication or credential test occurred. Deploy authorization remains UNKNOWN; root is not approved.
 
-Owner independently confirmed ED25519 host fingerprint SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ in Rackforest Console and stated it matches the previous authorized keyscan observation. The original RO-00 result failed the original comparison because the supplied expected fingerprint was mistranscribed. Later Owner evidence reconciles that identity but does not retroactively change the historical result to PASS. No new connection or keyscan occurred.
+The first Windows OpenSSH RO-00 attempt failed KEX negotiation and yielded no host key. In a later, separately authorized RO-00 attempt, the verified Git for Windows keyscan returned an ED25519 public key; its observed fingerprint did not match the then-supplied, mistranscribed expected value, so that run's comparison gate failed. The Owner later independently confirmed the observed fingerprint SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ in Rackforest Console. This reconciles the key identity after execution but does not retroactively change the original comparison result to PASS. No new connection or keyscan occurred in this closure review.
 
 | Operation | Result |
 |---|---|
