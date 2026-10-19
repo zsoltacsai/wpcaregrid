@@ -86,9 +86,14 @@ function rejectSymlinkComponents(string $path): void
     }
 }
 
-function resolveGitDirectory(string $checkout): string
+/** @return array{worktree: string, common: string} */
+function resolveGitDirectories(string $checkout): array
 {
+    // Inspect the lexical paths before realpath(), which otherwise erases
+    // evidence that an ancestor component was a symlink.
+    rejectSymlinkComponents($checkout);
     $marker = $checkout.'/.git';
+    rejectSymlinkComponents($marker);
     if (is_link($marker)) {
         fail('GIT_METADATA_SYMLINK');
     }
@@ -103,6 +108,7 @@ function resolveGitDirectory(string $checkout): string
         if (! str_starts_with($gitDirectory, DIRECTORY_SEPARATOR)) {
             $gitDirectory = $checkout.'/'.$gitDirectory;
         }
+        rejectSymlinkComponents($gitDirectory);
         $resolved = realpath($gitDirectory);
     } else {
         fail('GIT_METADATA_UNAVAILABLE');
@@ -110,14 +116,31 @@ function resolveGitDirectory(string $checkout): string
     if (! is_string($resolved) || ! is_dir($resolved)) {
         fail('GIT_DIRECTORY_UNAVAILABLE');
     }
-    rejectSymlinkComponents($resolved);
+    $common = $resolved;
+    $commonDirFile = $resolved.'/commondir';
+    if (file_exists($commonDirFile) || is_link($commonDirFile)) {
+        rejectSymlinkComponents($commonDirFile);
+        $commonPointer = readSafeFile($commonDirFile, 4096);
+        if ($commonPointer === '' || str_contains($commonPointer, "\0") || str_contains($commonPointer, "\n")) {
+            fail('INVALID_GIT_COMMON_DIRECTORY_POINTER');
+        }
+        $commonPath = str_starts_with($commonPointer, DIRECTORY_SEPARATOR)
+            ? $commonPointer
+            : $resolved.'/'.$commonPointer;
+        rejectSymlinkComponents($commonPath);
+        $common = realpath($commonPath);
+        if (! is_string($common) || ! is_dir($common)) {
+            fail('GIT_COMMON_DIRECTORY_UNAVAILABLE');
+        }
+    }
 
-    return $resolved;
+    return ['worktree' => $resolved, 'common' => $common];
 }
 
 function readPackedRef(string $gitDirectory, string $ref): ?string
 {
     $packedRefs = $gitDirectory.'/packed-refs';
+    rejectSymlinkComponents($packedRefs);
     if (! file_exists($packedRefs)) {
         return null;
     }
@@ -131,7 +154,7 @@ function readPackedRef(string $gitDirectory, string $ref): ?string
     return null;
 }
 
-function readGitHead(string $gitDirectory): string
+function readGitHead(string $gitDirectory, string $commonDirectory): string
 {
     $head = readSafeFile($gitDirectory.'/HEAD', 1024);
     if (preg_match('/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/', $head)) {
@@ -143,12 +166,18 @@ function readGitHead(string $gitDirectory): string
         fail('INVALID_GIT_HEAD');
     }
     $ref = $matches[1];
-    $refPath = $gitDirectory.'/'.$ref;
-    rejectSymlinkComponents($refPath);
-    if (is_file($refPath)) {
-        $commit = readSafeFile($refPath, 1024);
-    } else {
-        $commit = readPackedRef($gitDirectory, $ref) ?? '';
+    $commit = '';
+    foreach (array_unique([$gitDirectory, $commonDirectory]) as $refDirectory) {
+        $refPath = $refDirectory.'/'.$ref;
+        rejectSymlinkComponents($refPath);
+        if (is_file($refPath)) {
+            $commit = readSafeFile($refPath, 1024);
+            break;
+        }
+        $commit = readPackedRef($refDirectory, $ref) ?? '';
+        if ($commit !== '') {
+            break;
+        }
     }
     if (! preg_match('/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/', $commit)) {
         fail('GIT_COMMIT_UNAVAILABLE');
@@ -175,6 +204,7 @@ function auditIdentity(array $options): array
     if (is_link($requestedPath) || ! is_dir($requestedPath)) {
         fail('CHECKOUT_NOT_A_REAL_DIRECTORY');
     }
+    rejectSymlinkComponents($requestedPath);
     $checkout = realpath($requestedPath);
     if (! is_string($checkout) || $checkout !== rtrim($requestedPath, DIRECTORY_SEPARATOR)) {
         fail('CHECKOUT_PATH_IDENTITY_MISMATCH');
@@ -191,7 +221,7 @@ function auditIdentity(array $options): array
     if (! is_float($freeBytes) && ! is_int($freeBytes)) {
         fail('FILESYSTEM_CAPACITY_UNAVAILABLE');
     }
-    $gitDirectory = resolveGitDirectory($checkout);
+    $gitDirectories = resolveGitDirectories($checkout);
 
     return [
         'schema_version' => '1.0.0',
@@ -202,7 +232,7 @@ function auditIdentity(array $options): array
         'executed_at' => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z'),
         'host' => ['hostname' => $hostname, 'expected_match' => true],
         'account' => ['name' => $identity['name'], 'uid' => $identity['uid'], 'expected_match' => true, 'privileged' => false],
-        'application' => ['git_head' => readGitHead($gitDirectory)],
+        'application' => ['git_head' => readGitHead($gitDirectories['worktree'], $gitDirectories['common'])],
         'runtime' => ['php_version' => PHP_VERSION],
         'filesystem' => ['available_bytes' => (int) $freeBytes],
         'm12_gates' => array_fill_keys(M12_GATES, ['effective_value' => null, 'verification' => 'UNKNOWN', 'provenance' => 'no-approved-effective-runtime-source']),

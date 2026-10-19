@@ -2,6 +2,7 @@
 
 namespace WPCareGrid\Connector\Tests\Integration;
 
+use PHPUnit\Framework\AssertionFailedError;
 use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Core\Settings;
 use WPCareGrid\Connector\Tests\Support\TestCase;
@@ -41,6 +42,29 @@ final class PollLockConcurrencyTest extends TestCase
         $this->assertCount(100, $staleWinners);
         $this->assertSame(100, count(array_filter($staleWinners, static fn (int $winners): bool => $winners === 1)), 'Every expired-lock race has exactly one winner: '.wp_json_encode($staleWinners));
         $this->assertSame([], array_values(array_filter($staleWinners, static fn (int $winners): bool => $winners !== 1)), 'No zero-winner or double-owner iteration is allowed.');
+    }
+
+    public function test_wait_for_files_reports_worker_exit_before_timeout(): void
+    {
+        $base = $this->harness.'/unexpected-exit-'.bin2hex(random_bytes(4));
+        $worker = $this->startWorker([
+            'mode' => 'unsupported-test-mode',
+            'ready' => $base.'.ready',
+            'result_file' => $base.'.result',
+        ]);
+
+        $failure = null;
+        try {
+            $this->waitForFiles([$worker['config']['result_file']], 20, [$worker]);
+        } catch (AssertionFailedError $error) {
+            $failure = $error;
+        } finally {
+            $this->closeWorkerWithoutAssertion($worker['process']);
+        }
+
+        $this->assertInstanceOf(AssertionFailedError::class, $failure);
+        $this->assertStringContainsString('exited before writing', $failure->getMessage());
+        $this->assertStringContainsString('"running":false', $failure->getMessage());
     }
 
     public function test_non_expired_legacy_lock_cannot_be_stolen(): void
@@ -518,6 +542,18 @@ final class PollLockConcurrencyTest extends TestCase
             if ($missing === []) {
                 return;
             }
+
+            foreach ($workers as $worker) {
+                $resultFile = $worker['config']['result_file'] ?? null;
+                $handle = $worker['process']['handle'] ?? null;
+                if (is_string($resultFile) && in_array($resultFile, $missing, true) && is_resource($handle)) {
+                    $status = proc_get_status($handle);
+                    if (! ($status['running'] ?? false)) {
+                        $this->fail('Test worker exited before writing its synchronization result: '.wp_json_encode($this->workerProcessDiagnostics([$worker])));
+                    }
+                }
+            }
+
             usleep(10000);
         } while (microtime(true) < $deadline);
 
@@ -525,19 +561,28 @@ final class PollLockConcurrencyTest extends TestCase
         foreach ($missing as $path) {
             $diagnostics[] = basename($path);
         }
-        $processDiagnostics = [];
+        $this->fail('Timed out waiting for test-process synchronization files: '.wp_json_encode([
+            'missing_files' => $diagnostics,
+            'workers' => $this->workerProcessDiagnostics($workers),
+        ]));
+    }
+
+    /** @return list<array{pid: int|null, running: bool|null, exitcode: int|null, exception_class: string|null, sqlstate: string|null, stdout_bytes: int, stdout_sha256: string, stderr_bytes: int, stderr_sha256: string, mode: string|null, result_present: bool}> */
+    private function workerProcessDiagnostics(array $workers): array
+    {
+        $diagnostics = [];
         foreach ($workers as $worker) {
             $handle = $worker['process']['handle'] ?? null;
             if (! is_resource($handle)) {
-                $processDiagnostics[] = ['process_handle' => 'unavailable'];
+                $diagnostics[] = ['pid' => null, 'running' => null, 'exitcode' => null, 'exception_class' => null, 'sqlstate' => null, 'stdout_bytes' => 0, 'stdout_sha256' => hash('sha256', ''), 'stderr_bytes' => 0, 'stderr_sha256' => hash('sha256', ''), 'mode' => $worker['config']['mode'] ?? null, 'result_present' => false];
 
                 continue;
             }
             $status = proc_get_status($handle);
             $stdoutPipe = $worker['process']['pipes'][1] ?? null;
             $stderrPipe = $worker['process']['pipes'][2] ?? null;
-            $stdout = is_resource($stdoutPipe) ? (stream_get_contents($stdoutPipe) ?: '') : '';
-            $stderr = is_resource($stderrPipe) ? (stream_get_contents($stderrPipe) ?: '') : '';
+            $stdout = is_resource($stdoutPipe) ? (fread($stdoutPipe, 8192) ?: '') : '';
+            $stderr = is_resource($stderrPipe) ? (fread($stderrPipe, 8192) ?: '') : '';
             $exceptionClass = null;
             $sqlState = null;
             foreach ([$stdout, $stderr] as $diagnosticOutput) {
@@ -548,7 +593,7 @@ final class PollLockConcurrencyTest extends TestCase
                     $sqlState = $match[1];
                 }
             }
-            $processDiagnostics[] = [
+            $diagnostics[] = [
                 'pid' => $status['pid'] ?? null,
                 'running' => $status['running'] ?? null,
                 'exitcode' => $status['exitcode'] ?? null,
@@ -562,10 +607,34 @@ final class PollLockConcurrencyTest extends TestCase
                 'result_present' => isset($worker['config']['result_file']) && is_file($worker['config']['result_file']),
             ];
         }
-        $this->fail('Timed out waiting for test-process synchronization files: '.wp_json_encode([
-            'missing_files' => $diagnostics,
-            'workers' => $processDiagnostics,
-        ]));
+
+        return $diagnostics;
+    }
+
+    private function closeWorkerWithoutAssertion(array $process): void
+    {
+        $handle = $process['handle'] ?? null;
+        if (! is_resource($handle)) {
+            return;
+        }
+        $status = proc_get_status($handle);
+        if ($status['running']) {
+            proc_terminate($handle, 15);
+            $deadline = microtime(true) + 5;
+            do {
+                $status = proc_get_status($handle);
+                if (! $status['running']) {
+                    break;
+                }
+                usleep(10000);
+            } while (microtime(true) < $deadline);
+        }
+        foreach ($process['pipes'] as $pipe) {
+            if (is_resource($pipe)) {
+                fclose($pipe);
+            }
+        }
+        proc_close($handle);
     }
 
     private function waitForAnyFiles(array $paths, int $timeout = 20, array $workers = []): void

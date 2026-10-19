@@ -24,6 +24,20 @@ The next exact-head run [39230906190](https://github.com/zsoltacsai/wpcaregrid/a
 
 Proposed measurable residual-risk criterion if the broader runner cause remains unknown (not Owner-approved): 10 consecutive independent full seven-job runs with the Connector MySQL and MariaDB lock-succession test passing each time, preserving exact SHA, job URL, result and bounded failure diagnostics; reset the count on any failure. This is evidence for Owner acceptance, not proof of no defect.
 
+## M147-E.2a preflight disposition — 2026-10-18
+
+No new vulnerability is asserted. The controlled read-only preflight was blocked before connecting because the required execution authorization record lacked the exact target approval, named operator, approved interface, identity pin, active window, command allowlist, evidence handling, stop authority, and recovery contact. **NO LIVE STAGING ACCESS PERFORMED.**
+
+| Finding | Updated evidence | Status |
+|---|---|---|
+| AS-16 / M147-F01 | No operational scanner was run; no staging identity or scan result was collected. | OPEN; operational scanner validation incomplete. |
+| M147-F02 | No live gate was read; all six remain UNKNOWN. | OPEN; effective safety state unverified. |
+| M147-F03 | No effective feed configuration or live provenance was read; no feed was contacted. | OPEN; live source/licensing/configuration/freshness and network facts unverified. |
+| M147-F04 | No scan or side effect executed; effective routing remains unknown. | OPEN; incident/backup/queue/notification combinations not validated. |
+| CI-REL-01 | No new CI reliability evidence in this preflight. | OPEN; preserve prior evidence and disposition. |
+
+The absence of authorization is a stage blocker, not evidence that a staging control is either safe or unsafe. See [E.2a preflight evidence](m14-7-e2a-staging-preflight-evidence.md). Existing scoped closures are unchanged.
+
 ## M147-E.1 readiness review — 2026-10-18
 
 Offline planning baseline: `57b8cf02d655cb7316648785bd9a1b6b07b148e1`. No live environment or M12 value was read. M147-E is not operationally started; M147-E.2 is **NOT EXECUTED — OWNER APPROVAL REQUIRED**.
@@ -127,3 +141,56 @@ The scoped focused suites completed with 471 passed, 12 skipped, 0 failed, and 5
 The preceding execution-result paragraph is a candidate-time checkpoint; its pending-CI wording was accurate when recorded. PR #125 merged through the active primary ruleset at `bc0a4e536abfd573b5b34d5e2152dcf15ad80c80`. Exact-head CI run [39122868939](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39122868939) passed 7/7 on `28f92ee4238efad64345eba944531d652e194963`; exact merged-primary run [39124920641](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39124920641) passed 7/7 on the merge SHA. The Required MySQL process-concurrency gate passed in both runs. M147-D is **CLOSED only for bounded local synthetic attack-path validation**. No new confirmed Critical/High issue was reproduced in the tested paths; no runtime changes were made.
 
 AS-16/M147-F01, M147-F02, M147-F03, M147-F04, M147-F05, M147-F06 and M147-F08 remain open at their existing boundaries. M147-F07, M147-C-02 and M146-F08 retain only their prior narrow closures. M147-E/F have not started, M14.8 is not ready, and all six live M12 gates remain UNKNOWN. See the [M147-D closure report](m14-7-d-closure-report.md) for the attack-path coverage matrix, skips, CI evidence and limitations.
+
+## M147-E.2a RO-00–RO-04 authorization outcome — 2026-10-18
+
+Owner authorization covered RO-00–RO-04 for 18:00–18:30 Europe/Budapest. The unauthenticated RO-00 keyscan failed during local KEX negotiation; no host key was retrieved or compared. No authentication or remote command occurred, so RO-01–RO-04 were not executed. This is a client/tooling blocker, not evidence of a target vulnerability or unsafe server state. All live M12 gate values remain UNKNOWN and M147-E.2b remains NO-GO / NOT AUTHORIZED. No RO-05–RO-09 operation was attempted. See the [preflight evidence](m14-7-e2a-staging-preflight-evidence.md).
+
+
+## M147-E.2a — hozzáférési és CI-readiness kiegészítés (2026-10-18)
+
+**SSH hozzáférési készenlét: UNKNOWN.** Az Owner pontosítása szerint Codex korábban root hozzáférést kért a Rackforest VPS-hez; ez nem bizonyítja, hogy ilyen hozzáféréssel ténylegesen rendelkezett vagy azt használta. A rekordokban szereplő `deploy` csak korábbi jelölt, nincs igazolva SSH bejelentkezési fiókként. A nem érzékeny lokális metaadat-ellenőrzésben nincs felhasználói `.ssh/config`, az `SSH_AUTH_SOCK` és `SSH_AGENT_PID` nincs beállítva, a Windows `ssh-agent` szolgáltatás leállított. Privát kulcsot, agent-identitást vagy credential-store tartalmat nem vizsgáltunk és nem teszteltünk. Ezért sem `deploy`, sem `root`, sem más fiók/credential mechanizmus nem tekinthető jóváhagyottan elérhetőnek; a státusz nem bizonyított ROOT-ONLY hozzáférés, hanem UNKNOWN.
+
+RO-01–RO-04 előtt az Ownernek meg kell erősítenie a ténylegesen engedélyezett, nem root SSH-fiókot és a hozzáférési mechanizmust, titokértékek megosztása nélkül. Ha a korábbi root-kérés az egyetlen feljegyzett út, egy dedikált, minimális, csak a szükséges read-only ellenőrzésekre jogosult fiók a javasolt alternatíva; ennek létrehozása vagy SSH-konfiguráció módosítása külön operatív engedély nélkül nem történhet meg. Az engedélyezési rekord marad **DRAFT / NO-GO**.
+
+**CI-REL-01 friss bizonyíték — PR #129, run 39153976426.** A futás a `14dec63646d293ad2fec87228b22fa2150dbb676` pontos PR-head SHA-n zárult hibával. Connector WordPress MariaDB jobban a `WPCareGrid\\Connector\\Tests\\Integration\\PollLockConcurrencyTest::test_expired_owner_cannot_release_or_refresh_successor_lease` teszt 210 teszt / 1,824 assertion mellett, 1 failure és 3 skip eredménnyel a `hold-*.result` process-szinkronizációs fájlra várva timeoutolt a `wordpress/tests/Integration/PollLockConcurrencyTest.php:505` sorban. A MariaDB service egészségesként jelent meg; a naplóban az `io_uring` inicializálási figyelmeztetés után libaio fallback látszik. Ez kompatibilis runner/process scheduling vagy harness timing problémával, de a log nem bizonyít erőforrás-nyomást vagy gyökérokot; determinisztikus alkalmazáshiba sincs igazolva.
+
+A hét jobból hat sikeres, a Connector MariaDB sikertelen. A Server MySQL job és annak kötelező `Required MySQL process-concurrency gate` lépése sikeres. Run 39151494350 korábbi sikeres eredménye más PR-head SHA-n volt, ezért nem érvényes bizonyíték a jelenlegi fejre. Az M14.7 E.1-ben dokumentált, azonos szinkronizációs tesztet érintő két sikertelen próbálkozás és későbbi sikeres rerun további intermittáló jellegre utal, de nem zárja ki a versenyhelyzetet.
+
+**Disposition:** CI-REL-01 marad OPEN. Jelen bizonyíték alapján alkalmazáskód-módosítás nem indokolt; a hiba nem hagyható figyelmen kívül és nem minősíthető bizonyítottan ártalmatlan flakinessnek. Legkisebb következő lépés: Owner-jóváhagyás után kizárólag a Connector MariaDB sikertelen job célzott újrafuttatása változatlan forráson, azonos teszt és step-log összehasonlításával; ismétlődés esetén külön, szűk CI-harness javítási terv. Ez az újrafuttatás ebben a vizsgálatban nem történt meg.
+
+
+## CI-REL-01 és fingerprint reconciliation frissítés — 2026-10-18 19:16 UTC
+
+### RSA publikus kulcs-egyezés
+
+A helyi publikus `id_rsa.pub` újraszámolt fingerprintje `SHA256:Cy8+tFoYq7gsUPjpPBCqnNOvdzksvB6VsLE4AwdunkU` (3072-bit RSA); ez karakterre egyezik az Owner legutóbbi, teljes Rackforest-console értékével. Az Owner szerint mind a `root`, mind a `deploy` `authorized_keys` azonos ujjlenyomatú. **PUBLIC KEY FINGERPRINT MATCH: PASS** az Owner által jelentett szerveroldali adattal való összehasonlításra; közvetlen szerverhozzáférés nem történt. A régi `SHA256+tFo...` hibás átírás/mismatch bejegyzés történeti marad. Privát kulcs jelenléte, authentikáció és `deploy` jogosultság továbbra is **UNKNOWN**.
+
+### Run 39157541326 — a 077d5e7 PR-head exact-head futása
+
+A GitHub run a PR #129 aktuális, `077d5e75976cde0d0138727254bee7eb8a9ed8fb` headjéhez tartozik. 2026-10-18 19:16 UTC-kor a run **IN PROGRESS** volt: Quality, Server SQLite, Server MariaDB és a három Connector SQLite/MySQL/MariaDB job sikeres; Server MySQL még futott. A kötelező `Required MySQL process-concurrency gate` lépés ekkor **PENDING**, ezért a run összesített eredménye nem zöld és a gate PASS nem állítható. Ezt a snapshotot később csak ugyanazon SHA runjának végső GitHub állapota pontosíthatja; PR head változása esetén új exact-head run kell.
+
+A korábbi run `39153976426` egy másik SHA-n (`14dec63646d293ad2fec87228b22fa2150dbb676`) sikertelen volt: Connector MariaDB alatt `PollLockConcurrencyTest::test_expired_owner_cannot_release_or_refresh_successor_lease` 210 teszt, 1,824 assertion, 1 failure, 3 skipped eredménnyel nem várta meg a `hold-*.result` folyamat-szinkronizációs fájlt a 20 másodperces határidőn belül. Ugyanebben a runban MariaDB service healthy volt; a konténer naplójában `io_uring` EPERM után `libaio` fallback szerepelt. Ez nem bizonyítja, hogy a warning okozta a teszthibát, és nem bizonyít runner resource contentiont; a test-child megszakadását/állapotát a hibaüzenet önmagában nem mutatja. A MySQL szerver job és az explicit concurrency gate azon a runon sikeres volt. Korábbi, más SHA-n zöld run nem helyettesíti az exact-head bizonyítékot.
+
+**Disposition:** CI-REL-01 OPEN. A forrásból nem bizonyított determinisztikus alkalmazásdefektus, de a folyamat-szinkronizációs timeout ismétlődő harness/reliability kockázat, ezért nem minősíthető ártalmatlan flakinessnek. Nincs indokolt alkalmazáskód-javítás vagy timeout-emelés pusztán a rendelkezésre álló logokból. A jelen futás még folyamatban van; no manual rerun initiated. Következő minimális lépés: a run 39157541326 completion és a MySQL gate végső step-eredményének megvárása; ha MariaDB ismét timeoutol, csak egy célzott, változatlan SHA-s Connector MariaDB rerun jöhet szóba a külön engedélyezett CI-reliability határon belül.
+
+## M14.7 closure and CI-REL-01 latest evidence — 2026-10-18 19:38 UTC
+
+### CI-REL-01 — Connector MariaDB process synchronization
+
+Run [39153976426](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39153976426) failed on PR head 14dec63646d293ad2fec87228b22fa2150dbb676. Connector WordPress MariaDB reported 210 tests, 1,824 assertions, 1 failure and 3 skips. PollLockConcurrencyTest::test_expired_owner_cannot_release_or_refresh_successor_lease timed out after 20 seconds waiting for a hold-*.result synchronization file at wordpress/tests/Integration/PollLockConcurrencyTest.php:505. MariaDB was reported healthy. Logs showed an io_uring EPERM warning followed by libaio fallback; neither causality nor runner resource pressure is established. The failure output did not report the child process exit state.
+
+Run [39157541326](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39157541326), head 077d5e75976cde0d0138727254bee7eb8a9ed8fb, was canceled while the Server MySQL job's required process-concurrency gate was running; it is not a pass. Current-head run [39158228230](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39158228230) on 3a525fdfe548b0b24915a0bb6424bba8a6d9264e passed 7/7. Its Connector MariaDB job reports 210 tests, 1,828 assertions, 3 skips, 0 failures; the Server MySQL concurrency-gate step passed. Prior same-head retries include failures followed by a pass without source changes.
+
+**Disposition:** CI-REL-01 remains OPEN as a reliability/diagnosability issue, not a confirmed application vulnerability. Evidence does not distinguish harness timing, child-process failure, MariaDB behavior or runner scheduling. No source change, assertion relaxation or timeout increase is justified by current evidence. A future focused harness improvement should report child-process running/exit state on timeout and be validated with repeated MariaDB process tests. Local PHP/Composer/Docker are unavailable, so local PHP reproduction was NOT RUN.
+
+### M14.7 operational closure status
+
+M147-A/B/C/D remain CLOSED within their documented bounded scopes. M147-E.1 is CLOSED — PLANNING ONLY. Staging RO-01–RO-04 remain NOT EXECUTED; RO-05–RO-09 remain NOT AUTHORIZED; all six live M12 gates remain UNKNOWN; no live scanner or operational side-effect validation exists. M147-E.2b remains NOT AUTHORIZED, M147-F is NOT STARTED, and M14.8 is NOT READY. M14.7 cannot be reported fully closed.
+
+
+## CI-REL-01 update — instrumented worker diagnostics; root cause still open (2026-10-18)
+
+The MariaDB synchronization timeout recurred on run 39160096901. The test harness was then narrowly improved to capture child-process state when a result file is missing and to fail promptly if the worker exited; a synthetic regression test verifies that diagnostic path. Runs 39160455557 and 39160618085 expose and correct, respectively, a namespace escaping mistake and a Pint style issue introduced by that patch. On exact code head 049a08bdd2377d82e7f29bce7a319c0c3768dc4c, run 39160827416 passed 7/7, including the explicit Server MySQL process-concurrency gate; Connector MariaDB passed 211 tests / 1,834 assertions / 3 skipped.
+
+**Disposition remains OPEN.** The latest run did not reproduce the timeout, but the original worker exit/stall cause remains unknown and a single successful run is insufficient to establish reliability. No application code or timeout bound was changed. Continue collecting exact-head CI evidence and investigate only if the instrumented failure recurs. The failed runs remain historical evidence, not erased or reclassified as passes.

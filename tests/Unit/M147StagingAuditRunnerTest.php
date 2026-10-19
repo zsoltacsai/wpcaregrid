@@ -118,6 +118,46 @@ final class M147StagingAuditRunnerTest extends TestCase
         $this->removeTree($gitDirectory);
     }
 
+    public function test_resolves_linked_worktree_branch_from_common_packed_refs(): void
+    {
+        $common = $this->root.'-common';
+        $gitDirectory = $common.'/worktrees/fixture';
+        mkdir($gitDirectory, 0700, true);
+        file_put_contents($gitDirectory.'/HEAD', "ref: refs/heads/main\n");
+        file_put_contents($gitDirectory.'/commondir', "../..\n");
+        file_put_contents($common.'/packed-refs', "# pack-refs with: peeled fully-peeled\n".str_repeat('c', 40)." refs/heads/main\n");
+        $this->removeTree($this->root.'/.git');
+        file_put_contents($this->root.'/.git', 'gitdir: '.$gitDirectory."\n");
+
+        $identity = $this->currentPosixIdentity();
+        $result = $this->runAudit(gethostname(), $identity['name']);
+        self::assertSame(0, $result['exit'], $result['stderr']);
+        $evidence = json_decode($result['stdout'], true, 32, JSON_THROW_ON_ERROR);
+        self::assertSame(str_repeat('c', 40), $evidence['application']['git_head']);
+    }
+
+    public function test_rejects_symlinked_git_worktree_pointer_ancestor(): void
+    {
+        $common = $this->root.'-common';
+        $gitDirectory = $common.'/worktrees/fixture';
+        $alias = $this->root.'-git-alias';
+        mkdir($gitDirectory, 0700, true);
+        file_put_contents($gitDirectory.'/HEAD', "ref: refs/heads/main\n");
+        mkdir($gitDirectory.'/refs/heads', 0700, true);
+        file_put_contents($gitDirectory.'/refs/heads/main', str_repeat('d', 40)."\n");
+        if (! @symlink($common, $alias)) {
+            self::markTestSkipped('The current filesystem does not permit creating a symlink without additional privileges.');
+        }
+        $this->removeTree($this->root.'/.git');
+        file_put_contents($this->root.'/.git', 'gitdir: '.$alias.'/worktrees/fixture'."\n");
+
+        $identity = $this->currentPosixIdentity();
+        $result = $this->runAudit(gethostname(), $identity['name']);
+        self::assertSame(2, $result['exit']);
+        self::assertSame('GIT_METADATA_SYMLINK', trim($result['stderr']));
+        self::assertSame('', $result['stdout']);
+    }
+
     private function runAudit(string $host, string $account, array $extra = []): array
     {
         $arguments = [PHP_BINARY, $this->runner, '--mode', 'identity', '--checkout', $this->root, '--expected-host', $host, '--expected-account', $account, ...$extra];

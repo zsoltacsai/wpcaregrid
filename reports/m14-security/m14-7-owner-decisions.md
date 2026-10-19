@@ -1,5 +1,9 @@
 # M14.7 Owner Decisions and Execution Authorization
 
+## M147-E.2a authorization preflight — 2026-10-18
+
+The Owner supplied a draft execution record marked **NOT APPROVED FOR EXECUTION**. It names a candidate target, SSH user/method, Owner as supervisor/stop authority/recovery contact, and RO-00 through RO-09 operation categories. The host-key fingerprint, active execution window, authorization reference/final approval, verified SSH account privileges, and exact reviewed commands remain missing; RO-05 through RO-09 are explicitly blocked pending safe-method review. Do not connect based on this draft. The mandatory stop rule was followed: **NO LIVE STAGING ACCESS PERFORMED**. All live state, including every M12 gate, remains UNKNOWN. M147-E.2b is NO-GO / NOT AUTHORIZED. See [preflight evidence](m14-7-e2a-staging-preflight-evidence.md).
+
 ## M147-E.1 Level 2 authorization boundary — 2026-10-18
 
 The current Owner authorization permits **offline planning and documentation only** for staging scanner readiness: source/docs/tests review, architecture mapping, local synthetic tests only if genuinely necessary, and a planning PR. It explicitly prohibits staging SSH/API access, production/customer access, live M12 reads or changes, live feed/scanner execution, secrets, backup/restore, queue execution, incident creation, deployment, and M147-E.2/F/M14.8 work. No such prohibited activity occurred in this planning pass.
@@ -67,3 +71,11 @@ The separately granted M147-C Level 2 scope was used for local source review, sy
 The Owner explicitly authorized M147-D Level 2 local synthetic attack-path validation. Permitted for this stage: source review, disposable Laravel/WordPress fixtures and databases, synthetic tenant and role identities, mocked Connector/Stripe/fake HTTP, local fake queues/storage, regression tests, safe in-scope corrections, documentation and an unmerged PR with exact-head CI. No test may make live external-service requests.
 
 Not authorized: staging/production/customer access; real credentials or secrets; live Wordfence/other feeds; Stripe TEST/live requests; remote backup storage; real payment, incident, backup, restore, quarantine, remediation or notification; M12 gate changes; deployment; M147-E/F; M14.8. Browser tests are not expressly authorized in this stage and will not be run. The six live M12 values remain UNKNOWN and are not read or changed. The M147-D worktree baseline is `b392c5c3f4a934886b574e59ceb67d1dfe04c894`; planning-first attack paths are in [M147-D execution evidence](m14-7-d-execution-evidence.md).
+
+## M147-E.2a RO-00–RO-04 authorization outcome — 2026-10-18
+
+Owner authorization covered RO-00–RO-04 for 18:00–18:30 Europe/Budapest. The unauthenticated RO-00 keyscan failed during local KEX negotiation; no host key was retrieved or compared. No authentication or remote command occurred, so RO-01–RO-04 were not executed. This is a client/tooling blocker, not evidence of a target vulnerability or unsafe server state. All live M12 gate values remain UNKNOWN and M147-E.2b remains NO-GO / NOT AUTHORIZED. No RO-05–RO-09 operation was attempted. See the [preflight evidence](m14-7-e2a-staging-preflight-evidence.md).
+
+## M14.7 full-closure authorization state — 2026-10-18
+
+Local/GitHub review and documentation reconciliation are authorized. Staging authentication and remote RO-01–RO-04 commands still require a new complete, time-bounded Owner record. The current draft leaves execution window, account, credential-use mechanism, exact command scope and evidence/stop details unapproved. Non-root deploy is a candidate only until explicitly authorized. Public RSA fingerprint correspondence and independently Owner-confirmed ED25519 host fingerprint do not authorize authentication. RO-05–RO-09, M12 gate reads, scanner execution, M147-E.2b and external side effects remain unauthorized.
