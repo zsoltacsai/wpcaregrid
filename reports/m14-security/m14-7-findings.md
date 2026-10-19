@@ -1,5 +1,13 @@
 # M14.7 Planning Findings and Residual Register
 
+## Recovery sprint disposition — 2026-10-19
+
+This section supersedes earlier recovery-candidate CI-REL-01 statements below; those entries preserve their historical status at the time they were written. PR #130 remains open and unmerged at `544333f0629c50ac829315698b4a51887563d124`. Exact-head run [39233009685](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39233009685) passed all seven required jobs, including the Server MySQL process/concurrency gate (all nine required gate files passed). Connector WordPress MySQL and MariaDB each passed 210 tests / 1,828 assertions / 3 documented skips.
+
+The earlier `JsonException` was caused by the test parent publishing a JSON synchronization signal directly at the final path while its child treated path existence as readiness. The child could read a partial file. The harness now writes to an owned unique temporary file, checks the complete write, and atomically renames it to the signal path. The original 20-second deadline and lock assertions are unchanged; the affected regression passed in both Connector MySQL and MariaDB on the exact final head. This is a confirmed test-harness defect, not evidence of a production lock defect. **CI-REL-01 remains OPEN pending Owner review and protected merge of PR #130**; the identified defect is fixed and validated. If the same failure recurs after merge, investigate the new evidence; the earlier 10-run monitoring proposal is only a contingency, not a current closure requirement.
+
+No M12 live gate was read. Staging, production, customer, live scanner/feed, queue, backup/restore, remediation, notification, payment, AI, and deployment operations remain unperformed. The operational findings and independent-review requirements retain their existing dispositions.
+
 ## Evidence update — 2026-10-19
 
 The isolated local browser security matrix passed **14/14** on exact commit `5c350b759bed438eb8d967dd329a944a53b91a74`; the exact environment and per-scenario scope are recorded in the [recovery evidence](m14-7-closure-recovery-evidence.md). This adds selected evidence for localization/authentication, customer/operator/owner separation, Connector pairing/recovery, cross-origin Connector authentication, and a cross-origin same-site CSRF rejection with unchanged synthetic profile state. Stripe-hosted flows and the broader payment E2E files were not run because no isolated Stripe TEST/webhook/Mailpit setup was authorized. **M147-F05 remains OPEN**; this selected browser suite is not full browser or production integration assurance.
