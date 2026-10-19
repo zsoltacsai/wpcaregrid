@@ -9,8 +9,16 @@ $ErrorActionPreference = 'Stop'
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path.TrimEnd('\')
 $ExpectedPath = 'D:\-=AI=-\-=Git=-\wpcaregrid-m147-recovery'
 $ExpectedBranch = 'codex/m147-closure-recovery'
-if ($Repo -ine $ExpectedPath) { throw 'Registration is restricted to the dedicated M147 recovery worktree.' }
-if ((git -C $Repo branch --show-current).Trim() -cne $ExpectedBranch) { throw 'Registration branch identity does not match the dedicated M147 recovery branch.' }
+$ExpectedIdentity = 'm147-e2a-pr129-browser-e2e'
+$IntegrationPath = 'D:\-=AI=-\-=Git=-\wpcaregrid-m147-integration-review'
+$IntegrationBranch = 'codex/m147-pr-integration-review'
+if ($Repo -ieq $IntegrationPath) {
+    $ExpectedPath = $IntegrationPath
+    $ExpectedBranch = $IntegrationBranch
+    $ExpectedIdentity = 'm147-final-integration-browser-e2e'
+}
+if ($Repo -ine $ExpectedPath) { throw 'Registration is restricted to an explicitly approved dedicated M147 worktree.' }
+if ((git -C $Repo branch --show-current).Trim() -cne $ExpectedBranch) { throw 'Registration branch identity does not match the dedicated M147 branch.' }
 $Head = (git -C $Repo rev-parse --verify HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $Head -cne $ExpectedCommit) { throw 'The checked-out commit does not exactly match -ExpectedCommit.' }
 $Changes = @(git -C $Repo status --porcelain=v1 --untracked-files=all)
@@ -23,7 +31,7 @@ $State = Join-Path $E2E 'connector-browser-state.json'
 if ((Test-Path -LiteralPath $Services) -or (Test-Path -LiteralPath $State)) { throw 'Registration refused while a service or browser fixture state already exists.' }
 New-Item -ItemType Directory -Force -Path $E2E | Out-Null
 $Record = [ordered]@{
-    identity = 'm147-e2a-pr129-browser-e2e'
+    identity = $ExpectedIdentity
     repository_path = $Repo
     branch = $ExpectedBranch
     expected_commit = $Head

@@ -64,10 +64,14 @@ integrations as local fakes or disabled. The browser suite performs actual UI
 pairing and recovery flows; it does not run against staging or production.
 
 The harness retains its two historical worktree path/branch allowlist entries.
-The recovery path is a third explicit identity, fixed to
+The recovery path is one explicit identity, fixed to
 `D:\-=AI=-\-=Git=-\wpcaregrid-m147-recovery` and branch
-`codex/m147-closure-recovery`. Register the exact committed SHA before any
-local server is started, then pass that same 40-character SHA to the runner:
+`codex/m147-closure-recovery`. The integrated review path is a separate exact
+identity, fixed to
+`D:\-=AI=-\-=Git=-\wpcaregrid-m147-integration-review` and branch
+`codex/m147-pr-integration-review`. No arbitrary path or branch can register.
+Register the exact committed SHA before any local server is started, then pass
+that same 40-character SHA to the runner:
 
 ```powershell
 $expected = (git rev-parse --verify HEAD).Trim()

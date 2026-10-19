@@ -12,6 +12,10 @@ The initial identity mode reports host name, effective non-root POSIX account,
 UTC time, the checked-out Git commit, PHP version, and available filesystem
 bytes. The expected hostname, account, and absolute checkout path are required
 on every invocation. Any mismatch exits with status 2 and no evidence JSON.
+Git metadata supports ordinary checkouts and linked worktrees, including branch
+refs stored in the common Git directory or its `packed-refs` file. Lexical
+checkout, gitdir, common-dir, and ref paths are checked for symlink components
+before canonicalization; symlinked metadata is rejected rather than followed.
 
 The six M12 gates deliberately remain `UNKNOWN`. The runner has no safe,
 verified source for Laravel's effective configuration: repository defaults,

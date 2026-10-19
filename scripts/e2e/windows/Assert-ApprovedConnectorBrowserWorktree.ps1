@@ -17,15 +17,20 @@ $Historical = @{
 }
 $NewPath = 'D:\-=AI=-\-=Git=-\wpcaregrid-m147-recovery'
 $NewBranch = 'codex/m147-closure-recovery'
+$IntegrationPath = 'D:\-=AI=-\-=Git=-\wpcaregrid-m147-integration-review'
+$IntegrationBranch = 'codex/m147-pr-integration-review'
+$IntegrationIdentity = 'm147-final-integration-browser-e2e'
 
 if ($Historical.ContainsKey($PathKey)) {
     if ($Branch -cne $Historical[$PathKey]) { throw 'Refusing to run on an unapproved historical Connector E2E branch.' }
-} elseif ($PathKey -ieq $NewPath) {
-    if ($Branch -cne $NewBranch) { throw 'Refusing to run from the recovery worktree on an unexpected branch.' }
+} elseif ($PathKey -ieq $NewPath -or $PathKey -ieq $IntegrationPath) {
+    $ExpectedBranch = if ($PathKey -ieq $IntegrationPath) { $IntegrationBranch } else { $NewBranch }
+    $ExpectedIdentity = if ($PathKey -ieq $IntegrationPath) { $IntegrationIdentity } else { 'm147-e2a-pr129-browser-e2e' }
+    if ($Branch -cne $ExpectedBranch) { throw 'Refusing to run from the dedicated M147 worktree on an unexpected branch.' }
     $IdentityPath = Join-Path $Repo 'storage\e2e\worktree-identity.json'
     if (-not (Test-Path -LiteralPath $IdentityPath -PathType Leaf)) { throw 'Fresh worktree has no explicit browser E2E registration.' }
     $Identity = Get-Content -Raw -LiteralPath $IdentityPath | ConvertFrom-Json
-    if ($Identity.identity -cne 'm147-e2a-pr129-browser-e2e' -or $Identity.branch -cne $Branch -or $Identity.repository_path -ine $PathKey -or $Identity.expected_commit -cne $Head) {
+    if ($Identity.identity -cne $ExpectedIdentity -or $Identity.branch -cne $Branch -or $Identity.repository_path -ine $PathKey -or $Identity.expected_commit -cne $Head) {
         throw 'Fresh worktree registration does not match its path, branch, and exact HEAD.'
     }
 } else {
@@ -37,4 +42,5 @@ if ($ExpectedCommit) {
 }
 if ($RequireExactCommit -and -not $ExpectedCommit) { throw 'An exact expected commit is required for this browser E2E run.' }
 
-[pscustomobject]@{ Repository = $PathKey; Branch = $Branch; Head = $Head; Identity = if ($PathKey -ieq $NewPath) { 'm147-e2a-pr129-browser-e2e' } else { 'historical-connector-e2e' } }
+$ResolvedIdentity = if ($PathKey -ieq $IntegrationPath) { $IntegrationIdentity } elseif ($PathKey -ieq $NewPath) { 'm147-e2a-pr129-browser-e2e' } else { 'historical-connector-e2e' }
+[pscustomobject]@{ Repository = $PathKey; Branch = $Branch; Head = $Head; Identity = $ResolvedIdentity }
