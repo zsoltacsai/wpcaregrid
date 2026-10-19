@@ -87,6 +87,11 @@ its pinned local PHP runtime and dependencies, then verifies the synthetic
 configuration, database separation, loopback ports and egress guard before
 starting services. No existing unrelated service is reused or stopped.
 
+Before registration, install JavaScript dependencies from the committed
+`package-lock.json` with `npm ci --ignore-scripts`. Initialization runs the
+locked Vite build and requires `public/build/manifest.json` before the web
+servers start; `/up` alone does not validate rendered browser routes.
+
 The browser harness only covers its declared Connector pairing/recovery
 specification. Stripe and live-service tests remain excluded. A test result
 does not prove staging state or operational scanner safety.

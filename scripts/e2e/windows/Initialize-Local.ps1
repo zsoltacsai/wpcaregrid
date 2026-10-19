@@ -70,6 +70,20 @@ if (-not (Test-Path (Join-Path $WordPressDir 'vendor\autoload.php'))) {
     } finally { Pop-Location }
 }
 
+# Laravel browser routes render Vite assets. A healthy /up endpoint does not
+# prove the frontend manifest exists, so build from the committed npm lockfile
+# before starting HTTP services and fail closed if the manifest is absent.
+$Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+if (-not $Npm) { throw 'Node.js/npm is required; install the committed npm lockfile before local browser E2E.' }
+if (-not (Test-Path (Join-Path $Repo 'node_modules\@playwright\test'))) {
+    throw 'Locked browser dependencies are missing; run npm ci --ignore-scripts before local browser E2E.'
+}
+& $Npm.Source run build
+if ($LASTEXITCODE -ne 0) { throw 'The locked frontend build failed.' }
+if (-not (Test-Path -LiteralPath (Join-Path $Repo 'public\build\manifest.json') -PathType Leaf)) {
+    throw 'Vite build completed without producing public/build/manifest.json.'
+}
+
 $LaravelEnv = Join-Path $Repo '.env.e2e'
 if (-not (Test-Path $LaravelEnv)) {
     $KeyBytes = [byte[]]::new(32)
