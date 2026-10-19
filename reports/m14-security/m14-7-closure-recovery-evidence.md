@@ -81,3 +81,19 @@ Earlier in this recovery, `PollLockConcurrencyTest` could not be started with PH
 | M147-F / M14.8 | NOT STARTED / NOT READY |
 
 No source default or synthetic result is presented as evidence of an effective live safety gate. No independent penetration test or complete security assurance is claimed.
+
+## Exact-head CI reconciliation — PR #130
+
+The validation table above records CI as pending at the time the local candidate was committed. PR [#130](https://github.com/zsoltacsai/wpcaregrid/pull/130) was then created from the verified primary and exact head `faa541b822a04562c0fb9735b19c2f56d3d38159` was checked by [run 39203260034](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39203260034). All seven mandatory jobs passed:
+
+| Required job | Result |
+|---|---|
+| Quality (lint, style, dependencies, build, secrets) | PASS |
+| Server tests (PHP 8.4, sqlite) | PASS |
+| Server tests (PHP 8.4, mysql) | PASS |
+| Server tests (PHP 8.4, mariadb) | PASS |
+| Connector tests in WordPress (PHP 8.4, sqlite) | PASS |
+| Connector tests in WordPress (PHP 8.4, mysql) | PASS |
+| Connector tests in WordPress (PHP 8.4, mariadb) | PASS |
+
+The Server MySQL process/concurrency gate step itself passed. Its nine required test files completed successfully (15 tests / 161 assertions total). The Connector MariaDB job also passed on this exact head. The run is evidence for `faa541b...` only; any subsequent PR-head change requires a new exact-head run. PR #130 remains open and unmerged; PR #129 remains open and unmerged. No merged-primary CI exists for this candidate because no merge was requested or performed.
