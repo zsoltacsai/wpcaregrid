@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wpcaregrid.invalid/schemas/m147-staging-audit-evidence-1.0.0.json",
+  "title": "WP CareGrid M147 staging read-only audit evidence",
+  "oneOf": [{"$ref": "#/$defs/identity"}, {"$ref": "#/$defs/m12"}],
+  "$defs": {
+    "identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "audit_version", "audit_id", "scope", "classification", "executed_at", "host", "account", "application", "runtime", "filesystem", "m12_gates", "side_effects"],
+      "properties": {
+        "schema_version": {"const": "1.0.0"}, "audit_version": {"const": "1.0.0"},
+        "audit_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+        "scope": {"const": "RO-01-RO-04-read-only-identity-runtime-capacity"},
+        "classification": {"const": "candidate-host-and-account-matched"},
+        "executed_at": {"type": "string", "format": "date-time"},
+        "host": {"type": "object", "additionalProperties": false, "required": ["hostname", "expected_match"], "properties": {"hostname": {"type": "string", "minLength": 1}, "expected_match": {"const": true}}},
+        "account": {"type": "object", "additionalProperties": false, "required": ["name", "uid", "expected_match", "privileged"], "properties": {"name": {"type": "string", "minLength": 1}, "uid": {"type": "integer", "minimum": 1}, "expected_match": {"const": true}, "privileged": {"const": false}}},
+        "application": {"type": "object", "additionalProperties": false, "required": ["git_head"], "properties": {"git_head": {"type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"}}},
+        "runtime": {"type": "object", "additionalProperties": false, "required": ["php_version"], "properties": {"php_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+].*)?$"}}},
+        "filesystem": {"type": "object", "additionalProperties": false, "required": ["available_bytes"], "properties": {"available_bytes": {"type": "integer", "minimum": 0}}},
+        "m12_gates": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": false, "required": ["effective_value", "verification", "provenance"], "properties": {"effective_value": {"type": ["boolean", "null"]}, "verification": {"enum": ["PASS", "FAIL", "UNKNOWN"]}, "provenance": {"type": "string"}}}},
+        "side_effects": {"type": "object", "additionalProperties": false, "required": ["application_bootstrap", "subprocesses", "database_writes", "filesystem_writes"], "properties": {"application_bootstrap": {"const": false}, "subprocesses": {"const": false}, "database_writes": {"const": false}, "filesystem_writes": {"const": false}}}
+      }
+    },
+    "m12": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "audit_version", "scope", "executed_at", "gates", "side_effects"],
+      "properties": {
+        "schema_version": {"const": "1.0.0"}, "audit_version": {"const": "1.0.0"},
+        "scope": {"const": "M12-effective-gates-read-only"}, "executed_at": {"type": "string", "format": "date-time"},
+        "gates": {"type": "object", "additionalProperties": false, "required": ["M12_DESTRUCTIVE_RETENTION_ENABLED", "M12_PROFILE_ANONYMIZATION_ENABLED", "M12_BACKUP_DELETION_ENABLED", "M12_PROVIDER_DELETION_ENABLED", "M12_BULK_RETENTION_EXECUTION_ENABLED", "M12_SYNTHETIC_PROFILE_ANONYMIZATION_ENABLED"], "properties": {
+          "M12_DESTRUCTIVE_RETENTION_ENABLED": {"$ref": "#/$defs/unknownGate"},
+          "M12_PROFILE_ANONYMIZATION_ENABLED": {"$ref": "#/$defs/unknownGate"},
+          "M12_BACKUP_DELETION_ENABLED": {"$ref": "#/$defs/unknownGate"},
+          "M12_PROVIDER_DELETION_ENABLED": {"$ref": "#/$defs/unknownGate"},
+          "M12_BULK_RETENTION_EXECUTION_ENABLED": {"$ref": "#/$defs/unknownGate"},
+          "M12_SYNTHETIC_PROFILE_ANONYMIZATION_ENABLED": {"$ref": "#/$defs/unknownGate"}
+        }},
+        "side_effects": {"type": "object", "additionalProperties": false, "required": ["application_bootstrap", "subprocesses", "configuration_reads", "writes"], "properties": {"application_bootstrap": {"const": false}, "subprocesses": {"const": false}, "configuration_reads": {"const": false}, "writes": {"const": false}}}
+      }
+    },
+    "unknownGate": {"type": "object", "additionalProperties": false, "required": ["effective_boolean", "provenance", "verification_status"], "properties": {"effective_boolean": {"const": "UNKNOWN"}, "provenance": {"const": "unavailable-no-approved-effective-config-source"}, "verification_status": {"const": "UNKNOWN"}}}
+  }
+}

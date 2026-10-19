@@ -1,16 +1,10 @@
+param([string] $ExpectedCommit = $env:WP_CAREGRID_E2E_EXPECTED_COMMIT)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-$AllowedWorktreeBranches = @{
-    'D:\-=AI=-\-=Git=-\wpcaregrid-connector' = 'feature/connector-e2e'
-    'D:\-=AI=-\-=Git=-\wpcaregrid-combined' = 'integration/connector-seo'
-}
-$ExpectedBranch = $AllowedWorktreeBranches[$Repo]
-if (-not $ExpectedBranch) { throw "Run only from an approved Connector E2E worktree. Found: $Repo" }
-if ((git -C $Repo branch --show-current).Trim() -ne $ExpectedBranch) {
-    throw "Refusing to initialize unless the current branch is $ExpectedBranch."
-}
+$Identity = & (Join-Path $PSScriptRoot 'Assert-ApprovedConnectorBrowserWorktree.ps1') -ExpectedCommit $ExpectedCommit
+$Repo = $Identity.Repository
 
 $E2E = Join-Path $Repo 'storage\e2e'
 $Runtime = Join-Path $E2E 'runtime\php-8.4.26'

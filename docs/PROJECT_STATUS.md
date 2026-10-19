@@ -3,7 +3,27 @@
 > Kept up to date at the end of every milestone (see CLAUDE.md §27).
 > A new session should read CLAUDE.md, this file and the relevant docs, then run `git status` and `git log --oneline -12`.
 
-Last updated: 2026-10-18
+Last updated: 2026-10-19
+
+## M14.7 closure recovery — expanded local evidence (2026-10-19)
+
+This current-status section supersedes older milestone snapshots below; they are retained as historical records.
+
+The current unmerged implementation/evidence candidate is PR [#130](https://github.com/zsoltacsai/wpcaregrid/pull/130), branch `codex/m147-closure-recovery`. Its last code-change commit is `544333f0629c50ac829315698b4a51887563d124`; documentation reconciliation is at `ecfae2b4d65c998f7220c8b2957ac374833e9793`. The protected primary remains `9e11c2035cd343b8cc1615fee4dbcf4a34c16cd9`; PRs #129 and #130 remain open and unmerged. Local isolated Playwright ran the complete selected security-relevant matrix on `5c350b759bed438eb8d967dd329a944a53b91a74`: **14/14 passed**. The separate Laravel Security feature suite passed **102 tests / 1,778 assertions / 0 skips**. The earlier full Laravel strict-MySQL suite passed **1,411 tests / 20,776 assertions / 0 skips**; the supported local Connector suites and prior platform-specific failures are reconciled in the [recovery evidence](../reports/m14-security/m14-7-closure-recovery-evidence.md). These results do not establish staging or live scanner behavior.
+
+Exact-head CI [39233009685](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39233009685) on code-change commit `544333f0629c50ac829315698b4a51887563d124` passed **7/7**. After the documentation reconciliation commit `ecfae2b4d65c998f7220c8b2957ac374833e9793`, exact-head CI [39234984289](https://github.com/zsoltacai/wpcaregrid/actions/runs/39234984289) also passed **7/7**. The required Server MySQL process/concurrency gate passed in both runs, including all nine required files. Connector WordPress MySQL and MariaDB each passed 210 tests / 1,828 assertions / 3 documented skips. The earlier JsonException was a confirmed test-harness JSON signal publication race fixed by atomic temp-file/rename; the formerly failing lock-succession test passed on both engines. **CI-REL-01 remains OPEN pending Owner review/protected merge**, while the identified harness defect is fixed and exact-head validated. The full Stripe-hosted payment browser flows remain unrun because isolated Stripe TEST, public webhook and Mailpit infrastructure was not available; M147-F05 remains OPEN.
+
+Historical run [39230906190](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39230906190) on `512412eba05ef0e521c3365c89e34ab934615c39` completed **6/7**: Connector WordPress MySQL failed in the lock-succession test with `JsonException` after the child observed an incomplete JSON signal; Connector MariaDB passed. Source review confirmed a test-harness publication race (non-atomic final-path write observed by an existence-based reader). The subsequent atomic temp-file/rename correction was validated by the current 7/7 exact-head run above; the 20-second deadline and lock assertions were not weakened. The Server MySQL suite and mandatory process/concurrency gate passed on run 39230906190 as well.
+
+All six live M12 gate values remain **UNKNOWN**. No staging, SSH, Rackforest console, production, customer site, live feed, scanner, queue, external notification, backup/restore, remediation, deployment, Stripe or AI operation occurred. M147-E.2b remains **NO-GO / NOT AUTHORIZED**. AS-16/M147-F01, M147-F02 through F06, M147-F08 and CI-REL-01 retain their open dispositions; no finding is closed by this candidate. M14.7 is **incomplete**, approximately **65%** by delivery estimate, and M14.8 is **NOT READY**.
+
+## M14.7 closure recovery — local engineering candidate (2026-10-19)
+
+Authoritative primary was reverified at `9e11c2035cd343b8cc1615fee4dbcf4a34c16cd9`. PR #129 remains open and unmerged at `0c51d0966bc083c48bbba49ae3314e7968ec2b18`; its exact-head run [39170388169](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39170388169) passed 7/7, including the Server MySQL process/concurrency gate. That CI evidence applies to PR #129 only. The separate `codex/m147-closure-recovery` branch is an implementation/evidence candidate; it is not merged and has no exact-head CI result until its PR is created and checks complete.
+
+This candidate adds a manually invoked, standalone, fail-closed staging identity audit with an M12 mode that returns `UNKNOWN` rather than reading live configuration; it improves the exact-commit-guarded local Connector browser harness; and it adds bounded, redacted diagnostics/worker cleanup to the Connector process-concurrency test. The isolated Connector browser suite passed 3/3 on commit `510aeac849c022786978f6d3c87384dc557afdcc`. This is not staging validation. CI-REL-01 remains open because no local MariaDB process/concurrency reproduction was possible and the timeout root cause remains unproven. See the [recovery evidence](../reports/m14-security/m14-7-closure-recovery-evidence.md).
+
+All six live M12 gates remain **UNKNOWN** and were not read. M147-E.2b remains **NO-GO / NOT AUTHORIZED**; M147-F remains not started, and M14.8 remains not ready. No SSH, staging, production, customer-site, scanner, feed sync, queue, backup, restore, remediation, deployment, or live external service operation occurred. M147-A/B/C/D remain closed within their documented scopes; M147-E.1 remains planning-only. M14.7 remains incomplete (approximately 65% estimate, not a security score). No finding is closed by this candidate.
 
 ## Current milestone — M14.7 M147-E.1 closed (planning only)
 
