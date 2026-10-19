@@ -66,23 +66,27 @@ final class PollLockConcurrencyTest extends TestCase
         foreach (['release', 'refresh'] as $action) {
             $this->clearLockDirectly();
             $oldOwner = $this->startHoldOwner();
-            $oldResult = $oldOwner['config']['result_file'];
-            $oldValue = $this->readLockDirectly();
-            $this->assertMatchesRegularExpression('/^\d{10}:[a-f0-9]{64}$/D', $oldValue);
-            preg_match('/^\d{10}:([a-f0-9]{64})$/D', $oldValue, $matches);
-            $this->writeLockDirectly(sprintf('%010d:%s', time() - Lock::TTL - 5, $matches[1]));
+            try {
+                $oldResult = $oldOwner['config']['result_file'];
+                $oldValue = $this->readLockDirectly();
+                $this->assertMatchesRegularExpression('/^\d{10}:[a-f0-9]{64}$/D', $oldValue);
+                preg_match('/^\d{10}:([a-f0-9]{64})$/D', $oldValue, $matches);
+                $this->writeLockDirectly(sprintf('%010d:%s', time() - Lock::TTL - 5, $matches[1]));
 
-            $successorResults = $this->runSingleRace(1);
-            $this->assertSame([true], $successorResults, 'Exactly one new owner reclaims the expired lease.');
-            $successorValue = $this->readLockDirectly();
-            $this->assertNotSame($oldValue, $successorValue);
+                $successorResults = $this->runSingleRace(1);
+                $this->assertSame([true], $successorResults, 'Exactly one new owner reclaims the expired lease.');
+                $successorValue = $this->readLockDirectly();
+                $this->assertNotSame($oldValue, $successorValue);
 
-            file_put_contents($oldOwner['config']['action_file'], wp_json_encode(['action' => $action], JSON_THROW_ON_ERROR), LOCK_EX);
-            $this->waitForFiles([$oldResult], 20, [$oldOwner]);
-            $result = json_decode((string) file_get_contents($oldResult), true, 8, JSON_THROW_ON_ERROR);
-            $this->assertSame(false, $result[$action === 'release' ? 'released' : 'refreshed'], 'A stale owner must not affect the successor.');
-            $this->assertSame($successorValue, $this->readLockDirectly());
-            $this->finishWorker($oldOwner['process']);
+                file_put_contents($oldOwner['config']['action_file'], wp_json_encode(['action' => $action], JSON_THROW_ON_ERROR), LOCK_EX);
+                $this->waitForFiles([$oldResult], 20, [$oldOwner]);
+                $result = json_decode((string) file_get_contents($oldResult), true, 8, JSON_THROW_ON_ERROR);
+                $this->assertSame(false, $result[$action === 'release' ? 'released' : 'refreshed'], 'A stale owner must not affect the successor.');
+                $this->assertSame($successorValue, $this->readLockDirectly());
+                $this->finishWorker($oldOwner['process']);
+            } finally {
+                $this->stopWorker($oldOwner['process']);
+            }
         }
     }
 
@@ -557,8 +561,10 @@ final class PollLockConcurrencyTest extends TestCase
                 'pid' => $status['pid'] ?? null,
                 'running' => $status['running'] ?? null,
                 'exitcode' => $status['exitcode'] ?? null,
-                'stderr' => substr((string) $stderr, 0, 2000),
-                'result_file' => $worker['config']['result_file'] ?? null,
+                'stderr_bytes' => strlen((string) $stderr),
+                'stderr_sha256' => hash('sha256', (string) $stderr),
+                'mode' => $worker['config']['mode'] ?? null,
+                'result_present' => isset($worker['config']['result_file']) && is_file($worker['config']['result_file']),
             ];
         }
 
@@ -596,7 +602,47 @@ final class PollLockConcurrencyTest extends TestCase
         $exit = $closed >= 0 ? $closed : (int) ($status['exitcode'] ?? -1);
         $this->assertFalse($status['running'], 'Connector lock worker could not be stopped after exceeding its bounded runtime.');
         $this->assertFalse($timedOut, 'Connector lock worker exceeded its bounded runtime.');
-        $this->assertSame(0, $exit, 'Connector lock worker failed: '.$stderr);
+        $this->assertSame(0, $exit, 'Connector lock worker failed; stderr bytes/hash: '.strlen($stderr).'/'.hash('sha256', $stderr));
+    }
+
+    /**
+     * Best-effort bounded cleanup for a worker when an assertion aborts its scenario.
+     * Normal successful workers are reaped by finishWorker() first.
+     *
+     * @param  array{handle: resource, pipes: array<int, resource>}  $process
+     */
+    private function stopWorker(array $process): void
+    {
+        $handle = $process['handle'] ?? null;
+        if (! is_resource($handle)) {
+            return;
+        }
+
+        $status = proc_get_status($handle);
+        if ($status['running'] ?? false) {
+            proc_terminate($handle, 15);
+            $deadline = microtime(true) + 2;
+            do {
+                usleep(10000);
+                $status = proc_get_status($handle);
+            } while (($status['running'] ?? false) && microtime(true) < $deadline);
+        }
+
+        if ($status['running'] ?? false) {
+            proc_terminate($handle, 9);
+            $deadline = microtime(true) + 1;
+            do {
+                usleep(10000);
+                $status = proc_get_status($handle);
+            } while (($status['running'] ?? false) && microtime(true) < $deadline);
+        }
+
+        foreach ($process['pipes'] ?? [] as $pipe) {
+            if (is_resource($pipe)) {
+                fclose($pipe);
+            }
+        }
+        proc_close($handle);
     }
 
     private function requireMysqlProcesses(): void
