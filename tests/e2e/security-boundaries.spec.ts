@@ -25,20 +25,32 @@ test('customer session cannot enter Operator or Owner areas', async ({ page }) =
     }
 });
 
-test('customer profile update rejects a same-origin request without a CSRF token', async ({ page }) => {
+test('customer profile update rejects a cross-origin same-site request without a CSRF token', async ({ page }) => {
     await login(page);
-    await page.goto(`${APP}/account/profile`);
-    await expect(page.locator('#profile-form input[name="first_name"]')).toBeVisible();
+    await page.goto(WORDPRESS);
 
-    // Exercise the browser's real form submission path, but remove only its
-    // CSRF token. This avoids turning a browser navigation assertion into a
-    // fetch transport/CSP assertion while still proving server-side rejection.
-    await page.locator('#profile-form input[name="_token"]').evaluate((token) => token.remove());
-    await page.locator('#profile-form input[name="first_name"]').fill('CSRF-UNAUTHORIZED-CHANGE');
-    const [response] = await Promise.all([
-        page.waitForResponse((candidate) => candidate.url().endsWith('/account/profile') && candidate.request().method() === 'POST'),
-        page.locator('#profile-form button[type="submit"]').click(),
-    ]);
+    // A different local origin on the same host lets the browser send the
+    // synthetic session cookie, while Fetch Metadata reports same-site rather
+    // than same-origin. The simple form-encoded POST avoids a preflight and
+    // deliberately omits both the CSRF form field and headers.
+    const responsePromise = page.waitForResponse((candidate) => candidate.url() === `${APP}/account/profile` && candidate.request().method() === 'POST');
+    await page.evaluate(async (url) => {
+        await fetch(url, {
+            method: 'POST',
+            mode: 'cors',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                _method: 'PUT',
+                first_name: 'CSRF-UNAUTHORIZED-CHANGE',
+                last_name: 'Synthetic',
+                customer_type: 'individual',
+                country_code: 'HU',
+            }),
+        }).catch(() => undefined); // The browser may hide the rejection response when CORS denies reading it.
+    }, `${APP}/account/profile`);
+    const response = await responsePromise;
+    expect((await response.request().headers()).origin).toBe(WORDPRESS);
     expect(response.status()).toBe(419);
 
     await page.goto(`${APP}/account/profile`);
