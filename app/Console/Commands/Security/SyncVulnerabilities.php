@@ -66,46 +66,15 @@ class SyncVulnerabilities extends Command
                 throw new RuntimeException('Insufficient staging disk space.');
             }
 
-            $download = tempnam($feedDirectory, 'wpcg-feed-');
-            if ($download === false || realpath(dirname($download)) !== realpath($feedDirectory)) {
-                if (is_string($download)) {
-                    File::delete($download);
-                }
-                throw new RuntimeException('The feed could not be staged safely.');
-            }
-            @chmod($download, 0600);
+            $addresses = $resolver->resolve('www.wordfence.com');
+            $resolve = array_map(function (string $address): string {
+                $formatted = str_contains($address, ':') ? '['.$address.']' : $address;
 
+                return 'www.wordfence.com:443:'.$formatted;
+            }, $addresses);
+
+            $download = $this->stageWordfenceFeed($url, $key, $resolve, $feedDirectory, $limit);
             try {
-                $addresses = $resolver->resolve('www.wordfence.com');
-                $resolve = array_map(function (string $address): string {
-                    $formatted = str_contains($address, ':') ? '['.$address.']' : $address;
-
-                    return 'www.wordfence.com:443:'.$formatted;
-                }, $addresses);
-
-                $request = Http::connectTimeout((int) config('security.vulnerabilities.connect_timeout_seconds', 5))
-                    ->timeout((int) config('security.vulnerabilities.timeout_seconds', 180))
-                    ->withOptions($this->wordfenceHttpOptions($resolve, $download, $limit))
-                    ->acceptJson()
-                    ->withToken($key);
-
-                $response = $request->get($url);
-                if (! $response->successful()) {
-                    $status = $response->status();
-                    Log::warning('Wordfence vulnerability feed request failed.', ['status' => $status]);
-                    throw new RuntimeException($status === 429 ? 'Wordfence rate limit reached.' : 'Wordfence returned an unsuccessful response.');
-                }
-                $contentType = strtolower(trim(explode(';', (string) $response->header('Content-Type'))[0]));
-                if ($contentType !== 'application/json' && ! preg_match('#^application/[a-z0-9.+-]+\\+json$#', $contentType)) {
-                    throw new RuntimeException('Wordfence returned an unexpected content type.');
-                }
-
-                clearstatcache(true, $download);
-                $bytes = @filesize($download);
-                if ($bytes === false || $bytes === 0 || $bytes > $limit) {
-                    throw new RuntimeException('The feed download was empty, oversized, or incomplete.');
-                }
-
                 $count = WordfenceFeed::import($download, WordfenceFeed::indexPathFor($feedPath), $publisher, $feedPath, $startedAt);
             } finally {
                 File::delete($download);
@@ -122,6 +91,49 @@ class SyncVulnerabilities extends Command
             return self::FAILURE;
         } finally {
             $lock->release();
+        }
+    }
+
+    /** @param list<string> $resolve */
+    protected function stageWordfenceFeed(string $url, string $key, array $resolve, string $feedDirectory, int $limit): string
+    {
+        $download = tempnam($feedDirectory, 'wpcg-feed-');
+        if ($download === false || realpath(dirname($download)) !== realpath($feedDirectory)) {
+            if (is_string($download)) {
+                File::delete($download);
+            }
+            throw new RuntimeException('The feed could not be staged safely.');
+        }
+        @chmod($download, 0600);
+
+        try {
+            $response = Http::connectTimeout((int) config('security.vulnerabilities.connect_timeout_seconds', 5))
+                ->timeout((int) config('security.vulnerabilities.timeout_seconds', 180))
+                ->withOptions($this->wordfenceHttpOptions($resolve, $download, $limit))
+                ->acceptJson()
+                ->withToken($key)
+                ->get($url);
+
+            if (! $response->successful()) {
+                $status = $response->status();
+                Log::warning('Wordfence vulnerability feed request failed.', ['status' => $status]);
+                throw new RuntimeException($status === 429 ? 'Wordfence rate limit reached.' : 'Wordfence returned an unsuccessful response.');
+            }
+            $contentType = strtolower(trim(explode(';', (string) $response->header('Content-Type'))[0]));
+            if ($contentType !== 'application/json' && ! preg_match('#^application/[a-z0-9.+-]+\\+json$#', $contentType)) {
+                throw new RuntimeException('Wordfence returned an unexpected content type.');
+            }
+
+            clearstatcache(true, $download);
+            $bytes = @filesize($download);
+            if ($bytes === false || $bytes === 0 || $bytes > $limit) {
+                throw new RuntimeException('The feed download was empty, oversized, or incomplete.');
+            }
+
+            return $download;
+        } catch (Throwable $exception) {
+            File::delete($download);
+            throw $exception;
         }
     }
 

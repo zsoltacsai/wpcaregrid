@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Security;
 
+use App\Console\Commands\Security\SyncVulnerabilities;
 use App\Security\Vulnerabilities\AtomicIndexPublisher;
 use App\Security\Vulnerabilities\WordfenceFeed;
 use App\Security\Vulnerabilities\WordfenceFeedAddressResolver;
@@ -9,6 +10,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
+use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 class WordfenceV3IntegrationTest extends TestCase
@@ -126,6 +128,75 @@ class WordfenceV3IntegrationTest extends TestCase
         $this->assertSame(0, Artisan::call('security:vulnerabilities:sync'));
         Http::assertSent(fn ($request) => $request->url() === $this->endpoint
             && $request->hasHeader('Authorization', 'Bearer synthetic-api-key'));
+    }
+
+    public function test_real_guzzle_aborts_an_oversized_transfer_and_discards_staging_without_replacing_the_index(): void
+    {
+        $this->assertSame(0, $this->importJson($this->fixtureJson()));
+        $knownGoodIndex = file_get_contents($this->indexPath);
+        $filesBefore = $this->relativeFiles($this->directory);
+
+        $listener = stream_socket_server('tcp://127.0.0.1:0', $errorCode, $errorMessage);
+        $this->assertIsResource($listener, $errorMessage);
+        $address = stream_socket_get_name($listener, false);
+        fclose($listener);
+        $port = (int) substr((string) $address, strrpos((string) $address, ':') + 1);
+
+        $tempDirectory = sys_get_temp_dir();
+        $router = tempnam($tempDirectory, 'wpcg-large-router-');
+        $this->assertNotFalse($router);
+        $this->assertTrue(copy(base_path('tests/Fixtures/wordfence-http-router.php'), $router));
+        $process = new Process([PHP_BINARY, '-S', "127.0.0.1:{$port}", basename($router)], $tempDirectory);
+        $process->start();
+
+        try {
+            $deadline = microtime(true) + 5;
+            do {
+                $connection = @stream_socket_client("tcp://127.0.0.1:{$port}", $errorCode, $errorMessage, 0.1);
+                if (is_resource($connection)) {
+                    fclose($connection);
+                    break;
+                }
+                usleep(20_000);
+            } while (! $process->isTerminated() && microtime(true) < $deadline);
+            $this->assertFalse($process->isTerminated(), 'The local oversized-response server failed to start.');
+
+            $method = new \ReflectionMethod(SyncVulnerabilities::class, 'stageWordfenceFeed');
+            $failure = null;
+            try {
+                $method->invoke(
+                    new SyncVulnerabilities,
+                    "http://www.wordfence.com:{$port}/oversized",
+                    'synthetic-test-token',
+                    ["www.wordfence.com:{$port}:127.0.0.1"],
+                    $this->directory,
+                    1024,
+                );
+            } catch (\Throwable $exception) {
+                $failure = $exception;
+            }
+
+            $this->assertNotNull($failure, 'The oversized transfer must fail before import.');
+            $failureMessages = '';
+            for ($current = $failure; $current !== null; $current = $current->getPrevious()) {
+                $failureMessages .= ' '.$current->getMessage();
+            }
+            $this->assertStringContainsString('aborted by the progress callback', strtolower($failureMessages));
+            $this->assertSame($knownGoodIndex, file_get_contents($this->indexPath));
+            $this->assertSame($filesBefore, $this->relativeFiles($this->directory), 'The failed staging download must leave no temporary file.');
+        } finally {
+            $process->stop();
+            @unlink($router);
+        }
+    }
+
+    /** @return list<string> */
+    private function relativeFiles(string $directory): array
+    {
+        $files = array_map(static fn ($file): string => $file->getRelativePathname(), File::allFiles($directory));
+        sort($files);
+
+        return $files;
     }
 
     public function test_redirect_rate_limit_bad_type_and_interruption_preserve_previous_generation_and_do_not_log_secrets(): void
