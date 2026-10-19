@@ -10,6 +10,8 @@ Exact-head GitHub run [39224766832](https://github.com/zsoltacsai/wpcaregrid/act
 
 The new exact-head run [39227226180](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39227226180) for `fae8be696c24203c7a4d1c8ed34e2ef75fd1fce4` passed **7/7**, including the Server MySQL process/concurrency gate. Connector WordPress MariaDB passed 210 tests / 1,828 assertions with three skips: a MySQL-only restore case and two opt-in 900-second worker-kill cases. The formerly failing lock-succession test passed on this attempt. The failure was not reproduced, but the diagnostic patch consequently did not identify its cause. **CI-REL-01 remains OPEN**; the successful rerun does not establish that the prior worker exit was harmless.
 
+PR #130 documentation reconciliation head `e474df6bb737ceee451902b8c3d42be940d86af0` passed exact-head CI [39229079728](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39229079728), 7/7, including the Server MySQL process/concurrency gate. This does not close CI-REL-01. Proposed measurable disposition if root cause remains unknown (Owner acceptance required): 10 consecutive independent exact-head seven-job CI runs with this MariaDB test passing every time; preserve head SHA, job/test results, and bounded child diagnostics for each run; reset the count on any failure and continue investigation. This is a proposed monitoring threshold, not a claim that 10 passes prove absence of a defect.
+
 ## M147-E.1 readiness review — 2026-10-18
 
 Offline planning baseline: `57b8cf02d655cb7316648785bd9a1b6b07b148e1`. No live environment or M12 value was read. M147-E is not operationally started; M147-E.2 is **NOT EXECUTED — OWNER APPROVAL REQUIRED**.
