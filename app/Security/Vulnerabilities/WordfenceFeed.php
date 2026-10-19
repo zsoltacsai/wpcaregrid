@@ -132,8 +132,19 @@ final class WordfenceFeed implements VulnerabilitySource
         $groupKey = $type.'/'.$slug;
         if (! array_key_exists($groupKey, $this->loadedGroups)) {
             $manifest = $this->readManifest();
-            $path = self::dataRootFor($this->indexPath).DIRECTORY_SEPARATOR.$manifest['generation']
-                .DIRECTORY_SEPARATOR.$type.DIRECTORY_SEPARATOR.$slug.'.jsonl';
+            $generationPath = self::dataRootFor($this->indexPath).DIRECTORY_SEPARATOR.$manifest['generation'];
+            $catalog = $this->readCatalog($generationPath, $manifest['groups']);
+            if ($catalog === null) {
+                $this->invalidIndex = true;
+
+                return [];
+            }
+            if (! in_array($groupKey, $catalog, true)) {
+                $this->loadedGroups[$groupKey] = [];
+
+                return [];
+            }
+            $path = $generationPath.DIRECTORY_SEPARATOR.$type.DIRECTORY_SEPARATOR.$slug.'.jsonl';
             $size = @filesize($path);
             if (is_link($path) || ! is_file($path) || $size === false || $size > 8 * 1024 * 1024) {
                 $this->invalidIndex = true;

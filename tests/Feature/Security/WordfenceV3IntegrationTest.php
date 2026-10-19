@@ -94,6 +94,8 @@ class WordfenceV3IntegrationTest extends TestCase
         $this->assertTrue($source->available());
         $this->assertCount(1, $source->affecting('plugin', 'fixture-plugin', '1.9.9'));
         $this->assertCount(0, $source->affecting('plugin', 'fixture-plugin', '2.0'));
+        $this->assertCount(0, $source->affecting('plugin', 'not-in-feed', '1.0'));
+        $this->assertTrue($source->available(), 'An inventory slug absent from the feed is a valid no-match, not index corruption.');
         $this->assertNull($source->affecting('plugin', 'fixture-plugin', '1.9.9')[0]->cvssScore);
         $this->assertNull($source->affecting('plugin', 'fixture-plugin', '1.9.9')[0]->cve);
         $this->assertSame('https://www.wordfence.com/threat-intel/vulnerabilities/fixture-plugin-issue', $source->affecting('plugin', 'fixture-plugin', '1.9.9')[0]->reference);
