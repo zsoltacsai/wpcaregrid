@@ -54,6 +54,39 @@ Setup and health returned `PASS`. Negative checks confirmed that network-capable
 
 The harness does not provide OS-level network namespace isolation or execute the Connector browser harness. Connector discovery/inactive state is not a browser test. Scanner coverage remains `NOT_RUN`; no feed was configured. The six M12 gate values were not read. A fresh secret-safe read-only confirmation of all six false values remains mandatory before any separately authorized staging scanner validation. AS-16 and M146-F08 remain open.
 
+## Separate local Connector browser E2E harness
+
+The Windows browser harness is a separate local-only environment. It starts
+Laravel and a disposable WordPress site on `127.0.0.1:8317` and
+`127.0.0.1:8318`, uses separate SQLite files and synthetic users, disables
+WordPress cron, blocks non-loopback WordPress HTTP, and configures application
+integrations as local fakes or disabled. The browser suite performs actual UI
+pairing and recovery flows; it does not run against staging or production.
+
+The harness retains its two historical worktree path/branch allowlist entries.
+The recovery path is a third explicit identity, fixed to
+`D:\-=AI=-\-=Git=-\wpcaregrid-m147-recovery` and branch
+`codex/m147-closure-recovery`. Register the exact committed SHA before any
+local server is started, then pass that same 40-character SHA to the runner:
+
+```powershell
+$expected = (git rev-parse --verify HEAD).Trim()
+& .\scripts\e2e\windows\Register-ConnectorBrowserWorktree.ps1 -ExpectedCommit $expected
+& .\scripts\e2e\windows\Invoke-ConnectorBrowserE2E.ps1 -ExpectedCommit $expected
+```
+
+Registration refuses a different directory or branch, a dirty source tree,
+unexpected active service/fixture state, or a HEAD mismatch. Every entry point
+rechecks the repository path, branch and recorded exact HEAD; browser execution
+also requires the explicit `-ExpectedCommit`. The E2E runner first bootstraps
+its pinned local PHP runtime and dependencies, then verifies the synthetic
+configuration, database separation, loopback ports and egress guard before
+starting services. No existing unrelated service is reused or stopped.
+
+The browser harness only covers its declared Connector pairing/recovery
+specification. Stripe and live-service tests remain excluded. A test result
+does not prove staging state or operational scanner safety.
+
 ## Troubleshooting
 
 - Missing locked `wordpress/vendor` packages: install from the committed `wordpress/composer.lock` using the approved Composer procedure. Do not switch versions, disable TLS/integrity, or use `--ignore-platform-reqs`.

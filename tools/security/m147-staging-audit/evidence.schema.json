@@ -11,7 +11,7 @@
         "schema_version": {"const": "1.0.0"}, "audit_version": {"const": "1.0.0"},
         "audit_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
         "scope": {"const": "RO-01-RO-04-read-only-identity-runtime-capacity"},
-        "classification": {"const": "staging-candidate-identity-checked"},
+        "classification": {"const": "candidate-host-and-account-matched"},
         "executed_at": {"type": "string", "format": "date-time"},
         "host": {"type": "object", "additionalProperties": false, "required": ["hostname", "expected_match"], "properties": {"hostname": {"type": "string", "minLength": 1}, "expected_match": {"const": true}}},
         "account": {"type": "object", "additionalProperties": false, "required": ["name", "uid", "expected_match", "privileged"], "properties": {"name": {"type": "string", "minLength": 1}, "uid": {"type": "integer", "minimum": 1}, "expected_match": {"const": true}, "privileged": {"const": false}}},

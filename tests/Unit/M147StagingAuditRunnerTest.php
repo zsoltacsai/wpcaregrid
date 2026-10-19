@@ -24,6 +24,7 @@ final class M147StagingAuditRunnerTest extends TestCase
     protected function tearDown(): void
     {
         $this->removeTree($this->root);
+        $this->removeTree($this->root.'-common');
     }
 
     public function test_reports_allowlisted_read_only_evidence_and_unknown_m12_gates(): void
@@ -96,6 +97,22 @@ final class M147StagingAuditRunnerTest extends TestCase
         self::assertSame(false, $evidence['side_effects']['configuration_reads']);
         self::assertSame('UNKNOWN', $evidence['gates']['M12_DESTRUCTIVE_RETENTION_ENABLED']['effective_boolean']);
         self::assertStringNotContainsString('true', $stdout);
+    }
+
+    public function test_resolves_linked_worktree_git_pointer_without_invoking_git(): void
+    {
+        $gitDirectory = $this->root.'-common/worktrees/fixture';
+        mkdir($gitDirectory.'/refs/heads', 0700, true);
+        file_put_contents($gitDirectory.'/HEAD', "ref: refs/heads/main\n");
+        file_put_contents($gitDirectory.'/refs/heads/main', str_repeat('b', 40)."\n");
+        $this->removeTree($this->root.'/.git');
+        file_put_contents($this->root.'/.git', 'gitdir: '.$gitDirectory."\n");
+        $identity = posix_getpwuid(posix_geteuid());
+        $result = $this->runAudit(gethostname(), $identity['name']);
+        self::assertSame(0, $result['exit'], $result['stderr']);
+        $evidence = json_decode($result['stdout'], true, 32, JSON_THROW_ON_ERROR);
+        self::assertSame(str_repeat('b', 40), $evidence['application']['git_head']);
+        $this->removeTree($gitDirectory);
     }
 
     private function runAudit(string $host, string $account, array $extra = []): array

@@ -46,7 +46,10 @@ Replace both placeholders only from an active authorization record. Do not
 invoke through Laravel, `sudo`, a web endpoint, or an unapproved automation.
 The tool is not evidence that the target is staging by itself. Owner-approved
 host and account values, pinned host identity, and independent environment
-identifiers remain required. This document grants no staging access.
+identifiers remain required. The emitted classification means only that the
+provided hostname and account matched; it does not prove that the checkout,
+database, storage, or Connector is staging. This document grants no staging
+access.
 
 ## Failure behavior
 

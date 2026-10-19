@@ -32,7 +32,7 @@ $ServicesStartedHere = $false
 $SeededHere = $false
 $PlaywrightExit = 1
 
-foreach ($path in @($Php, $Ini, $WpPhp, $WpIni, $Chrome, $PlaywrightCli, $Fixture, $WpHelper, $CredentialsPath)) {
+foreach ($path in @($WpPhp, $Chrome, $PlaywrightCli, $Fixture, $WpHelper)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required local E2E file is missing: $path" }
 }
 foreach ($port in @(8317, 8318)) {
@@ -40,19 +40,6 @@ foreach ($port in @(8317, 8318)) {
 }
 if (Test-Path -LiteralPath $ServiceFile) { throw 'A local service record exists while the required ports are stopped.' }
 if (Test-Path -LiteralPath $StatePath) { throw 'A browser E2E fixture exists; inspect or clean it before another run.' }
-
-$LaravelPhpVersion = (& $Php -v | Select-Object -First 1)
-$WordPressPhpVersion = (& $WpPhp -c $WpIni -r 'echo PHP_VERSION;')
-if ($LaravelPhpVersion -notmatch '8\.4\.26' -or $WordPressPhpVersion -ne '8.3.33') { throw 'The local PHP runtime versions do not match the E2E contract.' }
-$laravelDb = (Resolve-Path (Join-Path $E2E 'laravel.sqlite')).Path
-$wpDb = (Resolve-Path (Join-Path $E2E 'wordpress-site\database\wp.sqlite')).Path
-if ($laravelDb -eq $wpDb -or -not $laravelDb.StartsWith($E2E, [StringComparison]::OrdinalIgnoreCase) -or -not $wpDb.StartsWith($E2E, [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'The local Laravel and WordPress SQLite databases are not isolated.'
-}
-if (-not (Get-Content -Raw -LiteralPath (Join-Path $E2E 'wordpress-site\wp-config.php')).Contains("define('WP_HTTP_BLOCK_EXTERNAL', true)")) {
-    throw 'The WordPress outbound HTTP guard is missing.'
-}
-Write-Output 'Preflight runtimes, separate SQLite files, loopback-only ports, and WordPress egress guard verified.'
 
 function Invoke-BrowserFixture([string] $Mode, [string[]] $Arguments = @()) {
     & $Php -c $Ini $Fixture $Mode @Arguments
@@ -68,6 +55,23 @@ try {
     $env:WP_CAREGRID_E2E_EXPECTED_COMMIT = $ExpectedCommit
     & (Join-Path $PSScriptRoot 'Initialize-Local.ps1') -ExpectedCommit $ExpectedCommit
     if ($LASTEXITCODE -ne 0) { throw 'Local E2E initialization failed.' }
+
+    foreach ($path in @($Php, $Ini, $WpIni, $CredentialsPath, (Join-Path $E2E 'laravel.sqlite'), (Join-Path $E2E 'wordpress-site\database\wp.sqlite'), (Join-Path $E2E 'wordpress-site\wp-config.php'))) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Initialization did not create a required isolated E2E file: $path" }
+    }
+    $LaravelPhpVersion = (& $Php -v | Select-Object -First 1)
+    $WordPressPhpVersion = (& $WpPhp -c $WpIni -r 'echo PHP_VERSION;')
+    if ($LaravelPhpVersion -notmatch '8\.4\.26' -or $WordPressPhpVersion -ne '8.3.33') { throw 'The local PHP runtime versions do not match the E2E contract.' }
+    $laravelDb = (Resolve-Path (Join-Path $E2E 'laravel.sqlite')).Path
+    $wpDb = (Resolve-Path (Join-Path $E2E 'wordpress-site\database\wp.sqlite')).Path
+    if ($laravelDb -eq $wpDb -or -not $laravelDb.StartsWith($E2E, [StringComparison]::OrdinalIgnoreCase) -or -not $wpDb.StartsWith($E2E, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The local Laravel and WordPress SQLite databases are not isolated.'
+    }
+    if (-not (Get-Content -Raw -LiteralPath (Join-Path $E2E 'wordpress-site\wp-config.php')).Contains("define('WP_HTTP_BLOCK_EXTERNAL', true)")) {
+        throw 'The WordPress outbound HTTP guard is missing.'
+    }
+    Write-Output 'Preflight runtimes, separate SQLite files, loopback-only ports, and WordPress egress guard verified.'
+
     & (Join-Path $PSScriptRoot 'Start-Local.ps1') -ExpectedCommit $ExpectedCommit
     if ($LASTEXITCODE -ne 0) { throw 'Local E2E services did not start.' }
     $ServicesStartedHere = $true

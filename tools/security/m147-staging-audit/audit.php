@@ -70,6 +70,22 @@ function readSafeFile(string $path, int $maximumBytes): string
     return trim($contents);
 }
 
+function rejectSymlinkComponents(string $path): void
+{
+    $absolute = str_starts_with($path, DIRECTORY_SEPARATOR);
+    $segments = explode(DIRECTORY_SEPARATOR, trim($path, DIRECTORY_SEPARATOR));
+    $cursor = $absolute ? DIRECTORY_SEPARATOR : '';
+    foreach ($segments as $segment) {
+        if ($segment === '' || $segment === '.') {
+            continue;
+        }
+        $cursor = $cursor === DIRECTORY_SEPARATOR ? $cursor.$segment : ($cursor === '' ? $segment : $cursor.DIRECTORY_SEPARATOR.$segment);
+        if (is_link($cursor)) {
+            fail('GIT_METADATA_SYMLINK');
+        }
+    }
+}
+
 function resolveGitDirectory(string $checkout): string
 {
     $marker = $checkout.'/.git';
@@ -94,6 +110,7 @@ function resolveGitDirectory(string $checkout): string
     if (! is_string($resolved) || ! is_dir($resolved)) {
         fail('GIT_DIRECTORY_UNAVAILABLE');
     }
+    rejectSymlinkComponents($resolved);
 
     return $resolved;
 }
@@ -127,9 +144,7 @@ function readGitHead(string $gitDirectory): string
     }
     $ref = $matches[1];
     $refPath = $gitDirectory.'/'.$ref;
-    if (is_link($refPath)) {
-        fail('GIT_REF_SYMLINK');
-    }
+    rejectSymlinkComponents($refPath);
     if (is_file($refPath)) {
         $commit = readSafeFile($refPath, 1024);
     } else {
@@ -183,7 +198,7 @@ function auditIdentity(array $options): array
         'audit_version' => AUDIT_VERSION,
         'audit_id' => bin2hex(random_bytes(16)),
         'scope' => 'RO-01-RO-04-read-only-identity-runtime-capacity',
-        'classification' => 'staging-candidate-identity-checked',
+        'classification' => 'candidate-host-and-account-matched',
         'executed_at' => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z'),
         'host' => ['hostname' => $hostname, 'expected_match' => true],
         'account' => ['name' => $identity['name'], 'uid' => $identity['uid'], 'expected_match' => true, 'privileged' => false],
