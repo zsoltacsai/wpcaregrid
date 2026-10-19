@@ -73,6 +73,22 @@ class SecurityScanTest extends TestCase
         $this->assertEquals(['security' => ['scan_uuid' => $scan->uuid, 'part' => 1, 'complete' => true, 'findings' => 2]], WebsiteJob::where('type', 'SECURITY_SCAN')->sole()->result);
     }
 
+    public function test_integrity_result_rejects_malware_findings_before_incident_and_backup_side_effects(): void
+    {
+        $site = $this->securitySite();
+        $scan = $this->requestScan($site, ScanType::Integrity);
+
+        $this->reportScan($site, $scan, [$this->suspiciousFile(
+            'wp-content/uploads/hostile.php', 'critical', 'high',
+        )])->assertSuccessful();
+
+        $this->assertSame(ScanStatus::Failed, $scan->refresh()->status);
+        $this->assertSame('INVALID_RESULT', $scan->error_code);
+        $this->assertSame(0, SecurityFinding::count());
+        $this->assertSame(0, $site['website']->securityIncidents()->count());
+        $this->assertSame(0, $site['website']->backups()->count());
+    }
+
     public function test_a_scan_continues_in_parts_until_the_site_reports_it_complete(): void
     {
         $site = $this->securitySite();

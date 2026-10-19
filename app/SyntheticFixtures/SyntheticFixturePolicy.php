@@ -49,6 +49,17 @@ final class SyntheticFixturePolicy
             && hash_equals((string) config('synthetic_fixtures.site_uuid'), (string) $website->uuid);
     }
 
+    /** Only the exact active M8 fixture may run an explicitly enabled Integrity scan. */
+    public function securityScanAllowed(Website $website, string $scanType): bool
+    {
+        return $scanType === 'integrity'
+            && $this->isEnabledFor($website)
+            && (bool) config('synthetic_fixtures.security_scan_enabled')
+            && is_string(config('synthetic_fixtures.site_uuid'))
+            && hash_equals((string) config('synthetic_fixtures.site_uuid'), (string) $website->uuid)
+            && $website->customer?->active === true;
+    }
+
     /** Owner pairing is available only for the active, explicitly configured M8 fixture. */
     public function ownerPairingAllowed(Website $website): bool
     {
@@ -57,9 +68,17 @@ final class SyntheticFixturePolicy
             && hash_equals((string) config('synthetic_fixtures.site_uuid'), (string) $website->uuid);
     }
 
-    public function jobAllowed(Website $website, JobType $type): bool
+    public function jobAllowed(Website $website, JobType $type, array $payload = []): bool
     {
-        if (! $this->isEnabledFor($website) || ! in_array($type, self::ALLOWED_JOBS, true)) {
+        if (! $this->isEnabledFor($website)) {
+            return false;
+        }
+
+        if ($type === JobType::SecurityScan) {
+            return $this->securityScanAllowed($website, (string) ($payload['scan_type'] ?? ''));
+        }
+
+        if (! in_array($type, self::ALLOWED_JOBS, true)) {
             return false;
         }
 

@@ -4,6 +4,8 @@ return [
     // All capabilities are opt-in and are additionally bound to the staging identity.
     'provisioning_enabled' => (bool) env('SYNTHETIC_FIXTURE_PROVISIONING_ENABLED', false),
     'controlled_execution_enabled' => (bool) env('SYNTHETIC_FIXTURE_CONTROLLED_EXECUTION_ENABLED', false),
+    // Connector security scans are a separate opt-in from controlled backup/restore polling.
+    'security_scan_enabled' => (bool) env('M8_SYNTHETIC_SECURITY_SCAN_ENABLED', false),
     'restore_enabled' => (bool) env('SYNTHETIC_FIXTURE_RESTORE_ENABLED', false),
     'site_uuid' => env('M8_SYNTHETIC_SITE_UUID'),
     'ttl_days' => (int) env('SYNTHETIC_FIXTURE_TTL_DAYS', 30),
