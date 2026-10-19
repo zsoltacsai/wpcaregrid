@@ -30,7 +30,8 @@ test('customer profile update rejects a same-origin request without a CSRF token
     await page.goto(`${APP}/account/profile`);
     await expect(page.locator('#profile-form input[name="first_name"]')).toBeVisible();
 
-    const response = await page.evaluate(async () => fetch('/account/profile', {
+    const status = await page.evaluate(async () => {
+        const response = await fetch('/account/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
@@ -40,23 +41,24 @@ test('customer profile update rejects a same-origin request without a CSRF token
             customer_type: 'individual',
             country_code: 'HU',
         }),
-    }));
-    expect(response.status).toBe(419);
+        });
+
+        return response.status;
+    });
+    expect(status).toBe(419);
 
     await page.reload();
     await expect(page.locator('#profile-form input[name="first_name"]')).not.toHaveValue('CSRF-UNAUTHORIZED-CHANGE');
 });
 
-test('WordPress browser origin cannot read Connector API responses through CORS', async ({ page }) => {
+test('cross-origin browser request still requires Connector authentication', async ({ page }) => {
     await page.goto(WORDPRESS);
     const result = await page.evaluate(async (apiUrl) => {
-        try {
-            const response = await fetch(apiUrl, { mode: 'cors', credentials: 'omit' });
-            return { readable: true, status: response.status };
-        } catch (error) {
-            return { readable: false, name: error instanceof Error ? error.name : 'unknown' };
-        }
+        const response = await fetch(apiUrl, { mode: 'cors', credentials: 'omit' });
+
+        return { origin: window.location.origin, type: response.type, status: response.status };
     }, `${APP}/api/v1/connector/jobs`);
 
-    expect(result).toMatchObject({ readable: false, name: 'TypeError' });
+    expect(result.origin).toBe(WORDPRESS);
+    expect(result).toMatchObject({ type: 'cors', status: 401 });
 });

@@ -186,6 +186,9 @@ if ($mode === 'browser-cleanup') {
             DB::table($table)->whereIn('website_id', $websiteIds)->delete();
         }
         DB::table('websites')->whereIn('id', $websiteIds)->delete();
+        // Profile pages can create a blank billing-identity row. It belongs to
+        // the synthetic customer fixture and must be removed before customers.
+        DB::table('customer_billing_identities')->whereIn('customer_id', $customerIds)->delete();
         DB::table('subscriptions')->whereIn('id', $subscriptionIds)->delete();
         DB::table('customers')->whereIn('id', $customerIds)->delete();
         DB::table('users')->whereIn('id', $userIds)->delete();

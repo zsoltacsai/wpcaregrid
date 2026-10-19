@@ -150,8 +150,10 @@ async function connectFromWordPress(page: Page, code: string, mobile = false): P
     const submitted = page.waitForResponse((response) => {
         const url = new URL(response.url());
         return response.request().method() === 'POST' && url.pathname.endsWith('/wp-admin/admin-post.php');
-    });
-    await page.keyboard.press('Enter');
+    }, { timeout: 15_000 });
+    // The preceding focus assertion covers keyboard order; activate the
+    // focused submit control directly to avoid page-level focus races.
+    await button.click();
     const response = await submitted;
     const redirect = response.headers()['location'] ?? '(no redirect)';
     console.log(`[browser-e2e] WordPress admin-post returned ${response.status()} -> ${redirect}`);

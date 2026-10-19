@@ -25,7 +25,13 @@ async function chooseLanguage(page: Page, name: 'Magyar' | 'English'): Promise<v
     if (await toggle.isVisible()) {
         await toggle.click();
     }
-    await page.getByRole('group', { name: /^(Language|Nyelv)$/ }).getByRole('button', { name, exact: true }).first().click();
+    const group = page.getByRole('group', { name: /^(Language|Nyelv)$/ });
+    const link = group.getByRole('link', { name, exact: true });
+    if (await link.count()) {
+        await link.first().click();
+    } else {
+        await group.getByRole('button', { name, exact: true }).first().click();
+    }
     await expect(page.locator('html')).toHaveAttribute('lang', name === 'Magyar' ? 'hu' : 'en');
 }
 
@@ -53,7 +59,7 @@ test('public pages: switching the language changes everything and persists', asy
     await expect(page.locator('h1')).toContainText('Plans and pricing');
 });
 
-test('pricing: forint only in both languages, monthly/annual and WordPress/WooCommerce', async ({ page }) => {
+test('pricing: selectable HUF prices remain correct in both languages and product tabs', async ({ page }) => {
     for (const [lang, monthly, annual, free] of [['en', '18,990', '189,900', '2 months free'], ['hu', '18 990', '189 900', '2 hónap ingyenes']] as const) {
         await page.goto('/');
         if ((await htmlLang(page)) !== lang) {
@@ -61,9 +67,13 @@ test('pricing: forint only in both languages, monthly/annual and WordPress/WooCo
         }
         await page.goto('/pricing');
 
-        // Only forint has prices: a label, no selector; Hungarian is always HUF.
-        await expect(page.getByText('HUF (Ft)')).toBeVisible();
-        await expect(page.locator('select[name="currency"]')).toHaveCount(0);
+        // Select the configured HUF display option; checkout still resolves its
+        // charge from server-side market rules, not this presentation choice.
+        const currency = page.locator('select[name="currency"]');
+        await expect(currency).toBeVisible();
+        await expect(currency.locator('option').evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value))).resolves.toContain('HUF');
+        await currency.selectOption('HUF');
+        await expect(currency).toHaveValue('HUF');
 
         const normal = (text: string | null) => (text ?? '').replace(/[  ]/g, ' ');
         expect(normal(await page.locator('#pricing-panel-wordpress').textContent())).toContain(monthly);
@@ -124,9 +134,9 @@ test('mobile: the selector is in the menu and works with the keyboard', async ({
     await page.getByRole('button', { name: 'Open menu' }).click();
     const group = page.getByRole('group', { name: 'Language' });
     await expect(group).toBeVisible();
-    await expect(group.getByRole('button', { name: 'English' })).toHaveAttribute('aria-current', 'true');
+    await expect(group.getByRole('link', { name: 'English' })).toHaveAttribute('aria-current', 'page');
 
-    await group.getByRole('button', { name: 'Magyar' }).focus();
+    await group.getByRole('link', { name: 'Magyar' }).focus();
     await page.keyboard.press('Enter');
     await expect(page.locator('html')).toHaveAttribute('lang', 'hu');
     expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
@@ -176,6 +186,7 @@ test.describe('customer area', () => {
     test('the profile form keeps its values when the language is switched', async ({ page }) => {
         await login(page);
         await page.goto('/account/profile');
+        await page.locator('input[name="customer_type"][value="company"]').check();
         await page.locator('input[name="city"]').fill('Debrecen');
         await chooseLanguage(page, 'Magyar');
 
