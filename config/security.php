@@ -9,7 +9,7 @@
 return [
 
     // Server-side engine version, recorded on every scan (findings are reproducible).
-    'scanner_version' => '1.0.0',
+    'scanner_version' => '1.1.0',
 
     'scan' => [
         // Seconds the site may spend on one scan part before it stops and
@@ -34,7 +34,7 @@ return [
     | source; "not configured" is shown instead, never "no vulnerabilities".
     |
     |   none       no source (default)
-    |   wordfence  a Wordfence Intelligence feed file (v2 JSON), refreshed by
+    |   wordfence  a Wordfence Intelligence v3 Scanner Feed, refreshed by
     |              `php artisan security:vulnerabilities:sync` when a feed
     |              URL (and key, if the feed needs one) is configured
     */
@@ -43,12 +43,15 @@ return [
         'feed_path' => env('SECURITY_VULNERABILITY_FEED_PATH', storage_path('app/private/security/vulnerabilities.json')),
         'feed_url' => env('SECURITY_VULNERABILITY_FEED_URL'),
         'feed_key' => env('SECURITY_VULNERABILITY_FEED_KEY'),
+        'scheduled_sync_enabled' => (bool) env('SECURITY_VULNERABILITY_SCHEDULE_ENABLED', false),
         // A feed older than this is treated as unavailable.
         'max_age_hours' => (int) env('SECURITY_VULNERABILITY_MAX_AGE_HOURS', 72),
-        // Feed downloads/imports are streamed or rejected above this bounded ceiling.
-        'max_bytes' => 64 * 1024 * 1024,
-        'connect_timeout_seconds' => 3,
-        'timeout_seconds' => 10,
+        // The current complete v3 feed is about 123 MB. Keep a bounded 160 MiB ceiling.
+        'max_bytes' => 160 * 1024 * 1024,
+        // Compact per-component index ceiling; oversized imports fail without replacing the active generation.
+        'max_index_bytes' => 128 * 1024 * 1024,
+        'connect_timeout_seconds' => 5,
+        'timeout_seconds' => 180,
     ],
 
     /*

@@ -4,149 +4,147 @@ namespace App\Console\Commands\Security;
 
 use App\Security\Vulnerabilities\AtomicIndexPublisher;
 use App\Security\Vulnerabilities\WordfenceFeed;
+use App\Security\Vulnerabilities\WordfenceFeedAddressResolver;
 use Illuminate\Console\Command;
-use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
+use Throwable;
 
-/**
- * Refresh the vulnerability index. Downloads the Wordfence Intelligence
- * feed only from the configured SECURITY_VULNERABILITY_FEED_URL (with
- * SECURITY_VULNERABILITY_FEED_KEY when the feed needs one), or imports a
- * feed file already on disk (--file). Never contacts anything unconfigured.
- */
+/** Downloads only the official v3 scanner feed, or imports an explicitly supplied local fixture/file. */
 class SyncVulnerabilities extends Command
 {
-    protected $signature = 'security:vulnerabilities:sync {--file= : Import this downloaded feed file instead of downloading}';
+    protected $signature = 'security:vulnerabilities:sync {--file= : Import a local feed file instead of downloading}';
 
-    protected $description = 'Download or import the vulnerability feed and rebuild its index';
+    protected $description = 'Download or import the Wordfence v3 vulnerability feed and rebuild its index';
 
-    public function handle(AtomicIndexPublisher $publisher): int
+    private const ENDPOINT = 'https://www.wordfence.com/api/intelligence/v3/vulnerabilities/scanner';
+
+    public function handle(WordfenceFeedAddressResolver $resolver, AtomicIndexPublisher $publisher): int
     {
         if (config('security.vulnerabilities.source') !== 'wordfence') {
-            $this->components->warn('No vulnerability source is configured (SECURITY_VULNERABILITY_SOURCE=wordfence).');
+            $this->components->warn('No vulnerability source is configured.');
 
             return self::FAILURE;
         }
 
-        $feedPath = (string) config('security.vulnerabilities.feed_path');
-        $source = $this->option('file');
+        $lock = Cache::lock('security:vulnerabilities:sync', 3600);
+        if (! $lock->get()) {
+            $this->components->warn('Another vulnerability feed synchronization is already running.');
 
-        if (! $source) {
+            return self::FAILURE;
+        }
+
+        try {
+            $startedAt = (int) floor(microtime(true) * 1000);
+            $feedPath = (string) config('security.vulnerabilities.feed_path');
+            $source = $this->option('file');
+            if ($source) {
+                $count = WordfenceFeed::import((string) $source, WordfenceFeed::indexPathFor($feedPath), $publisher, null, $startedAt);
+                $this->components->info("Vulnerability index rebuilt from local input: {$count} affected-software entries.");
+
+                return self::SUCCESS;
+            }
+
             $url = (string) config('security.vulnerabilities.feed_url');
-            if (! str_starts_with($url, 'https://')) {
-                $this->components->error('Set SECURITY_VULNERABILITY_FEED_URL (https) or pass --file.');
+            $key = config('security.vulnerabilities.feed_key');
+            if ($url !== self::ENDPOINT || ! is_string($key) || trim($key) === '') {
+                $this->components->error('Configure the official Wordfence v3 Scanner Feed URL and the Owner-managed API key.');
 
                 return self::FAILURE;
             }
 
-            File::ensureDirectoryExists(dirname($feedPath));
-            $download = tempnam(dirname($feedPath), 'wpcg-feed-');
-            if ($download === false || realpath(dirname($download)) !== realpath(dirname($feedPath))) {
+            $feedDirectory = dirname($feedPath);
+            File::ensureDirectoryExists($feedDirectory);
+            $limit = min(160 * 1024 * 1024, max(1, (int) config('security.vulnerabilities.max_bytes', 160 * 1024 * 1024)));
+            $indexLimit = (int) config('security.vulnerabilities.max_index_bytes', 128 * 1024 * 1024);
+            $minimumFreeSpace = $limit + 2 * $indexLimit + 64 * 1024 * 1024;
+            $freeSpace = @disk_free_space($feedDirectory);
+            if ($freeSpace === false || $freeSpace < $minimumFreeSpace) {
+                throw new RuntimeException('Insufficient staging disk space.');
+            }
+
+            $download = tempnam($feedDirectory, 'wpcg-feed-');
+            if ($download === false || realpath(dirname($download)) !== realpath($feedDirectory)) {
                 if (is_string($download)) {
                     File::delete($download);
                 }
-                $this->components->error('The feed could not be prepared safely.');
-
-                return self::FAILURE;
+                throw new RuntimeException('The feed could not be staged safely.');
             }
-
-            $indexPath = WordfenceFeed::indexPathFor($feedPath);
-            $publishDirectory = null;
-            $stagedIndex = null;
+            @chmod($download, 0600);
 
             try {
-                $publishDirectory = dirname($indexPath).DIRECTORY_SEPARATOR.'wpcg-index-stage-'.bin2hex(random_bytes(12));
-                if (! @mkdir($publishDirectory, 0700) || is_link($publishDirectory)
-                    || realpath(dirname($publishDirectory)) !== realpath(dirname($indexPath))) {
-                    throw new RuntimeException('The index publication directory could not be prepared safely.');
-                }
-                $stagedIndex = $publishDirectory.DIRECTORY_SEPARATOR.'index.json';
+                $addresses = $resolver->resolve('www.wordfence.com');
+                $resolve = array_map(function (string $address): string {
+                    $formatted = str_contains($address, ':') ? '['.$address.']' : $address;
 
-                $request = Http::connectTimeout((int) config('security.vulnerabilities.connect_timeout_seconds'))
-                    ->timeout((int) config('security.vulnerabilities.timeout_seconds'))
-                    ->withOptions(['allow_redirects' => false, 'stream' => true]);
-                if ($key = config('security.vulnerabilities.feed_key')) {
-                    $request = $request->withToken($key);
-                }
+                    return 'www.wordfence.com:443:'.$formatted;
+                }, $addresses);
+
+                $request = Http::connectTimeout((int) config('security.vulnerabilities.connect_timeout_seconds', 5))
+                    ->timeout((int) config('security.vulnerabilities.timeout_seconds', 180))
+                    ->withOptions([
+                        'allow_redirects' => false,
+                        'stream' => true,
+                        'proxy' => '',
+                        'curl' => [CURLOPT_RESOLVE => $resolve],
+                    ])
+                    ->acceptJson()
+                    ->withToken($key);
 
                 $response = $request->get($url);
                 if (! $response->successful()) {
-                    throw new RuntimeException('The provider returned a non-success response.');
+                    $status = $response->status();
+                    Log::warning('Wordfence vulnerability feed request failed.', ['status' => $status]);
+                    throw new RuntimeException($status === 429 ? 'Wordfence rate limit reached.' : 'Wordfence returned an unsuccessful response.');
                 }
                 $contentType = strtolower(trim(explode(';', (string) $response->header('Content-Type'))[0]));
-                if ($contentType !== 'application/json' && ! preg_match('#^application/[a-z0-9.+-]+\\+json$#', $contentType)) {
-                    throw new RuntimeException('The provider returned an unexpected content type.');
+                if ($contentType !== 'application/json' && ! preg_match('#^application/[a-z0-9.+-]+\+json$#', $contentType)) {
+                    throw new RuntimeException('Wordfence returned an unexpected content type.');
                 }
 
-                $limit = min(64 * 1024 * 1024, max(1, (int) config('security.vulnerabilities.max_bytes')));
                 $body = $response->toPsrResponse()->getBody();
-                $output = fopen($download, 'wb');
+                $output = @fopen($download, 'wb');
                 if ($output === false) {
                     throw new RuntimeException('The temporary feed file could not be opened.');
                 }
-
                 try {
                     $bytes = 0;
                     while (! $body->eof()) {
-                        // Read at most one byte over the cap so an oversized response
-                        // is rejected before it can be buffered or written in full.
-                        $chunk = $body->read(min(8192, $limit - $bytes + 1));
+                        $chunk = $body->read(min(65536, $limit - $bytes + 1));
                         if ($chunk === '') {
                             break;
                         }
                         $bytes += strlen($chunk);
                         if ($bytes > $limit || fwrite($output, $chunk) !== strlen($chunk)) {
-                            throw new RuntimeException('The feed exceeded its configured size limit or could not be written.');
+                            throw new RuntimeException('The feed exceeded its size limit or could not be written.');
                         }
+                    }
+                    if (! fflush($output) || $bytes === 0) {
+                        throw new RuntimeException('The feed download was empty or incomplete.');
                     }
                 } finally {
                     fclose($output);
                 }
 
-                if ($bytes === 0) {
-                    throw new RuntimeException('The feed response was empty.');
-                }
-
-                // Build the complete replacement index away from the active path.
-                // The scanner reads only the index, so publish that single
-                // authoritative artifact atomically. The raw response stays
-                // temporary; publishing two independent active files cannot be
-                // made atomic with two renames. Remove the legacy raw cache
-                // before publishing, so it cannot masquerade as this index's
-                // source if the atomic index replacement fails.
-                $count = WordfenceFeed::import($download, $stagedIndex);
-                if (file_exists($feedPath) || is_link($feedPath)) {
-                    if (is_link($feedPath) || ! is_file($feedPath) || ! @unlink($feedPath)) {
-                        throw new RuntimeException('The legacy feed cache could not be removed safely.');
-                    }
-                }
-                $publisher->publish($stagedIndex, $indexPath);
-            } catch (ConnectionException|RuntimeException $e) {
-                $this->components->error('The feed could not be safely downloaded or validated.');
-
-                return self::FAILURE;
+                $count = WordfenceFeed::import($download, WordfenceFeed::indexPathFor($feedPath), $publisher, $feedPath, $startedAt);
             } finally {
                 File::delete($download);
-                if (is_string($publishDirectory) && is_dir($publishDirectory) && ! is_link($publishDirectory)) {
-                    File::deleteDirectory($publishDirectory);
-                }
             }
+
+            $this->components->info("Wordfence v3 vulnerability index rebuilt: {$count} affected-software entries.");
+
+            return self::SUCCESS;
+        } catch (Throwable $exception) {
+            // Only the exception class is retained; provider messages and HTTP headers may contain secrets.
+            Log::warning('Wordfence vulnerability feed synchronization failed.', ['exception_class' => $exception::class]);
+            $this->components->error('The vulnerability feed could not be safely downloaded, validated, or published.');
+
+            return self::FAILURE;
+        } finally {
+            $lock->release();
         }
-
-        if ($source) {
-            try {
-                $count = WordfenceFeed::import((string) $source, WordfenceFeed::indexPathFor($feedPath));
-            } catch (RuntimeException $e) {
-                $this->components->error($e->getMessage());
-
-                return self::FAILURE;
-            }
-        }
-
-        $this->components->info("Vulnerability index rebuilt: {$count} affected-software entries.");
-
-        return self::SUCCESS;
     }
 }

@@ -6,20 +6,21 @@ use App\Security\PlainText;
 use App\Security\Severity;
 use Illuminate\Support\Facades\File;
 use RuntimeException;
+use Throwable;
 
-/**
- * Wordfence Intelligence vulnerability data (v2 feed format), turned into a
- * compact index grouped by software type and slug. The feed is downloaded
- * by `security:vulnerabilities:sync` (only when a feed URL is configured) or
- * imported from a file; scans read only the index.
- *
- * Only fields the feed provides are kept: affected version ranges, patched
- * versions, CVE, CVSS score and rating, title. Nothing is filled in.
- */
+/** Streaming Wordfence Intelligence v3 Scanner Feed importer and index reader. */
 final class WordfenceFeed implements VulnerabilitySource
 {
-    /** @var array<string, array<string, list<array<string, mixed>>>>|null */
-    private ?array $index = null;
+    private ?array $manifest = null;
+
+    private ?array $catalog = null;
+
+    private ?string $validatedGeneration = null;
+
+    private bool $invalidIndex = false;
+
+    /** @var array<string, list<array<string, mixed>>> */
+    private array $loadedGroups = [];
 
     public function __construct(private readonly string $indexPath) {}
 
@@ -33,44 +34,173 @@ final class WordfenceFeed implements VulnerabilitySource
         return preg_replace('/\.json$/', '', $feedPath).'.index.json';
     }
 
+    public static function dataRootFor(string $indexPath): string
+    {
+        return $indexPath.'.data';
+    }
+
     public function name(): string
     {
         return 'wordfence';
     }
 
+    public function unavailableReason(): string
+    {
+        $manifest = $this->readManifest();
+        if ($manifest === null) {
+            return 'VULNERABILITY_FEED_UNAVAILABLE';
+        }
+        if ((int) config('security.vulnerabilities.max_age_hours') > 0
+            && $manifest['created_at'] < now()->subHours((int) config('security.vulnerabilities.max_age_hours'))->getTimestamp()) {
+            return 'VULNERABILITY_FEED_STALE';
+        }
+
+        return 'VULNERABILITY_FEED_INVALID';
+    }
+
     public function available(): bool
     {
-        if (! is_file($this->indexPath)) {
+        $manifest = $this->readManifest();
+        if ($this->invalidIndex || $manifest === null || $manifest['entries'] < 1) {
+            return false;
+        }
+        $maxAge = (int) config('security.vulnerabilities.max_age_hours');
+        if ($maxAge > 0 && $manifest['created_at'] < now()->subHours($maxAge)->getTimestamp()) {
+            return false;
+        }
+        if ($this->validatedGeneration === $manifest['generation']) {
+            return true;
+        }
+
+        $generationPath = self::dataRootFor($this->indexPath).DIRECTORY_SEPARATOR.$manifest['generation'];
+        if (is_link($generationPath) || ! is_dir($generationPath)) {
+            return false;
+        }
+        $catalog = $this->readCatalog($generationPath, $manifest['groups']);
+        if ($catalog === null) {
             return false;
         }
 
-        $maxAge = (int) config('security.vulnerabilities.max_age_hours');
-        $maxBytes = min(64 * 1024 * 1024, max(1, (int) config('security.vulnerabilities.max_bytes', 64 * 1024 * 1024)));
-        $size = @filesize($this->indexPath);
+        $expected = ['core' => 0, 'plugin' => 0, 'theme' => 0];
+        foreach ($catalog as $group) {
+            [$type, $slug] = explode('/', $group, 2);
+            $expected[$type]++;
+            $groupFile = $generationPath.DIRECTORY_SEPARATOR.$type.DIRECTORY_SEPARATOR.$slug.'.jsonl';
+            if (is_link($groupFile) || ! is_file($groupFile)) {
+                return false;
+            }
+        }
+        foreach ($expected as $type => $number) {
+            $directory = $generationPath.DIRECTORY_SEPARATOR.$type;
+            if (! is_dir($directory)) {
+                if ($number > 0) {
+                    return false;
+                }
 
-        return $size !== false && $size >= 2 && $size <= $maxBytes
-            && ($maxAge <= 0 || filemtime($this->indexPath) >= now()->subHours($maxAge)->getTimestamp())
-            && $this->load() !== [];
+                continue;
+            }
+            if (is_link($directory)) {
+                return false;
+            }
+            $actual = 0;
+            foreach (new \FilesystemIterator($directory, \FilesystemIterator::SKIP_DOTS) as $item) {
+                if ($item->isLink() || ! $item->isFile() || ! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}\.jsonl$/', $item->getFilename())) {
+                    return false;
+                }
+                $actual++;
+            }
+            if ($actual !== $number) {
+                return false;
+            }
+        }
+
+        $this->validatedGeneration = $manifest['generation'];
+
+        return true;
     }
 
     public function affecting(string $type, string $slug, string $version): array
     {
-        if (! $this->available() || $version === '') {
+        if (! $this->available() || $version === '' || ! in_array($type, ['core', 'plugin', 'theme'], true)) {
+            return [];
+        }
+        $slug = $type === 'core' ? 'wordpress' : strtolower($slug);
+        if (! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug)) {
             return [];
         }
 
+        $groupKey = $type.'/'.$slug;
+        if (! array_key_exists($groupKey, $this->loadedGroups)) {
+            $manifest = $this->readManifest();
+            $generationPath = self::dataRootFor($this->indexPath).DIRECTORY_SEPARATOR.$manifest['generation'];
+            $catalog = $this->readCatalog($generationPath, $manifest['groups']);
+            if ($catalog === null) {
+                $this->invalidIndex = true;
+
+                return [];
+            }
+            if (! in_array($groupKey, $catalog, true)) {
+                $this->loadedGroups[$groupKey] = [];
+
+                return [];
+            }
+            $path = $generationPath.DIRECTORY_SEPARATOR.$type.DIRECTORY_SEPARATOR.$slug.'.jsonl';
+            $size = @filesize($path);
+            if (is_link($path) || ! is_file($path) || $size === false || $size > 8 * 1024 * 1024) {
+                $this->invalidIndex = true;
+
+                return [];
+            }
+
+            $entries = [];
+            if (is_file($path) && ($handle = @fopen($path, 'rb')) !== false) {
+                while (($line = fgets($handle, 65537)) !== false) {
+                    if (strlen($line) > 65536) {
+                        $this->invalidIndex = true;
+                        $entries = [];
+                        break;
+                    }
+                    try {
+                        $entry = json_decode($line, true, 16, JSON_THROW_ON_ERROR);
+                    } catch (\JsonException) {
+                        $this->invalidIndex = true;
+                        $entries = [];
+                        break;
+                    }
+                    if (! is_array($entry) || ! isset($entry['id'], $entry['title'], $entry['ranges'], $entry['patched'])
+                        || ! array_key_exists('cve', $entry) || ! array_key_exists('cvss', $entry)
+                        || ! array_key_exists('rating', $entry) || ! array_key_exists('reference', $entry)
+                        || ! is_array($entry['ranges']) || $entry['ranges'] === []) {
+                        $this->invalidIndex = true;
+                        $entries = [];
+                        break;
+                    }
+                    $entries[] = $entry;
+                }
+                fclose($handle);
+            }
+            $this->loadedGroups[$groupKey] = $entries;
+        }
+
         $matches = [];
-        foreach ($this->load()[$type][strtolower($slug)] ?? [] as $entry) {
+        foreach ($this->loadedGroups[$groupKey] as $entry) {
             foreach ($entry['ranges'] as $range) {
                 if (self::inRange($version, $range)) {
                     $matches[] = new Vulnerability(
                         id: $entry['id'],
                         title: $entry['title'],
-                        cve: $entry['cve'],
-                        cvssScore: $entry['cvss'],
-                        severity: $entry['rating'] ? Severity::tryFrom(strtolower($entry['rating'])) : Severity::fromCvss($entry['cvss']),
+                        cve: null,
+                        cvssScore: null,
+                        severity: $entry['rating'] ? Severity::tryFrom(strtolower($entry['rating'])) : null,
                         patchedVersions: $entry['patched'],
                         affected: $range['label'],
+                        reference: $entry['reference'],
+                        copyrightNotice: $entry['copyright_notice'],
+                        copyrightLicense: $entry['copyright_license'],
+                        copyrightLicenseUrl: $entry['copyright_license_url'],
+                        mitreNotice: $entry['mitre_notice'],
+                        mitreLicense: $entry['mitre_license'],
+                        mitreLicenseUrl: $entry['mitre_license_url'],
                     );
 
                     continue 2;
@@ -81,168 +211,339 @@ final class WordfenceFeed implements VulnerabilitySource
         return $matches;
     }
 
-    /**
-     * Build the index from a downloaded feed file. Returns the number of entries kept.
-     *
-     * @throws RuntimeException when the file is not a Wordfence v2 feed
-     */
-    public static function import(string $feedFile, string $indexPath): int
+    /** Stream a complete JSON feed into a private generation; publish only its manifest atomically. */
+    public static function import(string $feedFile, string $indexPath, ?AtomicIndexPublisher $publisher = null, ?string $legacyFeedPath = null, ?int $startedAt = null): int
     {
-        $maxBytes = min(64 * 1024 * 1024, max(1, (int) config('security.vulnerabilities.max_bytes', 64 * 1024 * 1024)));
+        $maxBytes = min(160 * 1024 * 1024, max(1, (int) config('security.vulnerabilities.max_bytes', 160 * 1024 * 1024)));
         $size = @filesize($feedFile);
         if (! is_file($feedFile) || $size === false || $size < 2 || $size > $maxBytes) {
             throw new RuntimeException('The vulnerability feed is empty, unavailable, or exceeds its size limit.');
         }
 
+        $dataRoot = self::dataRootFor($indexPath);
+        File::ensureDirectoryExists(dirname($indexPath));
+        File::ensureDirectoryExists($dataRoot);
+        $generation = bin2hex(random_bytes(16));
+        $staging = $dataRoot.DIRECTORY_SEPARATOR.'.stage-'.$generation;
+        if (! @mkdir($staging, 0700) || is_link($staging)) {
+            throw new RuntimeException('The vulnerability index generation could not be prepared safely.');
+        }
+
+        $groups = [];
+        $groupBytes = [];
+        $records = 0;
+        $entries = 0;
+        $indexBytes = 0;
+        $maxIndexBytes = (int) config('security.vulnerabilities.max_index_bytes', 128 * 1024 * 1024);
+        $startedAt ??= (int) floor(microtime(true) * 1000);
+
         try {
-            $feed = json_decode((string) file_get_contents($feedFile), true, 64, JSON_BIGINT_AS_STRING | JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
-            throw new RuntimeException('The vulnerability feed is not valid JSON.');
-        }
-        if (! is_array($feed) || $feed === [] || array_is_list($feed)) {
-            throw new RuntimeException('The vulnerability feed has an unexpected structure.');
-        }
-
-        $index = [];
-        $count = 0;
-        foreach ($feed as $id => $vulnerability) {
-            if (! is_array($vulnerability)) {
-                throw new RuntimeException('The vulnerability feed contains an invalid record.');
-            }
-            if (($vulnerability['informational'] ?? false) === true) {
-                continue;
-            }
-            if (! is_array($vulnerability['software'] ?? null) || $vulnerability['software'] === []) {
-                throw new RuntimeException('The vulnerability feed contains an incomplete record.');
-            }
-            $recordId = $vulnerability['id'] ?? $id;
-            if (! is_string($recordId) || ! preg_match('/^[A-Za-z0-9._:-]{1,128}$/', $recordId)
-                || ! is_string($vulnerability['title'] ?? null) || trim($vulnerability['title']) === '') {
-                throw new RuntimeException('The vulnerability feed contains an invalid identifier or title.');
-            }
-            $cvss = is_array($vulnerability['cvss'] ?? null) ? $vulnerability['cvss'] : [];
-
-            foreach ($vulnerability['software'] as $software) {
-                if (! is_array($software)) {
-                    throw new RuntimeException('The vulnerability feed contains invalid software metadata.');
+            foreach (WordfenceJsonRecords::fromFile($feedFile) as $key => $record) {
+                if (++$records > 100_000) {
+                    throw new RuntimeException('The vulnerability feed exceeds the supported record count.');
                 }
-                $type = $software['type'] ?? null;
-                $slug = $software['slug'] ?? null;
-                if (! is_string($type) || ! in_array($type, ['core', 'plugin', 'theme'], true)
-                    || ! is_string($slug)) {
-                    throw new RuntimeException('The vulnerability feed contains unsupported software metadata.');
-                }
-                $slug = strtolower($slug);
-                if (($type === 'core' && $slug !== 'wordpress') || ($type !== 'core' && ! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug))
-                    || ! is_array($software['affected_versions'] ?? null) || $software['affected_versions'] === []) {
-                    throw new RuntimeException('The vulnerability feed contains incomplete software metadata.');
-                }
-
-                $ranges = [];
-                foreach ($software['affected_versions'] as $label => $range) {
-                    if (! is_array($range) || ! is_string($range['from_version'] ?? null) || ! is_string($range['to_version'] ?? null)
-                        || $range['from_version'] === '' || $range['to_version'] === '') {
-                        throw new RuntimeException('The vulnerability feed contains an invalid affected-version range.');
-                    }
-                    $ranges[] = [
-                        'label' => substr((string) $label, 0, 64),
-                        'from' => $range['from_version'],
-                        'from_inclusive' => (bool) ($range['from_inclusive'] ?? true),
-                        'to' => $range['to_version'],
-                        'to_inclusive' => (bool) ($range['to_inclusive'] ?? true),
-                    ];
-                }
-                if ($ranges === []) {
+                self::validateRecord($key, $record);
+                if ($record['informational']) {
                     continue;
                 }
-
-                $index[$type][$type === 'core' ? 'wordpress' : $slug][] = [
-                    'id' => substr($recordId, 0, 48),
-                    'title' => PlainText::clean($vulnerability['title'], 191),
-                    'cve' => is_string($vulnerability['cve'] ?? null) && preg_match('/^CVE-\d{4}-\d{4,}$/', $vulnerability['cve']) ? $vulnerability['cve'] : null,
-                    'cvss' => is_numeric($cvss['score'] ?? null) ? (float) $cvss['score'] : null,
-                    'rating' => is_string($cvss['rating'] ?? null) && in_array(strtolower($cvss['rating']), ['low', 'medium', 'high', 'critical'], true) ? strtolower($cvss['rating']) : null,
-                    'patched' => array_values(array_filter(array_map(fn ($v) => is_string($v) ? $v : '', (array) ($software['patched_versions'] ?? [])), fn ($v) => preg_match('/^[0-9][0-9A-Za-z.\-]*$/', $v))),
-                    'ranges' => $ranges,
-                ];
-                $count++;
+                $cvss = [];
+                foreach ($record['software'] as $software) {
+                    $entry = self::normalizeSoftware($software, $record, $key, $cvss);
+                    $type = $entry['type'];
+                    $slug = $entry['slug'];
+                    unset($entry['type'], $entry['slug']);
+                    $groupKey = $type.'/'.$slug;
+                    if (! isset($groups[$groupKey])) {
+                        if (count($groups) >= 50_000) {
+                            throw new RuntimeException('The vulnerability feed exceeds the supported software-group count.');
+                        }
+                        $path = $staging.DIRECTORY_SEPARATOR.$type.DIRECTORY_SEPARATOR.$slug.'.jsonl';
+                        File::ensureDirectoryExists(dirname($path));
+                        $groups[$groupKey] = $path;
+                    }
+                    $line = json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n";
+                    $indexBytes += strlen($line);
+                    $groupBytes[$groupKey] = ($groupBytes[$groupKey] ?? 0) + strlen($line);
+                    if ($indexBytes > $maxIndexBytes || $groupBytes[$groupKey] > 8 * 1024 * 1024
+                        || file_put_contents($groups[$groupKey], $line, FILE_APPEND | LOCK_EX) !== strlen($line)) {
+                        throw new RuntimeException('The vulnerability index exceeds its storage limit or could not be written.');
+                    }
+                    $entries++;
+                }
             }
-        }
+            if ($entries === 0) {
+                throw new RuntimeException('The vulnerability feed contains no supported vulnerability records.');
+            }
 
-        if ($count === 0) {
-            throw new RuntimeException('The vulnerability feed contains no supported vulnerability records.');
-        }
+            $current = self::readManifestFile($indexPath);
+            $currentStartedAt = $current['started_at'] ?? (isset($current['created_at']) ? $current['created_at'] * 1000 : null);
+            if (is_int($currentStartedAt) && $currentStartedAt >= $startedAt) {
+                throw new RuntimeException('A newer synchronization generation is already active.');
+            }
+            if ($legacyFeedPath !== null && (file_exists($legacyFeedPath) || is_link($legacyFeedPath))) {
+                if (is_link($legacyFeedPath) || ! is_file($legacyFeedPath) || ! @unlink($legacyFeedPath)) {
+                    throw new RuntimeException('The legacy raw feed cache could not be removed safely.');
+                }
+            }
 
-        File::ensureDirectoryExists(dirname($indexPath));
-        $temporary = tempnam(dirname($indexPath), 'wpcg-index-');
-        if ($temporary === false || realpath(dirname($temporary)) !== realpath(dirname($indexPath))) {
-            if (is_string($temporary)) {
+            $catalog = json_encode(array_keys($groups), JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+            if (strlen($catalog) > 8 * 1024 * 1024 || file_put_contents($staging.DIRECTORY_SEPARATOR.'catalog.json', $catalog, LOCK_EX) !== strlen($catalog)) {
+                throw new RuntimeException('The vulnerability index catalog could not be written safely.');
+            }
+            $publishedGeneration = $dataRoot.DIRECTORY_SEPARATOR.$generation;
+            if (! @rename($staging, $publishedGeneration)) {
+                throw new RuntimeException('The vulnerability index generation could not be installed.');
+            }
+
+            $manifest = [
+                'format' => 'wordfence-intelligence-v3-scanner',
+                'source' => 'wordfence',
+                'endpoint' => 'https://www.wordfence.com/api/intelligence/v3/vulnerabilities/scanner',
+                'generation' => $generation,
+                'started_at' => $startedAt,
+                'created_at' => now()->getTimestamp(),
+                'records' => $records,
+                'entries' => $entries,
+                'groups' => count($groups),
+                'feed_bytes' => $size,
+            ];
+            $temporary = tempnam(dirname($indexPath), 'wpcg-index-');
+            if ($temporary === false || realpath(dirname($temporary)) !== realpath(dirname($indexPath))) {
+                throw new RuntimeException('The vulnerability index manifest could not be prepared safely.');
+            }
+            try {
+                $json = json_encode($manifest, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+                if (file_put_contents($temporary, $json, LOCK_EX) !== strlen($json)) {
+                    throw new RuntimeException('The vulnerability index manifest could not be written.');
+                }
+                ($publisher ?? new AtomicIndexPublisher)->publish($temporary, $indexPath);
+            } finally {
                 File::delete($temporary);
             }
-            throw new RuntimeException('The vulnerability index could not be prepared safely.');
-        }
+            self::pruneOldGenerations($dataRoot, $generation);
 
-        try {
-            $encoded = json_encode($index, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-            if (file_put_contents($temporary, $encoded, LOCK_EX) !== strlen($encoded) || ! rename($temporary, $indexPath)) {
-                throw new RuntimeException('The vulnerability index could not be replaced atomically.');
-            }
+            return $entries;
         } catch (\JsonException) {
-            throw new RuntimeException('The vulnerability index could not be encoded.');
+            throw new RuntimeException('The vulnerability feed contains data that cannot be indexed safely.');
         } finally {
-            File::delete($temporary);
+            if (is_dir($staging) && ! is_link($staging)) {
+                File::deleteDirectory($staging);
+            }
         }
-
-        return $count;
     }
 
-    /** "*" means unbounded. Versions compare as WordPress does (version_compare). */
+    private static function validateRecord(string $key, array $record): void
+    {
+        if (! preg_match('/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i', $key)
+            || ! is_string($record['id'] ?? null) || strcasecmp($record['id'], $key) !== 0
+            || ! is_string($record['title'] ?? null) || trim($record['title']) === ''
+            || ! is_array($record['software'] ?? null) || ! array_is_list($record['software']) || $record['software'] === []
+            || ! is_bool($record['informational'] ?? null)
+            || ! is_array($record['references'] ?? null) || ! array_is_list($record['references'])
+            || array_filter($record['references'], fn ($reference) => ! is_string($reference))
+            || ! (is_null($record['published'] ?? null) || is_string($record['published']) && preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $record['published']))) {
+            throw new RuntimeException('The vulnerability feed record does not match the v3 Scanner Feed schema.');
+        }
+        if (isset($record['copyrights']) && ! is_null($record['copyrights']) && ! is_array($record['copyrights'])) {
+            throw new RuntimeException('The vulnerability feed has invalid copyright metadata.');
+        }
+    }
+
+    private static function normalizeSoftware(mixed $software, array $record, string $id, array $cvss): array
+    {
+        if (! is_array($software)) {
+            throw new RuntimeException('The vulnerability feed contains invalid software metadata.');
+        }
+        $type = $software['type'] ?? null;
+        $slug = $software['slug'] ?? null;
+        if (! is_string($type) || ! in_array($type, ['core', 'plugin', 'theme'], true) || ! is_string($slug)) {
+            throw new RuntimeException('The vulnerability feed contains unsupported software metadata.');
+        }
+        $slug = strtolower($slug);
+        if ($type === 'core') {
+            if (! in_array($slug, ['', 'wordpress'], true)) {
+                throw new RuntimeException('The vulnerability feed contains unsupported core software metadata.');
+            }
+            $slug = 'wordpress';
+        } elseif (! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug)) {
+            throw new RuntimeException('The vulnerability feed contains an invalid software slug.');
+        }
+        $versions = $software['affected_versions'] ?? null;
+        if (! is_array($versions) || $versions === [] || array_is_list($versions)
+            || ! is_bool($software['patched'] ?? null)
+            || ! is_array($software['patched_versions'] ?? null) || ! array_is_list($software['patched_versions'])) {
+            throw new RuntimeException('The vulnerability feed contains incomplete software metadata.');
+        }
+
+        $ranges = [];
+        foreach ($versions as $label => $range) {
+            if (! is_array($range) || ! is_string($range['from_version'] ?? null) || ! is_string($range['to_version'] ?? null)
+                || ! is_bool($range['from_inclusive'] ?? null) || ! is_bool($range['to_inclusive'] ?? null)) {
+                throw new RuntimeException('The vulnerability feed contains an invalid affected-version range.');
+            }
+            foreach (['from_version', 'to_version'] as $key) {
+                if ($range[$key] !== '*' && ! preg_match('/^[0-9][0-9A-Za-z.+_-]{0,63}$/', $range[$key])) {
+                    throw new RuntimeException('The vulnerability feed contains an unsupported software version.');
+                }
+            }
+            $ranges[] = [
+                'label' => substr((string) $label, 0, 128),
+                'from' => $range['from_version'],
+                'from_inclusive' => $range['from_inclusive'],
+                'to' => $range['to_version'],
+                'to_inclusive' => $range['to_inclusive'],
+            ];
+        }
+        foreach ($software['patched_versions'] as $patched) {
+            if (! is_string($patched) || ! preg_match('/^[0-9][0-9A-Za-z.+_-]{0,63}$/', $patched)) {
+                throw new RuntimeException('The vulnerability feed contains invalid patched-version metadata.');
+            }
+        }
+
+        $reference = null;
+        foreach ($record['references'] as $candidate) {
+            if (! is_string($candidate)) {
+                continue;
+            }
+            $candidate = preg_replace('#^http://www\.wordfence\.com/#i', 'https://www.wordfence.com/', $candidate);
+            $parts = parse_url($candidate);
+            if (($parts['scheme'] ?? null) === 'https' && ($parts['host'] ?? null) === 'www.wordfence.com'
+                && str_starts_with($parts['path'] ?? '', '/threat-intel/vulnerabilities/')) {
+                $reference = $candidate;
+                break;
+            }
+        }
+        $copyrights = is_array($record['copyrights'] ?? null) ? $record['copyrights'] : [];
+        $defiant = is_array($copyrights['defiant'] ?? null) ? $copyrights['defiant'] : [];
+        $mitre = is_array($copyrights['mitre'] ?? null) ? $copyrights['mitre'] : [];
+        if ($defiant !== [] && (! is_string($defiant['notice'] ?? null) || ! is_string($defiant['license'] ?? null)
+            || ! is_string($defiant['license_url'] ?? null) || $reference === null)) {
+            throw new RuntimeException('Wordfence copyright attribution is incomplete.');
+        }
+        if ($mitre !== [] && (! is_string($mitre['notice'] ?? null) || ! is_string($mitre['license'] ?? null)
+            || ! is_string($mitre['license_url'] ?? null))) {
+            throw new RuntimeException('MITRE copyright attribution is incomplete.');
+        }
+
+        return [
+            'type' => $type,
+            'slug' => $slug,
+            'id' => substr($id, 0, 48),
+            'title' => PlainText::clean($record['title'], 191),
+            'cve' => null,
+            'cvss' => null,
+            'rating' => null,
+            'patched' => $software['patched_versions'],
+            'ranges' => $ranges,
+            'reference' => $reference,
+            'copyright_notice' => $defiant['notice'] ?? null,
+            'copyright_license' => $defiant['license'] ?? null,
+            'copyright_license_url' => $defiant['license_url'] ?? null,
+            'mitre_notice' => $mitre['notice'] ?? null,
+            'mitre_license' => $mitre['license'] ?? null,
+            'mitre_license_url' => $mitre['license_url'] ?? null,
+        ];
+    }
+
     public static function inRange(string $version, array $range): bool
     {
         $from = $range['from'] === '*' ? null : $range['from'];
         $to = $range['to'] === '*' ? null : $range['to'];
 
-        $aboveFrom = $from === null || version_compare($version, $from, $range['from_inclusive'] ? '>=' : '>');
-        $belowTo = $to === null || version_compare($version, $to, $range['to_inclusive'] ? '<=' : '<');
-
-        return $aboveFrom && $belowTo;
+        return ($from === null || version_compare($version, $from, $range['from_inclusive'] ? '>=' : '>'))
+            && ($to === null || version_compare($version, $to, $range['to_inclusive'] ? '<=' : '<'));
     }
 
-    private function load(): array
+    private function readManifest(): ?array
     {
-        if ($this->index !== null) {
-            return $this->index;
+        if ($this->manifest !== null) {
+            return $this->manifest;
         }
 
+        return $this->manifest = self::readManifestFile($this->indexPath);
+    }
+
+    private static function readManifestFile(string $path): ?array
+    {
+        $size = @filesize($path);
+        if (is_link($path) || ! is_file($path) || $size === false || $size > 4096) {
+            return null;
+        }
         try {
-            $decoded = json_decode((string) file_get_contents($this->indexPath), true, 64, JSON_THROW_ON_ERROR);
+            $manifest = json_decode((string) file_get_contents($path), true, 8, JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
-            return $this->index = [];
+            return null;
+        }
+        if (! is_array($manifest) || ($manifest['format'] ?? null) !== 'wordfence-intelligence-v3-scanner'
+            || ($manifest['source'] ?? null) !== 'wordfence'
+            || ($manifest['endpoint'] ?? null) !== 'https://www.wordfence.com/api/intelligence/v3/vulnerabilities/scanner'
+            || ! preg_match('/^[a-f0-9]{32}$/', $manifest['generation'] ?? '')
+            || ! is_int($manifest['created_at'] ?? null) || ! is_int($manifest['started_at'] ?? null)
+            || ! is_int($manifest['entries'] ?? null) || ! is_int($manifest['records'] ?? null) || ! is_int($manifest['groups'] ?? null)) {
+            return null;
         }
 
-        if (! is_array($decoded) || $decoded === []) {
-            return $this->index = [];
-        }
+        return $manifest;
+    }
 
-        foreach (['core', 'plugin', 'theme'] as $type) {
-            $group = $decoded[$type] ?? [];
-            if (! is_array($group)) {
-                continue;
+    private function readCatalog(string $generationPath, int $expectedGroups): ?array
+    {
+        if ($this->catalog !== null) {
+            return $this->catalog;
+        }
+        $path = $generationPath.DIRECTORY_SEPARATOR.'catalog.json';
+        $size = @filesize($path);
+        if (is_link($path) || ! is_file($path) || $size === false || $size < 2 || $size > 8 * 1024 * 1024) {
+            return null;
+        }
+        try {
+            $catalog = json_decode((string) file_get_contents($path), true, 4, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
+        if (! is_array($catalog) || ! array_is_list($catalog) || count($catalog) !== $expectedGroups) {
+            return null;
+        }
+        $seen = [];
+        foreach ($catalog as $group) {
+            if (! is_string($group) || ! preg_match('#^(core|plugin|theme)/[a-z0-9][a-z0-9_-]{0,99}$#', $group) || isset($seen[$group])) {
+                return null;
             }
-            foreach ($group as $entries) {
-                if (! is_array($entries) || $entries === []) {
+            $seen[$group] = true;
+        }
+
+        return $this->catalog = $catalog;
+    }
+
+    private static function pruneOldGenerations(string $dataRoot, string $active): void
+    {
+        try {
+            $root = realpath($dataRoot);
+            if ($root === false || is_link($dataRoot)) {
+                return;
+            }
+            foreach (new \DirectoryIterator($root) as $item) {
+                $name = $item->getFilename();
+                if ($item->isDot() || $item->isLink() || ! $item->isDir() || $name === $active
+                    || ! preg_match('/^[a-f0-9]{32}$/', $name) || $item->getMTime() >= time() - 96 * 3600) {
                     continue;
                 }
-
-                foreach ($entries as $entry) {
-                    if (is_array($entry) && isset($entry['id'], $entry['title'], $entry['patched'], $entry['ranges'])
-                        && is_array($entry['ranges']) && $entry['ranges'] !== []) {
-                        return $this->index = $decoded;
+                $target = realpath($item->getPathname());
+                if ($target !== false && dirname($target) === $root) {
+                    $links = false;
+                    foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($target, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::SELF_FIRST) as $child) {
+                        if ($child->isLink()) {
+                            $links = true;
+                            break;
+                        }
+                    }
+                    if (! $links) {
+                        File::deleteDirectory($target);
                     }
                 }
             }
+        } catch (Throwable) {
+            // Cleanup is best-effort and never changes the outcome of a published refresh.
         }
-
-        return $this->index = [];
     }
 }

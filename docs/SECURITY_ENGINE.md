@@ -91,7 +91,7 @@ Vulnerabilities are reported **only** from a configured, trusted source:
 | `SECURITY_VULNERABILITY_SOURCE` | Behaviour |
 | --- | --- |
 | `none` (default) | "Vulnerability scanner not configured." Coverage `unavailable`; a vulnerability-only scan fails. Nothing is reported as "0 vulnerabilities". |
-| `wordfence` | Wordfence Intelligence v2 feed. `security:vulnerabilities:sync` downloads it daily from `SECURITY_VULNERABILITY_FEED_URL` (HTTPS only, with `SECURITY_VULNERABILITY_FEED_KEY` as a bearer token when set), or imports a file (`--file=`), and builds a compact index. An index older than `SECURITY_VULNERABILITY_MAX_AGE_HOURS` (72) counts as unavailable. |
+| `wordfence` | Wordfence Intelligence v3 Scanner Feed. `security:vulnerabilities:sync` downloads the complete official feed daily from the exact v3 endpoint using the encrypted Owner-managed key, or imports a local file (`--file=`). The importer streams records into a generation-based compact index; an index older than `SECURITY_VULNERABILITY_MAX_AGE_HOURS` (72) counts as unavailable. See [WORDFENCE_INTELLIGENCE_V3.md](WORDFENCE_INTELLIGENCE_V3.md) for limits, attribution, license gate and the staging runbook. |
 
 Matching uses the inventory the connector already reports (core version, plugin slugs and versions, theme stylesheets and versions); the engine does no discovery of its own. A finding is reported only when the installed version is inside a range the source publishes (`version_compare`). Title, CVE, CVSS score, rating and patched versions come from the source as they are; a vulnerability without a rating has **no severity** ("Not rated"), never a guessed one. Confidence is `high` (the version matched a published range).
 
@@ -175,6 +175,7 @@ SECURITY_VULNERABILITY_FEED_PATH=             # default storage/app/private/secu
 SECURITY_VULNERABILITY_FEED_URL=
 SECURITY_VULNERABILITY_FEED_KEY=
 SECURITY_VULNERABILITY_MAX_AGE_HOURS=72
+SECURITY_VULNERABILITY_SCHEDULE_ENABLED=false # opt in only after the controlled import and attribution review
 SECURITY_SCHEDULE_ENABLED=false
 SECURITY_INCIDENT_AUTO_OPEN=true
 SECURITY_INCIDENT_AUTO_BACKUP=true
