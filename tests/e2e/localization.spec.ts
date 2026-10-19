@@ -48,7 +48,7 @@ test('public pages: switching the language changes everything and persists', asy
     await expect(page.locator('footer')).toContainText('Szerződési feltételek');
 
     // The choice is remembered: another page and a reload stay Hungarian.
-    await page.goto('/pricing');
+    await page.goto('/hu/pricing');
     expect(await htmlLang(page)).toBe('hu');
     await expect(page.locator('h1')).toContainText('Csomagok és árak');
     await page.reload();
@@ -61,11 +61,7 @@ test('public pages: switching the language changes everything and persists', asy
 
 test('pricing: selectable HUF prices remain correct in both languages and product tabs', async ({ page }) => {
     for (const [lang, monthly, annual, free] of [['en', '18,990', '189,900', '2 months free'], ['hu', '18 990', '189 900', '2 hónap ingyenes']] as const) {
-        await page.goto('/');
-        if ((await htmlLang(page)) !== lang) {
-            await chooseLanguage(page, lang === 'hu' ? 'Magyar' : 'English');
-        }
-        await page.goto('/pricing');
+        await page.goto(`/${lang}/pricing`);
 
         // Select the configured HUF display option; checkout still resolves its
         // charge from server-side market rules, not this presentation choice.

@@ -30,23 +30,18 @@ test('customer profile update rejects a same-origin request without a CSRF token
     await page.goto(`${APP}/account/profile`);
     await expect(page.locator('#profile-form input[name="first_name"]')).toBeVisible();
 
-    const status = await page.evaluate(async () => {
-        const response = await fetch('/account/profile', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-            first_name: 'CSRF-UNAUTHORIZED-CHANGE',
-            last_name: 'Synthetic',
-            customer_type: 'individual',
-            country_code: 'HU',
-        }),
-        });
+    // Exercise the browser's real form submission path, but remove only its
+    // CSRF token. This avoids turning a browser navigation assertion into a
+    // fetch transport/CSP assertion while still proving server-side rejection.
+    await page.locator('#profile-form input[name="_token"]').evaluate((token) => token.remove());
+    await page.locator('#profile-form input[name="first_name"]').fill('CSRF-UNAUTHORIZED-CHANGE');
+    const [response] = await Promise.all([
+        page.waitForResponse((candidate) => candidate.url().endsWith('/account/profile') && candidate.request().method() === 'POST'),
+        page.locator('#profile-form button[type="submit"]').click(),
+    ]);
+    expect(response.status()).toBe(419);
 
-        return response.status;
-    });
-    expect(status).toBe(419);
-
-    await page.reload();
+    await page.goto(`${APP}/account/profile`);
     await expect(page.locator('#profile-form input[name="first_name"]')).not.toHaveValue('CSRF-UNAUTHORIZED-CHANGE');
 });
 
