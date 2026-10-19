@@ -78,7 +78,7 @@ final class PollLockConcurrencyTest extends TestCase
                 $successorValue = $this->readLockDirectly();
                 $this->assertNotSame($oldValue, $successorValue);
 
-                file_put_contents($oldOwner['config']['action_file'], wp_json_encode(['action' => $action], JSON_THROW_ON_ERROR), LOCK_EX);
+                $this->writeJsonSignalAtomically($oldOwner['config']['action_file'], ['action' => $action]);
                 $this->waitForFiles([$oldResult], 20, [$oldOwner]);
                 $result = json_decode((string) file_get_contents($oldResult), true, 8, JSON_THROW_ON_ERROR);
                 $this->assertSame(false, $result[$action === 'release' ? 'released' : 'refreshed'], 'A stale owner must not affect the successor.');
@@ -458,6 +458,25 @@ final class PollLockConcurrencyTest extends TestCase
         $this->assertTrue($ready['acquired'] ?? false);
 
         return $worker;
+    }
+
+    private function writeJsonSignalAtomically(string $path, array $payload): void
+    {
+        $harness = realpath($this->harness);
+        if (! is_string($harness) || dirname($path) !== $harness || str_contains($path, "\0")) {
+            throw new RuntimeException('Refusing to publish a synchronization signal outside the owned test harness.');
+        }
+
+        $temporary = $path.'.tmp-'.bin2hex(random_bytes(8));
+        $json = wp_json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        if (file_put_contents($temporary, $json, LOCK_EX) !== strlen($json)) {
+            @unlink($temporary);
+            throw new RuntimeException('Could not write the complete test-process synchronization signal.');
+        }
+        if (! rename($temporary, $path)) {
+            @unlink($temporary);
+            throw new RuntimeException('Could not publish the test-process synchronization signal atomically.');
+        }
     }
 
     /** @return array{process: array, config: array} */
