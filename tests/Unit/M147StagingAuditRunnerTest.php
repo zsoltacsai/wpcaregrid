@@ -154,7 +154,7 @@ final class M147StagingAuditRunnerTest extends TestCase
         $identity = $this->currentPosixIdentity();
         $result = $this->runAudit(gethostname(), $identity['name']);
         self::assertSame(2, $result['exit']);
-        self::assertSame('GIT_METADATA_SYMLINK', trim($result['stderr']));
+        self::assertSame('BLOCKED: GIT_METADATA_SYMLINK', trim($result['stderr']));
         self::assertSame('', $result['stdout']);
     }
 
