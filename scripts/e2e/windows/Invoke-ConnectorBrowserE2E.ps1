@@ -80,6 +80,13 @@ try {
     Invoke-BrowserFixture 'browser-seed'
     $SeededHere = $true
 
+    # The normal localization browser suite uses this disposable account; do
+    # not source credentials from the developer's environment or a shared DB.
+    $FixtureState = Get-Content -Raw -LiteralPath $StatePath | ConvertFrom-Json
+    $env:E2E_BASE_URL = 'http://127.0.0.1:8317'
+    $env:E2E_CUSTOMER_EMAIL = [string] $FixtureState.accounts.a.email
+    $env:E2E_CUSTOMER_PASSWORD = [string] $FixtureState.accounts.a.password
+
     $env:CONNECTOR_BROWSER_STATE = $StatePath
     $env:WP_CAREGRID_E2E_CREDENTIALS = $CredentialsPath
     $env:CONNECTOR_E2E_PHP = $Php
@@ -100,10 +107,10 @@ try {
     if ($ServicesStartedHere -and (Test-Path -LiteralPath $ServiceFile)) {
         try { & (Join-Path $PSScriptRoot 'Stop-Local.ps1') -ExpectedCommit $ExpectedCommit } catch { Write-Warning 'Could not stop the isolated local services; verify ports 8317 and 8318.' }
     }
-    foreach ($name in @('CONNECTOR_BROWSER_STATE', 'WP_CAREGRID_E2E_CREDENTIALS', 'CONNECTOR_E2E_PHP', 'CONNECTOR_E2E_PHP_INI', 'CONNECTOR_E2E_WP_PHP', 'CONNECTOR_E2E_WP_PHP_INI', 'CONNECTOR_E2E_RESTART_SCRIPT', 'WP_CAREGRID_E2E_EXPECTED_COMMIT')) {
+    foreach ($name in @('CONNECTOR_BROWSER_STATE', 'WP_CAREGRID_E2E_CREDENTIALS', 'CONNECTOR_E2E_PHP', 'CONNECTOR_E2E_PHP_INI', 'CONNECTOR_E2E_WP_PHP', 'CONNECTOR_E2E_WP_PHP_INI', 'CONNECTOR_E2E_RESTART_SCRIPT', 'WP_CAREGRID_E2E_EXPECTED_COMMIT', 'E2E_BASE_URL', 'E2E_CUSTOMER_EMAIL', 'E2E_CUSTOMER_PASSWORD')) {
         Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
     }
 }
 
 if ($PlaywrightExit -ne 0) { exit $PlaywrightExit }
-Write-Output 'Connector browser E2E lifecycle passed; only local synthetic accounts and credentials were used.'
+Write-Output 'Local browser E2E suites passed; Connector pairing, localization/authentication and security-boundary specs used only loopback services and synthetic accounts.'
