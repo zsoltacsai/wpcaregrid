@@ -97,3 +97,39 @@ The validation table above records CI as pending at the time the local candidate
 | Connector tests in WordPress (PHP 8.4, mariadb) | PASS |
 
 The Server MySQL process/concurrency gate step itself passed. Its nine required test files completed successfully (15 tests / 161 assertions total). The Connector MariaDB job also passed on this exact head. The run is evidence for `faa541b...` only; any subsequent PR-head change requires a new exact-head run. PR #130 remains open and unmerged; PR #129 remains open and unmerged. No merged-primary CI exists for this candidate because no merge was requested or performed.
+
+## Expanded local validation — 2026-10-19
+
+The browser harness was registered against the exact implementation head and run after fixing two test assumptions: localization checks now navigate to explicit locale-prefixed routes, and the CSRF case models a cross-origin same-site request rather than treating same-origin Fetch Metadata as a CSRF attack. No product runtime code changed in these corrections.
+
+| Evidence | Exact scope | Result |
+|---|---|---|
+| Local browser suite, commit `5c350b759bed438eb8d967dd329a944a53b91a74` | Windows/Chrome headless; PHP 8.4.26 Laravel loopback `127.0.0.1:8317`; PHP 8.3.33 / WordPress 7.1.3 / Connector 0.4.7 loopback `127.0.0.1:8318`; separate disposable SQLite DBs; synthetic accounts; WordPress outbound HTTP blocked; Stripe credentials blank; no remote services | **14/14 passed**. Three Connector lifecycle/recovery, eight public/customer localization, and three customer/CSRF/cross-origin security cases. Fixture reset, synthetic-account cleanup and recorded-service shutdown succeeded. |
+| Laravel security feature suite, commit `5c350b759bed438eb8d967dd329a944a53b91a74` | Direct Windows PHP 8.4.26 PHPUnit invocation against local test configuration | **102 tests, 1,778 assertions, 0 failures, 0 skips**. Covers scanner lifecycle, synthetic feed matching and invalid/unavailable states, posture, incident/finding lifecycle, selected remediation authorization, and route boundaries. |
+| Earlier complete Laravel strict MySQL suite | Disposable local MySQL 8.4.11 environment; no application PHP changes after that run in the subsequent browser-only commits | **1,411 tests, 20,776 assertions, 0 failures, 0 skips**. |
+| Earlier Connector WordPress/MySQL suite | WordPress Core 7.1.3, Connector 0.4.7, PHP 8.4.26, PHPUnit 13.4.2; after the locally generated package was tested separately | **210 tests, 1,816 assertions, 4 skips, 0 failures**. The skips are the MySQL-only restore-database case plus two opt-in real process-kill cases that wait for the 900-second lock TTL; the package-upgrade skip was separately rerun and passed (1 test / 12 assertions). |
+| Latest exact-head CI, run [39224766832](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39224766832), head `5c350b759bed438eb8d967dd329a944a53b91a74` | Seven required GitHub jobs | **6/7 passed, 1 failed**. Quality, Server SQLite, Server MariaDB, Connector SQLite, Connector MySQL, and Server MySQL passed; Connector WordPress MariaDB failed. The Server MySQL process/concurrency gate explicitly passed (nine required files; logs show each file succeeded). No exact-head CI pass is claimed. |
+
+The failed Connector MariaDB test was `PollLockConcurrencyTest::test_expired_owner_cannot_release_or_refresh_successor_lease`. The worker had exited (`exitcode=255`, `running=false`) without publishing its expected `hold-*.result`; captured stdout/stderr lengths were 2,681/411 bytes, with only hashes emitted. The current diagnostics did not preserve an exception class or SQLSTATE, so the cause remains **UNKNOWN**. Earlier exact-head runs `39204575263` and `39216017512` passed 7/7; the same test has historical same-run retry passes after failures in run `39129828668`. This supports an intermittent harness/process failure pattern but does not establish it is harmless or rule out a deterministic defect under particular runner timing. WSL has no running Docker daemon and the Windows host has no local MySQL/MariaDB service, so a local reproduction was not available. CI-REL-01 remains **OPEN**. A follow-up test-harness-only change extracts a strictly allowlisted exception class and SQLSTATE from child output while retaining byte counts/hashes and preserving the 20-second deadline and all lock assertions; its exact-head CI is required before drawing a new conclusion.
+
+### Completed-run reconciliation
+
+The Server MySQL job in run `39224766832` completed successfully, including the mandatory process/concurrency gate; nine required test files succeeded. The run completed 6/7 overall, with only Connector WordPress MariaDB failing as described above. This replaces the earlier in-progress status recorded when the log inspection began; it does not retroactively make the run green. The diagnostic-only follow-up is in the current uncommitted test-harness diff and has not yet received exact-head CI.
+
+The browser matrix does **not** include Stripe-hosted commerce flows in `owner-commercial.spec.ts` or `stripe-purchase.spec.ts`: those require an isolated Stripe TEST account, public webhook ingress and Mailpit routing, none of which was configured or approved here. The 14 passing tests are the complete local security-relevant suite selected by `playwright.connector-e2e.config.ts`, not the complete repository-wide payment E2E set. M147-F05 remains OPEN with this bounded evidence update.
+
+The security suite exercises synthetic feed fixtures and local database state only. It does not validate live Wordfence provenance/licensing/freshness, DNS rebinding or all private-address variants, external notification routing, a real backup object write, a real Connector filesystem scan, or operational quarantine/remediation. Existing incident tests create synthetic incident and backup records in the test database; selected remediation tests exercise fake Connector results and database state. They do not establish that every queue, notification, backup-provider, quarantine or remediation side effect is isolated in staging. M147-F03 and M147-F04 remain OPEN; AS-16/M147-F01 remains OPEN because no operational scanner ran.
+
+## Staging audit artifact identity and operational boundary
+
+At repository commit `5c350b759bed438eb8d967dd329a944a53b91a74`, the manually invoked read-only runner is `tools/security/m147-staging-audit/audit.php`, version 1.0.0. The deterministic manifest command is `php tools/security/m147-staging-audit/manifest.php`. Its file identities are:
+
+| Artifact | SHA-256 |
+|---|---|
+| `audit.php` | `470be5d1ad7f0e34318f412369a516500706d2cfd9f020b931f40ff4d4a556e3` |
+| `evidence.schema.json` | `72327a45b00b850fb9cee3b9d7077132da0721cae4742326108811ea4b71aad5` |
+| `README.md` | `d0e5a47ac642ba7ae143bee657840a04941eca3b06987835b752c1e2c2ade17d` |
+| `REPORT_TEMPLATE.md` | `49872aeccc7f209925ef3876cef52914281eb69a4b633aa43c445a4e5ae3c864` |
+| `manifest.php` | `7413a99a151cea34882aac0223909c549bf5f2ee34d8a1ccec839f5712f23aae` |
+
+These hashes identify the current repository files; they are not an external signature. The runner was not copied to or executed on staging. No SSH, Rackforest console, live M12 read, scanner, feed sync, queue, backup, restore, remediation, deployment, production/customer access, or live payment/AI operation occurred. All six live M12 values remain **UNKNOWN**. M147-E.2b remains **NO-GO / NOT AUTHORIZED**.

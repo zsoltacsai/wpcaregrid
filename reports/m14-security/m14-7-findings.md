@@ -1,5 +1,13 @@
 # M14.7 Planning Findings and Residual Register
 
+## Evidence update — 2026-10-19
+
+The isolated local browser security matrix passed **14/14** on exact commit `5c350b759bed438eb8d967dd329a944a53b91a74`; the exact environment and per-scenario scope are recorded in the [recovery evidence](m14-7-closure-recovery-evidence.md). This adds selected evidence for localization/authentication, customer/operator/owner separation, Connector pairing/recovery, cross-origin Connector authentication, and a cross-origin same-site CSRF rejection with unchanged synthetic profile state. Stripe-hosted flows and the broader payment E2E files were not run because no isolated Stripe TEST/webhook/Mailpit setup was authorized. **M147-F05 remains OPEN**; this selected browser suite is not full browser or production integration assurance.
+
+On the same candidate, the Laravel `tests/Feature/Security` suite passed **102 tests / 1,778 assertions / 0 skips**. Its synthetic feed, posture, scanner lifecycle, incident, and selected remediation assertions do not establish live feed provenance, external notification routing, remote backup writes, or exhaustive quarantine/remediation effects. **M147-F03 and M147-F04 remain OPEN**; **AS-16/M147-F01 remains OPEN** because no operational scanner ran. All six live M12 values remain **UNKNOWN**.
+
+Exact-head GitHub run [39224766832](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39224766832) on `5c350b759bed438eb8d967dd329a944a53b91a74` completed **6/7 PASS, 1 FAIL**. The required Server MySQL process/concurrency gate explicitly passed. Connector WordPress MariaDB failed in `PollLockConcurrencyTest::test_expired_owner_cannot_release_or_refresh_successor_lease`; the child exited 255 without its result file, and the captured diagnostic retained output lengths/hashes but no exception class or SQLSTATE. Root cause is UNKNOWN. A diagnostic-only test-harness update now extracts only a constrained exception class and SQLSTATE, without changing the lock deadline or assertions. **CI-REL-01 remains OPEN**. No exact-head CI pass is claimed for this SHA.
+
 ## M147-E.1 readiness review — 2026-10-18
 
 Offline planning baseline: `57b8cf02d655cb7316648785bd9a1b6b07b148e1`. No live environment or M12 value was read. M147-E is not operationally started; M147-E.2 is **NOT EXECUTED — OWNER APPROVAL REQUIRED**.

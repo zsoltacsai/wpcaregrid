@@ -519,10 +519,22 @@ final class PollLockConcurrencyTest extends TestCase
             $stderrPipe = $worker['process']['pipes'][2] ?? null;
             $stdout = is_resource($stdoutPipe) ? (stream_get_contents($stdoutPipe) ?: '') : '';
             $stderr = is_resource($stderrPipe) ? (stream_get_contents($stderrPipe) ?: '') : '';
+            $exceptionClass = null;
+            $sqlState = null;
+            foreach ([$stdout, $stderr] as $diagnosticOutput) {
+                if ($exceptionClass === null && preg_match('~(?:Fatal error:\s*)?Uncaught\s+([A-Za-z_\\\\][A-Za-z0-9_\\\\]*)~', $diagnosticOutput, $match) === 1) {
+                    $exceptionClass = $match[1];
+                }
+                if ($sqlState === null && preg_match('~SQLSTATE\[([0-9A-Z]{5})\]~', $diagnosticOutput, $match) === 1) {
+                    $sqlState = $match[1];
+                }
+            }
             $processDiagnostics[] = [
                 'pid' => $status['pid'] ?? null,
                 'running' => $status['running'] ?? null,
                 'exitcode' => $status['exitcode'] ?? null,
+                'exception_class' => $exceptionClass,
+                'sqlstate' => $sqlState,
                 'stdout_bytes' => strlen($stdout),
                 'stdout_sha256' => hash('sha256', $stdout),
                 'stderr_bytes' => strlen($stderr),

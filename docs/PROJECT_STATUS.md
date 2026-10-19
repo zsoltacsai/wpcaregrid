@@ -3,7 +3,15 @@
 > Kept up to date at the end of every milestone (see CLAUDE.md §27).
 > A new session should read CLAUDE.md, this file and the relevant docs, then run `git status` and `git log --oneline -12`.
 
-Last updated: 2026-10-18
+Last updated: 2026-10-19
+
+## M14.7 closure recovery — expanded local evidence (2026-10-19)
+
+The current unmerged implementation/evidence candidate is PR [#130](https://github.com/zsoltacsai/wpcaregrid/pull/130), branch `codex/m147-closure-recovery`, exact head `5c350b759bed438eb8d967dd329a944a53b91a74`. The protected primary remains unchanged; PRs #129 and #130 remain open and unmerged. Local isolated Playwright ran the complete selected security-relevant matrix (Connector lifecycle/recovery, localization/customer authentication, role boundaries, CSRF and cross-origin Connector authentication): **14/14 passed**. The separate Laravel Security feature suite passed **102 tests / 1,778 assertions / 0 skips**. Earlier full local results remain recorded in the [recovery evidence](../reports/m14-security/m14-7-closure-recovery-evidence.md); no scanner-related runtime code changed in the later browser-only fixes.
+
+Exact-head CI run [39224766832](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39224766832) completed **6/7 passed, 1 failed**. Connector WordPress MariaDB failed; Quality, Server SQLite, Server MySQL, Server MariaDB, Connector SQLite and Connector MySQL passed. The Server MySQL process/concurrency gate explicitly passed. In the MariaDB failure, the lock-test child worker exited with code 255 without publishing its result file; no exception class or SQLSTATE was retained, so the root cause remains UNKNOWN. A narrow diagnostics-only test-harness update now extracts only an allowlisted exception class and SQLSTATE while preserving the 20-second deadline and assertions. CI-REL-01 remains OPEN, and this candidate has no green exact-head CI. The full browser payment flows remain unrun because they require isolated Stripe TEST, public webhook and Mailpit infrastructure. M147-F05 remains OPEN.
+
+All six live M12 gate values remain **UNKNOWN**. No staging, SSH, Rackforest console, production, customer site, live feed, scanner, queue, external notification, backup/restore, remediation, deployment, Stripe or AI operation occurred. M147-E.2b remains **NO-GO / NOT AUTHORIZED**. AS-16/M147-F01, M147-F02 through F06, M147-F08 and CI-REL-01 retain their open dispositions; no finding is closed by this candidate. M14.7 is **incomplete**, approximately **65%** by delivery estimate, and M14.8 is **NOT READY**.
 
 ## M14.7 closure recovery — local engineering candidate (2026-10-19)
 
