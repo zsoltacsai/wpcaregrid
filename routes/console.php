@@ -36,7 +36,9 @@ Schedule::command('admin-access:expire')->everyMinute()->withoutOverlapping()->o
 Schedule::command('security:monitor')->everyTenMinutes()->withoutOverlapping()->onOneServer();
 Schedule::command('security:schedule')->hourly()->withoutOverlapping()->onOneServer();
 Schedule::command('security:vulnerabilities:sync')->dailyAt('04:10')->withoutOverlapping()->onOneServer()
-    ->when(fn () => config('security.vulnerabilities.source') === 'wordfence' && config('security.vulnerabilities.feed_url'));
+    ->when(fn () => config('security.vulnerabilities.source') === 'wordfence'
+        && config('security.vulnerabilities.feed_url')
+        && config('security.vulnerabilities.scheduled_sync_enabled'));
 
 // Monitoring is a single bounded dispatcher; probe jobs are site-unique and queued.
 Schedule::command('monitoring:run')->everyFiveMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer();

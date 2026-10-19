@@ -51,8 +51,16 @@ class SecurityVisibilityAndPermissionsTest extends TestCase
     {
         File::ensureDirectoryExists($this->storageRoot.'-feed');
         $feed = $this->storageRoot.'-feed/v.json';
-        file_put_contents($feed.'.download', json_encode(['wf-1' => ['id' => 'wf-1', 'title' => 'Akismet <= 5.3 - Stored XSS', 'cvss' => ['score' => 6.4, 'rating' => 'Medium'], 'cve' => 'CVE-2026-10001',
-            'software' => [['type' => 'plugin', 'slug' => 'akismet', 'affected_versions' => ['* - 5.3' => ['from_version' => '*', 'from_inclusive' => true, 'to_version' => '5.3', 'to_inclusive' => true]], 'patched_versions' => ['5.3.1']]]]]));
+        $id = 'f1b2c3d4-0000-4000-8000-000000000001';
+        file_put_contents($feed.'.download', json_encode([$id => [
+            'id' => $id,
+            'title' => 'Akismet <= 5.3 - Stored XSS',
+            'software' => [['type' => 'plugin', 'slug' => 'akismet', 'patched' => true, 'affected_versions' => ['* - 5.3' => ['from_version' => '*', 'from_inclusive' => true, 'to_version' => '5.3', 'to_inclusive' => true]], 'patched_versions' => ['5.3.1']]],
+            'informational' => false,
+            'references' => ['https://www.wordfence.com/threat-intel/vulnerabilities/'.$id],
+            'published' => '2026-01-09 00:00:00',
+            'copyrights' => ['defiant' => ['notice' => 'Copyright 2012-2026 Defiant Inc.', 'license' => 'Synthetic fixture license text.', 'license_url' => 'https://www.wordfence.com/wti-community-edition-terms-and-conditions/']],
+        ]], JSON_THROW_ON_ERROR));
         WordfenceFeed::import($feed.'.download', WordfenceFeed::indexPathFor($feed));
         config(['security.vulnerabilities.source' => 'wordfence', 'security.vulnerabilities.feed_path' => $feed]);
 
