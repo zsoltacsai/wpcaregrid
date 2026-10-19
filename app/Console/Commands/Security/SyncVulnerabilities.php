@@ -85,12 +85,7 @@ class SyncVulnerabilities extends Command
 
                 $request = Http::connectTimeout((int) config('security.vulnerabilities.connect_timeout_seconds', 5))
                     ->timeout((int) config('security.vulnerabilities.timeout_seconds', 180))
-                    ->withOptions([
-                        'allow_redirects' => false,
-                        'stream' => true,
-                        'proxy' => '',
-                        'curl' => [CURLOPT_RESOLVE => $resolve],
-                    ])
+                    ->withOptions($this->wordfenceHttpOptions($resolve, $download, $limit))
                     ->acceptJson()
                     ->withToken($key);
 
@@ -101,32 +96,14 @@ class SyncVulnerabilities extends Command
                     throw new RuntimeException($status === 429 ? 'Wordfence rate limit reached.' : 'Wordfence returned an unsuccessful response.');
                 }
                 $contentType = strtolower(trim(explode(';', (string) $response->header('Content-Type'))[0]));
-                if ($contentType !== 'application/json' && ! preg_match('#^application/[a-z0-9.+-]+\+json$#', $contentType)) {
+                if ($contentType !== 'application/json' && ! preg_match('#^application/[a-z0-9.+-]+\\+json$#', $contentType)) {
                     throw new RuntimeException('Wordfence returned an unexpected content type.');
                 }
 
-                $body = $response->toPsrResponse()->getBody();
-                $output = @fopen($download, 'wb');
-                if ($output === false) {
-                    throw new RuntimeException('The temporary feed file could not be opened.');
-                }
-                try {
-                    $bytes = 0;
-                    while (! $body->eof()) {
-                        $chunk = $body->read(min(65536, $limit - $bytes + 1));
-                        if ($chunk === '') {
-                            break;
-                        }
-                        $bytes += strlen($chunk);
-                        if ($bytes > $limit || fwrite($output, $chunk) !== strlen($chunk)) {
-                            throw new RuntimeException('The feed exceeded its size limit or could not be written.');
-                        }
-                    }
-                    if (! fflush($output) || $bytes === 0) {
-                        throw new RuntimeException('The feed download was empty or incomplete.');
-                    }
-                } finally {
-                    fclose($output);
+                clearstatcache(true, $download);
+                $bytes = @filesize($download);
+                if ($bytes === false || $bytes === 0 || $bytes > $limit) {
+                    throw new RuntimeException('The feed download was empty, oversized, or incomplete.');
                 }
 
                 $count = WordfenceFeed::import($download, WordfenceFeed::indexPathFor($feedPath), $publisher, $feedPath, $startedAt);
@@ -147,4 +124,16 @@ class SyncVulnerabilities extends Command
             $lock->release();
         }
     }
+
+    /** @param list<string> $resolve @return array<string, mixed> */
+    protected function wordfenceHttpOptions(array $resolve, string $download, int $limit): array
+    {
+        return [
+            'allow_redirects' => false,
+            'proxy' => '',
+            'sink' => $download,
+            'progress' => static fn (int $downloadSize, int $downloaded): bool => $downloadSize > $limit || $downloaded > $limit,
+            'curl' => [CURLOPT_RESOLVE => $resolve],
+        ];
+}
 }
