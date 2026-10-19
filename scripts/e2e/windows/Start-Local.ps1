@@ -103,7 +103,12 @@ echo 'active '.get_plugin_data(WP_PLUGIN_DIR.'/'.$plugin)['Version'].PHP_EOL;
 '@ | Set-Content -LiteralPath $PluginCheck -Encoding ascii
     $env:WP_CAREGRID_E2E_SITE = Join-Path $E2E 'wordpress-site'
     $PluginStatus = (& $Php -c $Ini $PluginCheck).Trim()
-    if ($LASTEXITCODE -ne 0 -or $PluginStatus -notmatch '^active 0\.4\.1$') { throw "Connector plugin check failed: $PluginStatus" }
+    $ConnectorHeader = Join-Path $Repo 'wordpress\wp-caregrid-connector\wp-caregrid-connector.php'
+    if (-not (Test-Path -LiteralPath $ConnectorHeader -PathType Leaf)) { throw 'The checked-out Connector plugin header is missing.' }
+    $VersionLines = @(Select-String -LiteralPath $ConnectorHeader -Pattern '^\s*\* Version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$')
+    if ($VersionLines.Count -ne 1) { throw 'Could not establish one exact Connector version from the checked-out plugin header.' }
+    $ExpectedConnectorVersion = $VersionLines[0].Matches[0].Groups[1].Value
+    if ($LASTEXITCODE -ne 0 -or $PluginStatus -cne "active $ExpectedConnectorVersion") { throw "Connector plugin check failed: expected active $ExpectedConnectorVersion from source; observed $PluginStatus" }
 
     $LaravelDb = (Resolve-Path (Join-Path $E2E 'laravel.sqlite')).Path
     $WpDb = (Resolve-Path (Join-Path $E2E 'wordpress-site\database\wp.sqlite')).Path
