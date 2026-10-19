@@ -158,3 +158,52 @@ Fresh local metadata-only checking of id_rsa.pub yielded 3072 SHA256:Cy8+tFoYq7g
 | Six live M12 gates | UNKNOWN; not read. |
 
 An earlier cleanup attempt for task-specific temporary public-key evidence was rejected by local command policy. The prior report says it may remain and contains no credentials. It was neither inspected nor deleted in this review; no file from it is trusted without revalidation. A future approval must specify safe handling and cleanup.
+
+
+## Owner-provided staging evidence reconciliation — 2026-10-19
+
+This append-only entry records evidence supplied by the Owner after executing read-only commands in the Rackforest provider console. Codex did not connect to staging, invoke the commands, inspect the console, or independently retrieve the output. Earlier `BLOCKED` and `UNKNOWN` entries above accurately describe their original execution times and remain part of the audit history. This entry supersedes them only for the specifically reported staging observation below.
+
+### Environment and runner observations
+
+| Field | Owner-reported observation | Evidence boundary |
+|---|---|---|
+| Target | `stg1.wpcaregrid.com`; checkout `/var/www/wpcaregrid` | Owner reports hostname/path from console. No Codex connection or independent environment binding. |
+| Account | `deploy:deploy`, UID 1000, non-root | Owner-reported console output. |
+| Deployed Git HEAD | `be427a17320ca7aba9ec292d2c288813df5f7c07` | Owner reports console and runner output. |
+| PHP CLI | `8.4.26` | Owner reports runner/console output. |
+| Working tree | Clean | Owner reports `git status --short` output. |
+| Free filesystem bytes | `70,385,975,296` | Owner-reported runner output. The complete original JSON is not in the repository, so this value has not been independently reconciled against the full audit record. |
+| Audit runner | SHA-256 `7ba37058f137f65294fb0082f83d1d9418ad9e15fd74e40da7cdb2b6f022a73e` | The local primary copy was independently hashed by Codex and matches this value. Owner reports that the same artifact was downloaded to an isolated temporary directory and run as `deploy`; remote copy/execution is not independently verified by Codex. |
+| Audit identifier / exact execution time | UNKNOWN / not supplied | The top of the JSON screenshot was not captured; do not infer an audit ID or timestamp. The Owner supplied the date 2026-10-19 only. Supporting screenshot/JSON archival remains pending. |
+
+The runner's reported identity, revision, PHP and capacity are attributable to the Owner's description of its output, not to a complete retained machine-readable artifact. The earlier console identity checks and the runner output are separate reported sources; the missing JSON header prevents full record correlation. No secret-bearing output is included here.
+
+### Effective M12 gate readback
+
+The Owner reports that, in a separately authorized read-only console operation, the following command completed successfully as the non-root `deploy` account:
+
+```text
+runuser -u deploy -- timeout 20s php /var/www/wpcaregrid/artisan config:show privacy --no-interaction
+```
+
+The Owner reports that the effective Laravel configuration output explicitly displayed these six values as `false`:
+
+| Gate | Reported effective value | Environment / revision context | Method / date | Provenance |
+|---|---|---|---|---|
+| `M12_DESTRUCTIVE_RETENTION_ENABLED` | FALSE | Owner-reported staging `stg1.wpcaregrid.com`, observed checkout `be427a17320ca7aba9ec292d2c288813df5f7c07` | `config:show privacy`; 2026-10-19; exact UTC time unavailable | Owner-provided console result; full output not archived |
+| `M12_PROFILE_ANONYMIZATION_ENABLED` | FALSE | Same reported staging context | Same command/date; exact UTC time unavailable | Owner-provided console result; full output not archived |
+| `M12_BACKUP_DELETION_ENABLED` | FALSE | Same reported staging context | Same command/date; exact UTC time unavailable | Owner-provided console result; full output not archived |
+| `M12_PROVIDER_DELETION_ENABLED` | FALSE | Same reported staging context | Same command/date; exact UTC time unavailable | Owner-provided console result; full output not archived |
+| `M12_BULK_RETENTION_EXECUTION_ENABLED` | FALSE | Same reported staging context | Same command/date; exact UTC time unavailable | Owner-provided console result; full output not archived |
+| `M12_SYNTHETIC_PROFILE_ANONYMIZATION_ENABLED` | FALSE | Same reported staging context | Same command/date; exact UTC time unavailable | Owner-provided console result; full output not archived |
+
+This is reported effective Laravel configuration, not source defaults. The command bootstraps Laravel and may perform application initialization/database reads; that boundary was separately authorized by the Owner for this operation. Codex did not run it. These values describe only the state at that reported session; they do not establish persistence across deployment or configuration changes. Do not reproduce unrelated configuration values or secrets in evidence.
+
+### Reconciliation and current disposition
+
+- The prior `UNKNOWN` table remains historically correct because no live value had been read at that time. It is superseded for the Owner-reported 2026-10-19 observation only.
+- M147-F02's effective-configuration-readback subcriterion is **OWNER-REPORTED PASS** for the six booleans at the reported staging state. Full finding disposition remains **OPEN** pending complete, timestamped evidence retention and a fresh secret-safe readback after any approved staging release and immediately before any separately approved scanner campaign.
+- The original runner JSON header/audit ID and exact UTC timestamp are not available in the supplied evidence. Archive a redacted JSON record or screenshot with the six booleans, target identity, observed SHA, method and timestamp before treating this as a fully auditable closure artifact. Reconcile the free-capacity figure against that source when available.
+- Primary is `5e1e8f68951b2925e57dd406a9b3fcd1a7923799`; staging is reported at its ancestor `be427a17320ca7aba9ec292d2c288813df5f7c07`, 104 commits behind. The scanner result on that staging revision would not validate the merged-primary scanner behavior.
+- No scanner, feed synchronization, queue job, incident, notification, backup, restore, quarantine, remediation, deployment or configuration change was performed by Codex. M147-E.2b remains **NO-GO / NOT AUTHORIZED**.
