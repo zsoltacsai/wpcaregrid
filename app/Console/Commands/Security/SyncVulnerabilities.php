@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands\Security;
 
+use App\Security\Vulnerabilities\AtomicIndexPublisher;
 use App\Security\Vulnerabilities\WordfenceFeed;
 use Illuminate\Console\Command;
 use Illuminate\Http\Client\ConnectionException;
@@ -21,7 +22,7 @@ class SyncVulnerabilities extends Command
 
     protected $description = 'Download or import the vulnerability feed and rebuild its index';
 
-    public function handle(): int
+    public function handle(AtomicIndexPublisher $publisher): int
     {
         if (config('security.vulnerabilities.source') !== 'wordfence') {
             $this->components->warn('No vulnerability source is configured (SECURITY_VULNERABILITY_SOURCE=wordfence).');
@@ -109,15 +110,19 @@ class SyncVulnerabilities extends Command
                 }
 
                 // Build the complete replacement index away from the active path.
-                // Publish the raw cache first and the authoritative index last, so
-                // a failed cache rename cannot activate a new index on a failed sync.
+                // The scanner reads only the index, so publish that single
+                // authoritative artifact atomically. The raw response stays
+                // temporary; publishing two independent active files cannot be
+                // made atomic with two renames. Remove the legacy raw cache
+                // before publishing, so it cannot masquerade as this index's
+                // source if the atomic index replacement fails.
                 $count = WordfenceFeed::import($download, $stagedIndex);
-                if (! @rename($download, $feedPath)) {
-                    throw new RuntimeException('The validated feed could not be installed.');
+                if (file_exists($feedPath) || is_link($feedPath)) {
+                    if (is_link($feedPath) || ! is_file($feedPath) || ! @unlink($feedPath)) {
+                        throw new RuntimeException('The legacy feed cache could not be removed safely.');
+                    }
                 }
-                if (! @rename($stagedIndex, $indexPath)) {
-                    throw new RuntimeException('The validated vulnerability index could not be installed.');
-                }
+                $publisher->publish($stagedIndex, $indexPath);
             } catch (ConnectionException|RuntimeException $e) {
                 $this->components->error('The feed could not be safely downloaded or validated.');
 

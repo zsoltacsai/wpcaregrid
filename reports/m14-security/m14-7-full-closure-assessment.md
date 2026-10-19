@@ -172,3 +172,13 @@ The preceding documentation update created PR-head commit `bfee9cecf28672c273fe9
 - No production code, configuration, dependency, or workflow was changed by this evidence update.
 
 The updated PR exact head after this addendum requires its own PR-triggered CI; no status is inferred from the prior SHA.
+
+## PR #132 final feed-integrity review follow-up — 2026-10-19
+
+This section supersedes only the immediately preceding working-tree account of raw-cache publication; earlier evidence remains historical. In the old sequence, raw-cache rename could succeed and active-index rename fail, leaving the raw cache and authoritative index from different downloads. The scanner itself continues reading the prior validated index, and repository search found no runtime reader of the raw cache. The inconsistency therefore did not establish a false CLEAN result, but could mislead manual provenance/freshness review.
+
+The candidate now treats the index as the sole active artifact. Downloaded feed bytes stay temporary. A legacy raw cache is removed before the index switch only if it is a regular non-symlink file; an unsafe path or failed unlink stops before publication. `AtomicIndexPublisher` performs one checked same-filesystem rename to activate the complete index. A deterministic injected publication failure preserved the previous index; temporary files were cleaned; the following successful synthetic sync activated the new index. A directory at the legacy cache path is rejected before active replacement. Two concurrent local publisher processes were tested against an active-file reader; every observed hash matched the old or one complete staged document.
+
+Local validation on this candidate: focused feed/posture suite 17 tests / 858 assertions; full Security feature suite 105 tests / 2,503 assertions; Pint pass. These checks do not establish command-level freshness ordering among concurrent downloads, process termination exactly at the filesystem syscall boundary, feed licensing/provenance, or live production filesystem behavior. M147-F07 remains OPEN. M147-F02 remains OPEN despite Owner-reported false values for one prior staging observation; archival and fresh pre-scan verification remain outstanding. CI-REL-01 remains OPEN; this work does not resolve its earlier Connector MariaDB timeout root cause.
+
+No staging/production access, live scanner/feed, M12 read or change, queue, incident, notification, backup, restore, deployment or external-service call occurred. PR #132 remains the sole focused integration candidate and must stay unmerged pending Owner review. Exact-head CI result is recorded in the final current PR review evidence only after it completes.

@@ -180,3 +180,19 @@ The guarded Windows browser harness ran at exact commit `61f7d07f78c4bc4b065d8b3
 ## CI-REL-01 diagnostic regression and exact-head result — 2026-10-18
 
 The Connector process synchronization harness now records child worker running/exit status when an expected result file is absent and reports early worker exit immediately. A synthetic regression test covers the diagnostic behavior. At code head `049a08bdd2377d82e7f29bce7a319c0c3768dc4c`, exact-head CI run [39160827416](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39160827416) passed all seven jobs; the Server MySQL process-concurrency gate step passed. Connector MariaDB: 211 tests, 1,834 assertions, 3 skipped, 0 failed. Earlier MariaDB timeout and intermediate implementation/style failures remain recorded in the [full closure assessment](m14-7-full-closure-assessment.md). The timeout root cause is still unresolved; this single pass does not close CI-REL-01.
+
+## Feed publication follow-up — local synthetic tests, 2026-10-19
+
+| Scenario | Result | Evidence / limit |
+|---|---|---|
+| HTTP download failure / non-success / empty / oversized / truncated JSON / wrong content type / redirect | TESTED — PASS | Existing synthetic transport cases preserve the last-known-good index and clean temporary downloads. |
+| Invalid or incomplete feed | TESTED — PASS | Existing deterministic local import cases reject malformed records without replacing the active index. |
+| Legacy raw-cache path is a directory or otherwise unsafe | TESTED — PASS | Sync aborts before active-index publication; it does not follow or remove an unexpected path. |
+| Active-index publication fails before atomic rename | TESTED — PASS | Injected publisher failure preserves the previous active index byte-for-byte; staging/download artifacts are cleaned. |
+| Subsequent valid sync after publication failure | TESTED — PASS | A fresh synthetic HTTP response activates the replacement index; no second raw cache is retained. |
+| Interrupted publication | PARTIALLY TESTED | Failure injected immediately before rename. The active target remains old or becomes the complete new index, but a process kill at the exact syscall boundary is not separately fault-injected. |
+| Concurrent publication | PARTIALLY TESTED | Two local processes race complete staged JSON replacements while a reader checks every observed file; readers see only the old or a complete candidate document. This tests atomic publication, not feed-download ordering or full concurrent-command serialization. |
+| Raw-feed cache versus active-index generation | MITIGATED | Repository search found no runtime reader of the raw cache; HTTP sync no longer publishes a second active raw file. Two independent active renames are removed. |
+| Live provenance, licensing, production filesystem | NOT TESTED | Requires separately authorized operational review; no external feed or staging action occurred. |
+
+Validation on the M147-F07 follow-up branch: `tests/Feature/Security/VulnerabilityAndPostureTest.php` — 17 tests / 858 assertions; `tests/Feature/Security` — 105 tests / 2,503 assertions; Pint passed for the three changed PHP files. Exact-new-head CI must be checked after publication of the final branch head.
