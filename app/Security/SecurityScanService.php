@@ -12,6 +12,7 @@ use App\Models\SecurityScan;
 use App\Models\Website;
 use App\Models\WebsiteJob;
 use App\Security\Vulnerabilities\VulnerabilityScanner;
+use App\SyntheticFixtures\SyntheticFixturePolicy;
 use App\Websites\Actor;
 use App\Websites\AuditLog;
 use Illuminate\Support\Facades\DB;
@@ -90,9 +91,15 @@ class SecurityScanService
     public function refusal(Website $website, ScanType $type): ?string
     {
         $connector = $website->activeConnector;
+        $fixtures = app(SyntheticFixturePolicy::class);
+        $hasSyntheticMarker = $fixtures->fixture($website) !== null;
+        $syntheticIntegrityAllowed = $type === ScanType::Integrity
+            && $fixtures->securityScanAllowed($website, $type->connectorType() ?? '');
 
         return match (true) {
-            ! $website->allowsServiceOperations() => 'SUBSCRIPTION_INACTIVE',
+            $hasSyntheticMarker && $type !== ScanType::Integrity => 'SYNTHETIC_SCAN_TYPE_NOT_ALLOWED',
+            $hasSyntheticMarker && ! $syntheticIntegrityAllowed => 'SYNTHETIC_SCAN_DISABLED',
+            ! $website->allowsServiceOperations() && ! $syntheticIntegrityAllowed => 'SUBSCRIPTION_INACTIVE',
             $type->needsConnector() && $connector === null => 'NOT_CONNECTED',
             $type->needsConnector() && ! $connector->can(Capability::SecurityScan) => 'CAPABILITY_MISSING',
             $website->securityScans()->whereIn('status', [ScanStatus::Queued->value, ScanStatus::Running->value])->exists() => 'SCAN_IN_PROGRESS',
@@ -131,7 +138,7 @@ class SecurityScanService
         }
 
         try {
-            $part = $this->ingest->parse($reported);
+            $part = $this->ingest->parse($reported, $scan->type);
         } catch (ValidationException $e) {
             Log::warning('Security scan result rejected.', ['scan' => $scan->uuid, 'errors' => array_keys($e->errors())]);
             $this->fail($scan, 'INVALID_RESULT', 'The site reported a result that could not be accepted.');

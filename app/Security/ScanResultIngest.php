@@ -76,9 +76,26 @@ final class ScanResultIngest
      *
      * @throws ValidationException
      */
-    public function parse(array $data): array
+    public function parse(array $data, ScanType $scanType): array
     {
         $valid = Validator::make($data, self::rules())->validate();
+        $scanners = $scanType->scanners();
+
+        foreach ($valid['findings'] as $index => $finding) {
+            if (! in_array(FindingType::from($finding['type'])->scanner(), $scanners, true)) {
+                throw ValidationException::withMessages(["findings.{$index}.type" => 'Finding is outside the requested scan scope.']);
+            }
+        }
+
+        foreach (array_keys($valid['coverage']) as $scanner) {
+            if (! in_array($scanner, $scanners, true)) {
+                throw ValidationException::withMessages(["coverage.{$scanner}" => 'Coverage is outside the requested scan scope.']);
+            }
+        }
+
+        if (isset($valid['admins']) && ! in_array('malware', $scanners, true)) {
+            throw ValidationException::withMessages(['admins' => 'Administrator inventory is outside the requested scan scope.']);
+        }
 
         return [
             'part' => (int) $valid['part'],

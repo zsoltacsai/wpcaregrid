@@ -147,7 +147,7 @@ final class JobQueue
         if ($website->syntheticFixture()->exists()) {
             $refusal = match (true) {
                 ! $connector?->isActive() || $connector->website_id !== $website->id => 'website is not connected',
-                ! app(SyntheticFixturePolicy::class)->jobAllowed($website, $type) => 'synthetic test job is not enabled for this site',
+                ! app(SyntheticFixturePolicy::class)->jobAllowed($website, $type, $payload) => 'synthetic test job is not enabled for this site',
                 ! $connector->can($capability) => "connector does not support {$capability->value}",
                 $type === JobType::Restore && $connector->presence() !== Presence::Connected => 'connector is not currently reporting in',
                 default => null,
