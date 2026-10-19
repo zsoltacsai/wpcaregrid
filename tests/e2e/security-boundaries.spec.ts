@@ -29,28 +29,20 @@ test('customer profile update rejects a cross-origin same-site request without a
     await login(page);
     await page.goto(WORDPRESS);
 
-    // A different local origin on the same host lets the browser send the
-    // synthetic session cookie, while Fetch Metadata reports same-site rather
-    // than same-origin. The simple form-encoded POST avoids a preflight and
-    // deliberately omits both the CSRF form field and headers.
-    const responsePromise = page.waitForResponse((candidate) => candidate.url() === `${APP}/account/profile` && candidate.request().method() === 'POST');
-    await page.evaluate(async (url) => {
-        await fetch(url, {
-            method: 'POST',
-            mode: 'cors',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-                _method: 'PUT',
-                first_name: 'CSRF-UNAUTHORIZED-CHANGE',
-                last_name: 'Synthetic',
-                customer_type: 'individual',
-                country_code: 'HU',
-            }),
-        }).catch(() => undefined); // The browser may hide the rejection response when CORS denies reading it.
-    }, `${APP}/account/profile`);
-    const response = await responsePromise;
-    expect((await response.request().headers()).origin).toBe(WORDPRESS);
+    // Playwright's context-bound HTTP client carries only this disposable
+    // browser context's session cookie. Explicit Fetch Metadata models a
+    // sibling-origin request, which the local browser correctly does not send
+    // across its port boundary without an allowed CORS response.
+    const response = await page.request.post(`${APP}/account/profile`, {
+        headers: { Origin: WORDPRESS, 'Sec-Fetch-Site': 'same-site' },
+        form: {
+            _method: 'PUT',
+            first_name: 'CSRF-UNAUTHORIZED-CHANGE',
+            last_name: 'Synthetic',
+            customer_type: 'individual',
+            country_code: 'HU',
+        },
+    });
     expect(response.status()).toBe(419);
 
     await page.goto(`${APP}/account/profile`);
