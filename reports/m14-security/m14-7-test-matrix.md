@@ -1,5 +1,16 @@
 # M14.7 Security Test and Evidence Matrix
 
+## M147-E.2a live preflight — 2026-10-18
+
+| Scenario | Status | Evidence / disposition |
+|---|---|---|
+| Mandatory authorization record complete before staging connection | BLOCKED | Owner supplied a DRAFT / NOT APPROVED record. It still lacks the host identity pin, active window, authorization reference/final approval, and exact reviewed commands; several RO operations are explicitly blocked pending safety review. Stop rule applied; no connection. |
+| Staging identity, revision, runtime, WordPress and Connector | NOT TESTED | No live access; values UNKNOWN. Repository's 0.4.7/API v1 is expectation only. |
+| Six effective M12 booleans | NOT TESTED — UNKNOWN | No gate was read or modified. All six remain UNKNOWN. |
+| Effective scanner/feed, queue/scheduler, routing, storage, disk and recovery state | NOT TESTED — UNKNOWN | No live interfaces used. No scan/feed/queue/backup/recovery operation occurred. |
+
+See [E.2a preflight evidence](m14-7-e2a-staging-preflight-evidence.md). This is an authorization-blocked attempt, not a completed read-only preflight and not scanner validation. M147-E.2b remains NO-GO / NOT AUTHORIZED.
+
 ## M147-E.1 staging readiness plan — 2026-10-18
 
 Offline source review only on primary `57b8cf02d655cb7316648785bd9a1b6b07b148e1`. No staging, production, customer site, live gate, feed, scanner, backup, queue, external service, or browser was accessed or executed. The six live M12 values remain UNKNOWN. All M147-E.2 runbook scenarios below are **NOT EXECUTED — OWNER APPROVAL REQUIRED**.
@@ -103,3 +114,33 @@ A passing row is limited to explicit assertions in the referenced test. The deta
 PR #125 merged at `bc0a4e536abfd573b5b34d5e2152dcf15ad80c80`. Exact-head run [39122868939](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39122868939) and exact merged-primary run [39124920641](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39124920641) each passed all seven required jobs; the Server MySQL process/concurrency step passed in both. The local selected suites completed 471/483 passed, 12 skipped, 0 failed, 5,635 assertions. Skipped cases remain skipped; coverage rows above remain selected-path claims only. The full scenario evidence and closure disposition are in [M147-D closure report](m14-7-d-closure-report.md).
 
 M147-D is closed for bounded local synthetic attack-path validation. Browser E2E, exhaustive SSRF/DNS-rebinding, every Connector replay/order case, full incident/backup/remediation combinations, live M12 gates and operational host controls remain untested or partial. AS-16 remains open. No staging, production, customer-site, live-service, deployment or Level 3 operation occurred.
+
+## M147-E.2a RO-00–RO-04 execution — 2026-10-18
+
+| Scenario | Status | Evidence / disposition |
+|---|---|---|
+| RO-00 trusted SSH host-key verification | BLOCKED | Unauthenticated keyscan attempted during the approved window; local KEX negotiation failed and no key/fingerprint was retrieved or compared. No authentication occurred. |
+| RO-01 hostname, account, UTC time | NOT TESTED | Not executed after RO-00 blocked. |
+| RO-02 deployed Git HEAD | NOT TESTED | Not executed after RO-00 blocked. |
+| RO-03 PHP CLI version | NOT TESTED | Not executed after RO-00 blocked. |
+| RO-04 filesystem capacity | NOT TESTED | Not executed after RO-00 blocked. |
+| RO-05–RO-09 | NOT AUTHORIZED | Not attempted. All six live M12 gate values remain UNKNOWN. |
+
+M147-E.2b remains NO-GO / NOT AUTHORIZED.
+
+## Current M147-E.2a evidence reconciliation — 2026-10-18
+
+| Scenario | Status | Evidence / disposition |
+|---|---|---|
+| Local RSA public-key fingerprint | TESTED — PASS | Recomputed from local public id_rsa.pub; exact match to the complete Owner-provided Rackforest-console fingerprint. Server-side result is Owner-reported, not directly read by Codex. |
+| Local SSH binary identity and KEX | TESTED — PASS (local only) | Fresh hashes match verified package comparison record; local OpenSSH supports sntrup, Curve25519 and ED25519. No server negotiation. |
+| SSH credential usability / deploy authorization | UNKNOWN | Private-key file presence only by metadata; no key contents, agent identity or authentication inspected/tested. |
+| RO-00 original comparison | TESTED — FAIL; later reconciled | Original comparison against the then-supplied expected fingerprint failed. Owner later supplied independent exact match to observed keyscan value. Historical result preserved; no new keyscan. |
+| RO-01–RO-04 | NOT TESTED | No current exact account/credential/window authorization. |
+| RO-05–RO-09 and six M12 values | NOT TESTED / NOT AUTHORIZED | No read or operation occurred; six live values remain UNKNOWN. |
+| Live scanner and side-effect execution | NOT TESTED | M147-E.2b is not authorized. |
+
+
+## CI-REL-01 diagnostic regression and exact-head result — 2026-10-18
+
+The Connector process synchronization harness now records child worker running/exit status when an expected result file is absent and reports early worker exit immediately. A synthetic regression test covers the diagnostic behavior. At code head `049a08bdd2377d82e7f29bce7a319c0c3768dc4c`, exact-head CI run [39160827416](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39160827416) passed all seven jobs; the Server MySQL process-concurrency gate step passed. Connector MariaDB: 211 tests, 1,834 assertions, 3 skipped, 0 failed. Earlier MariaDB timeout and intermediate implementation/style failures remain recorded in the [full closure assessment](m14-7-full-closure-assessment.md). The timeout root cause is still unresolved; this single pass does not close CI-REL-01.

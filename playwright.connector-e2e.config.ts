@@ -4,7 +4,7 @@ const root = process.cwd();
 
 export default defineConfig({
     testDir: './tests/e2e',
-    testMatch: 'connector-browser.spec.ts',
+    testMatch: ['connector-browser.spec.ts', 'localization.spec.ts', 'security-boundaries.spec.ts'],
     timeout: 180_000,
     expect: { timeout: 12_000 },
     fullyParallel: false,

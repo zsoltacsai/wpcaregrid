@@ -4,6 +4,7 @@ namespace Tests\Support;
 
 use App\Backups\Storage\SftpStorage;
 use Aws\S3\S3Client;
+use Symfony\Component\Process\ExecutableFinder;
 
 /**
  * Real protocol servers for the storage provider tests: moto (an
@@ -35,17 +36,21 @@ final class StorageServers
             return self::$s3;
         }
 
-        $binary = trim((string) shell_exec('command -v moto_server'));
-        if ($binary === '') {
-            return null;
+        $endpoint = self::configuredS3Endpoint();
+        if ($endpoint === null) {
+            $binary = (new ExecutableFinder)->find('moto_server');
+            if ($binary === null) {
+                return null;
+            }
+
+            $port = self::freePort();
+            self::start([$binary, '-H', '127.0.0.1', '-p', (string) $port]);
+            self::waitFor($port);
+            $endpoint = "http://127.0.0.1:{$port}";
         }
 
-        $port = self::freePort();
-        self::start([$binary, '-H', '127.0.0.1', '-p', (string) $port]);
-        self::waitFor($port);
-
         $config = [
-            'driver' => 's3', 'endpoint' => "http://127.0.0.1:{$port}", 'region' => 'us-east-1', 'bucket' => 'caregrid-test-backups',
+            'driver' => 's3', 'endpoint' => $endpoint, 'region' => 'us-east-1', 'bucket' => 'caregrid-test-backups',
             'key' => 'test-access-key', 'secret' => 'test-secret-key-do-not-log', 'prefix' => 'backups', 'use_path_style_endpoint' => true,
             'server_side_encryption' => 'AES256', 'multipart_threshold' => 6 * 1024 * 1024, 'part_size' => 5 * 1024 * 1024,
         ];
@@ -53,6 +58,34 @@ final class StorageServers
             ->createBucket(['Bucket' => $config['bucket']]);
 
         return self::$s3 = $config;
+    }
+
+    /**
+     * An optional, explicit loopback endpoint lets isolated test containers
+     * provide Moto without teaching the test process to contact external hosts.
+     */
+    private static function configuredS3Endpoint(): ?string
+    {
+        $endpoint = getenv('CAREGRID_TEST_S3_ENDPOINT');
+        if ($endpoint === false || $endpoint === '') {
+            return null;
+        }
+        $parts = parse_url($endpoint);
+        if (! is_array($parts)
+            || ($parts['scheme'] ?? null) !== 'http'
+            || ($parts['host'] ?? null) !== '127.0.0.1'
+            || ! isset($parts['port'])
+            || $parts['port'] < 1
+            || $parts['port'] > 65535
+            || isset($parts['user'])
+            || isset($parts['pass'])
+            || isset($parts['query'])
+            || isset($parts['fragment'])
+            || isset($parts['path']) && $parts['path'] !== '') {
+            throw new \RuntimeException('CAREGRID_TEST_S3_ENDPOINT must be a plain HTTP loopback endpoint with an explicit port.');
+        }
+
+        return $endpoint;
     }
 
     public static function sftp(): ?array
@@ -63,15 +96,23 @@ final class StorageServers
 
         // An sshd set up outside the tests (CI starts one as root with a dedicated user).
         if (getenv('CAREGRID_TEST_SFTP_HOST')) {
+            $host = self::configuredSftpHost();
+            $port = self::configuredSftpPort();
+            $hostKey = getenv('CAREGRID_TEST_SFTP_HOST_KEY');
+            if (! is_string($hostKey) || $hostKey === '' || ! is_file($hostKey) || ! is_readable($hostKey)) {
+                throw new \RuntimeException('CAREGRID_TEST_SFTP_HOST_KEY must identify a readable pinned host-key file.');
+            }
+
             return self::$sftp = [
-                'driver' => 'sftp', 'host' => getenv('CAREGRID_TEST_SFTP_HOST'), 'port' => (int) (getenv('CAREGRID_TEST_SFTP_PORT') ?: 22),
+                'driver' => 'sftp', 'host' => $host, 'port' => $port,
                 'username' => getenv('CAREGRID_TEST_SFTP_USER'), 'password' => null, 'private_key' => getenv('CAREGRID_TEST_SFTP_KEY'), 'passphrase' => null,
                 'root' => rtrim((string) getenv('CAREGRID_TEST_SFTP_ROOT'), '/').'/backups-'.getmypid(), 'timeout' => 10,
-                'host_fingerprint' => SftpStorage::fingerprint((string) file_get_contents((string) getenv('CAREGRID_TEST_SFTP_HOST_KEY'))),
+                'host_fingerprint' => SftpStorage::fingerprint((string) file_get_contents($hostKey)),
             ];
         }
 
-        if (! is_executable('/usr/sbin/sshd') || trim((string) shell_exec('command -v ssh-keygen')) === '' || ! function_exists('posix_getuid') || posix_getuid() !== 0) {
+        $sshKeygen = (new ExecutableFinder)->find('ssh-keygen');
+        if (! is_executable('/usr/sbin/sshd') || $sshKeygen === null || ! function_exists('posix_getuid') || posix_getuid() !== 0) {
             return null;
         }
 
@@ -81,7 +122,10 @@ final class StorageServers
         foreach (['host', 'client'] as $key) {
             @unlink("{$dir}/{$key}");
             @unlink("{$dir}/{$key}.pub");
-            shell_exec('ssh-keygen -q -t ed25519 -N "" -f '.escapeshellarg("{$dir}/{$key}"));
+            $process = proc_open([$sshKeygen, '-q', '-t', 'ed25519', '-N', '', '-f', "{$dir}/{$key}"], [0 => ['file', self::nullDevice(), 'r'], 1 => ['file', self::nullDevice(), 'w'], 2 => ['file', self::nullDevice(), 'w']], $pipes);
+            if (! is_resource($process) || proc_close($process) !== 0 || ! is_file("{$dir}/{$key}.pub")) {
+                throw new \RuntimeException('Could not create the isolated SFTP test key pair.');
+            }
         }
 
         $port = self::freePort();
@@ -99,9 +143,34 @@ final class StorageServers
         ];
     }
 
+    private static function configuredSftpHost(): string
+    {
+        $host = getenv('CAREGRID_TEST_SFTP_HOST');
+        if ($host !== '127.0.0.1') {
+            throw new \RuntimeException('CAREGRID_TEST_SFTP_HOST must be the IPv4 loopback address 127.0.0.1.');
+        }
+
+        return $host;
+    }
+
+    private static function configuredSftpPort(): int
+    {
+        $configured = getenv('CAREGRID_TEST_SFTP_PORT');
+        $port = $configured === false || $configured === '' ? 22 : filter_var($configured, FILTER_VALIDATE_INT);
+        if (! is_int($port) || $port < 1 || $port > 65535) {
+            throw new \RuntimeException('CAREGRID_TEST_SFTP_PORT must be an integer from 1 to 65535.');
+        }
+
+        return $port;
+    }
+
     private static function start(array $command): void
     {
-        $process = proc_open($command, [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
+        $null = self::nullDevice();
+        $process = proc_open($command, [0 => ['file', $null, 'r'], 1 => ['file', $null, 'w'], 2 => ['file', $null, 'w']], $pipes);
+        if (! is_resource($process)) {
+            throw new \RuntimeException('Could not start the isolated storage test service.');
+        }
         self::$processes[] = $process;
 
         if (count(self::$processes) === 1) {
@@ -120,6 +189,11 @@ final class StorageServers
         fclose($socket);
 
         return $port;
+    }
+
+    private static function nullDevice(): string
+    {
+        return PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
     }
 
     private static function waitFor(int $port): void

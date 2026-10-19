@@ -1,15 +1,11 @@
+param([string] $ExpectedCommit = $env:WP_CAREGRID_E2E_EXPECTED_COMMIT)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-$AllowedWorktreeBranches = @{
-    'D:\-=AI=-\-=Git=-\wpcaregrid-connector' = 'feature/connector-e2e'
-    'D:\-=AI=-\-=Git=-\wpcaregrid-combined' = 'integration/connector-seo'
-}
-$ExpectedBranch = $AllowedWorktreeBranches[$Repo]
-if (-not $ExpectedBranch) { throw 'Wrong worktree.' }
-if ((git -C $Repo branch --show-current).Trim() -ne $ExpectedBranch) { throw 'Wrong branch.' }
+$Identity = & (Join-Path $PSScriptRoot 'Assert-ApprovedConnectorBrowserWorktree.ps1') -ExpectedCommit $ExpectedCommit
+$Repo = $Identity.Repository
 
-& (Join-Path $PSScriptRoot 'Initialize-Local.ps1')
+& (Join-Path $PSScriptRoot 'Initialize-Local.ps1') -ExpectedCommit $ExpectedCommit
 if ($LASTEXITCODE -ne 0) { throw 'Local E2E initialization failed.' }
 
 $E2E = Join-Path $Repo 'storage\e2e'
@@ -107,7 +103,12 @@ echo 'active '.get_plugin_data(WP_PLUGIN_DIR.'/'.$plugin)['Version'].PHP_EOL;
 '@ | Set-Content -LiteralPath $PluginCheck -Encoding ascii
     $env:WP_CAREGRID_E2E_SITE = Join-Path $E2E 'wordpress-site'
     $PluginStatus = (& $Php -c $Ini $PluginCheck).Trim()
-    if ($LASTEXITCODE -ne 0 -or $PluginStatus -notmatch '^active 0\.4\.1$') { throw "Connector plugin check failed: $PluginStatus" }
+    $ConnectorHeader = Join-Path $Repo 'wordpress\wp-caregrid-connector\wp-caregrid-connector.php'
+    if (-not (Test-Path -LiteralPath $ConnectorHeader -PathType Leaf)) { throw 'The checked-out Connector plugin header is missing.' }
+    $VersionLines = @(Select-String -LiteralPath $ConnectorHeader -Pattern '^\s*\* Version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$')
+    if ($VersionLines.Count -ne 1) { throw 'Could not establish one exact Connector version from the checked-out plugin header.' }
+    $ExpectedConnectorVersion = $VersionLines[0].Matches[0].Groups[1].Value
+    if ($LASTEXITCODE -ne 0 -or $PluginStatus -cne "active $ExpectedConnectorVersion") { throw "Connector plugin check failed: expected active $ExpectedConnectorVersion from source; observed $PluginStatus" }
 
     $LaravelDb = (Resolve-Path (Join-Path $E2E 'laravel.sqlite')).Path
     $WpDb = (Resolve-Path (Join-Path $E2E 'wordpress-site\database\wp.sqlite')).Path

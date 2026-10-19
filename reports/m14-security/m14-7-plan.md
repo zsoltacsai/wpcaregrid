@@ -1,5 +1,9 @@
 # M14.7 Security Validation and Attack-Path Plan
 
+## M147-E.2a authorization preflight — 2026-10-18
+
+The mandatory pre-connection execution record was later supplied as a draft marked **NOT APPROVED FOR EXECUTION**. It identifies the candidate SSH account and RO-00 through RO-09 categories but lacks the trusted host fingerprint, active execution window, authorization reference/final approval, and exact reviewed commands; several operations are explicitly blocked pending method review. The hard stop rule was applied before connecting. **NO LIVE STAGING ACCESS PERFORMED.** See [M147-E.2a preflight evidence](m14-7-e2a-staging-preflight-evidence.md). All six live M12 values remain UNKNOWN. Decision A is BLOCKED and M147-E.2b is NO-GO / NOT AUTHORIZED. No E.2a operational check, scan, feed request, queue action, backup, restore, or configuration change is claimed.
+
 ## Current status — M147-E.1 planning (2026-10-18)
 
 Authoritative primary was fetched and verified at `57b8cf02d655cb7316648785bd9a1b6b07b148e1`. M147-A/B/C/D are closed only within their documented scopes. M147-E.1 is a Level 2 offline readiness plan; it does not authorize staging access. M147-E operational validation remains **NOT STARTED**; M147-F is **NOT STARTED**; M14.8 is **NOT READY**. All six live M12 gate values remain **UNKNOWN / NOT READ**. See [readiness plan](m14-7-e1-readiness-plan.md), [proposed runbook](m14-7-e1-staging-runbook.md), [risk matrix](m14-7-e1-risk-matrix.md), and [Owner approval checklist](m14-7-e1-owner-approval-checklist.md). M147-E.2 procedures are **NOT EXECUTED — OWNER APPROVAL REQUIRED**.
@@ -162,3 +166,11 @@ The Owner has separately authorized M147-D Level 2 local synthetic attack-path v
 ## M147-D validation status — 2026-10-18
 
 The Owner-authorized Level 2 M147-D local synthetic attack-path suites have been run and documented in `reports/m14-security/m14-7-d-execution-evidence.md`. Local focused result: 471 passed, 12 skipped, 0 failed, 5,635 assertions. Existing tests were reused; no runtime fix was indicated by the reviewed/tested paths. M147-D is awaiting exact-head seven-job CI and Owner review, and is not closed. Partial/not-tested scenarios remain explicit, including M147-F04 side-effect combinations, live feed/SSRF/Wordfence facts, browser E2E, exhaustive hostile rendering, and live M12 gate state. M147-E/F and M14.8 remain not started. No Level 3 activity occurred.
+
+## M147-E.2a RO-00–RO-04 authorization outcome — 2026-10-18
+
+Owner authorization covered RO-00–RO-04 for 18:00–18:30 Europe/Budapest. The unauthenticated RO-00 keyscan failed during local KEX negotiation; no host key was retrieved or compared. No authentication or remote command occurred, so RO-01–RO-04 were not executed. This is a client/tooling blocker, not evidence of a target vulnerability or unsafe server state. All live M12 gate values remain UNKNOWN and M147-E.2b remains NO-GO / NOT AUTHORIZED. No RO-05–RO-09 operation was attempted. See the [preflight evidence](m14-7-e2a-staging-preflight-evidence.md).
+
+## Current M14.7 full-closure status — 2026-10-18
+
+M147-A/B/C/D are closed within their documented bounded scopes. M147-E.1 is closed for planning only. E.2a is PARTIAL/BLOCKED: the original RO-00 comparison was reconciled with later independent Owner confirmation, but RO-01–RO-04 were not run; RO-05–RO-09 and M147-E.2b were not authorized. All six live M12 gates remain UNKNOWN. No operational scanner or live side-effect validation exists. M147-F is not started; M14.8 is not ready. Overall progress remains approximately 65% implementation, not security assurance. Full M14.7 closure is not claimed.

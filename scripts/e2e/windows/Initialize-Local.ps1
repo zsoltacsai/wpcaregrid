@@ -1,16 +1,10 @@
+param([string] $ExpectedCommit = $env:WP_CAREGRID_E2E_EXPECTED_COMMIT)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-$AllowedWorktreeBranches = @{
-    'D:\-=AI=-\-=Git=-\wpcaregrid-connector' = 'feature/connector-e2e'
-    'D:\-=AI=-\-=Git=-\wpcaregrid-combined' = 'integration/connector-seo'
-}
-$ExpectedBranch = $AllowedWorktreeBranches[$Repo]
-if (-not $ExpectedBranch) { throw "Run only from an approved Connector E2E worktree. Found: $Repo" }
-if ((git -C $Repo branch --show-current).Trim() -ne $ExpectedBranch) {
-    throw "Refusing to initialize unless the current branch is $ExpectedBranch."
-}
+$Identity = & (Join-Path $PSScriptRoot 'Assert-ApprovedConnectorBrowserWorktree.ps1') -ExpectedCommit $ExpectedCommit
+$Repo = $Identity.Repository
 
 $E2E = Join-Path $Repo 'storage\e2e'
 $Runtime = Join-Path $E2E 'runtime\php-8.4.26'
@@ -74,6 +68,20 @@ if (-not (Test-Path (Join-Path $WordPressDir 'vendor\autoload.php'))) {
         & $Php -c $Ini $Composer install --no-interaction --prefer-dist --no-progress --no-scripts
         if ($LASTEXITCODE -ne 0) { throw 'WordPress test dependency install failed.' }
     } finally { Pop-Location }
+}
+
+# Laravel browser routes render Vite assets. A healthy /up endpoint does not
+# prove the frontend manifest exists, so build from the committed npm lockfile
+# before starting HTTP services and fail closed if the manifest is absent.
+$Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+if (-not $Npm) { throw 'Node.js/npm is required; install the committed npm lockfile before local browser E2E.' }
+if (-not (Test-Path (Join-Path $Repo 'node_modules\@playwright\test'))) {
+    throw 'Locked browser dependencies are missing; run npm ci --ignore-scripts before local browser E2E.'
+}
+& $Npm.Source run build
+if ($LASTEXITCODE -ne 0) { throw 'The locked frontend build failed.' }
+if (-not (Test-Path -LiteralPath (Join-Path $Repo 'public\build\manifest.json') -PathType Leaf)) {
+    throw 'Vite build completed without producing public/build/manifest.json.'
 }
 
 $LaravelEnv = Join-Path $Repo '.env.e2e'

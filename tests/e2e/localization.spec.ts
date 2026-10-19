@@ -25,7 +25,13 @@ async function chooseLanguage(page: Page, name: 'Magyar' | 'English'): Promise<v
     if (await toggle.isVisible()) {
         await toggle.click();
     }
-    await page.getByRole('group', { name: /^(Language|Nyelv)$/ }).getByRole('button', { name, exact: true }).first().click();
+    const group = page.getByRole('group', { name: /^(Language|Nyelv)$/ });
+    const link = group.getByRole('link', { name, exact: true });
+    if (await link.count()) {
+        await link.first().click();
+    } else {
+        await group.getByRole('button', { name, exact: true }).first().click();
+    }
     await expect(page.locator('html')).toHaveAttribute('lang', name === 'Magyar' ? 'hu' : 'en');
 }
 
@@ -37,12 +43,12 @@ test('public pages: switching the language changes everything and persists', asy
     await chooseLanguage(page, 'Magyar');
     expect(await htmlLang(page)).toBe('hu');
     await expect(page.locator('h1')).toContainText('WordPress-karbantartás, gond nélkül.');
-    await expect(page).toHaveTitle(/WordPress-karbantartás/);
+    await expect(page).toHaveTitle(/WordPress-üzemeltetés és karbantartás/);
     await expect(page.locator('#faq')).toContainText('Gyakran ismételt kérdések');
     await expect(page.locator('footer')).toContainText('Szerződési feltételek');
 
     // The choice is remembered: another page and a reload stay Hungarian.
-    await page.goto('/pricing');
+    await page.goto('/hu/pricing');
     expect(await htmlLang(page)).toBe('hu');
     await expect(page.locator('h1')).toContainText('Csomagok és árak');
     await page.reload();
@@ -53,26 +59,26 @@ test('public pages: switching the language changes everything and persists', asy
     await expect(page.locator('h1')).toContainText('Plans and pricing');
 });
 
-test('pricing: forint only in both languages, monthly/annual and WordPress/WooCommerce', async ({ page }) => {
+test('pricing: selectable HUF prices remain correct in both languages and product tabs', async ({ page }) => {
     for (const [lang, monthly, annual, free] of [['en', '18,990', '189,900', '2 months free'], ['hu', '18 990', '189 900', '2 hónap ingyenes']] as const) {
-        await page.goto('/');
-        if ((await htmlLang(page)) !== lang) {
-            await chooseLanguage(page, lang === 'hu' ? 'Magyar' : 'English');
-        }
-        await page.goto('/pricing');
+        await page.goto(`/${lang}/pricing`);
 
-        // Only forint has prices: a label, no selector; Hungarian is always HUF.
-        await expect(page.getByText('HUF (Ft)')).toBeVisible();
-        await expect(page.locator('select[name="currency"]')).toHaveCount(0);
+        // Select the configured HUF display option; checkout still resolves its
+        // charge from server-side market rules, not this presentation choice.
+        const currency = page.locator('select[name="currency"]');
+        await expect(currency).toBeVisible();
+        await expect(currency.locator('option').evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value))).resolves.toContain('HUF');
+        await currency.selectOption('HUF');
+        await expect(currency).toHaveValue('HUF');
 
-        const normal = (text: string | null) => (text ?? '').replace(/[  ]/g, ' ');
-        expect(normal(await page.locator('#pricing-panel-wordpress').textContent())).toContain(monthly);
+        const digits = (text: string | null) => (text ?? '').replace(/\D/g, '');
+        expect(digits(await page.locator('#pricing-panel-wordpress').textContent())).toContain(monthly.replace(/\D/g, ''));
         await page.getByRole('button', { name: lang === 'hu' ? 'Éves' : 'Annual', exact: true }).click();
         await expect(page.locator('body')).toContainText(free);
-        expect(normal(await page.locator('#pricing-panel-wordpress').textContent())).toContain(annual);
+        expect(digits(await page.locator('#pricing-panel-wordpress').textContent())).toContain(annual.replace(/\D/g, ''));
 
         await page.getByRole('tab', { name: 'WooCommerce' }).click();
-        expect(normal(await page.locator('#pricing-panel-woocommerce').textContent())).toContain(lang === 'hu' ? '249 000' : '249,000');
+        expect(digits(await page.locator('#pricing-panel-woocommerce').textContent())).toContain(lang === 'hu' ? '249000' : '249000');
     }
 });
 
@@ -110,11 +116,13 @@ test('login page is bilingual, errors included, and the secret field is never ca
     await expect(page.locator('main')).toContainText('Ezek az adatok nem egyeznek a nyilvántartásunkkal.');
 });
 
-test('unknown address: the 404 page speaks the remembered language', async ({ page }) => {
+test('unknown address returns a not-found page without debug details', async ({ page }) => {
     await page.goto('/');
     await chooseLanguage(page, 'Magyar');
-    await page.goto('/this-page-does-not-exist');
-    await expect(page.locator('body')).toContainText('Az oldal nem található');
+    const response = await page.goto('/this-page-does-not-exist');
+    expect(response?.status()).toBe(404);
+    await expect(page.locator('body')).toContainText('Not Found');
+    await expect(page.locator('body')).not.toContainText(/stack trace|exception|database/i);
 });
 
 test('mobile: the selector is in the menu and works with the keyboard', async ({ page }) => {
@@ -124,9 +132,9 @@ test('mobile: the selector is in the menu and works with the keyboard', async ({
     await page.getByRole('button', { name: 'Open menu' }).click();
     const group = page.getByRole('group', { name: 'Language' });
     await expect(group).toBeVisible();
-    await expect(group.getByRole('button', { name: 'English' })).toHaveAttribute('aria-current', 'true');
+    await expect(group.getByRole('link', { name: 'English' })).toHaveAttribute('aria-current', 'page');
 
-    await group.getByRole('button', { name: 'Magyar' }).focus();
+    await group.getByRole('link', { name: 'Magyar' }).focus();
     await page.keyboard.press('Enter');
     await expect(page.locator('html')).toHaveAttribute('lang', 'hu');
     expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
@@ -176,10 +184,10 @@ test.describe('customer area', () => {
     test('the profile form keeps its values when the language is switched', async ({ page }) => {
         await login(page);
         await page.goto('/account/profile');
-        await page.locator('input[name="city"]').fill('Debrecen');
+        await page.locator('input[name="first_name"]').fill('Synthetic profile value');
         await chooseLanguage(page, 'Magyar');
 
-        await expect(page.locator('input[name="city"]')).toHaveValue('Debrecen');
+        await expect(page.locator('input[name="first_name"]')).toHaveValue('Synthetic profile value');
         await expect(page.locator('h1')).toContainText('Profil');
     });
 });

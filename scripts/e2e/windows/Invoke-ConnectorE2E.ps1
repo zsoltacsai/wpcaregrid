@@ -1,14 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-$AllowedWorktreeBranches = @{
-    'D:\-=AI=-\-=Git=-\wpcaregrid-connector' = 'feature/connector-e2e'
-    'D:\-=AI=-\-=Git=-\wpcaregrid-combined' = 'integration/connector-seo'
-}
-$ExpectedBranch = $AllowedWorktreeBranches[$Repo]
-if (-not $ExpectedBranch) { throw 'Refusing to run outside an approved Connector E2E worktree.' }
-if ((git -C $Repo branch --show-current).Trim() -ne $ExpectedBranch) { throw 'Refusing to run on an unapproved branch.' }
+$Identity = & (Join-Path $PSScriptRoot 'Assert-ApprovedConnectorBrowserWorktree.ps1')
+$Repo = $Identity.Repository
 $E2E = Join-Path $Repo 'storage\e2e'
 $Php = Join-Path $E2E 'runtime\php-8.4.26\php.exe'
 $Ini = Join-Path $E2E 'runtime\php-8.4.26\php.ini'
