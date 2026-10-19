@@ -33,10 +33,15 @@ class WordfenceGuzzleRequestOptionsTest extends TestCase
         fclose($listener);
         $port = (int) substr((string) $address, strrpos((string) $address, ':') + 1);
 
-        $process = new Process([PHP_BINARY, '-S', "127.0.0.1:{$port}", base_path('tests/Fixtures/wordfence-http-router.php')]);
-        $process->start();
-        $sink = tempnam(sys_get_temp_dir(), 'wpcg-guzzle-');
+        $tempDirectory = sys_get_temp_dir();
+        $sink = tempnam($tempDirectory, 'wpcg-guzzle-');
+        $router = tempnam($tempDirectory, 'wpcg-router-');
         $this->assertNotFalse($sink);
+        $this->assertNotFalse($router);
+        $this->assertTrue(copy(base_path('tests/Fixtures/wordfence-http-router.php'), $router));
+
+        $process = new Process([PHP_BINARY, '-S', "127.0.0.1:{$port}", basename($router)], $tempDirectory);
+        $process->start();
 
         try {
             $deadline = microtime(true) + 5;
@@ -70,6 +75,7 @@ class WordfenceGuzzleRequestOptionsTest extends TestCase
         } finally {
             $process->stop();
             @unlink($sink);
+            @unlink($router);
         }
     }
 

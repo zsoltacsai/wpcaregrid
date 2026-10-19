@@ -135,5 +135,5 @@ class SyncVulnerabilities extends Command
             'progress' => static fn (int $downloadSize, int $downloaded): bool => $downloadSize > $limit || $downloaded > $limit,
             'curl' => [CURLOPT_RESOLVE => $resolve],
         ];
-}
+    }
 }
