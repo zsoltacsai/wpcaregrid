@@ -32,10 +32,9 @@ test('customer profile update rejects a same-origin request without a CSRF token
 
     const status = await page.evaluate(async () => {
         const response = await fetch('/account/profile', {
-        method: 'POST',
+        method: 'PUT',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
-            _method: 'PUT',
             first_name: 'CSRF-UNAUTHORIZED-CHANGE',
             last_name: 'Synthetic',
             customer_type: 'individual',
