@@ -6,7 +6,7 @@ This report records a local integration candidate combining the reviewed changes
 
 Authoritative primary at verification: `9e11c2035cd343b8cc1615fee4dbcf4a34c16cd9`. The primary branch remained at that exact SHA. Source PR heads at verification were #129 `0c51d0966bc083c48bbba49ae3314e7968ec2b18` and #130 `0afddacb234124b723978d542736d8477db28974`; both were open, targeted `claude/ecstatic-wozniak-oemyuf`, and were reported mergeable. Their exact-head GitHub CI runs were respectively [39170388169](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39170388169) and [39237437478](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39237437478), each 7/7 successful. The explicit Server MySQL process/concurrency gate passed in both runs. These are source-PR results, not CI evidence for this integration candidate.
 
-The candidate branch `codex/m147-pr-integration-review` is based on primary `9e11c2035cd343b8cc1615fee4dbcf4a34c16cd9`. Its final local validation SHA before evidence-documentation changes was `57ccb42a55c5cbe9220a40530685fa91a2a40173`. A new integration PR's exact-head CI must validate the final pushed SHA; until then its CI status is pending/unavailable, not green.
+The candidate branch `codex/m147-pr-integration-review` is based on primary `9e11c2035cd343b8cc1615fee4dbcf4a34c16cd9`. Its final local validation SHA before evidence-documentation changes was `57ccb42a55c5cbe9220a40530685fa91a2a40173`. Integration PR [#131](https://github.com/zsoltacsai/wpcaregrid/pull/131) was opened at `66060cbdd1acf0379fb63af416001a898832db72`; exact-head run [39243862900](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39243862900) completed 7/7 successfully, including the Server MySQL process/concurrency gate. This evidence is for that exact SHA; a documentation-only follow-up changes the head and requires a fresh exact-head CI run.
 
 ## Integration and review decisions
 
@@ -46,4 +46,4 @@ AS-16 / M147-F01 operational scanner validation remains open. M147-F02 live M12 
 
 ## Candidate disposition
 
-The local candidate is ready for protected PR review only after final documentation, cleanup, exact-head CI, and review of the complete diff. A green source-PR run cannot substitute for CI on the integrated head. M14.7 is **not fully validated or closed**: operational scanner evidence, fresh M12 readback, independent review, the external M17 checkpoint, and separately authorized staging work remain outstanding. No M14.8 work is started.
+The local candidate is ready for protected PR review with the documented cleanup limitation; its exact-head CI on `66060cbdd1acf0379fb63af416001a898832db72` passed 7/7. A green source-PR run cannot substitute for CI on the integrated head. M14.7 is **not fully validated or closed**: operational scanner evidence, fresh M12 readback, independent review, the external M17 checkpoint, and separately authorized staging work remain outstanding. No M14.8 work is started.
