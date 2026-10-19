@@ -96,11 +96,18 @@ final class StorageServers
 
         // An sshd set up outside the tests (CI starts one as root with a dedicated user).
         if (getenv('CAREGRID_TEST_SFTP_HOST')) {
+            $host = self::configuredSftpHost();
+            $port = self::configuredSftpPort();
+            $hostKey = getenv('CAREGRID_TEST_SFTP_HOST_KEY');
+            if (! is_string($hostKey) || $hostKey === '' || ! is_file($hostKey) || ! is_readable($hostKey)) {
+                throw new \RuntimeException('CAREGRID_TEST_SFTP_HOST_KEY must identify a readable pinned host-key file.');
+            }
+
             return self::$sftp = [
-                'driver' => 'sftp', 'host' => getenv('CAREGRID_TEST_SFTP_HOST'), 'port' => (int) (getenv('CAREGRID_TEST_SFTP_PORT') ?: 22),
+                'driver' => 'sftp', 'host' => $host, 'port' => $port,
                 'username' => getenv('CAREGRID_TEST_SFTP_USER'), 'password' => null, 'private_key' => getenv('CAREGRID_TEST_SFTP_KEY'), 'passphrase' => null,
                 'root' => rtrim((string) getenv('CAREGRID_TEST_SFTP_ROOT'), '/').'/backups-'.getmypid(), 'timeout' => 10,
-                'host_fingerprint' => SftpStorage::fingerprint((string) file_get_contents((string) getenv('CAREGRID_TEST_SFTP_HOST_KEY'))),
+                'host_fingerprint' => SftpStorage::fingerprint((string) file_get_contents($hostKey)),
             ];
         }
 
@@ -134,6 +141,27 @@ final class StorageServers
             'private_key' => "{$dir}/client", 'passphrase' => null, 'root' => "{$dir}/root/backups", 'timeout' => 10,
             'host_fingerprint' => SftpStorage::fingerprint((string) file_get_contents("{$dir}/host.pub")),
         ];
+    }
+
+    private static function configuredSftpHost(): string
+    {
+        $host = getenv('CAREGRID_TEST_SFTP_HOST');
+        if ($host !== '127.0.0.1') {
+            throw new \RuntimeException('CAREGRID_TEST_SFTP_HOST must be the IPv4 loopback address 127.0.0.1.');
+        }
+
+        return $host;
+    }
+
+    private static function configuredSftpPort(): int
+    {
+        $configured = getenv('CAREGRID_TEST_SFTP_PORT');
+        $port = $configured === false || $configured === '' ? 22 : filter_var($configured, FILTER_VALIDATE_INT);
+        if (! is_int($port) || $port < 1 || $port > 65535) {
+            throw new \RuntimeException('CAREGRID_TEST_SFTP_PORT must be an integer from 1 to 65535.');
+        }
+
+        return $port;
     }
 
     private static function start(array $command): void
