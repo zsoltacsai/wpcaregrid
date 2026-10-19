@@ -31,8 +31,7 @@ final class M147StagingAuditRunnerTest extends TestCase
 
     public function test_reports_allowlisted_read_only_evidence_and_unknown_m12_gates(): void
     {
-        $identity = posix_getpwuid(posix_geteuid());
-        self::assertIsArray($identity);
+        $identity = $this->currentPosixIdentity();
         $result = $this->runAudit(gethostname(), $identity['name']);
 
         self::assertSame(0, $result['exit']);
@@ -52,7 +51,7 @@ final class M147StagingAuditRunnerTest extends TestCase
 
     public function test_refuses_host_or_account_mismatch_without_evidence_output(): void
     {
-        $identity = posix_getpwuid(posix_geteuid());
+        $identity = $this->currentPosixIdentity();
         $result = $this->runAudit('unexpected-host.invalid', $identity['name']);
         self::assertSame(2, $result['exit']);
         self::assertStringContainsString('HOST_IDENTITY_MISMATCH', $result['stderr']);
@@ -61,7 +60,7 @@ final class M147StagingAuditRunnerTest extends TestCase
 
     public function test_refuses_unexpected_options_including_command_injection_shaped_values(): void
     {
-        $identity = posix_getpwuid(posix_geteuid());
+        $identity = $this->currentPosixIdentity();
         $result = $this->runAudit(gethostname(), $identity['name'], ['--shell', 'whoami']);
         self::assertSame(2, $result['exit']);
         self::assertStringContainsString('UNSUPPORTED_OPTION', $result['stderr']);
@@ -71,8 +70,10 @@ final class M147StagingAuditRunnerTest extends TestCase
     public function test_refuses_symlinked_git_head(): void
     {
         unlink($this->root.'/.git/HEAD');
-        symlink($this->root.'/.git/refs/heads/main', $this->root.'/.git/HEAD');
-        $identity = posix_getpwuid(posix_geteuid());
+        if (! @symlink($this->root.'/.git/refs/heads/main', $this->root.'/.git/HEAD')) {
+            self::markTestSkipped('The current Windows filesystem does not permit creating a symlink without additional privileges.');
+        }
+        $identity = $this->currentPosixIdentity();
         $result = $this->runAudit(gethostname(), $identity['name']);
         self::assertSame(2, $result['exit']);
         self::assertStringContainsString('UNSAFE_OR_MISSING_GIT_METADATA', $result['stderr']);
@@ -109,7 +110,7 @@ final class M147StagingAuditRunnerTest extends TestCase
         file_put_contents($gitDirectory.'/refs/heads/main', str_repeat('b', 40)."\n");
         $this->removeTree($this->root.'/.git');
         file_put_contents($this->root.'/.git', 'gitdir: '.$gitDirectory."\n");
-        $identity = posix_getpwuid(posix_geteuid());
+        $identity = $this->currentPosixIdentity();
         $result = $this->runAudit(gethostname(), $identity['name']);
         self::assertSame(0, $result['exit'], $result['stderr']);
         $evidence = json_decode($result['stdout'], true, 32, JSON_THROW_ON_ERROR);
@@ -129,6 +130,17 @@ final class M147StagingAuditRunnerTest extends TestCase
         fclose($pipes[2]);
 
         return ['exit' => proc_close($process), 'stdout' => $stdout, 'stderr' => $stderr];
+    }
+
+    private function currentPosixIdentity(): array
+    {
+        if (! function_exists('posix_geteuid') || ! function_exists('posix_getpwuid')) {
+            self::markTestSkipped('The standalone staging runner requires POSIX account metadata; its positive path is exercised in WSL/CI.');
+        }
+        $identity = posix_getpwuid(posix_geteuid());
+        self::assertIsArray($identity);
+
+        return $identity;
     }
 
     private function removeTree(string $path): void
