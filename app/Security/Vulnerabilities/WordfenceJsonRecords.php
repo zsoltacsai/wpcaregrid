@@ -71,6 +71,7 @@ final class WordfenceJsonRecords
     }
 
     private string $buffer = '';
+
     private int $offset = 0;
 
     private function peek(): ?string

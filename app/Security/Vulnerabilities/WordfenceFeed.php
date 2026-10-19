@@ -12,9 +12,13 @@ use Throwable;
 final class WordfenceFeed implements VulnerabilitySource
 {
     private ?array $manifest = null;
+
     private ?array $catalog = null;
+
     private ?string $validatedGeneration = null;
+
     private bool $invalidIndex = false;
+
     /** @var array<string, list<array<string, mixed>>> */
     private array $loadedGroups = [];
 
@@ -92,6 +96,7 @@ final class WordfenceFeed implements VulnerabilitySource
                 if ($number > 0) {
                     return false;
                 }
+
                 continue;
             }
             if (is_link($directory)) {
@@ -186,6 +191,7 @@ final class WordfenceFeed implements VulnerabilitySource
                         mitreLicense: $entry['mitre_license'],
                         mitreLicenseUrl: $entry['mitre_license_url'],
                     );
+
                     continue 2;
                 }
             }
@@ -299,7 +305,7 @@ final class WordfenceFeed implements VulnerabilitySource
                 if (file_put_contents($temporary, $json, LOCK_EX) !== strlen($json)) {
                     throw new RuntimeException('The vulnerability index manifest could not be written.');
                 }
-                ($publisher ?? new AtomicIndexPublisher())->publish($temporary, $indexPath);
+                ($publisher ?? new AtomicIndexPublisher)->publish($temporary, $indexPath);
             } finally {
                 File::delete($temporary);
             }
@@ -324,7 +330,7 @@ final class WordfenceFeed implements VulnerabilitySource
             || ! is_bool($record['informational'] ?? null)
             || ! is_array($record['references'] ?? null) || ! array_is_list($record['references'])
             || array_filter($record['references'], fn ($reference) => ! is_string($reference))
-            || !(is_null($record['published'] ?? null) || is_string($record['published']) && preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $record['published']))) {
+            || ! (is_null($record['published'] ?? null) || is_string($record['published']) && preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $record['published']))) {
             throw new RuntimeException('The vulnerability feed record does not match the v3 Scanner Feed schema.');
         }
         if (isset($record['copyrights']) && ! is_null($record['copyrights']) && ! is_array($record['copyrights'])) {
@@ -432,6 +438,7 @@ final class WordfenceFeed implements VulnerabilitySource
     {
         $from = $range['from'] === '*' ? null : $range['from'];
         $to = $range['to'] === '*' ? null : $range['to'];
+
         return ($from === null || version_compare($version, $from, $range['from_inclusive'] ? '>=' : '>'))
             && ($to === null || version_compare($version, $to, $range['to_inclusive'] ? '<=' : '<'));
     }
@@ -441,6 +448,7 @@ final class WordfenceFeed implements VulnerabilitySource
         if ($this->manifest !== null) {
             return $this->manifest;
         }
+
         return $this->manifest = self::readManifestFile($this->indexPath);
     }
 
@@ -463,6 +471,7 @@ final class WordfenceFeed implements VulnerabilitySource
             || ! is_int($manifest['entries'] ?? null) || ! is_int($manifest['records'] ?? null) || ! is_int($manifest['groups'] ?? null)) {
             return null;
         }
+
         return $manifest;
     }
 
@@ -491,6 +500,7 @@ final class WordfenceFeed implements VulnerabilitySource
             }
             $seen[$group] = true;
         }
+
         return $this->catalog = $catalog;
     }
 

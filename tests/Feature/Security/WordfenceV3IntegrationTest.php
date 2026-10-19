@@ -14,8 +14,11 @@ use Tests\TestCase;
 class WordfenceV3IntegrationTest extends TestCase
 {
     private string $directory;
+
     private string $feedPath;
+
     private string $indexPath;
+
     private string $endpoint = 'https://www.wordfence.com/api/intelligence/v3/vulnerabilities/scanner';
 
     protected function setUp(): void

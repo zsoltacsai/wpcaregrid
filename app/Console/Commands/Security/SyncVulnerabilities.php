@@ -2,9 +2,9 @@
 
 namespace App\Console\Commands\Security;
 
+use App\Security\Vulnerabilities\AtomicIndexPublisher;
 use App\Security\Vulnerabilities\WordfenceFeed;
 use App\Security\Vulnerabilities\WordfenceFeedAddressResolver;
-use App\Security\Vulnerabilities\AtomicIndexPublisher;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
