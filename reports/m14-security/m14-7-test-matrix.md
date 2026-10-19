@@ -141,6 +141,42 @@ M147-E.2b remains NO-GO / NOT AUTHORIZED.
 | Live scanner and side-effect execution | NOT TESTED | M147-E.2b is not authorized. |
 
 
+## Owner-provided M147-E.2a readback — 2026-10-19
+
+| Scenario | Status | Evidence / disposition |
+|---|---|---|
+| Staging identity, account, checkout, PHP, clean state and free capacity | PARTIALLY TESTED — OWNER-REPORTED | Owner reports Rackforest-console observations: `stg1.wpcaregrid.com`, `/var/www/wpcaregrid`, non-root `deploy` UID 1000, HEAD `be427a17320ca7aba9ec292d2c288813df5f7c07`, PHP 8.4.26, clean worktree and 70,385,975,296 free bytes. Runner hash matches the locally hashed primary artifact. Full JSON/audit ID/time and archival are missing; capacity is not cross-checked against the complete record. Codex made no staging connection. |
+| Six effective M12 configuration values | TESTED — PASS (OWNER-REPORTED; ONE OBSERVATION) | Owner reports a separately authorized `artisan config:show privacy` read displayed all six gates FALSE on the stated staging deployment. Exact UTC time and full output are unavailable. This supersedes prior UNKNOWN only for that observation; refresh before any future scanner. |
+| M147 scanner execution / incidents / backups / notifications / remediation | NOT TESTED | No live scanner or side effect occurred; M147-E.2b remains NO-GO / NOT AUTHORIZED. |
+
+
+## Local synthetic validation on merged primary — 2026-10-19
+
+Exact source tree: `5e1e8f68951b2925e57dd406a9b3fcd1a7923799` (the integration worktree had no tracked changes while tests ran).
+
+| Suite / command | Result | Coverage boundary |
+|---|---|---|
+| `php vendor/bin/phpunit tests/Feature/Security/VulnerabilityAndPostureTest.php --no-coverage` (WSL PHP 8.4.26, PHPUnit 12.5.36) | PASS — 14 tests, 165 assertions, 0 failures; 1:04.170 | Synthetic feed source/matching, vulnerable versus patched version, duplicate/multi-component records, redirects/oversize/incomplete feed, corrupt index, missing component version, posture and selected incident state. No live feed or external request. |
+| `php vendor/bin/phpunit tests/Unit/M147StagingAuditRunnerTest.php --no-coverage` (same WSL runtime) | PASS — 8 tests, 55 assertions | Standalone audit runner parser/identity fail-closed tests; no staging invocation. |
+| `node --test scripts/m14-7/m147-a.test.mjs` (Node.js) | PASS — 11 tests, 0 failures/skips | Synthetic fixture markers, path/symlink cleanup, in-memory fake queues/storage, loopback allowlist and bounded evidence output. |
+
+Feed licensing/provenance, private/link-local destination policy, DNS rebinding, IPv6, real Wordfence endpoints/freshness, live notifications, queue workers, external backup storage, quarantine/remediation, and the complete operational cancellation/recovery matrix remain **NOT TESTED**. In particular, the feed code requires configured HTTPS and refuses redirects, but this local suite does not establish a production host allowlist or DNS pinning. Those unknowns remain under M147-F03/F04 and cannot be resolved by synthetic parsing tests alone.
+
+
+## Local browser E2E on the merged-primary file tree — 2026-10-19
+
+The guarded Windows browser harness ran at exact commit `61f7d07f78c4bc4b065d8b3126bd4983e9759388`; its Git tree object is identical to authoritative primary `5e1e8f68951b2925e57dd406a9b3fcd1a7923799` (`2d51a00c107df8f6b9aa260c953e2025b523d919`). It used separate synthetic Laravel/WordPress SQLite databases, WordPress outbound HTTP blocking, Chrome, and loopback-only services on ports 8317/8318. Laravel PHP 8.4.26; WordPress PHP 8.3.33; synthetic WordPress 7.1.3 and Connector 0.4.7. No real pairing, staging, customer site, live Stripe, external webhook or mail service was used.
+
+**Result: 14/14 passed.** Three Connector pairing/recovery tests covered unsafe attempt rejection/re-pairing, credential persistence/heartbeat after WordPress restart, and stale state/recovery after a local Laravel outage. Eight localization/customer browser tests covered public pages, pricing/checkout text, authentication, language persistence, navigation and form state. Three security-boundary tests covered customer denial from Operator/Owner areas, cross-origin same-site mutation requiring CSRF, and Connector authentication on cross-origin requests. This is the complete suite selected by the guarded Connector browser harness, not every Playwright project or Stripe-dependent flow. Synthetic accounts/sites and local Connector settings were cleaned; the harness stopped its recorded local services and ports 8317/8318 were no longer listening. Existing ignored E2E credential/database files predated this run and were left untouched; their contents were not inspected.
+
+### Feed-publish failure regression — 2026-10-19
+
+| Scenario | Status | Evidence / disposition |
+|---|---|---|
+| Valid synthetic feed, raw-cache destination rename fails | TESTED — PASS after fix | Regression test first reproduced that the active index changed despite a failed command. The fix stages the new index separately, commits raw cache first and active index last; current working-tree retest preserved the previous active index and removed temporary files. Full Laravel Security feature directory: 103 tests / 1,783 assertions, 0 failures; focused feed/posture suite: 15 tests / 170 assertions, 0 failures. Exact PR-head CI is pending and must validate the final commit. |
+| Active-index filesystem rename failure / simultaneous feed syncs | NOT TESTED | Requires a deterministic filesystem/locking seam that is not currently provided. Remains within M147-F07; no claim of full atomic multi-file transaction or concurrent-update safety. |
+
+
 ## CI-REL-01 diagnostic regression and exact-head result — 2026-10-18
 
 The Connector process synchronization harness now records child worker running/exit status when an expected result file is absent and reports early worker exit immediately. A synthetic regression test covers the diagnostic behavior. At code head `049a08bdd2377d82e7f29bce7a319c0c3768dc4c`, exact-head CI run [39160827416](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39160827416) passed all seven jobs; the Server MySQL process-concurrency gate step passed. Connector MariaDB: 211 tests, 1,834 assertions, 3 skipped, 0 failed. Earlier MariaDB timeout and intermediate implementation/style failures remain recorded in the [full closure assessment](m14-7-full-closure-assessment.md). The timeout root cause is still unresolved; this single pass does not close CI-REL-01.

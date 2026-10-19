@@ -51,7 +51,18 @@ class SyncVulnerabilities extends Command
                 return self::FAILURE;
             }
 
+            $indexPath = WordfenceFeed::indexPathFor($feedPath);
+            $publishDirectory = null;
+            $stagedIndex = null;
+
             try {
+                $publishDirectory = dirname($indexPath).DIRECTORY_SEPARATOR.'wpcg-index-stage-'.bin2hex(random_bytes(12));
+                if (! @mkdir($publishDirectory, 0700) || is_link($publishDirectory)
+                    || realpath(dirname($publishDirectory)) !== realpath(dirname($indexPath))) {
+                    throw new RuntimeException('The index publication directory could not be prepared safely.');
+                }
+                $stagedIndex = $publishDirectory.DIRECTORY_SEPARATOR.'index.json';
+
                 $request = Http::connectTimeout((int) config('security.vulnerabilities.connect_timeout_seconds'))
                     ->timeout((int) config('security.vulnerabilities.timeout_seconds'))
                     ->withOptions(['allow_redirects' => false, 'stream' => true]);
@@ -97,11 +108,15 @@ class SyncVulnerabilities extends Command
                     throw new RuntimeException('The feed response was empty.');
                 }
 
-                // Validate and atomically replace the index before the raw cache.
-                // On failure, the previous feed and index remain untouched.
-                $count = WordfenceFeed::import($download, WordfenceFeed::indexPathFor($feedPath));
-                if (! rename($download, $feedPath)) {
+                // Build the complete replacement index away from the active path.
+                // Publish the raw cache first and the authoritative index last, so
+                // a failed cache rename cannot activate a new index on a failed sync.
+                $count = WordfenceFeed::import($download, $stagedIndex);
+                if (! @rename($download, $feedPath)) {
                     throw new RuntimeException('The validated feed could not be installed.');
+                }
+                if (! @rename($stagedIndex, $indexPath)) {
+                    throw new RuntimeException('The validated vulnerability index could not be installed.');
                 }
             } catch (ConnectionException|RuntimeException $e) {
                 $this->components->error('The feed could not be safely downloaded or validated.');
@@ -109,6 +124,9 @@ class SyncVulnerabilities extends Command
                 return self::FAILURE;
             } finally {
                 File::delete($download);
+                if (is_string($publishDirectory) && is_dir($publishDirectory) && ! is_link($publishDirectory)) {
+                    File::deleteDirectory($publishDirectory);
+                }
             }
         }
 

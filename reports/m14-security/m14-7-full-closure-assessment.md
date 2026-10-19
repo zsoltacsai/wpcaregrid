@@ -144,6 +144,25 @@ This addendum records the latest restricted preflight attempt. It does not chang
 M14.7 remains **PARTIAL / OWNER ACTION REQUIRED**. M147-E.2b is **NOT AUTHORIZED / NOT EXECUTED**. AS-16 / M147-F01, M147-F02, M147-F03, M147-F04, M147-F05, M147-F06, M147-F08, and CI-REL-01 remain open at their documented scopes. No M12 gate value has been read. No scanner, feed sync, queue job, incident, notification, backup, restore, remediation, deployment, production access, or customer-site access occurred.
 
 
+## Owner-provided staging evidence update — 2026-10-19
+
+This addendum does not rewrite the 2026-10-18 state. The Owner now reports that, from the Rackforest console, the staging checkout was `be427a17320ca7aba9ec292d2c288813df5f7c07`, PHP CLI was 8.4.26, the non-root `deploy` account owned the checkout, and the worktree was clean. The Owner also reports `70,385,975,296` available bytes and execution of the standalone audit runner at the SHA-256 currently recorded in this repository. The original full runner JSON (including its top/header), audit identifier and exact UTC time are not archived; the disk value cannot be reconciled to a complete source artifact yet.
+
+In a separately authorized configuration inspection, the Owner reports that the effective Laravel `config:show privacy` output explicitly showed all six M12 booleans as false. The exact UTC time/full output are unavailable and Codex did not perform the operation. Therefore M147-F02's gate-readback subcriterion is OWNER-REPORTED PASS for this one reported configuration/revision only; M147-F02 remains OPEN pending timestamped evidence archival and a fresh pre-scan read after any approved release.
+
+At the verified primary `5e1e8f68951b2925e57dd406a9b3fcd1a7923799`, merged-primary workflow [39255687374](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39255687374) passed all seven mandatory jobs. The explicit Server MySQL process-concurrency step passed (2-test/13-assertion precheck and 1-test/6-assertion gate). The primary/staging relation is linear: staging `be427a…` is an ancestor and is 104 commits behind primary. Scanner-related changes in that interval include bounded/no-redirect feed transfer and atomic validated index replacement, stricter incomplete vulnerability coverage handling, and posture logic requiring every declared scanner in a completed fresh scan to be complete. No Laravel migrations changed in the interval. The tracked `wordpress/` delta is limited to package manifests/lock and tests; no Connector runtime source file changed. The actual installed staging Connector artifact/version/pairing remains unverified.
+
+Consequently, no scanner result on the reported staging revision would validate current-primary behavior, and no staging update or scan is authorized here. M147-E.2b remains NO-GO. AS-16/M147-F01, M147-F03/F04/F05/F06/F08, and CI-REL-01 remain OPEN; M147-F07, M147-C-02 and M146-F08 retain only their previously bounded closures. M14.7 remains incomplete and M14.8 NOT READY. No staging action was performed by Codex.
+
+## Local synthetic and browser validation update — 2026-10-19
+
+On the merged-primary source tree, the Laravel Security feature directory passed **103 tests / 1,783 assertions / 0 failures**, including a new filesystem-failure injection for feed cache publication. The focused feed/posture suite passed **15 tests / 170 assertions / 0 failures**, the standalone staging audit runner suite passed **8 tests / 55 assertions**, the M147-A Node safety suite passed **11/11**, and the guarded local browser harness passed **14/14** at PR-head `61f7d07f78c4bc4b065d8b3126bd4983e9759388` whose tree matches primary `5e1e8f68951b2925e57dd406a9b3fcd1a7923799`. Local browser tests used only synthetic identities, separate SQLite stores and loopback services; no Stripe, external service, staging or production access occurred.
+
+The feed regression identified that a failure to rename the validated raw-cache file could occur after the active vulnerability index had already been replaced. A narrow candidate fix stages the validated index separately and makes the active index the last atomic publication step; a deterministic test now proves the last-known-good index is retained when raw-cache publication fails. This is a confirmed failure-state integrity defect, not evidence of live exploitation. The correction remains unmerged and exact-head CI has not yet run. M147-F07 is reopened for this newly demonstrated path and remains open for final active-index rename failure, concurrent sync, live provenance/licensing, and DNS/private-address behavior.
+
+CI-REL-01 remains open: merged-primary CI passed, but no fresh local MariaDB fault-injection or repeated stress run was completed here, and the original runner root cause is not established. The newly updated primary worktree cannot close it by inference from unrelated scanner tests.
+
+
 ## Exact updated-head CI reconciliation — 2026-10-19
 
 The preceding documentation update created PR-head commit `bfee9cecf28672c273fe918462a9bd92426d2a2a`.
