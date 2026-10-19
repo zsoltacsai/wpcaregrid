@@ -3,20 +3,15 @@ param(
     [ValidateSet('Laravel', 'WordPress')]
     [string] $Service,
     [ValidateSet('stop', 'start', 'restart')]
-    [string] $Action = 'restart'
+    [string] $Action = 'restart',
+    [string] $ExpectedCommit = $env:WP_CAREGRID_E2E_EXPECTED_COMMIT
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-$AllowedWorktreeBranches = @{
-    'D:\-=AI=-\-=Git=-\wpcaregrid-connector' = 'feature/connector-e2e'
-    'D:\-=AI=-\-=Git=-\wpcaregrid-combined' = 'integration/connector-seo'
-}
-$ExpectedBranch = $AllowedWorktreeBranches[$Repo]
-if (-not $ExpectedBranch) { throw 'Refusing to restart a service outside an approved Connector E2E worktree.' }
-if ((git -C $Repo branch --show-current).Trim() -ne $ExpectedBranch) { throw 'Refusing to restart services on an unapproved branch.' }
+$Identity = & (Join-Path $PSScriptRoot 'Assert-ApprovedConnectorBrowserWorktree.ps1') -ExpectedCommit $ExpectedCommit
+$Repo = $Identity.Repository
 
 $E2E = Join-Path $Repo 'storage\e2e'
 $ServiceFile = Join-Path $E2E 'local-services.json'

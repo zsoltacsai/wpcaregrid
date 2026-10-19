@@ -78,7 +78,7 @@ final class PollLockConcurrencyTest extends TestCase
             $this->assertNotSame($oldValue, $successorValue);
 
             file_put_contents($oldOwner['config']['action_file'], wp_json_encode(['action' => $action], JSON_THROW_ON_ERROR), LOCK_EX);
-            $this->waitForFiles([$oldResult]);
+            $this->waitForFiles([$oldResult], 20, [$oldOwner]);
             $result = json_decode((string) file_get_contents($oldResult), true, 8, JSON_THROW_ON_ERROR);
             $this->assertSame(false, $result[$action === 'release' ? 'released' : 'refreshed'], 'A stale owner must not affect the successor.');
             $this->assertSame($successorValue, $this->readLockDirectly());
@@ -487,7 +487,7 @@ final class PollLockConcurrencyTest extends TestCase
         return ['process' => ['handle' => $process, 'pipes' => $pipes], 'config' => $config + ['config_path' => $configPath]];
     }
 
-    private function waitForFiles(array $paths, int $timeout = 20): void
+    private function waitForFiles(array $paths, int $timeout = 20, array $workers = []): void
     {
         $deadline = microtime(true) + $timeout;
         do {
@@ -500,9 +500,37 @@ final class PollLockConcurrencyTest extends TestCase
 
         $diagnostics = [];
         foreach ($missing as $path) {
-            $diagnostics[] = $path;
+            $diagnostics[] = basename($path);
         }
-        $this->fail('Timed out waiting for test-process synchronization files: '.implode(', ', $diagnostics));
+        $processDiagnostics = [];
+        foreach ($workers as $worker) {
+            $handle = $worker['process']['handle'] ?? null;
+            if (! is_resource($handle)) {
+                $processDiagnostics[] = ['process_handle' => 'unavailable'];
+
+                continue;
+            }
+            $status = proc_get_status($handle);
+            $stdoutPipe = $worker['process']['pipes'][1] ?? null;
+            $stderrPipe = $worker['process']['pipes'][2] ?? null;
+            $stdout = is_resource($stdoutPipe) ? (stream_get_contents($stdoutPipe) ?: '') : '';
+            $stderr = is_resource($stderrPipe) ? (stream_get_contents($stderrPipe) ?: '') : '';
+            $processDiagnostics[] = [
+                'pid' => $status['pid'] ?? null,
+                'running' => $status['running'] ?? null,
+                'exitcode' => $status['exitcode'] ?? null,
+                'stdout_bytes' => strlen($stdout),
+                'stdout_sha256' => hash('sha256', $stdout),
+                'stderr_bytes' => strlen($stderr),
+                'stderr_sha256' => hash('sha256', $stderr),
+                'mode' => $worker['config']['mode'] ?? null,
+                'result_present' => isset($worker['config']['result_file']) && is_file($worker['config']['result_file']),
+            ];
+        }
+        $this->fail('Timed out waiting for test-process synchronization files: '.wp_json_encode([
+            'missing_files' => $diagnostics,
+            'workers' => $processDiagnostics,
+        ]));
     }
 
     private function waitForAnyFiles(array $paths, int $timeout = 20, array $workers = []): void

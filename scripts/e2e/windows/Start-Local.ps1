@@ -1,15 +1,11 @@
+param([string] $ExpectedCommit = $env:WP_CAREGRID_E2E_EXPECTED_COMMIT)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-$AllowedWorktreeBranches = @{
-    'D:\-=AI=-\-=Git=-\wpcaregrid-connector' = 'feature/connector-e2e'
-    'D:\-=AI=-\-=Git=-\wpcaregrid-combined' = 'integration/connector-seo'
-}
-$ExpectedBranch = $AllowedWorktreeBranches[$Repo]
-if (-not $ExpectedBranch) { throw 'Wrong worktree.' }
-if ((git -C $Repo branch --show-current).Trim() -ne $ExpectedBranch) { throw 'Wrong branch.' }
+$Identity = & (Join-Path $PSScriptRoot 'Assert-ApprovedConnectorBrowserWorktree.ps1') -ExpectedCommit $ExpectedCommit
+$Repo = $Identity.Repository
 
-& (Join-Path $PSScriptRoot 'Initialize-Local.ps1')
+& (Join-Path $PSScriptRoot 'Initialize-Local.ps1') -ExpectedCommit $ExpectedCommit
 if ($LASTEXITCODE -ne 0) { throw 'Local E2E initialization failed.' }
 
 $E2E = Join-Path $Repo 'storage\e2e'

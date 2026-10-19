@@ -1,18 +1,19 @@
+param(
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[0-9a-f]{40}$')]
+    [string] $ExpectedCommit
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-$AllowedWorktreeBranches = @{
-    'D:\-=AI=-\-=Git=-\wpcaregrid-connector' = 'feature/connector-e2e'
-    'D:\-=AI=-\-=Git=-\wpcaregrid-combined' = 'integration/connector-seo'
-}
-$ExpectedBranch = $AllowedWorktreeBranches[$Repo]
-if (-not $ExpectedBranch) { throw 'Refusing to run outside an approved Connector E2E worktree.' }
-if ((git -C $Repo branch --show-current).Trim() -ne $ExpectedBranch) { throw 'Refusing to run on an unapproved branch.' }
-$Head = (git -C $Repo rev-parse HEAD).Trim()
+$Identity = & (Join-Path $PSScriptRoot 'Assert-ApprovedConnectorBrowserWorktree.ps1') -ExpectedCommit $ExpectedCommit -RequireExactCommit
+$Repo = $Identity.Repository
+$Head = $Identity.Head
 Write-Output "Preflight worktree: $Repo"
-Write-Output "Preflight branch: $ExpectedBranch"
+Write-Output "Preflight branch: $($Identity.Branch)"
 Write-Output "Preflight HEAD: $Head"
+Write-Output "Preflight identity: $($Identity.Identity)"
 git -C $Repo status --short --untracked-files=all
 
 $E2E = Join-Path $Repo 'storage\e2e'
@@ -64,9 +65,10 @@ function Invoke-BrowserWordPress([string] $Mode, [string[]] $Arguments = @()) {
 }
 
 try {
-    & (Join-Path $PSScriptRoot 'Initialize-Local.ps1')
+    $env:WP_CAREGRID_E2E_EXPECTED_COMMIT = $ExpectedCommit
+    & (Join-Path $PSScriptRoot 'Initialize-Local.ps1') -ExpectedCommit $ExpectedCommit
     if ($LASTEXITCODE -ne 0) { throw 'Local E2E initialization failed.' }
-    & (Join-Path $PSScriptRoot 'Start-Local.ps1')
+    & (Join-Path $PSScriptRoot 'Start-Local.ps1') -ExpectedCommit $ExpectedCommit
     if ($LASTEXITCODE -ne 0) { throw 'Local E2E services did not start.' }
     $ServicesStartedHere = $true
 
@@ -92,9 +94,9 @@ try {
         try { Invoke-BrowserFixture 'browser-cleanup'; $SeededHere = $false } catch { Write-Warning 'Laravel browser fixture cleanup failed; its ignored state file remains for inspection.' }
     }
     if ($ServicesStartedHere -and (Test-Path -LiteralPath $ServiceFile)) {
-        try { & (Join-Path $PSScriptRoot 'Stop-Local.ps1') } catch { Write-Warning 'Could not stop the isolated local services; verify ports 8317 and 8318.' }
+        try { & (Join-Path $PSScriptRoot 'Stop-Local.ps1') -ExpectedCommit $ExpectedCommit } catch { Write-Warning 'Could not stop the isolated local services; verify ports 8317 and 8318.' }
     }
-    foreach ($name in @('CONNECTOR_BROWSER_STATE', 'WP_CAREGRID_E2E_CREDENTIALS', 'CONNECTOR_E2E_PHP', 'CONNECTOR_E2E_PHP_INI', 'CONNECTOR_E2E_WP_PHP', 'CONNECTOR_E2E_WP_PHP_INI', 'CONNECTOR_E2E_RESTART_SCRIPT')) {
+    foreach ($name in @('CONNECTOR_BROWSER_STATE', 'WP_CAREGRID_E2E_CREDENTIALS', 'CONNECTOR_E2E_PHP', 'CONNECTOR_E2E_PHP_INI', 'CONNECTOR_E2E_WP_PHP', 'CONNECTOR_E2E_WP_PHP_INI', 'CONNECTOR_E2E_RESTART_SCRIPT', 'WP_CAREGRID_E2E_EXPECTED_COMMIT')) {
         Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
     }
 }
