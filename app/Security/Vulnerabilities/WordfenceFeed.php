@@ -169,7 +169,16 @@ final class WordfenceFeed implements VulnerabilitySource
                     if (! is_array($entry) || ! isset($entry['id'], $entry['title'], $entry['ranges'], $entry['patched'])
                         || ! array_key_exists('cve', $entry) || ! array_key_exists('cvss', $entry)
                         || ! array_key_exists('rating', $entry) || ! array_key_exists('reference', $entry)
-                        || ! is_array($entry['ranges']) || $entry['ranges'] === []) {
+                        || ! is_array($entry['ranges']) || ! array_is_list($entry['ranges']) || $entry['ranges'] === []) {
+                        $this->invalidIndex = true;
+                        $entries = [];
+                        break;
+                    }
+                    try {
+                        foreach ($entry['ranges'] as $range) {
+                            self::assertValidRange($range);
+                        }
+                    } catch (\UnexpectedValueException) {
                         $this->invalidIndex = true;
                         $entries = [];
                         break;
@@ -487,10 +496,8 @@ final class WordfenceFeed implements VulnerabilitySource
 
     public static function inRange(string $version, array $range): bool
     {
-        if (! self::isSafeVersionToken($version, allowWildcard: false)
-            || ! is_string($range['from'] ?? null) || ! self::isSafeVersionToken($range['from'], allowWildcard: true)
-            || ! is_string($range['to'] ?? null) || ! self::isSafeVersionToken($range['to'], allowWildcard: true)
-            || ! is_bool($range['from_inclusive'] ?? null) || ! is_bool($range['to_inclusive'] ?? null)) {
+        self::assertValidRange($range);
+        if (! self::isSafeVersionToken($version, allowWildcard: false)) {
             return false;
         }
 
@@ -503,15 +510,25 @@ final class WordfenceFeed implements VulnerabilitySource
             && ($to === null || version_compare($version, $to, $range['to_inclusive'] ? '<=' : '<'));
     }
 
-    private static function isSafeVersionToken(mixed $version, bool $allowWildcard): bool
+    private static function assertValidRange(mixed $range): void
+    {
+        if (! is_array($range) || ! is_string($range['label'] ?? null)
+            || ! is_string($range['from'] ?? null) || ! self::isSafeVersionToken($range['from'], allowWildcard: true)
+            || ! is_string($range['to'] ?? null) || ! self::isSafeVersionToken($range['to'], allowWildcard: true)
+            || ! is_bool($range['from_inclusive'] ?? null) || ! is_bool($range['to_inclusive'] ?? null)) {
+            throw new \UnexpectedValueException('Malformed Wordfence version range.');
+        }
+    }
+
+    public static function isSafeVersionToken(mixed $version, bool $allowWildcard): bool
     {
         if (! is_string($version) || $version === '' || strlen($version) > 128 || preg_match('//u', $version) !== 1
             || preg_match('/[\p{Cc}\p{Cf}]/u', $version) === 1) {
             return false;
         }
 
-        if ($allowWildcard && $version === '*') {
-            return true;
+        if ($version === '*') {
+            return $allowWildcard;
         }
 
         return trim($version) !== '';

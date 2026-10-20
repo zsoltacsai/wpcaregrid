@@ -3,7 +3,10 @@
 namespace Tests\Feature\Security;
 
 use App\Console\Commands\Security\SyncVulnerabilities;
+use App\Models\Website;
+use App\Models\WebsiteInventory;
 use App\Security\Vulnerabilities\AtomicIndexPublisher;
+use App\Security\Vulnerabilities\VulnerabilityScanner;
 use App\Security\Vulnerabilities\WordfenceFeed;
 use App\Security\Vulnerabilities\WordfenceFeedAddressResolver;
 use Illuminate\Support\Facades\Artisan;
@@ -179,10 +182,12 @@ class WordfenceV3IntegrationTest extends TestCase
         $this->assertCount(1, $source->affecting('plugin', 'fixture-plugin', 'Version 1.0 build 2'));
 
         $this->assertTrue(WordfenceFeed::inRange('1.0-beta.2', [
+            'label' => 'synthetic prerelease interval',
             'from' => '1.0-beta.1', 'from_inclusive' => true,
             'to' => '1.0-rc.1', 'to_inclusive' => false,
         ]));
         $this->assertFalse(WordfenceFeed::inRange('1.0', [
+            'label' => 'synthetic prerelease interval',
             'from' => '1.0-beta.1', 'from_inclusive' => true,
             'to' => '1.0-rc.1', 'to_inclusive' => false,
         ]));
@@ -211,6 +216,71 @@ class WordfenceV3IntegrationTest extends TestCase
         Log::shouldHaveReceived('warning')->twice()->withArgs(fn (string $message, array $context): bool => $message === 'Wordfence vulnerability feed synchronization failed.'
             && $context === ['failure_class' => 'feed_schema_invalid', 'failure_subcode' => 'software.version_token']
         );
+    }
+
+    public function test_scanner_reports_supported_unusual_versions_and_keeps_invalid_or_wildcard_versions_partial(): void
+    {
+        $record = $this->record();
+        $makeSoftware = static fn (string $slug, string $from, string $to): array => [
+            'type' => 'plugin', 'name' => $slug, 'slug' => $slug,
+            'affected_versions' => ['fixture range' => [
+                'from_version' => $from, 'from_inclusive' => true,
+                'to_version' => $to, 'to_inclusive' => true,
+            ]],
+            'patched' => false, 'patched_versions' => [],
+        ];
+        $record['software'] = [
+            $makeSoftware('spaced-plugin', 'Version 1.0 build 1', 'Version 1.0 build 3'),
+            $makeSoftware('prefixed-plugin', 'v1.0', 'v2.0'),
+            $makeSoftware('prerelease-plugin', '1.0-beta.1', '1.0-rc.1'),
+        ];
+
+        $this->assertSame(0, $this->importJson($this->fixtureJson($record)));
+        $website = new Website;
+        $website->setRelation('inventory', new WebsiteInventory([
+            'core' => ['version' => '6.9'],
+            'plugins' => [
+                ['slug' => 'spaced-plugin', 'name' => 'Spaced plugin', 'version' => 'Version 1.0 build 2'],
+                ['slug' => 'prefixed-plugin', 'name' => 'Prefixed plugin', 'version' => 'v1.5'],
+                ['slug' => 'prerelease-plugin', 'name' => 'Prerelease plugin', 'version' => '1.0-beta.2'],
+                ['slug' => 'invalid-plugin', 'name' => 'Invalid plugin', 'version' => "1.0\u{0001}beta"],
+                ['slug' => 'wildcard-plugin', 'name' => 'Wildcard plugin', 'version' => '*'],
+                ['slug' => 'unknown-plugin', 'name' => 'Unknown plugin', 'version' => 'unknown'],
+            ],
+            'themes' => [],
+        ]));
+
+        $result = (new VulnerabilityScanner(WordfenceFeed::fromConfig()))->scan($website);
+
+        $this->assertSame('partial', $result['status']);
+        $this->assertSame('COMPONENT_VERSION_UNAVAILABLE', $result['reason']);
+        $this->assertSame(4, $result['checked']);
+        $this->assertSame(3, $result['skipped']);
+        $this->assertCount(3, $result['findings']);
+        $this->assertFalse(WordfenceFeed::isSafeVersionToken('*', allowWildcard: false));
+        $this->assertTrue(WordfenceFeed::isSafeVersionToken('*', allowWildcard: true));
+    }
+
+    public function test_malformed_index_range_makes_scanner_coverage_unavailable_instead_of_clean(): void
+    {
+        $this->assertSame(0, $this->importJson($this->fixtureJson()));
+        $manifest = json_decode((string) file_get_contents($this->indexPath), true, 8, JSON_THROW_ON_ERROR);
+        $groupFile = WordfenceFeed::dataRootFor($this->indexPath).'/'.$manifest['generation'].'/plugin/fixture-plugin.jsonl';
+        $entry = json_decode((string) file_get_contents($groupFile), true, 16, JSON_THROW_ON_ERROR);
+        $entry['ranges'][0]['from'] = "1.0\u{0001}unsupported";
+        file_put_contents($groupFile, json_encode($entry, JSON_THROW_ON_ERROR)."\n");
+
+        $website = new Website;
+        $website->setRelation('inventory', new WebsiteInventory([
+            'core' => ['version' => '6.9'],
+            'plugins' => [['slug' => 'fixture-plugin', 'name' => 'Fixture', 'version' => '1.5']],
+            'themes' => [],
+        ]));
+        $result = (new VulnerabilityScanner(WordfenceFeed::fromConfig()))->scan($website);
+
+        $this->assertSame('unavailable', $result['status']);
+        $this->assertSame('VULNERABILITY_FEED_INVALID', $result['reason']);
+        $this->assertSame([], $result['findings']);
     }
 
     public function test_empty_incompatible_and_oversized_records_fail_without_replacing_last_good_index(): void
