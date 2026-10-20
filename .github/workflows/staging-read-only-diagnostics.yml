@@ -1,0 +1,42 @@
+name: Staging read-only diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      diagnostic:
+        description: Fixed staging diagnostic operation
+        required: true
+        type: choice
+        options:
+          - m12-config-readback
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-read-only-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  m12-config-readback:
+    if: github.ref == 'refs/heads/claude/ecstatic-wozniak-oemyuf' && inputs.diagnostic == 'm12-config-readback'
+    name: M12 cached configuration readback
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    environment:
+      name: staging-diagnostics
+    permissions:
+      contents: read
+    env:
+      DIAGNOSTIC_ID: ${{ inputs.diagnostic }}
+      STAGING_DIAGNOSTICS_SSH_PRIVATE_KEY: ${{ secrets.STAGING_DIAGNOSTICS_SSH_PRIVATE_KEY }}
+      STAGING_DIAGNOSTICS_KNOWN_HOSTS: ${{ secrets.STAGING_DIAGNOSTICS_KNOWN_HOSTS }}
+    steps:
+      - name: Check out the protected target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run the fixed read-only diagnostic
+        shell: bash
+        run: bash scripts/staging-diagnostics/run-m12-readback.sh

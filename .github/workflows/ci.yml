@@ -50,6 +50,14 @@ jobs:
       - name: Tracked secret-path policy tests
         run: python3 scripts/tests/repository-secret-path-policy-test.py
 
+      - name: Staging diagnostics output and policy tests
+        run: |
+          python3 scripts/tests/staging-diagnostics-output-test.py
+          python3 scripts/tests/staging-diagnostics-policy-test.py
+          php scripts/tests/staging-diagnostics-parser-test.php
+          php -l scripts/staging-diagnostics/read-m12-cache.php
+          bash -n scripts/staging-diagnostics/dispatch.sh scripts/staging-diagnostics/run-m12-readback.sh
+
       - name: No local files, databases or keys in the repository
         run: python3 scripts/tests/repository-secret-path-policy.py
 
