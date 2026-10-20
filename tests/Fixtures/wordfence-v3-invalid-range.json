@@ -1,0 +1,27 @@
+{
+  "42345678-1234-4234-8234-123456789abc": {
+    "id": "42345678-1234-4234-8234-123456789abc",
+    "title": "Synthetic invalid range fixture",
+    "software": [
+      {
+        "type": "plugin",
+        "name": "Invalid range fixture",
+        "slug": "invalid-range-fixture",
+        "affected_versions": {
+          "1.0 - 2.0": {
+            "from_version": "1.0",
+            "from_inclusive": "invalid-input",
+            "to_version": "2.0",
+            "to_inclusive": false
+          }
+        },
+        "patched": true,
+        "patched_versions": ["2.1"]
+      }
+    ],
+    "informational": false,
+    "references": ["https://www.wordfence.com/threat-intel/vulnerabilities/synthetic-invalid-range"],
+    "published": "2026-01-09 00:00:00",
+    "copyrights": null
+  }
+}

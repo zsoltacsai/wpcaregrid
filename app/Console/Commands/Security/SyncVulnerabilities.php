@@ -111,7 +111,11 @@ class SyncVulnerabilities extends Command
             return self::SUCCESS;
         } catch (Throwable $exception) {
             $classification = $exception instanceof WordfenceSyncFailure ? $exception->classification : 'unexpected_failure';
-            Log::warning('Wordfence vulnerability feed synchronization failed.', ['failure_class' => $classification]);
+            $context = ['failure_class' => $classification];
+            if ($exception instanceof WordfenceSyncFailure && $exception->subcode !== null) {
+                $context['failure_subcode'] = $exception->subcode;
+            }
+            Log::warning('Wordfence vulnerability feed synchronization failed.', $context);
             $this->components->error('The vulnerability feed could not be safely downloaded, validated, or published.');
 
             return self::FAILURE;

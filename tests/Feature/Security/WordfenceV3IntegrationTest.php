@@ -105,6 +105,42 @@ class WordfenceV3IntegrationTest extends TestCase
         $this->assertSame('https://www.wordfence.com/threat-intel/vulnerabilities/fixture-plugin-issue', $source->affecting('plugin', 'fixture-plugin', '1.9.9')[0]->reference);
     }
 
+    public function test_official_schema_fixture_accepts_numeric_object_keys_nulls_and_string_versions(): void
+    {
+        $fixture = file_get_contents(base_path('tests/Fixtures/wordfence-v3-scanner-numeric-versions.json'));
+        $this->assertNotFalse($fixture);
+        $this->assertSame(0, $this->importJson($fixture));
+
+        $source = WordfenceFeed::fromConfig();
+        $this->assertTrue($source->available());
+        $this->assertCount(1, $source->affecting('plugin', 'numeric-version-fixture', '0'));
+        $this->assertCount(1, $source->affecting('plugin', 'numeric-version-fixture', 'v1.5'));
+        $this->assertSame(
+            'https://www.wordfence.com/threat-intel/vulnerabilities/synthetic-schema-fixture',
+            $source->affecting('plugin', 'numeric-version-fixture', '0')[0]->reference,
+        );
+        $this->assertNull($source->affecting('plugin', 'numeric-version-fixture', '0')[0]->copyrightNotice);
+    }
+
+    public function test_schema_subcode_is_safe_and_failed_import_keeps_the_last_good_index(): void
+    {
+        $this->assertSame(0, $this->importJson($this->fixtureJson()));
+        $knownGood = file_get_contents($this->indexPath);
+        $fixture = file_get_contents(base_path('tests/Fixtures/wordfence-v3-invalid-range.json'));
+        $this->assertNotFalse($fixture);
+        Log::spy();
+
+        $this->assertSame(1, $this->importJson($fixture));
+        $this->assertSame($knownGood, file_get_contents($this->indexPath));
+        Log::shouldHaveReceived('warning')->once()->withArgs(static fn (string $message, array $context): bool => $message === 'Wordfence vulnerability feed synchronization failed.'
+            && $context === [
+                'failure_class' => 'feed_schema_invalid',
+                'failure_subcode' => 'software.affected_version_range_fields',
+            ]
+        );
+        $this->assertStringNotContainsString('Synthetic invalid range fixture', Artisan::output());
+    }
+
     public function test_empty_incompatible_and_oversized_records_fail_without_replacing_last_good_index(): void
     {
         $this->assertSame(0, $this->importJson($this->fixtureJson()));
@@ -274,7 +310,10 @@ class WordfenceV3IntegrationTest extends TestCase
         $this->assertSame(1, $this->importJson($this->fixtureJson($invalid)));
         $this->assertSame($knownGood, file_get_contents($this->indexPath));
         Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context): bool => $message === 'Wordfence vulnerability feed synchronization failed.'
-            && $context === ['failure_class' => 'feed_schema_invalid']
+            && $context === [
+                'failure_class' => 'feed_schema_invalid',
+                'failure_subcode' => 'record.informational_type',
+            ]
         )->once();
     }
 
