@@ -20,7 +20,9 @@ use Tests\TestCase;
 
 class WordfenceV3IntegrationTest extends TestCase
 {
-    private static ?string $unrelatedSharedReport = null;
+    private static ?string $unrelatedSyntheticReport = null;
+
+    private static ?string $unrelatedSyntheticDirectory = null;
 
     private string $directory;
 
@@ -77,13 +79,13 @@ class WordfenceV3IntegrationTest extends TestCase
     public static function tearDownAfterClass(): void
     {
         try {
-            if (self::$unrelatedSharedReport !== null) {
-                self::assertFileExists(self::$unrelatedSharedReport, 'Test cleanup must leave a report owned by another process untouched.');
-                self::assertSame('another-process-report', file_get_contents(self::$unrelatedSharedReport));
+            if (self::$unrelatedSyntheticReport !== null) {
+                self::assertFileExists(self::$unrelatedSyntheticReport, 'Test cleanup must leave an unrelated synthetic report untouched.');
+                self::assertSame('another-process-report', file_get_contents(self::$unrelatedSyntheticReport));
             }
         } finally {
-            if (self::$unrelatedSharedReport !== null && is_file(self::$unrelatedSharedReport) && ! is_link(self::$unrelatedSharedReport)) {
-                @unlink(self::$unrelatedSharedReport);
+            if (self::$unrelatedSyntheticDirectory !== null && is_dir(self::$unrelatedSyntheticDirectory) && ! is_link(self::$unrelatedSyntheticDirectory)) {
+                File::deleteDirectory(self::$unrelatedSyntheticDirectory);
             }
             parent::tearDownAfterClass();
         }
@@ -214,15 +216,14 @@ class WordfenceV3IntegrationTest extends TestCase
         }
     }
 
-    public function test_test_cleanup_preserves_a_report_created_in_the_shared_profile_directory(): void
+    public function test_test_cleanup_preserves_an_unrelated_report_in_isolated_synthetic_storage(): void
     {
-        $sharedDirectory = storage_path('app/private/wordfence-profiles');
-        File::ensureDirectoryExists($sharedDirectory);
-        $this->assertFalse(is_link($sharedDirectory));
-        $this->assertTrue(@chmod($sharedDirectory, 0700));
-        $report = $sharedDirectory.'/another-process-'.bin2hex(random_bytes(8)).'.txt';
+        $syntheticOtherProcessDirectory = storage_path('framework/testing/wordfence-unrelated-report-'.bin2hex(random_bytes(8)));
+        File::ensureDirectoryExists($syntheticOtherProcessDirectory);
+        $report = $syntheticOtherProcessDirectory.'/another-process-report.txt';
         $this->assertSame(strlen('another-process-report'), file_put_contents($report, 'another-process-report', LOCK_EX));
-        self::$unrelatedSharedReport = $report;
+        self::$unrelatedSyntheticReport = $report;
+        self::$unrelatedSyntheticDirectory = $syntheticOtherProcessDirectory;
 
         $this->authorizeSyntheticStagingContext();
         Http::fake([$this->endpoint => Http::response($this->fixtureJson(), 200, ['Content-Type' => 'application/json'])]);
@@ -298,13 +299,18 @@ class WordfenceV3IntegrationTest extends TestCase
         $input = $profileDir.'/input.json';
         file_put_contents($input, '{"a":1}');
         $script = $profileDir.'/fake-profiler.php';
-        $profiler = new class($script) extends WordfenceFeedProfiler
+        $profiler = new class($script, $this->profileStoragePath) extends WordfenceFeedProfiler
         {
-            public function __construct(private string $script) {}
+            public function __construct(private string $script, private string $privateStoragePath) {}
 
             protected function profilerScriptPath(): string
             {
                 return $this->script;
+            }
+
+            protected function privateStorageDirectory(): string
+            {
+                return $this->privateStoragePath;
             }
         };
 
