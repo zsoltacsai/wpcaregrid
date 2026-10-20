@@ -338,55 +338,82 @@ final class WordfenceFeed implements VulnerabilitySource
     private static function validateRecord(string $key, array $record): void
     {
         if (! preg_match('/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i', $key)
-            || ! is_string($record['id'] ?? null) || strcasecmp($record['id'], $key) !== 0
-            || ! is_string($record['title'] ?? null) || trim($record['title']) === ''
-            || ! is_array($record['software'] ?? null) || ! array_is_list($record['software']) || $record['software'] === []
-            || ! is_bool($record['informational'] ?? null)
-            || ! is_array($record['references'] ?? null) || ! array_is_list($record['references'])
-            || array_filter($record['references'], fn ($reference) => ! is_string($reference))
-            || ! (is_null($record['published'] ?? null) || is_string($record['published']) && preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $record['published']))) {
-            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed record does not match the v3 Scanner Feed schema.');
+            || ! is_string($record['id'] ?? null) || strcasecmp($record['id'], $key) !== 0) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed record has an invalid identifier.', subcode: 'record.id_invalid');
         }
-        if (isset($record['copyrights']) && ! is_null($record['copyrights']) && ! is_array($record['copyrights'])) {
-            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed has invalid copyright metadata.');
+        if (! is_string($record['title'] ?? null) || trim($record['title']) === '') {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed record has an invalid title.', subcode: 'record.title_invalid');
+        }
+        if (! is_array($record['software'] ?? null) || ! array_is_list($record['software']) || $record['software'] === []) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed record has invalid software metadata.', subcode: 'record.software_shape');
+        }
+        if (! is_bool($record['informational'] ?? null)) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed record has an invalid informational flag.', subcode: 'record.informational_type');
+        }
+        if (! is_array($record['references'] ?? null) || ! array_is_list($record['references'])) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed record has invalid references.', subcode: 'record.references_shape');
+        }
+        if (array_filter($record['references'], fn ($reference) => ! is_string($reference))) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed record has invalid references.', subcode: 'record.references_item_type');
+        }
+        if (! (is_null($record['published'] ?? null) || is_string($record['published']) && preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $record['published']))) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed record has an invalid publication date.', subcode: 'record.published_type_or_format');
+        }
+        if (array_key_exists('copyrights', $record) && ! is_null($record['copyrights']) && ! $record['copyrights'] instanceof \stdClass) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed has invalid copyright metadata.', subcode: 'record.copyrights_object_or_null');
         }
     }
 
     private static function normalizeSoftware(mixed $software, array $record, string $id, array $cvss): array
     {
-        if (! is_array($software)) {
-            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains invalid software metadata.');
+        if (! $software instanceof \stdClass) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains invalid software metadata.', subcode: 'software.object_required');
         }
+        $software = get_object_vars($software);
         $type = $software['type'] ?? null;
         $slug = $software['slug'] ?? null;
         if (! is_string($type) || ! in_array($type, ['core', 'plugin', 'theme'], true) || ! is_string($slug)) {
-            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains unsupported software metadata.');
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains unsupported software metadata.', subcode: 'software.type_or_slug');
+        }
+        if (! is_string($software['name'] ?? null)) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains invalid software metadata.', subcode: 'software.name_type');
         }
         $slug = strtolower($slug);
         if ($type === 'core') {
             if (! in_array($slug, ['', 'wordpress'], true)) {
-                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains unsupported core software metadata.');
+                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains unsupported core software metadata.', subcode: 'software.core_slug');
             }
             $slug = 'wordpress';
         } elseif (! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug)) {
-            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid software slug.');
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid software slug.', subcode: 'software.slug_format');
         }
         $versions = $software['affected_versions'] ?? null;
-        if (! is_array($versions) || $versions === [] || array_is_list($versions)
-            || ! is_bool($software['patched'] ?? null)
-            || ! is_array($software['patched_versions'] ?? null) || ! array_is_list($software['patched_versions'])) {
-            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains incomplete software metadata.');
+        if (! $versions instanceof \stdClass || get_object_vars($versions) === []) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains invalid affected-version metadata.', subcode: 'software.affected_versions_object');
+        }
+        if (! is_bool($software['patched'] ?? null)) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid patched flag.', subcode: 'software.patched_type');
+        }
+        if (! is_array($software['patched_versions'] ?? null) || ! array_is_list($software['patched_versions'])) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains invalid patched-version metadata.', subcode: 'software.patched_versions_list');
         }
 
         $ranges = [];
         foreach ($versions as $label => $range) {
-            if (! is_array($range) || ! is_string($range['from_version'] ?? null) || ! is_string($range['to_version'] ?? null)
+            if (! $range instanceof \stdClass) {
+                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid affected-version range.', subcode: 'software.affected_version_range_object');
+            }
+            $range = get_object_vars($range);
+            if (! is_string($range['from_version'] ?? null) || ! is_string($range['to_version'] ?? null)
                 || ! is_bool($range['from_inclusive'] ?? null) || ! is_bool($range['to_inclusive'] ?? null)) {
-                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid affected-version range.');
+                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid affected-version range.', subcode: 'software.affected_version_range_fields');
             }
             foreach (['from_version', 'to_version'] as $key) {
-                if ($range[$key] !== '*' && ! preg_match('/^[0-9][0-9A-Za-z.+_-]{0,63}$/', $range[$key])) {
-                    throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an unsupported software version.');
+                // The provider defines these as strings and reserves only the standalone "*".
+                // Keep a bounded, printable token for safe comparison while allowing common
+                // identifiers such as "v1.2" and "trunk" that do not start with a digit.
+                if ($range[$key] !== '*' && ! preg_match('/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$/', $range[$key])) {
+                    throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an unsupported software version.', subcode: 'software.version_token');
                 }
             }
             $ranges[] = [
@@ -398,8 +425,8 @@ final class WordfenceFeed implements VulnerabilitySource
             ];
         }
         foreach ($software['patched_versions'] as $patched) {
-            if (! is_string($patched) || ! preg_match('/^[0-9][0-9A-Za-z.+_-]{0,63}$/', $patched)) {
-                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains invalid patched-version metadata.');
+            if (! is_string($patched) || ! preg_match('/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$/', $patched)) {
+                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains invalid patched-version metadata.', subcode: 'software.patched_version_token');
             }
         }
 
@@ -416,16 +443,27 @@ final class WordfenceFeed implements VulnerabilitySource
                 break;
             }
         }
-        $copyrights = is_array($record['copyrights'] ?? null) ? $record['copyrights'] : [];
-        $defiant = is_array($copyrights['defiant'] ?? null) ? $copyrights['defiant'] : [];
-        $mitre = is_array($copyrights['mitre'] ?? null) ? $copyrights['mitre'] : [];
-        if ($defiant !== [] && (! is_string($defiant['notice'] ?? null) || ! is_string($defiant['license'] ?? null)
-            || ! is_string($defiant['license_url'] ?? null) || $reference === null)) {
-            throw new WordfenceSyncFailure('feed_schema_invalid', 'Wordfence copyright attribution is incomplete.');
+        $copyrights = $record['copyrights'] ?? null;
+        $copyrights = $copyrights instanceof \stdClass ? get_object_vars($copyrights) : [];
+        if (array_key_exists('message', $copyrights) && ! is_string($copyrights['message'])) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed has invalid copyright metadata.', subcode: 'copyrights.message_type');
         }
-        if ($mitre !== [] && (! is_string($mitre['notice'] ?? null) || ! is_string($mitre['license'] ?? null)
+        foreach (['defiant', 'mitre'] as $party) {
+            if (array_key_exists($party, $copyrights) && $copyrights[$party] !== null && ! $copyrights[$party] instanceof \stdClass) {
+                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed has invalid copyright metadata.', subcode: 'copyrights.'.$party.'_object');
+            }
+        }
+        $defiantPresent = ($copyrights['defiant'] ?? null) instanceof \stdClass;
+        $mitrePresent = ($copyrights['mitre'] ?? null) instanceof \stdClass;
+        $defiant = ($copyrights['defiant'] ?? null) instanceof \stdClass ? get_object_vars($copyrights['defiant']) : [];
+        $mitre = ($copyrights['mitre'] ?? null) instanceof \stdClass ? get_object_vars($copyrights['mitre']) : [];
+        if ($defiantPresent && (! is_string($defiant['notice'] ?? null) || ! is_string($defiant['license'] ?? null)
+            || ! is_string($defiant['license_url'] ?? null) || $reference === null)) {
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'Wordfence copyright attribution is incomplete.', subcode: $reference === null ? 'copyrights.defiant_reference_missing' : 'copyrights.defiant_fields');
+        }
+        if ($mitrePresent && (! is_string($mitre['notice'] ?? null) || ! is_string($mitre['license'] ?? null)
             || ! is_string($mitre['license_url'] ?? null))) {
-            throw new WordfenceSyncFailure('feed_schema_invalid', 'MITRE copyright attribution is incomplete.');
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'MITRE copyright attribution is incomplete.', subcode: 'copyrights.mitre_fields');
         }
 
         return [

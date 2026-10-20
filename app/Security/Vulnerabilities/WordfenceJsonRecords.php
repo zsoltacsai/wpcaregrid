@@ -30,15 +30,18 @@ final class WordfenceJsonRecords
                 $record = $reader->readJsonObject();
 
                 try {
-                    $decoded = json_decode($record, true, 64, JSON_BIGINT_AS_STRING | JSON_THROW_ON_ERROR);
+                    // Keep objects distinct from arrays. In particular, an affected_versions
+                    // object can have numeric version keys that PHP would otherwise turn into
+                    // integer array keys (and mistake for a JSON list).
+                    $decoded = json_decode($record, false, 64, JSON_BIGINT_AS_STRING | JSON_THROW_ON_ERROR);
                 } catch (\JsonException) {
                     throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed contains invalid JSON.');
                 }
-                if (! is_array($decoded) || array_is_list($decoded)) {
+                if (! $decoded instanceof \stdClass) {
                     throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed contains an invalid record.');
                 }
 
-                yield $key => $decoded;
+                yield $key => get_object_vars($decoded);
 
                 $reader->skipWhitespace();
                 $next = $reader->readChar();
