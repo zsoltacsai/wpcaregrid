@@ -287,11 +287,33 @@ Live restore is off (`BACKUP_RESTORE_ENABLED=false`) until the staging rehearsal
 
 ### Staging deployment
 
-Use the reviewed deployment controller and its co-located `scripts/verify-release-ci.py` from the same exact merged primary commit on the staging VPS only. Before a target-code deployment, place both reviewed files in a protected temporary controller directory, verify their source commit and hashes, and invoke the controller as `deploy` from `/var/www/wpcaregrid`. Do not rely on the current application checkout for the verifier: it may predate the verifier and is not the trust source for release authorization. The controller still reads the scheduler wrapper and post-deployment receipt writer from the application checkout at their documented stages. Supply the exact full commit SHA:
+Use the reviewed deployment controller and its co-located `scripts/verify-release-ci.py` from the same exact merged primary commit on the staging VPS only. Prepare the two files from a trusted local clone at the exact source commit, transfer them into a private staging directory, verify both SHA-256 values there, and run the controller as `deploy` with `/var/www/wpcaregrid` as its working directory. Do not run the controller from the application checkout: it resolves `verify-release-ci.py` relative to its own file, and the live checkout may have an outdated or missing verifier. The controller still reads the scheduler wrapper and post-deployment receipt writer from the application checkout at their documented stages.
+
+The reviewed controller source commit is `3f2340a98024ff7d73d38816efc21da38a20fa6c`. Its expected file hashes are:
+
+- `scripts/deploy-staging.sh`: `f950ceb1824fcf0e5376aa49265534f57e79e581fbd1a33e1427aab37fd3c75a`
+- `scripts/verify-release-ci.py`: `0243d51fd55ef7ddb21fcc11e2804313ac3537cc0efe74da63a5747d79a7a4c7`
+
+On a trusted workstation with that commit available, extract the Git blobs without checkout filters, then verify the local copies:
+
+```sh
+SOURCE_SHA=3f2340a98024ff7d73d38816efc21da38a20fa6c
+git cat-file -e "${SOURCE_SHA}^{commit}"
+git cat-file blob "${SOURCE_SHA}:scripts/deploy-staging.sh" > deploy-staging.sh
+git cat-file blob "${SOURCE_SHA}:scripts/verify-release-ci.py" > verify-release-ci.py
+printf '%s  %s\\n' \
+  f950ceb1824fcf0e5376aa49265534f57e79e581fbd1a33e1427aab37fd3c75a deploy-staging.sh \
+  0243d51fd55ef7ddb21fcc11e2804313ac3537cc0efe74da63a5747d79a7a4c7 verify-release-ci.py \
+  | sha256sum -c -
+```
+
+For the separately approved deployment preparation, create a new release-specific directory on staging. If the private parent already exists, verify that it is a real directory owned by `deploy:deploy` with mode `0700`; stop if it is a symlink or has different metadata. Create the SHA-named child with `mkdir -m 0700` so an existing path is never reused, transfer only the two verified files using the `caregrid-staging` SSH profile, then set ownership to `deploy:deploy`, mode `0700` on the controller and `0600` on the verifier. Verify the directory and file metadata, reject symlinks, and run `sha256sum -c` against the expected hashes before execution. Keep the directory private and remove it only under a separately approved cleanup step.
+
+From the application directory, invoke the protected controller by absolute path and pass the exact full target SHA:
 
 ```sh
 cd /var/www/wpcaregrid
-bash scripts/deploy-staging.sh <full-40-character-commit-sha>
+bash /home/deploy/private-deploy-controller/3f2340a98024ff7d73d38816efc21da38a20fa6c/deploy-staging.sh 3f2340a98024ff7d73d38816efc21da38a20fa6c
 ```
 
 Forward deployment accepts only an exact 40-character SHA equal to the fetched tip of `claude/ecstatic-wozniak-oemyuf`. Before any backup or gate mutation, the controller requires a completed successful `push` run of `.github/workflows/ci.yml` attached to that exact SHA and verifies all seven mandatory jobs, including the MySQL process/concurrency step. The check uses unauthenticated read-only GitHub API requests and fails closed on missing, in-progress, canceled, failed, rate-limited, malformed or oversized evidence. PR-head CI, a parent SHA, an ancestor, or a feature-branch run cannot authorize a forward deploy. The script serializes concurrent deploys, rejects dirty or untracked repository state, and never runs `git clean` or resets local changes. `.env` and `storage/` are deployment data, not release files.
