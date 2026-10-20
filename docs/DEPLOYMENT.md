@@ -325,8 +325,14 @@ Forward deployment accepts only an exact 40-character SHA equal to the fetched t
 
 Rollback is a separate explicit operation, never an alternate forward-target mode:
 
+The rollback command uses the same protected controller source directory as a forward deployment. Keep the rollback target distinct, and preserve the existing root-approved SHA-file requirement described below:
+
 ```sh
-bash scripts/deploy-staging.sh --rollback <full-40-character-commit-sha>
+CONTROLLER_SOURCE_SHA=3f2340a98024ff7d73d38816efc21da38a20fa6c
+: "${ROLLBACK_TARGET_SHA:?Set this to the separately authorized rollback SHA}"
+[[ "${ROLLBACK_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 2
+cd /var/www/wpcaregrid
+bash "/home/deploy/private-deploy-controller/${CONTROLLER_SOURCE_SHA}/deploy-staging.sh" --rollback "${ROLLBACK_TARGET_SHA}"
 ```
 
 The rollback target must be an ancestor of the currently deployed baseline and fetched authoritative branch tip, must have the same exact-SHA successful mandatory CI evidence, and must match the single SHA that a staging administrator previously placed in the root-owned `/var/lib/wpcaregrid/approved-rollback-sha` file (`root:root`, mode `0600`, exactly 40 lowercase hexadecimal characters plus newline). The deploy user cannot write that approval file. Updating it is a separate audited root/admin action after reviewing a known-good staging release. If the file is absent, unsafe, or mismatched, rollback is refused. Automatic code recovery after a failed deployment remains a separate fail-closed baseline-recovery path.
