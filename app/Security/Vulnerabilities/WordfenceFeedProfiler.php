@@ -50,7 +50,7 @@ class WordfenceFeedProfiler
                 $feedArgument,
                 '--max-bytes='.$maximumBytes,
             ], base_path());
-            $process->setTimeout(min(15, max(1, (int) config('security.vulnerabilities.profile_timeout_seconds', 15))));
+            $process->setTimeout(min(120, max(1, (int) config('security.vulnerabilities.profile_timeout_seconds', 120))));
 
             $output = '';
             $observedBytes = 0;
@@ -122,14 +122,21 @@ class WordfenceFeedProfiler
         return str_replace(DIRECTORY_SEPARATOR, '/', substr($resolved, strlen($prefix)));
     }
 
+    protected function privateStorageDirectory(): string
+    {
+        return storage_path('app/private');
+    }
+
     private function profileDirectory(): ?string
     {
         $storage = storage_path();
         $app = $storage.DIRECTORY_SEPARATOR.'app';
-        $private = $app.DIRECTORY_SEPARATOR.'private';
+        $private = $this->privateStorageDirectory();
         $profiles = $private.DIRECTORY_SEPARATOR.'wordfence-profiles';
 
-        foreach ([$storage, $app, $private] as $directory) {
+        $privateIsDefault = $private === $app.DIRECTORY_SEPARATOR.'private';
+        $directoriesToCheck = $privateIsDefault ? [$storage, $app, $private] : [$private];
+        foreach ($directoriesToCheck as $directory) {
             if (is_link($directory) || ! is_dir($directory)) {
                 return null;
             }

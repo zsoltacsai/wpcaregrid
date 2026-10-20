@@ -20,22 +20,33 @@ use Tests\TestCase;
 
 class WordfenceV3IntegrationTest extends TestCase
 {
+    private static ?string $unrelatedSharedReport = null;
+
     private string $directory;
 
     private string $feedPath;
 
     private string $indexPath;
 
-    private string $endpoint = 'https://www.wordfence.com/api/intelligence/v3/vulnerabilities/scanner';
+    private string $profileStoragePath;
 
-    /** @var list<string> */
-    private array $profileFilesBefore = [];
+    private string $endpoint = 'https://www.wordfence.com/api/intelligence/v3/vulnerabilities/scanner';
 
     protected function setUp(): void
     {
         parent::setUp();
         $this->directory = storage_path('framework/testing/wordfence-v3-'.bin2hex(random_bytes(6)));
-        $this->profileFilesBefore = glob(storage_path('app/private/wordfence-profiles/*')) ?: [];
+        $this->profileStoragePath = $this->directory.'/private';
+        File::ensureDirectoryExists($this->profileStoragePath);
+        app()->instance(WordfenceFeedProfiler::class, new class($this->profileStoragePath) extends WordfenceFeedProfiler
+        {
+            public function __construct(private string $privateStoragePath) {}
+
+            protected function privateStorageDirectory(): string
+            {
+                return $this->privateStoragePath;
+            }
+        });
         $this->feedPath = $this->directory.'/feed.json';
         $this->indexPath = WordfenceFeed::indexPathFor($this->feedPath);
         config([
@@ -58,13 +69,24 @@ class WordfenceV3IntegrationTest extends TestCase
 
     protected function tearDown(): void
     {
-        foreach (glob(storage_path('app/private/wordfence-profiles/*')) ?: [] as $path) {
-            if (! in_array($path, $this->profileFilesBefore, true) && is_file($path) && ! is_link($path)) {
-                @unlink($path);
-            }
-        }
+        // This directory is unique to this test. Never sweep the shared production report directory.
         File::deleteDirectory($this->directory);
         parent::tearDown();
+    }
+
+    public static function tearDownAfterClass(): void
+    {
+        try {
+            if (self::$unrelatedSharedReport !== null) {
+                self::assertFileExists(self::$unrelatedSharedReport, 'Test cleanup must leave a report owned by another process untouched.');
+                self::assertSame('another-process-report', file_get_contents(self::$unrelatedSharedReport));
+            }
+        } finally {
+            if (self::$unrelatedSharedReport !== null && is_file(self::$unrelatedSharedReport) && ! is_link(self::$unrelatedSharedReport)) {
+                @unlink(self::$unrelatedSharedReport);
+            }
+            parent::tearDownAfterClass();
+        }
     }
 
     private function authorizeSyntheticStagingContext(): void
@@ -79,7 +101,7 @@ class WordfenceV3IntegrationTest extends TestCase
     /** @return list<string> */
     private function newProfileFiles(): array
     {
-        return array_values(array_diff(glob(storage_path('app/private/wordfence-profiles/*')) ?: [], $this->profileFilesBefore));
+        return glob($this->profileStoragePath.'/wordfence-profiles/*') ?: [];
     }
 
     private function record(string $id = '12345678-1234-4234-8234-123456789abc'): array
@@ -175,6 +197,7 @@ class WordfenceV3IntegrationTest extends TestCase
         Http::assertSentCount(1);
         $reports = $this->newProfileFiles();
         $this->assertCount(1, $reports);
+        $this->assertStringStartsWith($this->profileStoragePath.'/wordfence-profiles/', $reports[0]);
         $contents = file_get_contents($reports[0]);
         $this->assertIsString($contents);
         $this->assertStringContainsString('Top-level vulnerability records: 1', $contents);
@@ -189,6 +212,24 @@ class WordfenceV3IntegrationTest extends TestCase
             $this->assertSame(0700, fileperms(dirname($reports[0])) & 0777);
             $this->assertSame(0600, fileperms($reports[0]) & 0777);
         }
+    }
+
+    public function test_test_cleanup_preserves_a_report_created_in_the_shared_profile_directory(): void
+    {
+        $sharedDirectory = storage_path('app/private/wordfence-profiles');
+        File::ensureDirectoryExists($sharedDirectory);
+        $this->assertFalse(is_link($sharedDirectory));
+        $this->assertTrue(@chmod($sharedDirectory, 0700));
+        $report = $sharedDirectory.'/another-process-'.bin2hex(random_bytes(8)).'.txt';
+        $this->assertSame(strlen('another-process-report'), file_put_contents($report, 'another-process-report', LOCK_EX));
+        self::$unrelatedSharedReport = $report;
+
+        $this->authorizeSyntheticStagingContext();
+        Http::fake([$this->endpoint => Http::response($this->fixtureJson(), 200, ['Content-Type' => 'application/json'])]);
+
+        $this->assertSame(0, Artisan::call('security:vulnerabilities:sync', ['--profile-feed' => true]));
+        $this->assertFileExists($report);
+        $this->assertCount(1, $this->newProfileFiles());
     }
 
     public function test_profiling_failure_is_best_effort_and_does_not_change_import_or_cleanup(): void
