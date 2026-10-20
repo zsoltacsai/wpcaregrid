@@ -2,8 +2,6 @@
 
 namespace App\Security\Vulnerabilities;
 
-use RuntimeException;
-
 /** Reads a top-level JSON object one record at a time without decoding the feed as a whole. */
 final class WordfenceJsonRecords
 {
@@ -12,7 +10,7 @@ final class WordfenceJsonRecords
     {
         $input = @fopen($path, 'rb');
         if ($input === false) {
-            throw new RuntimeException('The vulnerability feed could not be opened.');
+            throw new WordfenceSyncFailure('feed_read_failure', 'The vulnerability feed could not be opened.');
         }
 
         try {
@@ -21,7 +19,7 @@ final class WordfenceJsonRecords
             $reader->expect('{');
             $reader->skipWhitespace();
             if ($reader->peek() === '}') {
-                throw new RuntimeException('The vulnerability feed contains no records.');
+                throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed contains no records.');
             }
 
             while (true) {
@@ -34,10 +32,10 @@ final class WordfenceJsonRecords
                 try {
                     $decoded = json_decode($record, true, 64, JSON_BIGINT_AS_STRING | JSON_THROW_ON_ERROR);
                 } catch (\JsonException) {
-                    throw new RuntimeException('The vulnerability feed contains invalid JSON.');
+                    throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed contains invalid JSON.');
                 }
                 if (! is_array($decoded) || array_is_list($decoded)) {
-                    throw new RuntimeException('The vulnerability feed contains an invalid record.');
+                    throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed contains an invalid record.');
                 }
 
                 yield $key => $decoded;
@@ -47,13 +45,13 @@ final class WordfenceJsonRecords
                 if ($next === '}') {
                     $reader->skipWhitespace();
                     if ($reader->readChar() !== null) {
-                        throw new RuntimeException('The vulnerability feed contains trailing data.');
+                        throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed contains trailing data.');
                     }
 
                     return;
                 }
                 if ($next !== ',') {
-                    throw new RuntimeException('The vulnerability feed has an unexpected structure.');
+                    throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed has an unexpected structure.');
                 }
                 $reader->skipWhitespace();
             }
@@ -66,7 +64,7 @@ final class WordfenceJsonRecords
     private function __construct(private $input, private readonly int $maximumRecordBytes)
     {
         if ($maximumRecordBytes < 128) {
-            throw new RuntimeException('The configured record limit is invalid.');
+            throw new WordfenceSyncFailure('invalid_size_configuration', 'The configured record limit is invalid.');
         }
     }
 
@@ -111,14 +109,14 @@ final class WordfenceJsonRecords
     private function expect(string $expected): void
     {
         if ($this->readChar() !== $expected) {
-            throw new RuntimeException('The vulnerability feed has an unexpected structure.');
+            throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed has an unexpected structure.');
         }
     }
 
     private function readJsonString(): string
     {
         if ($this->readChar() !== '"') {
-            throw new RuntimeException('The vulnerability feed has an unexpected structure.');
+            throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed has an unexpected structure.');
         }
 
         $token = '"';
@@ -126,16 +124,16 @@ final class WordfenceJsonRecords
         while (($char = $this->readChar()) !== null) {
             $token .= $char;
             if (strlen($token) > 512) {
-                throw new RuntimeException('The vulnerability feed contains an invalid record identifier.');
+                throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed contains an invalid record identifier.');
             }
             if (! $escaped && $char === '"') {
                 try {
                     $key = json_decode($token, true, 4, JSON_THROW_ON_ERROR);
                 } catch (\JsonException) {
-                    throw new RuntimeException('The vulnerability feed contains an invalid record identifier.');
+                    throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed contains an invalid record identifier.');
                 }
                 if (! is_string($key) || $key === '') {
-                    throw new RuntimeException('The vulnerability feed contains an invalid record identifier.');
+                    throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed contains an invalid record identifier.');
                 }
 
                 return $key;
@@ -143,13 +141,13 @@ final class WordfenceJsonRecords
             $escaped = ! $escaped && $char === '\\';
         }
 
-        throw new RuntimeException('The vulnerability feed ended unexpectedly.');
+        throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed ended unexpectedly.');
     }
 
     private function readJsonObject(): string
     {
         if ($this->readChar() !== '{') {
-            throw new RuntimeException('The vulnerability feed contains an invalid record.');
+            throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed contains an invalid record.');
         }
 
         $record = '{';
@@ -159,7 +157,7 @@ final class WordfenceJsonRecords
         while (($char = $this->readChar()) !== null) {
             $record .= $char;
             if (strlen($record) > $this->maximumRecordBytes) {
-                throw new RuntimeException('A vulnerability record exceeds the safe record-size limit.');
+                throw new WordfenceSyncFailure('feed_record_size_limit', 'A vulnerability record exceeds the safe record-size limit.');
             }
             if ($inString) {
                 if (! $escaped && $char === '"') {
@@ -178,6 +176,6 @@ final class WordfenceJsonRecords
             }
         }
 
-        throw new RuntimeException('The vulnerability feed ended inside a record.');
+        throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed ended inside a record.');
     }
 }

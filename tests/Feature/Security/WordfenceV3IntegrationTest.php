@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -37,6 +38,7 @@ class WordfenceV3IntegrationTest extends TestCase
             'security.vulnerabilities.max_bytes' => 160 * 1024 * 1024,
             'security.vulnerabilities.max_index_bytes' => 128 * 1024 * 1024,
         ]);
+        Cache::forget('security:vulnerabilities:wordfence:cooldown_until');
         app()->instance(WordfenceFeedAddressResolver::class, new class extends WordfenceFeedAddressResolver
         {
             public function resolve(string $host): array
@@ -212,6 +214,7 @@ class WordfenceV3IntegrationTest extends TestCase
             Http::failedConnection('synthetic interruption'),
         ];
         foreach ($responses as $response) {
+            Cache::forget('security:vulnerabilities:wordfence:cooldown_until');
             Http::fake([$this->endpoint => $response]);
             $this->assertSame(1, Artisan::call('security:vulnerabilities:sync'));
             $this->assertSame($knownGood, file_get_contents($this->indexPath));
@@ -222,6 +225,57 @@ class WordfenceV3IntegrationTest extends TestCase
         Http::fake([$this->endpoint => Http::response(str_repeat('x', 65), 200, ['Content-Type' => 'application/json'])]);
         $this->assertSame(1, Artisan::call('security:vulnerabilities:sync'));
         $this->assertSame($knownGood, file_get_contents($this->indexPath));
+    }
+
+    public function test_rate_limit_persists_a_manual_sync_cooldown_and_logs_only_a_safe_classification(): void
+    {
+        $this->assertSame(0, $this->importJson($this->fixtureJson()));
+        $knownGood = file_get_contents($this->indexPath);
+        Log::spy();
+        Http::fake([$this->endpoint => Http::response(
+            'provider body containing synthetic-api-key and Bearer synthetic-api-key',
+            429,
+            ['Retry-After' => '600', 'Content-Type' => 'application/json'],
+        )]);
+
+        $this->assertSame(1, Artisan::call('security:vulnerabilities:sync'));
+        $cooldownUntil = Cache::get('security:vulnerabilities:wordfence:cooldown_until');
+        $this->assertGreaterThanOrEqual(now()->getTimestamp() + 1799, $cooldownUntil);
+        $this->assertSame($knownGood, file_get_contents($this->indexPath));
+        $this->assertStringNotContainsString('synthetic-api-key', Artisan::output());
+        Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context): bool => $message === 'Wordfence vulnerability feed synchronization failed.'
+            && $context === ['failure_class' => 'rate_limited']
+        )->once();
+
+        $this->assertSame(1, Artisan::call('security:vulnerabilities:sync'));
+        Http::assertSentCount(1);
+        $this->assertSame($knownGood, file_get_contents($this->indexPath));
+        $this->assertStringNotContainsString('synthetic-api-key', Artisan::output());
+        Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context): bool => $message === 'Wordfence vulnerability feed synchronization deferred.'
+            && ($context['failure_class'] ?? null) === 'rate_limit_cooldown_active'
+            && array_keys($context) === ['failure_class', 'retry_after_seconds']
+        )->once();
+    }
+
+    public function test_feed_json_and_schema_failures_have_safe_classes_and_preserve_the_active_index(): void
+    {
+        $this->assertSame(0, $this->importJson($this->fixtureJson()));
+        $knownGood = file_get_contents($this->indexPath);
+        Log::spy();
+
+        $this->assertSame(1, $this->importJson('{"broken":'));
+        $this->assertSame($knownGood, file_get_contents($this->indexPath));
+        Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context): bool => $message === 'Wordfence vulnerability feed synchronization failed.'
+            && $context === ['failure_class' => 'feed_json_invalid']
+        )->once();
+
+        $invalid = $this->record();
+        unset($invalid['informational']);
+        $this->assertSame(1, $this->importJson($this->fixtureJson($invalid)));
+        $this->assertSame($knownGood, file_get_contents($this->indexPath));
+        Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context): bool => $message === 'Wordfence vulnerability feed synchronization failed.'
+            && $context === ['failure_class' => 'feed_schema_invalid']
+        )->once();
     }
 
     public function test_no_key_or_non_official_host_fails_before_any_request(): void
