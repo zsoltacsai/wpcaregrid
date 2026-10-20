@@ -5,7 +5,6 @@ namespace App\Security\Vulnerabilities;
 use App\Security\PlainText;
 use App\Security\Severity;
 use Illuminate\Support\Facades\File;
-use RuntimeException;
 use Throwable;
 
 /** Streaming Wordfence Intelligence v3 Scanner Feed importer and index reader. */
@@ -217,7 +216,7 @@ final class WordfenceFeed implements VulnerabilitySource
         $maxBytes = min(160 * 1024 * 1024, max(1, (int) config('security.vulnerabilities.max_bytes', 160 * 1024 * 1024)));
         $size = @filesize($feedFile);
         if (! is_file($feedFile) || $size === false || $size < 2 || $size > $maxBytes) {
-            throw new RuntimeException('The vulnerability feed is empty, unavailable, or exceeds its size limit.');
+            throw new WordfenceSyncFailure('feed_size_limit', 'The vulnerability feed is empty, unavailable, or exceeds its size limit.');
         }
 
         $dataRoot = self::dataRootFor($indexPath);
@@ -226,7 +225,7 @@ final class WordfenceFeed implements VulnerabilitySource
         $generation = bin2hex(random_bytes(16));
         $staging = $dataRoot.DIRECTORY_SEPARATOR.'.stage-'.$generation;
         if (! @mkdir($staging, 0700) || is_link($staging)) {
-            throw new RuntimeException('The vulnerability index generation could not be prepared safely.');
+            throw new WordfenceSyncFailure('staging_filesystem_failure', 'The vulnerability index generation could not be prepared safely.');
         }
 
         $groups = [];
@@ -240,7 +239,7 @@ final class WordfenceFeed implements VulnerabilitySource
         try {
             foreach (WordfenceJsonRecords::fromFile($feedFile) as $key => $record) {
                 if (++$records > 100_000) {
-                    throw new RuntimeException('The vulnerability feed exceeds the supported record count.');
+                    throw new WordfenceSyncFailure('feed_record_limit', 'The vulnerability feed exceeds the supported record count.');
                 }
                 self::validateRecord($key, $record);
                 if ($record['informational']) {
@@ -255,7 +254,7 @@ final class WordfenceFeed implements VulnerabilitySource
                     $groupKey = $type.'/'.$slug;
                     if (! isset($groups[$groupKey])) {
                         if (count($groups) >= 50_000) {
-                            throw new RuntimeException('The vulnerability feed exceeds the supported software-group count.');
+                            throw new WordfenceSyncFailure('feed_group_limit', 'The vulnerability feed exceeds the supported software-group count.');
                         }
                         $path = $staging.DIRECTORY_SEPARATOR.$type.DIRECTORY_SEPARATOR.$slug.'.jsonl';
                         File::ensureDirectoryExists(dirname($path));
@@ -266,33 +265,33 @@ final class WordfenceFeed implements VulnerabilitySource
                     $groupBytes[$groupKey] = ($groupBytes[$groupKey] ?? 0) + strlen($line);
                     if ($indexBytes > $maxIndexBytes || $groupBytes[$groupKey] > 8 * 1024 * 1024
                         || file_put_contents($groups[$groupKey], $line, FILE_APPEND | LOCK_EX) !== strlen($line)) {
-                        throw new RuntimeException('The vulnerability index exceeds its storage limit or could not be written.');
+                        throw new WordfenceSyncFailure('index_storage_failure', 'The vulnerability index exceeds its storage limit or could not be written.');
                     }
                     $entries++;
                 }
             }
             if ($entries === 0) {
-                throw new RuntimeException('The vulnerability feed contains no supported vulnerability records.');
+                throw new WordfenceSyncFailure('feed_empty_or_unsupported', 'The vulnerability feed contains no supported vulnerability records.');
             }
 
             $current = self::readManifestFile($indexPath);
             $currentStartedAt = $current['started_at'] ?? (isset($current['created_at']) ? $current['created_at'] * 1000 : null);
             if (is_int($currentStartedAt) && $currentStartedAt >= $startedAt) {
-                throw new RuntimeException('A newer synchronization generation is already active.');
+                throw new WordfenceSyncFailure('stale_generation', 'A newer synchronization generation is already active.');
             }
             if ($legacyFeedPath !== null && (file_exists($legacyFeedPath) || is_link($legacyFeedPath))) {
                 if (is_link($legacyFeedPath) || ! is_file($legacyFeedPath) || ! @unlink($legacyFeedPath)) {
-                    throw new RuntimeException('The legacy raw feed cache could not be removed safely.');
+                    throw new WordfenceSyncFailure('index_publication_failure', 'The legacy raw feed cache could not be removed safely.');
                 }
             }
 
             $catalog = json_encode(array_keys($groups), JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
             if (strlen($catalog) > 8 * 1024 * 1024 || file_put_contents($staging.DIRECTORY_SEPARATOR.'catalog.json', $catalog, LOCK_EX) !== strlen($catalog)) {
-                throw new RuntimeException('The vulnerability index catalog could not be written safely.');
+                throw new WordfenceSyncFailure('index_publication_failure', 'The vulnerability index catalog could not be written safely.');
             }
             $publishedGeneration = $dataRoot.DIRECTORY_SEPARATOR.$generation;
             if (! @rename($staging, $publishedGeneration)) {
-                throw new RuntimeException('The vulnerability index generation could not be installed.');
+                throw new WordfenceSyncFailure('index_publication_failure', 'The vulnerability index generation could not be installed.');
             }
 
             $manifest = [
@@ -309,14 +308,18 @@ final class WordfenceFeed implements VulnerabilitySource
             ];
             $temporary = tempnam(dirname($indexPath), 'wpcg-index-');
             if ($temporary === false || realpath(dirname($temporary)) !== realpath(dirname($indexPath))) {
-                throw new RuntimeException('The vulnerability index manifest could not be prepared safely.');
+                throw new WordfenceSyncFailure('index_publication_failure', 'The vulnerability index manifest could not be prepared safely.');
             }
             try {
                 $json = json_encode($manifest, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
                 if (file_put_contents($temporary, $json, LOCK_EX) !== strlen($json)) {
-                    throw new RuntimeException('The vulnerability index manifest could not be written.');
+                    throw new WordfenceSyncFailure('index_publication_failure', 'The vulnerability index manifest could not be written.');
                 }
-                ($publisher ?? new AtomicIndexPublisher)->publish($temporary, $indexPath);
+                try {
+                    ($publisher ?? new AtomicIndexPublisher)->publish($temporary, $indexPath);
+                } catch (Throwable $exception) {
+                    throw new WordfenceSyncFailure('index_publication_failure', 'The validated vulnerability index could not be published.', $exception);
+                }
             } finally {
                 File::delete($temporary);
             }
@@ -324,7 +327,7 @@ final class WordfenceFeed implements VulnerabilitySource
 
             return $entries;
         } catch (\JsonException) {
-            throw new RuntimeException('The vulnerability feed contains data that cannot be indexed safely.');
+            throw new WordfenceSyncFailure('feed_json_invalid', 'The vulnerability feed contains data that cannot be indexed safely.');
         } finally {
             if (is_dir($staging) && ! is_link($staging)) {
                 File::deleteDirectory($staging);
@@ -342,48 +345,48 @@ final class WordfenceFeed implements VulnerabilitySource
             || ! is_array($record['references'] ?? null) || ! array_is_list($record['references'])
             || array_filter($record['references'], fn ($reference) => ! is_string($reference))
             || ! (is_null($record['published'] ?? null) || is_string($record['published']) && preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $record['published']))) {
-            throw new RuntimeException('The vulnerability feed record does not match the v3 Scanner Feed schema.');
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed record does not match the v3 Scanner Feed schema.');
         }
         if (isset($record['copyrights']) && ! is_null($record['copyrights']) && ! is_array($record['copyrights'])) {
-            throw new RuntimeException('The vulnerability feed has invalid copyright metadata.');
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed has invalid copyright metadata.');
         }
     }
 
     private static function normalizeSoftware(mixed $software, array $record, string $id, array $cvss): array
     {
         if (! is_array($software)) {
-            throw new RuntimeException('The vulnerability feed contains invalid software metadata.');
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains invalid software metadata.');
         }
         $type = $software['type'] ?? null;
         $slug = $software['slug'] ?? null;
         if (! is_string($type) || ! in_array($type, ['core', 'plugin', 'theme'], true) || ! is_string($slug)) {
-            throw new RuntimeException('The vulnerability feed contains unsupported software metadata.');
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains unsupported software metadata.');
         }
         $slug = strtolower($slug);
         if ($type === 'core') {
             if (! in_array($slug, ['', 'wordpress'], true)) {
-                throw new RuntimeException('The vulnerability feed contains unsupported core software metadata.');
+                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains unsupported core software metadata.');
             }
             $slug = 'wordpress';
         } elseif (! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug)) {
-            throw new RuntimeException('The vulnerability feed contains an invalid software slug.');
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid software slug.');
         }
         $versions = $software['affected_versions'] ?? null;
         if (! is_array($versions) || $versions === [] || array_is_list($versions)
             || ! is_bool($software['patched'] ?? null)
             || ! is_array($software['patched_versions'] ?? null) || ! array_is_list($software['patched_versions'])) {
-            throw new RuntimeException('The vulnerability feed contains incomplete software metadata.');
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains incomplete software metadata.');
         }
 
         $ranges = [];
         foreach ($versions as $label => $range) {
             if (! is_array($range) || ! is_string($range['from_version'] ?? null) || ! is_string($range['to_version'] ?? null)
                 || ! is_bool($range['from_inclusive'] ?? null) || ! is_bool($range['to_inclusive'] ?? null)) {
-                throw new RuntimeException('The vulnerability feed contains an invalid affected-version range.');
+                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid affected-version range.');
             }
             foreach (['from_version', 'to_version'] as $key) {
                 if ($range[$key] !== '*' && ! preg_match('/^[0-9][0-9A-Za-z.+_-]{0,63}$/', $range[$key])) {
-                    throw new RuntimeException('The vulnerability feed contains an unsupported software version.');
+                    throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an unsupported software version.');
                 }
             }
             $ranges[] = [
@@ -396,7 +399,7 @@ final class WordfenceFeed implements VulnerabilitySource
         }
         foreach ($software['patched_versions'] as $patched) {
             if (! is_string($patched) || ! preg_match('/^[0-9][0-9A-Za-z.+_-]{0,63}$/', $patched)) {
-                throw new RuntimeException('The vulnerability feed contains invalid patched-version metadata.');
+                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains invalid patched-version metadata.');
             }
         }
 
@@ -418,11 +421,11 @@ final class WordfenceFeed implements VulnerabilitySource
         $mitre = is_array($copyrights['mitre'] ?? null) ? $copyrights['mitre'] : [];
         if ($defiant !== [] && (! is_string($defiant['notice'] ?? null) || ! is_string($defiant['license'] ?? null)
             || ! is_string($defiant['license_url'] ?? null) || $reference === null)) {
-            throw new RuntimeException('Wordfence copyright attribution is incomplete.');
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'Wordfence copyright attribution is incomplete.');
         }
         if ($mitre !== [] && (! is_string($mitre['notice'] ?? null) || ! is_string($mitre['license'] ?? null)
             || ! is_string($mitre['license_url'] ?? null))) {
-            throw new RuntimeException('MITRE copyright attribution is incomplete.');
+            throw new WordfenceSyncFailure('feed_schema_invalid', 'MITRE copyright attribution is incomplete.');
         }
 
         return [
