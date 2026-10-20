@@ -322,7 +322,7 @@ function m12ReadCache(): never
     }
 
     try {
-        $configuration = (new StaticLaravelConfigCacheParser())->parse($source);
+        $configuration = (new StaticLaravelConfigCacheParser)->parse($source);
     } catch (Throwable) {
         m12Fail('CACHE_FORMAT_INVALID');
     }

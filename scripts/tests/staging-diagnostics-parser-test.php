@@ -34,7 +34,7 @@ $fixture = [
     'services' => ['synthetic' => ['quoted' => "apostrophe ' and slash \\" ]],
 ];
 
-$parser = new StaticLaravelConfigCacheParser();
+$parser = new StaticLaravelConfigCacheParser;
 $parsed = $parser->parse('<?php return '.var_export($fixture, true).';');
 $output = implode("\n", m12FormatValues($parsed));
 assertTest(($parsed['privacy'][$privacyKeys[0]] ?? null) === false, 'actual boolean false parsed');
