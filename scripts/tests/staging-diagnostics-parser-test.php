@@ -6,7 +6,7 @@ require_once __DIR__.'/../staging-diagnostics/read-m12-cache.php';
 
 function assertTest(bool $condition, string $label): void
 {
-    if (!$condition) {
+    if (! $condition) {
         fwrite(STDERR, "FAIL: {$label}\n");
         exit(1);
     }
@@ -40,7 +40,7 @@ $output = implode("\n", m12FormatValues($parsed));
 assertTest(($parsed['privacy'][$privacyKeys[0]] ?? null) === false, 'actual boolean false parsed');
 assertTest(str_contains($output, 'M12|destructive_retention_enabled|FALSE'), 'false rendered as FALSE');
 assertTest(str_contains($output, 'M12|string_false|UNKNOWN') === false, 'unapproved keys not emitted');
-assertTest(!str_contains($output, 'SYNTHETIC_SECRET_MUST_NOT_BE_EMITTED'), 'unrelated sensitive value not emitted');
+assertTest(! str_contains($output, 'SYNTHETIC_SECRET_MUST_NOT_BE_EMITTED'), 'unrelated sensitive value not emitted');
 assertTest(str_contains($output, 'IDENTITY|deployment_environment|staging'), 'expected identity rendered');
 
 $missing = $fixture;
@@ -74,7 +74,7 @@ foreach ($malformedInputs as $input) {
     }
 }
 
-assertTest(!file_exists($marker), 'unexpected executable content was not run');
+assertTest(! file_exists($marker), 'unexpected executable content was not run');
 @unlink($marker);
 
 try {
