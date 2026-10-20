@@ -52,6 +52,8 @@ return [
         'max_index_bytes' => 128 * 1024 * 1024,
         'connect_timeout_seconds' => 5,
         'timeout_seconds' => 180,
+        // Offline profile is opt-in per invocation and remains staging-only.
+        'profile_timeout_seconds' => 15,
     ],
 
     /*

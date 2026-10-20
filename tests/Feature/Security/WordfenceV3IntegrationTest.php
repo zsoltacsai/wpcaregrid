@@ -9,6 +9,7 @@ use App\Security\Vulnerabilities\AtomicIndexPublisher;
 use App\Security\Vulnerabilities\VulnerabilityScanner;
 use App\Security\Vulnerabilities\WordfenceFeed;
 use App\Security\Vulnerabilities\WordfenceFeedAddressResolver;
+use App\Security\Vulnerabilities\WordfenceFeedProfiler;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
@@ -27,10 +28,14 @@ class WordfenceV3IntegrationTest extends TestCase
 
     private string $endpoint = 'https://www.wordfence.com/api/intelligence/v3/vulnerabilities/scanner';
 
+    /** @var list<string> */
+    private array $profileFilesBefore = [];
+
     protected function setUp(): void
     {
         parent::setUp();
         $this->directory = storage_path('framework/testing/wordfence-v3-'.bin2hex(random_bytes(6)));
+        $this->profileFilesBefore = glob(storage_path('app/private/wordfence-profiles/*')) ?: [];
         $this->feedPath = $this->directory.'/feed.json';
         $this->indexPath = WordfenceFeed::indexPathFor($this->feedPath);
         config([
@@ -53,8 +58,28 @@ class WordfenceV3IntegrationTest extends TestCase
 
     protected function tearDown(): void
     {
+        foreach (glob(storage_path('app/private/wordfence-profiles/*')) ?: [] as $path) {
+            if (! in_array($path, $this->profileFilesBefore, true) && is_file($path) && ! is_link($path)) {
+                @unlink($path);
+            }
+        }
         File::deleteDirectory($this->directory);
         parent::tearDown();
+    }
+
+    private function authorizeSyntheticStagingContext(): void
+    {
+        config([
+            'app.deployment_environment' => 'staging',
+            'app.deployment_hostname' => 'stg1.wpcaregrid.com',
+            'app.url' => 'https://staging.wpcaregrid.com',
+        ]);
+    }
+
+    /** @return list<string> */
+    private function newProfileFiles(): array
+    {
+        return array_values(array_diff(glob(storage_path('app/private/wordfence-profiles/*')) ?: [], $this->profileFilesBefore));
     }
 
     private function record(string $id = '12345678-1234-4234-8234-123456789abc'): array
@@ -116,6 +141,142 @@ class WordfenceV3IntegrationTest extends TestCase
         $this->assertSame('https://www.wordfence.com/threat-intel/vulnerabilities/fixture-plugin-issue', $matches[0]->reference);
         $this->assertSame('Copyright 2012-2026 Defiant Inc.', $matches[0]->copyrightNotice);
         $this->assertSame('Copyright 1999-2026 The MITRE Corporation', $matches[0]->mitreNotice);
+    }
+
+    public function test_profiling_is_off_by_default_and_ordinary_sync_has_no_profile_side_effect(): void
+    {
+        Http::fake([$this->endpoint => Http::response($this->fixtureJson(), 200, ['Content-Type' => 'application/json'])]);
+
+        $this->assertSame(0, Artisan::call('security:vulnerabilities:sync'));
+        Http::assertSentCount(1);
+        $this->assertSame([], $this->newProfileFiles());
+        $this->assertSame([], glob($this->directory.'/wpcg-feed-*') ?: []);
+    }
+
+    public function test_non_staging_profile_request_is_rejected_before_any_http_request(): void
+    {
+        Http::fake();
+        Log::spy();
+
+        $this->assertSame(1, Artisan::call('security:vulnerabilities:sync', ['--profile-feed' => true]));
+        Http::assertNothingSent();
+        $this->assertSame([], $this->newProfileFiles());
+        Log::shouldHaveReceived('warning')->once()->withArgs(static fn (string $message, array $context): bool => $message === 'Wordfence feed profiling was refused.'
+            && $context === ['failure_class' => 'feed_profile_context_rejected']
+        );
+    }
+
+    public function test_one_shot_staging_profile_uses_only_the_local_staged_feed_and_keeps_import_success(): void
+    {
+        $this->authorizeSyntheticStagingContext();
+        Http::fake([$this->endpoint => Http::response($this->fixtureJson(), 200, ['Content-Type' => 'application/json'])]);
+
+        $this->assertSame(0, Artisan::call('security:vulnerabilities:sync', ['--profile-feed' => true]));
+        Http::assertSentCount(1);
+        $reports = $this->newProfileFiles();
+        $this->assertCount(1, $reports);
+        $contents = file_get_contents($reports[0]);
+        $this->assertIsString($contents);
+        $this->assertStringContainsString('Top-level vulnerability records: 1', $contents);
+        $this->assertStringNotContainsString('12345678-1234-4234-8234-123456789abc', $contents);
+        $this->assertStringNotContainsString('Synthetic record', $contents);
+        $this->assertStringNotContainsString('1.0', $contents);
+        $this->assertStringNotContainsString('synthetic-api-key', $contents);
+        $this->assertSame([], glob($this->directory.'/wpcg-feed-*') ?: []);
+        $this->assertTrue(WordfenceFeed::fromConfig()->available());
+
+        if (DIRECTORY_SEPARATOR === '/') {
+            $this->assertSame(0700, fileperms(dirname($reports[0])) & 0777);
+            $this->assertSame(0600, fileperms($reports[0]) & 0777);
+        }
+    }
+
+    public function test_profiling_failure_is_best_effort_and_does_not_change_import_or_cleanup(): void
+    {
+        $this->authorizeSyntheticStagingContext();
+        Http::fake([$this->endpoint => Http::response($this->fixtureJson(), 200, ['Content-Type' => 'application/json'])]);
+        app()->instance(WordfenceFeedProfiler::class, new class extends WordfenceFeedProfiler
+        {
+            public function profile(string $feedPath, int $maximumBytes): ?string
+            {
+                return 'process_timeout';
+            }
+        });
+        Log::spy();
+
+        $this->assertSame(0, Artisan::call('security:vulnerabilities:sync', ['--profile-feed' => true]));
+        $this->assertTrue(WordfenceFeed::fromConfig()->available());
+        $this->assertSame([], $this->newProfileFiles());
+        $this->assertSame([], glob($this->directory.'/wpcg-feed-*') ?: []);
+        Log::shouldHaveReceived('warning')->once()->withArgs(static fn (string $message, array $context): bool => $message === 'Wordfence feed profiling failed.'
+            && $context === ['failure_class' => 'feed_profile_failed', 'failure_subcode' => 'process_timeout']
+        );
+    }
+
+    public function test_invalid_json_profile_failure_does_not_change_import_failure_or_leave_download(): void
+    {
+        $this->authorizeSyntheticStagingContext();
+        $secretVersion = 'private-synthetic-version-token';
+        Http::fake([$this->endpoint => Http::response('{"broken":"'.$secretVersion.'"', 200, ['Content-Type' => 'application/json'])]);
+        Log::spy();
+
+        $this->assertSame(1, Artisan::call('security:vulnerabilities:sync', ['--profile-feed' => true]));
+        $this->assertSame([], $this->newProfileFiles());
+        $this->assertSame([], glob($this->directory.'/wpcg-feed-*') ?: []);
+        $this->assertStringNotContainsString($secretVersion, Artisan::output());
+        Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'Wordfence feed profiling failed.'
+            && $context === ['failure_class' => 'feed_profile_failed', 'failure_subcode' => 'process_failed']
+        )->once();
+        Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'Wordfence vulnerability feed synchronization failed.'
+            && $context === ['failure_class' => 'feed_json_invalid']
+        )->once();
+    }
+
+    public function test_malformed_record_profile_contains_only_aggregates_and_import_remains_fail_closed(): void
+    {
+        $this->authorizeSyntheticStagingContext();
+        $id = '92345678-1234-4234-8234-123456789abc';
+        $secretVersion = 'private-synthetic-version-token';
+        $body = json_encode([$id => ['software' => $secretVersion]], JSON_THROW_ON_ERROR);
+        Http::fake([$this->endpoint => Http::response($body, 200, ['Content-Type' => 'application/json'])]);
+
+        $this->assertSame(1, Artisan::call('security:vulnerabilities:sync', ['--profile-feed' => true]));
+        $reports = $this->newProfileFiles();
+        $this->assertCount(1, $reports, 'Profiling records schema shape before the importer rejects the record.');
+        $contents = file_get_contents($reports[0]);
+        $this->assertIsString($contents);
+        $this->assertStringNotContainsString($id, $contents);
+        $this->assertStringNotContainsString($secretVersion, $contents);
+        $this->assertSame([], glob($this->directory.'/wpcg-feed-*') ?: []);
+    }
+
+    public function test_profiler_enforces_input_output_and_time_limits(): void
+    {
+        $profileDir = $this->directory.'/profile-test';
+        File::ensureDirectoryExists($profileDir);
+        $input = $profileDir.'/input.json';
+        file_put_contents($input, '{"a":1}');
+        $script = $profileDir.'/fake-profiler.php';
+        $profiler = new class($script) extends WordfenceFeedProfiler
+        {
+            public function __construct(private string $script) {}
+
+            protected function profilerScriptPath(): string
+            {
+                return $this->script;
+            }
+        };
+
+        $this->assertSame('input_limit', $profiler->profile($input, 2));
+
+        file_put_contents($script, '<?php echo str_repeat("x", 40000);');
+        $this->assertSame('output_limit', $profiler->profile($input, 100));
+        $this->assertSame([], $this->newProfileFiles());
+
+        config(['security.vulnerabilities.profile_timeout_seconds' => 1]);
+        file_put_contents($script, '<?php sleep(5); echo "finished";');
+        $this->assertSame('process_timeout', $profiler->profile($input, 100));
+        $this->assertSame([], $this->newProfileFiles());
     }
 
     public function test_official_schema_fixture_accepts_numeric_object_keys_nulls_and_string_versions(): void
