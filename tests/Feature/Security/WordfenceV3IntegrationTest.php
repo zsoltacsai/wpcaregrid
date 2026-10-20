@@ -151,6 +151,68 @@ class WordfenceV3IntegrationTest extends TestCase
         $this->assertStringNotContainsString('Synthetic invalid range fixture', Artisan::output());
     }
 
+    public function test_version_tokens_with_spaces_prefixes_suffixes_and_prereleases_use_wordpress_comparison_semantics(): void
+    {
+        $record = $this->record();
+        $record['software'][0]['affected_versions'] = [
+            'beta prerelease interval' => [
+                'from_version' => '1.0-beta.1', 'from_inclusive' => true,
+                'to_version' => '1.0-rc.1', 'to_inclusive' => false,
+            ],
+            'prefixed release interval' => [
+                'from_version' => 'v1.0', 'from_inclusive' => true,
+                'to_version' => 'v2.0', 'to_inclusive' => true,
+            ],
+            'spaced vendor build interval' => [
+                'from_version' => 'Version 1.0 build 1', 'from_inclusive' => true,
+                'to_version' => 'Version 1.0 build 3', 'to_inclusive' => true,
+            ],
+        ];
+        $record['software'][0]['patched_versions'] = ['v2.0 stable'];
+
+        $this->assertSame(0, $this->importJson($this->fixtureJson($record)));
+        $source = WordfenceFeed::fromConfig();
+        $this->assertCount(1, $source->affecting('plugin', 'fixture-plugin', '1.0-beta.2'));
+        $this->assertCount(0, $source->affecting('plugin', 'fixture-plugin', '1.0'));
+        $this->assertCount(1, $source->affecting('plugin', 'fixture-plugin', 'v1.5'));
+        $this->assertCount(0, $source->affecting('plugin', 'fixture-plugin', 'v2.1'));
+        $this->assertCount(1, $source->affecting('plugin', 'fixture-plugin', 'Version 1.0 build 2'));
+
+        $this->assertTrue(WordfenceFeed::inRange('1.0-beta.2', [
+            'from' => '1.0-beta.1', 'from_inclusive' => true,
+            'to' => '1.0-rc.1', 'to_inclusive' => false,
+        ]));
+        $this->assertFalse(WordfenceFeed::inRange('1.0', [
+            'from' => '1.0-beta.1', 'from_inclusive' => true,
+            'to' => '1.0-rc.1', 'to_inclusive' => false,
+        ]));
+    }
+
+    public function test_control_character_and_unbounded_version_tokens_fail_safely_without_replacing_the_index(): void
+    {
+        $this->assertSame(0, $this->importJson($this->fixtureJson()));
+        $knownGood = file_get_contents($this->indexPath);
+        Log::spy();
+
+        foreach (["1.0\u{0001}beta", str_repeat('v', 129)] as $version) {
+            $record = $this->record();
+            $record['software'][0]['affected_versions'] = [
+                'synthetic range' => [
+                    'from_version' => $version, 'from_inclusive' => true,
+                    'to_version' => '2.0', 'to_inclusive' => true,
+                ],
+            ];
+
+            $this->assertSame(1, $this->importJson($this->fixtureJson($record)));
+            $this->assertSame($knownGood, file_get_contents($this->indexPath));
+            $this->assertStringNotContainsString($version, Artisan::output());
+        }
+
+        Log::shouldHaveReceived('warning')->twice()->withArgs(fn (string $message, array $context): bool => $message === 'Wordfence vulnerability feed synchronization failed.'
+            && $context === ['failure_class' => 'feed_schema_invalid', 'failure_subcode' => 'software.version_token']
+        );
+    }
+
     public function test_empty_incompatible_and_oversized_records_fail_without_replacing_last_good_index(): void
     {
         $this->assertSame(0, $this->importJson($this->fixtureJson()));

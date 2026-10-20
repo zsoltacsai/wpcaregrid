@@ -409,10 +409,9 @@ final class WordfenceFeed implements VulnerabilitySource
                 throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid affected-version range.', subcode: 'software.affected_version_range_fields');
             }
             foreach (['from_version', 'to_version'] as $key) {
-                // The provider defines these as strings and reserves only the standalone "*".
-                // Keep a bounded, printable token for safe comparison while allowing common
-                // identifiers such as "v1.2" and "trunk" that do not start with a digit.
-                if ($range[$key] !== '*' && ! preg_match('/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$/', $range[$key])) {
+                // Wordfence defines version bounds as strings and reserves only the standalone "*".
+                // Plugin/theme versions may contain spaces, prefixes, suffixes, or prerelease text.
+                if (! self::isSafeVersionToken($range[$key], allowWildcard: true)) {
                     throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an unsupported software version.', subcode: 'software.version_token');
                 }
             }
@@ -425,7 +424,7 @@ final class WordfenceFeed implements VulnerabilitySource
             ];
         }
         foreach ($software['patched_versions'] as $patched) {
-            if (! is_string($patched) || ! preg_match('/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$/', $patched)) {
+            if (! self::isSafeVersionToken($patched, allowWildcard: false)) {
                 throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains invalid patched-version metadata.', subcode: 'software.patched_version_token');
             }
         }
@@ -488,11 +487,34 @@ final class WordfenceFeed implements VulnerabilitySource
 
     public static function inRange(string $version, array $range): bool
     {
+        if (! self::isSafeVersionToken($version, allowWildcard: false)
+            || ! is_string($range['from'] ?? null) || ! self::isSafeVersionToken($range['from'], allowWildcard: true)
+            || ! is_string($range['to'] ?? null) || ! self::isSafeVersionToken($range['to'], allowWildcard: true)
+            || ! is_bool($range['from_inclusive'] ?? null) || ! is_bool($range['to_inclusive'] ?? null)) {
+            return false;
+        }
+
         $from = $range['from'] === '*' ? null : $range['from'];
         $to = $range['to'] === '*' ? null : $range['to'];
 
+        // WordPress compares plugin and theme versions with PHP's version_compare(). Keep
+        // provider tokens unchanged so matching follows that behavior, including prereleases.
         return ($from === null || version_compare($version, $from, $range['from_inclusive'] ? '>=' : '>'))
             && ($to === null || version_compare($version, $to, $range['to_inclusive'] ? '<=' : '<'));
+    }
+
+    private static function isSafeVersionToken(mixed $version, bool $allowWildcard): bool
+    {
+        if (! is_string($version) || $version === '' || strlen($version) > 128 || preg_match('//u', $version) !== 1
+            || preg_match('/[\p{Cc}\p{Cf}]/u', $version) === 1) {
+            return false;
+        }
+
+        if ($allowWildcard && $version === '*') {
+            return true;
+        }
+
+        return trim($version) !== '';
     }
 
     private function readManifest(): ?array
