@@ -301,7 +301,7 @@ SOURCE_SHA=3f2340a98024ff7d73d38816efc21da38a20fa6c
 git cat-file -e "${SOURCE_SHA}^{commit}"
 git cat-file blob "${SOURCE_SHA}:scripts/deploy-staging.sh" > deploy-staging.sh
 git cat-file blob "${SOURCE_SHA}:scripts/verify-release-ci.py" > verify-release-ci.py
-printf '%s  %s\\n' \
+printf '%s  %s\n' \
   f950ceb1824fcf0e5376aa49265534f57e79e581fbd1a33e1427aab37fd3c75a deploy-staging.sh \
   0243d51fd55ef7ddb21fcc11e2804313ac3537cc0efe74da63a5747d79a7a4c7 verify-release-ci.py \
   | sha256sum -c -
