@@ -55,7 +55,7 @@ class SecurityVisibilityAndPermissionsTest extends TestCase
         file_put_contents($feed.'.download', json_encode([$id => [
             'id' => $id,
             'title' => 'Akismet <= 5.3 - Stored XSS',
-            'software' => [['type' => 'plugin', 'slug' => 'akismet', 'patched' => true, 'affected_versions' => ['* - 5.3' => ['from_version' => '*', 'from_inclusive' => true, 'to_version' => '5.3', 'to_inclusive' => true]], 'patched_versions' => ['5.3.1']]],
+            'software' => [['type' => 'plugin', 'name' => 'Akismet', 'slug' => 'akismet', 'patched' => true, 'affected_versions' => ['* - 5.3' => ['from_version' => '*', 'from_inclusive' => true, 'to_version' => '5.3', 'to_inclusive' => true]], 'patched_versions' => ['5.3.1']]],
             'informational' => false,
             'references' => ['https://www.wordfence.com/threat-intel/vulnerabilities/'.$id],
             'published' => '2026-01-09 00:00:00',
