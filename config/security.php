@@ -52,6 +52,10 @@ return [
         'max_index_bytes' => 128 * 1024 * 1024,
         'connect_timeout_seconds' => 5,
         'timeout_seconds' => 180,
+        // Offline profile is opt-in per invocation and remains staging-only.
+        // A measured 123 MiB synthetic feed took about 71 seconds on local Windows PHP 8.4.
+        // Keep enough headroom while retaining a hard two-minute ceiling.
+        'profile_timeout_seconds' => 120,
     ],
 
     /*

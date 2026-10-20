@@ -5,6 +5,7 @@ namespace App\Console\Commands\Security;
 use App\Security\Vulnerabilities\AtomicIndexPublisher;
 use App\Security\Vulnerabilities\WordfenceFeed;
 use App\Security\Vulnerabilities\WordfenceFeedAddressResolver;
+use App\Security\Vulnerabilities\WordfenceFeedProfiler;
 use App\Security\Vulnerabilities\WordfenceSyncFailure;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
@@ -16,7 +17,7 @@ use Throwable;
 /** Downloads only the official v3 scanner feed, or imports an explicitly supplied local fixture/file. */
 class SyncVulnerabilities extends Command
 {
-    protected $signature = 'security:vulnerabilities:sync {--file= : Import a local feed file instead of downloading}';
+    protected $signature = 'security:vulnerabilities:sync {--file= : Import a local feed file instead of downloading} {--profile-feed : Write an aggregate-only offline profile during this staging synchronization}';
 
     protected $description = 'Download or import the Wordfence v3 vulnerability feed and rebuild its index';
 
@@ -26,8 +27,15 @@ class SyncVulnerabilities extends Command
 
     private const RATE_LIMIT_COOLDOWN_SECONDS = 1800;
 
-    public function handle(WordfenceFeedAddressResolver $resolver, AtomicIndexPublisher $publisher): int
+    public function handle(WordfenceFeedAddressResolver $resolver, AtomicIndexPublisher $publisher, WordfenceFeedProfiler $profiler): int
     {
+        if ($this->option('profile-feed') && ($this->option('file') || ! $this->isAuthorizedStagingContext())) {
+            Log::warning('Wordfence feed profiling was refused.', ['failure_class' => 'feed_profile_context_rejected']);
+            $this->components->error('Offline feed profiling is restricted to the verified staging deployment.');
+
+            return self::FAILURE;
+        }
+
         if (config('security.vulnerabilities.source') !== 'wordfence') {
             Log::warning('Wordfence vulnerability feed synchronization failed.', ['failure_class' => 'source_not_configured']);
             $this->components->warn('No vulnerability source is configured.');
@@ -101,6 +109,23 @@ class SyncVulnerabilities extends Command
 
             $download = $this->stageWordfenceFeed($url, $key, $resolve, $feedDirectory, $limit);
             try {
+                if ($this->option('profile-feed')) {
+                    try {
+                        $failure = $profiler->profile($download, $limit);
+                    } catch (Throwable) {
+                        $failure = 'process_failed';
+                    }
+                    if ($failure !== null) {
+                        if (! in_array($failure, ['input_limit', 'process_timeout', 'output_limit', 'process_failed', 'private_storage_unavailable', 'report_write_failed'], true)) {
+                            $failure = 'process_failed';
+                        }
+                        Log::warning('Wordfence feed profiling failed.', [
+                            'failure_class' => 'feed_profile_failed',
+                            'failure_subcode' => $failure,
+                        ]);
+                    }
+                }
+
                 $count = WordfenceFeed::import($download, WordfenceFeed::indexPathFor($feedPath), $publisher, $feedPath, $startedAt);
             } finally {
                 File::delete($download);
@@ -122,6 +147,13 @@ class SyncVulnerabilities extends Command
         } finally {
             $lock->release();
         }
+    }
+
+    private function isAuthorizedStagingContext(): bool
+    {
+        return config('app.deployment_environment') === 'staging'
+            && config('app.deployment_hostname') === 'stg1.wpcaregrid.com'
+            && config('app.url') === 'https://staging.wpcaregrid.com';
     }
 
     /** @param list<string> $resolve */
