@@ -183,6 +183,7 @@ function profileFeed(string $path, int $maximumBytes): array
             $softwareList = $record['software'] ?? null;
             if (! is_array($softwareList)) {
                 increment($profile['missing_fields'], 'record.software_not_list');
+
                 continue;
             }
 
@@ -195,6 +196,7 @@ function profileFeed(string $path, int $maximumBytes): array
                 $software = get_object_vars($software);
                 if (! array_key_exists('affected_versions', $software)) {
                     increment($profile['missing_fields'], 'software.affected_versions');
+
                     continue;
                 }
                 $affected = $software['affected_versions'];
@@ -213,6 +215,7 @@ function profileFeed(string $path, int $maximumBytes): array
                     foreach (['from_version', 'to_version'] as $field) {
                         if (! array_key_exists($field, $range)) {
                             increment($profile['missing_fields'], "range.{$field}");
+
                             continue;
                         }
                         profileVersion($range[$field], $profile['endpoint'][$field]);
