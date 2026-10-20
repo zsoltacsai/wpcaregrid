@@ -1,0 +1,67 @@
+{
+  "synthetic-profile-record-001": {
+    "id": "synthetic-profile-record-001",
+    "software": [
+      {
+        "type": "plugin",
+        "slug": "sample-plugin",
+        "name": "Synthetic sample",
+        "affected_versions": {
+          "ordinary-inclusive": {
+            "from_version": "1.2.3",
+            "from_inclusive": true,
+            "to_version": "2.0.0",
+            "to_inclusive": true
+          },
+          "wildcard-and-exclusive": {
+            "from_version": "*",
+            "from_inclusive": true,
+            "to_version": "2.1.0",
+            "to_inclusive": false
+          },
+          "space-and-prerelease": {
+            "from_version": " 2.2.0 ",
+            "from_inclusive": false,
+            "to_version": "2.3.0-rc.1",
+            "to_inclusive": true
+          },
+          "build-and-prefix": {
+            "from_version": "v2.4.0",
+            "from_inclusive": true,
+            "to_version": "2.5.0+sample",
+            "to_inclusive": false
+          },
+          "unicode-and-control": {
+            "from_version": "2.6.0–preview",
+            "from_inclusive": true,
+            "to_version": "bad\u0001token",
+            "to_inclusive": true
+          },
+          "unexpected-types": {
+            "from_version": null,
+            "from_inclusive": "yes",
+            "to_version": 270,
+            "to_inclusive": null
+          },
+          "oversized": {
+            "from_version": "12345678901234567890123456789012345678901234567890123456789012345",
+            "from_inclusive": false,
+            "to_version": "",
+            "to_inclusive": true
+          }
+        },
+        "patched": true,
+        "patched_versions": ["2.7.0"]
+      },
+      {
+        "type": "theme",
+        "slug": "sample-theme",
+        "name": "Synthetic shape variant",
+        "affected_versions": ["unexpected-json-list"]
+      }
+    ],
+    "references": [],
+    "published": null,
+    "informational": false
+  }
+}
