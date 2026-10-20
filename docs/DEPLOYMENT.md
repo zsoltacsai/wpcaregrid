@@ -314,6 +314,7 @@ For the separately approved deployment preparation, create a new release-specifi
 The target SHA is supplied separately at deployment time. The following guard intentionally stops if that separately approved exact current branch tip has not been provided; do not substitute the controller source SHA:
 
 ```sh
+CONTROLLER_SOURCE_SHA=3f2340a98024ff7d73d38816efc21da38a20fa6c
 : "${DEPLOYMENT_TARGET_SHA:?Set this to the separately approved exact current primary-branch tip}"
 [[ "${DEPLOYMENT_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 2
 cd /var/www/wpcaregrid
