@@ -404,6 +404,22 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
         main.write_text("Include included.conf\nPubkeyAuthentication yes\n", encoding="ascii")
         self.assertFalse(provision._sshd_config_has_unsafe_match(main, owner_uid=os.geteuid(), owner_gid=os.getegid()))
 
+    def test_effective_sshd_config_requires_locked_account_compatible_pam_policy(self) -> None:
+        valid = (
+            "usepam yes", "pubkeyauthentication yes", "passwordauthentication no",
+            "kbdinteractiveauthentication no", "gssapiauthentication no",
+            "hostbasedauthentication no", "authorizedkeyscommand none",
+            "trustedusercakeys none", "forcecommand none", "allowtcpforwarding no",
+            "allowagentforwarding no", "x11forwarding no", "permittunnel no",
+            "permittty no", "permituserrc no", "permituserenvironment no",
+            "authorizedkeysfile .ssh/authorized_keys",
+            "subsystem sftp /usr/lib/openssh/sftp-server",
+        )
+        output = "\n".join(valid)
+        provision.validate_sshd_effective_config(output)
+        with self.assertRaisesRegex(provision.ProvisionError, "SSHD_AUTH_POLICY_UNSAFE"):
+            provision.validate_sshd_effective_config(output.replace("usepam yes", "usepam no"))
+
     def test_sudoers_pins_no_arguments_and_rejects_setenv(self) -> None:
         self.assertIn('wpcaregrid-staging-m12-readback ""', provision.SUDOERS_CONTENT)
         self.assertIn("!setenv", provision.SUDOERS_CONTENT)

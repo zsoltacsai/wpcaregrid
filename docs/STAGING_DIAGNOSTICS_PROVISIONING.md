@@ -118,6 +118,8 @@ Any pre-existing SHA-specific package directory is a hard stop; do not overwrite
 
 The verifier checks installed hashes and ownership, SSH effective authentication policy, pinned server host-key fingerprint, relevant file metadata, active state and the effective sudo list result. It does not read the cache or environment file content. Preserve only sanitized pass/fail evidence and the approved source SHA.
 
+The SSH preflight also requires effective `UsePAM yes`. Debian 12 OpenSSH refuses public-key login for a locked account when PAM account checks are disabled; the installer therefore stops before changing system files when this setting is unavailable.
+
 ## Rotation and revocation
 
 Rotate with a separately approved operation: generate a new dedicated key; install the new public key using a reviewed, narrowly scoped procedure; update the Environment private-key secret; verify the pinned host entry; perform one separately approved diagnostic check; then remove the old authorized key and revoke/delete the old private key. Never replace or reuse the deploy key. If compromise is suspected, immediately remove the matching authorized key, delete the Environment secret, and disable the diagnostics account before investigating. Record key fingerprints and dates, never private material.

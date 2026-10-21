@@ -444,8 +444,13 @@ def _check_sshd_effective_config() -> None:
             "user=caregrid-diagnostics,host=stg1.wpcaregrid.com,addr=198.51.100.10",
         ]
     )
+    validate_sshd_effective_config(output)
+
+
+def validate_sshd_effective_config(output: str) -> None:
     config = dict(line.split(None, 1) for line in output.splitlines() if " " in line)
     required = {
+        "usepam": "yes",
         "pubkeyauthentication": "yes",
         "passwordauthentication": "no",
         "kbdinteractiveauthentication": "no",
