@@ -1110,7 +1110,11 @@ def install(
             _write_install_file(layout.path(HELPER_PATH), files[HELPER_PATH], 0o644, layout)
             _write_install_file(layout.path(RUNNER_PATH), files[RUNNER_PATH], 0o755, layout)
 
-            stage_dir = layout.path("/run")
+            sudoers = layout.path(SUDOERS_PATH)
+            # Keep the temporary file on the destination filesystem.  On the
+            # staging hosts /run is a separate tmpfs, so replacing from there
+            # into /etc/sudoers.d fails with EXDEV (cross-device rename).
+            stage_dir = sudoers.parent
             descriptor, staged_sudoers = tempfile.mkstemp(prefix="wpcg-sudoers-", dir=stage_dir)
             staged_path = Path(staged_sudoers)
             try:
@@ -1121,9 +1125,11 @@ def install(
                 os.chmod(staged_path, 0o440)
                 os.chown(staged_path, layout.owner_uid, layout.owner_gid)
                 _validate_sudoers(staged_path, runner)
-                sudoers = layout.path(SUDOERS_PATH)
                 if _lstat(sudoers) is None:
-                    os.replace(staged_path, sudoers)
+                    try:
+                        os.replace(staged_path, sudoers)
+                    except OSError:
+                        raise ProvisionError("SUDOERS_INSTALL_FAILED") from None
                 elif not _file_matches(
                     sudoers,
                     SUDOERS_CONTENT.encode(),

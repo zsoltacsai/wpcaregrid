@@ -191,6 +191,50 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
             provision.SUDOERS_CONTENT,
         )
 
+    def test_sudoers_staging_is_on_destination_filesystem(self) -> None:
+        real_mkstemp = provision.tempfile.mkstemp
+        staged_directories: list[Path] = []
+
+        def record_sudoers_stage(*args, **kwargs):
+            if kwargs.get("prefix") == "wpcg-sudoers-":
+                staged_directories.append(Path(kwargs["dir"]))
+            return real_mkstemp(*args, **kwargs)
+
+        real_replace = provision.os.replace
+
+        def reject_cross_device_replace(source, destination):
+            if Path(source).parent != Path(destination).parent:
+                raise OSError(18, "cross-device link")
+            return real_replace(source, destination)
+
+        with (
+            patch.object(provision.tempfile, "mkstemp", side_effect=record_sudoers_stage),
+            patch.object(provision.os, "replace", side_effect=reject_cross_device_replace),
+        ):
+            self.run_install()
+
+        self.assertEqual(staged_directories, [self.layout.path(provision.SUDOERS_PATH).parent])
+        self.assertTrue(provision._activation_is_valid(self.layout, self.source_sha))
+        self.assertFalse(self.layout.path(provision.PENDING_PATH).exists())
+
+    def test_sudoers_replace_failure_has_safe_phase_classification(self) -> None:
+        real_replace = provision.os.replace
+
+        def fail_sudoers_replace(source, destination):
+            if Path(destination) == self.layout.path(provision.SUDOERS_PATH):
+                raise OSError(18, "sensitive path and OS message must not escape")
+            return real_replace(source, destination)
+
+        with patch.object(provision.os, "replace", side_effect=fail_sudoers_replace):
+            with self.assertRaisesRegex(
+                provision.ProvisionError, "SUDOERS_INSTALL_FAILED"
+            ):
+                self.run_install()
+
+        self.assertTrue(self.layout.path(provision.PENDING_PATH).is_file())
+        self.assertFalse(provision._activation_is_valid(self.layout, self.source_sha))
+        self.assertFalse(self.layout.path(provision.SUDOERS_PATH).exists())
+
     def test_repeated_install_is_idempotent(self) -> None:
         self.run_install()
         before = {
