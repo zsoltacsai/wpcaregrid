@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+import sys
 
 
 ROOT = Path(__file__).parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "staging-read-only-diagnostics.yml"
 RUNNER = ROOT / "scripts" / "staging-diagnostics" / "run-m12-readback.sh"
 DISPATCH = ROOT / "scripts" / "staging-diagnostics" / "dispatch.sh"
+PROVISIONING = ROOT / "scripts" / "staging-diagnostics" / "provisioning"
+sys.path.insert(0, str(PROVISIONING))
+import provision
 
 
 class StagingDiagnosticsPolicyTest(unittest.TestCase):
@@ -73,11 +77,39 @@ class StagingDiagnosticsPolicyTest(unittest.TestCase):
 
     def test_server_dispatcher_rejects_every_command_except_the_single_id(self) -> None:
         dispatcher = DISPATCH.read_text(encoding="utf-8")
-        self.assertIn('"${SSH_ORIGINAL_COMMAND-}" != \'m12-config-readback\'', dispatcher)
-        self.assertIn("sudo -n -- /usr/bin/php /usr/local/libexec/wpcaregrid-staging-m12-readback.php", dispatcher)
+        self.assertIn('[ "${SSH_ORIGINAL_COMMAND-}" = \'m12-config-readback\' ] || reject', dispatcher)
+        self.assertIn("sudo -n -- /usr/local/sbin/wpcaregrid-staging-m12-readback", dispatcher)
+        self.assertNotIn("sudo -n -- /usr/bin/php", dispatcher)
         self.assertIn("ulimit -c 0", dispatcher)
         self.assertNotIn("eval", dispatcher)
         self.assertNotIn("exec \"$SSH_ORIGINAL_COMMAND\"", dispatcher)
+
+    def test_provisioning_package_pins_the_sudo_command_and_never_reads_the_cache(self) -> None:
+        provision_source = (PROVISIONING / "provision.py").read_text(encoding="utf-8")
+        verifier = (PROVISIONING / "verify.py").read_text(encoding="utf-8")
+        rollback = (PROVISIONING / "rollback.py").read_text(encoding="utf-8")
+        wrapper = (PROVISIONING / "run-m12-readback.sh").read_text(encoding="utf-8")
+        account_shell = (PROVISIONING / "diagnostics-shell.sh").read_text(encoding="utf-8")
+
+        self.assertIn("NOPASSWD:", provision_source)
+        self.assertEqual(
+            provision.SUDOERS_CONTENT.splitlines()[-1],
+            'caregrid-diagnostics ALL=(root) NOPASSWD: /usr/local/sbin/wpcaregrid-staging-m12-readback ""',
+        )
+        self.assertIn("!setenv", provision_source)
+        self.assertIn("SOURCE_SHA_MISMATCH", provision_source)
+        self.assertIn("visudo", provision_source)
+        self.assertIn("HOST_IDENTITY_MISMATCH", provision_source)
+        self.assertIn('"/usr/bin/sudo", "-l", "-U", DIAGNOSTICS_USER', verifier)
+        self.assertIn("SUDOERS_EFFECTIVE_POLICY_UNSAFE", provision_source)
+        self.assertIn("entries != [expected]", provision_source)
+        self.assertIn("SSH_ORIGINAL_COMMAND", account_shell)
+        self.assertIn("if [ \"$#\" -ne 0 ]", wrapper)
+        self.assertIn("exec /usr/bin/php /usr/local/libexec/wpcaregrid-staging-m12-readback.php", wrapper)
+        cache_check = verifier.split("def _require_cache_metadata", maxsplit=1)[1].split("def verify(", maxsplit=1)[0]
+        self.assertNotIn("read_text", cache_check)
+        self.assertNotIn("read_bytes", cache_check)
+        self.assertNotIn("APP_CACHE", rollback)
 
 
 if __name__ == "__main__":
