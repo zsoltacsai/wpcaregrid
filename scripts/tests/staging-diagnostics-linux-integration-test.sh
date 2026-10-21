@@ -155,15 +155,25 @@ echo "UNTRUSTED_ROOT_OWNED_REPOSITORY=REJECTED"
 # though the one-command protected-config exception allows inspection of the
 # exact trusted checkout.
 git -C "$PREP_REPO" config --local safe.directory '*'
+chown root:wpcg-preparer-test "$PREP_REPO/.git/config"
+chmod 0640 "$PREP_REPO/.git/config"
 if PREP_RESULT=$(run_preparer "$PREP_REPO" 2>&1); then
   echo "REPOSITORY_SAFE_DIRECTORY_OVERRIDE_WAS_ACCEPTED" >&2
   exit 1
 fi
-grep -q 'code=GIT_PROVENANCE_CONFIG_REJECTED' <<< "$PREP_RESULT"
+if ! grep -q 'code=GIT_PROVENANCE_CONFIG_REJECTED' <<< "$PREP_RESULT"; then
+  actual_code=$(grep -oE 'code=[A-Z0-9_]+' <<< "$PREP_RESULT" | tail -n 1 || true)
+  printf 'SAFE_DIRECTORY_NEGATIVE_EXPECTED_REJECTION actual=%s\n' "${actual_code:-NO_CLASSIFICATION}" >&2
+  exit 1
+fi
 git -C "$PREP_REPO" config --local --unset-all safe.directory
+chown root:wpcg-preparer-test "$PREP_REPO/.git/config"
+chmod 0640 "$PREP_REPO/.git/config"
 ALIAS_MARKER=/tmp/wpcg-untrusted-git-alias-ran
 rm -f "$ALIAS_MARKER"
 git -C "$PREP_REPO" config --local alias.untrusted "!touch $ALIAS_MARKER"
+chown root:wpcg-preparer-test "$PREP_REPO/.git/config"
+chmod 0640 "$PREP_REPO/.git/config"
 if PREP_RESULT=$(run_preparer "$PREP_REPO" 2>&1); then
   echo "REPOSITORY_GIT_ALIAS_WAS_ACCEPTED" >&2
   exit 1
@@ -171,6 +181,8 @@ fi
 grep -q 'code=GIT_PROVENANCE_CONFIG_REJECTED' <<< "$PREP_RESULT"
 [[ ! -e "$ALIAS_MARKER" ]]
 git -C "$PREP_REPO" config --local --unset-all alias.untrusted
+chown root:wpcg-preparer-test "$PREP_REPO/.git/config"
+chmod 0640 "$PREP_REPO/.git/config"
 echo "GIT_SAFE_DIRECTORY_SCOPE_AND_CONFIG_REJECTIONS=PASS"
 
 # The operator may invoke only one root-owned no-argument wrapper.
