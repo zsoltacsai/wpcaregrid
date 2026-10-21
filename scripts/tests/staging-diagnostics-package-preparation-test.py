@@ -53,7 +53,12 @@ class CanonicalPackagePreparationTests(unittest.TestCase):
             ["git", "-C", str(self.repo), *args], text=True
         ).strip()
 
-    def invoke(self, *, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    def invoke(
+        self,
+        *,
+        extra_env: dict[str, str] | None = None,
+        extra_args: tuple[str, ...] = (),
+    ) -> subprocess.CompletedProcess[str]:
         env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
         if extra_env:
             env.update(extra_env)
@@ -77,15 +82,28 @@ class CanonicalPackagePreparationTests(unittest.TestCase):
             raise AssertionError("canonical helper blob missing or unsafe")
         helper = subprocess.check_output(
             ["git", "--no-replace-objects", "-C", str(self.repo), "cat-file", "blob", blob_oid],
-            text=True,
         )
-        return subprocess.run(
-            ["bash", "-s", "--", "--verify-only", str(self.repo), self.approved_sha],
+        repo_arg = str(self.repo)
+        result = subprocess.run(
+            [
+                "bash",
+                "-s",
+                "--",
+                "--verify-only",
+                repo_arg,
+                self.approved_sha,
+                *extra_args,
+            ],
             env=env,
             input=helper,
-            text=True,
             capture_output=True,
             check=False,
+        )
+        return subprocess.CompletedProcess(
+            args=result.args,
+            returncode=result.returncode,
+            stdout=result.stdout.decode("utf-8", errors="replace"),
+            stderr=result.stderr.decode("utf-8", errors="replace"),
         )
 
     def assert_rejected(self, classification: str, **kwargs: object) -> None:
@@ -136,6 +154,28 @@ class CanonicalPackagePreparationTests(unittest.TestCase):
     def test_rejects_local_object_replacement_configuration(self) -> None:
         self.git("config", "--local", "core.useReplaceRefs", "true")
         self.assert_rejected("GIT_PROVENANCE_CONFIG_REJECTED")
+
+    def test_rejects_repository_local_safe_directory_override(self) -> None:
+        self.git("config", "--local", "safe.directory", "*")
+        self.assert_rejected("GIT_PROVENANCE_CONFIG_REJECTED")
+
+    def test_rejects_repository_alias_configuration(self) -> None:
+        marker = Path(self.temp.name) / "alias-must-not-run"
+        self.git("config", "--local", "alias.untrusted", f"!touch {marker}")
+        self.assert_rejected("GIT_PROVENANCE_CONFIG_REJECTED")
+        self.assertFalse(marker.exists())
+
+    def test_rejects_command_line_attempt_to_add_git_configuration(self) -> None:
+        self.assert_rejected(
+            "USAGE",
+            extra_args=("--config=safe.directory=*",),
+        )
+
+    def test_rejects_git_configuration_environment_override(self) -> None:
+        self.assert_rejected(
+            "UNEXPECTED_GIT_ENVIRONMENT",
+            extra_env={"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.directory", "GIT_CONFIG_VALUE_0": "*"},
+        )
 
     def test_rejects_partial_clone_promisor_configuration(self) -> None:
         self.git("config", "--local", "remote.origin.promisor", "true")
