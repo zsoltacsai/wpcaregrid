@@ -45,24 +45,78 @@ Set `STAGING_DIAGNOSTICS_KNOWN_HOSTS` to the pinned `stg1.wpcaregrid.com` ED2551
 
 Never use `ssh-keyscan` output as the trust source. Keep the private key out of command arguments and logs. After provisioning, verify the Environment secret names and scope without displaying their values.
 
-## Server installation
+## Trusted package preparation and server installation
 
-Run the following only in a separately approved staging provisioning window, after the source commit and push CI are approved. Do not run it as part of deployment. Use the reviewed checkout at the exact SHA, owned by a trusted administrator, with no modified or untracked files. Supply a path to the public key only; the installer rejects non-ED25519 keys and does not need private-key material.
+The installer must never be invoked as root from the application checkout or another deploy-writable directory. Its Git check is defense in depth, not a pre-execution trust boundary: Python has already loaded the installer before that check can run.
 
-```sh
-sudo /usr/bin/python3 scripts/staging-diagnostics/provisioning/provision.py \
-  --approved-source-sha APPROVED_40_CHARACTER_COMMIT \
-  --public-key-file /root/secure-staging-diagnostics-key.pub
-sudo /usr/bin/python3 scripts/staging-diagnostics/provisioning/verify.py \
-  --approved-source-sha APPROVED_40_CHARACTER_COMMIT \
-  --public-key-file /root/secure-staging-diagnostics-key.pub
+Use an Owner-controlled machine and a reviewed commit with successful exact-SHA push CI. First confirm the local checkout is exactly that commit and clean. Then copy only the allowlisted package files from the Git object database into a new root-owned, mode-0700 staging directory. This is data transfer only; do not execute any repository code as root during preparation.
+
+Example Bash procedure (replace the repository path, approved SHA, and public-key path with the reviewed values):
+
+```bash
+set -euo pipefail
+umask 077
+
+REPO=/path/to/wpcaregrid
+APPROVED_SHA=APPROVED_40_CHARACTER_COMMIT
+STAGE=/var/lib/wpcaregrid-staging-diagnostics-provisioning/source/$APPROVED_SHA
+PUBLIC_KEY=/root/secure-staging-diagnostics-key.pub
+
+test "$(git -C "$REPO" rev-parse --verify HEAD)" = "$APPROVED_SHA"
+test -z "$(git -C "$REPO" status --porcelain --untracked-files=all)"
+if sudo test -e "$STAGE"; then
+  echo 'Refusing an existing source staging directory' >&2
+  exit 1
+fi
+sudo install -d -o root -g root -m 0700 "$STAGE"
+
+{
+  printf 'commit=%s\n' "$APPROVED_SHA"
+  while IFS= read -r relative; do
+    [ -n "$relative" ] || continue
+    case "$relative" in /*|*..*) echo 'Unsafe fixed package path' >&2; exit 1 ;; esac
+    destination=$STAGE/$relative
+    sudo install -d -o root -g root -m 0700 "$(dirname "$destination")"
+    git -C "$REPO" show "$APPROVED_SHA:$relative" | sudo tee "$destination" >/dev/null
+    sudo chown root:root "$destination"
+    sudo chmod 0444 "$destination"
+    expected=$(git -C "$REPO" show "$APPROVED_SHA:$relative" | sha256sum | cut -d' ' -f1)
+    actual=$(sudo sha256sum -- "$destination" | cut -d' ' -f1)
+    test "$expected" = "$actual"
+    test "$(sudo stat -c '%u:%g:%a:%F' -- "$destination")" = '0:0:444:regular file'
+    printf '%s  %s\n' "$expected" "$relative"
+  done <<'PACKAGE_FILES'
+scripts/staging-diagnostics/dispatch.sh
+scripts/staging-diagnostics/provisioning/activation-check.sh
+scripts/staging-diagnostics/provisioning/diagnostics-shell.sh
+scripts/staging-diagnostics/read-m12-cache.php
+scripts/staging-diagnostics/provisioning/run-m12-readback.sh
+scripts/staging-diagnostics/provisioning/provision.py
+scripts/staging-diagnostics/provisioning/verify.py
+scripts/staging-diagnostics/provisioning/rollback.py
+PACKAGE_FILES
+} | sudo tee "$STAGE/.wpcaregrid-provenance" >/dev/null
+sudo chown root:root "$STAGE/.wpcaregrid-provenance"
+sudo chmod 0444 "$STAGE/.wpcaregrid-provenance"
+test "$(sudo stat -c '%u:%g:%a:%F' -- "$STAGE/.wpcaregrid-provenance")" = '0:0:444:regular file'
+test -z "$(sudo find "$STAGE" -type l -print -quit)"
+
+# Run only after the preceding object-to-copy hashes and root ownership checks pass.
+sudo /usr/bin/python3 -I -S "$STAGE/scripts/staging-diagnostics/provisioning/provision.py" \
+  --approved-source-sha "$APPROVED_SHA" \
+  --public-key-file "$PUBLIC_KEY"
+sudo /usr/bin/python3 -I -S "$STAGE/scripts/staging-diagnostics/provisioning/verify.py" \
+  --approved-source-sha "$APPROVED_SHA" \
+  --public-key-file "$PUBLIC_KEY"
 ```
 
-The installer creates a dedicated locked `caregrid-diagnostics` account, root-owned fixed dispatcher/parser/wrapper files, a root-owned `authorized_keys` entry restricted to that dispatcher, and a sudoers rule for only the no-argument fixed wrapper. A root-owned shell guard rejects other SSH command forms. Forwarding, PTY, agent, X11 and user rc features are disabled by the SSH key restriction. The account is not added to the deploy group and receives no access to backups, databases, deployment credentials, or unrelated application files.
+The shell block reads Git blobs by the exact approved commit, writes only data into a new root-owned directory, and compares every staged file against the corresponding blob before Python starts. The root-run Python tools require that exact SHA-specific directory, root ownership, non-writable parent directories, regular non-symlink files, a root-owned read-only manifest, and matching hashes. `-I -S` disables environment and user-site Python import paths; `verify.py` and `rollback.py` import `provision.py` only from their own verified package directory. Never use elevated Python against the application checkout.
 
-The verifier checks the installed hashes and ownership, SSH effective authentication policy, pinned server host-key fingerprint, relevant file metadata, and the effective `sudo -l -U caregrid-diagnostics` result. It requires exactly the one fixed command. It does not read the cache or `.env` content. Preserve only sanitized pass/fail evidence and the approved source SHA.
+The installer creates a locked dedicated account, root-owned fixed dispatcher, activation checker, parser and wrapper, and the constrained sudoers rule. The dispatcher and root wrapper both require an intact active record and reject any pending journal. The state directory is root-owned mode 0711; the activation record is root-owned mode 0444 and contains only the approved source SHA. Activation is atomically written after all verification succeeds while the pending journal still exists. The journal is removed last, so missing, malformed, pending or partially written state denies the operation. OpenSSH opens authorized_keys as the target UID, so the root-owned .ssh directory is mode 0711 and the public-key file is mode 0444: the account can traverse/read but cannot alter either.
 
-If installation stops with a pending journal or any conflict, do not retry installation. Use the same approved source SHA and public key for the explicit rollback below, investigate the fixed failure code, then re-run the full preflight in a new authorization window.
+Any pre-existing SHA-specific package directory is a hard stop; do not overwrite or reuse it. If package preparation, hash comparison, installer validation, or verification fails, do not run the diagnostic workflow. Preserve the fixed failure classification and use the rollback command below from the same root-owned verified package. Do not run installation directly from the deploy-owned application tree.
+
+The verifier checks installed hashes and ownership, SSH effective authentication policy, pinned server host-key fingerprint, relevant file metadata, active state and the effective sudo list result. It does not read the cache or environment file content. Preserve only sanitized pass/fail evidence and the approved source SHA.
 
 ## Rotation and revocation
 
@@ -70,13 +124,13 @@ Rotate with a separately approved operation: generate a new dedicated key; insta
 
 ## Disable access / recover an interrupted install
 
-The rollback removes only the exact managed authorized-key line, exact managed sudoers file, and exact pending marker, then locks the account. It deliberately leaves root-owned helper files, the home directory, and the dedicated group for later audited cleanup; access is disabled after the key and sudoers entry are removed and the account is locked.
+The rollback first removes the active state, then removes only the exact managed authorized-key line, exact managed sudoers file, and exact pending marker, and finally locks the account. It deliberately leaves root-owned helper files, the home directory, and the dedicated group for later audited cleanup; access is disabled after the key and sudoers entry are removed and the account is locked.
 
 ```sh
-sudo /usr/bin/python3 scripts/staging-diagnostics/provisioning/rollback.py \
+sudo /usr/bin/python3 -I -S /var/lib/wpcaregrid-staging-diagnostics-provisioning/source/APPROVED_40_CHARACTER_COMMIT/scripts/staging-diagnostics/provisioning/rollback.py \
   --approved-source-sha APPROVED_40_CHARACTER_COMMIT \
   --public-key-file /root/secure-staging-diagnostics-key.pub
-sudo /usr/bin/python3 scripts/staging-diagnostics/provisioning/verify.py \
+sudo /usr/bin/python3 -I -S /var/lib/wpcaregrid-staging-diagnostics-provisioning/source/APPROVED_40_CHARACTER_COMMIT/scripts/staging-diagnostics/provisioning/verify.py \
   --approved-source-sha APPROVED_40_CHARACTER_COMMIT \
   --public-key-file /root/secure-staging-diagnostics-key.pub
 ```
@@ -86,5 +140,6 @@ After rollback, the verifier is expected to fail because the access boundary is 
 ## Threat model and boundaries
 
 The only SSH command accepted is `m12-config-readback`. The account's forced command, custom shell, root-owned dispatcher, no-argument sudo rule, and fixed PHP helper form separate restrictions. The parser accepts only its supported static cache syntax and emits only the approved six booleans and three deployment identity values; unsupported syntax fails closed. Workflow output is sanitized and bounded. SSH pins the host key and does not enable proxy, forwarding, PTY, or interactive access.
+Every provisioning operation must run from the separately hash-verified root-owned package, never from the deploy-writable application checkout. The fixed activation gate is checked both before sudo and again immediately before the cache helper runs.
 
 The Environment secret is still a high-value credential: anyone able to change trusted workflow code on the permitted branch could attempt to misuse it. Keep branch write access minimal, enforce required reviews/status checks where operationally available, review the exact workflow SHA before granting secrets, and revoke the key promptly when it is no longer needed. Do not add arbitrary diagnostic inputs, shell text, deployment commands, scanner operations, database access, backup/restore, or production targets to this interface. Any new diagnostic operation requires its own security review, fixed dispatcher allowlist, parser/output tests, and Owner approval.

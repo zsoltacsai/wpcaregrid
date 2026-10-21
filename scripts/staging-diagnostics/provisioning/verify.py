@@ -12,12 +12,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+# With Python -I -S, import only from this root-owned package directory.
+_PACKAGE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_PACKAGE_DIR))
 import provision
 from provision import (
     DIAGNOSTICS_GROUP,
     DIAGNOSTICS_HOME,
     DIAGNOSTICS_USER,
     HELPER_PATH,
+    _activation_is_valid,
     PENDING_PATH,
     RUNNER_PATH,
     SHELL_PATH,
@@ -113,7 +117,7 @@ def verify(source_root: Path, approved_sha: str, public_key: str) -> None:
     if os.geteuid() != 0:
         raise ProvisionError("ROOT_REQUIRED")
 
-    hashes = verify_source_provenance(source_root, approved_sha)
+    hashes = verify_source_provenance(source_root, approved_sha, trusted_execution=True)
     if source_hashes(source_root) != hashes:
         raise ProvisionError("SOURCE_FILE_MISMATCH")
 
@@ -132,11 +136,11 @@ def verify(source_root: Path, approved_sha: str, public_key: str) -> None:
     ssh_directory = home / ".ssh"
     _require_rooted_directory(home)
     _require_rooted_directory(ssh_directory)
-    if stat.S_IMODE(home.stat().st_mode) != 0o755 or stat.S_IMODE(ssh_directory.stat().st_mode) != 0o700:
+    if stat.S_IMODE(home.stat().st_mode) != 0o755 or stat.S_IMODE(ssh_directory.stat().st_mode) != 0o711:
         raise ProvisionError("ACCOUNT_HOME_PERMISSIONS_INVALID")
 
     key_line = authorized_key_line(parse_public_key(public_key))
-    _require_file(ssh_directory / "authorized_keys", f"{key_line}\n".encode(), 0o600)
+    _require_file(ssh_directory / "authorized_keys", f"{key_line}\n".encode(), 0o444)
 
     for target, relative in SOURCE_FILES.items():
         source = (source_root / relative).read_bytes()
@@ -165,7 +169,7 @@ def verify(source_root: Path, approved_sha: str, public_key: str) -> None:
         raise ProvisionError("HOST_IDENTITY_MISMATCH")
 
     pending = Path(PENDING_PATH)
-    if _lstat(pending) is not None:
+    if _lstat(pending) is not None or not _activation_is_valid(Layout(), approved_sha):
         raise ProvisionError("RECOVERY_REQUIRED")
 
 

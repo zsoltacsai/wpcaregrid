@@ -58,7 +58,8 @@ jobs:
           python3 -m py_compile scripts/staging-diagnostics/provisioning/provision.py scripts/staging-diagnostics/provisioning/verify.py scripts/staging-diagnostics/provisioning/rollback.py
           php scripts/tests/staging-diagnostics-parser-test.php
           php -l scripts/staging-diagnostics/read-m12-cache.php
-          bash -n scripts/staging-diagnostics/dispatch.sh scripts/staging-diagnostics/run-m12-readback.sh scripts/staging-diagnostics/provisioning/diagnostics-shell.sh scripts/staging-diagnostics/provisioning/run-m12-readback.sh
+          bash -n scripts/staging-diagnostics/dispatch.sh scripts/staging-diagnostics/run-m12-readback.sh scripts/staging-diagnostics/provisioning/activation-check.sh scripts/staging-diagnostics/provisioning/diagnostics-shell.sh scripts/staging-diagnostics/provisioning/run-m12-readback.sh
+          bash -n scripts/tests/staging-diagnostics-linux-integration-test.sh
 
       - name: No local files, databases or keys in the repository
         run: python3 scripts/tests/repository-secret-path-policy.py

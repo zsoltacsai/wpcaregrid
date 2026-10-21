@@ -77,7 +77,7 @@ class StagingDiagnosticsPolicyTest(unittest.TestCase):
 
     def test_server_dispatcher_rejects_every_command_except_the_single_id(self) -> None:
         dispatcher = DISPATCH.read_text(encoding="utf-8")
-        self.assertIn('"${SSH_ORIGINAL_COMMAND-}" != \'m12-config-readback\'', dispatcher)
+        self.assertIn('[ "${SSH_ORIGINAL_COMMAND-}" = \'m12-config-readback\' ] || reject', dispatcher)
         self.assertIn("sudo -n -- /usr/local/sbin/wpcaregrid-staging-m12-readback", dispatcher)
         self.assertNotIn("sudo -n -- /usr/bin/php", dispatcher)
         self.assertIn("ulimit -c 0", dispatcher)

@@ -7,4 +7,5 @@ if [ "$#" -ne 0 ]; then
     exit 64
 fi
 
+/usr/local/libexec/wpcaregrid-staging-diagnostics-activation-check >/dev/null 2>&1 || exit 65
 exec /usr/bin/php /usr/local/libexec/wpcaregrid-staging-m12-readback.php

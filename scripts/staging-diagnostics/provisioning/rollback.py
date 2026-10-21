@@ -11,11 +11,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+# With Python -I -S, import only from this root-owned package directory.
+_PACKAGE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_PACKAGE_DIR))
 import provision
 from provision import (
     DIAGNOSTICS_HOME,
     DIAGNOSTICS_USER,
     PENDING_PATH,
+    _deactivate,
     SUDOERS_CONTENT,
     SUDOERS_PATH,
     Layout,
@@ -30,7 +34,7 @@ from provision import (
 def rollback(source_root: Path, approved_sha: str, public_key: str) -> None:
     if os.geteuid() != 0:
         raise ProvisionError("ROOT_REQUIRED")
-    verify_source_provenance(source_root, approved_sha)
+    verify_source_provenance(source_root, approved_sha, trusted_execution=True)
 
     rollback_filesystem(Layout(), approved_sha, public_key)
     try:
@@ -42,6 +46,7 @@ def rollback(source_root: Path, approved_sha: str, public_key: str) -> None:
 
 
 def rollback_filesystem(layout: Layout, approved_sha: str, public_key: str) -> None:
+    _deactivate(layout)
     auth_path = layout.path(f"{DIAGNOSTICS_HOME}/.ssh/authorized_keys")
     auth_info = _lstat(auth_path)
     if auth_info is not None:
@@ -50,7 +55,7 @@ def rollback_filesystem(layout: Layout, approved_sha: str, public_key: str) -> N
             not stat.S_ISREG(auth_info.st_mode)
             or auth_info.st_uid != layout.owner_uid
             or auth_info.st_gid != layout.owner_gid
-            or stat.S_IMODE(auth_info.st_mode) != 0o600
+            or stat.S_IMODE(auth_info.st_mode) != 0o444
             or auth_path.read_bytes() != expected
         ):
             raise ProvisionError("AUTHORIZED_KEYS_CONFLICT")

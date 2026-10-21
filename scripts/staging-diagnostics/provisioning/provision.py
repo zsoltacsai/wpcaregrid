@@ -11,11 +11,13 @@ try:
 except ImportError:  # pragma: no cover - installer only runs on Linux
     fcntl = None
 import grp
+import glob
 import hashlib
 import os
 import pwd
 import re
 import shutil
+import shlex
 import stat
 import subprocess
 import sys
@@ -35,16 +37,29 @@ RUNNER_PATH = "/usr/local/sbin/wpcaregrid-staging-m12-readback"
 SUDOERS_PATH = "/etc/sudoers.d/wpcaregrid-staging-diagnostics"
 STATE_PATH = "/var/lib/wpcaregrid-staging-diagnostics"
 PENDING_PATH = f"{STATE_PATH}/provisioning.pending"
+ACTIVE_PATH = f"{STATE_PATH}/provisioning.active"
 LOCK_PATH = "/run/lock/wpcaregrid-staging-diagnostics.lock"
 APP_CACHE = "/var/www/wpcaregrid/bootstrap/cache/config.php"
 APP_ENV = "/var/www/wpcaregrid/.env"
+TRUSTED_SOURCE_PARENT = Path("/var/lib/wpcaregrid-staging-diagnostics-provisioning/source")
+PROVENANCE_PATH = ".wpcaregrid-provenance"
+
+ACTIVATION_CHECK_PATH = "/usr/local/libexec/wpcaregrid-staging-diagnostics-activation-check"
 
 SOURCE_FILES = {
     DISPATCH_PATH: "scripts/staging-diagnostics/dispatch.sh",
+    ACTIVATION_CHECK_PATH: "scripts/staging-diagnostics/provisioning/activation-check.sh",
     SHELL_PATH: "scripts/staging-diagnostics/provisioning/diagnostics-shell.sh",
     HELPER_PATH: "scripts/staging-diagnostics/read-m12-cache.php",
     RUNNER_PATH: "scripts/staging-diagnostics/provisioning/run-m12-readback.sh",
 }
+
+TRUSTED_PACKAGE_FILES = tuple(dict.fromkeys((
+    *SOURCE_FILES.values(),
+    "scripts/staging-diagnostics/provisioning/provision.py",
+    "scripts/staging-diagnostics/provisioning/verify.py",
+    "scripts/staging-diagnostics/provisioning/rollback.py",
+)))
 
 SUDOERS_CONTENT = (
     "Defaults:caregrid-diagnostics env_reset, !setenv\n"
@@ -122,9 +137,13 @@ def source_hashes(source_root: Path) -> dict[str, str]:
     return result
 
 
-def verify_source_provenance(source_root: Path, approved_sha: str) -> dict[str, str]:
+def verify_source_provenance(
+    source_root: Path, approved_sha: str, *, trusted_execution: bool = False
+) -> dict[str, str]:
     if not re.fullmatch(r"[0-9a-f]{40}", approved_sha):
         raise ProvisionError("SOURCE_SHA_INVALID")
+    if trusted_execution:
+        return _verify_trusted_source_package(source_root, approved_sha)
 
     def git(*args: str) -> str:
         completed = subprocess.run(
@@ -156,6 +175,99 @@ def verify_source_provenance(source_root: Path, approved_sha: str) -> dict[str, 
             raise ProvisionError("SOURCE_FILE_MISMATCH")
 
     return source_hashes(source_root)
+
+
+def _verify_trusted_source_package(
+    source_root: Path,
+    approved_sha: str,
+    *,
+    owner_uid: int = 0,
+    owner_gid: int = 0,
+    enforce_system_path: bool = True,
+) -> dict[str, str]:
+    """Verify an immutable root-owned package before installation mutations."""
+    expected_root = TRUSTED_SOURCE_PARENT / approved_sha
+    if source_root != expected_root:
+        raise ProvisionError("TRUSTED_SOURCE_PATH_UNSAFE")
+
+    current = source_root
+    while current != Path("/"):
+        info = _lstat(current)
+        if (
+            info is None
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != owner_uid
+            or info.st_gid != owner_gid
+            or info.st_mode & 0o022
+        ):
+            raise ProvisionError("TRUSTED_SOURCE_DIRECTORY_UNSAFE")
+        if not enforce_system_path and current == TRUSTED_SOURCE_PARENT.parent:
+            break
+        current = current.parent
+
+    manifest_path = source_root / PROVENANCE_PATH
+    manifest_info = _lstat(manifest_path)
+    if (
+        manifest_info is None
+        or not stat.S_ISREG(manifest_info.st_mode)
+        or manifest_info.st_uid != owner_uid
+        or manifest_info.st_gid != owner_gid
+        or stat.S_IMODE(manifest_info.st_mode) != 0o444
+        or manifest_info.st_size > 4096
+    ):
+        raise ProvisionError("TRUSTED_SOURCE_MANIFEST_UNSAFE")
+
+    try:
+        lines = manifest_path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError):
+        raise ProvisionError("TRUSTED_SOURCE_MANIFEST_INVALID") from None
+    if not lines or lines[0] != f"commit={approved_sha}":
+        raise ProvisionError("SOURCE_SHA_MISMATCH")
+    if len(lines) != len(TRUSTED_PACKAGE_FILES) + 1:
+        raise ProvisionError("TRUSTED_SOURCE_MANIFEST_INVALID")
+
+    hashes: dict[str, str] = {}
+    for line, relative in zip(lines[1:], TRUSTED_PACKAGE_FILES, strict=True):
+        match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_./-]+)", line)
+        if (
+            not match
+            or match.group(2) != relative
+            or relative.startswith("/")
+            or ".." in Path(relative).parts
+        ):
+            raise ProvisionError("TRUSTED_SOURCE_MANIFEST_INVALID")
+        path = source_root / relative
+        info = _lstat(path)
+        parents = [path.parent]
+        while parents[-1] != source_root:
+            parents.append(parents[-1].parent)
+        for parent in parents:
+            parent_info = _lstat(parent)
+            if (
+                parent_info is None
+                or not stat.S_ISDIR(parent_info.st_mode)
+                or parent_info.st_uid != owner_uid
+                or parent_info.st_gid != owner_gid
+                or parent_info.st_mode & 0o022
+            ):
+                raise ProvisionError("TRUSTED_SOURCE_DIRECTORY_UNSAFE")
+        if (
+            info is None
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_uid != owner_uid
+            or info.st_gid != owner_gid
+            or info.st_mode & 0o022
+            or path.resolve() != path
+        ):
+            raise ProvisionError("TRUSTED_SOURCE_FILE_UNSAFE")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest != match.group(1):
+            raise ProvisionError("SOURCE_FILE_MISMATCH")
+        hashes[relative] = digest
+
+    return {
+        target: hashes[relative] for target, relative in SOURCE_FILES.items()
+    } | {SUDOERS_PATH: hashlib.sha256(SUDOERS_CONTENT.encode()).hexdigest()}
 
 
 def _lstat(path: Path) -> os.stat_result | None:
@@ -250,13 +362,86 @@ def _run_checked(command: list[str], *, input_text: str | None = None) -> str:
     return completed.stdout
 
 
+def _sshd_config_has_unsafe_match(
+    root_config: Path = Path("/etc/ssh/sshd_config"),
+    *,
+    owner_uid: int = 0,
+    owner_gid: int = 0,
+) -> bool:
+    """Reject Match variation after recursively inspecting every Include."""
+    ssh_root = root_config.parent.resolve()
+    visited: set[Path] = set()
+
+    def inspect(path: Path) -> bool:
+        absolute = path.absolute()
+        if absolute in visited:
+            return False
+        if not absolute.is_relative_to(ssh_root):
+            raise ProvisionError("SSHD_INCLUDE_PATH_UNSAFE")
+        visited.add(absolute)
+        try:
+            info = absolute.lstat()
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != owner_uid
+                or info.st_gid != owner_gid
+                or info.st_mode & 0o022
+                or info.st_size > 1_048_576
+                or absolute.resolve(strict=True) != absolute
+            ):
+                raise ProvisionError("SSHD_CONFIG_FILE_UNSAFE")
+            text = absolute.read_text(encoding="utf-8")
+        except ProvisionError:
+            raise
+        except (OSError, UnicodeError):
+            raise ProvisionError("SSHD_CONFIG_READ_FAILED") from None
+
+        for raw_line in text.splitlines():
+            try:
+                fields = shlex.split(raw_line, comments=True, posix=True)
+            except ValueError:
+                raise ProvisionError("SSHD_CONFIG_SYNTAX_UNSUPPORTED") from None
+            if not fields:
+                continue
+            directive = fields[0].lower()
+            if directive == "match":
+                # Runner source addresses are dynamic; any Match block is refused.
+                return True
+            if directive != "include":
+                continue
+            if len(fields) < 2:
+                raise ProvisionError("SSHD_INCLUDE_UNRESOLVED")
+            for pattern in fields[1:]:
+                include_pattern = Path(pattern)
+                if not include_pattern.is_absolute():
+                    include_pattern = ssh_root / include_pattern
+                if ".." in include_pattern.parts or not include_pattern.absolute().is_relative_to(ssh_root):
+                    raise ProvisionError("SSHD_INCLUDE_PATH_UNSAFE")
+                matches = sorted(Path(item) for item in glob.glob(str(include_pattern)))
+                if not matches:
+                    raise ProvisionError("SSHD_INCLUDE_UNRESOLVED")
+                for match in matches:
+                    try:
+                        if match.resolve(strict=True) != match.absolute():
+                            raise ProvisionError("SSHD_INCLUDE_PATH_UNSAFE")
+                    except OSError:
+                        raise ProvisionError("SSHD_INCLUDE_UNRESOLVED") from None
+                    if inspect(match):
+                        return True
+        return False
+
+    return inspect(root_config)
+
+
 def _check_sshd_effective_config() -> None:
+    if _sshd_config_has_unsafe_match():
+        raise ProvisionError("SSHD_MATCH_POLICY_UNPROVABLE")
     output = _run_checked(
         [
             "/usr/sbin/sshd",
             "-T",
             "-C",
-            "user=caregrid-diagnostics,host=stg1.wpcaregrid.com,addr=127.0.0.1",
+            "user=caregrid-diagnostics,host=stg1.wpcaregrid.com,addr=198.51.100.10",
         ]
     )
     config = dict(line.split(None, 1) for line in output.splitlines() if " " in line)
@@ -269,6 +454,13 @@ def _check_sshd_effective_config() -> None:
         "authorizedkeyscommand": "none",
         "trustedusercakeys": "none",
         "forcecommand": "none",
+        "allowtcpforwarding": "no",
+        "allowagentforwarding": "no",
+        "x11forwarding": "no",
+        "permittunnel": "no",
+        "permittty": "no",
+        "permituserrc": "no",
+        "permituserenvironment": "no",
     }
     if any(config.get(key) != value for key, value in required.items()):
         raise ProvisionError("SSHD_AUTH_POLICY_UNSAFE")
@@ -435,11 +627,11 @@ def _install_account(
         os.chown(home, layout.owner_uid, layout.owner_gid)
         os.chmod(home, 0o755)
         ssh_dir = home / ".ssh"
-        ssh_dir.mkdir(mode=0o700, exist_ok=True)
+        ssh_dir.mkdir(mode=0o711, exist_ok=True)
         if ssh_dir.is_symlink() or not ssh_dir.is_dir():
             raise ProvisionError("SSH_DIRECTORY_UNSAFE")
         os.chown(ssh_dir, layout.owner_uid, layout.owner_gid)
-        os.chmod(ssh_dir, 0o700)
+        os.chmod(ssh_dir, 0o711)
         return
     home_info = _lstat(home)
     ssh_dir = home / ".ssh"
@@ -454,7 +646,7 @@ def _install_account(
         or (ssh_info is not None and (
             not stat.S_ISDIR(ssh_info.st_mode)
             or ssh_info.st_uid != 0
-            or stat.S_IMODE(ssh_info.st_mode) != 0o700
+            or stat.S_IMODE(ssh_info.st_mode) != 0o711
         ))
     ):
         raise ProvisionError("ACCOUNT_HOME_UNSAFE")
@@ -482,11 +674,11 @@ def _install_account(
         raise ProvisionError("ACCOUNT_HOME_UNSAFE")
     os.chown(home, 0, 0)
     os.chmod(home, 0o755)
-    ssh_dir.mkdir(mode=0o700, exist_ok=True)
+    ssh_dir.mkdir(mode=0o711, exist_ok=True)
     if ssh_dir.is_symlink() or not ssh_dir.is_dir():
         raise ProvisionError("SSH_DIRECTORY_UNSAFE")
     os.chown(ssh_dir, 0, 0)
-    os.chmod(ssh_dir, 0o700)
+    os.chmod(ssh_dir, 0o711)
 
 
 def _check_parent_path(path: Path, layout: Layout) -> None:
@@ -539,12 +731,38 @@ def _check_effective_sudoers(runner: Callable[[list[str]], str] = _run_checked) 
     validate_effective_sudoers_output(output)
 
 
-def _write_pending_marker(layout: Layout, approved_sha: str) -> None:
+def _ensure_state_directory(layout: Layout) -> Path:
     state_dir = layout.path(STATE_PATH)
-    if _lstat(state_dir) is None:
-        state_dir.mkdir(mode=0o700)
+    created = _lstat(state_dir) is None
+    if created:
+        state_dir.mkdir(mode=0o711)
         os.chown(state_dir, layout.owner_uid, layout.owner_gid)
-    validate_directory(state_dir, owner=layout.owner_uid, mode=0o700)
+        os.chmod(state_dir, 0o711)
+    boundary = layout.root.resolve()
+    current = state_dir
+    state_info = None
+    while True:
+        info = _lstat(current)
+        if (
+            info is None
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != layout.owner_uid
+            or info.st_gid != layout.owner_gid
+            or info.st_mode & 0o022
+        ):
+            raise ProvisionError("ACTIVATION_PARENT_UNSAFE")
+        if current == state_dir:
+            state_info = info
+        if current == boundary:
+            break
+        current = current.parent
+    if state_info is not None and stat.S_IMODE(state_info.st_mode) != 0o711:
+        os.chmod(state_dir, 0o711)
+    return state_dir
+
+
+def _write_pending_marker(layout: Layout, approved_sha: str) -> None:
+    state_dir = _ensure_state_directory(layout)
     marker = layout.path(PENDING_PATH)
     if _lstat(marker) is not None:
         raise ProvisionError("RECOVERY_REQUIRED")
@@ -554,6 +772,48 @@ def _write_pending_marker(layout: Layout, approved_sha: str) -> None:
         mode=0o600,
         uid=layout.owner_uid,
         gid=layout.owner_gid,
+    )
+
+
+def _activation_content(approved_sha: str) -> bytes:
+    if not re.fullmatch(r"[0-9a-f]{40}", approved_sha):
+        raise ProvisionError("SOURCE_SHA_INVALID")
+    return f"active={approved_sha}\n".encode("ascii")
+
+
+def _activation_is_valid(layout: Layout, approved_sha: str) -> bool:
+    try:
+        _ensure_state_directory(layout)
+    except (ProvisionError, OSError):
+        return False
+    if _lstat(layout.path(PENDING_PATH)) is not None:
+        return False
+    return _file_matches(
+        layout.path(ACTIVE_PATH),
+        _activation_content(approved_sha),
+        0o444,
+        layout.owner_uid,
+        layout.owner_gid,
+    )
+
+
+def _deactivate(layout: Layout) -> None:
+    _ensure_state_directory(layout)
+    activation = layout.path(ACTIVE_PATH)
+    # unlink removes a symlink itself without following it. The parent is root-owned.
+    if _lstat(activation) is not None:
+        activation.unlink()
+
+
+def _activate(layout: Layout, approved_sha: str) -> None:
+    _ensure_state_directory(layout)
+    atomic_write(
+        layout.path(ACTIVE_PATH),
+        _activation_content(approved_sha),
+        mode=0o444,
+        uid=layout.owner_uid,
+        gid=layout.owner_gid,
+        replace=True,
     )
 
 
@@ -575,6 +835,7 @@ def _file_matches(
 def _complete_install_exists(layout: Layout, files: dict[str, bytes], key_line: str) -> bool:
     install_files = {
         DISPATCH_PATH: (files[DISPATCH_PATH], 0o755),
+        ACTIVATION_CHECK_PATH: (files[ACTIVATION_CHECK_PATH], 0o755),
         SHELL_PATH: (files[SHELL_PATH], 0o755),
         HELPER_PATH: (files[HELPER_PATH], 0o644),
         RUNNER_PATH: (files[RUNNER_PATH], 0o755),
@@ -599,14 +860,14 @@ def _complete_install_exists(layout: Layout, files: dict[str, bytes], key_line: 
         or home_info.st_uid != layout.owner_uid
         or ssh_info.st_uid != layout.owner_uid
         or stat.S_IMODE(home_info.st_mode) != 0o755
-        or stat.S_IMODE(ssh_info.st_mode) != 0o700
+        or stat.S_IMODE(ssh_info.st_mode) != 0o711
     ):
         return False
     auth_path = ssh_dir / "authorized_keys"
     return _file_matches(
         auth_path,
         f"{key_line}\n".encode(),
-        0o600,
+        0o444,
         layout.owner_uid,
         layout.owner_gid,
     )
@@ -619,11 +880,15 @@ def install(
     approved_sha: str,
     public_key: str,
     runner: Callable[[list[str]], str] = _run_checked,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> None:
     if os.geteuid() != 0 and layout.root == Path("/"):
         raise ProvisionError("ROOT_REQUIRED")
-
-    hashes = verify_source_provenance(source_root, approved_sha)
+    hashes = verify_source_provenance(
+        source_root,
+        approved_sha,
+        trusted_execution=os.geteuid() == 0 and layout.root == Path("/"),
+    )
     files = {target: (source_root / relative).read_bytes() for target, relative in SOURCE_FILES.items()}
     if source_hashes(source_root) != hashes:
         raise ProvisionError("SOURCE_FILE_MISMATCH")
@@ -643,17 +908,18 @@ def install(
     if existing_auth and layout.root == Path("/") and not _file_matches(
         auth_path,
         f"{key_line}\n".encode(),
-        0o600,
+        0o444,
         layout.owner_uid,
         layout.owner_gid,
     ):
         raise ProvisionError("AUTHORIZED_KEYS_CONFLICT")
 
     if _complete_install_exists(layout, files, key_line):
-        if _lstat(layout.path(PENDING_PATH)):
+        if _lstat(layout.path(PENDING_PATH)) or not _activation_is_valid(layout, approved_sha):
             raise ProvisionError("RECOVERY_REQUIRED")
         _validate_sudoers(layout.path(SUDOERS_PATH), runner)
         runner(["/usr/sbin/visudo", "-c"])
+        _check_effective_sudoers(runner)
         return
 
     if layout.root != Path("/") and fcntl is None:
@@ -664,7 +930,9 @@ def install(
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         _write_pending_marker(layout, approved_sha)
         try:
+            _deactivate(layout)
             _write_install_file(layout.path(DISPATCH_PATH), files[DISPATCH_PATH], 0o755, layout)
+            _write_install_file(layout.path(ACTIVATION_CHECK_PATH), files[ACTIVATION_CHECK_PATH], 0o755, layout)
             _write_install_file(layout.path(SHELL_PATH), files[SHELL_PATH], 0o755, layout)
             _write_install_file(layout.path(HELPER_PATH), files[HELPER_PATH], 0o644, layout)
             _write_install_file(layout.path(RUNNER_PATH), files[RUNNER_PATH], 0o755, layout)
@@ -694,6 +962,8 @@ def install(
             finally:
                 staged_path.unlink(missing_ok=True)
 
+            if checkpoint:
+                checkpoint("after_sudoers_installation")
             _install_account(layout, group_exists, uid, runner)
             if not account_exists and layout.root == Path("/"):
                 # Re-read identity and insist the new account has the intended
@@ -701,14 +971,21 @@ def install(
                 _account_state()
 
             _validate_sudoers(layout.path(SUDOERS_PATH), runner)
-            if layout.root == Path("/"):
-                _check_effective_sudoers()
-            _write_install_file(auth_path, f"{key_line}\n".encode(), 0o600, layout)
+            _check_effective_sudoers(runner)
+            _write_install_file(auth_path, f"{key_line}\n".encode(), 0o444, layout)
+            if checkpoint:
+                checkpoint("after_authorized_keys_installation")
 
             if not _complete_install_exists(layout, files, key_line):
                 raise ProvisionError("POST_INSTALL_VERIFY_FAILED")
             runner(["/usr/sbin/visudo", "-c"])
+            if checkpoint:
+                checkpoint("after_final_verification")
+                checkpoint("before_activation_preparation")
 
+            _activate(layout, approved_sha)
+            if checkpoint:
+                checkpoint("after_activation_preparation")
             layout.path(PENDING_PATH).unlink()
         except Exception:
             # Leave the root-only journal for an explicit rollback/recovery.
