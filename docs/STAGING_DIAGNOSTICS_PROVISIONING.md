@@ -8,6 +8,8 @@ Before installation, the Owner must select the exact reviewed commit that contai
 
 The installer supports Debian and Ubuntu and fails closed if the expected account, paths, SSH policy, host identity, cache metadata, or file permissions do not match. It reads only metadata for `.env` and the Laravel configuration cache. The diagnostic helper later reads the single approved cache file through a non-executing parser. It never includes or evaluates the cache.
 
+The configuration cache must be a regular, non-symlinked file owned by `deploy`, no larger than 1 MiB, with mode `0600` (no group or other permission bits). Both the installer and the readback helper enforce this exact contract; a cache with mode `0640` is rejected as `CACHE_METADATA_INVALID`. Provisioning does not change the application's cache permissions. If the cache fails this check, stop and obtain separate Owner approval for any permission remediation; verify the PHP runtime can still read the cache after an approved change. The protected deployment controller's cache rebuild applies owner-only mode to `deploy`-owned cache files and separately checks runtime-user read access.
+
 ## GitHub controls to verify before adding secrets
 
 Configure the `staging-diagnostics` Environment in repository settings:
