@@ -3,6 +3,7 @@ set -eu
 
 STATE_DIR=/var/lib/wpcaregrid-staging-diagnostics
 PENDING_FILE=$STATE_DIR/provisioning.pending
+BOOTSTRAP_PENDING_FILE=$STATE_DIR/provisioning.bootstrap-pending
 ACTIVE_FILE=$STATE_DIR/provisioning.active
 
 fail() {
@@ -21,6 +22,7 @@ done
 [ ! -L "$STATE_DIR" ] && [ -d "$STATE_DIR" ] || fail
 [ "$(/usr/bin/stat -c '%u:%a:%F' -- "$STATE_DIR" 2>/dev/null)" = '0:711:directory' ] || fail
 [ ! -e "$PENDING_FILE" ] && [ ! -L "$PENDING_FILE" ] || fail
+[ ! -e "$BOOTSTRAP_PENDING_FILE" ] && [ ! -L "$BOOTSTRAP_PENDING_FILE" ] || fail
 [ ! -L "$ACTIVE_FILE" ] && [ -f "$ACTIVE_FILE" ] || fail
 [ "$(/usr/bin/stat -c '%u:%a:%F' -- "$ACTIVE_FILE" 2>/dev/null)" = '0:444:regular file' ] || fail
 [ "$(/usr/bin/stat -c '%s' -- "$ACTIVE_FILE" 2>/dev/null)" = '48' ] || fail

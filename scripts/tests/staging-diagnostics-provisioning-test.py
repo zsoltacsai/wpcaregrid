@@ -294,6 +294,13 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
         self.assertNotEqual(run_check().returncode, 0)
         state.chmod(0o700)
         self.layout.path(provision.PENDING_PATH).unlink()
+        bootstrap_pending = self.layout.path(provision.BOOTSTRAP_PENDING_PATH)
+        bootstrap_pending.write_text(f"source={self.source_sha}\n", encoding="ascii")
+        bootstrap_pending.chmod(0o600)
+        state.chmod(0o711)
+        self.assertNotEqual(run_check().returncode, 0)
+        state.chmod(0o700)
+        bootstrap_pending.unlink()
         active.chmod(0o600)
         active.write_text("active=invalid\n", encoding="ascii")
         active.chmod(0o444)
@@ -556,9 +563,17 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
     def test_recovery_removes_only_exact_key_sudoers_and_pending_marker(self) -> None:
         self.run_install()
         marker = self.layout.path(provision.PENDING_PATH)
+        bootstrap_marker = self.layout.path(provision.BOOTSTRAP_PENDING_PATH)
         marker.parent.mkdir(parents=True, exist_ok=True)
         provision.atomic_write(
             marker,
+            f"source={self.source_sha}\n".encode(),
+            mode=0o600,
+            uid=os.geteuid(),
+            gid=os.getegid(),
+        )
+        provision.atomic_write(
+            bootstrap_marker,
             f"source={self.source_sha}\n".encode(),
             mode=0o600,
             uid=os.geteuid(),
@@ -579,6 +594,7 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
         )
         self.assertFalse(self.layout.path(provision.SUDOERS_PATH).exists())
         self.assertFalse(marker.exists())
+        self.assertFalse(bootstrap_marker.exists())
         # Root-owned helpers are deliberately retained for an operator's later
         # integrity review; access has been disabled by removing the key/rule.
         self.assertTrue(self.layout.path(provision.DISPATCH_PATH).is_file())
@@ -635,6 +651,14 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
         )
         output = "\n".join(valid)
         provision.validate_sshd_effective_config(output)
+        # The account's exact authorized_keys entry carries OpenSSH `restrict`,
+        # so global forwarding/TTY policy need not be weakened for deploy.
+        scoped_key_policy = output.replace("allowtcpforwarding no", "allowtcpforwarding yes").replace(
+            "allowagentforwarding no", "allowagentforwarding yes"
+        ).replace("x11forwarding no", "x11forwarding yes").replace("permittunnel no", "permittunnel yes").replace(
+            "permittty no", "permittty yes"
+        ).replace("permituserrc no", "permituserrc yes")
+        provision.validate_sshd_effective_config(scoped_key_policy)
         with self.assertRaisesRegex(provision.ProvisionError, "SSHD_AUTH_POLICY_UNSAFE"):
             provision.validate_sshd_effective_config(output.replace("usepam yes", "usepam no"))
 

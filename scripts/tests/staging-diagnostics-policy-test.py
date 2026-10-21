@@ -111,6 +111,19 @@ class StagingDiagnosticsPolicyTest(unittest.TestCase):
         self.assertNotIn("read_bytes", cache_check)
         self.assertNotIn("APP_CACHE", rollback)
 
+    def test_bootstrap_is_fixed_and_preparer_has_no_general_root_utilities(self) -> None:
+        preparer = (PROVISIONING / "prepare-package.sh").read_text(encoding="utf-8")
+        bootstrap = (PROVISIONING / "bootstrap.py").read_text(encoding="utf-8")
+        self.assertIn('readonly BOOTSTRAP=/usr/local/sbin/wpcaregrid-staging-diagnostics-bootstrap', preparer)
+        self.assertIn('"$SUDO" -n -- "$BOOTSTRAP"', preparer)
+        for forbidden in ("sudo install", "sudo tee", "sudo chown", "sudo chmod", "sudo find", "sudo /usr/bin/python3"):
+            self.assertNotIn(forbidden, preparer.lower())
+        self.assertIn('CONFIG = Path("/etc/wpcaregrid-staging-diagnostics/bootstrap.json")', bootstrap)
+        self.assertIn('if len(sys.argv) != 1:', bootstrap)
+        self.assertIn('"/usr/bin/python3", "-I", "-S"', bootstrap)
+        self.assertIn('MAX_BLOB_BYTES', bootstrap)
+        self.assertIn('MAX_PACKAGE_BYTES', bootstrap)
+
 
 if __name__ == "__main__":
     unittest.main()

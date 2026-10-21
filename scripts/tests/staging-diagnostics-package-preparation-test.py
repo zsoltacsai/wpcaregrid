@@ -22,6 +22,7 @@ PACKAGE_FILES = (
     "scripts/staging-diagnostics/provisioning/provision.py",
     "scripts/staging-diagnostics/provisioning/verify.py",
     "scripts/staging-diagnostics/provisioning/rollback.py",
+    "scripts/staging-diagnostics/provisioning/bootstrap.py",
 )
 
 
@@ -97,12 +98,10 @@ class CanonicalPackagePreparationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "SOURCE_PROVENANCE=PASS")
 
-    def test_working_tree_preparer_is_never_executed(self) -> None:
+    def test_modified_working_tree_preparer_is_rejected(self) -> None:
         working_copy = self.repo / "scripts/staging-diagnostics/provisioning/prepare-package.sh"
         working_copy.write_text("#!/bin/bash\nsudo /bin/sh -c 'echo unsafe'\n", encoding="ascii")
-        result = self.invoke()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "SOURCE_PROVENANCE=PASS")
+        self.assert_rejected("SOURCE_TREE_DIRTY")
 
     def test_rejects_replace_ref_that_changes_old_git_show_resolution(self) -> None:
         target = self.repo / PACKAGE_FILES[0]

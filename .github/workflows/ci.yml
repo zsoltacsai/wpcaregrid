@@ -56,7 +56,8 @@ jobs:
           python3 scripts/tests/staging-diagnostics-policy-test.py
           python3 scripts/tests/staging-diagnostics-provisioning-test.py
           python3 scripts/tests/staging-diagnostics-package-preparation-test.py
-          python3 -m py_compile scripts/staging-diagnostics/provisioning/provision.py scripts/staging-diagnostics/provisioning/verify.py scripts/staging-diagnostics/provisioning/rollback.py
+          python3 scripts/tests/staging-diagnostics-bootstrap-test.py
+          python3 -m py_compile scripts/staging-diagnostics/provisioning/bootstrap.py scripts/staging-diagnostics/provisioning/provision.py scripts/staging-diagnostics/provisioning/verify.py scripts/staging-diagnostics/provisioning/rollback.py
           php scripts/tests/staging-diagnostics-parser-test.php
           php -l scripts/staging-diagnostics/read-m12-cache.php
           bash -n scripts/staging-diagnostics/dispatch.sh scripts/staging-diagnostics/run-m12-readback.sh scripts/staging-diagnostics/provisioning/activation-check.sh scripts/staging-diagnostics/provisioning/diagnostics-shell.sh scripts/staging-diagnostics/provisioning/run-m12-readback.sh scripts/staging-diagnostics/provisioning/prepare-package.sh
