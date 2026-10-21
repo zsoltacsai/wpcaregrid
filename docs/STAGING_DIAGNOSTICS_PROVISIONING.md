@@ -49,72 +49,46 @@ Never use `ssh-keyscan` output as the trust source. Keep the private key out of 
 
 The installer must never be invoked as root from the application checkout or another deploy-writable directory. Its Git check is defense in depth, not a pre-execution trust boundary: Python has already loaded the installer before that check can run.
 
-Use an Owner-controlled machine and a reviewed commit with successful exact-SHA push CI. First confirm the local checkout is exactly that commit and clean. Then copy only the allowlisted package files from the Git object database into a new root-owned, mode-0700 staging directory. This is data transfer only; do not execute any repository code as root during preparation.
+Use an Owner-controlled machine and a reviewed commit with successful exact-SHA push CI. Review the `prepare-package.sh` helper at that exact commit. Run it as the unprivileged Owner account, never through `sudo` or from a root shell. It rejects inherited `GIT_*` variables, replacement refs, alternate object stores, grafts, provenance-affecting local configuration and unsupported repository layouts. Every source path is resolved to a blob OID from the approved commit tree with replacement objects disabled. The helper verifies the blob bytes and staged copy against that OID and records the commit, tree, blob OIDs and SHA-256 hashes in the root-owned manifest before starting either root-owned Python program.
 
-Example Bash procedure (replace the repository path, approved SHA, and public-key path with the reviewed values):
+Example (replace the repository path, approved SHA and public-key path with the reviewed values):
 
 ```bash
 set -euo pipefail
-umask 077
-
 REPO=/path/to/wpcaregrid
 APPROVED_SHA=APPROVED_40_CHARACTER_COMMIT
-STAGE=/var/lib/wpcaregrid-staging-diagnostics-provisioning/source/$APPROVED_SHA
 PUBLIC_KEY=/root/secure-staging-diagnostics-key.pub
 
-test "$(git -C "$REPO" rev-parse --verify HEAD)" = "$APPROVED_SHA"
-test -z "$(git -C "$REPO" status --porcelain --untracked-files=all)"
-if sudo test -e "$STAGE"; then
-  echo 'Refusing an existing source staging directory' >&2
-  exit 1
-fi
-sudo install -d -o root -g root -m 0700 "$STAGE"
+git_clean() {
+  /usr/bin/env -i PATH=/usr/bin:/bin HOME="$HOME" \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 \
+    /usr/bin/git --no-replace-objects -C "$REPO" "$@"
+}
 
-{
-  printf 'commit=%s\n' "$APPROVED_SHA"
-  while IFS= read -r relative; do
-    [ -n "$relative" ] || continue
-    case "$relative" in /*|*..*) echo 'Unsafe fixed package path' >&2; exit 1 ;; esac
-    destination=$STAGE/$relative
-    sudo install -d -o root -g root -m 0700 "$(dirname "$destination")"
-    git -C "$REPO" show "$APPROVED_SHA:$relative" | sudo tee "$destination" >/dev/null
-    sudo chown root:root "$destination"
-    sudo chmod 0444 "$destination"
-    expected=$(git -C "$REPO" show "$APPROVED_SHA:$relative" | sha256sum | cut -d' ' -f1)
-    actual=$(sudo sha256sum -- "$destination" | cut -d' ' -f1)
-    test "$expected" = "$actual"
-    test "$(sudo stat -c '%u:%g:%a:%F' -- "$destination")" = '0:0:444:regular file'
-    printf '%s  %s\n' "$expected" "$relative"
-  done <<'PACKAGE_FILES'
-scripts/staging-diagnostics/dispatch.sh
-scripts/staging-diagnostics/provisioning/activation-check.sh
-scripts/staging-diagnostics/provisioning/diagnostics-shell.sh
-scripts/staging-diagnostics/read-m12-cache.php
-scripts/staging-diagnostics/provisioning/run-m12-readback.sh
-scripts/staging-diagnostics/provisioning/provision.py
-scripts/staging-diagnostics/provisioning/verify.py
-scripts/staging-diagnostics/provisioning/rollback.py
-PACKAGE_FILES
-} | sudo tee "$STAGE/.wpcaregrid-provenance" >/dev/null
-sudo chown root:root "$STAGE/.wpcaregrid-provenance"
-sudo chmod 0444 "$STAGE/.wpcaregrid-provenance"
-test "$(sudo stat -c '%u:%g:%a:%F' -- "$STAGE/.wpcaregrid-provenance")" = '0:0:444:regular file'
-test -z "$(sudo find "$STAGE" -type l -print -quit)"
+test "$(git_clean rev-parse --verify "$APPROVED_SHA^{commit}")" = "$APPROVED_SHA"
+helper_path=scripts/staging-diagnostics/provisioning/prepare-package.sh
+entry=$(git_clean ls-tree "$APPROVED_SHA" -- "$helper_path")
+metadata=${entry%%$'\t'*}
+path=${entry#*$'\t'}
+read -r mode kind helper_blob_oid <<< "$metadata"
+test "$path" = "$helper_path"
+test "$kind" = blob
+test "$mode" = 100644 -o "$mode" = 100755
+test "$(git_clean cat-file blob "$helper_blob_oid" | /usr/bin/git hash-object --stdin)" = "$helper_blob_oid"
 
-# Run only after the preceding object-to-copy hashes and root ownership checks pass.
-sudo /usr/bin/python3 -I -S "$STAGE/scripts/staging-diagnostics/provisioning/provision.py" \
-  --approved-source-sha "$APPROVED_SHA" \
-  --public-key-file "$PUBLIC_KEY"
-sudo /usr/bin/python3 -I -S "$STAGE/scripts/staging-diagnostics/provisioning/verify.py" \
-  --approved-source-sha "$APPROVED_SHA" \
-  --public-key-file "$PUBLIC_KEY"
+# Execute the reviewed helper bytes from the commit object database, never the
+# working-tree copy, and keep it unprivileged.
+git_clean cat-file blob "$helper_blob_oid" |
+  /usr/bin/env -i PATH=/usr/bin:/bin HOME="$HOME" /bin/bash -s -- \
+    "$REPO" "$APPROVED_SHA" "$PUBLIC_KEY"
 ```
 
-The shell block reads Git blobs by the exact approved commit, writes only data into a new root-owned directory, and compares every staged file against the corresponding blob before Python starts. The root-run Python tools require that exact SHA-specific directory, root ownership, non-writable parent directories, regular non-symlink files, a root-owned read-only manifest, and matching hashes. `-I -S` disables environment and user-site Python import paths; `verify.py` and `rollback.py` import `provision.py` only from their own verified package directory. Never use elevated Python against the application checkout.
+The bootstrap command extracts the helper itself by its blob OID from the approved commit and pipes those exact bytes into Bash; it never executes the working-tree copy. The helper uses a sanitized Git environment and fixed `/usr/bin/git`; it does not use `git status` as proof of object integrity or execute checkout files as root. It rejects an existing package directory and symlinked or unsafe Git object metadata. Root Python runs only after the exact tree-to-blob and staged-byte checks pass. The staged package is root-owned, non-writable by untrusted accounts, and imported only from its own verified directory under `python3 -I -S`. Never use elevated Python against the application checkout.
 
-The installer creates a locked dedicated account, root-owned fixed dispatcher, activation checker, parser and wrapper, and the constrained sudoers rule. The dispatcher and root wrapper both require an intact active record and reject any pending journal. The state directory is root-owned mode 0711; the activation record is root-owned mode 0444 and contains only the approved source SHA. Activation is atomically written after all verification succeeds while the pending journal still exists. The journal is removed last, so missing, malformed, pending or partially written state denies the operation. OpenSSH opens authorized_keys as the target UID, so the root-owned .ssh directory is mode 0711 and the public-key file is mode 0444: the account can traverse/read but cannot alter either.
+The installer creates a locked dedicated account, root-owned fixed dispatcher, activation checker, parser and wrapper, and the constrained sudoers rule. The dispatcher and root wrapper both require an intact active record and reject any pending journal. The state directory is root-owned mode 0711; the activation record is root-owned mode 0444 and contains only the approved source SHA. Activation is atomically written after all verification succeeds while the pending journal still exists. The journal is removed last, so missing, malformed, pending or partially written state denies the operation. Install, verification and rollback share an exclusive lifecycle lock under `/run/wpcaregrid-staging-diagnostics-lock` (root:root 0700, lock file 0600); the installer never changes system-wide `/run/lock`. OpenSSH opens authorized_keys as the target UID, so the root-owned .ssh directory is mode 0711 and the public-key file is mode 0444: the account can traverse/read but cannot alter either.
 
-Any pre-existing SHA-specific package directory is a hard stop; do not overwrite or reuse it. If package preparation, hash comparison, installer validation, or verification fails, do not run the diagnostic workflow. Preserve the fixed failure classification and use the rollback command below from the same root-owned verified package. Do not run installation directly from the deploy-owned application tree.
+Any pre-existing SHA-specific package directory is a hard stop; do not overwrite or reuse it. If source preparation or a pre-installer hash check fails, the root Python installer has not run, so no diagnostics account or credential can have been activated; treat any partial source directory as untrusted and have the Owner inspect and remove that exact root-owned SHA directory before retrying. Do not attempt rollback from a partial package. If the installer or post-install verification fails after root Python has started, keep the complete staged package and use the rollback command below from that root-owned package. In either case, do not run the diagnostic workflow until provisioning and verification both pass. Do not run installation directly from the deploy-owned application tree.
 
 The verifier checks installed hashes and ownership, SSH effective authentication policy, pinned server host-key fingerprint, relevant file metadata, active state and the effective sudo list result. It does not read the cache or environment file content. Preserve only sanitized pass/fail evidence and the approved source SHA.
 

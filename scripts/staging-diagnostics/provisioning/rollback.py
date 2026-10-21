@@ -31,6 +31,7 @@ from provision import (
 )
 
 
+@provision.serialized_lifecycle(blocking=True)
 def rollback(source_root: Path, approved_sha: str, public_key: str) -> None:
     if os.geteuid() != 0:
         raise ProvisionError("ROOT_REQUIRED")
@@ -45,6 +46,7 @@ def rollback(source_root: Path, approved_sha: str, public_key: str) -> None:
         _run_checked(["/usr/sbin/usermod", "--lock", DIAGNOSTICS_USER])
 
 
+@provision.serialized_lifecycle(blocking=True)
 def rollback_filesystem(layout: Layout, approved_sha: str, public_key: str) -> None:
     _deactivate(layout)
     auth_path = layout.path(f"{DIAGNOSTICS_HOME}/.ssh/authorized_keys")

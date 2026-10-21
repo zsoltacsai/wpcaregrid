@@ -113,6 +113,7 @@ def _verify_effective_sudoers() -> None:
     provision.validate_effective_sudoers_output(completed.stdout)
 
 
+@provision.serialized_lifecycle(blocking=True)
 def verify(source_root: Path, approved_sha: str, public_key: str) -> None:
     if os.geteuid() != 0:
         raise ProvisionError("ROOT_REQUIRED")

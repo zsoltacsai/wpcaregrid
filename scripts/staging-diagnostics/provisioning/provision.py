@@ -23,8 +23,11 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
-from typing import Callable
+from threading import local
+from typing import Callable, Iterator
 
 
 DIAGNOSTICS_USER = "caregrid-diagnostics"
@@ -38,7 +41,8 @@ SUDOERS_PATH = "/etc/sudoers.d/wpcaregrid-staging-diagnostics"
 STATE_PATH = "/var/lib/wpcaregrid-staging-diagnostics"
 PENDING_PATH = f"{STATE_PATH}/provisioning.pending"
 ACTIVE_PATH = f"{STATE_PATH}/provisioning.active"
-LOCK_PATH = "/run/lock/wpcaregrid-staging-diagnostics.lock"
+LOCK_DIR_PATH = "/run/wpcaregrid-staging-diagnostics-lock"
+LOCK_PATH = f"{LOCK_DIR_PATH}/lifecycle.lock"
 APP_CACHE = "/var/www/wpcaregrid/bootstrap/cache/config.php"
 APP_ENV = "/var/www/wpcaregrid/.env"
 TRUSTED_SOURCE_PARENT = Path("/var/lib/wpcaregrid-staging-diagnostics-provisioning/source")
@@ -68,6 +72,7 @@ SUDOERS_CONTENT = (
 )
 
 FAIL = "PROVISIONING_FAILED"
+_LIFECYCLE_STATE = local()
 
 
 class ProvisionError(RuntimeError):
@@ -223,15 +228,20 @@ def _verify_trusted_source_package(
         raise ProvisionError("TRUSTED_SOURCE_MANIFEST_INVALID") from None
     if not lines or lines[0] != f"commit={approved_sha}":
         raise ProvisionError("SOURCE_SHA_MISMATCH")
-    if len(lines) != len(TRUSTED_PACKAGE_FILES) + 1:
+    if (
+        len(lines) != len(TRUSTED_PACKAGE_FILES) + 2
+        or not re.fullmatch(r"tree=[0-9a-f]{40}", lines[1])
+    ):
         raise ProvisionError("TRUSTED_SOURCE_MANIFEST_INVALID")
 
     hashes: dict[str, str] = {}
-    for line, relative in zip(lines[1:], TRUSTED_PACKAGE_FILES, strict=True):
-        match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_./-]+)", line)
+    for line, relative in zip(lines[2:], TRUSTED_PACKAGE_FILES, strict=True):
+        match = re.fullmatch(
+            r"([0-9a-f]{40}) ([0-9a-f]{64})  ([A-Za-z0-9_./-]+)", line
+        )
         if (
             not match
-            or match.group(2) != relative
+            or match.group(3) != relative
             or relative.startswith("/")
             or ".." in Path(relative).parts
         ):
@@ -261,7 +271,7 @@ def _verify_trusted_source_package(
         ):
             raise ProvisionError("TRUSTED_SOURCE_FILE_UNSAFE")
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest != match.group(1):
+        if digest != match.group(2):
             raise ProvisionError("SOURCE_FILE_MISMATCH")
         hashes[relative] = digest
 
@@ -285,6 +295,116 @@ def validate_directory(path: Path, *, owner: int = 0, mode: int | None = None) -
         raise ProvisionError("DIRECTORY_WRITABLE_BY_UNTRUSTED_GROUP")
     if mode is not None and stat.S_IMODE(info.st_mode) != mode:
         raise ProvisionError("DIRECTORY_MODE_INVALID")
+
+
+@contextmanager
+def lifecycle_lock(
+    layout: Layout, *, blocking: bool, shared: bool = False
+) -> Iterator[None]:
+    """Serialize provisioning lifecycle operations in a private runtime directory."""
+    depth = getattr(_LIFECYCLE_STATE, "depth", 0)
+    if depth:
+        identity = (layout.root, layout.owner_uid, layout.owner_gid)
+        if identity != getattr(_LIFECYCLE_STATE, "identity", None):
+            raise ProvisionError("LIFECYCLE_LOCK_REENTRANT_SCOPE")
+        if getattr(_LIFECYCLE_STATE, "shared", False) and not shared:
+            raise ProvisionError("LIFECYCLE_LOCK_REENTRANT_SCOPE")
+        _LIFECYCLE_STATE.depth = depth + 1
+        try:
+            yield
+        finally:
+            _LIFECYCLE_STATE.depth -= 1
+        return
+
+    if fcntl is None:
+        raise ProvisionError("LOCKING_UNAVAILABLE")
+
+    run_dir = layout.path("/run")
+    validate_directory(run_dir, owner=layout.owner_uid)
+    for parent in (run_dir, layout.root):
+        parent_info = _lstat(parent)
+        if (
+            parent_info is None
+            or not stat.S_ISDIR(parent_info.st_mode)
+            or parent_info.st_uid != layout.owner_uid
+            or parent_info.st_gid != layout.owner_gid
+            or parent_info.st_mode & 0o022
+        ):
+            raise ProvisionError("LIFECYCLE_LOCK_PARENT_UNSAFE")
+    lock_dir = layout.path(LOCK_DIR_PATH)
+    info = _lstat(lock_dir)
+    if info is None:
+        try:
+            lock_dir.mkdir(mode=0o700)
+            os.chown(lock_dir, layout.owner_uid, layout.owner_gid)
+            os.chmod(lock_dir, 0o700)
+        except FileExistsError:
+            pass
+        except OSError:
+            raise ProvisionError("LIFECYCLE_LOCK_DIRECTORY_UNSAFE") from None
+    lock_dir_info = _lstat(lock_dir)
+    if (
+        lock_dir_info is None
+        or not stat.S_ISDIR(lock_dir_info.st_mode)
+        or lock_dir_info.st_uid != layout.owner_uid
+        or lock_dir_info.st_gid != layout.owner_gid
+        or stat.S_IMODE(lock_dir_info.st_mode) != 0o700
+    ):
+        raise ProvisionError("LIFECYCLE_LOCK_DIRECTORY_UNSAFE")
+    lock_path = layout.path(LOCK_PATH)
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError:
+        raise ProvisionError("LIFECYCLE_LOCK_UNSAFE") from None
+    try:
+        lock_info = os.fstat(descriptor)
+        path_info = _lstat(lock_path)
+        if (
+            not stat.S_ISREG(lock_info.st_mode)
+            or lock_info.st_uid != layout.owner_uid
+            or lock_info.st_gid != layout.owner_gid
+            or stat.S_IMODE(lock_info.st_mode) != 0o600
+            or path_info is None
+            or not stat.S_ISREG(path_info.st_mode)
+            or path_info.st_dev != lock_info.st_dev
+            or path_info.st_ino != lock_info.st_ino
+        ):
+            raise ProvisionError("LIFECYCLE_LOCK_UNSAFE")
+        operation = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+        if not blocking:
+            operation |= fcntl.LOCK_NB
+        try:
+            fcntl.flock(descriptor, operation)
+        except BlockingIOError:
+            raise ProvisionError("LIFECYCLE_LOCK_BUSY") from None
+        except OSError:
+            raise ProvisionError("LIFECYCLE_LOCK_FAILED") from None
+        _LIFECYCLE_STATE.identity = (layout.root, layout.owner_uid, layout.owner_gid)
+        _LIFECYCLE_STATE.shared = shared
+        _LIFECYCLE_STATE.depth = 1
+        yield
+    finally:
+        _LIFECYCLE_STATE.depth = 0
+        _LIFECYCLE_STATE.identity = None
+        _LIFECYCLE_STATE.shared = False
+        os.close(descriptor)
+
+
+def serialized_lifecycle(*, blocking: bool, shared: bool = False):
+    """Hold the common lock for a full installer, verifier, or rollback call."""
+    def decorate(function):
+        @wraps(function)
+        def wrapped(*args, **kwargs):
+            layout = kwargs.get("layout")
+            if layout is None and args and isinstance(args[0], Layout):
+                layout = args[0]
+            if layout is None:
+                layout = Layout()
+            with lifecycle_lock(layout, blocking=blocking, shared=shared):
+                return function(*args, **kwargs)
+        return wrapped
+    return decorate
 
 
 def atomic_write(
@@ -612,7 +732,6 @@ def _ensure_safe_target_directories(layout: Layout) -> None:
         "/etc/sudoers.d",
         "/var/lib",
         "/run",
-        "/run/lock",
     )
     for item in paths:
         validate_directory(layout.path(item), owner=layout.owner_uid)
@@ -878,6 +997,7 @@ def _complete_install_exists(layout: Layout, files: dict[str, bytes], key_line: 
     )
 
 
+@serialized_lifecycle(blocking=False)
 def install(
     *,
     layout: Layout,
@@ -929,10 +1049,7 @@ def install(
 
     if layout.root != Path("/") and fcntl is None:
         raise ProvisionError("LOCKING_UNAVAILABLE")
-    lock_file = layout.path(LOCK_PATH)
-    with lock_file.open("a+b") as lock:
-        if fcntl is not None:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with lifecycle_lock(layout, blocking=False):
         _write_pending_marker(layout, approved_sha)
         try:
             _deactivate(layout)

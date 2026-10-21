@@ -6,12 +6,14 @@ from __future__ import annotations
 import base64
 import importlib.util
 import hashlib
+import multiprocessing
 import os
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -38,6 +40,83 @@ def synthetic_ed25519_public_key() -> str:
     return f"ssh-ed25519 {base64.b64encode(blob).decode()} synthetic-test-key"
 
 
+def _multiprocess_runner(command: list[str]) -> str:
+    if command == ["/usr/bin/sudo", "-l", "-U", provision.DIAGNOSTICS_USER]:
+        return (
+            f"User {provision.DIAGNOSTICS_USER} may run the following commands on stg1:\n"
+            '(root) NOPASSWD: /usr/local/sbin/wpcaregrid-staging-m12-readback ""\n'
+        )
+    return ""
+
+
+def _multiprocess_install(
+    root: str,
+    source_root: str,
+    approved_sha: str,
+    public_key: str,
+    result_queue,
+    ready_event=None,
+    release_event=None,
+) -> None:
+    layout = provision.Layout(
+        root=Path(root), owner_uid=os.geteuid(), owner_gid=os.getegid()
+    )
+    try:
+        with patch.object(
+            provision,
+            "verify_source_provenance",
+            return_value=provision.source_hashes(Path(source_root)),
+        ):
+            def checkpoint(phase: str) -> None:
+                if phase == "after_authorized_keys_installation" and ready_event:
+                    ready_event.set()
+                    if not release_event or not release_event.wait(10):
+                        raise RuntimeError("test coordination timeout")
+
+            provision.install(
+                layout=layout,
+                source_root=Path(source_root),
+                approved_sha=approved_sha,
+                public_key=public_key,
+                runner=_multiprocess_runner,
+                checkpoint=checkpoint if ready_event else None,
+            )
+        result_queue.put("INSTALLED")
+    except provision.ProvisionError as error:
+        result_queue.put(str(error))
+    except Exception as error:  # pragma: no cover - test process diagnosis
+        result_queue.put("ERROR:" + type(error).__name__)
+
+
+def _multiprocess_rollback_hold_lock(
+    root: str,
+    approved_sha: str,
+    public_key: str,
+    started_event,
+    revoked_event,
+    release_event,
+    result_queue,
+) -> None:
+    layout = provision.Layout(
+        root=Path(root), owner_uid=os.geteuid(), owner_gid=os.getegid()
+    )
+    try:
+        with provision.lifecycle_lock(layout, blocking=True):
+            with patch.object(
+                rollback,
+                "verify_source_provenance",
+                return_value=provision.source_hashes(ROOT),
+            ):
+                rollback.rollback_filesystem(layout, approved_sha, public_key)
+            revoked_event.set()
+            started_event.set()
+            if not release_event.wait(10):
+                raise RuntimeError("test coordination timeout")
+        result_queue.put("REVOKED")
+    except Exception as error:  # pragma: no cover - test process diagnosis
+        result_queue.put("ERROR:" + type(error).__name__)
+
+
 class DiagnosticsProvisioningTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="caregrid-provision-test-")
@@ -53,7 +132,6 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
             "/etc/sudoers.d",
             "/var/lib",
             "/run",
-            "/run/lock",
         ):
             path = self.layout.path(directory)
             path.mkdir(parents=True, exist_ok=True)
@@ -146,7 +224,7 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
                 )
                 for directory in (
                     "/usr/local/libexec", "/usr/local/sbin", "/etc/sudoers.d",
-                    "/var/lib", "/run", "/run/lock",
+                    "/var/lib", "/run",
                 ):
                     target = self.layout.path(directory)
                     target.mkdir(parents=True, exist_ok=True)
@@ -218,6 +296,84 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
             self.layout.path(f"{provision.DIAGNOSTICS_HOME}/.ssh/authorized_keys").exists()
         )
 
+    def test_install_then_concurrent_rollback_finishes_revoked(self) -> None:
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        release = context.Event()
+        started = context.Event()
+        results = context.Queue()
+        installer = context.Process(
+            target=_multiprocess_install,
+            args=(str(self.temp_root), str(ROOT), self.source_sha, self.public_key, results, ready, release),
+        )
+        installer.start()
+        self.assertTrue(ready.wait(10), "installer did not reach the held activation phase")
+
+        with self.assertRaisesRegex(provision.ProvisionError, "LIFECYCLE_LOCK_BUSY"):
+            with provision.lifecycle_lock(self.layout, blocking=False):
+                pass
+
+        def rollback_worker() -> None:
+            with patch.object(
+                rollback,
+                "verify_source_provenance",
+                return_value=provision.source_hashes(ROOT),
+            ):
+                started.set()
+                rollback.rollback_filesystem(
+                    self.layout, self.source_sha, self.public_key
+                )
+            results.put("REVOKED")
+
+        revoker = context.Process(target=rollback_worker)
+        revoker.start()
+        self.assertTrue(started.wait(5))
+        time.sleep(0.1)
+        self.assertTrue(revoker.is_alive(), "rollback should wait behind the installer lock")
+        release.set()
+        installer.join(10)
+        revoker.join(10)
+        self.assertFalse(installer.is_alive())
+        self.assertFalse(revoker.is_alive())
+        self.assertEqual({results.get(timeout=2), results.get(timeout=2)}, {"INSTALLED", "REVOKED"})
+        self.assertFalse(self.layout.path(provision.ACTIVE_PATH).exists())
+        self.assertFalse(
+            self.layout.path(f"{provision.DIAGNOSTICS_HOME}/.ssh/authorized_keys").exists()
+        )
+        self.assertFalse(self.layout.path(provision.SUDOERS_PATH).exists())
+
+    def test_install_started_during_rollback_is_rejected_without_reactivation(self) -> None:
+        self.run_install()
+        context = multiprocessing.get_context("fork")
+        started = context.Event()
+        revoked = context.Event()
+        release = context.Event()
+        results = context.Queue()
+        rollback_process = context.Process(
+            target=_multiprocess_rollback_hold_lock,
+            args=(str(self.temp_root), self.source_sha, self.public_key, started, revoked, release, results),
+        )
+        rollback_process.start()
+        self.assertTrue(revoked.wait(10), "rollback did not deactivate while holding the lock")
+
+        installer = context.Process(
+            target=_multiprocess_install,
+            args=(str(self.temp_root), str(ROOT), self.source_sha, self.public_key, results),
+        )
+        installer.start()
+        installer.join(10)
+        self.assertFalse(installer.is_alive())
+        self.assertEqual(results.get(timeout=2), "LIFECYCLE_LOCK_BUSY")
+        self.assertFalse(self.layout.path(provision.ACTIVE_PATH).exists())
+        release.set()
+        rollback_process.join(10)
+        self.assertFalse(rollback_process.is_alive())
+        self.assertEqual(results.get(timeout=2), "REVOKED")
+        self.assertFalse(self.layout.path(provision.ACTIVE_PATH).exists())
+        self.assertFalse(
+            self.layout.path(f"{provision.DIAGNOSTICS_HOME}/.ssh/authorized_keys").exists()
+        )
+
     def test_idempotent_install_rejects_effective_sudo_privilege_expansion(self) -> None:
         self.run_install()
 
@@ -261,6 +417,48 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
             provision.ProvisionError, "DIRECTORY_WRITABLE_BY_UNTRUSTED_GROUP"
         ):
             provision.validate_directory(directory, owner=os.geteuid())
+
+    def test_lifecycle_lock_uses_a_private_directory_and_rejects_symlinks(self) -> None:
+        with provision.lifecycle_lock(self.layout, blocking=True):
+            lock_dir = self.layout.path(provision.LOCK_DIR_PATH)
+            lock_file = self.layout.path(provision.LOCK_PATH)
+            self.assertEqual(stat.S_IMODE(lock_dir.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(lock_file.stat().st_mode), 0o600)
+            self.assertEqual(lock_dir.stat().st_uid, os.geteuid())
+            self.assertEqual(lock_file.stat().st_uid, os.geteuid())
+        self.assertFalse((self.layout.path("/run/lock") / Path(provision.LOCK_PATH).name).exists())
+
+        unsafe_root = self.temp_root / "unsafe-lock-root"
+        unsafe_root.mkdir()
+        unsafe_layout = provision.Layout(
+            root=unsafe_root, owner_uid=os.geteuid(), owner_gid=os.getegid()
+        )
+        (unsafe_layout.path("/run")).mkdir()
+        outside = unsafe_root / "outside"
+        outside.mkdir()
+        unsafe_layout.path(provision.LOCK_DIR_PATH).symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(provision.ProvisionError, "LIFECYCLE_LOCK_DIRECTORY_UNSAFE"):
+            with provision.lifecycle_lock(unsafe_layout, blocking=True):
+                pass
+
+    def test_lifecycle_lock_rejects_a_symlinked_or_conflicting_lock_file(self) -> None:
+        lock_dir = self.layout.path(provision.LOCK_DIR_PATH)
+        lock_dir.mkdir(parents=True)
+        lock_dir.chmod(0o700)
+        target = self.temp_root / "outside-lock"
+        target.write_text("", encoding="ascii")
+        self.layout.path(provision.LOCK_PATH).symlink_to(target)
+        with self.assertRaisesRegex(provision.ProvisionError, "LIFECYCLE_LOCK_UNSAFE"):
+            with provision.lifecycle_lock(self.layout, blocking=True):
+                pass
+
+        self.layout.path(provision.LOCK_PATH).unlink()
+        lock_file = self.layout.path(provision.LOCK_PATH)
+        lock_file.write_text("", encoding="ascii")
+        lock_file.chmod(0o644)
+        with self.assertRaisesRegex(provision.ProvisionError, "LIFECYCLE_LOCK_UNSAFE"):
+            with provision.lifecycle_lock(self.layout, blocking=True):
+                pass
 
     def test_invalid_public_key_types_and_payloads_are_rejected(self) -> None:
         with self.assertRaisesRegex(provision.ProvisionError, "PUBLIC_KEY_INVALID"):
@@ -451,10 +649,12 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, destination)
             destination.chmod(0o444)
-        lines = [f"commit={sha}"]
+        lines = [f"commit={sha}", "tree=" + "f" * 40]
         for relative in provision.TRUSTED_PACKAGE_FILES:
-            digest = hashlib.sha256((package / relative).read_bytes()).hexdigest()
-            lines.append(f"{digest}  {relative}")
+            content = (package / relative).read_bytes()
+            digest = hashlib.sha256(content).hexdigest()
+            blob_oid = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+            lines.append(f"{blob_oid} {digest}  {relative}")
         manifest = package / provision.PROVENANCE_PATH
         manifest.write_text("\n".join(lines) + "\n", encoding="ascii")
         manifest.chmod(0o444)

@@ -55,11 +55,17 @@ jobs:
           python3 scripts/tests/staging-diagnostics-output-test.py
           python3 scripts/tests/staging-diagnostics-policy-test.py
           python3 scripts/tests/staging-diagnostics-provisioning-test.py
+          python3 scripts/tests/staging-diagnostics-package-preparation-test.py
           python3 -m py_compile scripts/staging-diagnostics/provisioning/provision.py scripts/staging-diagnostics/provisioning/verify.py scripts/staging-diagnostics/provisioning/rollback.py
           php scripts/tests/staging-diagnostics-parser-test.php
           php -l scripts/staging-diagnostics/read-m12-cache.php
-          bash -n scripts/staging-diagnostics/dispatch.sh scripts/staging-diagnostics/run-m12-readback.sh scripts/staging-diagnostics/provisioning/activation-check.sh scripts/staging-diagnostics/provisioning/diagnostics-shell.sh scripts/staging-diagnostics/provisioning/run-m12-readback.sh
+          bash -n scripts/staging-diagnostics/dispatch.sh scripts/staging-diagnostics/run-m12-readback.sh scripts/staging-diagnostics/provisioning/activation-check.sh scripts/staging-diagnostics/provisioning/diagnostics-shell.sh scripts/staging-diagnostics/provisioning/run-m12-readback.sh scripts/staging-diagnostics/provisioning/prepare-package.sh
           bash -n scripts/tests/staging-diagnostics-linux-integration-test.sh
+
+      - name: Debian 12 staging diagnostics integration
+        run: >-
+          docker run --rm --volume "$GITHUB_WORKSPACE:/workspace:ro" debian:12-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+          bash -lc "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server sudo php-cli python3 git && cd /workspace && bash scripts/tests/staging-diagnostics-linux-integration-test.sh"
 
       - name: No local files, databases or keys in the repository
         run: python3 scripts/tests/repository-secret-path-policy.py

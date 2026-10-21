@@ -6,9 +6,14 @@ if [ ! -f /.dockerenv ] || [ "$(id -u)" -ne 0 ]; then
   echo "INTEGRATION_REQUIRES_DISPOSABLE_ROOT_CONTAINER" >&2
   exit 77
 fi
-for tool in sshd ssh-keygen ssh sudo visudo php python3 useradd usermod; do
+for tool in sshd ssh-keygen ssh sudo visudo php python3 git useradd usermod; do
   command -v "$tool" >/dev/null || { echo "MISSING_TOOL=$tool" >&2; exit 77; }
 done
+
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/staging-diagnostics-provisioning-test.py
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/staging-diagnostics-package-preparation-test.py
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/staging-diagnostics-policy-test.py
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/staging-diagnostics-output-test.py
 
 APP=/var/www/wpcaregrid
 APPROVED_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -28,8 +33,10 @@ if ! getent passwd deploy >/dev/null; then
   useradd --system --gid deploy --home-dir /var/lib/deploy --create-home --shell /bin/sh deploy
 fi
 mkdir -p "$APP/bootstrap/cache" /var/lib/wpcaregrid-staging-diagnostics-provisioning/source
-mkdir -p /usr/local/libexec /usr/local/sbin /etc/sudoers.d /run/lock
-chmod 0755 /usr/local/libexec /usr/local/sbin /etc/sudoers.d /run/lock
+mkdir -p /usr/local/libexec /usr/local/sbin /etc/sudoers.d /run
+chmod 0755 /usr/local/libexec /usr/local/sbin /etc/sudoers.d /run
+[[ "$(stat -c '%a' /run/lock)" == 1777 ]] || { echo "DEBIAN12_RUN_LOCK_DEFAULT_UNEXPECTED" >&2; exit 1; }
+echo "DEBIAN12_RUN_LOCK_DEFAULT=1777"
 chown -R deploy:deploy "$APP"
 cat > "$APP/bootstrap/cache/config.php" <<'CONFIG_FIXTURE'
 <?php return array (
@@ -52,6 +59,49 @@ printf '%s\n' 'APP_KEY=synthetic-test-only' > "$APP/.env"
 chown deploy:deploy "$APP/bootstrap/cache/config.php" "$APP/.env"
 chmod 0600 "$APP/bootstrap/cache/config.php" "$APP/.env"
 
+# Exercise the real non-root Git-to-root-stage helper with a disposable clean
+# repository. The isolated test account receives temporary sudo only in this
+# container; --prepare-only must stop before any root Python installer starts.
+groupadd --system wpcg-preparer-test
+useradd --system --gid wpcg-preparer-test --home-dir /var/lib/wpcg-preparer-test \
+  --create-home --shell /bin/bash wpcg-preparer-test
+printf 'wpcg-preparer-test ALL=(root) NOPASSWD: ALL\n' > /etc/sudoers.d/wpcg-preparer-test
+chmod 0440 /etc/sudoers.d/wpcg-preparer-test
+visudo -c >/dev/null
+PREP_REPO=/var/tmp/wpcg-canonical-source
+mkdir -p "$PREP_REPO"
+while IFS= read -r relative; do
+  [ -n "$relative" ] || continue
+  mkdir -p "$PREP_REPO/$(dirname "$relative")"
+  cp "$REPO/$relative" "$PREP_REPO/$relative"
+done <<< "$PACKAGE_FILES"
+mkdir -p "$PREP_REPO/scripts/staging-diagnostics/provisioning"
+cp "$REPO/scripts/staging-diagnostics/provisioning/prepare-package.sh" \
+  "$PREP_REPO/scripts/staging-diagnostics/provisioning/prepare-package.sh"
+git -C "$PREP_REPO" init -q
+git -C "$PREP_REPO" config user.name 'Synthetic Provisioning Test'
+git -C "$PREP_REPO" config user.email 'synthetic@example.invalid'
+git -C "$PREP_REPO" add .
+git -C "$PREP_REPO" commit -qm 'synthetic approved diagnostics source'
+PREP_SHA=$(git -C "$PREP_REPO" rev-parse HEAD)
+chown -R wpcg-preparer-test:wpcg-preparer-test "$PREP_REPO"
+PREP_HELPER_ENTRY=$(runuser -u wpcg-preparer-test -- git --no-replace-objects -C "$PREP_REPO" ls-tree "$PREP_SHA" -- scripts/staging-diagnostics/provisioning/prepare-package.sh)
+[[ "$PREP_HELPER_ENTRY" == *$'\t'* ]]
+PREP_HELPER_META=${PREP_HELPER_ENTRY%%$'\t'*}
+PREP_HELPER_PATH=${PREP_HELPER_ENTRY#*$'\t'}
+read -r PREP_HELPER_MODE PREP_HELPER_KIND PREP_HELPER_OID <<< "$PREP_HELPER_META"
+[[ "$PREP_HELPER_PATH" == scripts/staging-diagnostics/provisioning/prepare-package.sh ]]
+[[ "$PREP_HELPER_MODE" == 100644 || "$PREP_HELPER_MODE" == 100755 ]]
+[[ "$PREP_HELPER_KIND" == blob && "$PREP_HELPER_OID" =~ ^[0-9a-f]{40}$ ]]
+runuser -u wpcg-preparer-test -- git --no-replace-objects -C "$PREP_REPO" cat-file blob "$PREP_HELPER_OID" |
+  runuser -u wpcg-preparer-test -- /usr/bin/env -i \
+    PATH=/usr/bin:/bin HOME=/var/lib/wpcg-preparer-test \
+    /bin/bash -s -- --prepare-only "$PREP_REPO" "$PREP_SHA"
+PREP_STAGE=/var/lib/wpcaregrid-staging-diagnostics-provisioning/source/$PREP_SHA
+[[ "$(stat -c '%u:%g:%a:%F' "$PREP_STAGE")" == '0:0:700:directory' ]]
+[[ "$(stat -c '%u:%g:%a:%F' "$PREP_STAGE/.wpcaregrid-provenance")" == '0:0:444:regular file' ]]
+echo "CANONICAL_GIT_PACKAGE_STAGING=PASS"
+
 rm -rf "$STAGE"
 install -d -o root -g root -m 0700 "$STAGE"
 while IFS= read -r relative; do
@@ -66,13 +116,12 @@ HOST_FINGERPRINT=$(ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256 | 
 sed -i "s|SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ|$HOST_FINGERPRINT|g" "$STAGE/scripts/staging-diagnostics/provisioning/provision.py" "$STAGE/scripts/staging-diagnostics/provisioning/verify.py"
 
 {
-  printf 'commit=%s
-' "$APPROVED_SHA"
+  printf 'commit=%s\ntree=%s\n' "$APPROVED_SHA" "$(printf '%040d' 0)"
   while IFS= read -r relative; do
     [ -n "$relative" ] || continue
     digest=$(sha256sum "$STAGE/$relative" | awk '{print $1}')
-    printf '%s  %s
-' "$digest" "$relative"
+    blob_oid=$(python3 -c 'import hashlib,sys; data=open(sys.argv[1],"rb").read(); print(hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest())' "$STAGE/$relative")
+    printf '%s %s  %s\n' "$blob_oid" "$digest" "$relative"
   done <<< "$PACKAGE_FILES"
 } > "$STAGE/.wpcaregrid-provenance"
 chown root:root "$STAGE/.wpcaregrid-provenance"
