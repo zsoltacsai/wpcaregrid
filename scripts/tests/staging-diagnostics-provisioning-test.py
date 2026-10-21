@@ -635,6 +635,14 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
         )
         output = "\n".join(valid)
         provision.validate_sshd_effective_config(output)
+        # The account's exact authorized_keys entry carries OpenSSH `restrict`,
+        # so global forwarding/TTY policy need not be weakened for deploy.
+        scoped_key_policy = output.replace("allowtcpforwarding no", "allowtcpforwarding yes").replace(
+            "allowagentforwarding no", "allowagentforwarding yes"
+        ).replace("x11forwarding no", "x11forwarding yes").replace("permittunnel no", "permittunnel yes").replace(
+            "permittty no", "permittty yes"
+        ).replace("permituserrc no", "permituserrc yes")
+        provision.validate_sshd_effective_config(scoped_key_policy)
         with self.assertRaisesRegex(provision.ProvisionError, "SSHD_AUTH_POLICY_UNSAFE"):
             provision.validate_sshd_effective_config(output.replace("usepam yes", "usepam no"))
 

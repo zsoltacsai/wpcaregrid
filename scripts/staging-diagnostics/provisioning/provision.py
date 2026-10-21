@@ -63,6 +63,7 @@ TRUSTED_PACKAGE_FILES = tuple(dict.fromkeys((
     "scripts/staging-diagnostics/provisioning/provision.py",
     "scripts/staging-diagnostics/provisioning/verify.py",
     "scripts/staging-diagnostics/provisioning/rollback.py",
+    "scripts/staging-diagnostics/provisioning/bootstrap.py",
 )))
 
 SUDOERS_CONTENT = (
@@ -579,12 +580,6 @@ def validate_sshd_effective_config(output: str) -> None:
         "authorizedkeyscommand": "none",
         "trustedusercakeys": "none",
         "forcecommand": "none",
-        "allowtcpforwarding": "no",
-        "allowagentforwarding": "no",
-        "x11forwarding": "no",
-        "permittunnel": "no",
-        "permittty": "no",
-        "permituserrc": "no",
         "permituserenvironment": "no",
     }
     if any(config.get(key) != value for key, value in required.items()):

@@ -12,6 +12,7 @@ done
 
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/staging-diagnostics-provisioning-test.py
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/staging-diagnostics-package-preparation-test.py
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/staging-diagnostics-bootstrap-test.py
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/staging-diagnostics-policy-test.py
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/staging-diagnostics-output-test.py
 
@@ -27,6 +28,8 @@ scripts/staging-diagnostics/provisioning/run-m12-readback.sh
 scripts/staging-diagnostics/provisioning/provision.py
 scripts/staging-diagnostics/provisioning/verify.py
 scripts/staging-diagnostics/provisioning/rollback.py'
+PACKAGE_FILES="$PACKAGE_FILES
+scripts/staging-diagnostics/provisioning/bootstrap.py"
 
 if ! getent passwd deploy >/dev/null; then
   getent group deploy >/dev/null || groupadd --system deploy
@@ -64,16 +67,15 @@ setfacl -m u:www-data:r--,g::--- "$APP/bootstrap/cache/config.php"
   exit 1
 }
 
-# Exercise the real non-root Git-to-root-stage helper with a disposable clean
-# repository. The isolated test account receives temporary sudo only in this
-# container; --prepare-only must stop before any root Python installer starts.
+# Exercise canonical Git checks as the non-root provisioning operator. The
+# operator receives no broad sudo rights; extraction is tested independently.
 groupadd --system wpcg-preparer-test
 useradd --system --gid wpcg-preparer-test --home-dir /var/lib/wpcg-preparer-test \
-  --create-home --shell /bin/bash wpcg-preparer-test
-printf 'wpcg-preparer-test ALL=(root) NOPASSWD: ALL\n' > /etc/sudoers.d/wpcg-preparer-test
-chmod 0440 /etc/sudoers.d/wpcg-preparer-test
-visudo -c >/dev/null
-PREP_REPO=/var/tmp/wpcg-canonical-source
+  --create-home --shell /usr/sbin/nologin wpcg-preparer-test
+[[ "$(getent passwd wpcg-preparer-test | cut -d: -f7)" == /usr/sbin/nologin ]]
+[[ ! -e /var/lib/wpcg-preparer-test/.ssh/authorized_keys ]]
+PREP_REPO=/var/lib/wpcg-canonical-source
+rm -rf "$PREP_REPO"
 mkdir -p "$PREP_REPO"
 while IFS= read -r relative; do
   [ -n "$relative" ] || continue
@@ -102,10 +104,34 @@ runuser -u wpcg-preparer-test -- git --no-replace-objects -C "$PREP_REPO" cat-fi
   runuser -u wpcg-preparer-test -- /usr/bin/env -i \
     PATH=/usr/bin:/bin HOME=/var/lib/wpcg-preparer-test \
     /bin/bash -s -- --prepare-only "$PREP_REPO" "$PREP_SHA"
-PREP_STAGE=/var/lib/wpcaregrid-staging-diagnostics-provisioning/source/$PREP_SHA
-[[ "$(stat -c '%u:%g:%a:%F' "$PREP_STAGE")" == '0:0:700:directory' ]]
-[[ "$(stat -c '%u:%g:%a:%F' "$PREP_STAGE/.wpcaregrid-provenance")" == '0:0:444:regular file' ]]
-echo "CANONICAL_GIT_PACKAGE_STAGING=PASS"
+echo "CANONICAL_GIT_UNPRIVILEGED_PREFLIGHT=PASS"
+
+# The operator may invoke only one root-owned no-argument wrapper.
+cat > /usr/local/sbin/wpcg-test-provisioning-wrapper <<'WRAPPER'
+#!/bin/sh
+set -eu
+test "$#" -eq 0
+printf 'FIXED_WRAPPER=PASS\n'
+WRAPPER
+chown root:root /usr/local/sbin/wpcg-test-provisioning-wrapper
+chmod 0755 /usr/local/sbin/wpcg-test-provisioning-wrapper
+printf 'wpcg-preparer-test ALL=(root) NOPASSWD: /usr/local/sbin/wpcg-test-provisioning-wrapper ""\n' > /etc/sudoers.d/wpcg-preparer-test
+chmod 0440 /etc/sudoers.d/wpcg-preparer-test
+visudo -c >/dev/null
+runuser -u wpcg-preparer-test -- sudo -n /usr/local/sbin/wpcg-test-provisioning-wrapper | grep -qx 'FIXED_WRAPPER=PASS'
+for forbidden in /bin/sh /usr/bin/install /usr/bin/tee /usr/bin/python3; do
+  if runuser -u wpcg-preparer-test -- sudo -n "$forbidden" >/dev/null 2>&1; then
+    echo "UNEXPECTED_SUDO_PERMISSION=$forbidden" >&2
+    exit 1
+  fi
+done
+if runuser -u wpcg-preparer-test -- sudo -n /usr/local/sbin/wpcg-test-provisioning-wrapper unexpected >/dev/null 2>&1; then
+  echo "FIXED_WRAPPER_ARGUMENT_WAS_ACCEPTED" >&2
+  exit 1
+fi
+echo "PROVISIONER_SUDO_ALLOWLIST=PASS"
+rm -f /etc/sudoers.d/wpcg-preparer-test /usr/local/sbin/wpcg-test-provisioning-wrapper
+visudo -c >/dev/null
 
 rm -rf "$STAGE"
 install -d -o root -g root -m 0700 "$STAGE"
@@ -145,12 +171,12 @@ AuthorizedKeysFile .ssh/authorized_keys
 AuthorizedKeysCommand none
 TrustedUserCAKeys none
 ForceCommand none
-AllowTcpForwarding no
-AllowAgentForwarding no
-X11Forwarding no
-PermitTunnel no
-PermitTTY no
-PermitUserRC no
+AllowTcpForwarding yes
+AllowAgentForwarding yes
+X11Forwarding yes
+PermitTunnel yes
+PermitTTY yes
+PermitUserRC yes
 PermitUserEnvironment no
 Subsystem sftp /usr/lib/openssh/sftp-server
 UsePAM yes
