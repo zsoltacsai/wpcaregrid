@@ -118,6 +118,8 @@ printf '%s\n' 'Defaults:wpcaregrid-provisioner env_reset, !setenv' 'wpcaregrid-p
 
 The source checkout at `/var/lib/wpcaregrid-staging-diagnostics-source/repo` must be readable by this account through a dedicated group but not writable by it. Keep it separate from `/var/lib/wpcaregrid-staging-diagnostics-provisioning/source`, which is reserved for the immutable root package. Run the helper through `runuser -u wpcaregrid-provisioner`; it uses the single sudo command above. Verify the account has no authorized key and its shell is `/usr/sbin/nologin`. These are separate Owner-controlled server mutations; do not run them before the code review gate.
 
+Git may reject this root-owned checkout for an unprivileged reader with its dubious-ownership protection. `prepare-package.sh` handles that only for the exact canonical path above: it validates the spelling, resolves no symlink aliases, and checks root ownership and non-writable mode bits on the checkout and its parent directories before adding one command-scoped `-c safe.directory=/var/lib/wpcaregrid-staging-diagnostics-source/repo` to its fixed Git calls. The helper clears Git configuration environment variables and disables system/global configuration; it rejects repository-local `safe.directory` and `alias.*` entries. It never sets a wildcard, writes Git configuration, changes ownership, or grants checkout write access. A different root-owned path, symlink alias, unsafe parent, or Git configuration override fails closed. The root-owned bootstrap does not use this exception: it already owns the checkout and keeps its independent canonical-object checks.
+
 Run the exact reviewed `prepare-package.sh` unprivileged with the same root-pinned repository and SHA:
 
 ```sh

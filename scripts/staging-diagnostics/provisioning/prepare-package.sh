@@ -7,6 +7,7 @@ umask 077
 readonly GIT=/usr/bin/git
 readonly SUDO=/usr/bin/sudo
 readonly BOOTSTRAP=/usr/local/sbin/wpcaregrid-staging-diagnostics-bootstrap
+readonly TRUSTED_ROOT_REPO=/var/lib/wpcaregrid-staging-diagnostics-source/repo
 readonly PACKAGE_FILES=(
   scripts/staging-diagnostics/dispatch.sh
   scripts/staging-diagnostics/provisioning/activation-check.sh
@@ -25,11 +26,37 @@ fail() {
 }
 
 git_clean() {
+  local -a safe_directory_args=()
+  if [[ "$REPO" == "$TRUSTED_ROOT_REPO" ]]; then
+    # Git's dubious-ownership guard is bypassed only for the one canonical,
+    # root-owned staging source checkout. Never trust repository-local config
+    # or a caller-provided safe.directory value.
+    safe_directory_args=(-c "safe.directory=$TRUSTED_ROOT_REPO")
+  fi
   /usr/bin/env -i \
     PATH=/usr/bin:/bin HOME="$HOME" \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
     GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 \
-    "$GIT" --no-replace-objects -C "$REPO" "$@"
+    "$GIT" "${safe_directory_args[@]}" --no-replace-objects -C "$REPO" "$@"
+}
+
+validate_trusted_root_repo_metadata() {
+  local path mode owner mode_bits unsafe_entry
+  path="$REPO"
+  while [[ "$path" != / ]]; do
+    [[ ! -L "$path" ]] || fail GIT_SAFE_DIRECTORY_PATH_UNSAFE
+    owner="$(/usr/bin/stat -c '%u' -- "$path")" || fail GIT_SAFE_DIRECTORY_PATH_UNSAFE
+    mode="$(/usr/bin/stat -c '%a' -- "$path")" || fail GIT_SAFE_DIRECTORY_PATH_UNSAFE
+    [[ "$owner" == 0 && "$mode" =~ ^[0-7]{3,4}$ ]] || fail GIT_SAFE_DIRECTORY_PATH_UNSAFE
+    mode_bits=$((8#$mode))
+    (( (mode_bits & 0022) == 0 )) || fail GIT_SAFE_DIRECTORY_PATH_UNSAFE
+    path="$(/usr/bin/dirname -- "$path")"
+  done
+
+  [[ -d "$REPO/.git" && ! -L "$REPO/.git" ]] || fail GIT_SAFE_DIRECTORY_PATH_UNSAFE
+  [[ -d "$REPO/.git/objects" && ! -L "$REPO/.git/objects" ]] || fail GIT_SAFE_DIRECTORY_PATH_UNSAFE
+  unsafe_entry="$(/usr/bin/find "$REPO" \( -type l -o ! -uid 0 -o -perm /022 \) -print -quit)" || fail GIT_SAFE_DIRECTORY_PATH_UNSAFE
+  [[ -z "$unsafe_entry" ]] || fail GIT_SAFE_DIRECTORY_PATH_UNSAFE
 }
 
 validate_git_inputs() {
@@ -52,7 +79,7 @@ validate_git_inputs() {
   config_keys="$(git_clean config --local --no-includes --name-only --list)" || fail GIT_CONFIG_READ_FAILED
   while IFS= read -r config_key; do
     case "$config_key" in
-      include.*|includeif.*|core.usereplacerefs|core.alternaterefscommand|core.worktree|core.fsmonitor|core.hookspath|core.sparsecheckout|extensions.partialclone|remote.*.promisor)
+      include.*|includeif.*|alias.*|safe.directory|core.usereplacerefs|core.alternaterefscommand|core.worktree|core.fsmonitor|core.hookspath|core.sparsecheckout|extensions.partialclone|remote.*.promisor)
         fail GIT_PROVENANCE_CONFIG_REJECTED
         ;;
     esac
@@ -95,7 +122,12 @@ if [[ "${1-}" == '--verify-only' || "${1-}" == '--prepare-only' ]]; then
   shift
 fi
 [[ "$#" -eq 2 ]] || fail USAGE
-REPO="$(/usr/bin/realpath -e -- "$1")" || fail SOURCE_PATH_INVALID
+REPO_INPUT="$1"
+REPO="$(/usr/bin/realpath -e -- "$REPO_INPUT")" || fail SOURCE_PATH_INVALID
+if [[ "$REPO_INPUT" == "$TRUSTED_ROOT_REPO" || "$REPO" == "$TRUSTED_ROOT_REPO" ]]; then
+  [[ "$REPO_INPUT" == "$TRUSTED_ROOT_REPO" && "$REPO" == "$TRUSTED_ROOT_REPO" ]] || fail GIT_SAFE_DIRECTORY_PATH_UNSAFE
+  validate_trusted_root_repo_metadata
+fi
 APPROVED_SHA="$2"
 [[ "$APPROVED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail APPROVED_SHA_INVALID
 validate_git_inputs

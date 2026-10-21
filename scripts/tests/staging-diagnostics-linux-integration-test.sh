@@ -74,9 +74,10 @@ useradd --system --gid wpcg-preparer-test --home-dir /var/lib/wpcg-preparer-test
   --create-home --shell /usr/sbin/nologin wpcg-preparer-test
 [[ "$(getent passwd wpcg-preparer-test | cut -d: -f7)" == /usr/sbin/nologin ]]
 [[ ! -e /var/lib/wpcg-preparer-test/.ssh/authorized_keys ]]
-PREP_REPO=/var/lib/wpcg-canonical-source
+PREP_REPO=/var/lib/wpcaregrid-staging-diagnostics-source/repo
 rm -rf "$PREP_REPO"
-mkdir -p "$PREP_REPO"
+install -d -o root -g root -m 0750 "$(dirname "$PREP_REPO")"
+install -d -o root -g wpcg-preparer-test -m 0750 "$PREP_REPO"
 while IFS= read -r relative; do
   [ -n "$relative" ] || continue
   mkdir -p "$PREP_REPO/$(dirname "$relative")"
@@ -91,8 +92,13 @@ git -C "$PREP_REPO" config user.email 'synthetic@example.invalid'
 git -C "$PREP_REPO" add .
 git -C "$PREP_REPO" commit -qm 'synthetic approved diagnostics source'
 PREP_SHA=$(git -C "$PREP_REPO" rev-parse HEAD)
-chown -R wpcg-preparer-test:wpcg-preparer-test "$PREP_REPO"
-PREP_HELPER_ENTRY=$(runuser -u wpcg-preparer-test -- git --no-replace-objects -C "$PREP_REPO" ls-tree "$PREP_SHA" -- scripts/staging-diagnostics/provisioning/prepare-package.sh)
+chown -R root:wpcg-preparer-test "$PREP_REPO"
+find "$PREP_REPO" -type d -exec chmod 0750 {} +
+find "$PREP_REPO" -type f -perm /111 -exec chmod 0750 {} +
+find "$PREP_REPO" -type f ! -perm /111 -exec chmod 0640 {} +
+[[ "$(stat -c '%U:%G:%a' "$PREP_REPO")" == "root:wpcg-preparer-test:750" ]]
+[[ "$(stat -c '%U:%G:%a' "$PREP_REPO/.git")" == "root:wpcg-preparer-test:750" ]]
+PREP_HELPER_ENTRY=$(git --no-replace-objects -C "$PREP_REPO" ls-tree "$PREP_SHA" -- scripts/staging-diagnostics/provisioning/prepare-package.sh)
 [[ "$PREP_HELPER_ENTRY" == *$'\t'* ]]
 PREP_HELPER_META=${PREP_HELPER_ENTRY%%$'\t'*}
 PREP_HELPER_PATH=${PREP_HELPER_ENTRY#*$'\t'}
@@ -100,11 +106,68 @@ read -r PREP_HELPER_MODE PREP_HELPER_KIND PREP_HELPER_OID <<< "$PREP_HELPER_META
 [[ "$PREP_HELPER_PATH" == scripts/staging-diagnostics/provisioning/prepare-package.sh ]]
 [[ "$PREP_HELPER_MODE" == 100644 || "$PREP_HELPER_MODE" == 100755 ]]
 [[ "$PREP_HELPER_KIND" == blob && "$PREP_HELPER_OID" =~ ^[0-9a-f]{40}$ ]]
-runuser -u wpcg-preparer-test -- git --no-replace-objects -C "$PREP_REPO" cat-file blob "$PREP_HELPER_OID" |
-  runuser -u wpcg-preparer-test -- /usr/bin/env -i \
-    PATH=/usr/bin:/bin HOME=/var/lib/wpcg-preparer-test \
-    /bin/bash -s -- --prepare-only "$PREP_REPO" "$PREP_SHA"
-echo "CANONICAL_GIT_UNPRIVILEGED_PREFLIGHT=PASS"
+run_preparer() {
+  local source_repo="$1"
+  git --no-replace-objects -C "$PREP_REPO" cat-file blob "$PREP_HELPER_OID" |
+    runuser -u wpcg-preparer-test -- /usr/bin/env -i \
+      PATH=/usr/bin:/bin HOME=/var/lib/wpcg-preparer-test \
+      /bin/bash -s -- --prepare-only "$source_repo" "$PREP_SHA"
+}
+PREP_RESULT=$(run_preparer "$PREP_REPO")
+[[ "$PREP_RESULT" == "SOURCE_PROVENANCE=PASS; ROOT_BOOTSTRAP=NOT_RUN" ]]
+echo "CANONICAL_GIT_ROOT_OWNED_UNPRIVILEGED_PREFLIGHT=PASS"
+
+# The trusted-path exception also requires all checkout and Git metadata files
+# to remain root-owned and non-writable by the operator.
+chmod 0660 "$PREP_REPO/.git/config"
+if PREP_RESULT=$(run_preparer "$PREP_REPO" 2>&1); then
+  echo "WRITABLE_GIT_METADATA_WAS_ACCEPTED" >&2
+  exit 1
+fi
+grep -q 'code=GIT_SAFE_DIRECTORY_PATH_UNSAFE' <<< "$PREP_RESULT"
+chmod 0640 "$PREP_REPO/.git/config"
+echo "ROOT_OWNED_GIT_METADATA_MODE=ENFORCED"
+
+# The exception applies only to the canonical root-owned source path. A symlink
+# alias or another root-owned checkout must not inherit it.
+PREP_ALIAS=/var/lib/wpcaregrid-staging-diagnostics-source/repo-alias
+ln -s "$PREP_REPO" "$PREP_ALIAS"
+if PREP_RESULT=$(run_preparer "$PREP_ALIAS" 2>&1); then
+  echo "SYMLINKED_TRUSTED_REPOSITORY_PATH_WAS_ACCEPTED" >&2
+  exit 1
+fi
+grep -q 'code=GIT_SAFE_DIRECTORY_PATH_UNSAFE' <<< "$PREP_RESULT"
+rm "$PREP_ALIAS"
+UNTRUSTED_REPO=/var/lib/wpcaregrid-staging-diagnostics-source/untrusted-repo
+cp -a "$PREP_REPO" "$UNTRUSTED_REPO"
+if PREP_RESULT=$(run_preparer "$UNTRUSTED_REPO" 2>&1); then
+  echo "UNTRUSTED_ROOT_OWNED_REPOSITORY_WAS_ACCEPTED" >&2
+  exit 1
+fi
+grep -q 'code=GIT_CONFIG_READ_FAILED' <<< "$PREP_RESULT"
+echo "UNTRUSTED_ROOT_OWNED_REPOSITORY=REJECTED"
+
+# Local safe.directory wildcards and executable aliases are rejected even
+# though the one-command protected-config exception allows inspection of the
+# exact trusted checkout.
+git -C "$PREP_REPO" config --local safe.directory '*'
+if PREP_RESULT=$(run_preparer "$PREP_REPO" 2>&1); then
+  echo "REPOSITORY_SAFE_DIRECTORY_OVERRIDE_WAS_ACCEPTED" >&2
+  exit 1
+fi
+grep -q 'code=GIT_PROVENANCE_CONFIG_REJECTED' <<< "$PREP_RESULT"
+git -C "$PREP_REPO" config --local --unset-all safe.directory
+ALIAS_MARKER=/tmp/wpcg-untrusted-git-alias-ran
+rm -f "$ALIAS_MARKER"
+git -C "$PREP_REPO" config --local alias.untrusted "!touch $ALIAS_MARKER"
+if PREP_RESULT=$(run_preparer "$PREP_REPO" 2>&1); then
+  echo "REPOSITORY_GIT_ALIAS_WAS_ACCEPTED" >&2
+  exit 1
+fi
+grep -q 'code=GIT_PROVENANCE_CONFIG_REJECTED' <<< "$PREP_RESULT"
+[[ ! -e "$ALIAS_MARKER" ]]
+git -C "$PREP_REPO" config --local --unset-all alias.untrusted
+echo "GIT_SAFE_DIRECTORY_SCOPE_AND_CONFIG_REJECTIONS=PASS"
 
 # The operator may invoke only one root-owned no-argument wrapper.
 cat > /usr/local/sbin/wpcg-test-provisioning-wrapper <<'WRAPPER'
