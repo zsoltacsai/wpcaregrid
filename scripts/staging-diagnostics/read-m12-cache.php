@@ -246,6 +246,62 @@ final class StaticLaravelConfigCacheParser
     }
 }
 
+function m12CacheAclMatches(int $mode, string $output): bool
+{
+    $entries = array_values(array_filter(preg_split('/\r?\n/', rtrim($output, "\r\n")) ?: []));
+    $ownerOnly = ['user::rw-', 'group::---', 'other::---'];
+    $phpFpmRead = [
+        'user::rw-',
+        'user:www-data:r--',
+        'group::---',
+        'mask::r--',
+        'other::---',
+    ];
+    $permissions = $mode & 0777;
+
+    return ($permissions === 0600 && $entries === $ownerOnly)
+        || ($permissions === 0640 && $entries === $phpFpmRead);
+}
+
+function m12ReadAclForOpenFile($handle): ?string
+{
+    if (! function_exists('proc_open')) {
+        return null;
+    }
+
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+        3 => $handle,
+    ];
+    $process = @proc_open(
+        ['/usr/bin/getfacl', '-cp', '--', '/proc/self/fd/3'],
+        $descriptors,
+        $pipes,
+        '/',
+        ['LC_ALL' => 'C', 'PATH' => '/usr/bin:/bin'],
+        ['bypass_shell' => true],
+    );
+
+    if (! is_resource($process)) {
+        return null;
+    }
+
+    fclose($pipes[0]);
+    $output = stream_get_contents($pipes[1], 513);
+    $error = stream_get_contents($pipes[2], 129);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $status = proc_close($process);
+
+    if (! is_string($output) || strlen($output) > 512 || $error !== '' || $status !== 0) {
+        return null;
+    }
+
+    return $output;
+}
+
 function m12ReadCache(): never
 {
     error_reporting(0);
@@ -290,7 +346,9 @@ function m12ReadCache(): never
     if (! is_array($pathStat)
         || (($pathStat['mode'] & 0170000) !== 0100000)
         || $pathStat['uid'] !== $deploy['uid']
-        || (($pathStat['mode'] & 0077) !== 0)
+        || (($pathStat['gid'] ?? null) !== $deploy['gid'])
+        || (($pathStat['mode'] & 0007) !== 0)
+        || ! in_array($pathStat['mode'] & 0777, [0600, 0640], true)
         || (($pathStat['mode'] & 0400) === 0)
         || $pathStat['size'] > 1_048_576) {
         m12Fail('CACHE_METADATA_INVALID');
@@ -313,9 +371,17 @@ function m12ReadCache(): never
         || $openedStat['dev'] !== $pathStat['dev']
         || $openedStat['ino'] !== $pathStat['ino']
         || (($openedStat['mode'] & 0170000) !== 0100000)
-        || $openedStat['uid'] !== $deploy['uid']) {
+        || $openedStat['uid'] !== $deploy['uid']
+        || $openedStat['gid'] !== $deploy['gid']) {
         fclose($handle);
         m12Fail('CACHE_PATH_RACE');
+    }
+
+    $acl = m12ReadAclForOpenFile($handle);
+
+    if (! is_string($acl) || ! m12CacheAclMatches($openedStat['mode'], $acl)) {
+        fclose($handle);
+        m12Fail('CACHE_METADATA_INVALID');
     }
 
     $source = stream_get_contents($handle, 1_048_577);

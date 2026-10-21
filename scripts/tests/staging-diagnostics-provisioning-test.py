@@ -206,6 +206,26 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
         self.assertFalse(self.layout.path(provision.PENDING_PATH).exists())
         self.assertTrue(provision._activation_is_valid(self.layout, self.source_sha))
 
+    def test_cache_acl_accepts_only_owner_or_exact_php_fpm_reader(self) -> None:
+        provision._validate_application_cache_acl(
+            stat.S_IFREG | 0o600,
+            "user::rw-\ngroup::---\nother::---\n",
+        )
+        provision._validate_application_cache_acl(
+            stat.S_IFREG | 0o640,
+            "user::rw-\nuser:www-data:r--\ngroup::---\nmask::r--\nother::---\n",
+        )
+        invalid = (
+            (stat.S_IFREG | 0o640, "user::rw-\ngroup::r--\nmask::r--\nother::---\n"),
+            (stat.S_IFREG | 0o640, "user::rw-\nuser:nobody:r--\ngroup::---\nmask::r--\nother::---\n"),
+            (stat.S_IFREG | 0o604, "user::rw-\ngroup::---\nother::r--\n"),
+            (stat.S_IFREG | 0o660, "user::rw-\nuser:www-data:r--\ngroup::r--\nmask::rw-\nother::---\n"),
+        )
+        for mode, acl in invalid:
+            with self.subTest(mode=oct(mode), acl=acl):
+                with self.assertRaisesRegex(provision.ProvisionError, "CACHE_METADATA_INVALID"):
+                    provision._validate_application_cache_acl(mode, acl)
+
     def test_every_interrupted_install_phase_remains_inactive(self) -> None:
         phases = (
             "after_sudoers_installation",

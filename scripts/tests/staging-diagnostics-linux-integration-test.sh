@@ -6,7 +6,7 @@ if [ ! -f /.dockerenv ] || [ "$(id -u)" -ne 0 ]; then
   echo "INTEGRATION_REQUIRES_DISPOSABLE_ROOT_CONTAINER" >&2
   exit 77
 fi
-for tool in sshd ssh-keygen ssh sudo visudo php python3 git useradd usermod; do
+for tool in sshd ssh-keygen ssh sudo visudo php python3 git useradd usermod getfacl setfacl; do
   command -v "$tool" >/dev/null || { echo "MISSING_TOOL=$tool" >&2; exit 77; }
 done
 
@@ -58,6 +58,11 @@ CONFIG_FIXTURE
 printf '%s\n' 'APP_KEY=synthetic-test-only' > "$APP/.env"
 chown deploy:deploy "$APP/bootstrap/cache/config.php" "$APP/.env"
 chmod 0600 "$APP/bootstrap/cache/config.php" "$APP/.env"
+setfacl -m u:www-data:r--,g::--- "$APP/bootstrap/cache/config.php"
+[[ "$(stat -c '%a' "$APP/bootstrap/cache/config.php")" == 640 ]] || {
+  echo "PHP_FPM_CACHE_ACL_MODE_UNEXPECTED" >&2
+  exit 1
+}
 
 # Exercise the real non-root Git-to-root-stage helper with a disposable clean
 # repository. The isolated test account receives temporary sudo only in this
