@@ -38,6 +38,8 @@ MAX_BLOB_BYTES = 2 * 1024 * 1024
 MAX_PACKAGE_BYTES = 8 * 1024 * 1024
 MAX_GIT_METADATA_ENTRIES = 500_000
 FAIL = "BOOTSTRAP_FAILED"
+STATE_DIR = Path("/var/lib/wpcaregrid-staging-diagnostics")
+BOOTSTRAP_PENDING = STATE_DIR / "provisioning.bootstrap-pending"
 
 
 class BootstrapError(Exception):
@@ -321,7 +323,116 @@ def prepare(config: dict[str, str]) -> Path:
     return stage
 
 
+def _write_bootstrap_journal(approved_sha: str) -> None:
+    if os.geteuid() != 0 or re.fullmatch(r"[0-9a-f]{40}", approved_sha) is None:
+        fail()
+    for path in (Path("/var"), Path("/var/lib")):
+        try:
+            info = path.lstat()
+        except OSError:
+            fail()
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != 0
+            or info.st_mode & 0o022
+        ):
+            fail()
+    try:
+        state_info = STATE_DIR.lstat()
+    except FileNotFoundError:
+        try:
+            STATE_DIR.mkdir(mode=0o711)
+            os.chown(STATE_DIR, 0, 0)
+            os.chmod(STATE_DIR, 0o711)
+            state_info = STATE_DIR.lstat()
+        except OSError:
+            fail()
+    except OSError:
+        fail()
+    if (
+        not stat.S_ISDIR(state_info.st_mode)
+        or stat.S_ISLNK(state_info.st_mode)
+        or state_info.st_uid != 0
+        or state_info.st_gid != 0
+        or stat.S_IMODE(state_info.st_mode) != 0o711
+    ):
+        fail()
+    try:
+        descriptor = os.open(
+            BOOTSTRAP_PENDING,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="ascii") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != 0
+                or info.st_gid != 0
+                or stat.S_IMODE(info.st_mode) != 0o600
+            ):
+                fail()
+            stream.write(f"source={approved_sha}\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError:
+        fail()
+
+
+def _remove_bootstrap_journal(approved_sha: str) -> None:
+    try:
+        info = BOOTSTRAP_PENDING.lstat()
+    except FileNotFoundError:
+        fail()
+    except OSError:
+        fail()
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or info.st_uid != 0
+        or info.st_gid != 0
+        or stat.S_IMODE(info.st_mode) != 0o600
+        or info.st_size != len(f"source={approved_sha}\n")
+    ):
+        fail()
+    try:
+        if BOOTSTRAP_PENDING.read_text(encoding="ascii") != f"source={approved_sha}\n":
+            fail()
+        BOOTSTRAP_PENDING.unlink()
+    except (OSError, UnicodeError):
+        fail()
+
+
+def _run_package_stage(package: Path, name: str, config: dict[str, str], timeout: int = 45) -> None:
+    result = subprocess.run(
+        [
+            "/usr/bin/python3", "-I", "-S", str(package / name),
+            "--approved-source-sha", config["commit"],
+            "--public-key-file", config["public_key"],
+        ],
+        check=False,
+        env={"PATH": "/usr/bin:/bin", "HOME": "/root", "PYTHONDONTWRITEBYTECODE": "1"},
+        stdin=subprocess.DEVNULL,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        fail()
+
+
+def _rollback_after_failure(package: Path, config: dict[str, str]) -> None:
+    # The bootstrap journal remains present unless immutable-package rollback
+    # completes and removes it as its final access-disabling step.
+    try:
+        _run_package_stage(package, "rollback.py", config)
+    except (BootstrapError, OSError, subprocess.SubprocessError):
+        pass
+
+
 def main() -> int:
+    journal_written = False
+    config: dict[str, str] | None = None
+    package: Path | None = None
     try:
         if len(sys.argv) != 1:
             fail()
@@ -332,19 +443,17 @@ def main() -> int:
         if key_info.st_uid != 0 or key_info.st_gid != 0 or key_info.st_mode & 0o022 or key_info.st_size > 16384:
             fail()
         package = stage / "scripts/staging-diagnostics/provisioning"
-        for name in ("provision.py", "verify.py"):
-            result = subprocess.run(
-                ["/usr/bin/python3", "-I", "-S", str(package / name), "--approved-source-sha", config["commit"], "--public-key-file", str(public_key)],
-                check=False,
-                env={"PATH": "/usr/bin:/bin", "HOME": "/root", "PYTHONDONTWRITEBYTECODE": "1"},
-                stdin=subprocess.DEVNULL,
-                timeout=45,
-            )
-            if result.returncode != 0:
-                fail()
+        _write_bootstrap_journal(config["commit"])
+        journal_written = True
+        _run_package_stage(package, "provision.py", config)
+        _run_package_stage(package, "verify.py", config)
+        _remove_bootstrap_journal(config["commit"])
+        journal_written = False
         print("STAGING_DIAGNOSTICS_BOOTSTRAP=PASS")
         return 0
     except (BootstrapError, OSError, subprocess.SubprocessError):
+        if journal_written and config is not None and package is not None:
+            _rollback_after_failure(package, config)
         print(FAIL, file=sys.stderr)
         return 1
 

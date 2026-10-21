@@ -250,6 +250,21 @@ printf '%s
 printf '%s
 ' "$output" | grep -q '^IDENTITY|deployment_environment|staging$'
 echo "REAL_OPENSSH_FIXED_DIAGNOSTIC=PASS"
+BOOTSTRAP_PENDING=/var/lib/wpcaregrid-staging-diagnostics/provisioning.bootstrap-pending
+printf 'source=%s\n' "$APPROVED_SHA" > "$BOOTSTRAP_PENDING"
+chown root:root "$BOOTSTRAP_PENDING"
+chmod 0600 "$BOOTSTRAP_PENDING"
+if /usr/local/libexec/wpcaregrid-staging-diagnostics-activation-check >/dev/null 2>&1; then
+  echo "BOOTSTRAP_PENDING_ACTIVATION_WAS_ACCEPTED" >&2
+  exit 1
+fi
+if "${SSH[@]}" m12-config-readback >/dev/null 2>&1; then
+  echo "BOOTSTRAP_PENDING_DIAGNOSTIC_WAS_USABLE" >&2
+  exit 1
+fi
+echo "REAL_OPENSSH_BOOTSTRAP_PENDING_STATE=DENIED"
+rm -f "$BOOTSTRAP_PENDING"
+/usr/local/libexec/wpcaregrid-staging-diagnostics-activation-check
 if ssh -F /dev/null -p 2222 -o BatchMode=yes -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive -o NumberOfPasswordPrompts=0 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/known_hosts -o ConnectTimeout=3 caregrid-diagnostics@127.0.0.1 m12-config-readback >/dev/null 2>&1; then
   echo "ALTERNATE_PASSWORD_AUTH_WAS_ACCEPTED" >&2
   exit 1

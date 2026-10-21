@@ -18,6 +18,7 @@ import provision
 from provision import (
     DIAGNOSTICS_HOME,
     DIAGNOSTICS_USER,
+    BOOTSTRAP_PENDING_PATH,
     PENDING_PATH,
     _deactivate,
     SUDOERS_CONTENT,
@@ -93,6 +94,20 @@ def rollback_filesystem(layout: Layout, approved_sha: str, public_key: str) -> N
         ):
             raise ProvisionError("RECOVERY_MARKER_CONFLICT")
         marker.unlink()
+
+    bootstrap_marker = layout.path(BOOTSTRAP_PENDING_PATH)
+    bootstrap_info = _lstat(bootstrap_marker)
+    if bootstrap_info is not None:
+        expected_bootstrap_marker = f"source={approved_sha}\n"
+        if (
+            not stat.S_ISREG(bootstrap_info.st_mode)
+            or bootstrap_info.st_uid != layout.owner_uid
+            or bootstrap_info.st_gid != layout.owner_gid
+            or stat.S_IMODE(bootstrap_info.st_mode) != 0o600
+            or bootstrap_marker.read_text(encoding="ascii") != expected_bootstrap_marker
+        ):
+            raise ProvisionError("BOOTSTRAP_JOURNAL_CONFLICT")
+        bootstrap_marker.unlink()
 
 
 def main() -> int:

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import os
 import shutil
 import subprocess
@@ -59,6 +61,8 @@ class BootstrapTests(unittest.TestCase):
         self.module = load_bootstrap()
         self.module.BASE = self.root / "stage-base"
         self.module.PACKAGE_ROOT = self.module.BASE / "source"
+        self.module.STATE_DIR = self.root / "diagnostics-state"
+        self.module.BOOTSTRAP_PENDING = self.module.STATE_DIR / "provisioning.bootstrap-pending"
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -154,6 +158,102 @@ class BootstrapTests(unittest.TestCase):
             with self.assertRaises(self.module.BootstrapError):
                 self.prepare()
         self.assertFalse((self.module.PACKAGE_ROOT / self.sha).exists())
+
+    def _run_main_with_stage_failure(self, failed_stage: str, failure: BaseException | int, rollback_fails: bool = False):
+        key = self.root / "diagnostics.pub"
+        key.write_text("ssh-ed25519 synthetic-public-key\n", encoding="ascii")
+        key.chmod(0o600)
+        config = {"repository": str(self.repo), "commit": self.sha, "public_key": str(key)}
+        package = self.root / "immutable-package"
+        package.mkdir()
+        calls: list[str] = []
+
+        def run_process(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            name = Path(command[3]).name
+            calls.append(name)
+            if name == failed_stage:
+                if isinstance(failure, BaseException):
+                    raise failure
+                return subprocess.CompletedProcess(command, failure)
+            if name == "rollback.py":
+                if rollback_fails:
+                    raise subprocess.TimeoutExpired(command, 45)
+                self.module._remove_bootstrap_journal(self.sha)
+            return subprocess.CompletedProcess(command, 0)
+
+        stderr = io.StringIO()
+        with (
+            patch.object(self.module, "_read_config", return_value=config),
+            patch.object(self.module, "prepare", return_value=package.parent),
+            patch.object(self.module.subprocess, "run", side_effect=run_process),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = self.module.main()
+        return result, calls, stderr.getvalue()
+
+    def test_provisioner_nonzero_exit_runs_immutable_rollback_and_disables_journal(self) -> None:
+        result, calls, error = self._run_main_with_stage_failure("provision.py", 17)
+        self.assertEqual(result, 1)
+        self.assertEqual(calls, ["provision.py", "rollback.py"])
+        self.assertFalse(self.module.BOOTSTRAP_PENDING.exists())
+        self.assertEqual(error.strip(), "BOOTSTRAP_FAILED")
+
+    def test_provisioner_timeout_keeps_gate_closed_if_rollback_times_out(self) -> None:
+        timeout = subprocess.TimeoutExpired("provision.py", 45)
+        result, calls, error = self._run_main_with_stage_failure("provision.py", timeout, rollback_fails=True)
+        self.assertEqual(result, 1)
+        self.assertEqual(calls, ["provision.py", "rollback.py"])
+        self.assertTrue(self.module.BOOTSTRAP_PENDING.exists())
+        self.assertEqual(error.strip(), "BOOTSTRAP_FAILED")
+
+    def test_verifier_nonzero_exit_rolls_back_a_completed_provisioner(self) -> None:
+        result, calls, _ = self._run_main_with_stage_failure("verify.py", 23)
+        self.assertEqual(result, 1)
+        self.assertEqual(calls, ["provision.py", "verify.py", "rollback.py"])
+        self.assertFalse(self.module.BOOTSTRAP_PENDING.exists())
+
+    def test_verifier_timeout_leaves_a_fail_closed_journal_when_rollback_fails(self) -> None:
+        timeout = subprocess.TimeoutExpired("verify.py", 45)
+        result, calls, _ = self._run_main_with_stage_failure("verify.py", timeout, rollback_fails=True)
+        self.assertEqual(result, 1)
+        self.assertEqual(calls, ["provision.py", "verify.py", "rollback.py"])
+        self.assertTrue(self.module.BOOTSTRAP_PENDING.exists())
+
+    def test_bootstrap_journal_rejects_existing_or_symlinked_state(self) -> None:
+        self.module.STATE_DIR.mkdir(mode=0o711)
+        self.module.STATE_DIR.chmod(0o711)
+        self.module.BOOTSTRAP_PENDING.symlink_to(self.root / "outside")
+        with self.assertRaises(self.module.BootstrapError):
+            self.module._write_bootstrap_journal(self.sha)
+        self.assertTrue(self.module.BOOTSTRAP_PENDING.is_symlink())
+
+    def test_success_removes_bootstrap_journal_only_after_verifier_success(self) -> None:
+        key = self.root / "diagnostics.pub"
+        key.write_text("ssh-ed25519 synthetic-public-key\n", encoding="ascii")
+        key.chmod(0o600)
+        config = {"repository": str(self.repo), "commit": self.sha, "public_key": str(key)}
+        package = self.root / "immutable-package"
+        package.mkdir()
+        observed: list[tuple[str, bool]] = []
+
+        def run_process(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            name = Path(command[3]).name
+            observed.append((name, self.module.BOOTSTRAP_PENDING.exists()))
+            return subprocess.CompletedProcess(command, 0)
+
+        stdout = io.StringIO()
+        with (
+            patch.object(self.module, "_read_config", return_value=config),
+            patch.object(self.module, "prepare", return_value=package.parent),
+            patch.object(self.module.subprocess, "run", side_effect=run_process),
+            contextlib.redirect_stdout(stdout),
+        ):
+            result = self.module.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(observed, [("provision.py", True), ("verify.py", True)])
+        self.assertFalse(self.module.BOOTSTRAP_PENDING.exists())
+        self.assertEqual(stdout.getvalue().strip(), "STAGING_DIAGNOSTICS_BOOTSTRAP=PASS")
 
 
 if __name__ == "__main__":
