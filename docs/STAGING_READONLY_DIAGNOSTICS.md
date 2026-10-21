@@ -12,6 +12,9 @@ scan, access a database, or change application state.
   `claude/ecstatic-wozniak-oemyuf`, and only through `workflow_dispatch`.
 - The job requests `contents: read` only and runs in the protected
   `staging-diagnostics` GitHub environment.
+- SSH key and known-hosts secrets are injected only into the one diagnostic
+  step, not checkout or future job steps. The workflow grants no deployment,
+  Actions-write, OIDC, database, or production permissions.
 - The environment must be configured separately with the Owner as a required
   reviewer, self-review disabled, and deployment branches restricted to
   `claude/ecstatic-wozniak-oemyuf`. Do not store credentials as repository-level
@@ -57,6 +60,36 @@ been provisioned and reviewed:
 
 The workflow fails closed when either secret is absent, the host key does not
 match, the selected ref is wrong, or the operation ID is unsupported.
+
+## Operations and incident handling
+
+- Before activation, configure repository or organization Actions log retention
+  to the shortest period allowed by the project evidence policy. This workflow
+  uploads no artifacts; GitHub log retention is controlled by repository or
+  organization settings, not by this workflow. Restrict repository access
+  because run logs are visible to people with repository access.
+- The workflow is manual and this PR does not grant an Actions-dispatch token
+  to Codex. An authorized repository actor must start the run; an Owner who is
+  not the initiator must approve the protected environment. Review the exact
+  workflow commit and successful CI before approval. Do not add a persistent
+  Actions-write credential merely to automate dispatch.
+- Rotate the diagnostics key under a separately approved change: install the
+  replacement public key, update the protected environment secret, validate
+  the new key through a separately authorized diagnostic run, then remove the
+  old authorized key. Never place private key material in a commit, issue,
+  workflow output, or application log.
+- On suspected key or host compromise, disable the protected environment or
+  remove its SSH secret, revoke the authorized key on staging through the
+  approved server process, and follow the project incident procedure. Preserve
+  only the sanitized workflow log needed for incident evidence.
+- Add a future diagnostic only as a new fixed operation identifier with a
+  matching exact server-side dispatcher branch, one fixed helper invocation,
+  a bounded output schema, sanitizer allowlist, negative tests, and reviewed
+  exact-SHA CI. Never pass workflow inputs through as shell text, SSH commands,
+  PHP arguments, paths, or sudo targets. Do not add a general-purpose shell.
+- The server-side sudo policy must retain `env_reset`, reject `SETENV`, and
+  allow only the exact helper command. Keep the helper and dispatcher root-owned
+  and non-writable by both staging accounts.
 
 ## One-shot procedure
 

@@ -17,6 +17,10 @@ final class StaticLaravelConfigCacheParser
 
     public function parse(string $source): array
     {
+        $this->tokens = [];
+        $this->position = 0;
+        $this->depth = 0;
+
         if (strlen($source) > 1_048_576) {
             throw new RuntimeException('CACHE_TOO_LARGE');
         }

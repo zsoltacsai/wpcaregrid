@@ -52,6 +52,7 @@ fi
 
 set +e
 timeout --signal=TERM --kill-after=2 45s ssh -T -p 22 \
+    -F /dev/null \
     -i "$key_file" \
     -o BatchMode=yes \
     -o IdentitiesOnly=yes \

@@ -7,4 +7,5 @@ if [ "${SSH_ORIGINAL_COMMAND-}" != 'm12-config-readback' ]; then
     exit 64
 fi
 
+ulimit -c 0
 exec /usr/bin/sudo -n -- /usr/bin/php /usr/local/libexec/wpcaregrid-staging-m12-readback.php

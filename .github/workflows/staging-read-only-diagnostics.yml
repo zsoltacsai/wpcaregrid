@@ -27,10 +27,6 @@ jobs:
       name: staging-diagnostics
     permissions:
       contents: read
-    env:
-      DIAGNOSTIC_ID: ${{ inputs.diagnostic }}
-      STAGING_DIAGNOSTICS_SSH_PRIVATE_KEY: ${{ secrets.STAGING_DIAGNOSTICS_SSH_PRIVATE_KEY }}
-      STAGING_DIAGNOSTICS_KNOWN_HOSTS: ${{ secrets.STAGING_DIAGNOSTICS_KNOWN_HOSTS }}
     steps:
       - name: Check out the protected target branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,4 +35,8 @@ jobs:
 
       - name: Run the fixed read-only diagnostic
         shell: bash
+        env:
+          DIAGNOSTIC_ID: ${{ inputs.diagnostic }}
+          STAGING_DIAGNOSTICS_SSH_PRIVATE_KEY: ${{ secrets.STAGING_DIAGNOSTICS_SSH_PRIVATE_KEY }}
+          STAGING_DIAGNOSTICS_KNOWN_HOSTS: ${{ secrets.STAGING_DIAGNOSTICS_KNOWN_HOSTS }}
         run: bash scripts/staging-diagnostics/run-m12-readback.sh

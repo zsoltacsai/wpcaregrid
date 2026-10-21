@@ -72,6 +72,11 @@ foreach ($malformedInputs as $input) {
     } catch (RuntimeException) {
         // Expected: token grammar rejects unsupported syntax without executing it.
     }
+
+    assertTest(
+        $parser->parse('<?php return '.var_export($fixture, true).';') === $fixture,
+        'parser resets after rejecting an input',
+    );
 }
 
 assertTest(! file_exists($marker), 'unexpected executable content was not run');
