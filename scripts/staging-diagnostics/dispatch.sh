@@ -8,4 +8,4 @@ if [ "${SSH_ORIGINAL_COMMAND-}" != 'm12-config-readback' ]; then
 fi
 
 ulimit -c 0
-exec /usr/bin/sudo -n -- /usr/bin/php /usr/local/libexec/wpcaregrid-staging-m12-readback.php
+exec /usr/bin/sudo -n -- /usr/local/sbin/wpcaregrid-staging-m12-readback
