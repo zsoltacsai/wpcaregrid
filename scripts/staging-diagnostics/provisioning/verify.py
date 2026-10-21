@@ -70,21 +70,10 @@ def _require_rooted_directory(path: Path) -> None:
 
 
 def _require_cache_metadata() -> None:
-    deploy = pwd.getpwnam("deploy")
-    cache_path = Path(provision.APP_CACHE)
-    cache = _lstat(cache_path)
-    if (
-        cache is None
-        or cache_path.is_symlink()
-        or os.path.realpath(cache_path) != str(cache_path)
-        or not stat.S_ISREG(cache.st_mode)
-        or cache.st_uid != deploy.pw_uid
-        or cache.st_mode & 0o077
-        or cache.st_size > 1_048_576
-    ):
-        raise ProvisionError("CACHE_METADATA_INVALID")
+    provision._check_application_cache_metadata()
 
     # Check the Laravel environment file's metadata only. Never open it.
+    deploy = pwd.getpwnam("deploy")
     env_path = Path(provision.APP_ENV)
     env_file = _lstat(env_path)
     if (

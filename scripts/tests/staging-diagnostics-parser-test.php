@@ -43,6 +43,16 @@ assertTest(str_contains($output, 'M12|string_false|UNKNOWN') === false, 'unappro
 assertTest(! str_contains($output, 'SYNTHETIC_SECRET_MUST_NOT_BE_EMITTED'), 'unrelated sensitive value not emitted');
 assertTest(str_contains($output, 'IDENTITY|deployment_environment|staging'), 'expected identity rendered');
 
+$ownerOnlyAcl = "user::rw-\ngroup::---\nother::---\n";
+$phpFpmAcl = "user::rw-\nuser:www-data:r--\ngroup::---\nmask::r--\nother::---\n";
+$groupReadableAcl = "user::rw-\ngroup::r--\nmask::r--\nother::---\n";
+$extraReaderAcl = "user::rw-\nuser:nobody:r--\ngroup::---\nmask::r--\nother::---\n";
+assertTest(m12CacheAclMatches(0600, $ownerOnlyAcl), 'owner-only cache ACL accepted');
+assertTest(m12CacheAclMatches(0640, $phpFpmAcl), 'exact PHP-FPM read ACL accepted');
+assertTest(! m12CacheAclMatches(0640, $groupReadableAcl), 'general group read rejected');
+assertTest(! m12CacheAclMatches(0640, $extraReaderAcl), 'unexpected named ACL reader rejected');
+assertTest(! m12CacheAclMatches(0604, $ownerOnlyAcl), 'world-readable cache rejected');
+
 $missing = $fixture;
 unset($missing['privacy']['provider_deletion_enabled']);
 $missingOutput = m12FormatValues($missing);

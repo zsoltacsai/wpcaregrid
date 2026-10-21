@@ -8,6 +8,8 @@ Before installation, the Owner must select the exact reviewed commit that contai
 
 The installer supports Debian and Ubuntu and fails closed if the expected account, paths, SSH policy, host identity, cache metadata, or file permissions do not match. It reads only metadata for `.env` and the Laravel configuration cache. The diagnostic helper later reads the single approved cache file through a non-executing parser. It never includes or evaluates the cache.
 
+The configuration cache must be a regular, non-symlinked file owned by `deploy`, no larger than 1 MiB, with one of two exact access-control forms: owner-only mode `0600` with ACL entries `user::rw-`, `group::---`, `other::---`; or mode `0640` with the exact ACL entries `user::rw-`, `user:www-data:r--`, `group::---`, `mask::r--`, `other::---`. The second form allows the PHP-FPM runtime user to read the cache without granting read access to the owning group or other users. The installer and readback helper validate ACLs on the opened file descriptor and reject any additional group or named-user access as `CACHE_METADATA_INVALID`. The `getfacl` utility from the `acl` package is required. Provisioning does not change cache permissions. If the cache fails validation, stop and obtain separate Owner approval for any permission remediation; verify the PHP runtime can still read the cache after an approved change. The protected deployment controller creates the PHP-FPM ACL and verifies runtime-user access during cache rebuild.
+
 ## GitHub controls to verify before adding secrets
 
 Configure the `staging-diagnostics` Environment in repository settings:

@@ -609,6 +609,7 @@ def _check_prerequisites() -> None:
         "/usr/sbin/visudo",
         "/usr/bin/getent",
         "/usr/bin/id",
+        "/usr/bin/getfacl",
     )
     if any(not Path(item).is_file() or not os.access(item, os.X_OK) for item in required):
         raise ProvisionError("PREREQUISITE_MISSING")
@@ -629,21 +630,75 @@ def _check_prerequisites() -> None:
         raise ProvisionError("HOST_IDENTITY_MISMATCH")
 
 
+def _validate_application_cache_acl(mode: int, output: str) -> None:
+    """Allow only owner-only access or the exact PHP-FPM named-user ACL."""
+    entries = tuple(line for line in output.splitlines() if line)
+    owner_only = ("user::rw-", "group::---", "other::---")
+    php_fpm_read = (
+        "user::rw-",
+        "user:www-data:r--",
+        "group::---",
+        "mask::r--",
+        "other::---",
+    )
+    permissions = stat.S_IMODE(mode)
+    if (permissions == 0o600 and entries == owner_only) or (
+        permissions == 0o640 and entries == php_fpm_read
+    ):
+        return
+    raise ProvisionError("CACHE_METADATA_INVALID")
+
+
+def _read_acl_for_descriptor(descriptor: int, mode: int) -> None:
+    try:
+        result = subprocess.run(
+            ["/usr/bin/getfacl", "-cp", "--", f"/proc/self/fd/{descriptor}"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+            pass_fds=(descriptor,),
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        raise ProvisionError("CACHE_METADATA_INVALID") from None
+    if result.returncode != 0 or result.stderr or len(result.stdout) > 512:
+        raise ProvisionError("CACHE_METADATA_INVALID")
+    _validate_application_cache_acl(mode, result.stdout)
+
+
 def _check_application_cache_metadata() -> None:
-    """Check only metadata; never read the Laravel cache or .env."""
+    """Check cache path, ownership, size and ACL without reading cache data."""
     deploy = pwd.getpwnam("deploy")
     cache_path = Path(APP_CACHE)
     if cache_path.is_symlink() or os.path.realpath(cache_path) != str(cache_path):
         raise ProvisionError("CACHE_PATH_UNSAFE")
-    cache = _lstat(cache_path)
-    if (
-        cache is None
-        or not stat.S_ISREG(cache.st_mode)
-        or cache.st_uid != deploy.pw_uid
-        or cache.st_mode & 0o077
-        or cache.st_size > 1_048_576
-    ):
-        raise ProvisionError("CACHE_METADATA_INVALID")
+    try:
+        descriptor = os.open(
+            cache_path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError:
+        raise ProvisionError("CACHE_METADATA_INVALID") from None
+    try:
+        cache = os.fstat(descriptor)
+        current_path = _lstat(cache_path)
+        if (
+            current_path is None
+            or not stat.S_ISREG(cache.st_mode)
+            or not stat.S_ISREG(current_path.st_mode)
+            or current_path.st_dev != cache.st_dev
+            or current_path.st_ino != cache.st_ino
+            or cache.st_uid != deploy.pw_uid
+            or cache.st_gid != deploy.pw_gid
+            or not cache.st_mode & 0o400
+            or cache.st_mode & 0o007
+            or cache.st_size > 1_048_576
+        ):
+            raise ProvisionError("CACHE_METADATA_INVALID")
+        _read_acl_for_descriptor(descriptor, cache.st_mode)
+    finally:
+        os.close(descriptor)
 
 
 def _validate_key_file(key_path: Path) -> str:
