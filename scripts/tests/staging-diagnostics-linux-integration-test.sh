@@ -76,7 +76,11 @@ useradd --system --gid wpcg-preparer-test --home-dir /var/lib/wpcg-preparer-test
 [[ ! -e /var/lib/wpcg-preparer-test/.ssh/authorized_keys ]]
 PREP_REPO=/var/lib/wpcaregrid-staging-diagnostics-source/repo
 rm -rf "$PREP_REPO"
-install -d -o root -g root -m 0750 "$(dirname "$PREP_REPO")"
+# The source parent remains root-owned and non-writable, while its dedicated
+# operator group gets traversal permission to reach the canonical checkout.
+install -d -o root -g wpcg-preparer-test -m 0750 "$(dirname "$PREP_REPO")"
+chown root:wpcg-preparer-test "$(dirname "$PREP_REPO")"
+chmod 0750 "$(dirname "$PREP_REPO")"
 install -d -o root -g wpcg-preparer-test -m 0750 "$PREP_REPO"
 while IFS= read -r relative; do
   [ -n "$relative" ] || continue
