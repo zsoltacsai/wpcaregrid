@@ -22,11 +22,14 @@ class StagingDiagnosticsPolicyTest(unittest.TestCase):
         self.assertNotIn("deployments: write", workflow)
         self.assertNotIn("upload-artifact", workflow)
         self.assertIn("refs/heads/claude/ecstatic-wozniak-oemyuf", workflow)
+        self.assertIn("github.actor == 'zsoltacsai'", workflow)
+        self.assertIn("deployment: false", workflow)
         self.assertNotIn("schedule:", workflow)
         self.assertNotIn("push:", workflow)
         self.assertNotIn("pull_request:", workflow)
         self.assertIn("persist-credentials: false", workflow)
-        self.assertIn("if: github.ref == 'refs/heads/claude/ecstatic-wozniak-oemyuf' && inputs.diagnostic == 'm12-config-readback'", workflow)
+        self.assertIn("ref: ${{ github.workflow_sha }}", workflow)
+        self.assertIn("if: github.actor == 'zsoltacsai' && github.ref == 'refs/heads/claude/ecstatic-wozniak-oemyuf' && inputs.diagnostic == 'm12-config-readback'", workflow)
         self.assertIn(
             "        env:\n"
             "          DIAGNOSTIC_ID: ${{ inputs.diagnostic }}\n"
@@ -40,6 +43,12 @@ class StagingDiagnosticsPolicyTest(unittest.TestCase):
         self.assertNotIn("STAGING_DIAGNOSTICS_KNOWN_HOSTS", job_environment)
         self.assertNotIn("${{ github.event", workflow)
         self.assertNotIn("${{ inputs.diagnostic }}'", workflow)
+        workflow_dir = ROOT / ".github" / "workflows"
+        workflow_files = [*workflow_dir.rglob("*.yml"), *workflow_dir.rglob("*.yaml")]
+        environment_users = [
+            path for path in workflow_files if "name: staging-diagnostics" in path.read_text(encoding="utf-8")
+        ]
+        self.assertEqual([path.resolve() for path in environment_users], [WORKFLOW.resolve()])
 
     def test_runner_has_fixed_target_command_and_strict_ssh_options(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")

@@ -9,16 +9,35 @@ scan, access a database, or change application state.
 
 - `.github/workflows/staging-read-only-diagnostics.yml` accepts only the fixed
   `m12-config-readback` operation, only from
-  `claude/ecstatic-wozniak-oemyuf`, and only through `workflow_dispatch`.
+  `claude/ecstatic-wozniak-oemyuf`, only when started by the Owner account
+  `zsoltacsai`, and only through `workflow_dispatch`. The job checks out
+  `github.workflow_sha`, so its scripts and parser come from the exact commit
+  containing the workflow version GitHub accepted for this run.
 - The job requests `contents: read` only and runs in the protected
-  `staging-diagnostics` GitHub environment.
+  `staging-diagnostics` GitHub environment. `deployment: false` avoids a
+  deployment record for this read-only diagnostic while retaining environment
+  protection and secret access controls.
 - SSH key and known-hosts secrets are injected only into the one diagnostic
   step, not checkout or future job steps. The workflow grants no deployment,
   Actions-write, OIDC, database, or production permissions.
-- The environment must be configured separately with the Owner as a required
-  reviewer, self-review disabled, and deployment branches restricted to
-  `claude/ecstatic-wozniak-oemyuf`. Do not store credentials as repository-level
-  secrets.
+- Configure the environment to allow only the
+  `claude/ecstatic-wozniak-oemyuf` branch. For solo-owner operation, set the
+  Owner account as the required reviewer and leave **Prevent self-review** off.
+  The Owner can start and approve their own diagnostic run; no independent
+  reviewer is required. Add another reviewer only if the Owner later chooses
+  to do so. Do not store credentials as repository-level secrets.
+- In GitHub Actions execution-protection settings, restrict this workflow path
+  to the Owner actor and `workflow_dispatch`. The repository ruleset protects
+  the designated branch by requiring a pull request and all seven CI checks,
+  with no bypass actor. That controls how code reaches the branch; it does not
+  establish that workflow code is trustworthy. The Owner must inspect workflow,
+  parser, dispatcher, runner, and sanitizer changes before merging them.
+- Environment secrets are available to any job that references that
+  environment; GitHub does not provide a per-workflow secret ACL on an
+  Environment. This must be the only workflow referencing
+  `staging-diagnostics`. The policy test enforces that repository invariant in
+  CI. The Owner must review changes to this invariant along with workflow
+  changes. Never grant this Environment to an unrelated workflow.
 - Use a dedicated `caregrid-diagnostics` Unix account and a dedicated SSH key.
   Do not reuse the deploy key. The authorized key must use OpenSSH `restrict`
   and a root-owned forced-command dispatcher. The dispatcher accepts only the
@@ -69,10 +88,10 @@ match, the selected ref is wrong, or the operation ID is unsupported.
   organization settings, not by this workflow. Restrict repository access
   because run logs are visible to people with repository access.
 - The workflow is manual and this PR does not grant an Actions-dispatch token
-  to Codex. An authorized repository actor must start the run; an Owner who is
-  not the initiator must approve the protected environment. Review the exact
-  workflow commit and successful CI before approval. Do not add a persistent
-  Actions-write credential merely to automate dispatch.
+  to Codex. The Owner starts and approves the protected environment job using
+  the same account. Review the exact workflow commit and successful CI before
+  starting or approving. Do not add a persistent Actions-write credential
+  merely to automate dispatch.
 - Rotate the diagnostics key under a separately approved change: install the
   replacement public key, update the protected environment secret, validate
   the new key through a separately authorized diagnostic run, then remove the
@@ -98,11 +117,14 @@ match, the selected ref is wrong, or the operation ID is unsupported.
 2. Confirm the separate server provisioning review: restricted account, forced
    command, fixed sudoers rule, root-owned helper files, and unchanged pinned
    host identity.
-3. Confirm the GitHub environment requires Owner approval and holds only the
-   environment-scoped diagnostics secrets above.
+3. Confirm the GitHub environment allows only the designated branch, requires
+   Owner approval while permitting Owner self-approval, and holds only the
+   environment-scoped diagnostics secrets above. Confirm the repository
+   Actions execution policy restricts this workflow to the Owner and
+   `workflow_dispatch`.
 4. In GitHub Actions, run **Staging read-only diagnostics** manually from
    `claude/ecstatic-wozniak-oemyuf` with `m12-config-readback`.
-5. Approve the protected environment deployment. The workflow makes one SSH
+5. Approve the protected environment job as the Owner. The workflow makes one SSH
    connection and emits only the six gate statuses, three identity statuses,
    and fixed failure classifications.
 6. Review and retain the sanitized Actions log only for the project’s approved
