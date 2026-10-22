@@ -590,6 +590,36 @@ def validate_sshd_effective_config(output: str) -> None:
     if config.get("subsystem", "").lower().endswith("internal-sftp"):
         raise ProvisionError("SSHD_INTERNAL_SFTP_UNSAFE")
 
+    # sshd's Allow*/Deny* directives are part of authentication, not channel
+    # restrictions.  A successful installation must not report readiness when
+    # the diagnostic account is excluded by an administrator's access list.
+    # Only literal principals are accepted here: host-qualified, wildcard and
+    # negated patterns depend on connection context or OpenSSH pattern
+    # precedence and cannot be proven for the GitHub runner's changing egress.
+    access_lists = {
+        "allowusers": (DIAGNOSTICS_USER,),
+        "allowgroups": (DIAGNOSTICS_GROUP,),
+        "denyusers": (DIAGNOSTICS_USER,),
+        "denygroups": (DIAGNOSTICS_GROUP,),
+    }
+    for directive, principals in access_lists.items():
+        configured = config.get(directive, "").split()
+        for pattern in configured:
+            if (
+                pattern.startswith("!")
+                or "@" in pattern
+                or any(character in pattern for character in "*?[]")
+            ):
+                raise ProvisionError("SSHD_ACCESS_POLICY_UNPROVABLE")
+        if directive.startswith("allow") and configured and not any(
+            principal in configured for principal in principals
+        ):
+            raise ProvisionError("SSHD_ACCESS_POLICY_DENIES_ACCOUNT")
+        if directive.startswith("deny") and any(
+            principal in configured for principal in principals
+        ):
+            raise ProvisionError("SSHD_ACCESS_POLICY_DENIES_ACCOUNT")
+
 
 def _check_prerequisites() -> None:
     _read_os_release()
