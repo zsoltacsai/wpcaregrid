@@ -389,9 +389,11 @@ final class WordfenceFeed implements VulnerabilitySource
         }
         $slug = strtolower($slug);
         if ($type === 'core') {
-            if (! in_array($slug, ['', 'wordpress'], true)) {
-                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains unsupported core software metadata.', subcode: 'software.core_slug');
+            if ($slug !== '' && ! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug)) {
+                throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid software slug.', subcode: 'software.slug_format');
             }
+            // Wordfence uses slug as a provider-side software identifier. Keep accepting
+            // safe provider identifiers, but map core records to our stable inventory key.
             $slug = 'wordpress';
         } elseif (! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug)) {
             throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid software slug.', subcode: 'software.slug_format');
