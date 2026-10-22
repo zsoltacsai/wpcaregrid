@@ -217,7 +217,7 @@ class WordfenceV3IntegrationTest extends TestCase
         $expectedFile = $generation.'/plugin/wfi-'.hash('sha256', $providerSlug).'.jsonl';
         $this->assertFileExists($expectedFile);
         $this->assertSame(realpath($generation.'/plugin'), realpath(dirname($expectedFile)));
-        $this->assertFileDoesNotExist(dirname($generation).'/vendor/plugin.v2 beta.jsonl');
+        $this->assertFileDoesNotExist($generation.'/vendor/plugin.v2 beta.jsonl');
     }
 
     public function test_opaque_filename_collision_fails_without_replacing_last_good_index(): void
