@@ -1,9 +1,10 @@
 # Staging read-only diagnostics
 
 This is a manually triggered, one-operation workflow for reading the six M12
-privacy gates and three staging identity values from Laravel's existing
-configuration cache. It does not boot Laravel and does not deploy, synchronize,
-scan, access a database, or change application state.
+privacy gates, two incident side-effect settings, and three staging identity
+values from Laravel's existing configuration cache. It does not boot Laravel
+and does not deploy, synchronize, scan, access a database, or change application
+state.
 
 ## Security model
 
@@ -56,9 +57,11 @@ scan, access a database, or change application state.
   evaluates the cache. It checks the fixed path, symlinks, file type, owner,
   permissions, inode, size, and parser limits. Unsupported structures fail
   closed with fixed codes.
-- The helper reports actual booleans only as `TRUE`, `FALSE`, or `UNKNOWN`. It
-  prints the expected staging identity strings only when they match; otherwise
-  it prints `MISMATCH` or `UNKNOWN`. It does not print other cache values.
+- The helper reports actual booleans only as `TRUE`, `FALSE`, or `UNKNOWN` for
+  the six privacy gates and the `security.incidents.auto_open` and
+  `security.incidents.auto_backup` settings. It prints expected staging identity
+  strings only when they match; otherwise it prints `MISMATCH` or `UNKNOWN`.
+  It does not print other cache values.
 - The runner pins the supplied ED25519 known-hosts record to
   `SHA256:7eMFqVIvoAipy7heD3YliZer0orFjSv4N/Ep5Ku7irQ`, disables proxies,
   forwarding, host-key updates, and interactive authentication, and allows one
@@ -125,8 +128,10 @@ match, the selected ref is wrong, or the operation ID is unsupported.
 4. In GitHub Actions, run **Staging read-only diagnostics** manually from
    `claude/ecstatic-wozniak-oemyuf` with `m12-config-readback`.
 5. Approve the protected environment job as the Owner. The workflow makes one SSH
-   connection and emits only the six gate statuses, three identity statuses,
-   and fixed failure classifications.
+   connection and emits only the six privacy gate statuses, two incident
+   side-effect statuses, three identity statuses, and fixed failure
+   classifications. Do not run the scanner unless both incident settings are
+   confirmed `FALSE` and the target pairing is independently verified.
 6. Review and retain the sanitized Actions log only for the project’s approved
    operational retention period. Do not enable a schedule or re-run a failed
    workflow without a new Owner authorization.

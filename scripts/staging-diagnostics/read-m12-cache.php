@@ -408,6 +408,8 @@ function m12FormatValues(array $configuration): array
 {
     $privacy = is_array($configuration['privacy'] ?? null) ? $configuration['privacy'] : [];
     $app = is_array($configuration['app'] ?? null) ? $configuration['app'] : [];
+    $security = is_array($configuration['security'] ?? null) ? $configuration['security'] : [];
+    $incidents = is_array($security['incidents'] ?? null) ? $security['incidents'] : [];
     $lines = [];
     $privacyKeys = [
         'destructive_retention_enabled',
@@ -422,6 +424,12 @@ function m12FormatValues(array $configuration): array
         $value = $privacy[$key] ?? null;
         $status = is_bool($value) ? ($value ? 'TRUE' : 'FALSE') : 'UNKNOWN';
         $lines[] = "M12|{$key}|{$status}";
+    }
+
+    foreach (['auto_open', 'auto_backup'] as $key) {
+        $value = $incidents[$key] ?? null;
+        $status = is_bool($value) ? ($value ? 'TRUE' : 'FALSE') : 'UNKNOWN';
+        $lines[] = "SECURITY|{$key}|{$status}";
     }
 
     foreach ([
