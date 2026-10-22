@@ -127,7 +127,7 @@ jobs:
           bash scripts/tests/connector-release-version-gate-test.sh
 
       - name: Code style (Pint)
-        run: vendor/bin/pint --test -v
+        run: vendor/bin/pint --test
 
       - name: PHP dependency advisories (application and connector test harness)
         run: |
