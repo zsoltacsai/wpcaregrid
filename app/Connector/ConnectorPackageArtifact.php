@@ -50,13 +50,17 @@ final class ConnectorPackageArtifact
         if (is_link($directory) || ! is_writable($directory)) {
             throw new RuntimeException('Connector package directory is not a safe writable directory.');
         }
-        @chmod($directory, 0700);
+        if (! @chmod($directory, 0700)) {
+            throw new RuntimeException('Connector package directory permissions could not be configured.');
+        }
 
         if (file_exists($path) || file_exists($sidecar)) {
             $verified = $this->verify($path);
             if ($verified['version'] !== $version || ! hash_equals($sourceHash, $verified['source_sha256'])) {
                 throw new RuntimeException("Immutable Connector package {$version} does not match current source; bump the release version.");
             }
+
+            $this->setDownloadPermissions($path, $sidecar);
 
             return $verified;
         }
@@ -107,7 +111,20 @@ final class ConnectorPackageArtifact
             throw new RuntimeException('Connector package manifest could not be atomically published.');
         }
 
-        return $this->verify($path);
+        $verified = $this->verify($path);
+        $this->setDownloadPermissions($path, $sidecar);
+
+        return $verified;
+    }
+
+    private function setDownloadPermissions(string $path, string $sidecar): void
+    {
+        // storage/ has a default ACL for deploy and www-data. These group-class
+        // bits set its ACL mask: keep the FPM user's inherited read/search grant
+        // effective while ensuring other users still have no access.
+        if (! @chmod($path, 0640) || ! @chmod($sidecar, 0640) || ! @chmod(dirname($path), 0750)) {
+            throw new RuntimeException('Connector package permissions could not be configured for downloads.');
+        }
     }
 
     /** @return array{version:string, source_sha256:string, source_revision:?string, package_sha256:string, path:string} */

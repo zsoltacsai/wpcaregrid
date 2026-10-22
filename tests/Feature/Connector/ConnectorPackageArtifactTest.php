@@ -53,6 +53,34 @@ final class ConnectorPackageArtifactTest extends TestCase
         $this->assertSame($package['package_sha256'], app(ConnectorPackageArtifact::class)->verify()['package_sha256']);
     }
 
+    public function test_package_acl_mask_allows_web_reads_without_public_access(): void
+    {
+        $this->artisan('connector:package')->assertSuccessful();
+        $package = app(ConnectorPackageArtifact::class)->verify();
+        $sidecar = $package['path'].'.manifest.json';
+
+        $this->assertSame(0750, fileperms(dirname($package['path'])) & 0777);
+        $this->assertSame(0640, fileperms($package['path']) & 0777);
+        $this->assertSame(0640, fileperms($sidecar) & 0777);
+    }
+
+    public function test_existing_private_package_permissions_are_repaired_after_verification(): void
+    {
+        $this->artisan('connector:package')->assertSuccessful();
+        $package = app(ConnectorPackageArtifact::class)->verify();
+        $sidecar = $package['path'].'.manifest.json';
+        chmod(dirname($package['path']), 0700);
+        chmod($package['path'], 0600);
+        chmod($sidecar, 0600);
+
+        $this->artisan('connector:package')->assertSuccessful();
+
+        $this->assertSame(0750, fileperms(dirname($package['path'])) & 0777);
+        $this->assertSame(0640, fileperms($package['path']) & 0777);
+        $this->assertSame(0640, fileperms($sidecar) & 0777);
+        $this->assertSame($package['package_sha256'], app(ConnectorPackageArtifact::class)->verify()['package_sha256']);
+    }
+
     public function test_package_hash_tampering_fails_closed(): void
     {
         $this->artisan('connector:package')->assertSuccessful();
