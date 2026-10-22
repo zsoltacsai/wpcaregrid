@@ -13,6 +13,7 @@ PRIVACY_KEYS = (
     "bulk_retention_execution_enabled",
     "synthetic_profile_anonymization_enabled",
 )
+INCIDENT_KEYS = ("auto_open", "auto_backup")
 IDENTITY = (
     ("deployment_environment", "staging"),
     ("deployment_hostname", "stg1.wpcaregrid.com"),
@@ -46,7 +47,7 @@ def sanitize(raw: str) -> list[str]:
             return ["DIAGNOSTIC_STATUS=UNKNOWN", f"DIAGNOSTIC_CODE={parts[2]}"]
         raise InvalidOutput
 
-    if len(rows) != len(PRIVACY_KEYS) + len(IDENTITY):
+    if len(rows) != len(PRIVACY_KEYS) + len(INCIDENT_KEYS) + len(IDENTITY):
         raise InvalidOutput
 
     safe: list[str] = []
@@ -56,7 +57,15 @@ def sanitize(raw: str) -> list[str]:
             raise InvalidOutput
         safe.append(f"privacy.{key}={parts[2]}")
 
-    for line, (key, expected) in zip(rows[len(PRIVACY_KEYS) :], IDENTITY, strict=True):
+    incident_start = len(PRIVACY_KEYS)
+    for line, key in zip(rows[incident_start : incident_start + len(INCIDENT_KEYS)], INCIDENT_KEYS, strict=True):
+        parts = line.split("|")
+        if len(parts) != 3 or parts[0] != "SECURITY" or parts[1] != key or parts[2] not in {"TRUE", "FALSE", "UNKNOWN"}:
+            raise InvalidOutput
+        safe.append(f"security.incidents.{key}={parts[2]}")
+
+    identity_start = incident_start + len(INCIDENT_KEYS)
+    for line, (key, expected) in zip(rows[identity_start:], IDENTITY, strict=True):
         parts = line.split("|")
         if len(parts) != 3 or parts[0] != "IDENTITY" or parts[1] != key:
             raise InvalidOutput
