@@ -778,13 +778,11 @@ class WordfenceV3IntegrationTest extends TestCase
     {
         $this->assertSame(0, $this->importJson($this->fixtureJson()));
         $knownGood = file_get_contents($this->indexPath);
-        app()->instance(WordfenceIndexAccess::class, new class extends WordfenceIndexAccess
-        {
-            public function allowPhpReadOnGeneration(string $path): void
-            {
-                throw new \RuntimeException('synthetic ACL failure');
-            }
-        });
+        $access = $this->createMock(WordfenceIndexAccess::class);
+        $access->expects($this->atLeastOnce())
+            ->method('allowPhpReadOnGeneration')
+            ->willThrowException(new \RuntimeException('synthetic ACL failure'));
+        app()->instance(WordfenceIndexAccess::class, $access);
 
         $next = $this->record('22345678-1234-4234-8234-123456789abc');
         $this->assertSame(1, $this->importJson($this->fixtureJson($next)));
@@ -794,8 +792,8 @@ class WordfenceV3IntegrationTest extends TestCase
 
     public function test_imported_wordfence_index_grants_php_fpm_read_only_access_on_linux(): void
     {
-        if (PHP_OS_FAMILY !== 'Linux' || ! is_executable('/usr/bin/setfacl') || ! is_executable('/usr/bin/getfacl')
-            || ! function_exists('posix_geteuid') || posix_geteuid() === 0 || ! function_exists('posix_getpwnam') || posix_getpwnam('www-data') === false) {
+        if (PHP_OS_FAMILY !== 'Linux' || !is_executable('/usr/bin/setfacl') || !is_executable('/usr/bin/getfacl')
+            || !function_exists('posix_geteuid') || posix_geteuid() === 0 || !function_exists('posix_getpwnam') || posix_getpwnam('www-data') === false) {
             $this->markTestSkipped('The Linux ACL integration prerequisites are unavailable.');
         }
 

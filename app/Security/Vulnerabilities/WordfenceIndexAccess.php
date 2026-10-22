@@ -42,7 +42,7 @@ class WordfenceIndexAccess
 
     private function assertNonRootPublisher(): void
     {
-        if (! function_exists('posix_geteuid') || posix_geteuid() === 0 || ! function_exists('posix_getpwnam') || posix_getpwnam(self::PHP_FPM_USER) === false) {
+        if (!function_exists('posix_geteuid') || posix_geteuid() === 0 || !function_exists('posix_getpwnam') || posix_getpwnam(self::PHP_FPM_USER) === false) {
             throw new RuntimeException('The vulnerability index publisher identity is not supported.');
         }
     }
@@ -50,7 +50,7 @@ class WordfenceIndexAccess
     private function assertOwnedRegularFile(string $path): void
     {
         $metadata = @lstat($path);
-        if ($metadata === false || ($metadata['mode'] & 0170000) !== 0100000 || ! $this->ownedByCurrentUser($metadata)) {
+        if ($metadata === false || ($metadata['mode'] & 0170000) !== 0100000 || !$this->ownedByCurrentUser($metadata)) {
             throw new RuntimeException('The vulnerability index file is not a safe regular file.');
         }
     }
@@ -58,7 +58,7 @@ class WordfenceIndexAccess
     private function assertOwnedDirectoryTree(string $path): void
     {
         $metadata = @lstat($path);
-        if ($metadata === false || ($metadata['mode'] & 0170000) !== 0040000 || ! $this->ownedByCurrentUser($metadata)) {
+        if ($metadata === false || ($metadata['mode'] & 0170000) !== 0040000 || !$this->ownedByCurrentUser($metadata)) {
             throw new RuntimeException('The vulnerability index generation is not a safe directory.');
         }
 
@@ -70,7 +70,7 @@ class WordfenceIndexAccess
             foreach ($iterator as $entry) {
                 $item = @lstat($entry->getPathname());
                 $type = $item === false ? 0 : $item['mode'] & 0170000;
-                if ($item === false || ! in_array($type, [0040000, 0100000], true) || ! $this->ownedByCurrentUser($item)) {
+                if ($item === false || !in_array($type, [0040000, 0100000], true) || !$this->ownedByCurrentUser($item)) {
                     throw new RuntimeException('The vulnerability index generation contains an unsafe filesystem entry.');
                 }
             }
@@ -87,7 +87,7 @@ class WordfenceIndexAccess
     /** @param list<string> $arguments */
     private function runSetfacl(array $arguments): void
     {
-        if (! is_executable(self::SETFACL)) {
+        if (!is_executable(self::SETFACL)) {
             throw new RuntimeException('The vulnerability index ACL utility is unavailable.');
         }
         $process = new Process([self::SETFACL, ...$arguments]);
@@ -98,7 +98,7 @@ class WordfenceIndexAccess
         } catch (Throwable) {
             throw new RuntimeException('The vulnerability index ACL could not be applied safely.');
         }
-        if (! $process->isSuccessful()) {
+        if (!$process->isSuccessful()) {
             throw new RuntimeException('The vulnerability index ACL could not be applied safely.');
         }
     }
