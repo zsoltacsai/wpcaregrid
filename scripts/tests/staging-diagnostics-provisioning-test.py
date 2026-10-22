@@ -706,6 +706,37 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
         with self.assertRaisesRegex(provision.ProvisionError, "SSHD_AUTH_POLICY_UNSAFE"):
             provision.validate_sshd_effective_config(output.replace("usepam yes", "usepam no"))
 
+    def test_effective_sshd_config_enforces_account_allow_and_deny_lists(self) -> None:
+        base = (
+            "usepam yes", "pubkeyauthentication yes", "passwordauthentication no",
+            "kbdinteractiveauthentication no", "gssapiauthentication no",
+            "hostbasedauthentication no", "authorizedkeyscommand none",
+            "trustedusercakeys none", "forcecommand none", "permituserenvironment no",
+            "authorizedkeysfile .ssh/authorized_keys",
+            "subsystem sftp /usr/lib/openssh/sftp-server",
+        )
+
+        def check(*directives: str) -> None:
+            provision.validate_sshd_effective_config("\n".join((*base, *directives)))
+
+        check("allowusers deploy caregrid-diagnostics", "allowgroups caregrid-diagnostics")
+        check("denyusers root", "denygroups deploy")
+
+        rejected = (
+            ("allowusers deploy", "SSHD_ACCESS_POLICY_DENIES_ACCOUNT"),
+            ("allowgroups deploy", "SSHD_ACCESS_POLICY_DENIES_ACCOUNT"),
+            ("denyusers caregrid-diagnostics", "SSHD_ACCESS_POLICY_DENIES_ACCOUNT"),
+            ("denygroups caregrid-diagnostics", "SSHD_ACCESS_POLICY_DENIES_ACCOUNT"),
+            ("allowusers *", "SSHD_ACCESS_POLICY_UNPROVABLE"),
+            ("allowusers !caregrid-diagnostics", "SSHD_ACCESS_POLICY_UNPROVABLE"),
+            ("allowusers caregrid-diagnostics@*", "SSHD_ACCESS_POLICY_UNPROVABLE"),
+            ("denyusers !root", "SSHD_ACCESS_POLICY_UNPROVABLE"),
+        )
+        for directive, error in rejected:
+            with self.subTest(directive=directive):
+                with self.assertRaisesRegex(provision.ProvisionError, error):
+                    check(directive)
+
     def test_sudoers_pins_no_arguments_and_rejects_setenv(self) -> None:
         self.assertIn('wpcaregrid-staging-m12-readback ""', provision.SUDOERS_CONTENT)
         self.assertIn("!setenv", provision.SUDOERS_CONTENT)
