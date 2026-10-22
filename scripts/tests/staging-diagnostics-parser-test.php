@@ -26,6 +26,13 @@ $fixture = [
         'string_false' => 'false',
         'sensitive_unrelated_value' => 'SYNTHETIC_SECRET_MUST_NOT_BE_EMITTED',
     ],
+    'security' => [
+        'incidents' => [
+            'auto_open' => false,
+            'auto_backup' => false,
+            'unrelated_secret_like_value' => 'SYNTHETIC_SECRET_MUST_NOT_BE_EMITTED',
+        ],
+    ],
     'app' => [
         'deployment_environment' => 'staging',
         'deployment_hostname' => 'stg1.wpcaregrid.com',
@@ -41,7 +48,11 @@ assertTest(($parsed['privacy'][$privacyKeys[0]] ?? null) === false, 'actual bool
 assertTest(str_contains($output, 'M12|destructive_retention_enabled|FALSE'), 'false rendered as FALSE');
 assertTest(str_contains($output, 'M12|string_false|UNKNOWN') === false, 'unapproved keys not emitted');
 assertTest(! str_contains($output, 'SYNTHETIC_SECRET_MUST_NOT_BE_EMITTED'), 'unrelated sensitive value not emitted');
+assertTest(str_contains($output, 'SECURITY|auto_open|FALSE'), 'false auto-open setting rendered');
+assertTest(str_contains($output, 'SECURITY|auto_backup|FALSE'), 'false auto-backup setting rendered');
 assertTest(str_contains($output, 'IDENTITY|deployment_environment|staging'), 'expected identity rendered');
+assertTest(substr_count($output, "\n") === 10, 'exactly eleven approved rows rendered');
+assertTest(! str_contains($output, 'SYNTHETIC_SECRET_MUST_NOT_BE_EMITTED'), 'unrelated secret-like settings not emitted');
 
 $ownerOnlyAcl = "user::rw-\ngroup::---\nother::---\n";
 $phpFpmAcl = "user::rw-\nuser:www-data:r--\ngroup::---\nmask::r--\nother::---\n";
@@ -62,6 +73,22 @@ $wrongType = $fixture;
 $wrongType['privacy']['backup_deletion_enabled'] = 'false';
 $wrongTypeOutput = m12FormatValues($wrongType);
 assertTest(in_array('M12|backup_deletion_enabled|UNKNOWN', $wrongTypeOutput, true), 'string false is UNKNOWN');
+
+$missingIncident = $fixture;
+unset($missingIncident['security']['incidents']['auto_open']);
+assertTest(in_array('SECURITY|auto_open|UNKNOWN', m12FormatValues($missingIncident), true), 'missing incident setting is UNKNOWN');
+
+$wrongIncidentParent = $fixture;
+$wrongIncidentParent['security'] = 'unsupported';
+assertTest(in_array('SECURITY|auto_backup|UNKNOWN', m12FormatValues($wrongIncidentParent), true), 'unsupported incident parent is UNKNOWN');
+
+$wrongIncidentType = $fixture;
+$wrongIncidentType['security']['incidents']['auto_backup'] = 'false';
+assertTest(in_array('SECURITY|auto_backup|UNKNOWN', m12FormatValues($wrongIncidentType), true), 'string false incident setting is UNKNOWN');
+
+$enabledIncident = $fixture;
+$enabledIncident['security']['incidents']['auto_open'] = true;
+assertTest(in_array('SECURITY|auto_open|TRUE', m12FormatValues($enabledIncident), true), 'enabled auto-open is surfaced as TRUE');
 
 $mismatch = $fixture;
 $mismatch['app']['deployment_hostname'] = 'unsafe-provider-supplied-host.example';
