@@ -7,10 +7,10 @@ use App\Models\Website;
 use App\Models\WebsiteInventory;
 use App\Security\Vulnerabilities\AtomicIndexPublisher;
 use App\Security\Vulnerabilities\VulnerabilityScanner;
-use App\Security\Vulnerabilities\WordfenceFeed;
-use App\Security\Vulnerabilities\WordfenceIndexAccess;
 use App\Security\Vulnerabilities\WordfenceFeedAddressResolver;
+use App\Security\Vulnerabilities\WordfenceFeed;
 use App\Security\Vulnerabilities\WordfenceFeedProfiler;
+use App\Security\Vulnerabilities\WordfenceIndexAccess;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
@@ -792,8 +792,8 @@ class WordfenceV3IntegrationTest extends TestCase
 
     public function test_imported_wordfence_index_grants_php_fpm_read_only_access_on_linux(): void
     {
-        if (PHP_OS_FAMILY !== 'Linux' || !is_executable('/usr/bin/setfacl') || !is_executable('/usr/bin/getfacl')
-            || !function_exists('posix_geteuid') || posix_geteuid() === 0 || !function_exists('posix_getpwnam') || posix_getpwnam('www-data') === false) {
+        if (PHP_OS_FAMILY !== 'Linux' || ! is_executable('/usr/bin/setfacl') || ! is_executable('/usr/bin/getfacl')
+            || ! function_exists('posix_geteuid') || posix_geteuid() === 0 || ! function_exists('posix_getpwnam') || posix_getpwnam('www-data') === false) {
             $this->markTestSkipped('The Linux ACL integration prerequisites are unavailable.');
         }
 
