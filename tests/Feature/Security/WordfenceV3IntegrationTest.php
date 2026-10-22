@@ -191,14 +191,63 @@ class WordfenceV3IntegrationTest extends TestCase
 
         $knownGood = file_get_contents($this->indexPath);
         Log::spy();
-        $record['software'][0]['slug'] = '../wordpress';
+        $record['software'][0]['slug'] = "bad\nslug";
 
         $this->assertSame(1, $this->importJson($this->fixtureJson($record)));
         $this->assertSame($knownGood, file_get_contents($this->indexPath));
-        $this->assertStringNotContainsString('../wordpress', Artisan::output());
+        $this->assertStringNotContainsString("bad\nslug", Artisan::output());
         Log::shouldHaveReceived('warning')->once()->withArgs(static fn (string $message, array $context): bool => $message === 'Wordfence vulnerability feed synchronization failed.'
             && $context === ['failure_class' => 'feed_schema_invalid', 'failure_subcode' => 'software.slug_format']
         );
+    }
+
+    public function test_bounded_provider_identifier_is_indexed_without_becoming_a_filesystem_path(): void
+    {
+        $providerSlug = '../vendor/plugin.v2 beta';
+        $record = $this->record();
+        $record['software'][0]['slug'] = $providerSlug;
+
+        $this->assertSame(0, $this->importJson($this->fixtureJson($record)));
+        $source = WordfenceFeed::fromConfig();
+        $this->assertTrue($source->available());
+        $this->assertCount(1, $source->affecting('plugin', $providerSlug, '1.9.9'));
+
+        $manifest = json_decode((string) file_get_contents($this->indexPath), true, 8, JSON_THROW_ON_ERROR);
+        $generation = WordfenceFeed::dataRootFor($this->indexPath).'/'.$manifest['generation'];
+        $expectedFile = $generation.'/plugin/wfi-'.hash('sha256', $providerSlug).'.jsonl';
+        $this->assertFileExists($expectedFile);
+        $this->assertSame(realpath($generation.'/plugin'), realpath(dirname($expectedFile)));
+        $this->assertFileDoesNotExist($generation.'/vendor/plugin.v2 beta.jsonl');
+    }
+
+    public function test_opaque_filename_collision_fails_without_replacing_last_good_index(): void
+    {
+        $this->assertSame(0, $this->importJson($this->fixtureJson()));
+        $knownGood = file_get_contents($this->indexPath);
+        $record = $this->record();
+        $opaqueSlug = '/opaque-plugin';
+        $record['software'][0]['slug'] = $opaqueSlug;
+        $canonicalCollision = 'wfi-'.hash('sha256', $opaqueSlug);
+        $record['software'][] = array_replace($record['software'][0], ['slug' => $canonicalCollision]);
+
+        Log::spy();
+        $this->assertSame(1, $this->importJson($this->fixtureJson($record)));
+        $this->assertSame($knownGood, file_get_contents($this->indexPath));
+        Log::shouldHaveReceived('warning')->once()->withArgs(static fn (string $message, array $context): bool => $message === 'Wordfence vulnerability feed synchronization failed.'
+            && $context === ['failure_class' => 'feed_schema_invalid', 'failure_subcode' => 'software.slug_collision']
+        );
+    }
+
+    public function test_canonical_direct_slug_index_layout_remains_compatible(): void
+    {
+        $this->assertSame(0, $this->importJson($this->fixtureJson()));
+        $manifest = json_decode((string) file_get_contents($this->indexPath), true, 8, JSON_THROW_ON_ERROR);
+        $directory = WordfenceFeed::dataRootFor($this->indexPath).'/'.$manifest['generation'].'/plugin';
+        $this->assertFileExists($directory.'/fixture-plugin.jsonl');
+
+        $source = WordfenceFeed::fromConfig();
+        $this->assertTrue($source->available());
+        $this->assertCount(1, $source->affecting('plugin', 'fixture-plugin', '1.9.9'));
     }
 
     public function test_profiling_is_off_by_default_and_ordinary_sync_has_no_profile_side_effect(): void

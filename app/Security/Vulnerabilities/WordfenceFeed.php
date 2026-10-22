@@ -84,7 +84,10 @@ final class WordfenceFeed implements VulnerabilitySource
         foreach ($catalog as $group) {
             [$type, $slug] = explode('/', $group, 2);
             $expected[$type]++;
-            $groupFile = $generationPath.DIRECTORY_SEPARATOR.$type.DIRECTORY_SEPARATOR.$slug.'.jsonl';
+            $groupFile = self::groupFilePath($generationPath, $type, $slug);
+            if ($groupFile === null) {
+                return false;
+            }
             if (is_link($groupFile) || ! is_file($groupFile)) {
                 return false;
             }
@@ -103,7 +106,7 @@ final class WordfenceFeed implements VulnerabilitySource
             }
             $actual = 0;
             foreach (new \FilesystemIterator($directory, \FilesystemIterator::SKIP_DOTS) as $item) {
-                if ($item->isLink() || ! $item->isFile() || ! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}\.jsonl$/', $item->getFilename())) {
+                if ($item->isLink() || ! $item->isFile() || ! self::isGroupFilename($item->getFilename())) {
                     return false;
                 }
                 $actual++;
@@ -123,8 +126,8 @@ final class WordfenceFeed implements VulnerabilitySource
         if (! $this->available() || $version === '' || ! in_array($type, ['core', 'plugin', 'theme'], true)) {
             return [];
         }
-        $slug = $type === 'core' ? 'wordpress' : strtolower($slug);
-        if (! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug)) {
+        $slug = $type === 'core' ? 'wordpress' : self::normalizeSoftwareSlug($slug);
+        if (! self::isSafeSoftwareSlug($slug)) {
             return [];
         }
 
@@ -143,9 +146,9 @@ final class WordfenceFeed implements VulnerabilitySource
 
                 return [];
             }
-            $path = $generationPath.DIRECTORY_SEPARATOR.$type.DIRECTORY_SEPARATOR.$slug.'.jsonl';
-            $size = @filesize($path);
-            if (is_link($path) || ! is_file($path) || $size === false || $size > 8 * 1024 * 1024) {
+            $path = self::groupFilePath($generationPath, $type, $slug);
+            $size = $path === null ? false : @filesize($path);
+            if ($path === null || is_link($path) || ! is_file($path) || $size === false || $size > 8 * 1024 * 1024) {
                 $this->invalidIndex = true;
 
                 return [];
@@ -238,6 +241,7 @@ final class WordfenceFeed implements VulnerabilitySource
         }
 
         $groups = [];
+        $groupFileOwners = [];
         $groupBytes = [];
         $records = 0;
         $entries = 0;
@@ -265,9 +269,15 @@ final class WordfenceFeed implements VulnerabilitySource
                         if (count($groups) >= 50_000) {
                             throw new WordfenceSyncFailure('feed_group_limit', 'The vulnerability feed exceeds the supported software-group count.');
                         }
-                        $path = $staging.DIRECTORY_SEPARATOR.$type.DIRECTORY_SEPARATOR.$slug.'.jsonl';
+                        $filename = self::groupFilename($slug);
+                        $fileKey = $type.'/'.$filename;
+                        if (isset($groupFileOwners[$fileKey]) && $groupFileOwners[$fileKey] !== $groupKey) {
+                            throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains colliding software identifiers.', subcode: 'software.slug_collision');
+                        }
+                        $path = $staging.DIRECTORY_SEPARATOR.$type.DIRECTORY_SEPARATOR.$filename;
                         File::ensureDirectoryExists(dirname($path));
                         $groups[$groupKey] = $path;
+                        $groupFileOwners[$fileKey] = $groupKey;
                     }
                     $line = json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n";
                     $indexBytes += strlen($line);
@@ -387,15 +397,15 @@ final class WordfenceFeed implements VulnerabilitySource
         if (! is_string($software['name'] ?? null)) {
             throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains invalid software metadata.', subcode: 'software.name_type');
         }
-        $slug = strtolower($slug);
+        $slug = self::normalizeSoftwareSlug($slug);
         if ($type === 'core') {
-            if ($slug !== '' && ! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug)) {
+            if (! self::isSafeSoftwareSlug($slug, allowEmpty: true)) {
                 throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid software slug.', subcode: 'software.slug_format');
             }
             // Wordfence uses slug as a provider-side software identifier. Keep accepting
             // safe provider identifiers, but map core records to our stable inventory key.
             $slug = 'wordpress';
-        } elseif (! preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug)) {
+        } elseif (! self::isSafeSoftwareSlug($slug)) {
             throw new WordfenceSyncFailure('feed_schema_invalid', 'The vulnerability feed contains an invalid software slug.', subcode: 'software.slug_format');
         }
         $versions = $software['affected_versions'] ?? null;
@@ -536,6 +546,62 @@ final class WordfenceFeed implements VulnerabilitySource
         return trim($version) !== '';
     }
 
+    /** Wordfence documents software slugs as identifiers, not as a fixed ASCII grammar. */
+    public static function isSafeSoftwareSlug(mixed $slug, bool $allowEmpty = false): bool
+    {
+        if (! is_string($slug) || strlen($slug) > 128 || preg_match('//u', $slug) !== 1
+            || preg_match('/[\p{Cc}\p{Cf}]/u', $slug) === 1) {
+            return false;
+        }
+
+        if ($slug === '' && $allowEmpty) {
+            return true;
+        }
+
+        return $slug !== '' && trim($slug) === $slug
+            && preg_match('/^[\p{Z}]|[\p{Z}]$/u', $slug) !== 1;
+    }
+
+    public static function normalizeSoftwareSlug(string $slug): string
+    {
+        return strtolower($slug);
+    }
+
+    private static function groupFilePath(string $generationPath, string $type, string $slug): ?string
+    {
+        if (! in_array($type, ['core', 'plugin', 'theme'], true) || ! self::isSafeSoftwareSlug($slug)) {
+            return null;
+        }
+
+        $directory = $generationPath.DIRECTORY_SEPARATOR.$type;
+        $hashedPath = $directory.DIRECTORY_SEPARATOR.self::groupFilename($slug);
+        if (file_exists($hashedPath) || is_link($hashedPath)) {
+            return $hashedPath;
+        }
+
+        // Read generations from the previous direct-slug filename format.
+        if (preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug)) {
+            $legacyPath = $directory.DIRECTORY_SEPARATOR.$slug.'.jsonl';
+            if (file_exists($legacyPath) || is_link($legacyPath)) {
+                return $legacyPath;
+            }
+        }
+
+        return $hashedPath;
+    }
+
+    private static function groupFilename(string $slug): string
+    {
+        $filename = preg_match('/^[a-z0-9][a-z0-9_-]{0,99}$/', $slug) ? $slug : 'wfi-'.hash('sha256', $slug);
+
+        return $filename.'.jsonl';
+    }
+
+    private static function isGroupFilename(string $filename): bool
+    {
+        return preg_match('/^(?:wfi-[a-f0-9]{64}|[a-z0-9][a-z0-9_-]{0,99})\.jsonl$/', $filename) === 1;
+    }
+
     private function readManifest(): ?array
     {
         if ($this->manifest !== null) {
@@ -588,7 +654,16 @@ final class WordfenceFeed implements VulnerabilitySource
         }
         $seen = [];
         foreach ($catalog as $group) {
-            if (! is_string($group) || ! preg_match('#^(core|plugin|theme)/[a-z0-9][a-z0-9_-]{0,99}$#', $group) || isset($seen[$group])) {
+            if (! is_string($group) || isset($seen[$group])) {
+                return null;
+            }
+            $parts = explode('/', $group, 2);
+            if (count($parts) !== 2) {
+                return null;
+            }
+            [$type, $slug] = $parts;
+            if (! in_array($type, ['core', 'plugin', 'theme'], true)
+                || ! self::isSafeSoftwareSlug($slug, allowEmpty: $type === 'core')) {
                 return null;
             }
             $seen[$group] = true;
