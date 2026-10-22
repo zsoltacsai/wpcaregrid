@@ -287,11 +287,11 @@ Live restore is off (`BACKUP_RESTORE_ENABLED=false`) until the staging rehearsal
 
 ### Staging deployment
 
-Use the reviewed deployment controller and its co-located `scripts/verify-release-ci.py` from the same exact merged primary commit on the staging VPS only. Prepare the two files from a trusted local clone at the exact source commit, transfer them into a private staging directory, verify both SHA-256 values there, and run the controller as `deploy` with `/var/www/wpcaregrid` as its working directory. Do not run the controller from the application checkout: it resolves `verify-release-ci.py` relative to its own file, and the live checkout may have an outdated or missing verifier. The controller still reads the scheduler wrapper and post-deployment receipt writer from the application checkout at their documented stages.
+Use the reviewed deployment controller and its co-located `scripts/verify-release-ci.py` from the same exact merged primary commit on the staging VPS only. The controller source SHA is an independently reviewed tool version: update it and both file hashes whenever the controller or CI verifier changes. The deployment target has its own exact-SHA push-CI gate. Prepare the two files from a trusted local clone at the exact source commit, transfer them into a private staging directory, verify both SHA-256 values there, and run the controller as `deploy` with `/var/www/wpcaregrid` as its working directory. Do not run the controller from the application checkout: it resolves `verify-release-ci.py` relative to its own file, and the live checkout may have an outdated or missing verifier. The controller still reads the scheduler wrapper and post-deployment receipt writer from the application checkout at their documented stages.
 
-The reviewed controller source commit is `3f2340a98024ff7d73d38816efc21da38a20fa6c`. Its expected file hashes are:
+The reviewed controller source commit is `ebc64a95def535f3f1087f1755f4193ff6d769ab`. Its expected file hashes are:
 
-- `scripts/deploy-staging.sh`: `f950ceb1824fcf0e5376aa49265534f57e79e581fbd1a33e1427aab37fd3c75a`
+- `scripts/deploy-staging.sh`: `8727167bacf1c9d4ba782afdc2434791db73fa9b4d7eb48a54a2ee43f5575491`
 - `scripts/verify-release-ci.py`: `0243d51fd55ef7ddb21fcc11e2804313ac3537cc0efe74da63a5747d79a7a4c7`
 
 `CONTROLLER_SOURCE_SHA` identifies only the commit used to extract the reviewed controller files. It is not the release target. At the later, separately approved deployment, set `DEPLOYMENT_TARGET_SHA` to the exact then-current primary-branch tip after its push CI has passed all seven mandatory jobs, including the MySQL process-concurrency gate. Never default the target to `CONTROLLER_SOURCE_SHA`; the target may change when this documentation PR or other work merges.
@@ -299,12 +299,12 @@ The reviewed controller source commit is `3f2340a98024ff7d73d38816efc21da38a20fa
 On a trusted workstation with the controller source commit available, extract the Git blobs without checkout filters, then verify the local copies:
 
 ```sh
-CONTROLLER_SOURCE_SHA=3f2340a98024ff7d73d38816efc21da38a20fa6c
+CONTROLLER_SOURCE_SHA=ebc64a95def535f3f1087f1755f4193ff6d769ab
 git cat-file -e "${CONTROLLER_SOURCE_SHA}^{commit}"
 git cat-file blob "${CONTROLLER_SOURCE_SHA}:scripts/deploy-staging.sh" > deploy-staging.sh
 git cat-file blob "${CONTROLLER_SOURCE_SHA}:scripts/verify-release-ci.py" > verify-release-ci.py
 printf '%s  %s\n' \
-  f950ceb1824fcf0e5376aa49265534f57e79e581fbd1a33e1427aab37fd3c75a deploy-staging.sh \
+  8727167bacf1c9d4ba782afdc2434791db73fa9b4d7eb48a54a2ee43f5575491 deploy-staging.sh \
   0243d51fd55ef7ddb21fcc11e2804313ac3537cc0efe74da63a5747d79a7a4c7 verify-release-ci.py \
   | sha256sum -c -
 ```
@@ -314,7 +314,7 @@ For the separately approved deployment preparation, create a new release-specifi
 The target SHA is supplied separately at deployment time. The following guard intentionally stops if that separately approved exact current branch tip has not been provided; do not substitute the controller source SHA:
 
 ```sh
-CONTROLLER_SOURCE_SHA=3f2340a98024ff7d73d38816efc21da38a20fa6c
+CONTROLLER_SOURCE_SHA=ebc64a95def535f3f1087f1755f4193ff6d769ab
 : "${DEPLOYMENT_TARGET_SHA:?Set this to the separately approved exact current primary-branch tip}"
 [[ "${DEPLOYMENT_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 2
 cd /var/www/wpcaregrid
@@ -328,7 +328,7 @@ Rollback is a separate explicit operation, never an alternate forward-target mod
 The rollback command uses the same protected controller source directory as a forward deployment. Keep the rollback target distinct, and preserve the existing root-approved SHA-file requirement described below:
 
 ```sh
-CONTROLLER_SOURCE_SHA=3f2340a98024ff7d73d38816efc21da38a20fa6c
+CONTROLLER_SOURCE_SHA=ebc64a95def535f3f1087f1755f4193ff6d769ab
 : "${ROLLBACK_TARGET_SHA:?Set this to the separately authorized rollback SHA}"
 [[ "${ROLLBACK_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 2
 cd /var/www/wpcaregrid
