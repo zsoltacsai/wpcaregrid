@@ -309,6 +309,11 @@ final class WordfenceFeed implements VulnerabilitySource
                 throw new WordfenceSyncFailure('index_publication_failure', 'The vulnerability index catalog could not be written safely.');
             }
             $publishedGeneration = $dataRoot.DIRECTORY_SEPARATOR.$generation;
+            try {
+                app(WordfenceIndexAccess::class)->allowPhpReadOnGeneration($staging);
+            } catch (Throwable $exception) {
+                throw new WordfenceSyncFailure('index_publication_failure', 'The vulnerability index permissions could not be prepared safely.', $exception);
+            }
             if (! @rename($staging, $publishedGeneration)) {
                 throw new WordfenceSyncFailure('index_publication_failure', 'The vulnerability index generation could not be installed.');
             }
@@ -335,7 +340,7 @@ final class WordfenceFeed implements VulnerabilitySource
                     throw new WordfenceSyncFailure('index_publication_failure', 'The vulnerability index manifest could not be written.');
                 }
                 try {
-                    ($publisher ?? new AtomicIndexPublisher)->publish($temporary, $indexPath);
+                    ($publisher ?? new AtomicIndexPublisher(app(WordfenceIndexAccess::class)))->publish($temporary, $indexPath);
                 } catch (Throwable $exception) {
                     throw new WordfenceSyncFailure('index_publication_failure', 'The validated vulnerability index could not be published.', $exception);
                 }
@@ -618,8 +623,12 @@ final class WordfenceFeed implements VulnerabilitySource
             return null;
         }
         try {
-            $manifest = json_decode((string) file_get_contents($path), true, 8, JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
+            $contents = @file_get_contents($path);
+            if ($contents === false) {
+                return null;
+            }
+            $manifest = json_decode($contents, true, 8, JSON_THROW_ON_ERROR);
+        } catch (\ErrorException|\JsonException) {
             return null;
         }
         if (! is_array($manifest) || ($manifest['format'] ?? null) !== 'wordfence-intelligence-v3-scanner'
@@ -645,8 +654,12 @@ final class WordfenceFeed implements VulnerabilitySource
             return null;
         }
         try {
-            $catalog = json_decode((string) file_get_contents($path), true, 4, JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
+            $contents = @file_get_contents($path);
+            if ($contents === false) {
+                return null;
+            }
+            $catalog = json_decode($contents, true, 4, JSON_THROW_ON_ERROR);
+        } catch (\ErrorException|\JsonException) {
             return null;
         }
         if (! is_array($catalog) || ! array_is_list($catalog) || count($catalog) !== $expectedGroups) {
