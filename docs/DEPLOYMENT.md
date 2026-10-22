@@ -287,19 +287,52 @@ Live restore is off (`BACKUP_RESTORE_ENABLED=false`) until the staging rehearsal
 
 ### Staging deployment
 
-Use the reviewed deployment controller and its co-located `scripts/verify-release-ci.py` from the same exact merged primary commit on the staging VPS only. Before a target-code deployment, place both reviewed files in a protected temporary controller directory, verify their source commit and hashes, and invoke the controller as `deploy` from `/var/www/wpcaregrid`. Do not rely on the current application checkout for the verifier: it may predate the verifier and is not the trust source for release authorization. The controller still reads the scheduler wrapper and post-deployment receipt writer from the application checkout at their documented stages. Supply the exact full commit SHA:
+Use the reviewed deployment controller and its co-located `scripts/verify-release-ci.py` from the same exact merged primary commit on the staging VPS only. Prepare the two files from a trusted local clone at the exact source commit, transfer them into a private staging directory, verify both SHA-256 values there, and run the controller as `deploy` with `/var/www/wpcaregrid` as its working directory. Do not run the controller from the application checkout: it resolves `verify-release-ci.py` relative to its own file, and the live checkout may have an outdated or missing verifier. The controller still reads the scheduler wrapper and post-deployment receipt writer from the application checkout at their documented stages.
+
+The reviewed controller source commit is `3f2340a98024ff7d73d38816efc21da38a20fa6c`. Its expected file hashes are:
+
+- `scripts/deploy-staging.sh`: `f950ceb1824fcf0e5376aa49265534f57e79e581fbd1a33e1427aab37fd3c75a`
+- `scripts/verify-release-ci.py`: `0243d51fd55ef7ddb21fcc11e2804313ac3537cc0efe74da63a5747d79a7a4c7`
+
+`CONTROLLER_SOURCE_SHA` identifies only the commit used to extract the reviewed controller files. It is not the release target. At the later, separately approved deployment, set `DEPLOYMENT_TARGET_SHA` to the exact then-current primary-branch tip after its push CI has passed all seven mandatory jobs, including the MySQL process-concurrency gate. Never default the target to `CONTROLLER_SOURCE_SHA`; the target may change when this documentation PR or other work merges.
+
+On a trusted workstation with the controller source commit available, extract the Git blobs without checkout filters, then verify the local copies:
 
 ```sh
+CONTROLLER_SOURCE_SHA=3f2340a98024ff7d73d38816efc21da38a20fa6c
+git cat-file -e "${CONTROLLER_SOURCE_SHA}^{commit}"
+git cat-file blob "${CONTROLLER_SOURCE_SHA}:scripts/deploy-staging.sh" > deploy-staging.sh
+git cat-file blob "${CONTROLLER_SOURCE_SHA}:scripts/verify-release-ci.py" > verify-release-ci.py
+printf '%s  %s\n' \
+  f950ceb1824fcf0e5376aa49265534f57e79e581fbd1a33e1427aab37fd3c75a deploy-staging.sh \
+  0243d51fd55ef7ddb21fcc11e2804313ac3537cc0efe74da63a5747d79a7a4c7 verify-release-ci.py \
+  | sha256sum -c -
+```
+
+For the separately approved deployment preparation, create a new release-specific directory on staging. If the private parent already exists, verify that it is a real directory owned by `deploy:deploy` with mode `0700`; stop if it is a symlink or has different metadata. Create the SHA-named child with `mkdir -m 0700` so an existing path is never reused, transfer only the two verified files using the `caregrid-staging` SSH profile, then set ownership to `deploy:deploy`, mode `0700` on the controller and `0600` on the verifier. Verify the directory and file metadata, reject symlinks, and run `sha256sum -c` against the expected hashes before execution. Keep the directory private and remove it only under a separately approved cleanup step.
+
+The target SHA is supplied separately at deployment time. The following guard intentionally stops if that separately approved exact current branch tip has not been provided; do not substitute the controller source SHA:
+
+```sh
+CONTROLLER_SOURCE_SHA=3f2340a98024ff7d73d38816efc21da38a20fa6c
+: "${DEPLOYMENT_TARGET_SHA:?Set this to the separately approved exact current primary-branch tip}"
+[[ "${DEPLOYMENT_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 2
 cd /var/www/wpcaregrid
-bash scripts/deploy-staging.sh <full-40-character-commit-sha>
+bash "/home/deploy/private-deploy-controller/${CONTROLLER_SOURCE_SHA}/deploy-staging.sh" "${DEPLOYMENT_TARGET_SHA}"
 ```
 
 Forward deployment accepts only an exact 40-character SHA equal to the fetched tip of `claude/ecstatic-wozniak-oemyuf`. Before any backup or gate mutation, the controller requires a completed successful `push` run of `.github/workflows/ci.yml` attached to that exact SHA and verifies all seven mandatory jobs, including the MySQL process/concurrency step. The check uses unauthenticated read-only GitHub API requests and fails closed on missing, in-progress, canceled, failed, rate-limited, malformed or oversized evidence. PR-head CI, a parent SHA, an ancestor, or a feature-branch run cannot authorize a forward deploy. The script serializes concurrent deploys, rejects dirty or untracked repository state, and never runs `git clean` or resets local changes. `.env` and `storage/` are deployment data, not release files.
 
 Rollback is a separate explicit operation, never an alternate forward-target mode:
 
+The rollback command uses the same protected controller source directory as a forward deployment. Keep the rollback target distinct, and preserve the existing root-approved SHA-file requirement described below:
+
 ```sh
-bash scripts/deploy-staging.sh --rollback <full-40-character-commit-sha>
+CONTROLLER_SOURCE_SHA=3f2340a98024ff7d73d38816efc21da38a20fa6c
+: "${ROLLBACK_TARGET_SHA:?Set this to the separately authorized rollback SHA}"
+[[ "${ROLLBACK_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 2
+cd /var/www/wpcaregrid
+bash "/home/deploy/private-deploy-controller/${CONTROLLER_SOURCE_SHA}/deploy-staging.sh" --rollback "${ROLLBACK_TARGET_SHA}"
 ```
 
 The rollback target must be an ancestor of the currently deployed baseline and fetched authoritative branch tip, must have the same exact-SHA successful mandatory CI evidence, and must match the single SHA that a staging administrator previously placed in the root-owned `/var/lib/wpcaregrid/approved-rollback-sha` file (`root:root`, mode `0600`, exactly 40 lowercase hexadecimal characters plus newline). The deploy user cannot write that approval file. Updating it is a separate audited root/admin action after reviewing a known-good staging release. If the file is absent, unsafe, or mismatched, rollback is refused. Automatic code recovery after a failed deployment remains a separate fail-closed baseline-recovery path.
