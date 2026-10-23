@@ -10,6 +10,7 @@ use App\Security\Vulnerabilities\VulnerabilityScanner;
 use App\Security\Vulnerabilities\WordfenceFeed;
 use App\Security\Vulnerabilities\WordfenceFeedAddressResolver;
 use App\Security\Vulnerabilities\WordfenceFeedProfiler;
+use App\Security\Vulnerabilities\WordfenceIndexAccess;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
@@ -771,6 +772,50 @@ class WordfenceV3IntegrationTest extends TestCase
         } finally {
             $lock->release();
         }
+    }
+
+    public function test_index_permission_failure_preserves_the_last_known_good_generation(): void
+    {
+        $this->assertSame(0, $this->importJson($this->fixtureJson()));
+        $knownGood = file_get_contents($this->indexPath);
+        $access = $this->createMock(WordfenceIndexAccess::class);
+        $access->expects($this->atLeastOnce())
+            ->method('allowPhpReadOnGeneration')
+            ->willThrowException(new \RuntimeException('synthetic ACL failure'));
+        app()->instance(WordfenceIndexAccess::class, $access);
+
+        $next = $this->record('22345678-1234-4234-8234-123456789abc');
+        $this->assertSame(1, $this->importJson($this->fixtureJson($next)));
+        $this->assertSame($knownGood, file_get_contents($this->indexPath));
+        $this->assertTrue(WordfenceFeed::fromConfig()->available());
+    }
+
+    public function test_imported_wordfence_index_grants_php_fpm_read_only_access_on_linux(): void
+    {
+        if (PHP_OS_FAMILY !== 'Linux' || ! is_executable('/usr/bin/setfacl') || ! is_executable('/usr/bin/getfacl')
+            || ! function_exists('posix_geteuid') || posix_geteuid() === 0 || ! function_exists('posix_getpwnam') || posix_getpwnam('www-data') === false) {
+            $this->markTestSkipped('The Linux ACL integration prerequisites are unavailable.');
+        }
+
+        $this->assertSame(0, $this->importJson($this->fixtureJson()));
+        $manifest = json_decode((string) file_get_contents($this->indexPath), true, 8, JSON_THROW_ON_ERROR);
+        $generation = WordfenceFeed::dataRootFor($this->indexPath).'/'.$manifest['generation'];
+
+        $this->assertSame(['group::---', 'mask::r--', 'other::---', 'user::rw-', 'user:www-data:r--'], $this->aclEntries($this->indexPath));
+        $this->assertSame(['group::---', 'mask::r-x', 'other::---', 'user::rwx', 'user:www-data:r-x'], $this->aclEntries($generation));
+        $this->assertSame(['group::---', 'mask::r--', 'other::---', 'user::rw-', 'user:www-data:r--'], $this->aclEntries($generation.'/catalog.json'));
+        $this->assertSame(['group::---', 'mask::r--', 'other::---', 'user::rw-', 'user:www-data:r--'], $this->aclEntries($generation.'/plugin/fixture-plugin.jsonl'));
+    }
+
+    /** @return list<string> */
+    private function aclEntries(string $path): array
+    {
+        $process = new Process(['/usr/bin/getfacl', '-cp', $path]);
+        $process->mustRun();
+        $entries = array_values(array_filter(array_map('trim', explode("\n", $process->getOutput()))));
+        sort($entries);
+
+        return $entries;
     }
 
     public function test_publisher_failure_preserves_the_active_manifest(): void

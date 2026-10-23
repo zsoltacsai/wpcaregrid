@@ -4,6 +4,8 @@ namespace Tests\Feature\Owner;
 
 use App\Connector\HealthStatus;
 use App\Owner\SystemStatus;
+use App\Security\Vulnerabilities\VulnerabilitySource;
+use App\Security\Vulnerabilities\WordfenceFeed;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -38,6 +40,44 @@ class SystemStatusTest extends TestCase
         $this->assertCount(14, $this->states());
         $this->assertSame(HealthStatus::Healthy, $this->states()['privacy_retention']);
         $this->assertSame(HealthStatus::Healthy, $this->states()['privacy_exports']);
+    }
+
+    public function test_unreadable_vulnerability_manifest_does_not_make_owner_system_return_500(): void
+    {
+        if (PHP_OS_FAMILY !== 'Linux' || ! function_exists('posix_geteuid') || posix_geteuid() === 0) {
+            $this->markTestSkipped('Unreadable-file permission checks require a non-root Linux test process.');
+        }
+
+        $directory = storage_path('framework/testing/system-unreadable-'.bin2hex(random_bytes(6)));
+        mkdir($directory, 0700, true);
+        $feedPath = $directory.'/vulnerabilities.json';
+        $indexPath = WordfenceFeed::indexPathFor($feedPath);
+        $manifest = [
+            'format' => 'wordfence-intelligence-v3-scanner',
+            'source' => 'wordfence',
+            'endpoint' => 'https://www.wordfence.com/api/intelligence/v3/vulnerabilities/scanner',
+            'generation' => str_repeat('a', 32),
+            'started_at' => 1,
+            'created_at' => 1,
+            'entries' => 1,
+            'records' => 1,
+            'groups' => 1,
+        ];
+        file_put_contents($indexPath, json_encode($manifest, JSON_THROW_ON_ERROR));
+        chmod($indexPath, 0000);
+        clearstatcache(true, $indexPath);
+        config(['security.vulnerabilities.source' => 'wordfence', 'security.vulnerabilities.feed_path' => $feedPath]);
+        app()->instance(VulnerabilitySource::class, WordfenceFeed::fromConfig());
+        $this->asOwner();
+
+        try {
+            $this->get(route('owner.system'))->assertOk()->assertSee(__('owner.system.checks.security_scanner'));
+            $this->assertSame(HealthStatus::Unknown, $this->states()['security_scanner']);
+        } finally {
+            @chmod($indexPath, 0600);
+            @unlink($indexPath);
+            @rmdir($directory);
+        }
     }
 
     public function test_disabled_privacy_retention_gate_is_visible_as_safe_and_enabled_value_requires_attention(): void
