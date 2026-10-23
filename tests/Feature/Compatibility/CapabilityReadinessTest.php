@@ -11,6 +11,8 @@ use App\Connector\JobQueue;
 use App\Connector\JobType;
 use App\Models\User;
 use App\Operator\Permission;
+use App\Security\Vulnerabilities\NoVulnerabilitySource;
+use App\Security\Vulnerabilities\VulnerabilitySource;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Concerns\PairsConnectors;
 use Tests\TestCase;
@@ -175,6 +177,49 @@ final class CapabilityReadinessTest extends TestCase
 
         $this->assertSame('BLOCK', $results[Capability::SecurityScanReady->value]['status']);
         $this->assertContains('SCANNER_UNAVAILABLE', $results[Capability::SecurityScanReady->value]['reasons']);
+    }
+
+    public function test_snapshot_refresh_marks_security_scan_unavailable_when_vulnerability_source_is_unavailable(): void
+    {
+        $site = $this->pairedWebsite();
+        $website = $site['website']->fresh();
+        $connector = $website->activeConnector;
+        $facts = $this->inventoryPayload()['compatibility'];
+
+        $this->app->instance(VulnerabilitySource::class, new NoVulnerabilitySource);
+        $unavailable = app(CapabilitySnapshotStore::class)->refresh($website, $connector, $facts);
+
+        $this->assertSame('BLOCK', $unavailable->status(Capability::SecurityScanReady)->value);
+        $this->assertContains(
+            'SCANNER_UNAVAILABLE',
+            $unavailable->capabilities[Capability::SecurityScanReady->value]['reasons'],
+        );
+
+        $this->app->instance(VulnerabilitySource::class, new class implements VulnerabilitySource
+        {
+            public function name(): string
+            {
+                return 'test';
+            }
+
+            public function available(): bool
+            {
+                return true;
+            }
+
+            public function affecting(string $type, string $slug, string $version): array
+            {
+                return [];
+            }
+        });
+
+        $available = app(CapabilitySnapshotStore::class)->refresh($website, $connector, $facts);
+
+        $this->assertSame('PASS', $available->status(Capability::SecurityScanReady)->value);
+        $this->assertNotContains(
+            'SCANNER_UNAVAILABLE',
+            $available->capabilities[Capability::SecurityScanReady->value]['reasons'],
+        );
     }
 
     public function test_policy_change_or_expired_fact_snapshot_is_not_fresh(): void
