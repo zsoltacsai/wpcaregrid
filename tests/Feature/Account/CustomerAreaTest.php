@@ -28,7 +28,7 @@ class CustomerAreaTest extends TestCase
             ->assertSee('Active')
             ->assertSee('25 Oct 2026')
             ->assertSee('0 connected')
-            ->assertSee('Connect your first website')
+            ->assertSee(__('account.dashboard.setup_text'))
             ->assertSee(route('account.websites.create'))
             ->assertDontSee('Demo data');
     }

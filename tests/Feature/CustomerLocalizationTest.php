@@ -514,12 +514,12 @@ class CustomerLocalizationTest extends TestCase
         Subscription::factory()->for($customer)->create();
 
         $en = $this->actingAs($customer->user)->in('en')->get(route('account.dashboard'));
-        foreach (['Welcome back, Anna', 'Dashboard', 'Websites', 'Subscription', 'Billing', 'Profile', 'Log out', 'Connect your first website'] as $text) {
+        foreach (['Welcome back, Anna', 'Dashboard', 'Websites', 'Subscription', 'Billing', 'Profile', 'Log out', trans('account.dashboard.setup_text', [], 'en')] as $text) {
             $en->assertSee($text);
         }
 
         $hu = $this->actingAs($customer->user)->in('hu')->get(route('account.dashboard'));
-        foreach (['Üdv újra, Anna', 'Vezérlőpult', 'Weboldalak', 'Előfizetés', 'Számlázás', 'Profil', 'Kilépés', 'Csatlakoztassa az első weboldalát', 'Aktív'] as $text) {
+        foreach (['Üdv újra, Anna', 'Vezérlőpult', 'Weboldalak', 'Előfizetés', 'Számlázás', 'Profil', 'Kilépés', trans('account.dashboard.setup_text', [], 'hu'), 'Aktív'] as $text) {
             $hu->assertSee($text);
         }
         $hu->assertDontSee('Welcome back')->assertDontSee('Log out');
