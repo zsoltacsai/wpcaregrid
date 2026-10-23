@@ -129,7 +129,7 @@ final class JobQueue
 
                         return false;
                     }
-                    if ($reason = $this->refusal($website, $connector, $job->type, $job->payload ?? [])) {
+                    if ($reason = $this->refusal($website, $connector, $job->type, $job->payload ?? [], $job)) {
                         $job->update(['status' => JobStatus::Cancelled, 'error' => ['code' => 'JOB_NOT_ALLOWED', 'message' => $reason]]);
                         app(JobLifecycle::class)->finished($job);
 
@@ -153,7 +153,7 @@ final class JobQueue
                 return false;
             }
 
-            if ($reason = $this->refusal($website, $connector, $job->type, $job->payload ?? [])) {
+            if ($reason = $this->refusal($website, $connector, $job->type, $job->payload ?? [], $job)) {
                 $job->update(['status' => JobStatus::Cancelled, 'error' => ['code' => 'JOB_NOT_ALLOWED', 'message' => $reason]]);
                 app(JobLifecycle::class)->finished($job);
 
@@ -190,11 +190,18 @@ final class JobQueue
      *
      * @param  array<string, mixed>  $payload
      */
-    public function refusal(Website $website, ?Connector $connector, JobType $type, array $payload = []): ?string
+    public function refusal(Website $website, ?Connector $connector, JobType $type, array $payload = [], ?WebsiteJob $job = null): ?string
     {
         if ($type === JobType::SecurityScan
             && ($windowRefusal = app(M14SecurityScanWindowService::class)->refusalForScan($website)) !== null) {
             return $windowRefusal;
+        }
+
+        if ($type === JobType::SecurityScan
+            && $website->syntheticFixture()->exists()
+            && $website->syntheticFixture()->first()?->purpose === config('m14_security_fixture.purpose')
+            && ! app(M14SecurityScanWindowService::class)->scanJobAllowed($website, $payload, $job)) {
+            return 'M14_SCAN_NOT_BOUND_TO_ACTIVE_WINDOW';
         }
 
         $capability = $type->requiredCapability($payload);

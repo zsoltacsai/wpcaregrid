@@ -35,6 +35,10 @@ class BackupService
      */
     public function request(Website $website, BackupReason $reason, string $actor, ?BackupType $type = null, array $attributes = []): Backup
     {
+        if ($website->syntheticFixture?->purpose === 'm14-security') {
+            throw new BackupRefused('M14_FIXTURE_BACKUP_DISABLED');
+        }
+
         $decision = $this->policy->for($website, $reason);
         $type ??= $decision->type;
 

@@ -6,6 +6,8 @@ return [
     'fixture_enabled' => (bool) env('M14_SECURITY_FIXTURE_ENABLED', false),
     'controlled_polling_enabled' => (bool) env('M14_SECURITY_CONTROLLED_POLLING_ENABLED', false),
     'security_scan_enabled' => (bool) env('M14_SECURITY_SCAN_ENABLED', false),
+    // Explicitly opts one exact M14 scan into site-scoped incident/backup suppression.
+    'side_effect_isolation_enabled' => (bool) env('M14_SECURITY_SIDE_EFFECT_ISOLATION_ENABLED', false),
     'scan_window_minutes' => (int) env('M14_SECURITY_SCAN_WINDOW_MINUTES', 10),
     'site_uuid' => env('M14_SECURITY_SITE_UUID'),
     'customer_uuid' => env('M14_SECURITY_CUSTOMER_UUID'),

@@ -176,7 +176,7 @@ final class SyntheticFixturePolicy
             || ! is_string(config('m14_security_fixture.site_uuid'))
             || ! is_string(config('m14_security_fixture.customer_uuid'))
             || ! is_string(config('m14_security_fixture.site_host'))
-            || ! preg_match('/^m14-security-[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?\.staging\.wpcaregrid\.com$/D', (string) config('m14_security_fixture.site_host'))
+            || ! M14SecurityHost::isAllowed((string) config('m14_security_fixture.site_host'))
             || ! hash_equals((string) config('m14_security_fixture.site_uuid'), (string) $website->uuid)
             || $website->url !== 'https://'.(string) config('m14_security_fixture.site_host')
             || $fixture->environment !== 'staging'

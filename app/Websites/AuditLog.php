@@ -27,6 +27,7 @@ final class AuditLog
         'connector.paired', 'connector.disconnected',
         'license.expired',
         'security.scan_requested', 'security.scan_started', 'security.scan_completed', 'security.scan_partial', 'security.scan_failed', 'security.scan_cancelled',
+        'security.m14_test_side_effects_suppressed',
         'security.finding_opened', 'security.finding_confirmed', 'security.finding_status', 'security.finding_quarantined', 'security.finding_remediated',
         'security.incident_opened', 'security.incident_status', 'security.incident_resolved', 'security.incident_closed',
         'security.remediation_requested', 'security.remediation_refused', 'security.remediation_blocked', 'security.remediation_failed',
