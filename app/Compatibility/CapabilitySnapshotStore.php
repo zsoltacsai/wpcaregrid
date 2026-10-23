@@ -4,17 +4,26 @@ namespace App\Compatibility;
 
 use App\Models\Connector;
 use App\Models\Website;
+use App\Security\Vulnerabilities\VulnerabilitySource;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 final class CapabilitySnapshotStore
 {
-    public function __construct(private readonly CapabilityEvaluator $evaluator) {}
+    public function __construct(
+        private readonly CapabilityEvaluator $evaluator,
+        private readonly VulnerabilitySource $vulnerabilitySource,
+    ) {}
 
     public function refresh(Website $website, ?Connector $connector, ?array $facts, ?Carbon $evidenceCheckedAt = null): CapabilitySnapshot
     {
         $at = now();
-        $capabilities = $this->evaluator->evaluate($website, $connector, $facts);
+        $capabilities = $this->evaluator->evaluate(
+            $website,
+            $connector,
+            $facts,
+            scannerConfigured: $this->vulnerabilitySource->available(),
+        );
         $snapshot = DB::transaction(function () use ($website, $connector, $facts, $capabilities, $at, $evidenceCheckedAt) {
             $existing = CapabilitySnapshot::query()->where('website_id', $website->id)->lockForUpdate()->first();
             $previous = $existing?->capabilities ?? [];
