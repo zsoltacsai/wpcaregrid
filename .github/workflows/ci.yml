@@ -340,7 +340,7 @@ jobs:
           php artisan optimize:clear
 
   wordpress:
-    name: Connector tests (PHP ${{ matrix.php }}, WordPress ${{ matrix.wordpress }}, ${{ matrix.database }})
+    name: ${{ matrix.legacy_check_name || format('Connector tests (PHP {0}, WordPress {1}, {2})', matrix.php, matrix.wordpress, matrix.database) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -349,6 +349,12 @@ jobs:
         php: ['8.2', '8.3', '8.4', '8.5']
         wordpress: ['6.8', '7.1']
         database: [mysql, mariadb]
+        include:
+          # Preserve the protected primary branch's seven required check
+          # contexts while exercising the same PHP 8.4 / WP 7.1 fixtures.
+          - { php: '8.4', wordpress: '7.1', database: sqlite, legacy_check_name: 'Connector tests in WordPress (PHP 8.4, sqlite)' }
+          - { php: '8.4', wordpress: '7.1', database: mysql, legacy_check_name: 'Connector tests in WordPress (PHP 8.4, mysql)' }
+          - { php: '8.4', wordpress: '7.1', database: mariadb, legacy_check_name: 'Connector tests in WordPress (PHP 8.4, mariadb)' }
     services:
       mysql:
         image: ${{ matrix.database == 'mariadb' && 'mariadb:10.11' || 'mysql:8.4' }}
@@ -405,6 +411,7 @@ jobs:
       - name: Connector tests (real WordPress)
         working-directory: wordpress
         run: |
-          export WP_CAREGRID_TEST_MYSQL='root:ci-root-password@127.0.0.1/wordpress'
+          if [ "${{ matrix.database }}" != "sqlite" ]; then
+            export WP_CAREGRID_TEST_MYSQL='root:ci-root-password@127.0.0.1/wordpress'
+          fi
           vendor/bin/phpunit --display-skipped
-

@@ -18,12 +18,22 @@ final class CompatibilityMatrixTest extends TestCase
 
         $this->assertMatchesRegularExpression('/^8\.[2-5]$/D', $expectedPhp);
         $this->assertMatchesRegularExpression('/^(6\.8|7\.1)$/D', $expectedWordPress);
-        $this->assertContains($expectedDatabase, ['mysql', 'mariadb']);
+        $this->assertContains($expectedDatabase, ['sqlite', 'mysql', 'mariadb']);
         $this->assertSame($expectedPhp, PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION);
         $this->assertSame($expectedWordPress, preg_replace('/^(\d+\.\d+).*/', '$1', get_bloginfo('version')));
         $this->assertTrue(extension_loaded('mysqli'));
 
         $facts = (new EnvironmentFacts)->collect(false);
+        if ($expectedDatabase === 'sqlite') {
+            $this->assertFalse($wpdb->is_mysql);
+            // SQLite is a supported test fixture for read-only Connector
+            // behavior; it is not a database-backup compatibility claim.
+            $this->assertSame('unknown', $facts['database']['engine']);
+            $this->assertNull($facts['database']['version']);
+
+            return;
+        }
+
         $this->assertSame($expectedDatabase, $facts['database']['engine']);
         $this->assertIsString($facts['database']['version']);
         $this->assertNotSame('', $facts['database']['version']);
