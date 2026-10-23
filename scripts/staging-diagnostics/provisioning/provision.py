@@ -49,6 +49,16 @@ APP_ENV = "/var/www/wpcaregrid/.env"
 TRUSTED_SOURCE_PARENT = Path("/var/lib/wpcaregrid-staging-diagnostics-provisioning/source")
 PROVENANCE_PATH = ".wpcaregrid-provenance"
 
+# This is the exact helper shipped by the previously installed P3 source
+# revision c63537186d932c9f1a736a19a7ecaecef01b25d7. Permit only this
+# root-owned, correctly-moded legacy helper to be atomically upgraded;
+# unexpected files at managed paths remain conflicts.
+LEGACY_INSTALL_FILE_SHA256 = {
+    HELPER_PATH: frozenset(
+        {"0bc2a28f2df132c06de1de269cc3996c60625e1d758bc7554ea630e2e9bd4dce"}
+    ),
+}
+
 ACTIVATION_CHECK_PATH = "/usr/local/libexec/wpcaregrid-staging-diagnostics-activation-check"
 
 SOURCE_FILES = {
@@ -904,12 +914,32 @@ def _check_parent_path(path: Path, layout: Layout) -> None:
 
 def _write_install_file(path: Path, content: bytes, mode: int, layout: Layout) -> None:
     _check_parent_path(path, layout)
+    replace_legacy = False
+    existing = _lstat(path)
+    if existing is not None:
+        try:
+            managed_path = "/" + path.relative_to(layout.root).as_posix()
+        except ValueError:
+            managed_path = ""
+        accepted_hashes = LEGACY_INSTALL_FILE_SHA256.get(managed_path, frozenset())
+        if (
+            stat.S_ISREG(existing.st_mode)
+            and existing.st_uid == layout.owner_uid
+            and existing.st_gid == layout.owner_gid
+            and stat.S_IMODE(existing.st_mode) == mode
+        ):
+            try:
+                existing_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                existing_hash = ""
+            replace_legacy = existing_hash in accepted_hashes
     atomic_write(
         path,
         content,
         mode=mode,
         uid=layout.owner_uid,
         gid=layout.owner_gid,
+        replace=replace_legacy,
     )
 
 
