@@ -174,11 +174,13 @@ final class CapabilityEvaluator
         $wp = $website->wordpress_version;
         $phpStatus = ! is_string($php) || ! preg_match('/^\d+\.\d+(?:\.\d+)?$/', $php)
             ? $this->result(CapabilityStatus::Unknown, ReasonCode::FactMissing)
+            : (in_array($this->versionBranch($php), (array) config('compatibility.legacy_eol_php_branches', []), true)
+                ? $this->result(CapabilityStatus::Unknown, ReasonCode::RuntimeVersionEol)
             : (version_compare($php, config('compatibility.declared_minimum_php'), '<')
                 ? $this->result(CapabilityStatus::Block, ReasonCode::RuntimeVersionUnsupported)
                 : ($this->isTestedBranch($php, (array) config('compatibility.tested_php_branches', []))
                     ? $this->result(CapabilityStatus::Pass)
-                    : $this->result(CapabilityStatus::Unknown, ReasonCode::RuntimeVersionUntested)));
+                    : $this->result(CapabilityStatus::Unknown, ReasonCode::RuntimeVersionUntested))));
         $wpStatus = ! is_string($wp) || ! preg_match('/^\d+\.\d+(?:\.\d+)?$/', $wp)
             ? $this->result(CapabilityStatus::Unknown, ReasonCode::FactMissing)
             : (version_compare($wp, config('compatibility.declared_minimum_wordpress'), '<')
@@ -235,6 +237,11 @@ final class CapabilityEvaluator
         }
 
         return in_array($matches[1], $branches, true);
+    }
+
+    private function versionBranch(string $version): ?string
+    {
+        return preg_match('/^(\d+\.\d+)/', $version, $matches) ? $matches[1] : null;
     }
 
     private function backupEvidence(Website $website, array $facts, ?Backup $selected = null, string $scope = 'full'): array

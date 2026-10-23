@@ -15,7 +15,7 @@ return [
         'CHECK_REQUIRED' => 'A current check is required.', 'FACT_STALE' => 'The last check is out of date. Run a new check.',
         'CONNECTOR_OFFLINE' => 'The site Connector is not currently reporting in.', 'CONNECTOR_UNSUPPORTED' => 'Update the site Connector to a supported release.',
         'CONNECTOR_UPDATE_RECOMMENDED' => 'A newer Connector release is available.', 'CONNECTOR_NEWER_UNKNOWN' => 'This newer Connector version has not been evaluated yet.',
-        'RUNTIME_VERSION_UNSUPPORTED' => 'This PHP or WordPress version is below the declared minimum.', 'RUNTIME_VERSION_UNTESTED' => 'This PHP or WordPress version has not been covered by the current compatibility fixtures.',
+        'RUNTIME_VERSION_UNSUPPORTED' => 'This PHP or WordPress version is below the declared minimum.', 'RUNTIME_VERSION_UNTESTED' => 'This PHP or WordPress version has not been covered by the current compatibility fixtures.', 'RUNTIME_VERSION_EOL' => 'PHP 8.1 is end-of-life. Upgrade to a supported PHP release; high-risk operations remain unavailable.',
         'PHP_EXTENSION_MISSING' => 'A PHP extension required for this operation is unavailable.',
         'CONNECTOR_CAPABILITY_MISSING' => 'The installed Connector does not provide this operation.', 'FACT_MISSING' => 'The site has not provided the information needed for this check.',
         'FACT_STALE' => 'The site information needs to be checked again.', 'FACT_MALFORMED' => 'The site information could not be validated.',

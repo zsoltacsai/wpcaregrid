@@ -195,7 +195,7 @@ final class CapabilityReadinessTest extends TestCase
         $facts = $this->inventoryPayload()['compatibility'];
         $facts['database']['engine'] = 'mysql';
         $facts['database']['version'] = '8.0.40';
-        $site['website']->update(['php_version' => '8.5.0']);
+        $site['website']->update(['php_version' => '8.6.0']);
         $this->refreshCapabilityEvidence($site['website'], $facts);
 
         $results = app(CapabilityEvaluator::class)->evaluate($site['website']->fresh(), $site['website']->activeConnector, $facts);
@@ -205,6 +205,24 @@ final class CapabilityReadinessTest extends TestCase
         $databaseBackup = $results[Capability::BackupReady->value]['scopes']['database'];
         $this->assertNotSame('PASS', $databaseBackup['status']);
         $this->assertContains('DB_VERSION_UNKNOWN', $databaseBackup['reasons']);
+    }
+
+    public function test_php_81_is_explicitly_end_of_life_and_never_passes_capability_gates(): void
+    {
+        $site = $this->pairedWebsite();
+        $site['website']->update(['php_version' => '8.1.33']);
+        $facts = $this->inventoryPayload()['compatibility'];
+
+        $results = app(CapabilityEvaluator::class)->evaluate(
+            $site['website']->fresh(),
+            $site['website']->activeConnector,
+            $facts,
+        );
+
+        foreach ([Capability::SecurityScanReady, Capability::BackupReady, Capability::RestoreReady, Capability::UpdateReady] as $capability) {
+            $this->assertNotSame('PASS', $results[$capability->value]['status']);
+            $this->assertContains('RUNTIME_VERSION_EOL', $results[$capability->value]['reasons']);
+        }
     }
 
     public function test_unknown_nested_connector_fact_is_rejected_before_persistence(): void
