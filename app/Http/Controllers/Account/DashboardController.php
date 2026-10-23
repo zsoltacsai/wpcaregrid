@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Account;
 
 use App\Http\Controllers\Controller;
-use App\Models\Website;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\Request;
 
@@ -18,7 +17,7 @@ class DashboardController extends Controller
             'subscription' => $customer->primarySubscription(),
             'websiteCount' => $customer->websites()->count(),
             'connectedCount' => $customer->websites()->where('connector_status', 'connected')->count(),
-            'canAddWebsite' => $request->user()->can('create', Website::class),
+            'canAddWebsite' => true,
             'openOffers' => strtoupper((string) $customer->country_code) === 'HU'
                 ? $customer->recoveryOffers()->where('currency', 'HUF')->whereIn('status', ['offered', 'accepted'])->where('valid_until', '>', now())->count()
                 : 0,

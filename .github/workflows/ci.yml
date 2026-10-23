@@ -314,6 +314,7 @@ jobs:
             tests/Feature/ViesReviewConcurrencyTest.php \
             tests/Feature/PromotionReservationConcurrencyTest.php \
             tests/Feature/StripeSubscriptionConcurrencyTest.php \
+            tests/Feature/WebsiteSlotAssignmentConcurrencyTest.php \
             tests/Feature/InvoiceIntentConcurrencyTest.php \
             tests/Feature/InvoiceIssuanceConcurrencyTest.php \
             tests/Feature/Privacy/PrivacyRequestConcurrencyTest.php \

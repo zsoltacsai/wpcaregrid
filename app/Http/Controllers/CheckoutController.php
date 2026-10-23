@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Checkout\BillingIdentityIncomplete;
 use App\Checkout\CheckoutGateway;
+use App\Checkout\CheckoutInProgress;
 use App\Checkout\CheckoutOfferResolver;
 use App\Checkout\CheckoutStatus;
 use App\Checkout\CheckoutUnavailable;
@@ -25,7 +26,9 @@ use App\Pricing\Exceptions\MarketNotAvailable;
 use App\Pricing\Exceptions\PricingException;
 use App\Pricing\PriceSelection;
 use App\Pricing\PricingCatalog;
+use App\Pricing\ProductType;
 use App\Tax\BillingIdentityCompleteness;
+use App\Websites\WebsitePurchaseTarget;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -51,6 +54,23 @@ class CheckoutController extends Controller
 
         $display = app(DisplayCurrency::class);
         $account = $request->user()?->customer;
+        $websiteTarget = null;
+        if (! $account && $request->session()->has('account.website_purchase_draft')) {
+            $request->session()->forget('account.website_purchase_draft');
+
+            return redirect()->route('login')->with('status', __('account.websites.login_required'));
+        }
+        if ($account && $request->session()->has('account.website_purchase_draft')) {
+            $websiteTarget = WebsitePurchaseTarget::fromDraft($request->session()->get('account.website_purchase_draft'));
+            if (! $websiteTarget) {
+                $request->session()->forget('account.website_purchase_draft');
+
+                return redirect()->route('account.websites.create')->withErrors(['website' => __('account.websites.draft_expired')]);
+            }
+            if ($websiteTarget->type !== $selection->productType) {
+                return redirect()->route('account.websites.options')->withErrors(['website' => __('account.websites.checkout_target_invalid')]);
+            }
+        }
         if ($account && ! $billingIdentity->customerIsComplete($account)) {
             return redirect()->route('account.profile', [
                 'continue_checkout' => 1,
@@ -105,6 +125,7 @@ class CheckoutController extends Controller
 
         return view('pages.checkout.show', [
             'selection' => $selection,
+            'websiteTarget' => $websiteTarget,
             'offer' => $offer,
             'market' => $market,
             'currency' => $currency,
@@ -128,6 +149,21 @@ class CheckoutController extends Controller
 
     public function store(StartCheckoutRequest $request, StartCheckout $startCheckout): RedirectResponse
     {
+        $websiteTarget = null;
+        if (! $request->user()?->customer && $request->session()->has('account.website_purchase_draft')) {
+            $request->session()->forget('account.website_purchase_draft');
+
+            return redirect()->route('login')->with('status', __('account.websites.login_required'));
+        }
+        if ($request->user()?->customer && $request->session()->has('account.website_purchase_draft')) {
+            $websiteTarget = WebsitePurchaseTarget::fromDraft($request->session()->get('account.website_purchase_draft'));
+            if (! $websiteTarget || $websiteTarget->type !== $request->selection()->productType) {
+                $request->session()->forget('account.website_purchase_draft');
+
+                return redirect()->route('account.websites.create')->withErrors(['website' => __('account.websites.draft_expired')]);
+            }
+        }
+
         try {
             $intent = $startCheckout->handle(
                 $request->selection(),
@@ -138,6 +174,7 @@ class CheckoutController extends Controller
                 $request->validated('currency'),
                 $request->validated('terms_document_uuid') ? LegalDocumentVersion::query()->where('uuid', $request->validated('terms_document_uuid'))->firstOrFail() : null,
                 $request->validated('terms_accepted') === true || $request->validated('terms_accepted') === '1',
+                $websiteTarget,
             );
         } catch (BillingIdentityIncomplete $e) {
             if ($customer = $request->user()?->customer) {
@@ -150,6 +187,8 @@ class CheckoutController extends Controller
             }
 
             return back()->withInput()->withErrors(['billing_identity' => __('checkout.identity.incomplete')]);
+        } catch (CheckoutInProgress) {
+            return redirect()->route('account.subscription')->with('status', __('account.websites.checkout_pending'));
         } catch (MarketNotAvailable $e) {
             return back()->withInput()->withErrors(['country' => $e->customerMessage()]);
         } catch (PricingException $e) {
@@ -203,6 +242,11 @@ class CheckoutController extends Controller
             if ($intent && ! $this->startedInThisSession($request, $intent)) {
                 $intent = null;
             }
+            if ($intent && $intent->customer_id !== null
+                && $request->user()?->customer?->id !== $intent->customer_id) {
+                $intent = null;
+            }
+            $intent?->loadMissing('subscription.website', 'customer.user');
         }
 
         return view('pages.checkout.success', ['intent' => $intent]);
@@ -210,6 +254,8 @@ class CheckoutController extends Controller
 
     public function cancel(Request $request, CheckoutIntent $intent, CheckoutGateway $gateway): View
     {
+        abort_unless($this->startedInThisSession($request, $intent)
+            && ($intent->customer_id === null || $request->user()?->customer?->id === $intent->customer_id), 404);
         // Only the browser that started the checkout can cancel it, and only
         // while it is open. The cancel URL is only a request to expire Stripe;
         // capacity remains held until Stripe confirms expiry by webhook.
@@ -228,6 +274,16 @@ class CheckoutController extends Controller
             if ($sessionId) {
                 rescue(fn () => $gateway->expireSession($sessionId), report: false);
             }
+        }
+
+        if ($intent->customer_id !== null
+            && is_string($intent->intended_website_url)
+            && $intent->intended_website_type instanceof ProductType) {
+            $request->session()->put('account.website_purchase_draft', [
+                'url' => $intent->intended_website_url,
+                'type' => $intent->intended_website_type->value,
+                'created_at' => now()->timestamp,
+            ]);
         }
 
         return view('pages.checkout.cancel', [

@@ -168,7 +168,11 @@ final class StripeWebhookHandler
         $intent = $this->intentFor($session);
 
         if ($intent?->canMoveTo($status)) {
-            $intent->update(['status' => $status, ...$attributes]);
+            $intent->update([
+                'status' => $status,
+                ...$attributes,
+                ...(in_array($status, [CheckoutStatus::Expired, CheckoutStatus::Failed], true) ? ['request_fingerprint' => null] : []),
+            ]);
         }
 
         // A signed Stripe expiry is definitive even if the browser already

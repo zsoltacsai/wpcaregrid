@@ -6,12 +6,18 @@ use App\Billing\SubscriptionStatus;
 use App\Checkout\CheckoutGateway;
 use App\Checkout\CheckoutStatus;
 use App\Checkout\PromotionReservations;
+use App\Mail\AccountActivation;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Promotion;
 use App\Models\PromotionReservation;
 use App\Models\Subscription;
+use App\Models\User;
+use App\Models\Website;
+use App\Pricing\ProductType;
+use App\Tax\BillingIdentityCompleteness;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\SendsStripeWebhooks;
 use Tests\Fakes\FakeCheckoutGateway;
@@ -156,7 +162,7 @@ class CheckoutTest extends TestCase
 
         $first = $this->submit(['promotion_code' => 'PREVIEW', 'country' => 'DE', 'currency' => 'EUR', 'interval' => 'annual']);
         $second = $this->submit(['promotion_code' => 'PREVIEW', 'country' => 'DE', 'currency' => 'EUR', 'interval' => 'annual']);
-        $this->assertSame($first->headers->get('Location'), $second->headers->get('Location'));
+        $this->assertSame($first->headers->get('Location'), $second->headers->get('Location'), $second->getContent());
         $this->assertDatabaseCount('checkout_intents', 1);
         $this->assertDatabaseCount('promotion_reservations', 1);
         $this->assertCount(1, $this->gateway->created);
@@ -298,6 +304,52 @@ class CheckoutTest extends TestCase
             'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'annual', 'country' => 'HU', 'currency' => 'HUF',
         ])->assertRedirect(route('account.profile', ['continue_checkout' => 1, 'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'annual']));
 
+        $this->assertDatabaseCount('checkout_intents', 0);
+        $this->assertSame([], $this->gateway->created);
+    }
+
+    public function test_additional_site_selection_survives_billing_profile_completion_gate(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['billing_address' => null]);
+        $this->actingAs($customer->user);
+        $this->post(route('account.websites.store'), ['url' => 'profile.example', 'type' => 'woocommerce'])
+            ->assertRedirect(route('account.websites.options'));
+
+        $this->get(route('checkout.show', ['product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual']))
+            ->assertRedirect(route('account.profile', ['continue_checkout' => 1, 'product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual']))
+            ->assertSessionHas('account.website_purchase_draft', fn (array $draft) => $draft['url'] === 'https://profile.example' && $draft['type'] === 'woocommerce');
+
+        $this->post(route('checkout.store'), [
+            'product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual', 'country' => 'HU', 'currency' => 'HUF',
+        ])->assertRedirect(route('account.profile', ['continue_checkout' => 1, 'product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual']))
+            ->assertSessionHas('account.website_purchase_draft');
+
+        $this->assertDatabaseCount('checkout_intents', 0);
+        $this->assertSame([], $this->gateway->created);
+
+        $this->put(route('account.profile.update'), [
+            'continue_checkout' => 1,
+            'product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual',
+            'first_name' => $customer->first_name, 'last_name' => $customer->last_name,
+            'customer_type' => 'individual', 'country_code' => 'HU',
+            'address_line1' => 'Test utca 1.', 'postal_code' => '1011', 'city' => 'Budapest',
+        ])->assertRedirect(route('checkout.show', ['product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual']));
+        $this->assertSame([], app(BillingIdentityCompleteness::class)->missingForCustomer($customer->fresh()));
+        $response = $this->actingAs($customer->user->fresh())
+            ->get(route('checkout.show', ['product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual']));
+        $this->assertSame(200, $response->status(), (string) $response->headers->get('Location'));
+        $response->assertSee('https://profile.example');
+    }
+
+    public function test_product_type_cannot_be_changed_between_website_selection_and_checkout(): void
+    {
+        $customer = Customer::factory()->withUser()->create();
+        $this->actingAs($customer->user);
+        $this->post(route('account.websites.store'), ['url' => 'https://typed.example', 'type' => 'woocommerce']);
+
+        $this->get(route('checkout.show', ['product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly']))
+            ->assertRedirect(route('account.websites.options'))
+            ->assertSessionHasErrors('website');
         $this->assertDatabaseCount('checkout_intents', 0);
         $this->assertSame([], $this->gateway->created);
     }
@@ -713,6 +765,186 @@ class CheckoutTest extends TestCase
             ->assertDontSee(strtoupper(substr($intent->uuid, 0, 8)));
     }
 
+    public function test_authenticated_customer_buys_second_site_and_signed_webhook_binds_it_once(): void
+    {
+        Mail::fake();
+        $customer = Customer::factory()->withUser()->create(['country_code' => 'HU', 'stripe_customer_id' => 'cus_existing_account']);
+        $firstSubscription = Subscription::factory()->for($customer)->create([
+            'stripe_customer_id' => $customer->stripe_customer_id,
+            'stripe_subscription_id' => 'sub_first_site',
+            'product_type' => 'wordpress',
+        ]);
+        $firstWebsite = Website::factory()->for($customer)->create([
+            'url' => 'https://first.example', 'type' => 'wordpress', 'subscription_id' => $firstSubscription->id,
+        ]);
+        $usersBefore = User::count();
+        $this->actingAs($customer->user);
+
+        $this->post(route('account.websites.store'), ['url' => 'Store.example/', 'type' => 'woocommerce'])
+            ->assertRedirect(route('account.websites.options'));
+        $this->get(route('account.websites.options'))->assertOk()->assertSee('https://store.example')->assertSee(__('account.websites.buy_subscription'));
+        $this->post(route('account.websites.purchase'), ['plan' => 'secure', 'interval' => 'annual'])
+            ->assertRedirect(route('checkout.show', ['product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual']));
+        $this->get(route('checkout.show', ['product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual']))
+            ->assertOk()->assertSee('https://store.example')->assertSee(__('pricing.intervals.annual'));
+
+        $this->post(route('checkout.store'), [
+            'product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual', 'country' => 'HU', 'currency' => 'HUF',
+        ])->assertStatus(303);
+        $intent = CheckoutIntent::sole();
+        $this->assertSame($customer->id, $intent->customer_id);
+        $this->assertSame($customer->email, $intent->email);
+        $this->assertSame('https://store.example', $intent->intended_website_url);
+        $this->assertSame(ProductType::WooCommerce, $intent->intended_website_type);
+        $this->assertSame('price_woocommerce_secure_annual_HUF', $intent->stripe_price_id);
+        $this->assertSame($customer->stripe_customer_id, $intent->customer->stripe_customer_id);
+        $this->assertSame($usersBefore, User::count());
+        $this->assertSame(1, count($this->gateway->created));
+
+        // Stripe may deliver the subscription event before the Checkout event.
+        $this->stripeEvent('customer.subscription.created', $this->stripeSubscription('sub_second_site', 'active', [
+            'customer' => $customer->stripe_customer_id,
+            'metadata' => ['checkout_intent' => $intent->uuid],
+            'items' => ['data' => [[
+                'id' => 'si_second', 'current_period_start' => now()->timestamp,
+                'current_period_end' => now()->addYear()->timestamp,
+                'price' => ['id' => 'price_woocommerce_secure_annual_HUF', 'unit_amount' => 149000000, 'currency' => 'huf'],
+            ]]],
+        ]), eventId: 'evt_multisite_subscription')->assertStatus(204);
+
+        $this->stripeEvent('checkout.session.completed', [
+            'id' => $intent->stripe_checkout_session_id,
+            'client_reference_id' => $intent->uuid,
+            'payment_status' => 'paid',
+            'customer' => $customer->stripe_customer_id,
+            'subscription' => 'sub_second_site',
+            'metadata' => ['checkout_intent' => $intent->uuid],
+        ], eventId: 'evt_multisite_checkout')->assertStatus(204);
+
+        $secondSubscription = Subscription::where('stripe_subscription_id', 'sub_second_site')->sole();
+        $secondWebsite = Website::where('url', 'https://store.example')->sole();
+        $this->assertSame($customer->id, $secondSubscription->customer_id);
+        $this->assertSame($customer->id, $secondWebsite->customer_id);
+        $this->assertSame($secondSubscription->id, $secondWebsite->subscription_id);
+        $this->assertSame(ProductType::WooCommerce, $secondWebsite->type);
+        $this->assertSame($firstSubscription->id, $firstWebsite->refresh()->subscription_id);
+        $this->assertSame(2, $customer->fresh()->subscriptions()->count());
+        $this->assertSame(2, $customer->fresh()->websites()->count());
+        Mail::assertNotQueued(AccountActivation::class);
+
+        $this->stripeEvent('customer.subscription.created', $this->stripeSubscription('sub_second_site', 'active', [
+            'customer' => $customer->stripe_customer_id,
+            'metadata' => ['checkout_intent' => $intent->uuid],
+            'items' => ['data' => [[
+                'id' => 'si_second', 'price' => ['id' => 'price_woocommerce_secure_annual_HUF', 'unit_amount' => 149000000, 'currency' => 'huf'],
+            ]]],
+        ]), eventId: 'evt_multisite_subscription')->assertStatus(204);
+        $this->assertSame(2, Website::count());
+
+        $this->get(route('checkout.success', ['session_id' => $intent->stripe_checkout_session_id]))
+            ->assertOk()->assertSee(__('account.websites.connect_website'))->assertSee(route('account.websites.show', $secondWebsite));
+        $this->get(route('account.subscription'))->assertOk()->assertSee(__('account.websites.add_another'));
+    }
+
+    public function test_failed_additional_site_checkout_never_creates_a_paid_website(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['stripe_customer_id' => 'cus_failed_addsite']);
+        $this->actingAs($customer->user);
+        $this->post(route('account.websites.store'), ['url' => 'https://failed.example', 'type' => 'wordpress']);
+        $this->post(route('account.websites.purchase'), ['plan' => 'basic', 'interval' => 'monthly']);
+        $this->post(route('checkout.store'), [
+            'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly', 'country' => 'HU', 'currency' => 'HUF',
+        ])->assertStatus(303);
+        $intent = CheckoutIntent::sole();
+
+        $this->stripeEvent('checkout.session.async_payment_failed', [
+            'id' => $intent->stripe_checkout_session_id,
+            'client_reference_id' => $intent->uuid,
+        ], eventId: 'evt_multisite_failed')->assertStatus(204);
+
+        $this->assertSame(CheckoutStatus::Failed, $intent->refresh()->status);
+        $this->assertDatabaseCount('subscriptions', 0);
+        $this->assertDatabaseCount('websites', 0);
+    }
+
+    public function test_paid_site_collision_keeps_the_subscription_recoverable_without_misbinding(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['stripe_customer_id' => 'cus_site_collision']);
+        $first = Subscription::factory()->for($customer)->create([
+            'stripe_customer_id' => $customer->stripe_customer_id,
+            'stripe_subscription_id' => 'sub_collision_first',
+            'product_type' => 'wordpress',
+        ]);
+        $this->actingAs($customer->user);
+        $this->post(route('account.websites.store'), ['url' => 'https://race.example', 'type' => 'wordpress']);
+        $this->post(route('account.websites.purchase'), ['plan' => 'basic', 'interval' => 'monthly']);
+        $this->post(route('checkout.store'), [
+            'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly', 'country' => 'HU', 'currency' => 'HUF',
+        ])->assertStatus(303);
+        $intent = CheckoutIntent::sole();
+
+        // Simulate another authorized flow claiming the URL before Stripe's webhook is processed.
+        Website::factory()->for($customer)->create([
+            'url' => 'https://race.example', 'type' => 'wordpress', 'subscription_id' => $first->id,
+        ]);
+        $this->stripeEvent('customer.subscription.created', $this->stripeSubscription('sub_collision_second', 'active', [
+            'customer' => $customer->stripe_customer_id,
+            'metadata' => ['checkout_intent' => $intent->uuid],
+            'items' => ['data' => [[
+                'id' => 'si_collision_second',
+                'price' => ['id' => 'price_wordpress_basic_monthly_HUF', 'unit_amount' => 990000, 'currency' => 'huf'],
+            ]]],
+        ]), eventId: 'evt_site_collision')->assertStatus(204);
+
+        $paid = Subscription::where('stripe_subscription_id', 'sub_collision_second')->sole();
+        $this->assertNull($paid->website);
+        $this->assertSame(2, $customer->fresh()->subscriptions()->count());
+        $this->get(route('account.subscription'))->assertOk()->assertSee($paid->planName());
+
+        $this->post(route('account.websites.store'), ['url' => 'https://recovered.example', 'type' => 'wordpress']);
+        $this->get(route('account.websites.options'))->assertOk()->assertSee($paid->uuid);
+        $this->assertSame(1, $customer->fresh()->websites()->count());
+        $this->post(route('account.websites.assign'), ['subscription' => $paid->uuid])->assertRedirect();
+        $this->assertSame($paid->id, Website::where('url', 'https://recovered.example')->sole()->subscription_id);
+        $this->assertSame(2, $customer->fresh()->websites()->count());
+    }
+
+    public function test_additional_site_checkout_double_submit_reuses_one_stripe_session(): void
+    {
+        $customer = Customer::factory()->withUser()->create();
+        $this->actingAs($customer->user);
+        $this->post(route('account.websites.store'), ['url' => 'https://repeat.example', 'type' => 'woocommerce']);
+        $this->post(route('account.websites.purchase'), ['plan' => 'business', 'interval' => 'monthly']);
+        $payload = ['product' => 'woocommerce', 'plan' => 'business', 'interval' => 'monthly', 'country' => 'HU', 'currency' => 'HUF'];
+
+        $this->post(route('checkout.store'), $payload)->assertStatus(303);
+        $this->post(route('checkout.store'), $payload)->assertStatus(303);
+
+        $this->assertDatabaseCount('checkout_intents', 1);
+        $this->assertCount(1, $this->gateway->created);
+        $this->assertSame('https://repeat.example', CheckoutIntent::sole()->intended_website_url);
+    }
+
+    public function test_a_different_plan_cannot_open_a_second_checkout_for_the_same_pending_website(): void
+    {
+        $customer = Customer::factory()->withUser()->create();
+        $this->actingAs($customer->user);
+        $this->post(route('account.websites.store'), ['url' => 'https://one-purchase.example', 'type' => 'wordpress']);
+        $this->post(route('account.websites.purchase'), ['plan' => 'basic', 'interval' => 'monthly']);
+        $this->post(route('checkout.store'), [
+            'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly', 'country' => 'HU', 'currency' => 'HUF',
+        ])->assertStatus(303);
+
+        $this->post(route('account.websites.purchase'), ['plan' => 'secure', 'interval' => 'annual']);
+        $this->post(route('checkout.store'), [
+            'product' => 'wordpress', 'plan' => 'secure', 'interval' => 'annual', 'country' => 'HU', 'currency' => 'HUF',
+        ])->assertRedirect(route('account.subscription'))->assertSessionHas('status', __('account.websites.checkout_pending'));
+
+        $this->assertDatabaseCount('checkout_intents', 1);
+        $this->assertCount(1, $this->gateway->created);
+        $this->assertSame('basic', CheckoutIntent::sole()->plan->value);
+    }
+
     public function test_cancel_marks_the_intent_cancelled_and_expires_the_stripe_session(): void
     {
         $this->submit();
@@ -769,7 +1001,7 @@ class CheckoutTest extends TestCase
         $intent = CheckoutIntent::sole();
 
         $this->switchBrowser();
-        $this->get(route('checkout.cancel', $intent))->assertOk();
+        $this->get(route('checkout.cancel', $intent))->assertNotFound();
 
         $this->assertSame(CheckoutStatus::CheckoutCreated, $intent->refresh()->status);
         $this->assertSame([], $this->gateway->expired);

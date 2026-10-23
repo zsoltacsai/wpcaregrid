@@ -89,6 +89,9 @@ Route::middleware(['auth', 'customer', EnsureCurrentLegalAcceptance::class, Ensu
     Route::get('/websites', [WebsiteController::class, 'index'])->name('websites.index');
     Route::get('/websites/new', [WebsiteController::class, 'create'])->name('websites.create');
     Route::post('/websites', [WebsiteController::class, 'store'])->middleware('throttle:account')->name('websites.store');
+    Route::get('/websites/options', [WebsiteController::class, 'options'])->name('websites.options');
+    Route::post('/websites/assign', [WebsiteController::class, 'assign'])->middleware('throttle:account')->name('websites.assign');
+    Route::post('/websites/purchase', [WebsiteController::class, 'purchase'])->middleware('throttle:account')->name('websites.purchase');
     Route::get('/websites/{website}', [WebsiteController::class, 'show'])->name('websites.show');
     Route::post('/websites/{website}/compatibility-check', [WebsiteController::class, 'requestCompatibilityCheck'])->middleware('throttle:6,1')->name('websites.compatibility-check');
     Route::post('/websites/{website}/pairing-code', [WebsiteController::class, 'pairingCode'])->middleware('throttle:10,1')->name('websites.pairing-code');
