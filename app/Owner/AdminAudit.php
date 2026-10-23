@@ -20,7 +20,7 @@ final class AdminAudit
         'price.created', 'price.updated', 'price.published', 'price.draft_discarded',
         'customer.updated', 'customer.vat_rechecked', 'customer.vat_review_resolved',
         'synthetic_fixture.provisioned',
-        'm14_security_scan_window.opened', 'm14_security_scan_window.closed',
+        'm14_security_scan_window.opened', 'm14_security_scan_window.scan_bound', 'm14_security_scan_window.closed',
         'monitoring.maintenance_created',
         'privacy.request.created', 'privacy.request.status_changed', 'privacy.provider_task.created', 'privacy.provider_task.status_changed',
         'privacy.closure.impact_previewed', 'privacy.account_access.restricted', 'privacy.account_access.restored',

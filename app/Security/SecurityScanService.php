@@ -64,6 +64,10 @@ class SecurityScanService
                 'coverage' => [],
             ]);
 
+            if (app(SyntheticFixturePolicy::class)->m14SecurityFixtureEnabledFor($website)) {
+                app(M14SecurityScanWindowService::class)->bindScan($website, $scan);
+            }
+
             AuditLog::record($website, 'security.scan_requested', actor: $actor, data: ['scan' => $scan->uuid, 'type' => $type->value]);
             $incident && app(IncidentService::class)->log($incident, 'scan', $actor, ['scan' => $scan->uuid, 'type' => $type->value]);
 

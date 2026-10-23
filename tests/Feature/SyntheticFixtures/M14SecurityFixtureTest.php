@@ -2,6 +2,10 @@
 
 namespace Tests\Feature\SyntheticFixtures;
 
+use App\Backups\BackupReason;
+use App\Backups\BackupRefused;
+use App\Backups\BackupService;
+use App\Backups\BackupType;
 use App\Connector\ConnectorError;
 use App\Connector\JobQueue;
 use App\Connector\JobType;
@@ -17,8 +21,15 @@ use App\Models\SyntheticSiteFixture;
 use App\Models\User;
 use App\Models\Website;
 use App\Models\WebsiteInventory;
+use App\Security\Confidence;
+use App\Security\FindingRecorder;
+use App\Security\FindingType;
+use App\Security\IncidentService;
+use App\Security\ReportedFinding;
 use App\Security\ScanType;
 use App\Security\SecurityScanService;
+use App\Security\Severity;
+use App\SyntheticFixtures\M14SecurityHost;
 use App\SyntheticFixtures\M14SecurityScanWindowService;
 use App\SyntheticFixtures\StagingIdentity;
 use App\SyntheticFixtures\SyntheticFixturePolicy;
@@ -51,6 +62,7 @@ final class M14SecurityFixtureTest extends TestCase
             'm14_security_fixture.fixture_enabled' => false,
             'm14_security_fixture.controlled_polling_enabled' => false,
             'm14_security_fixture.security_scan_enabled' => false,
+            'm14_security_fixture.side_effect_isolation_enabled' => false,
             'm14_security_fixture.site_uuid' => null,
             'm14_security_fixture.customer_uuid' => null,
             'm14_security_fixture.connector_uuid' => null,
@@ -87,6 +99,54 @@ final class M14SecurityFixtureTest extends TestCase
         Mail::assertNothingOutgoing();
         Notification::assertNothingSent();
         Queue::assertNothingPushed();
+    }
+
+    public function test_m14_provisioner_accepts_an_explicit_external_https_hostname(): void
+    {
+        config([
+            'm14_security_fixture.provisioning_enabled' => true,
+            'm14_security_fixture.site_host' => 'm14-test.example.org',
+        ]);
+
+        $website = app(SyntheticFixtureProvisioner::class)->provisionM14SecurityFixture()['website'];
+
+        $this->assertSame('https://m14-test.example.org', $website->url);
+        $this->assertTrue(M14SecurityHost::isAllowed('m14-test.example.org'));
+        $this->assertTrue(M14SecurityHost::isExactHttpsUrl($website->url, 'm14-test.example.org'));
+    }
+
+    public function test_m14_provisioner_rejects_unsafe_or_noncanonical_hosts_without_writes(): void
+    {
+        foreach ([
+            'M14-test.example.org', 'm14-test.example.org.', '*.example.org',
+            'https://m14-test.example.org', 'user@m14-test.example.org',
+            'm14-test.example.org:443', '127.0.0.1', '[::1]',
+            '127.1', '0177.0.0.1', 'localhost', 'm14-test.local', 'm14-test.test',
+            'm14-test.example', 'm14-test.home.arpa',
+        ] as $host) {
+            config([
+                'm14_security_fixture.provisioning_enabled' => true,
+                'm14_security_fixture.site_host' => $host,
+            ]);
+
+            try {
+                app(SyntheticFixtureProvisioner::class)->provisionM14SecurityFixture();
+                $this->fail("Unsafe M14 host was accepted: {$host}");
+            } catch (ValidationException) {
+                $this->assertSame(0, Customer::count());
+                $this->assertSame(0, Website::count());
+            }
+        }
+
+        foreach ([
+            'https://m14-test.example.org/',
+            'https://user@m14-test.example.org',
+            'https://m14-test.example.org:443',
+            'http://m14-test.example.org',
+            'https://alias.example.org',
+        ] as $url) {
+            $this->assertFalse(M14SecurityHost::isExactHttpsUrl($url, 'm14-test.example.org'));
+        }
     }
 
     public function test_m14_provisioning_is_disabled_by_default_and_fails_closed_outside_staging(): void
@@ -309,6 +369,20 @@ final class M14SecurityFixtureTest extends TestCase
         $scan = app(SecurityScanService::class)->request($website, ScanType::Integrity, 'operator:1');
         $this->assertSame('queued', $scan->status->value);
         $this->assertSame(1, $website->jobs()->where('type', JobType::SecurityScan->value)->count());
+        $this->assertDatabaseHas('m14_security_scan_isolations', [
+            'scan_uuid' => $scan->uuid,
+            'website_id' => $website->id,
+            'connector_id' => $website->activeConnector->id,
+        ]);
+        try {
+            app(JobQueue::class)->queue($website, JobType::SecurityScan, [
+                'scan_uuid' => (string) Str::uuid(),
+                'scan_type' => 'integrity', 'part' => 1, 'time_budget' => 60,
+            ]);
+            $this->fail('An M14 scan job must be bound to the exact authorized scan UUID.');
+        } catch (ConnectorError $error) {
+            $this->assertSame('JOB_NOT_ALLOWED', $error->errorCode);
+        }
 
         $other = $this->pairedWebsite('https://unrelated-customer.example.test')['website'];
         $this->assertSame('M14_SCAN_WINDOW_ACTIVE', app(SecurityScanService::class)->refusal($other, ScanType::Integrity));
@@ -332,18 +406,170 @@ final class M14SecurityFixtureTest extends TestCase
         }
     }
 
-    public function test_m14_window_requires_false_safety_gates_and_fresh_current_readiness(): void
+    public function test_m14_window_keeps_global_incident_settings_and_uses_exact_site_isolation(): void
     {
         $site = $this->pairedM14Fixture();
         config([
             'm14_security_fixture.controlled_polling_enabled' => true,
             'm14_security_fixture.security_scan_enabled' => true,
             'security.incidents.auto_open' => true,
-            'security.incidents.auto_backup' => false,
+            'security.incidents.auto_backup' => true,
+        ]);
+
+        $window = app(M14SecurityScanWindowService::class)->open($site['website'], 'test-owner');
+
+        $this->assertTrue($window->isLive());
+        $this->assertTrue($window->side_effect_isolation);
+        $this->assertTrue(config('security.incidents.auto_open'));
+        $this->assertTrue(config('security.incidents.auto_backup'));
+    }
+
+    public function test_m14_window_fails_closed_when_site_scoped_isolation_is_disabled(): void
+    {
+        $site = $this->pairedM14Fixture();
+        config([
+            'm14_security_fixture.controlled_polling_enabled' => true,
+            'm14_security_fixture.security_scan_enabled' => true,
+            'm14_security_fixture.side_effect_isolation_enabled' => false,
         ]);
 
         $this->expectException(ValidationException::class);
         app(M14SecurityScanWindowService::class)->open($site['website'], 'test-owner');
+    }
+
+    public function test_m14_scan_delivery_rechecks_bound_scan_uuid(): void
+    {
+        $site = $this->pairedM14Fixture();
+        $website = $site['website'];
+        config([
+            'm14_security_fixture.controlled_polling_enabled' => true,
+            'm14_security_fixture.security_scan_enabled' => true,
+        ]);
+        app(M14SecurityScanWindowService::class)->open($website, 'test-owner');
+        $website->jobs()->where('type', '!=', JobType::SecurityScan->value)->update(['status' => 'success']);
+        $scan = app(SecurityScanService::class)->request($website, ScanType::Integrity, 'operator:1');
+        $job = $scan->job()->firstOrFail();
+        $payload = $job->payload;
+        $payload['scan_uuid'] = (string) Str::uuid();
+        $job->forceFill(['payload' => $payload])->save();
+
+        $delivered = app(JobQueue::class)->deliver($website->activeConnector, controlledExecution: true);
+
+        $this->assertCount(0, $delivered);
+        $this->assertSame('cancelled', $job->fresh()->status->value);
+        $this->assertSame('JOB_NOT_ALLOWED', $job->fresh()->error['code']);
+    }
+
+    public function test_exact_m14_scan_suppresses_automatic_incident_and_backup_with_audit(): void
+    {
+        $site = $this->pairedM14Fixture();
+        $website = $site['website'];
+        config([
+            'm14_security_fixture.controlled_polling_enabled' => true,
+            'm14_security_fixture.security_scan_enabled' => true,
+            'security.incidents.auto_open' => true,
+            'security.incidents.auto_backup' => true,
+        ]);
+
+        app(M14SecurityScanWindowService::class)->open($website, 'test-owner');
+        $scan = app(SecurityScanService::class)->request($website, ScanType::Integrity, 'operator:1');
+        app(FindingRecorder::class)->record($scan, new ReportedFinding(
+            FindingType::SuspiciousFile,
+            'm14-test-suspicious-file',
+            Severity::High,
+            Confidence::High,
+            'Synthetic suspicious file',
+            'Synthetic test finding only.',
+            'fixture',
+            'synthetic/test.php',
+        ));
+
+        $this->assertNull(app(IncidentService::class)->openForDetection($scan));
+        $this->assertSame(0, $website->securityIncidents()->count());
+        $this->assertSame(0, $website->backups()->count());
+        $this->assertDatabaseHas('website_events', [
+            'website_id' => $website->id,
+            'event' => 'security.m14_test_side_effects_suppressed',
+        ]);
+        $this->assertSame(0, $website->jobs()->whereIn('type', [
+            JobType::BackupFiles->value, JobType::BackupDatabase->value, JobType::BackupFull->value,
+        ])->count());
+        $this->assertTrue(config('security.incidents.auto_open'));
+        $this->assertTrue(config('security.incidents.auto_backup'));
+    }
+
+    public function test_site_scoped_m14_suppression_does_not_change_ordinary_auto_incidents(): void
+    {
+        $website = $this->pairedWebsite('https://ordinary-customer.example.test')['website'];
+        config([
+            'security.incidents.auto_open' => true,
+            'security.incidents.auto_backup' => true,
+        ]);
+        $scan = $website->securityScans()->create([
+            'type' => ScanType::Integrity,
+            'status' => 'completed',
+            'requested_by' => 'system',
+            'scanner_version' => 'test',
+            'coverage' => [],
+        ]);
+        app(FindingRecorder::class)->record($scan, new ReportedFinding(
+            FindingType::SuspiciousFile, 'ordinary-suspicious-file', Severity::High, Confidence::High,
+            'Suspicious file', 'Test finding.', 'plugin', 'plugin/test.php',
+        ));
+
+        $incident = app(IncidentService::class)->openForDetection($scan);
+
+        $this->assertNotNull($incident);
+        $this->assertSame(1, $website->securityIncidents()->count());
+        $this->assertFalse($website->events()->where('event', 'security.m14_test_side_effects_suppressed')->exists());
+        $this->assertTrue(config('security.incidents.auto_open'));
+        $this->assertTrue(config('security.incidents.auto_backup'));
+    }
+
+    public function test_persisted_m14_isolation_survives_window_expiry_for_a_delayed_failure_callback(): void
+    {
+        $site = $this->pairedM14Fixture();
+        $website = $site['website'];
+        config([
+            'm14_security_fixture.controlled_polling_enabled' => true,
+            'm14_security_fixture.security_scan_enabled' => true,
+            'security.incidents.auto_open' => true,
+            'security.incidents.auto_backup' => true,
+        ]);
+
+        $window = app(M14SecurityScanWindowService::class)->open($website, 'test-owner');
+        $scan = app(SecurityScanService::class)->request($website, ScanType::Integrity, 'operator:1');
+        $scan->job()->update(['status' => 'cancelled']);
+        $scan->forceFill(['status' => 'cancelled', 'completed_at' => now()])->save();
+        $window->forceFill(['expires_at' => now()->subSecond()])->save();
+        app(M14SecurityScanWindowService::class)->close('test-owner', 'expired-terminal-scan');
+
+        app(FindingRecorder::class)->record($scan, new ReportedFinding(
+            FindingType::SuspiciousFile, 'm14-delayed-failure', Severity::High, Confidence::High,
+            'Synthetic delayed result', 'Synthetic test finding only.', 'fixture', 'synthetic/delayed.php',
+        ));
+
+        $this->assertNull(app(IncidentService::class)->openForDetection($scan));
+        $this->assertSame(0, $website->securityIncidents()->count());
+        $this->assertSame(0, $website->backups()->count());
+    }
+
+    public function test_m14_backup_service_refuses_even_direct_backup_requests(): void
+    {
+        config(['m14_security_fixture.provisioning_enabled' => true]);
+        $website = app(SyntheticFixtureProvisioner::class)->provisionM14SecurityFixture()['website'];
+
+        try {
+            app(BackupService::class)->request($website, BackupReason::Recovery, 'test', BackupType::Full);
+            $this->fail('M14 fixtures must not receive real backup operations.');
+        } catch (BackupRefused $error) {
+            $this->assertSame('M14_FIXTURE_BACKUP_DISABLED', $error->errorCode);
+        }
+
+        $this->assertSame(0, $website->backups()->count());
+        $this->assertSame(0, $website->jobs()->whereIn('type', [
+            JobType::BackupFiles->value, JobType::BackupDatabase->value, JobType::BackupFull->value,
+        ])->count());
     }
 
     public function test_window_close_requires_all_fixture_scan_work_to_be_terminal(): void
@@ -399,6 +625,7 @@ final class M14SecurityFixtureTest extends TestCase
         config([
             'm14_security_fixture.provisioning_enabled' => true,
             'm14_security_fixture.fixture_enabled' => true,
+            'm14_security_fixture.side_effect_isolation_enabled' => true,
             'm14_security_fixture.site_host' => 'm14-security-fixture.staging.wpcaregrid.com',
         ]);
         $website = app(SyntheticFixtureProvisioner::class)->provisionM14SecurityFixture()['website'];

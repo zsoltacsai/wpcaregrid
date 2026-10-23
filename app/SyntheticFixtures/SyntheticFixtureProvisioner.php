@@ -69,8 +69,9 @@ final class SyntheticFixtureProvisioner
         $host = 'https://'.$expectedHost;
         $parsed = parse_url($host);
 
-        if (! preg_match('/^m14-security-[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?\.staging\.wpcaregrid\.com$/D', $expectedHost)
+        if (! M14SecurityHost::isAllowed($expectedHost)
             || ! is_array($parsed)
+            || ! M14SecurityHost::isExactHttpsUrl($host, $expectedHost)
             || strtolower((string) ($parsed['scheme'] ?? '')) !== 'https'
             || strtolower((string) ($parsed['host'] ?? '')) !== $expectedHost
             || ! in_array($parsed['path'] ?? '', ['', '/'], true)

@@ -11,13 +11,14 @@ class M14SecurityScanWindow extends Model
     public $incrementing = false;
 
     protected $fillable = [
-        'active', 'website_id', 'opened_by', 'opened_at', 'expires_at', 'closed_by', 'closed_at',
+        'active', 'website_id', 'scan_uuid', 'side_effect_isolation', 'opened_by', 'opened_at', 'expires_at', 'closed_by', 'closed_at',
     ];
 
     protected function casts(): array
     {
         return [
             'active' => 'boolean',
+            'side_effect_isolation' => 'boolean',
             'opened_at' => 'datetime',
             'expires_at' => 'datetime',
             'closed_at' => 'datetime',
