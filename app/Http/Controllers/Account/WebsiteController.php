@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Account;
 
 use App\Backups\BackupPolicy;
+use App\Checkout\ExistingCustomerCurrencyLock;
 use App\Connector\ConnectorError;
 use App\Connector\DisconnectWebsite;
 use App\Connector\JobQueue;
@@ -10,14 +11,21 @@ use App\Connector\JobType;
 use App\Connector\PairingCodes;
 use App\Http\Controllers\Controller;
 use App\Models\Website;
+use App\Pricing\BillingInterval;
+use App\Pricing\Exceptions\AmbiguousCustomerCurrency;
+use App\Pricing\PlanTier;
+use App\Pricing\PricingCatalog;
 use App\Pricing\ProductType;
 use App\Rules\PublicWebsiteUrl;
-use App\Websites\ConnectorStatus;
-use App\Websites\WebsiteStatus;
+use App\Websites\AssignWebsiteToSubscription;
+use App\Websites\NormalizeWebsiteUrl;
+use App\Websites\WebsitePurchaseTarget;
 use Illuminate\Contracts\View\View;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 class WebsiteController extends Controller
@@ -29,40 +37,105 @@ class WebsiteController extends Controller
         return view('account.websites.index', [
             'websites' => $customer->websites()->latest('id')->get(),
             'hasAccess' => $customer->hasActiveSubscription(),
-            'canAddWebsite' => $request->user()->can('create', Website::class),
+            'canAddWebsite' => true,
         ]);
     }
 
-    public function create(Request $request): View
+    public function create(Request $request, PricingCatalog $pricing): View
     {
-        $this->authorize('create', Website::class);
+        $request->session()->forget('account.website_purchase_draft');
 
-        $subscription = $request->attributes->get('customer')->subscriptionAvailableForWebsite();
-
-        return view('account.websites.create', ['defaultType' => $subscription->product_type]);
+        return view('account.websites.create', ['defaultType' => $pricing->defaultProductType]);
     }
 
-    public function store(Request $request): RedirectResponse
+    public function store(Request $request, NormalizeWebsiteUrl $normalize): RedirectResponse
     {
-        $this->authorize('create', Website::class);
-
         $customer = $request->attributes->get('customer');
-        $request->merge(['url' => $this->normalizeUrl((string) $request->input('url'))]);
+        $request->merge(['url' => $normalize((string) $request->input('url'))]);
 
         $validated = $request->validate([
             'url' => ['required', 'string', 'max:255', 'url:http,https', new PublicWebsiteUrl, Rule::unique('websites')->where('customer_id', $customer->id)],
             'type' => ['required', Rule::enum(ProductType::class)],
         ], ['url.unique' => __('account.websites.duplicate')]);
 
-        $website = $customer->websites()->create([
-            'url' => $validated['url'],
-            'type' => $validated['type'],
-            'subscription_id' => $customer->subscriptionAvailableForWebsite()->id,
-            'status' => WebsiteStatus::Pending,
-            'connector_status' => ConnectorStatus::NotInstalled,
+        $request->session()->put('account.website_purchase_draft', [
+            'url' => $validated['url'], 'type' => $validated['type'], 'created_at' => now()->timestamp,
         ]);
 
+        return redirect()->route('account.websites.options');
+    }
+
+    public function options(Request $request, PricingCatalog $pricing, ExistingCustomerCurrencyLock $currencyLock): View|RedirectResponse
+    {
+        $target = WebsitePurchaseTarget::fromDraft($request->session()->get('account.website_purchase_draft'));
+        if (! $target) {
+            $request->session()->forget('account.website_purchase_draft');
+
+            return redirect()->route('account.websites.create')->withErrors(['website' => __('account.websites.draft_expired')]);
+        }
+
+        $customer = $request->attributes->get('customer');
+        $subscriptions = $customer->activeSubscriptions()->where('product_type', $target->type->value)
+            ->whereDoesntHave('website')->oldest('id')->get();
+        try {
+            $currency = $currencyLock->forCustomer($customer)
+                ?? (strtoupper((string) $customer->country_code) === 'HU' ? 'HUF' : $pricing->defaultInternationalCurrency());
+        } catch (AmbiguousCustomerCurrency $exception) {
+            return redirect()->route('account.subscription')->withErrors(['checkout' => $exception->customerMessage()]);
+        }
+        $market = is_string($currency) ? $pricing->marketForCurrency($currency) : null;
+        $countries = __('countries');
+        $billingCountry = is_array($countries)
+            ? ($countries[strtoupper((string) $customer->country_code)] ?? strtoupper((string) $customer->country_code))
+            : strtoupper((string) $customer->country_code);
+        $offers = $market ? array_values(array_filter($pricing->offers($target->type, $market), fn ($offer) => $offer->monthly->active && $offer->annual->active
+            && $offer->monthly->hasStripePrice() && $offer->annual->hasStripePrice()
+        )) : [];
+
+        return view('account.websites.options', compact('target', 'subscriptions', 'offers', 'currency', 'billingCountry'));
+    }
+
+    public function assign(Request $request, AssignWebsiteToSubscription $assign): RedirectResponse
+    {
+        $customer = $request->attributes->get('customer');
+        $target = WebsitePurchaseTarget::fromDraft($request->session()->get('account.website_purchase_draft'));
+        if (! $target) {
+            $request->session()->forget('account.website_purchase_draft');
+
+            return redirect()->route('account.websites.create')->withErrors(['website' => __('account.websites.draft_expired')]);
+        }
+
+        $validated = $request->validate(['subscription' => ['required', 'uuid']]);
+        try {
+            $website = $assign($customer, $validated['subscription'], $target);
+        } catch (UniqueConstraintViolationException) {
+            Log::notice('Customer website assignment hit a uniqueness conflict.', ['customer_uuid' => $customer->uuid]);
+
+            return back()->withErrors(['url' => __('account.websites.duplicate')]);
+        }
+
+        $request->session()->forget('account.website_purchase_draft');
+
         return redirect()->route('account.websites.show', $website)->with('status', __('account.onboarding.created'));
+    }
+
+    public function purchase(Request $request): RedirectResponse
+    {
+        $target = WebsitePurchaseTarget::fromDraft($request->session()->get('account.website_purchase_draft'));
+        if (! $target) {
+            $request->session()->forget('account.website_purchase_draft');
+
+            return redirect()->route('account.websites.create')->withErrors(['website' => __('account.websites.draft_expired')]);
+        }
+
+        $selection = $request->validate([
+            'plan' => ['required', Rule::enum(PlanTier::class)],
+            'interval' => ['required', Rule::enum(BillingInterval::class)],
+        ]);
+
+        return redirect()->route('checkout.show', [
+            'product' => $target->type->value, 'plan' => $selection['plan'], 'interval' => $selection['interval'],
+        ]);
     }
 
     public function show(Website $website): View
@@ -126,26 +199,6 @@ class WebsiteController extends Controller
         $disconnect($website, 'disconnected_by_customer', 'customer:'.$request->user()->id);
 
         return redirect()->route('account.websites.show', $website)->with('status', __('connector.account.disconnected'));
-    }
-
-    /** "Company.example/" → "https://company.example" (scheme added, host lower-cased, trailing slash removed). */
-    private function normalizeUrl(string $url): string
-    {
-        $url = trim($url);
-
-        if ($url !== '' && ! preg_match('#^https?://#i', $url)) {
-            $url = 'https://'.$url;
-        }
-
-        $parts = parse_url($url);
-
-        if (! $parts || empty($parts['host'])) {
-            return $url;
-        }
-
-        $path = rtrim($parts['path'] ?? '', '/');
-
-        return strtolower($parts['scheme']).'://'.strtolower($parts['host']).(isset($parts['port']) ? ':'.$parts['port'] : '').$path;
     }
 
     /**

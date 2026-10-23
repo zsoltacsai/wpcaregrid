@@ -25,6 +25,7 @@ final class SubscriptionSync
         private readonly PricingCatalog $catalog,
         private readonly ProvisionCustomer $provision,
         private readonly SubscriptionBillingSnapshot $billingSnapshot,
+        private readonly BindCheckoutWebsite $bindCheckoutWebsite,
         private readonly QueueBillingEmail $billingEmails,
         private readonly SubscriptionBackupEntitlementRecorder $backupEntitlements,
     ) {}
@@ -241,6 +242,8 @@ final class SubscriptionSync
         $this->recordActivation($subscription);
         $subscription->save();
 
+        $this->bindCheckoutWebsite->apply($subscription, $intent);
+
         $entitlementEffectiveAt = $subscription->wasRecentlyCreated || $scheduledChangeEffective
             ? ($subscription->current_period_start ?? $eventTime)
             : ($subscription->wasChanged(['product_type', 'plan']) ? $eventTime : ($subscription->current_period_start ?? $eventTime));
@@ -397,6 +400,7 @@ final class SubscriptionSync
 
         $this->recordActivation($subscription);
         $subscription->save();
+        $this->bindCheckoutWebsite->apply($subscription, $intent);
         $this->notifyActivation($subscription);
 
         return $subscription;

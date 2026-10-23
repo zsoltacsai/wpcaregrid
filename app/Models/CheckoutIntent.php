@@ -23,7 +23,7 @@ class CheckoutIntent extends Model
 
     protected $guarded = ['id', 'billing_identity_id'];
 
-    protected $hidden = ['browser_session_hash', 'stripe_checkout_url', 'tax_id', 'tax_identifier_encrypted'];
+    protected $hidden = ['browser_session_hash', 'request_fingerprint', 'stripe_checkout_url', 'tax_id', 'tax_identifier_encrypted'];
 
     /** Only the public `uuid` is generated; the numeric id stays the primary key. */
     public function uniqueIds(): array
@@ -49,6 +49,7 @@ class CheckoutIntent extends Model
             'stripe_checkout_expires_at' => 'datetime',
             'completed_at' => 'datetime',
             'cancelled_at' => 'datetime',
+            'intended_website_type' => ProductType::class,
             'legal_accepted_at' => 'datetime',
         ];
     }

@@ -6,11 +6,17 @@ use App\Legal\LegalDocumentCatalog;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\LegalDocumentVersion;
+use App\Models\Promotion;
 use App\Pricing\Exceptions\PricingException;
 use App\Pricing\PriceSelection;
 use App\Pricing\PricingCatalog;
+use App\Rules\PublicWebsiteUrl;
 use App\Tax\BillingIdentityCompleteness;
+use App\Websites\NormalizeWebsiteUrl;
+use App\Websites\WebsitePurchaseTarget;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -28,6 +34,7 @@ final class StartCheckout
         private readonly PromotionReservations $reservations,
         private readonly CheckoutOfferResolver $offers,
         private readonly BillingIdentityCompleteness $billingIdentity,
+        private readonly NormalizeWebsiteUrl $normalizeWebsiteUrl,
     ) {}
 
     /**
@@ -37,8 +44,16 @@ final class StartCheckout
      * @throws PromotionRejected when the code is unknown or not valid for the price
      * @throws CheckoutUnavailable when Stripe cannot be used
      */
-    public function handle(PriceSelection $selection, CustomerDetails $customer, ?string $promotionCode, string $browserSessionId, ?Customer $account = null, ?string $currency = null, ?LegalDocumentVersion $legalDocument = null, bool $legalAccepted = false): CheckoutIntent
+    public function handle(PriceSelection $selection, CustomerDetails $customer, ?string $promotionCode, string $browserSessionId, ?Customer $account = null, ?string $currency = null, ?LegalDocumentVersion $legalDocument = null, bool $legalAccepted = false, ?WebsitePurchaseTarget $websiteTarget = null): CheckoutIntent
     {
+        if ($websiteTarget && (! $account || $websiteTarget->type !== $selection->productType
+            || ($this->normalizeWebsiteUrl)($websiteTarget->url) !== $websiteTarget->url
+            || Validator::make(['url' => $websiteTarget->url], ['url' => ['required', 'string', 'max:255', 'url:http,https', new PublicWebsiteUrl]])->fails())) {
+            throw ValidationException::withMessages(['website' => __('account.websites.checkout_target_invalid')]);
+        }
+        if ($websiteTarget && $account->websites()->where('url', $websiteTarget->url)->exists()) {
+            throw ValidationException::withMessages(['website' => __('account.websites.duplicate')]);
+        }
         $currentTerms = app(LegalDocumentCatalog::class)->current('terms_of_service', app()->getLocale());
         $checkoutAcceptanceRequired = $currentTerms?->acceptance_mode === 'acceptance_required_before_checkout';
         if ($checkoutAcceptanceRequired && (! $legalAccepted || $legalDocument?->id !== $currentTerms?->id
@@ -91,11 +106,30 @@ final class StartCheckout
         $market = $this->catalog->market($price->market);
 
         $sessionHash = CheckoutIntent::hashBrowserSession($browserSessionId);
+        $fingerprint = hash('sha256', json_encode($websiteTarget
+            ? ['account_website', $account?->id, $websiteTarget->url, $websiteTarget->type->value]
+            : [
+                $sessionHash, $account?->id, $customer->email, strtoupper($customer->country),
+                $price->money->currency->code, $price->stripePriceId, $selection->productType->value,
+                $selection->tier->value, $selection->interval->value, $promotion?->id, $legalDocument?->id,
+            ], JSON_THROW_ON_ERROR));
+
+        $inFlight = CheckoutIntent::query()->where('request_fingerprint', $fingerprint)->first();
+        if ($inFlight) {
+            if ($this->sameCheckoutRequest($inFlight, $customer, $price->stripePriceId, $selection, $promotion, $legalDocument, $websiteTarget, $sessionHash)) {
+                return $inFlight;
+            }
+            if (in_array($inFlight->status, [CheckoutStatus::Pending, CheckoutStatus::CheckoutCreated, CheckoutStatus::Cancelled, CheckoutStatus::Completed], true)) {
+                throw new CheckoutInProgress;
+            }
+            $inFlight->update(['request_fingerprint' => null]);
+        }
 
         // A double click or a resubmitted form reuses the open Stripe session
         // instead of creating a second one.
         $existing = CheckoutIntent::query()
             ->where('browser_session_hash', $sessionHash)
+            ->where('customer_id', $account?->id)
             ->where('email', $customer->email)
             ->where('country', $customer->country)
             ->where('currency', $price->money->currency->code)
@@ -104,6 +138,8 @@ final class StartCheckout
             ->where('interval', $selection->interval->value)
             ->where('promotion_id', $promotion?->id)
             ->where('legal_document_version_id', $legalDocument?->id)
+            ->where('intended_website_url', $websiteTarget?->url)
+            ->where('intended_website_type', $websiteTarget?->type->value)
             ->where('created_at', '>=', now()->subMinutes(self::REUSE_WINDOW_MINUTES))
             ->latest('id')
             ->first();
@@ -112,42 +148,56 @@ final class StartCheckout
             return $existing;
         }
 
-        $intent = DB::transaction(function () use ($account, $customer, $price, $market, $promotion, $sessionHash, $legalDocument, $legalAccepted) {
-            $intent = CheckoutIntent::create([
-                'status' => CheckoutStatus::Pending,
-                'customer_id' => $account?->id,
-                'email' => $customer->email,
-                'first_name' => $customer->firstName,
-                'last_name' => $customer->lastName,
-                'country' => $customer->country,
-                'customer_type' => $customer->customerType,
-                'company_name' => $customer->companyName,
-                'tax_id' => null,
-                'tax_identifier_encrypted' => $customer->taxId,
-                'billing_address' => $customer->billingAddress,
-                'product_type' => $price->productType,
-                'plan' => $price->tier,
-                'interval' => $price->interval,
-                'market' => $price->marketGroup,
-                'currency' => $price->money->currency->code,
-                'amount' => $price->money->amount,
-                'tax_treatment' => $market->taxTreatment->value,
-                'stripe_price_id' => $price->stripePriceId,
-                'pricing_version' => $price->version,
-                'promotion_id' => $promotion?->id,
-                'promotion_code' => $promotion?->code,
-                'legal_document_version_id' => $legalAccepted ? $legalDocument?->id : null,
-                'legal_document_sha256' => $legalAccepted ? $legalDocument?->content_sha256 : null,
-                'legal_accepted_at' => $legalAccepted ? now('UTC') : null,
-                'browser_session_hash' => $sessionHash,
-            ]);
+        try {
+            $intent = DB::transaction(function () use ($account, $customer, $price, $market, $promotion, $sessionHash, $legalDocument, $legalAccepted, $websiteTarget, $fingerprint) {
+                $intent = CheckoutIntent::create([
+                    'status' => CheckoutStatus::Pending,
+                    'customer_id' => $account?->id,
+                    'email' => $customer->email,
+                    'first_name' => $customer->firstName,
+                    'last_name' => $customer->lastName,
+                    'country' => $customer->country,
+                    'customer_type' => $customer->customerType,
+                    'company_name' => $customer->companyName,
+                    'tax_id' => null,
+                    'tax_identifier_encrypted' => $customer->taxId,
+                    'billing_address' => $customer->billingAddress,
+                    'product_type' => $price->productType,
+                    'plan' => $price->tier,
+                    'interval' => $price->interval,
+                    'market' => $price->marketGroup,
+                    'currency' => $price->money->currency->code,
+                    'amount' => $price->money->amount,
+                    'tax_treatment' => $market->taxTreatment->value,
+                    'stripe_price_id' => $price->stripePriceId,
+                    'intended_website_url' => $websiteTarget?->url,
+                    'intended_website_type' => $websiteTarget?->type,
+                    'pricing_version' => $price->version,
+                    'promotion_id' => $promotion?->id,
+                    'promotion_code' => $promotion?->code,
+                    'legal_document_version_id' => $legalAccepted ? $legalDocument?->id : null,
+                    'legal_document_sha256' => $legalAccepted ? $legalDocument?->content_sha256 : null,
+                    'legal_accepted_at' => $legalAccepted ? now('UTC') : null,
+                    'browser_session_hash' => $sessionHash,
+                    'request_fingerprint' => $fingerprint,
+                ]);
 
-            if ($promotion) {
-                $this->reservations->reserve($promotion, $intent, $price, $customer->email, $account?->id);
+                if ($promotion) {
+                    $this->reservations->reserve($promotion, $intent, $price, $customer->email, $account?->id);
+                }
+
+                return $intent;
+            }, attempts: 3);
+        } catch (UniqueConstraintViolationException $exception) {
+            $winner = CheckoutIntent::query()->where('request_fingerprint', $fingerprint)->first();
+            if ($winner && $this->sameCheckoutRequest($winner, $customer, $price->stripePriceId, $selection, $promotion, $legalDocument, $websiteTarget, $sessionHash)) {
+                return $winner;
             }
-
-            return $intent;
-        }, attempts: 3);
+            if ($winner) {
+                throw new CheckoutInProgress;
+            }
+            throw $exception;
+        }
 
         try {
             $session = $this->gateway->createSession($intent, $promotion);
@@ -159,6 +209,7 @@ final class StartCheckout
                 $intent->update(['failure_reason' => $e->getMessage()]);
             } else {
                 $intent->update(['status' => CheckoutStatus::Failed, 'failure_reason' => $e->getMessage()]);
+                $intent->update(['request_fingerprint' => null]);
                 $this->reservations->release($intent);
             }
 
@@ -192,6 +243,29 @@ final class StartCheckout
             && $intent->company_name === $customer->companyName
             && $intent->taxIdentifier() === $customer->taxId
             && $this->canonicalBillingAddress($intent->billing_address) === $this->canonicalBillingAddress($customer->billingAddress);
+    }
+
+    private function sameCheckoutRequest(
+        CheckoutIntent $intent,
+        CustomerDetails $customer,
+        string $stripePriceId,
+        PriceSelection $selection,
+        ?Promotion $promotion,
+        ?LegalDocumentVersion $legalDocument,
+        ?WebsitePurchaseTarget $websiteTarget,
+        string $sessionHash,
+    ): bool {
+        return $intent->isReusable()
+            && $intent->browser_session_hash === $sessionHash
+            && $this->sameBillingIdentity($intent, $customer)
+            && $intent->stripe_price_id === $stripePriceId
+            && $intent->product_type === $selection->productType
+            && $intent->plan === $selection->tier
+            && $intent->interval === $selection->interval
+            && $intent->promotion_id === $promotion?->id
+            && $intent->legal_document_version_id === $legalDocument?->id
+            && $intent->intended_website_url === $websiteTarget?->url
+            && $intent->intended_website_type === $websiteTarget?->type;
     }
 
     /** @param array<string, mixed>|null $address @return array<string, mixed> */

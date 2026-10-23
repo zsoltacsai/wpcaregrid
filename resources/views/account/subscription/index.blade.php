@@ -1,5 +1,6 @@
 <x-layouts.account :title="__('account.subscription.title')">
     <x-account.page-header :title="__('account.subscription.title')" :lead="__('account.subscription.lead')" />
+    <div class="mb-6"><x-ui.button :href="route('account.websites.create')" icon="plus">{{ __('account.websites.add_another') }}</x-ui.button></div>
 
     @forelse ($subscriptions as $subscription)
         <x-account.panel :title="$subscription->planName().' — '.$subscription->product_type->label()" :heading-id="'subscription-'.$subscription->uuid" class="mb-6">
@@ -56,7 +57,7 @@
     @empty
         <x-account.panel>
             <p class="text-sm text-muted">{{ __('account.subscription.none') }}</p>
-            <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->pricing()" variant="secondary" class="mt-4">{{ __('account.dashboard.view_plans') }}</x-ui.button>
+            <x-ui.button :href="route('account.websites.create')" icon="plus" variant="secondary" class="mt-4">{{ __('account.websites.add_another') }}</x-ui.button>
         </x-account.panel>
     @endforelse
 </x-layouts.account>

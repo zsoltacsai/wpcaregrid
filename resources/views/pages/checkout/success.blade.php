@@ -4,6 +4,8 @@
 --}}
 @php
     $confirmed = $intent?->status === \App\Checkout\CheckoutStatus::Completed;
+    $accountPurchase = $intent && auth()->user()?->customer?->id === $intent->customer_id;
+    $website = $accountPurchase ? $intent->subscription?->website : null;
 @endphp
 
 <x-layouts.marketing :title="__('checkout.meta.success_title')" :description="__('home.meta.description')">
@@ -15,7 +17,7 @@
                     <h1 id="success-title" class="mt-6 text-[28px] leading-[1.15] font-semibold tracking-[-0.015em] sm:text-[32px]">{{ __('checkout.success.title') }}</h1>
                     <p class="mt-3 text-lg text-ink">{{ __('checkout.success.lead') }}</p>
                     <p class="mt-4 text-base leading-relaxed text-muted">
-                        {{ $intent->customer?->user?->hasVerifiedEmail() ? __('account.dashboard.setup_text') : __('account.success.account_email') }}
+                        {{ $accountPurchase ? __('account.success.existing_account_complete') : ($intent->customer?->user?->hasVerifiedEmail() ? __('account.dashboard.setup_text') : __('account.success.account_email')) }}
                     </p>
                 @else
                     <x-ui.icon-tile name="clock" />
@@ -42,7 +44,13 @@
 
                 <div class="mt-8 flex flex-col gap-3 sm:flex-row">
                     @if ($confirmed)
-                        <x-ui.button :href="route('login')">{{ __('account.success.login') }}</x-ui.button>
+                        @if ($accountPurchase)
+                            <x-ui.button :href="$website ? route('account.websites.show', $website) : route('account.subscription')">{{ $website ? __('account.websites.connect_website') : __('account.success.open_account') }}</x-ui.button>
+                        @else
+                            <x-ui.button :href="route('login')">{{ __('account.success.login') }}</x-ui.button>
+                        @endif
+                    @elseif ($accountPurchase)
+                        <x-ui.button :href="route('account.dashboard')" variant="secondary">{{ __('account.success.open_account') }}</x-ui.button>
                     @else
                         <x-ui.button :href="request()->fullUrl()" variant="secondary">{{ __('account.success.refresh') }}</x-ui.button>
                     @endif
