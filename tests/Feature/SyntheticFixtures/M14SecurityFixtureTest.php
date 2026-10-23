@@ -2,14 +2,14 @@
 
 namespace Tests\Feature\SyntheticFixtures;
 
-use App\Connector\ConnectorError;
-use App\Connector\JobQueue;
-use App\Connector\JobType;
-use App\Connector\PairingCodes;
 use App\Backups\BackupReason;
 use App\Backups\BackupRefused;
 use App\Backups\BackupService;
 use App\Backups\BackupType;
+use App\Connector\ConnectorError;
+use App\Connector\JobQueue;
+use App\Connector\JobType;
+use App\Connector\PairingCodes;
 use App\Models\BillingInvoice;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
@@ -21,15 +21,16 @@ use App\Models\SyntheticSiteFixture;
 use App\Models\User;
 use App\Models\Website;
 use App\Models\WebsiteInventory;
-use App\Security\ScanType;
 use App\Security\Confidence;
+use App\Security\FindingRecorder;
 use App\Security\FindingType;
 use App\Security\IncidentService;
 use App\Security\ReportedFinding;
-use App\Security\Severity;
+use App\Security\ScanType;
 use App\Security\SecurityScanService;
-use App\SyntheticFixtures\M14SecurityScanWindowService;
+use App\Security\Severity;
 use App\SyntheticFixtures\M14SecurityHost;
+use App\SyntheticFixtures\M14SecurityScanWindowService;
 use App\SyntheticFixtures\StagingIdentity;
 use App\SyntheticFixtures\SyntheticFixturePolicy;
 use App\SyntheticFixtures\SyntheticFixtureProvisioner;
@@ -472,7 +473,7 @@ final class M14SecurityFixtureTest extends TestCase
 
         app(M14SecurityScanWindowService::class)->open($website, 'test-owner');
         $scan = app(SecurityScanService::class)->request($website, ScanType::Integrity, 'operator:1');
-        app(\App\Security\FindingRecorder::class)->record($scan, new ReportedFinding(
+        app(FindingRecorder::class)->record($scan, new ReportedFinding(
             FindingType::SuspiciousFile,
             'm14-test-suspicious-file',
             Severity::High,
@@ -511,7 +512,7 @@ final class M14SecurityFixtureTest extends TestCase
             'scanner_version' => 'test',
             'coverage' => [],
         ]);
-        app(\App\Security\FindingRecorder::class)->record($scan, new ReportedFinding(
+        app(FindingRecorder::class)->record($scan, new ReportedFinding(
             FindingType::SuspiciousFile, 'ordinary-suspicious-file', Severity::High, Confidence::High,
             'Suspicious file', 'Test finding.', 'plugin', 'plugin/test.php',
         ));
@@ -543,7 +544,7 @@ final class M14SecurityFixtureTest extends TestCase
         $window->forceFill(['expires_at' => now()->subSecond()])->save();
         app(M14SecurityScanWindowService::class)->close('test-owner', 'expired-terminal-scan');
 
-        app(\App\Security\FindingRecorder::class)->record($scan, new ReportedFinding(
+        app(FindingRecorder::class)->record($scan, new ReportedFinding(
             FindingType::SuspiciousFile, 'm14-delayed-failure', Severity::High, Confidence::High,
             'Synthetic delayed result', 'Synthetic test finding only.', 'fixture', 'synthetic/delayed.php',
         ));

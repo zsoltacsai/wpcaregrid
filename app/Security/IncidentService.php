@@ -82,8 +82,16 @@ class IncidentService
             AuditLog::record($scan->website, 'security.m14_test_side_effects_suppressed', actor: 'system', data: [
                 'scan' => $scan->uuid,
                 'finding_count' => $serious->count(),
-                'global_auto_open' => match (config('security.incidents.auto_open')) { true => 'true', false => 'false', default => 'unknown' },
-                'global_auto_backup' => match (config('security.incidents.auto_backup')) { true => 'true', false => 'false', default => 'unknown' },
+                'global_auto_open' => match (config('security.incidents.auto_open')) {
+                    true => 'true',
+                    false => 'false',
+                    default => 'unknown',
+                },
+                'global_auto_backup' => match (config('security.incidents.auto_backup')) {
+                    true => 'true',
+                    false => 'false',
+                    default => 'unknown',
+                },
             ]);
 
             return null;
