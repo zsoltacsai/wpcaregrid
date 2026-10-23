@@ -19,4 +19,3 @@ return [
     'tested_mysql_branches' => ['8.4'],
     'tested_mariadb_branches' => ['10.11'],
 ];
-
