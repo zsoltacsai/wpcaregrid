@@ -398,8 +398,8 @@ jobs:
           WORDPRESS_CONSTRAINT: ${{ format('~{0}.0', matrix.wordpress) }}
         run: |
           set -euo pipefail
-          composer update phpunit/phpunit --with "phpunit/phpunit:$PHPUNIT_CONSTRAINT" --no-interaction --prefer-dist --no-progress
-          composer update johnpbloch/wordpress-core --with "johnpbloch/wordpress-core:$WORDPRESS_CONSTRAINT" --no-interaction --prefer-dist --no-progress
+          composer update phpunit/phpunit --with "phpunit/phpunit:$PHPUNIT_CONSTRAINT" --with-all-dependencies --no-interaction --prefer-dist --no-progress
+          composer update johnpbloch/wordpress-core --with "johnpbloch/wordpress-core:$WORDPRESS_CONSTRAINT" --with-all-dependencies --no-interaction --prefer-dist --no-progress
           composer install --no-interaction --prefer-dist --no-progress
 
       - name: Connector tests (real WordPress)
@@ -407,3 +407,4 @@ jobs:
         run: |
           export WP_CAREGRID_TEST_MYSQL='root:ci-root-password@127.0.0.1/wordpress'
           vendor/bin/phpunit --display-skipped
+
