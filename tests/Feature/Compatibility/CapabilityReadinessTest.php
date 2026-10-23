@@ -236,6 +236,40 @@ final class CapabilityReadinessTest extends TestCase
         $response->assertDontSee('DB_PASSWORD')->assertDontSee('/var/www/');
     }
 
+    public function test_pass_without_reason_uses_correct_copy_in_both_locales_and_stale_fails_closed(): void
+    {
+        $site = $this->pairedWebsite();
+        $website = $site['website'];
+        $snapshot = $website->capabilitySnapshot()->firstOrFail();
+        $capabilities = $snapshot->capabilities;
+        $capabilities[Capability::SecurityScanReady->value] = ['status' => 'PASS', 'reasons' => []];
+        $snapshot->update(['capabilities' => $capabilities, 'checked_at' => now()]);
+
+        foreach (['en', 'hu'] as $locale) {
+            $this->actingAs($website->customer->user)
+                ->withCookie((string) config('localization.cookie'), $locale)
+                ->get(route('account.websites.show', $website))
+                ->assertOk()
+                ->assertSeeInOrder([
+                    trans('compatibility.capabilities.SECURITY_SCAN_READY', [], $locale),
+                    trans('compatibility.reasons.PASS_NO_ISSUES', [], $locale),
+                    trans('compatibility.status.PASS', [], $locale),
+                ]);
+        }
+
+        $snapshot->update(['checked_at' => now()->subSeconds((int) config('compatibility.dynamic_ttl_seconds') + 1)]);
+
+        $this->actingAs($website->customer->user)
+            ->withCookie((string) config('localization.cookie'), 'en')
+            ->get(route('account.websites.show', $website))
+            ->assertOk()
+            ->assertSeeInOrder([
+                trans('compatibility.capabilities.SECURITY_SCAN_READY', [], 'en'),
+                trans('compatibility.reasons.FACT_STALE', [], 'en'),
+                trans('compatibility.status.UNKNOWN', [], 'en'),
+            ]);
+    }
+
     public function test_operator_diagnostics_are_scoped_and_show_redacted_technical_facts(): void
     {
         $site = $this->pairedWebsite();
