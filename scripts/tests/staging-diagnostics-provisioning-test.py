@@ -250,6 +250,83 @@ class DiagnosticsProvisioningTests(unittest.TestCase):
         self.assertFalse(self.layout.path(provision.PENDING_PATH).exists())
         self.assertTrue(provision._activation_is_valid(self.layout, self.source_sha))
 
+    def test_install_atomically_upgrades_the_exact_legacy_readback_helper(self) -> None:
+        self.run_install()
+        helper_path = self.layout.path(provision.HELPER_PATH)
+        legacy_content = b"previous approved readback helper\n"
+        helper_path.write_bytes(legacy_content)
+        helper_path.chmod(0o644)
+        legacy_hash = hashlib.sha256(legacy_content).hexdigest()
+
+        with patch.dict(
+            provision.LEGACY_INSTALL_FILE_SHA256,
+            {provision.HELPER_PATH: frozenset({legacy_hash})},
+        ):
+            self.run_install()
+
+        expected = (ROOT / provision.SOURCE_FILES[provision.HELPER_PATH]).read_bytes()
+        self.assertEqual(helper_path.read_bytes(), expected)
+        self.assertEqual(stat.S_IMODE(helper_path.stat().st_mode), 0o644)
+        self.assertFalse(self.layout.path(provision.PENDING_PATH).exists())
+        self.assertTrue(provision._activation_is_valid(self.layout, self.source_sha))
+
+    def test_install_does_not_replace_an_unrecognized_managed_path_file(self) -> None:
+        self.run_install()
+        helper_path = self.layout.path(provision.HELPER_PATH)
+        unrecognized_content = b"unexpected root-owned content\n"
+        helper_path.write_bytes(unrecognized_content)
+        helper_path.chmod(0o644)
+
+        with self.assertRaisesRegex(provision.ProvisionError, "FILE_CONFLICT"):
+            self.run_install()
+
+        self.assertEqual(helper_path.read_bytes(), unrecognized_content)
+        self.assertTrue(self.layout.path(provision.PENDING_PATH).is_file())
+        self.assertFalse(provision._activation_is_valid(self.layout, self.source_sha))
+
+    def test_install_does_not_replace_a_legacy_hash_with_unsafe_mode(self) -> None:
+        self.run_install()
+        helper_path = self.layout.path(provision.HELPER_PATH)
+        legacy_content = b"previous approved readback helper\n"
+        helper_path.write_bytes(legacy_content)
+        helper_path.chmod(0o600)
+        legacy_hash = hashlib.sha256(legacy_content).hexdigest()
+
+        with patch.dict(
+            provision.LEGACY_INSTALL_FILE_SHA256,
+            {provision.HELPER_PATH: frozenset({legacy_hash})},
+        ):
+            with self.assertRaisesRegex(provision.ProvisionError, "FILE_CONFLICT"):
+                self.run_install()
+
+        self.assertEqual(helper_path.read_bytes(), legacy_content)
+        self.assertTrue(self.layout.path(provision.PENDING_PATH).is_file())
+        self.assertFalse(provision._activation_is_valid(self.layout, self.source_sha))
+
+    def test_install_does_not_follow_a_symlink_at_managed_helper_path(self) -> None:
+        self.run_install()
+        helper_path = self.layout.path(provision.HELPER_PATH)
+        target = self.temp_root / "unmanaged-helper-target"
+        target.write_bytes(b"do not replace or follow\n")
+        helper_path.unlink()
+        helper_path.symlink_to(target)
+
+        with self.assertRaisesRegex(provision.ProvisionError, "FILE_CONFLICT"):
+            self.run_install()
+
+        self.assertTrue(helper_path.is_symlink())
+        self.assertEqual(target.read_bytes(), b"do not replace or follow\n")
+        self.assertTrue(self.layout.path(provision.PENDING_PATH).is_file())
+        self.assertFalse(provision._activation_is_valid(self.layout, self.source_sha))
+
+    def test_legacy_helper_upgrade_allowlist_pins_observed_prior_artifact_hash(self) -> None:
+        self.assertEqual(
+            provision.LEGACY_INSTALL_FILE_SHA256[provision.HELPER_PATH],
+            frozenset(
+                {"0bc2a28f2df132c06de1de269cc3996c60625e1d758bc7554ea630e2e9bd4dce"}
+            ),
+        )
+
     def test_cache_acl_accepts_only_owner_or_exact_php_fpm_reader(self) -> None:
         provision._validate_application_cache_acl(
             stat.S_IFREG | 0o600,
