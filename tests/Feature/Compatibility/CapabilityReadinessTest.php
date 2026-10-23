@@ -236,6 +236,119 @@ final class CapabilityReadinessTest extends TestCase
         $response->assertDontSee('DB_PASSWORD')->assertDontSee('/var/www/');
     }
 
+    public function test_pass_without_reason_uses_correct_copy_in_both_locales_and_stale_fails_closed(): void
+    {
+        $site = $this->pairedWebsite();
+        $website = $site['website'];
+        $operator = User::factory()->operator([Permission::WebsitesView])->create();
+        $snapshot = $website->capabilitySnapshot()->firstOrFail();
+        $capabilities = $snapshot->capabilities;
+        $capabilities[Capability::SecurityScanReady->value] = ['status' => 'PASS', 'reasons' => []];
+        $snapshot->update(['capabilities' => $capabilities, 'checked_at' => now()]);
+
+        foreach (['en', 'hu'] as $locale) {
+            $expected = [
+                trans('compatibility.capabilities.SECURITY_SCAN_READY', [], $locale),
+                trans('compatibility.reasons.PASS_NO_ISSUES', [], $locale),
+                trans('compatibility.status.PASS', [], $locale),
+            ];
+            $checkRequired = trans('compatibility.reasons.CHECK_REQUIRED', [], $locale);
+
+            $this->actingAs($website->customer->user)
+                ->withCookie((string) config('localization.cookie'), $locale)
+                ->get(route('account.websites.show', $website))
+                ->assertOk()
+                ->assertSeeInOrder($expected)
+                ->assertDontSee($checkRequired);
+        }
+
+        // Staff areas are intentionally English-only; the locale cookie must not change them.
+        $operatorExpected = [
+            trans('compatibility.capabilities.SECURITY_SCAN_READY', [], 'en'),
+            trans('compatibility.reasons.PASS_NO_ISSUES', [], 'en'),
+            trans('compatibility.status.PASS', [], 'en'),
+        ];
+        $operatorCheckRequired = trans('compatibility.reasons.CHECK_REQUIRED', [], 'en');
+
+        $this->actingAs($operator, 'operator')
+            ->withCookie((string) config('localization.cookie'), 'hu')
+            ->get(route('operator.websites.show', $website))
+            ->assertOk()
+            ->assertSeeInOrder($operatorExpected)
+            ->assertDontSee($operatorCheckRequired);
+
+        $snapshot->update(['checked_at' => now()->subSeconds((int) config('compatibility.dynamic_ttl_seconds') + 1)]);
+        $staleExpected = [
+            trans('compatibility.capabilities.SECURITY_SCAN_READY', [], 'en'),
+            trans('compatibility.reasons.FACT_STALE', [], 'en'),
+            trans('compatibility.status.UNKNOWN', [], 'en'),
+        ];
+
+        $this->actingAs($website->customer->user)
+            ->withCookie((string) config('localization.cookie'), 'en')
+            ->get(route('account.websites.show', $website))
+            ->assertOk()
+            ->assertSeeInOrder($staleExpected);
+
+        $this->actingAs($operator, 'operator')
+            ->withCookie((string) config('localization.cookie'), 'en')
+            ->get(route('operator.websites.show', $website))
+            ->assertOk()
+            ->assertSeeInOrder($staleExpected);
+    }
+
+    public function test_compatibility_copy_preserves_known_reasons_and_handles_missing_or_unknown_details(): void
+    {
+        $site = $this->pairedWebsite();
+        $website = $site['website'];
+        $operator = User::factory()->operator([Permission::WebsitesView])->create();
+        $snapshot = $website->capabilitySnapshot()->firstOrFail();
+
+        $cases = [
+            ['status' => 'PASS', 'reasons' => ['CONNECTOR_UPDATE_RECOMMENDED'], 'reason' => 'CONNECTOR_UPDATE_RECOMMENDED'],
+            ['status' => 'WARN', 'reasons' => [], 'reason' => 'DETAIL_UNAVAILABLE'],
+            ['status' => 'BLOCK', 'reasons' => [], 'reason' => 'DETAIL_UNAVAILABLE'],
+            ['status' => 'UNKNOWN', 'reasons' => [], 'reason' => 'CHECK_REQUIRED'],
+            ['status' => 'PASS', 'reasons' => ['UNRECOGNIZED_REASON'], 'reason' => 'DETAIL_UNAVAILABLE'],
+        ];
+
+        foreach ($cases as $case) {
+            $capabilities = $snapshot->fresh()->capabilities;
+            $capabilities[Capability::SecurityScanReady->value] = [
+                'status' => $case['status'],
+                'reasons' => $case['reasons'],
+            ];
+            $snapshot->update(['capabilities' => $capabilities, 'checked_at' => now()]);
+
+            foreach (['en', 'hu'] as $locale) {
+                $expected = [
+                    trans('compatibility.capabilities.SECURITY_SCAN_READY', [], $locale),
+                    trans('compatibility.reasons.'.$case['reason'], [], $locale),
+                    trans('compatibility.status.'.$case['status'], [], $locale),
+                ];
+
+                $this->actingAs($website->customer->user)
+                    ->withCookie((string) config('localization.cookie'), $locale)
+                    ->get(route('account.websites.show', $website))
+                    ->assertOk()
+                    ->assertSeeInOrder($expected);
+            }
+
+            // Operator pages deliberately stay English regardless of device locale.
+            $operatorExpected = [
+                trans('compatibility.capabilities.SECURITY_SCAN_READY', [], 'en'),
+                trans('compatibility.reasons.'.$case['reason'], [], 'en'),
+                trans('compatibility.status.'.$case['status'], [], 'en'),
+            ];
+
+            $this->actingAs($operator, 'operator')
+                ->withCookie((string) config('localization.cookie'), 'hu')
+                ->get(route('operator.websites.show', $website))
+                ->assertOk()
+                ->assertSeeInOrder($operatorExpected);
+        }
+    }
+
     public function test_operator_diagnostics_are_scoped_and_show_redacted_technical_facts(): void
     {
         $site = $this->pairedWebsite();

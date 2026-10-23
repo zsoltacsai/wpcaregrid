@@ -10,6 +10,8 @@ return [
         'SECURITY_REMEDIATION_READY' => 'Biztonsági helyreállítás', 'ADMIN_ACCESS_READY' => 'Ideiglenes adminisztrátori hozzáférés',
     ],
     'reasons' => [
+        'DETAIL_UNAVAILABLE' => 'Ehhez az állapothoz nem érkezett részletes indoklás; az állapotjelzést tekintse mérvadónak.',
+        'PASS_NO_ISSUES' => 'Az aktuális kompatibilitási ellenőrzés ennél a képességnél nem jelzett problémát.',
         'CHECK_REQUIRED' => 'Új, aktuális ellenőrzés szükséges.', 'FACT_STALE' => 'Az előző ellenőrzés elavult. Indítson új ellenőrzést.',
         'CONNECTOR_OFFLINE' => 'A webhely Connectora jelenleg nem jelentkezik.', 'CONNECTOR_UNSUPPORTED' => 'Frissítse a webhely Connectorát egy támogatott kiadásra.',
         'CONNECTOR_UPDATE_RECOMMENDED' => 'Újabb Connector-kiadás érhető el.', 'CONNECTOR_NEWER_UNKNOWN' => 'Ezt az újabb Connector-verziót még nem értékeltük.',

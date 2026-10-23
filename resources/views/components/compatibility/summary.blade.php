@@ -26,7 +26,16 @@
                     default => 'neutral',
                 };
                 $reason = $stale ? 'FACT_STALE' : (data_get($result, 'reasons.0') ?? null);
-                $reasonKey = in_array($reason, $knownReasons, true) ? $reason : 'CHECK_REQUIRED';
+                // A passing capability often has no reason code: do not describe it as needing a check.
+                // Unknown/malformed reason codes and non-PASS states remain conservative.
+                $reasonKey = in_array($reason, $knownReasons, true)
+                    ? $reason
+                    : match (true) {
+                        $reason !== null => 'DETAIL_UNAVAILABLE',
+                        $status === \App\Compatibility\CapabilityStatus::Pass => 'PASS_NO_ISSUES',
+                        $status === \App\Compatibility\CapabilityStatus::Unknown => 'CHECK_REQUIRED',
+                        default => 'DETAIL_UNAVAILABLE',
+                    };
             @endphp
             <div class="min-w-0 border-b border-line py-2">
                 <dt class="font-medium text-primary">{{ __('compatibility.capabilities.'.$capability->value) }}</dt>
