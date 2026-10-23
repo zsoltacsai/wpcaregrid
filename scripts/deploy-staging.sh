@@ -330,7 +330,7 @@ normalize_tracked_checkout_permissions() {
         mode="${metadata%% *}"
 
         case "$path" in
-            artisan|composer.json|composer.lock|package.json|vite.config.*|postcss.config.*|tailwind.config.*|app/*|bootstrap/*|config/*|database/*|lang/*|public/*|resources/*|routes/*|scripts/*) ;;
+            artisan|composer.json|composer.lock|package.json|vite.config.*|postcss.config.*|tailwind.config.*|app/*|bootstrap/*|config/*|database/*|lang/*|public/*|resources/*|routes/*|scripts/*|wordpress/*) ;;
             *) continue ;;
         esac
         case "$path" in
@@ -369,6 +369,8 @@ runtime_source_access_ok() {
         vendor/autoload.php
         resources/views/owner/dns/cloudflare.blade.php
         public/build/manifest.json
+        wordpress/wp-caregrid-connector/release.json
+        wordpress/wp-caregrid-connector/wp-caregrid-connector.php
     )
 
     for path in "${runtime_paths[@]}"; do
@@ -384,7 +386,7 @@ runtime_source_access_ok() {
     while IFS= read -r -d '' entry; do
         path="${entry#*$'\t'}"
         case "$path" in
-            app/*|bootstrap/*|config/*|database/*|lang/*|public/*|resources/*|routes/*|scripts/*|artisan) ;;
+            app/*|bootstrap/*|config/*|database/*|lang/*|public/*|resources/*|routes/*|scripts/*|wordpress/*|artisan) ;;
             *) continue ;;
         esac
         case "$path" in
@@ -395,7 +397,7 @@ runtime_source_access_ok() {
         privileged file-check www-data read "$path" || { log "PHP-FPM cannot read tracked runtime source: ${path}"; return 1; }
     done < <(git ls-files -z)
 
-    log 'PHP-FPM can read representative runtime files and all tracked PHP/shell source files.'
+    log 'PHP-FPM can read representative runtime files and all tracked PHP/shell source files, including the distributable Connector source.'
 }
 
 check_http_status() {

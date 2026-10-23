@@ -15,6 +15,7 @@ SPEC.loader.exec_module(MODULE)
 
 def valid_output() -> str:
     rows = [f"M12|{key}|FALSE" for key in MODULE.PRIVACY_KEYS]
+    rows.extend(f"SECURITY|{key}|FALSE" for key in MODULE.INCIDENT_KEYS)
     rows.extend(f"IDENTITY|{key}|{expected}" for key, expected in MODULE.IDENTITY)
     return "\n".join(rows) + "\n"
 
@@ -26,15 +27,18 @@ class StagingDiagnosticsOutputTest(unittest.TestCase):
             [
                 f"privacy.{key}=FALSE" for key in MODULE.PRIVACY_KEYS
             ]
+            + [f"security.incidents.{key}=FALSE" for key in MODULE.INCIDENT_KEYS]
             + [f"app.{key}={expected}" for key, expected in MODULE.IDENTITY],
         )
 
     def test_true_unknown_and_identity_mismatch_are_bounded(self) -> None:
         rows = valid_output().splitlines()
         rows[0] = "M12|destructive_retention_enabled|TRUE"
+        rows[len(MODULE.PRIVACY_KEYS)] = "SECURITY|auto_open|TRUE"
         rows[-1] = "IDENTITY|url|MISMATCH"
         result = MODULE.sanitize("\n".join(rows))
         self.assertEqual(result[0], "privacy.destructive_retention_enabled=TRUE")
+        self.assertEqual(result[len(MODULE.PRIVACY_KEYS)], "security.incidents.auto_open=TRUE")
         self.assertEqual(result[-1], "app.url=MISMATCH")
 
     def test_fixed_failure_classification_is_sanitized(self) -> None:
