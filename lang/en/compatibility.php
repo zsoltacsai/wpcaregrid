@@ -10,6 +10,7 @@ return [
         'SECURITY_REMEDIATION_READY' => 'Security remediation', 'ADMIN_ACCESS_READY' => 'Temporary admin access',
     ],
     'reasons' => [
+        'PASS_NO_ISSUES' => 'No issues reported for this capability in the current compatibility check.',
         'CHECK_REQUIRED' => 'A current check is required.', 'FACT_STALE' => 'The last check is out of date. Run a new check.',
         'CONNECTOR_OFFLINE' => 'The site Connector is not currently reporting in.', 'CONNECTOR_UNSUPPORTED' => 'Update the site Connector to a supported release.',
         'CONNECTOR_UPDATE_RECOMMENDED' => 'A newer Connector release is available.', 'CONNECTOR_NEWER_UNKNOWN' => 'This newer Connector version has not been evaluated yet.',
