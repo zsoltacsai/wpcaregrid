@@ -25,7 +25,7 @@ final class CompatibilityMatrixTest extends TestCase
 
         $facts = (new EnvironmentFacts)->collect(false);
         if ($expectedDatabase === 'sqlite') {
-            $this->assertFalse($wpdb->is_mysql);
+            $this->assertFalse((bool) $wpdb->is_mysql);
             // SQLite is a supported test fixture for read-only Connector
             // behavior; it is not a database-backup compatibility claim.
             $this->assertSame('unknown', $facts['database']['engine']);
