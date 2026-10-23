@@ -15,7 +15,7 @@ return [
         'CHECK_REQUIRED' => 'Új, aktuális ellenőrzés szükséges.', 'FACT_STALE' => 'Az előző ellenőrzés elavult. Indítson új ellenőrzést.',
         'CONNECTOR_OFFLINE' => 'A webhely Connectora jelenleg nem jelentkezik.', 'CONNECTOR_UNSUPPORTED' => 'Frissítse a webhely Connectorát egy támogatott kiadásra.',
         'CONNECTOR_UPDATE_RECOMMENDED' => 'Újabb Connector-kiadás érhető el.', 'CONNECTOR_NEWER_UNKNOWN' => 'Ezt az újabb Connector-verziót még nem értékeltük.',
-        'RUNTIME_VERSION_UNSUPPORTED' => 'A PHP- vagy WordPress-verzió a megadott minimum alatt van.', 'RUNTIME_VERSION_UNTESTED' => 'Ezt a PHP- vagy WordPress-verziót még nem fedik le az aktuális kompatibilitási tesztek.',
+        'RUNTIME_VERSION_UNSUPPORTED' => 'A PHP- vagy WordPress-verzió a megadott minimum alatt van.', 'RUNTIME_VERSION_UNTESTED' => 'Ezt a PHP- vagy WordPress-verziót még nem fedik le az aktuális kompatibilitási tesztek.', 'RUNTIME_VERSION_EOL' => 'A PHP 8.1 életciklusa véget ért. Frissíts támogatott PHP-verzióra; a magas kockázatú műveletek nem érhetők el.',
         'PHP_EXTENSION_MISSING' => 'A művelethez szükséges PHP-bővítmény nem érhető el.',
         'CONNECTOR_CAPABILITY_MISSING' => 'A telepített Connector nem támogatja ezt a műveletet.', 'FACT_MISSING' => 'A webhely még nem küldte el az ellenőrzéshez szükséges adatokat.',
         'FACT_MALFORMED' => 'A webhely adatait nem sikerült ellenőrizni.', 'MULTISITE_UNSUPPORTED' => 'Ez a művelet WordPress Multisite esetén nem támogatott.',

@@ -10,6 +10,7 @@ enum ReasonCode: string
     case ConnectorNewerUnknown = 'CONNECTOR_NEWER_UNKNOWN';
     case RuntimeVersionUnsupported = 'RUNTIME_VERSION_UNSUPPORTED';
     case RuntimeVersionUntested = 'RUNTIME_VERSION_UNTESTED';
+    case RuntimeVersionEol = 'RUNTIME_VERSION_EOL';
     case ExtensionMissing = 'PHP_EXTENSION_MISSING';
     case CapabilityMissing = 'CONNECTOR_CAPABILITY_MISSING';
     case FactMissing = 'FACT_MISSING';

@@ -56,10 +56,25 @@ def validate_workflow_controls(workflow):
     assert not re.search(r"(?m)^\s+(?:write-all|contents|actions|checks|pull-requests|deployments|id-token):\s*(?:write|write-all)\s*$", workflow), "unexpected token write permission"
     assert "name: Quality (lint, style, dependencies, build, secrets)" in workflow
     assert "name: Server tests (PHP 8.4, ${{ matrix.database }})" in workflow
-    assert "name: Connector tests in WordPress (PHP ${{ matrix.php }}, ${{ matrix.database }})" in workflow
+    assert "name: ${{ matrix.legacy_check_name || format('Connector tests (PHP {0}, WordPress {1}, {2})', matrix.php, matrix.wordpress, matrix.database) }}" in workflow
     assert "database: [sqlite, mysql, mariadb]" in workflow, "server matrix shrank"
-    for database in DATABASES:
-        assert f"database: {database}, php: '8.4'" in workflow, f"Connector {database} check missing"
+    assert "php: ['8.2', '8.3', '8.4', '8.5']" in workflow, "customer PHP compatibility matrix incomplete"
+    assert "wordpress: ['6.8', '7.1']" in workflow, "Connector WordPress compatibility fixtures incomplete"
+    assert "database: [mysql, mariadb]" in workflow, "Connector SQL engine matrix incomplete"
+    for legacy_context in (
+        "Connector tests in WordPress (PHP 8.4, sqlite)",
+        "Connector tests in WordPress (PHP 8.4, mysql)",
+        "Connector tests in WordPress (PHP 8.4, mariadb)",
+    ):
+        assert legacy_context in workflow, f"required protected-branch check context missing: {legacy_context}"
+    for expected_fact in (
+        'WP_CAREGRID_EXPECTED_PHP_BRANCH: ${{ matrix.php }}',
+        'WP_CAREGRID_EXPECTED_WORDPRESS_BRANCH: ${{ matrix.wordpress }}',
+        'WP_CAREGRID_EXPECTED_DATABASE: ${{ matrix.database }}',
+        'composer update phpunit/phpunit --with',
+        'composer update johnpbloch/wordpress-core --with',
+    ):
+        assert expected_fact in workflow, f"Connector matrix assertion/setup missing: {expected_fact}"
     assert "Required MySQL process-concurrency gate" in workflow, "MySQL process gate missing"
     assert re.search(r"DISPATCH_BASE.*inputs\.connector_release_base", workflow)
     assert "^[0-9a-fA-F]{40}$" in workflow
