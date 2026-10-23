@@ -12,11 +12,10 @@ class WebsitePolicy
         return $user->customer !== null && $website->customer_id === $user->customer->id;
     }
 
-    /** Adding a website is a paid action: it needs an active plan without a website. */
+    /** The account may start the add-site flow; assignment enforces a paid compatible slot. */
     public function create(User $user): bool
     {
-        return $user->customer?->hasActiveSubscription() === true
-            && $user->customer->subscriptionAvailableForWebsite() !== null;
+        return $user->customer !== null;
     }
 
     /** Generating a pairing code is a paid action for the site's own plan. */

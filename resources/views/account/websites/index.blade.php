@@ -1,10 +1,8 @@
 <x-layouts.account :title="__('account.websites.title')">
     <x-account.page-header :title="__('account.websites.title')" :lead="__('account.websites.lead')">
-        @if ($canAddWebsite)
-            <x-slot:actions>
-                <x-ui.button :href="route('account.websites.create')" icon="plus">{{ __('account.websites.add') }}</x-ui.button>
-            </x-slot:actions>
-        @endif
+        <x-slot:actions>
+            <x-ui.button :href="route('account.websites.create')" icon="plus">{{ __('account.websites.add_another') }}</x-ui.button>
+        </x-slot:actions>
     </x-account.page-header>
 
     @unless ($hasAccess)
@@ -16,6 +14,7 @@
     @if ($websites->isEmpty())
         <x-account.panel>
             <p class="text-sm text-muted">{{ __('account.websites.empty') }}</p>
+            <x-ui.button :href="route('account.websites.create')" icon="plus" class="mt-4">{{ __('account.websites.add_another') }}</x-ui.button>
         </x-account.panel>
     @else
         <ul class="divide-y divide-line rounded-lg border border-line bg-surface">

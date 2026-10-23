@@ -49,7 +49,6 @@
         </x-account.panel>
     </div>
 
-    @if ($canAddWebsite)
         <section class="mt-6 flex flex-col gap-4 rounded-lg border border-accent bg-accent-soft p-6 sm:flex-row sm:items-center sm:justify-between" aria-labelledby="setup-title">
             <div class="flex items-start gap-4">
                 <x-ui.icon-tile name="globe" tone="positive" class="bg-surface" />
@@ -58,7 +57,6 @@
                     <p class="mt-1 text-sm text-ink">{{ __('account.dashboard.setup_text') }}</p>
                 </div>
             </div>
-            <x-ui.button :href="route('account.websites.create')" icon="arrow-right" class="self-start sm:self-auto">{{ __('account.dashboard.add_website') }}</x-ui.button>
+            <x-ui.button :href="route('account.websites.create')" icon="arrow-right" class="self-start sm:self-auto">{{ __('account.websites.add_another') }}</x-ui.button>
         </section>
-    @endif
 </x-layouts.account>

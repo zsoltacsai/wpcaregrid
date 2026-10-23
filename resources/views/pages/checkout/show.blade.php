@@ -25,6 +25,11 @@
                 {{ __('checkout.title') }}
             </h1>
             <p class="mt-3 text-base text-muted sm:text-lg">{{ __('checkout.lead') }}</p>
+            @if ($websiteTarget)
+                <x-account.notice class="mt-5">
+                    <strong>{{ __('account.websites.selected_site') }}:</strong> {{ $websiteTarget->url }} · {{ $websiteTarget->type->label() }}
+                </x-account.notice>
+            @endif
 
             <form id="checkout-form"
                 method="POST"

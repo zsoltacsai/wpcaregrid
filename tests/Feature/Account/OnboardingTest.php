@@ -6,9 +6,12 @@ use App\Billing\SubscriptionStatus;
 use App\Models\Customer;
 use App\Models\Subscription;
 use App\Models\Website;
+use App\Pricing\PricingCatalog;
+use App\Pricing\ProductType;
 use App\Websites\ConnectorStatus;
 use App\Websites\WebsiteStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
@@ -16,12 +19,22 @@ class OnboardingTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // Match an owner-published catalog where the purchasable prices are configured.
+        foreach (config('pricing.prices') as $i => $price) {
+            config(["pricing.prices.{$i}.stripe_price_id" => "price_{$price['product_type']}_{$price['plan']}_{$price['interval']}_{$price['currency']}"]);
+        }
+    }
+
     private function customer(SubscriptionStatus ...$statuses): Customer
     {
-        $customer = Customer::factory()->withUser()->create();
+        $customer = Customer::factory()->withUser()->create(['stripe_customer_id' => 'cus_'.Str::random(14)]);
 
         foreach ($statuses as $status) {
-            Subscription::factory()->for($customer)->status($status)->create();
+            Subscription::factory()->for($customer)->status($status)->create(['stripe_customer_id' => $customer->stripe_customer_id]);
         }
 
         return $customer;
@@ -33,8 +46,9 @@ class OnboardingTest extends TestCase
 
         $this->actingAs($customer->user)->get(route('account.websites.create'))->assertOk()->assertSee('Connect your website');
 
-        $response = $this->post(route('account.websites.store'), ['url' => 'Company.example/', 'type' => 'wordpress']);
-
+        $this->post(route('account.websites.store'), ['url' => 'Company.example/', 'type' => 'wordpress'])
+            ->assertRedirect(route('account.websites.options'));
+        $response = $this->post(route('account.websites.assign'), ['subscription' => $customer->subscriptions()->sole()->uuid]);
         $website = Website::sole();
         $response->assertRedirect(route('account.websites.show', $website));
         $this->assertSame('https://company.example', $website->url);
@@ -58,14 +72,15 @@ class OnboardingTest extends TestCase
     }
 
     #[DataProvider('inactiveStates')]
-    public function test_customer_without_active_subscription_cannot_onboard(?SubscriptionStatus $status): void
+    public function test_customer_without_active_subscription_can_start_purchase_journey(?SubscriptionStatus $status): void
     {
         $customer = $status ? $this->customer($status) : $this->customer();
 
         $this->actingAs($customer->user);
-        $this->get(route('account.websites.create'))->assertForbidden();
-        $this->post(route('account.websites.store'), ['url' => 'https://company.example', 'type' => 'wordpress'])->assertForbidden();
-        $this->get(route('account.dashboard'))->assertOk()->assertDontSee(route('account.websites.create'));
+        $this->get(route('account.websites.create'))->assertOk()->assertSee(route('account.websites.store'));
+        $this->post(route('account.websites.store'), ['url' => 'https://company.example', 'type' => 'wordpress'])
+            ->assertRedirect(route('account.websites.options'));
+        $this->get(route('account.websites.options'))->assertOk()->assertSee(__('account.websites.buy_subscription'));
 
         $this->assertDatabaseCount('websites', 0);
     }
@@ -75,12 +90,40 @@ class OnboardingTest extends TestCase
         $customer = $this->customer(SubscriptionStatus::Active);
         $this->actingAs($customer->user);
 
-        $this->post(route('account.websites.store'), ['url' => 'https://one.example', 'type' => 'wordpress'])->assertRedirect();
-        $this->post(route('account.websites.store'), ['url' => 'https://two.example', 'type' => 'wordpress'])->assertForbidden();
-
-        Subscription::factory()->for($customer)->create();
-        $this->post(route('account.websites.store'), ['url' => 'https://two.example', 'type' => 'woocommerce'])->assertRedirect();
+        $wordpress = $customer->subscriptions()->sole();
+        $this->post(route('account.websites.store'), ['url' => 'https://one.example', 'type' => 'wordpress'])->assertRedirect(route('account.websites.options'));
+        $this->post(route('account.websites.assign'), ['subscription' => $wordpress->uuid])->assertRedirect();
+        $this->post(route('account.websites.store'), ['url' => 'https://two.example', 'type' => 'woocommerce'])->assertRedirect(route('account.websites.options'));
+        $woo = Subscription::factory()->for($customer)->create(['product_type' => 'woocommerce']);
+        $this->post(route('account.websites.assign'), ['subscription' => $woo->uuid])->assertRedirect();
         $this->assertDatabaseCount('websites', 2);
+    }
+
+    public function test_product_type_mismatch_and_cross_customer_slot_are_rejected(): void
+    {
+        $customer = $this->customer(SubscriptionStatus::Active);
+        $other = $this->customer(SubscriptionStatus::Active);
+        $this->actingAs($customer->user);
+        $this->post(route('account.websites.store'), ['url' => 'https://store.example', 'type' => 'woocommerce'])->assertRedirect(route('account.websites.options'));
+        $wordpressSlot = $customer->subscriptions()->sole();
+        $this->from(route('account.websites.options'))->post(route('account.websites.assign'), ['subscription' => $wordpressSlot->uuid])
+            ->assertSessionHasErrors('subscription');
+        $this->post(route('account.websites.assign'), ['subscription' => $other->subscriptions()->sole()->uuid])->assertNotFound();
+        $this->assertDatabaseCount('websites', 0);
+    }
+
+    public function test_plan_selection_is_server_catalog_backed_and_retains_website_target(): void
+    {
+        $customer = Customer::factory()->withUser()->create();
+        $this->actingAs($customer->user);
+        $this->post(route('account.websites.store'), ['url' => 'https://shop.example', 'type' => 'woocommerce'])->assertRedirect(route('account.websites.options'));
+        $this->get(route('account.websites.options'))
+            ->assertOk()
+            ->assertSee('https://shop.example')
+            ->assertSee(__('pricing.plans.woocommerce.basic.name'))
+            ->assertSee(__('account.websites.annual_savings', ['amount' => app(PricingCatalog::class)->offers(ProductType::WooCommerce, app(PricingCatalog::class)->market('hu'))[0]->annualSavings()->format(), 'months' => app(PricingCatalog::class)->offers(ProductType::WooCommerce, app(PricingCatalog::class)->market('hu'))[0]->freeMonthsOnAnnual()]));
+        $this->post(route('account.websites.purchase'), ['plan' => 'secure', 'interval' => 'annual'])
+            ->assertRedirect(route('checkout.show', ['product' => 'woocommerce', 'plan' => 'secure', 'interval' => 'annual']));
     }
 
     public function test_website_input_is_validated(): void
