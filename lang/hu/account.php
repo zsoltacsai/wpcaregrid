@@ -101,7 +101,7 @@ return [
         'connected_count' => ':count csatlakoztatva',
         'added_count' => '{0} Még nincs weboldal|{1} :count weboldal hozzáadva|[2,*] :count weboldal hozzáadva',
         'setup_title' => 'Beállítás szükséges',
-        'setup_text' => 'Csatlakoztassa az első weboldalát, hogy elindíthassuk a kezdeti ellenőrzést.',
+        'setup_text' => 'Adjon hozzá új weboldalt egy meglévő előfizetéssel vagy válasszon új csomagot, majd csatlakoztassa az oldalát a fiókjához.',
         'add_website' => 'Weboldal hozzáadása',
         'confirming' => 'A fizetése megerősítése folyamatban van. Az előfizetése abban a pillanatban aktívvá válik, amint a Stripe megerősíti, általában egy percen belül.',
         'payment_problem' => 'Probléma van a legutóbbi fizetésével. A csatlakoztatás és új weboldalak hozzáadása a megoldásig szünetel.',

@@ -89,7 +89,7 @@ return [
         'connected_count' => ':count connected',
         'added_count' => '{0} No websites added|{1} :count website added|[2,*] :count websites added',
         'setup_title' => 'Setup required',
-        'setup_text' => 'Connect your first website so we can start the initial check.',
+        'setup_text' => 'Add another website using an existing subscription or choose a new plan, then connect it to your account.',
         'add_website' => 'Add website',
         'confirming' => 'Your payment is being confirmed. Your subscription becomes active as soon as Stripe confirms it, usually within a minute.',
         'payment_problem' => 'There is a problem with your latest payment. Onboarding and new websites are paused until it is resolved.',

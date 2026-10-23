@@ -126,7 +126,6 @@ class SeoIndexingTest extends TestCase
         $urls = [
             route('checkout.show', ['product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly']),
             route('checkout.success'),
-            route('checkout.cancel', $intent),
             route('login'),
             route('password.request'),
             route('password.reset', ['token' => 'opaque-reset-token', 'email' => 'seo-buyer@example.test']),
@@ -135,6 +134,9 @@ class SeoIndexingTest extends TestCase
             route('operator.login'),
             route('staff.activate', ['token' => 'opaque-staff-token']),
         ];
+
+        // A cancel URL is private to the browser/account that started checkout.
+        $this->get(route('checkout.cancel', $intent))->assertNotFound();
 
         foreach ($urls as $url) {
             $this->get($url)
