@@ -260,14 +260,22 @@ final class CapabilityReadinessTest extends TestCase
                 ->assertOk()
                 ->assertSeeInOrder($expected)
                 ->assertDontSee($checkRequired);
-
-            $this->actingAs($operator, 'operator')
-                ->withCookie((string) config('localization.cookie'), $locale)
-                ->get(route('operator.websites.show', $website))
-                ->assertOk()
-                ->assertSeeInOrder($expected)
-                ->assertDontSee($checkRequired);
         }
+
+        // Staff areas are intentionally English-only; the locale cookie must not change them.
+        $operatorExpected = [
+            trans('compatibility.capabilities.SECURITY_SCAN_READY', [], 'en'),
+            trans('compatibility.reasons.PASS_NO_ISSUES', [], 'en'),
+            trans('compatibility.status.PASS', [], 'en'),
+        ];
+        $operatorCheckRequired = trans('compatibility.reasons.CHECK_REQUIRED', [], 'en');
+
+        $this->actingAs($operator, 'operator')
+            ->withCookie((string) config('localization.cookie'), 'hu')
+            ->get(route('operator.websites.show', $website))
+            ->assertOk()
+            ->assertSeeInOrder($operatorExpected)
+            ->assertDontSee($operatorCheckRequired);
 
         $snapshot->update(['checked_at' => now()->subSeconds((int) config('compatibility.dynamic_ttl_seconds') + 1)]);
         $staleExpected = [
@@ -324,13 +332,20 @@ final class CapabilityReadinessTest extends TestCase
                     ->get(route('account.websites.show', $website))
                     ->assertOk()
                     ->assertSeeInOrder($expected);
-
-                $this->actingAs($operator, 'operator')
-                    ->withCookie((string) config('localization.cookie'), $locale)
-                    ->get(route('operator.websites.show', $website))
-                    ->assertOk()
-                    ->assertSeeInOrder($expected);
             }
+
+            // Operator pages deliberately stay English regardless of device locale.
+            $operatorExpected = [
+                trans('compatibility.capabilities.SECURITY_SCAN_READY', [], 'en'),
+                trans('compatibility.reasons.'.$case['reason'], [], 'en'),
+                trans('compatibility.status.'.$case['status'], [], 'en'),
+            ];
+
+            $this->actingAs($operator, 'operator')
+                ->withCookie((string) config('localization.cookie'), 'hu')
+                ->get(route('operator.websites.show', $website))
+                ->assertOk()
+                ->assertSeeInOrder($operatorExpected);
         }
     }
 
