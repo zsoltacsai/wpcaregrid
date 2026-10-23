@@ -201,7 +201,7 @@ class ConnectorController extends Controller
             'poll_interval' => config('connector.poll_interval'),
             'website_uuid' => $website?->uuid,
             'synthetic_site' => $website ? $website->syntheticFixture()->exists() : false,
-            'controlled_execution' => $website ? $policy->controlledExecutionAllowed($website) : false,
+            'controlled_execution' => $website ? $policy->controlledPollingAllowed($website) : false,
         ];
     }
 }

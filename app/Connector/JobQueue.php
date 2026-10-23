@@ -7,9 +7,11 @@ use App\Compatibility\CapabilityReadiness;
 use App\Models\Connector;
 use App\Models\Website;
 use App\Models\WebsiteJob;
+use App\SyntheticFixtures\M14SecurityScanWindowService;
 use App\SyntheticFixtures\SyntheticFixturePolicy;
 use App\Websites\AuditLog;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -35,6 +37,24 @@ final class JobQueue
 
         if (config('platform.recovery_mode') && ! $type->isSafeDuringPlatformRecovery()) {
             throw ConnectorError::jobNotAllowed('platform recovery mode is active');
+        }
+
+        if ($type === JobType::SecurityScan) {
+            return DB::transaction(function () use ($website, $type, $payload, $requestedBy, $links) {
+                app(M14SecurityScanWindowService::class)->lockGate();
+                if ($reason = $this->refusal($website, $website->activeConnector, $type, $payload)) {
+                    throw ConnectorError::jobNotAllowed($reason);
+                }
+
+                return $website->jobs()->create([
+                    'type' => $type,
+                    'payload' => $payload,
+                    'status' => $links['status'] ?? JobStatus::Queued,
+                    'requested_by' => $requestedBy,
+                    'backup_id' => $links['backup_id'] ?? null,
+                    'restore_id' => $links['restore_id'] ?? null,
+                ]);
+            });
         }
 
         if ($reason = $this->refusal($website, $website->activeConnector, $type, $payload)) {
@@ -65,12 +85,12 @@ final class JobQueue
 
         $synthetic = $website->syntheticFixture()->exists();
         if ($controlledExecution && ! $synthetic) {
-            throw ConnectorError::jobNotAllowed('controlled execution is reserved for the configured synthetic M8 site');
+            throw ConnectorError::jobNotAllowed('controlled execution is reserved for an explicitly configured synthetic fixture');
         }
         if ($synthetic) {
             $policy = app(SyntheticFixturePolicy::class);
-            if ($controlledExecution && ! $policy->controlledExecutionAllowed($website)) {
-                throw ConnectorError::jobNotAllowed('controlled execution is not enabled for the configured synthetic M8 site');
+            if ($controlledExecution && ! $policy->controlledPollingAllowed($website)) {
+                throw ConnectorError::jobNotAllowed('controlled polling is not enabled for this configured synthetic fixture');
             }
         }
 
@@ -96,6 +116,36 @@ final class JobQueue
         $jobs = $query->limit($controlledExecution ? 1 : config('connector.jobs_per_poll'))->get();
 
         return $jobs->filter(function (WebsiteJob $job) use ($website, $connector) {
+            if ($job->type === JobType::SecurityScan) {
+                return DB::transaction(function () use ($job, $website, $connector) {
+                    app(M14SecurityScanWindowService::class)->lockGate();
+                    $job->refresh();
+                    if (! in_array($job->status, [JobStatus::Queued, JobStatus::Delivered], true)) {
+                        return false;
+                    }
+                    if ($job->attempts >= config('connector.max_job_attempts')) {
+                        $job->update(['status' => JobStatus::Expired, 'error' => ['code' => 'NOT_REPORTED', 'message' => 'The connector did not report a result.']]);
+                        app(JobLifecycle::class)->finished($job);
+
+                        return false;
+                    }
+                    if ($reason = $this->refusal($website, $connector, $job->type, $job->payload ?? [])) {
+                        $job->update(['status' => JobStatus::Cancelled, 'error' => ['code' => 'JOB_NOT_ALLOWED', 'message' => $reason]]);
+                        app(JobLifecycle::class)->finished($job);
+
+                        return false;
+                    }
+                    $job->forceFill([
+                        'status' => JobStatus::Delivered,
+                        'connector_id' => $connector->id,
+                        'delivered_at' => now(),
+                        'attempts' => $job->attempts + 1,
+                    ])->save();
+                    app(JobLifecycle::class)->delivered($job);
+
+                    return true;
+                });
+            }
             if ($job->attempts >= config('connector.max_job_attempts')) {
                 $job->update(['status' => JobStatus::Expired, 'error' => ['code' => 'NOT_REPORTED', 'message' => 'The connector did not report a result.']]);
                 app(JobLifecycle::class)->finished($job);
@@ -142,6 +192,11 @@ final class JobQueue
      */
     public function refusal(Website $website, ?Connector $connector, JobType $type, array $payload = []): ?string
     {
+        if ($type === JobType::SecurityScan
+            && ($windowRefusal = app(M14SecurityScanWindowService::class)->refusalForScan($website)) !== null) {
+            return $windowRefusal;
+        }
+
         $capability = $type->requiredCapability($payload);
 
         if ($website->syntheticFixture()->exists()) {

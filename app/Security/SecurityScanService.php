@@ -12,6 +12,7 @@ use App\Models\SecurityScan;
 use App\Models\Website;
 use App\Models\WebsiteJob;
 use App\Security\Vulnerabilities\VulnerabilityScanner;
+use App\SyntheticFixtures\M14SecurityScanWindowService;
 use App\SyntheticFixtures\SyntheticFixturePolicy;
 use App\Websites\Actor;
 use App\Websites\AuditLog;
@@ -43,12 +44,13 @@ class SecurityScanService
     /** @throws SecurityRefused */
     public function request(Website $website, ScanType $type, string $actor, ?SecurityIncident $incident = null): SecurityScan
     {
-        if ($refusal = $this->refusal($website, $type)) {
-            throw new SecurityRefused($refusal);
-        }
-
         $who = Actor::parse($actor);
         $scan = DB::transaction(function () use ($website, $type, $actor, $who, $incident) {
+            app(M14SecurityScanWindowService::class)->lockGate();
+            if ($refusal = $this->refusal($website, $type)) {
+                throw new SecurityRefused($refusal);
+            }
+
             $scan = $website->securityScans()->create([
                 'incident_id' => $incident?->id,
                 'type' => $type,
@@ -90,6 +92,10 @@ class SecurityScanService
     /** Why this scan cannot start now, or null. */
     public function refusal(Website $website, ScanType $type): ?string
     {
+        if ($windowRefusal = app(M14SecurityScanWindowService::class)->refusalForScan($website)) {
+            return $windowRefusal;
+        }
+
         $connector = $website->activeConnector;
         $fixtures = app(SyntheticFixturePolicy::class);
         $hasSyntheticMarker = $fixtures->fixture($website) !== null;
