@@ -22,20 +22,23 @@
 
 The Owner reports the following read-only package inventory:
 
-- PHP CLI and installed PHP 8.4 packages: `8.4.27-1+ubuntu24.04.1+deb.sury.org+1`; PHP-FPM 8.4.27 is installed.
-- MySQL, cURL, intl, mbstring, OPcache, XML, and ZIP extensions are installed at PHP 8.4.27.
-- PHP 8.5 is not installed. PHP 8.4 SQLite is removed (`rc` package state).
+- PHP CLI: 8.4.27. Installed PHP 8.4 package build: `8.4.27-1+ubuntu24.04.1+deb.sury.org+1`, from `ppa.launchpadcontent.net/ondrej/php` for Ubuntu 24.04 Noble.
+- PHP-FPM package: 8.4.27. PHP 8.5 CLI/FPM are not installed; APT offers PHP 8.5.12 from the same configured repository.
+- CLI modules include PDO MySQL, mysqli, cURL, intl, mbstring, XML, ZIP, sodium, and OPcache. SQLite, GD, and bcmath do not appear in the CLI module inventory.
+- PHP 8.4 SQLite is removed (`rc` package state).
 
 Integration & QA separately reports a read-only staging preflight:
 
-- CLI binary `/usr/bin/php8.4` and running `php8.4-fpm` unit are PHP 8.4.27; FPM process count is four.
-- Nginx configuration includes both PHP 7.4 and 8.4 sockets. The effective upstream for the staging vhost, and whether PHP 7.4 is actively used, remain unverified.
-- `/up` returned HTTP 200; this does not identify the runtime serving the route.
-- APT reports PHP 8.4.27 installed and PHP 8.5.12 as a candidate from the `ondrej/php` PPA; PHP 8.5 is not installed.
+- `/usr/bin/php8.4` and the active `php8.4-fpm.service` use PHP 8.4.27. The service has been running since 2026-10-24 06:15 CEST; the sampled FPM status showed three idle workers, 1,605 requests, and zero slow requests.
+- Nginx configuration includes both PHP 7.4 and PHP 8.4 sockets. The effective upstream for the staging vhost, whether PHP 7.4 is actively used, the running FPM executable identity, Supervisor workers, and scheduler interpreter remain unverified.
+- `/up` returned HTTP 200; this does not identify which runtime serves the request.
+- APT reports the installed PHP 8.4.27 build and PHP 8.5.12 candidate from the `ondrej/php` PPA. This report does not independently validate that repository's signing-key fingerprint.
 
-PHP 8.4.27 is the upstream fixed release for CVE-2026-109618 and CVE-2026-109619. The package version identifies a deb.sury.org build, but the repository signing-key fingerprint and package provenance have not yet been independently validated. Active vhost-to-FPM routing, queue-worker PHP executable/version, scheduler PHP executable/version, and possible PHP 7.4 use also remain unknown. Record the overall active-runtime patch state as **partially verified**, not fully closed. Do not infer PHP 8.5 readiness from the candidate package or the HTTP health check.
+PHP 8.4.27 is the upstream fixed release for CVE-2026-109618 and CVE-2026-109619. Its reported version is at the fixed upstream release level, but the PPA signature/provenance and every active PHP process have not been independently verified. Record the active-runtime patch state as **partially verified**, not fully closed.
 
-No PHP 8.5 installation, runtime switch, or service restart is authorized by these inventories. Continue to require verified package signing provenance, effective vhost/pool mapping, worker and scheduler runtime checks, package/extension compatibility, a tested rollback, protected integration, and an exclusive staging window before any runtime change.
+The production `composer.json` and `composer.lock` do not declare GD, bcmath, or PDO SQLite as Composer platform requirements. That does not prove that optional or application-specific code paths never use them. Before migration, confirm the active database driver and run a source/workload check for GD/BCMath use; install only extensions justified by the actual application and Connector workload.
+
+No PHP 8.5 installation, runtime switch, or service restart is authorized by these inventories. The cutover preflight remains: validate the PPA signing key against an independent publisher source; map the staging Nginx vhost to its actual FPM socket/pool; verify the active FPM executable; identify Supervisor and scheduler PHP executables/versions without exposing full command arguments; resolve the PHP 7.4 socket usage; confirm required extensions and Composer platform; test rollback to a patched runtime; and obtain protected integration approval plus an exclusive staging window.
 
 ## Staging-first runtime changes
 
