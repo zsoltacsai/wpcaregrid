@@ -31,7 +31,7 @@ Integration & QA reports these additional read-only checks:
 
 - The running FPM executable is `/usr/sbin/php-fpm8.4` with no deleted-binary indication; `php8.4-fpm.service` is active.
 - The `wpcaregrid` Nginx vhost uses `/run/php/php8.4-fpm.sock`. Several other enabled vhosts, including test, M8 E2E, and M14 synthetic configurations, also use that socket.
-- Supervisor reports `wpcaregrid-backups` and `wpcaregrid-default` as RUNNING. Their actual PHP executables/versions and the scheduler interpreter remain unverified.
+- Owner read-only process inspection confirms Supervisor programs `wpcaregrid-backups` and `wpcaregrid-default` are RUNNING `artisan queue:work` workers using `/usr/bin/php8.4` (sampled PIDs are intentionally omitted as ephemeral). The scheduler execution and PHP interpreter remain unverified.
 - A prior FPM status sample showed three idle workers, 1,605 requests, and zero slow requests; this is a sampled status, not a complete long-lived-process inventory.
 - `/up` returned HTTP 200; this alone does not attest package provenance or every PHP process.
 
@@ -49,11 +49,11 @@ Before a cutover, read-only preflight must:
 
 1. Validate the staging trusted keyring and signed PPA Release metadata against the Launchpad fingerprint above.
 2. Confirm the exact staging server block, selected FPM pool, socket, and active FPM executable.
-3. Identify each Supervisor program's executable and PHP version without exposing full argument strings, and identify the scheduler interpreter if present.
+3. Treat `wpcaregrid-backups` and `wpcaregrid-default` as PHP 8.4 `artisan queue:work` workers. Before restart, let active backup work finish or follow the approved drain procedure; do not abruptly interrupt a backup. Identify the scheduler interpreter separately. After any approved worker restart, verify both actual `/proc/<pid>/exe` paths and PHP versions without exposing full argument strings.
 4. Confirm whether PHP 7.4 is still installed or referenced by any active vhost/process.
 5. Check application/Connector extension usage and Composer platform requirements, including the absent GD, bcmath, and SQLite modules.
 6. Verify a tested rollback to a still-patched PHP runtime and ensure rollback does not alter other vhosts.
-7. Obtain protected integration approval and an exclusive UTC staging window.
+7. Preserve the PHP 8.4 CLI/FPM packages and socket throughout the initial parallel 8.5 cutover. Test and document rollback to patched PHP 8.4, including restoring worker executables; do not switch other vhosts. Obtain protected integration approval and an exclusive UTC staging window.
 
 No PHP 8.5 install, package removal, socket switch, service reload/restart, or production change is authorized by this inventory.
 
