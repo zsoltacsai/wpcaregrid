@@ -342,8 +342,7 @@ class OperatorConsoleTest extends TestCase
     public function test_a_future_scanner_plugs_into_the_console(): void
     {
         $website = $this->consoleSite()['website'];
-        $this->app->instance(SecurityScanner::class, new class implements SecurityScanner
-        {
+        $this->app->instance(SecurityScanner::class, new class implements SecurityScanner {
             public function isConfigured(): bool
             {
                 return true;
