@@ -18,6 +18,19 @@
 - Temporary configuration mitigations are not a replacement for a complete vendor patch unless the vendor explicitly says otherwise. Preserve sanitized advisory, package and restart evidence.
 - If a supported runtime reaches end of security support within 12 months, create a dated upgrade plan. At 6 months, treat the upgrade as a release blocker for new production launch or runtime expansion unless the Owner records an exception and compensating controls.
 
+## Staging security inventory — Owner-reported, 2026-10-24
+
+The Owner reports the following read-only staging inventory:
+
+- PHP CLI and installed PHP 8.4 packages: `8.4.27-1+ubuntu24.04.1+deb.sury.org+1`; PHP-FPM 8.4.27 is installed.
+- MySQL, cURL, intl, mbstring, OPcache, XML, and ZIP extensions are installed at PHP 8.4.27.
+- PHP 8.5 is not installed. PHP 8.4 SQLite is removed (`rc` package state).
+- The Owner's inventory does not yet establish the active web/FPM pool runtime or the PHP interpreters used by queue workers and scheduled jobs.
+
+PHP 8.4.27 is the upstream fixed release for CVE-2026-109618 and CVE-2026-109619. The reported package version identifies a deb.sury.org build; installed version strings alone do not establish repository signature provenance or which runtime serves requests. Until repository/package provenance, the active FPM pool, worker, and scheduler interpreters are independently checked, record the overall staging patch state as **partially verified**. Do not infer PHP 8.5 readiness from this inventory.
+
+No PHP 8.5 installation, runtime switch, or service restart is authorized by this inventory. Continue to require package and extension compatibility checks, a tested rollback, protected integration, and an exclusive staging window before any runtime change.
+
 ## Staging-first runtime changes
 
 1. Confirm the advisory, affected runtime packages, current staging release SHA, active deployment state and exact target package source.
