@@ -39,7 +39,7 @@
                             <td class="max-w-[180px] truncate px-3 py-2 text-xs">{{ $offer->website->host() }}</td>
                             <td class="px-3 py-2 tabular-nums whitespace-nowrap">{{ $offer->money()->format() }}</td>
                             <td class="px-3 py-2"><x-ui.status-badge :tone="$offer->status->tone()">{{ $offer->status->label() }}</x-ui.status-badge></td>
-                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $offer->valid_until->format('Y-m-d H:i') }}</td>
+                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">@displayDateTime($offer->valid_until)</td>
                         </tr>
                     @endforeach
                 </tbody>

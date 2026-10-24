@@ -6,7 +6,7 @@
     <section class="rounded-md border border-line bg-surface p-5">
         <dl class="grid gap-4 sm:grid-cols-2">
             <div><dt class="text-xs text-muted">Subscription</dt><dd class="mt-1 font-mono">{{ $preview->subscription->uuid }}</dd></div>
-            <div><dt class="text-xs text-muted">State / expiry</dt><dd class="mt-1">{{ strtoupper($preview->state) }} · {{ $preview->expires_at->utc()->format('Y-m-d H:i:s') }} UTC</dd></div>
+            <div><dt class="text-xs text-muted">State / expiry</dt><dd class="mt-1">{{ strtoupper($preview->state) }} · @displayDateTime($preview->expires_at, 'Y-m-d H:i:s T')</dd></div>
             <div class="sm:col-span-2"><dt class="text-xs text-muted">Preview hash</dt><dd class="mt-1 break-all font-mono">{{ $preview->preview_hash }}</dd></div>
         </dl>
     </section>

@@ -31,7 +31,7 @@
                             <span class="flex items-center gap-2">
                                 @if ($incident->severity)<x-ui.status-badge :tone="$incident->severity->tone()">{{ $incident->severity->label() }}</x-ui.status-badge>@endif
                                 <x-ui.status-badge :tone="$incident->status->tone()">{{ $incident->status->label() }}</x-ui.status-badge>
-                                <span class="font-mono text-xs text-muted">{{ $incident->created_at->format('Y-m-d H:i') }}</span>
+                                <span class="font-mono text-xs text-muted">@displayDateTime($incident->created_at)</span>
                             </span>
                         </li>
                     @endforeach
@@ -62,7 +62,7 @@
                                     <td class="px-4 py-2">@if ($state)<x-ui.status-badge :tone="$state->tone()">{{ __('security.states.'.$state->value) }}</x-ui.status-badge>@endif</td>
                                     <td class="px-4 py-2 tabular-nums">{{ $summary->findings }}</td>
                                     <td class="px-4 py-2">@if ($summary->highestSeverity)<x-ui.status-badge :tone="$summary->highestSeverity->tone()">{{ $summary->highestSeverity->label() }}</x-ui.status-badge>@endif</td>
-                                    <td class="px-4 py-2 font-mono text-xs text-muted">{{ $summary->lastScanAt?->format('Y-m-d H:i') ?? __('operator.never') }}</td>
+                                    <td class="px-4 py-2 font-mono text-xs text-muted">{{ app(\App\Support\DisplayDateTime::class)->format($summary->lastScanAt) ?? __('operator.never') }}</td>
                                 </tr>
                             @endforeach
                         </tbody>

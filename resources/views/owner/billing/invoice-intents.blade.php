@@ -42,7 +42,7 @@
                         <td class="p-3">{{ $intent->blocked_reason ? __('owner.invoice_intents.reasons.'.$intent->blocked_reason) : '—' }}</td>
                         <td class="p-3">{{ $intent->dry_run_result['validation'] ?? __('owner.invoice_intents.not_run') }}</td>
                         <td class="p-3">{{ $intent->retry_count }}</td>
-                        <td class="p-3">{{ $intent->updated_at?->translatedFormat('j M Y H:i') }}</td>
+                        <td class="p-3">@displayDateTime($intent->updated_at)</td>
                     </tr>
                 @empty
                     <tr><td colspan="11" class="p-6 text-center text-muted">{{ __('owner.invoice_intents.empty') }}</td></tr>

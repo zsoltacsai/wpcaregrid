@@ -11,10 +11,10 @@ use App\Models\Promotion;
 use App\Pricing\BillingInterval;
 use App\Pricing\PlanTier;
 use App\Pricing\ProductType;
+use App\Support\DisplayDateTime;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 
 /**
@@ -57,7 +57,7 @@ class CouponController extends Controller
         $data['percent_off'] = Promotion::parsePercent($data['percent_off']);
 
         try {
-            $promotion = $coupons->create($this->normalise($data), $request->user());
+            $promotion = $coupons->create($this->normalise($data, app(DisplayDateTime::class)), $request->user());
         } catch (PromotionGatewayException $e) {
             return back()->withInput()->with('owner_error', ['kind' => 'permission', 'message' => $e->ownerMessage(), 'code' => strtoupper($e->reason)]);
         }
@@ -88,7 +88,7 @@ class CouponController extends Controller
             $data['markets'] = $coupon->markets;
         }
 
-        $coupon = $coupons->update($coupon, $this->normalise($data), $request->user());
+        $coupon = $coupons->update($coupon, $this->normalise($data, app(DisplayDateTime::class)), $request->user());
 
         return redirect()->route('owner.coupons.show', $coupon)->with('status', $coupon->wasChanged() ? __('owner.coupons.saved') : __('owner.coupons.unchanged'));
     }
@@ -145,10 +145,10 @@ class CouponController extends Controller
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>
      */
-    private function normalise(array $data): array
+    private function normalise(array $data, DisplayDateTime $displayDateTime): array
     {
         foreach (['starts_at', 'expires_at'] as $field) {
-            $data[$field] = filled($data[$field] ?? null) ? Carbon::parse($data[$field]) : null;
+            $data[$field] = filled($data[$field] ?? null) ? $displayDateTime->parseLocal($data[$field]) : null;
         }
         foreach (['max_redemptions', 'max_redemptions_per_customer', 'duration_months'] as $field) {
             $data[$field] = filled($data[$field] ?? null) ? (int) $data[$field] : null;
@@ -171,7 +171,7 @@ class CouponController extends Controller
             'productTypes' => ProductType::cases(),
             'tiers' => PlanTier::cases(),
             'intervals' => BillingInterval::cases(),
-            'timezone' => config('app.timezone'),
+            'timezone' => app(DisplayDateTime::class)->timezone()->getName(),
             'marketGroups' => [
                 'all' => __('owner.coupons.market_groups.all'),
                 'HU' => __('owner.coupons.market_groups.hu'),

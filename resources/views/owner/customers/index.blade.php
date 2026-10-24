@@ -90,7 +90,7 @@
                             </td>
                             <td class="px-3 py-2 tabular-nums">{{ $customer->websites_count }}</td>
                             <td class="px-3 py-2"><x-ui.status-badge :tone="$customer->active ? 'positive' : 'neutral'">{{ __('owner.customers.states.'.($customer->active ? 'active' : 'inactive')) }}</x-ui.status-badge></td>
-                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $customer->created_at->format('Y-m-d') }}</td>
+                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ app(\App\Support\DisplayDateTime::class)->date($customer->created_at) }}</td>
                         </tr>
                     @endforeach
                 </tbody>

@@ -10,10 +10,10 @@ use App\Offers\OfferStatus;
 use App\Offers\RecoveryOffers;
 use App\Pricing\PriceEditor;
 use App\Pricing\PricingCatalog;
+use App\Support\DisplayDateTime;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 
 /**
@@ -48,13 +48,13 @@ class RecoveryOfferController extends Controller
             'customer' => $customer,
             'websites' => $customer?->websites()->orderBy('url')->get(['id', 'uuid', 'url']) ?? collect(),
             'currencies' => $catalog->recoveryOfferCurrencies(),
-            'timezone' => config('app.timezone'),
+            'timezone' => app(DisplayDateTime::class)->timezone()->getName(),
         ]);
     }
 
     public function store(Request $request, RecoveryOffers $offers): RedirectResponse
     {
-        $data = $this->validated($request, withCustomer: true);
+        $data = $this->validated($request, withCustomer: true, displayDateTime: app(DisplayDateTime::class));
         $customer = Customer::where('uuid', $data['customer'])->where('active', true)->firstOrFail();
 
         $offer = $offers->create($customer, $data, $request->user());
@@ -71,14 +71,14 @@ class RecoveryOfferController extends Controller
             'websites' => $offer->customer->websites()->orderBy('url')->get(['id', 'uuid', 'url']),
             'currencies' => $catalog->recoveryOfferCurrencies(),
             'amount' => $prices->major($offer->amount, $offer->currency),
-            'timezone' => config('app.timezone'),
+            'timezone' => app(DisplayDateTime::class)->timezone()->getName(),
             'audit' => AdminAuditEvent::with('actor')->where('subject_type', 'offer')->where('subject_key', $offer->uuid)->latest('id')->limit(20)->get(),
         ]);
     }
 
     public function update(Request $request, RecoveryOffer $offer, RecoveryOffers $offers): RedirectResponse
     {
-        $data = $this->validated($request, withCustomer: false);
+        $data = $this->validated($request, withCustomer: false, displayDateTime: app(DisplayDateTime::class));
 
         $offers->update($offer, $data, $request->user());
 
@@ -110,7 +110,7 @@ class RecoveryOfferController extends Controller
     /**
      * @return array<string, mixed>
      */
-    private function validated(Request $request, bool $withCustomer): array
+    private function validated(Request $request, bool $withCustomer, DisplayDateTime $displayDateTime): array
     {
         $data = $request->validate([
             ...($withCustomer ? ['customer' => ['required', 'uuid']] : []),
@@ -123,7 +123,7 @@ class RecoveryOfferController extends Controller
             'valid_until' => ['required', 'date'],
         ]);
 
-        $data['valid_until'] = Carbon::parse($data['valid_until']);
+        $data['valid_until'] = $displayDateTime->parseLocal($data['valid_until']);
 
         return $data;
     }

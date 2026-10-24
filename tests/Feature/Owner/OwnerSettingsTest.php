@@ -81,7 +81,9 @@ final class OwnerSettingsTest extends TestCase
         $this->assertSame('Europe/Budapest', $settings->get('general.timezone'));
         $this->assertSame('HU', $settings->get('general.country'));
         $this->assertSame('CareGrid Test Business', config('app.name'));
-        $this->assertSame('Europe/Budapest', config('app.timezone'));
+        $this->assertSame('UTC', config('app.timezone'));
+        $this->assertSame('UTC', date_default_timezone_get());
+        $this->assertSame('Europe/Budapest', config('owner_settings.general.timezone'));
         $this->assertDatabaseHas('owner_settings', ['id' => 'general.business_name', 'value' => '"CareGrid Test Business"']);
         $this->assertSame(4, AdminAuditEvent::where('event', 'owner_setting.updated')->count());
         $this->assertSame($owner->id, AdminAuditEvent::where('event', 'owner_setting.updated')->first()->actor_user_id);

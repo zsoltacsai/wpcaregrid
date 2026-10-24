@@ -82,7 +82,7 @@
                             <td class="px-3 py-2"><x-ui.status-badge :tone="$row['backup']->tone()">{{ $row['backup']->label() }}</x-ui.status-badge></td>
                             <td class="px-3 py-2"><x-ui.status-badge :tone="$row['security']->state->tone()">{{ $row['security']->state->label() }}</x-ui.status-badge></td>
                             <td class="px-3 py-2 text-xs whitespace-nowrap">{{ $row['pending'] === null ? '—' : $row['pending'] }}</td>
-                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $row['last_seen']?->format('Y-m-d H:i') ?? __('owner.never') }}</td>
+                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ app(\App\Support\DisplayDateTime::class)->format($row['last_seen']) ?? __('owner.never') }}</td>
                         </tr>
                     @endforeach
                 </tbody>
@@ -100,7 +100,7 @@
                         <x-ui.status-badge :tone="$row['connector']->tone()">{{ $row['connector']->label() }}</x-ui.status-badge>
                         <x-ui.status-badge :tone="$row['backup']->tone()">{{ __('owner.websites.columns.backup') }}: {{ $row['backup']->label() }}</x-ui.status-badge>
                     </div>
-                    <p class="mt-2 font-mono text-xs text-muted">{{ $row['last_seen']?->format('Y-m-d H:i') ?? __('owner.never') }}</p>
+                    <p class="mt-2 font-mono text-xs text-muted">{{ app(\App\Support\DisplayDateTime::class)->format($row['last_seen']) ?? __('owner.never') }}</p>
                 </li>
             @endforeach
         </ul>

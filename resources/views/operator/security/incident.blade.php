@@ -52,7 +52,7 @@
                         <li class="py-2">
                             <span class="flex flex-wrap items-center justify-between gap-2">
                                 <span class="font-medium text-primary">{{ __('operator.security.incident_events.'.$event->type) }}</span>
-                                <span class="font-mono text-[11px] text-muted">{{ $event->created_at->format('Y-m-d H:i') }} · {{ __('operator.actors.'.($event->actor_type ?? 'system')) }}@if ($event->actorUser) {{ $event->actorUser->email }}@endif</span>
+                                <span class="font-mono text-[11px] text-muted">@displayDateTime($event->created_at) · {{ __('operator.actors.'.($event->actor_type ?? 'system')) }}@if ($event->actorUser) {{ $event->actorUser->email }}@endif</span>
                             </span>
                             @if ($event->data)<span class="block font-mono text-[11px] break-all text-muted">{{ collect($event->data)->map(fn ($v, $k) => $k.'='.(is_bool($v) ? ($v ? 'yes' : 'no') : $v))->implode(' · ') }}</span>@endif
                             @if ($event->note)<p class="mt-1 text-sm whitespace-pre-line text-ink">{{ $event->note }}</p>@endif
@@ -106,7 +106,7 @@
                 <h3 class="mt-4 text-xs font-semibold tracking-[0.08em] text-muted uppercase">{{ __('operator.backups.title') }}</h3>
                 <ul class="mt-1 text-xs">
                     @forelse ($backups as $backup)
-                        <li class="flex justify-between gap-2 py-1"><span>{{ $backup->reason->label() }} · <span class="font-mono">{{ $backup->created_at->format('Y-m-d H:i') }}</span></span><x-ui.status-badge :tone="$backup->status->tone()" variant="code">{{ $backup->status->label() }}</x-ui.status-badge></li>
+                        <li class="flex justify-between gap-2 py-1"><span>{{ $backup->reason->label() }} · <span class="font-mono">@displayDateTime($backup->created_at)</span></span><x-ui.status-badge :tone="$backup->status->tone()" variant="code">{{ $backup->status->label() }}</x-ui.status-badge></li>
                     @empty
                         <li class="text-muted">{{ __('operator.backups.none') }}</li>
                     @endforelse

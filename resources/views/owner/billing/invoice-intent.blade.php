@@ -31,8 +31,8 @@
         <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.dry_run_result') }}</dt><dd>{{ $intent->dry_run_result['validation'] ?? __('owner.invoice_intents.not_run') }}</dd></div>
         <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.retry_count') }}</dt><dd>{{ $intent->retry_count }}</dd></div>
         <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.error_category') }}</dt><dd>{{ $intent->last_error_category ?? '—' }}</dd></div>
-        <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.created') }}</dt><dd>{{ $intent->created_at?->translatedFormat('j M Y H:i') }}</dd></div>
-        <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.updated') }}</dt><dd>{{ $intent->updated_at?->translatedFormat('j M Y H:i') }}</dd></div>
+        <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.created') }}</dt><dd>@displayDateTime($intent->created_at)</dd></div>
+        <div><dt class="text-xs text-muted">{{ __('owner.invoice_intents.updated') }}</dt><dd>@displayDateTime($intent->updated_at)</dd></div>
     </dl>
     <h2 class="mb-3 mt-7 text-lg font-semibold">{{ __('owner.invoice_intents.billing_snapshot') }}</h2>
     <dl class="grid gap-3 rounded-md border border-line bg-surface p-5 sm:grid-cols-2">
@@ -95,7 +95,7 @@
         @forelse ($intent->taxReviews as $review)
             <li class="rounded-md border border-line bg-surface p-4">
                 <p class="font-medium">{{ $review->provider_tax_code }} · {{ __('owner.invoice_intents.treatments.'.$review->proposed_treatment) }} · {{ __('owner.invoice_intents.review_statuses.'.$review->status) }}</p>
-                <p class="mt-1 text-xs text-muted">{{ $review->created_at?->translatedFormat('j M Y H:i:s') }} · {{ $review->actor?->email ?? '—' }} · {{ __('owner.invoice_intents.configuration_version') }} {{ $review->configurationVersion?->version ?? '—' }}</p>
+                <p class="mt-1 text-xs text-muted">@displayDateTime($review->created_at, 'Y-m-d H:i:s T') · {{ $review->actor?->email ?? '—' }} · {{ __('owner.invoice_intents.configuration_version') }} {{ $review->configurationVersion?->version ?? '—' }}</p>
                 <p class="mt-2 text-sm">{{ $review->justification }}</p>
                 @if($review->basis_reference)<p class="mt-1 text-xs text-muted">{{ __('owner.invoice_intents.basis_reference') }}: {{ $review->basis_reference }}</p>@endif
                 @if ($canApproveTaxReview && $review->status === 'proposed_pending_accountant')
@@ -122,7 +122,7 @@
         @foreach ($intent->events as $event)
             <li class="rounded-md border border-line bg-surface p-4">
                 <p class="font-medium">{{ __('owner.invoice_intents.events.'.$event->event_type) }}</p>
-                <p class="mt-1 text-xs text-muted">{{ $event->created_at?->translatedFormat('j M Y H:i:s') }} · {{ $event->from_status ?? '—' }} → {{ $event->to_status ?? '—' }}</p>
+                <p class="mt-1 text-xs text-muted">@displayDateTime($event->created_at, 'Y-m-d H:i:s T') · {{ $event->from_status ?? '—' }} → {{ $event->to_status ?? '—' }}</p>
             </li>
         @endforeach
     </ol>

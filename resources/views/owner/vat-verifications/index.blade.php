@@ -25,10 +25,10 @@
                                     <dt class="text-muted">{{ __('owner.customers.vat.country') }}</dt><dd>{{ $evidence?->country_code ?? $identity->country_code }}</dd>
                                     <dt class="text-muted">{{ __('owner.customers.vat.identifier') }}</dt><dd class="font-mono">{{ \App\Tax\Vat\VatIdentifierMasker::mask($evidence?->country_code ?? $identity->country_code, $evidence?->vat_identifier ?? $identity->tax_identifier) }}</dd>
                                     <dt class="text-muted">{{ __('owner.customers.vat.source') }}</dt><dd>{{ $evidence ? ($evidence->provider === 'eu_vies' ? __('owner.customers.vat.vies') : __('owner.customers.vat.local_check')) : '—' }}</dd>
-                                    <dt class="text-muted">{{ __('owner.customers.vat.last_check') }}</dt><dd>{{ $evidence?->checked_at?->format('Y-m-d H:i') ?? '—' }}</dd>
+                                    <dt class="text-muted">{{ __('owner.customers.vat.last_check') }}</dt><dd>{{ app(\App\Support\DisplayDateTime::class)->format($evidence?->checked_at) ?? '—' }}</dd>
                                 </dl>
                             </div>
-                            <span class="text-xs text-muted">{{ $review->created_at?->format('Y-m-d H:i') }}</span>
+                            <span class="text-xs text-muted">@displayDateTime($review->created_at)</span>
                         </div>
 
                         @if (auth('owner')->user()?->can('owner.customers.manage'))
