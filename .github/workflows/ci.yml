@@ -348,7 +348,7 @@ jobs:
       matrix:
         php: ['8.2', '8.3', '8.4', '8.5']
         wordpress: ['6.8', '7.1']
-        database: [mysql, mariadb]
+        database: [mysql57, mysql80, mysql, mariadb]
         include:
           # Preserve the protected primary branch's seven required check
           # contexts while exercising the same PHP 8.4 / WP 7.1 fixtures.
@@ -357,7 +357,7 @@ jobs:
           - { php: '8.4', wordpress: '7.1', database: mariadb, legacy_check_name: 'Connector tests in WordPress (PHP 8.4, mariadb)' }
     services:
       mysql:
-        image: ${{ matrix.database == 'mariadb' && 'mariadb:10.11' || 'mysql:8.4' }}
+        image: ${{ matrix.database == 'mariadb' && 'mariadb:10.11' || matrix.database == 'mysql57' && 'mysql:5.7' || matrix.database == 'mysql80' && 'mysql:8.0' || 'mysql:8.4' }}
         env:
           MYSQL_ROOT_PASSWORD: ci-root-password
           MYSQL_DATABASE: wordpress
@@ -371,7 +371,8 @@ jobs:
       WP_CAREGRID_TEST_STRICT: '1'
       WP_CAREGRID_EXPECTED_PHP_BRANCH: ${{ matrix.php }}
       WP_CAREGRID_EXPECTED_WORDPRESS_BRANCH: ${{ matrix.wordpress }}
-      WP_CAREGRID_EXPECTED_DATABASE: ${{ matrix.database }}
+      WP_CAREGRID_EXPECTED_DATABASE: ${{ (matrix.database == 'mysql57' || matrix.database == 'mysql80') && 'mysql' || matrix.database }}
+      WP_CAREGRID_EXPECTED_DATABASE_BRANCH: ${{ matrix.database == 'mysql57' && '5.7' || matrix.database == 'mysql80' && '8.0' || matrix.database == 'mysql' && '8.4' || matrix.database == 'mariadb' && '10.11' || 'sqlite' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

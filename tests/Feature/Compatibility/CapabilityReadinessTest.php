@@ -194,7 +194,7 @@ final class CapabilityReadinessTest extends TestCase
         $site = $this->pairedWebsite();
         $facts = $this->inventoryPayload()['compatibility'];
         $facts['database']['engine'] = 'mysql';
-        $facts['database']['version'] = '8.0.40';
+        $facts['database']['version'] = '5.7.44';
         $site['website']->update(['php_version' => '8.6.0']);
         $this->refreshCapabilityEvidence($site['website'], $facts);
 

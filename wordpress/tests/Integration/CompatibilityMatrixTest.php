@@ -15,10 +15,17 @@ final class CompatibilityMatrixTest extends TestCase
         $expectedPhp = (string) getenv('WP_CAREGRID_EXPECTED_PHP_BRANCH');
         $expectedWordPress = (string) getenv('WP_CAREGRID_EXPECTED_WORDPRESS_BRANCH');
         $expectedDatabase = (string) getenv('WP_CAREGRID_EXPECTED_DATABASE');
+        $expectedDatabaseBranch = (string) getenv('WP_CAREGRID_EXPECTED_DATABASE_BRANCH');
 
         $this->assertMatchesRegularExpression('/^8\.[2-5]$/D', $expectedPhp);
         $this->assertMatchesRegularExpression('/^(6\.8|7\.1)$/D', $expectedWordPress);
         $this->assertContains($expectedDatabase, ['sqlite', 'mysql', 'mariadb']);
+        $expectedBranches = [
+            'sqlite' => ['sqlite'],
+            'mysql' => ['5.7', '8.0', '8.4'],
+            'mariadb' => ['10.11'],
+        ];
+        $this->assertContains($expectedDatabaseBranch, $expectedBranches[$expectedDatabase]);
         $this->assertSame($expectedPhp, PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION);
         $this->assertSame($expectedWordPress, preg_replace('/^(\d+\.\d+).*/', '$1', get_bloginfo('version')));
         $this->assertTrue(extension_loaded('mysqli'));
@@ -38,7 +45,7 @@ final class CompatibilityMatrixTest extends TestCase
         $this->assertIsString($facts['database']['version']);
         $this->assertNotSame('', $facts['database']['version']);
         $this->assertSame(
-            $expectedDatabase === 'mysql' ? '8.4' : '10.11',
+            $expectedDatabaseBranch,
             preg_match('/^(\d+\.\d+)/', $facts['database']['version'], $matches) ? $matches[1] : null,
         );
     }
