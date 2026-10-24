@@ -71,6 +71,17 @@ class SecurityScanService
             AuditLog::record($website, 'security.scan_requested', actor: $actor, data: ['scan' => $scan->uuid, 'type' => $type->value]);
             $incident && app(IncidentService::class)->log($incident, 'scan', $actor, ['scan' => $scan->uuid, 'type' => $type->value]);
 
+            // Commit the scan row and its first Connector job atomically. If a
+            // request process dies after creating the scan but before queueing,
+            // an orphaned queued scan would otherwise time out with no job.
+            if ($type->needsConnector()) {
+                try {
+                    $this->queuePart($scan, 1);
+                } catch (ConnectorError|ValidationException $e) {
+                    $this->fail($scan, 'JOB_NOT_ALLOWED', $e->getMessage());
+                }
+            }
+
             return $scan;
         });
 
@@ -82,12 +93,6 @@ class SecurityScanService
             $this->finish($scan->refresh());
 
             return $scan->refresh();
-        }
-
-        try {
-            $this->queuePart($scan, 1);
-        } catch (ConnectorError|ValidationException $e) {
-            $this->fail($scan, 'JOB_NOT_ALLOWED', $e->getMessage());
         }
 
         return $scan->refresh();
