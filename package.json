@@ -21,7 +21,7 @@
     "dependencies": {
         "@fontsource/ibm-plex-mono": "^5.3.0",
         "@fontsource/ibm-plex-sans": "^5.3.0",
-        "alpinejs": "^3.17.4"
+        "alpinejs": "^3.17.5"
     },
     "overrides": {
         "shell-quote": "1.11.0",
