@@ -32,7 +32,7 @@ Integration & QA separately reports a read-only staging preflight:
 - `/usr/bin/php8.4` and the active `php8.4-fpm.service` use PHP 8.4.27. The service has been running since 2026-10-24 06:15 CEST; the sampled FPM status showed three idle workers, 1,605 requests, and zero slow requests.
 - Nginx configuration includes both PHP 7.4 and PHP 8.4 sockets. The effective upstream for the staging vhost, whether PHP 7.4 is actively used, the running FPM executable identity, Supervisor workers, and scheduler interpreter remain unverified.
 - `/up` returned HTTP 200; this does not identify which runtime serves the request.
-- APT reports the installed PHP 8.4.27 build and PHP 8.5.12 candidate from the `ondrej/php` PPA. This report does not independently validate that repository's signing-key fingerprint.
+- APT reports the installed PHP 8.4.27 build and PHP 8.5.12 candidate from the `ondrej/php` PPA. Launchpad currently publishes the PPA signing-key fingerprint as `B8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6` ([official PPA details](https://launchpad.net/~ondrej/+archive/ubuntu/php)). This is the expected publisher fingerprint for local comparison, not proof that staging's trusted keyring contains that key or that the installed package index was verified by it; the staging keyring and signed Release metadata still need read-only validation.
 
 PHP 8.4.27 is the upstream fixed release for CVE-2026-109618 and CVE-2026-109619. Its reported version is at the fixed upstream release level, but the PPA signature/provenance and every active PHP process have not been independently verified. Record the active-runtime patch state as **partially verified**, not fully closed.
 
