@@ -55,6 +55,8 @@ return [
             'unix_socket' => env('DB_SOCKET', ''),
             'charset' => env('DB_CHARSET', 'utf8mb4'),
             'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+            // Keep TIMESTAMP storage/comparison semantics UTC regardless of the Owner display preference or DB server timezone.
+            'timezone' => '+00:00',
             'prefix' => '',
             'prefix_indexes' => true,
             'strict' => true,
@@ -76,6 +78,8 @@ return [
             'unix_socket' => env('PLATFORM_DB_BACKUP_VERIFY_DB_SOCKET', ''),
             'charset' => env('DB_CHARSET', 'utf8mb4'),
             'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+            // Keep TIMESTAMP storage/comparison semantics UTC regardless of the Owner display preference or DB server timezone.
+            'timezone' => '+00:00',
             'prefix' => '',
             'prefix_indexes' => true,
             'strict' => true,

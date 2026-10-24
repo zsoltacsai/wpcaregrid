@@ -14,7 +14,7 @@
             <div><dt class="text-xs text-muted">Customer reference</dt><dd class="mt-1 font-mono">{{ $plan->preview['customer_reference'] }}</dd></div>
             <div><dt class="text-xs text-muted">State</dt><dd class="mt-1">{{ strtoupper($plan->state->value) }}</dd></div>
             <div class="sm:col-span-2"><dt class="text-xs text-muted">Preview hash (SHA-256)</dt><dd class="mt-1 break-all font-mono">{{ $plan->preview_hash }}</dd></div>
-            <div><dt class="text-xs text-muted">Owner review</dt><dd class="mt-1">{{ strtoupper($plan->owner_approval_status) }}{{ $plan->approved_at ? ' · '.$plan->approved_at->utc()->format('Y-m-d H:i:s').' UTC' : '' }}</dd></div>
+            <div><dt class="text-xs text-muted">Owner review</dt><dd class="mt-1">{{ strtoupper($plan->owner_approval_status) }}{{ $plan->approved_at ? ' · '.app(\App\Support\DisplayDateTime::class)->format($plan->approved_at, 'Y-m-d H:i:s T') : '' }}</dd></div>
             <div><dt class="text-xs text-muted">Policy binding</dt><dd class="mt-1 break-all font-mono">{{ $plan->policy_version ?? 'No active retention policy version' }}</dd></div>
         </dl>
     </section>

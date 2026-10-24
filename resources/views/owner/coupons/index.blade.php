@@ -30,9 +30,9 @@
                             <td class="px-3 py-2"><a href="{{ route('owner.coupons.show', $coupon) }}" class="font-mono font-medium text-primary hover:underline">{{ $coupon->code }}</a></td>
                             <td class="px-3 py-2 tabular-nums">{{ $coupon->percentLabel() }}% <span class="text-xs text-muted">{{ __('owner.coupons.durations_short.'.$coupon->duration, ['months' => $coupon->duration_months]) }}</span><span class="block text-xs text-muted">{{ __('owner.coupons.market_groups.'.($coupon->marketLabelKey())) }}</span></td>
                             <td class="px-3 py-2"><x-ui.status-badge :tone="$coupon->active ? 'positive' : 'neutral'">{{ __('owner.coupons.states.'.($coupon->active ? 'active' : 'inactive')) }}</x-ui.status-badge></td>
-                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $coupon->starts_at?->format('Y-m-d') ?? '…' }} – {{ $coupon->expires_at?->format('Y-m-d') ?? '…' }}</td>
+                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ app(\App\Support\DisplayDateTime::class)->date($coupon->starts_at) ?? '…' }} – {{ app(\App\Support\DisplayDateTime::class)->date($coupon->expires_at) ?? '…' }}</td>
                             <td class="px-3 py-2 tabular-nums">{{ $coupon->times_redeemed }}@if ($coupon->max_redemptions !== null) / {{ $coupon->max_redemptions }}@endif</td>
-                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $coupon->updated_at->format('Y-m-d H:i') }}</td>
+                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">@displayDateTime($coupon->updated_at)</td>
                         </tr>
                     @endforeach
                 </tbody>

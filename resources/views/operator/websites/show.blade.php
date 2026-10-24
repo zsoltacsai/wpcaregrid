@@ -18,7 +18,7 @@
         $pendingPlugins = $plugins->where('update_available', true);
         $pendingThemes = $themes->where('update_available', true);
         $lastUpdate = $updateJobs->first(fn ($job) => $job->status->isFinal());
-        $time = fn ($at) => $at ? $at->format('Y-m-d H:i') : __('operator.never');
+        $time = fn ($at) => app(\App\Support\DisplayDateTime::class)->format($at) ?? __('operator.never');
         // Jump links only for the sections this operator can see.
         $sections = array_keys(array_filter([
             'overview' => true, 'connector' => true, 'wordpress' => true, 'plugins' => true, 'themes' => true, 'woocommerce' => true,
@@ -120,7 +120,7 @@
                     <div class="mt-4 rounded-md border border-accent bg-accent-soft p-3">
                         <p class="text-xs font-semibold tracking-[0.12em] text-muted uppercase">{{ __('operator.connector.code_label') }}</p>
                         <p class="mt-1 font-mono text-xl font-medium tracking-[0.08em] text-primary select-all">{{ $pairingCode['code'] }}</p>
-                        <p class="mt-1 text-xs text-ink">{{ __('operator.connector.code_note', ['time' => $pairingCode['expires_at']->format('H:i')]) }}</p>
+                        <p class="mt-1 text-xs text-ink">{{ __('operator.connector.code_note', ['time' => app(\App\Support\DisplayDateTime::class)->format($pairingCode['expires_at'], 'H:i T')]) }}</p>
                     </div>
                 @endif
                 <div class="mt-4 grid gap-3 border-t border-line pt-4 md:grid-cols-2">
@@ -356,7 +356,7 @@
                                             @if ($backup->error_code)<span class="mt-1 block text-[11px] text-danger-ink">{{ BackupText::error($backup->error_code) }} <span class="font-mono">({{ $backup->error_code }})</span></span>@endif
                                         </td>
                                         <td class="px-3 py-2 font-mono text-xs">{{ BackupText::size($backup->total_size) }}</td>
-                                        <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $backup->expires_at?->format('Y-m-d') ?? __('operator.none') }}</td>
+                                        <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ app(\App\Support\DisplayDateTime::class)->format($backup->expires_at) ?? __('operator.none') }}</td>
                                         <td class="px-3 py-2 text-right">
                                             @if (in_array($backup->id, $restorable, true))
                                                 <x-ui.button :href="route('operator.websites.backups.restore', [$website, $backup])" variant="secondary" size="sm">{{ __('operator.backups.restore') }}</x-ui.button>

@@ -51,6 +51,7 @@ use GuzzleHttp\Client;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Schema;
@@ -137,6 +138,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        Blade::directive('displayDateTime', fn (string $expression) =>
+            "<?php echo e(app(\\App\\Support\\DisplayDateTime::class)->format({$expression})); ?>"
+        );
+
         URL::defaults(['locale' => config('localization.default', 'en')]);
 
         // Database-backed service credentials override their fixed config keys at runtime.

@@ -55,7 +55,7 @@
                     <dt class="text-muted">{{ __('owner.pricing.columns.amount') }}</dt><dd class="tabular-nums">{{ number_format($definition->amount) }} <span class="text-xs text-muted">{{ __('owner.pricing.minor_units', ['currency' => $definition->currency]) }}</span></dd>
                     <dt class="text-muted">{{ __('owner.pricing.columns.stripe') }}</dt><dd class="font-mono text-xs break-all">{{ $definition->stripe_price_id ?: '—' }}</dd>
                     <dt class="text-muted">{{ __('owner.pricing.columns.state') }}</dt><dd>{{ $definition->active ? __('owner.pricing.states.on_sale') : __('owner.pricing.states.inactive') }}</dd>
-                    <dt class="text-muted">{{ __('owner.pricing.published_at') }}</dt><dd class="font-mono text-xs">{{ $definition->published_at->format('Y-m-d H:i') }}</dd>
+                    <dt class="text-muted">{{ __('owner.pricing.published_at') }}</dt><dd class="font-mono text-xs">@displayDateTime($definition->published_at)</dd>
                     @if ($definition->retired_stripe_price_ids)
                         <dt class="text-muted">{{ __('owner.pricing.retired') }}</dt><dd class="font-mono text-xs break-all">{{ implode(', ', $definition->retired_stripe_price_ids) }}</dd>
                     @endif

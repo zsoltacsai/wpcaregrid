@@ -25,7 +25,7 @@
                             <td class="px-4 py-3 font-mono">{{ $request->customer?->uuid ?? '—' }}</td>
                             <td class="px-4 py-3">{{ __('privacy.types.'.$request->request_type->value) }}</td>
                             <td class="px-4 py-3">{{ __('privacy.request_statuses.'.$request->status->value) }}</td>
-                            <td class="px-4 py-3">{{ $request->requested_at?->utc()->format('Y-m-d H:i:s').' UTC' }}</td>
+                            <td class="px-4 py-3">@displayDateTime($request->requested_at, 'Y-m-d H:i:s T')</td>
                             <td class="px-4 py-3">{{ $request->provider_tasks_count }}</td>
                         </tr>
                     @empty

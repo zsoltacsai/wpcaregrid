@@ -18,7 +18,7 @@
             <tbody class="divide-y divide-line">
                 @foreach ($scans as $scan)
                     <tr class="align-top">
-                        <td class="px-4 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $scan->created_at->format('Y-m-d H:i') }}</td>
+                        <td class="px-4 py-2 font-mono text-xs whitespace-nowrap text-muted">@displayDateTime($scan->created_at)</td>
                         @if ($showWebsite)<td class="px-4 py-2"><a href="{{ route('operator.websites.security', $scan->website) }}" class="text-primary hover:underline">{{ $scan->website->host() }}</a></td>@endif
                         <td class="px-4 py-2 text-xs">{{ $scan->type->label() }}</td>
                         <td class="px-4 py-2">

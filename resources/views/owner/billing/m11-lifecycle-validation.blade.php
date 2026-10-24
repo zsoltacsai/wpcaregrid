@@ -29,7 +29,7 @@
             <article class="rounded-md border border-line bg-surface p-4 text-sm">
                 <dl class="grid gap-2 sm:grid-cols-2">
                     <div><dt class="text-muted">{{ __('owner.m11_lifecycle_validation.run_id') }}</dt><dd class="font-mono">{{ $run->subject_key }}</dd></div>
-                    <div><dt class="text-muted">{{ __('owner.m11_lifecycle_validation.at') }}</dt><dd>{{ $run->created_at?->timezone(config('app.timezone'))->format('Y-m-d H:i:s T') }}</dd></div>
+                    <div><dt class="text-muted">{{ __('owner.m11_lifecycle_validation.at') }}</dt><dd>@displayDateTime($run->created_at, 'Y-m-d H:i:s T')</dd></div>
                     <div><dt class="text-muted">{{ __('owner.m11_lifecycle_validation.scenario_label') }}</dt><dd>{{ data_get($run->data, 'scenario') }}</dd></div>
                     <div><dt class="text-muted">{{ __('owner.m11_lifecycle_validation.outcome') }}</dt><dd>{{ data_get($run->data, 'outcome') }} · {{ data_get($run->data, 'reason') }}</dd></div>
                     @if (data_get($run->data, 'subscription_uuid'))<div><dt class="text-muted">{{ __('owner.m11_lifecycle_validation.subscription') }}</dt><dd class="font-mono">{{ data_get($run->data, 'subscription_uuid') }}</dd></div>@endif

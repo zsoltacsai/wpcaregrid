@@ -48,7 +48,7 @@
                 <tbody class="divide-y divide-line">
                     @foreach ($backups as $backup)
                         <tr class="align-top">
-                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap">{{ $backup->created_at->format('Y-m-d H:i') }}</td>
+                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap">@displayDateTime($backup->created_at)</td>
                             <td class="px-3 py-2"><a href="{{ route('operator.websites.show', $backup->website) }}#backups" class="text-primary hover:underline">{{ $backup->website->host() }}</a></td>
                             <td class="px-3 py-2 text-xs">{{ $backup->type->label() }}</td>
                             <td class="px-3 py-2 text-xs">{{ $backup->reason->label() }}</td>
@@ -57,7 +57,7 @@
                                 @if ($backup->error_code)<span class="mt-1 block font-mono text-[11px] text-danger-ink">{{ $backup->error_code }}</span>@endif
                             </td>
                             <td class="px-3 py-2 font-mono text-xs">{{ BackupText::size($backup->total_size) }}</td>
-                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $backup->expires_at?->format('Y-m-d') ?? __('operator.none') }}</td>
+                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ app(\App\Support\DisplayDateTime::class)->date($backup->expires_at) ?? __('operator.none') }}</td>
                         </tr>
                     @endforeach
                 </tbody>

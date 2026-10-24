@@ -103,7 +103,7 @@
     </x-account.detail>
     <x-account.detail :label="__('account.subscription.last_payment')">
         @if ($s->last_payment_status)
-            {{ __('account.subscription.payment_statuses.'.$s->last_payment_status) }}@if ($s->last_payment_at) · <span class="font-mono">{{ $s->last_payment_at->translatedFormat('j M Y') }}</span>@endif
+            {{ __('account.subscription.payment_statuses.'.$s->last_payment_status) }}@if ($s->last_payment_at) · <span class="font-mono">{{ app(\App\Support\DisplayDateTime::class)->date($s->last_payment_at, 'j M Y') }}</span>@endif
         @endif
     </x-account.detail>
     <x-account.detail :label="__('account.subscription.website')">
@@ -117,7 +117,7 @@
         <ul class="mt-2 divide-y divide-line text-sm">
             @foreach ($billingInvoices as $invoice)
                 <li class="flex flex-wrap items-center justify-between gap-2 py-2">
-                    <span>{{ $invoice->stripe_created_at?->translatedFormat('j M Y') ?? '—' }} · {{ __('account.subscription.invoice_statuses.'.$invoice->invoice_status, [], app()->getLocale()) }}</span>
+                    <span>{{ app(\App\Support\DisplayDateTime::class)->localizedFormat($invoice->stripe_created_at, 'j M Y') ?? '—' }} · {{ __('account.subscription.invoice_statuses.'.$invoice->invoice_status, [], app()->getLocale()) }}</span>
                     <span class="tabular-nums">{{ $invoice->money('amount_paid')?->format() ?? __('account.subscription.amount_unknown') }}</span>
                 </li>
             @endforeach

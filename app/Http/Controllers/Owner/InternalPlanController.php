@@ -8,9 +8,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use App\Models\Subscription;
 use App\Pricing\ProductType;
+use App\Support\DisplayDateTime;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 
 /**
@@ -22,7 +22,7 @@ use Illuminate\Validation\Rule;
  */
 class InternalPlanController extends Controller
 {
-    public function store(Request $request, Customer $customer, InternalPlans $plans): RedirectResponse
+    public function store(Request $request, Customer $customer, InternalPlans $plans, DisplayDateTime $displayDateTime): RedirectResponse
     {
         $data = $request->validate([
             'product_type' => ['required', Rule::enum(ProductType::class)],
@@ -34,8 +34,8 @@ class InternalPlanController extends Controller
             $customer,
             InternalPlan::Probono,
             ProductType::from($data['product_type']),
-            $this->date($data['starts_at'] ?? null),
-            $this->date($data['ends_at'] ?? null),
+            $this->date($data['starts_at'] ?? null, $displayDateTime),
+            $this->date($data['ends_at'] ?? null, $displayDateTime),
             filled($data['note'] ?? null) ? $data['note'] : null,
             $request->user(),
         );
@@ -43,11 +43,11 @@ class InternalPlanController extends Controller
         return redirect()->route('owner.customers.show', $customer)->with('status', __('owner.probono.assigned', ['name' => $customer->fullName()]));
     }
 
-    public function update(Request $request, Customer $customer, Subscription $subscription, InternalPlans $plans): RedirectResponse
+    public function update(Request $request, Customer $customer, Subscription $subscription, InternalPlans $plans, DisplayDateTime $displayDateTime): RedirectResponse
     {
         $data = $request->validate($this->dateRules());
 
-        $updated = $plans->update($subscription, $this->date($data['starts_at'] ?? null), $this->date($data['ends_at'] ?? null), filled($data['note'] ?? null) ? $data['note'] : null, $request->user());
+        $updated = $plans->update($subscription, $this->date($data['starts_at'] ?? null, $displayDateTime), $this->date($data['ends_at'] ?? null, $displayDateTime), filled($data['note'] ?? null) ? $data['note'] : null, $request->user());
 
         return redirect()->route('owner.customers.show', $customer)->with('status', $updated->wasChanged() ? __('owner.probono.saved') : __('owner.probono.unchanged'));
     }
@@ -69,8 +69,8 @@ class InternalPlanController extends Controller
         ];
     }
 
-    private function date(?string $value): ?Carbon
+    private function date(?string $value, DisplayDateTime $displayDateTime): ?\Illuminate\Support\Carbon
     {
-        return filled($value) ? Carbon::parse($value) : null;
+        return filled($value) ? $displayDateTime->parseLocal($value) : null;
     }
 }

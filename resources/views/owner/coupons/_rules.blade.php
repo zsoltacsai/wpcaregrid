@@ -1,7 +1,7 @@
 {{-- The editable rules of a coupon: validity, limits, restrictions, note. Used when creating and editing (@include; needs $productTypes, $tiers, $intervals, $timezone). --}}
 @php
     $coupon ??= null;
-    $stamp = fn ($date) => $date?->format('Y-m-d\TH:i');
+    $stamp = fn ($date) => app(\App\Support\DisplayDateTime::class)->format($date, 'Y-m-d\TH:i');
     $selected = fn (string $field) => (array) old($field, $coupon?->{$field} ?? []);
 @endphp
 

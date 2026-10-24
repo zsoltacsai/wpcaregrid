@@ -17,7 +17,7 @@
             <article class="rounded-md border border-line bg-surface p-5">
                 <h3 class="text-base font-semibold">{{ __('owner.synthetic_invoice_test.run_title', ['id' => $run->id]) }}</h3>
                 <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                    <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.prepared_at') }}</dt><dd>{{ $run->created_at?->timezone(config('app.timezone'))->format('Y-m-d H:i:s T') ?? '—' }}</dd></div>
+                    <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.prepared_at') }}</dt><dd>{{ app(\App\Support\DisplayDateTime::class)->format($run->created_at, 'Y-m-d H:i:s T') ?? '—' }}</dd></div>
                     <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.status') }}</dt><dd>{{ $run->status }}</dd></div>
                     <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.amount') }}</dt><dd>{{ $run->formattedAmount() }}</dd></div>
                     <div><dt class="text-muted">{{ __('owner.synthetic_invoice_test.tax_code') }}</dt><dd>{{ $run->tax_code }} · {{ __('owner.synthetic_invoice_test.mechanical_only') }}</dd></div>

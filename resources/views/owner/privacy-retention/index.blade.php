@@ -70,11 +70,11 @@
                         <tr>
                             <td class="p-3 align-top"><strong>{{ $key }}</strong><div class="text-xs text-muted">{{ $definition['category'] }} · {{ $definition['trigger'] }}</div></td>
                             <td class="p-3 align-top">{{ is_array($value) ? ($value['value'].' '.$value['unit']) : (is_bool($value) ? ($value ? 'ON' : 'OFF') : (is_scalar($value) ? (string) $value : 'Not set')) }}</td>
-                            <td class="p-3 align-top">v{{ $policy?->version ?? '—' }}<div class="text-xs text-muted">{{ $policy?->effective_at?->utc()->format('Y-m-d H:i:s') ?? 'No version' }} {{ $policy?->effective_at ? 'UTC' : '' }}</div>
-                                <div class="mt-1 text-xs text-muted">Changed by user #{{ $policy?->last_changed_by ?? 'migration' }} · {{ $policy?->updated_at?->utc()->format('Y-m-d H:i:s') ?? '—' }}{{ $policy?->updated_at ? ' UTC' : '' }}</div>
+                            <td class="p-3 align-top">v{{ $policy?->version ?? '—' }}<div class="text-xs text-muted">{{ app(\App\Support\DisplayDateTime::class)->format($policy?->effective_at, 'Y-m-d H:i:s T') ?? 'No version' }}</div>
+                                <div class="mt-1 text-xs text-muted">Changed by user #{{ $policy?->last_changed_by ?? 'migration' }} · {{ app(\App\Support\DisplayDateTime::class)->format($policy?->updated_at, 'Y-m-d H:i:s T') ?? '—' }}</div>
                                 <details class="mt-2 text-xs"><summary class="cursor-pointer">Version history ({{ $versions->get($key, collect())->count() }})</summary>
                                     @foreach ($versions->get($key, collect()) as $version)
-                                        <div class="mt-1">v{{ $version->version }} · {{ $version->approval_status?->value }} · {{ $version->effective_at?->utc()->format('Y-m-d H:i:s') ?? '—' }}{{ $version->effective_at ? ' UTC' : '' }}</div>
+                                        <div class="mt-1">v{{ $version->version }} · {{ $version->approval_status?->value }} · @displayDateTime($version->effective_at, 'Y-m-d H:i:s T')</div>
                                     @endforeach
                                 </details>
                             </td>
@@ -113,7 +113,7 @@
         <p class="mt-1 text-sm text-muted">Counts only; no names, email addresses, site URLs, raw payloads, or accounting content.</p>
         @forelse ($previews as $preview)
             <details class="mt-3 rounded-sm border border-line p-3">
-                <summary class="cursor-pointer text-sm font-medium">{{ $preview->policy?->policy_key }} v{{ $preview->policy_version }} · {{ $preview->evaluated_at?->utc()->format('Y-m-d H:i:s').' UTC' }} · {{ $preview->coverage_state }} · actually deleted 0</summary>
+                <summary class="cursor-pointer text-sm font-medium">{{ $preview->policy?->policy_key }} v{{ $preview->policy_version }} · @displayDateTime($preview->evaluated_at, 'Y-m-d H:i:s T') · {{ $preview->coverage_state }} · actually deleted 0</summary>
                 <pre class="mt-3 overflow-auto whitespace-pre-wrap text-xs">{{ json_encode($preview->summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
             </details>
         @empty

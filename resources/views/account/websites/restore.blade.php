@@ -57,7 +57,7 @@
         <aside class="grid gap-4">
             <x-account.panel :title="__('backups.restore.backup')" heading-id="restore-backup-title">
                 <dl class="grid gap-4 text-sm">
-                    <x-account.detail :label="__('backups.account.created')"><span class="font-mono">{{ $backup->created_at->translatedFormat('j M Y H:i') }}</span></x-account.detail>
+                    <x-account.detail :label="__('backups.account.created')"><span class="font-mono">@displayDateTime($backup->created_at)</span></x-account.detail>
                     <x-account.detail :label="__('backups.account.type')">{{ $backup->type->label() }}</x-account.detail>
                     <x-account.detail :label="__('backups.account.reason_column')">{{ $backup->reason->label() }}</x-account.detail>
                     <x-account.detail :label="__('backups.account.size')"><span class="font-mono">{{ BackupText::size($backup->total_size) }}</span></x-account.detail>

@@ -49,7 +49,7 @@
 
     <p class="mt-3 text-xs text-muted">
         {{ __('compatibility.last_checked') }}:
-        @if ($snapshot?->checked_at)<span class="font-mono">{{ $snapshot->checked_at->translatedFormat('j M Y H:i') }}</span>@else{{ __('compatibility.not_checked') }}@endif
+        @if ($snapshot?->checked_at)<span class="font-mono">@displayDateTime($snapshot->checked_at)</span>@else{{ __('compatibility.not_checked') }}@endif
     </p>
 
     @if ($operator && $snapshot)
