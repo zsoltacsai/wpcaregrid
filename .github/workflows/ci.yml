@@ -161,12 +161,15 @@ jobs:
           "$RUNNER_TEMP/gitleaks" detect --source=. --config=.gitleaks.toml --redact --no-banner --verbose
 
   server:
-    name: Server tests (PHP 8.4, ${{ matrix.database }})
+    name: Server tests (PHP ${{ matrix.php }}, ${{ matrix.database }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        # Preserve the existing PHP 8.4 required-check names and add a full
+        # server-side PHP 8.5 lane, including the strict MySQL concurrency gate.
+        php: ['8.4', '8.5']
         database: [sqlite, mysql, mariadb]
     services:
       mysql:
@@ -187,7 +190,7 @@ jobs:
 
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
-          php-version: ${{ env.PHP_VERSION }}
+          php-version: ${{ matrix.php }}
           extensions: ${{ env.PHP_EXTENSIONS }}
           coverage: none
           tools: composer:v2
