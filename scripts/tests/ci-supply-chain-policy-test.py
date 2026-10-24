@@ -55,7 +55,8 @@ def validate_workflow_controls(workflow):
     assert re.search(r"(?m)^permissions:\s*\n\s+contents:\s*read\s*$", workflow), "workflow token must remain contents: read"
     assert not re.search(r"(?m)^\s+(?:write-all|contents|actions|checks|pull-requests|deployments|id-token):\s*(?:write|write-all)\s*$", workflow), "unexpected token write permission"
     assert "name: Quality (lint, style, dependencies, build, secrets)" in workflow
-    assert "name: Server tests (PHP 8.4, ${{ matrix.database }})" in workflow
+    assert "name: Server tests (PHP ${{ matrix.php }}, ${{ matrix.database }})" in workflow
+    assert "php: ['8.4', '8.5']" in workflow, "server PHP matrix must retain 8.4 and validate 8.5"
     assert "name: ${{ matrix.legacy_check_name || format('Connector tests (PHP {0}, WordPress {1}, {2})', matrix.php, matrix.wordpress, matrix.database) }}" in workflow
     assert "database: [sqlite, mysql, mariadb]" in workflow, "server matrix shrank"
     assert "php: ['8.2', '8.3', '8.4', '8.5']" in workflow, "customer PHP compatibility matrix incomplete"
