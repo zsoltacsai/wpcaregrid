@@ -138,9 +138,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        Blade::directive('displayDateTime', fn (string $expression) =>
-            "<?php echo e(app(\\App\\Support\\DisplayDateTime::class)->format({$expression})); ?>"
-        );
+        Blade::directive('displayDateTime', fn (string $expression) => "<?php echo e(app(\\App\\Support\\DisplayDateTime::class)->format({$expression})); ?>");
 
         URL::defaults(['locale' => config('localization.default', 'en')]);
 

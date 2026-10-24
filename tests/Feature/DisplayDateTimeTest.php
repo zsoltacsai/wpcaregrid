@@ -2,9 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Compatibility\CapabilitySnapshot;
 use App\Owner\OwnerSettings;
 use App\Support\DisplayDateTime;
-use App\Compatibility\CapabilitySnapshot;
 use Carbon\Carbon;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;

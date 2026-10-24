@@ -11,6 +11,7 @@ use App\Pricing\ProductType;
 use App\Support\DisplayDateTime;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 
 /**
@@ -69,7 +70,7 @@ class InternalPlanController extends Controller
         ];
     }
 
-    private function date(?string $value, DisplayDateTime $displayDateTime): ?\Illuminate\Support\Carbon
+    private function date(?string $value, DisplayDateTime $displayDateTime): ?Carbon
     {
         return filled($value) ? $displayDateTime->parseLocal($value) : null;
     }
