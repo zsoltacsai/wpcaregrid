@@ -1,5 +1,29 @@
 # M14 dedicated staging security fixture
 
+## Acceptance paths and Owner-approved alternative
+
+This document remains the runbook for **Path A**, the optional dedicated,
+non-billing `m14-security` synthetic fixture and its site-scoped test window.
+The fixture implementation, exact identity checks, isolation controls, and
+cleanup rules below remain in force whenever Path A is used.
+
+For the M14 operational **Integrity-scan execution criterion only**, the Owner
+approved **Path B** on 2026-10-24: the already completed, bounded Integrity
+scan on the Owner-authorized, actively subscribed `kiszov-szeged.hu` staging
+registration may satisfy the end-to-end Connector scan evidence. Path B does
+not convert that ordinary paid Website into a synthetic fixture, change its
+subscription or entitlements, or grant it M14-only suppression, backup,
+restore, or polling permissions. It uses the normal authenticated Owner /
+Connector / Website authorization path. It is an acceptance alternative for
+the completed Integrity execution criterion, not a waiver of the independent
+security audits, synthetic negative tests, malware coverage, or destructive
+operation tests listed elsewhere in the M14 matrix.
+
+The accepted scan and its scope limitations are recorded in
+[`reports/m14/owner-real-site-integrity-acceptance-2026-10-24.md`](../reports/m14/owner-real-site-integrity-acceptance-2026-10-24.md).
+Do not repeat the live scan solely to produce a synthetic Website UUID. A new
+live operation requires its own current preflight and authorization.
+
 This runbook defines a separate `m14-security` fixture. It does not reuse the
 M8 backup/restore fixture and does not convert or scan the paid
 `m14-synthetic.staging.wpcaregrid.com` website. The fixture creates only a

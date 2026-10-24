@@ -1,5 +1,13 @@
 # M14.7 Full-Closure Assessment — 2026-10-18
 
+> **Later evidence update (2026-10-24):** this assessment remains historically
+> accurate as of its original review date. Its statement that no operational
+> scan had occurred is superseded only for the operational Integrity-execution
+> criterion by the Owner-approved, completed Path B scan recorded in
+> [`reports/m14/owner-real-site-integrity-acceptance-2026-10-24.md`](../m14/owner-real-site-integrity-acceptance-2026-10-24.md).
+> Other M14.7 findings, the audit gaps, and M14.8 status are not closed by that
+> scan.
+
 ## Verdict
 
 **B — PARTIAL / OWNER ACTION REQUIRED.** Previously closed engineering stages have evidence within their stated scopes, but M14.7 is not fully closed. Operational scanner validation, fresh live M12 readback and side-effect validation have not occurred.

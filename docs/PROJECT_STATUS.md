@@ -3,9 +3,19 @@
 > Kept up to date at the end of every milestone (see CLAUDE.md §27).
 > A new session should read CLAUDE.md, this file and the relevant docs, then run `git status` and `git log --oneline -12`.
 
-Last updated: 2026-10-19
+Last updated: 2026-10-24
 
-## Current M14.7 status — Owner-reported staging evidence (2026-10-19)
+## M14.7/M14.8 latest evidence — Owner-approved real-site Integrity acceptance (2026-10-24)
+
+Primary branch `claude/ecstatic-wozniak-oemyuf` and protected staging were verified at merge SHA `8262bb60dccf5bd8681e4a97ac1d8cd56128d603`. Exact-SHA Actions run [40092077613](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40092077613) passed 30/30 jobs, including the MySQL process/concurrency gate. The protected deployment receipt and runtime SHA matched this release. The Owner-approved read-only M12 readback [40095400109](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40095400109) reported all six privacy gates `FALSE`, staging identity `stg1.wpcaregrid.com` / `https://staging.wpcaregrid.com`, and global `security.incidents.auto_open=TRUE` plus `security.incidents.auto_backup=TRUE`; neither global setting was changed.
+
+The Owner approved the existing registered, subscribed `https://kiszov-szeged.hu` site as a real, production-like target for a bounded Integrity scan and formally replaced the requirement to provision another disposable external WordPress site solely for this operational scan criterion. The completed scan is `01a16dfa-afed-735f-a4fd-2eafcd0a8a3d`; Website `01a16409-3537-7061-993d-a18fccd5b945`; active Connector `01a16533-b4a5-7271-89f7-c032bae5b643`, version `0.4.7`; WordPress `7.1.3`; customer-hosted PHP `8.2.35`; Connector job 48 completed once with `SCAN_COMPLETED`. Coverage: 5,930 verified, 0 modified, 0 extra, 1 missing, 4 unavailable; 0 findings. The missing/unavailable items remain a coverage limitation; the result is not a Malware scan or a malware-free claim. Remediation was disabled. The Owner-reported scan window had no incident or backup; a complete notification-channel delta was not retained and remains unverified. No global incident/backup toggle was changed.
+
+The exact scan and the revised acceptance route are recorded in [the real-site acceptance report](../reports/m14/owner-real-site-integrity-acceptance-2026-10-24.md), [the decision register](../reports/m14/owner-questionnaire.md), and [the M14 closure criteria](../reports/m14/m14-closure-criteria.md). The old `NO COMPLETED STAGING SCAN` claim is superseded for this operational Integrity-execution criterion only. The real site remains an ordinary subscribed Website; synthetic fixture policy and entitlements were not applied to it.
+
+**Milestone status: M14 BLOCKED — NOT CLOSED.** The app-security and tenant-isolation audit documents still classify portions of their scope as `PARTIAL`; the complete supply-chain, compatibility, Connector/archive, operational side-effect, and backup-entitlement audit dispositions have not been reconciled in this closeout. The coverage exceptions need triage, notification deltas are incomplete, and the independent-review residual remains open. M14.8 is not ready until these mandatory audit and risk-disposition records are completed. The scan closes the operational Integrity execution evidence gap, not all M14.7/M14.8 requirements. No further live scan is warranted solely for acceptance-path identity.
+
+## Historical M14.7 status snapshot — Owner-reported staging evidence (2026-10-19; superseded above)
 
 Authoritative primary is `5e1e8f68951b2925e57dd406a9b3fcd1a7923799`; merged-primary run [39255687374](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39255687374) passed all seven required jobs, including the explicit Server MySQL process-concurrency gate. PR #131 integrated the M14.7 recovery candidate; PRs #129/#130 are superseded historical candidates and are not to be recreated or remerged.
 
