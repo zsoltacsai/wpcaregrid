@@ -1,5 +1,6 @@
 # Owner-approved real-site Integrity acceptance — 2026-10-24
 
+> **Status note — final M14 reconciliation (2026-10-24):** this report remains the evidence record for the one accepted Integrity scan. Its historical statement that this evidence alone did not support M14 closure was correct when written and is superseded by the later bounded final audit in [`m14-final-audit-2026-10-24.md`](m14-final-audit-2026-10-24.md). Current status: `M14 CLOSED — VERIFIED` within the accepted engineering/audit scope. Scan limitations below remain; no Malware/full-coverage or malware-free claim is made. Authenticated Operator UI visual verification remains an M15 follow-up.
 ## Decision and scope
 
 On 2026-10-24, the Owner explicitly selected the existing `kiszov-szeged.hu`

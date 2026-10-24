@@ -4,6 +4,9 @@
 **Evidence:** Owner response to the M14 Owner Decisions record in this task, following review of planning PR #83.
 **Scope:** planning and implementation scope only. These decisions do not authorize production destructive execution, customer-data transfer to AI providers, or unsupported hosting claims.
 
+## Final milestone status note — 2026-10-24
+
+The Owner's recorded product and acceptance decisions below remain unchanged. Subsequent engineering, exact-SHA CI and Owner-reported protected deployment evidence support `M14 CLOSED — VERIFIED` within the bounded accepted engineering/security-audit scope; see [`M14 final audit`](m14-final-audit-2026-10-24.md). This does not extend any decision to Malware scanning, full coverage, production launch, destructive production operations, or M15/M17 approval. M16 is `PROPOSED / TO BE FORMALIZED BY MASTER ROADMAP`.
 ## OQ-01 — Initial WordPress hosting support — APPROVED
 
 Use an evidence-based, capability-specific support model. A capability is supported only when versioned compatibility/preflight fixtures and runtime checks prove it. Keep distinct states such as `MONITORING_READY`, `UPDATE_READY`, `BACKUP_READY`, `RESTORE_READY`, `SECURITY_SCAN_READY` and `ADMIN_ACCESS_READY`. Unknown restore/write compatibility fails closed. Warnings may remain non-blocking only where the affected capability can operate safely.
