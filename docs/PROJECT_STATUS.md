@@ -1,5 +1,25 @@
 # WP CareGrid — Project Status
 
+## M14 final audit execution — 2026-10-24
+
+Latest primary merge SHA `5ea05192581e5ca98945669be6aa2cfbcff7bd86` was
+verified with [exact merge CI run 40101414072](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40101414072):
+30/30 jobs succeeded, including the Server MySQL process-concurrency gate.
+The Owner-approved Integrity scan on `kiszov-szeged.hu` is complete with
+Connector job 48 terminal success; exact identity, counters, M12 evidence,
+side-effect limitations and the 11-row M14/M15/M17 disposition are recorded in
+[`reports/m14/m14-final-audit-2026-10-24.md`](../reports/m14/m14-final-audit-2026-10-24.md).
+
+The audit found that the Operator scan history omitted missing, extra and
+unavailable Integrity coverage counts. A focused Blade/localization change and
+rendering regression are prepared on isolated branch `codex/m14-final-audit`.
+Because this changes runtime UI, M14 remains **BLOCKED pending exact-head CI,
+protected merge and protected staging deployment/read-only smoke for that
+change**. The prior successful scan is not being repeated. The historic
+notification delta and exact paths behind one missing/four unavailable items
+remain unknown and are recorded without a zero-side-effect or complete-coverage
+claim.
+
 > Kept up to date at the end of every milestone (see CLAUDE.md §27).
 > A new session should read CLAUDE.md, this file and the relevant docs, then run `git status` and `git log --oneline -12`.
 

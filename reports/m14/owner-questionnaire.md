@@ -70,3 +70,23 @@ M14 audit gaps are recorded in
 [`owner-real-site-integrity-acceptance-2026-10-24.md`](owner-real-site-integrity-acceptance-2026-10-24.md).
 OQ-06 changes the scanner acceptance route only; it does not close M14.7 or
 M14.8 audits, waive synthetic negative tests, or imply M14 closure.
+
+## OQ-07 — bounded notification-delta evidence for accepted Integrity run — APPROVED 2026-10-24
+
+For the single OQ-06 Integrity scan, the Owner accepts the following evidence
+instead of requiring a new live scan solely to reconstruct a notification
+inventory that was not persisted: (1) inspect the complete scan-result,
+incident, backup, queue-lifecycle and scheduled-scan code path; (2) verify that
+the Integrity result validator rejects Malware-only `SuspiciousFile` findings
+before findings/incident/backup side effects; (3) run the existing isolated
+negative test proving that this rejection leaves no finding, incident or
+backup; and (4) retain the scan record's reported zero findings and no
+incident/backup report without asserting a reconstructed notification delta.
+
+The historical notification before/after delta remains `UNKNOWN`; this
+decision does not change it to zero. The decision applies only to the completed
+bounded Integrity operation on the OQ-06 target. It does not authorize a
+Malware/full scan, suppress customer alerts, prove notification safety for
+other paths, or replace site/tenant/consent controls. Future M15 notification
+testing must use fake transports/queues or a separately approved isolated
+target.

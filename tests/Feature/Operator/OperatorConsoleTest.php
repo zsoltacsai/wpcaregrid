@@ -14,6 +14,7 @@ use App\Operator\Permission;
 use App\Security\SecurityScanner;
 use App\Security\SecurityState;
 use App\Security\SecuritySummary;
+use App\Security\ScanType;
 use App\Security\Severity;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -279,6 +280,37 @@ class OperatorConsoleTest extends TestCase
             ->getContent();
         $this->assertSame(0, $this->metric($html, 'open_findings'));
         $this->assertSame(1, $this->metric($html, 'not_scanned'));
+    }
+
+    public function test_security_scan_history_displays_all_integrity_coverage_counts(): void
+    {
+        $website = $this->consoleSite()['website'];
+        $website->securityScans()->create([
+            'type' => ScanType::Integrity,
+            'status' => 'completed',
+            'requested_by' => 'operator:1',
+            'scanner_version' => '1.1.0',
+            'rules_version' => '2026.10.1',
+            'connector_version' => '0.4.7',
+            'duration_ms' => 10752,
+            'coverage' => ['integrity' => [
+                'status' => 'completed',
+                'verified' => 5930,
+                'modified' => 0,
+                'missing' => 1,
+                'extra' => 0,
+                'unavailable' => 4,
+            ]],
+            'summary' => ['findings' => 0, 'by_severity' => []],
+        ]);
+        $this->asOperator();
+
+        $this->get(route('operator.websites.security', $website))->assertOk()
+            ->assertSee('5,930 verified')
+            ->assertSee('0 modified')
+            ->assertSee('1 missing')
+            ->assertSee('0 extra')
+            ->assertSee('4 unavailable');
     }
 
     public function test_a_future_scanner_plugs_into_the_console(): void
