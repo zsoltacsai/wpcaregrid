@@ -27,18 +27,35 @@ The Owner reports the following read-only package inventory:
 - CLI modules include PDO MySQL, mysqli, cURL, intl, mbstring, XML, ZIP, sodium, and OPcache. SQLite, GD, and bcmath do not appear in the CLI module inventory.
 - PHP 8.4 SQLite is removed (`rc` package state).
 
-Integration & QA separately reports a read-only staging preflight:
+Integration & QA reports these additional read-only checks:
 
-- `/usr/bin/php8.4` and the active `php8.4-fpm.service` use PHP 8.4.27. The service has been running since 2026-10-24 06:15 CEST; the sampled FPM status showed three idle workers, 1,605 requests, and zero slow requests.
-- Nginx configuration includes both PHP 7.4 and PHP 8.4 sockets. The effective upstream for the staging vhost, whether PHP 7.4 is actively used, the running FPM executable identity, Supervisor workers, and scheduler interpreter remain unverified.
-- `/up` returned HTTP 200; this does not identify which runtime serves the request.
-- APT reports the installed PHP 8.4.27 build and PHP 8.5.12 candidate from the `ondrej/php` PPA. Launchpad currently publishes the PPA signing-key fingerprint as `B8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6` ([official PPA details](https://launchpad.net/~ondrej/+archive/ubuntu/php)). This is the expected publisher fingerprint for local comparison, not proof that staging's trusted keyring contains that key or that the installed package index was verified by it; the staging keyring and signed Release metadata still need read-only validation.
+- The running FPM executable is `/usr/sbin/php-fpm8.4` with no deleted-binary indication; `php8.4-fpm.service` is active.
+- The `wpcaregrid` Nginx vhost uses `/run/php/php8.4-fpm.sock`. Several other enabled vhosts, including test, M8 E2E, and M14 synthetic configurations, also use that socket.
+- Supervisor reports `wpcaregrid-backups` and `wpcaregrid-default` as RUNNING. Their actual PHP executables/versions and the scheduler interpreter remain unverified.
+- A prior FPM status sample showed three idle workers, 1,605 requests, and zero slow requests; this is a sampled status, not a complete long-lived-process inventory.
+- `/up` returned HTTP 200; this alone does not attest package provenance or every PHP process.
 
-PHP 8.4.27 is the upstream fixed release for CVE-2026-109618 and CVE-2026-109619. Its reported version is at the fixed upstream release level, but the PPA signature/provenance and every active PHP process have not been independently verified. Record the active-runtime patch state as **partially verified**, not fully closed.
+Launchpad currently publishes the PPA signing-key fingerprint as `B8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6` ([official PPA details](https://launchpad.net/~ondrej/+archive/ubuntu/php)). This is the expected publisher fingerprint for local comparison, not proof that staging's trusted keyring contains that key or that installed package metadata was verified by it. Staging keyring contents and signed Release metadata still require read-only validation.
+
+PHP 8.4.27 is the upstream fixed release for CVE-2026-109618 and CVE-2026-109619. The reported installed packages and active FPM binary are at that upstream version level, so the version inventory is **consistent with the patched release**. Full P0 remediation remains **partially verified** until the PPA signature/provenance and every active PHP process (including Supervisor and scheduler jobs) are attested.
 
 The production `composer.json` and `composer.lock` do not declare GD, bcmath, or PDO SQLite as hard Composer platform requirements. The lock metadata mentions GD for Laravel's HTTP test image helper and optional image support; repository validation/test scripts and CI use SQLite, and historical M12 staging evidence omitted two SQLite-only restore tests while documenting CI/MySQL coverage. These facts suggest the absent modules are not baseline production requirements, but do not prove that no application-specific runtime path uses them. Before migration, confirm the actual database driver and inspect application/Connector code paths and scheduled workloads for GD, BCMath, or SQLite use; install only extensions shown to be required.
 
-No PHP 8.5 installation, runtime switch, or service restart is authorized by these inventories. The cutover preflight remains: validate the PPA signing key against an independent publisher source; map the staging Nginx vhost to its actual FPM socket/pool; verify the active FPM executable; identify Supervisor and scheduler PHP executables/versions without exposing full command arguments; resolve the PHP 7.4 socket usage; confirm required extensions and Composer platform; test rollback to a patched runtime; and obtain protected integration approval plus an exclusive staging window.
+### PHP 8.5 staging cutover preflight (not authorization)
+
+The Owner prefers a parallel 8.4/8.5 installation initially, subject to approval. PHP 8.4 must remain installed and its shared socket must not be repointed: other enabled vhosts depend on `/run/php/php8.4-fpm.sock`. A future 8.5 pool should use its own socket and only the specifically approved staging vhost may be switched.
+
+Before a cutover, read-only preflight must:
+
+1. Validate the staging trusted keyring and signed PPA Release metadata against the Launchpad fingerprint above.
+2. Confirm the exact staging server block, selected FPM pool, socket, and active FPM executable.
+3. Identify each Supervisor program's executable and PHP version without exposing full argument strings, and identify the scheduler interpreter if present.
+4. Confirm whether PHP 7.4 is still installed or referenced by any active vhost/process.
+5. Check application/Connector extension usage and Composer platform requirements, including the absent GD, bcmath, and SQLite modules.
+6. Verify a tested rollback to a still-patched PHP runtime and ensure rollback does not alter other vhosts.
+7. Obtain protected integration approval and an exclusive UTC staging window.
+
+No PHP 8.5 install, package removal, socket switch, service reload/restart, or production change is authorized by this inventory.
 
 ## Staging-first runtime changes
 
