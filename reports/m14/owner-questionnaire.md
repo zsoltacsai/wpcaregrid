@@ -47,3 +47,26 @@ OQ-01 through OQ-05 are `OWNER_APPROVED`. They resolve the Owner/product choices
 The approved boundary is implemented as exactly three source-owned provider entries (`openai`, `anthropic`, `google_gemini`) with fixed official metadata endpoints and no custom URL. The proposed explicit probes are bodyless model metadata GETs; no static marker is required. Provider/account cost is not claimed to be zero based on endpoint documentation. The Owner current-password-confirmation requirement for AI key create/replace/remove, health-generation concurrency handling, no environment fallback, and runtime-resolved-only storage are engineering controls within OQ-05; no new Owner decision is requested. Customer-data processing by AI remains `NOT AUTHORIZED / FUTURE REVIEW REQUIRED`.
 
 The following remain false: `M12_DESTRUCTIVE_RETENTION_ENABLED`, profile anonymization execution, customer backup deletion, provider deletion, bulk destructive execution and normal-staging synthetic execution. No decision in this register authorizes production destructive execution, customer-data egress to AI providers, or work in M15.
+
+## OQ-06 — M14 operational Integrity-scan acceptance route — APPROVED 2026-10-24
+
+The Owner selected the already registered, Owner-controlled, actively
+subscribed `kiszov-szeged.hu` staging Website for a bounded, non-destructive
+Integrity scan and accepted the completed Connector-side scan as operational
+M14 Integrity-execution evidence. This decision replaces the need to provision
+a separate external disposable WordPress installation solely for that one
+acceptance criterion.
+
+The target remains an ordinary real Customer Website with its existing
+subscription, billing identity, Connector association, entitlements and
+normal authorization. It must not be relabelled as synthetic, be assigned
+fixture-only permissions or suppression, or be used for destructive tests.
+Malware/full scanning, quarantine, remediation, update, restore, or other
+destructive work is not authorized by OQ-06. Each future live operation needs
+its own bounded scope and current safety preflight.
+
+The exact completed scan, deployment, CI, coverage limitations and remaining
+M14 audit gaps are recorded in
+[`owner-real-site-integrity-acceptance-2026-10-24.md`](owner-real-site-integrity-acceptance-2026-10-24.md).
+OQ-06 changes the scanner acceptance route only; it does not close M14.7 or
+M14.8 audits, waive synthetic negative tests, or imply M14 closure.
