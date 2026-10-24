@@ -313,6 +313,32 @@ class OperatorConsoleTest extends TestCase
             ->assertSee('4 unavailable');
     }
 
+    public function test_security_scan_history_does_not_invent_missing_integrity_counts(): void
+    {
+        $website = $this->consoleSite()['website'];
+        $website->securityScans()->create([
+            'type' => ScanType::Integrity,
+            'status' => 'partial',
+            'requested_by' => 'operator:1',
+            'scanner_version' => '1.1.0',
+            'rules_version' => '2026.10.1',
+            'connector_version' => '0.4.7',
+            'coverage' => ['integrity' => [
+                'status' => 'partial',
+                'verified' => 1,
+            ]],
+            'summary' => ['findings' => 0, 'by_severity' => []],
+        ]);
+        $this->asOperator();
+
+        $this->get(route('operator.websites.security', $website))->assertOk()
+            ->assertSee('1 verified')
+            ->assertSee('— modified')
+            ->assertSee('— missing')
+            ->assertSee('— extra')
+            ->assertSee('— unavailable');
+    }
+
     public function test_a_future_scanner_plugs_into_the_console(): void
     {
         $website = $this->consoleSite()['website'];

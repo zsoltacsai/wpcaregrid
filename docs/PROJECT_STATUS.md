@@ -12,7 +12,8 @@ side-effect limitations and the 11-row M14/M15/M17 disposition are recorded in
 
 The audit found that the Operator scan history omitted missing, extra and
 unavailable Integrity coverage counts. A focused Blade/localization change and
-rendering regression are prepared on isolated branch `codex/m14-final-audit`.
+rendering regressions (including absent-count behavior) are prepared on
+isolated branch `codex/m14-final-audit`.
 Because this changes runtime UI, M14 remains **BLOCKED pending exact-head CI,
 protected merge and protected staging deployment/read-only smoke for that
 change**. The prior successful scan is not being repeated. The historic

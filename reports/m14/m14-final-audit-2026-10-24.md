@@ -61,7 +61,7 @@ The Integrity result schema accepts only findings whose `FindingType::scanner()`
 
 The M14 decision register now accepts source-path review plus the existing isolated rejection test and observed scan/incident/backup evidence as sufficient for this *single bounded Integrity operation* despite the missing historical notification snapshot. This acceptance does not extend to Malware/full scanning, other notification producers, or customer operations. The specific historical notification delta remains `UNKNOWN`, not zero.
 
-The coverage display change in this branch renders verified, modified, missing, extra and unavailable counts for Integrity scans in both languages. The regression test uses an ordinary sanitized coverage payload and confirms all five values. It does not add paths, hashes or customer file names to the UI.
+The coverage display change in this branch renders verified, modified, missing, extra and unavailable counts for Integrity scans in both languages. Regression tests confirm all five values for a complete payload and show an em dash, rather than an invented zero, when a count is absent. It does not add paths, hashes or customer file names to the UI.
 
 ## M14 / M15 / M17 boundary and decisions
 

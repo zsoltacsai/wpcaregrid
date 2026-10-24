@@ -35,10 +35,10 @@
                                     @if ($scanner === 'integrity' && isset($coverage['verified']))
                                         <span class="font-mono text-muted">
                                             · {{ number_format((int) $coverage['verified']) }} {{ __('security.integrity_counts.verified') }},
-                                            {{ number_format((int) ($coverage['modified'] ?? 0)) }} {{ __('security.integrity_counts.modified') }},
-                                            {{ number_format((int) ($coverage['missing'] ?? 0)) }} {{ __('security.integrity_counts.missing') }},
-                                            {{ number_format((int) ($coverage['extra'] ?? 0)) }} {{ __('security.integrity_counts.extra') }},
-                                            {{ number_format((int) ($coverage['unavailable'] ?? 0)) }} {{ __('security.integrity_counts.unavailable') }}
+                                            {{ isset($coverage['modified']) ? number_format((int) $coverage['modified']) : '—' }} {{ __('security.integrity_counts.modified') }},
+                                            {{ isset($coverage['missing']) ? number_format((int) $coverage['missing']) : '—' }} {{ __('security.integrity_counts.missing') }},
+                                            {{ isset($coverage['extra']) ? number_format((int) $coverage['extra']) : '—' }} {{ __('security.integrity_counts.extra') }},
+                                            {{ isset($coverage['unavailable']) ? number_format((int) $coverage['unavailable']) : '—' }} {{ __('security.integrity_counts.unavailable') }}
                                         </span>
                                     @endif
                                 </span>
