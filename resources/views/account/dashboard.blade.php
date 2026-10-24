@@ -44,6 +44,10 @@
         </x-account.panel>
 
         <x-account.panel :title="__('account.dashboard.websites')" heading-id="dashboard-websites">
+            <x-slot:action>
+                <a href="{{ route('account.websites.index') }}" class="rounded-sm text-sm font-medium text-primary underline decoration-line-strong underline-offset-4 hover:decoration-primary">{{ __('account.dashboard.view_websites') }}</a>
+            </x-slot:action>
+
             <p class="text-2xl font-semibold tracking-[-0.01em] text-primary tabular-nums">{{ __('account.dashboard.connected_count', ['count' => $connectedCount]) }}</p>
             <p class="mt-2 text-sm text-muted">{{ trans_choice('account.dashboard.added_count', $websiteCount) }}</p>
         </x-account.panel>

@@ -8,7 +8,9 @@ use App\Checkout\StripeCheckoutGateway;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Subscription;
+use App\Models\Website;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Lang;
 use Tests\Fakes\FakeCheckoutGateway;
 use Tests\TestCase;
 
@@ -31,6 +33,33 @@ class CustomerAreaTest extends TestCase
             ->assertSee(__('account.dashboard.setup_text'))
             ->assertSee(route('account.websites.create'))
             ->assertDontSee('Demo data');
+    }
+
+    public function test_dashboard_always_links_to_the_customer_website_list_in_both_locales(): void
+    {
+        $customer = Customer::factory()->withUser()->create();
+        $user = $customer->user;
+        $this->actingAs($user);
+
+        foreach (['en', 'hu'] as $locale) {
+            $user->forceFill(['locale' => $locale])->save();
+
+            $this->get(route('account.dashboard'))
+                ->assertOk()
+                ->assertSee(route('account.websites.index'))
+                ->assertSee(Lang::get('account.dashboard.view_websites', [], $locale));
+        }
+
+        Website::factory()->for($customer)->create();
+
+        foreach (['en', 'hu'] as $locale) {
+            $user->forceFill(['locale' => $locale])->save();
+
+            $this->get(route('account.dashboard'))
+                ->assertOk()
+                ->assertSee(route('account.websites.index'))
+                ->assertSee(Lang::get('account.dashboard.view_websites', [], $locale));
+        }
     }
 
     public function test_dashboard_explains_a_pending_subscription_without_activating_it(): void

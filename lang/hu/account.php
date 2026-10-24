@@ -109,6 +109,7 @@ return [
         'no_subscription' => 'Még nincs előfizetése.',
         'view_plans' => 'Csomagok megtekintése',
         'view_subscription' => 'Előfizetés megtekintése',
+        'view_websites' => 'Weboldalak megtekintése',
     ],
 
     'subscription' => [
