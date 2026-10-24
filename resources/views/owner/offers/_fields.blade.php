@@ -2,7 +2,7 @@
 @php
     $offer ??= null;
     $amount ??= '';
-    $stamp = fn ($date) => $date?->format('Y-m-d\TH:i');
+    $stamp = fn ($date) => app(\App\Support\DisplayDateTime::class)->format($date, 'Y-m-d\TH:i');
 @endphp
 
 <div class="grid gap-4 md:grid-cols-2">

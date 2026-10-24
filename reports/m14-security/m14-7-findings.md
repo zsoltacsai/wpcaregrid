@@ -1,5 +1,33 @@
 # M14.7 Planning Findings and Residual Register
 
+## Final operational evidence reconciliation — 2026-10-24
+
+This addendum supersedes historical “no scan / M12 unknown” statements only
+for the exact accepted operation and evidence below. It does not erase the
+scope limits in the historical test reports.
+
+| Finding | Current evidence | Disposition |
+|---|---|---|
+| AS-16 / M147-F01 — operational scan | Owner-approved ordinary-site Integrity scan `01a16dfa-afed-735f-a4fd-2eafcd0a8a3d` completed on Website `01a16409-3537-7061-993d-a18fccd5b945`; Connector `01a16533-b4a5-7271-89f7-c032bae5b643`, 0.4.7; job 48 terminal `SCAN_COMPLETED`; 5,930 verified, 0 modified, 0 extra, 1 missing, 4 unavailable, 0 findings. | CLOSED for bounded Integrity execution only. Does not establish malware-free status, Malware scan, or complete filesystem coverage. |
+| M147-F02 — M12 gates | Owner-approved readback 40095400109 reported all six privacy gates false and staging identity matched; global incident auto-open and auto-backup remained true. | CLOSED for the accepted scan-time readback. The global settings were not changed. |
+| M147-F03 — Wordfence feed/index | Previously validated Wordfence v3 feed/index; Owner reported successful manual sync of 44,951 affected-software entries. No new feed download was needed. | CLOSED for the recorded valid feed/index evidence; do not infer a new feed fetch on this audit SHA. |
+| M147-F04 — side effects | Integrity result schema rejects Malware-only `SuspiciousFile` before the incident path; existing isolated test proves no finding/incident/backup effect on that invalid result. Scan record reported zero findings and Owner reported no incident/backup. Notification history was not archived; no notification-send call was found in the scan/incident/ingest/job-finish path. | CLOSED for the one bounded Integrity route under OQ-07. Historical notification delta remains UNKNOWN; no generalized or zero-delta claim. |
+| M147-F05 — browser / UI | Authenticated Operator security and website pages were inspected read-only; the scan appeared completed, then overview refreshed to Healthy and correct local time. A display gap hid missing/extra/unavailable integrity counts; current audit branch adds all counters and a regression test. | UI correction pending exact-head CI and protected staging deploy/smoke. |
+| M147-F06 — review independence | No separate qualified reviewer participated in this audit. The authoritative branch ruleset is enforced but requires zero approvals in the single-maintainer topology. | Explicit medium governance residual; do not claim independent review. External independent penetration test remains M17. |
+| M147-F07 — feed publication | PR #132's atomic publication correction and its regression/CI evidence remain in scope; current primary exact merge CI is green. | CLOSED for the documented bounded publication correctness scope. |
+| M147-F08 — independent penetration test | No external penetration test was performed. | M17 production-launch gate, not represented as complete. |
+| CI-REL-01 — historical test harness issue | Later atomic test-signal publication repair passed exact-head CI; current run 40101414072 passed all 30 jobs and the required MySQL concurrency step. | CLOSED as no current reproducible CI failure; historical failure remains preserved in older evidence. |
+
+Coverage path-level triage is incomplete because the sanitized persisted scan
+record contains aggregate counters only. The checker source distinguishes
+missing checksum-expected entries from unavailable checksum references, but
+the exact paths and per-entry causes for this historical scan cannot be
+reconstructed. This remains an explicit M15 coverage follow-up. The current
+audit UI patch exposes the aggregate counters and does not invent paths.
+
+The complete 11-row audit decision, M14/M15/M17 boundary and evidence links
+are recorded in [`M14 final audit`](../m14/m14-final-audit-2026-10-24.md).
+
 ## Recovery sprint disposition — 2026-10-19
 
 This section supersedes earlier recovery-candidate CI-REL-01 statements below; those entries preserve their historical status at the time they were written. PR #130 remains open and unmerged at `544333f0629c50ac829315698b4a51887563d124`. Exact-head run [39233009685](https://github.com/zsoltacsai/wpcaregrid/actions/runs/39233009685) passed all seven required jobs, including the Server MySQL process/concurrency gate (all nine required gate files passed). Connector WordPress MySQL and MariaDB each passed 210 tests / 1,828 assertions / 3 documented skips.

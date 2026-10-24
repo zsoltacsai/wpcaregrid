@@ -25,7 +25,7 @@
                     <li class="flex flex-wrap items-center justify-between gap-3 py-2.5">
                         <span>
                             <span class="text-primary">{{ __('backups.restore.scopes.'.$restore->scope->value.'.label') }}</span>
-                            <span class="font-mono text-xs text-muted">· {{ $restore->backup->created_at->translatedFormat('j M Y H:i') }}</span>
+                            <span class="font-mono text-xs text-muted">· @displayDateTime($restore->backup->created_at)</span>
                             @if ($restore->error_code)<span class="block text-xs text-danger-ink">{{ BackupText::error($restore->error_code) }}</span>@endif
                         </span>
                         <x-ui.status-badge :tone="$restore->status->tone()" variant="code">{{ $restore->status->label() }}</x-ui.status-badge>
@@ -52,7 +52,7 @@
             <tbody class="divide-y divide-line">
                 @forelse ($backups as $backup)
                     <tr>
-                        <td class="px-4 py-3 font-mono text-xs whitespace-nowrap">{{ $backup->created_at->translatedFormat('j M Y H:i') }}</td>
+                        <td class="px-4 py-3 font-mono text-xs whitespace-nowrap">@displayDateTime($backup->created_at)</td>
                         <td class="px-4 py-3 font-mono text-xs uppercase">{{ $backup->type->label() }}</td>
                         <td class="px-4 py-3">{{ $backup->reason->label() }}</td>
                         <td class="px-4 py-3 font-mono text-xs whitespace-nowrap">{{ BackupText::size($backup->total_size) }}</td>
@@ -61,7 +61,7 @@
                             @if (in_array($backup->status->value, ['failed', 'corrupt'], true))<span class="mt-1 block text-xs text-danger-ink">{{ BackupText::error($backup->error_code) }}</span>@endif
                         </td>
                         <td class="px-4 py-3 font-mono text-xs whitespace-nowrap">
-                            @if ($backup->status->value === 'expired'){{ $backup->expired_at?->translatedFormat('j M Y') }}@elseif ($backup->expires_at){{ $backup->expires_at->translatedFormat('j M Y') }}@else—@endif
+                            @if ($backup->status->value === 'expired'){{ app(\App\Support\DisplayDateTime::class)->date($backup->expired_at) }}@elseif ($backup->expires_at){{ app(\App\Support\DisplayDateTime::class)->date($backup->expires_at) }}@else—@endif
                         </td>
                         <td class="px-4 py-3 text-right">
                             @if ($backup->isRestorable() && $policy->restoreAllowed && $canBackup)
@@ -89,7 +89,7 @@
                         <span class="text-primary">{{ __('backups.events.'.$event->event) }}
                             @if (! empty($event->data['code']))<span class="block text-xs text-muted">{{ BackupText::error($event->data['code']) }}</span>@endif
                         </span>
-                        <span class="font-mono text-xs text-muted">{{ $event->created_at->translatedFormat('j M Y H:i') }}</span>
+                        <span class="font-mono text-xs text-muted">@displayDateTime($event->created_at)</span>
                     </li>
                 @endforeach
             </ul>

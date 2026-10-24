@@ -17,7 +17,7 @@
                 <dt class="text-muted">{{ __('owner.customers.fields.email') }}</dt><dd class="break-all text-primary">{{ $customer->email }}</dd>
                 <dt class="text-muted">{{ __('owner.customers.fields.type') }}</dt><dd>{{ $customer->customer_type ? __('owner.customers.types.'.$customer->customer_type) : '—' }}</dd>
                 <dt class="text-muted">{{ __('owner.customers.fields.login') }}</dt><dd>{{ $customer->user?->hasVerifiedEmail() ? __('owner.customers.login_active') : __('owner.customers.login_pending') }}</dd>
-                <dt class="text-muted">{{ __('owner.customers.fields.created') }}</dt><dd class="font-mono text-xs">{{ $customer->created_at->format('Y-m-d H:i') }}</dd>
+                <dt class="text-muted">{{ __('owner.customers.fields.created') }}</dt><dd class="font-mono text-xs">@displayDateTime($customer->created_at)</dd>
             </dl>
         </x-operator.section>
 
@@ -51,8 +51,8 @@
                 <dt class="text-muted">{{ __('owner.customers.vat.country') }}</dt><dd>{{ $latestVatValidation?->country_code ?? $billingIdentity->country_code }}</dd>
                 <dt class="text-muted">{{ __('owner.customers.vat.identifier') }}</dt><dd class="font-mono text-xs">{{ $maskedVatIdentifier }}</dd>
                 <dt class="text-muted">{{ __('owner.customers.vat.source') }}</dt><dd>{{ $latestVatValidation ? ($latestVatValidation->provider === 'eu_vies' ? __('owner.customers.vat.vies') : __('owner.customers.vat.local_check')) : '—' }}</dd>
-                <dt class="text-muted">{{ __('owner.customers.vat.last_check') }}</dt><dd>{{ $latestVatValidation?->checked_at?->format('Y-m-d H:i') ?? '—' }}</dd>
-                <dt class="text-muted">{{ __('owner.customers.vat.last_successful_check') }}</dt><dd>{{ $lastSuccessfulVatValidation?->checked_at?->format('Y-m-d H:i') ?? '—' }}</dd>
+                <dt class="text-muted">{{ __('owner.customers.vat.last_check') }}</dt><dd>{{ app(\App\Support\DisplayDateTime::class)->format($latestVatValidation?->checked_at) ?? '—' }}</dd>
+                <dt class="text-muted">{{ __('owner.customers.vat.last_successful_check') }}</dt><dd>{{ app(\App\Support\DisplayDateTime::class)->format($lastSuccessfulVatValidation?->checked_at) ?? '—' }}</dd>
             </dl>
 
             @if ($vatHistory->isNotEmpty())
@@ -61,7 +61,7 @@
                     <ul class="mt-2 divide-y divide-line text-xs">
                         @foreach ($vatHistory as $evidence)
                             @php $historyStatus = match ($evidence->status->value) { 'valid' => 'valid', 'invalid', 'malformed' => 'invalid', 'unavailable' => 'unavailable', default => 'pending_review' }; @endphp
-                            <li class="flex flex-wrap justify-between gap-2 py-2"><span>{{ $evidence->country_code }} · {{ $evidence->provider === 'eu_vies' ? __('owner.customers.vat.vies') : __('owner.customers.vat.local_check') }} · {{ __('owner.customers.vat.statuses.'.$historyStatus) }} · {{ \App\Tax\Vat\VatIdentifierMasker::mask($evidence->country_code, $evidence->vat_identifier) }}</span><time datetime="{{ $evidence->checked_at?->toIso8601String() }}">{{ $evidence->checked_at?->format('Y-m-d H:i') }}</time></li>
+                            <li class="flex flex-wrap justify-between gap-2 py-2"><span>{{ $evidence->country_code }} · {{ $evidence->provider === 'eu_vies' ? __('owner.customers.vat.vies') : __('owner.customers.vat.local_check') }} · {{ __('owner.customers.vat.statuses.'.$historyStatus) }} · {{ \App\Tax\Vat\VatIdentifierMasker::mask($evidence->country_code, $evidence->vat_identifier) }}</span><time datetime="{{ $evidence->checked_at?->toIso8601String() }}">@displayDateTime($evidence->checked_at)</time></li>
                         @endforeach
                     </ul>
                 </div>
@@ -82,7 +82,7 @@
                 <h3 class="text-xs font-semibold text-primary">{{ __('owner.customers.vat.review_history') }}</h3>
                 <ul class="mt-2 divide-y divide-line text-xs">
                     @foreach ($reviewCases as $review)
-                        <li class="py-2">{{ __('owner.customers.vat.review_statuses.'.$review->status->value) }} · {{ $review->created_at?->format('Y-m-d H:i') }} @if ($review->resolved_at) · {{ __('owner.customers.vat.resolved') }} @endif</li>
+                        <li class="py-2">{{ __('owner.customers.vat.review_statuses.'.$review->status->value) }} · @displayDateTime($review->created_at) @if ($review->resolved_at) · {{ __('owner.customers.vat.resolved') }} @endif</li>
                     @endforeach
                 </ul>
             </div>
@@ -116,7 +116,7 @@
                                     @endif
                                 </td>
                                 <td class="px-2 py-2"><x-ui.status-badge :status="$subscription->status" /></td>
-                                <td class="px-2 py-2 font-mono text-xs">{{ $subscription->nextBillingDate()?->format('Y-m-d') ?? ($subscription->cancel_at_period_end ? __('owner.customers.cancels') : '—') }}</td>
+                                <td class="px-2 py-2 font-mono text-xs">{{ app(\App\Support\DisplayDateTime::class)->date($subscription->nextBillingDate()) ?? ($subscription->cancel_at_period_end ? __('owner.customers.cancels') : '—') }}</td>
                                 <td class="px-2 py-2 text-xs">{{ $customer->websites->firstWhere('subscription_id', $subscription->id)?->host() ?? '—' }}</td>
                             </tr>
                             @if ($subscription->pending_change_status || $subscription->reconciliation_status !== 'pending')
@@ -131,7 +131,7 @@
                                             <br>
                                         @endif
                                         {{ __('owner.customers.reconciliation') }}: {{ $subscription->reconciliation_status }}
-                                        · {{ $subscription->last_reconciled_at?->format('Y-m-d H:i') ?? '—' }}
+                                        · {{ app(\App\Support\DisplayDateTime::class)->format($subscription->last_reconciled_at) ?? '—' }}
                                         @if ($subscription->reconciliation_error_category)
                                             · {{ $subscription->reconciliation_error_category }}
                                         @endif
@@ -150,7 +150,7 @@
                         <ul class="mt-2 divide-y divide-line text-xs">
                             @foreach ($subscription->billingInvoices as $invoice)
                                 <li class="flex flex-wrap items-center justify-between gap-2 py-2">
-                                    <span>{{ $invoice->stripe_created_at?->format('Y-m-d') ?? '—' }} · {{ __('account.subscription.invoice_statuses.'.$invoice->invoice_status, [], app()->getLocale()) }}</span>
+                                    <span>{{ app(\App\Support\DisplayDateTime::class)->date($invoice->stripe_created_at) ?? '—' }} · {{ __('account.subscription.invoice_statuses.'.$invoice->invoice_status, [], app()->getLocale()) }}</span>
                                     <span class="tabular-nums">{{ $invoice->money('amount_paid')?->format() ?? __('account.subscription.amount_unknown') }}</span>
                                 </li>
                             @endforeach
@@ -166,7 +166,7 @@
             <ul class="divide-y divide-line text-xs">
                 @foreach ($customer->billingEmailOutbox as $delivery)
                     <li class="flex flex-wrap items-center justify-between gap-2 py-2">
-                        <span>{{ $delivery->created_at?->format('Y-m-d H:i') }} · {{ $delivery->notification }}</span>
+                        <span>@displayDateTime($delivery->created_at) · {{ $delivery->notification }}</span>
                         <span>{{ $delivery->status }}{{ $delivery->failure_category ? ' · '.$delivery->failure_category : '' }}</span>
                     </li>
                 @endforeach
@@ -177,7 +177,7 @@
     @php
         $internal = $customer->subscriptions->filter(fn ($s) => $s->isInternal());
         $open = $internal->filter(fn ($s) => in_array($s->status, [\App\Billing\SubscriptionStatus::Pending, \App\Billing\SubscriptionStatus::Active], true));
-        $stamp = fn ($date) => $date?->format('Y-m-d\TH:i');
+        $stamp = fn ($date) => app(\App\Support\DisplayDateTime::class)->format($date, 'Y-m-d\TH:i');
     @endphp
     <x-operator.section :title="__('owner.probono.section')" id="customer-internal-plan" class="mt-4">
         <p class="mb-4 text-sm text-muted">{{ __('owner.probono.lead') }}</p>
@@ -190,8 +190,8 @@
                     <span class="text-xs text-muted">{{ $plan->product_type->label() }}</span>
                     <x-ui.status-badge :status="$plan->status" />
                     <span class="text-xs text-muted">
-                        {{ $plan->internal_starts_at ? __('owner.probono.starts_on', ['date' => $plan->internal_starts_at->format('Y-m-d')]) : __('owner.probono.since', ['date' => ($plan->activated_at ?? $plan->created_at)->format('Y-m-d')]) }},
-                        {{ $plan->internal_ends_at ? __('owner.probono.until', ['date' => $plan->internal_ends_at->format('Y-m-d')]) : __('owner.probono.no_end') }}
+                        {{ $plan->internal_starts_at ? __('owner.probono.starts_on', ['date' => app(\App\Support\DisplayDateTime::class)->date($plan->internal_starts_at)]) : __('owner.probono.since', ['date' => app(\App\Support\DisplayDateTime::class)->date($plan->activated_at ?? $plan->created_at)]) }},
+                        {{ $plan->internal_ends_at ? __('owner.probono.until', ['date' => app(\App\Support\DisplayDateTime::class)->date($plan->internal_ends_at)]) : __('owner.probono.no_end') }}
                     </span>
                     <span class="text-xs text-muted">· {{ __('owner.probono.website') }}: {{ $customer->websites->firstWhere('subscription_id', $plan->id)?->host() ?? __('owner.probono.no_website') }}</span>
                 </div>
@@ -201,7 +201,7 @@
                         @csrf
                         @method('PUT')
                         <x-form.field :name="'starts_at'" type="datetime-local" :label="__('owner.probono.starts_at')" :value="$stamp($plan->internal_starts_at)" :optional="true" />
-                        <x-form.field :name="'ends_at'" type="datetime-local" :label="__('owner.probono.ends_at')" :value="$stamp($plan->internal_ends_at)" :optional="true" :hint="__('owner.probono.dates_hint', ['zone' => config('app.timezone')])" />
+                        <x-form.field :name="'ends_at'" type="datetime-local" :label="__('owner.probono.ends_at')" :value="$stamp($plan->internal_ends_at)" :optional="true" :hint="__('owner.probono.dates_hint', ['zone' => app(\App\Support\DisplayDateTime::class)->timezone()->getName()])" />
                         <div class="md:col-span-2">
                             <label for="note-{{ $plan->uuid }}" class="block text-sm font-medium text-primary">{{ __('owner.probono.note') }} <span class="font-normal text-muted">({{ __('owner.optional') }})</span></label>
                             <textarea id="note-{{ $plan->uuid }}" name="note" rows="2" maxlength="1000" class="mt-2 block w-full rounded-sm border border-line-strong bg-surface px-4 py-3 text-[15px] text-ink">{{ $plan->internal_note }}</textarea>
@@ -233,7 +233,7 @@
                 <x-form.select name="product_type" :label="__('owner.probono.product')" :options="collect(\App\Pricing\ProductType::cases())->mapWithKeys(fn ($t) => [$t->value => $t->label()])->all()" :selected="$customer->websites->first()?->type?->value ?? 'wordpress'" />
                 <div></div>
                 <x-form.field name="starts_at" type="datetime-local" :label="__('owner.probono.starts_at')" :optional="true" />
-                <x-form.field name="ends_at" type="datetime-local" :label="__('owner.probono.ends_at')" :optional="true" :hint="__('owner.probono.dates_hint', ['zone' => config('app.timezone')])" />
+                <x-form.field name="ends_at" type="datetime-local" :label="__('owner.probono.ends_at')" :optional="true" :hint="__('owner.probono.dates_hint', ['zone' => app(\App\Support\DisplayDateTime::class)->timezone()->getName()])" />
                 <div class="md:col-span-2">
                     <label for="note-new" class="block text-sm font-medium text-primary">{{ __('owner.probono.note') }} <span class="font-normal text-muted">({{ __('owner.optional') }})</span></label>
                     <textarea id="note-new" name="note" rows="2" maxlength="1000" class="mt-2 block w-full rounded-sm border border-line-strong bg-surface px-4 py-3 text-[15px] text-ink">{{ old('note') }}</textarea>

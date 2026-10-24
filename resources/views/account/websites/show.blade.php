@@ -15,7 +15,7 @@
                     <x-ui.status-badge :tone="$presence->tone()">{{ $presence->label() }}</x-ui.status-badge>
                 </x-account.detail>
                 <x-account.detail :label="__('connector.account.last_seen')">
-                    @if ($connector?->last_seen_at)<span class="font-mono">{{ $connector->last_seen_at->translatedFormat('j M Y H:i') }}</span>@else{{ __('connector.account.never') }}@endif
+                    @if ($connector?->last_seen_at)<span class="font-mono">@displayDateTime($connector->last_seen_at)</span>@else{{ __('connector.account.never') }}@endif
                 </x-account.detail>
                 <x-account.detail :label="__('connector.account.version')">
                     @if ($connector?->connector_version)
@@ -60,7 +60,7 @@
                     <div class="mt-6 rounded-md border border-accent bg-accent-soft p-4">
                         <p class="text-xs font-semibold tracking-[0.12em] text-muted uppercase">{{ __('connector.account.code_label') }}</p>
                         <p class="mt-2 font-mono text-2xl font-medium tracking-[0.08em] text-primary select-all">{{ $pairingCode['code'] }}</p>
-                        <p class="mt-2 text-xs text-ink">{{ __('connector.account.code_note', ['time' => $pairingCode['expires_at']->translatedFormat('H:i')]) }}</p>
+                        <p class="mt-2 text-xs text-ink">{{ __('connector.account.code_note', ['time' => app(\App\Support\DisplayDateTime::class)->time($pairingCode['expires_at'])]) }}</p>
                     </div>
                 @endif
 
@@ -84,7 +84,7 @@
             @if ($website->health_status)
                 <div class="flex flex-wrap items-center justify-between gap-3">
                     <x-ui.status-badge :tone="$website->health_status->tone()">{{ $website->health_status->label() }}</x-ui.status-badge>
-                    <span class="font-mono text-xs text-muted">{{ __('connector.account.checked_at', ['time' => $website->health_checked_at->translatedFormat('j M Y H:i')]) }}</span>
+                    <span class="font-mono text-xs text-muted">{{ __('connector.account.checked_at', ['time' => app(\App\Support\DisplayDateTime::class)->format($website->health_checked_at)]) }}</span>
                 </div>
                 <ul class="mt-4 divide-y divide-line text-sm">
                     @foreach ($website->health_findings ?? [] as $finding)
@@ -184,7 +184,7 @@
                         <span class="min-w-0 [overflow-wrap:anywhere] text-primary">{{ __('connector.jobs.types.'.$job->type->value) }} @if ($job->result_code)<span class="font-mono text-xs text-muted">· {{ $job->result_code }}</span>@endif
                             @if ($job->type->isUpdate() && $job->backup?->status === \App\Backups\BackupStatus::Verified)<span class="mt-0.5 flex items-center gap-1 text-xs text-accent-ink"><x-ui.icon name="shield" class="size-3.5" />{{ __('backups.account.protected') }}</span>@endif
                         </span>
-                        <span class="row-start-2 font-mono text-xs text-muted sm:row-start-auto">{{ ($job->completed_at ?? $job->created_at)->translatedFormat('j M Y H:i') }}</span>
+                        <span class="row-start-2 font-mono text-xs text-muted sm:row-start-auto">@displayDateTime($job->completed_at ?? $job->created_at)</span>
                         <span class="row-span-2 sm:row-span-1"><x-ui.status-badge :tone="$tone" variant="code">{{ __('connector.jobs.statuses.'.$job->status->value) }}</x-ui.status-badge></span>
                     </li>
                 @endforeach

@@ -8,7 +8,7 @@
 
             @if ($subscription->pending_change_status)
                 <p class="mt-4 rounded-sm border border-line bg-canvas p-3 text-sm text-muted">
-                    {{ __('account.subscription.pending_change', ['plan' => app(\App\Pricing\PricingCatalog::class)->plan($subscription->product_type, \App\Pricing\PlanTier::from($subscription->pending_plan))->name, 'interval' => \App\Pricing\BillingInterval::from($subscription->pending_interval)->label(), 'date' => $subscription->pending_change_effective_at?->timezone(config('app.timezone'))->translatedFormat('j M Y') ?? __('account.subscription.not_available')]) }}
+                    {{ __('account.subscription.pending_change', ['plan' => app(\App\Pricing\PricingCatalog::class)->plan($subscription->product_type, \App\Pricing\PlanTier::from($subscription->pending_plan))->name, 'interval' => \App\Pricing\BillingInterval::from($subscription->pending_interval)->label(), 'date' => app(\App\Support\DisplayDateTime::class)->date($subscription->pending_change_effective_at, 'j M Y') ?? __('account.subscription.not_available')]) }}
                 </p>
             @endif
 

@@ -35,7 +35,7 @@
                 <ul class="divide-y divide-line text-sm">
                     @foreach ($invoices as $invoice)
                         <li class="flex flex-wrap items-center justify-between gap-2 py-3">
-                            <span>{{ $invoice->stripe_created_at?->translatedFormat('j M Y') ?? '—' }} · {{ __('account.subscription.invoice_statuses.'.$invoice->invoice_status) }}</span>
+                            <span>{{ app(\App\Support\DisplayDateTime::class)->localizedFormat($invoice->stripe_created_at, 'j M Y') ?? '—' }} · {{ __('account.subscription.invoice_statuses.'.$invoice->invoice_status) }}</span>
                             <span class="tabular-nums">{{ $invoice->money('amount_paid')?->format() ?? __('account.subscription.amount_unknown') }}</span>
                         </li>
                     @endforeach

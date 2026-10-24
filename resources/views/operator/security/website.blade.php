@@ -121,7 +121,7 @@
                                         @if ($finding->status_note)<span class="mt-1 block max-w-[160px] text-[11px] text-muted">{{ $finding->status_note }}</span>@endif
                                     </td>
                                     <td class="px-3 py-2 font-mono text-[11px] whitespace-nowrap text-muted">
-                                        {{ $finding->first_seen_at->format('Y-m-d') }} → {{ $finding->last_seen_at->format('Y-m-d') }}
+                                        @displayDateTime($finding->first_seen_at, 'Y-m-d') → @displayDateTime($finding->last_seen_at, 'Y-m-d')
                                         <span class="block">×{{ $finding->occurrence_count }}</span>
                                     </td>
                                     <td class="px-3 py-2">
@@ -190,7 +190,7 @@
                     @foreach ($incidents as $incident)
                         <li class="flex flex-wrap items-center justify-between gap-2 py-2">
                             <a href="{{ route('operator.websites.security.incidents.show', [$website, $incident]) }}" class="font-medium text-primary hover:underline">{{ $incident->title }}</a>
-                            <span class="flex items-center gap-2"><x-ui.status-badge :tone="$incident->status->tone()">{{ $incident->status->label() }}</x-ui.status-badge><span class="font-mono text-xs text-muted">{{ $incident->created_at->format('Y-m-d H:i') }}</span></span>
+                            <span class="flex items-center gap-2"><x-ui.status-badge :tone="$incident->status->tone()">{{ $incident->status->label() }}</x-ui.status-badge><span class="font-mono text-xs text-muted">@displayDateTime($incident->created_at)</span></span>
                         </li>
                     @endforeach
                 </ul>
@@ -221,7 +221,7 @@
                     @foreach ($quarantines as $quarantine)
                         <li class="flex flex-wrap items-center justify-between gap-2 py-2">
                             <span class="min-w-0"><span class="block font-mono text-[11px] break-all text-primary">{{ $quarantine->original_path }}</span>
-                                <span class="block font-mono text-[11px] text-muted">sha256 {{ substr($quarantine->sha256, 0, 16) }}… · {{ $quarantine->quarantined_at->format('Y-m-d H:i') }}</span></span>
+                                <span class="block font-mono text-[11px] text-muted">sha256 {{ substr($quarantine->sha256, 0, 16) }}… · @displayDateTime($quarantine->quarantined_at)</span></span>
                             @if ($quarantine->status === 'quarantined')
                                 @can('operator.security.remediate')
                                     <form method="POST" action="{{ route('operator.websites.security.quarantines.restore', [$website, $quarantine]) }}" class="flex items-center gap-2">

@@ -16,6 +16,9 @@ return [
     'tested_php_branches' => ['8.2', '8.3', '8.4', '8.5'],
     'declared_minimum_wordpress' => '6.4',
     'tested_wordpress_branches' => ['6.8', '7.1'],
-    'tested_mysql_branches' => ['8.4'],
+    // The Connector runs against current WordPress core, whose legacy MySQL
+    // floor is 5.5.5. Backup/restore still require an exact tested branch.
+    'declared_minimum_mysql' => '5.5.5',
+    'tested_mysql_branches' => ['5.7', '8.0', '8.4'],
     'tested_mariadb_branches' => ['10.11'],
 ];

@@ -60,7 +60,9 @@ def validate_workflow_controls(workflow):
     assert "database: [sqlite, mysql, mariadb]" in workflow, "server matrix shrank"
     assert "php: ['8.2', '8.3', '8.4', '8.5']" in workflow, "customer PHP compatibility matrix incomplete"
     assert "wordpress: ['6.8', '7.1']" in workflow, "Connector WordPress compatibility fixtures incomplete"
-    assert "database: [mysql, mariadb]" in workflow, "Connector SQL engine matrix incomplete"
+    assert "database: [mysql57, mysql80, mysql, mariadb]" in workflow, "Connector SQL engine matrix incomplete"
+    for fixture in ("'mysql:5.7'", "'mysql:8.0'", "'mysql:8.4'", "'mariadb:10.11'"):
+        assert fixture in workflow, f"Connector SQL fixture image missing: {fixture}"
     for legacy_context in (
         "Connector tests in WordPress (PHP 8.4, sqlite)",
         "Connector tests in WordPress (PHP 8.4, mysql)",
@@ -70,7 +72,8 @@ def validate_workflow_controls(workflow):
     for expected_fact in (
         'WP_CAREGRID_EXPECTED_PHP_BRANCH: ${{ matrix.php }}',
         'WP_CAREGRID_EXPECTED_WORDPRESS_BRANCH: ${{ matrix.wordpress }}',
-        'WP_CAREGRID_EXPECTED_DATABASE: ${{ matrix.database }}',
+        "WP_CAREGRID_EXPECTED_DATABASE: ${{ (matrix.database == 'mysql57' || matrix.database == 'mysql80') && 'mysql' || matrix.database }}",
+        "WP_CAREGRID_EXPECTED_DATABASE_BRANCH: ${{ matrix.database == 'mysql57' && '5.7' || matrix.database == 'mysql80' && '8.0' || matrix.database == 'mysql' && '8.4' || matrix.database == 'mariadb' && '10.11' || 'sqlite' }}",
         'composer update phpunit/phpunit --with',
         'composer update johnpbloch/wordpress-core --with',
     ):

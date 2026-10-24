@@ -4,7 +4,7 @@ This policy describes the PHP runtime on the **customer-hosted WordPress site** 
 
 ## Evidence and promotion rule
 
-The Connector CI matrix in this change runs the real WordPress integration suite across PHP 8.2, 8.3, 8.4 and 8.5; WordPress 6.8 and 7.1; MySQL 8.4 and MariaDB 10.11. Each lane exercises inventory and environment-fact collection, authenticated polling and job/result handling, security scanning, file and database backup/restore paths, and their filesystem, credential, tenant and authorization tests. The lane asserts the actual PHP, WordPress and database versions so a misconfigured runner cannot produce a false green result. These branches stay unpromoted in the server capability policy until the exact-head matrix has passed.
+The Connector CI matrix runs the real WordPress integration suite across PHP 8.2, 8.3, 8.4 and 8.5; WordPress 6.8 and 7.1; and the explicitly listed MySQL and MariaDB branches in `.github/workflows/ci.yml`. Each lane exercises inventory and environment-fact collection, authenticated polling and job/result handling, security scanning, file and database backup/restore paths, and their filesystem, credential, tenant and authorization tests. The lane asserts the actual PHP, WordPress and database versions so a misconfigured runner cannot produce a false green result. A branch remains unpromoted in the server capability policy until its exact-head matrix passes.
 
 CI evidence is necessary but not sufficient to enable a runtime/database branch in `config/compatibility.php`: add the branch only after the relevant exact-head CI matrix passes. Keep unknown branches as `UNKNOWN`, especially for backup, restore, remediation and other high-impact operations. Do not infer support from a neighboring PHP minor or from Laravel server tests.
 
@@ -12,7 +12,9 @@ The connector test harness selects PHPUnit versions that can run on each PHP bra
 
 ## Operation-specific support
 
-Runtime and database facts are evaluated separately for each capability. Read-only inventory or security scanning may be supported while database backup/restore is not. Database backup requires a known MySQL/MariaDB engine and a tested major/minor branch, `mysqli`, and the normal capability, storage and authorization checks. A passing PHP result alone never implies database backup or restore support.
+Runtime and database facts are evaluated separately for each capability. Read-only inventory or security scanning may be supported while database backup/restore is not. WordPress upstream documents MySQL 5.5.5+ as its legacy minimum for current releases and recommends MySQL 8.0+ or MariaDB 10.11+. That core minimum does not certify Connector behavior or authorize backups. Versions below MySQL 5.5.5 are blocked; versions at or above that floor still require an exact tested Connector branch for database backup/restore. The tested MySQL branches are 5.7, 8.0 and 8.4; other branches remain `UNKNOWN`. MySQL 5.7 and 8.0 are end-of-life upstream, so operators should plan upgrades even where the Connector tests pass. Compatibility testing does not mean the database vendor still provides security updates. Database backup also requires `mysqli` and the normal capability, storage and authorization checks. A passing PHP result alone never implies database backup or restore support.
+
+Sources: [WordPress requirements](https://wordpress.org/about/requirements/), [MySQL 5.7 release notes](https://dev.mysql.com/doc/relnotes/mysql/5.7/en/), and [MySQL 8.0 release notes](https://dev.mysql.com/doc/relnotes/mysql/8.0/en/).
 
 ## PHP 8.1 legacy policy
 
@@ -20,4 +22,4 @@ PHP 8.1 is an optional legacy-recognition branch only. It is end-of-life upstrea
 
 ## Extending the matrix
 
-To add a PHP, WordPress, MySQL or MariaDB branch, extend the GitHub Actions matrix and its exact-runtime assertions, run the full Connector integration suite for the relevant combinations, inspect each job result, then update the matching tested branch in `config/compatibility.php` in a follow-up change. Unsupported or unavailable fixture combinations remain untested; no production capability may be inferred for them.
+To add a PHP, WordPress, MySQL or MariaDB branch, extend the GitHub Actions matrix and its exact-runtime assertions, run the full Connector integration suite for the relevant combinations, inspect each job result, then update the matching tested branch in `config/compatibility.php` only after those fixtures pass. Unsupported or unavailable fixture combinations remain untested; no production capability may be inferred for them. The Laravel SaaS server database matrix is separate and is not evidence for customer-hosted Connector databases.

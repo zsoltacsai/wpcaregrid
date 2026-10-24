@@ -11,7 +11,7 @@
                 $fields = $event->data['fields'] ?? null;
             @endphp
             <li class="flex flex-col gap-0.5 py-2 sm:flex-row sm:items-baseline sm:gap-3">
-                <span class="shrink-0 font-mono text-xs text-muted">{{ $event->created_at->format('Y-m-d H:i') }}</span>
+                <span class="shrink-0 font-mono text-xs text-muted">@displayDateTime($event->created_at)</span>
                 <span class="min-w-0 flex-1 text-primary">
                     {{ __($key) !== $key ? __($key) : $event->event }}
                     <span class="font-mono text-[11px] break-all text-muted">{{ $event->subject_key }}</span>

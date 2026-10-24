@@ -18,7 +18,7 @@
             <tbody class="divide-y divide-line">
                 @foreach ($scans as $scan)
                     <tr class="align-top">
-                        <td class="px-4 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $scan->created_at->format('Y-m-d H:i') }}</td>
+                        <td class="px-4 py-2 font-mono text-xs whitespace-nowrap text-muted">@displayDateTime($scan->created_at)</td>
                         @if ($showWebsite)<td class="px-4 py-2"><a href="{{ route('operator.websites.security', $scan->website) }}" class="text-primary hover:underline">{{ $scan->website->host() }}</a></td>@endif
                         <td class="px-4 py-2 text-xs">{{ $scan->type->label() }}</td>
                         <td class="px-4 py-2">
@@ -32,7 +32,15 @@
                                     <span @class(['font-medium', 'text-danger-ink' => ($coverage['status'] ?? null) === 'failed', 'text-warning-ink' => in_array($coverage['status'] ?? null, ['partial', 'unavailable'], true)])>{{ $coverage ? __('security.coverage.'.$coverage['status']) : '—' }}</span>
                                     @if (isset($coverage['reason']))<span class="text-muted">({{ __('security.unavailable_reasons.'.$coverage['reason']) }})</span>@endif
                                     @if (isset($coverage['files_scanned']))<span class="font-mono text-muted">· {{ number_format($coverage['files_scanned']) }} files</span>@endif
-                                    @if (isset($coverage['verified']))<span class="font-mono text-muted">· {{ number_format($coverage['verified']) }} verified, {{ $coverage['modified'] ?? 0 }} modified</span>@endif
+                                    @if ($scanner === 'integrity' && isset($coverage['verified']))
+                                        <span class="font-mono text-muted">
+                                            · {{ number_format((int) $coverage['verified']) }} {{ __('security.integrity_counts.verified') }},
+                                            {{ isset($coverage['modified']) ? number_format((int) $coverage['modified']) : '—' }} {{ __('security.integrity_counts.modified') }},
+                                            {{ isset($coverage['missing']) ? number_format((int) $coverage['missing']) : '—' }} {{ __('security.integrity_counts.missing') }},
+                                            {{ isset($coverage['extra']) ? number_format((int) $coverage['extra']) : '—' }} {{ __('security.integrity_counts.extra') }},
+                                            {{ isset($coverage['unavailable']) ? number_format((int) $coverage['unavailable']) : '—' }} {{ __('security.integrity_counts.unavailable') }}
+                                        </span>
+                                    @endif
                                 </span>
                             @endforeach
                         </td>

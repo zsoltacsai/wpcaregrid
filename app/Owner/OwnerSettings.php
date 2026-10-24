@@ -283,8 +283,8 @@ final class OwnerSettings
         $localization = $this->group('localization');
         config([
             'app.name' => $general['general.business_name'],
-            'app.timezone' => $general['general.timezone'],
             'app.locale' => $localization['localization.default_language'],
+            'owner_settings.general.timezone' => $general['general.timezone'],
             'owner_settings.general.support_email' => $general['general.support_email'],
             'owner_settings.general.country' => $general['general.country'],
             'owner_settings.pricing.enabled_currencies' => $this->get('pricing.enabled_currencies'),
@@ -303,7 +303,6 @@ final class OwnerSettings
             'platform_backup.s3.bucket' => $this->get('backups.primary.bucket'),
             'platform_backup.s3.path_style' => (bool) $this->get('backups.primary.path_style'),
         ]);
-        date_default_timezone_set((string) $general['general.timezone']);
         app()->setLocale((string) $localization['localization.default_language']);
 
         if (! $this->hasStored('mail.mode')) {
@@ -430,7 +429,7 @@ final class OwnerSettings
             'backups.primary.region' => (string) config('filesystems.disks.platform_backups.region', 'us-east-1'),
             'backups.primary.bucket' => config('filesystems.disks.platform_backups.bucket'),
             'backups.primary.path_style' => (bool) config('filesystems.disks.platform_backups.use_path_style_endpoint', false),
-            'general.timezone' => config('app.timezone', 'UTC'),
+            'general.timezone' => config('owner_settings.general.timezone', config('app.timezone', 'UTC')),
             'general.country' => 'HU',
             'localization.default_language' => in_array(config('app.locale'), ['hu', 'en'], true) ? config('app.locale') : 'en',
             'mail.mode' => $this->loopbackHost(config('mail.mailers.smtp.host'))

@@ -27,10 +27,10 @@
                 <x-ui.status-badge tone="positive">{{ __('backups.statuses.verified') }}</x-ui.status-badge>
             </x-account.detail>
             <x-account.detail :label="__('backups.account.type')">{{ $verified->type->label() }}</x-account.detail>
-            <x-account.detail :label="__('backups.account.created')"><span class="font-mono">{{ $verified->created_at->translatedFormat('j M Y H:i') }}</span></x-account.detail>
+            <x-account.detail :label="__('backups.account.created')"><span class="font-mono">@displayDateTime($verified->created_at)</span></x-account.detail>
             <x-account.detail :label="__('backups.account.size')"><span class="font-mono">{{ BackupText::size($verified->total_size) }}</span></x-account.detail>
             <x-account.detail :label="__('backups.account.expires')">
-                @if ($verified->expires_at)<span class="font-mono">{{ $verified->expires_at->translatedFormat('j M Y') }}</span>@elseif ($policy->retentionCount){{ __('backups.account.expires_by_count') }}@endif
+                @if ($verified->expires_at)<span class="font-mono">{{ app(\App\Support\DisplayDateTime::class)->date($verified->expires_at) }}</span>@elseif ($policy->retentionCount){{ __('backups.account.expires_by_count') }}@endif
             </x-account.detail>
             <x-account.detail :label="__('backups.account.frequency')">{{ $policy->frequency ? __('backups.account.frequencies.'.$policy->frequency) : '' }}</x-account.detail>
         </dl>

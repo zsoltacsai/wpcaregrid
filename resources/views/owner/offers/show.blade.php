@@ -20,7 +20,7 @@
                 <dt class="text-muted">{{ __('owner.offers.fields.customer') }}</dt><dd><a class="text-primary hover:underline" href="{{ route('owner.customers.show', $offer->customer) }}">{{ $offer->customer->fullName() }}</a> · <span class="break-all">{{ $offer->customer->email }}</span></dd>
                 <dt class="text-muted">{{ __('owner.offers.fields.website') }}</dt><dd><a class="text-primary hover:underline" href="{{ route('owner.websites.show', $offer->website) }}">{{ $offer->website->host() }}</a></dd>
                 <dt class="text-muted">{{ __('owner.offers.fields.price') }}</dt><dd class="tabular-nums">{{ $offer->money()->format() }} <span class="font-mono text-xs text-muted">{{ $offer->currency }}</span></dd>
-                <dt class="text-muted">{{ __('owner.offers.fields.valid_until') }}</dt><dd class="font-mono text-xs">{{ $offer->valid_until->format('Y-m-d H:i') }} {{ $timezone }}</dd>
+                <dt class="text-muted">{{ __('owner.offers.fields.valid_until') }}</dt><dd class="font-mono text-xs">@displayDateTime($offer->valid_until)</dd>
                 <dt class="text-muted">{{ __('owner.offers.fields.created_by') }}</dt><dd class="text-xs">{{ $offer->createdBy?->email ?? '—' }}</dd>
             </dl>
         </x-operator.section>
@@ -29,7 +29,7 @@
             <dl class="grid grid-cols-[minmax(0,130px)_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
                 @foreach (['created_at' => 'created', 'offered_at' => 'offered', 'accepted_at' => 'accepted', 'declined_at' => 'declined', 'expired_at' => 'expired', 'paid_at' => 'paid', 'cancelled_at' => 'cancelled', 'completed_at' => 'completed'] as $field => $label)
                     @if ($offer->{$field})
-                        <dt class="text-muted">{{ __('owner.offers.timeline.'.$label) }}</dt><dd class="font-mono text-xs">{{ $offer->{$field}->format('Y-m-d H:i') }}</dd>
+                        <dt class="text-muted">{{ __('owner.offers.timeline.'.$label) }}</dt><dd class="font-mono text-xs">@displayDateTime($offer->{$field})</dd>
                     @endif
                 @endforeach
                 @if ($offer->paid_amount !== null)

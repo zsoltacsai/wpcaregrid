@@ -33,7 +33,7 @@
                 <dt class="text-muted">{{ __('owner.websites.columns.connector') }}</dt>
                 <dd><x-ui.status-badge :tone="$connector->tone()">{{ $connector->label() }}</x-ui.status-badge> <span class="font-mono text-xs text-muted">{{ $website->activeConnector?->connector_version }}</span></dd>
                 <dt class="text-muted">{{ __('owner.websites.columns.last_seen') }}</dt>
-                <dd class="font-mono text-xs">{{ ($website->activeConnector?->last_seen_at ?? $website->last_seen_at)?->format('Y-m-d H:i') ?? __('owner.never') }}</dd>
+                <dd class="font-mono text-xs">{{ app(\App\Support\DisplayDateTime::class)->format($website->activeConnector?->last_seen_at ?? $website->last_seen_at) ?? __('owner.never') }}</dd>
                 <dt class="text-muted">{{ __('owner.websites.wordpress') }}</dt>
                 <dd class="font-mono text-xs">{{ $website->wordpress_version ?? '—' }} · PHP {{ $website->php_version ?? '—' }}</dd>
                 <dt class="text-muted">{{ __('owner.websites.columns.updates') }}</dt>
@@ -49,7 +49,7 @@
                 <div class="mt-4 rounded-md border border-warning/40 bg-surface p-4" role="status">
                     <p class="text-sm font-semibold">{{ __('owner.websites.pairing_code_once') }}</p>
                     <p class="mt-2 font-mono text-lg tracking-wider" data-testid="pairing-code">{{ $pairingCode['code'] }}</p>
-                    <p class="mt-1 text-xs text-muted">{{ __('owner.websites.pairing_code_expires', ['time' => $pairingCode['expires_at']->format('Y-m-d H:i:s T')]) }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ __('owner.websites.pairing_code_expires', ['time' => app(\App\Support\DisplayDateTime::class)->format($pairingCode['expires_at'], 'Y-m-d H:i:s T')]) }}</p>
                 </div>
             @endif
             <div class="mt-4 flex flex-wrap gap-2">
@@ -80,7 +80,7 @@
                 <ul class="mt-2 divide-y divide-line text-sm">
                     @foreach ($backups as $backup)
                         <li class="flex flex-wrap justify-between gap-2 py-1.5">
-                            <span class="font-mono text-xs text-muted">{{ $backup->created_at->format('Y-m-d H:i') }} · {{ $backup->type->value }}</span>
+                            <span class="font-mono text-xs text-muted">@displayDateTime($backup->created_at) · {{ $backup->type->value }}</span>
                             <x-ui.status-badge :tone="\App\Operator\BackupState::fromStatus($backup->status)->tone()" variant="code">{{ $backup->status->value }}</x-ui.status-badge>
                         </li>
                     @endforeach

@@ -200,8 +200,8 @@
 
     @if ($entry)
         <p class="mt-4 font-mono text-xs text-muted">
-            @if ($entry->published_at){{ __('owner.content.published_at', ['at' => $entry->published_at->format('Y-m-d H:i')]) }}@endif
-            @if ($entry->draft_updated_at) · {{ __('owner.content.draft_at', ['at' => $entry->draft_updated_at->format('Y-m-d H:i')]) }}@endif
+            @if ($entry->published_at){{ __('owner.content.published_at', ['at' => app(\App\Support\DisplayDateTime::class)->format($entry->published_at)]) }}@endif
+            @if ($entry->draft_updated_at) · {{ __('owner.content.draft_at', ['at' => app(\App\Support\DisplayDateTime::class)->format($entry->draft_updated_at)]) }}@endif
         </p>
     @endif
 </x-layouts.owner>

@@ -56,12 +56,12 @@
         <aside class="grid gap-3">
             <x-operator.section :title="__('backups.restore.backup')">
                 <dl class="grid gap-3 text-sm">
-                    <x-account.detail :label="__('operator.backups.created')"><span class="font-mono">{{ $backup->created_at->format('Y-m-d H:i') }}</span></x-account.detail>
+                    <x-account.detail :label="__('operator.backups.created')"><span class="font-mono">@displayDateTime($backup->created_at)</span></x-account.detail>
                     <x-account.detail :label="__('operator.backups.type')">{{ $backup->type->label() }}</x-account.detail>
                     <x-account.detail :label="__('operator.backups.reason')">{{ $backup->reason->label() }}</x-account.detail>
                     <x-account.detail :label="__('operator.backups.size')"><span class="font-mono">{{ BackupText::size($backup->total_size) }}</span></x-account.detail>
                     <x-account.detail :label="__('operator.backups.status')"><x-ui.status-badge :tone="$backup->status->tone()">{{ $backup->status->label() }}</x-ui.status-badge></x-account.detail>
-                    <x-account.detail :label="__('operator.backups.verified')">@if ($backup->verified_at)<span class="font-mono">{{ $backup->verified_at->format('Y-m-d H:i') }}</span>@endif</x-account.detail>
+                    <x-account.detail :label="__('operator.backups.verified')">@if ($backup->verified_at)<span class="font-mono">@displayDateTime($backup->verified_at)</span>@endif</x-account.detail>
                 </dl>
             </x-operator.section>
             <x-account.notice>{{ __('backups.restore.safety') }}</x-account.notice>

@@ -19,7 +19,7 @@
 <x-account.panel :title="__('security.customer.title')" heading-id="security-title" {{ $attributes }}>
     <div class="flex flex-wrap items-center justify-between gap-3">
         <x-ui.status-badge :tone="$tone">{{ __('security.states.'.$state) }}</x-ui.status-badge>
-        <span class="font-mono text-xs text-muted">{{ __('security.customer.last_scan') }}: {{ $website->security_scanned_at?->translatedFormat('j M Y H:i') ?? __('security.customer.never') }}</span>
+        <span class="font-mono text-xs text-muted">{{ __('security.customer.last_scan') }}: {{ app(\App\Support\DisplayDateTime::class)->format($website->security_scanned_at) ?? __('security.customer.never') }}</span>
     </div>
     <p class="mt-3 text-sm text-ink">{{ $website->security_scanned_at === null && $state === 'unknown' ? __('security.customer.not_scanned') : __('security.customer.states.'.$state) }}</p>
 

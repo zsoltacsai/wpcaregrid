@@ -1,5 +1,32 @@
 # M14.3 Initial Support Matrix (Evidence-Gated)
 
+## Current CI-supported fixture envelope — 2026-10-24
+
+The older entries below are planning-time snapshots and are superseded only
+for exact versions exercised by the current primary workflow. Exact merge CI
+[40101414072](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40101414072)
+completed successfully with 30/30 jobs. Its Connector matrix is defined in
+`.github/workflows/ci.yml` and executes real WordPress test environments for:
+
+| Dimension | Executed branches | Claim boundary |
+|---|---|---|
+| Customer Connector PHP | 8.2, 8.3, 8.4, 8.5 | Tested in the current job matrix. PHP 8.1 remains optional legacy only and is not in this tested support claim. |
+| WordPress | 6.8, 7.1 | These exact fixture branches are exercised; other versions are not inferred from the two points. |
+| MySQL | 5.7, 8.0, 8.4 | MySQL 5.0–5.6 and other untested branches are not claimed. Per the Owner's support instruction, DB versions below MySQL 5 are unsupported; this does not lower the tested 5.7 floor. |
+| MariaDB | 10.11 | No broader MariaDB range is inferred. |
+| Laravel application PHP | 8.4 | This is a separate server-runtime dimension and must not be confused with customer-host Connector PHP. |
+
+CI exercises inventory/polling, environment and compatibility reporting,
+Integrity/Malware scanner contracts, backup/database capabilities, result
+ingestion and security boundaries represented by the repository's real
+WordPress tests. It does not prove every operation succeeds on every
+third-party host or every patch-level release. Restore/destructive behavior
+still depends on fresh operation-specific facts and safety preflights.
+Unknown or untested combinations stay `UNKNOWN`/blocked for high-risk
+operations. Add a new supported branch only after adding the corresponding
+fixture to this matrix and observing that relevant CI fixture pass. No live
+site is being modified by this support classification.
+
 This is an engineering target for fixtures, not a public compatibility promise. Numeric support ranges remain `TBD_FROM_FIXTURES` where repository evidence is incomplete.
 
 | Dimension | Source evidence | Initial classification rule | Evidence still required |
