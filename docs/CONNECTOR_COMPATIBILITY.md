@@ -12,7 +12,9 @@ The connector test harness selects PHPUnit versions that can run on each PHP bra
 
 ## Operation-specific support
 
-Runtime and database facts are evaluated separately for each capability. Read-only inventory or security scanning may be supported while database backup/restore is not. WordPress upstream documents MySQL 5.5.5+ as its legacy minimum for current releases and recommends MySQL 8.0+ or MariaDB 10.11+. That core minimum does not certify Connector behavior or authorize backups. MySQL versions below 5.0 are unsupported; MySQL 5.5.5+ is not automatically supported for every Connector operation. Database backup requires a known engine and an exact tested major/minor branch, `mysqli`, and the normal capability, storage and authorization checks. EOL databases should be upgraded; test evidence is not a promise of security maintenance. A passing PHP result alone never implies database backup or restore support.
+Runtime and database facts are evaluated separately for each capability. Read-only inventory or security scanning may be supported while database backup/restore is not. WordPress upstream documents MySQL 5.5.5+ as its legacy minimum for current releases and recommends MySQL 8.0+ or MariaDB 10.11+. That core minimum does not certify Connector behavior or authorize backups. Versions below MySQL 5.5.5 are blocked; versions at or above that floor still require an exact tested Connector branch for database backup/restore. The tested MySQL branches are 5.7, 8.0 and 8.4; other branches remain `UNKNOWN`. MySQL 5.7 and 8.0 are end-of-life upstream, so operators should plan upgrades even where the Connector tests pass. Compatibility testing does not mean the database vendor still provides security updates. Database backup also requires `mysqli` and the normal capability, storage and authorization checks. A passing PHP result alone never implies database backup or restore support.
+
+Sources: [WordPress requirements](https://wordpress.org/about/requirements/), [MySQL 5.7 release notes](https://dev.mysql.com/doc/relnotes/mysql/5.7/en/), and [MySQL 8.0 release notes](https://dev.mysql.com/doc/relnotes/mysql/8.0/en/).
 
 ## PHP 8.1 legacy policy
 

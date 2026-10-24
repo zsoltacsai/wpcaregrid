@@ -218,6 +218,15 @@ final class CapabilityEvaluator
         }
 
         $engine = $db['engine'];
+        if ($engine === 'mysql') {
+            if (! preg_match('/^(\\d+\\.\\d+\\.\\d+)(?:[-+].*)?$/', $db['version'], $versionMatch)) {
+                return $this->result(CapabilityStatus::Unknown, ReasonCode::DatabaseUnknown);
+            }
+            if (version_compare($versionMatch[1], (string) config('compatibility.declared_minimum_mysql'), '<')) {
+                return $this->result(CapabilityStatus::Block, ReasonCode::DatabaseVersionUnsupported);
+            }
+        }
+
         $testedBranches = (array) config('compatibility.tested_'.$engine.'_branches', []);
         if (! $this->isTestedBranch($db['version'], $testedBranches)) {
             return $this->result(CapabilityStatus::Unknown, ReasonCode::DatabaseUnknown);
