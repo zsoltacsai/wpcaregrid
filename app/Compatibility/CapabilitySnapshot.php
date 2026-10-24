@@ -43,6 +43,7 @@ class CapabilitySnapshot extends Model
     {
         return $this->checked_at !== null
             && $this->checked_at->greaterThanOrEqualTo(now()->subSeconds($seconds ?? (int) config('compatibility.dynamic_ttl_seconds')))
+            && $this->checked_at->lessThanOrEqualTo(now())
             && $this->policy_version === config('compatibility.policy_version')
             && $this->evaluator_version === config('compatibility.evaluator_version');
     }

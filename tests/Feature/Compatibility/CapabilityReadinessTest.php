@@ -7,6 +7,7 @@ use App\Compatibility\CapabilityEvaluator;
 use App\Compatibility\CapabilityReadiness;
 use App\Compatibility\CapabilitySnapshotStore;
 use App\Connector\ConnectorError;
+use App\Connector\InventoryIngest;
 use App\Connector\JobQueue;
 use App\Connector\JobType;
 use App\Models\User;
@@ -113,6 +114,52 @@ final class CapabilityReadinessTest extends TestCase
         }
 
         $this->assertSame($before, $website->jobs()->count());
+    }
+
+    public function test_delayed_inventory_does_not_refresh_compatibility_readiness(): void
+    {
+        $site = $this->pairedWebsite();
+        $website = $site['website'];
+        $collectedAt = now()->subSeconds(config('compatibility.dynamic_ttl_seconds') + 1);
+        $payload = $this->inventoryPayload();
+        $payload['collected_at'] = $collectedAt->toIso8601String();
+        app(InventoryIngest::class)->store($website->activeConnector, $payload);
+
+        $snapshot = $website->fresh()->capabilitySnapshot;
+        $this->assertSame($collectedAt->timestamp, $snapshot->checked_at->timestamp);
+        $this->assertFalse($snapshot->isFresh());
+
+        $before = $website->jobs()->count();
+        try {
+            app(JobQueue::class)->queue($website->fresh(), JobType::UpdatePlugin, ['plugin' => 'akismet/akismet.php']);
+            $this->fail('A delayed inventory refreshed readiness for a high-impact action.');
+        } catch (ConnectorError $error) {
+            $this->assertSame('JOB_NOT_ALLOWED', $error->errorCode);
+        }
+
+        $this->assertSame($before, $website->jobs()->count());
+    }
+
+    public function test_missing_or_future_inventory_timestamp_cannot_refresh_compatibility_readiness(): void
+    {
+        $site = $this->pairedWebsite();
+        $website = $site['website'];
+        $connector = $website->activeConnector;
+
+        foreach ([null, now()->addDay()->toIso8601String()] as $collectedAt) {
+            $payload = $this->inventoryPayload();
+            if ($collectedAt === null) {
+                unset($payload['collected_at']);
+            } else {
+                $payload['collected_at'] = $collectedAt;
+            }
+
+            app(InventoryIngest::class)->store($connector->fresh(), $payload);
+
+            $snapshot = $website->fresh()->capabilitySnapshot;
+            $this->assertFalse($snapshot->isFresh());
+            $this->assertLessThanOrEqual(now()->timestamp, $snapshot->checked_at->timestamp);
+        }
     }
 
     public function test_connector_045_is_supported_old_for_monitoring_but_cannot_pass_mutating_readiness(): void
