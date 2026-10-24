@@ -103,6 +103,7 @@ trait PairsConnectors
                 'php_limits' => ['memory_bytes' => 268435456, 'max_execution_seconds' => 120],
                 'cron' => ['wp_cron_disabled' => false],
             ],
+            'collected_at' => now()->toIso8601String(),
         ];
     }
 }

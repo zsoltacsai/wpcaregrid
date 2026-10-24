@@ -6,6 +6,7 @@ use App\Compatibility\CapabilitySnapshotStore;
 use App\Models\Connector;
 use App\Models\WebsiteInventory;
 use App\Websites\AuditLog;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 
@@ -104,7 +105,21 @@ final class InventoryIngest
         $website->update(['wordpress_version' => $data['core']['version'], 'php_version' => $data['php_version']]);
         $this->recordNewlyExpired($record, $previous);
 
-        app(CapabilitySnapshotStore::class)->refresh($website->fresh(), $connector->fresh(), $data['compatibility'] ?? null);
+        // Compatibility facts describe the environment when the Connector
+        // collected the inventory, not when a delayed/replayed request arrived.
+        // Missing or future timestamps cannot refresh high-impact readiness.
+        $now = now();
+        $collectedAt = isset($data['collected_at']) ? Carbon::parse($data['collected_at']) : null;
+        $evidenceCheckedAt = $collectedAt !== null && $collectedAt->lessThanOrEqualTo($now)
+            ? $collectedAt
+            : $now->copy()->subSeconds((int) config('compatibility.dynamic_ttl_seconds') + 1);
+
+        app(CapabilitySnapshotStore::class)->refresh(
+            $website->fresh(),
+            $connector->fresh(),
+            $data['compatibility'] ?? null,
+            $evidenceCheckedAt,
+        );
 
         return $record;
     }
