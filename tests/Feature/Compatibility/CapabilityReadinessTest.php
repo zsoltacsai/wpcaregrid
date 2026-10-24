@@ -194,7 +194,7 @@ final class CapabilityReadinessTest extends TestCase
         $site = $this->pairedWebsite();
         $facts = $this->inventoryPayload()['compatibility'];
         $facts['database']['engine'] = 'mysql';
-        $facts['database']['version'] = '8.0.40';
+        $facts['database']['version'] = '5.6.51';
         $site['website']->update(['php_version' => '8.6.0']);
         $this->refreshCapabilityEvidence($site['website'], $facts);
 
@@ -205,6 +205,45 @@ final class CapabilityReadinessTest extends TestCase
         $databaseBackup = $results[Capability::BackupReady->value]['scopes']['database'];
         $this->assertNotSame('PASS', $databaseBackup['status']);
         $this->assertContains('DB_VERSION_UNKNOWN', $databaseBackup['reasons']);
+    }
+
+    public function test_mysql_below_the_wordpress_floor_is_blocked_from_database_backup(): void
+    {
+        $site = $this->pairedWebsite();
+        $connector = $site['website']->activeConnector;
+        $connector->update(['capabilities' => array_merge($connector->capabilities, ['backup_database'])]);
+        $facts = $this->inventoryPayload()['compatibility'];
+        $facts['database']['engine'] = 'mysql';
+        $facts['database']['version'] = '5.5.4';
+        $this->refreshCapabilityEvidence($site['website'], $facts);
+
+        $results = app(CapabilityEvaluator::class)->evaluate(
+            $site['website']->fresh(),
+            $connector->fresh(),
+            $facts,
+        );
+
+        $databaseBackup = $results[Capability::BackupReady->value]['scopes']['database'];
+        $this->assertSame('BLOCK', $databaseBackup['status']);
+        $this->assertContains('DB_VERSION_UNSUPPORTED', $databaseBackup['reasons']);
+    }
+
+    public function test_ci_tested_mysql_57_and_80_branches_enable_database_backup_only_with_other_evidence(): void
+    {
+        $site = $this->pairedWebsite();
+        $website = $site['website'];
+        $connector = $website->activeConnector;
+        $connector->update(['capabilities' => array_merge($connector->capabilities, ['backup_database'])]);
+        $facts = $this->inventoryPayload()['compatibility'];
+
+        foreach (['5.7.44', '8.0.46'] as $version) {
+            $facts['database']['engine'] = 'mysql';
+            $facts['database']['version'] = $version;
+            $this->refreshCapabilityEvidence($website, $facts);
+            $results = app(CapabilityEvaluator::class)->evaluate($website->fresh(), $connector->fresh(), $facts);
+
+            $this->assertSame('PASS', $results[Capability::BackupReady->value]['scopes']['database']['status'], $version);
+        }
     }
 
     public function test_php_81_is_explicitly_end_of_life_and_never_passes_capability_gates(): void

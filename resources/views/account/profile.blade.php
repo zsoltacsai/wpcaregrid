@@ -107,7 +107,7 @@
 
             <dl class="mb-4 grid gap-2 text-sm sm:grid-cols-2">
                 <div><dt class="text-xs text-muted">{{ __('account.profile.vies.current_status') }}</dt><dd>{{ __('account.profile.vies.status.'.$vatDisplayStatus) }}</dd></div>
-                <div><dt class="text-xs text-muted">{{ __('account.profile.vies.last_successful_check') }}</dt><dd>{{ $lastSuccessful?->checked_at?->format('Y-m-d H:i') ?? __('account.profile.vies.not_checked') }}</dd></div>
+                <div><dt class="text-xs text-muted">{{ __('account.profile.vies.last_successful_check') }}</dt><dd>{{ app(\App\Support\DisplayDateTime::class)->format($lastSuccessful?->checked_at) ?? __('account.profile.vies.not_checked') }}</dd></div>
             </dl>
 
             <form method="POST" action="{{ route('account.profile.vat-verification') }}" class="grid gap-4 sm:grid-cols-2" novalidate>
@@ -131,7 +131,7 @@
                                     default => 'pending_review',
                                 };
                             @endphp
-                            <li class="flex flex-wrap justify-between gap-2 py-2"><span>{{ $evidence->country_code }} · {{ $evidence->provider === 'eu_vies' ? __('account.profile.vies.source') : __('account.profile.vies.local_check') }} · {{ __('account.profile.vies.status.'.$itemStatus) }}</span><time datetime="{{ $evidence->checked_at?->toIso8601String() }}">{{ $evidence->checked_at?->format('Y-m-d H:i') }}</time></li>
+                            <li class="flex flex-wrap justify-between gap-2 py-2"><span>{{ $evidence->country_code }} · {{ $evidence->provider === 'eu_vies' ? __('account.profile.vies.source') : __('account.profile.vies.local_check') }} · {{ __('account.profile.vies.status.'.$itemStatus) }}</span><time datetime="{{ $evidence->checked_at?->toIso8601String() }}">@displayDateTime($evidence->checked_at)</time></li>
                         @endforeach
                     </ul>
                 </div>

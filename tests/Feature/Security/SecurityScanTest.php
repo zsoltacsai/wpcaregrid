@@ -234,6 +234,27 @@ class SecurityScanTest extends TestCase
         $this->assertSame(JobStatus::Expired, WebsiteJob::where('type', 'SECURITY_SCAN')->sole()->status);
     }
 
+    public function test_a_scan_and_its_first_connector_job_roll_back_together_if_queueing_is_interrupted(): void
+    {
+        $site = $this->securitySite();
+        WebsiteJob::creating(function (WebsiteJob $job): void {
+            if ($job->type?->value === 'SECURITY_SCAN') {
+                throw new \RuntimeException('simulated queue interruption');
+            }
+        });
+
+        try {
+            app(SecurityScanService::class)->request($site['website']->refresh(), ScanType::Integrity, 'operator:1');
+            $this->fail('The interrupted queue operation should propagate.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('simulated queue interruption', $exception->getMessage());
+        }
+
+        $this->assertSame(0, SecurityScan::count());
+        $this->assertSame(0, WebsiteJob::where('type', 'SECURITY_SCAN')->count());
+        $this->assertSame(0, WebsiteEvent::where('event', 'security.scan_requested')->count());
+    }
+
     public function test_cancel_stops_the_part_that_has_not_run(): void
     {
         $site = $this->securitySite();

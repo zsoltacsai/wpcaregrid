@@ -13,8 +13,8 @@
                 <dt class="text-muted">{{ __('owner.coupons.fields.market_group') }}</dt><dd>{{ __('owner.coupons.market_groups.'.$coupon->marketLabelKey()) }}</dd>
                 <dt class="text-muted">{{ __('owner.coupons.columns.used') }}</dt><dd class="tabular-nums">{{ $coupon->times_redeemed }}</dd>
                 <dt class="text-muted">{{ __('owner.coupons.remaining') }}</dt><dd class="tabular-nums">{{ $coupon->remainingRedemptions() ?? __('owner.coupons.unlimited') }} <span class="text-muted">({{ __('owner.coupons.reserved', ['count' => app(\App\Checkout\PromotionReservations::class)->activeCount($coupon)]) }})</span></dd>
-                <dt class="text-muted">{{ __('owner.coupons.created_at') }}</dt><dd class="font-mono text-xs">{{ $coupon->created_at->format('Y-m-d H:i') }}</dd>
-                <dt class="text-muted">{{ __('owner.coupons.columns.updated') }}</dt><dd class="font-mono text-xs">{{ $coupon->updated_at->format('Y-m-d H:i') }}</dd>
+                <dt class="text-muted">{{ __('owner.coupons.created_at') }}</dt><dd class="font-mono text-xs">@displayDateTime($coupon->created_at)</dd>
+                <dt class="text-muted">{{ __('owner.coupons.columns.updated') }}</dt><dd class="font-mono text-xs">@displayDateTime($coupon->updated_at)</dd>
                 <dt class="text-muted">{{ __('owner.coupons.stripe_code') }}</dt><dd class="font-mono text-xs break-all">{{ $coupon->stripe_promotion_code_id ?: '—' }}</dd>
             </dl>
             @if ($coupon->makesEveryInvoiceFree())
@@ -66,7 +66,7 @@
                     @foreach ($recent as $intent)
                         <li class="flex flex-wrap justify-between gap-2 py-2">
                             <span>{{ $intent->product_type->label() }} {{ __('owner.tiers.'.$intent->plan->value) }} · {{ $intent->interval->label() }}</span>
-                            <span class="font-mono text-xs text-muted">{{ $intent->status->value }} · {{ ($intent->completed_at ?? $intent->created_at)->format('Y-m-d H:i') }}</span>
+                            <span class="font-mono text-xs text-muted">{{ $intent->status->value }} · @displayDateTime($intent->completed_at ?? $intent->created_at)</span>
                         </li>
                     @endforeach
                 </ul>

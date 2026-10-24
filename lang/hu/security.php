@@ -36,6 +36,14 @@ return [
         'malware' => 'Malware-jelek',
     ],
 
+    'integrity_counts' => [
+        'verified' => 'ellenőrizve',
+        'modified' => 'módosult',
+        'missing' => 'hiányzó',
+        'extra' => 'többlet',
+        'unavailable' => 'nem ellenőrizhető',
+    ],
+
     'unavailable_reasons' => [
         'VULNERABILITY_SOURCE_NOT_CONFIGURED' => 'A sérülékenységi vizsgáló nincs beállítva.',
         'NO_INVENTORY' => 'A weboldal még nem jelentette a bővítményeit és témáit.',

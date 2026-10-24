@@ -99,7 +99,7 @@
                             <td class="px-3 py-2"><x-ui.status-badge :tone="$row['backup']->tone()">{{ $row['backup']->label() }}</x-ui.status-badge></td>
                             <td class="px-3 py-2"><x-ui.status-badge :tone="$row['security']->state->tone()">{{ $row['security']->state->label() }}</x-ui.status-badge></td>
                             <td @class(['px-3 py-2 text-xs whitespace-nowrap', 'font-medium text-warning-ink' => $row['pending'] > 0, 'text-muted' => $row['pending'] === 0])>{{ $row['updates'] }}</td>
-                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $row['last_seen']?->format('Y-m-d H:i') ?? __('operator.never') }}</td>
+                            <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ app(\App\Support\DisplayDateTime::class)->format($row['last_seen']) ?? __('operator.never') }}</td>
                         </tr>
                     @endforeach
                 </tbody>
@@ -119,7 +119,7 @@
                     </div>
                     <p class="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted">
                         <span>{{ $row['updates'] }}</span>
-                        <span class="font-mono">{{ $row['last_seen']?->format('Y-m-d H:i') ?? __('operator.never') }}</span>
+                        <span class="font-mono">{{ app(\App\Support\DisplayDateTime::class)->format($row['last_seen']) ?? __('operator.never') }}</span>
                     </p>
                 </li>
             @endforeach

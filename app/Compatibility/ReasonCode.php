@@ -26,6 +26,7 @@ enum ReasonCode: string
     case DiskSpaceInsufficient = 'DISK_SPACE_INSUFFICIENT';
     case DiskSpaceUnknown = 'DISK_SPACE_UNKNOWN';
     case DatabaseUnsupported = 'DB_ENGINE_UNSUPPORTED';
+    case DatabaseVersionUnsupported = 'DB_VERSION_UNSUPPORTED';
     case DatabaseUnknown = 'DB_VERSION_UNKNOWN';
     case BackupNotVerified = 'BACKUP_NOT_VERIFIED';
     case BackupObjectMissing = 'BACKUP_OBJECT_MISSING';

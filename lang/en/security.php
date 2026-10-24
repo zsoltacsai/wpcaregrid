@@ -36,6 +36,14 @@ return [
         'malware' => 'Malware indicators',
     ],
 
+    'integrity_counts' => [
+        'verified' => 'verified',
+        'modified' => 'modified',
+        'missing' => 'missing',
+        'extra' => 'extra',
+        'unavailable' => 'unavailable',
+    ],
+
     'unavailable_reasons' => [
         'VULNERABILITY_SOURCE_NOT_CONFIGURED' => 'Vulnerability scanner not configured.',
         'NO_INVENTORY' => 'The site has not reported its plugins and themes yet.',

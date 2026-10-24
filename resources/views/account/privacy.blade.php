@@ -37,19 +37,19 @@
                     <dl class="grid gap-3 text-sm sm:grid-cols-3">
                         <div><dt class="text-xs text-muted">{{ __('account.privacy.case_type') }}</dt><dd>{{ __('privacy.types.'.$case->request_type->value) }}</dd></div>
                         <div><dt class="text-xs text-muted">{{ __('account.privacy.case_status') }}</dt><dd>{{ __('privacy.request_statuses.'.$case->status->value) }}</dd></div>
-                        <div><dt class="text-xs text-muted">{{ __('account.privacy.requested_at') }}</dt><dd>{{ $case->requested_at?->utc()->format('Y-m-d H:i').' UTC' }}</dd></div>
+                        <div><dt class="text-xs text-muted">{{ __('account.privacy.requested_at') }}</dt><dd>@displayDateTime($case->requested_at)</dd></div>
                     </dl>
                     @if ($case->exportArtifact)
                         @php($artifact = $case->exportArtifact)
                         <dl class="mt-4 grid gap-3 border-t border-line pt-3 text-sm sm:grid-cols-3">
                             <div><dt class="text-xs text-muted">{{ __('account.privacy.export_status') }}</dt><dd>{{ __('account.privacy.export_states.'.$artifact->status->value) }}</dd></div>
                             <div><dt class="text-xs text-muted">{{ __('account.privacy.coverage') }}</dt><dd>{{ __('account.privacy.partial_coverage') }}</dd></div>
-                            <div><dt class="text-xs text-muted">{{ __('account.privacy.expires_at') }}</dt><dd>{{ $artifact->expires_at?->utc()->format('Y-m-d H:i').' UTC' ?? '—' }}</dd></div>
+                            <div><dt class="text-xs text-muted">{{ __('account.privacy.expires_at') }}</dt><dd>{{ app(\App\Support\DisplayDateTime::class)->format($artifact->expires_at) ?? '—' }}</dd></div>
                         </dl>
                         @if ($downloadUrls[$case->uuid] ?? false)
                             <div class="mt-4 flex flex-wrap items-center gap-3">
                                 <a class="text-sm font-medium text-action underline" href="{{ $downloadUrls[$case->uuid] }}">{{ __('account.privacy.download') }}</a>
-                                <span class="text-xs text-muted">{{ __('account.privacy.link_expires', ['date' => $artifact->download_expires_at?->utc()->format('Y-m-d H:i').' UTC']) }}</span>
+                                <span class="text-xs text-muted">{{ __('account.privacy.link_expires', ['date' => app(\App\Support\DisplayDateTime::class)->format($artifact->download_expires_at)]) }}</span>
                             </div>
                             <form method="POST" action="{{ route('account.privacy.exports.link', $artifact) }}" class="mt-4 flex flex-wrap items-end gap-3">
                                 @csrf
