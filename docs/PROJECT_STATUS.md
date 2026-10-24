@@ -1,6 +1,20 @@
 # WP CareGrid — Project Status
 
-## M14 final audit execution — 2026-10-24
+## Authoritative milestone status — 2026-10-24 18:58 UTC
+
+**M14 CLOSED — VERIFIED** within the Owner-approved bounded engineering and security-audit criteria. This is not a malware-free assertion, full filesystem coverage, independent penetration-test certification, production launch approval, or permission to bypass M15 pilot-entry gates.
+
+The M14 runtime release is PR #171, merge SHA `b152fcfc53543938c27d820d966ca99bd56e22d6`; exact merge-SHA [CI run 40108236754](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40108236754) succeeded (30/30 jobs), including the Server MySQL process-concurrency gate. The Owner reports that the protected staging controller deployed this SHA under receipt `release-20261024T165817.155049Z-b152fcfc53543938c27d820d966ca99bd56e22d6.json`; reported checks included exact runtime SHA, clean checkout, `/up` HTTP 200, protected configuration HTTP 403, and healthy deployment-controller, scheduler, and queue checks. Codex did not independently inspect staging in this documentation pass.
+
+The accepted Integrity operation remains scan `01a16dfa-afed-735f-a4fd-2eafcd0a8a3d` on `https://kiszov-szeged.hu` (Website `01a16409-3537-7061-993d-a18fccd5b945`): `COMPLETED`, 5,930 verified, 0 modified, 0 extra, 1 missing, 4 unavailable, 0 findings. Coverage is incomplete; this is not a Malware scan or malware-free claim. The historical notification delta is unknown. The updated Integrity counters were deployed, but authenticated Operator UI visual verification was not completed after the browser session expired; carry it into M15.
+
+PRs #165 and #166 subsequently merged dependency updates at `092b18198f248385849c2fb59414d055ef811bd5` and current primary HEAD `761e0e5d37558da808ac961ca2d2a68b4ffab0db`. Their exact-SHA CI runs [40117322988](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40117322988) and [40119815251](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40119815251) succeeded, each 30/30. The Owner reports both dependency releases were deployed to staging; their separate receipt is not archived here.
+
+**M15 remains separate:** carry forward offline Connector and stale-backup warnings, incomplete Integrity coverage, authenticated Operator UI visual verification, actual pilot-host compatibility, site consent/scope, monitoring, backup and recovery assurance. **M17 remains separate production readiness:** independent penetration testing, production security verification and DR, legal/accounting decisions, and production payment/release authorization. **M16 — PROPOSED / TO BE FORMALIZED BY MASTER ROADMAP.**
+
+The historical snapshots below preserve what was known at their original timestamps. Older `BLOCKED`, `NOT READY`, `UNKNOWN`, and pending-#171 statements are superseded for current M14 status by this section, not erased or retroactively rewritten.
+
+## Historical snapshot — pre-#171 M14 audit state (2026-10-24; superseded by the authoritative status above)
 
 Latest primary merge SHA `5ea05192581e5ca98945669be6aa2cfbcff7bd86` was
 verified with [exact merge CI run 40101414072](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40101414072):

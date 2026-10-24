@@ -1,19 +1,10 @@
 # M14.7 Full-Closure Assessment — 2026-10-18
 
-> **Final audit reconciliation (2026-10-24):** use
-> [`M14 final audit`](../m14/m14-final-audit-2026-10-24.md) as the authoritative
-> current matrix. The Owner-approved scan of `kiszov-szeged.hu` completed as
-> Integrity scan `01a16dfa-afed-735f-a4fd-2eafcd0a8a3d`, Connector job 48,
-> with 5,930 verified, 0 modified, 0 extra, 1 missing, 4 unavailable, and 0
-> findings. This closes the operational Integrity execution criterion only.
-> The historic notification delta and per-path reasons for the aggregate
-> missing/unavailable counts were not persisted and remain unknown. No
-> malware-free or full-coverage claim is made. Current primary merge CI run
-> [40101414072](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40101414072)
-> passed 30/30, including the required MySQL process-concurrency step. The
-> final audit UI correction is PR #171 and remains pending exact-head CI and
-> protected staging deployment/read-only smoke; do not mark M14 closed before
-> those gates complete.
+> **Current status update — 2026-10-24:** M14 is `CLOSED — VERIFIED` within the bounded Owner-approved engineering/security-audit criteria. PR #171 merged at `b152fcfc53543938c27d820d966ca99bd56e22d6`; exact merge CI [40108236754](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40108236754) passed 30/30 including MySQL process concurrency. The Owner reports protected staging deployment. PRs #165/#166 and current branch HEAD `761e0e5d37558da808ac961ca2d2a68b4ffab0db` subsequently passed exact-SHA CI; the Owner reports their deployment. This does not imply malware-free status, complete coverage, independent penetration-test certification, production approval, or M15 readiness. Operator UI visual verification remains an M15 follow-up; historical scan path causes and notification delta remain unknown.
+>
+> All verdicts and pending statements below are **historical snapshots** of the October 18 assessment, preserved without retroactive rewriting. Use [the final M14 audit](../m14/m14-final-audit-2026-10-24.md) for current status.
+>
+> **Historical interim reconciliation (2026-10-24; superseded by the current status above):** this note recorded the accepted Integrity scan and the then-current CI state before PR #171 completed. PR #171 has since merged, passed exact merge-SHA CI, and was reportedly deployed through the protected controller. The scan limitations remain as stated in the current note above.
 
 > **Later evidence update (2026-10-24):** this assessment remains historically
 > accurate as of its original review date. Its statement that no operational
@@ -25,7 +16,7 @@
 
 ## Verdict
 
-**B — PARTIAL / OWNER ACTION REQUIRED.** Previously closed engineering stages have evidence within their stated scopes, but M14.7 is not fully closed. Operational scanner validation, fresh live M12 readback and side-effect validation have not occurred.
+**Historical verdict as of 2026-10-18: B — PARTIAL / OWNER ACTION REQUIRED.** This assessment predates later operational evidence and final M14 closure; it is not the current verdict.
 
 ## Repository and CI baseline
 

@@ -2,11 +2,11 @@
 
 ## Final audit reconciliation — 2026-10-24
 
-The authoritative current evidence and disposition are in [M14 final audit](m14-final-audit-2026-10-24.md). That addendum supersedes older `PARTIAL` status statements only where it cites newer evidence; historical reports remain unchanged.
+**Current verdict: `M14 CLOSED — VERIFIED`** for the bounded engineering and security-audit criteria accepted by the Owner. Current evidence is in [M14 final audit](m14-final-audit-2026-10-24.md). PR #171 merged at `b152fcfc53543938c27d820d966ca99bd56e22d6`; exact merge-SHA [CI 40108236754](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40108236754) passed 30/30 jobs, including MySQL process concurrency. The Owner reports protected staging deployment under receipt `release-20261024T165817.155049Z-b152fcfc53543938c27d820d966ca99bd56e22d6.json`. PRs #165/#166 and current HEAD `761e0e5d37558da808ac961ca2d2a68b4ffab0db` also passed exact-SHA CI; their staging deployment is Owner-reported. Historical blocked/partial statements are preserved and superseded only where this current disposition cites newer proof.
 
 The Owner's 2026-10-24 acceptance-policy directive allows bounded engineering evidence to replace duplicative formality, while preserving authentication, tenant, Connector, privacy, destructive-operation, recovery and release controls. For the one completed, non-destructive Integrity scan, the historical notification-channel delta was not archived. It is not reconstructed or claimed to be zero. Source review finds no notification-send path on the validated Integrity result path; scan-result type validation rejects Malware-only `SuspiciousFile` findings before the incident/backup path, and the existing isolated regression test verifies no finding, incident or backup side effect for that rejection. This evidence is accepted for that one Integrity operation only; no Malware/full-scan or general notification-safety claim follows.
 
-The completed scan's 1 missing and 4 unavailable counters remain explicit limitations. The sanitized persisted record lacks paths/reasons, so exact items cannot be retrospectively identified. The Operator UI count-visibility correction is in progress in the current audit PR. Until its exact-head CI and protected staging verification complete, final M14 disposition remains blocked on that small runtime evidence correction. No further live scan is warranted solely to recover information not persisted by the prior run.
+The completed scan's 1 missing and 4 unavailable counters remain explicit limitations. The sanitized persisted record lacks paths/reasons, so exact items cannot be retrospectively identified. PR #171 corrected Operator count visibility and the protected staging deployment is Owner-reported; authenticated UI visual verification was not completed after the browser session expired and remains a bounded M15 follow-up. No further live scan is warranted solely to recover information not persisted by the prior run.
 
 | M14 area | Current disposition | Future boundary |
 |---|---|---|
@@ -14,7 +14,7 @@ The completed scan's 1 missing and 4 unavailable counters remain explicit limita
 | Supply chain / release | `PASS_WITH_MEDIUM_RISKS`; enforced ruleset and exact-SHA CI verified; historical protected staging receipt recorded | Single-maintainer review residual remains explicit. M17 independently rechecks production release lineage. |
 | Hosting compatibility | `PASS_WITH_MEDIUM_RISKS` only within fixture matrix; unknown combinations fail closed | PHP 8.1, WP 6.4 and atypical hosting layouts remain unclaimed; evaluate during M15 host admission. |
 | Connector / webhook / archive | `PASS_WITH_MEDIUM_RISKS` within M14.2 test and release evidence | Real pilot-host behavior and independent adversarial testing remain M15/M17. |
-| Integrity scan | Operational Integrity criterion passed for the Owner-approved target; 1 missing and 4 unavailable remain incomplete coverage | UI count display is pending the current audit PR's CI/deploy; exact path triage may require a future scan only if M15 needs it. No Malware scan implied. |
+| Integrity scan | Operational Integrity criterion passed for the Owner-approved target; PR #171 adds aggregate coverage counters and its staging deployment is Owner-reported; 1 missing and 4 unavailable remain incomplete coverage | Individual historical paths were not persisted; authenticated UI visual confirmation remains M15 follow-up. No Malware scan implied. |
 | Operational side effects | Bounded Integrity path accepted with source/test evidence; historical notification delta remains unknown | Malware/full scans and other notification-producing operations require separate evidence. |
 | Backup policy | Engineering implementation passes; external `WAIT_LEGAL`, `WAIT_ACCOUNTING`, `WAIT_FACT` remain fail-closed | Do not activate deletion/reduction until the respective policy owners resolve gates. |
 | AI boundary | `PASS_WITH_MEDIUM_RISKS` for configuration groundwork only | No customer-data egress or feature use; separate approval and review required. |
@@ -34,7 +34,7 @@ The completed scan's 1 missing and 4 unavailable counters remain explicit limita
 10. **Release/staging:** focused and full mandatory CI green on exact SHA; MySQL process/concurrency gate required; guarded staging rollout/health passes; use isolated synthetic fixtures for synthetic/destructive tests, while Path B real-site Integrity evidence remains an explicitly approved, bounded exception for that read-only scan criterion; no production deploy.
 11. **Audit disposition:** required audits final status is one of `PASS`, `PASS_WITH_MEDIUM_RISKS`, `PARTIAL_FUTURE_SCOPE`, `BLOCKED_HIGH`, `BLOCKED_CRITICAL`. No Critical/High unresolved; medium risks named and explicitly accepted; M15 blockers explicit.
 
-## Immediate M15 pilot-entry blockers
+## M15 pilot-entry gates (separate from M14 closure)
 
 - any unresolved Critical/High security finding, cross-tenant access, secret exposure, uncontrolled destructive path, kill-switch bypass or data-loss risk;
 - absent hosting preflight or unknown operation incorrectly reported supported;
@@ -57,9 +57,17 @@ for that criterion. It does not waive remaining M14.7/M14.8 audit, coverage,
 independent-review, or synthetic negative-test requirements. The decision and
 the exact scan evidence are recorded in the linked acceptance report above.
 
+## M15 carry-forward
+
+M15 separately requires review of Connector offline warnings, backup freshness, Integrity coverage, authenticated Operator UI display, actual pilot-host compatibility, site consent/scope, monitoring, and backup/recovery assurance. These are pilot-readiness gates, not retroactive M14 failures.
+
 ## M17 carry-forward
 
 Independent penetration test for auth, tenant isolation, Owner/Operator, Connector, admin access and destructive actions; production DNS/TLS/secrets/backup/monitoring checks; full production DR/rollback; exact-release security recheck; production marketing/analytics setup and launch functions. M14 does not grant public launch readiness.
+
+## M16 roadmap status
+
+`M16 — PROPOSED / TO BE FORMALIZED BY MASTER ROADMAP`. This reconciliation does not define its scope or acceptance criteria.
 
 ## Verdicts
 

@@ -1,6 +1,6 @@
 # Release checklist
 
-Gates before the controlled pilot and before production use. Each item is **READY** (done and verified in the repository or by tests), **NOT READY** (work or a rehearsal is still needed) or **NOT CONFIGURED** (needs production configuration or an external account). States are as of the "Production Hardening, CI & Release Readiness" commit; update them as items are completed (and the summary in PROJECT_STATUS.md).
+Gates before the controlled pilot and before production use. Each item is **READY** (done and verified in the repository or by tests), **NOT READY** (work or a rehearsal is still needed) or **NOT CONFIGURED** (needs production configuration or an external account). Status refreshed 2026-10-24; this checklist distinguishes deployed staging from production configuration. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the current M14 closure and staging evidence boundaries.
 
 How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT CONFIGURED, never prints secrets) and the owner System page. Deployment steps: [DEPLOYMENT.md](DEPLOYMENT.md); pilot: [PILOT.md](PILOT.md).
 
@@ -12,7 +12,7 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 | English and Hungarian for the public site, customer login and portal; HU → HUF; no fake international prices | READY | LOCALIZATION.md; CustomerLocalizationTest, HungarianContentTest, Playwright localization spec |
 | Customer emails in Hungarian | NOT READY | English only; needs the language stored at checkout (LOCALIZATION.md) |
 | Fresh install without dev packages | READY | `composer install --no-dev`, build, migrate, `connector:package`, all caches, rollback and re-migrate verified on an exported copy of the repository (2026-10-04) |
-| Staging server `staging.wpcaregrid.com` | NOT CONFIGURED | DEPLOYMENT.md "Staging" (server, `.env`, nginx, Stripe endpoint, checklist) |
+| Staging server `stg1.wpcaregrid.com` | READY — M14 staging deployment reported | Protected deployment of M14 SHA `b152fcfc53543938c27d820d966ca99bd56e22d6` is Owner-reported under receipt `release-20261024T165817.155049Z-b152fcfc53543938c27d820d966ca99bd56e22d6.json`; later dependency release deployment through current HEAD `761e0e5d37558da808ac961ca2d2a68b4ffab0db` is also Owner-reported, separate receipt not archived. Not production readiness. |
 | Rollback procedure | READY (documented) | DEPLOYMENT.md "Rollback"; to be rehearsed once on staging |
 | `APP_ENV=production`, `APP_DEBUG=false`, `APP_KEY` set | NOT CONFIGURED | `system:check` Application = OK (ERROR if debug in production) |
 | `APP_URL` is the public `https://` domain | NOT CONFIGURED | `system:check` Application (ERROR if http or local in production) |
