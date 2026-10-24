@@ -18,6 +18,60 @@
 - Temporary configuration mitigations are not a replacement for a complete vendor patch unless the vendor explicitly says otherwise. Preserve sanitized advisory, package and restart evidence.
 - If a supported runtime reaches end of security support within 12 months, create a dated upgrade plan. At 6 months, treat the upgrade as a release blocker for new production launch or runtime expansion unless the Owner records an exception and compensating controls.
 
+## Staging security inventory — Owner and Integration & QA reports, 2026-10-24
+
+The Owner reports the following read-only package inventory:
+
+- PHP CLI: 8.4.27. Installed PHP 8.4 package build: `8.4.27-1+ubuntu24.04.1+deb.sury.org+1`, from `ppa.launchpadcontent.net/ondrej/php` for Ubuntu 24.04 Noble.
+- PHP-FPM package: 8.4.27. PHP 8.5 CLI/FPM are not installed; APT offers PHP 8.5.12 from the same configured repository.
+- CLI modules include PDO MySQL, mysqli, cURL, intl, mbstring, XML, ZIP, sodium, and OPcache. SQLite, GD, and bcmath do not appear in the CLI module inventory.
+- PHP 8.4 SQLite is removed (`rc` package state).
+
+Integration & QA reports these additional read-only checks:
+
+- The running FPM executable is `/usr/sbin/php-fpm8.4` with no deleted-binary indication; `php8.4-fpm.service` is active.
+- The `wpcaregrid` Nginx vhost uses `/run/php/php8.4-fpm.sock`. Several other enabled vhosts, including test, M8 E2E, and M14 synthetic configurations, also use that socket.
+- Owner read-only process inspection confirms Supervisor programs `wpcaregrid-backups` and `wpcaregrid-default` are RUNNING `artisan queue:work` workers using `/usr/bin/php8.4` (sampled PIDs are intentionally omitted as ephemeral). The scheduler execution and PHP interpreter remain unverified.
+- A prior FPM status sample showed three idle workers, 1,605 requests, and zero slow requests; this is a sampled status, not a complete long-lived-process inventory.
+
+### Owner application-health baseline — 2026-10-24
+
+The Owner reports a read-only pre-migration health check run as `www-data` with the explicitly selected PHP 8.4 CLI:
+
+```text
+runuser -u www-data -- /usr/bin/php8.4 artisan system:check
+Result: 12 OK, 2 WARNING, 0 ERROR
+```
+
+The 12 successful groups were Application, Database, Queue, Scheduler, Stripe, Cloudflare DNS, Security scanner, Mail, Safety switches, Privacy retention safety, Privacy restore safety, and Privacy exports. The two warnings were: one website is not reporting to the Connector API, and no backup had been verified within the preceding seven days. These are recorded as the pre-cutover baseline. The Connector warning should be compared after migration; the backup warning is a cutover blocker until a fresh staging backup is completed and independently verified. No backup was created by this inventory.
+
+The Owner also reports the `www-data` crontab entry `* * * * * /usr/local/bin/wpcaregrid-scheduler >> /dev/null 2>&1`. The wrapper is root-owned and provides locking and pause protection; Laravel's health check reports the scheduler running. The wrapper's actual PHP interpreter and effective runtime remain **unverified** and must be established read-only before cutover and verified again afterward. Do not infer it from the successful PHP 8.4 Artisan health check.
+
+Before approval, preserve this exact health result as the baseline. After an approved cutover, rerun the same health check as `www-data` using the intended PHP 8.5 CLI, compare all 12 groups, investigate any new warning/error, and verify the scheduler wrapper, queue workers, CLI, and intended FPM pool are on PHP 8.5. A fresh verified backup and tested rollback to patched PHP 8.4 remain mandatory.
+- `/up` returned HTTP 200; this alone does not attest package provenance or every PHP process.
+
+Launchpad currently publishes the PPA signing-key fingerprint as `B8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6` ([official PPA details](https://launchpad.net/~ondrej/+archive/ubuntu/php)). This is the expected publisher fingerprint for local comparison, not proof that staging's trusted keyring contains that key or that installed package metadata was verified by it. Staging keyring contents and signed Release metadata still require read-only validation.
+
+PHP 8.4.27 is the upstream fixed release for CVE-2026-109618 and CVE-2026-109619. The reported installed packages and active FPM binary are at that upstream version level, so the version inventory is **consistent with the patched release**. Full P0 remediation remains **partially verified** until the PPA signature/provenance and every active PHP process (including Supervisor and scheduler jobs) are attested.
+
+The production `composer.json` and `composer.lock` do not declare GD, bcmath, or PDO SQLite as hard Composer platform requirements. The lock metadata mentions GD for Laravel's HTTP test image helper and optional image support; repository validation/test scripts and CI use SQLite, and historical M12 staging evidence omitted two SQLite-only restore tests while documenting CI/MySQL coverage. These facts suggest the absent modules are not baseline production requirements, but do not prove that no application-specific runtime path uses them. Before migration, confirm the actual database driver and inspect application/Connector code paths and scheduled workloads for GD, BCMath, or SQLite use; install only extensions shown to be required.
+
+### PHP 8.5 staging cutover preflight (not authorization)
+
+The Owner prefers a parallel 8.4/8.5 installation initially, subject to approval. PHP 8.4 must remain installed and its shared socket must not be repointed: other enabled vhosts depend on `/run/php/php8.4-fpm.sock`. A future 8.5 pool should use its own socket and only the specifically approved staging vhost may be switched.
+
+Before a cutover, read-only preflight must:
+
+1. Validate the staging trusted keyring and signed PPA Release metadata against the Launchpad fingerprint above.
+2. Confirm the exact staging server block, selected FPM pool, socket, and active FPM executable.
+3. Treat `wpcaregrid-backups` and `wpcaregrid-default` as PHP 8.4 `artisan queue:work` workers. Before restart, let active backup work finish or follow the approved drain procedure; do not abruptly interrupt a backup. Identify the scheduler interpreter separately. After any approved worker restart, verify both actual `/proc/<pid>/exe` paths and PHP versions without exposing full argument strings.
+4. Confirm whether PHP 7.4 is still installed or referenced by any active vhost/process.
+5. Check application/Connector extension usage and Composer platform requirements, including the absent GD, bcmath, and SQLite modules.
+6. Verify a tested rollback to a still-patched PHP runtime and ensure rollback does not alter other vhosts.
+7. Preserve the PHP 8.4 CLI/FPM packages and socket throughout the initial parallel 8.5 cutover. Test and document rollback to patched PHP 8.4, including restoring worker executables; do not switch other vhosts. Obtain protected integration approval and an exclusive UTC staging window.
+
+No PHP 8.5 install, package removal, socket switch, service reload/restart, or production change is authorized by this inventory.
+
 ## Staging-first runtime changes
 
 1. Confirm the advisory, affected runtime packages, current staging release SHA, active deployment state and exact target package source.
