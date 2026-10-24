@@ -33,6 +33,21 @@ Integration & QA reports these additional read-only checks:
 - The `wpcaregrid` Nginx vhost uses `/run/php/php8.4-fpm.sock`. Several other enabled vhosts, including test, M8 E2E, and M14 synthetic configurations, also use that socket.
 - Owner read-only process inspection confirms Supervisor programs `wpcaregrid-backups` and `wpcaregrid-default` are RUNNING `artisan queue:work` workers using `/usr/bin/php8.4` (sampled PIDs are intentionally omitted as ephemeral). The scheduler execution and PHP interpreter remain unverified.
 - A prior FPM status sample showed three idle workers, 1,605 requests, and zero slow requests; this is a sampled status, not a complete long-lived-process inventory.
+
+### Owner application-health baseline — 2026-10-24
+
+The Owner reports a read-only pre-migration health check run as `www-data` with the explicitly selected PHP 8.4 CLI:
+
+```text
+runuser -u www-data -- /usr/bin/php8.4 artisan system:check
+Result: 12 OK, 2 WARNING, 0 ERROR
+```
+
+The 12 successful groups were Application, Database, Queue, Scheduler, Stripe, Cloudflare DNS, Security scanner, Mail, Safety switches, Privacy retention safety, Privacy restore safety, and Privacy exports. The two warnings were: one website is not reporting to the Connector API, and no backup had been verified within the preceding seven days. These are recorded as the pre-cutover baseline. The Connector warning should be compared after migration; the backup warning is a cutover blocker until a fresh staging backup is completed and independently verified. No backup was created by this inventory.
+
+The Owner also reports the `www-data` crontab entry `* * * * * /usr/local/bin/wpcaregrid-scheduler >> /dev/null 2>&1`. The wrapper is root-owned and provides locking and pause protection; Laravel's health check reports the scheduler running. The wrapper's actual PHP interpreter and effective runtime remain **unverified** and must be established read-only before cutover and verified again afterward. Do not infer it from the successful PHP 8.4 Artisan health check.
+
+Before approval, preserve this exact health result as the baseline. After an approved cutover, rerun the same health check as `www-data` using the intended PHP 8.5 CLI, compare all 12 groups, investigate any new warning/error, and verify the scheduler wrapper, queue workers, CLI, and intended FPM pool are on PHP 8.5. A fresh verified backup and tested rollback to patched PHP 8.4 remain mandatory.
 - `/up` returned HTTP 200; this alone does not attest package provenance or every PHP process.
 
 Launchpad currently publishes the PPA signing-key fingerprint as `B8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6` ([official PPA details](https://launchpad.net/~ondrej/+archive/ubuntu/php)). This is the expected publisher fingerprint for local comparison, not proof that staging's trusted keyring contains that key or that installed package metadata was verified by it. Staging keyring contents and signed Release metadata still require read-only validation.
