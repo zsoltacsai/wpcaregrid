@@ -97,6 +97,7 @@ return [
         'no_subscription' => 'You have no subscription yet.',
         'view_plans' => 'View plans',
         'view_subscription' => 'View subscription',
+        'view_websites' => 'View websites',
     ],
 
     'subscription' => [
