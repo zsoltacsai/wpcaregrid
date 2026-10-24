@@ -168,6 +168,7 @@ final class DisplayDateTimeTest extends TestCase
     public function test_mysql_connections_keep_timestamp_sessions_in_utc(): void
     {
         $this->assertSame('+00:00', config('database.connections.mysql.timezone'));
+        $this->assertSame('+00:00', config('database.connections.m9_platform_verify.timezone'));
         $this->assertSame('+00:00', config('database.connections.mariadb.timezone'));
     }
 }
