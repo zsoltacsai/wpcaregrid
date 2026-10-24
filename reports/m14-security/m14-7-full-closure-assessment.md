@@ -1,5 +1,20 @@
 # M14.7 Full-Closure Assessment — 2026-10-18
 
+> **Final audit reconciliation (2026-10-24):** use
+> [`M14 final audit`](../m14/m14-final-audit-2026-10-24.md) as the authoritative
+> current matrix. The Owner-approved scan of `kiszov-szeged.hu` completed as
+> Integrity scan `01a16dfa-afed-735f-a4fd-2eafcd0a8a3d`, Connector job 48,
+> with 5,930 verified, 0 modified, 0 extra, 1 missing, 4 unavailable, and 0
+> findings. This closes the operational Integrity execution criterion only.
+> The historic notification delta and per-path reasons for the aggregate
+> missing/unavailable counts were not persisted and remain unknown. No
+> malware-free or full-coverage claim is made. Current primary merge CI run
+> [40101414072](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40101414072)
+> passed 30/30, including the required MySQL process-concurrency step. The
+> final audit UI correction is PR #171 and remains pending exact-head CI and
+> protected staging deployment/read-only smoke; do not mark M14 closed before
+> those gates complete.
+
 > **Later evidence update (2026-10-24):** this assessment remains historically
 > accurate as of its original review date. Its statement that no operational
 > scan had occurred is superseded only for the operational Integrity-execution
