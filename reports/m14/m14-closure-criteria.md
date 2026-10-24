@@ -1,5 +1,25 @@
 # M14 Closure Criteria and Future Audit Boundaries
 
+## Final audit reconciliation — 2026-10-24
+
+The authoritative current evidence and disposition are in [M14 final audit](m14-final-audit-2026-10-24.md). That addendum supersedes older `PARTIAL` status statements only where it cites newer evidence; historical reports remain unchanged.
+
+The Owner's 2026-10-24 acceptance-policy directive allows bounded engineering evidence to replace duplicative formality, while preserving authentication, tenant, Connector, privacy, destructive-operation, recovery and release controls. For the one completed, non-destructive Integrity scan, the historical notification-channel delta was not archived. It is not reconstructed or claimed to be zero. Source review finds no notification-send path on the validated Integrity result path; scan-result type validation rejects Malware-only `SuspiciousFile` findings before the incident/backup path, and the existing isolated regression test verifies no finding, incident or backup side effect for that rejection. This evidence is accepted for that one Integrity operation only; no Malware/full-scan or general notification-safety claim follows.
+
+The completed scan's 1 missing and 4 unavailable counters remain explicit limitations. The sanitized persisted record lacks paths/reasons, so exact items cannot be retrospectively identified. The Operator UI count-visibility correction is in progress in the current audit PR. Until its exact-head CI and protected staging verification complete, final M14 disposition remains blocked on that small runtime evidence correction. No further live scan is warranted solely to recover information not persisted by the prior run.
+
+| M14 area | Current disposition | Future boundary |
+|---|---|---|
+| Application security and tenant isolation | `PASS_WITH_MEDIUM_RISKS` for bounded M14.1 scope; no known Critical/High defect in evidence reviewed | Broader independent penetration and exhaustive service/async probes: M17; pilot must retain site-specific consent and response controls. |
+| Supply chain / release | `PASS_WITH_MEDIUM_RISKS`; enforced ruleset and exact-SHA CI verified; historical protected staging receipt recorded | Single-maintainer review residual remains explicit. M17 independently rechecks production release lineage. |
+| Hosting compatibility | `PASS_WITH_MEDIUM_RISKS` only within fixture matrix; unknown combinations fail closed | PHP 8.1, WP 6.4 and atypical hosting layouts remain unclaimed; evaluate during M15 host admission. |
+| Connector / webhook / archive | `PASS_WITH_MEDIUM_RISKS` within M14.2 test and release evidence | Real pilot-host behavior and independent adversarial testing remain M15/M17. |
+| Integrity scan | Operational Integrity criterion passed for the Owner-approved target; 1 missing and 4 unavailable remain incomplete coverage | UI count display is pending the current audit PR's CI/deploy; exact path triage may require a future scan only if M15 needs it. No Malware scan implied. |
+| Operational side effects | Bounded Integrity path accepted with source/test evidence; historical notification delta remains unknown | Malware/full scans and other notification-producing operations require separate evidence. |
+| Backup policy | Engineering implementation passes; external `WAIT_LEGAL`, `WAIT_ACCOUNTING`, `WAIT_FACT` remain fail-closed | Do not activate deletion/reduction until the respective policy owners resolve gates. |
+| AI boundary | `PASS_WITH_MEDIUM_RISKS` for configuration groundwork only | No customer-data egress or feature use; separate approval and review required. |
+| M15 / M17 | Not authorized by M14 closure | M15 pilot-entry and M17 production-launch criteria remain independently enforced. |
+
 ## M14 engineering closure requires
 
 1. **Application Security Audit:** explicit route/service/job/API threat coverage, auth/session/re-auth, CSRF/XSS/SSRF, rate limiting, webhook and Connector review; all Critical/High findings resolved and retested.

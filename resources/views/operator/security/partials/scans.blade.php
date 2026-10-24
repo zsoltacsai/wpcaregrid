@@ -32,7 +32,15 @@
                                     <span @class(['font-medium', 'text-danger-ink' => ($coverage['status'] ?? null) === 'failed', 'text-warning-ink' => in_array($coverage['status'] ?? null, ['partial', 'unavailable'], true)])>{{ $coverage ? __('security.coverage.'.$coverage['status']) : '—' }}</span>
                                     @if (isset($coverage['reason']))<span class="text-muted">({{ __('security.unavailable_reasons.'.$coverage['reason']) }})</span>@endif
                                     @if (isset($coverage['files_scanned']))<span class="font-mono text-muted">· {{ number_format($coverage['files_scanned']) }} files</span>@endif
-                                    @if (isset($coverage['verified']))<span class="font-mono text-muted">· {{ number_format($coverage['verified']) }} verified, {{ $coverage['modified'] ?? 0 }} modified</span>@endif
+                                    @if ($scanner === 'integrity' && isset($coverage['verified']))
+                                        <span class="font-mono text-muted">
+                                            · {{ number_format((int) $coverage['verified']) }} {{ __('security.integrity_counts.verified') }},
+                                            {{ isset($coverage['modified']) ? number_format((int) $coverage['modified']) : '—' }} {{ __('security.integrity_counts.modified') }},
+                                            {{ isset($coverage['missing']) ? number_format((int) $coverage['missing']) : '—' }} {{ __('security.integrity_counts.missing') }},
+                                            {{ isset($coverage['extra']) ? number_format((int) $coverage['extra']) : '—' }} {{ __('security.integrity_counts.extra') }},
+                                            {{ isset($coverage['unavailable']) ? number_format((int) $coverage['unavailable']) : '—' }} {{ __('security.integrity_counts.unavailable') }}
+                                        </span>
+                                    @endif
                                 </span>
                             @endforeach
                         </td>
