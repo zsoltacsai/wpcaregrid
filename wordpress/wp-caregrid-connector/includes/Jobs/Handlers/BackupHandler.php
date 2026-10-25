@@ -11,6 +11,8 @@ use WPCareGrid\Connector\Backups\DiskSpace;
 use WPCareGrid\Connector\Backups\FilesArchiver;
 use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Backups\Uploader;
+use WPCareGrid\Connector\Core\LeaseLost;
+use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Jobs\InvalidPayload;
 use WPCareGrid\Connector\Jobs\JobHandler;
 use WPCareGrid\Connector\Jobs\JobResult;
@@ -69,12 +71,18 @@ final class BackupHandler implements JobHandler, ResumableJob
             $this->prepare($payload);
 
             return $this->upload_and_finalize($uuid);
+        } catch (LeaseLost $e) {
+            // Keep verified local backup artifacts intact for the next owner;
+            // deleting them here could race the successor's resumable upload.
+            throw $e;
         } catch (BackupFailure $e) {
+            Lock::refreshOrFail();
             $this->cleanup($uuid);
             Logger::warning('backup.failed', ['backup' => $uuid, 'code' => $e->error_code]);
 
             return JobResult::failed($e->error_code, $e->getMessage(), $e->details);
         } catch (\Throwable $e) {
+            Lock::refreshOrFail();
             $this->cleanup($uuid);
 
             throw $e;
@@ -138,6 +146,7 @@ final class BackupHandler implements JobHandler, ResumableJob
         try {
             return $this->upload_and_finalize($uuid);
         } catch (BackupFailure $e) {
+            Lock::refreshOrFail();
             $this->cleanup($uuid);
 
             return JobResult::failed($e->error_code, $e->getMessage(), $e->details);
@@ -156,7 +165,9 @@ final class BackupHandler implements JobHandler, ResumableJob
         $manifest = $this->manifest($uuid, $state);
         $response = null;
         for ($attempt = 0; $attempt < 3; $attempt++) {
+            Lock::refreshOrFail();
             $response = $this->api->post("backups/{$uuid}/finalize", ['manifest' => $manifest]);
+            Lock::refreshOrFail();
             if ($response->ok() || ! $response->is_temporary()) {
                 break;
             }

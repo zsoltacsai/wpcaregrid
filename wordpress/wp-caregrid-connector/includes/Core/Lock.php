@@ -15,6 +15,8 @@ final class Lock
 
     private static ?string $ownedValue = null;
 
+    private static bool $leaseRequired = false;
+
     private static int $refreshedAt = 0;
 
     public static function acquire(): bool
@@ -148,6 +150,24 @@ final class Lock
         return true;
     }
 
+    /**
+     * Refresh a lease during work and stop immediately if this poll lost it.
+     * Direct component tests may call backup helpers outside JobRunner; in
+     * that unmanaged context there is no lease to refresh.
+     *
+     * @throws LeaseLost when an owned lease expired or was replaced.
+     */
+    public static function refreshOrFail(): void
+    {
+        if (! self::$leaseRequired) {
+            return;
+        }
+
+        if (self::$ownedValue === null || ! self::refresh()) {
+            throw new LeaseLost('The Connector poll lease is no longer owned by this worker.');
+        }
+    }
+
     /** Release is conditional: an expired owner cannot delete its successor's lease. */
     public static function release(): bool
     {
@@ -155,6 +175,7 @@ final class Lock
 
         $ownedValue = self::$ownedValue;
         self::forgetOwnership();
+        self::$leaseRequired = false;
         if ($ownedValue === null || ! isset($wpdb->options)) {
             return false;
         }
@@ -219,6 +240,7 @@ final class Lock
     private static function own(string $value, int $now): void
     {
         self::$ownedValue = $value;
+        self::$leaseRequired = true;
         self::$refreshedAt = $now;
     }
 

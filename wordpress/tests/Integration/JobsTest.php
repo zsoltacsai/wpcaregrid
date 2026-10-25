@@ -2,7 +2,10 @@
 
 namespace WPCareGrid\Connector\Tests\Integration;
 
+use WPCareGrid\Connector\Core\LeaseLost;
+use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Core\Settings;
+use WPCareGrid\Connector\Jobs\JobHandler;
 use WPCareGrid\Connector\Jobs\JobRegistry;
 use WPCareGrid\Connector\Jobs\JobResult;
 use WPCareGrid\Connector\Jobs\JobRunner;
@@ -341,6 +344,103 @@ final class JobsTest extends TestCase
         // A stale lock from a crashed process is taken over.
         update_option('wp_caregrid_poll_lock', time() - 3600, false);
         $this->assertSame(1, $this->plugin()->runner()->poll()['executed']);
+    }
+
+    public function test_lost_lease_stops_the_poll_and_leaves_running_job_unreported(): void
+    {
+        $successor = sprintf('%010d:%s', time() + Lock::TTL, bin2hex(random_bytes(32)));
+        $handler = new class($successor) implements JobHandler
+        {
+            public int $runs = 0;
+
+            public function __construct(private readonly string $successor) {}
+
+            public function capability(array $payload = []): string
+            {
+                return 'health';
+            }
+
+            public function validate(array $payload): array
+            {
+                return $payload;
+            }
+
+            public function handle(array $payload): JobResult
+            {
+                $this->runs++;
+                update_option('wp_caregrid_poll_lock', $this->successor, false);
+                Lock::refreshOrFail();
+
+                return JobResult::success('MUST_NOT_COMPLETE');
+            }
+        };
+        $this->use_handlers(['SITE_HEALTH' => $handler]);
+        $first = $this->job('SITE_HEALTH');
+        $second = $this->job('SITE_HEALTH');
+        $this->serve_jobs($first, $second);
+
+        $summary = $this->plugin()->runner()->poll();
+
+        $this->assertSame(['executed' => 0, 'delivered' => 0], $summary);
+        $this->assertSame(1, $handler->runs, 'The poll stops immediately and does not start a later job.');
+        $this->assertSame(JobStore::RUNNING, $this->plugin()->jobs()->find($first['uuid'])['state']);
+        $this->assertNull($this->plugin()->jobs()->find($second['uuid']), 'A later job remains untouched.');
+        $this->assertSame([], $this->http->api_requests('POST jobs/*/result'), 'No result is published after losing the lease.');
+        $this->assertSame($successor, get_option('wp_caregrid_poll_lock'), 'The stale worker does not release its successor lease.');
+        delete_option('wp_caregrid_poll_lock');
+    }
+
+    public function test_lost_lease_during_handler_failure_is_not_recorded_as_completed(): void
+    {
+         = sprintf('%010d:%s', time() + Lock::TTL, bin2hex(random_bytes(32)));
+         = new class() implements JobHandler
+        {
+            public function __construct(private readonly string ) {}
+
+            public function capability(array  = []): string
+            {
+                return 'health';
+            }
+
+            public function validate(array ): array
+            {
+                return ;
+            }
+
+            public function handle(array ): JobResult
+            {
+                update_option('wp_caregrid_poll_lock', ->successor, false);
+                throw new \RuntimeException('synthetic failure after lease replacement');
+            }
+        };
+        ->use_handlers(['SITE_HEALTH' => ]);
+         = ->job('SITE_HEALTH');
+        ->serve_jobs();
+
+         = ->plugin()->runner()->poll();
+
+        ->assertSame(['executed' => 0, 'delivered' => 0], );
+        ->assertSame(JobStore::RUNNING, ->plugin()->jobs()->find(['uuid'])['state']);
+        ->assertSame([], ->http->api_requests('POST jobs/*/result'));
+        ->assertSame(, get_option('wp_caregrid_poll_lock'));
+        delete_option('wp_caregrid_poll_lock');
+    }
+
+    public function test_refresh_or_fail_detects_replaced_lease_without_touching_successor(): void
+    {
+        $this->assertTrue(Lock::acquire());
+        $successor = sprintf('%010d:%s', time() + Lock::TTL, bin2hex(random_bytes(32)));
+        update_option('wp_caregrid_poll_lock', $successor, false);
+
+        try {
+            Lock::refreshOrFail();
+            $this->fail('A worker with a replaced lease must stop.');
+        } catch (LeaseLost) {
+            $this->assertSame($successor, get_option('wp_caregrid_poll_lock'));
+        } finally {
+            Lock::release();
+            delete_option('wp_caregrid_poll_lock');
+        }
     }
 
     public function test_malformed_jobs_are_ignored(): void

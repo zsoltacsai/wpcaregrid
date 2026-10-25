@@ -344,7 +344,7 @@ final class FileRestorer
                 throw $this->apply_failure('apply_plan', $entry, 'restore_plan_changed');
             }
             $this->visited[$entry] = true;
-            Lock::refresh();
+            Lock::refreshOrFail();
 
             if (is_dir($source)) {
                 if ($plan['operation'] === 'skip') {
@@ -487,6 +487,7 @@ final class FileRestorer
             }
 
             while (! feof($input)) {
+                Lock::refreshOrFail();
                 $readWarning = null;
                 $chunk = $this->capture_warning(static fn () => fread($input, 1048576), $readWarning);
                 if ($chunk === false) {

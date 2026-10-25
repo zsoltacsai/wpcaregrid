@@ -4,6 +4,7 @@ namespace App\Connector;
 
 use App\Models\Connector;
 use App\Models\ConnectorPairingCode;
+use App\Models\Website;
 use App\Websites\AuditLog;
 use App\Websites\ConnectorStatus;
 use App\Websites\WebsiteStatus;
@@ -37,7 +38,10 @@ final class PairConnector
                 throw ConnectorError::invalidPairingCode();
             }
 
-            $website = $code->website;
+            // Pairing and polling serialize on the website row. This prevents
+            // an already-authenticated poll from delivering old work after a
+            // new pairing has retired its connector.
+            $website = Website::query()->whereKey($code->website_id)->lockForUpdate()->firstOrFail();
 
             if (! $website->allowsServiceOperations() && ! $website->allowsSyntheticConnectorOperations()) {
                 throw ConnectorError::serviceInactive();
@@ -50,6 +54,22 @@ final class PairConnector
             }
 
             $code->update(['used_at' => now()]);
+
+            // A delivered job belongs to the installation that received it.
+            // Do not let a later poll transfer it to the replacement pairing.
+            $retiredJobs = $website->jobs()
+                ->where('status', JobStatus::Delivered)
+                ->whereNotNull('connector_id')
+                ->lockForUpdate()
+                ->get();
+
+            foreach ($retiredJobs as $job) {
+                $job->forceFill([
+                    'status' => JobStatus::Cancelled,
+                    'error' => ['code' => 'CONNECTOR_REPAIRED', 'message' => 'The connector pairing changed before the result was received.'],
+                ])->save();
+                app(JobLifecycle::class)->finished($job);
+            }
 
             // Re-pairing replaces the previous installation's credential.
             $website->connectors()->where('status', Connector::ACTIVE)->get()->each->revoke('re_paired');
@@ -77,7 +97,12 @@ final class PairConnector
 
             // The initial check: inventory, health and licenses.
             foreach ([JobType::GetInventory, JobType::SiteHealth, JobType::LicenseCheck] as $type) {
-                if ($connector->can($type->requiredCapability())) {
+                $alreadyPending = $website->jobs()
+                    ->where('type', $type)
+                    ->whereIn('status', [JobStatus::Queued, JobStatus::Waiting, JobStatus::Delivered])
+                    ->exists();
+
+                if (! $alreadyPending && $connector->can($type->requiredCapability())) {
                     $this->jobs->queue($website->setRelation('activeConnector', $connector), $type, [], 'pairing');
                 }
             }

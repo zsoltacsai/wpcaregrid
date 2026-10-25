@@ -13,6 +13,8 @@ use WPCareGrid\Connector\Backups\RestoreFaultHooks;
 use WPCareGrid\Connector\Backups\SqlImporter;
 use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Backups\WordPressBackupIndexLookup;
+use WPCareGrid\Connector\Core\LeaseLost;
+use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Health\HealthChecker;
 use WPCareGrid\Connector\Jobs\InvalidPayload;
 use WPCareGrid\Connector\Jobs\JobHandler;
@@ -88,6 +90,7 @@ final class RestoreHandler implements JobHandler
         $uuid = $payload['restore_uuid'];
         $importer = null;
         $destructiveMutationStarted = false;
+        $preserveArtifacts = false;
         $failureStage = 'source_validation';
         $this->progress($uuid, $destructiveMutationStarted, $failureStage);
         @set_time_limit(0);
@@ -141,16 +144,20 @@ final class RestoreHandler implements JobHandler
             // This boundary is after all remote and archive validation but before
             // maintenance mode or any live table/file mutation.
             $this->fault_hooks?->reach('before_destructive_mutation', $uuid);
+            Lock::refreshOrFail();
             Maintenance::enable($uuid);
+            $preserveMaintenance = false;
             try {
                 do_action('wp_caregrid_restore_critical_section', $payload['scope']);
                 $failureStage = 'database_swap';
                 $this->progress($uuid, $destructiveMutationStarted, $failureStage);
                 if ($importer !== null) {
+                    Lock::refreshOrFail();
                     $importer->swap(function () use (&$destructiveMutationStarted, $uuid) {
                         $this->progress($uuid, true, 'database_swap');
                         $destructiveMutationStarted = true;
                     });
+                    Lock::refreshOrFail();
                     $importer = null;
                     $this->fault_hooks?->reach('after_database_swap', $uuid);
                 }
@@ -168,8 +175,16 @@ final class RestoreHandler implements JobHandler
                 if ($files !== null) {
                     $this->fault_hooks?->reach('after_file_apply', $uuid);
                 }
+            } catch (LeaseLost $e) {
+                // A stale worker must not release the site's restore gate;
+                // the later owner will reconcile the durable mutation marker.
+                $preserveMaintenance = true;
+                $preserveArtifacts = true;
+                throw $e;
             } finally {
-                Maintenance::disable();
+                if (! $preserveMaintenance) {
+                    Maintenance::disable();
+                }
             }
 
             $failureStage = 'post_restore_health';
@@ -185,7 +200,18 @@ final class RestoreHandler implements JobHandler
             return $passed
                 ? JobResult::success('RESTORED', $data)
                 : JobResult::partial('RESTORED_CHECKS_FAILED', 'The backup was restored, but the checks afterwards found problems.', $data);
+        } catch (LeaseLost $e) {
+            // Fail-stop: preserve staged recovery material and do not mutate
+            // temporary database tables after ownership has been lost.
+            $preserveArtifacts = true;
+            throw $e;
         } catch (BackupFailure $e) {
+            try {
+                Lock::refreshOrFail();
+            } catch (LeaseLost $leaseLost) {
+                $preserveArtifacts = true;
+                throw $leaseLost;
+            }
             $importer?->discard();
             Logger::warning('restore.failed', ['restore' => $uuid, 'code' => $e->error_code]);
 
@@ -194,6 +220,12 @@ final class RestoreHandler implements JobHandler
                 'failure_stage' => $failureStage,
             ]));
         } catch (\Throwable) {
+            try {
+                Lock::refreshOrFail();
+            } catch (LeaseLost $leaseLost) {
+                $preserveArtifacts = true;
+                throw $leaseLost;
+            }
             // Unexpected errors must still report whether live state may have
             // changed, without leaking exception text or a filesystem path.
             $importer?->discard();
@@ -204,7 +236,9 @@ final class RestoreHandler implements JobHandler
                 'failure_stage' => $failureStage,
             ]);
         } finally {
-            TempDir::remove_job($uuid);
+            if (! $preserveArtifacts) {
+                TempDir::remove_job($uuid);
+            }
         }
     }
 

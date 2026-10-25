@@ -147,7 +147,7 @@ final class TarReader
                         throw new BackupFailure('RESTORE_ARCHIVE_INVALID', 'The archive is truncated.');
                     }
                     $left -= strlen($data);
-                    Lock::refresh();
+                    Lock::refreshOrFail();
 
                     return $data;
                 });

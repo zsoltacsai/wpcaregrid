@@ -3,6 +3,7 @@
 namespace WPCareGrid\Connector\Backups;
 
 use WPCareGrid\Connector\Core\Lock;
+use WPCareGrid\Connector\Core\LeaseLost;
 
 /**
  * Exports this site's tables (those with the WordPress table prefix) to a
@@ -92,6 +93,9 @@ final class DatabaseDumper
                 $sink->close();
             } catch (\Throwable) {
             }
+            if ($e instanceof LeaseLost) {
+                throw $e;
+            }
             throw $e instanceof BackupFailure ? $e : new BackupFailure('DATABASE_DUMP_FAILED', 'The database export failed.');
         } finally {
             $db->close();
@@ -150,7 +154,7 @@ final class DatabaseDumper
 
             $rows += count($batch);
             $db->flush();
-            Lock::refresh();
+            Lock::refreshOrFail();
 
             if (count($batch) < self::BATCH) {
                 break;

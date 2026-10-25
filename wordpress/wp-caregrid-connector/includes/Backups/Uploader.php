@@ -26,7 +26,9 @@ final class Uploader
     public function upload(string $backup_uuid, string $name, string $path, int $size, string $sha256, int $chunk_size): void
     {
         $base = "backups/{$backup_uuid}/objects/{$name}";
+        Lock::refreshOrFail();
         $status = $this->api->get($base);
+        Lock::refreshOrFail();
         $this->stop_if_refused($status, 'status');
 
         $offset = min($size, max(0, (int) ($status->data['received_bytes'] ?? 0)));
@@ -45,10 +47,11 @@ final class Uploader
         try {
             while (true) {
                 while ($offset < $size) {
+                    Lock::refreshOrFail();
                     fseek($handle, $offset);
                     $chunk = (string) fread($handle, min($chunk_size, $size - $offset));
                     $response = $this->api->put_raw("{$base}?offset={$offset}", $chunk, ['X-Chunk-SHA256' => hash('sha256', $chunk)]);
-                    Lock::refresh();
+                    Lock::refreshOrFail();
 
                     if ($response->ok()) {
                         $offset = (int) ($response->data['received_bytes'] ?? $offset + strlen($chunk));
@@ -70,7 +73,9 @@ final class Uploader
                     $this->retry_or_fail($response, $retries);
                 }
 
+                Lock::refreshOrFail();
                 $response = $this->api->post("{$base}/complete", ['size' => $size, 'sha256' => $sha256]);
+                Lock::refreshOrFail();
                 if ($response->ok()) {
                     return;
                 }

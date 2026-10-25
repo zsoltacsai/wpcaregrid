@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Connector;
 
+use App\Connector\JobQueue;
+use App\Connector\JobStatus;
 use App\Connector\JobType;
 use App\Connector\PairingCodes;
 use App\Models\Connector;
@@ -148,6 +150,59 @@ class PairingTest extends TestCase
             ->postJson(route('api.v1.connector.heartbeat'), $this->heartbeatPayload())
             ->assertStatus(401)->assertJsonPath('error.code', 'CONNECTOR_REVOKED');
         $this->assertSame(1, Connector::where('status', 'active')->count());
+    }
+
+    public function test_repair_cancels_jobs_delivered_to_the_old_connector_and_ignores_late_results(): void
+    {
+        $site = $this->pairedWebsite();
+        $website = $site['website'];
+        $oldConnector = $website->activeConnector()->firstOrFail();
+        $oldJob = $website->jobs()->where('status', JobStatus::Queued)->firstOrFail();
+        $oldJob->forceFill([
+            'status' => JobStatus::Delivered,
+            'connector_id' => $oldConnector->id,
+            'attempts' => 1,
+            'delivered_at' => now(),
+        ])->save();
+
+        $newCredential = $this->pair(app(PairingCodes::class)->issue($website), $website->url)
+            ->assertCreated()->json('credential');
+        $newConnector = Connector::where('status', Connector::ACTIVE)->sole();
+
+        $oldJob->refresh();
+        $this->assertSame(JobStatus::Cancelled, $oldJob->status);
+        $this->assertSame('CONNECTOR_REPAIRED', $oldJob->error['code']);
+        $this->assertSame($oldConnector->id, $oldJob->connector_id, 'The old job retains its original connector binding.');
+        foreach ([JobType::GetInventory, JobType::SiteHealth, JobType::LicenseCheck] as $type) {
+            $this->assertSame(
+                1,
+                $website->jobs()->where('type', $type)->whereIn('status', [JobStatus::Queued, JobStatus::Waiting, JobStatus::Delivered])->count(),
+                "Re-pairing must not create a duplicate pending {$type->value} check."
+            );
+        }
+
+        $result = [
+            'status' => 'success',
+            'result_code' => 'INVENTORY_COLLECTED',
+            'data' => ['inventory' => $this->inventoryPayload()],
+        ];
+        $this->withHeaders(['Authorization' => 'Bearer '.$site['credential'], 'X-CareGrid-Website' => $website->uuid])
+            ->postJson(route('api.v1.connector.jobs.result', $oldJob->uuid), $result)
+            ->assertUnauthorized()->assertJsonPath('error.code', 'CONNECTOR_REVOKED');
+
+        $this->withHeaders(['Authorization' => 'Bearer '.$newCredential, 'X-CareGrid-Website' => $website->uuid])
+            ->postJson(route('api.v1.connector.jobs.result', $oldJob->uuid), $result)
+            ->assertOk()->assertJson(['duplicate' => true, 'status' => 'cancelled']);
+
+        $this->assertNull($website->refresh()->inventory, 'A late result cannot update current site inventory.');
+        $this->assertSame(JobStatus::Cancelled, $oldJob->refresh()->status);
+
+        // Even if a stale Delivered row survives from a concurrent boundary,
+        // delivery must never rebind it to the new pairing.
+        $oldJob->forceFill(['status' => JobStatus::Delivered, 'error' => null])->save();
+        $delivered = app(JobQueue::class)->deliver($newConnector);
+        $this->assertFalse($delivered->contains('uuid', $oldJob->uuid));
+        $this->assertSame($oldConnector->id, $oldJob->refresh()->connector_id);
     }
 
     public function test_pairing_is_rate_limited(): void
