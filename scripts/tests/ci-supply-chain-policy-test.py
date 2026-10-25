@@ -85,7 +85,11 @@ def validate_workflow_controls(workflow):
 
 
 def validate_sqlite_regression_gate(workflow):
-    match = re.search(r"(?ms)^  sqlite_regressions:\\n(.*?)(?=^  [A-Za-z0-9_-]+:\\n|\\Z)", workflow)
+    lines = workflow.splitlines()
+    start = next((index for index, line in enumerate(lines) if line == "  sqlite_regressions:"), None)
+    assert start is not None, "dedicated fast SQLite regression job missing"
+    end = next((index for index in range(start + 1, len(lines)) if lines[index].startswith("  ") and not lines[index].startswith("    ") and lines[index].endswith(":")), len(lines))
+    job = "\n".join(lines[start:end])
     assert match, "dedicated fast SQLite regression job missing"
     job = match.group(1)
     assert "name: Server SQLite regression gate (PHP 8.4)" in job, "stable SQLite check name changed"
