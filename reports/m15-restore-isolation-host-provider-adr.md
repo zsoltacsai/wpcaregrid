@@ -283,6 +283,45 @@ A new restore cannot start while any prior restore is active, terminal-but-unrep
 
 Recovery uses named roles, exact site/restore/work/backup/scope, dual approval where policy requires, bounded audited actions and integrity evidence. Operators cannot clear state by deleting .maintenance, removing a lock or marking a job successful.
 
+### Crash/recovery sequence diagram
+
+The diagram shows a crash after the durable mutation boundary but before terminal receipt publication. The broker does not infer success from process exit or an absent Connector marker. A separately authorized recovery intent is required; if integrity cannot be established, the gate stays closed.
+
+~~~mermaid
+sequenceDiagram
+    participant B as Root broker / durable state
+    participant W as Isolated restore worker
+    participant D as Site DB + volume
+    participant C as Connector relay
+    participant L as Laravel
+    participant O as Authorized recovery operator
+    B->>B: Persist APPLYING and mutation_started for generation g
+    B->>W: Start exact accepted work item
+    W->>D: Apply selected restore scope
+    Note over W,D: Host or worker crashes; completion is not proven
+    B--xW: Process/host loss
+    Note over B: Restart boot holds ingress and all writers closed
+    B->>B: Reconcile journal, controls and exact work binding
+    B->>B: Outcome ambiguous; persist RECOVERY_REQUIRED
+    B->>B: No TTL unlock; do not rerun original restore
+    B-->>C: Signed RECOVERY_REQUIRED receipt in durable outbox, if safely reconstructable
+    C->>L: Relay receipt (may be retried)
+    L->>L: Verify signature/bindings; mark manual recovery required
+    O->>L: Separately authorize recovery of exact site/restore/scope
+    L->>C: New recovery intent bound to safety backup and current restore
+    C->>B: Relay signed recovery intent
+    B->>B: Verify intent, replay state, current gate; retain prior generation
+    B->>W: Launch isolated recovery worker only after writer/ingress proof
+    W->>D: Restore safety source and run bounded verification
+    W-->>B: Recovery outcome + evidence digest
+    B->>B: Verify outcome; persist and sign RECOVERY_SUCCESS receipt
+    B->>B: Reconcile/open in controlled order; ingress opens last
+    B-->>C: Durable signed receipt
+    C->>L: Relay same receipt idempotently
+    L->>L: Verify and record terminal recovery once
+    Note over B,D: If any evidence/control is missing or recovery fails, remain closed
+~~~
+
 ## 10. Proposed #182 contract/API changes
 
 Current RestoreIsolationGateProvider methods alone are insufficient for async host execution, signed authorization, worker handoff and terminal proof. Keep fail-closed behavior and prepare a separate contract-change PR after M17 review with these typed concepts:
