@@ -90,12 +90,10 @@ def validate_sqlite_regression_gate(workflow):
     assert start is not None, "dedicated fast SQLite regression job missing"
     end = next((index for index in range(start + 1, len(lines)) if lines[index].startswith("  ") and not lines[index].startswith("    ") and lines[index].endswith(":")), len(lines))
     job = "\n".join(lines[start:end])
-    assert match, "dedicated fast SQLite regression job missing"
-    job = match.group(1)
     assert "name: Server SQLite regression gate (PHP 8.4)" in job, "stable SQLite check name changed"
     assert "php-version: '8.4'" in job, "SQLite regression gate PHP version changed"
     assert re.search(r"(?m)^      DB_CONNECTION: sqlite$", job), "SQLite job must select the SQLite connection"
-    assert re.search(r"(?m)^      DB_DATABASE: database/ci-sqlite-regressions\\.sqlite$", job), "SQLite job must use its isolated disposable database file"
+    assert re.search(r"(?m)^      DB_DATABASE: database/ci-sqlite-regressions\.sqlite$", job), "SQLite job must use its isolated disposable database file"
     assert re.search(r"(?m)^      CAREGRID_EXPECTED_DATABASE_DRIVER: sqlite$", job), "SQLite driver expectation missing"
     assert "scripts/tests/assert-ci-sqlite-driver.php" in job, "SQLite runtime engine assertion missing"
     assert "vendor/bin/phpunit" in job and "--fail-on-skipped" in job, "strict targeted PHPUnit regressions missing"
