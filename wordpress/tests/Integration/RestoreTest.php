@@ -278,6 +278,7 @@ final class RestoreTest extends TestCase
 
             file_put_contents($path, 'live damaged state');
             update_option('caregrid_providerless_compensation', 'live damaged state');
+            $this->use_backup_objects($primary, $primaryObjects);
             $failed = $this->restore_with_fault(
                 $primary,
                 $primaryObjects,
@@ -298,6 +299,7 @@ final class RestoreTest extends TestCase
 
             remove_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
             try {
+                $this->use_backup_objects($safety, $safetyObjects);
                 $compensation = $this->restore($safety, 'full', $safetyObjects);
             } finally {
                 add_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
@@ -2160,6 +2162,17 @@ final class RestoreTest extends TestCase
         $this->server->completed = [];
 
         return [$uuid, $objects];
+    }
+
+    private function use_backup_objects(string $uuid, array $objects): void
+    {
+        foreach ($objects as $object) {
+            $name = (string) ($object['name'] ?? '');
+            $path = sys_get_temp_dir().'/caregrid-download-'.$uuid.'-'.$name;
+            $this->assertNotSame('', $name);
+            $this->assertFileExists($path);
+            $this->server->downloads[$name] = $path;
+        }
     }
 
     private function restore(string $backup, string $scope, array $objects, bool $fresh_http = true): array
