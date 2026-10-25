@@ -31,7 +31,7 @@ One application server is assumed. Everything below works with more than one (sh
 | OS | Linux, x86_64 (Ubuntu 24.04 LTS is what CI runs) |
 | PHP | **8.4** is the current staging runtime and required patched rollback (CLI and FPM). Laravel server CI tests PHP 8.4 and 8.5; CI coverage does not mean a host has migrated or is approved to do so. Ubuntu 24.04 ships 8.3, so the current 8.4 installation uses the `ppa:ondrej/php` repository |
 | PHP extensions | Required by the locked packages (`composer check-platform-reqs --no-dev --lock`): ctype, curl, dom, fileinfo, filter, hash, iconv, json, libxml, mbstring, openssl, pcre, session, simplexml, tokenizer. Required by the application: **intl** (`Number::fileSize`), **zip** (`connector:package`), **pdo_mysql** (MySQL), **pcntl** (CLI only: queue worker `--timeout`). Ubuntu packages: `php8.4-fpm php8.4-cli php8.4-mysql php8.4-mbstring php8.4-xml php8.4-curl php8.4-zip php8.4-intl` (the others are built in) |
-| Database | **MySQL 8.4 LTS** is the primary database; Laravel server CI also tests MariaDB 10.11 (migrations roll back fully on both). Ubuntu 24.04 ships MySQL 8.0 (end of life April 2026); install 8.4 from the MySQL APT repository. SQLite is for development and tests only |
+| Database | **MySQL 8.4 LTS** is the production database target and the only full Laravel server integration engine. Ubuntu 24.04 ships MySQL 8.0 (end of life April 2026); install 8.4 from the MySQL APT repository. SQLite is for development and tests only |
 | Web server | nginx with TLS (Let's Encrypt / certbot) |
 | Process supervisor | supervisor (or systemd), for the two queue workers |
 | Build tools | Composer 2; Node.js **22** + npm to build assets (Vite 8 needs Node ≥ 20.19 or ≥ 22.12; Ubuntu 24.04 ships 18, so use the NodeSource 22.x repository) |
@@ -376,7 +376,7 @@ For a separately approved production release, preserve the existing production p
 ## Rollback
 
 1. `php artisan down --retry=60`.
-2. If the release added migrations and they must be undone: `php artisan migrate:rollback --step=<number of new migrations> --pretend` first, then without `--pretend`. Every migration has a working `down()` (CI migrates, rolls everything back and migrates again on SQLite and MySQL), but rolling back drops columns and tables with their data. When in doubt, restore the dump taken before the update instead.
+2. If the release added migrations and they must be undone: `php artisan migrate:rollback --step=<number of new migrations> --pretend` first, then without `--pretend`. Every migration has a working `down()` (full server CI migrates, rolls back and migrates again on MySQL 8.4; targeted SQLite regressions run separately), but rolling back drops columns and tables with their data. When in doubt, restore the dump taken before the update instead.
 
    **Data loss in owner-managed migrations.** Rolling back a release that contains these migrations destroys data that cannot be rebuilt from Stripe or from the code. The commercial migrations are documented in COUPONS.md, PROBONO.md and RECOVERY_OFFERS.md:
 
@@ -479,7 +479,8 @@ The staging runtime remains PHP 8.4 until a separate, approved PHP 8.5 cutover i
 `.github/workflows/ci.yml` runs on pushes to the development branch and on pull requests (never deploys):
 
 - **quality:** no tracked `.env`/keys/databases, `composer validate`, PHP lint, Pint, `composer audit` (app and connector tests), `npm ci && npm run build`, `npm audit` (high and critical), gitleaks over the full history (`.gitleaks.toml`).
-- **Laravel server (PHP 8.4 and 8.5 × SQLite, MySQL 8.4, MariaDB 10.11):** each PHP version runs the server suite across all three database lanes. The required MySQL process-concurrency gate runs on both PHP versions. Migrations, rollback, caches, S3/SFTP integration, `system:check`, and HTTP smoke checks are included.
-- **WordPress Connector:** customer-runtime compatibility is tested across PHP 8.2–8.5, WordPress 6.8 and 7.1, MySQL 5.7/8.0/8.4, and MariaDB 10.11. The explicit PHP 8.4 + WordPress 7.1 SQLite/MySQL/MariaDB contexts remain in the matrix; the Connector matrix is separate from the Laravel server PHP matrix.
+- **Laravel full server tests:** exactly two lanes run: PHP 8.4 + MySQL 8.4 LTS and PHP 8.5 + MySQL 8.4 LTS. Each verifies the actual Laravel PDO driver and server version, runs the full strict PHPUnit suite, migrations and rollback, production cache build, S3/Moto and SFTP integration, system check, HTTP smoke, and its required MySQL process-concurrency gate. The full Laravel MariaDB lanes were removed because they did not establish MariaDB connections and are not the production database target.
+- **Laravel SQLite regressions:** a separate PHP 8.4 gate verifies the actual PDO SQLite connection and runs selected Unit and Feature regressions without S3/SFTP services. It does not replace full server integration.
+- **WordPress Connector:** customer-runtime compatibility is tested across PHP 8.2–8.5, WordPress 6.8 and 7.1, MySQL 5.7/8.0/8.4, and MariaDB 10.11. The required PHP 8.4 + WordPress 7.1 SQLite/MySQL/MariaDB contexts remain; Connector MariaDB coverage is unchanged and independent of the Laravel server matrix.
 
 The Linux CI run is the authoritative result for filesystem behaviour (permissions, symlinks); on Windows those few assertions are skipped with an explicit reason.

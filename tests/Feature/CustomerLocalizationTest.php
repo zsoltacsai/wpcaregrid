@@ -103,6 +103,64 @@ class CustomerLocalizationTest extends TestCase
         }
     }
 
+    public function test_a_localized_marketing_route_remembers_its_locale_for_the_unprefixed_login_page(): void
+    {
+        foreach (['hu' => 'Belépés', 'en' => 'Log in'] as $locale => $loginLabel) {
+            $response = $this->get(route('home', ['locale' => $locale]))
+                ->assertOk()
+                ->assertHeader('Content-Language', $locale);
+
+            $response->assertCookie(self::COOKIE, $locale);
+
+            // Model the browser sending the response cookie on the next request.
+            $this->withCookie(self::COOKIE, $locale)
+                ->get(route('login'))
+                ->assertOk()
+                ->assertHeader('Content-Language', $locale)
+                ->assertSee($loginLabel);
+        }
+    }
+
+    public function test_a_guest_marketing_language_replaces_a_conflicting_cookie_for_auth_views(): void
+    {
+        $this->in('en')->get('/hu/')->assertOk()->assertCookie(self::COOKIE, 'hu');
+
+        $this->withCookie(self::COOKIE, 'hu')->get(route('login'))
+            ->assertOk()->assertHeader('Content-Language', 'hu');
+        $this->withCookie(self::COOKIE, 'hu')->get(route('password.request'))
+            ->assertOk()->assertHeader('Content-Language', 'hu');
+        $this->withCookie(self::COOKIE, 'hu')->get(route('password.reset', ['token' => 'synthetic-invalid-token']))
+            ->assertHeader('Content-Language', 'hu');
+        $this->withCookie(self::COOKIE, 'hu')->get(route('account.activate', ['token' => 'synthetic-invalid-token']))
+            ->assertHeader('Content-Language', 'hu');
+        $this->withCookie(self::COOKIE, 'hu')->get(route('checkout.show', [
+            'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly',
+        ]))->assertOk()->assertHeader('Content-Language', 'hu');
+    }
+
+    public function test_authenticated_account_uses_saved_locale_after_a_conflicting_marketing_visit_and_cookie(): void
+    {
+        foreach (['en' => 'hu', 'hu' => 'en'] as $savedLocale => $marketingLocale) {
+            $customer = Customer::factory()->withUser()->create();
+            $customer->user->forceFill(['locale' => $savedLocale])->save();
+
+            $this->actingAs($customer->user)
+                ->get(route('home', ['locale' => $marketingLocale]))
+                ->assertOk()
+                ->assertHeader('Content-Language', $marketingLocale);
+
+            $this->assertSame($savedLocale, $customer->user->refresh()->locale, 'A localized marketing view must not persist its language choice.');
+
+            $this->actingAs($customer->user)
+                ->withCookie(self::COOKIE, $marketingLocale)
+                ->get(route('account.subscription'))
+                ->assertOk()
+                ->assertHeader('Content-Language', $savedLocale);
+
+            $this->assertSame($savedLocale, $customer->user->refresh()->locale, 'A stale device cookie must not overwrite the saved account preference.');
+        }
+    }
+
     public function test_switching_the_language_remembers_it_and_returns_to_the_same_page(): void
     {
         $checkout = route('checkout.show', ['product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly']);
@@ -600,20 +658,25 @@ class CustomerLocalizationTest extends TestCase
         $this->assertNull($b->user->refresh()->locale);
     }
 
-    public function test_a_choice_made_before_signing_in_carries_into_the_session_and_the_saved_preference(): void
+    public function test_a_guest_language_carries_into_the_account_but_only_an_explicit_switch_updates_the_saved_preference(): void
     {
         $customer = Customer::factory()->withUser()->create();
 
         $this->actingAs($customer->user)->get(route('account.dashboard'))->assertHeader('Content-Language', 'en');
         $this->assertNull($customer->user->refresh()->locale, 'Nothing was chosen: nothing is saved.');
 
-        // Chosen on the public site (the cookie), then signed in: the portal uses it and remembers it.
+        // A guest choice carried by the browser cookie controls rendering, but
+        // does not become a saved account preference merely because the user signs in.
         $this->actingAs($customer->user)->in('hu')->get(route('account.dashboard'))->assertHeader('Content-Language', 'hu');
+        $this->assertNull($customer->user->refresh()->locale);
+
+        // An explicit customer language-switch action is the persistence path.
+        $this->actingAs($customer->user)->post(route('locale.update'), ['locale' => 'hu'])->assertRedirect();
         $this->assertSame('hu', $customer->user->refresh()->locale);
 
-        // The latest choice on this device wins and is saved.
-        $this->actingAs($customer->user)->in('en')->get(route('account.dashboard'))->assertHeader('Content-Language', 'en');
-        $this->assertSame('en', $customer->user->refresh()->locale);
+        // A stale device cookie cannot override the saved account preference.
+        $this->actingAs($customer->user)->in('en')->get(route('account.dashboard'))->assertHeader('Content-Language', 'hu');
+        $this->assertSame('hu', $customer->user->refresh()->locale);
     }
 
     public function test_a_stored_value_that_is_not_supported_is_ignored(): void
