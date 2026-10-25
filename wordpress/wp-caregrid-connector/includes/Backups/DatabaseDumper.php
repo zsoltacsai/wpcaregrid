@@ -59,7 +59,7 @@ final class DatabaseDumper
         $db->suppress_errors(true);
         $db->show_errors(false);
 
-        if (! $db->dbh instanceof \mysqli || ! $db->get_var('SELECT 1')) {
+        if (! ($db->dbh instanceof \mysqli) || ! $db->get_var('SELECT 1')) {
             throw new BackupFailure('DATABASE_DUMP_FAILED', 'The database could not be opened for the backup.');
         }
 
