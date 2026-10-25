@@ -209,4 +209,22 @@ class AccountBackupsTest extends TestCase
         $this->assertSame(BackupReason::Manual, Backup::sole()->reason);
         $this->assertSame(0, BackupRestore::count());
     }
+
+    public function test_restore_feature_switch_still_refuses_when_provider_is_supported(): void
+    {
+        config(['compatibility.restore_isolation_provider_ids' => ['tests.fake-host-isolation']]);
+        $site = $this->backupReadySite();
+        $website = $site['website'];
+        $backup = $this->verifiedBackup($website);
+
+        $this->assertTrue(app(\App\Compatibility\CapabilityReadiness::class)->restoreIsolationSupported($website));
+
+        $this->actingAs($website->customer->user)
+            ->post(route('account.websites.backups.restore.store', [$website, $backup]), ['scope' => 'full', 'confirmation' => 'company.example', 'understood' => '1'])
+            ->assertSessionHas('backup_error', __('backups.refusals.RESTORE_NOT_AVAILABLE'));
+
+        $this->assertSame(1, Backup::count());
+        $this->assertSame(0, BackupRestore::count());
+        $this->assertSame(0, WebsiteJob::whereIn('type', ['RESTORE', 'BACKUP_FULL'])->count());
+    }
 }

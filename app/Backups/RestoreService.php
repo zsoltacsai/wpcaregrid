@@ -80,9 +80,9 @@ class RestoreService
             return 'BACKUP_NOT_FOUND';
         }
 
-        // Keep the host-safety limitation visible and authoritative even when
-        // restore is otherwise disabled by policy. This check is repeated by
-        // the Connector immediately before any destructive mutation.
+        // Keep one authoritative host-readiness decision visible to both UI
+        // and request handling, even when another restore policy is disabled.
+        // The Connector repeats isolation acquisition before destructive work.
         if (! app(CapabilityReadiness::class)->restoreIsolationSupported($website)) {
             return 'RESTORE_ISOLATION_UNAVAILABLE';
         }
