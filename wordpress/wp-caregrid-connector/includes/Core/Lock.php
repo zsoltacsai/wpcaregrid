@@ -200,6 +200,12 @@ final class Lock
         }
     }
 
+    /** The option name is exposed for restore exclusion; the lease token remains private. */
+    public static function optionName(): string
+    {
+        return self::OPTION;
+    }
+
     /** Release is conditional: an expired owner cannot delete its successor's lease. */
     public static function release(): bool
     {
