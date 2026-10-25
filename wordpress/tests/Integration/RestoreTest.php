@@ -558,13 +558,32 @@ final class RestoreTest extends TestCase
             wp_cache_flush();
             $this->assertSame('safety', get_option('m8_compensation_manifest_marker'));
             $this->assertSame($expectedSafetyFilesystem, $this->capture_restore_manifest());
-            $this->assertSame([], $this->temp_files());
+
+            $failedRestore = array_filter(
+                $this->plugin()->jobs()->all(),
+                static fn (array $job): bool => ($job['type'] ?? null) === 'RESTORE'
+                    && ($job['payload']['backup_uuid'] ?? null) === $primary
+                    && ($job['result']['status'] ?? null) === 'failed'
+            );
+            $this->assertCount(1, $failedRestore);
+            $failedRestoreUuid = reset($failedRestore)['payload']['restore_uuid'];
+            $remainingTemp = $this->temp_files();
+            sort($remainingTemp);
+            $expectedTemp = [
+                $failedRestoreUuid.'-database.download',
+                $failedRestoreUuid.'-files-staging',
+                $failedRestoreUuid.'-files.download',
+            ];
+            sort($expectedTemp);
+            $this->assertSame($expectedTemp, $remainingTemp, 'Only the interrupted destructive restore artifacts remain protected after compensation.');
         });
     }
 
     public function test_database_restore_keeps_the_connector_connected(): void
     {
         $this->requires_mysql();
+        global $wpdb;
+        $stagingTablesBefore = $wpdb->get_col("SHOW TABLES LIKE 'cg%'");
         update_option('caregrid_restore_marker', 'before');
         [$backup, $objects] = $this->backup('BACKUP_DATABASE');
 
@@ -582,8 +601,7 @@ final class RestoreTest extends TestCase
         $this->assertTrue(Settings::is_connected());
         $this->assertSame(self::CREDENTIAL, (new CredentialStore)->get());
         $this->assertNotNull(BackupIndex::find($backup));
-        global $wpdb;
-        $this->assertSame([], $wpdb->get_col("SHOW TABLES LIKE 'cg%'"), 'No temporary tables are left.');
+        $this->assertSame($stagingTablesBefore, $wpdb->get_col("SHOW TABLES LIKE 'cg%'"), 'A successful restore adds no temporary tables and preserves unrelated protected attempts.');
         $this->assertTrue($result['data']['destructive_mutation_started']);
     }
 
@@ -1116,6 +1134,8 @@ final class RestoreTest extends TestCase
     public function test_rejected_sql_leaves_the_live_database_untouched(): void
     {
         $this->requires_mysql();
+        global $wpdb;
+        $stagingTablesBefore = $wpdb->get_col("SHOW TABLES LIKE 'cg%'");
         update_option('caregrid_restore_marker', 'live');
         $dump = "SET NAMES utf8mb4;\nDROP TABLE IF EXISTS `wp_options`;\nCREATE TABLE `wp_options` (`option_id` bigint(20) unsigned NOT NULL AUTO_INCREMENT, `option_name` varchar(191) NOT NULL DEFAULT '', `option_value` longtext NOT NULL, `autoload` varchar(20) NOT NULL DEFAULT 'yes', PRIMARY KEY (`option_id`)) ENGINE=InnoDB;\nINSERT INTO `wp_options` VALUES ('1','siteurl','https://evil.example','yes');\nDROP TABLE `wp_users`;\n";
 
@@ -1125,8 +1145,7 @@ final class RestoreTest extends TestCase
         wp_cache_flush();
         $this->assertSame('live', get_option('caregrid_restore_marker'));
         $this->assertSame('https://site.example', get_option('siteurl'));
-        global $wpdb;
-        $this->assertSame([], $wpdb->get_col("SHOW TABLES LIKE 'cg%'"));
+        $this->assertSame($stagingTablesBefore, $wpdb->get_col("SHOW TABLES LIKE 'cg%'"), 'Rejected SQL does not leave tables from this import or alter existing restore attempts.');
         $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
     }
 
