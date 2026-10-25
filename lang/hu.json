@@ -6,5 +6,6 @@
     "Page Expired": "Az oldal lejárt",
     "Too Many Requests": "Túl sok kérés",
     "Server Error": "Szerverhiba",
-    "Service Unavailable": "A szolgáltatás átmenetileg nem érhető el"
+    "Service Unavailable": "A szolgáltatás átmenetileg nem érhető el",
+    "Security findings table": "Biztonsági találatok táblázata"
 }
