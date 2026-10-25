@@ -84,6 +84,33 @@ def validate_workflow_controls(workflow):
     assert "^[0-9a-fA-F]{40}$" in workflow
 
 
+def validate_sqlite_regression_gate(workflow):
+    match = re.search(r"(?ms)^  sqlite_regressions:\\n(.*?)(?=^  [A-Za-z0-9_-]+:\\n|\\Z)", workflow)
+    assert match, "dedicated fast SQLite regression job missing"
+    job = match.group(1)
+    assert "name: Server SQLite regression gate (PHP 8.4)" in job, "stable SQLite check name changed"
+    assert "php-version: '8.4'" in job, "SQLite regression gate PHP version changed"
+    assert re.search(r"(?m)^      DB_CONNECTION: sqlite$", job), "SQLite job must select the SQLite connection"
+    assert re.search(r"(?m)^      DB_DATABASE: ':memory:'$", job), "SQLite job must use an isolated in-memory DB"
+    assert re.search(r"(?m)^      CAREGRID_EXPECTED_DATABASE_DRIVER: sqlite$", job), "SQLite driver expectation missing"
+    assert "scripts/tests/assert-ci-sqlite-driver.php" in job, "SQLite runtime engine assertion missing"
+    assert "vendor/bin/phpunit" in job and "--fail-on-skipped" in job, "strict targeted PHPUnit regressions missing"
+    for test_path in (
+        "tests/Unit",
+        "tests/Feature/AuthorizationMatrixTest.php",
+        "tests/Feature/Account/AuthenticationTest.php",
+        "tests/Feature/Account/AuthorizationTest.php",
+        "tests/Feature/Account/CustomerAreaTest.php",
+        "tests/Feature/Account/OnboardingTest.php",
+        "tests/Feature/CustomerLocalizationTest.php",
+        "tests/Feature/LocalizedMarketingRoutesTest.php",
+    ):
+        assert test_path in job, f"SQLite regression scope missing: {test_path}"
+    assert "services:" not in job, "quick SQLite regressions must not start integration services"
+    for forbidden in ("moto_server", "SFTP test service", "CAREGRID_TEST_REQUIRE_SERVICES"):
+        assert forbidden not in job, f"quick SQLite job includes full integration service setup: {forbidden}"
+
+
 def expect_rejected(check, content, reason):
     try:
         check(content)
@@ -101,11 +128,13 @@ def main():
 
     workflow = WORKFLOW.read_text(encoding="utf-8")
     validate_workflow_controls(workflow)
+    validate_sqlite_regression_gate(workflow)
     mutations = (
         (workflow + "\npull_request_target:\n", "pull_request_target"),
         (workflow.replace("contents: read", "contents: write", 1), "write token permission"),
         (workflow.replace("name: Quality (lint, style, dependencies, build, secrets)", "name: quality removed", 1), "missing mandatory job"),
         (workflow.replace("Required MySQL process-concurrency gate", "optional MySQL process gate", 1), "missing MySQL process gate"),
+        (workflow.replace("  sqlite_regressions:", "  quick_sqlite_missing:", 1), "missing dedicated SQLite regression gate"),
         (workflow.replace("^[0-9a-fA-F]{40}$", "^.+$", 1), "weak manual SHA grammar"),
     )
     for mutated, reason in mutations:
