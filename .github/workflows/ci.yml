@@ -348,7 +348,7 @@ jobs:
     timeout-minutes: 20
     env:
       DB_CONNECTION: sqlite
-      DB_DATABASE: ':memory:'
+      DB_DATABASE: database/ci-sqlite-regressions.sqlite
       DB_URL: ''
       CACHE_STORE: array
       CAREGRID_EXPECTED_DATABASE_DRIVER: sqlite
@@ -365,7 +365,9 @@ jobs:
       - name: Application environment
         run: |
           cp .env.example .env
+          touch database/ci-sqlite-regressions.sqlite
           php artisan key:generate --force
+          php artisan migrate --force
 
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
