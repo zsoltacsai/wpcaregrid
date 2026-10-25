@@ -121,7 +121,7 @@ class CustomerLocalizationTest extends TestCase
         }
     }
 
-    public function test_an_explicit_marketing_language_replaces_a_conflicting_cookie_for_auth_views(): void
+    public function test_a_guest_marketing_language_replaces_a_conflicting_cookie_for_auth_views(): void
     {
         $this->in('en')->get('/hu/')->assertOk()->assertCookie(self::COOKIE, 'hu');
 
@@ -136,6 +136,29 @@ class CustomerLocalizationTest extends TestCase
         $this->withCookie(self::COOKIE, 'hu')->get(route('checkout.show', [
             'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly',
         ]))->assertOk()->assertHeader('Content-Language', 'hu');
+    }
+
+    public function test_authenticated_account_uses_saved_locale_after_a_conflicting_marketing_visit_and_cookie(): void
+    {
+        foreach (['en' => 'hu', 'hu' => 'en'] as $savedLocale => $marketingLocale) {
+            $customer = Customer::factory()->withUser()->create();
+            $customer->user->forceFill(['locale' => $savedLocale])->save();
+
+            $this->actingAs($customer->user)
+                ->get(route('home', ['locale' => $marketingLocale]))
+                ->assertOk()
+                ->assertHeader('Content-Language', $marketingLocale);
+
+            $this->assertSame($savedLocale, $customer->user->refresh()->locale, 'A localized marketing view must not persist its language choice.');
+
+            $this->actingAs($customer->user)
+                ->withCookie(self::COOKIE, $marketingLocale)
+                ->get(route('account.subscription'))
+                ->assertOk()
+                ->assertHeader('Content-Language', $savedLocale);
+
+            $this->assertSame($savedLocale, $customer->user->refresh()->locale, 'A stale device cookie must not overwrite the saved account preference.');
+        }
     }
 
     public function test_switching_the_language_remembers_it_and_returns_to_the_same_page(): void

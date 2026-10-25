@@ -100,7 +100,7 @@ test.describe('customer HU/EN continuity without payment', () => {
         await expect(page.locator('form button[type="submit"]').last()).toBeVisible();
     });
 
-    test('an explicit marketing language overrides a conflicting saved preference and is synchronized on login', async ({ browser }) => {
+    test('a guest marketing choice survives login while the authenticated account keeps its saved preference', async ({ browser }) => {
         test.skip(!LOCAL_FIXTURE_ENABLED, 'Enable M16_LOCAL_E2E=1 to seed the isolated local SQLite fixture.');
 
         for (const locale of ['hu', 'en'] as const) {
@@ -111,9 +111,9 @@ test.describe('customer HU/EN continuity without payment', () => {
 
             await context.clearCookies();
 
-            // The authenticated customer has a deliberately conflicting saved
-            // preference. A localized homepage path is an explicit choice and
-            // its cookie takes precedence on the following unprefixed login.
+            // The guest's explicit marketing choice carries through the
+            // unprefixed login page, despite the synthetic account having a
+            // different saved locale.
             await page.goto(locale === 'hu' ? '/hu/' : '/en/');
             await expect(page.locator('html')).toHaveAttribute('lang', locale);
             await page.getByRole('link', { name: locale === 'hu' ? 'Belépés' : 'Login', exact: true }).first().click();
@@ -123,16 +123,22 @@ test.describe('customer HU/EN continuity without payment', () => {
             await page.locator('input[name="password"]').fill(CUSTOMER_PASSWORD);
             await page.locator('form button[type="submit"]').last().click();
             await page.waitForURL(/\/account(?:\/)?$/);
-            await page.goto('/account/websites');
+            await expect(page.locator('html')).toHaveAttribute('lang', savedLocale);
+
+            // Authenticated marketing pages may use their explicit URL locale,
+            // but returning to the account must use the saved preference.
+            await page.goto(locale === 'hu' ? '/hu/' : '/en/');
             await expect(page.locator('html')).toHaveAttribute('lang', locale);
-            await expect(page.locator('h1')).toContainText(locale === 'hu' ? 'Weboldalak' : 'Websites');
+            await page.goto('/account/websites');
+            await expect(page.locator('html')).toHaveAttribute('lang', savedLocale);
+            await expect(page.locator('h1')).toContainText(savedLocale === 'hu' ? 'Weboldalak' : 'Websites');
 
             const persistedLocale = execFileSync(LOCAL_PHP, ['-d', 'display_errors=0', '-r', '$p=new PDO("sqlite:".getenv("M16_LOCAL_SQLITE_PATH")); echo $p->query("SELECT locale FROM users WHERE email = \'m16-locale-customer@caregrid.test\'")->fetchColumn();'], {
                 encoding: 'utf8',
                 env: { ...process.env, M16_LOCAL_SQLITE_PATH: LOCAL_SQLITE },
                 stdio: ['ignore', 'pipe', 'pipe'],
             }).trim();
-            expect(persistedLocale).toBe(locale);
+            expect(persistedLocale).toBe(savedLocale);
 
             await context.close();
         }

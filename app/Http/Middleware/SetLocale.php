@@ -12,21 +12,33 @@ use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Sets the display language of the request (App\Localization\Locales) before
- * anything renders, and keeps a signed-in customer's saved preference in step
- * with the language chosen on this device.
+ * anything renders. Marketing routes may display their explicit language,
+ * while an authenticated customer's saved preference controls account pages.
  */
 class SetLocale
 {
     public function handle(Request $request, Closure $next): Response
     {
         $originalLocale = app()->getLocale();
+        $user = $request->user('web');
+        $marketingLocaleIsExplicit = Locales::hasExplicitRouteLocale($request);
         $locale = Locales::resolve($request);
+
+        // A marketing URL is allowed to render in its explicit language, but
+        // must not override a signed-in customer's saved account preference.
+        // Guests still carry that choice through the unprefixed auth flow in
+        // the locale cookie; after authentication the saved preference wins.
+        if ($user && ! Locales::isEnglishOnly($request) && ! $marketingLocaleIsExplicit
+            && Locales::isSupported($user->locale)) {
+            $locale = $user->locale;
+        }
+
         URL::defaults(['locale' => $locale]);
 
-        // A localized marketing URL is an explicit language choice. Carry it
-        // to the unprefixed auth, activation and account routes via the same
-        // encrypted first-party preference cookie used by the language form.
-        if (Locales::hasExplicitRouteLocale($request)) {
+        // A guest's marketing choice carries through login/registration. Do
+        // not write an authenticated visitor's marketing view to the cookie;
+        // their preference changes only via the customer language selector.
+        if (! $user && $marketingLocaleIsExplicit) {
             Cookie::queue(Locales::cookie($locale));
         }
 
@@ -34,14 +46,6 @@ class SetLocale
             app()->setLocale($locale);
             // Money and plan wording are formatted for the locale when the catalogue is built.
             app()->forgetInstance(PricingCatalog::class);
-        }
-
-        // A signed-in customer's saved preference follows the choice made on this device (also one made before signing in).
-        $user = $request->user('web');
-        $remembered = $request->cookie((string) config('localization.cookie'));
-        if ($user && Locales::isSupported($remembered) && ! Locales::isEnglishOnly($request)
-            && ! Locales::hasExplicitRouteLocale($request) && $user->locale !== $remembered) {
-            $user->forceFill(['locale' => $remembered])->saveQuietly();
         }
 
         try {
