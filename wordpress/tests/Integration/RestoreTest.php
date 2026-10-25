@@ -18,6 +18,7 @@ use WPCareGrid\Connector\Backups\TarReader;
 use WPCareGrid\Connector\Backups\TarWriter;
 use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Backups\Uploader;
+use WPCareGrid\Connector\Core\LeaseLost;
 use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Core\Settings;
 use WPCareGrid\Connector\Jobs\Handlers\RestoreHandler;
@@ -25,6 +26,7 @@ use WPCareGrid\Connector\Jobs\JobRegistry;
 use WPCareGrid\Connector\Jobs\JobRunner;
 use WPCareGrid\Connector\Tests\Support\FakeBackupServer;
 use WPCareGrid\Connector\Tests\Support\FilesystemManifest;
+use WPCareGrid\Connector\Tests\Support\LeaseReplacementRestoreFault;
 use WPCareGrid\Connector\Tests\Support\OneShotRestoreFault;
 use WPCareGrid\Connector\Tests\Support\RestoreHarnessGuard;
 use WPCareGrid\Connector\Tests\Support\RestoreVariantIndex;
@@ -49,6 +51,7 @@ final class RestoreTest extends TestCase
 
     protected function tearDown(): void
     {
+        Lock::release();
         Maintenance::disable();
         @unlink(ABSPATH.'.maintenance');
         remove_all_actions('wp_caregrid_restore_critical_section');
@@ -755,6 +758,7 @@ final class RestoreTest extends TestCase
 
     public function test_lost_lease_during_sql_import_preserves_staging_and_successor_can_retry(): void
     {
+        $this->with_harness_environment(function (): void {
         $this->requires_mysql();
         $this->assertTrue(Lock::acquire());
 
@@ -818,10 +822,12 @@ final class RestoreTest extends TestCase
         $wpdb->query("DROP TABLE IF EXISTS `{$first_table}`");
         $wpdb->query("DROP TABLE IF EXISTS `{$successor_table}`");
         Lock::release();
+            });
     }
 
     public function test_swap_failure_does_not_discard_staging_after_lease_replacement(): void
     {
+        $this->with_harness_environment(function (): void {
         $this->requires_mysql();
         $this->assertTrue(Lock::acquire());
 
@@ -874,6 +880,7 @@ final class RestoreTest extends TestCase
 
         $wpdb->query("DROP TABLE IF EXISTS `{$stage_table}`");
         $wpdb->delete($wpdb->options, ['option_name' => 'wp_caregrid_poll_lock'], ['%s']);
+            });
     }
 
     public function test_cleanup_check_to_drop_race_cannot_delete_successor_staging_table(): void
