@@ -19,10 +19,6 @@ const localBaseUrl = (() => {
     }
 })();
 
-test.skip(
-    !localBaseUrl || !OWNER_EMAIL || !OWNER_PASSWORD || !OPERATOR_EMAIL || !OPERATOR_PASSWORD,
-    'Requires local E2E_BASE_URL and synthetic Owner/Operator credentials.',
-);
 test.use({
     baseURL: BASE,
     viewport: { width: 390, height: 844 },
@@ -61,6 +57,8 @@ async function capture(page: Page, filename: string): Promise<void> {
 
 for (const item of consoles) {
     test.describe(`${item.name} mobile navigation keyboard focus`, () => {
+        test.skip(!localBaseUrl || !item.email || !item.password, `Requires a local synthetic ${item.name} account.`);
+
         test(`opens with Enter, tabs into navigation, and Escape returns visible focus to trigger`, async ({ page }) => {
             await signIn(page, item);
 
@@ -117,6 +115,8 @@ for (const item of consoles) {
 
 if (process.env.M16_SECURITY_FIXTURE === '1') {
     test('renders the local synthetic security incident and scrollable findings table on mobile', async ({ page }) => {
+        test.skip(!localBaseUrl || !OPERATOR_EMAIL || !OPERATOR_PASSWORD, 'Requires a local synthetic Operator account.');
+
         const item = consoles[1];
         await signIn(page, item);
         await page.goto('/operator/security');
@@ -125,7 +125,7 @@ if (process.env.M16_SECURITY_FIXTURE === '1') {
         await expect(page.getByRole('link', { name: /Synthetic local visual QA incident/ })).toBeVisible();
         const row = page.getByRole('row').filter({ hasText: 'm16-security-fixture-20261025.local.test' });
         await expect(row).toBeVisible();
-        const tableViewport = page.locator('div.overflow-x-auto');
+        const tableViewport = page.getByRole('region', { name: /security findings table|biztonsági találatok táblázata/i });
         const dimensions = await tableViewport.evaluate((element) => ({
             clientWidth: element.clientWidth,
             scrollWidth: element.scrollWidth,
@@ -134,13 +134,70 @@ if (process.env.M16_SECURITY_FIXTURE === '1') {
         }));
         expect(dimensions.scrollWidth).toBeGreaterThan(dimensions.clientWidth);
         expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
+        await expect(tableViewport).toHaveAttribute('tabindex', '0');
+        await expect(page.getByRole('columnheader', { name: 'Website' })).toBeVisible();
         await capture(page, 'operator-mobile-security-table-left.png');
 
-        const rightEdge = await tableViewport.evaluate((element) => {
-            element.scrollLeft = element.scrollWidth;
-            return element.scrollLeft;
-        });
-        expect(rightEdge).toBeGreaterThan(0);
+        await page.keyboard.press('Tab');
+        let scrollRegionFocused = false;
+        for (let attempt = 0; attempt < 60; attempt++) {
+            scrollRegionFocused = await tableViewport.evaluate((element) => element === document.activeElement);
+            if (scrollRegionFocused) break;
+            await page.keyboard.press('Tab');
+        }
+        expect(scrollRegionFocused).toBe(true);
+        await expect.poll(() => tableViewport.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+        expect(await tableViewport.evaluate((element) => getComputedStyle(element).outlineWidth)).not.toBe('0px');
+
+        for (let attempt = 0; attempt < 40; attempt++) {
+            const current = await tableViewport.evaluate((element) => element.scrollLeft);
+            const maximum = await tableViewport.evaluate((element) => element.scrollWidth - element.clientWidth);
+            if (current >= maximum) break;
+            await page.keyboard.press('ArrowRight');
+        }
+
+        const rightEdge = await tableViewport.evaluate((element) => ({
+            scrollLeft: element.scrollLeft,
+            maxScrollLeft: element.scrollWidth - element.clientWidth,
+            bounds: element.getBoundingClientRect().toJSON(),
+            lastHeader: element.querySelector('thead th:last-child')?.getBoundingClientRect().toJSON(),
+        }));
+        expect(rightEdge.scrollLeft).toBeGreaterThan(0);
+        expect(rightEdge.scrollLeft).toBeGreaterThanOrEqual(rightEdge.maxScrollLeft - 2);
+        expect(rightEdge.lastHeader?.right).toBeLessThanOrEqual(rightEdge.bounds.right + 1);
         await capture(page, 'operator-mobile-security-table-right.png');
+
+        await page.keyboard.press('ArrowLeft');
+        expect(await tableViewport.evaluate((element) => element.scrollLeft)).toBeLessThan(rightEdge.scrollLeft);
+
+        for (let attempt = 0; attempt < 40; attempt++) {
+            if (await tableViewport.evaluate((element) => element.scrollLeft) <= 0) break;
+            await page.keyboard.press('ArrowLeft');
+        }
+
+        const leftEdge = await tableViewport.evaluate((element) => ({
+            scrollLeft: element.scrollLeft,
+            bounds: element.getBoundingClientRect().toJSON(),
+            firstHeader: element.querySelector('thead th:first-child')?.getBoundingClientRect().toJSON(),
+        }));
+        expect(leftEdge.scrollLeft).toBe(0);
+        expect(leftEdge.firstHeader?.left).toBeGreaterThanOrEqual(leftEdge.bounds.left - 1);
+
+        await page.keyboard.press('Shift+Tab');
+        await expect(tableViewport).not.toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(tableViewport).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(tableViewport.locator('a').first()).toBeFocused();
+
+        await page.setViewportSize({ width: 1280, height: 900 });
+        const desktopDimensions = await tableViewport.evaluate((element) => ({
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+            documentWidth: document.documentElement.scrollWidth,
+            viewportWidth: window.innerWidth,
+        }));
+        expect(desktopDimensions.scrollWidth).toBeLessThanOrEqual(desktopDimensions.clientWidth);
+        expect(desktopDimensions.documentWidth).toBeLessThanOrEqual(desktopDimensions.viewportWidth);
     });
 }

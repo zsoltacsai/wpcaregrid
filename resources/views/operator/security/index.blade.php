@@ -43,7 +43,14 @@
             @if ($websites->isEmpty())
                 <p class="text-sm text-muted">{{ __('operator.security.no_open_findings') }}</p>
             @else
-                <div class="relative -mx-4 -my-2 overflow-x-auto">
+                <div
+                    class="relative -mx-4 -my-2 overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    tabindex="0"
+                    role="region"
+                    aria-label="{{ __('Security findings table') }}"
+                    @keydown.arrow-right.prevent="$el.scrollBy({ left: $el.clientWidth * 0.75 })"
+                    @keydown.arrow-left.prevent="$el.scrollBy({ left: -$el.clientWidth * 0.75 })"
+                >
                     <table class="w-full min-w-[640px] text-left text-sm">
                         <thead class="text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">
                             <tr class="border-b border-line">
