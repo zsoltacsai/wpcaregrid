@@ -1147,18 +1147,30 @@ final class RestoreTest extends TestCase
         $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
     }
 
-    public function test_a_leftover_maintenance_mode_is_removed_at_the_next_poll(): void
+    public function test_unknown_leftover_maintenance_mode_is_preserved_at_the_next_poll(): void
     {
-        // A restore process that died: our marker and WordPress's .maintenance file remain.
-        Maintenance::enable(wp_generate_uuid4());
-        $reflection = new \ReflectionProperty(Maintenance::class, 'active');
-        $reflection->setValue(null, null);
+        // A restart cannot infer that a restore is safe from process-local state.
+        Maintenance::preserve();
+        $restoreUuid = wp_generate_uuid4();
+        $token = bin2hex(random_bytes(16));
+        $marker = [
+            'version' => 2,
+            'restore' => $restoreUuid,
+            'recovery_for' => null,
+            'required_scope' => 'full',
+            'since' => time(),
+            'refreshed_at' => time(),
+            'token' => $token,
+        ];
+        file_put_contents(TempDir::ensure().'/maintenance.json', wp_json_encode($marker));
+        file_put_contents(ABSPATH.'.maintenance', '<?php $upgrading = 2147483647; /* wp-caregrid:'.$token.' */');
         $this->assertFileExists(ABSPATH.'.maintenance');
 
         $this->http->on('GET jobs', ['status' => 200, 'body' => ['jobs' => []]]);
         $this->plugin()->runner()->poll();
 
-        $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
+        $this->assertFileExists(ABSPATH.'.maintenance', 'Unknown durable restore state must remain fail-closed.');
+        $this->assertFileExists(TempDir::ensure().'/maintenance.json');
     }
 
     public function test_someone_elses_maintenance_mode_is_not_touched(): void
