@@ -2,8 +2,8 @@
 
 namespace Tests\Feature;
 
-use App\Billing\QueueBillingEmail;
 use App\Billing\ProvisionCustomer;
+use App\Billing\QueueBillingEmail;
 use App\Checkout\CheckoutGateway;
 use App\Checkout\CheckoutStatus;
 use App\Checkout\CustomerDetails;
@@ -317,7 +317,7 @@ final class CustomerTransactionEmailLocalizationTest extends TestCase
     }
 
     /** @param array<string, mixed> $values
-     *  @return list<string>
+     * @return list<string>
      */
     private function leafPaths(array $values, string $prefix = ''): array
     {
