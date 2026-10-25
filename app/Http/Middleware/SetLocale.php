@@ -6,6 +6,7 @@ use App\Localization\Locales;
 use App\Pricing\PricingCatalog;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\URL;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -21,6 +22,13 @@ class SetLocale
         $originalLocale = app()->getLocale();
         $locale = Locales::resolve($request);
         URL::defaults(['locale' => $locale]);
+
+        // A localized marketing URL is an explicit language choice. Carry it
+        // to the unprefixed auth, activation and account routes via the same
+        // encrypted first-party preference cookie used by the language form.
+        if (Locales::hasExplicitRouteLocale($request)) {
+            Cookie::queue(Locales::cookie($locale));
+        }
 
         if (app()->getLocale() !== $locale) {
             app()->setLocale($locale);

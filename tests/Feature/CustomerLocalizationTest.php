@@ -103,6 +103,41 @@ class CustomerLocalizationTest extends TestCase
         }
     }
 
+    public function test_a_localized_marketing_route_remembers_its_locale_for_the_unprefixed_login_page(): void
+    {
+        foreach (['hu' => 'Belépés', 'en' => 'Log in'] as $locale => $loginLabel) {
+            $response = $this->get(route('home', ['locale' => $locale]))
+                ->assertOk()
+                ->assertHeader('Content-Language', $locale);
+
+            $response->assertCookie(self::COOKIE, $locale);
+
+            // Model the browser sending the response cookie on the next request.
+            $this->withCookie(self::COOKIE, $locale)
+                ->get(route('login'))
+                ->assertOk()
+                ->assertHeader('Content-Language', $locale)
+                ->assertSee($loginLabel);
+        }
+    }
+
+    public function test_an_explicit_marketing_language_replaces_a_conflicting_cookie_for_auth_views(): void
+    {
+        $this->in('en')->get('/hu/')->assertOk()->assertCookie(self::COOKIE, 'hu');
+
+        $this->withCookie(self::COOKIE, 'hu')->get(route('login'))
+            ->assertOk()->assertHeader('Content-Language', 'hu');
+        $this->withCookie(self::COOKIE, 'hu')->get(route('password.request'))
+            ->assertOk()->assertHeader('Content-Language', 'hu');
+        $this->withCookie(self::COOKIE, 'hu')->get(route('password.reset', ['token' => 'synthetic-invalid-token']))
+            ->assertHeader('Content-Language', 'hu');
+        $this->withCookie(self::COOKIE, 'hu')->get(route('account.activate', ['token' => 'synthetic-invalid-token']))
+            ->assertHeader('Content-Language', 'hu');
+        $this->withCookie(self::COOKIE, 'hu')->get(route('checkout.show', [
+            'product' => 'wordpress', 'plan' => 'basic', 'interval' => 'monthly',
+        ]))->assertOk()->assertHeader('Content-Language', 'hu');
+    }
+
     public function test_switching_the_language_remembers_it_and_returns_to_the_same_page(): void
     {
         $checkout = route('checkout.show', ['product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly']);
