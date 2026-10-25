@@ -342,6 +342,67 @@ jobs:
           php tests/smoke/http-smoke.php http://localhost:8000
           php artisan optimize:clear
 
+  sqlite_regressions:
+    name: Server SQLite regression gate (PHP 8.4)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DB_CONNECTION: sqlite
+      DB_DATABASE: database/ci-sqlite-regressions.sqlite
+      DB_URL: ''
+      CACHE_STORE: array
+      CAREGRID_EXPECTED_DATABASE_DRIVER: sqlite
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          extensions: mbstring, intl, gd, zip, sodium, pdo_sqlite, sqlite3, fileinfo, openssl, curl, posix, pcntl, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - name: Application environment
+        run: |
+          cp .env.example .env
+          touch database/ci-sqlite-regressions.sqlite
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Initialize disposable SQLite database
+        run: |
+          php artisan key:generate --force
+          php artisan migrate --force
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Frontend build for rendered feature tests
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify the actual Laravel SQLite connection
+        run: php scripts/tests/assert-ci-sqlite-driver.php
+
+      - name: Targeted fast SQLite regressions (no S3/SFTP services)
+        run: |
+          set -euo pipefail
+          vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings tests/Unit
+          for test in \
+            tests/Feature/AuthorizationMatrixTest.php \
+            tests/Feature/Account/AuthenticationTest.php \
+            tests/Feature/Account/AuthorizationTest.php \
+            tests/Feature/Account/CustomerAreaTest.php \
+            tests/Feature/Account/OnboardingTest.php \
+            tests/Feature/CustomerLocalizationTest.php \
+            tests/Feature/LocalizedMarketingRoutesTest.php; do
+            vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings "$test"
+          done
+
   wordpress:
     name: ${{ matrix.legacy_check_name || format('Connector tests (PHP {0}, WordPress {1}, {2})', matrix.php, matrix.wordpress, matrix.database) }}
     runs-on: ubuntu-24.04
