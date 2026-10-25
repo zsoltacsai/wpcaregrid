@@ -6,6 +6,12 @@ The `.maintenance` file is a shared WordPress path. Token verification followed 
 
 The PR remains blocked from merge until Integration & QA reviews the contract, provider compatibility, and deployment plan. No staging or production provider was installed or exercised.
 
+## Owner disposition — 2026-10-25
+
+The Owner accepts the fail-closed `RestoreIsolationGate` architecture for PR #182, with a concrete, reviewed provider remaining a launch blocker. This accepts the compatibility behavior (live restore stops before mutation when the provider is absent); it does **not** mean the generic PHP `.maintenance` path race has been solved, that a provider exists, or that a host is compatible. The provider implementation and its host-specific compatibility evidence are separate required work before launch.
+
+Required provider review evidence must identify the exact host/runtime and prove: all public-origin and CDN/cache routes are gated; in-flight mutating requests are drained; WordPress updater, plugin/theme updater, WP-Cron, Action Scheduler, queue workers, CLI, deployment and recovery writers are fenced; the gate persists through process loss; acquire/commit/release operations are generation-bound and idempotent; loss is observable before every live DB/file mutation boundary; and no unrelated actor can clear or bypass the gate. Review must include provider-specific concurrency/crash tests and an operational recovery procedure. An advisory Connector `flock()` or a fake test provider is not sufficient evidence.
+
 ## Code contract
 
 The WordPress filter `wp_caregrid_restore_isolation_gate` must provide a `RestoreIsolationGateProvider`. It must implement `provider_id()`, idempotent `acquire()`, `assert_active()`, two-phase `commit()`, and generation-bound `release()` as declared in `wordpress/wp-caregrid-connector/includes/Backups/RestoreIsolationGateProvider.php`.

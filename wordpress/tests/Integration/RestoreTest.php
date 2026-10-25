@@ -132,9 +132,134 @@ final class RestoreTest extends TestCase
 
             $this->assertSame('failed', $result['status']);
             $this->assertSame('RESTORE_ISOLATION_UNAVAILABLE', $result['error']['code'] ?? null);
+            $this->assertFalse($result['error']['details']['destructive_mutation_started'] ?? true);
+            $this->assertSame('file_apply', $result['error']['details']['failure_stage'] ?? null);
             $this->assertSame('synthetic broken state', file_get_contents($path), 'Unsupported hosts stop before the first live file mutation.');
             $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
             $this->assertFileDoesNotExist(TempDir::path().'/maintenance.json');
+        });
+    }
+
+    public function test_database_restore_without_provider_preserves_live_database_before_swap(): void
+    {
+        $this->with_harness_environment(function (): void {
+            $this->requires_mysql();
+            global $wpdb;
+
+            update_option('caregrid_providerless_restore', 'backup-state');
+            [$backup, $objects] = $this->backup('BACKUP_DATABASE');
+            update_option('caregrid_providerless_restore', 'live-state');
+            $livePost = wp_insert_post(['post_title' => 'Providerless live row', 'post_status' => 'publish']);
+            $tablesBefore = $wpdb->get_col("SHOW TABLES LIKE 'cg%'");
+            remove_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
+
+            try {
+                $result = $this->restore($backup, 'database', $objects);
+            } finally {
+                add_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
+            }
+
+            $this->assertSame('failed', $result['status']);
+            $this->assertSame('RESTORE_ISOLATION_UNAVAILABLE', $result['error']['code'] ?? null);
+            $this->assertFalse($result['error']['details']['destructive_mutation_started'] ?? true);
+            $this->assertSame('database_swap', $result['error']['details']['failure_stage'] ?? null);
+            wp_cache_flush();
+            $this->assertSame('live-state', get_option('caregrid_providerless_restore'));
+            $this->assertNotNull(get_post($livePost), 'The live row remains present because table swap never starts.');
+            $this->assertSame($tablesBefore, $wpdb->get_col("SHOW TABLES LIKE 'cg%'"), 'Attempt-scoped staging tables are discarded while the Connector lease is held.');
+            $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
+            $this->assertFileDoesNotExist(TempDir::path().'/maintenance.json');
+        });
+    }
+
+    public function test_full_restore_without_provider_preserves_live_files_and_database(): void
+    {
+        $this->with_harness_environment(function (): void {
+            $this->requires_mysql();
+            global $wpdb;
+            $path = WP_CONTENT_DIR.'/uploads/restore-me/providerless-full.txt';
+            $this->put($path, 'backup-file-state');
+            update_option('caregrid_providerless_full_restore', 'backup-db-state');
+            [$backup, $objects] = $this->backup('BACKUP_FULL');
+
+            file_put_contents($path, 'live-file-state');
+            update_option('caregrid_providerless_full_restore', 'live-db-state');
+            $livePost = wp_insert_post(['post_title' => 'Providerless full live row', 'post_status' => 'publish']);
+            $tablesBefore = $wpdb->get_col("SHOW TABLES LIKE 'cg%'");
+            remove_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
+
+            try {
+                $result = $this->restore($backup, 'full', $objects);
+            } finally {
+                add_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
+            }
+
+            $this->assertSame('failed', $result['status']);
+            $this->assertSame('RESTORE_ISOLATION_UNAVAILABLE', $result['error']['code'] ?? null);
+            $this->assertFalse($result['error']['details']['destructive_mutation_started'] ?? true);
+            $this->assertSame('database_swap', $result['error']['details']['failure_stage'] ?? null);
+            wp_cache_flush();
+            $this->assertSame('live-db-state', get_option('caregrid_providerless_full_restore'));
+            $this->assertNotNull(get_post($livePost));
+            $this->assertSame($tablesBefore, $wpdb->get_col("SHOW TABLES LIKE 'cg%'"), 'Rejected full restore cleans only its current attempt staging tables.');
+            $this->assertSame('live-file-state', file_get_contents($path), 'No file apply begins before the provider gate is acquired.');
+            $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
+            $this->assertFileDoesNotExist(TempDir::path().'/maintenance.json');
+        });
+    }
+
+    public function test_recovery_restore_without_provider_preserves_destructive_gate_and_live_state(): void
+    {
+        $this->with_harness_environment(function (): void {
+            $this->requires_mysql();
+            $path = WP_CONTENT_DIR.'/uploads/restore-me/providerless-recovery.txt';
+            $this->put($path, 'backup-file-state');
+            update_option('caregrid_providerless_recovery', 'backup-db-state');
+            [$backup, $objects] = $this->backup('BACKUP_FULL');
+
+            file_put_contents($path, 'live-file-state');
+            update_option('caregrid_providerless_recovery', 'live-db-state');
+            $livePost = wp_insert_post(['post_title' => 'Providerless recovery live row', 'post_status' => 'publish']);
+            $interruptedUuid = wp_generate_uuid4();
+            $interrupted = $this->job('RESTORE', ['restore_uuid' => $interruptedUuid, 'backup_uuid' => $backup, 'scope' => 'full', 'objects' => $objects]);
+            $runner = $this->restore_runner_with_fault(new LeaseReplacementRestoreFault('database_swap_ready'));
+            $this->queue_twice($interrupted);
+
+            $this->assertSame(['executed' => 0, 'delivered' => 0], $runner->poll());
+            $this->assertTrue(Maintenance::is_ours());
+            $this->assertTrue($this->plugin()->jobs()->has_destructive_mutation_started($interrupted['uuid']));
+            Maintenance::preserve();
+            $this->expire_poll_lease();
+            $this->assertSame(['executed' => 0, 'delivered' => 1], $runner->poll());
+            $interruptedResult = $this->posted_result($interrupted['uuid']);
+            $this->assertSame('JOB_INTERRUPTED', $interruptedResult['error']['code'] ?? null);
+            $maintenanceBefore = file_get_contents(ABSPATH.'.maintenance');
+            $markerBefore = file_get_contents(TempDir::path().'/maintenance.json');
+            $this->assertIsString($maintenanceBefore);
+            $this->assertIsString($markerBefore);
+
+            $recovery = $this->job('RESTORE', ['restore_uuid' => wp_generate_uuid4(), 'backup_uuid' => $backup, 'scope' => 'full', 'objects' => $objects]);
+            $this->queue_once($recovery);
+            remove_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
+
+            try {
+                $summary = $runner->poll();
+            } finally {
+                add_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
+            }
+
+            $result = $this->posted_result($recovery['uuid']);
+            $this->assertSame(['executed' => 1, 'delivered' => 1], $summary);
+            $this->assertSame('failed', $result['status']);
+            $this->assertSame('RESTORE_ISOLATION_UNAVAILABLE', $result['error']['code'] ?? null);
+            $this->assertFalse($result['error']['details']['destructive_mutation_started'] ?? true);
+            wp_cache_flush();
+            $this->assertSame('live-db-state', get_option('caregrid_providerless_recovery'));
+            $this->assertNotNull(get_post($livePost));
+            $this->assertSame('live-file-state', file_get_contents($path));
+            $this->assertSame($maintenanceBefore, file_get_contents(ABSPATH.'.maintenance'), 'A destructive recovery gate remains byte-for-byte intact without its provider.');
+            $this->assertSame($markerBefore, file_get_contents(TempDir::path().'/maintenance.json'), 'The durable recovery marker remains available for a later provider-backed retry.');
+            $this->assertTrue($this->isolationGate->is_gated());
         });
     }
 
