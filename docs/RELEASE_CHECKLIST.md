@@ -27,7 +27,7 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 
 | Item | State | Check |
 | --- | --- | --- |
-| Migrations run from an empty database, roll back fully, run again | READY | CI (SQLite and MySQL 8.4); verified locally on MySQL 8.4 |
+| Migrations run from an empty database, roll back fully, run again | READY | Full Laravel CI on MySQL 8.4 for PHP 8.4 and 8.5; targeted SQLite regressions separately |
 | Indexes and foreign keys | READY | verified on MySQL 8.4 (every table has a primary key; foreign keys on all relations) |
 | Server-side suite on MySQL | READY | CI server job (mysql); found and fixed: reason codes longer than their columns, JSON key order in tests |
 | No seed or demo data in production | READY | `migrate --force` only; no seeders run |
@@ -164,6 +164,6 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 
 | Item | State | Check |
 | --- | --- | --- |
-| Workflow: quality, server (SQLite, MySQL), WordPress (SQLite, MySQL) | READY | `.github/workflows/ci.yml` |
+| Workflow: quality, Laravel PHP 8.4/8.5 on MySQL 8.4, targeted SQLite regressions, Connector matrix | READY | CI workflow; Connector MariaDB coverage unchanged |
 | First green run on GitHub | READY | run #2 (commit `3f01f5d`, 2026-10-04): all 5 jobs green; server 593 tests × 2 with real S3 (moto) and SFTP (OpenSSH), 0 skips; connector 169 tests × 2; gitleaks clean over full history; audits clean. Run #1 failed on CI configuration only (moto path, two test fixtures not allowlisted) |
-| Required status checks on the main branch | NOT CONFIGURED | GitHub branch protection |
+| Required status checks on protected primary | READY | Ruleset 25300175 requires Quality, Laravel MySQL 8.4/PHP 8.4+8.5, SQLite regression, and three Connector PHP 8.4 contexts |
