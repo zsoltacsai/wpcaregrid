@@ -56,6 +56,7 @@ final class Maintenance
                 unset($existing['legacy_compat']);
                 self::write_marker($existing);
             }
+
             return;
         }
 
@@ -260,6 +261,7 @@ final class Maintenance
             return false;
         }
         $content = @file_get_contents(self::file());
+
         return is_string($content) && self::content_matches_marker($marker, $content);
     }
 
