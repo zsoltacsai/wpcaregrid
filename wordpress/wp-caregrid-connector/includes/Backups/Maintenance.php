@@ -21,8 +21,11 @@ final class Maintenance
      * Start maintenance, or adopt this Connector's unresolved restore gate for
      * an explicitly delivered recovery restore whose scope covers the old one.
      */
-    public static function enable(string $restore_uuid, JobStore $jobs): void
+    public static function enable(string $restore_uuid, JobStore $jobs, RestoreIsolationLease $lease): void
     {
+        if ($lease->restore_uuid !== $restore_uuid) {
+            throw new BackupFailure('RESTORE_ISOLATION_UNAVAILABLE', 'The host restore gate is not bound to this restore.');
+        }
         self::$marker = TempDir::ensure().'/maintenance.json';
         $existing = self::read_marker();
 
@@ -42,11 +45,25 @@ final class Maintenance
                 throw new BackupFailure('MAINTENANCE_ACTIVE', 'An unresolved restore requires a validated recovery operation.');
             }
 
+            $previousLease = RestoreIsolationLease::from_array($existing['isolation_gate'] ?? null);
+            if ($previousLease === null || $previousLease->restore_uuid !== $oldUuid) {
+                throw new BackupFailure('RESTORE_ISOLATION_UNAVAILABLE', 'The prior restore gate cannot be safely adopted. Operator recovery is required.');
+            }
+            $pendingReleases = $existing['pending_isolation_releases'] ?? [];
+            if (! is_array($pendingReleases)) {
+                throw new BackupFailure('RESTORE_ISOLATION_UNAVAILABLE', 'The prior restore gate handoff is ambiguous. Operator recovery is required.');
+            }
+            if ($previousLease->generation !== $lease->generation) {
+                $pendingReleases[] = $previousLease->to_array();
+            }
+
             $existing['recovery_for'] = $existing['recovery_for'] ?? $oldUuid;
             $existing['restore'] = $restore_uuid;
             $existing['required_scope'] = $newScope;
             $existing['refreshed_at'] = time();
             $existing['version'] = 2;
+            $existing['isolation_gate'] = $lease->to_array();
+            $existing['pending_isolation_releases'] = $pendingReleases;
             $legacy = ! is_string($existing['token'] ?? null);
             $existing['token'] = is_string($existing['token'] ?? null) ? $existing['token'] : bin2hex(random_bytes(16));
             if ($legacy) {
@@ -57,7 +74,12 @@ final class Maintenance
             }
             if ($legacy) {
                 unset($existing['legacy_compat']);
-                self::write_marker($existing);
+                if (! self::write_marker($existing)) {
+                    throw new BackupFailure('MAINTENANCE_FAILED', 'The adopted restore marker could not be finalized.');
+                }
+            }
+            if (! self::reconcile_pending_isolation_releases($existing, $lease)) {
+                throw new BackupFailure('RESTORE_ISOLATION_UNAVAILABLE', 'The previous host gate could not be retired safely. Operator recovery is required.');
             }
 
             return;
@@ -76,12 +98,14 @@ final class Maintenance
             'since' => time(),
             'refreshed_at' => time(),
             'token' => bin2hex(random_bytes(16)),
+            'isolation_gate' => $lease->to_array(),
         ];
         if (! self::write_marker($marker)) {
             throw new BackupFailure('MAINTENANCE_FAILED', 'Maintenance mode could not be enabled.');
         }
         if (! self::write_maintenance_file($marker)) {
-            @unlink(self::marker());
+            // Keep the durable host-gate reference so the next poll or an
+            // operator can reconcile a partially armed restore safely.
             throw new BackupFailure('MAINTENANCE_FAILED', 'Maintenance mode could not be enabled.');
         }
 
@@ -103,9 +127,21 @@ final class Maintenance
         if ($state !== 'completed_success' && ! ($state === 'safe_to_release' && ! $recoveringPriorState)) {
             return;
         }
+        $lease = RestoreIsolationLease::from_array($marker['isolation_gate'] ?? null);
+        if ($lease === null || $lease->restore_uuid !== $restore_uuid) {
+            return;
+        }
+        if (! self::reconcile_pending_isolation_releases($marker, $lease)) {
+            return;
+        }
         $maintenancePath = self::file();
         if (self::path_exists($maintenancePath)) {
             if (is_link($maintenancePath) || ! is_file($maintenancePath) || ! self::file_matches_marker($marker)) {
+                return;
+            }
+            try {
+                RestoreIsolationGate::assert_active($lease);
+            } catch (\WPCareGrid\Connector\Core\LeaseLost) {
                 return;
             }
             if (! self::unlink_path($maintenancePath)) {
@@ -118,6 +154,12 @@ final class Maintenance
             if (self::path_exists($maintenancePath)) {
                 return;
             }
+        }
+
+        // The provider must release only this generation and treat a repeated
+        // release as success, so marker-unlink failure remains retryable.
+        if (! RestoreIsolationGate::release($lease)) {
+            return;
         }
 
         $markerPath = self::marker();
@@ -181,6 +223,19 @@ final class Maintenance
             return;
         }
 
+        $lease = RestoreIsolationLease::from_array($marker['isolation_gate'] ?? null);
+        if ($lease === null || $lease->restore_uuid !== $restore) {
+            return;
+        }
+        try {
+            RestoreIsolationGate::assert_active($lease);
+        } catch (\WPCareGrid\Connector\Core\LeaseLost) {
+            return;
+        }
+        if (! self::reconcile_pending_isolation_releases($marker, $lease)) {
+            return;
+        }
+
         // If the WordPress marker disappeared or aged out, recreate/refresh
         // only when it is absent or still exactly ours. Never overwrite a
         // different component's .maintenance file.
@@ -195,7 +250,15 @@ final class Maintenance
         $marker['version'] = 2;
         $marker['legacy_compat'] = true;
         $marker['token'] = is_string($marker['token'] ?? null) ? $marker['token'] : bin2hex(random_bytes(16));
-        if (! self::write_marker($marker) || ! self::write_maintenance_file($marker)) {
+        if (! self::write_marker($marker)) {
+            return;
+        }
+        try {
+            RestoreIsolationGate::assert_active($lease);
+        } catch (\WPCareGrid\Connector\Core\LeaseLost) {
+            return;
+        }
+        if (! self::write_maintenance_file($marker)) {
             return;
         }
         unset($marker['legacy_compat']);
@@ -206,6 +269,58 @@ final class Maintenance
     public static function preserve(): void
     {
         self::$marker = null;
+    }
+
+    public static function persisted_isolation_lease(): ?RestoreIsolationLease
+    {
+        $marker = self::read_marker();
+
+        return RestoreIsolationLease::from_array($marker['isolation_gate'] ?? null);
+    }
+
+    public static function persists_isolation_lease(RestoreIsolationLease $lease): bool
+    {
+        $persisted = self::persisted_isolation_lease();
+
+        return $persisted !== null
+            && $persisted->provider === $lease->provider
+            && $persisted->generation === $lease->generation;
+    }
+
+    public static function may_release_unpersisted_isolation_lease(RestoreIsolationLease $lease): bool
+    {
+        if (self::persists_isolation_lease($lease)) {
+            return false;
+        }
+
+        // An unreadable/malformed marker or a maintenance path means there is
+        // not enough evidence to prove this generation was never published.
+        return ! self::path_exists(self::marker()) && ! self::path_exists(self::file());
+    }
+
+    /**
+     * Retire old host-gate generations only after the current generation and
+     * pending release list are durably recorded. Repeated commits are safe.
+     */
+    private static function reconcile_pending_isolation_releases(array &$marker, RestoreIsolationLease $current): bool
+    {
+        $pending = $marker['pending_isolation_releases'] ?? [];
+        if (! is_array($pending)) {
+            return false;
+        }
+        foreach ($pending as $value) {
+            $previous = RestoreIsolationLease::from_array($value);
+            if ($previous === null || ! RestoreIsolationGate::commit($current, $previous)) {
+                return false;
+            }
+        }
+        if ($pending === []) {
+            return true;
+        }
+
+        unset($marker['pending_isolation_releases']);
+
+        return self::write_marker($marker);
     }
 
     private static function scope_covers(?string $newScope, ?string $oldScope): bool

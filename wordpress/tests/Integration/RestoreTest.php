@@ -12,6 +12,8 @@ use WPCareGrid\Connector\Backups\FilePolicy;
 use WPCareGrid\Connector\Backups\FileRestorer;
 use WPCareGrid\Connector\Backups\Maintenance;
 use WPCareGrid\Connector\Backups\PathGuard;
+use WPCareGrid\Connector\Backups\RestoreFaultHooks;
+use WPCareGrid\Connector\Backups\RestoreIsolationGate;
 use WPCareGrid\Connector\Backups\Sink;
 use WPCareGrid\Connector\Backups\SqlImporter;
 use WPCareGrid\Connector\Backups\TarReader;
@@ -27,6 +29,7 @@ use WPCareGrid\Connector\Jobs\JobResult;
 use WPCareGrid\Connector\Jobs\JobRunner;
 use WPCareGrid\Connector\Tests\Support\FakeBackupServer;
 use WPCareGrid\Connector\Tests\Support\FilesystemManifest;
+use WPCareGrid\Connector\Tests\Support\FakeRestoreIsolationGate;
 use WPCareGrid\Connector\Tests\Support\LeaseReplacementRestoreFault;
 use WPCareGrid\Connector\Tests\Support\OneShotRestoreFault;
 use WPCareGrid\Connector\Tests\Support\RestoreHarnessGuard;
@@ -38,11 +41,18 @@ final class RestoreTest extends TestCase
 {
     private FakeBackupServer $server;
 
+    private FakeRestoreIsolationGate $isolationGate;
+
+    private \Closure $isolationGateFilter;
+
     private array $created = [];
 
     protected function setUp(): void
     {
         parent::setUp();
+        $this->isolationGate = new FakeRestoreIsolationGate;
+        $this->isolationGateFilter = fn () => $this->isolationGate;
+        add_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
         $this->pair();
         $this->server = (new FakeBackupServer($this->http))->register();
         $this->plugin()->set('uploader', new Uploader($this->plugin()->api(), fn () => null));
@@ -57,10 +67,125 @@ final class RestoreTest extends TestCase
         @unlink(ABSPATH.'.maintenance');
         @unlink(TempDir::path().'/maintenance.json');
         remove_all_actions('wp_caregrid_restore_critical_section');
+        remove_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
+        $this->isolationGate->reset();
         foreach ($this->created as $path) {
             TempDir::remove($path);
         }
         parent::tearDown();
+    }
+
+    public function test_restore_gate_recovery_handoff_is_durable_and_retryable(): void
+    {
+        $oldUuid = wp_generate_uuid4();
+        $newUuid = wp_generate_uuid4();
+        $old = new \WPCareGrid\Connector\Backups\RestoreIsolationLease('test-host-gate', $oldUuid, 'files', str_repeat('a', 64));
+        $candidate = new \WPCareGrid\Connector\Backups\RestoreIsolationLease('test-host-gate', $newUuid, 'full', str_repeat('b', 64));
+
+        $this->assertSame($old, $this->isolationGate->acquire($old, null));
+        $acquired = $this->isolationGate->acquire($candidate, $old);
+        $this->assertSame($candidate, $acquired);
+        $this->assertTrue($this->isolationGate->assert_active($old), 'The previous host gate remains active before the new marker is durable.');
+        $this->assertTrue($this->isolationGate->assert_active($candidate));
+
+        // Simulate process death after acquisition but before marker publication.
+        $retry = new \WPCareGrid\Connector\Backups\RestoreIsolationLease('test-host-gate', $newUuid, 'full', str_repeat('c', 64));
+        $resumed = $this->isolationGate->acquire($retry, $old);
+        $this->assertSame($candidate->generation, $resumed?->generation, 'A retry resumes the pending generation rather than orphaning another one.');
+        $this->assertTrue($this->isolationGate->assert_active($old));
+        $this->isolationGate->writersQuiescent = false;
+        $this->assertFalse($this->isolationGate->commit($candidate, $old), 'A failed provider commit keeps both generations for retry.');
+        $this->isolationGate->writersQuiescent = true;
+        $this->assertTrue($this->isolationGate->assert_active($old));
+        $this->assertTrue($this->isolationGate->assert_active($candidate));
+        $this->assertTrue($this->isolationGate->commit($candidate, $old), 'Commit retires the old generation only after the caller has persisted the new lease.');
+        $this->assertFalse($this->isolationGate->assert_active($old));
+        $this->assertTrue($this->isolationGate->assert_active($candidate));
+        $this->assertTrue($this->isolationGate->commit($candidate, $old), 'Committing the handoff twice is idempotent.');
+    }
+
+    public function test_unpersisted_gate_is_not_released_when_durable_state_is_ambiguous(): void
+    {
+        $lease = RestoreIsolationGate::acquire(wp_generate_uuid4(), 'files');
+        $markerPath = TempDir::ensure().'/maintenance.json';
+        file_put_contents($markerPath, '{malformed');
+
+        $this->assertFalse(Maintenance::may_release_unpersisted_isolation_lease($lease));
+        $this->assertTrue($this->isolationGate->assert_active($lease), 'An unreadable durable marker keeps the host gate closed.');
+
+        unlink($markerPath);
+        $this->assertTrue(Maintenance::may_release_unpersisted_isolation_lease($lease));
+    }
+
+    public function test_restore_fails_closed_before_live_apply_when_host_gate_is_unsupported(): void
+    {
+        $this->with_harness_environment(function (): void {
+            $path = WP_CONTENT_DIR.'/uploads/restore-me/unsupported-gate.txt';
+            $this->put($path, 'before backup');
+            [$backup, $objects] = $this->backup('BACKUP_FILES');
+            file_put_contents($path, 'synthetic broken state');
+            remove_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
+
+            $result = $this->restore($backup, 'files', $objects);
+            add_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
+
+            $this->assertSame('failed', $result['status']);
+            $this->assertSame('RESTORE_ISOLATION_UNAVAILABLE', $result['error']['code'] ?? null);
+            $this->assertSame('synthetic broken state', file_get_contents($path), 'Unsupported hosts stop before the first live file mutation.');
+            $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
+            $this->assertFileDoesNotExist(TempDir::path().'/maintenance.json');
+        });
+    }
+
+    public function test_restore_fails_closed_when_provider_cannot_quiesce_all_writers(): void
+    {
+        $this->with_harness_environment(function (): void {
+            $path = WP_CONTENT_DIR.'/uploads/restore-me/unquiesced-host.txt';
+            $this->put($path, 'before backup');
+            [$backup, $objects] = $this->backup('BACKUP_FILES');
+            file_put_contents($path, 'synthetic broken state');
+            $this->isolationGate->writersQuiescent = false;
+
+            $result = $this->restore($backup, 'files', $objects);
+
+            $this->assertSame('failed', $result['status']);
+            $this->assertSame('RESTORE_ISOLATION_UNAVAILABLE', $result['error']['code'] ?? null);
+            $this->assertSame('synthetic broken state', file_get_contents($path));
+            $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
+            $this->assertFalse($this->isolationGate->is_gated());
+        });
+    }
+
+    public function test_restore_fail_stops_when_host_writer_quiescence_is_lost_before_apply(): void
+    {
+        $this->with_harness_environment(function (): void {
+            $path = WP_CONTENT_DIR.'/uploads/restore-me/lost-gate.txt';
+            $this->put($path, 'before backup');
+            [$backup, $objects] = $this->backup('BACKUP_FILES');
+            file_put_contents($path, 'synthetic broken state');
+            $fault = new class($this->isolationGate) implements RestoreFaultHooks
+            {
+                public function __construct(private readonly FakeRestoreIsolationGate $gate) {}
+
+                public function reach(string $point, string $restore_uuid): void
+                {
+                    if ($point === 'before_file_apply') {
+                        $this->gate->writersQuiescent = false;
+                    }
+                }
+            };
+            $runner = $this->restore_runner_with_fault($fault);
+            $job = $this->job('RESTORE', ['restore_uuid' => wp_generate_uuid4(), 'backup_uuid' => $backup, 'scope' => 'files', 'objects' => $objects]);
+            $this->queue_once($job);
+
+            $summary = $runner->poll();
+
+            $this->assertSame(['executed' => 0, 'delivered' => 0], $summary);
+            $this->assertSame('synthetic broken state', file_get_contents($path), 'The restore stops before applying files after isolation is lost.');
+            $this->assertFileExists(ABSPATH.'.maintenance', 'The WordPress gate remains in place for operator recovery.');
+            $this->assertFileExists(TempDir::path().'/maintenance.json', 'The durable host-gate generation remains available.');
+            $this->assertTrue($this->isolationGate->is_gated(), 'The synthetic host gate remains closed after the worker stops.');
+        });
     }
 
     public function test_files_restore_puts_files_back_but_not_config_or_connector(): void
@@ -979,7 +1104,7 @@ final class RestoreTest extends TestCase
         $jobs = $this->plugin()->jobs();
         $jobs->begin($job['uuid'], 'RESTORE', (array) $job['payload']);
         $jobs->mark_restore_progress($restoreUuid, false, 'file_staging');
-        Maintenance::enable($restoreUuid, $jobs);
+        Maintenance::enable($restoreUuid, $jobs, RestoreIsolationGate::acquire($restoreUuid, 'files'));
 
         $content = '<?php $unrelated_maintenance = true;';
         file_put_contents(ABSPATH.'.maintenance', $content);
@@ -1069,7 +1194,7 @@ final class RestoreTest extends TestCase
 
             try {
                 try {
-                    Maintenance::enable($recoveryUuid, $jobs);
+                    Maintenance::enable($recoveryUuid, $jobs, RestoreIsolationGate::acquire($recoveryUuid, 'database'));
                     $this->fail("{$case} v2 token must block recovery adoption.");
                 } catch (BackupFailure $error) {
                     $this->assertSame('MAINTENANCE_ACTIVE', $error->error_code);
@@ -1091,6 +1216,7 @@ final class RestoreTest extends TestCase
         $job = $this->job('RESTORE', ['restore_uuid' => $restoreUuid, 'backup_uuid' => wp_generate_uuid4(), 'scope' => 'database', 'objects' => []]);
         $jobs->begin($job['uuid'], 'RESTORE', (array) $job['payload']);
         $jobs->complete($job['uuid'], JobResult::success('RESTORED'));
+        $lease = RestoreIsolationGate::acquire($restoreUuid, 'database');
 
         $token = str_repeat('c', 32);
         $marker = [
@@ -1101,6 +1227,7 @@ final class RestoreTest extends TestCase
             'since' => time(),
             'refreshed_at' => time(),
             'token' => $token,
+            'isolation_gate' => $lease->to_array(),
         ];
         $markerPath = TempDir::ensure().'/maintenance.json';
         $maintenancePath = ABSPATH.'.maintenance';
@@ -1867,7 +1994,7 @@ final class RestoreTest extends TestCase
         return $this->posted_result($job['uuid']) ?? $this->fail('No result posted.');
     }
 
-    private function restore_runner_with_fault(LeaseReplacementRestoreFault $fault): JobRunner
+    private function restore_runner_with_fault(RestoreFaultHooks $fault): JobRunner
     {
         $plugin = $this->plugin();
         $registry = new JobRegistry(['RESTORE' => new RestoreHandler($plugin->downloader(), $plugin->health(), $plugin->jobs(), null, $fault)]);
