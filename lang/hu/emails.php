@@ -3,6 +3,45 @@
 return [
     'greeting' => 'Kedves :name!',
     'signature' => 'WP CareGrid',
+    'support' => 'Kérdése van? Válaszoljon erre az e-mailre.',
+    'activation' => [
+        'subject' => 'Aktiválja WP CareGrid-fiókját',
+        'intro' => 'Köszönjük a megrendelését. A fizetését megerősítettük.',
+        'body' => 'Állítson be jelszót a fiókja aktiválásához. A fiókjában követheti az előfizetését, és csatlakoztathatja a weboldalát.',
+        'action' => 'Jelszó beállítása',
+        'expiry' => 'Ez a hivatkozás 7 napig érvényes. Ha lejárt, a belépési oldalon az e-mail-címével kérhet új jelszó-visszaállító hivatkozást.',
+        'ignore' => 'Ha nem Ön adta le a megrendelést, hagyja figyelmen kívül ezt az e-mailt.',
+    ],
+    'welcome' => [
+        'subject' => 'Üdvözöljük a WP CareGridben',
+        'intro' => 'A fiókja aktív.',
+        'body' => 'Következő lépésként adja hozzá a weboldalát, hogy elindíthassuk az első ellenőrzést.',
+        'action' => 'Ugrás a fiókjához',
+    ],
+    'payment_confirmation' => [
+        'subject' => 'A fizetést megkaptuk',
+        'intro' => 'Megkaptuk a(z) :plan csomaghoz tartozó :amount összeget.',
+        'body' => 'A számlát külön e-mailben küldjük.',
+        'action' => 'Előfizetés megtekintése',
+    ],
+    'payment_failed' => [
+        'subject' => 'A fizetés nem sikerült',
+        'intro' => 'A(z) :plan csomaghoz tartozó :amount összeget nem tudtuk levonni.',
+        'body' => 'A Stripe megpróbálja újra levonni az összeget. A szolgáltatás megszakadásának elkerüléséhez ellenőrizze, hogy érvényes-e a fizetési módja.',
+        'action' => 'Előfizetés megtekintése',
+    ],
+    'subscription_activated' => [
+        'subject' => 'Az előfizetése aktív',
+        'intro' => 'A(z) :plan előfizetése aktív.',
+        'body' => 'Kezdje meg a beállítást azzal, hogy hozzáadja weboldalát a fiókjában.',
+        'action' => 'Weboldal hozzáadása',
+    ],
+    'subscription_canceled' => [
+        'subject' => 'Az előfizetését lemondtuk',
+        'intro' => 'A(z) :plan előfizetése megszűnt.',
+        'body' => 'Az ehhez a csomaghoz tartozó weboldal karbantartása leállt. Ha nem ezt szerette volna, válaszoljon erre az e-mailre.',
+        'action' => 'Előfizetés megtekintése',
+    ],
     'lifecycle' => [
         'action' => 'Számlázás megtekintése',
         'cancellation_scheduled' => ['subject' => 'Az előfizetés lemondása ütemezve', 'body' => 'A(z) :plan előfizetése a kifizetett időszak végéig aktív marad, utána lezárul.'],

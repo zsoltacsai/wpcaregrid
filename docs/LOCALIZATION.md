@@ -13,7 +13,7 @@ How the public site, the customer login and the customer portal are shown in Eng
 | Customer login: log in, activation link, forgot / reset password, logout, errors (validation, authentication, 404, 403, 419, 429) | Magyar, English |
 | Customer portal: dashboard, websites and onboarding, connection, backups and restore, WordPress admin access, security, subscription, billing, profile | Magyar, English |
 | Owner area, operator console, staff invitations | English only, always (`english_only` paths) |
-| Emails | Recovery offers: English and Hungarian (the customer's saved language). Activation, welcome, payment, subscription: English only, see below |
+| Emails | Customer activation, welcome, payment, subscription and recovery-offer emails: English and Hungarian; see the saved-language and outbox rules below |
 
 ## How a language is chosen
 
@@ -57,9 +57,11 @@ Laravel's own structure (no package): `lang/en`, `lang/hu`.
 
 ## Emails
 
-The **recovery offer** emails ([RECOVERY_OFFERS.md](RECOVERY_OFFERS.md): offer sent, payment received) are sent in the customer's saved language (`Customer::mailLocale()`: `users.locale`, else the default), from `lang/{en,hu}/offers.php`. They are sent from the owner area and from a webhook for an offer that already has a customer, so a language is known.
+Customer activation and welcome emails use the saved customer login language (`users.locale`) when available, otherwise the configured default. For a newly provisioned login, the supported language captured on its `CheckoutIntent` is saved before the activation email is queued. An existing login's saved language is never overwritten by checkout.
 
-The older customer emails (activation, welcome, payment, subscription) are **English only**: they use `emails.php`, which has no Hungarian file. They are sent by Stripe webhooks, where no request and so no language exists; sending them in the customer's language needs the language stored at checkout (`checkout_intents`, `customers`) and `->locale()` on the mailables. That is a separate, small milestone; the login and activation pages themselves are fully bilingual.
+Billing lifecycle emails use the immutable locale snapshot recorded on each billing-email outbox row. The outbox worker applies that locale while rendering/sending and restores the worker's previous application locale in a `finally` block, so a reused queue worker does not leak one customer's language into another job. Recovery-offer emails continue to use the customer's saved language (`Customer::mailLocale()`), from `lang/{en,hu}/offers.php`.
+
+The Hungarian and English customer-email catalogs are `lang/{hu,en}/emails.php`; their key and placeholder parity is covered by `CustomerTransactionEmailLocalizationTest`. Locale controls translated copy only and does not select or change billing currency, amounts, tax treatment or Stripe price configuration.
 
 ## Adding a language or a currency
 

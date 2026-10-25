@@ -3,6 +3,7 @@
 namespace App\Checkout;
 
 use App\Legal\LegalDocumentCatalog;
+use App\Localization\Locales;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\LegalDocumentVersion;
@@ -106,6 +107,7 @@ final class StartCheckout
         $market = $this->catalog->market($price->market);
 
         $sessionHash = CheckoutIntent::hashBrowserSession($browserSessionId);
+        $locale = Locales::isSupported(app()->getLocale()) ? app()->getLocale() : Locales::default();
         $fingerprint = hash('sha256', json_encode($websiteTarget
             ? ['account_website', $account?->id, $websiteTarget->url, $websiteTarget->type->value]
             : [
@@ -149,7 +151,7 @@ final class StartCheckout
         }
 
         try {
-            $intent = DB::transaction(function () use ($account, $customer, $price, $market, $promotion, $sessionHash, $legalDocument, $legalAccepted, $websiteTarget, $fingerprint) {
+            $intent = DB::transaction(function () use ($account, $customer, $price, $market, $promotion, $sessionHash, $legalDocument, $legalAccepted, $websiteTarget, $fingerprint, $locale) {
                 $intent = CheckoutIntent::create([
                     'status' => CheckoutStatus::Pending,
                     'customer_id' => $account?->id,
@@ -167,6 +169,7 @@ final class StartCheckout
                     'interval' => $price->interval,
                     'market' => $price->marketGroup,
                     'currency' => $price->money->currency->code,
+                    'locale' => $locale,
                     'amount' => $price->money->amount,
                     'tax_treatment' => $market->taxTreatment->value,
                     'stripe_price_id' => $price->stripePriceId,

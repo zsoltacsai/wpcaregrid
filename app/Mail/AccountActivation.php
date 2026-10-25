@@ -17,6 +17,7 @@ class AccountActivation extends Mailable implements ShouldQueue
 
     public function __construct(public readonly Customer $customer, #[\SensitiveParameter] public readonly string $token)
     {
+        $this->locale($customer->mailLocale());
         // Only send once the webhook transaction that queued it has committed.
         $this->afterCommit();
     }

@@ -14,7 +14,10 @@ final class BillingLifecycleNotice extends Mailable
         private readonly string $notification,
         private readonly ?string $plan,
         private readonly ?string $interval = null,
-    ) {}
+    ) {
+        // The outbox job sets this locale from its immutable locale snapshot before construction.
+        $this->locale(app()->getLocale());
+    }
 
     public function envelope(): Envelope
     {
