@@ -137,6 +137,15 @@ final class SqlImporter
             $renames[] = "`{$temp}` TO `{$table}`";
         }
 
+        $options_temp = $this->tables[$options] ?? null;
+        if (! is_string($options_temp)) {
+            throw new BackupFailure('RESTORE_SQL_REJECTED', 'The database dump does not contain the WordPress options table.');
+        }
+
+        // The restored snapshot may contain an old poll lease. Carry the
+        // current owner into the prepared table so the atomic rename never
+        // exposes a missing or expired lease to another poller.
+        Lock::preserveInOptionsTable($options_temp);
         Lock::refreshOrFail();
         $wpdb->query('RENAME TABLE '.implode(', ', $renames));
         if ($wpdb->last_error !== '') {
