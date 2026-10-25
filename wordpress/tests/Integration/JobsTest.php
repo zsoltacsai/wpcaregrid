@@ -392,37 +392,37 @@ final class JobsTest extends TestCase
 
     public function test_lost_lease_during_handler_failure_is_not_recorded_as_completed(): void
     {
-         = sprintf('%010d:%s', time() + Lock::TTL, bin2hex(random_bytes(32)));
-         = new class() implements JobHandler
+        $successor = sprintf('%010d:%s', time() + Lock::TTL, bin2hex(random_bytes(32)));
+        $handler = new class($successor) implements JobHandler
         {
-            public function __construct(private readonly string ) {}
+            public function __construct(private readonly string $successor) {}
 
-            public function capability(array  = []): string
+            public function capability(array $payload = []): string
             {
                 return 'health';
             }
 
-            public function validate(array ): array
+            public function validate(array $payload): array
             {
-                return ;
+                return $payload;
             }
 
-            public function handle(array ): JobResult
+            public function handle(array $payload): JobResult
             {
-                update_option('wp_caregrid_poll_lock', ->successor, false);
+                update_option('wp_caregrid_poll_lock', $this->successor, false);
                 throw new \RuntimeException('synthetic failure after lease replacement');
             }
         };
-        ->use_handlers(['SITE_HEALTH' => ]);
-         = ->job('SITE_HEALTH');
-        ->serve_jobs();
+        $this->use_handlers(['SITE_HEALTH' => $handler]);
+        $job = $this->job('SITE_HEALTH');
+        $this->serve_jobs($job);
 
-         = ->plugin()->runner()->poll();
+        $summary = $this->plugin()->runner()->poll();
 
-        ->assertSame(['executed' => 0, 'delivered' => 0], );
-        ->assertSame(JobStore::RUNNING, ->plugin()->jobs()->find(['uuid'])['state']);
-        ->assertSame([], ->http->api_requests('POST jobs/*/result'));
-        ->assertSame(, get_option('wp_caregrid_poll_lock'));
+        $this->assertSame(['executed' => 0, 'delivered' => 0], $summary);
+        $this->assertSame(JobStore::RUNNING, $this->plugin()->jobs()->find($job['uuid'])['state']);
+        $this->assertSame([], $this->http->api_requests('POST jobs/*/result'));
+        $this->assertSame($successor, get_option('wp_caregrid_poll_lock'));
         delete_option('wp_caregrid_poll_lock');
     }
 
