@@ -366,11 +366,14 @@ jobs:
         run: |
           cp .env.example .env
           touch database/ci-sqlite-regressions.sqlite
-          php artisan key:generate --force
-          php artisan migrate --force
 
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Initialize disposable SQLite database
+        run: |
+          php artisan key:generate --force
+          php artisan migrate --force
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
