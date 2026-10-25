@@ -179,7 +179,7 @@ final class Lock
         global $wpdb;
 
         if (! preg_match('/^[A-Za-z0-9_$]+$/', $table)) {
-            throw new \\InvalidArgumentException('The Connector options table name is invalid.');
+            throw new \InvalidArgumentException('The Connector options table name is invalid.');
         }
 
         self::refreshOrFail();
@@ -196,7 +196,7 @@ final class Lock
         );
 
         if ($wpdb->query($sql) === false) {
-            throw new \\RuntimeException('The Connector poll lease could not be carried into the restore table.');
+            throw new \RuntimeException('The Connector poll lease could not be carried into the restore table.');
         }
     }
 
