@@ -24,6 +24,7 @@ use WPCareGrid\Connector\Core\Settings;
 use WPCareGrid\Connector\Jobs\Handlers\RestoreHandler;
 use WPCareGrid\Connector\Jobs\JobRegistry;
 use WPCareGrid\Connector\Jobs\JobRunner;
+use WPCareGrid\Connector\Jobs\JobResult;
 use WPCareGrid\Connector\Tests\Support\FakeBackupServer;
 use WPCareGrid\Connector\Tests\Support\FilesystemManifest;
 use WPCareGrid\Connector\Tests\Support\LeaseReplacementRestoreFault;
@@ -1001,7 +1002,7 @@ final class RestoreTest extends TestCase
             $restoreUuid = wp_generate_uuid4();
             $job = $this->job('RESTORE', ['restore_uuid' => $restoreUuid, 'backup_uuid' => wp_generate_uuid4(), 'scope' => 'database', 'objects' => []]);
             $jobs->begin($job['uuid'], 'RESTORE', (array) $job['payload']);
-            $jobs->complete($job['uuid'], \WPCareGrid\Connector\Jobs\JobResult::success('RESTORED'));
+            $jobs->complete($job['uuid'], JobResult::success('RESTORED'));
 
             $marker = [
                 'version' => 2,
@@ -1040,7 +1041,7 @@ final class RestoreTest extends TestCase
             $interrupted = $this->job('RESTORE', ['restore_uuid' => $restoreUuid, 'backup_uuid' => wp_generate_uuid4(), 'scope' => 'database', 'objects' => []]);
             $jobs->begin($interrupted['uuid'], 'RESTORE', (array) $interrupted['payload']);
             $jobs->mark_restore_progress($restoreUuid, true, 'database_swap');
-            $jobs->complete($interrupted['uuid'], \WPCareGrid\Connector\Jobs\JobResult::failed('RESTORE_INTERRUPTED', 'Synthetic interrupted restore.', [
+            $jobs->complete($interrupted['uuid'], JobResult::failed('RESTORE_INTERRUPTED', 'Synthetic interrupted restore.', [
                 'destructive_mutation_started' => true,
                 'failure_stage' => 'database_swap',
             ]));
