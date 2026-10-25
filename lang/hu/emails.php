@@ -4,6 +4,14 @@ return [
     'greeting' => 'Kedves :name!',
     'signature' => 'WP CareGrid',
     'support' => 'Kérdése van? Válaszoljon erre az e-mailre.',
+    'password_reset' => [
+        'subject' => 'Jelszó-visszaállítási kérelem',
+        'greeting' => 'Kedves Felhasználó!',
+        'intro' => 'Jelszó-visszaállítási kérelmet kaptunk a fiókjához.',
+        'action' => 'Jelszó visszaállítása',
+        'expiry' => 'Ez a hivatkozás :count perc múlva lejár.',
+        'ignore' => 'Ha nem Ön kérte a jelszó visszaállítását, nincs további teendője.',
+    ],
     'activation' => [
         'subject' => 'Aktiválja WP CareGrid-fiókját',
         'intro' => 'Köszönjük a megrendelését. A fizetését megerősítettük.',

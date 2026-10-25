@@ -19,6 +19,7 @@ use App\Mail\WelcomeEmail;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Subscription;
+use App\Notifications\CustomerPasswordReset;
 use App\Pricing\BillingInterval;
 use App\Pricing\Currency;
 use App\Pricing\Money;
@@ -29,6 +30,8 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Mail\Mailable;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Queue;
 use ReflectionProperty;
 use Tests\Fakes\FakeCheckoutGateway;
@@ -80,6 +83,86 @@ final class CustomerTransactionEmailLocalizationTest extends TestCase
             $this->assertSame($case['activation_subject'], $activationMail->envelope()->subject);
             $this->assertSame($case['welcome_subject'], $welcomeMail->envelope()->subject);
         }
+    }
+
+    public function test_password_reset_uses_saved_locale_and_laravel_broker_url_and_expiry(): void
+    {
+        Notification::fake();
+        $expiry = 23;
+        config(['auth.passwords.users.expire' => $expiry]);
+
+        foreach ([
+            ['locale' => 'hu', 'application' => 'en', 'subject' => 'Jelszó-visszaállítási kérelem', 'greeting' => 'Kedves Felhasználó!', 'intro' => 'Jelszó-visszaállítási kérelmet kaptunk', 'action' => 'Jelszó visszaállítása', 'expiry' => '23 perc múlva lejár', 'ignore' => 'Ha nem Ön kérte'],
+            ['locale' => 'en', 'application' => 'hu', 'subject' => 'Password reset request', 'greeting' => 'Hello,', 'intro' => 'We received a password reset request', 'action' => 'Reset password', 'expiry' => 'expire in 23 minutes', 'ignore' => 'If you did not request'],
+        ] as $case) {
+            $user = Customer::factory()->withUser()->create()->user;
+            $user->forceFill(['locale' => $case['locale']])->save();
+            $this->app->setLocale($case['application']);
+
+            $this->post(route('password.email'), ['email' => $user->email])
+                ->assertSessionHas('status', __('account.auth.link_sent'));
+
+            $notification = null;
+            Notification::assertSentTo($user, CustomerPasswordReset::class, function (CustomerPasswordReset $sent, array $channels) use (&$notification): bool {
+                $notification = $sent;
+
+                return $channels === ['mail'];
+            });
+            $this->assertInstanceOf(CustomerPasswordReset::class, $notification);
+
+            $message = $notification->toMail($user);
+            $this->assertSame($case['subject'], $message->subject);
+            $this->assertSame($case['greeting'], $message->greeting);
+            $this->assertStringContainsString($case['intro'], implode(' ', $message->introLines));
+            $this->assertSame($case['action'], $message->actionText);
+            $this->assertStringContainsString($case['expiry'], implode(' ', $message->outroLines));
+            $this->assertStringContainsString($case['ignore'], implode(' ', $message->outroLines));
+            $expectedUrl = route('password.reset', [
+                'token' => $notification->token,
+                'email' => $user->getEmailForPasswordReset(),
+            ]);
+            $this->assertTrue(hash_equals($expectedUrl, $message->actionUrl));
+            $this->assertTrue(Password::broker()->tokenExists($user, $notification->token));
+        }
+
+        Notification::assertCount(2);
+    }
+
+    public function test_password_reset_uses_configured_default_for_missing_or_unsupported_saved_locale(): void
+    {
+        Notification::fake();
+        $fallback = config('localization.default');
+
+        foreach ([null, 'xx'] as $savedLocale) {
+            $user = Customer::factory()->withUser()->create()->user;
+            $user->forceFill(['locale' => $savedLocale])->save();
+            $user->sendPasswordResetNotification('synthetic-reset-token');
+            $sent = Notification::sent($user, CustomerPasswordReset::class)->last();
+            $message = $sent->toMail($user);
+
+            $this->assertSame(trans('emails.password_reset.subject', [], $fallback), $message->subject);
+            $this->assertSame(trans('emails.password_reset.action', [], $fallback), $message->actionText);
+        }
+    }
+
+    public function test_sequential_password_reset_notifications_do_not_leak_locale_between_users(): void
+    {
+        Notification::fake();
+        $hungarian = Customer::factory()->withUser()->create()->user;
+        $hungarian->forceFill(['locale' => 'hu'])->save();
+        $english = Customer::factory()->withUser()->create()->user;
+        $english->forceFill(['locale' => 'en'])->save();
+
+        $hungarian->sendPasswordResetNotification('synthetic-hu-token');
+        $english->sendPasswordResetNotification('synthetic-en-token');
+
+        $hungarianMail = Notification::sent($hungarian, CustomerPasswordReset::class)->last()->toMail($hungarian);
+        $englishMail = Notification::sent($english, CustomerPasswordReset::class)->last()->toMail($english);
+
+        $this->assertSame('Jelszó-visszaállítási kérelem', $hungarianMail->subject);
+        $this->assertSame('Password reset request', $englishMail->subject);
+        $this->assertSame('Jelszó visszaállítása', $hungarianMail->actionText);
+        $this->assertSame('Reset password', $englishMail->actionText);
     }
 
     public function test_billing_mailables_render_localized_subjects_and_bodies_without_changing_currency(): void

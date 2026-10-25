@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Localization\Locales;
+use App\Notifications\CustomerPasswordReset;
 use App\Operator\Permission;
 use Database\Factories\UserFactory;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
@@ -54,6 +56,14 @@ class User extends Authenticatable implements MustVerifyEmail
     public function customer(): HasOne
     {
         return $this->hasOne(Customer::class);
+    }
+
+    /** Send reset links using this login's saved language, independent of request locale. */
+    public function sendPasswordResetNotification($token): void
+    {
+        $locale = Locales::isSupported($this->locale) ? $this->locale : Locales::default();
+
+        $this->notify(new CustomerPasswordReset($token, $locale));
     }
 
     public function legalDocumentAcceptances(): HasMany

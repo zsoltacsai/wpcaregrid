@@ -57,7 +57,7 @@ Laravel's own structure (no package): `lang/en`, `lang/hu`.
 
 ## Emails
 
-Customer activation and welcome emails use the saved customer login language (`users.locale`) when available, otherwise the configured default. For a newly provisioned login, the supported language captured on its `CheckoutIntent` is saved before the activation email is queued. An existing login's saved language is never overwritten by checkout.
+Customer activation, welcome, and password-reset emails use the saved customer login language (`users.locale`) when available, otherwise the configured default. Password resets retain Laravel's password broker and reset URL callback; only the customer reset notification copy is localized. Its expiry copy reads the configured default password broker lifetime. For a newly provisioned login, the supported language captured on its `CheckoutIntent` is saved before the activation email is queued. An existing login's saved language is never overwritten by checkout.
 
 Billing lifecycle emails use the immutable locale snapshot recorded on each billing-email outbox row. The outbox worker applies that locale while rendering/sending and restores the worker's previous application locale in a `finally` block, so a reused queue worker does not leak one customer's language into another job. Recovery-offer emails continue to use the customer's saved language (`Customer::mailLocale()`), from `lang/{en,hu}/offers.php`.
 
