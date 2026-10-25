@@ -23,8 +23,8 @@ use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Core\Settings;
 use WPCareGrid\Connector\Jobs\Handlers\RestoreHandler;
 use WPCareGrid\Connector\Jobs\JobRegistry;
-use WPCareGrid\Connector\Jobs\JobRunner;
 use WPCareGrid\Connector\Jobs\JobResult;
+use WPCareGrid\Connector\Jobs\JobRunner;
 use WPCareGrid\Connector\Tests\Support\FakeBackupServer;
 use WPCareGrid\Connector\Tests\Support\FilesystemManifest;
 use WPCareGrid\Connector\Tests\Support\LeaseReplacementRestoreFault;
@@ -1012,7 +1012,7 @@ final class RestoreTest extends TestCase
                 'since' => time(),
                 'refreshed_at' => time(),
             ];
-            if ($case !== 'missing') {
+            if (is_string($token)) {
                 $marker['token'] = $token;
             }
             $markerJson = wp_json_encode($marker);
@@ -1059,7 +1059,7 @@ final class RestoreTest extends TestCase
                 'since' => time(),
                 'refreshed_at' => time(),
             ];
-            if ($case !== 'missing') {
+            if (is_string($token)) {
                 $marker['token'] = $token;
             }
             $markerJson = wp_json_encode($marker);
