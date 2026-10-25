@@ -26,6 +26,7 @@ use App\Pricing\PlanTier;
 use App\Pricing\PriceSelection;
 use App\Pricing\ProductType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Mail\Mailable;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
@@ -346,7 +347,7 @@ final class CustomerTransactionEmailLocalizationTest extends TestCase
 
     private function mailableLocale(object $mail): ?string
     {
-        return (new ReflectionProperty(\Illuminate\Mail\Mailable::class, 'locale'))->getValue($mail);
+        return (new ReflectionProperty(Mailable::class, 'locale'))->getValue($mail);
     }
 
     private function mailableSubject(object $mail, string $locale): string
