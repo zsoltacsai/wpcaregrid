@@ -753,6 +753,181 @@ final class RestoreTest extends TestCase
         $this->assertSame('wp-content/uploads/a b.jpg', PathGuard::relative('wp-content/uploads/a b.jpg'));
     }
 
+    public function test_lost_lease_during_sql_import_preserves_staging_and_successor_can_retry(): void
+    {
+        $this->requires_mysql();
+        $this->assertTrue(Lock::acquire());
+
+        global $wpdb;
+        $restore_uuid = wp_generate_uuid4();
+        $path = TempDir::ensure().'/lease-lost-'.$restore_uuid.'.sql.gz';
+        $this->created[] = $path;
+        $sql = "CREATE TABLE `wp_m15_lease_stage` (`marker` varchar(32) NOT NULL) ENGINE=InnoDB;\nINSERT INTO `wp_m15_lease_stage` VALUES ('staged');\n";
+        file_put_contents($path, gzencode($sql));
+
+        $fault = new \WPCareGrid\Connector\Tests\Support\LeaseReplacementRestoreFault('database_statement_imported', 2);
+        $queries = [];
+        $capture = static function (string $query) use (&$queries): string {
+            $queries[] = $query;
+
+            return $query;
+        };
+        add_filter('query', $capture, PHP_INT_MAX);
+
+        $first_importer = new SqlImporter($restore_uuid, $wpdb->base_prefix, $fault);
+        $first_stage_sql = $first_importer->translate('CREATE TABLE `wp_m15_lease_stage` (`marker` varchar(32) NOT NULL) ENGINE=InnoDB;');
+        preg_match('/^CREATE TABLE `([A-Za-z0-9_$]+)`/', $first_stage_sql, $first_match);
+        $first_table = $first_match[1] ?? '';
+        try {
+            try {
+                $first_importer->import($path);
+                $this->fail('The importer continued after its lease was replaced.');
+            } catch (\WPCareGrid\Connector\Core\LeaseLost) {
+                $this->assertTrue($fault->consumed());
+            }
+        } finally {
+            remove_filter('query', $capture, PHP_INT_MAX);
+        }
+
+        $this->assertMatchesRegularExpression('/^[A-Za-z0-9_$]+$/', $first_table);
+        $this->assertSame('staged', $wpdb->get_var("SELECT marker FROM `{$first_table}`"));
+        $replacement_index = null;
+        foreach ($queries as $index => $query) {
+            if (str_contains($query, 'wp_caregrid_poll_lock') && preg_match('/^\s*UPDATE\b/i', $query) === 1) {
+                $replacement_index = $index;
+            }
+        }
+        $this->assertNotNull($replacement_index, 'The test replaced the lease after staged SQL had executed.');
+        $after_lease_loss = array_slice($queries, $replacement_index + 1);
+        $this->assertSame([], array_values(array_filter($after_lease_loss, static fn (string $query): bool => preg_match('/^\s*(DROP TABLE|SET FOREIGN_KEY_CHECKS\s*=\s*1)\b/i', $query) === 1)));
+
+        // Expire the replaced lease, then let the next worker claim it and retry
+        // the identical restore UUID without sharing the stale worker's tables.
+        $expired = sprintf('%010d:%s', time() - 1, bin2hex(random_bytes(32)));
+        $wpdb->update($wpdb->options, ['option_value' => $expired], ['option_name' => 'wp_caregrid_poll_lock'], ['%s'], ['%s']);
+        $this->assertTrue(Lock::acquire());
+        $successor = new SqlImporter($restore_uuid, $wpdb->base_prefix);
+        $successor_stage_sql = $successor->translate('CREATE TABLE `wp_m15_lease_stage` (`marker` varchar(32) NOT NULL) ENGINE=InnoDB;');
+        preg_match('/^CREATE TABLE `([A-Za-z0-9_$]+)`/', $successor_stage_sql, $successor_match);
+        $successor_table = $successor_match[1] ?? '';
+        $this->assertNotSame($first_table, $successor_table);
+        $successor->import($path);
+        $this->assertSame('staged', $wpdb->get_var("SELECT marker FROM `{$successor_table}`"));
+        $this->assertSame('staged', $wpdb->get_var("SELECT marker FROM `{$first_table}`"), 'The retry does not overwrite or lose the previous attempt staging.');
+
+        $wpdb->query("DROP TABLE IF EXISTS `{$first_table}`");
+        $wpdb->query("DROP TABLE IF EXISTS `{$successor_table}`");
+        Lock::release();
+    }
+
+    public function test_swap_failure_does_not_discard_staging_after_lease_replacement(): void
+    {
+        $this->requires_mysql();
+        $this->assertTrue(Lock::acquire());
+
+        global $wpdb;
+        $restore_uuid = wp_generate_uuid4();
+        $live_siteurl = get_option('siteurl');
+        $path = TempDir::ensure().'/swap-lease-lost-'.$restore_uuid.'.sql.gz';
+        $this->created[] = $path;
+        $sql = "CREATE TABLE `wp_options` (`option_id` bigint unsigned NOT NULL AUTO_INCREMENT, `option_name` varchar(191) NOT NULL, `option_value` longtext NOT NULL, `autoload` varchar(20) NOT NULL, PRIMARY KEY (`option_id`)) ENGINE=InnoDB;\nINSERT INTO `wp_options` VALUES ('1','m15_stage_marker','staged','no');\n";
+        file_put_contents($path, gzencode($sql));
+
+        $fault = new \WPCareGrid\Connector\Tests\Support\LeaseReplacementRestoreFault('database_swap_failed');
+        $importer = new SqlImporter($restore_uuid, $wpdb->base_prefix, $fault);
+        $stage_sql = $importer->translate('CREATE TABLE `wp_options` (`option_id` bigint unsigned NOT NULL AUTO_INCREMENT, `option_name` varchar(191) NOT NULL, `option_value` longtext NOT NULL, `autoload` varchar(20) NOT NULL, PRIMARY KEY (`option_id`)) ENGINE=InnoDB;');
+        preg_match('/^CREATE TABLE `([A-Za-z0-9_$]+)`/', $stage_sql, $stage_match);
+        $stage_table = $stage_match[1] ?? '';
+        $importer->import($path);
+
+        $queries = [];
+        $capture = static function (string $query) use (&$queries): string {
+            $queries[] = $query;
+
+            return str_starts_with(strtoupper(ltrim($query)), 'RENAME TABLE')
+                ? 'RENAME TABLE `wp_m15_missing_source` TO `wp_m15_missing_target`'
+                : $query;
+        };
+        add_filter('query', $capture, PHP_INT_MAX);
+        try {
+            try {
+                $importer->swap();
+                $this->fail('A controlled rename failure must stop when the lease is replaced.');
+            } catch (\WPCareGrid\Connector\Core\LeaseLost) {
+                $this->assertTrue($fault->consumed());
+            }
+        } finally {
+            remove_filter('query', $capture, PHP_INT_MAX);
+        }
+
+        $this->assertSame('staged', $wpdb->get_var("SELECT option_value FROM `{$stage_table}` WHERE option_name = 'm15_stage_marker'"));
+        $this->assertSame($live_siteurl, get_option('siteurl'), 'The live options table was not swapped.');
+        $replacement_index = null;
+        foreach ($queries as $index => $query) {
+            if (str_contains($query, 'wp_caregrid_poll_lock') && preg_match('/^\s*UPDATE\b/i', $query) === 1) {
+                $replacement_index = $index;
+            }
+        }
+        $this->assertNotNull($replacement_index);
+        $after_lease_loss = array_slice($queries, $replacement_index + 1);
+        $this->assertSame([], array_values(array_filter($after_lease_loss, static fn (string $query): bool => preg_match('/^\s*DROP TABLE\b/i', $query) === 1)));
+
+        $wpdb->query("DROP TABLE IF EXISTS `{$stage_table}`");
+        $wpdb->delete($wpdb->options, ['option_name' => 'wp_caregrid_poll_lock'], ['%s']);
+    }
+
+    public function test_cleanup_check_to_drop_race_cannot_delete_successor_staging_table(): void
+    {
+        $this->requires_mysql();
+        $this->assertTrue(Lock::acquire());
+
+        global $wpdb;
+        $restore_uuid = wp_generate_uuid4();
+        $path = TempDir::ensure().'/cleanup-race-'.$restore_uuid.'.sql.gz';
+        $this->created[] = $path;
+        $create = 'CREATE TABLE `wp_m15_cleanup_stage` (`marker` varchar(32) NOT NULL) ENGINE=InnoDB;';
+        $sql = $create."\nINSERT INTO `wp_m15_cleanup_stage` VALUES ('old-attempt');\n";
+        file_put_contents($path, gzencode($sql));
+
+        $old = new SqlImporter($restore_uuid, $wpdb->base_prefix);
+        $old->import($path);
+        $old_stage_sql = $old->translate($create);
+        preg_match('/^CREATE TABLE `([A-Za-z0-9_$]+)`/', $old_stage_sql, $old_match);
+        $old_table = $old_match[1] ?? '';
+
+        $successor = new SqlImporter($restore_uuid, $wpdb->base_prefix);
+        $successor_stage_sql = $successor->translate($create);
+        preg_match('/^CREATE TABLE `([A-Za-z0-9_$]+)`/', $successor_stage_sql, $successor_match);
+        $successor_table = $successor_match[1] ?? '';
+        $this->assertNotSame($old_table, $successor_table);
+        $wpdb->query($successor_stage_sql);
+        $wpdb->insert($successor_table, ['marker' => 'successor']);
+
+        $replacement = sprintf('%010d:%s', time() + Lock::TTL, bin2hex(random_bytes(32)));
+        $raced = false;
+        $race = static function (string $query) use (&$raced, $old_table, $replacement, $wpdb): string {
+            if (! $raced && str_starts_with(strtoupper(ltrim($query)), 'DROP TABLE IF EXISTS') && str_contains($query, '`'.$old_table.'`')) {
+                $raced = true;
+                $wpdb->update($wpdb->options, ['option_value' => $replacement], ['option_name' => 'wp_caregrid_poll_lock'], ['%s'], ['%s']);
+            }
+
+            return $query;
+        };
+        add_filter('query', $race, PHP_INT_MAX);
+        try {
+            $old->discard();
+        } finally {
+            remove_filter('query', $race, PHP_INT_MAX);
+        }
+
+        $this->assertTrue($raced, 'The synthetic lease replacement occurred between verification and DROP.');
+        $this->assertSame($successor_table, $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($successor_table))));
+        $this->assertSame('successor', $wpdb->get_var("SELECT marker FROM `{$successor_table}`"));
+
+        $wpdb->query("DROP TABLE IF EXISTS `{$successor_table}`");
+        $wpdb->delete($wpdb->options, ['option_name' => 'wp_caregrid_poll_lock'], ['%s']);
+    }
+
     public function test_sql_importer_accepts_only_the_dump_grammar(): void
     {
         $importer = new SqlImporter('11111111-2222-4333-8444-555555555555', 'wp_');

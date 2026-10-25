@@ -35,11 +35,17 @@ final class SqlImporter
 
     public int $statements = 0;
 
-    public function __construct(string $restore_uuid, private readonly string $site_prefix)
-    {
+    public function __construct(
+        private readonly string $restore_uuid,
+        private readonly string $site_prefix,
+        private readonly ?RestoreFaultHooks $fault_hooks = null,
+    ) {
         $tag = substr(md5($restore_uuid), 0, 6);
-        $this->tmp_prefix = 'cgr'.$tag.'_';
-        $this->old_prefix = 'cgo'.$tag.'_';
+        // Retries for the same restore UUID must never share temporary table
+        // names: a stale worker may still be unwinding when its successor stages.
+        $attempt = bin2hex(random_bytes(6));
+        $this->tmp_prefix = 'cgr'.$tag.$attempt.'_';
+        $this->old_prefix = 'cgo'.$tag.$attempt.'_';
     }
 
     /** Load the dump into temporary tables. */
@@ -52,12 +58,15 @@ final class SqlImporter
             throw new BackupFailure('RESTORE_DATABASE_FAILED', 'The database dump cannot be opened.');
         }
 
+        $leaseLost = false;
         try {
             while (($line = $this->line($handle)) !== null) {
                 if ($line === '' || str_starts_with($line, '-- ')) {
                     continue;
                 }
 
+                // Do not start another staged write after losing the lease.
+                Lock::refreshOrFail();
                 $sql = $this->translate($line);
                 // Already validated; wpdb's charset re-check would mangle binary values.
                 $wpdb->check_current_query = false;
@@ -67,14 +76,29 @@ final class SqlImporter
                 }
 
                 $this->statements++;
+                $this->fault_hooks?->reach('database_statement_imported', $this->restore_uuid);
                 Lock::refreshOrFail();
             }
+        } catch (LeaseLost $e) {
+            // A stale worker must not clean up or otherwise mutate database state.
+            $leaseLost = true;
+            throw $e;
         } catch (\Throwable $e) {
-            $this->discard();
+            try {
+                $this->discard();
+            } catch (LeaseLost $lost) {
+                $leaseLost = true;
+                throw $lost;
+            }
             throw $e;
         } finally {
             gzclose($handle);
-            $wpdb->query('SET FOREIGN_KEY_CHECKS = 1');
+            if (! $leaseLost) {
+                // A normal failure may become a lease loss while discard() is
+                // unwinding. Recheck before the final SQL statement too.
+                Lock::refreshOrFail();
+                $wpdb->query('SET FOREIGN_KEY_CHECKS = 1');
+            }
         }
 
         if ($this->tables === []) {
@@ -152,6 +176,9 @@ final class SqlImporter
         Lock::refreshOrFail();
         $wpdb->query('RENAME TABLE '.implode(', ', $renames));
         if ($wpdb->last_error !== '') {
+            // Keep the failure injection seam before cleanup so tests can
+            // replace the lease in the exact rename-error/cleanup window.
+            $this->fault_hooks?->reach('database_swap_failed', $this->restore_uuid);
             $this->discard();
             throw new BackupFailure('RESTORE_DATABASE_FAILED', 'The restored tables could not be put in place.');
         }
@@ -176,12 +203,17 @@ final class SqlImporter
         wp_cache_flush();
     }
 
-    /** Remove the temporary tables (restore refused or failed before the swap). */
+    /**
+     * Remove only this attempt's temporary tables while lease ownership is
+     * still valid. Attempt-scoped names prevent a check-to-DROP race from
+     * deleting a successor's staged tables.
+     */
     public function discard(): void
     {
         global $wpdb;
 
         foreach ($this->tables as $temp) {
+            Lock::refreshOrFail();
             $wpdb->query("DROP TABLE IF EXISTS `{$temp}`");
         }
     }
@@ -193,7 +225,7 @@ final class SqlImporter
         }
 
         $temp = $this->tmp_prefix.substr($table, strlen($this->site_prefix));
-        if (strlen($this->old($table)) > 64) {
+        if (strlen($temp) > 64 || strlen($this->old($table)) > 64) {
             throw new BackupFailure('RESTORE_SQL_REJECTED', 'A table name is too long to restore safely.');
         }
 

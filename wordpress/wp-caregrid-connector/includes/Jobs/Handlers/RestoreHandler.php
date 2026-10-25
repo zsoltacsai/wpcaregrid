@@ -136,7 +136,7 @@ final class RestoreHandler implements JobHandler
                     throw new BackupFailure('DATABASE_NOT_SUPPORTED', 'Database restores need MySQL or MariaDB.');
                 }
                 global $wpdb;
-                $importer = new SqlImporter($uuid, $wpdb->base_prefix);
+                $importer = new SqlImporter($uuid, $wpdb->base_prefix, $this->fault_hooks);
                 $importer->import($paths['database']);
                 $this->fault_hooks?->reach('database_prepared', $uuid);
             }
