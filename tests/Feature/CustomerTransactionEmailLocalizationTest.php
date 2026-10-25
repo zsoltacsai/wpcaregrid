@@ -19,6 +19,7 @@ use App\Mail\WelcomeEmail;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
 use App\Models\Subscription;
+use App\Models\User;
 use App\Notifications\CustomerPasswordReset;
 use App\Pricing\BillingInterval;
 use App\Pricing\Currency;
@@ -145,20 +146,75 @@ final class CustomerTransactionEmailLocalizationTest extends TestCase
         }
     }
 
+    public function test_password_reset_for_owner_and_operator_is_always_rendered_in_english(): void
+    {
+        Notification::fake();
+        $this->app->setLocale('hu');
+
+        foreach ([
+            ['role' => 'owner', 'locale' => 'hu', 'customer_link' => true],
+            ['role' => 'operator', 'locale' => 'hu', 'customer_link' => true],
+            ['role' => 'owner', 'locale' => null, 'customer_link' => false],
+            ['role' => 'operator', 'locale' => 'xx', 'customer_link' => false],
+        ] as $case) {
+            $user = User::factory()
+                ->{$case['role']}()
+                ->create(['email' => fake()->unique()->safeEmail()]);
+            $user->forceFill(['locale' => $case['locale']])->save();
+
+            // A corrupt/legacy association must not make an internal role a customer.
+            if ($case['customer_link']) {
+                $user->customer()->save(Customer::factory()->make());
+            }
+
+            $this->post(route('password.email'), ['email' => $user->email])
+                ->assertSessionHas('status');
+
+            $notification = null;
+            Notification::assertSentTo($user, CustomerPasswordReset::class, function (CustomerPasswordReset $sent, array $channels) use (&$notification): bool {
+                $notification = $sent;
+
+                return $channels === ['mail'];
+            });
+
+            $this->assertInstanceOf(CustomerPasswordReset::class, $notification);
+            $message = $notification->toMail($user);
+
+            $this->assertSame('Password reset request', $message->subject);
+            $this->assertSame('Hello,', $message->greeting);
+            $this->assertStringContainsString('We received a password reset request', implode(' ', $message->introLines));
+            $this->assertSame('Reset password', $message->actionText);
+            $this->assertStringContainsString('If you did not request', implode(' ', $message->outroLines));
+            $this->assertSame(route('password.reset', [
+                'token' => $notification->token,
+                'email' => $user->getEmailForPasswordReset(),
+            ]), $message->actionUrl);
+            $this->assertTrue(Password::broker()->tokenExists($user, $notification->token));
+            $this->assertSame('hu', app()->getLocale());
+        }
+    }
+
     public function test_sequential_password_reset_notifications_do_not_leak_locale_between_users(): void
     {
         Notification::fake();
+        $this->app->setLocale('hu');
+        $owner = User::factory()->owner()->create();
+        $owner->forceFill(['locale' => 'hu'])->save();
         $hungarian = Customer::factory()->withUser()->create()->user;
         $hungarian->forceFill(['locale' => 'hu'])->save();
         $english = Customer::factory()->withUser()->create()->user;
         $english->forceFill(['locale' => 'en'])->save();
 
+        $owner->sendPasswordResetNotification('synthetic-owner-token');
         $hungarian->sendPasswordResetNotification('synthetic-hu-token');
         $english->sendPasswordResetNotification('synthetic-en-token');
 
+        $ownerMail = Notification::sent($owner, CustomerPasswordReset::class)->last()->toMail($owner);
         $hungarianMail = Notification::sent($hungarian, CustomerPasswordReset::class)->last()->toMail($hungarian);
         $englishMail = Notification::sent($english, CustomerPasswordReset::class)->last()->toMail($english);
 
+        $this->assertSame('Password reset request', $ownerMail->subject);
+        $this->assertSame('Reset password', $ownerMail->actionText);
         $this->assertSame('Jelszó-visszaállítási kérelem', $hungarianMail->subject);
         $this->assertSame('Password reset request', $englishMail->subject);
         $this->assertSame('Jelszó visszaállítása', $hungarianMail->actionText);

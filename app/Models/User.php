@@ -61,7 +61,15 @@ class User extends Authenticatable implements MustVerifyEmail
     /** Send reset links using this login's saved language, independent of request locale. */
     public function sendPasswordResetNotification($token): void
     {
-        $locale = Locales::isSupported($this->locale) ? $this->locale : Locales::default();
+        // The password broker is shared by customers and internal accounts.
+        // Only a non-staff login with a persisted Customer may use customer copy.
+        $isCustomerAccount = ! $this->isOwner()
+            && ! $this->isOperator()
+            && $this->customer()->exists();
+
+        $locale = $isCustomerAccount && Locales::isSupported($this->locale)
+            ? $this->locale
+            : ($isCustomerAccount ? Locales::default() : 'en');
 
         $this->notify(new CustomerPasswordReset($token, $locale));
     }
