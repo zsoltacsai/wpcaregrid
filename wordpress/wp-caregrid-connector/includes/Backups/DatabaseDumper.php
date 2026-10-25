@@ -51,7 +51,7 @@ final class DatabaseDumper
     {
         global $wpdb;
 
-        if (! self::supported()) {
+        if (self::supported() === false) {
             throw new BackupFailure('DATABASE_NOT_SUPPORTED', 'Database backups need MySQL or MariaDB.');
         }
 
@@ -115,7 +115,7 @@ final class DatabaseDumper
     private function table(\wpdb $db, Sink $sink, string $table, string $prefix): int
     {
         $create = $db->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
-        if (! is_array($create) || ! isset($create[1])) {
+        if (is_array($create) === false || isset($create[1]) === false) {
             throw new BackupFailure('DATABASE_DUMP_FAILED', 'A table definition could not be read.');
         }
 
@@ -131,7 +131,7 @@ final class DatabaseDumper
             if ($db->last_error !== '') {
                 throw new BackupFailure('DATABASE_DUMP_FAILED', 'A table could not be read.');
             }
-            if (! $batch) {
+            if (empty($batch)) {
                 break;
             }
 
