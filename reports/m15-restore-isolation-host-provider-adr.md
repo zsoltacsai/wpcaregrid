@@ -1,219 +1,369 @@
-# ADR M15-01 — Per-site host agent and isolated runtime for restore isolation
+# ADR M15-01 v2 — Asynchronous restore handoff to a per-site isolated host worker
 
-- **Status:** Proposed; awaiting explicit Owner architecture approval
-- **Date:** 2026-10-25
-- **Decision scope:** Host isolation architecture only. This ADR does not authorize provider implementation, provider allowlisting, deployment, or a live restore.
-- **Baseline:** `claude/ecstatic-wozniak-oemyuf` at `de54ed273478ec6739cf27a40c8eda27697f0974`
-- **Related decision record:** [M15 restore isolation gate contract](../reports/m15-restore-isolation-gate-contract.md)
+- **Status:** Proposed for independent M17 AppSec re-review; final Owner architecture approval required before implementation
+- **Date:** 2026-10-26
 - **Tracking:** [Issue #189](https://github.com/zsoltacsai/wpcaregrid/issues/189)
+- **Architecture review:** M17 v1 review was BLOCKED at [PR #190 comment 6404599176](https://github.com/zsoltacsai/wpcaregrid/pull/190#issuecomment-6404599176). This v2 addresses its five technical blockers; it does not claim M17 has accepted them.
+- **Baseline:** claude/ecstatic-wozniak-oemyuf at de54ed273478ec6739cf27a40c8eda27697f0974
+- **Current fail-closed contract:** [M15 restore isolation gate contract](../reports/m15-restore-isolation-gate-contract.md)
+- **Related product direction:** [Issue #191](https://github.com/zsoltacsai/wpcaregrid/issues/191)
 
-## 1. Context
+## 1. Decision and product scope
 
-PR #182 introduced a fail-closed Connector/platform contract for destructive restore. The Connector asks a `RestoreIsolationGateProvider` to acquire, assert, commit, and release an opaque lease. Platform readiness accepts a provider identity only from a fresh Connector capability snapshot and an explicit server-side allowlist. That identity is a readiness fact: it is not evidence that a host gate is currently held. The Connector must acquire and reassert a real gate before live database or filesystem mutation.
+The Owner has accepted this product direction:
 
-A PHP `.maintenance` file, ownership token, or Connector `flock()` cannot exclude WordPress code, another PHP process, a queue worker, a cron/CLI process, a deployment tool, or a direct database client that does not cooperate with the Connector. A path check followed by `unlink()` or replacement is also subject to filesystem races. The provider must therefore control the host-level writer and ingress boundaries, not infer exclusivity from Connector process state.
+- The default recovery feature is an authenticated, integrity-checked customer-downloadable backup package.
+- Direct destructive restore is optional and available only on an exact host profile whose isolation provider passed independent security and compatibility review.
+- Shared or unknown hosting remains fail-closed for direct restore. Provider absence does not disable otherwise authorized backup creation, retention, or download.
+- Eligible backup download-only access may continue for 14 calendar days after effective service/subscription termination, subject to privacy, legal erasure, retention and the separate implementation/review in #191. This ADR does not implement or change that policy.
 
-The current provider interface and platform allowlist intentionally have no production implementation or supported host configured. Unsupported or uncertain environments must continue to refuse live restore before mutation. This ADR describes a candidate design for one explicitly bounded hosting profile. It does not assert that any existing staging or production host has that topology.
+This ADR proposes a first host-provider architecture: an isolated per-site runtime with an unprivileged per-site agent and a minimal fixed-operation root broker. The agent accepts only a Laravel-authorized restore intent, stages immutable input, hands execution to a separate one-shot restore worker, and returns a cryptographically verifiable terminal receipt. The PHP Connector never performs live restore mutations in the supported provider path.
 
-## 2. Decision proposed
+**Design only.** Provider code, Connector/Laravel contract changes, allowlist activation, staging/production installation, live restore, and changing #182’s fail-closed behavior are not authorized by this ADR.
 
-Adopt a **per-site host isolation agent controlling a dedicated site runtime** as the first provider architecture to implement and evaluate.
+## 2. Threat model and trust boundaries
 
-The supported profile requires a site-specific runtime boundary for ingress, PHP-FPM, storage, database access, schedulers, queues, CLI, updates, and deployment. A privileged host supervisor may exist, but the Connector-facing provider is a per-site logical agent with a fixed site binding and a narrow RPC surface. It is not a root shell, a general command runner, or a customer-configurable control plane.
+### Protected assets and guarantees
 
-The first implementation must support only hosts whose exact configuration demonstrates all required boundaries. A missing/unknown writer, origin/CDN route, service, or database/file path makes acquisition fail closed. “Dedicated VPS” by itself is not sufficient evidence.
+The design protects live WordPress files, database state, active restore ownership, customer/tenant separation, and maintenance/host-gate availability against stale/replayed Connector requests or results, compromised/buggy WordPress PHP attempts to fabricate a restore or regain writes, concurrent web/cron/queue/CLI/updater/deployment/database/filesystem writers, process or host crash, malformed backup archives, manifest substitution, path traversal, CDN/cache/direct-origin bypass, and sibling-site impact.
 
-### 2.1 Target topology
+### Trust assumptions
 
-```mermaid
-flowchart LR
-    U[Public clients] --> E[CDN / edge policy]
-    E --> O[Origin ingress gate]
-    O --> F[Per-site PHP-FPM unit / UID]
-    F --> W[Per-site WordPress runtime]
-    W --> P[Connector provider adapter]
-    P -->|site-bound local RPC| A[Per-site isolation agent]
-    A --> S[Root-owned host supervisor]
-    S --> E
-    S --> O
-    S --> F
-    S --> Q[Per-site queue / cron / CLI / updater units]
-    S --> D[Per-site DB boundary or fenced DB proxy]
-    S --> V[Per-site filesystem volume]
-    A --> R[Isolated one-shot restore worker]
-    R --> D
-    R --> V
-    A --> J[Durable host gate state]
-    P --> M[Restricted durable Connector restore marker]
-    M --> P
-```
+- Laravel’s restore authorization and signing key are protected by existing platform key-management controls.
+- The host kernel and root broker are trusted; compromised host root is outside this design’s protection claim.
+- The exact host profile can identify and control every ingress and writer class. Unknown writers, shared credentials, unobservable routes, or unverified provider behavior mean unsupported/no acquire.
+- The worker artifact and broker are delivered through a separately reviewed signed release process. This ADR does not establish their supply-chain provenance.
+- The Connector’s Unix UID is an identity signal only, never sufficient restore authorization.
+- Provider readiness data is advisory admission evidence, never evidence that a host gate is currently held.
 
-The host agent maps its local socket and process identity to a site identifier from root-owned configuration. The caller cannot supply arbitrary unit names, paths, hosts, SQL, shell fragments, or control actions. A root-owned supervisor performs a fixed set of typed operations; the agent is confined to one site’s configured units, ingress policy, database boundary, and volume. Per-site processes, cgroups, UIDs, mount namespaces, and service identities must not be shared with another site.
+### Component responsibilities
 
-A compromised site process must not gain a general host-control primitive. Local peer credentials establish which site runtime is calling; they do **not**, by themselves, prove that the requested restore was authorized. Before implementation, the Owner must approve how a short-lived, replay-resistant restore authorization is bound to site, restore UUID, scope, backup identity, job/lease identity, audience, and expiry. The current provider method signatures do not carry such an authorization object. This is a contract gap to resolve explicitly; do not treat socket permissions as a substitute for platform authorization.
-
-### 2.2 Ingress, CDN, origin, and in-flight request closure
-
-Acquisition begins by durably recording a closed/acquiring state. The agent then closes the **origin first** for the site: the origin must reject public requests and direct-origin access, while retaining only the narrowly authenticated management/control path needed for reconciliation. It next applies a site-specific edge deny and cache-bypass/purge policy. CDN policy success must be acknowledged by the provider integration; cached responses, alternate hostnames, IPv4/IPv6 listeners, alternate ports, load balancers, and direct origin routes must be included in the compatibility evidence.
-
-The gate may not report acquired while any public path can serve the site or reach a mutating handler. If the CDN has no enforceable per-site policy or the origin is publicly reachable around it, the host is unsupported. A firewall change that affects a shared listener or another tenant is prohibited.
-
-After new requests are rejected, the agent drains in-flight requests and persistent connections for the site. It must observe that the site PHP-FPM pool and all request workers have no in-flight state-changing request before stopping/fencing them. Drain is bounded. A timeout, incomplete counter, control-plane error, or unrecognized connection leaves the site closed and returns failure; it does not silently continue. Do not use a shared PHP-FPM master shutdown as a shortcut.
-
-A read-only, local health/control route may remain available only if it is outside the public application runtime, has a separate identity, cannot write site state, and cannot expose secrets. Its exemption must be demonstrated, not assumed.
-
-### 2.3 Writer inventory and fencing
-
-The implementation must maintain an explicit per-site inventory and control proof for every writer class. New or unknown writers invalidate the profile until reviewed.
-
-| Writer class | Required boundary while gate is held |
-|---|---|
-| HTTP / PHP-FPM / WordPress admin and REST | Origin and edge deny new traffic; drain and fence the dedicated site pool. No shared pool. |
-| WP-Cron and external cron | Disable/fence the site’s internal cron trigger and every host, panel, or external scheduler entry. Drain any current run. Unknown external cron is NO-GO. |
-| Action Scheduler and application queues | Pause producers and site-specific workers; wait for active jobs to finish or prove they are fenced before apply. Do not clear or discard queued work. A retry cannot run until the gate is released. |
-| WP-CLI and maintenance scripts | Run only through a site-scoped launcher that checks the host gate. Fence interactive/automated CLI and maintenance commands during apply. Unknown shell or panel access is a compatibility blocker. |
-| Core/plugin/theme updates | Disable/fence in-application and host/vendor update mechanisms, including scheduled updates and filesystem replacement. |
-| Deployment and release automation | Deployment controller must acquire the same host gate or fail before changing code, schema, assets, workers, or configuration. Deploy while restore is active is denied. |
-| Direct database clients | Prefer a per-site DB instance. Otherwise all site writes must pass through a site-aware proxy enforcing the active generation; direct network access and shared/untracked credentials must be blocked. Drain existing write sessions. Shared database global read-only mode is not acceptable. |
-| Filesystem writers | Site files/volume must have a unique site identity. Fence all site writers and expose a writable mount only to the one-shot restore worker while applying. Other sites, backup/sync tools, antivirus hooks, root-owned scheduled jobs, and deployment agents must be inventoried and controlled. |
-| Human/provider operations | Only the separately approved, audited break-glass recovery path may operate while closed. Untracked provider-console actions or root processes capable of writing the site make the claim conditional/unsupported. |
-
-The initial supported profile should require a **dedicated per-site database instance and filesystem volume** where available. A shared database may be considered only after a site-aware write proxy, direct-connection denial, session drain, and adversarial evidence are demonstrated. Per-schema grants alone do not fence already-open sessions or other holders of the same credential.
-
-A unique Unix UID and mount boundary are necessary but not sufficient if a process with broader host privilege can write around them. The host threat model trusts the provider’s host kernel/root control plane; it does not claim protection against a malicious or compromised host root. The provider must nevertheless make routine application, deployment, scheduler, and customer processes unable to bypass the site gate.
-
-### 2.4 Provider RPC and privilege boundary
-
-The Connector adapter uses a local, site-specific Unix-domain socket with strict filesystem permissions. The agent verifies peer credentials and a root-owned UID-to-site mapping on every request. RPC messages are typed, size-bounded, versioned, and reject unknown fields/actions. The protocol exposes only the contract operations: stable provider identity, acquire/resume, assert, two-phase commit, and exact-generation release. It returns bounded success/failure codes and opaque lease data only where the Connector contract requires it.
-
-The agent never accepts arbitrary commands, executable names, environment variables, destination paths, URLs, SQL, unit names, or caller-selected site IDs. It uses fixed root-owned configuration. It rate-limits and serializes per-site requests. Inputs are validated against the platform-signed authorization decision once an approved authorization mechanism is selected. Retries are idempotent; replayed or expired authorization cannot create a new restore generation.
-
-The privilege implementation must be reviewed separately. If operations require a root-owned broker, its API and service policy must be smaller than the set of host capabilities exposed to the Connector. The WordPress/PHP process must never inherit the broker’s credentials or control socket access for another site.
-
-## 3. Durable generation state machine
-
-The host agent’s state is authoritative for host enforcement; the Connector’s restricted restore marker is authoritative for Connector recovery linkage. Both must be reconciled. No lease timeout or process-local `active` variable may reopen the site.
-
-### 3.1 States
-
-- **OPEN** — ordinary site runtime is enabled.
-- **ACQUIRING(g)** — a new generation is durably reserved; ingress/writer closure is in progress.
-- **DRAINING(g)** — new ingress is denied and in-flight requests/jobs/sessions are draining.
-- **QUIESCENT(g)** — all writer and bypass checks have affirmative evidence; only now may the provider return acquired.
-- **APPLYING(g)** — exact generation remains active while restore performs live DB/filesystem mutations.
-- **RECOVERY_REQUIRED(g)** — mutation may have begun or outcome is uncertain; ingress and writers remain fenced.
-- **RELEASING(g)** — restore/recovery completion is verified; the agent is reopening components in a controlled order.
-- **OPEN** — returned only after all required components are healthy and the final ingress policy is consistent.
-- **CLOSED_ERROR(g)** — any ambiguous failure, lost control, state corruption, or incomplete recovery; manual reconciliation is required.
-
-All transitions are serialized per site and durable before external effects whose completion they describe. Generation identifiers are monotonically ordered or collision-resistant and site-bound. Mutating calls require the exact current generation and restore identity. A stale generation, wrong restore, wrong scope, duplicate release, or stale authorization cannot change state.
-
-### 3.2 Acquire and marker handoff
-
-1. Validate the authorized restore intent and fixed site mapping. Reject unknown site/writer configuration.
-2. Persist `ACQUIRING(g)` before manipulating ingress or services. If the same restore/scope retries, return/resume its same pending generation; never allocate an unrelated second gate.
-3. Close origin and edge/public paths; drain requests; fence cron, queues, CLI, updates, deployment, DB sessions, and filesystem writers.
-4. Persist `QUIESCENT(g)` only after every required control acknowledges the exact site and current generation. Any missing acknowledgement stays closed and fails.
-5. The Connector durably writes its new restricted marker, including the new generation and the prior generation(s) that remain protected.
-6. The Connector invokes the contract’s idempotent `commit(current, previous)`. The provider keeps both generations closed until it verifies that the new generation is current and retires only the exact previous generation(s).
-7. If the Connector crashes before marker publication, the previous generation remains in force and the pending generation is recoverable by the same restore identity. If it crashes after marker publication but before commit, a later poll retries commit. No timeout silently discards either generation.
-
-The current contract says provider identity/generation are kept in the restricted Connector marker and not exposed to the platform or logs. A durable host state machine also needs an internal generation record to survive host/agent restart. **This is an unresolved contract wording/data-ownership decision:** the proposed host store must be root-owned, site-scoped, inaccessible to the platform and WordPress runtime, and must never emit provider IDs, generation values, lease tokens, or authorization tokens to logs. Owner approval is required to clarify that this provider-private durable state is permitted. If “marker only” is a strict requirement, the architecture must be revised before implementation; do not weaken restart safety.
-
-### 3.3 Apply assertions and release
-
-Before every live mutation boundary—database table swap, live option write, each file-apply entry, destination-directory creation, temporary/live file write, rename, and recovery/compensation step—the Connector asserts its job lease and the provider asserts the exact host generation and that the writer boundary remains enforced. The provider persists an apply-started marker before the first destructive action. A failed assertion stops before the next mutation and moves to `RECOVERY_REQUIRED`; it never releases the gate or deletes recovery artifacts.
-
-Release is not a TTL cleanup. It requires durable Connector terminal evidence that the restore or approved recovery completed and passed required integrity/health checks, plus an exact matching generation. Unknown or legacy destructive state remains closed. The agent then re-enables the site runtime while the public ingress remains closed, verifies local service health and generation state, resumes only the reviewed site writers in a deterministic order, and opens edge/origin ingress last. If any step fails, the site remains closed in `CLOSED_ERROR` or `RECOVERY_REQUIRED`.
-
-**Contract gap:** current `release(RestoreIsolationLease $lease): bool` carries no terminal-success/recovery attestation. The Connector call site can enforce ordering, but an agent cannot distinguish a correct caller from an early release request based on the lease alone. Before implementation, Owner/Integration review must choose an explicit mechanism: (a) a verifiable, single-use completion receipt bound to site, restore, scope, generation and terminal evidence; or (b) a host-side verifier that reads a narrowly defined durable marker through a safe descriptor-based interface. The choice must not expose provider generation to Laravel/platform logs and must be tested against replay, stale state, and marker replacement. Do not implement an implicit “release means success” trust assumption without recording this decision.
-
-### 3.4 Durable storage and restart behavior
-
-The agent uses a root-owned durable per-site state store with transactional updates, crash-consistent writes, explicit durability guarantees, and integrity/ownership validation at startup. Its record includes site binding, restore identity/scope, generation ordering, previous/pending/current state, per-control acknowledgement state, mutation-started state, and recovery disposition. Secrets and authorization material are stored separately with least privilege; logs contain only non-secret event class, coarse result, timestamp, and a non-sensitive correlation reference.
-
-On boot, the agent must establish the gate before any site runtime or public ingress can start. A missing/corrupt/inconsistent journal, unavailable edge API, unexpected process, stale active runtime, unknown generation, or disagreement with the Connector marker results in closed ingress and stopped/fenced writers. The agent reconstructs the lock conservatively and requires audited reconciliation. It never infers OPEN merely from absent marker, expired lease, stopped Connector, a successful service restart, or a host reboot.
-
-## 4. Recovery and failure model
-
-| Failure | Required behavior |
-|---|---|
-| Edge/origin rule cannot be confirmed | Keep origin closed; do not return acquired. |
-| Drain timeout or unknown in-flight writer | Keep ingress closed; no live mutation; operator review. |
-| Queue, cron, CLI, deployment, or update writer cannot be fenced | Keep gate closed; mark host profile unsupported. |
-| Direct DB/file writer discovered | Abort acquire before mutation; preserve current generation and evidence. |
-| Agent/Connector process loss before mutation | Durable gate remains closed; same generation can be reconciled; release only if no-mutation is positively proven. |
-| Process loss during/after mutation | `RECOVERY_REQUIRED`; no auto-expiry, cleanup, or deployment; authorized recovery must re-establish the gate. |
-| Failed restore health check | Keep gate closed and source/safety/recovery artifacts; follow separately approved recovery procedure. |
-| Recovery failure or ambiguous outcome | Keep gate closed; manual recovery. |
-| Partial re-open/service restart failure | Re-close what can be safely re-closed; never open public ingress; audit required. |
-| State-store corruption or generation mismatch | Fail closed; do not guess the current owner. |
-| Operator requests break-glass | Require exact site/restore/generation context, named authorization, recorded reason, independent confirmation where policy requires, pre/post integrity evidence, and no unrelated site impact. |
-
-A backup’s existence is not proof of its integrity or restore readiness. This ADR does not authorize an automatic restore/rollback, backup operation, notification, quarantine, remediation, or cleanup. Those are separate controls and approvals.
-
-## 5. Alternatives considered
-
-| Option | Decision | Reason |
+| Component | Authoritative responsibility | Must not do |
 |---|---|---|
-| PHP `.maintenance` plus owner token or re-check | Reject | Other PHP/WordPress/CLI/database writers need not honor it; path operations retain TOCTOU. |
-| Connector advisory lock/`flock()` | Reject | Cooperative lock only; cannot fence unrelated processes or external writers. |
-| SSH/root commands launched by the Connector | Reject | Exposes arbitrary privileged execution to the application and makes identity, quoting, audit, and least privilege difficult. |
-| Whole-host maintenance mode / stop shared FPM or DB | Reject | Cross-tenant blast radius; fails site isolation and can disrupt unrelated sites. |
-| Platform-only readiness allowlist | Reject as enforcement | Readiness is not an active host gate; the Connector must enforce at mutation time. |
-| Host/vendor control-plane API | Keep as future adapter option | May be valid if exact vendor API proves every ingress and writer boundary; no generic API is assumed. |
-| Dedicated per-site runtime plus site-scoped host agent | Recommend for first provider | Makes the writer inventory and blast radius explicit and testable; still requires host-specific proof. |
+| Laravel platform | Tenant/business authorization, immutable backup selection, intent signing, workflow state, receipt verification and idempotent result ingestion | Claim isolation from readiness alone; directly release host gates |
+| WordPress Connector/PHP | Authenticated polling, non-destructive manifest/object checks, bounded host transfer, durable handoff/outbox, relay of signed receipts | Apply files, swap live tables, wait inside FPM while FPM drains, choose paths/units/credentials |
+| Per-site unprivileged agent | Typed per-site RPC, transfer coordination, status relay | Possess root credentials, bypass broker policy, gain cross-site authority |
+| Minimal root broker | Verify intent and anti-replay, own authoritative gate/generation journal, control fixed site resources, launch/observe worker, validate terminal evidence and sign receipt | Expose shell/root RPC; trust PHP claims; unlock on TTL/process loss |
+| One-shot restore worker | Validate accepted immutable work; stage/apply within fixed site sandbox; emit bounded evidence | Change gate state, access arbitrary host paths/secrets, use general network or subprocesses |
+| Edge/origin/DB/storage controls | Enforce site-specific deny, drain, and writer fence | Affect unrelated sites or rely on cooperative flock |
 
-## 6. Hosting compatibility policy
+## 3. First supported topology and least privilege
 
-- **Candidate:** dedicated per-site VPS/runtime with independent FPM unit, UID/cgroup, filesystem volume, DB instance or proven site-aware DB proxy, controlled edge/origin, and complete writer inventory.
-- **Conditional:** multiple sites on one VPS only with separate pool/unit/UID/storage/database boundaries and a test proving a different site remains available and writable while this site is gated.
-- **Not supported by default:** traditional shared hosting, shared PHP-FPM identity, common writable volume, untracked host panel cron/CLI, shared DB credentials, or direct public origin/CDN bypass.
-- **Managed WordPress:** only through a vendor-specific provider whose API and actual deployment behavior are independently verified for all required writers and ingress paths.
-- **Unknown topology:** `BLOCK`; never infer compatibility from product name, version, or a successful unit fake.
+The first reference profile is a dedicated/managed VPS with one isolated WordPress site:
 
-A supported-host claim is bound to an exact vendor, plan, runtime version, topology, configuration revision, and tested provider artifact. A change to any of those invalidates the evidence until re-reviewed.
+- Unique site UID, cgroup, PHP-FPM pool/container, filesystem volume and database instance/credentials.
+- Site-specific origin listener and enforceable CDN/edge policy. Direct-origin access is denied except for separately scoped authenticated control and health paths.
+- Site-scoped cron, Action Scheduler, queue workers, WP-CLI, update jobs, and deployment units, all inventoried and fenceable.
+- A per-site unprivileged agent has no host-control credentials. It communicates with one narrowly scoped broker endpoint.
+- A root-owned broker exposes only typed operations for fixed root-owned site mappings. It uses fixed systemd/unit/mount/database policy; no caller-supplied command, executable, environment, URL, SQL, path, or unit name.
+- A separate one-shot restore-worker UID/process namespace receives only verified work and exact site filesystem/database access. It has no general network egress, cross-site mount, agent-state write access, or gate-release authority.
+- Broker durable state and signing key are root-only. Platform intent verification keys are pinned/rotatable root-owned public keys. Site PHP never reads broker secrets.
+- A site-specific host public key is enrolled into Laravel through a separately approved authenticated provider-registration process. Connector inventory alone cannot enroll or rotate a trusted key.
 
-## 7. Verification plan required before provider allowlisting
+The broker is a small privileged reference monitor, not a general-purpose root agent. Its operation set, IPC schema, systemd policy, syscall restrictions, file descriptors, key access, update mechanism, and failure behavior require independent review. If the exact platform cannot maintain this boundary, it is unsupported.
 
-No fake provider, unit test, or local simulation alone qualifies a host. Before an ID is allowlisted, evidence must include:
+A multi-site host is conditionally supportable only with independent site UID/cgroup, FPM, DB, storage, ingress, queue/cron/CLI/deploy and agent state. A test must prove a sibling site remains healthy and writable throughout the target site’s gate. Shared PHP-FPM identities, common writable volumes, shared/unfenced DB credentials, or unknown external writers remain unsupported for direct restore. These restore restrictions do not remove separately authorized backup/download rights.
 
-1. **Contract tests:** acquire/resume idempotence; wrong site/restore/scope/generation; commit retries; release retries; stale/duplicate authorization; no secret or lease data in logs.
-2. **Ingress adversarial tests:** CDN cache and alternate paths; direct origin IPv4/IPv6/host aliases; stale keepalive connections; webhooks and REST write routes; ingress rule propagation delay.
-3. **Drain/fencing tests:** latch-controlled in-flight HTTP mutation; PHP-FPM restart; WP-Cron and external cron; Action Scheduler; queue workers; CLI; updater; deployment and host-panel jobs.
-4. **DB tests:** open direct sessions, all site credentials, proxy bypass, concurrent writes, and unrelated-site isolation. Prove no untracked DB writer remains.
-5. **Filesystem tests:** independent process attempting writes without taking a Connector lock; symlink/hardlink/path replacement; volume/mount identity; backup/sync/deploy writer races.
-6. **Crash/reboot tests:** terminate Connector and agent at every acquire/marker/commit/apply/recovery/release step; reboot while closed; corrupt/truncate state journal; retry with same and stale generation.
-7. **Recovery tests:** verified no-mutation release, destructive/unknown state retention, failed recovery, successful recovery handoff, and cleanup only after durable verified outcome.
-8. **Blast-radius tests:** another site on the host remains healthy and writable; shared services are untouched.
-9. **Operations:** independent M17/AppSec review, Integration & QA review, Owner acceptance, recovery contact/runbook, audit-log redaction, and a dedicated disposable lab before any staging/pilot approval.
+## 4. Signed Restore Intent v1 proposal
 
-The test harness must inject interruption at every durable transition and assert both enforcement state and live synthetic DB/filesystem state. Concurrency evidence must come from the exact supported host topology, not merely CI service containers.
+### Encoding and signature
 
-## 8. Open decisions and required approvals
+Laravel creates a **Signed Restore Intent v1** only after validating the restore request, target website, active Connector, customer permissions, immutable backup manifest, scope, and required safety backup. It signs a canonical JSON payload using RFC 8785 JSON Canonicalization Scheme and Ed25519 with a domain separator such as WPCAREGRID-RESTORE-INTENT-V1 followed by a NUL byte. The signature covers every field. The broker accepts only the configured algorithm and pinned key ID; unknown algorithms, fields, key IDs or schema versions are rejected.
 
-This ADR is not accepted until the Owner explicitly approves or rejects these decisions:
+The private signing key remains in platform key management. The broker receives only the relevant public verification keys through authenticated host release/configuration. Key rotation has a bounded overlap: new intents use the new key; the previous key is accepted only through the maximum intent acceptance period. No secret or bearer capability is written to Connector logs, maintenance markers or user output.
 
-1. **Topology:** per-site dedicated runtime and host-controlled ingress/writer fencing as the first supported provider.
-2. **Privilege:** root-owned fixed-operation supervisor/agent arrangement and its site-binding model.
-3. **Authorization:** signed single-use restore intent or other reviewed mechanism binding the platform-approved job to host RPC.
-4. **Durability:** provider-private host state alongside the Connector marker, or a revised alternative reconciling the current contract’s “marker only” wording.
-5. **Terminal proof:** extension of the release contract with a verifiable success/recovery receipt, or a safe host-side terminal-state verifier.
-6. **Database scope:** dedicated per-site DB instance as baseline versus a site-aware proxy with proven fencing.
-7. **Edge/origin provider:** exact CDN/origin adapter and behavior; no vendor has been selected.
-8. **Recovery control:** named break-glass roles, audit retention, and separation-of-duties requirements.
-9. **Compatibility policy:** unsupported defaults for shared/unknown hosting and evidence required to add each host/provider ID.
+### Required payload
 
-After Owner approval, create separate implementation and conformance-test PRs. Keep `COMPATIBILITY_RESTORE_ISOLATION_PROVIDER_IDS` empty until the exact provider has passed independent compatibility review. Implementation, allowlist activation, staging deployment, production deployment, live restore, and migration of existing hosts all require their own authorization and exact scope.
+    {
+      "schema": "wp-caregrid.restore-intent.v1",
+      "iss": "wpcaregrid-platform",
+      "aud": "provider-installation-id",
+      "provider_id": "reviewed-provider-id",
+      "host_id": "registered-host-id",
+      "tenant_id": "immutable-tenant-id",
+      "site_id": "immutable-website-id",
+      "connector_id": "active-connector-id",
+      "restore_uuid": "uuid",
+      "job_uuid": "uuid",
+      "backup_uuid": "uuid",
+      "manifest_sha256": "64-lowercase-hex",
+      "scope": "files|database|full",
+      "intent_id": "uuid",
+      "nonce": "base64url-32-random-bytes",
+      "issued_at": "UTC RFC3339 timestamp",
+      "expires_at": "UTC RFC3339 timestamp",
+      "key_id": "platform-signing-key-id"
+    }
 
-## 9. Consequences
+The example is a schema proposal, not a real credential or site identifier. Implementation must define canonical validation, maximum lifetime, clock-skew policy, key rotation and rejection codes. Proposed maximum lifetime is two minutes for first acceptance. Once durably accepted, execution relies on the host’s immutable accepted-work record, not on the token’s continuing wall-clock validity. Unsafe clock rollback is fail-closed.
 
-**Benefits:** restore exclusivity is tied to host-enforced ingress and writer controls; loss of the Connector process does not reopen a partially modified site; unknown topology fails before mutation; the supported-host claim is bounded and auditable.
+The broker verifies signature, issuer, exact audience/provider/host, tenant/site mapping, active Connector identity, scope, backup/manifest binding, UUID syntax, issue/expiry window, and nonce. It durably reserves intent ID and nonce before acknowledging. A byte-identical duplicate returns the same work item; the same ID or nonce with different content is rejected. A terminal/cancelled intent is never re-executed by replay.
 
-**Costs and limits:** this is substantial host integration, not a Connector-only feature. It requires a dedicated runtime, control-plane integration, provider-specific edge and database support, careful root privilege review, crash-injection testing, independent security review, and operational recovery ownership. Availability may be reduced after a crash because the safe state is closed. A host root compromise remains outside the protection boundary.
+The signed manifest binds the exact backup UUID/scope, fixed object names, sizes and SHA-256 hashes. The host accepts only fixed object names for the scope, not archive paths or host paths. Each streamed object is size-limited, hashed, fsynced into a root-owned inbox, and atomically published as immutable input only after digest verification. Partial uploads are not executable. A crash resumes the same intent or leaves non-executable quarantined data; it cannot create a second work item.
 
-**Current status remains:** provider not implemented; provider IDs not allowlisted; no host compatibility verified; no staging/production installation or live restore authorized or performed; PR #182’s generic `.maintenance` TOCTOU limitation remains open as a host-integration concern.
+## 5. Connector-to-host-worker handoff
 
-## 10. Change boundary for this ADR
+The current #182 path runs restore mutation in Connector PHP. The supported-provider path must replace that execution path with asynchronous host-owned work:
 
-This document is architecture proposal only. It changes no Connector code, Laravel readiness logic, restore UI, configuration, allowlist, service, workflow, host, staging, or production state. M16 email-localization files are outside scope. Owner architecture approval is a hard gate before the next implementation task.
+1. **Platform authorization:** Laravel stores the restore/job and exact immutable backup/manifest/scope binding, then returns the signed intent with the authenticated job. A duplicate request is rejected or resolves to the same active restore.
+2. **Connector validation and transfer:** Connector validates the authenticated response and performs only non-destructive manifest/object checks. It streams bounded backup objects to the per-site agent. It does not unzip into the live site.
+3. **Durable host acceptance:** Agent relays intent and stream to the broker. Broker verifies intent and bindings, records nonce/work reservation, validates complete object digests, and durably records ACCEPTED. It returns a bounded acknowledgement with only required correlation IDs; no host generation or lease secret is returned to Laravel.
+4. **Durable Connector handoff:** Connector writes its restricted restore marker/outbox entry for the accepted work item and returns from the poll/request promptly. It records HANDOFF_ACCEPTED, not restore success. The marker is recovery linkage, not host enforcement.
+5. **No FPM self-drain:** Broker starts gate acquisition asynchronously after handoff acceptance. It never waits for the calling PHP-FPM request inside that request. It closes ingress, then waits until the current request and all site cgroup descendants have exited. Only then does it stop/fence the dedicated pool and prove the cgroup empty. If the caller does not exit within the bound, restore mutation does not start; the site remains closed/blocked for reconciliation. It does not kill an unknown process and assume safety.
+6. **Writer fencing and gate acquisition:** Broker confirms every control in §6, persists QUIESCENT for the exact internal generation, and only then allows worker launch.
+7. **Isolated execution:** Broker starts the fixed verified worker under a separate restore-worker identity, private mount namespace, site-only writable volume, exact site DB credentials, bounded resources and no arbitrary network/subprocess access. FPM/Connector has no live write path.
+8. **Authenticated result relay:** Broker verifies worker exit, work binding, durable mutation state, DB/filesystem evidence and required checks. It creates, signs and fsyncs a Terminal Receipt in a durable host outbox. Connector relays it to Laravel using the existing authenticated channel; Laravel independently verifies host signature and intent bindings before changing customer-visible state.
+9. **Idempotent retry:** Interrupted receipt delivery retransmits the same stored receipt. Duplicate identical receipts are acknowledged without a second transition. Conflicting, stale, invalidly signed, wrong-tenant/scope/backup receipts are rejected and cannot release the host gate.
+
+~~~mermaid
+sequenceDiagram
+    participant L as Laravel
+    participant C as Connector PHP
+    participant A as Per-site unprivileged agent
+    participant B as Root broker / durable gate
+    participant E as CDN + origin
+    participant W as One-shot restore worker
+    participant D as Site DB + volume
+    L->>L: Authorize site, backup, scope; bind immutable manifest
+    L->>C: Authenticated job + signed one-use Restore Intent
+    C->>C: Validate intent and stage only non-live input
+    C->>A: Stream fixed backup objects + signed intent
+    A->>B: Typed begin/stream RPC
+    B->>B: Verify signature, audience, bindings, nonce; persist ACCEPTED
+    B-->>A: Idempotent handoff acknowledgement
+    A-->>C: Handoff accepted
+    C->>C: Persist marker/outbox; return poll promptly
+    C-->>L: Handoff accepted; not a terminal result
+    B->>E: Deny public edge/origin paths and cache bypass
+    B->>B: Drain FPM caller and all site writers; fail closed on timeout
+    B->>B: Persist QUIESCENT generation; verify writer fences
+    B->>W: Launch fixed worker in isolated site sandbox
+    W->>D: Verify inputs, apply selected scope, check result
+    W-->>B: Bounded work result and evidence digest
+    B->>B: Validate result; persist and sign terminal receipt
+    B->>E: Reopen only after verified terminal state
+    B-->>A: Durable signed receipt available
+    A->>L: Authenticated receipt relay (retryable/idempotent)
+    L->>L: Verify signature and intent binding; update once
+~~~
+
+Handoff does not authorize scanner jobs, backups, notifications, remediation, quarantine, deployment, or unrelated maintenance. The worker receives a restore-only typed operation.
+
+## 6. Ingress, drain, database and filesystem fencing
+
+Broker first durably records a closed/acquiring state, then denies new origin requests and direct-origin traffic. It applies a site-specific edge deny/cache policy and requires provider acknowledgement. IPv4/IPv6, aliases, alternate ports/load balancers, CDN cache, webhooks, admin/REST routes, and direct-origin paths are compatibility evidence. Generic WAF or DNS matching is not proof. If any public path can reach the app or serve a mutable endpoint, acquisition fails.
+
+After ingress deny, broker drains requests, persistent connections, PHP-FPM and its cgroup descendants. It identifies the handoff caller and lets it return before waiting for the pool to empty. Broker RPC is asynchronous; no PHP request waits for its own FPM shutdown. Unknown or stuck processes are not force-killed and treated as drained. Bounded failure prevents worker start and remains closed/manual-reconcile unless the broker positively proves safe rollback before mutation.
+
+Broker fences:
+
+- Dedicated PHP-FPM and all HTTP entrypoints.
+- WP-Cron plus every external/system/panel cron trigger.
+- Action Scheduler and queues: stop new claims/producers; drain or fence active jobs; retain queued work.
+- WP-CLI, maintenance scripts, interactive sessions and automation.
+- Core/plugin/theme updater mechanisms.
+- Deployment/release/migration jobs: they must acquire the same broker lock or fail before changing code/schema/config.
+- Direct DB sessions/writers: first profile requires a dedicated per-site DB instance/credentials. Drain existing sessions; restrict network/credentials so no untracked writer bypasses broker. Shared/global DB read-only mode is prohibited.
+- Filesystem/sync/backup/antivirus/deploy writers: unique site volume and identity; fence all site writers. Only the isolated worker gets the scoped writable mount during apply. No other site/shared UID is affected.
+- Human/provider operations: only separately approved audited recovery may operate while closed.
+
+Broker reports acquired only after every control acknowledges the exact site/state, no in-flight writers remain, and durable state agrees. Missing evidence, unsupported edge/DB/provider APIs, shared PHP-FPM, shared writable storage, direct DB access or unknown writer is NO-GO. flock and Connector locks are cooperative serialization only, not isolation.
+
+## 7. Verified Terminal Receipt v1 proposal
+
+Only the root broker creates a terminal receipt, after independently checking the accepted intent, internal current generation, worker identity/exit, durable mutation marker, exact input manifest, output/evidence digest, DB/filesystem result, and required non-mutating health checks. Worker cannot release the gate or sign a host receipt. Broker stores the receipt durably before a release transition. A caller-supplied success flag is insufficient.
+
+The receipt is canonical JSON signed with a site/provider-specific Ed25519 host key. Laravel pins the public key through a separately approved provider-enrollment flow. It includes:
+
+    {
+      "schema": "wp-caregrid.restore-terminal.v1",
+      "issuer": "registered-host-broker",
+      "audience": "wpcaregrid-platform",
+      "receipt_id": "uuid",
+      "intent_id": "uuid",
+      "tenant_id": "immutable-tenant-id",
+      "site_id": "immutable-website-id",
+      "connector_id": "active-connector-id",
+      "restore_uuid": "uuid",
+      "job_uuid": "uuid",
+      "backup_uuid": "uuid",
+      "manifest_sha256": "64-lowercase-hex",
+      "scope": "files|database|full",
+      "outcome": "RESTORE_SUCCESS|SAFE_PRE_MUTATION_ABORT|RECOVERY_SUCCESS|RECOVERY_REQUIRED",
+      "mutation_started": true,
+      "failure_stage": "bounded-enum-or-null",
+      "evidence_sha256": "64-lowercase-hex",
+      "started_at": "UTC RFC3339 timestamp",
+      "finished_at": "UTC RFC3339 timestamp",
+      "host_key_id": "registered-host-signing-key-id"
+    }
+
+The receipt omits the internal generation and lease token. Broker durably binds intent/receipt IDs to the exact internal generation, so the signed receipt is generation-bound without disclosing that generation to Laravel or logs. Platform verifies it against the original intent and atomically records its unique receipt ID and final state. Identical replay is idempotent; conflicting replay is rejected.
+
+Outcome rules:
+
+- **RESTORE_SUCCESS:** apply and approved integrity/health checks completed; broker persists terminal evidence; gate may reopen in controlled order.
+- **SAFE_PRE_MUTATION_ABORT:** broker proves no live DB/file write intent or mutation occurred and the work item is abandoned. Missing proof forbids this outcome.
+- **RECOVERY_SUCCESS:** separately authorized recovery completed and passed checks under a new bound recovery intent/generation. Only then may the broker reopen.
+- **RECOVERY_REQUIRED:** mutation began or state is ambiguous, checks failed, evidence is missing, or a critical process crashed. Gate stays closed. This receipt reports state; it never authorizes release.
+
+Before the first live DB/file write, broker durably records mutation_started=true and verifies the active gate. A crash between that record and the first write is conservatively treated as destructive/ambiguous. No automatic destructive compensation is allowed. Pre-release health checks must be enumerated and proven non-mutating. If WordPress boot requires writes, use an isolated verification copy or keep the site closed for manual review.
+
+## 8. Durable state ownership, atomicity and reconciliation
+
+### Authoritative state
+
+- **Laravel database:** business request, selected backup/scope, tenant authorization, platform job and customer-facing state. Stores signed-intent digest/key IDs and verified receipt, not host generation, lease token, broker journal or secrets.
+- **Connector marker/outbox:** durable relay pointer from Connector job to handoff/receipt. Not authority to open the host gate.
+- **Root broker state store:** authoritative host enforcement state. Stores accepted intent ID/hash/nonce, work state, site/restore/job binding, internal generation and previous/pending/current generations, control acknowledgements, mutation state and receipt/outbox state.
+- **Per-site agent:** ephemeral orchestration/cache only.
+- **Restore worker:** immutable accepted input plus ephemeral work; never gate/terminal authority.
+
+This explicitly amends the v1 interpretation of #182’s marker-only wording: the provider needs protected durable enforcement state to survive restart. Proposed #182 follow-up must permit root-only provider-private generation state while prohibiting exposure to Laravel, WordPress/PHP and logs. Connector marker remains minimal recovery linkage. Owner and M17 approval are required before implementation.
+
+### Persistence and external-effect ordering
+
+1. Laravel commits the authorized restore/job and manifest binding before signing. A transactional outbox makes retries return the same intent identity, or a new same-job intent only if the earlier one expired/unaccepted and no host work exists.
+2. Broker verifies intent and atomically reserves unique intent/nonce in RECEIVING before acknowledgement.
+3. Broker writes bounded objects to root-owned no-follow temporary files, hashes exact bytes, fsyncs files, atomically renames verified objects and fsyncs the directory. Only after every object matches does a durable transaction move work to ACCEPTED. Crash between object publication and transaction leaves non-executable inbox data; accepted work with missing/corrupt input never runs.
+4. Broker persists ACQUIRING(g) before gate side effects and records each ingress/drain/writer/DB acknowledgement. Partial effects never mean acquired.
+5. Broker persists QUIESCENT(g) only after positive verification; no worker starts before commit.
+6. Connector writes marker/outbox and returns. Broker verifies marker linkage only after FPM/site writers are fenced, using a fixed path, no-follow descriptor-based read, expected owner/schema/size and exact restore binding. Marker is not host ownership.
+7. Before every live mutation phase, worker/broker verify exact generation. Broker durably commits mutation-started before apply.
+8. Broker stores/fsyncs validated terminal receipt/outbox before unlock. It controls the open sequence. Receipt relay may happen later and retry without duplicate transitions.
+9. Host journal uses root-owned storage, restrictive modes, transactional updates, explicit fsync/directory-sync guarantees and startup integrity checks. Store technology and filesystem durability semantics must be selected and fault-tested during implementation; generic rename is not a multi-resource transaction.
+
+Host controls cannot share one DB transaction. Broker implements a durable saga: record intent before each external effect, record verified acknowledgement after it. A crash resumes the same generation or enters closed error. It never assumes an unacknowledged control succeeded or failed.
+
+### State machine
+
+~~~mermaid
+stateDiagram-v2
+    [*] --> OPEN
+    OPEN --> RECEIVING: verified intent reserved
+    RECEIVING --> ACCEPTED: immutable inputs verified and durable
+    ACCEPTED --> ACQUIRING: async activation
+    ACQUIRING --> DRAINING: ingress denied
+    DRAINING --> QUIESCENT: all writers fenced
+    DRAINING --> CLOSED_ERROR: timeout or unknown writer
+    ACQUIRING --> CLOSED_ERROR: partial control failure
+    QUIESCENT --> APPLYING: durable mutation intent
+    QUIESCENT --> SAFE_ABORT: no mutation proven
+    APPLYING --> VERIFYING: worker result
+    APPLYING --> RECOVERY_REQUIRED: crash, loss or ambiguity
+    VERIFYING --> RELEASING: verified terminal success
+    VERIFYING --> RECOVERY_REQUIRED: failed or unknown checks
+    RECOVERY_REQUIRED --> QUIESCENT: separately authorized recovery
+    QUIESCENT --> APPLYING: recovery worker
+    RELEASING --> OPEN: healthy writers; ingress opens last
+    SAFE_ABORT --> RELEASING: verified safe abort
+    CLOSED_ERROR --> QUIESCENT: audited safe reconciliation
+    CLOSED_ERROR --> RECOVERY_REQUIRED: mutation possible/unknown
+~~~
+
+No TTL, Connector disappearance, PHP restart, reboot, absent marker or stale process memory transitions a closed/recovery state to OPEN.
+
+## 9. Crash, retry, cancellation and recovery
+
+| Interruption | Rule |
+|---|---|
+| Before intent acceptance | Laravel may redeliver same job; no accepted host work or live side effect exists. |
+| During transfer | Resume same intent/object digests. Partial data is quarantined/non-executable. |
+| After ACCEPTED, before gate | Query returns same work item; activation idempotent. Cancellation only after broker reconciles its own effects and proves no mutation. |
+| During caller/FPM drain | Worker does not start. Unknown writer means remain closed and require reconciliation. |
+| During gate acquire | Resume same generation and inspect each control. No unrelated generation. |
+| Before first live mutation | Safe abort only with durable proof no mutation intent/write occurred; reopen only after own control state is reconciled. |
+| During/after DB or file mutation | No automatic duplicate restore. Preserve artifacts/gate; issue RECOVERY_REQUIRED and require separately authorized recovery. |
+| After worker result, before receipt persistence | Reconstruct only from durable evidence; otherwise recovery required and closed. |
+| After receipt persistence, before opening | Revalidate stored receipt/generation; continue idempotently or remain closed. |
+| After opening, before platform receipt delivery | Retry identical signed receipt from outbox. Laravel records once; no second worker. |
+| Reboot or state corruption | Boot holds ingress/writers closed before site services start; manual audited reconciliation. |
+
+A new restore cannot start while any prior restore is active, terminal-but-unreported or recovery-required for that site. Platform and broker enforce one active restore per site. Worker retry is not full restore replay; post-mutation ambiguity requires recovery.
+
+Recovery uses named roles, exact site/restore/work/backup/scope, dual approval where policy requires, bounded audited actions and integrity evidence. Operators cannot clear state by deleting .maintenance, removing a lock or marking a job successful.
+
+## 10. Proposed #182 contract/API changes
+
+Current RestoreIsolationGateProvider methods alone are insufficient for async host execution, signed authorization, worker handoff and terminal proof. Keep fail-closed behavior and prepare a separate contract-change PR after M17 review with these typed concepts:
+
+- **SignedRestoreIntent:** validated payload/signature/key metadata.
+- **RestoreArtifactManifest:** fixed scope/object enum, backup ID, expected sizes/SHA-256, digest and strict byte limit.
+- **HostWorkAcceptance:** correlation and accepted/rejected/in-progress status; no host paths, secrets or internal generation.
+- **begin_handoff(intent, manifest)** and **append_artifact(work_id, object_enum, bounded_stream):** asynchronous, idempotent staging; execute only after digest validation.
+- **activate_handoff(work_id):** nonblocking request to begin durable acquire/drain saga; returns before caller FPM/CLI process is drained.
+- **query_handoff(work_id):** bounded Connector retry status.
+- **assert_active(internal_lease)** and generation-bound two-phase commit: broker/worker-side only; PHP is not the mutation executor.
+- **take_terminal_receipt(work_id):** read broker’s durable signed receipt outbox.
+- **verify_and_ack_receipt(receipt_id):** acknowledge exact stored receipt relay; never an unlock signal.
+- Replace release(lease): bool with broker-owned finalization that validates its durable terminal record; Connector cannot submit a success boolean.
+- Laravel receipt verifier: validate signature, host key enrollment, intent/manifest binding, outcome invariants, uniqueness and replay before a single transaction updates status.
+
+Exact method signatures, result enums, schema migrations, key enrollment/rotation, backwards compatibility, and Laravel job-state mapping require contract review. Old Connector mutation code must not remain as fallback when provider is absent. Unsupported hosts continue to refuse before live mutation. Backup creation, verification and download remain independent.
+
+## 11. Answers to M17 v1 blockers
+
+| Blocker | v2 proposal | Required evidence |
+|---|---|---|
+| Connector-to-host-worker handoff and FPM self-drain | Connector validates immutable input, submits async handoff, persists marker/outbox and returns. Broker drains after caller exits; separate UID/process/mount/DB worker applies. | Duplicate/disconnect/caller-exit/FPM timeout/process-tree/no-PHP-write tests. |
+| Peer credentials are not authorization | Canonical Ed25519 Signed Restore Intent binds tenant/site/active Connector/restore/job/backup digest/scope/provider+host audience/expiry/nonce. Durable anti-replay. | Tamper, expiry, cross-site/tenant/provider, stale Connector, duplicate and nonce tests. |
+| No terminal proof | Broker validates worker evidence, persists/signs generation-bound Terminal Receipt; only valid terminal state can release. Laravel verifies before user-visible success. | Forged/missing/stale/conflicting receipt and crash-before/after-persist tests. |
+| Durable-state ownership conflict | Laravel owns business state; Connector owns relay marker/outbox; root broker owns enforcement/generation/replay journal. Contract amendment permits private host state, no platform/log exposure. | Crash-consistency/fsync review, reboot/reconciliation, corruption/mismatch fail-closed tests. |
+| Least privilege | Per-site unprivileged agent, fixed root broker, isolated one-shot worker and site-specific FPM/UID/DB/volume. | Socket/cross-site tests, broker operation/syscall review, artifact pinning and escape tests. |
+
+These are proposed resolutions, not completed implementation or evidence.
+
+## 12. Compatibility and conformance matrix
+
+Before adding a provider ID to the allowlist, test:
+
+- Intent canonicalization/signature/key rotation/expiry/clock rollback/nonce replay and exact duplicate delivery.
+- Wrong tenant/site/Connector/job/backup/manifest/scope/provider/host/audience; unknown fields; stream interruption; digest mismatch; path traversal.
+- Same handoff ID on Connector retry; no duplicate worker; HANDOFF_ACCEPTED never means success.
+- FPM self-drain: PHP returns promptly; cgroup empties before worker start; child process, persistent connection, timeout and unknown process fail closed.
+- CDN/cache/direct-origin IPv4/IPv6/aliases/ports/load balancers, all HTTP write routes and policy propagation.
+- Concurrent HTTP, cron, Action Scheduler, queue, CLI, updater, deploy, DB and filesystem writers; open DB sessions and independent non-cooperating filesystem writer.
+- Dedicated DB/volume credentials and sibling-site non-impact.
+- Wrong/stale generation, commit retry, receipt replay, missing/forged receipt, outcome invariants, early finalize request, broker/agent/worker termination at every transition.
+- Power loss/reboot between file fsync, directory fsync, DB transaction, edge ack, marker publish, mutation intent, DB/file apply, receipt persistence and release. Corrupt/missing state boots closed.
+- Safe pre-mutation abort, recovery, ambiguous state and no automatic destructive retry.
+- No token, signature, nonce, private key, credential, lease token or generation in logs.
+- Independent provider-specific adversarial tests and proof sibling sites remain writable.
+
+Mocks and Connector unit tests are necessary but not host compatibility evidence. Support is bound to exact vendor/plan/OS/runtime/edge/DB/storage/service configuration and provider artifact.
+
+## 13. Implementation sequence after separate approval
+
+1. **Contract PR:** amend #182 lifecycle for signed intent, async handoff, immutable inputs, terminal receipt, state ownership and idempotent result ingestion. No allowlist.
+2. **Protocol/conformance PR:** schemas, canonicalization/signature fixtures, replay/state model and handoff/result tests; no privileged broker or supported-host claim.
+3. **Broker/agent/worker PR:** separate module, fixed site operations, unprivileged per-site agent, minimal root broker, isolated worker, durable state, receipt process.
+4. **Disposable-host integration PR:** adversarial ingress/writer/drain/crash/reboot/recovery tests, sibling-site non-impact and runbook.
+5. **Independent M17 review and Owner decision:** review exact profile/artifact; only then may an exact provider ID be separately approved for allowlisting. Staging and live restore each require independent operation-specific authorization.
+
+M16 transaction emails and #191 backup-download implementation are separate workstreams and must not be mixed into provider PRs.
+
+## 14. Owner decision request
+
+This v2 adopts M17’s recommendations as proposals and asks for explicit final disposition:
+
+1. Per-site agent + isolated runtime for dedicated/managed VPS only; shared/unknown remains unsupported.
+2. Unprivileged site agent plus minimal fixed-operation root broker; reject general root RPC.
+3. Signed Restore Intent v1 with durable host replay protection and §4 bindings.
+4. Root-only provider-private durable generation state via reviewed #182 contract amendment; never expose generations/secrets to Laravel or logs.
+5. Broker-verified signed Terminal Receipt; boolean-only release rejected.
+6. Dedicated per-site DB instance and filesystem volume for first profile; defer shared-DB proxy.
+7. Concrete per-site CDN/origin adapter and direct-origin closure tests required.
+8. Named audited recovery roles, approval for destructive break-glass, no manual marker/lock deletion.
+9. Unknown/shared hosting fail-closed; allowlist only an exact independently tested profile.
+
+M17 must explicitly accept or block this ADR and list residual gaps. Then request separate final Owner architecture/implementation authorization. Directional approval alone does not authorize implementation.
+
+## 15. Current status and boundary
+
+- Customer backup/download is the default recovery capability. Host isolation is optional restore only for qualified hosts.
+- #191 remains separate.
+- Provider is not implemented; COMPATIBILITY_RESTORE_ISOLATION_PROVIDER_IDS remains empty.
+- No host profile is verified; no key is enrolled; no provider artifact/allowlist is approved.
+- PR #182 fail-closed behavior remains. Generic PHP .maintenance path TOCTOU is not claimed solved.
+- No staging/production action, live restore, backup deletion, retention/M12 change, or PHP cutover occurred.
+- This ADR changes documentation only. M16 email-localization files are not in scope.
