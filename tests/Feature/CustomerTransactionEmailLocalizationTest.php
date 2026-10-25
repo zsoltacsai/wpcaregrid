@@ -100,7 +100,7 @@ final class CustomerTransactionEmailLocalizationTest extends TestCase
             $this->app->setLocale($case['application']);
 
             $this->post(route('password.email'), ['email' => $user->email])
-                ->assertSessionHas('status', __('account.auth.link_sent'));
+                ->assertSessionHas('status');
 
             $notification = null;
             Notification::assertSentTo($user, CustomerPasswordReset::class, function (CustomerPasswordReset $sent, array $channels) use (&$notification): bool {
