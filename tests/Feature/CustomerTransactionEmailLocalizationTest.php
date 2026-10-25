@@ -156,11 +156,10 @@ final class CustomerTransactionEmailLocalizationTest extends TestCase
             ['role' => 'operator', 'locale' => 'hu', 'customer_link' => true],
             ['role' => 'owner', 'locale' => null, 'customer_link' => false],
             ['role' => 'operator', 'locale' => 'xx', 'customer_link' => false],
+            ['role' => 'staff', 'locale' => 'hu', 'customer_link' => true],
         ] as $case) {
-            $user = User::factory()
-                ->{$case['role']}()
-                ->create(['email' => fake()->unique()->safeEmail()]);
-            $user->forceFill(['locale' => $case['locale']])->save();
+            $user = User::factory()->create(['email' => fake()->unique()->safeEmail()]);
+            $user->forceFill(['role' => $case['role'], 'locale' => $case['locale']])->save();
 
             // A corrupt/legacy association must not make an internal role a customer.
             if ($case['customer_link']) {

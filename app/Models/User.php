@@ -62,8 +62,10 @@ class User extends Authenticatable implements MustVerifyEmail
     public function sendPasswordResetNotification($token): void
     {
         // The password broker is shared by customers and internal accounts.
-        // Only a non-staff login with a persisted Customer may use customer copy.
-        $isCustomerAccount = ! $this->isOwner()
+        // The schema defines null role as customer; fail closed for every
+        // internal, unexpected or ambiguous non-null role, even with a Customer.
+        $isCustomerAccount = $this->role === null
+            && ! $this->isOwner()
             && ! $this->isOperator()
             && $this->customer()->exists();
 
