@@ -144,7 +144,11 @@ final class SqlImporter
         // current owner into the prepared table so the atomic rename never
         // exposes a missing or expired lease to another poller.
         Lock::preserveInOptionsTable($options_temp);
-        $connector_state = $wpdb->get_results($wpdb->prepare("SELECT option_name, option_value, autoload FROM `{$options}` WHERE option_name LIKE %s", $wpdb->esc_like('wp_caregrid_').'%'), ARRAY_A);
+        $connector_state = $wpdb->get_results($wpdb->prepare(
+            "SELECT option_name, option_value, autoload FROM `{$options}` WHERE option_name LIKE %s AND option_name <> %s",
+            $wpdb->esc_like('wp_caregrid_').'%',
+            Lock::optionName()
+        ), ARRAY_A);
         Lock::refreshOrFail();
         $wpdb->query('RENAME TABLE '.implode(', ', $renames));
         if ($wpdb->last_error !== '') {
@@ -159,7 +163,11 @@ final class SqlImporter
         }
 
         Lock::refreshOrFail();
-        $wpdb->query($wpdb->prepare("DELETE FROM `{$options}` WHERE option_name LIKE %s", $wpdb->esc_like('wp_caregrid_').'%'));
+        $wpdb->query($wpdb->prepare(
+            "DELETE FROM `{$options}` WHERE option_name LIKE %s AND option_name <> %s",
+            $wpdb->esc_like('wp_caregrid_').'%',
+            Lock::optionName()
+        ));
         foreach ((array) $connector_state as $row) {
             Lock::refreshOrFail();
             $wpdb->insert($options, $row);
