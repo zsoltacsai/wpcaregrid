@@ -10,9 +10,13 @@ use WPCareGrid\Connector\Backups\Downloader;
 use WPCareGrid\Connector\Backups\FileRestorer;
 use WPCareGrid\Connector\Backups\Maintenance;
 use WPCareGrid\Connector\Backups\RestoreFaultHooks;
+use WPCareGrid\Connector\Backups\RestoreIsolationGate;
+use WPCareGrid\Connector\Backups\RestoreIsolationLease;
 use WPCareGrid\Connector\Backups\SqlImporter;
 use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Backups\WordPressBackupIndexLookup;
+use WPCareGrid\Connector\Core\LeaseLost;
+use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Health\HealthChecker;
 use WPCareGrid\Connector\Jobs\InvalidPayload;
 use WPCareGrid\Connector\Jobs\JobHandler;
@@ -29,8 +33,8 @@ use WPCareGrid\Connector\Security\Logger;
  *      safety backup of the current site before sending this job).
  *   3. Prepare everything outside the live site: extract and validate the
  *      files; validate and load the database into temporary tables.
- *   4. Maintenance mode, then swap the tables and copy the files; maintenance
- *      mode always ends (see Maintenance).
+ *   4. Acquire verified host writer isolation, enable the durable maintenance
+ *      marker, then swap tables/copy files. Unsupported hosts stop before apply.
  *   5. Post-restore checks: files present, database answering, WordPress
  *      version, and the health checks (home page, REST API, theme, plugins).
  *      Only when they pass is the restore reported as successful.
@@ -87,7 +91,9 @@ final class RestoreHandler implements JobHandler
     {
         $uuid = $payload['restore_uuid'];
         $importer = null;
+        $isolationLease = null;
         $destructiveMutationStarted = false;
+        $preserveArtifacts = false;
         $failureStage = 'source_validation';
         $this->progress($uuid, $destructiveMutationStarted, $failureStage);
         @set_time_limit(0);
@@ -133,7 +139,7 @@ final class RestoreHandler implements JobHandler
                     throw new BackupFailure('DATABASE_NOT_SUPPORTED', 'Database restores need MySQL or MariaDB.');
                 }
                 global $wpdb;
-                $importer = new SqlImporter($uuid, $wpdb->base_prefix);
+                $importer = new SqlImporter($uuid, $wpdb->base_prefix, $this->fault_hooks);
                 $importer->import($paths['database']);
                 $this->fault_hooks?->reach('database_prepared', $uuid);
             }
@@ -141,16 +147,29 @@ final class RestoreHandler implements JobHandler
             // This boundary is after all remote and archive validation but before
             // maintenance mode or any live table/file mutation.
             $this->fault_hooks?->reach('before_destructive_mutation', $uuid);
-            Maintenance::enable($uuid);
+            Lock::refreshOrFail();
+            $isolationLease = RestoreIsolationGate::acquire($uuid, $payload['scope'], Maintenance::persisted_isolation_lease());
+            RestoreIsolationGate::assert_active($isolationLease);
+            Maintenance::enable($uuid, $this->jobs, $isolationLease);
+            $this->fault_hooks?->reach('maintenance_enabled', $uuid);
+            // The marker exists, but the durable mutation boundary has not
+            // yet been recorded. A lost lease here is classified from the
+            // prior staging phase by the next poll.
+            Lock::refreshOrFail();
             try {
                 do_action('wp_caregrid_restore_critical_section', $payload['scope']);
                 $failureStage = 'database_swap';
                 $this->progress($uuid, $destructiveMutationStarted, $failureStage);
+                $this->fault_hooks?->reach('database_swap_boundary_entered', $uuid);
                 if ($importer !== null) {
-                    $importer->swap(function () use (&$destructiveMutationStarted, $uuid) {
+                    Lock::refreshOrFail();
+                    RestoreIsolationGate::assert_active($isolationLease);
+                    $importer->swap(function () use (&$destructiveMutationStarted, $uuid, $isolationLease) {
+                        RestoreIsolationGate::assert_active($isolationLease);
                         $this->progress($uuid, true, 'database_swap');
                         $destructiveMutationStarted = true;
                     });
+                    Lock::refreshOrFail();
                     $importer = null;
                     $this->fault_hooks?->reach('after_database_swap', $uuid);
                 }
@@ -163,13 +182,20 @@ final class RestoreHandler implements JobHandler
                 $this->progress($uuid, $destructiveMutationStarted, $failureStage);
                 if ($files !== null) {
                     $this->fault_hooks?->reach('before_file_apply', $uuid);
+                    RestoreIsolationGate::assert_active($isolationLease);
                 }
-                $files?->apply(TempDir::file($uuid, 'files-staging'));
+                $files?->apply(
+                    TempDir::file($uuid, 'files-staging'),
+                    fn () => RestoreIsolationGate::assert_active($isolationLease),
+                );
                 if ($files !== null) {
                     $this->fault_hooks?->reach('after_file_apply', $uuid);
                 }
-            } finally {
-                Maintenance::disable();
+            } catch (LeaseLost $e) {
+                // A stale worker must not release the site's restore gate;
+                // the later owner will reconcile the durable mutation marker.
+                $preserveArtifacts = true;
+                throw $e;
             }
 
             $failureStage = 'post_restore_health';
@@ -178,6 +204,11 @@ final class RestoreHandler implements JobHandler
             $checks = $this->post_checks();
             $health = $this->health->run();
             $passed = ! in_array(false, array_column($checks, 'passed'), true) && $health['status'] !== 'critical';
+            if ($destructiveMutationStarted && ! $passed) {
+                // Keep the verified source artifacts until a later restore
+                // has passed its post-restore checks.
+                $preserveArtifacts = true;
+            }
             $data = ['post_checks' => $checks, 'health' => $health, 'restored' => ['scope' => $payload['scope'], 'backup_uuid' => $payload['backup_uuid'], 'files' => $files?->stats, 'file_plan' => $files?->plan_summary()], 'wordpress_version' => $this->version_on_disk(), 'destructive_mutation_started' => $destructiveMutationStarted, 'failure_stage' => $failureStage];
 
             Logger::info('restore.finished', ['restore' => $uuid, 'passed' => $passed]);
@@ -185,7 +216,23 @@ final class RestoreHandler implements JobHandler
             return $passed
                 ? JobResult::success('RESTORED', $data)
                 : JobResult::partial('RESTORED_CHECKS_FAILED', 'The backup was restored, but the checks afterwards found problems.', $data);
+        } catch (LeaseLost $e) {
+            // Fail-stop: preserve staged recovery material and do not mutate
+            // temporary database tables after ownership has been lost.
+            $preserveArtifacts = true;
+            Maintenance::preserve();
+            throw $e;
         } catch (BackupFailure $e) {
+            try {
+                Lock::refreshOrFail();
+            } catch (LeaseLost $leaseLost) {
+                $preserveArtifacts = true;
+                throw $leaseLost;
+            }
+            $preserveArtifacts = $preserveArtifacts || $destructiveMutationStarted;
+            if (! $destructiveMutationStarted) {
+                $this->release_unpersisted_isolation_gate($isolationLease);
+            }
             $importer?->discard();
             Logger::warning('restore.failed', ['restore' => $uuid, 'code' => $e->error_code]);
 
@@ -194,6 +241,16 @@ final class RestoreHandler implements JobHandler
                 'failure_stage' => $failureStage,
             ]));
         } catch (\Throwable) {
+            try {
+                Lock::refreshOrFail();
+            } catch (LeaseLost $leaseLost) {
+                $preserveArtifacts = true;
+                throw $leaseLost;
+            }
+            $preserveArtifacts = $preserveArtifacts || $destructiveMutationStarted;
+            if (! $destructiveMutationStarted) {
+                $this->release_unpersisted_isolation_gate($isolationLease);
+            }
             // Unexpected errors must still report whether live state may have
             // changed, without leaking exception text or a filesystem path.
             $importer?->discard();
@@ -204,7 +261,9 @@ final class RestoreHandler implements JobHandler
                 'failure_stage' => $failureStage,
             ]);
         } finally {
-            TempDir::remove_job($uuid);
+            if (! $preserveArtifacts) {
+                TempDir::remove_job($uuid);
+            }
         }
     }
 
@@ -226,6 +285,13 @@ final class RestoreHandler implements JobHandler
     private function progress(string $uuid, bool $destructive, string $stage): void
     {
         $this->jobs->mark_restore_progress($uuid, $destructive, $stage);
+    }
+
+    private function release_unpersisted_isolation_gate(?RestoreIsolationLease $lease): void
+    {
+        if ($lease !== null && Maintenance::may_release_unpersisted_isolation_lease($lease)) {
+            RestoreIsolationGate::release($lease);
+        }
     }
 
     /** @return list<array{id: string, passed: bool, message: string}> */

@@ -426,6 +426,7 @@ class PreUpdateAndRestoreTest extends TestCase
         $this->assertRefused('CONFIRMATION_MISMATCH', fn () => app(RestoreService::class)->request($website, $full, BackupType::Full, 'c', 'other.example'));
 
         $website->activeConnector->update(['capabilities' => ['backup_full', 'restore_files']]);
+        $this->refreshCapabilityEvidence($website->fresh());
         $this->assertRefused('CAPABILITY_MISSING', fn () => app(RestoreService::class)->request($website->refresh(), $full, BackupType::Database, 'c', 'company.example'));
 
         $website->activeConnector->forceFill(['last_seen_at' => now()->subHours(2)])->save();

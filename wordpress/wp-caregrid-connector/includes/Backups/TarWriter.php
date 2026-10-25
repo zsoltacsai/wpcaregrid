@@ -43,7 +43,7 @@ final class TarWriter
             }
             $this->sink->write($data);
             $left -= strlen($data);
-            Lock::refresh();
+            Lock::refreshOrFail();
         }
 
         fclose($handle);

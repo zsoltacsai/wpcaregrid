@@ -8,6 +8,7 @@ use WPCareGrid\Connector\Health\HealthChecker;
 use WPCareGrid\Connector\Jobs\Handlers\RestoreHandler;
 use WPCareGrid\Connector\Jobs\JobRegistry;
 use WPCareGrid\Connector\Jobs\JobRunner;
+use WPCareGrid\Connector\Tests\Support\FakeRestoreIsolationGate;
 use WPCareGrid\Connector\Tests\Support\ProcessRestoreBarrier;
 
 $configPath = $argv[1] ?? '';
@@ -42,6 +43,9 @@ if (get_option('wp_caregrid_test_fixture') !== 'synthetic' || ! is_plugin_active
     fwrite(STDERR, "Refusing to start without the synthetic Connector fixture.\n");
     exit(2);
 }
+
+$isolationGate = new FakeRestoreIsolationGate;
+add_filter('wp_caregrid_restore_isolation_gate', static fn () => $isolationGate);
 
 $config = json_decode((string) file_get_contents($configPath), true, 32, JSON_THROW_ON_ERROR);
 $barrierDir = (string) ($config['barrier_dir'] ?? '');

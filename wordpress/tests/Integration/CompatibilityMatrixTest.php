@@ -3,6 +3,7 @@
 namespace WPCareGrid\Connector\Tests\Integration;
 
 use WPCareGrid\Connector\Compatibility\EnvironmentFacts;
+use WPCareGrid\Connector\Tests\Support\FakeRestoreIsolationGate;
 use WPCareGrid\Connector\Tests\Support\TestCase;
 
 /** Prevent a green CI lane from silently testing a different runtime fixture. */
@@ -48,5 +49,23 @@ final class CompatibilityMatrixTest extends TestCase
             $expectedDatabaseBranch,
             preg_match('/^(\d+\.\d+)/', $facts['database']['version'], $matches) ? $matches[1] : null,
         );
+    }
+
+    public function test_restore_isolation_provider_identity_is_reported_without_acquiring_the_gate(): void
+    {
+        $facts = (new EnvironmentFacts)->collect(false);
+        $this->assertNull($facts['restore_isolation_provider_id']);
+
+        $provider = new FakeRestoreIsolationGate;
+        $filter = static fn () => $provider;
+        add_filter('wp_caregrid_restore_isolation_gate', $filter);
+        try {
+            $facts = (new EnvironmentFacts)->collect(false);
+
+            $this->assertSame('test-host-gate', $facts['restore_isolation_provider_id']);
+            $this->assertFalse($provider->is_gated(), 'Readiness collection must not acquire or mutate the host gate.');
+        } finally {
+            remove_filter('wp_caregrid_restore_isolation_gate', $filter);
+        }
     }
 }

@@ -102,14 +102,14 @@ final class FileRestorer
         }
     }
 
-    public function apply(string $staging): void
+    public function apply(string $staging, ?callable $assert_live_mutation_allowed = null): void
     {
         if (! $this->plan_ready) {
             throw new BackupFailure('RESTORE_PLAN_MISSING', 'The restore plan was not prepared.');
         }
 
         $this->visited = [];
-        $this->apply_tree($staging, '');
+        $this->apply_tree($staging, '', $assert_live_mutation_allowed);
         foreach ($this->restore_plan as $entry) {
             if ($entry['operation'] !== 'skip' && ! isset($this->visited[$entry['path']])) {
                 throw $this->apply_failure('apply_plan', $entry['path'], 'restore_plan_changed');
@@ -327,7 +327,7 @@ final class FileRestorer
         return is_writable($ancestor) ? [true, null] : [false, 'permission_denied'];
     }
 
-    private function apply_tree(string $staging, string $relative): void
+    private function apply_tree(string $staging, string $relative, ?callable $assert_live_mutation_allowed): void
     {
         $dir = $relative === '' ? $staging : $staging.'/'.$relative;
 
@@ -344,7 +344,8 @@ final class FileRestorer
                 throw $this->apply_failure('apply_plan', $entry, 'restore_plan_changed');
             }
             $this->visited[$entry] = true;
-            Lock::refresh();
+            Lock::refreshOrFail();
+            $this->assert_live_mutation_allowed($assert_live_mutation_allowed);
 
             if (is_dir($source)) {
                 if ($plan['operation'] === 'skip') {
@@ -357,7 +358,7 @@ final class FileRestorer
                 }
                 if ($target === null && in_array($entry, ['wp-content', 'root'], true) && $plan['operation'] === 'noop') {
                     $this->stats['noop']++;
-                    $this->apply_tree($staging, $entry);
+                    $this->apply_tree($staging, $entry, $assert_live_mutation_allowed);
 
                     continue;
                 }
@@ -365,6 +366,7 @@ final class FileRestorer
                     if (file_exists($target) || is_link($target)) {
                         throw $this->apply_failure('mkdir', $entry, 'restore_plan_changed');
                     }
+                    $this->assert_live_mutation_allowed($assert_live_mutation_allowed);
                     $warning = null;
                     $created = $this->capture_warning(static fn () => wp_mkdir_p($target), $warning);
                     if (! $created || ! is_dir($target) || is_link($target)) {
@@ -379,7 +381,7 @@ final class FileRestorer
                 } else {
                     throw $this->apply_failure('apply_plan', $entry, 'restore_plan_changed');
                 }
-                $this->apply_tree($staging, $entry);
+                $this->apply_tree($staging, $entry, $assert_live_mutation_allowed);
 
                 continue;
             }
@@ -427,16 +429,17 @@ final class FileRestorer
                 throw $this->apply_failure('destination_check', $entry, 'restore_plan_changed');
             }
 
-            $this->replace_file($source, $target, $entry);
+            $this->replace_file($source, $target, $entry, $assert_live_mutation_allowed);
             $this->stats['files']++;
         }
     }
 
     /** Replace a file atomically using an exclusive, unpredictable sibling temporary file. */
-    private function replace_file(string $source, string $target, string $relative): void
+    private function replace_file(string $source, string $target, string $relative, ?callable $assert_live_mutation_allowed): void
     {
         $parent = dirname($target);
         if (! is_dir($parent)) {
+            $this->assert_live_mutation_allowed($assert_live_mutation_allowed);
             $this->capture_warning(static fn () => wp_mkdir_p($parent), $warning);
             if (! is_dir($parent)) {
                 throw $this->apply_failure('mkdir', $relative, $this->error_category($warning));
@@ -467,6 +470,7 @@ final class FileRestorer
         try {
             // x+b maps to exclusive creation; it will not follow an existing symlink.
             for ($attempt = 0; $attempt < 5; $attempt++) {
+                $this->assert_live_mutation_allowed($assert_live_mutation_allowed);
                 $candidate = $parent.'/.caregrid-restore-'.bin2hex(random_bytes(16)).'.tmp';
                 $temporaryWarning = null;
                 $candidateHandle = $this->capture_warning(static fn () => fopen($candidate, 'x+b'), $temporaryWarning);
@@ -487,6 +491,7 @@ final class FileRestorer
             }
 
             while (! feof($input)) {
+                Lock::refreshOrFail();
                 $readWarning = null;
                 $chunk = $this->capture_warning(static fn () => fread($input, 1048576), $readWarning);
                 if ($chunk === false) {
@@ -499,6 +504,7 @@ final class FileRestorer
                 $offset = 0;
                 $length = strlen($chunk);
                 while ($offset < $length) {
+                    $this->assert_live_mutation_allowed($assert_live_mutation_allowed);
                     $writeWarning = null;
                     $written = $this->capture_warning(static fn () => fwrite($output, substr($chunk, $offset)), $writeWarning);
                     if (! is_int($written) || $written < 1) {
@@ -526,6 +532,7 @@ final class FileRestorer
                 ]);
             }
 
+            $this->assert_live_mutation_allowed($assert_live_mutation_allowed);
             $renameWarning = null;
             $renamed = $this->capture_warning(static fn () => rename($temporary, $target), $renameWarning);
             if (! $renamed) {
@@ -543,6 +550,13 @@ final class FileRestorer
             if (! $committed && is_string($temporary) && (is_file($temporary) || is_link($temporary))) {
                 @unlink($temporary);
             }
+        }
+    }
+
+    private function assert_live_mutation_allowed(?callable $guard): void
+    {
+        if ($guard !== null) {
+            $guard();
         }
     }
 

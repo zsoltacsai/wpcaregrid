@@ -2,6 +2,7 @@
 
 namespace WPCareGrid\Connector\Backups;
 
+use WPCareGrid\Connector\Core\LeaseLost;
 use WPCareGrid\Connector\Core\Lock;
 
 /**
@@ -50,7 +51,7 @@ final class DatabaseDumper
     {
         global $wpdb;
 
-        if (! self::supported()) {
+        if (self::supported() === false) {
             throw new BackupFailure('DATABASE_NOT_SUPPORTED', 'Database backups need MySQL or MariaDB.');
         }
 
@@ -58,7 +59,7 @@ final class DatabaseDumper
         $db->suppress_errors(true);
         $db->show_errors(false);
 
-        if (! $db->dbh instanceof \mysqli || ! $db->get_var('SELECT 1')) {
+        if (($db->dbh instanceof \mysqli) === false || empty($db->get_var('SELECT 1'))) {
             throw new BackupFailure('DATABASE_DUMP_FAILED', 'The database could not be opened for the backup.');
         }
 
@@ -92,6 +93,9 @@ final class DatabaseDumper
                 $sink->close();
             } catch (\Throwable) {
             }
+            if ($e instanceof LeaseLost) {
+                throw $e;
+            }
             throw $e instanceof BackupFailure ? $e : new BackupFailure('DATABASE_DUMP_FAILED', 'The database export failed.');
         } finally {
             $db->close();
@@ -111,7 +115,7 @@ final class DatabaseDumper
     private function table(\wpdb $db, Sink $sink, string $table, string $prefix): int
     {
         $create = $db->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
-        if (! is_array($create) || ! isset($create[1])) {
+        if (is_array($create) === false || isset($create[1]) === false) {
             throw new BackupFailure('DATABASE_DUMP_FAILED', 'A table definition could not be read.');
         }
 
@@ -127,7 +131,7 @@ final class DatabaseDumper
             if ($db->last_error !== '') {
                 throw new BackupFailure('DATABASE_DUMP_FAILED', 'A table could not be read.');
             }
-            if (! $batch) {
+            if (empty($batch)) {
                 break;
             }
 
@@ -150,7 +154,7 @@ final class DatabaseDumper
 
             $rows += count($batch);
             $db->flush();
-            Lock::refresh();
+            Lock::refreshOrFail();
 
             if (count($batch) < self::BATCH) {
                 break;

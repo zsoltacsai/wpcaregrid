@@ -26,6 +26,7 @@ return [
         'DISK_SPACE_UNKNOWN' => 'Available temporary storage could not be checked.', 'DB_ENGINE_UNSUPPORTED' => 'The database engine is not supported for this operation.',
         'DB_VERSION_UNKNOWN' => 'Database compatibility could not be confirmed.', 'BACKUP_NOT_VERIFIED' => 'A verified recovery point is not available.',
         'BACKUP_OBJECT_MISSING' => 'A required recovery file is missing.', 'RESTORE_CONFLICT' => 'Another site operation is in progress.',
+        'RESTORE_ISOLATION_UNAVAILABLE' => 'No reviewed host isolation provider is available; destructive restore is blocked.',
         'SCANNER_UNAVAILABLE' => 'The required scanning capability is unavailable.', 'SCANNER_NOT_RUN' => 'A scan has not been run.',
         'SAFETY_GATE_CLOSED' => 'A required safety check is not satisfied.',
     ],

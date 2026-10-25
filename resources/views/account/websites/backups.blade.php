@@ -64,7 +64,7 @@
                             @if ($backup->status->value === 'expired'){{ app(\App\Support\DisplayDateTime::class)->date($backup->expired_at) }}@elseif ($backup->expires_at){{ app(\App\Support\DisplayDateTime::class)->date($backup->expires_at) }}@else—@endif
                         </td>
                         <td class="px-4 py-3 text-right">
-                            @if ($backup->isRestorable() && $policy->restoreAllowed && $canBackup)
+                            @if ($backup->isRestorable() && $policy->restoreAllowed && $restoreIsolationSupported && $canBackup)
                                 <a href="{{ route('account.websites.backups.restore', [$website, $backup]) }}" class="rounded-sm text-sm font-medium text-primary underline decoration-line-strong underline-offset-4 hover:decoration-primary">{{ __('backups.account.restore') }}</a>
                             @endif
                         </td>
@@ -77,7 +77,9 @@
     </div>
     <div class="mt-4">{{ $backups->links() }}</div>
 
-    @if (! $policy->restoreAllowed && $backups->isNotEmpty())
+    @if (! $restoreIsolationSupported && $backups->isNotEmpty())
+        <p class="mt-4 text-xs text-muted">{{ __('backups.account.restore_isolation_unavailable') }}</p>
+    @elseif (! $policy->restoreAllowed && $backups->isNotEmpty())
         <p class="mt-4 text-xs text-muted">{{ __('backups.account.restore_disabled') }}</p>
     @endif
 

@@ -3,6 +3,7 @@
 namespace App\Connector;
 
 use App\Models\Connector;
+use App\Models\Website;
 use App\Models\WebsiteJob;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +28,14 @@ final class RecordJobResult
     public function record(Connector $connector, string $jobUuid, array $result): array
     {
         return DB::transaction(function () use ($connector, $jobUuid, $result) {
+            // Match pairing and delivery lock order. A result that arrives
+            // after re-pair observes the terminal cancellation and cannot
+            // update inventory or lifecycle state.
+            $website = Website::query()->whereKey($connector->website_id)->lockForUpdate()->first();
+            if (! $website) {
+                throw ConnectorError::jobNotFound();
+            }
+
             $job = WebsiteJob::where('uuid', $jobUuid)->where('website_id', $connector->website_id)->lockForUpdate()->first();
 
             if (! $job) {

@@ -26,6 +26,106 @@ final class JobStore
         return $this->all()[$uuid] ?? null;
     }
 
+    /** Resolve a restore UUID to its durable queue record, including terminal jobs. */
+    public function find_restore(string $restoreUuid): ?array
+    {
+        $direct = $this->find($restoreUuid);
+        if (($direct['type'] ?? null) === 'RESTORE') {
+            return ['uuid' => $restoreUuid, 'job' => $direct];
+        }
+
+        foreach ($this->all() as $jobUuid => $job) {
+            if (($job['type'] ?? null) === 'RESTORE'
+                && ($job['payload']['restore_uuid'] ?? null) === $restoreUuid) {
+                return ['uuid' => (string) $jobUuid, 'job' => $job];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Classify whether a restore marker can be released after a process restart.
+     * Unknown records and every durable destructive boundary fail closed.
+     *
+     * @return 'pre_mutation_running'|'safe_to_release'|'recovery_required'|'completed_success'|'unknown'
+     */
+    public function restore_maintenance_state(string $restoreUuid): string
+    {
+        $entry = $this->find_restore($restoreUuid);
+        if ($entry === null) {
+            return 'unknown';
+        }
+
+        $uuid = $entry['uuid'];
+        $job = $entry['job'];
+        $result = is_array($job['result'] ?? null) ? $job['result'] : [];
+        $details = is_array($result['data'] ?? null) ? $result['data'] : [];
+        $error = is_array($result['error'] ?? null) ? $result['error'] : [];
+        $errorDetails = $error['details'] ?? null;
+        if (is_object($errorDetails)) {
+            $errorDetails = get_object_vars($errorDetails);
+        }
+        if (is_array($errorDetails)) {
+            $details = array_merge($details, $errorDetails);
+        }
+
+        if (($job['state'] ?? null) === self::COMPLETED
+            && ($result['status'] ?? null) === 'success'
+            && ($result['result_code'] ?? null) === 'RESTORED') {
+            return 'completed_success';
+        }
+
+        $destructive = $this->has_destructive_mutation_started($uuid)
+            || ($job['destructive_mutation_started'] ?? false) === true
+            || ($details['destructive_mutation_started'] ?? false) === true;
+        if ($destructive) {
+            return 'recovery_required';
+        }
+
+        $stage = $job['failure_stage'] ?? ($details['failure_stage'] ?? null);
+        $safeStage = in_array($stage, ['source_validation', 'backup_download', 'file_staging', 'database_staging'], true);
+        if (($job['state'] ?? null) === self::RUNNING
+            && ($job['destructive_mutation_started'] ?? false) === false
+            && $safeStage) {
+            return 'pre_mutation_running';
+        }
+
+        if (($job['state'] ?? null) === self::COMPLETED
+            && ($details['destructive_mutation_started'] ?? null) === false
+            && $safeStage) {
+            return 'safe_to_release';
+        }
+
+        return 'unknown';
+    }
+
+    /** Scope attached to a restore record, or null when it cannot be proven. */
+    public function restore_scope(string $restoreUuid): ?string
+    {
+        $entry = $this->find_restore($restoreUuid);
+        $scope = $entry['job']['payload']['scope'] ?? null;
+
+        return in_array($scope, ['files', 'database', 'full'], true) ? $scope : null;
+    }
+
+    /** Restore UUIDs whose files may still be required to recover live state. */
+    public function protected_restore_uuids(): array
+    {
+        $protected = [];
+        foreach ($this->all() as $job) {
+            if (($job['type'] ?? null) !== 'RESTORE' || ! is_string($job['payload']['restore_uuid'] ?? null)) {
+                continue;
+            }
+            $uuid = $job['payload']['restore_uuid'];
+            if (in_array($this->restore_maintenance_state($uuid), ['recovery_required', 'unknown', 'pre_mutation_running'], true)) {
+                $protected[$uuid] = true;
+            }
+        }
+
+        return array_keys($protected);
+    }
+
     /** Record the start of a job before anything is executed. */
     public function begin(string $uuid, string $type, array $payload = []): void
     {

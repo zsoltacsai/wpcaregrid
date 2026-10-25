@@ -131,7 +131,7 @@ final class FilesArchiver
 
             $child = $relative === '' ? $item : $relative.'/'.$item;
             $path = $dir.'/'.$item;
-            Lock::refresh();
+            Lock::refreshOrFail();
 
             if (is_link($path)) {
                 $skip('symlinks');
