@@ -9,6 +9,9 @@ final class Maintenance
 {
     private static ?string $marker = null;
 
+    /** Test-only fault injection for a failed filesystem unlink. */
+    private static ?\Closure $unlinkForTesting = null;
+
     public static function file(): string
     {
         return ABSPATH.'.maintenance';
@@ -100,15 +103,45 @@ final class Maintenance
         if ($state !== 'completed_success' && ! ($state === 'safe_to_release' && ! $recoveringPriorState)) {
             return;
         }
-        if (is_file(self::file()) && ! self::file_matches_marker($marker)) {
-            return;
+        $maintenancePath = self::file();
+        if (self::path_exists($maintenancePath)) {
+            if (is_link($maintenancePath) || ! is_file($maintenancePath) || ! self::file_matches_marker($marker)) {
+                return;
+            }
+            if (! self::unlink_path($maintenancePath)) {
+                // Keep the durable JSON marker so a later poll can retry.
+                return;
+            }
+            // This path operation is still TOCTOU against non-cooperating
+            // WordPress writers; flock cannot make those writers participate.
+            // See the M15 ownership review before treating release as safe.
+            if (self::path_exists($maintenancePath)) {
+                return;
+            }
         }
 
-        if (is_file(self::file())) {
-            @unlink(self::file());
+        $markerPath = self::marker();
+        if (! self::unlink_path($markerPath) && self::path_exists($markerPath)) {
+            return;
         }
-        @unlink(self::marker());
+        if (self::path_exists($markerPath)) {
+            return;
+        }
         self::$marker = null;
+    }
+
+    private static function path_exists(string $path): bool
+    {
+        return file_exists($path) || is_link($path);
+    }
+
+    private static function unlink_path(string $path): bool
+    {
+        if (self::$unlinkForTesting !== null) {
+            return (self::$unlinkForTesting)($path) === true;
+        }
+
+        return @unlink($path);
     }
 
     public static function is_ours(): bool

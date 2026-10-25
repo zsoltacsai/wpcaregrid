@@ -1083,6 +1083,61 @@ final class RestoreTest extends TestCase
         }
     }
 
+    public function test_failed_maintenance_unlink_keeps_recovery_marker_for_idempotent_retry(): void
+    {
+        $jobs = $this->plugin()->jobs();
+        Maintenance::preserve();
+        $restoreUuid = wp_generate_uuid4();
+        $job = $this->job('RESTORE', ['restore_uuid' => $restoreUuid, 'backup_uuid' => wp_generate_uuid4(), 'scope' => 'database', 'objects' => []]);
+        $jobs->begin($job['uuid'], 'RESTORE', (array) $job['payload']);
+        $jobs->complete($job['uuid'], JobResult::success('RESTORED'));
+
+        $token = str_repeat('c', 32);
+        $marker = [
+            'version' => 2,
+            'restore' => $restoreUuid,
+            'recovery_for' => null,
+            'required_scope' => 'database',
+            'since' => time(),
+            'refreshed_at' => time(),
+            'token' => $token,
+        ];
+        $markerPath = TempDir::ensure().'/maintenance.json';
+        $maintenancePath = ABSPATH.'.maintenance';
+        $maintenance = '<?php $upgrading = 2147483647; /* wp-caregrid:'.$token.' */';
+        file_put_contents($markerPath, wp_json_encode($marker));
+        file_put_contents($maintenancePath, $maintenance);
+
+        $unlink = new \ReflectionProperty(Maintenance::class, 'unlinkForTesting');
+        $unlink->setValue(null, static function (string $path) use ($maintenancePath): bool {
+            if ($path === $maintenancePath) {
+                return false;
+            }
+
+            return @unlink($path);
+        });
+
+        try {
+            Maintenance::cleanup_stale($jobs);
+            $this->assertSame($maintenance, file_get_contents($maintenancePath), 'A failed unlink leaves the WordPress gate untouched.');
+            $this->assertFileExists($markerPath, 'The durable recovery marker remains available for retry.');
+
+            $unlink->setValue(null, null);
+            Maintenance::cleanup_stale($jobs);
+            $this->assertFileDoesNotExist($maintenancePath);
+            $this->assertFileDoesNotExist($markerPath);
+
+            Maintenance::cleanup_stale($jobs);
+            $this->assertFileDoesNotExist($maintenancePath, 'A repeated successful cleanup remains idempotent.');
+            $this->assertFileDoesNotExist($markerPath, 'A repeated successful cleanup remains idempotent.');
+        } finally {
+            $unlink->setValue(null, null);
+            @unlink($maintenancePath);
+            @unlink($markerPath);
+            Maintenance::preserve();
+        }
+    }
+
     public function test_swap_failure_does_not_discard_staging_after_lease_replacement(): void
     {
         $this->with_harness_environment(function (): void {
