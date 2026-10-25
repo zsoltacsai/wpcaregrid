@@ -82,6 +82,7 @@ class WebsiteController extends Controller
             'restorable' => $can(Permission::BackupsRestore) && $connectorState === ConnectorState::Connected
                 ? $backups->filter(fn (Backup $backup) => $backup->isRestorable() && $restores->refusal($website, $backup, $backup->type) === null)->pluck('id')->all()
                 : [],
+            'restoreIsolationSupported' => app(\App\Compatibility\CapabilityReadiness::class)->restoreIsolationSupported($website),
             'restores' => $can(Permission::BackupsView) ? $website->restores()->with('backup')->latest('id')->limit(5)->get() : collect(),
             'backupPolicy' => $policy->for($website),
             'updateJobs' => $can(Permission::UpdatesView)

@@ -263,6 +263,56 @@ final class RestoreTest extends TestCase
         });
     }
 
+    public function test_compensating_restore_without_provider_preserves_live_data_and_recovery_markers(): void
+    {
+        $this->requires_mysql();
+        $this->with_harness_environment(function (): void {
+            $path = WP_CONTENT_DIR.'/uploads/restore-me/providerless-compensation.txt';
+            $this->put($path, 'primary baseline');
+            update_option('caregrid_providerless_compensation', 'primary');
+            [$primary, $primaryObjects] = $this->backup('BACKUP_FULL');
+
+            file_put_contents($path, 'safety baseline');
+            update_option('caregrid_providerless_compensation', 'safety');
+            [$safety, $safetyObjects] = $this->backup('BACKUP_FULL');
+
+            file_put_contents($path, 'live damaged state');
+            update_option('caregrid_providerless_compensation', 'live damaged state');
+            $failed = $this->restore_with_fault(
+                $primary,
+                $primaryObjects,
+                new OneShotRestoreFault('before_file_apply', 'HARNESS_FILE_APPLY_FAILURE'),
+            );
+
+            $this->assertSame('failed', $failed['status']);
+            $this->assertTrue($failed['error']['details']['destructive_mutation_started']);
+            $this->assertTrue(Maintenance::is_ours());
+            $maintenanceBefore = file_get_contents(ABSPATH.'.maintenance');
+            $markerBefore = file_get_contents(TempDir::path().'/maintenance.json');
+            wp_cache_flush();
+            $databaseBeforeCompensation = get_option('caregrid_providerless_compensation');
+            $fileBeforeCompensation = file_get_contents($path);
+            $this->assertIsString($maintenanceBefore);
+            $this->assertIsString($markerBefore);
+
+            remove_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
+            try {
+                $compensation = $this->restore($safety, 'full', $safetyObjects);
+            } finally {
+                add_filter('wp_caregrid_restore_isolation_gate', $this->isolationGateFilter);
+            }
+
+            $this->assertSame('failed', $compensation['status']);
+            $this->assertSame('RESTORE_ISOLATION_UNAVAILABLE', $compensation['error']['code'] ?? null);
+            wp_cache_flush();
+            $this->assertSame($databaseBeforeCompensation, get_option('caregrid_providerless_compensation'));
+            $this->assertSame($fileBeforeCompensation, file_get_contents($path));
+            $this->assertSame($maintenanceBefore, file_get_contents(ABSPATH.'.maintenance'));
+            $this->assertSame($markerBefore, file_get_contents(TempDir::path().'/maintenance.json'));
+            $this->assertTrue($this->isolationGate->is_gated());
+        });
+    }
+
     public function test_restore_fails_closed_when_provider_cannot_quiesce_all_writers(): void
     {
         $this->with_harness_environment(function (): void {

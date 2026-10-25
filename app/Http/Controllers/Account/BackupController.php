@@ -9,6 +9,7 @@ use App\Backups\BackupService;
 use App\Backups\BackupText;
 use App\Backups\BackupType;
 use App\Backups\RestoreService;
+use App\Compatibility\CapabilityReadiness;
 use App\Http\Controllers\Controller;
 use App\Models\Backup;
 use App\Models\Website;
@@ -20,7 +21,7 @@ use Illuminate\Validation\Rule;
 /** Backup history, "Backup now" and restore requests in the customer area. */
 class BackupController extends Controller
 {
-    public function index(Request $request, Website $website, BackupPolicy $policy): View
+    public function index(Request $request, Website $website, BackupPolicy $policy, CapabilityReadiness $readiness): View
     {
         $this->authorize('view', $website);
 
@@ -32,6 +33,7 @@ class BackupController extends Controller
             'events' => $website->events()->where(fn ($q) => $q->where('event', 'like', 'backup.%')->orWhere('event', 'like', 'restore.%')->orWhere('event', 'like', 'update.%'))
                 ->latest('id')->limit(15)->get(),
             'policy' => $policy->for($website),
+            'restoreIsolationSupported' => $readiness->restoreIsolationSupported($website),
             'canBackup' => $request->user()->can('backup', $website),
         ]);
     }

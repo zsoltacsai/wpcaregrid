@@ -7,6 +7,25 @@ use WPCareGrid\Connector\Core\LeaseLost;
 /** Resolves the optional host gate and fails closed when destructive isolation is unavailable. */
 final class RestoreIsolationGate
 {
+    /** Return only the provider identity used for server-side readiness; never acquire a gate here. */
+    public static function readiness_provider_id(): ?string
+    {
+        $provider = self::provider();
+        if ($provider === null) {
+            return null;
+        }
+
+        try {
+            $id = $provider->provider_id();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return is_string($id) && preg_match('/^[a-z0-9][a-z0-9._-]{0,63}$/D', $id) === 1
+            ? $id
+            : null;
+    }
+
     public static function acquire(string $restore_uuid, string $scope, ?RestoreIsolationLease $previous = null): RestoreIsolationLease
     {
         $provider = self::provider();

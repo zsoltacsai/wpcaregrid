@@ -45,6 +45,47 @@ final class CapabilityReadinessTest extends TestCase
         $this->assertSame($before, $website->jobs()->count());
     }
 
+    public function test_restore_provider_readiness_requires_fresh_allowlisted_identity(): void
+    {
+        config(['compatibility.restore_isolation_provider_ids' => ['tests.fake-host-isolation']]);
+        $site = $this->pairedWebsite();
+        $website = $site['website'];
+        $readiness = app(CapabilityReadiness::class);
+
+        $this->assertTrue($readiness->restoreIsolationSupported($website->fresh()));
+
+        $facts = $website->capabilitySnapshot->facts;
+        unset($facts['restore_isolation_provider_id']);
+        $this->refreshCapabilityEvidence($website, $facts);
+        $this->assertFalse($readiness->restoreIsolationSupported($website->fresh()), 'Missing provider identity is unsupported.');
+
+        $facts['restore_isolation_provider_id'] = 'unreviewed.provider';
+        $this->refreshCapabilityEvidence($website, $facts);
+        $this->assertFalse($readiness->restoreIsolationSupported($website->fresh()), 'An unreviewed provider identity is not accepted.');
+
+        $facts['restore_isolation_provider_id'] = 'tests.fake-host-isolation';
+        $this->refreshCapabilityEvidence($website, $facts);
+        $website->fresh()->capabilitySnapshot->update(['checked_at' => now()->subSeconds(config('compatibility.operation_ttl_seconds') + 1)]);
+        $this->assertFalse($readiness->restoreIsolationSupported($website->fresh()), 'Stale provider evidence is unsupported.');
+    }
+
+    public function test_restore_isolation_block_does_not_disable_backup_readiness(): void
+    {
+        config(['compatibility.restore_isolation_provider_ids' => []]);
+        $site = $this->pairedWebsite();
+        $website = $site['website'];
+        $connector = $website->activeConnector;
+        $connector->update(['capabilities' => array_merge($connector->capabilities, ['backup_files', 'backup_database', 'backup_full', 'restore_full'])]);
+        $facts = $this->inventoryPayload()['compatibility'];
+        unset($facts['restore_isolation_provider_id']);
+
+        $results = app(CapabilityEvaluator::class)->evaluate($website->fresh(), $connector->fresh(), $facts);
+
+        $this->assertSame('PASS', $results[Capability::BackupReady->value]['status']);
+        $this->assertSame('BLOCK', $results[Capability::RestoreReady->value]['status']);
+        $this->assertContains('RESTORE_ISOLATION_UNAVAILABLE', $results[Capability::RestoreReady->value]['reasons']);
+    }
+
     public function test_multisite_blocks_filesystem_mutations_but_keeps_connection_diagnostics(): void
     {
         $site = $this->pairedWebsite();

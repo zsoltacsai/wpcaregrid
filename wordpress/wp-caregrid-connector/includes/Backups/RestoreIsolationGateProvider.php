@@ -17,6 +17,7 @@ namespace WPCareGrid\Connector\Backups;
  */
 interface RestoreIsolationGateProvider
 {
+    /** A stable, non-secret provider identifier; this method must have no side effects. */
     public function provider_id(): string;
 
     /**

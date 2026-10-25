@@ -26,6 +26,7 @@ return [
         'DB_ENGINE_UNSUPPORTED' => 'Az adatbázismotor ehhez a művelethez nem támogatott.', 'DB_VERSION_UNKNOWN' => 'Az adatbázis-kompatibilitás nem igazolható.',
         'BACKUP_NOT_VERIFIED' => 'Nem áll rendelkezésre ellenőrzött helyreállítási pont.', 'BACKUP_OBJECT_MISSING' => 'Egy szükséges helyreállítási fájl hiányzik.',
         'RESTORE_CONFLICT' => 'A webhelyen egy másik művelet van folyamatban.', 'SCANNER_UNAVAILABLE' => 'A szükséges vizsgálati képesség nem érhető el.',
+        'RESTORE_ISOLATION_UNAVAILABLE' => 'Nincs elérhető, ellenőrzött host-izolációs szolgáltató; a destruktív visszaállítás tiltott.',
         'SCANNER_NOT_RUN' => 'Vizsgálat még nem futott.', 'SAFETY_GATE_CLOSED' => 'Egy szükséges biztonsági feltétel nem teljesül.',
     ],
     'last_checked' => 'Utolsó ellenőrzés', 'not_checked' => 'Még nem ellenőrzött', 'operator_details' => 'Technikai részletek',
