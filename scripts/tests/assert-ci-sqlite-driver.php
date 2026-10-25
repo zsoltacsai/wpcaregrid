@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-use Illuminate\\Contracts\\Console\\Kernel;
-use Illuminate\\Support\\Facades\\DB;
+use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Support\Facades\DB;
 
 $root = dirname(__DIR__, 2);
 
@@ -34,7 +34,7 @@ if ($expected !== 'sqlite'
 
 $version = DB::selectOne('select sqlite_version() as version')->version ?? null;
 
-if (!is_string($version) || !preg_match('/^\\d+\\.\\d+(?:\\.\\d+)?$/', $version)) {
+if (!is_string($version) || !preg_match('/^\d+\.\d+(?:\.\d+)?$/', $version)) {
     fwrite(STDERR, "SQLite engine version could not be verified.\n");
     exit(1);
 }
