@@ -281,11 +281,12 @@ final class RestoreTest extends TestCase
             $failed = $this->restore_with_fault(
                 $primary,
                 $primaryObjects,
-                new OneShotRestoreFault('before_file_apply', 'HARNESS_FILE_APPLY_FAILURE'),
+                new OneShotRestoreFault('after_database_swap', 'HARNESS_DATABASE_SWAP_FAILURE'),
             );
 
             $this->assertSame('failed', $failed['status']);
-            $this->assertTrue($failed['error']['details']['destructive_mutation_started']);
+            $this->assertSame('HARNESS_DATABASE_SWAP_FAILURE', $failed['error']['code'] ?? null);
+            $this->assertTrue($failed['error']['details']['destructive_mutation_started'] ?? false);
             $this->assertTrue(Maintenance::is_ours());
             $maintenanceBefore = file_get_contents(ABSPATH.'.maintenance');
             $markerBefore = file_get_contents(TempDir::path().'/maintenance.json');
