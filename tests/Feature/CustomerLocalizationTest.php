@@ -658,20 +658,25 @@ class CustomerLocalizationTest extends TestCase
         $this->assertNull($b->user->refresh()->locale);
     }
 
-    public function test_a_choice_made_before_signing_in_carries_into_the_session_and_the_saved_preference(): void
+    public function test_a_guest_language_carries_into_the_account_but_only_an_explicit_switch_updates_the_saved_preference(): void
     {
         $customer = Customer::factory()->withUser()->create();
 
         $this->actingAs($customer->user)->get(route('account.dashboard'))->assertHeader('Content-Language', 'en');
         $this->assertNull($customer->user->refresh()->locale, 'Nothing was chosen: nothing is saved.');
 
-        // Chosen on the public site (the cookie), then signed in: the portal uses it and remembers it.
+        // A guest choice carried by the browser cookie controls rendering, but
+        // does not become a saved account preference merely because the user signs in.
         $this->actingAs($customer->user)->in('hu')->get(route('account.dashboard'))->assertHeader('Content-Language', 'hu');
+        $this->assertNull($customer->user->refresh()->locale);
+
+        // An explicit customer language-switch action is the persistence path.
+        $this->actingAs($customer->user)->post(route('locale.update'), ['locale' => 'hu'])->assertRedirect();
         $this->assertSame('hu', $customer->user->refresh()->locale);
 
-        // The latest choice on this device wins and is saved.
-        $this->actingAs($customer->user)->in('en')->get(route('account.dashboard'))->assertHeader('Content-Language', 'en');
-        $this->assertSame('en', $customer->user->refresh()->locale);
+        // A stale device cookie cannot override the saved account preference.
+        $this->actingAs($customer->user)->in('en')->get(route('account.dashboard'))->assertHeader('Content-Language', 'hu');
+        $this->assertSame('hu', $customer->user->refresh()->locale);
     }
 
     public function test_a_stored_value_that_is_not_supported_is_ignored(): void
