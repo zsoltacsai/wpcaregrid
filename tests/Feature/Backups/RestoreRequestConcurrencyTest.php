@@ -156,6 +156,7 @@ class RestoreRequestConcurrencyTest extends TestCase
             'SESSION_DRIVER' => 'array',
             'QUEUE_CONNECTION' => 'sync',
             'BACKUP_RESTORE_ENABLED' => 'true',
+            'COMPATIBILITY_RESTORE_ISOLATION_PROVIDER_IDS' => implode(',', (array) config('compatibility.restore_isolation_provider_ids', [])),
             'BACKUP_STORAGE' => 'local',
             'BACKUP_LOCAL_ROOT' => (string) config('backup.providers.local.root'),
             'BACKUP_STAGING_PATH' => (string) config('backup.upload.staging_path'),

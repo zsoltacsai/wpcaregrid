@@ -142,7 +142,10 @@ class AccountBackupsTest extends TestCase
 
     public function test_unreviewed_isolation_provider_hides_customer_restore_and_rejects_direct_post_without_side_effects(): void
     {
-        config(['compatibility.restore_isolation_provider_ids' => []]);
+        config([
+            'backup.restore.enabled' => true,
+            'compatibility.restore_isolation_provider_ids' => [],
+        ]);
         $site = $this->backupReadySite();
         $website = $site['website'];
         $backup = $this->verifiedBackup($website);
@@ -171,7 +174,10 @@ class AccountBackupsTest extends TestCase
 
     public function test_provider_readiness_change_after_customer_form_render_is_rechecked_before_request(): void
     {
-        config(['compatibility.restore_isolation_provider_ids' => ['tests.fake-host-isolation']]);
+        config([
+            'backup.restore.enabled' => true,
+            'compatibility.restore_isolation_provider_ids' => ['tests.fake-host-isolation'],
+        ]);
         $site = $this->backupReadySite();
         $website = $site['website'];
         $backup = $this->verifiedBackup($website);

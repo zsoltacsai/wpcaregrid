@@ -69,7 +69,7 @@ final class CapabilityReadinessTest extends TestCase
         $this->assertFalse($readiness->restoreIsolationSupported($website->fresh()), 'Stale provider evidence is unsupported.');
     }
 
-    public function test_restore_isolation_block_does_not_disable_backup_readiness(): void
+    public function test_unknown_restore_isolation_does_not_disable_backup_readiness(): void
     {
         config(['compatibility.restore_isolation_provider_ids' => []]);
         $site = $this->pairedWebsite();
@@ -82,8 +82,8 @@ final class CapabilityReadinessTest extends TestCase
         $results = app(CapabilityEvaluator::class)->evaluate($website->fresh(), $connector->fresh(), $facts);
 
         $this->assertSame('PASS', $results[Capability::BackupReady->value]['status']);
-        $this->assertSame('BLOCK', $results[Capability::RestoreReady->value]['status']);
-        $this->assertContains('RESTORE_ISOLATION_UNAVAILABLE', $results[Capability::RestoreReady->value]['reasons']);
+        $this->assertSame('UNKNOWN', $results[Capability::RestoreReady->value]['status']);
+        $this->assertContains('FACT_MISSING', $results[Capability::RestoreReady->value]['reasons']);
     }
 
     public function test_multisite_blocks_filesystem_mutations_but_keeps_connection_diagnostics(): void
