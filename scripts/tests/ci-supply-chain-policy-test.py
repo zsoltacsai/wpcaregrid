@@ -95,7 +95,7 @@ def validate_sqlite_regression_gate(workflow):
     assert "name: Server SQLite regression gate (PHP 8.4)" in job, "stable SQLite check name changed"
     assert "php-version: '8.4'" in job, "SQLite regression gate PHP version changed"
     assert re.search(r"(?m)^      DB_CONNECTION: sqlite$", job), "SQLite job must select the SQLite connection"
-    assert re.search(r"(?m)^      DB_DATABASE: ':memory:'$", job), "SQLite job must use an isolated in-memory DB"
+    assert re.search(r"(?m)^      DB_DATABASE: database/ci-sqlite-regressions\\.sqlite$", job), "SQLite job must use its isolated disposable database file"
     assert re.search(r"(?m)^      CAREGRID_EXPECTED_DATABASE_DRIVER: sqlite$", job), "SQLite driver expectation missing"
     assert "scripts/tests/assert-ci-sqlite-driver.php" in job, "SQLite runtime engine assertion missing"
     assert "vendor/bin/phpunit" in job and "--fail-on-skipped" in job, "strict targeted PHPUnit regressions missing"
@@ -142,7 +142,7 @@ def main():
         (workflow.replace("^[0-9a-fA-F]{40}$", "^.+$", 1), "weak manual SHA grammar"),
     )
     for mutated, reason in mutations:
-        expect_rejected(validate_workflow_controls, mutated, reason)
+        expect_rejected(lambda content: (validate_workflow_controls(content), validate_sqlite_regression_gate(content)), mutated, reason)
     deployed = workflow + "\n      - name: forbidden\n        run: scripts/deploy-staging.sh\n"
     expect_rejected(lambda content: assert_no_deployment(content), deployed, "deployment command in CI")
 
