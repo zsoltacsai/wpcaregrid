@@ -29,9 +29,9 @@ One application server is assumed. Everything below works with more than one (sh
 | | |
 | --- | --- |
 | OS | Linux, x86_64 (Ubuntu 24.04 LTS is what CI runs) |
-| PHP | **8.4** (CLI and FPM). `composer.json` allows `^8.3`, but CI tests 8.4 only. Ubuntu 24.04 ships 8.3, so install 8.4 from the `ppa:ondrej/php` repository |
+| PHP | **8.4** is the current staging runtime and required patched rollback (CLI and FPM). Laravel server CI tests PHP 8.4 and 8.5; CI coverage does not mean a host has migrated or is approved to do so. Ubuntu 24.04 ships 8.3, so the current 8.4 installation uses the `ppa:ondrej/php` repository |
 | PHP extensions | Required by the locked packages (`composer check-platform-reqs --no-dev --lock`): ctype, curl, dom, fileinfo, filter, hash, iconv, json, libxml, mbstring, openssl, pcre, session, simplexml, tokenizer. Required by the application: **intl** (`Number::fileSize`), **zip** (`connector:package`), **pdo_mysql** (MySQL), **pcntl** (CLI only: queue worker `--timeout`). Ubuntu packages: `php8.4-fpm php8.4-cli php8.4-mysql php8.4-mbstring php8.4-xml php8.4-curl php8.4-zip php8.4-intl` (the others are built in) |
-| Database | **MySQL 8.4 LTS** (tested in CI, migrations roll back fully). Ubuntu 24.04 ships 8.0 (end of life April 2026); install 8.4 from the MySQL APT repository. MariaDB is not tested. SQLite is for development and tests only |
+| Database | **MySQL 8.4 LTS** is the primary database; Laravel server CI also tests MariaDB 10.11 (migrations roll back fully on both). Ubuntu 24.04 ships MySQL 8.0 (end of life April 2026); install 8.4 from the MySQL APT repository. SQLite is for development and tests only |
 | Web server | nginx with TLS (Let's Encrypt / certbot) |
 | Process supervisor | supervisor (or systemd), for the two queue workers |
 | Build tools | Composer 2; Node.js **22** + npm to build assets (Vite 8 needs Node ≥ 20.19 or ≥ 22.12; Ubuntu 24.04 ships 18, so use the NodeSource 22.x repository) |
@@ -456,6 +456,8 @@ Use the existing test sandbox (STRIPE_TEST_MODE.md): the same products and price
 
 ### Staging checklist
 
+The staging runtime remains PHP 8.4 until a separate, approved PHP 8.5 cutover is completed. Preserve PHP 8.4 packages and its shared FPM socket as the patched rollback path; do not infer staging migration from CI results.
+
 1. Packages installed; `php -v` 8.4, `mysql --version` 8.4, `node -v` 22; `composer check-platform-reqs --no-dev`.
 2. First installation done; `.env` per the table; caches built; ACLs set.
 3. nginx + certificate; `https://staging.wpcaregrid.com/up` answers 200; `http://` redirects; `X-Robots-Tag` present.
@@ -477,7 +479,7 @@ Use the existing test sandbox (STRIPE_TEST_MODE.md): the same products and price
 `.github/workflows/ci.yml` runs on pushes to the development branch and on pull requests (never deploys):
 
 - **quality:** no tracked `.env`/keys/databases, `composer validate`, PHP lint, Pint, `composer audit` (app and connector tests), `npm ci && npm run build`, `npm audit` (high and critical), gitleaks over the full history (`.gitleaks.toml`).
-- **server (PHP 8.4 × SQLite, MySQL 8.4):** migrations from an empty database, full rollback and again; production caches; the full test suite with real S3 (moto) and SFTP (OpenSSH, key authentication, pinned host key) services, `--fail-on-skipped`; `system:check`; the HTTP smoke test against `php artisan serve`.
-- **wordpress (PHP 8.4 × SQLite, MySQL 8.4):** the connector inside real WordPress 7.1, strict mode (symlink containment and permission tests may not be skipped).
+- **Laravel server (PHP 8.4 and 8.5 × SQLite, MySQL 8.4, MariaDB 10.11):** each PHP version runs the server suite across all three database lanes. The required MySQL process-concurrency gate runs on both PHP versions. Migrations, rollback, caches, S3/SFTP integration, `system:check`, and HTTP smoke checks are included.
+- **WordPress Connector:** customer-runtime compatibility is tested across PHP 8.2–8.5, WordPress 6.8 and 7.1, MySQL 5.7/8.0/8.4, and MariaDB 10.11. The explicit PHP 8.4 + WordPress 7.1 SQLite/MySQL/MariaDB contexts remain in the matrix; the Connector matrix is separate from the Laravel server PHP matrix.
 
 The Linux CI run is the authoritative result for filesystem behaviour (permissions, symlinks); on Windows those few assertions are skipped with an explicit reason.
