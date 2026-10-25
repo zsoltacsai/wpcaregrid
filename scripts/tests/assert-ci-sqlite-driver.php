@@ -7,9 +7,9 @@ use Illuminate\Support\Facades\DB;
 
 $root = dirname(__DIR__, 2);
 
-require $root . '/vendor/autoload.php';
+require $root.'/vendor/autoload.php';
 
-$app = require $root . '/bootstrap/app.php';
+$app = require $root.'/bootstrap/app.php';
 $app->make(Kernel::class)->bootstrap();
 
 $expected = getenv('CAREGRID_EXPECTED_DATABASE_DRIVER') ?: '';
@@ -34,7 +34,7 @@ if ($expected !== 'sqlite'
 
 $version = DB::selectOne('select sqlite_version() as version')->version ?? null;
 
-if (!is_string($version) || !preg_match('/^\d+\.\d+(?:\.\d+)?$/', $version)) {
+if (! is_string($version) || ! preg_match('/^\d+\.\d+(?:\.\d+)?$/', $version)) {
     fwrite(STDERR, "SQLite engine version could not be verified.\n");
     exit(1);
 }
