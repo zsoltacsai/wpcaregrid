@@ -2,8 +2,8 @@
 
 namespace WPCareGrid\Connector\Backups;
 
-use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Core\LeaseLost;
+use WPCareGrid\Connector\Core\Lock;
 
 /**
  * Exports this site's tables (those with the WordPress table prefix) to a
