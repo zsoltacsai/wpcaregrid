@@ -3,6 +3,7 @@
 namespace WPCareGrid\Connector\Compatibility;
 
 use WPCareGrid\Connector\Backups\DatabaseDumper;
+use WPCareGrid\Connector\Backups\RestoreIsolationGate;
 use WPCareGrid\Connector\Backups\TempDir;
 
 /** Bounded observations only; the SaaS server owns support policy. */
@@ -61,6 +62,9 @@ final class EnvironmentFacts
             'cron' => [
                 'wp_cron_disabled' => defined('DISABLE_WP_CRON') && DISABLE_WP_CRON === true,
             ],
+            // Presence is evidence only. The platform accepts only provider IDs
+            // that have passed its separate host compatibility review.
+            'restore_isolation_provider_id' => RestoreIsolationGate::readiness_provider_id(),
         ];
     }
 

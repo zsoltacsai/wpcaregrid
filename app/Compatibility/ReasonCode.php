@@ -30,6 +30,7 @@ enum ReasonCode: string
     case DatabaseUnknown = 'DB_VERSION_UNKNOWN';
     case BackupNotVerified = 'BACKUP_NOT_VERIFIED';
     case BackupObjectMissing = 'BACKUP_OBJECT_MISSING';
+    case RestoreIsolationUnavailable = 'RESTORE_ISOLATION_UNAVAILABLE';
     case RestoreConflict = 'RESTORE_CONFLICT';
     case ScannerUnavailable = 'SCANNER_UNAVAILABLE';
     case ScannerNotRun = 'SCANNER_NOT_RUN';

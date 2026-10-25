@@ -77,6 +77,7 @@ return [
         'BACKUP_IN_PROGRESS' => 'A backup is already in progress.',
         'TOO_SOON' => 'A backup was started recently. Please wait before starting another.',
         'RESTORE_NOT_AVAILABLE' => 'Restoring from the dashboard is not available yet. Contact us and we will restore it for you.',
+        'RESTORE_ISOLATION_UNAVAILABLE' => 'This website does not currently report a reviewed restore-isolation provider. Restores are unavailable; existing backups remain available.',
         'BACKUP_NOT_RESTORABLE' => 'This backup cannot be restored: only verified, unexpired backups can.',
         'RESTORE_TYPE_MISMATCH' => 'This backup does not contain what you chose to restore.',
         'SAFETY_BACKUP_UNAVAILABLE' => 'A safety backup of the current site is not possible, so the restore cannot start.',
@@ -119,6 +120,7 @@ return [
         'protected' => 'Protected by backup',
         'restore_requested' => 'Restore requested. A safety backup of the current site runs first; the restore starts only once it is verified.',
         'restore_disabled' => 'Restoring from the dashboard is not available yet. Contact us and we will restore a backup for you.',
+        'restore_isolation_unavailable' => 'Restore is unavailable because this website has not reported a reviewed host-isolation provider. Existing backups and downloads remain available.',
     ],
 
     'restore' => [

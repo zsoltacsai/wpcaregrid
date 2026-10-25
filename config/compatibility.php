@@ -2,7 +2,7 @@
 
 return [
     'policy_version' => env('COMPATIBILITY_POLICY_VERSION', 'compatibility-policy-v1'),
-    'evaluator_version' => '1',
+    'evaluator_version' => '2',
     'dynamic_ttl_seconds' => (int) env('COMPATIBILITY_DYNAMIC_TTL_SECONDS', 1800),
     // High-impact mutations require a recently completed inventory/preflight.
     'operation_ttl_seconds' => (int) env('COMPATIBILITY_OPERATION_TTL_SECONDS', 300),
@@ -21,4 +21,9 @@ return [
     'declared_minimum_mysql' => '5.5.5',
     'tested_mysql_branches' => ['5.7', '8.0', '8.4'],
     'tested_mariadb_branches' => ['10.11'],
+    // Empty until a concrete host provider and its compatibility evidence are reviewed.
+    'restore_isolation_provider_ids' => array_values(array_unique(array_filter(
+        array_map('trim', explode(',', (string) env('COMPATIBILITY_RESTORE_ISOLATION_PROVIDER_IDS', ''))),
+        static fn (string $providerId): bool => preg_match('/^[a-z0-9][a-z0-9._-]{0,63}$/D', $providerId) === 1,
+    ))),
 ];

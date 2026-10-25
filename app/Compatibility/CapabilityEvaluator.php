@@ -39,7 +39,7 @@ final class CapabilityEvaluator
         $restoreCapability = ConnectorCapability::tryFrom('restore_'.$restoreScope) ?? ConnectorCapability::RestoreFull;
         $restoreFs = $restoreScope === 'database' ? $tempFilesystem : $filesystem;
         $restoreDb = in_array($restoreScope, ['database', 'full'], true) ? $database : $this->result(CapabilityStatus::Pass);
-        $restore = $this->combine($connection, $versionWrite, $runtime, $layout, $restoreFs, $restoreDb, $tempFilesystem, $this->connectorCapability($connector, $restoreCapability), $restoreSource);
+        $restore = $this->combine($connection, $versionWrite, $runtime, $layout, $restoreFs, $restoreDb, $tempFilesystem, $this->connectorCapability($connector, $restoreCapability), $restoreSource, $this->restoreIsolation($facts));
         $scan = $this->combine($connection, $versionRead, $runtime, $layout, $this->connectorCapability($connector, ConnectorCapability::SecurityScan), $this->readableLayout($facts));
         if (! $scannerConfigured) {
             $scan = $this->combine($scan, $this->result(CapabilityStatus::Block, ReasonCode::ScannerUnavailable));
@@ -202,6 +202,18 @@ final class CapabilityEvaluator
         return $free <= (int) config('compatibility.disk_reserve_bytes')
             ? $this->result(CapabilityStatus::Block, ReasonCode::DiskSpaceInsufficient)
             : $this->result(CapabilityStatus::Pass);
+    }
+
+    private function restoreIsolation(array $facts): array
+    {
+        $providerId = $facts['restore_isolation_provider_id'] ?? null;
+        if (! is_string($providerId) || $providerId === '') {
+            return $this->result(CapabilityStatus::Unknown, ReasonCode::FactMissing);
+        }
+
+        return in_array($providerId, (array) config('compatibility.restore_isolation_provider_ids', []), true)
+            ? $this->result(CapabilityStatus::Pass)
+            : $this->result(CapabilityStatus::Block, ReasonCode::RestoreIsolationUnavailable);
     }
 
     private function database(array $facts): array

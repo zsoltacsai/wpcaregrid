@@ -55,7 +55,7 @@ final class InventoryIngest
             "{$prefix}woocommerce.active" => ['required_with:'.$prefix.'woocommerce', 'boolean'],
             "{$prefix}woocommerce.version" => $version,
             "{$prefix}collected_at" => ['nullable', 'date'],
-            "{$prefix}compatibility" => ['nullable', 'array:schema_version,multisite,layout,root_symlink,filesystem,disk_free_bytes,database,extensions,php_limits,cron'],
+            "{$prefix}compatibility" => ['nullable', 'array:schema_version,multisite,layout,root_symlink,filesystem,disk_free_bytes,database,extensions,php_limits,cron,restore_isolation_provider_id'],
             "{$prefix}compatibility.schema_version" => ['required_with:'.$prefix.'compatibility', 'integer', 'min:1', 'max:10'],
             "{$prefix}compatibility.multisite" => ['required_with:'.$prefix.'compatibility', 'boolean'],
             "{$prefix}compatibility.layout" => ['required_with:'.$prefix.'compatibility', Rule::in(['standard', 'multisite', 'bedrock', 'custom', 'unknown'])],
@@ -80,6 +80,7 @@ final class InventoryIngest
             "{$prefix}compatibility.php_limits.max_execution_seconds" => ['nullable', 'integer', 'min:0', 'max:86400'],
             "{$prefix}compatibility.cron" => ['nullable', 'array:wp_cron_disabled'],
             "{$prefix}compatibility.cron.wp_cron_disabled" => ['nullable', 'boolean'],
+            "{$prefix}compatibility.restore_isolation_provider_id" => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9][a-z0-9._-]{0,63}$/D'],
         ];
     }
 

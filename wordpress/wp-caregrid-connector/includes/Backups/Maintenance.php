@@ -2,76 +2,484 @@
 
 namespace WPCareGrid\Connector\Backups;
 
-/**
- * WordPress maintenance mode during the critical part of a restore, using
- * WordPress's own .maintenance file. It can never stay on:
- *   1. the restore turns it off in a finally block;
- *   2. a shutdown function turns it off if PHP dies (fatal error, timeout);
- *   3. WordPress itself ignores a .maintenance file older than 10 minutes;
- *   4. every poll removes a leftover that this connector created.
- * The marker lives in the temporary directory, not in the database, so a
- * database restore cannot lose it.
- */
+use WPCareGrid\Connector\Core\LeaseLost;
+use WPCareGrid\Connector\Jobs\JobStore;
+
+/** Persistent, fail-closed WordPress maintenance protection for restore recovery. */
 final class Maintenance
 {
-    private static ?string $active = null;
-
-    /** Resolved when maintenance starts, so the shutdown failsafe never needs the database. */
     private static ?string $marker = null;
+
+    /** Test-only fault injection for a failed filesystem unlink. */
+    private static ?\Closure $unlinkForTesting = null;
 
     public static function file(): string
     {
         return ABSPATH.'.maintenance';
     }
 
-    public static function enable(string $restore_uuid): void
+    /**
+     * Start maintenance, or adopt this Connector's unresolved restore gate for
+     * an explicitly delivered recovery restore whose scope covers the old one.
+     */
+    public static function enable(string $restore_uuid, JobStore $jobs, RestoreIsolationLease $lease): void
     {
-        if (is_file(self::file())) {
-            throw new BackupFailure('MAINTENANCE_ACTIVE', 'The site is already in maintenance mode.');
+        if ($lease->restore_uuid !== $restore_uuid) {
+            throw new BackupFailure('RESTORE_ISOLATION_UNAVAILABLE', 'The host restore gate is not bound to this restore.');
         }
-
-        // The marker first: without it the failsafes could not tell the file is ours.
         self::$marker = TempDir::ensure().'/maintenance.json';
-        if (@file_put_contents(self::marker(), wp_json_encode(['restore' => $restore_uuid, 'since' => time()])) === false) {
+        $existing = self::read_marker();
+
+        if (is_file(self::file()) || is_file(self::marker())) {
+            if ($existing === null || ! self::file_matches_marker($existing)) {
+                throw new BackupFailure('MAINTENANCE_ACTIVE', 'The site is already in maintenance mode.');
+            }
+
+            $oldUuid = (string) ($existing['restore'] ?? '');
+            $oldState = $jobs->restore_maintenance_state($oldUuid);
+            $currentState = $jobs->restore_maintenance_state($restore_uuid);
+            $oldScope = $existing['required_scope'] ?? $jobs->restore_scope($oldUuid);
+            $newScope = $jobs->restore_scope($restore_uuid);
+            if (! in_array($oldState, ['recovery_required', 'unknown'], true)
+                || $currentState !== 'pre_mutation_running'
+                || ! self::scope_covers($newScope, $oldScope)) {
+                throw new BackupFailure('MAINTENANCE_ACTIVE', 'An unresolved restore requires a validated recovery operation.');
+            }
+
+            $previousLease = RestoreIsolationLease::from_array($existing['isolation_gate'] ?? null);
+            if ($previousLease === null || $previousLease->restore_uuid !== $oldUuid) {
+                throw new BackupFailure('RESTORE_ISOLATION_UNAVAILABLE', 'The prior restore gate cannot be safely adopted. Operator recovery is required.');
+            }
+            $pendingReleases = $existing['pending_isolation_releases'] ?? [];
+            if (! is_array($pendingReleases)) {
+                throw new BackupFailure('RESTORE_ISOLATION_UNAVAILABLE', 'The prior restore gate handoff is ambiguous. Operator recovery is required.');
+            }
+            if ($previousLease->generation !== $lease->generation) {
+                $pendingReleases[] = $previousLease->to_array();
+            }
+
+            $existing['recovery_for'] = $existing['recovery_for'] ?? $oldUuid;
+            $existing['restore'] = $restore_uuid;
+            $existing['required_scope'] = $newScope;
+            $existing['refreshed_at'] = time();
+            $existing['version'] = 2;
+            $existing['isolation_gate'] = $lease->to_array();
+            $existing['pending_isolation_releases'] = $pendingReleases;
+            $legacy = ! is_string($existing['token'] ?? null);
+            $existing['token'] = is_string($existing['token'] ?? null) ? $existing['token'] : bin2hex(random_bytes(16));
+            if ($legacy) {
+                $existing['legacy_compat'] = true;
+            }
+            if (! self::write_marker($existing) || ($legacy && ! self::write_maintenance_file($existing))) {
+                throw new BackupFailure('MAINTENANCE_FAILED', 'The existing restore protection could not be safely adopted.');
+            }
+            if ($legacy) {
+                unset($existing['legacy_compat']);
+                if (! self::write_marker($existing)) {
+                    throw new BackupFailure('MAINTENANCE_FAILED', 'The adopted restore marker could not be finalized.');
+                }
+            }
+            if (! self::reconcile_pending_isolation_releases($existing, $lease)) {
+                throw new BackupFailure('RESTORE_ISOLATION_UNAVAILABLE', 'The previous host gate could not be retired safely. Operator recovery is required.');
+            }
+
+            return;
+        }
+
+        $scope = $jobs->restore_scope($restore_uuid);
+        if ($scope === null || $jobs->restore_maintenance_state($restore_uuid) !== 'pre_mutation_running') {
+            throw new BackupFailure('MAINTENANCE_FAILED', 'The restore state could not be verified before maintenance mode.');
+        }
+
+        $marker = [
+            'version' => 2,
+            'restore' => $restore_uuid,
+            'recovery_for' => null,
+            'required_scope' => $scope,
+            'since' => time(),
+            'refreshed_at' => time(),
+            'token' => bin2hex(random_bytes(16)),
+            'isolation_gate' => $lease->to_array(),
+        ];
+        if (! self::write_marker($marker)) {
             throw new BackupFailure('MAINTENANCE_FAILED', 'Maintenance mode could not be enabled.');
         }
-        if (@file_put_contents(self::file(), '<?php $upgrading = '.time().';') === false) {
-            @unlink(self::marker());
+        if (! self::write_maintenance_file($marker)) {
+            // Keep the durable host-gate reference so the next poll or an
+            // operator can reconcile a partially armed restore safely.
             throw new BackupFailure('MAINTENANCE_FAILED', 'Maintenance mode could not be enabled.');
         }
 
-        if (self::$active === null) {
-            register_shutdown_function(static function () {
-                if (self::$active !== null) {
-                    self::disable();
-                }
-            });
-        }
-        self::$active = $restore_uuid;
     }
 
-    /** Only removes a maintenance file this connector created. */
-    public static function disable(): void
+    /** Release only after durable proof that mutation never began or recovery succeeded. */
+    private static function disable(string $restore_uuid, JobStore $jobs): void
     {
-        if (is_file(self::marker())) {
-            @unlink(self::file());
-            @unlink(self::marker());
+        $marker = self::read_marker();
+        if ($marker === null || ($marker['restore'] ?? null) !== $restore_uuid) {
+            return;
         }
-        self::$active = null;
+        if (! self::has_valid_v2_token($marker)) {
+            return;
+        }
+
+        $state = $jobs->restore_maintenance_state($restore_uuid);
+        $recoveringPriorState = is_string($marker['recovery_for'] ?? null);
+        if ($state !== 'completed_success' && ! ($state === 'safe_to_release' && ! $recoveringPriorState)) {
+            return;
+        }
+        $lease = RestoreIsolationLease::from_array($marker['isolation_gate'] ?? null);
+        if ($lease === null || $lease->restore_uuid !== $restore_uuid) {
+            return;
+        }
+        if (! self::reconcile_pending_isolation_releases($marker, $lease)) {
+            return;
+        }
+        $maintenancePath = self::file();
+        if (self::path_exists($maintenancePath)) {
+            if (is_link($maintenancePath) || ! is_file($maintenancePath) || ! self::file_matches_marker($marker)) {
+                return;
+            }
+            try {
+                RestoreIsolationGate::assert_active($lease);
+            } catch (LeaseLost) {
+                return;
+            }
+            if (! self::unlink_path($maintenancePath)) {
+                // Keep the durable JSON marker so a later poll can retry.
+                return;
+            }
+            // This path operation is still TOCTOU against non-cooperating
+            // WordPress writers; flock cannot make those writers participate.
+            // See the M15 ownership review before treating release as safe.
+            if (self::path_exists($maintenancePath)) {
+                return;
+            }
+        }
+
+        // The provider must release only this generation and treat a repeated
+        // release as success, so marker-unlink failure remains retryable.
+        if (! RestoreIsolationGate::release($lease)) {
+            return;
+        }
+
+        $markerPath = self::marker();
+        if (! self::unlink_path($markerPath) && self::path_exists($markerPath)) {
+            return;
+        }
+        if (self::path_exists($markerPath)) {
+            return;
+        }
         self::$marker = null;
+    }
+
+    private static function path_exists(string $path): bool
+    {
+        return file_exists($path) || is_link($path);
+    }
+
+    private static function unlink_path(string $path): bool
+    {
+        if (self::$unlinkForTesting !== null) {
+            return (self::$unlinkForTesting)($path) === true;
+        }
+
+        return @unlink($path);
     }
 
     public static function is_ours(): bool
     {
-        return is_file(self::marker()) && is_file(self::file());
+        $marker = self::read_marker();
+
+        return $marker !== null && self::file_matches_marker($marker);
     }
 
-    /** A leftover from a process that died: nothing of ours is running now (the poll lock is held). */
-    public static function cleanup_stale(): void
+    /**
+     * Reconcile only from durable restore state. Running, destructive, or
+     * ambiguous restores keep (and refresh) the maintenance gate.
+     */
+    public static function cleanup_stale(JobStore $jobs): void
     {
-        if (self::$active === null && is_file(self::marker())) {
-            self::disable();
+        $marker = self::read_marker();
+        if ($marker === null) {
+            return;
         }
+        if (! self::has_valid_v2_token($marker)) {
+            return;
+        }
+
+        $restore = $marker['restore'] ?? null;
+        if (! is_string($restore) || ! preg_match('/^[0-9a-f-]{36}$/i', $restore)) {
+            return;
+        }
+
+        $state = $jobs->restore_maintenance_state($restore);
+        $recoveringPriorState = is_string($marker['recovery_for'] ?? null);
+        $mayRelease = $state === 'completed_success'
+            || ($state === 'safe_to_release' && ! $recoveringPriorState);
+
+        if ($mayRelease) {
+            self::disable($restore, $jobs);
+
+            return;
+        }
+
+        $lease = RestoreIsolationLease::from_array($marker['isolation_gate'] ?? null);
+        if ($lease === null || $lease->restore_uuid !== $restore) {
+            return;
+        }
+        try {
+            RestoreIsolationGate::assert_active($lease);
+        } catch (LeaseLost) {
+            return;
+        }
+        if (! self::reconcile_pending_isolation_releases($marker, $lease)) {
+            return;
+        }
+
+        // If the WordPress marker disappeared or aged out, recreate/refresh
+        // only when it is absent or still exactly ours. Never overwrite a
+        // different component's .maintenance file.
+        if (is_file(self::file()) && ! self::file_matches_marker($marker)) {
+            return;
+        }
+        if (is_string($marker['token'] ?? null) && self::file_matches_marker($marker)) {
+            return;
+        }
+
+        $marker['refreshed_at'] = time();
+        $marker['version'] = 2;
+        $marker['legacy_compat'] = true;
+        $marker['token'] = is_string($marker['token'] ?? null) ? $marker['token'] : bin2hex(random_bytes(16));
+        if (! self::write_marker($marker)) {
+            return;
+        }
+        try {
+            RestoreIsolationGate::assert_active($lease);
+        } catch (LeaseLost) {
+            return;
+        }
+        if (! self::write_maintenance_file($marker)) {
+            return;
+        }
+        unset($marker['legacy_compat']);
+        self::write_marker($marker);
+    }
+
+    /** Clear process-local path state only; never touch durable protection. */
+    public static function preserve(): void
+    {
+        self::$marker = null;
+    }
+
+    public static function persisted_isolation_lease(): ?RestoreIsolationLease
+    {
+        $marker = self::read_marker();
+
+        return RestoreIsolationLease::from_array($marker['isolation_gate'] ?? null);
+    }
+
+    public static function persists_isolation_lease(RestoreIsolationLease $lease): bool
+    {
+        $persisted = self::persisted_isolation_lease();
+
+        return $persisted !== null
+            && $persisted->provider === $lease->provider
+            && $persisted->generation === $lease->generation;
+    }
+
+    public static function may_release_unpersisted_isolation_lease(RestoreIsolationLease $lease): bool
+    {
+        if (self::persists_isolation_lease($lease)) {
+            return false;
+        }
+
+        // An unreadable/malformed marker or a maintenance path means there is
+        // not enough evidence to prove this generation was never published.
+        return ! self::path_exists(self::marker()) && ! self::path_exists(self::file());
+    }
+
+    /**
+     * Retire old host-gate generations only after the current generation and
+     * pending release list are durably recorded. Repeated commits are safe.
+     */
+    private static function reconcile_pending_isolation_releases(array &$marker, RestoreIsolationLease $current): bool
+    {
+        $pending = $marker['pending_isolation_releases'] ?? [];
+        if (! is_array($pending)) {
+            return false;
+        }
+        foreach ($pending as $value) {
+            $previous = RestoreIsolationLease::from_array($value);
+            if ($previous === null || ! RestoreIsolationGate::commit($current, $previous)) {
+                return false;
+            }
+        }
+        if ($pending === []) {
+            return true;
+        }
+
+        unset($marker['pending_isolation_releases']);
+
+        return self::write_marker($marker);
+    }
+
+    private static function scope_covers(?string $newScope, ?string $oldScope): bool
+    {
+        $scopes = ['files' => ['files'], 'database' => ['database'], 'full' => ['files', 'database']];
+
+        return $newScope !== null && $oldScope !== null
+            && array_diff($scopes[$oldScope] ?? [], $scopes[$newScope] ?? []) === [];
+    }
+
+    private static function write_marker(array $marker): bool
+    {
+        $path = self::marker();
+        $json = wp_json_encode($marker);
+        if (! is_string($json)) {
+            return false;
+        }
+        $temporary = $path.'.'.bin2hex(random_bytes(6)).'.tmp';
+        if (@file_put_contents($temporary, $json, LOCK_EX) === false) {
+            return false;
+        }
+        @chmod($temporary, 0600);
+        if (! @rename($temporary, $path)) {
+            @unlink($temporary);
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static function write_maintenance_file(array $marker): bool
+    {
+        // WordPress ignores maintenance files older than ten minutes. A far
+        // future timestamp keeps a confirmed recovery gate active even if the
+        // Connector is offline; only the state-aware release path removes it.
+        $timestamp = 2147483647;
+        $token = $marker['token'] ?? null;
+        $content = '<?php $upgrading = '.$timestamp.';'.(is_string($token) ? ' /* wp-caregrid:'.$token.' */' : '');
+
+        $handle = @fopen(self::file(), 'x');
+        if ($handle === false) {
+            $handle = @fopen(self::file(), 'r+');
+            if ($handle === false || ! @flock($handle, LOCK_EX)) {
+                if (is_resource($handle)) {
+                    fclose($handle);
+                }
+
+                return false;
+            }
+            rewind($handle);
+            $current = stream_get_contents($handle);
+            if (! is_string($current) || ! self::content_matches_marker($marker, $current)) {
+                flock($handle, LOCK_UN);
+                fclose($handle);
+
+                return false;
+            }
+            rewind($handle);
+            if (! ftruncate($handle, 0)) {
+                flock($handle, LOCK_UN);
+                fclose($handle);
+
+                return false;
+            }
+        } else {
+            @chmod(self::file(), 0600);
+        }
+
+        $written = 0;
+        $length = strlen($content);
+        while ($written < $length) {
+            $count = @fwrite($handle, substr($content, $written));
+            if (! is_int($count) || $count < 1) {
+                flock($handle, LOCK_UN);
+                fclose($handle);
+
+                return false;
+            }
+            $written += $count;
+        }
+        $ok = fflush($handle);
+        flock($handle, LOCK_UN);
+        fclose($handle);
+
+        return $ok;
+    }
+
+    private static function file_matches_marker(array $marker): bool
+    {
+        if (! is_file(self::file())) {
+            return false;
+        }
+        $content = @file_get_contents(self::file());
+
+        return is_string($content) && self::content_matches_marker($marker, $content);
+    }
+
+    private static function content_matches_marker(array $marker, string $content): bool
+    {
+        $version = $marker['version'] ?? 1;
+        $token = $marker['token'] ?? null;
+        if ($version === 2 && self::has_valid_v2_token($marker)) {
+            // The ownership token remains stable when the WordPress expiry
+            // timestamp is refreshed. This also makes a crash between the
+            // marker and .maintenance writes recoverable on the next poll.
+            if (preg_match('/^<\?php \$upgrading = [0-9]+; \/\* wp-caregrid:'.preg_quote($token, '/').' \*\/$/', $content) === 1) {
+                return true;
+            }
+            if (($marker['legacy_compat'] ?? false) !== true) {
+                return false;
+            }
+        } elseif ($version !== 1) {
+            return false;
+        }
+
+        // Read-only compatibility with explicitly recognized legacy markers
+        // and the short v1-to-v2 adoption window. Never infer ownership from
+        // the generic far-future maintenance timestamp.
+        $timestamps = array_unique([
+            (int) ($marker['refreshed_at'] ?? 0),
+            (int) ($marker['since'] ?? 0),
+        ]);
+        foreach ($timestamps as $timestamp) {
+            if ($timestamp > 0 && hash_equals('<?php $upgrading = '.$timestamp.';', $content)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** V2 markers require a well-formed token before any cleanup or adoption. */
+    private static function has_valid_v2_token(array $marker): bool
+    {
+        $version = $marker['version'] ?? 1;
+        if ($version === 1) {
+            return true;
+        }
+        if ($version !== 2) {
+            return false;
+        }
+
+        $token = $marker['token'] ?? null;
+
+        return is_string($token) && preg_match('/^[a-f0-9]{32}$/', $token) === 1;
+    }
+
+    private static function read_marker(): ?array
+    {
+        $path = self::marker();
+        if (! is_file($path)) {
+            return null;
+        }
+        $json = @file_get_contents($path);
+        $marker = is_string($json) ? json_decode($json, true) : null;
+
+        return is_array($marker) ? $marker : null;
     }
 
     private static function marker(): string

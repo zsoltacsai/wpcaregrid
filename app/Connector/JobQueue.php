@@ -81,7 +81,21 @@ final class JobQueue
     /** @return Collection<int, WebsiteJob> Jobs to hand to this connector now. */
     public function deliver(Connector $connector, bool $controlledExecution = false): Collection
     {
-        $website = $connector->website;
+        return DB::transaction(fn () => $this->deliverLocked($connector, $controlledExecution), 3);
+    }
+
+    /** Serialize Connector polling with pairing and bind redelivery to its owner. */
+    private function deliverLocked(Connector $connector, bool $controlledExecution): Collection
+    {
+        // Pairing and delivery use the same website lock. Re-read the
+        // credential under that lock so a poll authenticated just before
+        // re-pair cannot hand out work after the old connector is revoked.
+        $website = Website::query()->whereKey($connector->website_id)->lockForUpdate()->first();
+        $currentConnector = Connector::query()->whereKey($connector->id)->lockForUpdate()->first();
+        if (! $website || ! $currentConnector?->isActive() || $currentConnector->website_id !== $website->id) {
+            return collect();
+        }
+        $connector = $currentConnector;
 
         $synthetic = $website->syntheticFixture()->exists();
         if ($controlledExecution && ! $synthetic) {
@@ -95,7 +109,13 @@ final class JobQueue
         }
 
         $query = $website->jobs()
-            ->whereIn('status', [JobStatus::Queued, JobStatus::Delivered])
+            ->where(function ($query) use ($connector) {
+                $query->where('status', JobStatus::Queued)
+                    ->orWhere(function ($query) use ($connector) {
+                        $query->where('status', JobStatus::Delivered)
+                            ->where('connector_id', $connector->id);
+                    });
+            })
             // Admin sessions need the customer's browser on the site: only handed out by a claim.
             ->where('type', '!=', JobType::CreateAdminSession)
             ->oldest('id');
@@ -113,7 +133,7 @@ final class JobQueue
             )));
         }
 
-        $jobs = $query->limit($controlledExecution ? 1 : config('connector.jobs_per_poll'))->get();
+        $jobs = $query->limit($controlledExecution ? 1 : config('connector.jobs_per_poll'))->lockForUpdate()->get();
 
         return $jobs->filter(function (WebsiteJob $job) use ($website, $connector) {
             if ($job->type === JobType::SecurityScan) {

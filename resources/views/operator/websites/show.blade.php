@@ -367,7 +367,13 @@
                             </tbody>
                         </table>
                     </div>
-                    @can('operator.backups.restore')<p class="mt-2 text-xs text-muted">{{ __('operator.backups.restore_when') }}</p>@endcan
+                    @can('operator.backups.restore')
+                        @if (! $restoreIsolationSupported && $backups->isNotEmpty())
+                            <x-account.notice class="mt-2">{{ __('operator.backups.restore_isolation_unavailable') }}</x-account.notice>
+                        @else
+                            <p class="mt-2 text-xs text-muted">{{ __('operator.backups.restore_when') }}</p>
+                        @endif
+                    @endcan
                 @endif
 
                 @if ($restores->isNotEmpty())

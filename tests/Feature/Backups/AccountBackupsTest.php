@@ -7,8 +7,10 @@ use App\Backups\BackupService;
 use App\Backups\BackupStatus;
 use App\Backups\BackupType;
 use App\Backups\RestoreStatus;
+use App\Compatibility\CapabilityReadiness;
 use App\Models\Backup;
 use App\Models\BackupRestore;
+use App\Models\WebsiteJob;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Concerns\CreatesBackups;
 use Tests\TestCase;
@@ -137,5 +139,93 @@ class AccountBackupsTest extends TestCase
         $this->assertSame(BackupType::Files, $restore->scope);
         $this->assertSame('customer:'.$user->id, $restore->requested_by);
         $this->actingAs($user)->get(route('account.websites.backups.index', $website))->assertSee(__('backups.restore_statuses.awaiting_safety_backup'));
+    }
+
+    public function test_unreviewed_isolation_provider_hides_customer_restore_and_rejects_direct_post_without_side_effects(): void
+    {
+        config(['compatibility.restore_isolation_provider_ids' => []]);
+        $site = $this->backupReadySite();
+        $website = $site['website'];
+        $backup = $this->verifiedBackup($website);
+        $user = $website->customer->user;
+
+        $this->actingAs($user)->get(route('account.websites.backups.index', $website))
+            ->assertOk()
+            ->assertSee(__('backups.account.restore_isolation_unavailable'))
+            ->assertDontSee(route('account.websites.backups.restore', [$website, $backup]));
+
+        $restoreUrl = route('account.websites.backups.restore.store', [$website, $backup]);
+        $this->actingAs($user)->get(route('account.websites.backups.restore', [$website, $backup]))
+            ->assertOk()
+            ->assertSee(__('backups.refusals.RESTORE_ISOLATION_UNAVAILABLE'))
+            ->assertDontSee('action="'.$restoreUrl.'"', false);
+
+        $backupCount = Backup::count();
+        $this->actingAs($user)->post($restoreUrl, ['scope' => 'full', 'confirmation' => 'company.example', 'understood' => '1'])
+            ->assertSessionHas('backup_error', __('backups.refusals.RESTORE_ISOLATION_UNAVAILABLE'));
+
+        $this->assertSame($backupCount, Backup::count(), 'The refusal must occur before the safety backup is created.');
+        $this->assertSame(0, BackupRestore::count());
+        $this->assertSame(0, WebsiteJob::where('type', 'RESTORE')->count());
+        $this->assertSame(0, WebsiteJob::whereIn('type', ['BACKUP_FILES', 'BACKUP_DATABASE', 'BACKUP_FULL'])->count());
+    }
+
+    public function test_provider_readiness_change_after_customer_form_render_is_rechecked_before_request(): void
+    {
+        config([
+            'backup.restore.enabled' => true,
+            'compatibility.restore_isolation_provider_ids' => ['tests.fake-host-isolation'],
+        ]);
+        $site = $this->backupReadySite();
+        $website = $site['website'];
+        $backup = $this->verifiedBackup($website);
+        $user = $website->customer->user;
+        $restoreUrl = route('account.websites.backups.restore.store', [$website, $backup]);
+
+        $this->actingAs($user)->get(route('account.websites.backups.restore', [$website, $backup]))
+            ->assertOk()
+            ->assertSee($restoreUrl, false);
+
+        config(['compatibility.restore_isolation_provider_ids' => []]);
+        $backupCount = Backup::count();
+        $this->actingAs($user)->post($restoreUrl, ['scope' => 'full', 'confirmation' => 'company.example', 'understood' => '1'])
+            ->assertSessionHas('backup_error', __('backups.refusals.RESTORE_ISOLATION_UNAVAILABLE'));
+
+        $this->assertSame($backupCount, Backup::count());
+        $this->assertSame(0, BackupRestore::count());
+        $this->assertSame(0, WebsiteJob::where('type', 'RESTORE')->count());
+    }
+
+    public function test_customer_can_still_request_a_backup_when_restore_isolation_is_unavailable(): void
+    {
+        config(['compatibility.restore_isolation_provider_ids' => []]);
+        $site = $this->backupReadySite();
+        $website = $site['website'];
+
+        $this->actingAs($website->customer->user)
+            ->post(route('account.websites.backups.store', $website))
+            ->assertSessionHas('status', __('backups.account.queued'));
+
+        $this->assertSame(1, Backup::count());
+        $this->assertSame(BackupReason::Manual, Backup::sole()->reason);
+        $this->assertSame(0, BackupRestore::count());
+    }
+
+    public function test_restore_feature_switch_still_refuses_when_provider_is_supported(): void
+    {
+        config(['compatibility.restore_isolation_provider_ids' => ['tests.fake-host-isolation']]);
+        $site = $this->backupReadySite();
+        $website = $site['website'];
+        $backup = $this->verifiedBackup($website);
+
+        $this->assertTrue(app(CapabilityReadiness::class)->restoreIsolationSupported($website));
+
+        $this->actingAs($website->customer->user)
+            ->post(route('account.websites.backups.restore.store', [$website, $backup]), ['scope' => 'full', 'confirmation' => 'company.example', 'understood' => '1'])
+            ->assertSessionHas('backup_error', __('backups.refusals.RESTORE_NOT_AVAILABLE'));
+
+        $this->assertSame(1, Backup::count());
+        $this->assertSame(0, BackupRestore::count());
+        $this->assertSame(0, WebsiteJob::whereIn('type', ['RESTORE', 'BACKUP_FULL'])->count());
     }
 }

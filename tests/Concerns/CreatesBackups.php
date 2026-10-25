@@ -32,6 +32,8 @@ trait CreatesBackups
             'backup.storage' => 'local',
             'backup.providers.local.root' => $this->storageRoot,
             'backup.upload.staging_path' => $this->storageRoot.'-staging',
+            // Explicit test-only provider identity; production defaults allow none.
+            'compatibility.restore_isolation_provider_ids' => ['tests.fake-host-isolation'],
         ]);
 
         $backupPlan = $plan;

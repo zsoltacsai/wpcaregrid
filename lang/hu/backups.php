@@ -77,6 +77,7 @@ return [
         'BACKUP_IN_PROGRESS' => 'Már folyamatban van egy mentés.',
         'TOO_SOON' => 'Nemrég indult egy mentés. Kérjük, várjon, mielőtt újat indít.',
         'RESTORE_NOT_AVAILABLE' => 'A visszaállítás a vezérlőpultról még nem érhető el. Lépjen kapcsolatba velünk, és visszaállítjuk Önnek.',
+        'RESTORE_ISOLATION_UNAVAILABLE' => 'A webhely jelenleg nem jelez ellenőrzött visszaállítási izolációs szolgáltatót. A visszaállítás nem érhető el; a meglévő mentések továbbra is használhatók.',
         'BACKUP_NOT_RESTORABLE' => 'Ez a mentés nem állítható vissza: csak ellenőrzött, le nem járt mentések állíthatók vissza.',
         'RESTORE_TYPE_MISMATCH' => 'Ez a mentés nem tartalmazza azt, amit visszaállítani szeretne.',
         'SAFETY_BACKUP_UNAVAILABLE' => 'A jelenlegi oldal biztonsági mentése nem lehetséges, ezért a visszaállítás nem indítható.',
@@ -119,6 +120,7 @@ return [
         'protected' => 'Mentéssel védve',
         'restore_requested' => 'A visszaállítás kérése megtörtént. Először a jelenlegi oldal biztonsági mentése fut le; a visszaállítás csak az ellenőrzése után indul.',
         'restore_disabled' => 'A visszaállítás a vezérlőpultról még nem érhető el. Lépjen kapcsolatba velünk, és visszaállítunk Önnek egy mentést.',
+        'restore_isolation_unavailable' => 'A visszaállítás nem érhető el, mert a webhely még nem jelez ellenőrzött host-izolációs szolgáltatót. A meglévő mentések és letöltések továbbra is elérhetők.',
     ],
 
     'restore' => [

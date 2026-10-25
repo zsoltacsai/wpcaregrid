@@ -8,6 +8,7 @@ use WPCareGrid\Connector\Backups\Maintenance;
 use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Core\Connection;
 use WPCareGrid\Connector\Core\ControlledExecution;
+use WPCareGrid\Connector\Core\LeaseLost;
 use WPCareGrid\Connector\Core\Lock;
 use WPCareGrid\Connector\Core\Scheduler;
 use WPCareGrid\Connector\Core\Settings;
@@ -45,14 +46,16 @@ final class JobRunner
         }
 
         try {
-            // Housekeeping: a restore that died must not leave the site in
-            // maintenance mode; stale temporary backup files are removed.
-            Maintenance::cleanup_stale();
+            // Reconcile maintenance from the durable restore record before
+            // cleaning files. Ambiguous/destructive restores retain both.
+            Lock::refreshOrFail();
+            Maintenance::cleanup_stale($this->store);
             TempDir::cleanup_stale($this->store);
 
             $summary['delivered'] += $this->flush_outbox();
 
             $response = $this->api->get($controlledExecution ? 'jobs?execution_mode=controlled' : 'jobs');
+            Lock::refreshOrFail();
 
             if ($response->is_revoked()) {
                 $this->connection->handle_revocation();
@@ -77,9 +80,16 @@ final class JobRunner
                 if (is_array($job) && $this->process($job)) {
                     $summary['executed']++;
                 }
+                // process() may have durably completed or classified an
+                // interrupted restore. Only then can maintenance reconcile.
+                Maintenance::cleanup_stale($this->store);
             }
 
             $summary['delivered'] += $this->flush_outbox();
+        } catch (LeaseLost) {
+            // Ownership is gone. Do not process another job or flush more
+            // effects during this poll. A later poll reconciles RUNNING state.
+            Logger::warning('poll.lease_lost');
         } finally {
             $this->unlock();
         }
@@ -90,6 +100,7 @@ final class JobRunner
     /** @return bool Whether the job was executed now. */
     public function process(array $job): bool
     {
+        Lock::refreshOrFail();
         $uuid = (string) ($job['uuid'] ?? '');
         $type = (string) ($job['type'] ?? '');
 
@@ -108,8 +119,13 @@ final class JobRunner
             if ($known['state'] === JobStore::RUNNING && $resumable instanceof ResumableJob && $resumable->can_resume((array) ($known['payload'] ?? []))) {
                 Logger::info('job.resumed', ['job' => $uuid, 'type' => $known['type']]);
                 try {
+                    Lock::refreshOrFail();
                     $result = $resumable->resume((array) $known['payload']);
+                    Lock::refreshOrFail();
+                } catch (LeaseLost $e) {
+                    throw $e;
                 } catch (\Throwable $e) {
+                    Lock::refreshOrFail();
                     $result = JobResult::failed('JOB_EXCEPTION', 'The job failed unexpectedly.', ['exception' => get_class($e)]);
                 }
                 $this->store->complete($uuid, $result, $known['started_at'] ?? null);
@@ -135,6 +151,9 @@ final class JobRunner
                 }
                 $this->store->complete($uuid, JobResult::failed('JOB_INTERRUPTED', 'The job started but did not finish; it was not run again.', $details), $known['started_at'] ?? null);
                 Logger::warning('job.interrupted', ['job' => $uuid, 'type' => $known['type']]);
+                if (($known['type'] ?? null) === 'RESTORE') {
+                    Maintenance::cleanup_stale($this->store);
+                }
             } else {
                 $this->store->mark_undelivered($uuid);
                 Logger::info('job.duplicate_ignored', ['job' => $uuid, 'type' => $type]);
@@ -177,8 +196,13 @@ final class JobRunner
         Logger::info('job.started', ['job' => $uuid, 'type' => $type]);
 
         try {
+            Lock::refreshOrFail();
             $result = $handler->handle($payload);
+            Lock::refreshOrFail();
+        } catch (LeaseLost $e) {
+            throw $e;
         } catch (\Throwable $e) {
+            Lock::refreshOrFail();
             $result = JobResult::failed('JOB_EXCEPTION', 'The job failed unexpectedly.', ['exception' => get_class($e)]);
         }
 
@@ -194,12 +218,14 @@ final class JobRunner
         $delivered = 0;
 
         foreach ($this->store->undelivered() as $uuid => $job) {
+            Lock::refreshOrFail();
             $attempts = $this->store->record_delivery_attempt($uuid);
 
             $response = $this->api->post(
                 "jobs/{$uuid}/result",
                 array_merge($job['result'], ['started_at' => $job['started_at'], 'completed_at' => $job['completed_at']])
             );
+            Lock::refreshOrFail();
 
             if ($response->is_revoked()) {
                 $this->connection->handle_revocation();

@@ -57,6 +57,7 @@ trait PairsConnectors
             'extensions' => ['curl' => true, 'openssl' => true, 'sodium' => true, 'zlib' => true, 'mysqli' => true],
             'php_limits' => ['memory_bytes' => 268435456, 'max_execution_seconds' => 120],
             'cron' => ['wp_cron_disabled' => false],
+            'restore_isolation_provider_id' => 'tests.fake-host-isolation',
         ];
 
         app(CapabilitySnapshotStore::class)->refresh($website->fresh(), $website->activeConnector()->first(), $facts);
@@ -102,6 +103,7 @@ trait PairsConnectors
                 'extensions' => ['curl' => true, 'openssl' => true, 'sodium' => true, 'zlib' => true, 'mysqli' => true],
                 'php_limits' => ['memory_bytes' => 268435456, 'max_execution_seconds' => 120],
                 'cron' => ['wp_cron_disabled' => false],
+                'restore_isolation_provider_id' => 'tests.fake-host-isolation',
             ],
             'collected_at' => now()->toIso8601String(),
         ];

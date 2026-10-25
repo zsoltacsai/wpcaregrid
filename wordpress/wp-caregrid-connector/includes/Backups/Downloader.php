@@ -31,8 +31,9 @@ final class Downloader
 
         try {
             while ($offset < $size) {
+                Lock::refreshOrFail();
                 $response = $this->api->get_raw("backups/{$backup_uuid}/objects/{$name}/content?offset={$offset}&length=".min(self::RANGE, $size - $offset));
-                Lock::refresh();
+                Lock::refreshOrFail();
 
                 $body = $response->body;
                 if ($response->ok() && $body !== '' && hash_equals((string) $response->header('x-chunk-sha256'), hash('sha256', $body))) {

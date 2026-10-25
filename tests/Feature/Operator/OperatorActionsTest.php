@@ -258,6 +258,72 @@ class OperatorActionsTest extends TestCase
         $this->assertSame(0, BackupRestore::count());
     }
 
+    public function test_unreviewed_isolation_provider_hides_operator_restore_and_rejects_direct_post_without_side_effects(): void
+    {
+        config(['compatibility.restore_isolation_provider_ids' => []]);
+        $site = $this->consoleSite();
+        $website = $site['website'];
+        $backup = $this->verifiedBackup($website);
+        $this->asOperator();
+
+        $this->get(route('operator.websites.show', $website))
+            ->assertOk()
+            ->assertSee(__('operator.backups.restore_isolation_unavailable'))
+            ->assertDontSee(route('operator.websites.backups.restore', [$website, $backup]));
+
+        $restoreUrl = route('operator.websites.backups.restore.store', [$website, $backup]);
+        $this->get(route('operator.websites.backups.restore', [$website, $backup]))
+            ->assertOk()
+            ->assertSee(__('operator.refusals.RESTORE_ISOLATION_UNAVAILABLE'))
+            ->assertDontSee('action="'.$restoreUrl.'"', false);
+
+        $backupCount = Backup::count();
+        $this->post($restoreUrl, ['scope' => 'full', 'confirmation' => 'company.example', 'understood' => '1'])
+            ->assertSessionHas('operator_error', fn ($error) => is_array($error) && $error['code'] === 'RESTORE_ISOLATION_UNAVAILABLE');
+
+        $this->assertSame($backupCount, Backup::count(), 'The refusal must precede safety-backup creation.');
+        $this->assertSame(0, BackupRestore::count());
+        $this->assertSame(0, WebsiteJob::where('type', 'RESTORE')->count());
+        $this->assertSame(0, WebsiteJob::whereIn('type', ['BACKUP_FILES', 'BACKUP_DATABASE', 'BACKUP_FULL'])->count());
+    }
+
+    public function test_operator_rechecks_restore_provider_readiness_after_form_render(): void
+    {
+        config(['compatibility.restore_isolation_provider_ids' => ['tests.fake-host-isolation']]);
+        $site = $this->consoleSite();
+        $website = $site['website'];
+        $backup = $this->verifiedBackup($website);
+        $this->asOperator();
+        $restoreUrl = route('operator.websites.backups.restore.store', [$website, $backup]);
+
+        $this->get(route('operator.websites.backups.restore', [$website, $backup]))
+            ->assertOk()
+            ->assertSee($restoreUrl, false);
+
+        config(['compatibility.restore_isolation_provider_ids' => []]);
+        $backupCount = Backup::count();
+        $this->post($restoreUrl, ['scope' => 'full', 'confirmation' => 'company.example', 'understood' => '1'])
+            ->assertSessionHas('operator_error', fn ($error) => is_array($error) && $error['code'] === 'RESTORE_ISOLATION_UNAVAILABLE');
+
+        $this->assertSame($backupCount, Backup::count());
+        $this->assertSame(0, BackupRestore::count());
+        $this->assertSame(0, WebsiteJob::where('type', 'RESTORE')->count());
+    }
+
+    public function test_operator_can_still_request_a_backup_when_restore_isolation_is_unavailable(): void
+    {
+        config(['compatibility.restore_isolation_provider_ids' => []]);
+        $site = $this->consoleSite();
+        $this->asOperator();
+
+        $this->post(route('operator.websites.backups.store', $site['website']))
+            ->assertSessionHas('status', __('operator.backups.queued'));
+
+        $this->assertSame(1, Backup::count());
+        $this->assertSame(BackupReason::Manual, Backup::sole()->reason);
+        $this->assertSame(0, BackupRestore::count());
+    }
+
     /* ----- Admin access ----- */
 
     public function test_maintenance_access_goes_through_the_admin_access_service(): void

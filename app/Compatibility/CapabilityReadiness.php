@@ -28,6 +28,10 @@ final class CapabilityReadiness
         }
 
         $snapshot = $website->capabilitySnapshot;
+        if ($type === JobType::Restore && ! $this->restoreIsolationSupported($website)) {
+            return 'RESTORE_ISOLATION_UNAVAILABLE';
+        }
+
         $evidenceTtl = $this->requiresRecentPreflight($type)
             ? (int) config('compatibility.operation_ttl_seconds')
             : null;
@@ -70,6 +74,23 @@ final class CapabilityReadiness
     public function restoreRefusal(Website $website, Backup $backup, string $scope): ?string
     {
         return $this->refusal($website, JobType::Restore, ['backup_uuid' => $backup->uuid, 'scope' => $scope]);
+    }
+
+    /** One fresh, server-approved provider identity controls both interfaces and dispatch. */
+    public function restoreIsolationSupported(Website $website): bool
+    {
+        $snapshot = $website->capabilitySnapshot;
+        if (! $snapshot
+            || ! $snapshot->isFresh((int) config('compatibility.operation_ttl_seconds'))
+            || ! $snapshot->matchesCurrent($website, $website->activeConnector)) {
+            return false;
+        }
+
+        $providerId = data_get($snapshot->facts, 'restore_isolation_provider_id');
+
+        return is_string($providerId)
+            && $providerId !== ''
+            && in_array($providerId, (array) config('compatibility.restore_isolation_provider_ids', []), true);
     }
 
     private function statusRefusal(array $result, ?string $key = null): ?string
