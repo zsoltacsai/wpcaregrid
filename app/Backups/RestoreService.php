@@ -76,11 +76,21 @@ class RestoreService
     /** Why this restore may not be requested, or null. */
     public function refusal(Website $website, Backup $backup, BackupType $scope, ?int $ignoreRestoreId = null): ?string
     {
+        if ($backup->website_id !== $website->id) {
+            return 'BACKUP_NOT_FOUND';
+        }
+
+        // Keep the host-safety limitation visible and authoritative even when
+        // restore is otherwise disabled by policy. This check is repeated by
+        // the Connector immediately before any destructive mutation.
+        if (! app(CapabilityReadiness::class)->restoreIsolationSupported($website)) {
+            return 'RESTORE_ISOLATION_UNAVAILABLE';
+        }
+
         $decision = $this->policy->for($website, BackupReason::PreRestore);
         $connector = $website->activeConnector;
 
         $refusal = match (true) {
-            $backup->website_id !== $website->id => 'BACKUP_NOT_FOUND',
             ! $decision->restoreAllowed => 'RESTORE_NOT_AVAILABLE',
             ! $decision->eligible => $decision->refusal,
             ! $backup->isRestorable() => 'BACKUP_NOT_RESTORABLE',

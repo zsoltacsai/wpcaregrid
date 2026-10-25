@@ -77,10 +77,10 @@
     </div>
     <div class="mt-4">{{ $backups->links() }}</div>
 
-    @if (! $policy->restoreAllowed && $backups->isNotEmpty())
-        <p class="mt-4 text-xs text-muted">{{ __('backups.account.restore_disabled') }}</p>
-    @elseif (! $restoreIsolationSupported && $backups->isNotEmpty())
+    @if (! $restoreIsolationSupported && $backups->isNotEmpty())
         <p class="mt-4 text-xs text-muted">{{ __('backups.account.restore_isolation_unavailable') }}</p>
+    @elseif (! $policy->restoreAllowed && $backups->isNotEmpty())
+        <p class="mt-4 text-xs text-muted">{{ __('backups.account.restore_disabled') }}</p>
     @endif
 
     <x-account.panel :title="__('backups.account.activity')" heading-id="backup-activity-title" class="mt-6">

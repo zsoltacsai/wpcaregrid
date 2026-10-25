@@ -142,10 +142,7 @@ class AccountBackupsTest extends TestCase
 
     public function test_unreviewed_isolation_provider_hides_customer_restore_and_rejects_direct_post_without_side_effects(): void
     {
-        config([
-            'backup.restore.enabled' => true,
-            'compatibility.restore_isolation_provider_ids' => [],
-        ]);
+        config(['compatibility.restore_isolation_provider_ids' => []]);
         $site = $this->backupReadySite();
         $website = $site['website'];
         $backup = $this->verifiedBackup($website);
