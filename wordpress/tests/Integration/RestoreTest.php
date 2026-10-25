@@ -133,7 +133,7 @@ final class RestoreTest extends TestCase
             $this->assertSame('failed', $result['status']);
             $this->assertSame('RESTORE_ISOLATION_UNAVAILABLE', $result['error']['code'] ?? null);
             $this->assertFalse($result['error']['details']['destructive_mutation_started'] ?? true);
-            $this->assertSame('file_apply', $result['error']['details']['failure_stage'] ?? null);
+            $this->assertSame('file_staging', $result['error']['details']['failure_stage'] ?? null);
             $this->assertSame('synthetic broken state', file_get_contents($path), 'Unsupported hosts stop before the first live file mutation.');
             $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
             $this->assertFileDoesNotExist(TempDir::path().'/maintenance.json');
@@ -162,7 +162,7 @@ final class RestoreTest extends TestCase
             $this->assertSame('failed', $result['status']);
             $this->assertSame('RESTORE_ISOLATION_UNAVAILABLE', $result['error']['code'] ?? null);
             $this->assertFalse($result['error']['details']['destructive_mutation_started'] ?? true);
-            $this->assertSame('database_swap', $result['error']['details']['failure_stage'] ?? null);
+            $this->assertSame('database_staging', $result['error']['details']['failure_stage'] ?? null);
             wp_cache_flush();
             $this->assertSame('live-state', get_option('caregrid_providerless_restore'));
             $this->assertNotNull(get_post($livePost), 'The live row remains present because table swap never starts.');
@@ -197,7 +197,7 @@ final class RestoreTest extends TestCase
             $this->assertSame('failed', $result['status']);
             $this->assertSame('RESTORE_ISOLATION_UNAVAILABLE', $result['error']['code'] ?? null);
             $this->assertFalse($result['error']['details']['destructive_mutation_started'] ?? true);
-            $this->assertSame('database_swap', $result['error']['details']['failure_stage'] ?? null);
+            $this->assertSame('database_staging', $result['error']['details']['failure_stage'] ?? null);
             wp_cache_flush();
             $this->assertSame('live-db-state', get_option('caregrid_providerless_full_restore'));
             $this->assertNotNull(get_post($livePost));
