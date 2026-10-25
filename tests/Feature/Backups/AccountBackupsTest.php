@@ -7,6 +7,7 @@ use App\Backups\BackupService;
 use App\Backups\BackupStatus;
 use App\Backups\BackupType;
 use App\Backups\RestoreStatus;
+use App\Compatibility\CapabilityReadiness;
 use App\Models\Backup;
 use App\Models\BackupRestore;
 use App\Models\WebsiteJob;
@@ -217,7 +218,7 @@ class AccountBackupsTest extends TestCase
         $website = $site['website'];
         $backup = $this->verifiedBackup($website);
 
-        $this->assertTrue(app(\App\Compatibility\CapabilityReadiness::class)->restoreIsolationSupported($website));
+        $this->assertTrue(app(CapabilityReadiness::class)->restoreIsolationSupported($website));
 
         $this->actingAs($website->customer->user)
             ->post(route('account.websites.backups.restore.store', [$website, $backup]), ['scope' => 'full', 'confirmation' => 'company.example', 'understood' => '1'])
