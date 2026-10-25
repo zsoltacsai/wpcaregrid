@@ -18,7 +18,7 @@ final class LeaseReplacementRestoreFault implements RestoreFaultHooks
     public function __construct(private readonly string $point, private readonly int $statement = 1)
     {
         RestoreHarnessGuard::activeRoot();
-        if (! in_array($point, ['database_statement_imported', 'database_swap_failed'], true) || $statement < 1) {
+        if (! in_array($point, ['database_statement_imported', 'database_swap_failed', 'maintenance_enabled', 'database_swap_boundary_entered', 'database_swap_ready', 'before_file_apply'], true) || $statement < 1) {
             throw new RuntimeException('Invalid deterministic lease-replacement plan.');
         }
     }

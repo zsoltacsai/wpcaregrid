@@ -149,6 +149,7 @@ final class SqlImporter
         if ($beforeSwap !== null) {
             $beforeSwap();
         }
+        $this->fault_hooks?->reach('database_swap_ready', $this->restore_uuid);
         Lock::refreshOrFail();
 
         $renames = [];

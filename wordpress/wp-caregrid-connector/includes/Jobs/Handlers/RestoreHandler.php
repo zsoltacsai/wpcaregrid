@@ -145,12 +145,17 @@ final class RestoreHandler implements JobHandler
             // maintenance mode or any live table/file mutation.
             $this->fault_hooks?->reach('before_destructive_mutation', $uuid);
             Lock::refreshOrFail();
-            Maintenance::enable($uuid);
-            $preserveMaintenance = false;
+            Maintenance::enable($uuid, $this->jobs);
+            $this->fault_hooks?->reach('maintenance_enabled', $uuid);
+            // The marker exists, but the durable mutation boundary has not
+            // yet been recorded. A lost lease here is classified from the
+            // prior staging phase by the next poll.
+            Lock::refreshOrFail();
             try {
                 do_action('wp_caregrid_restore_critical_section', $payload['scope']);
                 $failureStage = 'database_swap';
                 $this->progress($uuid, $destructiveMutationStarted, $failureStage);
+                $this->fault_hooks?->reach('database_swap_boundary_entered', $uuid);
                 if ($importer !== null) {
                     Lock::refreshOrFail();
                     $importer->swap(function () use (&$destructiveMutationStarted, $uuid) {
@@ -178,13 +183,8 @@ final class RestoreHandler implements JobHandler
             } catch (LeaseLost $e) {
                 // A stale worker must not release the site's restore gate;
                 // the later owner will reconcile the durable mutation marker.
-                $preserveMaintenance = true;
                 $preserveArtifacts = true;
                 throw $e;
-            } finally {
-                if (! $preserveMaintenance) {
-                    Maintenance::disable();
-                }
             }
 
             $failureStage = 'post_restore_health';
@@ -193,6 +193,11 @@ final class RestoreHandler implements JobHandler
             $checks = $this->post_checks();
             $health = $this->health->run();
             $passed = ! in_array(false, array_column($checks, 'passed'), true) && $health['status'] !== 'critical';
+            if ($destructiveMutationStarted && ! $passed) {
+                // Keep the verified source artifacts until a later restore
+                // has passed its post-restore checks.
+                $preserveArtifacts = true;
+            }
             $data = ['post_checks' => $checks, 'health' => $health, 'restored' => ['scope' => $payload['scope'], 'backup_uuid' => $payload['backup_uuid'], 'files' => $files?->stats, 'file_plan' => $files?->plan_summary()], 'wordpress_version' => $this->version_on_disk(), 'destructive_mutation_started' => $destructiveMutationStarted, 'failure_stage' => $failureStage];
 
             Logger::info('restore.finished', ['restore' => $uuid, 'passed' => $passed]);
@@ -204,6 +209,7 @@ final class RestoreHandler implements JobHandler
             // Fail-stop: preserve staged recovery material and do not mutate
             // temporary database tables after ownership has been lost.
             $preserveArtifacts = true;
+            Maintenance::preserve();
             throw $e;
         } catch (BackupFailure $e) {
             try {
@@ -212,6 +218,7 @@ final class RestoreHandler implements JobHandler
                 $preserveArtifacts = true;
                 throw $leaseLost;
             }
+            $preserveArtifacts = $preserveArtifacts || $destructiveMutationStarted;
             $importer?->discard();
             Logger::warning('restore.failed', ['restore' => $uuid, 'code' => $e->error_code]);
 
@@ -226,6 +233,7 @@ final class RestoreHandler implements JobHandler
                 $preserveArtifacts = true;
                 throw $leaseLost;
             }
+            $preserveArtifacts = $preserveArtifacts || $destructiveMutationStarted;
             // Unexpected errors must still report whether live state may have
             // changed, without leaking exception text or a filesystem path.
             $importer?->discard();

@@ -52,8 +52,9 @@ final class RestoreTest extends TestCase
     protected function tearDown(): void
     {
         Lock::release();
-        Maintenance::disable();
+        Maintenance::preserve();
         @unlink(ABSPATH.'.maintenance');
+        @unlink(TempDir::path().'/maintenance.json');
         remove_all_actions('wp_caregrid_restore_critical_section');
         foreach ($this->created as $path) {
             TempDir::remove($path);
@@ -76,6 +77,7 @@ final class RestoreTest extends TestCase
         $result = $this->restore($backup, 'files', $objects);
 
         $this->assertSame('success', $result['status'], wp_json_encode([$result['error'], $result['data']['post_checks'] ?? null]));
+        $this->assertFalse(Maintenance::is_ours(), 'Successful post-restore checks clear the Connector-owned maintenance gate.');
         $this->assertSame('RESTORED', $result['result_code']);
         $this->assertSame('ORIGINAL', file_get_contents(WP_CONTENT_DIR.'/uploads/restore-me/photo.jpg'));
         $this->assertSame('theme v1', file_get_contents(WP_CONTENT_DIR.'/themes/twentytwentyfive/caregrid-note.txt'));
@@ -572,6 +574,7 @@ final class RestoreTest extends TestCase
         $result = $this->restore($backup, 'database', $objects);
 
         $this->assertSame('success', $result['status'], wp_json_encode([$result['error'], $result['data']['post_checks'] ?? null]));
+        $this->assertFalse(Maintenance::is_ours(), 'Completed database restore removes its owned maintenance gate only after post-checks.');
         wp_cache_flush();
         $this->assertSame('before', get_option('caregrid_restore_marker'));
         $this->assertNull(get_post($post));
@@ -823,6 +826,152 @@ final class RestoreTest extends TestCase
             $wpdb->query("DROP TABLE IF EXISTS `{$successor_table}`");
             Lock::release();
         });
+    }
+
+    public function test_next_poll_releases_maintenance_after_lease_loss_before_destructive_boundary(): void
+    {
+        $this->with_harness_environment(function (): void {
+            [$backup, $objects] = $this->backup('BACKUP_FILES');
+            $restoreUuid = wp_generate_uuid4();
+            $job = $this->job('RESTORE', ['restore_uuid' => $restoreUuid, 'backup_uuid' => $backup, 'scope' => 'files', 'objects' => $objects]);
+            $fault = new LeaseReplacementRestoreFault('maintenance_enabled');
+            $runner = $this->restore_runner_with_fault($fault);
+            $this->queue_twice($job);
+
+            $this->assertSame(['executed' => 0, 'delivered' => 0], $runner->poll());
+            $this->assertTrue($fault->consumed());
+            $this->assertTrue(Maintenance::is_ours(), 'Lease loss after marker creation must leave maintenance enabled.');
+            $staged = glob(TempDir::path().'/'.$restoreUuid.'-*') ?: [];
+            $this->assertNotSame([], $staged, 'The interrupted restore retains its staged artifacts.');
+            foreach ($staged as $path) {
+                @touch($path, time() - 7 * HOUR_IN_SECONDS);
+            }
+
+            Maintenance::preserve();
+            $this->expire_poll_lease();
+            $summary = $runner->poll();
+
+            $result = $this->posted_result($job['uuid']);
+            $this->assertSame(['executed' => 0, 'delivered' => 1], $summary);
+            $this->assertSame('JOB_INTERRUPTED', $result['error']['code'] ?? null);
+            $this->assertFalse($result['error']['details']['destructive_mutation_started'] ?? true);
+            $this->assertFalse(Maintenance::is_ours(), 'Durable pre-mutation evidence allows safe cleanup after interruption is recorded.');
+            foreach ($staged as $path) {
+                $this->assertFileExists($path, 'The poll that classified interruption must not remove recovery artifacts.');
+            }
+        });
+    }
+
+    public function test_next_poll_preserves_maintenance_after_durable_destructive_boundary(): void
+    {
+        $this->with_harness_environment(function (): void {
+            $this->requires_mysql();
+            [$backup, $objects] = $this->backup('BACKUP_DATABASE');
+            $restoreUuid = wp_generate_uuid4();
+            $job = $this->job('RESTORE', ['restore_uuid' => $restoreUuid, 'backup_uuid' => $backup, 'scope' => 'database', 'objects' => $objects]);
+            $fault = new LeaseReplacementRestoreFault('database_swap_ready');
+            $runner = $this->restore_runner_with_fault($fault);
+            $this->queue_twice($job);
+
+            $this->assertSame(['executed' => 0, 'delivered' => 0], $runner->poll());
+            $this->assertTrue($fault->consumed());
+            $this->assertTrue(Maintenance::is_ours());
+            $this->assertTrue($this->plugin()->jobs()->has_destructive_mutation_started($job['uuid']));
+            $staged = glob(TempDir::path().'/'.$restoreUuid.'-*') ?: [];
+            $this->assertNotSame([], $staged, 'Destructive interruption retains its recovery artifacts.');
+
+            Maintenance::preserve();
+            $this->expire_poll_lease();
+            $summary = $runner->poll();
+
+            $result = $this->posted_result($job['uuid']);
+            $this->assertSame(['executed' => 0, 'delivered' => 1], $summary);
+            $this->assertSame('JOB_INTERRUPTED', $result['error']['code'] ?? null);
+            $this->assertTrue($result['error']['details']['destructive_mutation_started'] ?? false);
+            $this->assertTrue(Maintenance::is_ours(), 'A destructive interruption remains gated after the next worker poll.');
+            $this->assertStringContainsString('$upgrading = 2147483647;', file_get_contents(ABSPATH.'.maintenance'));
+            foreach ($staged as $path) {
+                $this->assertFileExists($path);
+            }
+        });
+    }
+
+    public function test_next_poll_preserves_maintenance_when_database_swap_state_is_ambiguous(): void
+    {
+        $this->with_harness_environment(function (): void {
+            $this->requires_mysql();
+            [$backup, $objects] = $this->backup('BACKUP_DATABASE');
+            $restoreUuid = wp_generate_uuid4();
+            $job = $this->job('RESTORE', ['restore_uuid' => $restoreUuid, 'backup_uuid' => $backup, 'scope' => 'database', 'objects' => $objects]);
+            $fault = new LeaseReplacementRestoreFault('database_swap_boundary_entered');
+            $runner = $this->restore_runner_with_fault($fault);
+            $this->queue_twice($job);
+
+            $this->assertSame(['executed' => 0, 'delivered' => 0], $runner->poll());
+            $this->assertTrue($fault->consumed());
+            $this->assertTrue(Maintenance::is_ours());
+            $this->assertFalse($this->plugin()->jobs()->has_destructive_mutation_started($job['uuid']));
+
+            Maintenance::preserve();
+            $this->expire_poll_lease();
+            $summary = $runner->poll();
+
+            $result = $this->posted_result($job['uuid']);
+            $this->assertSame(['executed' => 0, 'delivered' => 1], $summary);
+            $this->assertNull($result['error']['details']['destructive_mutation_started'] ?? null);
+            $this->assertTrue(Maintenance::is_ours(), 'Ambiguous database-swap state cannot release maintenance without recovery.');
+            $this->assertStringContainsString('$upgrading = 2147483647;', file_get_contents(ABSPATH.'.maintenance'));
+        });
+    }
+
+    public function test_successful_recovery_clears_the_original_restore_maintenance_gate(): void
+    {
+        $this->with_harness_environment(function (): void {
+            $this->requires_mysql();
+            [$backup, $objects] = $this->backup('BACKUP_DATABASE');
+            $interruptedUuid = wp_generate_uuid4();
+            $interrupted = $this->job('RESTORE', ['restore_uuid' => $interruptedUuid, 'backup_uuid' => $backup, 'scope' => 'database', 'objects' => $objects]);
+            $fault = new LeaseReplacementRestoreFault('database_swap_ready');
+            $runner = $this->restore_runner_with_fault($fault);
+            $this->queue_once($interrupted);
+            $runner->poll();
+            $this->assertTrue(Maintenance::is_ours());
+            $this->assertTrue($this->plugin()->jobs()->has_destructive_mutation_started($interrupted['uuid']));
+
+            Maintenance::preserve();
+            $this->expire_poll_lease();
+            $recovery = $this->job('RESTORE', ['restore_uuid' => wp_generate_uuid4(), 'backup_uuid' => $backup, 'scope' => 'database', 'objects' => $objects]);
+            $this->queue_once($recovery);
+            $summary = $runner->poll();
+
+            $result = $this->posted_result($recovery['uuid']);
+            $this->assertSame(1, $summary['executed']);
+            $this->assertSame('success', $result['status']);
+            $this->assertSame('RESTORED', $result['result_code']);
+            $this->assertFalse(Maintenance::is_ours(), 'Only a recovery restore with successful post-checks releases the adopted gate.');
+            $this->assertFileDoesNotExist(ABSPATH.'.maintenance');
+        });
+    }
+
+    public function test_unrelated_maintenance_file_is_never_removed_by_restore_cleanup(): void
+    {
+        $restoreUuid = wp_generate_uuid4();
+        $job = $this->job('RESTORE', ['restore_uuid' => $restoreUuid, 'backup_uuid' => wp_generate_uuid4(), 'scope' => 'files', 'objects' => []]);
+        $jobs = $this->plugin()->jobs();
+        $jobs->begin($job['uuid'], 'RESTORE', (array) $job['payload']);
+        $jobs->mark_restore_progress($restoreUuid, false, 'file_staging');
+        Maintenance::enable($restoreUuid, $jobs);
+
+        $content = '<?php $unrelated_maintenance = true;';
+        file_put_contents(ABSPATH.'.maintenance', $content);
+
+        try {
+            Maintenance::cleanup_stale($jobs);
+            $this->assertSame($content, file_get_contents(ABSPATH.'.maintenance'));
+            $this->assertFalse(Maintenance::is_ours(), 'A replacement maintenance file is not treated as Connector-owned.');
+        } finally {
+            @unlink(ABSPATH.'.maintenance');
+        }
     }
 
     public function test_swap_failure_does_not_discard_staging_after_lease_replacement(): void
@@ -1539,6 +1688,39 @@ final class RestoreTest extends TestCase
         $this->plugin()->runner()->poll();
 
         return $this->posted_result($job['uuid']) ?? $this->fail('No result posted.');
+    }
+
+    private function restore_runner_with_fault(LeaseReplacementRestoreFault $fault): JobRunner
+    {
+        $plugin = $this->plugin();
+        $registry = new JobRegistry(['RESTORE' => new RestoreHandler($plugin->downloader(), $plugin->health(), $plugin->jobs(), null, $fault)]);
+        $runner = new JobRunner($plugin->api(), $registry, $plugin->jobs(), $plugin->connection());
+        $plugin->set('registry', $registry);
+        $plugin->set('runner', $runner);
+
+        return $runner;
+    }
+
+    private function queue_once(array $job): void
+    {
+        $response = ['status' => 200, 'body' => ['jobs' => [$job], 'poll_interval' => 300]];
+        $this->http->on('GET jobs', $response, ['status' => 200, 'body' => ['jobs' => []]]);
+        $this->http->on('POST jobs/*/result', ['status' => 202, 'body' => ['accepted' => true]]);
+    }
+
+    private function queue_twice(array $job): void
+    {
+        $response = ['status' => 200, 'body' => ['jobs' => [$job], 'poll_interval' => 300]];
+        $this->http->on('GET jobs', $response, $response);
+        $this->http->on('POST jobs/*/result', ['status' => 202, 'body' => ['accepted' => true]]);
+    }
+
+    private function expire_poll_lease(): void
+    {
+        global $wpdb;
+        $expired = sprintf('%010d:%s', time() - 1, bin2hex(random_bytes(32)));
+        $updated = $wpdb->update($wpdb->options, ['option_value' => $expired], ['option_name' => 'wp_caregrid_poll_lock'], ['%s'], ['%s']);
+        $this->assertSame(1, $updated, 'Expire only the synthetic successor lease so the next poll can acquire it.');
     }
 
     private function restore_with_fault(string $backup, array $objects, OneShotRestoreFault $fault): array

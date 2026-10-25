@@ -120,9 +120,13 @@ final class TempDir
             }
 
             $job = $jobs->find($m[1]);
-            $running = $job && $job['state'] === JobStore::RUNNING;
+            $restore = $jobs->find_restore($m[1]);
+            $restoreState = $restore === null ? null : $jobs->restore_maintenance_state($m[1]);
+            $running = ($job && $job['state'] === JobStore::RUNNING)
+                || ($restore && $restore['job']['state'] === JobStore::RUNNING);
+            $neededForRecovery = in_array($restoreState, ['recovery_required', 'unknown', 'pre_mutation_running'], true);
 
-            if (! $running && time() - (int) @filemtime((string) $path) > self::STALE_AFTER) {
+            if (! $running && ! $neededForRecovery && time() - (int) @filemtime((string) $path) > self::STALE_AFTER) {
                 self::remove((string) $path);
             }
         }

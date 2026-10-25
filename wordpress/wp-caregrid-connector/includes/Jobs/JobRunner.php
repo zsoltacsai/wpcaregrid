@@ -46,10 +46,10 @@ final class JobRunner
         }
 
         try {
-            // Housekeeping: a restore that died must not leave the site in
-            // maintenance mode; stale temporary backup files are removed.
+            // Reconcile maintenance from the durable restore record before
+            // cleaning files. Ambiguous/destructive restores retain both.
             Lock::refreshOrFail();
-            Maintenance::cleanup_stale();
+            Maintenance::cleanup_stale($this->store);
             TempDir::cleanup_stale($this->store);
 
             $summary['delivered'] += $this->flush_outbox();
@@ -80,6 +80,9 @@ final class JobRunner
                 if (is_array($job) && $this->process($job)) {
                     $summary['executed']++;
                 }
+                // process() may have durably completed or classified an
+                // interrupted restore. Only then can maintenance reconcile.
+                Maintenance::cleanup_stale($this->store);
             }
 
             $summary['delivered'] += $this->flush_outbox();
@@ -148,6 +151,9 @@ final class JobRunner
                 }
                 $this->store->complete($uuid, JobResult::failed('JOB_INTERRUPTED', 'The job started but did not finish; it was not run again.', $details), $known['started_at'] ?? null);
                 Logger::warning('job.interrupted', ['job' => $uuid, 'type' => $known['type']]);
+                if (($known['type'] ?? null) === 'RESTORE') {
+                    Maintenance::cleanup_stale($this->store);
+                }
             } else {
                 $this->store->mark_undelivered($uuid);
                 Logger::info('job.duplicate_ignored', ['job' => $uuid, 'type' => $type]);
