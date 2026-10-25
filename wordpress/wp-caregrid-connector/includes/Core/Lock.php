@@ -168,6 +168,38 @@ final class Lock
         }
     }
 
+    /**
+     * Carry this poll's live lease into the prepared options table before an
+     * atomic database restore replaces the live options table.
+     *
+     * @throws LeaseLost when this worker no longer owns the live lease.
+     */
+    public static function preserveInOptionsTable(string $table): void
+    {
+        global $wpdb;
+
+        if (! preg_match('/^[A-Za-z0-9_$]+$/', $table)) {
+            throw new \\InvalidArgumentException('The Connector options table name is invalid.');
+        }
+
+        self::refreshOrFail();
+
+        if (! self::$leaseRequired || self::$ownedValue === null) {
+            throw new LeaseLost('The Connector poll lease is no longer owned by this worker.');
+        }
+
+        $sql = $wpdb->prepare(
+            "REPLACE INTO `{$table}` (option_name, option_value, autoload) VALUES (%s, %s, %s)",
+            self::OPTION,
+            self::$ownedValue,
+            'no'
+        );
+
+        if ($wpdb->query($sql) === false) {
+            throw new \\RuntimeException('The Connector poll lease could not be carried into the restore table.');
+        }
+    }
+
     /** Release is conditional: an expired owner cannot delete its successor's lease. */
     public static function release(): bool
     {
