@@ -769,7 +769,7 @@ final class RestoreTest extends TestCase
         $sql = "CREATE TABLE `wp_m15_lease_stage` (`marker` varchar(32) NOT NULL) ENGINE=InnoDB;\nINSERT INTO `wp_m15_lease_stage` VALUES ('staged');\n";
         file_put_contents($path, gzencode($sql));
 
-        $fault = new \WPCareGrid\Connector\Tests\Support\LeaseReplacementRestoreFault('database_statement_imported', 2);
+        $fault = new LeaseReplacementRestoreFault('database_statement_imported', 2);
         $queries = [];
         $capture = static function (string $query) use (&$queries): string {
             $queries[] = $query;
@@ -786,7 +786,7 @@ final class RestoreTest extends TestCase
             try {
                 $first_importer->import($path);
                 $this->fail('The importer continued after its lease was replaced.');
-            } catch (\WPCareGrid\Connector\Core\LeaseLost) {
+            } catch (LeaseLost) {
                 $this->assertTrue($fault->consumed());
             }
         } finally {
@@ -839,7 +839,7 @@ final class RestoreTest extends TestCase
         $sql = "CREATE TABLE `wp_options` (`option_id` bigint unsigned NOT NULL AUTO_INCREMENT, `option_name` varchar(191) NOT NULL, `option_value` longtext NOT NULL, `autoload` varchar(20) NOT NULL, PRIMARY KEY (`option_id`)) ENGINE=InnoDB;\nINSERT INTO `wp_options` VALUES ('1','m15_stage_marker','staged','no');\n";
         file_put_contents($path, gzencode($sql));
 
-        $fault = new \WPCareGrid\Connector\Tests\Support\LeaseReplacementRestoreFault('database_swap_failed');
+        $fault = new LeaseReplacementRestoreFault('database_swap_failed');
         $importer = new SqlImporter($restore_uuid, $wpdb->base_prefix, $fault);
         $stage_sql = $importer->translate('CREATE TABLE `wp_options` (`option_id` bigint unsigned NOT NULL AUTO_INCREMENT, `option_name` varchar(191) NOT NULL, `option_value` longtext NOT NULL, `autoload` varchar(20) NOT NULL, PRIMARY KEY (`option_id`)) ENGINE=InnoDB;');
         preg_match('/^CREATE TABLE `([A-Za-z0-9_$]+)`/', $stage_sql, $stage_match);
@@ -859,7 +859,7 @@ final class RestoreTest extends TestCase
             try {
                 $importer->swap();
                 $this->fail('A controlled rename failure must stop when the lease is replaced.');
-            } catch (\WPCareGrid\Connector\Core\LeaseLost) {
+            } catch (LeaseLost) {
                 $this->assertTrue($fault->consumed());
             }
         } finally {
