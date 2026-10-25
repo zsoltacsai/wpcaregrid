@@ -194,7 +194,7 @@ final class CustomerTransactionEmailLocalizationTest extends TestCase
         Mail::assertSent(BillingLifecycleNotice::class, function (BillingLifecycleNotice $mail): bool {
             return $this->mailableLocale($mail) === 'en'
                 && $this->mailableSubject($mail, 'en') === 'Subscription reactivated'
-                && str_contains($mail->render(), 'Your request to keep the Business plan active was confirmed.');
+                && str_contains($mail->render(), 'Your request to keep the Business subscription active was confirmed.');
         });
         $this->assertSame('hu', $this->app->getLocale());
         $this->assertSame('sent', $row->fresh()->status);
@@ -307,7 +307,16 @@ final class CustomerTransactionEmailLocalizationTest extends TestCase
     {
         $customer = Customer::factory()->withUser()->create();
         $customer->user->forceFill(['locale' => 'en'])->save();
-        $intent = $this->checkoutIntent(['customer_id' => $customer->id, 'locale' => 'hu']);
+        $intent = $this->checkoutIntent([
+            'customer_id' => $customer->id,
+            'email' => $customer->email,
+            'first_name' => $customer->first_name,
+            'last_name' => $customer->last_name,
+            'country' => $customer->country_code,
+            'customer_type' => $customer->customer_type,
+            'billing_address' => $customer->billing_address,
+            'locale' => 'hu',
+        ]);
 
         $resolved = app(ProvisionCustomer::class)->forIntent($intent, null);
 
