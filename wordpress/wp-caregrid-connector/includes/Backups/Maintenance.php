@@ -2,6 +2,7 @@
 
 namespace WPCareGrid\Connector\Backups;
 
+use WPCareGrid\Connector\Core\LeaseLost;
 use WPCareGrid\Connector\Jobs\JobStore;
 
 /** Persistent, fail-closed WordPress maintenance protection for restore recovery. */
@@ -141,7 +142,7 @@ final class Maintenance
             }
             try {
                 RestoreIsolationGate::assert_active($lease);
-            } catch (\WPCareGrid\Connector\Core\LeaseLost) {
+            } catch (LeaseLost) {
                 return;
             }
             if (! self::unlink_path($maintenancePath)) {
@@ -229,7 +230,7 @@ final class Maintenance
         }
         try {
             RestoreIsolationGate::assert_active($lease);
-        } catch (\WPCareGrid\Connector\Core\LeaseLost) {
+        } catch (LeaseLost) {
             return;
         }
         if (! self::reconcile_pending_isolation_releases($marker, $lease)) {
@@ -255,7 +256,7 @@ final class Maintenance
         }
         try {
             RestoreIsolationGate::assert_active($lease);
-        } catch (\WPCareGrid\Connector\Core\LeaseLost) {
+        } catch (LeaseLost) {
             return;
         }
         if (! self::write_maintenance_file($marker)) {

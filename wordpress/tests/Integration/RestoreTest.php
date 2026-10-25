@@ -14,6 +14,7 @@ use WPCareGrid\Connector\Backups\Maintenance;
 use WPCareGrid\Connector\Backups\PathGuard;
 use WPCareGrid\Connector\Backups\RestoreFaultHooks;
 use WPCareGrid\Connector\Backups\RestoreIsolationGate;
+use WPCareGrid\Connector\Backups\RestoreIsolationLease;
 use WPCareGrid\Connector\Backups\Sink;
 use WPCareGrid\Connector\Backups\SqlImporter;
 use WPCareGrid\Connector\Backups\TarReader;
@@ -28,8 +29,8 @@ use WPCareGrid\Connector\Jobs\JobRegistry;
 use WPCareGrid\Connector\Jobs\JobResult;
 use WPCareGrid\Connector\Jobs\JobRunner;
 use WPCareGrid\Connector\Tests\Support\FakeBackupServer;
-use WPCareGrid\Connector\Tests\Support\FilesystemManifest;
 use WPCareGrid\Connector\Tests\Support\FakeRestoreIsolationGate;
+use WPCareGrid\Connector\Tests\Support\FilesystemManifest;
 use WPCareGrid\Connector\Tests\Support\LeaseReplacementRestoreFault;
 use WPCareGrid\Connector\Tests\Support\OneShotRestoreFault;
 use WPCareGrid\Connector\Tests\Support\RestoreHarnessGuard;
@@ -79,8 +80,8 @@ final class RestoreTest extends TestCase
     {
         $oldUuid = wp_generate_uuid4();
         $newUuid = wp_generate_uuid4();
-        $old = new \WPCareGrid\Connector\Backups\RestoreIsolationLease('test-host-gate', $oldUuid, 'files', str_repeat('a', 64));
-        $candidate = new \WPCareGrid\Connector\Backups\RestoreIsolationLease('test-host-gate', $newUuid, 'full', str_repeat('b', 64));
+        $old = new RestoreIsolationLease('test-host-gate', $oldUuid, 'files', str_repeat('a', 64));
+        $candidate = new RestoreIsolationLease('test-host-gate', $newUuid, 'full', str_repeat('b', 64));
 
         $this->assertSame($old, $this->isolationGate->acquire($old, null));
         $acquired = $this->isolationGate->acquire($candidate, $old);
@@ -89,7 +90,7 @@ final class RestoreTest extends TestCase
         $this->assertTrue($this->isolationGate->assert_active($candidate));
 
         // Simulate process death after acquisition but before marker publication.
-        $retry = new \WPCareGrid\Connector\Backups\RestoreIsolationLease('test-host-gate', $newUuid, 'full', str_repeat('c', 64));
+        $retry = new RestoreIsolationLease('test-host-gate', $newUuid, 'full', str_repeat('c', 64));
         $resumed = $this->isolationGate->acquire($retry, $old);
         $this->assertSame($candidate->generation, $resumed?->generation, 'A retry resumes the pending generation rather than orphaning another one.');
         $this->assertTrue($this->isolationGate->assert_active($old));

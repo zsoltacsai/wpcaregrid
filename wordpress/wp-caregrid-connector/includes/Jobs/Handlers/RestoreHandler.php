@@ -11,6 +11,7 @@ use WPCareGrid\Connector\Backups\FileRestorer;
 use WPCareGrid\Connector\Backups\Maintenance;
 use WPCareGrid\Connector\Backups\RestoreFaultHooks;
 use WPCareGrid\Connector\Backups\RestoreIsolationGate;
+use WPCareGrid\Connector\Backups\RestoreIsolationLease;
 use WPCareGrid\Connector\Backups\SqlImporter;
 use WPCareGrid\Connector\Backups\TempDir;
 use WPCareGrid\Connector\Backups\WordPressBackupIndexLookup;
@@ -286,7 +287,7 @@ final class RestoreHandler implements JobHandler
         $this->jobs->mark_restore_progress($uuid, $destructive, $stage);
     }
 
-    private function release_unpersisted_isolation_gate(?\WPCareGrid\Connector\Backups\RestoreIsolationLease $lease): void
+    private function release_unpersisted_isolation_gate(?RestoreIsolationLease $lease): void
     {
         if ($lease !== null && Maintenance::may_release_unpersisted_isolation_lease($lease)) {
             RestoreIsolationGate::release($lease);
