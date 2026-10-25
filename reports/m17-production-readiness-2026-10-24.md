@@ -3,17 +3,18 @@
 **Evidence cut-off:** 2026-10-25  
 **Workstream:** Thread 3 / M17  
 **Worktree:** codex/m17-production-readiness  
-**Authoritative primary:** 5d0616954da955a8414b3ed5acf6be00bd7e30f8  
+**Authoritative primary:** 1c7fc5478ed44811ceb95ed78e7db2f148b51305  
 **Scope:** production-readiness preparation. No production access/config/deployment, credential operation, customer-data mutation, payment or recovery operation was performed.
 
 Unknown or stale is not PASS. M14 remains closed within its accepted scope; this report does not reopen it or claim production readiness.
 
 ## Release baseline and PHP evidence
 
-- Primary claude/ecstatic-wozniak-oemyuf was fetched from GitHub and verified at 5d0616954da955a8414b3ed5acf6be00bd7e30f8 (PR #176 merge).
+- Protected primary `claude/ecstatic-wozniak-oemyuf` was fetched from GitHub and verified at `1c7fc5478ed44811ceb95ed78e7db2f148b51305`, the PR #178 merge. Verified merge history: PR #176 at `b4677dd47af87f1d9627fb9693c9e3b0ed598e4a`; PR #177 at `5d0616954da955a8414b3ed5acf6be00bd7e30f8`; PR #178 at `1c7fc5478ed44811ceb95ed78e7db2f148b51305`.
 - PR #175 adds Laravel/server PHP 8.5 CI while preserving PHP 8.4. Exact merge run [40133739348](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40133739348): 40/40 passed, including PHP 8.4 and 8.5 MySQL process-concurrency. This is CI evidence, not a runtime migration.
 - PR #176 documents Owner-reported staging inventory. Exact-head run [40135536019](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40135536019): 40/40 passed. No PHP 8.5 staging cutover was authorized or performed.
-- PR #177 is open for M15 inventory timestamp freshness, based on b4677dd and head 3296fa463e6274260a2f79a15fd359c6ae55bf0b. It is owned by M15 and outside this report.
+- PR #177, M15 inventory timestamp freshness, is merged at `5d0616954da955a8414b3ed5acf6be00bd7e30f8`. The PR is no longer open; broader M15 acceptance remains outside this report.
+- PR #178, “M16: add website list shortcut to account dashboard,” is merged at `1c7fc5478ed44811ceb95ed78e7db2f148b51305` from head `1d2b82662052536a4e1ea9c0eb30cd6087c1f47d`. It adds an EN/HU Websites link on the account dashboard and covers empty/populated dashboards. Exact-head CI run [40140956204](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40140956204) passed 30/30; merge-SHA CI run [40142182123](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40142182123) passed 30/30. This UI change does not itself constitute M16 Owner acceptance; M16 acceptance remains open.
 - Thread 4 owns shared release/checklist coordination. Recheck primary, active PRs and the live ruleset before an M17 PR.
 
 Staging observations below are Owner/Integration-provided read-only reports and were not independently reproduced by M17. They are point-in-time evidence, not a fresh release preflight.
@@ -154,7 +155,7 @@ This preparation report is not that decision and authorizes no production launch
 
 Hotfix owns PHP remediation/cutover. Thread 4 owns shared release files, integration sequencing and staging slot. M15 owns pilot/backup operations. M16 owns UI/customer acceptance. Owner/advisors own production infrastructure and commercial/legal decisions. M17 does not edit shared release checklists or perform staging/production mutations.
 
-**Worktree:** D:\-=AI=-\-=Git=-\wpcaregrid\.codex-worktrees\m17-production-readiness. The assigned local branch codex/m17-production-readiness began at 943deb62558940181b948771b7abdf70e76ae516; its untracked draft was preserved. The reviewable remote report branch is based on current primary 5d0616954da955a8414b3ed5acf6be00bd7e30f8. This M17-owned report does not alter PR #176's PHP policy, M15 files, shared release documents or another worktree. Primary fetch succeeded after the initial DNS failure. No app tests are claimed for a documentation-only change; PR exact-head CI supplies repository checks.
+**Worktree:** D:\-=AI=-\-=Git=-\wpcaregrid\.codex-worktrees\m17-production-readiness. The assigned local branch codex/m17-production-readiness began at 943deb62558940181b948771b7abdf70e76ae516; its untracked draft was preserved. The reviewable remote report branch has been refreshed against current primary `1c7fc5478ed44811ceb95ed78e7db2f148b51305`, including the merged M16 PR #178. The PR diff remains limited to this M17-owned report; no M15 files, shared release documents, PHP policy or other worktrees were changed. Primary fetch succeeded after the initial DNS failure. No app tests are claimed for a documentation-only change; exact-head CI supplies repository checks.
 
 **Disposition: M17 ENGINEERING IN PROGRESS.** Control inventory, least-privilege credential lifecycle, monitoring/incident procedures, DR proposal/rehearsal acceptance, external review register and GO/NO-GO template are prepared. Production remains NO-GO: package/signature/consumer evidence is partial, alert and DR verification are open, independent review/legal/accounting approvals are external, M15/M16 acceptance is required, and Owner launch approval is separate.
 
