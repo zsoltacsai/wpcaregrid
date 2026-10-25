@@ -46,7 +46,22 @@
             {{ __('home.skip_link') }}
         </a>
 
-        <div x-data="{ open: false }" @keydown.escape.window="open = false" class="lg:grid lg:min-h-screen lg:grid-cols-[220px_minmax(0,1fr)]">
+        <div
+            x-data="{
+                open: false,
+                closeMenu() {
+                    if (!this.open) return;
+                    this.open = false;
+                    this.$nextTick(() => {
+                        if (this.$refs.menuToggle && this.$refs.menuToggle.getClientRects().length) {
+                            this.$refs.menuToggle.focus({ preventScroll: true });
+                        }
+                    });
+                }
+            }"
+            @keydown.escape.window="closeMenu()"
+            class="lg:grid lg:min-h-screen lg:grid-cols-[220px_minmax(0,1fr)]"
+        >
             <header class="on-dark sticky top-0 z-40 bg-primary text-on-dark lg:static lg:flex lg:flex-col">
                 <div class="flex h-14 items-center justify-between gap-4 px-4 sm:px-6 lg:h-auto lg:flex-col lg:items-start lg:gap-2 lg:px-5 lg:pt-5 lg:pb-6">
                     <a href="{{ route('owner.dashboard') }}" class="rounded-sm" aria-label="{{ __('owner.area') }}">
@@ -56,6 +71,7 @@
                     <button
                         type="button"
                         class="-mr-2 inline-flex size-10 items-center justify-center rounded-sm hover:bg-white/10 lg:hidden"
+                        x-ref="menuToggle"
                         @click="open = !open"
                         aria-controls="owner-nav"
                         aria-expanded="false"
