@@ -91,6 +91,9 @@ final class Maintenance
         if ($marker === null || ($marker['restore'] ?? null) !== $restore_uuid) {
             return;
         }
+        if (! self::has_valid_v2_token($marker)) {
+            return;
+        }
 
         $state = $jobs->restore_maintenance_state($restore_uuid);
         $recoveringPriorState = is_string($marker['recovery_for'] ?? null);
@@ -123,6 +126,9 @@ final class Maintenance
     {
         $marker = self::read_marker();
         if ($marker === null) {
+            return;
+        }
+        if (! self::has_valid_v2_token($marker)) {
             return;
         }
 
@@ -267,8 +273,9 @@ final class Maintenance
 
     private static function content_matches_marker(array $marker, string $content): bool
     {
+        $version = $marker['version'] ?? 1;
         $token = $marker['token'] ?? null;
-        if (is_string($token) && preg_match('/^[a-f0-9]{32}$/', $token)) {
+        if ($version === 2 && self::has_valid_v2_token($marker)) {
             // The ownership token remains stable when the WordPress expiry
             // timestamp is refreshed. This also makes a crash between the
             // marker and .maintenance writes recoverable on the next poll.
@@ -278,9 +285,13 @@ final class Maintenance
             if (($marker['legacy_compat'] ?? false) !== true) {
                 return false;
             }
+        } elseif ($version !== 1) {
+            return false;
         }
 
-        // Read-only compatibility with markers created by Connector 0.4.8.
+        // Read-only compatibility with explicitly recognized legacy markers
+        // and the short v1-to-v2 adoption window. Never infer ownership from
+        // the generic far-future maintenance timestamp.
         $timestamps = array_unique([
             (int) ($marker['refreshed_at'] ?? 0),
             (int) ($marker['since'] ?? 0),
@@ -291,7 +302,23 @@ final class Maintenance
             }
         }
 
-        return hash_equals('<?php $upgrading = 2147483647;', $content);
+        return false;
+    }
+
+    /** V2 markers require a well-formed token before any cleanup or adoption. */
+    private static function has_valid_v2_token(array $marker): bool
+    {
+        $version = $marker['version'] ?? 1;
+        if ($version === 1) {
+            return true;
+        }
+        if ($version !== 2) {
+            return false;
+        }
+
+        $token = $marker['token'] ?? null;
+
+        return is_string($token) && preg_match('/^[a-f0-9]{32}$/', $token) === 1;
     }
 
     private static function read_marker(): ?array

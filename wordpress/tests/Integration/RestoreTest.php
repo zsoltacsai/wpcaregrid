@@ -992,6 +992,96 @@ final class RestoreTest extends TestCase
         }
     }
 
+    public function test_invalid_v2_marker_never_claims_a_generic_far_future_maintenance_file(): void
+    {
+        $jobs = $this->plugin()->jobs();
+
+        foreach (['missing' => null, 'malformed' => 'not-a-token', 'wrong' => str_repeat('a', 32)] as $case => $token) {
+            Maintenance::preserve();
+            $restoreUuid = wp_generate_uuid4();
+            $job = $this->job('RESTORE', ['restore_uuid' => $restoreUuid, 'backup_uuid' => wp_generate_uuid4(), 'scope' => 'database', 'objects' => []]);
+            $jobs->begin($job['uuid'], 'RESTORE', (array) $job['payload']);
+            $jobs->complete($job['uuid'], \WPCareGrid\Connector\Jobs\JobResult::success('RESTORED'));
+
+            $marker = [
+                'version' => 2,
+                'restore' => $restoreUuid,
+                'recovery_for' => null,
+                'required_scope' => 'database',
+                'since' => time(),
+                'refreshed_at' => time(),
+            ];
+            if ($case !== 'missing') {
+                $marker['token'] = $token;
+            }
+            $markerJson = wp_json_encode($marker);
+            $maintenance = '<?php $upgrading = 2147483647;';
+            file_put_contents(TempDir::ensure().'/maintenance.json', $markerJson);
+            file_put_contents(ABSPATH.'.maintenance', $maintenance);
+
+            try {
+                Maintenance::cleanup_stale($jobs);
+                $this->assertSame($maintenance, file_get_contents(ABSPATH.'.maintenance'), "{$case} v2 token cannot authorize deletion of a generic maintenance file.");
+                $this->assertSame($markerJson, file_get_contents(TempDir::path().'/maintenance.json'));
+            } finally {
+                @unlink(ABSPATH.'.maintenance');
+                @unlink(TempDir::path().'/maintenance.json');
+            }
+        }
+    }
+
+    public function test_invalid_v2_marker_blocks_recovery_adoption_without_touching_maintenance(): void
+    {
+        $jobs = $this->plugin()->jobs();
+
+        foreach (['missing' => null, 'malformed' => 'not-a-token', 'wrong' => str_repeat('b', 32)] as $case => $token) {
+            Maintenance::preserve();
+            $restoreUuid = wp_generate_uuid4();
+            $interrupted = $this->job('RESTORE', ['restore_uuid' => $restoreUuid, 'backup_uuid' => wp_generate_uuid4(), 'scope' => 'database', 'objects' => []]);
+            $jobs->begin($interrupted['uuid'], 'RESTORE', (array) $interrupted['payload']);
+            $jobs->mark_restore_progress($restoreUuid, true, 'database_swap');
+            $jobs->complete($interrupted['uuid'], \WPCareGrid\Connector\Jobs\JobResult::failed('RESTORE_INTERRUPTED', 'Synthetic interrupted restore.', [
+                'destructive_mutation_started' => true,
+                'failure_stage' => 'database_swap',
+            ]));
+
+            $recoveryUuid = wp_generate_uuid4();
+            $recovery = $this->job('RESTORE', ['restore_uuid' => $recoveryUuid, 'backup_uuid' => wp_generate_uuid4(), 'scope' => 'full', 'objects' => []]);
+            $jobs->begin($recovery['uuid'], 'RESTORE', (array) $recovery['payload']);
+            $jobs->mark_restore_progress($recoveryUuid, false, 'database_staging');
+
+            $marker = [
+                'version' => 2,
+                'restore' => $restoreUuid,
+                'recovery_for' => $restoreUuid,
+                'required_scope' => 'database',
+                'since' => time(),
+                'refreshed_at' => time(),
+            ];
+            if ($case !== 'missing') {
+                $marker['token'] = $token;
+            }
+            $markerJson = wp_json_encode($marker);
+            $maintenance = '<?php $upgrading = 2147483647;';
+            file_put_contents(TempDir::ensure().'/maintenance.json', $markerJson);
+            file_put_contents(ABSPATH.'.maintenance', $maintenance);
+
+            try {
+                try {
+                    Maintenance::enable($recoveryUuid, $jobs);
+                    $this->fail("{$case} v2 token must block recovery adoption.");
+                } catch (BackupFailure $error) {
+                    $this->assertSame('MAINTENANCE_ACTIVE', $error->error_code);
+                }
+                $this->assertSame($maintenance, file_get_contents(ABSPATH.'.maintenance'), "{$case} v2 token cannot rewrite the existing maintenance file.");
+                $this->assertSame($markerJson, file_get_contents(TempDir::path().'/maintenance.json'));
+            } finally {
+                @unlink(ABSPATH.'.maintenance');
+                @unlink(TempDir::path().'/maintenance.json');
+            }
+        }
+    }
+
     public function test_swap_failure_does_not_discard_staging_after_lease_replacement(): void
     {
         $this->with_harness_environment(function (): void {
