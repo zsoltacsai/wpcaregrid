@@ -113,7 +113,7 @@ The current #182 path runs restore mutation in Connector PHP. The supported-prov
 6. **Writer fencing and gate acquisition:** Broker confirms every control in §6, persists QUIESCENT for the exact internal generation, and only then allows worker launch.
 7. **Isolated execution:** Broker starts the fixed verified worker under a separate restore-worker identity, private mount namespace, site-only writable volume, exact site DB credentials, bounded resources and no arbitrary network/subprocess access. FPM/Connector has no live write path.
 8. **Authenticated result relay:** Broker verifies worker exit, work binding, durable mutation state, DB/filesystem evidence and required checks. It creates, signs and fsyncs a Terminal Receipt in its durable host outbox. The broker reopens the site only after the verified terminal state is durable and all release conditions pass. Once the Connector is safely available again, it retrieves the exact stored receipt through the agent's read-only typed interface and relays it to Laravel over the existing authenticated platform channel. Laravel durably processes the exact receipt before issuing a platform-signed ACK; the agent does not relay directly to Laravel.
-9. **Idempotent retry and receipt lifecycle:** Interrupted delivery retransmits the same stored receipt. Laravel returns the same durable ACK for an already processed receipt; the broker retains the receipt until it verifies and durably records that signed ACK. Invalid, absent, mismatched, replayed, delayed, or lost ACKs cannot authorize pruning. Duplicate identical receipts/ACKs do not create another transition or work item. Conflicting, stale, invalidly signed, wrong-tenant/scope/backup receipts are rejected and cannot release the host gate. Exact retention, acknowledgement, pruning and recovery semantics are contract-PR acceptance criteria.
+9. **Idempotent retry and receipt lifecycle:** Interrupted delivery retransmits the same stored receipt. Laravel returns the same durable ACK for an already processed receipt; the broker retains the receipt until it verifies and durably records that signed ACK. Invalid, absent, mismatched, replayed, delayed, or lost ACKs cannot authorize pruning. Duplicate identical receipts/ACKs do not create another transition or work item. The ACK contains no broker generation: the broker resolves the ACK's receipt ID/digest and platform-known work bindings to exactly one durable accepted-work record, then checks that record's private generation against its receipt/outbox state. Missing, ambiguous, corrupt, or wrong-generation work mapping rejects the ACK and preserves the receipt. Conflicting, stale, invalidly signed, wrong-tenant/scope/backup receipts are rejected and cannot release the host gate. Exact retention, acknowledgement, pruning and recovery semantics are contract-PR acceptance criteria.
 
 ~~~mermaid
 sequenceDiagram
@@ -149,9 +149,11 @@ sequenceDiagram
     C->>L: Relay over authenticated platform channel (retryable/idempotent)
     L->>L: Verify signature and intent binding; update once
     L->>L: Durably process exact receipt; persist stable ACK record
-    L-->>C: Platform-signed Terminal Receipt ACK (bound to receipt/work)
+    L-->>C: Sign ACK from platform-known receipt/work bindings; no broker generation
     C->>A: Relay signed ACK through typed interface
     A->>B: Submit signed ACK; broker verifies signature/bindings
+    B->>B: Resolve unique accepted work by receipt/digest + intent/site bindings
+    B->>B: Verify private generation mapping; fail closed on missing/ambiguous/mismatch
     B->>B: Persist ACK idempotently; prune receipt only after durable ACK
 ~~~
 
@@ -342,13 +344,13 @@ Current RestoreIsolationGateProvider methods alone are insufficient for async ho
 - **query_handoff(work_id):** bounded Connector retry status.
 - **assert_active(internal_lease)** and generation-bound two-phase commit: broker/worker-side only; PHP is not the mutation executor.
 - **take_terminal_receipt(work_id):** read broker’s durable signed receipt outbox.
-- **verify_and_ack_receipt(signed_ack):** verify the platform signature and exact stored receipt/work/generation bindings; durably record the ACK idempotently before any receipt pruning. This is never an unlock signal.
+- **verify_and_ack_receipt(signed_ack):** verify the platform signature and exact stored receipt/work bindings, then resolve the unique accepted-work record and verify its broker-private generation from durable broker state. The signed ACK contains no generation. Missing, ambiguous, corrupt, or mismatched mappings fail closed. Durably record the verified ACK idempotently before any receipt pruning. This is never an unlock signal.
 - Replace release(lease): bool with broker-owned finalization that validates its durable terminal record; Connector cannot submit a success boolean.
 - Laravel receipt verifier: validate signature, host key enrollment, intent/manifest binding, outcome invariants, uniqueness and replay before a single transaction updates status.
 
 Exact method signatures, result enums, schema migrations, key enrollment/rotation, backwards compatibility, and Laravel job-state mapping require contract review. Old Connector mutation code must not remain as fallback when provider is absent. Unsupported hosts continue to refuse before live mutation. Backup creation, verification and download remain independent.
 
-The separate contract PR must make the following mandatory acceptance criteria explicit and testable: (1) nonce and intent-ID retention, replay prevention, and safe pruning; (2) receipt identity, durable outbox, platform-acknowledgement, retry, retention/pruning, and crash-recovery lifecycle; (3) host/platform key enrollment, rotation overlap, revocation, and compromised-key handling; (4) clock-skew bounds, monotonic/rollback behavior, expiry and reboot handling; and (5) terminal-outcome invariants, including that SAFE_PRE_MUTATION_ABORT is impossible after any durable mutation-start evidence and RECOVERY_REQUIRED never reopens the site. ADR v2 records these as unresolved contract requirements; it does not define their final wire-level policy.
+The separate contract PR must make the following mandatory acceptance criteria explicit and testable: (1) nonce and intent-ID retention, replay prevention, and safe pruning; (2) receipt identity, durable outbox, platform-acknowledgement, retry, retention/pruning, and crash-recovery lifecycle; (3) host/platform key enrollment, rotation overlap, revocation, and compromised-key handling; (4) clock-skew bounds, monotonic/rollback behavior, expiry and reboot handling; (5) terminal-outcome invariants, including that SAFE_PRE_MUTATION_ABORT is impossible after any durable mutation-start evidence and RECOVERY_REQUIRED never reopens the site; and (6) ACK-to-work reconciliation using receipt ID/digest plus exact platform-known work bindings, with deterministic rejection tests for absent, ambiguous, corrupt, or wrong-generation broker mappings and proof that rejection preserves the receipt. ADR v2 records these as unresolved contract requirements; it does not define their final wire-level policy.
 
 ### Proposed platform-signed Terminal Receipt ACK v1
 
@@ -370,12 +372,11 @@ Proposed signed fields (all are covered by the signature):
       "connector_id": "active-connector-id",
       "provider_id": "reviewed-provider-id",
       "host_id": "registered-host-id",
-      "broker_generation": "opaque-generation-bound-to-accepted-work",
       "processed_at": "UTC RFC3339 timestamp",
       "key_id": "platform-ack-signing-key-id"
     }
 
-The broker compares every binding with its durable accepted intent and exact outbox receipt, checks ACK freshness under the contract's clock policy, and rejects unknown schemas, keys, fields or conflicting ACK IDs. It atomically persists the verified ACK identity/digest and acknowledged receipt state (with the implementation's reviewed durability guarantees) before pruning any receipt bytes. A repeated identical ACK is an idempotent no-op; an ACK for a different receipt, digest, intent, job, tenant, site, Connector, host or generation is rejected. A missing, invalid, late, replayed, or lost ACK never triggers automatic receipt deletion. If the platform committed ingestion but the ACK was lost, it returns the same durable ACK on receipt retry; pruning remains prohibited until the broker receives and commits it.
+Every signed ACK field is available to Laravel from the receipt it received, its durable restore/job/site/tenant records, the active Connector and registered provider/host bindings, or its durable ACK/signing-key record; none requires reading broker-private state. The broker verifies the ACK signature and platform-known bindings, finds exactly one accepted-work record by the exact receipt ID and digest plus intent/restore/job/tenant/site/Connector/provider/host bindings, then checks the receipt's durable broker-private generation against that record and outbox entry. Generation is never sent to Laravel, included in the Terminal Receipt, or accepted from the ACK. Missing, duplicate/ambiguous, corrupted, or wrong-generation mappings reject ACK acceptance and leave the receipt unpruned. Only after successful verification does the broker atomically persist the ACK identity/digest and acknowledged receipt state (with implementation-reviewed durability guarantees) before pruning receipt bytes. A repeated identical ACK is an idempotent no-op; conflicting ACK IDs or bindings are rejected. A missing, invalid, late, replayed, or lost ACK never triggers automatic receipt deletion. If the platform committed ingestion but the ACK was lost, it returns the same durable ACK on receipt retry; pruning remains prohibited until the broker receives and commits it.
 
 This is an architecture contract proposal, not an implemented protocol. The contract PR must define nonce and ACK-ID retention/pruning, stable ACK replay behavior, receipt/ACK recovery after either-side crash, public-key enrollment/rotation/revocation and compromise response, clock skew/rollback, and terminal-outcome invariants with deterministic negative and crash tests.
 
