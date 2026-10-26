@@ -6,6 +6,7 @@ use App\Backups\BackupObjectName;
 use App\Backups\CustomerDownloads\BackupDownloadGrants;
 use App\Backups\CustomerDownloads\BackupDownloadRefused;
 use App\Backups\CustomerDownloads\DownloadRange;
+use App\Backups\CustomerDownloads\DownloadResponseOutput;
 use App\Backups\CustomerDownloads\PrepareBackupDownloadGrant;
 use App\Backups\Storage\BackupStorage;
 use App\Backups\Storage\StorageManager;
@@ -20,6 +21,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Testing\TestResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Tests\Concerns\CreatesBackups;
 use Tests\TestCase;
@@ -207,6 +209,91 @@ class CustomerBackupDownloadTest extends TestCase
         $this->assertSame('', $body);
         $this->assertSame(0, $grant->fresh()->bytes_served);
         $this->assertNull($grant->fresh()->last_response_completed_at);
+    }
+
+    public function test_ready_grant_denies_new_range_after_website_service_ends(): void
+    {
+        [$user, $grant] = $this->preparedGrant('ready grant service termination');
+        $this->assertSame(BackupDownloadGrant::READY, $grant->fresh()->status);
+        $grant->website->subscription->forceFill(['status' => SubscriptionStatus::Canceled])->save();
+
+        $response = $this->actingAs($user)->withHeader('Range', 'bytes=0-5')
+            ->get(route('account.backup-downloads.content', $grant));
+
+        $response->assertGone()->assertExactJson(['code' => 'SERVICE_UNAVAILABLE']);
+        $this->assertNotInstanceOf(StreamedResponse::class, $response->baseResponse);
+        $this->assertSame(0, $grant->fresh()->bytes_served);
+        $this->assertSame(0, $grant->fresh()->range_responses);
+    }
+
+    public function test_client_disconnect_counts_submitted_bytes_and_records_incomplete_206(): void
+    {
+        Log::spy();
+        $output = new FakeDownloadResponseOutput;
+        $output->abortOnFlush = 1;
+        [, $grant, $response] = $this->preparedStreamResponse(str_repeat('d', 300 * 1024), $output);
+
+        $body = $response->streamedContent();
+        $expectedLength = 300 * 1024;
+        $submitted = 256 * 1024;
+
+        $this->assertSame((string) $expectedLength, $response->headers->get('Content-Length'));
+        $this->assertSame($submitted, strlen($body));
+        $this->assertLessThan((int) $response->headers->get('Content-Length'), strlen($body));
+        $this->assertSame($submitted, $grant->fresh()->bytes_served);
+        $this->assertNull($grant->fresh()->last_response_completed_at);
+        $this->assertNotNull($grant->fresh()->last_response_interrupted_at);
+        Log::shouldHaveReceived('info')->with('Customer backup download event.', \Mockery::on(
+            fn (array $context) => ($context['event'] ?? null) === 'range_interrupted'
+                && ($context['code'] ?? null) === 'CLIENT_DISCONNECTED'
+                && ($context['bytes'] ?? null) === $submitted,
+        ))->once();
+    }
+
+    public function test_partial_output_records_stream_incomplete_and_only_attempted_bytes(): void
+    {
+        Log::spy();
+        $output = new FakeDownloadResponseOutput;
+        $output->partialWriteBytes = 12_345;
+        [, $grant, $response] = $this->preparedStreamResponse(str_repeat('i', 300 * 1024), $output);
+
+        $body = $response->streamedContent();
+
+        $this->assertSame(12_345, strlen($body));
+        $this->assertSame(12_345, $grant->fresh()->bytes_served);
+        $this->assertNotNull($grant->fresh()->last_response_interrupted_at);
+        $this->assertNull($grant->fresh()->last_response_completed_at);
+        Log::shouldHaveReceived('info')->with('Customer backup download event.', \Mockery::on(
+            fn (array $context) => ($context['event'] ?? null) === 'range_interrupted'
+                && ($context['code'] ?? null) === 'STREAM_INCOMPLETE'
+                && ($context['bytes'] ?? null) === 12_345,
+        ))->once();
+    }
+
+    public function test_revocation_during_controller_stream_stops_before_the_next_chunk(): void
+    {
+        Log::spy();
+        $grant = null;
+        $user = null;
+        $output = new FakeDownloadResponseOutput;
+        $output->afterFlush = function () use (&$user, &$grant): void {
+            if ($user instanceof User && $grant instanceof BackupDownloadGrant && $grant->fresh()->status === BackupDownloadGrant::READY) {
+                app(BackupDownloadGrants::class)->revoke($user, $grant);
+            }
+        };
+        [$user, $grant, $response] = $this->preparedStreamResponse(str_repeat('r', 300 * 1024), $output);
+
+        $body = $response->streamedContent();
+
+        $this->assertSame(256 * 1024, strlen($body));
+        $this->assertSame(256 * 1024, $grant->fresh()->bytes_served);
+        $this->assertSame(BackupDownloadGrant::REVOKED, $grant->fresh()->status);
+        $this->assertNull($grant->fresh()->last_response_completed_at);
+        Log::shouldHaveReceived('info')->with('Customer backup download event.', \Mockery::on(
+            fn (array $context) => ($context['event'] ?? null) === 'range_interrupted'
+                && ($context['code'] ?? null) === 'GRANT_REVOKED'
+                && ($context['bytes'] ?? null) === 256 * 1024,
+        ))->once();
     }
 
     public function test_user_role_change_before_stream_emission_revokes_download_access(): void
@@ -427,6 +514,21 @@ class CustomerBackupDownloadTest extends TestCase
         $this->assertLessThanOrEqual(64 * 1024, $this->storage->largestConsumerChunk);
     }
 
+    public function test_range_crossing_a_fingerprint_boundary_reads_both_full_edge_blocks(): void
+    {
+        $blockSize = 1024 * 1024;
+        $content = str_repeat('b', 2 * $blockSize);
+        [$user, $grant] = $this->preparedGrant($content);
+        $this->storage->largestRead = 0;
+
+        $response = $this->actingAs($user)->withHeader('Range', 'bytes='.(($blockSize - 1)).'-'.$blockSize)
+            ->get(route('account.backup-downloads.content', $grant));
+
+        $response->assertStatus(206)->assertHeader('Content-Length', '2');
+        $this->assertSame(substr($content, $blockSize - 1, 2), $response->streamedContent());
+        $this->assertSame(2 * $blockSize, $this->storage->largestRead);
+    }
+
     private function bindObject(Backup $backup, BackupObject $object, string $content): void
     {
         $this->storage->objects[$backup->objectKey(BackupObjectName::from($object->name))] = $content;
@@ -442,7 +544,21 @@ class CustomerBackupDownloadTest extends TestCase
     }
 
     /** @return array{0: User, 1: BackupDownloadGrant, 2: TestResponse} */
-    private function preparedStreamResponse(string $content): array
+    private function preparedStreamResponse(string $content, ?DownloadResponseOutput $output = null): array
+    {
+        [$user, $grant] = $this->preparedGrant($content);
+        if ($output !== null) {
+            $this->app->instance(DownloadResponseOutput::class, $output);
+        }
+        $response = $this->actingAs($user)->withHeader('Range', 'bytes=0-'.(strlen($content) - 1))
+            ->get(route('account.backup-downloads.content', $grant));
+        $response->assertStatus(206);
+
+        return [$user, $grant, $response];
+    }
+
+    /** @return array{0: User, 1: BackupDownloadGrant} */
+    private function preparedGrant(string $content): array
     {
         $site = $this->backupReadySite();
         $backup = $this->verifiedSftpBackup($site['website']);
@@ -452,11 +568,8 @@ class CustomerBackupDownloadTest extends TestCase
         $grant = app(BackupDownloadGrants::class)->create($user, $site['website'], $backup, $object);
         (new PrepareBackupDownloadGrant($grant->id))->handle(app(BackupDownloadGrants::class), $this->manager);
         $grant->refresh();
-        $response = $this->actingAs($user)->withHeader('Range', 'bytes=0-'.(strlen($content) - 1))
-            ->get(route('account.backup-downloads.content', $grant));
-        $response->assertStatus(206);
 
-        return [$user, $grant, $response];
+        return [$user, $grant];
     }
 
     private function grantUrl($website, Backup $backup, string $object): string
@@ -525,5 +638,34 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
     public function delete(string $key): void
     {
         unset($this->objects[$key]);
+    }
+}
+
+final class FakeDownloadResponseOutput extends DownloadResponseOutput
+{
+    public ?int $abortOnFlush = null;
+
+    public ?int $partialWriteBytes = null;
+
+    public int $flushes = 0;
+
+    public ?\Closure $afterFlush = null;
+
+    public function write(string $chunk): int
+    {
+        $attempted = $this->partialWriteBytes === null ? strlen($chunk) : min(strlen($chunk), $this->partialWriteBytes);
+        echo substr($chunk, 0, $attempted);
+
+        return $attempted;
+    }
+
+    public function flushAndCheckAbort(): bool
+    {
+        $this->flushes++;
+        if ($this->afterFlush !== null) {
+            ($this->afterFlush)();
+        }
+
+        return $this->abortOnFlush === $this->flushes;
     }
 }

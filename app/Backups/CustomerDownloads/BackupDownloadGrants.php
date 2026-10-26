@@ -333,6 +333,11 @@ final class BackupDownloadGrants
         }
     }
 
+    /**
+     * Record output bytes submitted by PHP, not bytes acknowledged by a client.
+     *
+     * @param  int  $bytes  Bytes submitted to the response output boundary.
+     */
     public function recordResponse(int $grantId, int $bytes, bool $completed, ?string $failureCode = null): void
     {
         $boundedBytes = max(0, min($bytes, (int) config('backup.downloads.max_range_size', 8 * 1024 * 1024)));

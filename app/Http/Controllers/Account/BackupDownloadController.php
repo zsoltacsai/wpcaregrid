@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Account;
 use App\Backups\BackupObjectName;
 use App\Backups\CustomerDownloads\BackupDownloadGrants;
 use App\Backups\CustomerDownloads\BackupDownloadRefused;
+use App\Backups\CustomerDownloads\DownloadResponseOutput;
 use App\Models\Backup;
 use App\Models\BackupDownloadGrant;
 use App\Models\Website;
@@ -63,7 +64,7 @@ final class BackupDownloadController extends Controller
         }
     }
 
-    public function content(Request $request, BackupDownloadGrant $grant, BackupDownloadGrants $grants): StreamedResponse|JsonResponse
+    public function content(Request $request, BackupDownloadGrant $grant, BackupDownloadGrants $grants, DownloadResponseOutput $output): StreamedResponse|JsonResponse
     {
         try {
             $range = $grants->readRange($request->user(), $grant, (string) $request->header('Range', ''));
@@ -72,21 +73,26 @@ final class BackupDownloadController extends Controller
         }
 
         $filename = 'backup-'.$grant->backup->uuid.'-'.$grant->backupObject->objectName()->filename();
-        $response = response()->stream(function () use ($request, $range, $grant, $grants): void {
-            $sent = 0;
+        $response = response()->stream(function () use ($request, $range, $grant, $grants, $output): void {
+            $submitted = 0;
             $completed = false;
             $failureCode = null;
+            $previousIgnoreUserAbort = ignore_user_abort(true);
             try {
                 foreach ($grants->responseChunks($request->user(), $grant, $range) as $chunk) {
-                    echo $chunk;
-                    flush();
-                    if (connection_aborted() > 0) {
+                    $attempted = max(0, min(strlen($chunk), $output->write($chunk)));
+                    $submitted += $attempted;
+                    $aborted = $output->flushAndCheckAbort();
+                    if ($aborted) {
                         $failureCode = 'CLIENT_DISCONNECTED';
                         break;
                     }
-                    $sent += strlen($chunk);
+                    if ($attempted !== strlen($chunk)) {
+                        $failureCode = 'STREAM_INCOMPLETE';
+                        break;
+                    }
                 }
-                $completed = $failureCode === null && $sent === $range->length;
+                $completed = $failureCode === null && $submitted === $range->length;
                 if (! $completed && $failureCode === null) {
                     $failureCode = 'STREAM_INCOMPLETE';
                 }
@@ -95,7 +101,11 @@ final class BackupDownloadController extends Controller
             } catch (Throwable) {
                 $failureCode = 'STREAM_FAILED';
             } finally {
-                $grants->recordResponse($grant->id, $sent, $completed, $failureCode);
+                try {
+                    $grants->recordResponse($grant->id, $submitted, $completed, $failureCode);
+                } finally {
+                    ignore_user_abort($previousIgnoreUserAbort);
+                }
             }
         }, 206, [
             'Accept-Ranges' => 'bytes',
