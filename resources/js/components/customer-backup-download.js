@@ -124,6 +124,66 @@ async function jsonOrError(response) {
     return body;
 }
 
+function sameObjectIdentity(state) {
+    return state.root.dataset.createUrl === state.objectIdentity.createUrl
+        && Number(state.root.dataset.totalSize) === state.objectIdentity.totalSize
+        && String(state.root.dataset.sha256 ?? '').toLowerCase() === state.objectIdentity.sha256;
+}
+
+async function revokeGrant(state, grantId) {
+    if (!grantId) return true;
+
+    try {
+        const revokeUrl = state.revokeTemplate.replace('__GRANT__', encodeURIComponent(grantId));
+        const response = await fetch(revokeUrl, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+            headers: { Accept: 'application/json', 'X-CSRF-TOKEN': state.csrfToken },
+        });
+        if (!response.ok) return false;
+
+        return (await parseJson(response)).status === 'revoked';
+    } catch {
+        return false;
+    }
+}
+
+async function revokePendingGrant(state) {
+    if (!state.pendingRevokeGrantId) return true;
+    if (!await revokeGrant(state, state.pendingRevokeGrantId)) return false;
+
+    state.pendingRevokeGrantId = null;
+
+    return true;
+}
+
+async function discardDiskWriter(state) {
+    const writer = state.writer;
+    state.writer = null;
+    state.handle = null;
+    if (!writer?.abort) return;
+
+    try {
+        await writer.abort();
+    } catch { /* A failed write or prior abort can leave the writer already closed. */ }
+}
+
+function resetTransfer(state) {
+    state.offset = 0;
+    state.parts = [];
+    state.rateLimitRetries = 0;
+    if (state.progress) state.progress.value = 0;
+    if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+    state.objectUrl = null;
+}
+
+function clearCurrentGrant(state) {
+    state.grantId = null;
+    state.statusUrl = null;
+    state.contentUrl = null;
+    state.grantStatus = null;
+}
+
 function sleep(milliseconds, signal) {
     return new Promise((resolve, reject) => {
         const timeout = setTimeout(resolve, milliseconds);
@@ -147,6 +207,8 @@ async function respectContentRateLimit(state) {
 }
 
 async function createOrResumeGrant(state) {
+    if (!sameObjectIdentity(state)) throw apiError('OBJECT_IDENTITY_CHANGED');
+
     if (!state.grantId) {
         const created = await jsonOrError(await fetch(state.createUrl, {
             method: 'POST',
@@ -188,6 +250,7 @@ async function transferRanges(state) {
     const expectedSha = state.root.dataset.sha256.toLowerCase();
 
     while (state.offset < state.totalSize) {
+        if (!sameObjectIdentity(state)) throw apiError('OBJECT_IDENTITY_CHANGED');
         if (state.abortController.signal.aborted) throw new DOMException('Aborted', 'AbortError');
         await respectContentRateLimit(state);
 
@@ -227,7 +290,12 @@ async function transferRanges(state) {
         const bytes = await readBoundedBody(response, expectedLength);
 
         if (state.mode === 'disk') {
-            await state.writer.write({ type: 'write', position: start, data: bytes });
+            try {
+                await state.writer.write({ type: 'write', position: start, data: bytes });
+            } catch {
+                if (state.abortController.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+                throw apiError('FILE_WRITER_FAILED');
+            }
         } else {
             state.parts.push(bytes);
         }
@@ -248,7 +316,7 @@ function showBlobDownload(state) {
     state.parts = [];
 }
 
-function bindDownload(root) {
+export function bindDownload(root) {
     const size = Number(root.dataset.totalSize);
     const supportsDisk = window.isSecureContext && typeof window.showSaveFilePicker === 'function';
     const mode = selectDownloadMode(size, supportsDisk);
@@ -259,6 +327,11 @@ function bindDownload(root) {
         csrfToken: root.dataset.csrfToken,
         filename: root.dataset.filename,
         totalSize: size,
+        objectIdentity: Object.freeze({
+            createUrl: root.dataset.createUrl,
+            totalSize: size,
+            sha256: String(root.dataset.sha256 ?? '').toLowerCase(),
+        }),
         mode,
         offset: 0,
         grantId: null,
@@ -267,11 +340,14 @@ function bindDownload(root) {
         grantStatus: null,
         handle: null,
         writer: null,
+        pendingRevokeGrantId: null,
         parts: [],
         requestTimes: [],
         objectUrl: null,
         abortController: null,
         active: false,
+        activePromise: null,
+        cancelInProgress: false,
         messages: null,
         errors: null,
         startButton: root.querySelector('[data-download-start]'),
@@ -296,7 +372,8 @@ function bindDownload(root) {
     refs.status.textContent = mode === 'blob' ? refs.messages.smallFileOnly : refs.messages.ready;
 
     async function start() {
-        if (refs.active) return;
+        if (refs.active || refs.cancelInProgress) return;
+        refs.retryButton.textContent = refs.messages.retry;
         refs.active = true;
         refs.rateLimitRetries = 0;
         refs.abortController = new AbortController();
@@ -307,16 +384,27 @@ function bindDownload(root) {
         setVisible(refs.cancelButton, Boolean(refs.grantId));
 
         try {
-            if (refs.mode === 'disk' && !refs.handle) {
+            if (refs.mode === 'disk' && !refs.writer) {
                 // Must run directly from the user gesture before network work.
-                refs.handle = await window.showSaveFilePicker({ suggestedName: refs.filename });
-                refs.writer = await refs.handle.createWritable();
+                try {
+                    if (!refs.handle) refs.handle = await window.showSaveFilePicker({ suggestedName: refs.filename });
+                    refs.writer = await refs.handle.createWritable();
+                } catch (error) {
+                    if (error?.name === 'AbortError') throw error;
+                    throw apiError('FILE_WRITER_FAILED');
+                }
             }
+
+            if (!await revokePendingGrant(refs)) throw apiError('REVOCATION_UNCONFIRMED');
 
             await createOrResumeGrant(refs);
             await transferRanges(refs);
             if (refs.mode === 'disk') {
-                await refs.writer.close();
+                try {
+                    await refs.writer.close();
+                } catch {
+                    throw apiError('FILE_WRITER_FAILED');
+                }
                 refs.writer = null;
             } else {
                 showBlobDownload(refs);
@@ -346,8 +434,31 @@ function bindDownload(root) {
             } else if (error?.code === 'PREPARATION_PENDING') {
                 refs.status.textContent = refs.messages.preparationSlow;
                 setVisible(refs.retryButton, true);
+            } else if (error?.code === 'FILE_WRITER_FAILED') {
+                refs.abortController.abort();
+                await discardDiskWriter(refs);
+                resetTransfer(refs);
+                if (refs.grantId) refs.pendingRevokeGrantId = refs.grantId;
+                clearCurrentGrant(refs);
+                refs.retryButton.textContent = refs.messages.restartAction;
+                refs.status.textContent = await revokePendingGrant(refs)
+                    ? refs.messages.writerFailed
+                    : refs.messages.writerFailedRevokeFailed;
+                setVisible(refs.retryButton, true);
+            } else if (error?.code === 'REVOCATION_UNCONFIRMED') {
+                if (refs.mode === 'disk') await discardDiskWriter(refs);
+                refs.retryButton.textContent = refs.messages.restartAction;
+                refs.status.textContent = refs.messages.revokeUnconfirmed;
+                setVisible(refs.retryButton, true);
+            } else if (error?.code === 'OBJECT_IDENTITY_CHANGED') {
+                refs.status.textContent = fixedErrorMessage(refs, error.code);
+                setVisible(refs.retryButton, false);
+                setVisible(refs.startButton, false);
+                setVisible(refs.cancelButton, false);
             } else {
-                refs.status.textContent = fixedErrorMessage(refs, error?.code);
+                refs.status.textContent = error instanceof TypeError
+                    ? refs.messages.interrupted
+                    : fixedErrorMessage(refs, error?.code);
                 setVisible(refs.retryButton, true);
             }
             setVisible(refs.cancelButton, Boolean(refs.grantId));
@@ -358,34 +469,44 @@ function bindDownload(root) {
         }
     }
 
-    refs.startButton.addEventListener('click', start);
-    refs.retryButton.addEventListener('click', start);
+    const begin = () => {
+        const attempt = start();
+        refs.activePromise = attempt;
+
+        return attempt;
+    };
+
+    refs.startButton.addEventListener('click', begin);
+    refs.retryButton.addEventListener('click', begin);
     refs.cancelButton.addEventListener('click', async () => {
+        if (refs.cancelInProgress) return;
+        refs.cancelInProgress = true;
+        refs.cancelButton.disabled = true;
+        refs.startButton.disabled = true;
+        refs.retryButton.disabled = true;
+
         if (refs.active) {
             refs.cancelling = true;
             refs.abortController?.abort();
         }
-        try {
-            if (refs.writer?.abort) await refs.writer.abort();
-        } catch { /* The in-progress file write may already have been aborted. */ }
-        refs.writer = null;
-        refs.parts = [];
-        refs.offset = 0;
-        if (refs.objectUrl) URL.revokeObjectURL(refs.objectUrl);
-        refs.objectUrl = null;
 
-        if (refs.grantId) {
-            const revokeUrl = refs.revokeTemplate.replace('__GRANT__', encodeURIComponent(refs.grantId));
-            await fetch(revokeUrl, {
-                method: 'DELETE',
-                credentials: 'same-origin',
-                headers: { Accept: 'application/json', 'X-CSRF-TOKEN': refs.csrfToken },
-            }).catch(() => {});
+        try {
+            await discardDiskWriter(refs);
+            if (refs.activePromise) await refs.activePromise;
+            if (refs.grantId) refs.pendingRevokeGrantId = refs.grantId;
+            clearCurrentGrant(refs);
+            resetTransfer(refs);
+            refs.retryButton.textContent = refs.messages.retry;
+            refs.status.textContent = refs.pendingRevokeGrantId
+                ? (await revokePendingGrant(refs) ? refs.messages.cancelled : refs.messages.cancelRevokeFailed)
+                : refs.messages.cancelledUnconfirmed;
+        } finally {
+            refs.cancelling = false;
+            refs.cancelInProgress = false;
+            refs.cancelButton.disabled = false;
+            refs.retryButton.disabled = false;
         }
-        refs.grantId = null;
-        refs.statusUrl = null;
-        refs.contentUrl = null;
-        refs.status.textContent = refs.messages.cancelled;
+
         refs.progress.value = 0;
         setVisible(refs.progress, false);
         setVisible(refs.cancelButton, false);
