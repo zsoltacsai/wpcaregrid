@@ -4,6 +4,7 @@ namespace App\Backups\Storage;
 
 use phpseclib3\Crypt\PublicKeyLoader;
 use phpseclib3\Net\SFTP;
+use Closure;
 
 /**
  * SFTP storage. The server's host key must match the configured SHA256
@@ -11,7 +12,7 @@ use phpseclib3\Net\SFTP;
  * so verification reads the object back in pieces and hashes it. Uploads
  * go to a ".part" name and are renamed when complete.
  */
-final class SftpStorage implements IncompleteUploadListable, InspectableBackupStorage, ListableBackupStorage
+final class SftpStorage implements IncompleteUploadListable, InspectableBackupStorage, ListableBackupStorage, StreamableBackupStorage
 {
     use HashesStreams;
 
@@ -79,6 +80,29 @@ final class SftpStorage implements IncompleteUploadListable, InspectableBackupSt
         }
 
         return (string) $data;
+    }
+
+    public function streamObject(string $key, callable $consume): int
+    {
+        $path = $this->path($key);
+        $bytes = 0;
+        $consumer = Closure::fromCallable($consume);
+        $result = $this->connection()->get($path, function (string $chunk) use ($consumer, &$bytes): void {
+            if ($chunk === '') {
+                return;
+            }
+            $consumer($chunk);
+            $bytes += strlen($chunk);
+        });
+
+        // phpseclib 3.x initializes and returns an empty string when a callback
+        // is used. The caller validates the delivered count and full SHA-256,
+        // so a partial transfer can never become a pinned fingerprint.
+        if ($result !== '' && $result !== true) {
+            throw new StorageUnavailable('SFTP object stream returned unexpected data.');
+        }
+
+        return $bytes;
     }
 
     public function delete(string $key): void

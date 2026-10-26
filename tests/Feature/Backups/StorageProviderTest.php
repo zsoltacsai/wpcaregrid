@@ -13,6 +13,7 @@ use App\Backups\Storage\SftpStorage;
 use App\Backups\Storage\StorageManager;
 use App\Backups\Storage\StorageNotConfigured;
 use App\Backups\Storage\StorageUnavailable;
+use App\Backups\Storage\StreamableBackupStorage;
 use App\Backups\Storage\Verification;
 use Aws\CommandInterface;
 use Aws\MockHandler;
@@ -62,6 +63,21 @@ class StorageProviderTest extends TestCase
 
             $offset = min(4096, $size - 100);
             $this->assertSame(substr($bytes, $offset, 100), $storage->readRange(self::KEY, $offset, 100));
+
+            if ($storage instanceof StreamableBackupStorage) {
+                $hash = hash_init('sha256');
+                $streamed = 0;
+                $largestChunk = 0;
+                $actual = $storage->streamObject(self::KEY, function (string $chunk) use (&$hash, &$streamed, &$largestChunk): void {
+                    $largestChunk = max($largestChunk, strlen($chunk));
+                    $streamed += strlen($chunk);
+                    hash_update($hash, $chunk);
+                });
+                $this->assertSame($size, $actual);
+                $this->assertSame($size, $streamed);
+                $this->assertSame($sha, hash_final($hash));
+                $this->assertLessThanOrEqual(1024 * 1024, $largestChunk, 'Provider callbacks must be bounded.');
+            }
         }
 
         $storage->delete(self::KEY);
@@ -119,6 +135,27 @@ class StorageProviderTest extends TestCase
         $this->assertSame(Verification::NATIVE, $native->method, 'No download needed.');
 
         $this->assertSame('CHECKSUM_MISMATCH', $storage->verify(self::KEY, 5, $sha)->failure);
+    }
+
+    public function test_s3_object_stream_reads_psr_body_in_bounded_chunks(): void
+    {
+        [$storage, $mock] = $this->mockedS3();
+        $bytes = str_repeat('s3-stream', 30000);
+        $mock->append(new Result(['Body' => Utils::streamFor($bytes)]));
+        $count = 0;
+        $largest = 0;
+        $hash = hash_init('sha256');
+
+        $actual = $storage->streamObject(self::KEY, function (string $chunk) use (&$count, &$largest, &$hash): void {
+            $count += strlen($chunk);
+            $largest = max($largest, strlen($chunk));
+            hash_update($hash, $chunk);
+        });
+
+        $this->assertSame(strlen($bytes), $actual);
+        $this->assertSame(strlen($bytes), $count);
+        $this->assertSame(hash('sha256', $bytes), hash_final($hash));
+        $this->assertLessThanOrEqual(64 * 1024, $largest);
     }
 
     public function test_s3_sends_the_sha256_so_the_service_rejects_corrupt_uploads(): void

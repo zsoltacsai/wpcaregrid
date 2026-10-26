@@ -18,7 +18,7 @@ use Aws\S3\S3Client;
  * - Larger objects are uploaded in parts. S3 then only knows a checksum of
  *   checksums, so verification streams the object back and hashes it.
  */
-final class S3Storage implements IncompleteUploadListable, InspectableBackupStorage, ListableBackupStorage
+final class S3Storage implements IncompleteUploadListable, InspectableBackupStorage, ListableBackupStorage, StreamableBackupStorage
 {
     use HashesStreams;
 
@@ -121,6 +121,35 @@ final class S3Storage implements IncompleteUploadListable, InspectableBackupStor
         }
 
         return (string) $object['Body'];
+    }
+
+    public function streamObject(string $key, callable $consume): int
+    {
+        try {
+            $object = $this->client()->getObject([
+                'Bucket' => $this->config['bucket'],
+                'Key' => $this->key($key),
+                '@http' => ['stream' => true],
+            ] + $this->encryptionParameters());
+
+            $body = $object['Body'];
+            $bytes = 0;
+            while (! $body->eof()) {
+                $chunk = $body->read(64 * 1024);
+                if ($chunk === '' && ! $body->eof()) {
+                    throw new StorageUnavailable('S3 object stream ended unexpectedly.');
+                }
+                if ($chunk === '') {
+                    break;
+                }
+                $consume($chunk);
+                $bytes += strlen($chunk);
+            }
+
+            return $bytes;
+        } catch (AwsException $e) {
+            throw $this->unavailable($e);
+        }
     }
 
     public function delete(string $key): void

@@ -266,6 +266,16 @@ A restore always names one verified, unexpired backup of the same website, and a
   - `update.blocked`.
 
   Entries carry codes and sizes only.
+
+### Customer object downloads — Phase A (default off)
+
+`BACKUP_CUSTOMER_DOWNLOADS_ENABLED` defaults to `false`. Phase A provides only the authenticated backend; it adds no customer UI, recovery archive, offboarding grace, retention hold, deletion scheduling, or restore entitlement. Do not enable it until the separately required M12 privacy/retention review and Owner rollout approval are complete.
+
+The customer session must own the website, and the backup/object are resolved through that website. Only verified objects belonging to a verified, unexpired, retained backup can be requested. The route accepts only the fixed object names (`files`, `database`, `manifest`); provider names, storage keys and URLs come exclusively from server-side records. A download request creates or reuses a short-lived, revocable grant bound to user, customer, website, backup, object, storage provider, canonical key, expected size and SHA-256. A background backup-queue job streams the object once in bounded chunks, checks its full byte count and SHA-256 against the already verified object record, and stores only encrypted per-block SHA-256 fingerprints in the grant. No backup copy is created.
+
+Each content request requires one bounded HTTP `Range` header and returns at most 8 MiB plus at most one configured fingerprint block for alignment (the code refuses a block size above 8 MiB), after the complete aligned block(s) have been checked against those encrypted fingerprints. This content-addressed check is the version-binding mechanism for both S3 and SFTP: a later provider read may come from another physical version, but no bytes are returned unless they match the exact bytes that passed the full SHA-256 preparation scan. Missing, changed, truncated or unavailable objects fail closed. Requests require the normal authenticated customer session; the grant UUID is not a bearer credential. Rate limits apply per grant creation and per content request. Customer-download lifecycle and refusal events use structured application logs with fixed event codes, actor/site/backup identifiers, fixed object names and byte counts only; they do not contain storage keys, provider URLs, checksums, credentials or provider exception text. Download lifecycle entries are not added to `website_events` in Phase A, so the customer-visible audit timeline and its translations are unchanged.
+
+The endpoint intentionally supports one range per request; clients resume by requesting the next range with the same unexpired grant. It never serves an unbounded whole-object response. The background scan can take up to the configured preparation timeout; a preparation grant expires after one hour and a ready grant after ten minutes. The encrypted block-hash manifest is transient grant data and is cleared on revocation or preparation failure. Database backup/restore and encryption-key lifecycle policy must account for this encrypted transient data; it is not a substitute for the pending M12 retention/privacy review. Local storage and any provider without bounded streaming support are refused.
 - **Connector side:**
   - `PathGuard` refuses absolute paths, `..`, backslashes, NUL and drive letters;
   - `realpath` containment is checked before any write;
@@ -296,6 +306,7 @@ All settings are in `config/backup.php`, read from `.env` (see `.env.example`):
 - **uploads and staging:** chunk size, maximum object size, staging path;
 - **transfer:** tries, backoff and timeout;
 - **verification:** read-back;
+- **customer downloads:** `BACKUP_CUSTOMER_DOWNLOADS_ENABLED` (default `false`), 10-minute ready-grant TTL, 1-hour preparation TTL, 4 MiB default fingerprint blocks (allowed 1–8 MiB) and 8 MiB maximum HTTP ranges. These are bounded code defaults, not production activation approval;
 - **timeouts and cooldowns:** stale-after hours, staging retention, manual cooldown;
 - **per plan:** retention, whether pre-update backups are required, restore allowed;
 - **restores:** the restore feature flag.
