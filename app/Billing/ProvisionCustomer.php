@@ -2,6 +2,7 @@
 
 namespace App\Billing;
 
+use App\Localization\Locales;
 use App\Mail\AccountActivation;
 use App\Models\CheckoutIntent;
 use App\Models\Customer;
@@ -86,7 +87,7 @@ final class ProvisionCustomer
             $intent->refresh();
         }
 
-        $this->ensureUser($customer);
+        $this->ensureUser($customer, $intent);
         $this->recordCheckoutLegalAcceptance($intent, $customer);
 
         return $customer;
@@ -114,7 +115,7 @@ final class ProvisionCustomer
         }
     }
 
-    private function ensureUser(Customer $customer): void
+    private function ensureUser(Customer $customer, CheckoutIntent $intent): void
     {
         if ($customer->user_id) {
             return;
@@ -140,12 +141,18 @@ final class ProvisionCustomer
             return;
         }
 
+        $customer->user()->associate($user)->save();
+        $customer->setRelation('user', $user);
+
         if ($user->wasRecentlyCreated) {
+            $locale = Locales::isSupported($intent->locale) ? $intent->locale : null;
+            if ($locale !== null) {
+                $user->forceFill(['locale' => $locale])->save();
+            }
+
             $token = Password::broker('activations')->createToken($user);
             Mail::to($customer->email)->queue((new AccountActivation($customer, $token))->afterCommit());
         }
-
-        $customer->user()->associate($user)->save();
     }
 
     private function recordCheckoutLegalAcceptance(CheckoutIntent $intent, Customer $customer): void

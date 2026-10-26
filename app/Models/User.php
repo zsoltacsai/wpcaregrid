@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Localization\Locales;
+use App\Notifications\CustomerPasswordReset;
 use App\Operator\Permission;
 use Database\Factories\UserFactory;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
@@ -54,6 +56,24 @@ class User extends Authenticatable implements MustVerifyEmail
     public function customer(): HasOne
     {
         return $this->hasOne(Customer::class);
+    }
+
+    /** Send reset links using this login's saved language, independent of request locale. */
+    public function sendPasswordResetNotification($token): void
+    {
+        // The password broker is shared by customers and internal accounts.
+        // The schema defines null role as customer; fail closed for every
+        // internal, unexpected or ambiguous non-null role, even with a Customer.
+        $isCustomerAccount = $this->role === null
+            && ! $this->isOwner()
+            && ! $this->isOperator()
+            && $this->customer()->exists();
+
+        $locale = $isCustomerAccount && Locales::isSupported($this->locale)
+            ? $this->locale
+            : ($isCustomerAccount ? Locales::default() : 'en');
+
+        $this->notify(new CustomerPasswordReset($token, $locale));
     }
 
     public function legalDocumentAcceptances(): HasMany

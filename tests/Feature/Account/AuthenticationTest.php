@@ -6,7 +6,7 @@ use App\Mail\AccountActivation;
 use App\Mail\WelcomeEmail;
 use App\Models\Customer;
 use App\Models\User;
-use Illuminate\Auth\Notifications\ResetPassword;
+use App\Notifications\CustomerPasswordReset;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -113,7 +113,7 @@ class AuthenticationTest extends TestCase
 
         $known->assertSessionHas('status', __('account.auth.link_sent'));
         $unknown->assertSessionHas('status', __('account.auth.link_sent'));
-        Notification::assertSentTo($user, ResetPassword::class);
+        Notification::assertSentTo($user, CustomerPasswordReset::class);
         Notification::assertCount(1);
     }
 

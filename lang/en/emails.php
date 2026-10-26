@@ -5,6 +5,14 @@ return [
     'greeting' => 'Hello :name,',
     'signature' => 'WP CareGrid',
     'support' => 'Questions? Reply to this email.',
+    'password_reset' => [
+        'subject' => 'Password reset request',
+        'greeting' => 'Hello,',
+        'intro' => 'We received a password reset request for your account.',
+        'action' => 'Reset password',
+        'expiry' => 'This link will expire in :count minutes.',
+        'ignore' => 'If you did not request a password reset, no further action is needed.',
+    ],
 
     'activation' => [
         'subject' => 'Activate your WP CareGrid account',
