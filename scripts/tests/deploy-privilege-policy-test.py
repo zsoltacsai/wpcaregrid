@@ -7,6 +7,7 @@ import io
 import os
 import shutil
 import socket
+import stat
 import subprocess
 import tempfile
 from contextlib import redirect_stdout
@@ -269,9 +270,15 @@ def main():
         valid_evidence = {
             "executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(),
             "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]},
-            "fd_target": "socket:[98765]",
+            "fd_is_socket": True,
         }
-        module.validate_fpm_listener_processes(profile, inode, owners, lambda pid, fd: valid_evidence)
+        module.validate_fpm_listener_processes(profile, inode, inode, owners, lambda pid, fd: valid_evidence)
+        try:
+            module.validate_fpm_listener_processes(profile, inode, inode + 1, owners, lambda pid, fd: valid_evidence)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("listener inode that differs from the configured socket path was accepted")
         for invalid_output in (
             "",
             f"u_str ESTAB 0 511 {socket_path} * 0 users:((\"php-fpm\",pid=1234,fd=8)) ino:98765",
@@ -284,12 +291,12 @@ def main():
             else:
                 raise AssertionError("stale, inactive, or ownerless FPM socket passed listener validation")
         for invalid_evidence in (
-            {"executable": "/usr/bin/python3", "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]}, "fd_target": "socket:[98765]"},
-            {"executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "cgroup_paths": {"/system.slice/other.service"}, "fd_target": "socket:[98765]"},
-            {"executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]}, "fd_target": "socket:[98766]"},
+            {"executable": "/usr/bin/python3", "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]}, "fd_is_socket": True},
+            {"executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "cgroup_paths": {"/system.slice/other.service"}, "fd_is_socket": True},
+            {"executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]}, "fd_is_socket": False},
         ):
             try:
-                module.validate_fpm_listener_processes(profile, inode, owners, lambda pid, fd, item=invalid_evidence: item)
+                module.validate_fpm_listener_processes(profile, inode, inode, owners, lambda pid, fd, item=invalid_evidence: item)
             except ValueError:
                 pass
             else:
@@ -309,7 +316,8 @@ def main():
                 inode, owners = module.parse_unix_listener_records(ss.stdout, live_path)
                 assert os.getpid() in {pid for pid, _ in owners}, "real Unix listener is not attributed to its owning process"
                 targets = [(pid, fd, os.readlink(f"/proc/{pid}/fd/{fd}")) for pid, fd in owners]
-                assert any(target == f"socket:[{inode}]" for _, _, target in targets), f"ss listener inode {inode} did not match owner FD targets {targets!r}"
+                assert os.lstat(live_path).st_ino == inode, "ss listener inode did not match the bound socket path inode"
+                assert all(stat.S_ISSOCK(os.stat(f"/proc/{pid}/fd/{fd}").st_mode) for pid, fd in owners), f"ss listener owners no longer hold socket descriptors: {targets!r}"
             finally:
                 listener.close()
 

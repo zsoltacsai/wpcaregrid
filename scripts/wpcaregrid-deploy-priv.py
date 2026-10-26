@@ -616,15 +616,20 @@ def validate_fpm_main_process(profile, *, pid, executable, cgroup_paths, command
         raise ValueError("active FPM master identity or configuration differs from profile")
 
 
-def validate_fpm_listener_processes(profile, inode, owners, process_evidence):
+def validate_fpm_listener_processes(profile, inode, socket_path_inode, owners, process_evidence):
     profile = php_profile(profile)
-    if not isinstance(inode, int) or inode <= 0 or not owners:
+    # `ss -e` reports the bound pathname's VFS inode; /proc/<pid>/fd points
+    # at the socket object and has a distinct sockfs inode. Bind the listener
+    # row to the configured path, then verify each `ss`-reported PID/FD still
+    # names a socket held by the selected FPM service.
+    if (not isinstance(inode, int) or inode <= 0 or not owners
+            or not isinstance(socket_path_inode, int) or socket_path_inode != inode):
         raise ValueError("invalid FPM listener evidence")
     for pid, fd in owners:
         evidence = process_evidence(pid, fd)
         if (evidence.get("executable") != PHP_RUNTIME_FPM_BINARIES[profile].as_posix()
                 or PHP_RUNTIME_FPM_CGROUPS[profile] not in evidence.get("cgroup_paths", set())
-                or evidence.get("fd_target") != f"socket:[{inode}]" ):
+                or evidence.get("fd_is_socket") is not True):
             raise ValueError("FPM listener is not owned by the selected FPM service")
 
 
@@ -728,12 +733,18 @@ def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
         try:
             executable = os.readlink(f"/proc/{listener_pid}/exe")
             cgroups = process_cgroup_paths(listener_pid)
-            fd_target = os.readlink(f"/proc/{listener_pid}/fd/{listener_fd}")
+            fd_info = os.stat(f"/proc/{listener_pid}/fd/{listener_fd}")
         except OSError:
             raise ValueError("active FPM listener process evidence is unavailable") from None
-        return {"executable": executable, "cgroup_paths": cgroups, "fd_target": fd_target}
+        return {"executable": executable, "cgroup_paths": cgroups, "fd_is_socket": stat.S_ISSOCK(fd_info.st_mode)}
 
-    validate_fpm_listener_processes(profile, listener_inode, listener_owners, listener_process_evidence)
+    validate_fpm_listener_processes(
+        profile,
+        listener_inode,
+        socket_info.st_ino,
+        listener_owners,
+        listener_process_evidence,
+    )
     nginx_runtime_contract(active_php_profile())
     supervisor_runtime_contract(allow_legacy=allow_legacy_supervisor)
 
