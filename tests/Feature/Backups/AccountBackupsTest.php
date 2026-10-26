@@ -9,6 +9,7 @@ use App\Backups\BackupType;
 use App\Backups\RestoreStatus;
 use App\Compatibility\CapabilityReadiness;
 use App\Models\Backup;
+use App\Models\BackupObject;
 use App\Models\BackupRestore;
 use App\Models\WebsiteJob;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -110,6 +111,72 @@ class AccountBackupsTest extends TestCase
             ->assertSee(['Pre-update', 'Scheduled', 'Verified', 'Failed', 'The backup did not finish in time'])
             ->assertSee(__('backups.account.restore_disabled'))
             ->assertDontSee(route('account.websites.backups.restore', [$website, $failed]));
+    }
+
+    public function test_customer_backup_browser_shows_only_verified_objects_when_downloads_are_enabled(): void
+    {
+        config(['backup.downloads.enabled' => true]);
+        $site = $this->backupReadySite();
+        $website = $site['website'];
+        $backup = $this->verifiedBackup($website, BackupType::Full);
+        $files = $backup->objects()->where('name', 'files')->firstOrFail();
+
+        $this->actingAs($website->customer->user)
+            ->get(route('account.websites.backups.index', $website))
+            ->assertOk()
+            ->assertSee(__('backups.download.guide_title'))
+            ->assertSee(__('backups.download.not_one_click'))
+            ->assertSee(__('backups.download.objects.manifest'))
+            ->assertSee(__('backups.download.objects.files'))
+            ->assertSee(__('backups.download.objects.database'))
+            ->assertSee('data-customer-backup-download', false)
+            ->assertSee(route('account.websites.backups.download-grants.store', [$website, $backup, 'files']), false)
+            ->assertSee('data-filename="files.tar.gz"', false)
+            ->assertSee('data-total-size="'.$files->size.'"', false)
+            ->assertSee('data-sha256="'.$files->sha256.'"', false)
+            ->assertSee('data-range-limit="8388608"', false)
+            ->assertSee(__('backups.download.verified_at'))
+            ->assertSee(__('backups.download.show_checksum'));
+    }
+
+    public function test_customer_backup_browser_keeps_download_controls_default_off(): void
+    {
+        $this->assertFalse(config('backup.downloads.enabled'));
+        $site = $this->backupReadySite();
+        $backup = $this->verifiedBackup($site['website'], BackupType::Full);
+
+        $this->actingAs($site['website']->customer->user)
+            ->get(route('account.websites.backups.index', $site['website']))
+            ->assertOk()
+            ->assertSee(__('backups.download.disabled'))
+            ->assertDontSee('data-customer-backup-download', false)
+            ->assertDontSee(route('account.websites.backups.download-grants.store', [$site['website'], $backup, 'files']), false);
+    }
+
+    public function test_customer_backup_browser_does_not_offer_unverified_objects(): void
+    {
+        config(['backup.downloads.enabled' => true]);
+        $site = $this->backupReadySite();
+        $backup = $this->verifiedBackup($site['website'], BackupType::Full);
+        $files = $backup->objects()->where('name', 'files')->firstOrFail();
+        $files->update(['status' => BackupObject::PENDING, 'verified_at' => null]);
+
+        $this->actingAs($site['website']->customer->user)
+            ->get(route('account.websites.backups.index', $site['website']))
+            ->assertOk()
+            ->assertDontSee(route('account.websites.backups.download-grants.store', [$site['website'], $backup, 'files']), false)
+            ->assertSee(__('backups.download.unavailable'));
+    }
+
+    public function test_customer_cannot_open_another_customers_backup_browser(): void
+    {
+        $ownerSite = $this->backupReadySite('https://owner.example');
+        $foreignSite = $this->backupReadySite('https://other.example');
+        $this->verifiedBackup($foreignSite['website'], BackupType::Full);
+
+        $this->actingAs($ownerSite['website']->customer->user)
+            ->get(route('account.websites.backups.index', $foreignSite['website']))
+            ->assertForbidden();
     }
 
     public function test_restore_confirmation_flow(): void
