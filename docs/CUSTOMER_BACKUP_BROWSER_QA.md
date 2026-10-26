@@ -38,7 +38,7 @@ The following screenshots were captured by the passing headed-Chromium Playwrigh
 
 **Agent-observed manual verification:** in Windows Chrome the real operating-system save picker opened from the page's Start click. Canceling it returned to the page with the localized “No save location selected” state and restored Start; no grant was requested by that gesture. A subsequent agent attempt to save through the native dialog could not be completed because the available UI control could not target its Save button. The later Owner confirmation supersedes the prior UNKNOWN for successful native file writing, but does not imply that the agent independently observed the write.
 
-**Native Cancel → Start:** no separate Owner confirmation or agent-observed successful native picker cancel-then-restart-and-save cycle is recorded. Keep this specific native interaction **UNKNOWN**. The automated regression `Cancel then Start obtains a fresh writer and downloads from byte zero` passed using the deterministic browser API stub; it remains separate evidence and must not be described as a manual native test.
+**Owner-reported native Cancel → Start verification:** the Owner reports that they canceled an in-progress delayed synthetic download, started a new native save, and verified that the newly saved file contained exactly `00 01 02 03`. This records the interruption and restarted save as separate sequential events. The Owner did not provide the browser/version, OS build, or a screenshot; none is inferred. This is Owner-reported evidence, not independently observed by the agent. The automated regression `Cancel then Start obtains a fresh writer and downloads from byte zero` is separately passing with the deterministic browser API stub and is not the evidence for this manual result.
 
 ## Manual native-picker check (Chrome or Edge)
 
@@ -68,7 +68,7 @@ The automated Chromium suite does not claim this native picker check passed. Saf
 | Invalid Content-Range and changed object identity fail closed | Two dedicated Playwright regression cases | PASS |
 | Native Windows picker opens and cancellation returns to a usable page | Agent-observed manual Chrome session | PASS |
 | Native file write completes and saved bytes equal `00 01 02 03` | Owner-reported manual verification of `synthetic-backup.bin`; browser/OS details not supplied | PASS (Owner evidence; not independently observed by agent) |
-| Native picker Cancel → Start → successful fresh save | No specific manual result reported; automated writer-stub regression is separate | **UNKNOWN** |
+| Native picker Cancel → Start → successful fresh save | Owner reports canceling the delayed synthetic transfer, starting a new save, and verifying the newly saved file bytes | PASS (Owner evidence; not independently observed by agent) |
 | Safari/WebKit Blob behavior | No Safari/WebKit runtime available in this QA session | **UNKNOWN** |
 | Feature remains default-off and customer controls are eligibility-gated | `AccountBackupsTest::test_customer_backup_browser_shows_only_verified_objects_when_downloads_are_enabled` and default-off view regression | PASS |
 | Feature limits, no public provider URL, no restore/retention change | Source review of the complete PR; limits remain 256 MiB disk / 16 MiB Blob; #191C excluded | PASS |
