@@ -8,6 +8,7 @@ use App\Models\BackupDownloadGrant;
 use App\Models\Website;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
 use Symfony\Component\Process\Process;
 use Tests\Concerns\CreatesBackups;
 use Tests\TestCase;
@@ -110,12 +111,15 @@ class CustomerBackupDownloadConcurrencyTest extends TestCase
     public function test_concurrent_preparation_failure_cannot_overwrite_revoke(): void
     {
         config(['backup.downloads.enabled' => true]);
+        Queue::fake();
         $site = $this->backupReadySite('https://revoke-failure-race.example');
         $backup = $this->verifiedBackup($site['website'], BackupType::Full);
         $backup->forceFill(['storage_provider' => 'sftp'])->save();
         $object = $backup->objects()->where('name', 'files')->firstOrFail();
         $grant = app(BackupDownloadGrants::class)
             ->create($site['website']->customer->user, $site['website'], $backup, $object);
+        $this->assertSame(BackupDownloadGrant::PREPARING, $grant->status);
+        $this->assertNull($grant->failure_code);
         $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'wpcg-download-failure-race-'.bin2hex(random_bytes(8));
         mkdir($directory, 0700);
         $process = null;
