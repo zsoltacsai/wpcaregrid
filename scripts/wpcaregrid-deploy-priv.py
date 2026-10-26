@@ -488,6 +488,8 @@ def validate_nginx_runtime_dump(output):
                     # socket directive. Reject any competing inline PHP route.
                     if server["php_sockets"]:
                         raise ValueError("staging vhost has a competing inline PHP socket")
+                elif is_staging and server["php_sockets"]:
+                    raise ValueError("staging vhost has an unselected PHP socket")
                 server = None
     if include_count != 1 or selected_include_blocks != 1:
         raise ValueError("PHP runtime selector is not uniquely scoped to a staging vhost")

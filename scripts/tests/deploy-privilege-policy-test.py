@@ -331,6 +331,7 @@ def main():
             good_nginx + "# configuration file /etc/nginx/sites-enabled/other.example:\ninclude /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n",
             good_nginx.replace("include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;", "fastcgi_pass unix:/run/php/php7.4-fpm.sock;"),
             good_nginx.replace("include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;", "include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n    fastcgi_pass unix:/run/php/php8.4-fpm.sock;"),
+            good_nginx + "# configuration file /etc/nginx/sites-enabled/staging-extra:\nserver {\n    server_name staging.wpcaregrid.com;\n    fastcgi_pass unix:/run/php/php8.5-fpm.sock;\n}\n",
         ):
             module.run = lambda argv, bad_nginx=bad_nginx, **kwargs: subprocess.CompletedProcess(argv, 0, stdout=bad_nginx if argv[-1] == "-T" else "")
             try:
