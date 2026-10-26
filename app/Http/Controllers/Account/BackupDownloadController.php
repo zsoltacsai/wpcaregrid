@@ -23,11 +23,11 @@ final class BackupDownloadController extends Controller
     public function create(Request $request, Website $website, Backup $backup, string $object, BackupDownloadGrants $grants): JsonResponse
     {
         $name = BackupObjectName::tryFrom($object);
-        if (! $name) {
+        if (!$name) {
             return response()->json(['code' => 'NOT_FOUND'], 404);
         }
         $backupObject = $backup->objects()->where('name', $name->value)->first();
-        if (! $backupObject) {
+        if (!$backupObject) {
             return response()->json(['code' => 'NOT_FOUND'], 404);
         }
 
@@ -75,12 +75,12 @@ final class BackupDownloadController extends Controller
         $response = response()->stream(function () use ($range, $grant, $grants): void {
             $sent = 0;
             try {
-                if (! connection_aborted()) {
+                if (!connection_aborted()) {
                     echo $range->bytes;
                     $sent = strlen($range->bytes);
                 }
             } finally {
-                $grants->recordResponse($grant, $sent, $sent === $range->length && ! connection_aborted());
+                $grants->recordResponse($grant, $sent, $sent === $range->length && !connection_aborted());
             }
         }, 206, [
             'Accept-Ranges' => 'bytes',

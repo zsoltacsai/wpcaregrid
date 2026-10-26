@@ -263,7 +263,9 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
         return 'sftp';
     }
 
-    public function put(string $key, $stream, int $size, string $sha256): void {}
+    public function put(string $key, $stream, int $size, string $sha256): void
+    {
+    }
 
     public function verify(string $key, int $size, string $sha256): Verification
     {
@@ -279,6 +281,7 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
         }
         return $bytes;
     }
+
     public function streamObject(string $key, callable $consume): int
     {
         if ($this->failWithSensitiveProviderMessage) {
@@ -293,6 +296,7 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
         }
         return $bytes;
     }
+
     public function delete(string $key): void
     {
         unset($this->objects[$key]);

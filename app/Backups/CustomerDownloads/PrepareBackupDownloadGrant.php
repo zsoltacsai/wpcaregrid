@@ -2,7 +2,6 @@
 
 namespace App\Backups\CustomerDownloads;
 
-use App\Backups\BackupStatus;
 use App\Backups\Storage\StorageManager;
 use App\Backups\Storage\StreamableBackupStorage;
 use App\Models\Backup;
@@ -15,8 +14,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /** Prepare one encrypted block-fingerprint manifest; never copies the backup. */

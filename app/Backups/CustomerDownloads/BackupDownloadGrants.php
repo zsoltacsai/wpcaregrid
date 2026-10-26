@@ -75,23 +75,23 @@ final class BackupDownloadGrants
     {
         $this->requireEnabled();
         $customer = $user->customer;
-        if (! $customer instanceof Customer || $user->isOwner() || $user->isOperator() || (int) $website->customer_id !== (int) $customer->id
+        if (!$customer instanceof Customer || $user->isOwner() || $user->isOperator() || (int) $website->customer_id !== (int) $customer->id
             || (int) $backup->website_id !== (int) $website->id || (int) $object->backup_id !== (int) $backup->id) {
             throw new BackupDownloadRefused('NOT_FOUND');
         }
 
-        if ($backup->status !== BackupStatus::Verified || ! $backup->isRestorable()) {
+        if ($backup->status !== BackupStatus::Verified || !$backup->isRestorable()) {
             throw new BackupDownloadRefused('BACKUP_UNAVAILABLE');
         }
 
         $name = BackupObjectName::tryFrom((string) $object->name);
-        if (! $name || ($name !== BackupObjectName::Manifest && ! in_array($name->value, $backup->type->objects(), true))) {
+        if (!$name || ($name !== BackupObjectName::Manifest && !in_array($name->value, $backup->type->objects(), true))) {
             throw new BackupDownloadRefused('OBJECT_UNAVAILABLE');
         }
 
         if ($object->status !== BackupObject::VERIFIED || $object->verified_at === null || $object->size < 1
             || $object->size > (int) config('backup.upload.max_object_size', 50 * 1024 * 1024 * 1024)
-            || ! is_string($object->sha256) || ! preg_match('/\A[a-f0-9]{64}\z/i', $object->sha256)
+            || !is_string($object->sha256) || !preg_match('/\A[a-f0-9]{64}\z/i', $object->sha256)
             || ($object->remote_size !== null && $object->remote_size !== $object->size)) {
             throw new BackupDownloadRefused('OBJECT_UNAVAILABLE');
         }
@@ -109,7 +109,7 @@ final class BackupDownloadGrants
 
         if ($grant && ((int) $grant->user_id !== (int) $user->id || (int) $grant->customer_id !== (int) $customer->id
             || (int) $grant->website_id !== (int) $website->id || (int) $grant->backup_id !== (int) $backup->id
-            || (int) $grant->backup_object_id !== (int) $object->id || ! $this->snapshotMatches($grant, $website, $backup, $object))) {
+            || (int) $grant->backup_object_id !== (int) $object->id || !$this->snapshotMatches($grant, $website, $backup, $object))) {
             throw new BackupDownloadRefused('GRANT_REVOKED');
         }
 
@@ -120,7 +120,7 @@ final class BackupDownloadGrants
     {
         DB::transaction(function () use ($grantId, $blockSize, $encodedHashes): void {
             $grant = BackupDownloadGrant::query()->whereKey($grantId)->lockForUpdate()->first();
-            if (! $grant || $grant->status !== BackupDownloadGrant::PREPARING || $grant->revoked_at !== null || $grant->expires_at?->isPast()) {
+            if (!$grant || $grant->status !== BackupDownloadGrant::PREPARING || $grant->revoked_at !== null || $grant->expires_at?->isPast()) {
                 return;
             }
             if ($blockSize < 1024 * 1024 || $blockSize > 8 * 1024 * 1024) {
@@ -130,7 +130,7 @@ final class BackupDownloadGrants
             }
             $decoded = base64_decode($encodedHashes, true);
             $expectedCount = (int) ceil($grant->object_size / $blockSize);
-            if (! is_string($decoded) || strlen($decoded) !== $expectedCount * 32) {
+            if (!is_string($decoded) || strlen($decoded) !== $expectedCount * 32) {
                 $grant->forceFill(['status' => BackupDownloadGrant::FAILED, 'failure_code' => 'FINGERPRINT_INVALID'])->save();
 
                 return;
@@ -162,7 +162,7 @@ final class BackupDownloadGrants
         $allowed = ['PREPARATION_EXPIRED', 'OBJECT_SIZE_MISMATCH', 'OBJECT_INTEGRITY_MISMATCH', 'STORAGE_UNAVAILABLE', 'STORAGE_UNSUPPORTED', 'FINGERPRINT_CONFIGURATION_INVALID', 'FINGERPRINT_INVALID', 'PREPARATION_FAILED'];
         $code = in_array($code, $allowed, true) ? $code : 'PREPARATION_FAILED';
         $grant = BackupDownloadGrant::query()->whereKey($grantId)->first();
-        if (! $grant || $grant->status !== BackupDownloadGrant::PREPARING || $grant->revoked_at !== null) {
+        if (!$grant || $grant->status !== BackupDownloadGrant::PREPARING || $grant->revoked_at !== null) {
             return;
         }
         $grant->forceFill(['status' => BackupDownloadGrant::FAILED, 'failure_code' => $code, 'block_hashes' => null])->save();
@@ -206,7 +206,7 @@ final class BackupDownloadGrants
         $website = Website::query()->find($grant->website_id);
         $backup = Backup::query()->find($grant->backup_id);
         $object = BackupObject::query()->find($grant->backup_object_id);
-        if (! $website || ! $backup || ! $object) {
+        if (!$website || !$backup || !$object) {
             throw new BackupDownloadRefused('GRANT_REVOKED');
         }
         $this->assertEligible($user, $website, $backup, $object, $grant);
@@ -221,13 +221,13 @@ final class BackupDownloadGrants
             $hashes = false;
         }
         $count = (int) ceil($grant->object_size / $blockSize);
-        if (! is_string($hashes) || strlen($hashes) !== $count * 32) {
+        if (!is_string($hashes) || strlen($hashes) !== $count * 32) {
             throw new BackupDownloadRefused('FINGERPRINT_INVALID');
         }
 
         try {
             $storage = $this->storages->provider($grant->storage_provider);
-            if (! $storage instanceof StreamableBackupStorage || $storage->name() !== $grant->storage_provider) {
+            if (!$storage instanceof StreamableBackupStorage || $storage->name() !== $grant->storage_provider) {
                 throw new BackupDownloadRefused('STORAGE_UNSUPPORTED');
             }
             $firstBlock = intdiv($range->offset, $blockSize);
@@ -242,7 +242,7 @@ final class BackupDownloadGrants
                 $relativeOffset = ($block - $firstBlock) * $blockSize;
                 $blockLength = min($blockSize, $grant->object_size - ($block * $blockSize));
                 $expectedHash = substr($hashes, $block * 32, 32);
-                if (! hash_equals($expectedHash, hash('sha256', substr($bytes, $relativeOffset, $blockLength), true))) {
+                if (!hash_equals($expectedHash, hash('sha256', substr($bytes, $relativeOffset, $blockLength), true))) {
                     throw new BackupDownloadRefused('OBJECT_INTEGRITY_MISMATCH');
                 }
             }
@@ -264,14 +264,14 @@ final class BackupDownloadGrants
         $website = Website::query()->find($grant->website_id);
         $backup = Backup::query()->find($grant->backup_id);
         $object = BackupObject::query()->find($grant->backup_object_id);
-        if (! $website || ! $backup || ! $object) {
+        if (!$website || !$backup || !$object) {
             throw new BackupDownloadRefused('GRANT_REVOKED');
         }
         $this->assertEligible($user, $website, $backup, $object, $grant);
 
         // A revoke racing the storage read wins before response bytes are emitted.
         $grant = BackupDownloadGrant::query()->find($grant->id);
-        if (! $grant || $grant->status !== BackupDownloadGrant::READY || $grant->revoked_at !== null || $grant->expires_at?->isPast()) {
+        if (!$grant || $grant->status !== BackupDownloadGrant::READY || $grant->revoked_at !== null || $grant->expires_at?->isPast()) {
             throw new BackupDownloadRefused('GRANT_REVOKED');
         }
         $grant->forceFill(['last_range_at' => now(), 'range_responses' => $grant->range_responses + 1])->save();
@@ -295,7 +295,7 @@ final class BackupDownloadGrants
         if ($max < 1 || $max > 8 * 1024 * 1024) {
             throw new BackupDownloadRefused('RANGE_CONFIGURATION_INVALID');
         }
-        if ($total < 1 || strlen($header) > 100 || str_contains($header, ',') || ! preg_match('/\Abytes=(\d*)-(\d*)\z/i', trim($header), $match)) {
+        if ($total < 1 || strlen($header) > 100 || str_contains($header, ',') || !preg_match('/\Abytes=(\d*)-(\d*)\z/i', trim($header), $match)) {
             throw new BackupDownloadRefused('RANGE_INVALID');
         }
         if ($match[1] === '' && $match[2] === '') {
@@ -345,7 +345,7 @@ final class BackupDownloadGrants
 
     private function requireEnabled(): void
     {
-        if (! $this->enabled()) {
+        if (!$this->enabled()) {
             throw new BackupDownloadRefused('NOT_FOUND');
         }
     }
