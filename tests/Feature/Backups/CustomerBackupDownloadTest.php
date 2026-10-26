@@ -6,12 +6,12 @@ use App\Backups\BackupObjectName;
 use App\Backups\CustomerDownloads\BackupDownloadGrants;
 use App\Backups\CustomerDownloads\PrepareBackupDownloadGrant;
 use App\Backups\Storage\BackupStorage;
+use App\Backups\Storage\StorageManager;
 use App\Backups\Storage\StreamableBackupStorage;
 use App\Backups\Storage\Verification;
 use App\Models\Backup;
 use App\Models\BackupDownloadGrant;
 use App\Models\BackupObject;
-use App\Backups\Storage\StorageManager;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
@@ -237,6 +237,7 @@ class CustomerBackupDownloadTest extends TestCase
     {
         $backup = $this->verifiedBackup($website, at: $at);
         $backup->forceFill(['storage_provider' => 'sftp'])->save();
+
         return $backup->refresh();
     }
 
@@ -278,6 +279,7 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
         if ($this->afterRangeRead !== null) {
             ($this->afterRangeRead)();
         }
+
         return $bytes;
     }
 
@@ -293,6 +295,7 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
             $consume($chunk);
             $bytes += strlen($chunk);
         }
+
         return $bytes;
     }
 

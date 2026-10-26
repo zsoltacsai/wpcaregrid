@@ -126,6 +126,7 @@ final class BackupDownloadGrants
             if ($blockSize < 1024 * 1024 || $blockSize > 8 * 1024 * 1024) {
                 $grant->forceFill(['status' => BackupDownloadGrant::FAILED, 'failure_code' => 'FINGERPRINT_CONFIGURATION_INVALID'])->save();
                 $this->audit('failed', $grant->user, $grant->website, $grant->backup, $grant->object_name, 'FINGERPRINT_CONFIGURATION_INVALID');
+
                 return;
             }
             $decoded = base64_decode($encodedHashes, true);
@@ -275,6 +276,7 @@ final class BackupDownloadGrants
             throw new BackupDownloadRefused('GRANT_REVOKED');
         }
         $grant->forceFill(['last_range_at' => now(), 'range_responses' => $grant->range_responses + 1])->save();
+
         return new DownloadRange($range->offset, $range->length, $range->total, $slice);
     }
 
@@ -319,6 +321,7 @@ final class BackupDownloadGrants
         if ($length > $max) {
             throw new BackupDownloadRefused('RANGE_TOO_LARGE');
         }
+
         return new DownloadRange($start, $length, $total, '');
     }
 

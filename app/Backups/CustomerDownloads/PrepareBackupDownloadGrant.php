@@ -16,7 +16,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
 /** Prepare one encrypted block-fingerprint manifest; never copies the backup. */
-final class PrepareBackupDownloadGrant implements ShouldQueue, ShouldBeUnique
+final class PrepareBackupDownloadGrant implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 

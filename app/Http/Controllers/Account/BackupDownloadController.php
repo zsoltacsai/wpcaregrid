@@ -100,6 +100,7 @@ final class BackupDownloadController extends Controller
     {
         try {
             $grants->revoke($request->user(), $grant);
+
             return response()->json(['status' => BackupDownloadGrant::REVOKED]);
         } catch (BackupDownloadRefused $e) {
             return $this->failure($e);

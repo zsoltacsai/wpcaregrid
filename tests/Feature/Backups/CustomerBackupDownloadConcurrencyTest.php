@@ -109,6 +109,7 @@ class CustomerBackupDownloadConcurrencyTest extends TestCase
     private function childEnvironment(): array
     {
         $mysql = config('database.connections.mysql');
+
         return [
             'APP_ENV' => 'testing', 'APP_KEY' => (string) config('app.key'),
             'DB_CONNECTION' => 'mysql', 'DB_HOST' => (string) $mysql['host'], 'DB_PORT' => (string) $mysql['port'],
