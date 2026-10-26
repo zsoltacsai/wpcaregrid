@@ -22,13 +22,13 @@ blocked() {
     fi
 }
 
-for directory in /etc /etc/nginx "$PROFILE_DIR" /usr /usr/bin; do
+for directory in /etc /etc/nginx "$PROFILE_DIR" /usr /usr/bin /var /var/lib /var/lib/wpcaregrid; do
     [[ -d "$directory" && ! -L "$directory" ]] || fail
     [[ "$(stat -c '%u' "$directory")" == '0' ]] || fail
     mode="$(stat -c '%a' "$directory")"
     [[ "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 022) == 0 )) || fail
 done
-[[ -L "$PROFILE_LINK" && "$(stat -c '%u' "$PROFILE_LINK")" == '0' ]] || fail
+[[ -L "$PROFILE_LINK" && "$(stat --no-dereference -c '%u' "$PROFILE_LINK")" == '0' ]] || fail
 profile_path="$(readlink -- "$PROFILE_LINK")" || fail
 [[ "$(dirname -- "$profile_path")" == "$PROFILE_DIR" ]] || fail
 [[ -f "$profile_path" && ! -L "$profile_path" ]] || fail
@@ -49,7 +49,7 @@ case "$profile_path" in
         fail
         ;;
 esac
-[[ -x "$PHP_BIN" && ! -L "$PHP_BIN" ]] || fail
+[[ -f "$PHP_BIN" && -x "$PHP_BIN" && ! -L "$PHP_BIN" ]] || fail
 [[ "$(stat -c '%u' "$PHP_BIN")" == '0' ]] || fail
 mode="$(stat -c '%a' "$PHP_BIN")"
 [[ "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 022) == 0 )) || fail

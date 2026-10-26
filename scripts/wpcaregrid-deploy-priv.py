@@ -43,7 +43,7 @@ OLD_CRON = "* * * * * cd /var/www/wpcaregrid && php artisan schedule:run >> /dev
 GUARDED_CRON = "* * * * * /usr/local/bin/wpcaregrid-scheduler >> /dev/null 2>&1"
 STAGING_DB = "wpcaregrid"
 SCHEDULER_SOURCE_SHA256 = "de962446f29dea5bf13e33be6653ec77518ff81f48d5af1c1baec1335253885c"
-PHP_RUNTIME_LAUNCHER_SHA256 = "e47d03bf3d3a70761fe7f690d265ae870158aa80c75829ded3bfb0c73f4340b2"
+PHP_RUNTIME_LAUNCHER_SHA256 = "4e7699229435e1fe21d1b436c8e10e44901ad5794c1b16cad0df18f7778d264c"
 SCHEDULER_RUNTIME_SOURCE_SHA256 = "94470bbd9f13cc383723c17d4686e77aff0d5d13d5eb3290e5888911c776e5d4"
 WORKER_COMMANDS = {
     "wpcaregrid-default": "/usr/local/bin/wpcaregrid-php /var/www/wpcaregrid/artisan queue:work database --queue=default --sleep=3 --tries=3 --backoff=60 --timeout=120 --max-time=3600 --memory=256",

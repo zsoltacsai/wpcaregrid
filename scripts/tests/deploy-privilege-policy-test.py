@@ -362,6 +362,11 @@ def main():
     launcher = (ROOT / "scripts/run-php-runtime.sh").read_text(encoding="utf-8")
     assert "queue:work) blocked /var/lib/wpcaregrid/workers-disabled" in launcher
     assert "schedule:run) blocked /var/lib/wpcaregrid/scheduler-paused" in launcher
+    assert "/var/lib/wpcaregrid" in launcher.split("for directory in ", 1)[1].split("; do", 1)[0]
+    assert 'stat --no-dereference -c \'%u\' "$PROFILE_LINK"' in launcher
+    assert '[[ -f "$PHP_BIN" && -x "$PHP_BIN" && ! -L "$PHP_BIN" ]]' in launcher
+    launcher_hash = hashlib.sha256((ROOT / "scripts/run-php-runtime.sh").read_bytes()).hexdigest()
+    assert launcher_hash == module.PHP_RUNTIME_LAUNCHER_SHA256
     assert launcher.index("queue:work) blocked") < launcher.index('exec "$PHP_BIN"')
 
     controller = CONTROLLER.read_text(encoding="utf-8")
