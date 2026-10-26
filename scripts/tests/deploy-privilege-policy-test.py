@@ -5,6 +5,7 @@ import importlib.util
 import hashlib
 import io
 import os
+import shutil
 import subprocess
 import tempfile
 from contextlib import redirect_stdout
@@ -29,6 +30,21 @@ def expect_rejected(args):
 
 
 def main():
+    if os.name != "nt":
+        bash = shutil.which("bash")
+        if not bash:
+            raise AssertionError("Linux deployment policy tests require Bash for syntax validation")
+        subprocess.run(
+            [
+                bash,
+                "-n",
+                str(CONTROLLER),
+                str(ROOT / "scripts/run-scheduler.sh"),
+                str(ROOT / "scripts/run-php-runtime.sh"),
+            ],
+            check=True,
+        )
+
     invocations = []
 
     def fake_run(argv, **kwargs):
