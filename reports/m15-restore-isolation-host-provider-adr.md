@@ -112,8 +112,8 @@ The current #182 path runs restore mutation in Connector PHP. The supported-prov
 5. **No FPM self-drain:** Broker starts gate acquisition asynchronously after handoff acceptance. It never waits for the calling PHP-FPM request inside that request. It closes ingress, then waits until the current request and all site cgroup descendants have exited. Only then does it stop/fence the dedicated pool and prove the cgroup empty. If the caller does not exit within the bound, restore mutation does not start; the site remains closed/blocked for reconciliation. It does not kill an unknown process and assume safety.
 6. **Writer fencing and gate acquisition:** Broker confirms every control in §6, persists QUIESCENT for the exact internal generation, and only then allows worker launch.
 7. **Isolated execution:** Broker starts the fixed verified worker under a separate restore-worker identity, private mount namespace, site-only writable volume, exact site DB credentials, bounded resources and no arbitrary network/subprocess access. FPM/Connector has no live write path.
-8. **Authenticated result relay:** Broker verifies worker exit, work binding, durable mutation state, DB/filesystem evidence and required checks. It creates, signs and fsyncs a Terminal Receipt in a durable host outbox. Connector relays it to Laravel using the existing authenticated channel; Laravel independently verifies host signature and intent bindings before changing customer-visible state.
-9. **Idempotent retry:** Interrupted receipt delivery retransmits the same stored receipt. Duplicate identical receipts are acknowledged without a second transition. Conflicting, stale, invalidly signed, wrong-tenant/scope/backup receipts are rejected and cannot release the host gate.
+8. **Authenticated result relay:** Broker verifies worker exit, work binding, durable mutation state, DB/filesystem evidence and required checks. It creates, signs and fsyncs a Terminal Receipt in its durable host outbox. The broker reopens the site only after the verified terminal state is durable and all release conditions pass. Once the Connector is safely available again, it retrieves the exact stored receipt through the agent's read-only typed interface and relays it to Laravel over the existing authenticated platform channel. The agent does not relay directly to Laravel. Laravel independently verifies host signature and intent bindings before changing customer-visible state.
+9. **Idempotent retry and receipt lifecycle:** Interrupted delivery retransmits the same stored receipt; the broker retains it until an authenticated platform acknowledgement is durably recorded. Duplicate identical receipts/acknowledgements do not create another transition or work item. Conflicting, stale, invalidly signed, wrong-tenant/scope/backup receipts are rejected and cannot release the host gate. Exact retention, acknowledgement, pruning and recovery semantics are contract-PR acceptance criteria.
 
 ~~~mermaid
 sequenceDiagram
@@ -140,11 +140,17 @@ sequenceDiagram
     B->>W: Launch fixed worker in isolated site sandbox
     W->>D: Verify inputs, apply selected scope, check result
     W-->>B: Bounded work result and evidence digest
-    B->>B: Validate result; persist and sign terminal receipt
+    B->>B: Validate result; persist and sign terminal receipt/outbox
     B->>E: Reopen only after verified terminal state
-    B-->>A: Durable signed receipt available
-    A->>L: Authenticated receipt relay (retryable/idempotent)
+    C->>A: After safe reopen, request stored receipt (read-only)
+    A->>B: Read exact durable receipt by work ID
+    B-->>A: Return same signed receipt; retain until platform ACK
+    A-->>C: Return receipt to Connector; no direct platform relay
+    C->>L: Relay over authenticated platform channel (retryable/idempotent)
     L->>L: Verify signature and intent binding; update once
+    L-->>C: Authenticated idempotent receipt ACK
+    C->>A: Relay ACK through typed interface
+    A->>B: Persist ACK; apply reviewed retention lifecycle
 ~~~
 
 Handoff does not authorize scanner jobs, backups, notifications, remediation, quarantine, deployment, or unrelated maintenance. The worker receives a restore-only typed operation.
@@ -339,6 +345,8 @@ Current RestoreIsolationGateProvider methods alone are insufficient for async ho
 - Laravel receipt verifier: validate signature, host key enrollment, intent/manifest binding, outcome invariants, uniqueness and replay before a single transaction updates status.
 
 Exact method signatures, result enums, schema migrations, key enrollment/rotation, backwards compatibility, and Laravel job-state mapping require contract review. Old Connector mutation code must not remain as fallback when provider is absent. Unsupported hosts continue to refuse before live mutation. Backup creation, verification and download remain independent.
+
+The separate contract PR must make the following mandatory acceptance criteria explicit and testable: (1) nonce and intent-ID retention, replay prevention, and safe pruning; (2) receipt identity, durable outbox, platform-acknowledgement, retry, retention/pruning, and crash-recovery lifecycle; (3) host/platform key enrollment, rotation overlap, revocation, and compromised-key handling; (4) clock-skew bounds, monotonic/rollback behavior, expiry and reboot handling; and (5) terminal-outcome invariants, including that SAFE_PRE_MUTATION_ABORT is impossible after any durable mutation-start evidence and RECOVERY_REQUIRED never reopens the site. ADR v2 records these as unresolved contract requirements; it does not define their final wire-level policy.
 
 ## 11. Answers to M17 v1 blockers
 
