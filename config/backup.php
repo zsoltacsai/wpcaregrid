@@ -96,6 +96,15 @@ return [
         'readback' => (bool) env('BACKUP_VERIFY_READBACK', true),
     ],
 
+    // Customer downloads remain unavailable until an explicit reviewed rollout.
+    'downloads' => [
+        'enabled' => (bool) env('BACKUP_CUSTOMER_DOWNLOADS_ENABLED', false),
+        'grant_ttl_seconds' => 600,
+        'preparation_ttl_seconds' => 3600,
+        'fingerprint_block_size' => 4 * $mib,
+        'max_range_size' => 8 * $mib,
+    ],
+
     // A backup that has not finished uploading after this long has failed.
     'stale_after_hours' => (int) env('BACKUP_STALE_AFTER_HOURS', 6),
     // Staged data of failed backups is removed after this long.
