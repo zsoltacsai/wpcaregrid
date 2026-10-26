@@ -281,6 +281,7 @@ def main():
 [26-Oct-2026 12:00:00] NOTICE:  daemonize = no
 [26-Oct-2026 12:00:00] NOTICE: [www]
 [26-Oct-2026 12:00:00] NOTICE:  user = www-data
+[26-Oct-2026 12:00:00] NOTICE:  group = www-data
 [26-Oct-2026 12:00:00] NOTICE:  listen = {socket_path}
 """
         module.validate_fpm_pool_listen(profile, good_fpm_dump)
@@ -289,6 +290,14 @@ def main():
             good_fpm_dump.replace("[www]", "[other]"),
             good_fpm_dump.replace(f"listen = {socket_path}\n", f"listen = {socket_path}\n[26-Oct-2026 12:00:00] NOTICE:  listen = /run/php/other.sock\n"),
             good_fpm_dump + f"[26-Oct-2026 12:00:00] NOTICE: [other]\n[26-Oct-2026 12:00:00] NOTICE:  listen = {socket_path}\n",
+            good_fpm_dump.replace("user = www-data", "user = deploy"),
+            good_fpm_dump.replace("group = www-data", "group = deploy"),
+            good_fpm_dump.replace("user = www-data", "user = root"),
+            good_fpm_dump.replace("group = www-data", "group = root"),
+            good_fpm_dump.replace("user = www-data\n", ""),
+            good_fpm_dump.replace("group = www-data\n", ""),
+            good_fpm_dump.replace("user = www-data\n", "user = www-data\n[26-Oct-2026 12:00:00] NOTICE:  user = deploy\n"),
+            good_fpm_dump.replace("group = www-data\n", "group = www-data\n[26-Oct-2026 12:00:00] NOTICE:  group = root\n"),
         )
         for bad_dump in wrong_dumps:
             try:
