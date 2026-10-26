@@ -17,6 +17,7 @@ class WelcomeEmail extends Mailable implements ShouldQueue
 
     public function __construct(public readonly Customer $customer)
     {
+        $this->locale($customer->mailLocale());
         // Only send once the webhook transaction that queued it has committed.
         $this->afterCommit();
     }

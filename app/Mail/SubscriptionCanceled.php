@@ -17,6 +17,8 @@ class SubscriptionCanceled extends Mailable implements ShouldQueue
 
     public function __construct(public readonly Subscription $subscription)
     {
+        // ProcessBillingEmailOutboxJob applies the outbox's stored locale before construction.
+        $this->locale(app()->getLocale());
         // Only send once the webhook transaction that queued it has committed.
         $this->afterCommit();
     }

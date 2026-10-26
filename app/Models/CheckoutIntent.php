@@ -46,6 +46,7 @@ class CheckoutIntent extends Model
             'amount' => 'integer',
             'billing_address' => 'array',
             'tax_identifier_encrypted' => 'encrypted',
+            'locale' => 'string',
             'stripe_checkout_expires_at' => 'datetime',
             'completed_at' => 'datetime',
             'cancelled_at' => 'datetime',
