@@ -25,9 +25,9 @@ class CustomerBackupDownloadConcurrencyTest extends TestCase
         $isCiHost = strtolower((string) (getenv('CI') ?: '')) === 'true'
             && strtolower((string) (getenv('CAREGRID_CI_MYSQL_SERVICE_HOST') ?: '')) === $host
             && $database === 'caregrid_test';
-        if (strtolower((string) (getenv('APP_ENV') ?: 'testing')) !== 'testing' || $connection !== 'mysql' || ! $isDedicated
-            || (! in_array($host, ['localhost', '127.0.0.1', '::1'], true) && ! $isCiHost)
-            || (string) (getenv('DB_URL') ?: '') !== '' || ! function_exists('pcntl_fork')) {
+        if (strtolower((string) (getenv('APP_ENV') ?: 'testing')) !== 'testing' || $connection !== 'mysql' || $isDedicated === false
+            || (in_array($host, ['localhost', '127.0.0.1', '::1'], true) === false && $isCiHost === false)
+            || (string) (getenv('DB_URL') ?: '') !== '' || function_exists('pcntl_fork') === false) {
             $this->markTestSkipped('Requires an explicitly named local MySQL test database and PCNTL.');
         }
 

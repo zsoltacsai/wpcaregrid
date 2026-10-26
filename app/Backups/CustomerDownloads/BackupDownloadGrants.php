@@ -20,9 +20,7 @@ use Throwable;
 /** Owns the customer download grant lifecycle and its integrity boundary. */
 final class BackupDownloadGrants
 {
-    public function __construct(private readonly StorageManager $storages)
-    {
-    }
+    public function __construct(private readonly StorageManager $storages) {}
 
     public function enabled(): bool
     {

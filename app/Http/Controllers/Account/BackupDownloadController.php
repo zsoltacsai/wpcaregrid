@@ -31,6 +31,7 @@ final class BackupDownloadController extends Controller
 
         try {
             $grant = $grants->create($request->user(), $website, $backup, $backupObject);
+
             return response()->json([
                 'grant' => $grant->uuid,
                 'status' => $grant->status,
@@ -49,6 +50,7 @@ final class BackupDownloadController extends Controller
     {
         try {
             $grant = $grants->status($request->user(), $grant);
+
             return response()->json([
                 'grant' => $grant->uuid,
                 'status' => $grant->status,

@@ -14,7 +14,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Throwable;
 
 /** Prepare one encrypted block-fingerprint manifest; never copies the backup. */
 final class PrepareBackupDownloadGrant implements ShouldQueue, ShouldBeUnique
@@ -106,13 +105,13 @@ final class PrepareBackupDownloadGrant implements ShouldQueue, ShouldBeUnique
             $grants->markReady($grant->id, $blockSize, base64_encode($rawBlockHashes));
         } catch (BackupDownloadRefused $e) {
             $grants->failPreparation($grant->id, $e->errorCode);
-        } catch (Throwable) {
+        } catch (\Throwable) {
             // Provider exception messages can include endpoints, keys or paths.
             $grants->failPreparation($grant->id, 'STORAGE_UNAVAILABLE');
         }
     }
 
-    public function failed(?Throwable $exception): void
+    public function failed(?\Throwable $exception): void
     {
         app(BackupDownloadGrants::class)->failPreparation($this->grantId, 'PREPARATION_FAILED');
     }
