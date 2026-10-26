@@ -3,6 +3,7 @@
 namespace Tests\Feature\Backups;
 
 use App\Backups\BackupType;
+use App\Backups\CustomerDownloads\BackupDownloadGrants;
 use App\Models\BackupDownloadGrant;
 use App\Models\Website;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
@@ -106,6 +107,61 @@ class CustomerBackupDownloadConcurrencyTest extends TestCase
         }
     }
 
+    public function test_concurrent_preparation_failure_cannot_overwrite_revoke(): void
+    {
+        config(['backup.downloads.enabled' => true]);
+        $site = $this->backupReadySite('https://revoke-failure-race.example');
+        $backup = $this->verifiedBackup($site['website'], BackupType::Full);
+        $backup->forceFill(['storage_provider' => 'sftp'])->save();
+        $object = $backup->objects()->where('name', 'files')->firstOrFail();
+        $grant = app(BackupDownloadGrants::class)
+            ->create($site['website']->customer->user, $site['website'], $backup, $object);
+        $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'wpcg-download-failure-race-'.bin2hex(random_bytes(8));
+        mkdir($directory, 0700);
+        $process = null;
+
+        try {
+            DB::beginTransaction();
+            BackupDownloadGrant::query()->whereKey($grant->id)->lockForUpdate()->firstOrFail();
+            $process = new Process([
+                PHP_BINARY,
+                base_path('tests/Support/customer-backup-failure-worker.php'),
+                base_path(), $directory, (string) $grant->id,
+            ], base_path(), $this->childEnvironment());
+            $process->setTimeout(40);
+            $process->start();
+            $this->awaitFiles($directory, ['ready', 'connection-id']);
+            file_put_contents($directory.DIRECTORY_SEPARATOR.'start', 'go', LOCK_EX);
+            $this->awaitFiles($directory, ['attempting']);
+            $this->awaitFailureTransitionReadOrLock($directory);
+
+            DB::table('backup_download_grants')->where('id', $grant->id)->update([
+                'status' => BackupDownloadGrant::REVOKED,
+                'revoked_at' => now(),
+                'block_hashes' => null,
+                'updated_at' => now(),
+            ]);
+            DB::commit();
+            $process->wait();
+
+            $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+            $this->assertSame(BackupDownloadGrant::REVOKED, $grant->fresh()->status);
+            $this->assertNotNull($grant->fresh()->revoked_at);
+            $this->assertNull($grant->fresh()->failure_code);
+        } finally {
+            if (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
+            if ($process?->isRunning()) {
+                $process->stop(1);
+            }
+            foreach (glob($directory.DIRECTORY_SEPARATOR.'*') ?: [] as $path) {
+                @unlink($path);
+            }
+            @rmdir($directory);
+        }
+    }
+
     private function childEnvironment(): array
     {
         $mysql = config('database.connections.mysql');
@@ -132,5 +188,25 @@ class CustomerBackupDownloadConcurrencyTest extends TestCase
             usleep(1000);
         }
         $this->fail('Customer download grant processes did not reach the deterministic barrier.');
+    }
+
+    private function awaitFailureTransitionReadOrLock(string $directory): void
+    {
+        $connectionId = (int) file_get_contents($directory.DIRECTORY_SEPARATOR.'connection-id');
+        $deadline = microtime(true) + 20;
+        while (microtime(true) < $deadline) {
+            if (is_file($directory.DIRECTORY_SEPARATOR.'selected')) {
+                return;
+            }
+            foreach (DB::select('SHOW FULL PROCESSLIST') as $process) {
+                if ((int) ($process->Id ?? 0) === $connectionId
+                    && is_string($process->Info ?? null)
+                    && str_contains(strtolower($process->Info), 'backup_download_grants')) {
+                    return;
+                }
+            }
+            usleep(1000);
+        }
+        $this->fail('Failure worker did not reach the grant read/lock while the parent held the row.');
     }
 }

@@ -72,12 +72,30 @@ final class BackupDownloadController extends Controller
         }
 
         $filename = 'backup-'.$grant->backup->uuid.'-'.$grant->backupObject->objectName()->filename();
-        $response = response()->stream(function () use ($range, $grant, $grants): void {
-            $sent = strlen($range->bytes);
+        $response = response()->stream(function () use ($request, $range, $grant, $grants): void {
+            $sent = 0;
+            $completed = false;
+            $failureCode = null;
             try {
-                echo $range->bytes;
+                foreach ($grants->responseChunks($request->user(), $grant, $range) as $chunk) {
+                    echo $chunk;
+                    flush();
+                    if (connection_aborted() > 0) {
+                        $failureCode = 'CLIENT_DISCONNECTED';
+                        break;
+                    }
+                    $sent += strlen($chunk);
+                }
+                $completed = $failureCode === null && $sent === $range->length;
+                if (! $completed && $failureCode === null) {
+                    $failureCode = 'STREAM_INCOMPLETE';
+                }
+            } catch (BackupDownloadRefused $e) {
+                $failureCode = $e->errorCode;
+            } catch (Throwable) {
+                $failureCode = 'STREAM_FAILED';
             } finally {
-                $grants->recordResponse($grant, $sent, $sent === $range->length && connection_aborted() === false);
+                $grants->recordResponse($grant->id, $sent, $completed, $failureCode);
             }
         }, 206, [
             'Accept-Ranges' => 'bytes',
@@ -111,7 +129,7 @@ final class BackupDownloadController extends Controller
             'NOT_FOUND' => 404,
             'RANGE_INVALID', 'RANGE_TOO_LARGE' => 416,
             'RANGE_CONFIGURATION_INVALID' => 503,
-            'BACKUP_UNAVAILABLE', 'OBJECT_UNAVAILABLE', 'GRANT_EXPIRED', 'GRANT_REVOKED', 'GRANT_UNAVAILABLE' => 410,
+            'BACKUP_UNAVAILABLE', 'OBJECT_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'GRANT_EXPIRED', 'GRANT_REVOKED', 'GRANT_UNAVAILABLE' => 410,
             'OBJECT_INTEGRITY_MISMATCH', 'OBJECT_SIZE_MISMATCH', 'STORAGE_UNAVAILABLE', 'STORAGE_UNSUPPORTED' => 503,
             default => 409,
         };

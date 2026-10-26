@@ -4,14 +4,19 @@ namespace Tests\Feature\Backups;
 
 use App\Backups\BackupObjectName;
 use App\Backups\CustomerDownloads\BackupDownloadGrants;
+use App\Backups\CustomerDownloads\BackupDownloadRefused;
+use App\Backups\CustomerDownloads\DownloadRange;
 use App\Backups\CustomerDownloads\PrepareBackupDownloadGrant;
 use App\Backups\Storage\BackupStorage;
 use App\Backups\Storage\StorageManager;
 use App\Backups\Storage\StreamableBackupStorage;
 use App\Backups\Storage\Verification;
+use App\Billing\InternalPlan;
+use App\Billing\SubscriptionStatus;
 use App\Models\Backup;
 use App\Models\BackupDownloadGrant;
 use App\Models\BackupObject;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
@@ -161,6 +166,200 @@ class CustomerBackupDownloadTest extends TestCase
         $this->assertNotInstanceOf(StreamedResponse::class, $response->baseResponse);
     }
 
+    public function test_revocation_between_response_creation_and_stream_emission_sends_no_bytes(): void
+    {
+        [$user, $grant, $response] = $this->preparedStreamResponse('revocation race bytes');
+        app(BackupDownloadGrants::class)->revoke($user, $grant);
+
+        ob_start();
+        $response->baseResponse->sendContent();
+        $body = (string) ob_get_clean();
+
+        $this->assertSame('', $body);
+        $this->assertSame(0, $grant->fresh()->bytes_served);
+        $this->assertNotNull($grant->fresh()->last_response_interrupted_at);
+        $this->assertNull($grant->fresh()->last_response_completed_at);
+    }
+
+    public function test_backup_deletion_between_response_creation_and_emission_sends_no_bytes(): void
+    {
+        [, $grant, $response] = $this->preparedStreamResponse('deletion race bytes');
+        $grant->backup->forceFill(['deletion_state' => 'reconciliation_required'])->save();
+
+        ob_start();
+        $response->baseResponse->sendContent();
+        $body = (string) ob_get_clean();
+
+        $this->assertSame('', $body);
+        $this->assertSame(0, $grant->fresh()->bytes_served);
+        $this->assertNull($grant->fresh()->last_response_completed_at);
+    }
+
+    public function test_service_termination_between_response_creation_and_emission_sends_no_bytes(): void
+    {
+        [, $grant, $response] = $this->preparedStreamResponse('service termination race bytes');
+        $grant->website->subscription->forceFill(['status' => SubscriptionStatus::Canceled])->save();
+
+        ob_start();
+        $response->baseResponse->sendContent();
+        $body = (string) ob_get_clean();
+
+        $this->assertSame('', $body);
+        $this->assertSame(0, $grant->fresh()->bytes_served);
+        $this->assertNull($grant->fresh()->last_response_completed_at);
+    }
+
+    public function test_user_role_change_before_stream_emission_revokes_download_access(): void
+    {
+        [$user, $grant, $response] = $this->preparedStreamResponse('role change race bytes');
+        $user->forceFill(['role' => User::ROLE_OPERATOR])->save();
+
+        ob_start();
+        $response->baseResponse->sendContent();
+        $body = (string) ob_get_clean();
+
+        $this->assertSame('', $body);
+        $this->assertSame(0, $grant->fresh()->bytes_served);
+        $this->assertNull($grant->fresh()->last_response_completed_at);
+    }
+
+    public function test_stream_rechecks_access_between_bounded_chunks(): void
+    {
+        [$user, $grant, $response] = $this->preparedStreamResponse(str_repeat('c', 300 * 1024));
+        $chunks = app(BackupDownloadGrants::class)->responseChunks(
+            $user,
+            $grant,
+            new DownloadRange(0, 300 * 1024, 300 * 1024, str_repeat('c', 300 * 1024)),
+        );
+
+        $chunks->rewind();
+        $this->assertSame(256 * 1024, strlen($chunks->current()));
+        app(BackupDownloadGrants::class)->revoke($user, $grant);
+        try {
+            $chunks->next();
+            $this->fail('A revoked grant must not yield a subsequent response chunk.');
+        } catch (BackupDownloadRefused $exception) {
+            $this->assertSame('GRANT_REVOKED', $exception->errorCode);
+        }
+    }
+
+    public function test_stream_stops_at_chunk_boundary_when_website_service_ends(): void
+    {
+        [$user, $grant] = $this->preparedStreamResponse(str_repeat('s', 300 * 1024));
+        $chunks = app(BackupDownloadGrants::class)->responseChunks(
+            $user,
+            $grant,
+            new DownloadRange(0, 300 * 1024, 300 * 1024, str_repeat('s', 300 * 1024)),
+        );
+
+        $chunks->rewind();
+        $this->assertSame(256 * 1024, strlen($chunks->current()));
+        $grant->website->subscription->forceFill(['status' => SubscriptionStatus::Canceled])->save();
+        try {
+            $chunks->next();
+            $this->fail('A terminated website entitlement must stop the next bounded chunk.');
+        } catch (BackupDownloadRefused $exception) {
+            $this->assertSame('SERVICE_UNAVAILABLE', $exception->errorCode);
+        }
+    }
+
+    public function test_entitlement_is_site_specific_and_fails_closed_at_effective_termination(): void
+    {
+        $site = $this->backupReadySite('https://entitlement.example');
+        $backup = $this->verifiedSftpBackup($site['website']);
+        $object = $backup->objects()->where('name', 'files')->firstOrFail();
+        $user = $site['website']->customer->user;
+
+        foreach ([SubscriptionStatus::Active, SubscriptionStatus::Trialing] as $status) {
+            $site['website']->subscription->forceFill(['status' => $status, 'cancel_at_period_end' => false])->save();
+            app(BackupDownloadGrants::class)->create($user, $site['website'], $backup, $object);
+        }
+
+        $site['website']->subscription->forceFill(['status' => SubscriptionStatus::Active, 'cancel_at_period_end' => true])->save();
+        app(BackupDownloadGrants::class)->create($user, $site['website'], $backup, $object);
+
+        $site['website']->subscription->forceFill(['status' => SubscriptionStatus::Canceled, 'cancel_at_period_end' => false])->save();
+        $this->expectException(BackupDownloadRefused::class);
+        $this->expectExceptionMessage('SERVICE_UNAVAILABLE');
+        app(BackupDownloadGrants::class)->create($user, $site['website'], $backup, $object);
+    }
+
+    public function test_expired_internal_plan_inactive_customer_and_missing_site_subscription_are_denied(): void
+    {
+        $site = $this->backupReadySite('https://service-denied.example');
+        $backup = $this->verifiedSftpBackup($site['website']);
+        $object = $backup->objects()->where('name', 'files')->firstOrFail();
+        $user = $site['website']->customer->user;
+        $subscription = $site['website']->subscription;
+
+        $subscription->forceFill([
+            'internal_plan' => InternalPlan::Probono,
+            'status' => SubscriptionStatus::Active,
+            'internal_ends_at' => now(),
+        ])->save();
+        try {
+            app(BackupDownloadGrants::class)->create($user, $site['website'], $backup, $object);
+            $this->fail('An internal plan at its exclusive end timestamp has no entitlement.');
+        } catch (BackupDownloadRefused $exception) {
+            $this->assertSame('SERVICE_UNAVAILABLE', $exception->errorCode);
+        }
+
+        $subscription->forceFill(['internal_plan' => null, 'status' => SubscriptionStatus::Active, 'internal_ends_at' => null])->save();
+        $site['website']->customer->forceFill(['active' => false])->save();
+        try {
+            app(BackupDownloadGrants::class)->create($user, $site['website'], $backup, $object);
+            $this->fail('An inactive customer has no download entitlement.');
+        } catch (BackupDownloadRefused $exception) {
+            $this->assertSame('SERVICE_UNAVAILABLE', $exception->errorCode);
+        }
+
+        $site['website']->customer->forceFill(['active' => true])->save();
+        $site['website']->forceFill(['subscription_id' => null])->save();
+        try {
+            app(BackupDownloadGrants::class)->create($user, $site['website'], $backup, $object);
+            $this->fail('A website without its own subscription has no entitlement.');
+        } catch (BackupDownloadRefused $exception) {
+            $this->assertSame('SERVICE_UNAVAILABLE', $exception->errorCode);
+        }
+    }
+
+    public function test_terminated_entitlement_fails_existing_range_read_and_preparation(): void
+    {
+        $site = $this->backupReadySite('https://termination.example');
+        $backup = $this->verifiedSftpBackup($site['website']);
+        $object = $backup->objects()->where('name', 'files')->firstOrFail();
+        $content = 'service ended before preparation';
+        $this->bindObject($backup, $object, $content);
+        $user = $site['website']->customer->user;
+        $grant = app(BackupDownloadGrants::class)->create($user, $site['website'], $backup, $object);
+        $site['website']->subscription->forceFill(['status' => SubscriptionStatus::Canceled])->save();
+
+        (new PrepareBackupDownloadGrant($grant->id))->handle(app(BackupDownloadGrants::class), $this->manager);
+        $this->assertSame(BackupDownloadGrant::FAILED, $grant->fresh()->status);
+        $this->assertSame('SERVICE_UNAVAILABLE', $grant->fresh()->failure_code);
+        $this->actingAs($user)->withHeader('Range', 'bytes=0-4')
+            ->getJson(route('account.backup-downloads.content', $grant))->assertGone();
+    }
+
+    public function test_entitlement_loss_during_preparation_prevents_ready_transition(): void
+    {
+        $site = $this->backupReadySite('https://ready-transition.example');
+        $backup = $this->verifiedSftpBackup($site['website']);
+        $object = $backup->objects()->where('name', 'files')->firstOrFail();
+        $content = 'service ends while object is read';
+        $this->bindObject($backup, $object, $content);
+        $user = $site['website']->customer->user;
+        $grant = app(BackupDownloadGrants::class)->create($user, $site['website'], $backup, $object);
+        $this->storage->afterStream = fn () => $site['website']->subscription
+            ->forceFill(['status' => SubscriptionStatus::Canceled])->save();
+
+        (new PrepareBackupDownloadGrant($grant->id))->handle(app(BackupDownloadGrants::class), $this->manager);
+
+        $this->assertSame(BackupDownloadGrant::FAILED, $grant->fresh()->status);
+        $this->assertSame('PREPARATION_FAILED', $grant->fresh()->failure_code);
+        $this->assertNull($grant->fresh()->block_hashes);
+    }
+
     public function test_range_is_single_bounded_and_invalid_ranges_are_rejected(): void
     {
         $site = $this->backupReadySite();
@@ -242,6 +441,24 @@ class CustomerBackupDownloadTest extends TestCase
         return $backup->refresh();
     }
 
+    /** @return array{0: User, 1: BackupDownloadGrant, 2: TestResponse} */
+    private function preparedStreamResponse(string $content): array
+    {
+        $site = $this->backupReadySite();
+        $backup = $this->verifiedSftpBackup($site['website']);
+        $object = $backup->objects()->where('name', 'files')->firstOrFail();
+        $this->bindObject($backup, $object, $content);
+        $user = $site['website']->customer->user;
+        $grant = app(BackupDownloadGrants::class)->create($user, $site['website'], $backup, $object);
+        (new PrepareBackupDownloadGrant($grant->id))->handle(app(BackupDownloadGrants::class), $this->manager);
+        $grant->refresh();
+        $response = $this->actingAs($user)->withHeader('Range', 'bytes=0-'.(strlen($content) - 1))
+            ->get(route('account.backup-downloads.content', $grant));
+        $response->assertStatus(206);
+
+        return [$user, $grant, $response];
+    }
+
     private function grantUrl($website, Backup $backup, string $object): string
     {
         return route('account.websites.backups.download-grants.store', [$website, $backup, $object]);
@@ -260,6 +477,8 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
     public bool $failWithSensitiveProviderMessage = false;
 
     public ?\Closure $afterRangeRead = null;
+
+    public ?\Closure $afterStream = null;
 
     public function name(): string
     {
@@ -295,6 +514,9 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
             $this->largestConsumerChunk = max($this->largestConsumerChunk, strlen($chunk));
             $consume($chunk);
             $bytes += strlen($chunk);
+        }
+        if ($this->afterStream !== null) {
+            ($this->afterStream)();
         }
 
         return $bytes;

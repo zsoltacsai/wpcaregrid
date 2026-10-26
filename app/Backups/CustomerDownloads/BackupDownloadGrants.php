@@ -20,6 +20,8 @@ use Throwable;
 /** Owns the customer download grant lifecycle and its integrity boundary. */
 final class BackupDownloadGrants
 {
+    private const RESPONSE_CHUNK_SIZE = 256 * 1024;
+
     public function __construct(private readonly StorageManager $storages) {}
 
     public function enabled(): bool
@@ -74,10 +76,30 @@ final class BackupDownloadGrants
     public function assertEligible(User $user, Website $website, Backup $backup, BackupObject $object, ?BackupDownloadGrant $grant = null): Customer
     {
         $this->requireEnabled();
-        $customer = $user->customer;
-        if ($customer instanceof Customer === false || $user->isOwner() || $user->isOperator() || (int) $website->customer_id !== (int) $customer->id
+        $authoritativeUser = User::query()->find($user->id);
+        $customer = $authoritativeUser?->customer()->first();
+        if ($authoritativeUser === null || $customer instanceof Customer === false || $authoritativeUser->isOwner() || $authoritativeUser->isOperator() || (int) $website->customer_id !== (int) $customer->id
             || (int) $backup->website_id !== (int) $website->id || (int) $object->backup_id !== (int) $backup->id) {
             throw new BackupDownloadRefused('NOT_FOUND');
+        }
+
+        // Re-resolve both relations from their authoritative rows on each
+        // authorization decision. An active subscription elsewhere on the
+        // customer must never authorize this website's backup.
+        $website->unsetRelation('customer')->unsetRelation('subscription');
+        try {
+            $websiteCustomer = $website->customer;
+            $subscription = $website->subscription;
+            $serviceAllowed = $websiteCustomer instanceof Customer
+                && $subscription !== null
+                && (int) $websiteCustomer->id === (int) $customer->id
+                && (int) $subscription->customer_id === (int) $customer->id
+                && $website->allowsServiceOperations();
+        } catch (Throwable) {
+            $serviceAllowed = false;
+        }
+        if (! $serviceAllowed) {
+            throw new BackupDownloadRefused('SERVICE_UNAVAILABLE');
         }
 
         if ($backup->status !== BackupStatus::Verified || $backup->isRestorable() === false) {
@@ -160,14 +182,16 @@ final class BackupDownloadGrants
 
     public function failPreparation(int $grantId, string $code): void
     {
-        $allowed = ['PREPARATION_EXPIRED', 'OBJECT_SIZE_MISMATCH', 'OBJECT_INTEGRITY_MISMATCH', 'STORAGE_UNAVAILABLE', 'STORAGE_UNSUPPORTED', 'FINGERPRINT_CONFIGURATION_INVALID', 'FINGERPRINT_INVALID', 'PREPARATION_FAILED'];
+        $allowed = ['PREPARATION_EXPIRED', 'OBJECT_SIZE_MISMATCH', 'OBJECT_INTEGRITY_MISMATCH', 'STORAGE_UNAVAILABLE', 'STORAGE_UNSUPPORTED', 'FINGERPRINT_CONFIGURATION_INVALID', 'FINGERPRINT_INVALID', 'PREPARATION_FAILED', 'SERVICE_UNAVAILABLE'];
         $code = in_array($code, $allowed, true) ? $code : 'PREPARATION_FAILED';
-        $grant = BackupDownloadGrant::query()->whereKey($grantId)->first();
-        if ($grant === null || $grant->status !== BackupDownloadGrant::PREPARING || $grant->revoked_at !== null) {
-            return;
-        }
-        $grant->forceFill(['status' => BackupDownloadGrant::FAILED, 'failure_code' => $code, 'block_hashes' => null])->save();
-        $this->audit('failed', $grant->user, $grant->website, $grant->backup, $grant->object_name, $code);
+        DB::transaction(function () use ($grantId, $code): void {
+            $grant = BackupDownloadGrant::query()->whereKey($grantId)->lockForUpdate()->first();
+            if ($grant === null || $grant->status !== BackupDownloadGrant::PREPARING || $grant->revoked_at !== null) {
+                return;
+            }
+            $grant->forceFill(['status' => BackupDownloadGrant::FAILED, 'failure_code' => $code, 'block_hashes' => null])->save();
+            $this->audit('failed', $grant->user, $grant->website, $grant->backup, $grant->object_name, $code);
+        }, attempts: 3);
     }
 
     public function status(User $user, BackupDownloadGrant $grant): BackupDownloadGrant
@@ -275,19 +299,77 @@ final class BackupDownloadGrants
         if ($grant === null || $grant->status !== BackupDownloadGrant::READY || $grant->revoked_at !== null || $grant->expires_at?->isPast()) {
             throw new BackupDownloadRefused('GRANT_REVOKED');
         }
-        $grant->forceFill(['last_range_at' => now(), 'range_responses' => $grant->range_responses + 1])->save();
+        $updated = BackupDownloadGrant::query()->whereKey($grant->id)
+            ->where('status', BackupDownloadGrant::READY)->whereNull('revoked_at')->where('expires_at', '>', now())
+            ->increment('range_responses', 1, ['last_range_at' => now()]);
+        if ($updated !== 1) {
+            throw new BackupDownloadRefused('GRANT_REVOKED');
+        }
 
         return new DownloadRange($range->offset, $range->length, $range->total, $slice);
     }
 
-    public function recordResponse(BackupDownloadGrant $grant, int $bytes, bool $completed): void
+    /**
+     * Yield one bounded chunk only after reloading and revalidating all access
+     * state. The check immediately before each yield is the authorization
+     * linearization point. A revocation concurrent with the following echo may
+     * allow that single in-flight chunk to complete; every later chunk performs
+     * a fresh check. No transaction or row lock spans output/backpressure.
+     *
+     * @return \Generator<int, string>
+     *
+     * @throws BackupDownloadRefused
+     */
+    public function responseChunks(User $user, BackupDownloadGrant $grant, DownloadRange $range): \Generator
     {
-        $attributes = [
-            'bytes_served' => $grant->bytes_served + max(0, min($bytes, (int) config('backup.downloads.max_range_size', 8 * 1024 * 1024))),
+        $length = strlen($range->bytes);
+        if ($length !== $range->length || $length < 1) {
+            throw new BackupDownloadRefused('OBJECT_SIZE_MISMATCH');
+        }
+
+        for ($offset = 0; $offset < $length; $offset += self::RESPONSE_CHUNK_SIZE) {
+            $this->assertCurrentServiceEligibility($user, $grant);
+            yield substr($range->bytes, $offset, self::RESPONSE_CHUNK_SIZE);
+        }
+    }
+
+    public function recordResponse(int $grantId, int $bytes, bool $completed, ?string $failureCode = null): void
+    {
+        $boundedBytes = max(0, min($bytes, (int) config('backup.downloads.max_range_size', 8 * 1024 * 1024)));
+        $now = now();
+        $updates = [
+            $completed ? 'last_response_completed_at' : 'last_response_interrupted_at' => $now,
+            'updated_at' => $now,
         ];
-        $attributes[$completed ? 'last_response_completed_at' : 'last_response_interrupted_at'] = now();
-        $grant->forceFill($attributes)->save();
-        $this->audit($completed ? 'range_completed' : 'range_interrupted', $grant->user, $grant->website, $grant->backup, $grant->object_name, bytes: min($bytes, (int) config('backup.downloads.max_range_size', 8 * 1024 * 1024)));
+        if ($boundedBytes > 0) {
+            $updates['bytes_served'] = DB::raw('bytes_served + '.$boundedBytes);
+        }
+        BackupDownloadGrant::query()->whereKey($grantId)->update($updates);
+
+        $grant = BackupDownloadGrant::query()->with(['user', 'website', 'backup'])->find($grantId);
+        if ($grant !== null) {
+            $this->audit($completed ? 'range_completed' : 'range_interrupted', $grant->user, $grant->website, $grant->backup, $grant->object_name, $failureCode, $boundedBytes);
+        }
+    }
+
+    private function assertCurrentServiceEligibility(User $user, BackupDownloadGrant $grant): void
+    {
+        $fresh = BackupDownloadGrant::query()->find($grant->id);
+        if ($fresh === null) {
+            throw new BackupDownloadRefused('GRANT_REVOKED');
+        }
+        $this->assertGrantOwner($user, $fresh);
+        if ($fresh->status !== BackupDownloadGrant::READY || $fresh->revoked_at !== null || $fresh->expires_at === null || $fresh->expires_at->isPast()) {
+            throw new BackupDownloadRefused($fresh->status === BackupDownloadGrant::REVOKED || $fresh->revoked_at !== null ? 'GRANT_REVOKED' : 'GRANT_EXPIRED');
+        }
+
+        $website = Website::query()->find($fresh->website_id);
+        $backup = Backup::query()->find($fresh->backup_id);
+        $object = BackupObject::query()->find($fresh->backup_object_id);
+        if ($website === null || $backup === null || $object === null) {
+            throw new BackupDownloadRefused('GRANT_REVOKED');
+        }
+        $this->assertEligible($user, $website, $backup, $object, $fresh);
     }
 
     /** @throws BackupDownloadRefused */
@@ -341,7 +423,10 @@ final class BackupDownloadGrants
 
     private function assertGrantOwner(User $user, BackupDownloadGrant $grant): void
     {
-        if ((int) $grant->user_id !== (int) $user->id || (int) $user->customer?->id !== (int) $grant->customer_id || $user->isOwner() || $user->isOperator()) {
+        $authoritativeUser = User::query()->find($user->id);
+        $customer = $authoritativeUser?->customer()->first();
+        if ($authoritativeUser === null || (int) $grant->user_id !== (int) $authoritativeUser->id
+            || (int) $customer?->id !== (int) $grant->customer_id || $authoritativeUser->isOwner() || $authoritativeUser->isOperator()) {
             throw new BackupDownloadRefused('NOT_FOUND');
         }
     }
