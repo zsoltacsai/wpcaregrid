@@ -352,7 +352,7 @@ The separate contract PR must make the following mandatory acceptance criteria e
 
 ### Proposed platform-signed Terminal Receipt ACK v1
 
-Laravel emits an ACK only after it has durably processed the exact signed receipt and committed the corresponding idempotent platform state transition. The ACK is a protocol message signed with an Ed25519 platform key over RFC 8785 canonical JSON with a domain separator such as `WPCAREGRID-TERMINAL-RECEIPT-ACK-V1\\0`. The broker trusts only explicitly enrolled platform public keys and verifies the signature before accepting the ACK.
+Laravel emits an ACK only after it has durably processed the exact signed receipt and committed the corresponding idempotent platform state transition. The ACK is a protocol message signed with an Ed25519 platform key over RFC 8785 canonical JSON with a domain separator such as `WPCAREGRID-TERMINAL-RECEIPT-ACK-V1\0`. The broker trusts only explicitly enrolled platform public keys and verifies the signature before accepting the ACK.
 
 Proposed signed fields (all are covered by the signature):
 
