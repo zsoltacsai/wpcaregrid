@@ -1,4 +1,6 @@
 @use('App\Backups\BackupText')
+@use('App\Backups\BackupObjectName')
+@use('App\Models\BackupObject')
 
 <x-layouts.account :title="__('backups.account.title').' – '.$website->host()">
     <nav aria-label="Breadcrumb" class="mb-4 text-sm">
@@ -64,8 +66,110 @@
                             @if ($backup->status->value === 'expired'){{ app(\App\Support\DisplayDateTime::class)->date($backup->expired_at) }}@elseif ($backup->expires_at){{ app(\App\Support\DisplayDateTime::class)->date($backup->expires_at) }}@else—@endif
                         </td>
                         <td class="px-4 py-3 text-right">
+                            @if ($backup->objects->isNotEmpty())
+                                <details class="text-left">
+                                    <summary class="cursor-pointer rounded-sm text-sm font-medium text-primary underline decoration-line-strong underline-offset-4 hover:decoration-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus">
+                                        {{ __('backups.download.package_files') }}
+                                    </summary>
+                                    <ul class="mt-3 space-y-3 text-left">
+                                        @foreach ($backup->objects as $object)
+                                            @php
+                                                $objectName = BackupObjectName::tryFrom((string) $object->name);
+                                                $objectExpected = $objectName === BackupObjectName::Manifest
+                                                    || ($objectName !== null && in_array($objectName->value, $backup->type->objects(), true));
+                                            @endphp
+                                            @if ($objectExpected)
+                                                <li class="rounded-md border border-line bg-surface p-3" data-backup-object="{{ $object->name }}">
+                                                    <div class="flex flex-wrap items-start justify-between gap-2">
+                                                        <span class="font-medium text-primary">{{ __('backups.download.objects.'.$object->name) }}</span>
+                                                        <span class="font-mono text-xs text-muted">{{ BackupText::size($object->size) }}</span>
+                                                    </div>
+                                                    <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
+                                                        <x-ui.status-badge :tone="$object->status === BackupObject::VERIFIED ? 'positive' : 'neutral'" variant="code">
+                                                            {{ __('backups.download.object_status.'.$object->status) }}
+                                                        </x-ui.status-badge>
+                                                        @if ($object->verified_at)
+                                                            <span>{{ __('backups.download.verified_at') }} @displayDateTime($object->verified_at)</span>
+                                                        @endif
+                                                        @if ($object->sha256)
+                                                            <details>
+                                                                <summary class="cursor-pointer underline underline-offset-2">{{ __('backups.download.show_checksum') }}</summary>
+                                                                <code class="mt-1 block break-all">SHA-256: {{ $object->sha256 }}</code>
+                                                            </details>
+                                                        @endif
+                                                    </div>
+
+                                                    @if (! $downloadsEnabled)
+                                                        <p class="mt-2 text-xs text-muted">{{ __('backups.download.disabled') }}</p>
+                                                    @elseif (isset($downloadableObjects[$object->id]))
+                                                        <div
+                                                            class="mt-3 space-y-2 text-left"
+                                                            data-customer-backup-download
+                                                            data-create-url="{{ route('account.websites.backups.download-grants.store', [$website, $backup, $object->name]) }}"
+                                                            data-revoke-url-template="{{ route('account.backup-downloads.revoke', '__GRANT__') }}"
+                                                            data-total-size="{{ $object->size }}"
+                                                            data-sha256="{{ strtolower($object->sha256) }}"
+                                                            data-filename="{{ $objectName->filename() }}"
+                                                            data-range-limit="{{ config('backup.downloads.max_range_size', 8 * 1024 * 1024) }}"
+                                                            data-disk-limit="268435456"
+                                                            data-blob-limit="16777216"
+                                                            data-csrf-token="{{ csrf_token() }}"
+                                                        >
+                                                            <div class="flex flex-wrap items-center gap-2">
+                                                                <button type="button" class="inline-flex min-h-10 items-center rounded-sm bg-primary px-3 py-2 text-xs font-semibold text-white hover:bg-primary/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:opacity-60" data-download-start disabled>
+                                                                    {{ __('backups.download.start') }}
+                                                                </button>
+                                                                <button type="button" class="inline-flex min-h-10 items-center rounded-sm border border-line px-3 py-2 text-xs font-semibold text-primary hover:bg-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus" data-download-retry hidden>
+                                                                    {{ __('backups.download.retry') }}
+                                                                </button>
+                                                                <button type="button" class="inline-flex min-h-10 items-center rounded-sm border border-line px-3 py-2 text-xs font-semibold text-muted hover:bg-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus" data-download-cancel hidden>
+                                                                    {{ __('backups.download.cancel') }}
+                                                                </button>
+                                                            </div>
+                                                            <progress class="mt-2 h-2 w-full accent-action" data-download-progress max="{{ $object->size }}" value="0" aria-label="{{ __('backups.download.progress_label', ['file' => __('backups.download.objects.'.$object->name)]) }}" hidden></progress>
+                                                            <p class="mt-2 text-xs text-muted" data-download-status role="status" aria-live="polite">{{ __('backups.download.messages.checking') }}</p>
+                                                            <a class="mt-2 inline-flex min-h-10 items-center rounded-sm text-xs font-semibold text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus" data-download-save hidden>{{ __('backups.download.save_file') }}</a>
+                                                            <p class="mt-2 text-xs text-muted" data-download-limit hidden></p>
+                                                            <span class="hidden" data-download-message="preparing">{{ __('backups.download.messages.preparing') }}</span>
+                                                            <span class="hidden" data-download-message="smallFileOnly">{{ __('backups.download.messages.smallFileOnly') }}</span>
+                                                            <span class="hidden" data-download-message="unsupported">{{ __('backups.download.messages.unsupported') }}</span>
+                                                            <span class="hidden" data-download-message="browserLimit">{{ __('backups.download.messages.browserLimit') }}</span>
+                                                            <span class="hidden" data-download-message="diskLimit">{{ __('backups.download.messages.diskLimit') }}</span>
+                                                            <span class="hidden" data-download-message="preparationSlow">{{ __('backups.download.messages.preparationSlow') }}</span>
+                                                            <span class="hidden" data-download-message="ready">{{ __('backups.download.messages.ready') }}</span>
+                                                            <span class="hidden" data-download-message="downloading">{{ __('backups.download.messages.downloading') }}</span>
+                                                            <span class="hidden" data-download-message="waiting">{{ __('backups.download.messages.waiting') }}</span>
+                                                            <span class="hidden" data-download-message="interrupted">{{ __('backups.download.messages.interrupted') }}</span>
+                                                            <span class="hidden" data-download-message="pickerCancelled">{{ __('backups.download.messages.pickerCancelled') }}</span>
+                                                            <span class="hidden" data-download-message="completeDisk">{{ __('backups.download.messages.completeDisk') }}</span>
+                                                            <span class="hidden" data-download-message="completeBlob">{{ __('backups.download.messages.completeBlob') }}</span>
+                                                            <span class="hidden" data-download-message="cancelled">{{ __('backups.download.messages.cancelled') }}</span>
+                                                            <span class="hidden" data-download-message="cancelledUnconfirmed">{{ __('backups.download.messages.cancelledUnconfirmed') }}</span>
+                                                            <span class="hidden" data-download-message="cancelRevokeFailed">{{ __('backups.download.messages.cancelRevokeFailed') }}</span>
+                                                            <span class="hidden" data-download-message="writerFailed">{{ __('backups.download.messages.writerFailed') }}</span>
+                                                            <span class="hidden" data-download-message="writerFailedRevokeFailed">{{ __('backups.download.messages.writerFailedRevokeFailed') }}</span>
+                                                            <span class="hidden" data-download-message="revokeUnconfirmed">{{ __('backups.download.messages.revokeUnconfirmed') }}</span>
+                                                            <span class="hidden" data-download-message="restartAction">{{ __('backups.download.messages.restartAction') }}</span>
+                                                            <span class="hidden" data-download-message="retry">{{ __('backups.download.messages.retry') }}</span>
+                                                            <span class="hidden" data-download-message="expired">{{ __('backups.download.messages.expired') }}</span>
+                                                            <span class="hidden" data-download-message="revoked">{{ __('backups.download.messages.revoked') }}</span>
+                                                            <span class="hidden" data-download-message="failed">{{ __('backups.download.messages.failed') }}</span>
+                                                            <span class="hidden" data-download-message="default-error">{{ __('backups.download.errors.default') }}</span>
+                                                            @foreach (['NOT_FOUND', 'BACKUP_UNAVAILABLE', 'OBJECT_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'GRANT_EXPIRED', 'GRANT_REVOKED', 'GRANT_UNAVAILABLE', 'RANGE_INVALID', 'RANGE_TOO_LARGE', 'RANGE_CONFIGURATION_INVALID', 'OBJECT_INTEGRITY_MISMATCH', 'OBJECT_SIZE_MISMATCH', 'STORAGE_UNAVAILABLE', 'STORAGE_UNSUPPORTED', 'PREPARATION_EXPIRED', 'PREPARATION_FAILED', 'FINGERPRINT_CONFIGURATION_INVALID', 'FINGERPRINT_INVALID', 'DOWNLOAD_UNAVAILABLE', 'RATE_LIMITED', 'STREAM_INCOMPLETE', 'STREAM_FAILED', 'OBJECT_IDENTITY_CHANGED', 'REVOCATION_UNCONFIRMED', 'FILE_WRITER_FAILED'] as $errorCode)
+                                                                <span class="hidden" data-download-error="{{ $errorCode }}">{{ __('backups.download.errors.'.$errorCode) }}</span>
+                                                            @endforeach
+                                                        </div>
+                                                    @else
+                                                        <p class="mt-2 text-xs text-muted">{{ __('backups.download.unavailable') }}</p>
+                                                    @endif
+                                                </li>
+                                            @endif
+                                        @endforeach
+                                    </ul>
+                                </details>
+                            @endif
                             @if ($backup->isRestorable() && $policy->restoreAllowed && $restoreIsolationSupported && $canBackup)
-                                <a href="{{ route('account.websites.backups.restore', [$website, $backup]) }}" class="rounded-sm text-sm font-medium text-primary underline decoration-line-strong underline-offset-4 hover:decoration-primary">{{ __('backups.account.restore') }}</a>
+                                <a href="{{ route('account.websites.backups.restore', [$website, $backup]) }}" class="mt-2 inline-flex rounded-sm text-sm font-medium text-primary underline decoration-line-strong underline-offset-4 hover:decoration-primary">{{ __('backups.account.restore') }}</a>
                             @endif
                         </td>
                     </tr>
@@ -76,6 +180,18 @@
         </table>
     </div>
     <div class="mt-4">{{ $backups->links() }}</div>
+
+    <x-account.panel :title="__('backups.download.guide_title')" heading-id="recovery-package-guide" class="mt-6">
+        <p class="text-sm text-muted">{{ __('backups.download.guide_intro') }}</p>
+        <ul class="mt-4 list-disc space-y-2 pl-5 text-sm text-primary">
+            <li><strong>manifest.json</strong> — {{ __('backups.download.guide_manifest') }}</li>
+            <li><strong>files.tar.gz</strong> — {{ __('backups.download.guide_files') }}</li>
+            <li><strong>database.sql.gz</strong> — {{ __('backups.download.guide_database') }}</li>
+        </ul>
+        <p class="mt-4 text-sm text-muted">{{ __('backups.download.guide_verify') }}</p>
+        <p class="mt-2 text-sm font-medium text-primary">{{ __('backups.download.not_one_click') }}</p>
+        <p class="mt-2 text-xs text-muted">{{ __('backups.download.browser_limits') }}</p>
+    </x-account.panel>
 
     @if (! $restoreIsolationSupported && $backups->isNotEmpty())
         <p class="mt-4 text-xs text-muted">{{ __('backups.account.restore_isolation_unavailable') }}</p>

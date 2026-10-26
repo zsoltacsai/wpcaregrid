@@ -2,16 +2,20 @@
 
 namespace App\Http\Controllers\Account;
 
+use App\Backups\BackupObjectName;
 use App\Backups\BackupPolicy;
 use App\Backups\BackupReason;
 use App\Backups\BackupRefused;
 use App\Backups\BackupService;
+use App\Backups\BackupStatus;
 use App\Backups\BackupText;
 use App\Backups\BackupType;
+use App\Backups\CustomerDownloads\BackupDownloadGrants;
 use App\Backups\RestoreService;
 use App\Compatibility\CapabilityReadiness;
 use App\Http\Controllers\Controller;
 use App\Models\Backup;
+use App\Models\BackupObject;
 use App\Models\Website;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
@@ -25,9 +29,39 @@ class BackupController extends Controller
     {
         $this->authorize('view', $website);
 
+        $backups = $website->backups()->with(['objects', 'objectDeletions'])->latest('id')->paginate(25);
+        $downloadsEnabled = app(BackupDownloadGrants::class)->enabled();
+        $downloadableObjects = [];
+
+        // This controls presentation only. The grant endpoint repeats all
+        // tenant, service, deletion, integrity and storage checks.
+        if ($downloadsEnabled && $website->allowsServiceOperations()) {
+            foreach ($backups->getCollection() as $backup) {
+                if ($backup->status !== BackupStatus::Verified || ! $backup->isRestorable()) {
+                    continue;
+                }
+
+                $deletedObjects = $backup->objectDeletions->pluck('object_name')->all();
+                foreach ($backup->objects as $object) {
+                    $name = BackupObjectName::tryFrom((string) $object->name);
+                    $isExpectedObject = $name === BackupObjectName::Manifest
+                        || ($name !== null && in_array($name->value, $backup->type->objects(), true));
+
+                    if ($isExpectedObject && $object->status === BackupObject::VERIFIED
+                        && $object->verified_at !== null && $object->size > 0
+                        && preg_match('/\A[a-f0-9]{64}\z/i', (string) $object->sha256) === 1
+                        && ! in_array($object->name, $deletedObjects, true)) {
+                        $downloadableObjects[$object->id] = true;
+                    }
+                }
+            }
+        }
+
         return view('account.websites.backups', [
             'website' => $website,
-            'backups' => $website->backups()->latest('id')->paginate(25),
+            'backups' => $backups,
+            'downloadsEnabled' => $downloadsEnabled,
+            'downloadableObjects' => $downloadableObjects,
             'restores' => $website->restores()->with('backup')->latest('id')->limit(5)->get(),
             // Backup activity only; admin access and connector events have their own places.
             'events' => $website->events()->where(fn ($q) => $q->where('event', 'like', 'backup.%')->orWhere('event', 'like', 'restore.%')->orWhere('event', 'like', 'update.%'))
