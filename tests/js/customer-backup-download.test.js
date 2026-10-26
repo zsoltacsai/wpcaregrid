@@ -25,7 +25,7 @@ function makeDownloadFixture(t, overrides = {}) {
             if (selector === '[data-download-message]') return Object.entries({
                 preparing: 'preparing', smallFileOnly: 'small', unsupported: 'unsupported', browserLimit: 'browser limit',
                 diskLimit: 'disk limit', preparationSlow: 'preparation slow', ready: 'ready', downloading: 'downloading :percent',
-                waiting: 'waiting :seconds', interrupted: 'interrupted', complete: 'complete', cancelled: 'revoked confirmed',
+                waiting: 'waiting :seconds', interrupted: 'interrupted', pickerCancelled: 'picker cancelled', completeDisk: 'complete to disk', completeBlob: 'complete blob', cancelled: 'revoked confirmed',
                 cancelledUnconfirmed: 'cancelled, grant unconfirmed', cancelRevokeFailed: 'cancelled, revoke failed',
                 writerFailed: 'writer failed; restart', writerFailedRevokeFailed: 'writer failed; revoke failed',
                 revokeUnconfirmed: 'revoke unconfirmed', restartAction: 'Restart from beginning', retry: 'Retry',

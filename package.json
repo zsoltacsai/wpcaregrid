@@ -6,7 +6,8 @@
         "build": "vite build",
         "dev": "vite",
         "test": "node --test tests/js/marketing-analytics.test.js tests/js/customer-backup-download.test.js scripts/m14-7/m147-a.test.mjs",
-        "test:backup-download": "node --test tests/js/customer-backup-download.test.js"
+        "test:backup-download": "node --test tests/js/customer-backup-download.test.js",
+        "test:e2e:backup-download": "playwright test -c playwright.backup-download.config.ts"
     },
     "devDependencies": {
         "@playwright/test": "^1.64.1",

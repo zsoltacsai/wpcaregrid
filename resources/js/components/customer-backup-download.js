@@ -376,6 +376,7 @@ export function bindDownload(root) {
         refs.retryButton.textContent = refs.messages.retry;
         refs.active = true;
         refs.rateLimitRetries = 0;
+        refs.pickerCancelled = false;
         refs.abortController = new AbortController();
         refs.startButton.disabled = true;
         setVisible(refs.startButton, false);
@@ -390,7 +391,10 @@ export function bindDownload(root) {
                     if (!refs.handle) refs.handle = await window.showSaveFilePicker({ suggestedName: refs.filename });
                     refs.writer = await refs.handle.createWritable();
                 } catch (error) {
-                    if (error?.name === 'AbortError') throw error;
+                    if (error?.name === 'AbortError') {
+                        refs.pickerCancelled = true;
+                        throw error;
+                    }
                     throw apiError('FILE_WRITER_FAILED');
                 }
             }
@@ -409,13 +413,21 @@ export function bindDownload(root) {
             } else {
                 showBlobDownload(refs);
             }
-            refs.status.textContent = refs.messages.complete;
+            refs.status.textContent = refs.mode === 'disk'
+                ? refs.messages.completeDisk
+                : refs.messages.completeBlob;
             setVisible(refs.progress, false);
             setVisible(refs.cancelButton, false);
             setVisible(refs.retryButton, false);
         } catch (error) {
             if (error?.name === 'AbortError') {
-                if (!refs.cancelling) {
+                if (refs.pickerCancelled) {
+                    refs.status.textContent = refs.messages.pickerCancelled;
+                    setVisible(refs.progress, false);
+                    setVisible(refs.cancelButton, false);
+                    setVisible(refs.retryButton, false);
+                    setVisible(refs.startButton, true);
+                } else if (!refs.cancelling) {
                     refs.status.textContent = refs.messages.interrupted;
                     setVisible(refs.retryButton, true);
                 }

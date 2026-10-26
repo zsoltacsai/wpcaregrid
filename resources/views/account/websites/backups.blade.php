@@ -140,7 +140,9 @@
                                                             <span class="hidden" data-download-message="downloading">{{ __('backups.download.messages.downloading') }}</span>
                                                             <span class="hidden" data-download-message="waiting">{{ __('backups.download.messages.waiting') }}</span>
                                                             <span class="hidden" data-download-message="interrupted">{{ __('backups.download.messages.interrupted') }}</span>
-                                                            <span class="hidden" data-download-message="complete">{{ __('backups.download.messages.complete') }}</span>
+                                                            <span class="hidden" data-download-message="pickerCancelled">{{ __('backups.download.messages.pickerCancelled') }}</span>
+                                                            <span class="hidden" data-download-message="completeDisk">{{ __('backups.download.messages.completeDisk') }}</span>
+                                                            <span class="hidden" data-download-message="completeBlob">{{ __('backups.download.messages.completeBlob') }}</span>
                                                             <span class="hidden" data-download-message="cancelled">{{ __('backups.download.messages.cancelled') }}</span>
                                                             <span class="hidden" data-download-message="cancelledUnconfirmed">{{ __('backups.download.messages.cancelledUnconfirmed') }}</span>
                                                             <span class="hidden" data-download-message="cancelRevokeFailed">{{ __('backups.download.messages.cancelRevokeFailed') }}</span>
