@@ -15,6 +15,7 @@ use App\Models\BackupObject;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 use Tests\Concerns\CreatesBackups;
 use Tests\TestCase;
 
@@ -83,11 +84,11 @@ class CustomerBackupDownloadTest extends TestCase
         $first = $this->actingAs($site['website']->customer->user)->withHeader('Range', 'bytes=0-4')
             ->getJson(route('account.backup-downloads.content', $grant));
         $first->assertStatus(206)->assertHeader('Content-Range', 'bytes 0-4/'.strlen($content));
-        $this->assertSame(substr($content, 0, 5), $first->getContent());
+        $this->assertSame(substr($content, 0, 5), $first->streamedContent());
 
         $second = $this->withHeader('Range', 'bytes=5-9')->get(route('account.backup-downloads.content', $grant));
         $second->assertStatus(206)->assertHeader('Content-Range', 'bytes 5-9/'.strlen($content));
-        $this->assertSame(substr($content, 5, 5), $second->getContent());
+        $this->assertSame(substr($content, 5, 5), $second->streamedContent());
         $this->assertSame(2, $grant->fresh()->range_responses);
         $this->assertSame(10, $grant->fresh()->bytes_served);
         $this->assertLessThanOrEqual(strlen($content), $this->storage->largestRead);
@@ -138,7 +139,7 @@ class CustomerBackupDownloadTest extends TestCase
 
         $response = $this->actingAs($user)->withHeader('Range', 'bytes=0-5')->getJson(route('account.backup-downloads.content', $grant));
         $response->assertStatus(503)->assertExactJson(['code' => 'OBJECT_INTEGRITY_MISMATCH']);
-        $this->assertSame('', $response->getContent());
+        $this->assertNotInstanceOf(StreamedResponse::class, $response->baseResponse);
     }
 
     public function test_deletion_started_during_range_read_fails_closed_before_response_body(): void
@@ -157,7 +158,7 @@ class CustomerBackupDownloadTest extends TestCase
             ->getJson(route('account.backup-downloads.content', $grant));
 
         $response->assertGone()->assertExactJson(['code' => 'OBJECT_UNAVAILABLE']);
-        $this->assertSame('', $response->getContent());
+        $this->assertNotInstanceOf(StreamedResponse::class, $response->baseResponse);
     }
 
     public function test_range_is_single_bounded_and_invalid_ranges_are_rejected(): void
@@ -165,7 +166,7 @@ class CustomerBackupDownloadTest extends TestCase
         $site = $this->backupReadySite();
         $backup = $this->verifiedSftpBackup($site['website']);
         $object = $backup->objects()->where('name', 'files')->firstOrFail();
-        $content = str_repeat('x', 512 * 1024);
+        $content = str_repeat('x', 2 * 1024 * 1024);
         $this->bindObject($backup, $object, $content);
         $user = $site['website']->customer->user;
         $grant = app(BackupDownloadGrants::class)->create($user, $site['website'], $backup, $object);
