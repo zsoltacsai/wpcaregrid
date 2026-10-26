@@ -308,7 +308,8 @@ def main():
                 ss = subprocess.run([ss_binary, "-xlepH"], check=True, capture_output=True, text=True, timeout=5)
                 inode, owners = module.parse_unix_listener_records(ss.stdout, live_path)
                 assert os.getpid() in {pid for pid, _ in owners}, "real Unix listener is not attributed to its owning process"
-                assert any(os.readlink(f"/proc/{pid}/fd/{fd}") == f"socket:[{inode}]" for pid, fd in owners)
+                targets = [(pid, fd, os.readlink(f"/proc/{pid}/fd/{fd}")) for pid, fd in owners]
+                assert any(target == f"socket:[{inode}]" for _, _, target in targets), f"ss listener inode {inode} did not match owner FD targets {targets!r}"
             finally:
                 listener.close()
 
