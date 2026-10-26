@@ -230,7 +230,7 @@ def main():
                 marker.write_text("active\n", encoding="ascii")
             saved = {
                 name: getattr(module, name)
-                for name in ("PHP_RUNTIME_LINK", "PHP_RUNTIME_FILES", "GATE", "SCHEDULER_PAUSE", "WORKERS_DISABLED", "open_root_trusted_directory", "active_php_profile", "php_runtime_preflight", "require_regular", "run")
+                for name in ("PHP_RUNTIME_LINK", "PHP_RUNTIME_FILES", "GATE", "SCHEDULER_PAUSE", "WORKERS_DISABLED", "open_root_trusted_directory", "active_php_profile", "runtime_snippet", "php_runtime_preflight", "require_regular", "run")
             }
             try:
                 module.PHP_RUNTIME_LINK = active_link
@@ -240,9 +240,18 @@ def main():
                 module.WORKERS_DISABLED = disabled
                 module.open_root_trusted_directory = lambda path: os.open(path, os.O_RDONLY | os.O_DIRECTORY)
                 module.active_php_profile = lambda: next(profile for profile, path in profile_files.items() if os.readlink(active_link) == str(path))
+                module.runtime_snippet = lambda profile: None
                 module.php_runtime_preflight = lambda profile: None
                 module.require_regular = lambda path, **kwargs: (_ for _ in ()).throw(ValueError("unsafe marker")) if path.is_symlink() or not path.is_file() else path.stat()
                 failure_state = {"fail_nginx_once": False}
+                nginx_dump = """# configuration file /etc/nginx/sites-enabled/staging.wpcaregrid.com:
+server {
+    server_name staging.wpcaregrid.com;
+    location ~ \\.php$ {
+        include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;
+    }
+}
+"""
 
                 def fake_runtime_run(argv, **kwargs):
                     if argv[:2] == ["/usr/bin/supervisorctl", "status"]:
@@ -251,7 +260,7 @@ def main():
                     if argv == ["/usr/sbin/nginx", "-t"] and failure_state["fail_nginx_once"]:
                         failure_state["fail_nginx_once"] = False
                         raise subprocess.CalledProcessError(1, argv)
-                    return subprocess.CompletedProcess(argv, 0, stdout="")
+                    return subprocess.CompletedProcess(argv, 0, stdout=nginx_dump if argv == ["/usr/sbin/nginx", "-T"] else "")
 
                 module.run = fake_runtime_run
                 module.switch_php_runtime("8.5")
