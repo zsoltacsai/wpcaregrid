@@ -163,7 +163,7 @@ The `authorization` object is a strict union:
 - `RESTORE`: `schema=wp-caregrid.restore-work-binding.v1`, `restore_intent_id`, `restore_intent_envelope_sha256`, `backup_uuid`, `manifest_sha256`, `scope`.
 - `RECOVERY`: `schema=wp-caregrid.recovery-work-binding.v1`, `original_restore_intent_id`, `recovery_trigger_receipt_id`, `recovery_trigger_receipt_sha256`, `recovery_intent_id`, `recovery_intent_envelope_sha256`, `recovery_work_id`, `safety_backup_uuid`, `safety_manifest_sha256`, `recovery_scope`.
 
-The recovery `work_id` equals `recovery_work_id`; the restore `work_id` equals the accepted restore work ID. Every identity tuple equals the signed intent and broker registration. Acceptance is produced by the broker and verified by Laravel/Connector/agent/HMR as applicable against the registered host signing key. It contains no generation, lease, path, command, or secret.
+The recovery `work_id` equals `recovery_work_id`; the restore `work_id` equals the accepted restore work ID. Every identity tuple equals the signed intent and broker registration. The broker produces and signs acceptance. Laravel verifies its host signature and exact authorization/work tuple before recording it. Connector and HMR transport the acceptance bytes unchanged; they cannot use it to authorize state changes. The per-site agent may verify the signature for local handoff correlation but still defers authorization to the broker. It contains no generation, lease, path, command, or secret.
 
 The broker MUST persist one stable signed response per exact accepted intent digest. Exact retries return byte-identical acceptance; conflicting intent ID/digest returns a typed denial. An acceptance ID is a correlation identifier, not a bearer capability.
 
@@ -625,7 +625,7 @@ Exact response schemas are also closed:
 - HMR-to-broker IPC uses the fixed `wp-caregrid.hmr-broker-rpc.v1` wrapper: `schema`, `request_id`, `relay_id`, `provider_id`, `host_id`, `operation`, and `payload`. It is JCS encoded, size bounded, and authenticated with OS peer credentials on the registered per-site socket. The response `wp-caregrid.hmr-broker-response.v1` contains `schema`, `request_id`, `result`, `payload`; payload is a strict operation-specific union. No generation, filesystem path, SQL, command, secret, or caller-selected site binding is returned.
 
 
-HMR envelopes are authenticated by the fixed outbound mTLS channel, bound to the certificate-mapped relay/provider/host tuple, and JCS encoded. HMR does not sign or authorize the nested protocol message. The nested bytes are preserved exactly.
+HMR-to-platform envelopes are authenticated by the fixed outbound mTLS channel, bound to the certificate-mapped relay/provider/host tuple, and JCS encoded. HMR-to-broker IPC envelopes instead use the fixed Unix-domain SOCK_SEQPACKET endpoint and OS peer-credential policy in §10. HMR does not sign or authorize the nested protocol message. The nested bytes are preserved exactly.
 
 | Schema / field | Type / authoritative source | Producer → verifier | Binding / validation |
 |---|---|---|---|
