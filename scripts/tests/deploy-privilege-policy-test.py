@@ -3,6 +3,7 @@
 
 import importlib.util
 import hashlib
+import fnmatch
 import io
 import os
 import shutil
@@ -21,6 +22,7 @@ DENIAL_FIXTURE = ROOT / "scripts/tests/fixtures/deploy-sudo-denial-fixture.sh"
 spec = importlib.util.spec_from_file_location("deploy_priv", HELPER)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+NGINX_VALIDATOR = module.validate_nginx_runtime_dump
 
 
 def expect_rejected(args):
@@ -29,6 +31,62 @@ def expect_rejected(args):
     except (ValueError, OSError, subprocess.SubprocessError):
         return
     raise AssertionError(f"unsafe helper request accepted: {args!r}")
+
+
+def nginx_fixture(profile="8.4", *, staging_name="staging.wpcaregrid.com", extra_staging_include=None, handler_override=None, selector_path=None):
+    selector_path = selector_path or module.PHP_RUNTIME_LINK.as_posix()
+    files = {
+        "/etc/nginx/nginx.conf": "events {}\nhttp {\n    include /etc/nginx/sites-enabled/*;\n}\n",
+        "/etc/nginx/sites-enabled/staging": (
+            "server {\n"
+            f"    server_name {staging_name};\n"
+            "    include /etc/nginx/snippets/wpcaregrid-staging-routes.conf;\n"
+            + (f"    include {extra_staging_include};\n" if extra_staging_include else "")
+            + "}\n"
+        ),
+        "/etc/nginx/sites-enabled/sibling": (
+            "server {\n"
+            "    server_name sibling.example;\n"
+            "    location ~ \\.php$ {\n"
+            "        include /etc/nginx/snippets/sibling-fastcgi.conf;\n"
+            "    }\n"
+            "}\n"
+        ),
+        "/etc/nginx/snippets/wpcaregrid-staging-routes.conf": (
+            "location ~ \\.php$ {\n"
+            "    include /etc/nginx/snippets/wpcaregrid-staging-handler.conf;\n"
+            "    include /etc/nginx/fastcgi_params;\n"
+            "}\n"
+        ),
+        "/etc/nginx/snippets/wpcaregrid-staging-handler.conf": handler_override or f"include {selector_path};\n",
+        selector_path: module.PHP_RUNTIME_DIRECTIVES[profile],
+        "/etc/nginx/fastcgi_params": "fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n",
+        "/etc/nginx/snippets/sibling-fastcgi.conf": "fastcgi_pass unix:/run/php/php8.4-fpm.sock;\n",
+    }
+    if extra_staging_include and extra_staging_include not in files:
+        files[extra_staging_include] = "location ~ \\.alternate-php$ {\n    include /etc/nginx/snippets/staging-extra-fastcgi.conf;\n}\n"
+        files["/etc/nginx/snippets/staging-extra-fastcgi.conf"] = "fastcgi_pass unix:/run/php/php8.4-fpm.sock;\n"
+    dump = "".join(f"# configuration file {path}:\n{content}" for path, content in files.items())
+    return dump, files
+
+
+def validate_nginx_fixture(dump, files, resolver_override=None):
+    def source_reader(path):
+        if path not in files:
+            raise ValueError("fixture source missing")
+        return files[path]
+
+    def include_resolver(pattern, source_paths):
+        if resolver_override is not None:
+            return resolver_override(pattern, source_paths)
+        if not pattern.startswith("/") or "$" in pattern:
+            raise ValueError("fixture include unsafe")
+        matched = sorted(path for path in source_paths if fnmatch.fnmatchcase(path, pattern))
+        if not matched:
+            raise ValueError("fixture include unresolved")
+        return matched
+
+    NGINX_VALIDATOR(dump, source_reader=source_reader, include_resolver=include_resolver)
 
 
 def main():
@@ -353,7 +411,7 @@ def main():
                 marker.write_text("active\n", encoding="ascii")
             saved = {
                 name: getattr(module, name)
-                for name in ("PHP_RUNTIME_LINK", "PHP_RUNTIME_FILES", "GATE", "SCHEDULER_PAUSE", "WORKERS_DISABLED", "open_root_trusted_directory", "active_php_profile", "runtime_snippet", "php_runtime_preflight", "require_regular", "run")
+                for name in ("PHP_RUNTIME_LINK", "PHP_RUNTIME_FILES", "GATE", "SCHEDULER_PAUSE", "WORKERS_DISABLED", "open_root_trusted_directory", "active_php_profile", "runtime_snippet", "php_runtime_preflight", "require_regular", "validate_nginx_runtime_dump", "run")
             }
             try:
                 module.PHP_RUNTIME_LINK = active_link
@@ -367,14 +425,9 @@ def main():
                 module.php_runtime_preflight = lambda profile: None
                 module.require_regular = lambda path, **kwargs: (_ for _ in ()).throw(ValueError("unsafe marker")) if path.is_symlink() or not path.is_file() else path.stat()
                 failure_state = {"fail_nginx_once": False, "fail_reload_once": False}
-                nginx_dump = """# configuration file /etc/nginx/sites-enabled/staging.wpcaregrid.com:
-server {
-    server_name staging.wpcaregrid.com;
-    location ~ \\.php$ {
-        include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;
-    }
-}
-"""
+                nginx_state = {}
+                original_nginx_validator = module.validate_nginx_runtime_dump
+                module.validate_nginx_runtime_dump = lambda output: validate_nginx_fixture(output, nginx_state["files"])
 
                 def fake_runtime_run(argv, **kwargs):
                     if argv[:2] == ["/usr/bin/supervisorctl", "status"]:
@@ -386,7 +439,11 @@ server {
                     if argv == ["/usr/bin/systemctl", "reload", "nginx"] and failure_state["fail_reload_once"]:
                         failure_state["fail_reload_once"] = False
                         raise subprocess.CalledProcessError(1, argv)
-                    return subprocess.CompletedProcess(argv, 0, stdout=nginx_dump if argv == ["/usr/sbin/nginx", "-T"] else "")
+                    if argv == ["/usr/sbin/nginx", "-T"]:
+                        dump, files = nginx_fixture(profile=module.active_php_profile())
+                        nginx_state["files"] = files
+                        return subprocess.CompletedProcess(argv, 0, stdout=dump)
+                    return subprocess.CompletedProcess(argv, 0, stdout="")
 
                 module.run = fake_runtime_run
                 module.php_runtime_preflight = lambda profile: (_ for _ in ()).throw(ValueError("synthetic preflight refusal"))
@@ -441,6 +498,7 @@ server {
                 assert module.active_php_profile() == "8.4", "post-switch preflight failure did not restore the previous selector"
                 assert gate.is_file() and pause.is_file() and disabled.is_file(), "post-switch preflight failure removed a fail-closed marker"
             finally:
+                module.validate_nginx_runtime_dump = original_nginx_validator
                 for name, value in saved.items():
                     setattr(module, name, value)
 
@@ -492,36 +550,109 @@ server {
 
     original_snippet = module.runtime_snippet
     original_active_profile = module.active_php_profile
+    original_nginx_validator = module.validate_nginx_runtime_dump
     original_run = module.run
     try:
         module.runtime_snippet = lambda profile: None
         module.active_php_profile = lambda: "8.4"
-        good_nginx = """# configuration file /etc/nginx/sites-enabled/staging.wpcaregrid.com:\nserver {\n    listen 80;\n    server_name staging.wpcaregrid.com;\n    return 301 https://staging.wpcaregrid.com$request_uri;\n}\nserver {\n    listen 443 ssl;\n    server_name staging.wpcaregrid.com;\n    include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n}\n# configuration file /etc/nginx/snippets/wpcaregrid-staging-php84.conf:\nfastcgi_pass unix:/run/php/php8.4-fpm.sock;\n"""
-        good_nginx += "# configuration file /etc/nginx/sites-enabled/sibling.example:\nserver {\n    server_name sibling.example;\n    fastcgi_pass unix:/run/php/php8.4-fpm.sock;\n}\n"
-        module.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout=good_nginx if argv[-1] == "-T" else "")
-        module.nginx_runtime_contract("8.4")
-        for bad_nginx in (
-            good_nginx.replace("staging.wpcaregrid.com;", "other.example;").replace("staging.wpcaregrid.com:\nserver", "other.example:\nserver"),
-            good_nginx.replace("server_name staging.wpcaregrid.com;\n    include", "server_name staging.wpcaregrid.com sibling.example;\n    include"),
-            good_nginx.replace("server_name staging.wpcaregrid.com;\n    include", "server_name staging.wpcaregrid.com *.example;\n    include"),
-            good_nginx.replace("server_name staging.wpcaregrid.com;\n    include", "server_name staging.wpcaregrid.com ~^sibling\\\\.example$;\n    include"),
-            good_nginx + "# configuration file /etc/nginx/sites-enabled/sibling.example:\nserver {\n    server_name sibling.example;\n    include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n}\n",
-            good_nginx + "# configuration file /etc/nginx/sites-enabled/other.example:\ninclude /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n",
-            good_nginx.replace("include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;", "fastcgi_pass unix:/run/php/php7.4-fpm.sock;"),
-            good_nginx.replace("include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;", "include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n    fastcgi_pass unix:/run/php/php8.4-fpm.sock;"),
-            good_nginx + "# configuration file /etc/nginx/sites-enabled/staging-extra:\nserver {\n    server_name staging.wpcaregrid.com;\n    fastcgi_pass unix:/run/php/php8.5-fpm.sock;\n}\n",
-            good_nginx + "# configuration file /etc/nginx/sites-enabled/staging-duplicate:\nserver {\n    server_name staging.wpcaregrid.com;\n    include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n}\n",
-        ):
-            module.run = lambda argv, bad_nginx=bad_nginx, **kwargs: subprocess.CompletedProcess(argv, 0, stdout=bad_nginx if argv[-1] == "-T" else "")
+        good_dump, good_sources = nginx_fixture("8.4")
+        validate_nginx_fixture(good_dump, good_sources)
+        for profile in ("8.4", "8.5"):
+            module.active_php_profile = lambda selected=profile: selected
+            dump, sources = nginx_fixture(profile)
+            validate_nginx_fixture(dump, sources)
+
+        sibling_route = good_sources["/etc/nginx/snippets/sibling-fastcgi.conf"]
+        assert sibling_route == "fastcgi_pass unix:/run/php/php8.4-fpm.sock;\n", "sibling PHP 8.4 route fixture changed"
+        module.active_php_profile = lambda: "8.4"
+
+        bad_fixtures = []
+        bad_fixtures.append(nginx_fixture("8.4", staging_name="staging.wpcaregrid.com sibling.example"))
+        bad_fixtures.append(nginx_fixture("8.4", staging_name="other.example"))
+        bad_fixtures.append(nginx_fixture("8.4", staging_name="staging.wpcaregrid.com *.example"))
+        bad_fixtures.append(nginx_fixture("8.4", staging_name=r"staging.wpcaregrid.com ~^sibling\.example$"))
+
+        sibling_selector_dump, sibling_selector_sources = nginx_fixture("8.4")
+        sibling_selector_sources["/etc/nginx/sites-enabled/sibling"] = sibling_selector_sources["/etc/nginx/sites-enabled/sibling"].replace(
+            "include /etc/nginx/snippets/sibling-fastcgi.conf;", f"include {module.PHP_RUNTIME_LINK.as_posix()};"
+        )
+        sibling_selector_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in sibling_selector_sources.items())
+        bad_fixtures.append((sibling_selector_dump, sibling_selector_sources))
+
+        outside_dump, outside_sources = nginx_fixture("8.4")
+        outside_sources["/etc/nginx/nginx.conf"] = outside_sources["/etc/nginx/nginx.conf"].replace(
+            "include /etc/nginx/sites-enabled/*;", f"include {module.PHP_RUNTIME_LINK.as_posix()};\n    include /etc/nginx/sites-enabled/*;"
+        )
+        outside_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in outside_sources.items())
+        bad_fixtures.append((outside_dump, outside_sources))
+
+        duplicate_dump, duplicate_sources = nginx_fixture("8.4")
+        duplicate_sources["/etc/nginx/snippets/wpcaregrid-staging-handler.conf"] += f"include {module.PHP_RUNTIME_LINK.as_posix()};\n"
+        duplicate_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in duplicate_sources.items())
+        bad_fixtures.append((duplicate_dump, duplicate_sources))
+
+        competing_path = "/etc/nginx/snippets/staging-extra-location.conf"
+        bad_fixtures.append(nginx_fixture("8.4", extra_staging_include=competing_path))
+
+        cycle_dump, cycle_sources = nginx_fixture("8.4", handler_override="include /etc/nginx/snippets/cycle-a.conf;\n")
+        cycle_sources["/etc/nginx/snippets/cycle-a.conf"] = "include /etc/nginx/snippets/cycle-b.conf;\n"
+        cycle_sources["/etc/nginx/snippets/cycle-b.conf"] = "include /etc/nginx/snippets/cycle-a.conf;\n"
+        cycle_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in cycle_sources.items())
+        bad_fixtures.append((cycle_dump, cycle_sources))
+
+        missing_dump, missing_sources = nginx_fixture("8.4", handler_override="include /etc/nginx/snippets/missing.conf;\n")
+        missing_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in missing_sources.items())
+        bad_fixtures.append((missing_dump, missing_sources))
+
+        variable_dump, variable_sources = nginx_fixture("8.4", handler_override="include $unsafe_path;\n")
+        variable_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in variable_sources.items())
+        bad_fixtures.append((variable_dump, variable_sources))
+
+        for bad_dump, bad_sources in bad_fixtures:
             try:
-                module.nginx_runtime_contract("8.4")
-            except ValueError:
+                validate_nginx_fixture(bad_dump, bad_sources)
+            except (ValueError, KeyError, OSError):
                 pass
             else:
-                raise AssertionError("unsafe or non-staging Nginx PHP routing was accepted")
+                raise AssertionError("unsafe Nginx include context or competing PHP route was accepted")
+
+        unproven_wildcard_dump, unproven_wildcard_sources = nginx_fixture("8.4")
+        def incomplete_wildcard(pattern, source_paths):
+            if pattern == "/etc/nginx/sites-enabled/*":
+                return ["/etc/nginx/sites-enabled/staging", "/etc/nginx/sites-enabled/unlisted"]
+            return sorted(path for path in source_paths if fnmatch.fnmatchcase(path, pattern))
+        try:
+            validate_nginx_fixture(unproven_wildcard_dump, unproven_wildcard_sources, incomplete_wildcard)
+        except (ValueError, KeyError, OSError):
+            pass
+        else:
+            raise AssertionError("wildcard include with an unlisted filesystem match was accepted")
+
+        mismatched_source_dump, mismatched_sources = nginx_fixture("8.4")
+        try:
+            module.validate_nginx_runtime_dump(
+                mismatched_source_dump,
+                source_reader=lambda path: mismatched_sources[path] + "# changed after nginx -T\n",
+                include_resolver=lambda pattern, paths: sorted(path for path in paths if fnmatch.fnmatchcase(path, pattern)),
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Nginx dump whose source differs from trusted file was accepted")
+
+        current_sources = {"files": good_sources}
+        module.active_php_profile = lambda: "8.4"
+        module.validate_nginx_runtime_dump = lambda output: validate_nginx_fixture(output, current_sources["files"])
+
+        def fake_nginx_run(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, stdout=good_dump if argv[-1] == "-T" else "")
+
+        module.run = fake_nginx_run
+        module.nginx_runtime_contract("8.4")
     finally:
         module.runtime_snippet = original_snippet
         module.active_php_profile = original_active_profile
+        module.validate_nginx_runtime_dump = original_nginx_validator
         module.run = original_run
 
     controller = CONTROLLER.read_text(encoding="utf-8")

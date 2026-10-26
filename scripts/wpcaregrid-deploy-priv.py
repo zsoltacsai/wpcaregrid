@@ -7,11 +7,14 @@ The deployment controller never installs or updates it.
 
 import os
 import hashlib
+import glob
+import fnmatch
+import posixpath
 import re
 import stat
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 APP = Path("/var/www/wpcaregrid")
@@ -39,6 +42,11 @@ PHP_RUNTIME_SERVICES = {"8.4": "php8.4-fpm", "8.5": "php8.5-fpm"}
 PHP_RUNTIME_FPM_CGROUPS = {"8.4": "/system.slice/php8.4-fpm.service", "8.5": "/system.slice/php8.5-fpm.service"}
 PHP_RUNTIME_SOCKETS = {"8.4": Path("/run/php/php8.4-fpm.sock"), "8.5": Path("/run/php/php8.5-fpm.sock")}
 PHP_RUNTIME_VHOST = "staging.wpcaregrid.com"
+NGINX_ROOT_CONFIG = "/etc/nginx/nginx.conf"
+NGINX_CONFIG_MAX_BYTES = 262144
+NGINX_CONFIG_MAX_FILES = 256
+NGINX_CONFIG_MAX_DEPTH = 32
+NGINX_CONFIG_MAX_EXPANDED_NODES = 20000
 PHP_RUNTIME_LAUNCHER_DEST = Path("/usr/local/bin/wpcaregrid-php")
 SUPERVISOR_CONFIG = Path("/etc/supervisor/conf.d/wpcaregrid.conf")
 OLD_CRON = "* * * * * cd /var/www/wpcaregrid && php artisan schedule:run >> /dev/null 2>&1"
@@ -433,70 +441,308 @@ def nginx_runtime_contract(profile):
     validate_nginx_runtime_dump(result.stdout or "")
 
 
-def validate_nginx_runtime_dump(output):
-    sections = []
-    current_path = ""
-    current_lines = []
-    for line in output.splitlines():
-        marker = re.fullmatch(r"# configuration file (/.+):", line)
+def _nginx_dump_sections(output):
+    if not isinstance(output, str) or len(output.encode("utf-8")) > NGINX_CONFIG_MAX_BYTES:
+        raise ValueError("Nginx configuration dump is missing or oversized")
+    sections = {}
+    current_path = None
+    current_content = []
+    for raw_line in output.splitlines(keepends=True):
+        marker = re.fullmatch(r"# configuration file (/.+):\r?\n?", raw_line)
         if marker:
-            if current_path:
-                sections.append((current_path, current_lines))
+            if current_path is not None:
+                if current_path in sections:
+                    raise ValueError("duplicate Nginx configuration source marker")
+                sections[current_path] = "".join(current_content)
             current_path = marker.group(1)
-            current_lines = []
-        elif current_path:
-            current_lines.append(line)
-    if current_path:
-        sections.append((current_path, current_lines))
+            if posixpath.normpath(current_path) != current_path or ".." in PurePosixPath(current_path).parts:
+                raise ValueError("non-canonical Nginx configuration source path")
+            current_content = []
+        elif current_path is None:
+            if raw_line.strip():
+                raise ValueError("unexpected text before Nginx source markers")
+        else:
+            current_content.append(raw_line)
+    if current_path is not None:
+        if current_path in sections:
+            raise ValueError("duplicate Nginx configuration source marker")
+        sections[current_path] = "".join(current_content)
+    if not sections or len(sections) > NGINX_CONFIG_MAX_FILES:
+        raise ValueError("Nginx configuration source count is unsupported")
+    if NGINX_ROOT_CONFIG not in sections:
+        raise ValueError("Nginx root configuration source is absent")
+    return sections
 
-    include_count = 0
-    selected_include_blocks = 0
-    for path, lines in sections:
-        depth = 0
-        server = None
-        server_base_depth = None
-        for raw_line in lines:
-            line = raw_line.split("#", 1)[0].strip()
-            if not line:
-                continue
-            if server is None and re.match(r"^server\s*\{", line):
-                server = {"path": path, "names": set(), "selector": False, "php_sockets": []}
-                server_base_depth = depth
-            if server is not None:
-                names = re.fullmatch(r"server_name\s+(.+?)\s*;", line)
-                if names:
-                    server["names"].update(token.lower() for token in names.group(1).split())
-            selector = re.fullmatch(r"include\s+/etc/nginx/snippets/wpcaregrid-staging-runtime\.conf\s*;", line)
-            if selector:
-                include_count += 1
-                if server is None:
-                    raise ValueError("PHP runtime selector is outside a server block")
+
+def _read_trusted_nginx_source(path):
+    """Read one nginx -T source through root-owned, non-writable directories."""
+    source = Path(path)
+    if not source.is_absolute() or os.path.normpath(str(source)) != str(source):
+        raise ValueError("Nginx source path is not canonical")
+    parent_fd = open_root_trusted_directory(source.parent)
+    try:
+        source_info = os.stat(source.name, dir_fd=parent_fd, follow_symlinks=False)
+        if source_info.st_uid != 0:
+            raise ValueError("Nginx source is not root-owned")
+        if stat.S_ISLNK(source_info.st_mode):
+            target = os.readlink(source.name, dir_fd=parent_fd)
+            target_path = Path(target) if os.path.isabs(target) else source.parent / target
+            target_path = Path(os.path.normpath(str(target_path)))
+            if not target_path.is_absolute() or ".." in target_path.parts:
+                raise ValueError("Nginx source symlink target is unsafe")
+            target_parent_fd = open_root_trusted_directory(target_path.parent)
+            try:
+                fd = os.open(target_path.name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=target_parent_fd)
+            finally:
+                os.close(target_parent_fd)
+        elif stat.S_ISREG(source_info.st_mode):
+            fd = os.open(source.name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+        else:
+            raise ValueError("Nginx source is not a regular file")
+    finally:
+        os.close(parent_fd)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError("Nginx source metadata is unsafe")
+        if info.st_size > NGINX_CONFIG_MAX_BYTES:
+            raise ValueError("Nginx source is oversized")
+        data = bytearray()
+        while len(data) <= NGINX_CONFIG_MAX_BYTES:
+            chunk = os.read(fd, min(16384, NGINX_CONFIG_MAX_BYTES + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        if len(data) != info.st_size or len(data) > NGINX_CONFIG_MAX_BYTES:
+            raise ValueError("Nginx source changed while reading")
+        return bytes(data).decode("utf-8")
+    finally:
+        os.close(fd)
+
+
+def _resolve_nginx_include(pattern, source_paths):
+    if not isinstance(pattern, str) or not pattern.startswith("/") or "$" in pattern:
+        raise ValueError("Nginx include path is relative or dynamic")
+    if posixpath.normpath(pattern) != pattern or ".." in PurePosixPath(pattern).parts:
+        raise ValueError("Nginx include path is non-canonical")
+    matches = sorted(os.path.normpath(item) for item in glob.glob(pattern))
+    dumped = sorted(path for path in source_paths if fnmatch.fnmatchcase(path, pattern))
+    if not matches or matches != dumped:
+        raise ValueError("Nginx include resolution differs from dumped sources")
+    return matches
+
+
+def _tokenize_nginx_config(text):
+    tokens = []
+    token = []
+    quote = None
+    escaped = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if escaped:
+                token.append(ch)
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            else:
+                token.append(ch)
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "#":
+            while i < len(text) and text[i] != "\n":
+                i += 1
+            if token:
+                tokens.append("".join(token))
+                token = []
+        elif ch.isspace():
+            if token:
+                tokens.append("".join(token))
+                token = []
+        elif ch in "{};":
+            if token:
+                tokens.append("".join(token))
+                token = []
+            tokens.append(ch)
+        elif ch == "\\" and i + 1 < len(text):
+            token.extend((ch, text[i + 1]))
+            i += 1
+        else:
+            token.append(ch)
+        i += 1
+    if quote or escaped:
+        raise ValueError("unterminated Nginx quoted argument")
+    if token:
+        tokens.append("".join(token))
+    if len(tokens) > NGINX_CONFIG_MAX_EXPANDED_NODES:
+        raise ValueError("Nginx configuration has too many tokens")
+    return tokens
+
+
+def _parse_nginx_nodes(tokens, source):
+    index = 0
+
+    def parse_items(expect_close=False):
+        nonlocal index
+        nodes = []
+        statement = []
+        while index < len(tokens):
+            token = tokens[index]
+            index += 1
+            if token == "}":
+                if not expect_close or statement:
+                    raise ValueError("unexpected Nginx closing brace")
+                return nodes
+            if token in (";", "{"):
+                if not statement:
+                    raise ValueError("empty Nginx directive")
+                name, *args = statement
+                if token == ";":
+                    nodes.append({"kind": "directive", "name": name, "args": args, "source": source})
                 else:
-                    server["selector"] = True
-            if server is not None:
-                socket = re.fullmatch(r"fastcgi_pass\s+(.+?)\s*;", line)
-                if socket:
-                    server["php_sockets"].append(socket.group(1))
-            depth += line.count("{") - line.count("}")
-            if server is not None and depth == server_base_depth:
-                is_staging = PHP_RUNTIME_VHOST in server["names"]
-                if server["selector"] and server["names"] != {PHP_RUNTIME_VHOST}:
-                    raise ValueError("PHP runtime selector server_name must be exactly the staging vhost")
-                if server["selector"] and is_staging:
-                    selected_include_blocks += 1
-                if server["selector"] and not is_staging:
-                    raise ValueError("PHP runtime selector is referenced by a non-staging vhost")
-                if is_staging and server["selector"]:
-                    # The include's contents appear as a separate section in
-                    # `nginx -T`; runtime_snippet() above verifies its exact
-                    # socket directive. Reject any competing inline PHP route.
-                    if server["php_sockets"]:
-                        raise ValueError("staging vhost has a competing inline PHP socket")
-                elif is_staging and server["php_sockets"]:
-                    raise ValueError("staging vhost has an unselected PHP socket")
-                server = None
-    if include_count != 1 or selected_include_blocks != 1:
-        raise ValueError("PHP runtime selector is not uniquely scoped to a staging vhost")
+                    children = parse_items(expect_close=True)
+                    nodes.append({"kind": "block", "name": name, "args": args, "children": children, "source": source})
+                statement = []
+            else:
+                statement.append(token)
+        if expect_close or statement:
+            raise ValueError("unterminated Nginx directive or block")
+        return nodes
+
+    parsed = parse_items()
+    if index != len(tokens):
+        raise ValueError("unparsed Nginx tokens")
+    return parsed
+
+
+def _expand_nginx_includes(nodes, sections, parsed, source_reader, include_resolver, stack, reached, counter):
+    if len(stack) > NGINX_CONFIG_MAX_DEPTH:
+        raise ValueError("Nginx include nesting exceeds the bound")
+    expanded = []
+    for node in nodes:
+        counter[0] += 1
+        if counter[0] > NGINX_CONFIG_MAX_EXPANDED_NODES:
+            raise ValueError("expanded Nginx configuration exceeds the bound")
+        if node["kind"] == "directive" and node["name"] == "include":
+            if len(node["args"]) != 1:
+                raise ValueError("Nginx include must have exactly one path")
+            targets = include_resolver(node["args"][0], sections.keys())
+            children = []
+            for target in targets:
+                if target not in sections:
+                    raise ValueError("Nginx include target is absent from nginx -T")
+                if target in stack:
+                    raise ValueError("Nginx include cycle detected")
+                reached.add(target)
+                child_nodes = parsed.get(target)
+                if child_nodes is None:
+                    child_nodes = _parse_nginx_nodes(_tokenize_nginx_config(sections[target]), target)
+                    parsed[target] = child_nodes
+                children.extend(_expand_nginx_includes(
+                    child_nodes, sections, parsed, source_reader, include_resolver,
+                    (*stack, target), reached, counter,
+                ))
+            expanded.append({"kind": "include", "path": node["args"][0], "targets": targets, "children": children, "source": node["source"]})
+        elif node["kind"] == "block":
+            node = dict(node)
+            node["children"] = _expand_nginx_includes(
+                node["children"], sections, parsed, source_reader, include_resolver,
+                stack, reached, counter,
+            )
+            expanded.append(node)
+        else:
+            expanded.append(node)
+    return expanded
+
+
+def validate_nginx_runtime_dump(output, *, source_reader=None, include_resolver=None):
+    """Resolve the bounded nginx -T include graph and validate effective routing context."""
+    source_reader = source_reader or _read_trusted_nginx_source
+    include_resolver = include_resolver or _resolve_nginx_include
+    sections = _nginx_dump_sections(output)
+    total_bytes = 0
+    for path, contents in sections.items():
+        source = source_reader(path)
+        total_bytes += len(source.encode("utf-8"))
+        if total_bytes > NGINX_CONFIG_MAX_BYTES:
+            raise ValueError("combined Nginx configuration exceeds the bound")
+        if source.replace("\r\n", "\n") != contents.replace("\r\n", "\n"):
+            raise ValueError("nginx -T source differs from the trusted file")
+
+    parsed = {path: _parse_nginx_nodes(_tokenize_nginx_config(text), path) for path, text in sections.items()}
+    reached = {NGINX_ROOT_CONFIG}
+    expanded = _expand_nginx_includes(
+        parsed[NGINX_ROOT_CONFIG], sections, parsed, source_reader, include_resolver,
+        (NGINX_ROOT_CONFIG,), reached, [0],
+    )
+    if reached != set(sections):
+        raise ValueError("nginx -T contains unreachable or unproven source sections")
+
+    selector_uses = []
+    servers = []
+
+    def visit(nodes, context):
+        for node in nodes:
+            if node["kind"] == "include":
+                if node["path"] == PHP_RUNTIME_LINK.as_posix():
+                    selector_uses.append((context, node))
+                visit(node["children"], context)
+            elif node["kind"] == "block":
+                if node["name"] == "server":
+                    servers.append((node, context))
+                visit(node["children"], (*context, node))
+
+    visit(expanded, ())
+    if len(selector_uses) != 1:
+        raise ValueError("PHP runtime selector is not uniquely included")
+    selector_context, _ = selector_uses[0]
+    server_contexts = [node for node in selector_context if node["name"] == "server"]
+    location_contexts = [node for node in selector_context if node["name"] == "location"]
+    http_contexts = [node for node in selector_context if node["name"] == "http"]
+    if len(server_contexts) != 1 or not http_contexts or not location_contexts:
+        raise ValueError("PHP runtime selector is not inside an HTTP staging location")
+    selected_server = server_contexts[0]
+    if not any(server is selected_server for server, _ in servers):
+        raise ValueError("PHP runtime selector server context is not effective")
+
+    def direct_directives(nodes, name):
+        found = []
+        for node in nodes:
+            if node["kind"] == "include":
+                found.extend(direct_directives(node["children"], name))
+            elif node["kind"] == "directive" and node["name"] == name:
+                found.append(node)
+        return found
+
+    def descendant_directives(nodes, name):
+        found = []
+        for node in nodes:
+            if node["kind"] == "include":
+                found.extend(descendant_directives(node["children"], name))
+            elif node["kind"] == "directive" and node["name"] == name:
+                found.append(node)
+            elif node["kind"] == "block":
+                found.extend(descendant_directives(node["children"], name))
+        return found
+
+    for server, _ in servers:
+        name_directives = direct_directives(server["children"], "server_name")
+        names = {name.lower() for directive in name_directives for name in directive["args"]}
+        routes = descendant_directives(server["children"], "fastcgi_pass")
+        has_selector = server is selected_server
+        is_staging = PHP_RUNTIME_VHOST in names
+        if has_selector:
+            if len(name_directives) != 1 or names != {PHP_RUNTIME_VHOST}:
+                raise ValueError("PHP runtime selector server_name must be exactly the staging vhost")
+            if len(routes) != 1 or routes[0]["args"] != [f"unix:{PHP_RUNTIME_SOCKETS[active_php_profile()].as_posix()}"]:
+                raise ValueError("staging server has a missing or competing FastCGI route")
+        elif is_staging and routes:
+            if names != {PHP_RUNTIME_VHOST}:
+                raise ValueError("staging PHP route shares a server block with another hostname")
+            raise ValueError("staging PHP route does not use the runtime selector")
 
 
 def supervisor_runtime_contract(*, allow_legacy=False):
