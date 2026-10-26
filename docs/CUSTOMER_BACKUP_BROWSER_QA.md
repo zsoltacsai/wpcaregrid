@@ -32,9 +32,13 @@ The following screenshots were captured by the passing headed-Chromium Playwrigh
 | Invalid range failed closed | [invalid-range-failed-closed.png](evidence/customer-backup-download/invalid-range-failed-closed.png) |
 | Object identity change failed closed | [object-identity-change-failed-closed.png](evidence/customer-backup-download/object-identity-change-failed-closed.png) |
 
-### Manual native-picker observation
+### Native file-write evidence
 
-On this Windows/Chrome session the real operating-system save picker opened from the page's Start click. Canceling it returned to the page with the localized “No save location selected” state and restored Start; no grant was requested by that gesture. A subsequent attempt to save to the dedicated worktree output path was rejected by the native dialog as a path it could not resolve, so no file was written and the native writer completion/byte verification remains **UNKNOWN**. The automated writer-stub coverage must not be represented as a successful native file write.
+**Owner-reported manual verification (not independently observed by the agent):** the Owner completed the local synthetic browser test and confirmed that the saved `synthetic-backup.bin` contains exactly `00 01 02 03`. This satisfies native file-write and byte verification based on the Owner's report. The Owner did not provide the browser/version, OS build, or a screenshot, so those details are not claimed here.
+
+**Agent-observed manual verification:** in Windows Chrome the real operating-system save picker opened from the page's Start click. Canceling it returned to the page with the localized “No save location selected” state and restored Start; no grant was requested by that gesture. A subsequent agent attempt to save through the native dialog could not be completed because the available UI control could not target its Save button. The later Owner confirmation supersedes the prior UNKNOWN for successful native file writing, but does not imply that the agent independently observed the write.
+
+**Native Cancel → Start:** no separate Owner confirmation or agent-observed successful native picker cancel-then-restart-and-save cycle is recorded. Keep this specific native interaction **UNKNOWN**. The automated regression `Cancel then Start obtains a fresh writer and downloads from byte zero` passed using the deterministic browser API stub; it remains separate evidence and must not be described as a manual native test.
 
 ## Manual native-picker check (Chrome or Edge)
 
@@ -62,7 +66,9 @@ The automated Chromium suite does not claim this native picker check passed. Saf
 | Writer failure restarts from zero with a new writer | `writer failure forces a new picker and a byte-zero restart` | PASS |
 | Failed revoke is never presented as success | `failed revoke is not shown as success and blocks a replacement grant until confirmed` | PASS |
 | Invalid Content-Range and changed object identity fail closed | Two dedicated Playwright regression cases | PASS |
-| Native Windows picker opens and cancel is handled | Manual Chrome session; no file was written | PASS for open/cancel; native file write **UNKNOWN** |
+| Native Windows picker opens and cancellation returns to a usable page | Agent-observed manual Chrome session | PASS |
+| Native file write completes and saved bytes equal `00 01 02 03` | Owner-reported manual verification of `synthetic-backup.bin`; browser/OS details not supplied | PASS (Owner evidence; not independently observed by agent) |
+| Native picker Cancel → Start → successful fresh save | No specific manual result reported; automated writer-stub regression is separate | **UNKNOWN** |
 | Safari/WebKit Blob behavior | No Safari/WebKit runtime available in this QA session | **UNKNOWN** |
 | Feature remains default-off and customer controls are eligibility-gated | `AccountBackupsTest::test_customer_backup_browser_shows_only_verified_objects_when_downloads_are_enabled` and default-off view regression | PASS |
 | Feature limits, no public provider URL, no restore/retention change | Source review of the complete PR; limits remain 256 MiB disk / 16 MiB Blob; #191C excluded | PASS |
