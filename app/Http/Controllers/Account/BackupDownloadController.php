@@ -7,7 +7,6 @@ use App\Backups\CustomerDownloads\BackupDownloadGrants;
 use App\Backups\CustomerDownloads\BackupDownloadRefused;
 use App\Models\Backup;
 use App\Models\BackupDownloadGrant;
-use App\Models\BackupObject;
 use App\Models\Website;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
