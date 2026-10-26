@@ -73,12 +73,12 @@ final class BackupDownloadController extends Controller
         $response = response()->stream(function () use ($range, $grant, $grants): void {
             $sent = 0;
             try {
-                if (!connection_aborted()) {
+                if (connection_aborted() === false) {
                     echo $range->bytes;
                     $sent = strlen($range->bytes);
                 }
             } finally {
-                $grants->recordResponse($grant, $sent, $sent === $range->length && !connection_aborted());
+                $grants->recordResponse($grant, $sent, $sent === $range->length && connection_aborted() === false);
             }
         }, 206, [
             'Accept-Ranges' => 'bytes',
