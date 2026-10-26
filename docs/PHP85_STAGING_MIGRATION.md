@@ -14,7 +14,7 @@ Before the protected controller can use runtime profiles, an administrator must 
 
 1. Verify the package signer and cached repository metadata; confirm PHP 8.5 package provenance, required extensions, and CLI/FPM package versions. The PPA signer/InRelease evidence is currently UNKNOWN.
 2. Install PHP 8.5 side-by-side with patched PHP 8.4 only after package provenance is verified. Do not change alternatives or remove PHP 8.4.
-3. Confirm `/usr/bin/php8.4`, `/usr/bin/php8.5`, both FPM services, and sockets `/run/php/php8.4-fpm.sock` and `/run/php/php8.5-fpm.sock`. Both sockets must be `www-data:www-data` mode `0660`; both FPM services remain active. The 8.4 pool/socket is shared by other vhosts and must not be repointed.
+3. Confirm `/usr/bin/php8.4`, `/usr/bin/php8.5`, both FPM services, and sockets `/run/php/php8.4-fpm.sock` and `/run/php/php8.5-fpm.sock`. The effective `[www]` pool in each PHP-FPM configuration must run as `user = www-data` and `group = www-data`; the protected preflight validates these worker identities from `php-fpm -tt` output. Both sockets must independently be `www-data:www-data` mode `0660`; socket ownership does not prove the PHP worker UID/GID. Both FPM services remain active. The 8.4 pool/socket is shared by other vhosts and must not be repointed.
 4. Install root-owned mode-0644 snippets with exactly one directive each:
    - `wpcaregrid-staging-php84.conf`: `fastcgi_pass unix:/run/php/php8.4-fpm.sock;`
    - `wpcaregrid-staging-php85.conf`: `fastcgi_pass unix:/run/php/php8.5-fpm.sock;`
