@@ -6,6 +6,7 @@ import hashlib
 import io
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 from contextlib import redirect_stdout
@@ -192,7 +193,7 @@ def main():
             "expected_gid": 33,
         }
         module.validate_runtime_evidence(profile, **valid_runtime)
-        for key, bad_value in (("binary_ok", False), ("cli_version", "8.4" if profile == "8.5" else "8.5"), ("fpm_active", False), ("fpm_binary_ok", False), ("fpm_executable", "/usr/sbin/php-fpm8.4" if profile == "8.5" else "/usr/sbin/php-fpm8.5"), ("fpm_version", "8.4.27" if profile == "8.5" else "8.5.12"), ("socket_type", False), ("socket_mode", 0o666)):
+        for key, bad_value in (("binary_ok", False), ("cli_version", "8.4" if profile == "8.5" else "8.5"), ("fpm_active", False), ("fpm_binary_ok", False), ("fpm_executable", "/usr/sbin/php-fpm8.4" if profile == "8.5" else "/usr/sbin/php-fpm8.5"), ("fpm_version", "8.4.27" if profile == "8.5" else "8.5.12"), ("socket_type", False), ("socket_uid", 0), ("socket_gid", 0), ("socket_mode", 0o666)):
             invalid_runtime = dict(valid_runtime)
             invalid_runtime[key] = bad_value
             try:
@@ -215,6 +216,103 @@ def main():
             pass
         else:
             raise AssertionError("incompatible PHP-FPM configuration was accepted")
+    for profile in ("8.4", "8.5"):
+        socket_path = module.PHP_RUNTIME_SOCKETS[profile].as_posix()
+        good_fpm_dump = f"""[26-Oct-2026 12:00:00] NOTICE: [global]
+[26-Oct-2026 12:00:00] NOTICE:  daemonize = no
+[26-Oct-2026 12:00:00] NOTICE: [www]
+[26-Oct-2026 12:00:00] NOTICE:  user = www-data
+[26-Oct-2026 12:00:00] NOTICE:  listen = {socket_path}
+"""
+        module.validate_fpm_pool_listen(profile, good_fpm_dump)
+        wrong_dumps = (
+            good_fpm_dump.replace(socket_path, "/run/php/php7.4-fpm.sock"),
+            good_fpm_dump.replace("[www]", "[other]"),
+            good_fpm_dump.replace(f"listen = {socket_path}\n", f"listen = {socket_path}\n[26-Oct-2026 12:00:00] NOTICE:  listen = /run/php/other.sock\n"),
+            good_fpm_dump + f"[26-Oct-2026 12:00:00] NOTICE: [other]\n[26-Oct-2026 12:00:00] NOTICE:  listen = {socket_path}\n",
+        )
+        for bad_dump in wrong_dumps:
+            try:
+                module.validate_fpm_pool_listen(profile, bad_dump)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"wrong effective FPM pool listener passed for PHP {profile}")
+
+        main_identity = {
+            "pid": 1234,
+            "executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(),
+            "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]},
+            "command_line_uses_config": True,
+        }
+        module.validate_fpm_main_process(profile, **main_identity)
+        assert module.command_line_uses_fpm_config(profile, [module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "--nodaemonize", "--fpm-config", module.PHP_RUNTIME_FPM_CONFIGS[profile].as_posix()])
+        assert module.command_line_uses_fpm_config(profile, [f"php-fpm: master process ({module.PHP_RUNTIME_FPM_CONFIGS[profile].as_posix()})"])
+        assert not module.command_line_uses_fpm_config(profile, [module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "--fpm-config", "/tmp/untrusted-fpm.conf"])
+        for key, value in (
+            ("executable", module.PHP_RUNTIME_FPM_BINARIES["8.5" if profile == "8.4" else "8.4"].as_posix()),
+            ("cgroup_paths", {"/system.slice/unrelated.service"}),
+            ("command_line_uses_config", False),
+        ):
+            invalid_identity = dict(main_identity)
+            invalid_identity[key] = value
+            try:
+                module.validate_fpm_main_process(profile, **invalid_identity)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"incorrect PHP {profile} FPM service identity passed")
+
+        listener_line = f"u_str LISTEN 0 511 {socket_path} * 0 users:((\"php-fpm8.{profile[-1]}\",pid=1234,fd=8)) ino:98765 sk:1"
+        inode, owners = module.parse_unix_listener_records(listener_line, socket_path)
+        assert inode == 98765 and owners == [(1234, 8)]
+        valid_evidence = {
+            "executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(),
+            "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]},
+            "fd_target": "socket:[98765]",
+        }
+        module.validate_fpm_listener_processes(profile, inode, owners, lambda pid, fd: valid_evidence)
+        for invalid_output in (
+            "",
+            f"u_str ESTAB 0 511 {socket_path} * 0 users:((\"php-fpm\",pid=1234,fd=8)) ino:98765",
+            f"u_str LISTEN 0 511 {socket_path} * 0 ino:98765",
+        ):
+            try:
+                module.parse_unix_listener_records(invalid_output, socket_path)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("stale, inactive, or ownerless FPM socket passed listener validation")
+        for invalid_evidence in (
+            {"executable": "/usr/bin/python3", "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]}, "fd_target": "socket:[98765]"},
+            {"executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "cgroup_paths": {"/system.slice/other.service"}, "fd_target": "socket:[98765]"},
+            {"executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]}, "fd_target": "socket:[98766]"},
+        ):
+            try:
+                module.validate_fpm_listener_processes(profile, inode, owners, lambda pid, fd, item=invalid_evidence: item)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("foreign process, service, or socket inode passed FPM listener validation")
+
+    if os.name != "nt":
+        ss_binary = shutil.which("ss")
+        if not ss_binary:
+            raise AssertionError("Linux listener integration requires the iproute2 ss utility")
+        with tempfile.TemporaryDirectory() as temporary:
+            live_path = str(Path(temporary) / "live-listener.sock")
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(live_path)
+            listener.listen(1)
+            try:
+                ss = subprocess.run([ss_binary, "-xlepH"], check=True, capture_output=True, text=True, timeout=5)
+                inode, owners = module.parse_unix_listener_records(ss.stdout, live_path)
+                assert os.getpid() in {pid for pid, _ in owners}, "real Unix listener is not attributed to its owning process"
+                assert any(os.readlink(f"/proc/{pid}/fd/{fd}") == f"socket:[{inode}]" for pid, fd in owners)
+            finally:
+                listener.close()
+
+    for profile in ("8.4", "8.5"):
         for name, command in module.WORKER_COMMANDS.items():
             expected_executable = module.PHP_RUNTIME_BINARIES[profile].as_posix()
             expected_argv = [expected_executable, *command.split()[1:]]
@@ -259,7 +357,7 @@ def main():
                 module.runtime_snippet = lambda profile: None
                 module.php_runtime_preflight = lambda profile: None
                 module.require_regular = lambda path, **kwargs: (_ for _ in ()).throw(ValueError("unsafe marker")) if path.is_symlink() or not path.is_file() else path.stat()
-                failure_state = {"fail_nginx_once": False}
+                failure_state = {"fail_nginx_once": False, "fail_reload_once": False}
                 nginx_dump = """# configuration file /etc/nginx/sites-enabled/staging.wpcaregrid.com:
 server {
     server_name staging.wpcaregrid.com;
@@ -276,9 +374,22 @@ server {
                     if argv == ["/usr/sbin/nginx", "-t"] and failure_state["fail_nginx_once"]:
                         failure_state["fail_nginx_once"] = False
                         raise subprocess.CalledProcessError(1, argv)
+                    if argv == ["/usr/bin/systemctl", "reload", "nginx"] and failure_state["fail_reload_once"]:
+                        failure_state["fail_reload_once"] = False
+                        raise subprocess.CalledProcessError(1, argv)
                     return subprocess.CompletedProcess(argv, 0, stdout=nginx_dump if argv == ["/usr/sbin/nginx", "-T"] else "")
 
                 module.run = fake_runtime_run
+                module.php_runtime_preflight = lambda profile: (_ for _ in ()).throw(ValueError("synthetic preflight refusal"))
+                try:
+                    module.switch_php_runtime("8.5")
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("failed preflight permitted a runtime selector change")
+                assert module.active_php_profile() == "8.4", "preflight failure changed the active selector"
+                assert gate.is_file() and pause.is_file() and disabled.is_file()
+                module.php_runtime_preflight = lambda profile: None
                 module.switch_php_runtime("8.5")
                 assert module.active_php_profile() == "8.5"
                 active_link.unlink()
@@ -292,6 +403,34 @@ server {
                     raise AssertionError("failed Nginx validation did not abort runtime switch")
                 assert module.active_php_profile() == "8.4", "partial runtime transition did not restore previous selector"
                 assert gate.is_file() and pause.is_file() and disabled.is_file(), "failed runtime transition removed a fail-closed marker"
+
+                failure_state["fail_reload_once"] = True
+                try:
+                    module.switch_php_runtime("8.5")
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("failed Nginx reload did not abort runtime switch")
+                assert module.active_php_profile() == "8.4", "reload failure did not restore the previous selector"
+                assert gate.is_file() and pause.is_file() and disabled.is_file(), "reload failure removed a fail-closed marker"
+
+                preflight_calls = []
+
+                def fail_post_switch_preflight(profile):
+                    preflight_calls.append((profile, module.active_php_profile()))
+                    if len(preflight_calls) == 2:
+                        raise ValueError("synthetic post-switch listener failure")
+
+                module.php_runtime_preflight = fail_post_switch_preflight
+                try:
+                    module.switch_php_runtime("8.5")
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("post-switch listener failure did not abort runtime switch")
+                assert preflight_calls[0] == ("8.5", "8.4") and preflight_calls[1] == ("8.5", "8.5")
+                assert module.active_php_profile() == "8.4", "post-switch preflight failure did not restore the previous selector"
+                assert gate.is_file() and pause.is_file() and disabled.is_file(), "post-switch preflight failure removed a fail-closed marker"
             finally:
                 for name, value in saved.items():
                     setattr(module, name, value)
@@ -349,14 +488,20 @@ server {
         module.runtime_snippet = lambda profile: None
         module.active_php_profile = lambda: "8.4"
         good_nginx = """# configuration file /etc/nginx/sites-enabled/staging.wpcaregrid.com:\nserver {\n    listen 80;\n    server_name staging.wpcaregrid.com;\n    return 301 https://staging.wpcaregrid.com$request_uri;\n}\nserver {\n    listen 443 ssl;\n    server_name staging.wpcaregrid.com;\n    include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n}\n# configuration file /etc/nginx/snippets/wpcaregrid-staging-php84.conf:\nfastcgi_pass unix:/run/php/php8.4-fpm.sock;\n"""
+        good_nginx += "# configuration file /etc/nginx/sites-enabled/sibling.example:\nserver {\n    server_name sibling.example;\n    fastcgi_pass unix:/run/php/php8.4-fpm.sock;\n}\n"
         module.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout=good_nginx if argv[-1] == "-T" else "")
         module.nginx_runtime_contract("8.4")
         for bad_nginx in (
             good_nginx.replace("staging.wpcaregrid.com;", "other.example;").replace("staging.wpcaregrid.com:\nserver", "other.example:\nserver"),
+            good_nginx.replace("server_name staging.wpcaregrid.com;\n    include", "server_name staging.wpcaregrid.com sibling.example;\n    include"),
+            good_nginx.replace("server_name staging.wpcaregrid.com;\n    include", "server_name staging.wpcaregrid.com *.example;\n    include"),
+            good_nginx.replace("server_name staging.wpcaregrid.com;\n    include", "server_name staging.wpcaregrid.com ~^sibling\\\\.example$;\n    include"),
+            good_nginx + "# configuration file /etc/nginx/sites-enabled/sibling.example:\nserver {\n    server_name sibling.example;\n    include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n}\n",
             good_nginx + "# configuration file /etc/nginx/sites-enabled/other.example:\ninclude /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n",
             good_nginx.replace("include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;", "fastcgi_pass unix:/run/php/php7.4-fpm.sock;"),
             good_nginx.replace("include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;", "include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n    fastcgi_pass unix:/run/php/php8.4-fpm.sock;"),
             good_nginx + "# configuration file /etc/nginx/sites-enabled/staging-extra:\nserver {\n    server_name staging.wpcaregrid.com;\n    fastcgi_pass unix:/run/php/php8.5-fpm.sock;\n}\n",
+            good_nginx + "# configuration file /etc/nginx/sites-enabled/staging-duplicate:\nserver {\n    server_name staging.wpcaregrid.com;\n    include /etc/nginx/snippets/wpcaregrid-staging-runtime.conf;\n}\n",
         ):
             module.run = lambda argv, bad_nginx=bad_nginx, **kwargs: subprocess.CompletedProcess(argv, 0, stdout=bad_nginx if argv[-1] == "-T" else "")
             try:
@@ -377,6 +522,8 @@ server {
     workers_stop_line = next(i for i, line in enumerate(controller_lines) if "privileged worker stop-all" in line)
     disabled_line = next(i for i, line in enumerate(controller_lines) if "privileged worker-runtime-disable" in line and i > gate_line)
     assert gate_line < disabled_line < workers_stop_line < switch_line, "runtime switch must follow the active gate, persistent worker disable, and drained workers"
+    assert 'workers_running || return 1\n    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || return 1\n    release_gate || return 1' in controller, "recovery must revalidate the active runtime listener before releasing traffic"
+    assert 'privileged worker-runtime-check "$PHP_TARGET_PROFILE" || fail \'A queue worker changed runtime before traffic was reopened.\'\n    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || fail \'The selected PHP-FPM pool or live listener changed before traffic was reopened.\'\n    release_gate' in controller, "deployment must revalidate the active runtime listener immediately before releasing traffic"
     recovery_switch_line = next(i for i, line in enumerate(controller_lines) if "privileged php-runtime-switch \"$PHP_BASELINE_PROFILE\"" in line)
     baseline_checkout_line = next(i for i, line in enumerate(controller_lines) if "rollback_code_to_baseline || return 1" in line)
     assert recovery_switch_line < baseline_checkout_line, "runtime must return to baseline before code rollback"

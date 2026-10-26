@@ -34,7 +34,9 @@ PHP_RUNTIME_DIRECTIVES = {
 }
 PHP_RUNTIME_BINARIES = {"8.4": Path("/usr/bin/php8.4"), "8.5": Path("/usr/bin/php8.5")}
 PHP_RUNTIME_FPM_BINARIES = {"8.4": Path("/usr/sbin/php-fpm8.4"), "8.5": Path("/usr/sbin/php-fpm8.5")}
+PHP_RUNTIME_FPM_CONFIGS = {"8.4": Path("/etc/php/8.4/fpm/php-fpm.conf"), "8.5": Path("/etc/php/8.5/fpm/php-fpm.conf")}
 PHP_RUNTIME_SERVICES = {"8.4": "php8.4-fpm", "8.5": "php8.5-fpm"}
+PHP_RUNTIME_FPM_CGROUPS = {"8.4": "/system.slice/php8.4-fpm.service", "8.5": "/system.slice/php8.5-fpm.service"}
 PHP_RUNTIME_SOCKETS = {"8.4": Path("/run/php/php8.4-fpm.sock"), "8.5": Path("/run/php/php8.5-fpm.sock")}
 PHP_RUNTIME_VHOST = "staging.wpcaregrid.com"
 PHP_RUNTIME_LAUNCHER_DEST = Path("/usr/local/bin/wpcaregrid-php")
@@ -478,6 +480,8 @@ def validate_nginx_runtime_dump(output):
             depth += line.count("{") - line.count("}")
             if server is not None and depth == server_base_depth:
                 is_staging = PHP_RUNTIME_VHOST in server["names"]
+                if server["selector"] and server["names"] != {PHP_RUNTIME_VHOST}:
+                    raise ValueError("PHP runtime selector server_name must be exactly the staging vhost")
                 if server["selector"] and is_staging:
                     selected_include_blocks += 1
                 if server["selector"] and not is_staging:
@@ -534,6 +538,96 @@ def rewrite_supervisor_runtime_commands(text):
     return updated
 
 
+def validate_fpm_pool_listen(profile, output):
+    """Validate the effective fixed FPM pool dump, not merely a source file."""
+    profile = php_profile(profile)
+    expected_socket = PHP_RUNTIME_SOCKETS[profile].as_posix()
+    current_pool = None
+    listens = {}
+    for raw_line in output.splitlines():
+        line = re.sub(r"^\[[^]]+\]\s+NOTICE:\s*", "", raw_line).strip()
+        if line.startswith("[") and line.endswith("]"):
+            current_pool = line[1:-1].strip()
+            continue
+        match = re.fullmatch(r"listen\s*=\s*(\S+)\s*", line)
+        if match and current_pool is not None:
+            listens.setdefault(current_pool, []).append(match.group(1))
+    if listens.get("www") != [expected_socket]:
+        raise ValueError("effective www FPM pool listener differs from the selected socket")
+    if any(pool != "www" and expected_socket in values for pool, values in listens.items()):
+        raise ValueError("another FPM pool also claims the selected socket")
+
+
+def parse_unix_listener_records(output, expected_socket):
+    """Parse ss -xlepH evidence for one pathname Unix LISTEN socket."""
+    records = []
+    for line in output.splitlines():
+        fields = line.split()
+        if expected_socket not in fields:
+            continue
+        if len(fields) < 5 or fields[0] != "u_str" or fields[1] != "LISTEN":
+            raise ValueError("expected Unix socket path is not in LISTEN state")
+        inode_match = re.search(r"(?:^|\s)ino:(\d+)(?:\s|$)", line)
+        owners = [(int(pid), int(fd)) for pid, fd in re.findall(r"pid=(\d+),fd=(\d+)", line)]
+        if not inode_match or not owners:
+            raise ValueError("Unix listener lacks inode or process evidence")
+        records.append((int(inode_match.group(1)), owners))
+    if len(records) != 1:
+        raise ValueError("expected exactly one active Unix listener")
+    return records[0]
+
+
+def process_cgroup_paths(pid):
+    try:
+        data = Path(f"/proc/{pid}/cgroup").read_text(encoding="ascii")
+    except (OSError, UnicodeError):
+        raise ValueError("FPM process cgroup is unavailable") from None
+    paths = set()
+    for line in data.splitlines():
+        fields = line.split(":", 2)
+        if len(fields) == 3:
+            paths.add(fields[2])
+    return paths
+
+
+def command_line_uses_fpm_config(profile, argv):
+    config = PHP_RUNTIME_FPM_CONFIGS[profile].as_posix()
+    for index, arg in enumerate(argv[:-1]):
+        if arg in {"--fpm-config", "-y"}:
+            return argv[index + 1] == config
+    return f"master process ({config})" in " ".join(argv)
+
+
+def process_uses_fpm_config(pid, profile):
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        argv = [part.decode("utf-8") for part in raw if part]
+    except (OSError, UnicodeError):
+        raise ValueError("FPM master command line is unavailable") from None
+    return command_line_uses_fpm_config(profile, argv)
+
+
+def validate_fpm_main_process(profile, *, pid, executable, cgroup_paths, command_line_uses_config):
+    profile = php_profile(profile)
+    if (not re.fullmatch(r"[1-9][0-9]{0,8}", str(pid))
+            or executable != PHP_RUNTIME_FPM_BINARIES[profile].as_posix()
+            or PHP_RUNTIME_FPM_CGROUPS[profile] not in cgroup_paths
+            or command_line_uses_config is not True):
+        raise ValueError("active FPM master identity or configuration differs from profile")
+
+
+def validate_fpm_listener_processes(profile, inode, owners, process_evidence):
+    profile = php_profile(profile)
+    if not isinstance(inode, int) or inode <= 0 or not owners:
+        raise ValueError("invalid FPM listener evidence")
+    for pid, fd in owners:
+        evidence = process_evidence(pid, fd)
+        if (evidence.get("executable") != PHP_RUNTIME_FPM_BINARIES[profile].as_posix()
+                or PHP_RUNTIME_FPM_CGROUPS[profile] not in evidence.get("cgroup_paths", set())
+                or evidence.get("fd_target") != f"socket:[{inode}]" ):
+            raise ValueError("FPM listener is not owned by the selected FPM service")
+
+
 def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
     profile = php_profile(profile)
     runtime_snippet(profile)
@@ -546,14 +640,30 @@ def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
     cli_version = (result.stdout or "").strip() if result.returncode == 0 else ""
     service = run(["/usr/bin/systemctl", "is-active", "--quiet", PHP_RUNTIME_SERVICES[profile]], check=False)
     main_pid = run(["/usr/bin/systemctl", "show", "--property=MainPID", "--value", PHP_RUNTIME_SERVICES[profile]], check=False, stdout=subprocess.PIPE)
+    cgroup = run(["/usr/bin/systemctl", "show", "--property=ControlGroup", "--value", PHP_RUNTIME_SERVICES[profile]], check=False, stdout=subprocess.PIPE)
     pid = (main_pid.stdout or "").strip()
     if main_pid.returncode or not re.fullmatch(r"[1-9][0-9]{0,8}", pid):
         fpm_executable = ""
+        main_cgroups = set()
+        uses_expected_config = False
     else:
         try:
             fpm_executable = os.readlink(f"/proc/{pid}/exe")
-        except OSError:
+            main_cgroups = process_cgroup_paths(pid)
+            uses_expected_config = process_uses_fpm_config(pid, profile)
+        except (OSError, ValueError):
             fpm_executable = ""
+            main_cgroups = set()
+            uses_expected_config = False
+    validate_fpm_main_process(
+        profile,
+        pid=pid,
+        executable=fpm_executable,
+        cgroup_paths=main_cgroups,
+        command_line_uses_config=uses_expected_config,
+    )
+    if cgroup.returncode or (cgroup.stdout or "").strip() != PHP_RUNTIME_FPM_CGROUPS[profile]:
+        raise ValueError("PHP-FPM systemd service cgroup differs from profile")
     fpm_binary = PHP_RUNTIME_FPM_BINARIES[profile]
     try:
         fpm_parent = open_root_trusted_directory(fpm_binary.parent)
@@ -564,6 +674,14 @@ def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
         fpm_binary_ok = False
     fpm_version_result = run([str(fpm_binary), "-v"], check=False, stdout=subprocess.PIPE) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="")
     fpm_version_match = re.search(r"(?m)^PHP (8\.[0-9]+\.[0-9]+) \(fpm-fcgi\)", fpm_version_result.stdout or "") if fpm_version_result.returncode == 0 else None
+    fpm_config_result = subprocess.run(
+        [str(fpm_binary), "-tt", "--fpm-config", str(PHP_RUNTIME_FPM_CONFIGS[profile])],
+        check=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=SAFE_ENV, close_fds=True, timeout=10,
+    ) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="", stderr="")
+    if fpm_config_result.returncode:
+        raise ValueError("effective PHP-FPM pool configuration could not be inspected")
+    validate_fpm_pool_listen(profile, (fpm_config_result.stdout or "") + "\n" + (fpm_config_result.stderr or ""))
     fpm_info_result = subprocess.run(
         [str(fpm_binary), "-i"], check=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL, text=True, env=SAFE_ENV, close_fds=True, timeout=10,
@@ -595,6 +713,27 @@ def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
         expected_uid=expected_uid,
         expected_gid=expected_gid,
     )
+    listener_result = subprocess.run(
+        ["/usr/bin/ss", "-xlepH"], check=False, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        env=SAFE_ENV, close_fds=True, timeout=10,
+    )
+    if listener_result.returncode:
+        raise ValueError("active Unix socket listeners could not be inspected")
+    listener_inode, listener_owners = parse_unix_listener_records(
+        listener_result.stdout or "", PHP_RUNTIME_SOCKETS[profile].as_posix()
+    )
+
+    def listener_process_evidence(listener_pid, listener_fd):
+        try:
+            executable = os.readlink(f"/proc/{listener_pid}/exe")
+            cgroups = process_cgroup_paths(listener_pid)
+            fd_target = os.readlink(f"/proc/{listener_pid}/fd/{listener_fd}")
+        except OSError:
+            raise ValueError("active FPM listener process evidence is unavailable") from None
+        return {"executable": executable, "cgroup_paths": cgroups, "fd_target": fd_target}
+
+    validate_fpm_listener_processes(profile, listener_inode, listener_owners, listener_process_evidence)
     nginx_runtime_contract(active_php_profile())
     supervisor_runtime_contract(allow_legacy=allow_legacy_supervisor)
 
@@ -720,6 +859,7 @@ def switch_php_runtime(profile):
             run(["/usr/bin/systemctl", "reload", "nginx"])
             if active_php_profile() != profile:
                 raise ValueError("runtime selector did not persist")
+            php_runtime_preflight(profile)
         except Exception:
             try:
                 os.symlink(str(PHP_RUNTIME_FILES[previous]), rollback_name, dir_fd=directory_fd)
@@ -729,6 +869,7 @@ def switch_php_runtime(profile):
                 os.fsync(directory_fd)
                 nginx_runtime_contract(previous)
                 run(["/usr/bin/systemctl", "reload", "nginx"])
+                php_runtime_preflight(previous)
             except Exception:
                 raise ValueError("runtime switch failed and selector rollback requires manual recovery") from None
             raise ValueError("runtime switch failed; previous selector restored") from None

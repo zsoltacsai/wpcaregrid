@@ -662,6 +662,7 @@ recover_after_failure() {
     wait_for_scheduler || return 1
     check_system_health || return 1
     workers_running || return 1
+    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || return 1
     release_gate || return 1
 
     if (( CODE_SWITCHED )); then
@@ -927,6 +928,7 @@ main() {
     wait_for_scheduler || fail 'Scheduler heartbeat did not recover after cache refresh.'
     workers_running || fail 'One or more required Supervisor workers stopped before traffic was reopened.'
     privileged worker-runtime-check "$PHP_TARGET_PROFILE" || fail 'A queue worker changed runtime before traffic was reopened.'
+    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || fail 'The selected PHP-FPM pool or live listener changed before traffic was reopened.'
     release_gate
     if ! post_deploy_smoke || ! runtime_cache_access_ok || ! workers_running; then
         log 'Final staging HTTP/security or runtime-cache permission check failed; closing the Nginx gate again.' >&2
