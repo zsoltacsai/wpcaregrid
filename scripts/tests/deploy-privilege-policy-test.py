@@ -3,8 +3,12 @@
 
 import importlib.util
 import hashlib
+import fnmatch
 import io
 import os
+import shutil
+import socket
+import stat
 import subprocess
 import tempfile
 from contextlib import redirect_stdout
@@ -18,6 +22,7 @@ DENIAL_FIXTURE = ROOT / "scripts/tests/fixtures/deploy-sudo-denial-fixture.sh"
 spec = importlib.util.spec_from_file_location("deploy_priv", HELPER)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+NGINX_VALIDATOR = module.validate_nginx_runtime_dump
 
 
 def expect_rejected(args):
@@ -28,7 +33,78 @@ def expect_rejected(args):
     raise AssertionError(f"unsafe helper request accepted: {args!r}")
 
 
+def nginx_fixture(profile="8.4", *, staging_name="staging.wpcaregrid.com", extra_staging_include=None, handler_override=None, selector_path=None):
+    selector_path = selector_path or module.PHP_RUNTIME_LINK.as_posix()
+    files = {
+        "/etc/nginx/nginx.conf": "events {}\nhttp {\n    include /etc/nginx/sites-enabled/*;\n}\n",
+        "/etc/nginx/sites-enabled/staging": (
+            "server {\n"
+            f"    server_name {staging_name};\n"
+            "    include /etc/nginx/snippets/wpcaregrid-staging-routes.conf;\n"
+            + (f"    include {extra_staging_include};\n" if extra_staging_include else "")
+            + "}\n"
+        ),
+        "/etc/nginx/sites-enabled/sibling": (
+            "server {\n"
+            "    server_name sibling.example;\n"
+            "    location ~ \\.php$ {\n"
+            "        include /etc/nginx/snippets/sibling-fastcgi.conf;\n"
+            "    }\n"
+            "}\n"
+        ),
+        "/etc/nginx/snippets/wpcaregrid-staging-routes.conf": (
+            "location ~ \\.php$ {\n"
+            "    include /etc/nginx/snippets/wpcaregrid-staging-handler.conf;\n"
+            "    include /etc/nginx/fastcgi_params;\n"
+            "}\n"
+        ),
+        "/etc/nginx/snippets/wpcaregrid-staging-handler.conf": handler_override or f"include {selector_path};\n",
+        selector_path: module.PHP_RUNTIME_DIRECTIVES[profile],
+        "/etc/nginx/fastcgi_params": "fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n",
+        "/etc/nginx/snippets/sibling-fastcgi.conf": "fastcgi_pass unix:/run/php/php8.4-fpm.sock;\n",
+    }
+    if extra_staging_include and extra_staging_include not in files:
+        files[extra_staging_include] = "location ~ \\.alternate-php$ {\n    include /etc/nginx/snippets/staging-extra-fastcgi.conf;\n}\n"
+        files["/etc/nginx/snippets/staging-extra-fastcgi.conf"] = "fastcgi_pass unix:/run/php/php8.4-fpm.sock;\n"
+    dump = "".join(f"# configuration file {path}:\n{content}" for path, content in files.items())
+    return dump, files
+
+
+def validate_nginx_fixture(dump, files, resolver_override=None):
+    def source_reader(path):
+        if path not in files:
+            raise ValueError("fixture source missing")
+        return files[path]
+
+    def include_resolver(pattern, source_paths):
+        if resolver_override is not None:
+            return resolver_override(pattern, source_paths)
+        if not pattern.startswith("/") or "$" in pattern:
+            raise ValueError("fixture include unsafe")
+        matched = sorted(path for path in source_paths if fnmatch.fnmatchcase(path, pattern))
+        if not matched:
+            raise ValueError("fixture include unresolved")
+        return matched
+
+    NGINX_VALIDATOR(dump, source_reader=source_reader, include_resolver=include_resolver)
+
+
 def main():
+    if os.name != "nt":
+        bash = shutil.which("bash")
+        if not bash:
+            raise AssertionError("Linux deployment policy tests require Bash for syntax validation")
+        subprocess.run(
+            [
+                bash,
+                "-n",
+                str(CONTROLLER),
+                str(ROOT / "scripts/run-scheduler.sh"),
+                str(ROOT / "scripts/run-php-runtime.sh"),
+            ],
+            check=True,
+        )
+
     invocations = []
 
     def fake_run(argv, **kwargs):
@@ -122,10 +198,504 @@ def main():
     module.dispatch(["rollback-allowed", "a" * 40])
     expect_rejected(["rollback-allowed", "b" * 40])
 
+    assert module.php_profile("8.4") == "8.4"
+    assert module.php_profile("8.5") == "8.5"
+    for profile in ("8.3", "8.6", "/usr/bin/php8.5", "", "8.5;id"):
+        try:
+            module.php_profile(profile)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"unsupported PHP runtime profile accepted: {profile!r}")
+
+    stopped = {name: "STOPPED" for name in module.WORKERS}
+    running = {name: "RUNNING" for name in module.WORKERS}
+    assert module.runtime_switch_preconditions(True, True, stopped)
+    assert not module.runtime_switch_preconditions(False, True, stopped)
+    assert not module.runtime_switch_preconditions(True, False, stopped)
+    assert not module.runtime_switch_preconditions(True, True, running)
+    assert not module.runtime_switch_preconditions(True, True, {"unexpected": "STOPPED"})
+
+    with tempfile.TemporaryDirectory() as temporary:
+        marker = Path(temporary) / "workers-disabled"
+        marker.write_text("disabled\n", encoding="ascii")
+        prior_marker = module.WORKERS_DISABLED
+        prior_require = module.require_regular
+        prior_run = module.run
+        module.WORKERS_DISABLED = marker
+        module.require_regular = lambda *args, **kwargs: None
+        module.run = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("disabled worker reached Supervisor"))
+        try:
+            module.worker("start", "wpcaregrid-default")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("worker start bypassed the persistent disable marker")
+        finally:
+            module.WORKERS_DISABLED = prior_marker
+            module.require_regular = prior_require
+            module.run = prior_run
+
+    for profile in ("8.4", "8.5"):
+        valid_runtime = {
+            "binary_ok": True,
+            "cli_version": profile,
+            "fpm_active": True,
+            "fpm_binary_ok": True,
+            "fpm_executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(),
+            "fpm_version": profile + ".27",
+            "socket_type": True,
+            "socket_uid": 33,
+            "socket_gid": 33,
+            "socket_mode": 0o660,
+            "expected_uid": 33,
+            "expected_gid": 33,
+        }
+        module.validate_runtime_evidence(profile, **valid_runtime)
+        for key, bad_value in (("binary_ok", False), ("cli_version", "8.4" if profile == "8.5" else "8.5"), ("fpm_active", False), ("fpm_binary_ok", False), ("fpm_executable", "/usr/sbin/php-fpm8.4" if profile == "8.5" else "/usr/sbin/php-fpm8.5"), ("fpm_version", "8.4.27" if profile == "8.5" else "8.5.12"), ("socket_type", False), ("socket_uid", 0), ("socket_gid", 0), ("socket_mode", 0o666)):
+            invalid_runtime = dict(valid_runtime)
+            invalid_runtime[key] = bad_value
+            try:
+                module.validate_runtime_evidence(profile, **invalid_runtime)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"runtime mismatch accepted: {profile} {key}")
+    fpm_info = """[PHP Modules]\nctype\ncurl\ndom\nfileinfo\nfilter\nhash\niconv\nintl\njson\nlibxml\nmbstring\nopenssl\npcre\nPDO\npdo_mysql\nsession\nSimpleXML\nsodium\ntokenizer\nxml\nzip\n[Zend Modules]\nZend OPcache\nopcache.validate_timestamps => On => On\nopcache.revalidate_freq => 2 => 2\n"""
+    module.validate_fpm_runtime_info(fpm_info)
+    for invalid_info in (
+        fpm_info.replace("pdo_mysql\n", ""),
+        fpm_info.replace("opcache.validate_timestamps => On => On", "opcache.validate_timestamps => Off => Off"),
+        fpm_info.replace("opcache.revalidate_freq => 2 => 2", "opcache.revalidate_freq => 5 => 5"),
+        fpm_info.replace("opcache.revalidate_freq => 2 => 2", ""),
+    ):
+        try:
+            module.validate_fpm_runtime_info(invalid_info)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("incompatible PHP-FPM configuration was accepted")
+    for profile in ("8.4", "8.5"):
+        socket_path = module.PHP_RUNTIME_SOCKETS[profile].as_posix()
+        good_fpm_dump = f"""[26-Oct-2026 12:00:00] NOTICE: [global]
+[26-Oct-2026 12:00:00] NOTICE:  daemonize = no
+[26-Oct-2026 12:00:00] NOTICE: [www]
+[26-Oct-2026 12:00:00] NOTICE:  user = www-data
+[26-Oct-2026 12:00:00] NOTICE:  group = www-data
+[26-Oct-2026 12:00:00] NOTICE:  listen = {socket_path}
+"""
+        module.validate_fpm_pool_listen(profile, good_fpm_dump)
+        wrong_dumps = (
+            good_fpm_dump.replace(socket_path, "/run/php/php7.4-fpm.sock"),
+            good_fpm_dump.replace("[www]", "[other]"),
+            good_fpm_dump.replace(f"listen = {socket_path}\n", f"listen = {socket_path}\n[26-Oct-2026 12:00:00] NOTICE:  listen = /run/php/other.sock\n"),
+            good_fpm_dump + f"[26-Oct-2026 12:00:00] NOTICE: [other]\n[26-Oct-2026 12:00:00] NOTICE:  listen = {socket_path}\n",
+            good_fpm_dump.replace("user = www-data", "user = deploy"),
+            good_fpm_dump.replace("group = www-data", "group = deploy"),
+            good_fpm_dump.replace("user = www-data", "user = root"),
+            good_fpm_dump.replace("group = www-data", "group = root"),
+            good_fpm_dump.replace("user = www-data\n", ""),
+            good_fpm_dump.replace("group = www-data\n", ""),
+            good_fpm_dump.replace("user = www-data\n", "user = www-data\n[26-Oct-2026 12:00:00] NOTICE:  user = deploy\n"),
+            good_fpm_dump.replace("group = www-data\n", "group = www-data\n[26-Oct-2026 12:00:00] NOTICE:  group = root\n"),
+        )
+        for bad_dump in wrong_dumps:
+            try:
+                module.validate_fpm_pool_listen(profile, bad_dump)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"wrong effective FPM pool listener passed for PHP {profile}")
+
+        main_identity = {
+            "pid": 1234,
+            "executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(),
+            "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]},
+            "command_line_uses_config": True,
+        }
+        module.validate_fpm_main_process(profile, **main_identity)
+        assert module.command_line_uses_fpm_config(profile, [module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "--nodaemonize", "--fpm-config", module.PHP_RUNTIME_FPM_CONFIGS[profile].as_posix()])
+        assert module.command_line_uses_fpm_config(profile, [f"php-fpm: master process ({module.PHP_RUNTIME_FPM_CONFIGS[profile].as_posix()})"])
+        assert not module.command_line_uses_fpm_config(profile, [module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "--fpm-config", "/tmp/untrusted-fpm.conf"])
+        for key, value in (
+            ("executable", module.PHP_RUNTIME_FPM_BINARIES["8.5" if profile == "8.4" else "8.4"].as_posix()),
+            ("cgroup_paths", {"/system.slice/unrelated.service"}),
+            ("command_line_uses_config", False),
+        ):
+            invalid_identity = dict(main_identity)
+            invalid_identity[key] = value
+            try:
+                module.validate_fpm_main_process(profile, **invalid_identity)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"incorrect PHP {profile} FPM service identity passed")
+
+        listener_line = f"u_str LISTEN 0 511 {socket_path} * 0 users:((\"php-fpm8.{profile[-1]}\",pid=1234,fd=8)) ino:98765 sk:1"
+        inode, owners = module.parse_unix_listener_records(listener_line, socket_path)
+        assert inode == 98765 and owners == [(1234, 8)]
+        valid_evidence = {
+            "executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(),
+            "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]},
+            "fd_is_socket": True,
+        }
+        module.validate_fpm_listener_processes(profile, inode, inode, owners, lambda pid, fd: valid_evidence)
+        try:
+            module.validate_fpm_listener_processes(profile, inode, inode + 1, owners, lambda pid, fd: valid_evidence)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("listener inode that differs from the configured socket path was accepted")
+        for invalid_output in (
+            "",
+            f"u_str ESTAB 0 511 {socket_path} * 0 users:((\"php-fpm\",pid=1234,fd=8)) ino:98765",
+            f"u_str LISTEN 0 511 {socket_path} * 0 ino:98765",
+        ):
+            try:
+                module.parse_unix_listener_records(invalid_output, socket_path)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("stale, inactive, or ownerless FPM socket passed listener validation")
+        for invalid_evidence in (
+            {"executable": "/usr/bin/python3", "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]}, "fd_is_socket": True},
+            {"executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "cgroup_paths": {"/system.slice/other.service"}, "fd_is_socket": True},
+            {"executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(), "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS[profile]}, "fd_is_socket": False},
+        ):
+            try:
+                module.validate_fpm_listener_processes(profile, inode, inode, owners, lambda pid, fd, item=invalid_evidence: item)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("foreign process, service, or socket inode passed FPM listener validation")
+
+    if os.name != "nt":
+        ss_binary = shutil.which("ss")
+        if not ss_binary:
+            raise AssertionError("Linux listener integration requires the iproute2 ss utility")
+        with tempfile.TemporaryDirectory() as temporary:
+            live_path = str(Path(temporary) / "live-listener.sock")
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(live_path)
+            listener.listen(1)
+            try:
+                ss = subprocess.run([ss_binary, "-xlepH"], check=True, capture_output=True, text=True, timeout=5)
+                inode, owners = module.parse_unix_listener_records(ss.stdout, live_path)
+                assert os.getpid() in {pid for pid, _ in owners}, "real Unix listener is not attributed to its owning process"
+                targets = [(pid, fd, os.readlink(f"/proc/{pid}/fd/{fd}")) for pid, fd in owners]
+                assert os.lstat(live_path).st_ino == inode, "ss listener inode did not match the bound socket path inode"
+                assert all(stat.S_ISSOCK(os.stat(f"/proc/{pid}/fd/{fd}").st_mode) for pid, fd in owners), f"ss listener owners no longer hold socket descriptors: {targets!r}"
+            finally:
+                listener.close()
+
+    for profile in ("8.4", "8.5"):
+        for name, command in module.WORKER_COMMANDS.items():
+            expected_executable = module.PHP_RUNTIME_BINARIES[profile].as_posix()
+            expected_argv = [expected_executable, *command.split()[1:]]
+            status = f"{name} RUNNING pid 42, uptime 0:01:00\n"
+            module.validate_worker_runtime(profile, name, status, expected_executable, expected_argv)
+            for bad_executable, bad_argv in (
+                (module.PHP_RUNTIME_BINARIES["8.5" if profile == "8.4" else "8.4"].as_posix(), expected_argv),
+                (expected_executable, [expected_executable, "/tmp/unrelated.php"]),
+            ):
+                try:
+                    module.validate_worker_runtime(profile, name, status, bad_executable, bad_argv)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("mismatched live worker runtime was accepted")
+
+    if os.name != "nt":
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile_files = {"8.4": root / "php84.conf", "8.5": root / "php85.conf"}
+            for profile, path in profile_files.items():
+                path.write_text(profile, encoding="ascii")
+            active_link = root / "active.conf"
+            active_link.symlink_to(profile_files["8.4"])
+            gate = root / "deploy-maintenance"
+            pause = root / "scheduler-paused"
+            disabled = root / "workers-disabled"
+            for marker in (gate, pause, disabled):
+                marker.write_text("active\n", encoding="ascii")
+            saved = {
+                name: getattr(module, name)
+                for name in ("PHP_RUNTIME_LINK", "PHP_RUNTIME_FILES", "GATE", "SCHEDULER_PAUSE", "WORKERS_DISABLED", "open_root_trusted_directory", "active_php_profile", "runtime_snippet", "php_runtime_preflight", "require_regular", "validate_nginx_runtime_dump", "run")
+            }
+            try:
+                module.PHP_RUNTIME_LINK = active_link
+                module.PHP_RUNTIME_FILES = profile_files
+                module.GATE = gate
+                module.SCHEDULER_PAUSE = pause
+                module.WORKERS_DISABLED = disabled
+                module.open_root_trusted_directory = lambda path: os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+                module.active_php_profile = lambda: next(profile for profile, path in profile_files.items() if os.readlink(active_link) == str(path))
+                module.runtime_snippet = lambda profile: None
+                module.php_runtime_preflight = lambda profile: None
+                module.require_regular = lambda path, **kwargs: (_ for _ in ()).throw(ValueError("unsafe marker")) if path.is_symlink() or not path.is_file() else path.stat()
+                failure_state = {"fail_nginx_once": False, "fail_reload_once": False}
+                nginx_state = {}
+                original_nginx_validator = module.validate_nginx_runtime_dump
+                module.validate_nginx_runtime_dump = lambda output: validate_nginx_fixture(output, nginx_state["files"])
+
+                def fake_runtime_run(argv, **kwargs):
+                    if argv[:2] == ["/usr/bin/supervisorctl", "status"]:
+                        name = argv[-1]
+                        return subprocess.CompletedProcess(argv, 0, stdout=f"{name} STOPPED\n")
+                    if argv == ["/usr/sbin/nginx", "-t"] and failure_state["fail_nginx_once"]:
+                        failure_state["fail_nginx_once"] = False
+                        raise subprocess.CalledProcessError(1, argv)
+                    if argv == ["/usr/bin/systemctl", "reload", "nginx"] and failure_state["fail_reload_once"]:
+                        failure_state["fail_reload_once"] = False
+                        raise subprocess.CalledProcessError(1, argv)
+                    if argv == ["/usr/sbin/nginx", "-T"]:
+                        dump, files = nginx_fixture(profile=module.active_php_profile())
+                        nginx_state["files"] = files
+                        return subprocess.CompletedProcess(argv, 0, stdout=dump)
+                    return subprocess.CompletedProcess(argv, 0, stdout="")
+
+                module.run = fake_runtime_run
+                module.php_runtime_preflight = lambda profile: (_ for _ in ()).throw(ValueError("synthetic preflight refusal"))
+                try:
+                    module.switch_php_runtime("8.5")
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("failed preflight permitted a runtime selector change")
+                assert module.active_php_profile() == "8.4", "preflight failure changed the active selector"
+                assert gate.is_file() and pause.is_file() and disabled.is_file()
+                module.php_runtime_preflight = lambda profile: None
+                module.switch_php_runtime("8.5")
+                assert module.active_php_profile() == "8.5"
+                active_link.unlink()
+                active_link.symlink_to(profile_files["8.4"])
+                failure_state["fail_nginx_once"] = True
+                try:
+                    module.switch_php_runtime("8.5")
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("failed Nginx validation did not abort runtime switch")
+                assert module.active_php_profile() == "8.4", "partial runtime transition did not restore previous selector"
+                assert gate.is_file() and pause.is_file() and disabled.is_file(), "failed runtime transition removed a fail-closed marker"
+
+                failure_state["fail_reload_once"] = True
+                try:
+                    module.switch_php_runtime("8.5")
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("failed Nginx reload did not abort runtime switch")
+                assert module.active_php_profile() == "8.4", "reload failure did not restore the previous selector"
+                assert gate.is_file() and pause.is_file() and disabled.is_file(), "reload failure removed a fail-closed marker"
+
+                preflight_calls = []
+
+                def fail_post_switch_preflight(profile):
+                    preflight_calls.append((profile, module.active_php_profile()))
+                    if len(preflight_calls) == 2:
+                        raise ValueError("synthetic post-switch listener failure")
+
+                module.php_runtime_preflight = fail_post_switch_preflight
+                try:
+                    module.switch_php_runtime("8.5")
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("post-switch listener failure did not abort runtime switch")
+                assert preflight_calls[0] == ("8.5", "8.4") and preflight_calls[1] == ("8.5", "8.5")
+                assert module.active_php_profile() == "8.4", "post-switch preflight failure did not restore the previous selector"
+                assert gate.is_file() and pause.is_file() and disabled.is_file(), "post-switch preflight failure removed a fail-closed marker"
+            finally:
+                module.validate_nginx_runtime_dump = original_nginx_validator
+                for name, value in saved.items():
+                    setattr(module, name, value)
+
+    original_trusted_read = module.trusted_file_bytes
+    original_run = module.run
+    try:
+        for profile in ("8.4", "8.5"):
+            module.trusted_file_bytes = lambda path, **kwargs: module.PHP_RUNTIME_DIRECTIVES[profile].encode("ascii")
+            module.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout="")
+            module.runtime_snippet(profile)
+            module.trusted_file_bytes = lambda path, **kwargs: b"fastcgi_pass unix:/run/php/php7.4-fpm.sock;\n"
+            try:
+                module.runtime_snippet(profile)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("unexpected FPM socket directive was accepted")
+
+        module.SUPERVISOR_CONFIG = Path("/synthetic/wpcaregrid.conf")
+        supervisor_fixture = """[program:wpcaregrid-default]\ncommand=php /var/www/wpcaregrid/artisan queue:work database --queue=default --sleep=3 --tries=3 --backoff=60 --timeout=120 --max-time=3600 --memory=256\n\n[program:wpcaregrid-backups]\ncommand=php /var/www/wpcaregrid/artisan queue:work backups --queue=backups --sleep=3 --timeout=3660 --max-time=14400 --memory=512\n"""
+        module.trusted_file_bytes = lambda path, **kwargs: supervisor_fixture.encode("utf-8")
+        module.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout="user::rw-\ngroup::r--\nother::r--\n")
+        module.supervisor_runtime_contract(allow_legacy=True)
+        rewritten_supervisor = module.rewrite_supervisor_runtime_commands(supervisor_fixture)
+        assert "command=" + module.WORKER_COMMANDS["wpcaregrid-default"] in rewritten_supervisor
+        assert "command=" + module.WORKER_COMMANDS["wpcaregrid-backups"] in rewritten_supervisor
+        assert module.rewrite_supervisor_runtime_commands(rewritten_supervisor) == rewritten_supervisor
+        try:
+            module.supervisor_runtime_contract()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("legacy implicit Supervisor PHP command passed strict runtime verification")
+        supervisor_fixture = supervisor_fixture.replace("command=php ", "command=/usr/local/bin/wpcaregrid-php ")
+        module.supervisor_runtime_contract()
+        supervisor_fixture += "[program:unexpected]\ncommand=/bin/sh -c id\n"
+        module.supervisor_runtime_contract()
+        supervisor_fixture = supervisor_fixture.replace("/usr/local/bin/wpcaregrid-php /var/www/wpcaregrid/artisan queue:work backups", "php /var/www/wpcaregrid/artisan queue:work backups")
+        try:
+            module.supervisor_runtime_contract()
+            module.rewrite_supervisor_runtime_commands(supervisor_fixture)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("mixed Supervisor PHP runtimes were accepted")
+    finally:
+        module.trusted_file_bytes = original_trusted_read
+        module.run = original_run
+
+    original_snippet = module.runtime_snippet
+    original_active_profile = module.active_php_profile
+    original_nginx_validator = module.validate_nginx_runtime_dump
+    original_run = module.run
+    try:
+        module.runtime_snippet = lambda profile: None
+        module.active_php_profile = lambda: "8.4"
+        good_dump, good_sources = nginx_fixture("8.4")
+        validate_nginx_fixture(good_dump, good_sources)
+        for profile in ("8.4", "8.5"):
+            module.active_php_profile = lambda selected=profile: selected
+            dump, sources = nginx_fixture(profile)
+            validate_nginx_fixture(dump, sources)
+
+        sibling_route = good_sources["/etc/nginx/snippets/sibling-fastcgi.conf"]
+        assert sibling_route == "fastcgi_pass unix:/run/php/php8.4-fpm.sock;\n", "sibling PHP 8.4 route fixture changed"
+        module.active_php_profile = lambda: "8.4"
+
+        bad_fixtures = []
+        bad_fixtures.append(nginx_fixture("8.4", staging_name="staging.wpcaregrid.com sibling.example"))
+        bad_fixtures.append(nginx_fixture("8.4", staging_name="other.example"))
+        bad_fixtures.append(nginx_fixture("8.4", staging_name="staging.wpcaregrid.com *.example"))
+        bad_fixtures.append(nginx_fixture("8.4", staging_name=r"staging.wpcaregrid.com ~^sibling\.example$"))
+
+        sibling_selector_dump, sibling_selector_sources = nginx_fixture("8.4")
+        sibling_selector_sources["/etc/nginx/sites-enabled/sibling"] = sibling_selector_sources["/etc/nginx/sites-enabled/sibling"].replace(
+            "include /etc/nginx/snippets/sibling-fastcgi.conf;", f"include {module.PHP_RUNTIME_LINK.as_posix()};"
+        )
+        sibling_selector_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in sibling_selector_sources.items())
+        bad_fixtures.append((sibling_selector_dump, sibling_selector_sources))
+
+        outside_dump, outside_sources = nginx_fixture("8.4")
+        outside_sources["/etc/nginx/nginx.conf"] = outside_sources["/etc/nginx/nginx.conf"].replace(
+            "include /etc/nginx/sites-enabled/*;", f"include {module.PHP_RUNTIME_LINK.as_posix()};\n    include /etc/nginx/sites-enabled/*;"
+        )
+        outside_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in outside_sources.items())
+        bad_fixtures.append((outside_dump, outside_sources))
+
+        duplicate_dump, duplicate_sources = nginx_fixture("8.4")
+        duplicate_sources["/etc/nginx/snippets/wpcaregrid-staging-handler.conf"] += f"include {module.PHP_RUNTIME_LINK.as_posix()};\n"
+        duplicate_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in duplicate_sources.items())
+        bad_fixtures.append((duplicate_dump, duplicate_sources))
+
+        competing_path = "/etc/nginx/snippets/staging-extra-location.conf"
+        bad_fixtures.append(nginx_fixture("8.4", extra_staging_include=competing_path))
+
+        cycle_dump, cycle_sources = nginx_fixture("8.4", handler_override="include /etc/nginx/snippets/cycle-a.conf;\n")
+        cycle_sources["/etc/nginx/snippets/cycle-a.conf"] = "include /etc/nginx/snippets/cycle-b.conf;\n"
+        cycle_sources["/etc/nginx/snippets/cycle-b.conf"] = "include /etc/nginx/snippets/cycle-a.conf;\n"
+        cycle_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in cycle_sources.items())
+        bad_fixtures.append((cycle_dump, cycle_sources))
+
+        missing_dump, missing_sources = nginx_fixture("8.4", handler_override="include /etc/nginx/snippets/missing.conf;\n")
+        missing_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in missing_sources.items())
+        bad_fixtures.append((missing_dump, missing_sources))
+
+        variable_dump, variable_sources = nginx_fixture("8.4", handler_override="include $unsafe_path;\n")
+        variable_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in variable_sources.items())
+        bad_fixtures.append((variable_dump, variable_sources))
+
+        for bad_dump, bad_sources in bad_fixtures:
+            try:
+                validate_nginx_fixture(bad_dump, bad_sources)
+            except (ValueError, KeyError, OSError):
+                pass
+            else:
+                raise AssertionError("unsafe Nginx include context or competing PHP route was accepted")
+
+        unproven_wildcard_dump, unproven_wildcard_sources = nginx_fixture("8.4")
+        def incomplete_wildcard(pattern, source_paths):
+            if pattern == "/etc/nginx/sites-enabled/*":
+                return ["/etc/nginx/sites-enabled/staging", "/etc/nginx/sites-enabled/unlisted"]
+            return sorted(path for path in source_paths if fnmatch.fnmatchcase(path, pattern))
+        try:
+            validate_nginx_fixture(unproven_wildcard_dump, unproven_wildcard_sources, incomplete_wildcard)
+        except (ValueError, KeyError, OSError):
+            pass
+        else:
+            raise AssertionError("wildcard include with an unlisted filesystem match was accepted")
+
+        mismatched_source_dump, mismatched_sources = nginx_fixture("8.4")
+        try:
+            module.validate_nginx_runtime_dump(
+                mismatched_source_dump,
+                source_reader=lambda path: mismatched_sources[path] + "# changed after nginx -T\n",
+                include_resolver=lambda pattern, paths: sorted(path for path in paths if fnmatch.fnmatchcase(path, pattern)),
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Nginx dump whose source differs from trusted file was accepted")
+
+        current_sources = {"files": good_sources}
+        module.active_php_profile = lambda: "8.4"
+        module.validate_nginx_runtime_dump = lambda output: validate_nginx_fixture(output, current_sources["files"])
+
+        def fake_nginx_run(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, stdout=good_dump if argv[-1] == "-T" else "")
+
+        module.run = fake_nginx_run
+        module.nginx_runtime_contract("8.4")
+    finally:
+        module.runtime_snippet = original_snippet
+        module.active_php_profile = original_active_profile
+        module.validate_nginx_runtime_dump = original_nginx_validator
+        module.run = original_run
+
+    controller = CONTROLLER.read_text(encoding="utf-8")
+    controller_lines = controller.splitlines()
+    gate_line = next(i for i, line in enumerate(controller_lines) if "privileged gate-on" in line and i > 700)
+    switch_line = next(i for i, line in enumerate(controller_lines) if "privileged php-runtime-switch \"$PHP_TARGET_PROFILE\"" in line)
+    workers_stop_line = next(i for i, line in enumerate(controller_lines) if "privileged worker stop-all" in line)
+    disabled_line = next(i for i, line in enumerate(controller_lines) if "privileged worker-runtime-disable" in line and i > gate_line)
+    assert gate_line < disabled_line < workers_stop_line < switch_line, "runtime switch must follow the active gate, persistent worker disable, and drained workers"
+    assert 'workers_running || return 1\n    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || return 1\n    release_gate || return 1' in controller, "recovery must revalidate the active runtime listener before releasing traffic"
+    assert 'privileged worker-runtime-check "$PHP_TARGET_PROFILE" || fail \'A queue worker changed runtime before traffic was reopened.\'\n    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || fail \'The selected PHP-FPM pool or live listener changed before traffic was reopened.\'\n    release_gate' in controller, "deployment must revalidate the active runtime listener immediately before releasing traffic"
+    recovery_switch_line = next(i for i, line in enumerate(controller_lines) if "privileged php-runtime-switch \"$PHP_BASELINE_PROFILE\"" in line)
+    baseline_checkout_line = next(i for i, line in enumerate(controller_lines) if "rollback_code_to_baseline || return 1" in line)
+    assert recovery_switch_line < baseline_checkout_line, "runtime must return to baseline before code rollback"
+    assert "composer check-platform-reqs --no-dev --lock" in controller
+    assert "update-alternatives" not in controller
+    assert 'if ! post_deploy_smoke || ! runtime_cache_access_ok || ! workers_running; then' in controller
+    assert "privileged gate-on || log 'Could not confirm the Nginx gate marker" in controller
+    launcher = (ROOT / "scripts/run-php-runtime.sh").read_text(encoding="utf-8")
+    assert "queue:work) blocked /var/lib/wpcaregrid/workers-disabled" in launcher
+    assert "schedule:run) blocked /var/lib/wpcaregrid/scheduler-paused" in launcher
+    assert "/var/lib/wpcaregrid" in launcher.split("for directory in ", 1)[1].split("; do", 1)[0]
+    assert 'stat --no-dereference -c \'%u\' "$PROFILE_LINK"' in launcher
+    assert '[[ -f "$PHP_BIN" && -x "$PHP_BIN" && ! -L "$PHP_BIN" ]]' in launcher
+    launcher_hash = hashlib.sha256((ROOT / "scripts/run-php-runtime.sh").read_bytes()).hexdigest()
+    assert launcher_hash == module.PHP_RUNTIME_LAUNCHER_SHA256
+    assert launcher.index("queue:work) blocked") < launcher.index('exec "$PHP_BIN"')
+
     controller = CONTROLLER.read_text(encoding="utf-8")
     fixture = DENIAL_FIXTURE.read_text(encoding="utf-8")
     wrapper_hash = hashlib.sha256((ROOT / "scripts/run-scheduler.sh").read_bytes()).hexdigest()
-    assert wrapper_hash == module.SCHEDULER_SOURCE_SHA256, "root helper wrapper hash must match the reviewed scheduler source"
+    launcher_hash = hashlib.sha256((ROOT / "scripts/run-php-runtime.sh").read_bytes()).hexdigest()
+    assert wrapper_hash == module.SCHEDULER_RUNTIME_SOURCE_SHA256, "root helper scheduler hash must match the reviewed runtime wrapper"
+    assert launcher_hash == module.PHP_RUNTIME_LAUNCHER_SHA256, "root helper launcher hash must match the reviewed runtime dispatcher"
     direct_privilege = [
         line.strip()
         for line in controller.splitlines()

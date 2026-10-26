@@ -33,6 +33,10 @@ TEMP_BACKUP=''
 CHECK_REPORT=''
 DEPLOYMENT_MODE='forward'
 CI_RUN_ID=''
+PHP_BASELINE_PROFILE=''
+PHP_TARGET_PROFILE=''
+PHP_BIN='/usr/bin/php8.4'
+RUNTIME_SWITCH_ATTEMPTED=0
 declare -A OLD_WORKER_PIDS=()
 
 log() {
@@ -41,6 +45,22 @@ log() {
 
 privileged() {
     sudo -n "$DEPLOY_PRIV_HELPER" "$@"
+}
+
+php() {
+    "$PHP_BIN" "$@"
+}
+
+composer() {
+    "$PHP_BIN" /usr/bin/composer "$@"
+}
+
+set_php_profile() {
+    case "$1" in
+        8.4) PHP_BIN='/usr/bin/php8.4' ;;
+        8.5) PHP_BIN='/usr/bin/php8.5' ;;
+        *) return 1 ;;
+    esac
 }
 
 assert_privilege_boundary() {
@@ -239,7 +259,8 @@ start_workers() {
         fi
     done
 
-    wait_for_restarted_workers
+    wait_for_restarted_workers || return 1
+    privileged worker-runtime-check "$PHP_TARGET_PROFILE" || return 1
 }
 
 check_system_health() {
@@ -583,6 +604,7 @@ rollback_code_to_baseline() {
 stop_workers_for_rollback() {
     local worker output
 
+    privileged worker-runtime-disable || return 1
     for worker in "${WORKERS[@]}"; do
         output="$(worker_status "$worker")" || return 1
         if [[ "$output" =~ ^${worker}[[:space:]]+RUNNING([[:space:]]|$) ]]; then
@@ -611,6 +633,13 @@ recover_after_failure() {
 
     if (( CODE_SWITCHED )); then
         stop_workers_for_rollback || return 1
+        if (( RUNTIME_SWITCH_ATTEMPTED )); then
+            privileged php-runtime-switch "$PHP_BASELINE_PROFILE" || return 1
+            [[ "$(privileged php-runtime-status)" == "$PHP_BASELINE_PROFILE" ]] || return 1
+            set_php_profile "$PHP_BASELINE_PROFILE" || return 1
+            PHP_TARGET_PROFILE="$PHP_BASELINE_PROFILE"
+            RUNTIME_SWITCH_ATTEMPTED=0
+        fi
         rollback_code_to_baseline || return 1
     else
         [[ -r bootstrap/cache/config.php ]] || return 1
@@ -620,8 +649,11 @@ recover_after_failure() {
     php artisan migrate:status --no-interaction | grep -q 'Pending' && return 1
 
     php artisan up || return 1
+    check_system_health allow-scheduler-pending || return 1
     if (( WORKERS_MAY_BE_STOPPED )); then
         php artisan queue:restart || return 1
+        privileged worker-runtime-enable || return 1
+        privileged php-runtime-supervisor-update || return 1
         start_workers || return 1
         WORKERS_MAY_BE_STOPPED=0
     fi
@@ -630,6 +662,7 @@ recover_after_failure() {
     wait_for_scheduler || return 1
     check_system_health || return 1
     workers_running || return 1
+    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || return 1
     release_gate || return 1
 
     if (( CODE_SWITCHED )); then
@@ -704,14 +737,20 @@ main() {
     local cache_file cache_dir
     local worker
 
-    if (( $# == 1 )); then
-        requested_ref="$1"
-    elif (( $# == 2 )) && [[ "$1" == '--rollback' ]]; then
+    local requested_profile=''
+    if (( $# >= 1 )) && [[ "$1" == '--rollback' ]]; then
         DEPLOYMENT_MODE='rollback'
-        requested_ref="$2"
-    else
-        fail 'Usage: scripts/deploy-staging.sh <full-commit-sha> | --rollback <full-commit-sha>'
+        shift
     fi
+    (( $# >= 1 )) || fail 'Usage: scripts/deploy-staging.sh [--rollback] <full-commit-sha> [--php-runtime 8.4|8.5]'
+    requested_ref="$1"
+    shift
+    while (( $# )); do
+        [[ "$1" == '--php-runtime' && $# -ge 2 && -z "$requested_profile" ]] || fail 'Usage: scripts/deploy-staging.sh [--rollback] <full-commit-sha> [--php-runtime 8.4|8.5]'
+        requested_profile="$2"
+        shift 2
+    done
+    [[ -z "$requested_profile" || "$requested_profile" == '8.4' || "$requested_profile" == '8.5' ]] || fail 'PHP runtime must be exactly 8.4 or 8.5.'
     [[ "$(id -un)" == 'deploy' ]] || fail 'Run this script as the deploy user.'
     assert_privilege_boundary || fail 'The staging deploy sudo policy is not the reviewed helper-only rule.'
     [[ "$(pwd -P)" == "$APP_DIR" ]] || fail "Run from ${APP_DIR}."
@@ -739,9 +778,15 @@ main() {
     command -v flock >/dev/null || fail 'The flock utility is required to prevent concurrent deployments.'
     flock -n 9 || fail 'Another staging deployment is already running.'
     capture_baseline_sha || fail 'Could not pin the current staging release after acquiring the deployment lock.'
+    PHP_BASELINE_PROFILE="$(privileged php-runtime-status)" || fail 'The active PHP runtime profile is absent or invalid.'
+    [[ "$PHP_BASELINE_PROFILE" == '8.4' || "$PHP_BASELINE_PROFILE" == '8.5' ]] || fail 'The active PHP runtime profile is not supported.'
+    PHP_TARGET_PROFILE="${requested_profile:-$PHP_BASELINE_PROFILE}"
+    set_php_profile "$PHP_BASELINE_PROFILE" || fail 'The baseline PHP profile is unsupported.'
+    privileged php-runtime-preflight "$PHP_BASELINE_PROFILE" || fail 'The active PHP CLI/FPM/Nginx/Supervisor runtime does not match its profile.'
+    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || fail 'The requested PHP CLI/FPM/Nginx/Supervisor runtime is not ready.'
     pre_deploy_smoke || fail 'The pinned baseline staging release is not healthy before deployment.'
-    command -v git >/dev/null && command -v composer >/dev/null && command -v npm >/dev/null && command -v curl >/dev/null && [[ -x /usr/bin/python3 ]] || fail 'A required deployment tool is missing.'
-    php -r 'exit(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === 4 ? 0 : 1);' || fail 'PHP 8.4 CLI is required.'
+    command -v git >/dev/null && [[ -f /usr/bin/composer && ! -L /usr/bin/composer ]] && command -v npm >/dev/null && command -v curl >/dev/null && [[ -x /usr/bin/python3 ]] || fail 'A required deployment tool is missing.'
+    php -r 'exit(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === (int) substr($argv[1], 2) ? 0 : 1);' "$PHP_BASELINE_PROFILE" || fail 'The selected baseline PHP CLI does not match the active runtime profile.'
     composer --version | grep -q 'Composer version 2\.' || fail 'Composer 2 is required.'
     node -e 'process.exit(Number(process.versions.node.split(".")[0]) === 22 ? 0 : 1)' || fail 'Node.js 22 is required.'
     php artisan about --only=environment >/dev/null || fail 'Laravel cannot boot with the current production configuration.'
@@ -800,6 +845,7 @@ main() {
     log 'Laravel maintenance mode enabled behind the Nginx gate.'
 
     WORKERS_MAY_BE_STOPPED=1
+    privileged worker-runtime-disable || fail 'Queue workers could not be persistently blocked before drain.'
     privileged worker stop-all
     for worker in "${WORKERS[@]}"; do
         [[ "$(worker_status "$worker")" =~ ^${worker}[[:space:]]+STOPPED([[:space:]]|$) ]] || fail "${worker} did not stop cleanly."
@@ -812,9 +858,17 @@ main() {
     git checkout --detach "$TARGET_SHA"
     [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || fail 'Checked-out HEAD does not match the requested commit.'
     normalize_tracked_checkout_permissions || fail 'Could not normalize tracked checkout permissions safely.'
+    privileged php-runtime-install || fail 'Could not install the fixed PHP runtime dispatcher and Supervisor command contract.'
+    if [[ "$PHP_TARGET_PROFILE" != "$PHP_BASELINE_PROFILE" ]]; then
+        RUNTIME_SWITCH_ATTEMPTED=1
+        privileged php-runtime-switch "$PHP_TARGET_PROFILE" || fail 'PHP runtime cutover failed; keep the maintenance gate closed for recovery.'
+        [[ "$(privileged php-runtime-status)" == "$PHP_TARGET_PROFILE" ]] || fail 'The PHP runtime selector did not match the requested target.'
+    fi
+    set_php_profile "$PHP_TARGET_PROFILE" || fail 'The target PHP profile is unsupported.'
 
     log 'Installing production Composer dependencies.'
     umask 022
+    composer check-platform-reqs --no-dev --lock || fail 'Composer platform requirements do not pass on the selected target runtime.'
     composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
     umask 077
     privileged vendor-readable || fail 'PHP-FPM cannot read one or more Composer PHP files.'
@@ -856,8 +910,11 @@ main() {
     php artisan up
     log 'Laravel is live behind the Nginx gate; restarting workers onto the deployed code.'
     php artisan queue:restart
+    privileged worker-runtime-enable || fail 'The fixed runtime worker gate could not be opened under the maintenance gate.'
+    privileged php-runtime-supervisor-update || fail 'Supervisor could not reload the fixed PHP runtime worker commands.'
     privileged worker start-all
     wait_for_restarted_workers || fail 'Expected Supervisor workers did not restart with new PIDs.'
+    privileged worker-runtime-check "$PHP_TARGET_PROFILE" || fail 'A queue worker is not using the selected PHP runtime.'
     WORKERS_MAY_BE_STOPPED=0
 
     [[ "$(stat -c '%U:%G:%a' .env)" == 'deploy:deploy:600' ]] || fail '.env ownership or mode changed unexpectedly.'
@@ -870,6 +927,8 @@ main() {
     resume_scheduler
     wait_for_scheduler || fail 'Scheduler heartbeat did not recover after cache refresh.'
     workers_running || fail 'One or more required Supervisor workers stopped before traffic was reopened.'
+    privileged worker-runtime-check "$PHP_TARGET_PROFILE" || fail 'A queue worker changed runtime before traffic was reopened.'
+    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || fail 'The selected PHP-FPM pool or live listener changed before traffic was reopened.'
     release_gate
     if ! post_deploy_smoke || ! runtime_cache_access_ok || ! workers_running; then
         log 'Final staging HTTP/security or runtime-cache permission check failed; closing the Nginx gate again.' >&2
@@ -878,7 +937,7 @@ main() {
         fail 'Final staging HTTP/security smoke failed.'
     fi
     mark_gate_released
-    if ! receipt_name="$(/usr/bin/env -i PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/python3 "${SCRIPT_DIR}/write-deployment-receipt.py" --baseline "$BASELINE_SHA" --target "$TARGET_SHA" --workflow-run-id "$CI_RUN_ID" --mode "$DEPLOYMENT_MODE")"; then
+    if ! receipt_name="$(/usr/bin/env -i PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/python3 "${SCRIPT_DIR}/write-deployment-receipt.py" --baseline "$BASELINE_SHA" --target "$TARGET_SHA" --workflow-run-id "$CI_RUN_ID" --mode "$DEPLOYMENT_MODE" --php-binary "$PHP_BIN")"; then
         log 'Deployment receipt failed; closing the Nginx gate before reporting failure.' >&2
         privileged gate-on || true
         GATE_ACTIVE=1

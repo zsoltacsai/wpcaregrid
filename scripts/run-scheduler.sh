@@ -41,4 +41,4 @@ if [[ ! -r "$CONFIG_CACHE" ]]; then
 fi
 
 cd "$APP_DIR"
-exec php artisan schedule:run
+exec /usr/local/bin/wpcaregrid-php /var/www/wpcaregrid/artisan schedule:run

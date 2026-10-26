@@ -16,6 +16,7 @@ from pathlib import Path
 
 
 APPLICATION = Path("/var/www/wpcaregrid")
+APPROVED_PHP_BINARIES = {"/usr/bin/php8.4", "/usr/bin/php8.5"}
 RECEIPTS = Path("/home/deploy/private-backups/deployment-receipts")
 LOCKFILES = ("composer.lock", "wordpress/composer.lock", "package-lock.json")
 
@@ -26,6 +27,12 @@ class ReceiptFailure(ValueError):
     def __init__(self, code):
         super().__init__(code)
         self.code = code
+
+
+def validate_php_binary_path(value):
+    if value not in APPROVED_PHP_BINARIES:
+        raise ValueError("unsupported PHP runtime binary")
+    return value
 
 
 def connector_revision_matches_release_history(application, source_revision, target_sha, mode):
@@ -267,6 +274,7 @@ def main():
     parser.add_argument("--target", required=True)
     parser.add_argument("--workflow-run-id", required=True)
     parser.add_argument("--mode", choices=("forward", "rollback"), required=True)
+    parser.add_argument("--php-binary", choices=("/usr/bin/php8.4", "/usr/bin/php8.5"), required=True)
     args = parser.parse_args()
     try:
         git_head = (APPLICATION / ".git").exists()
@@ -283,14 +291,18 @@ def main():
         import subprocess
 
         safe_env = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
-        php = subprocess.run(["/usr/bin/php", "-r", "echo PHP_VERSION;"], check=True, capture_output=True, text=True, timeout=5, env=safe_env).stdout.strip()
+        php_binary = Path(validate_php_binary_path(args.php_binary))
+        php_info = php_binary.lstat()
+        if not stat.S_ISREG(php_info.st_mode) or php_info.st_uid != 0 or php_info.st_mode & 0o022 or not os.access(php_binary, os.X_OK):
+            raise ValueError("selected PHP binary is unavailable")
+        php = subprocess.run([str(php_binary), "-r", "echo PHP_VERSION;"], check=True, capture_output=True, text=True, timeout=5, env=safe_env).stdout.strip()
         node = subprocess.run(["/usr/bin/node", "--version"], check=True, capture_output=True, text=True, timeout=5, env=safe_env).stdout.strip()
         import shutil
 
-        composer_path = shutil.which("composer", path=safe_env["PATH"])
-        if not composer_path:
+        composer_path = Path("/usr/bin/composer")
+        if not composer_path.is_file() or composer_path.is_symlink() or composer_path.stat().st_uid != 0 or composer_path.stat().st_mode & 0o022:
             raise ValueError("Composer is unavailable")
-        composer = subprocess.run([composer_path, "--version", "--no-ansi"], check=True, capture_output=True, text=True, timeout=5, env=safe_env).stdout.splitlines()[0].strip()
+        composer = subprocess.run([str(php_binary), str(composer_path), "--version", "--no-ansi"], check=True, capture_output=True, text=True, timeout=5, env=safe_env).stdout.splitlines()[0].strip()
         data = receipt_data(
             APPLICATION,
             baseline_sha=args.baseline,

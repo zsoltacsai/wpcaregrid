@@ -7,11 +7,14 @@ The deployment controller never installs or updates it.
 
 import os
 import hashlib
+import glob
+import fnmatch
+import posixpath
 import re
 import stat
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 APP = Path("/var/www/wpcaregrid")
@@ -19,13 +22,43 @@ GATE_DIR = Path("/var/lib/wpcaregrid")
 GATE = GATE_DIR / "deploy-maintenance"
 SCHEDULER_LOCK = GATE_DIR / "scheduler.lock"
 SCHEDULER_PAUSE = GATE_DIR / "scheduler-paused"
+WORKERS_DISABLED = GATE_DIR / "workers-disabled"
 APPROVED_ROLLBACK = GATE_DIR / "approved-rollback-sha"
 SCHEDULER_SOURCE = APP / "scripts/run-scheduler.sh"
 SCHEDULER_DEST = Path("/usr/local/bin/wpcaregrid-scheduler")
+PHP_RUNTIME_LINK = Path("/etc/nginx/snippets/wpcaregrid-staging-runtime.conf")
+PHP_RUNTIME_FILES = {
+    "8.4": Path("/etc/nginx/snippets/wpcaregrid-staging-php84.conf"),
+    "8.5": Path("/etc/nginx/snippets/wpcaregrid-staging-php85.conf"),
+}
+PHP_RUNTIME_DIRECTIVES = {
+    "8.4": "fastcgi_pass unix:/run/php/php8.4-fpm.sock;\n",
+    "8.5": "fastcgi_pass unix:/run/php/php8.5-fpm.sock;\n",
+}
+PHP_RUNTIME_BINARIES = {"8.4": Path("/usr/bin/php8.4"), "8.5": Path("/usr/bin/php8.5")}
+PHP_RUNTIME_FPM_BINARIES = {"8.4": Path("/usr/sbin/php-fpm8.4"), "8.5": Path("/usr/sbin/php-fpm8.5")}
+PHP_RUNTIME_FPM_CONFIGS = {"8.4": Path("/etc/php/8.4/fpm/php-fpm.conf"), "8.5": Path("/etc/php/8.5/fpm/php-fpm.conf")}
+PHP_RUNTIME_SERVICES = {"8.4": "php8.4-fpm", "8.5": "php8.5-fpm"}
+PHP_RUNTIME_FPM_CGROUPS = {"8.4": "/system.slice/php8.4-fpm.service", "8.5": "/system.slice/php8.5-fpm.service"}
+PHP_RUNTIME_SOCKETS = {"8.4": Path("/run/php/php8.4-fpm.sock"), "8.5": Path("/run/php/php8.5-fpm.sock")}
+PHP_RUNTIME_VHOST = "staging.wpcaregrid.com"
+NGINX_ROOT_CONFIG = "/etc/nginx/nginx.conf"
+NGINX_CONFIG_MAX_BYTES = 262144
+NGINX_CONFIG_MAX_FILES = 256
+NGINX_CONFIG_MAX_DEPTH = 32
+NGINX_CONFIG_MAX_EXPANDED_NODES = 20000
+PHP_RUNTIME_LAUNCHER_DEST = Path("/usr/local/bin/wpcaregrid-php")
+SUPERVISOR_CONFIG = Path("/etc/supervisor/conf.d/wpcaregrid.conf")
 OLD_CRON = "* * * * * cd /var/www/wpcaregrid && php artisan schedule:run >> /dev/null 2>&1"
 GUARDED_CRON = "* * * * * /usr/local/bin/wpcaregrid-scheduler >> /dev/null 2>&1"
 STAGING_DB = "wpcaregrid"
 SCHEDULER_SOURCE_SHA256 = "de962446f29dea5bf13e33be6653ec77518ff81f48d5af1c1baec1335253885c"
+PHP_RUNTIME_LAUNCHER_SHA256 = "4e7699229435e1fe21d1b436c8e10e44901ad5794c1b16cad0df18f7778d264c"
+SCHEDULER_RUNTIME_SOURCE_SHA256 = "94470bbd9f13cc383723c17d4686e77aff0d5d13d5eb3290e5888911c776e5d4"
+WORKER_COMMANDS = {
+    "wpcaregrid-default": "/usr/local/bin/wpcaregrid-php /var/www/wpcaregrid/artisan queue:work database --queue=default --sleep=3 --tries=3 --backoff=60 --timeout=120 --max-time=3600 --memory=256",
+    "wpcaregrid-backups": "/usr/local/bin/wpcaregrid-php /var/www/wpcaregrid/artisan queue:work backups --queue=backups --sleep=3 --timeout=3660 --max-time=14400 --memory=512",
+}
 WORKERS = {"wpcaregrid-default", "wpcaregrid-backups"}
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
 
@@ -73,6 +106,26 @@ def open_directory(path):
         raise
 
 
+def open_root_trusted_directory(path):
+    """Open a fixed root-owned directory chain with no symlinks or writable components."""
+    parts = Path(path).parts
+    if not parts or parts[0] != "/":
+        raise ValueError("directory must be absolute")
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[1:]:
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            info = os.fstat(next_fd)
+            os.close(fd)
+            fd = next_fd
+            if info.st_uid != 0 or info.st_mode & 0o022:
+                raise ValueError("untrusted root-owned directory chain")
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
 def ensure_gate_dir():
     try:
         GATE_DIR.mkdir(mode=0o755)
@@ -102,6 +155,9 @@ def marker(path, enabled):
 def worker(action, name):
     if name not in WORKERS or action not in {"status", "start", "stop"}:
         raise ValueError("unsupported worker operation")
+    if action == "start" and (WORKERS_DISABLED.exists() or WORKERS_DISABLED.is_symlink()):
+        require_regular(WORKERS_DISABLED, owner=0)
+        raise ValueError("workers remain fail-closed during deployment")
     result = run(["/usr/bin/supervisorctl", action, name], check=False, stdout=subprocess.PIPE)
     output = result.stdout or ""
     if action == "status":
@@ -174,7 +230,7 @@ def install_scheduler():
         raise ValueError("scheduler source is group/world writable")
     with os.fdopen(source_fd, "rb", closefd=False) as source_file:
         data = source_file.read(32769)
-    if len(data) != info.st_size or hashlib.sha256(data).hexdigest() != SCHEDULER_SOURCE_SHA256:
+    if len(data) != info.st_size or hashlib.sha256(data).hexdigest() not in {SCHEDULER_SOURCE_SHA256, SCHEDULER_RUNTIME_SOURCE_SHA256}:
         os.close(source_fd)
         os.close(destination_fd)
         raise ValueError("scheduler source hash mismatch")
@@ -216,6 +272,919 @@ def install_scheduler():
         os.close(fd)
     os.replace(temp_name, SCHEDULER_DEST.name, src_dir_fd=destination_fd, dst_dir_fd=destination_fd)
     os.close(destination_fd)
+
+
+def trusted_file_bytes(path, *, owner=0, mode=None, max_size=131072):
+    """Read a fixed regular file through a no-follow descriptor below root-owned dirs."""
+    directory_fd = open_root_trusted_directory(path.parent)
+    try:
+        current = os.fstat(directory_fd)
+        if current.st_uid != 0 or current.st_mode & 0o022:
+            raise ValueError("unsafe trusted directory")
+        fd = os.open(path.name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != owner or info.st_size > max_size:
+                raise ValueError("unsafe trusted file")
+            if mode is not None and stat.S_IMODE(info.st_mode) != mode:
+                raise ValueError("unexpected trusted file mode")
+            data = bytearray()
+            while len(data) <= max_size:
+                chunk = os.read(fd, min(16384, max_size + 1 - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+            if len(data) != info.st_size or len(data) > max_size:
+                raise ValueError("trusted file changed while reading")
+            return bytes(data)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(directory_fd)
+
+
+def deploy_source_bytes(relative, *, max_size):
+    """Read one fixed deploy-owned source through a descriptor and reject writable metadata."""
+    import pwd
+
+    path = app_file(relative)
+    directory_fd = open_directory(path.parent)
+    try:
+        parent = os.fstat(directory_fd)
+        if parent.st_uid != pwd.getpwnam("deploy").pw_uid or parent.st_mode & 0o022:
+            raise ValueError("unsafe deployment source directory")
+        fd = os.open(path.name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != pwd.getpwnam("deploy").pw_uid or info.st_mode & 0o022 or info.st_size > max_size:
+                raise ValueError("unsafe deployment source")
+            data = bytearray()
+            while len(data) <= max_size:
+                chunk = os.read(fd, min(16384, max_size + 1 - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+            if len(data) != info.st_size or len(data) > max_size:
+                raise ValueError("deployment source changed while reading")
+            return bytes(data)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(directory_fd)
+
+
+def atomic_root_file(path, data, *, mode=0o644):
+    """Atomically install fixed bytes in a root-owned destination directory."""
+    directory_fd = open_root_trusted_directory(path.parent)
+    try:
+        parent = os.fstat(directory_fd)
+        if parent.st_uid != 0 or parent.st_mode & 0o022:
+            raise ValueError("unsafe destination directory")
+        temp_name = path.name + ".wpcaregrid-new"
+        try:
+            os.stat(temp_name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError("unexpected installer temporary file")
+        fd = os.open(temp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=directory_fd)
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fchown(fd, 0, 0)
+            os.fchmod(fd, mode)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        try:
+            try:
+                existing = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None:
+                info = os.fstat(existing)
+                os.close(existing)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != 0:
+                    raise ValueError("unsafe existing destination")
+            os.replace(temp_name, path.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            os.fsync(directory_fd)
+        except Exception:
+            try:
+                os.unlink(temp_name, dir_fd=directory_fd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(directory_fd)
+
+
+def php_profile(profile):
+    if profile not in PHP_RUNTIME_FILES:
+        raise ValueError("unsupported PHP runtime profile")
+    return profile
+
+
+def runtime_switch_preconditions(gate_active, scheduler_paused, worker_states):
+    return gate_active is True and scheduler_paused is True and worker_states == {name: "STOPPED" for name in WORKERS}
+
+
+def set_workers_disabled(disabled):
+    try:
+        require_regular(GATE, owner=0)
+        require_regular(SCHEDULER_PAUSE, owner=0)
+    except (OSError, ValueError):
+        raise ValueError("worker runtime state can change only behind both deployment gates") from None
+    active_php_profile()
+    marker(WORKERS_DISABLED, disabled)
+
+
+def worker_runtime_enabled():
+    if WORKERS_DISABLED.exists() or WORKERS_DISABLED.is_symlink():
+        require_regular(WORKERS_DISABLED, owner=0)
+        raise ValueError("queue workers are deliberately disabled")
+
+
+def runtime_snippet(profile):
+    profile = php_profile(profile)
+    data = trusted_file_bytes(PHP_RUNTIME_FILES[profile], mode=0o644, max_size=128)
+    if data != PHP_RUNTIME_DIRECTIVES[profile].encode("ascii"):
+        raise ValueError("PHP runtime snippet differs from its fixed contract")
+
+
+def active_php_profile():
+    directory_fd = open_root_trusted_directory(PHP_RUNTIME_LINK.parent)
+    try:
+        link_info = os.stat(PHP_RUNTIME_LINK.name, dir_fd=directory_fd, follow_symlinks=False)
+        if not stat.S_ISLNK(link_info.st_mode) or link_info.st_uid != 0:
+            raise ValueError("unsafe PHP runtime selector")
+        target = os.readlink(PHP_RUNTIME_LINK.name, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    for profile, path in PHP_RUNTIME_FILES.items():
+        if target == str(path):
+            runtime_snippet(profile)
+            return profile
+    raise ValueError("unknown PHP runtime selector")
+
+
+def nginx_runtime_contract(profile):
+    """Prove the active selector is referenced only by staging and selects its socket."""
+    profile = php_profile(profile)
+    runtime_snippet(profile)
+    if active_php_profile() != profile:
+        raise ValueError("active PHP selector differs from expected profile")
+    run(["/usr/sbin/nginx", "-t"])
+    result = run(["/usr/sbin/nginx", "-T"], check=False, stdout=subprocess.PIPE)
+    if result.returncode:
+        raise ValueError("nginx configuration could not be inspected")
+    validate_nginx_runtime_dump(result.stdout or "")
+
+
+def _nginx_dump_sections(output):
+    if not isinstance(output, str) or len(output.encode("utf-8")) > NGINX_CONFIG_MAX_BYTES:
+        raise ValueError("Nginx configuration dump is missing or oversized")
+    sections = {}
+    current_path = None
+    current_content = []
+    for raw_line in output.splitlines(keepends=True):
+        marker = re.fullmatch(r"# configuration file (/.+):\r?\n?", raw_line)
+        if marker:
+            if current_path is not None:
+                if current_path in sections:
+                    raise ValueError("duplicate Nginx configuration source marker")
+                sections[current_path] = "".join(current_content)
+            current_path = marker.group(1)
+            if posixpath.normpath(current_path) != current_path or ".." in PurePosixPath(current_path).parts:
+                raise ValueError("non-canonical Nginx configuration source path")
+            current_content = []
+        elif current_path is None:
+            if raw_line.strip():
+                raise ValueError("unexpected text before Nginx source markers")
+        else:
+            current_content.append(raw_line)
+    if current_path is not None:
+        if current_path in sections:
+            raise ValueError("duplicate Nginx configuration source marker")
+        sections[current_path] = "".join(current_content)
+    if not sections or len(sections) > NGINX_CONFIG_MAX_FILES:
+        raise ValueError("Nginx configuration source count is unsupported")
+    if NGINX_ROOT_CONFIG not in sections:
+        raise ValueError("Nginx root configuration source is absent")
+    return sections
+
+
+def _read_trusted_nginx_source(path):
+    """Read one nginx -T source through root-owned, non-writable directories."""
+    source = Path(path)
+    if not source.is_absolute() or os.path.normpath(str(source)) != str(source):
+        raise ValueError("Nginx source path is not canonical")
+    parent_fd = open_root_trusted_directory(source.parent)
+    try:
+        source_info = os.stat(source.name, dir_fd=parent_fd, follow_symlinks=False)
+        if source_info.st_uid != 0:
+            raise ValueError("Nginx source is not root-owned")
+        if stat.S_ISLNK(source_info.st_mode):
+            target = os.readlink(source.name, dir_fd=parent_fd)
+            target_path = Path(target) if os.path.isabs(target) else source.parent / target
+            target_path = Path(os.path.normpath(str(target_path)))
+            if not target_path.is_absolute() or ".." in target_path.parts:
+                raise ValueError("Nginx source symlink target is unsafe")
+            target_parent_fd = open_root_trusted_directory(target_path.parent)
+            try:
+                fd = os.open(target_path.name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=target_parent_fd)
+            finally:
+                os.close(target_parent_fd)
+        elif stat.S_ISREG(source_info.st_mode):
+            fd = os.open(source.name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+        else:
+            raise ValueError("Nginx source is not a regular file")
+    finally:
+        os.close(parent_fd)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError("Nginx source metadata is unsafe")
+        if info.st_size > NGINX_CONFIG_MAX_BYTES:
+            raise ValueError("Nginx source is oversized")
+        data = bytearray()
+        while len(data) <= NGINX_CONFIG_MAX_BYTES:
+            chunk = os.read(fd, min(16384, NGINX_CONFIG_MAX_BYTES + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        if len(data) != info.st_size or len(data) > NGINX_CONFIG_MAX_BYTES:
+            raise ValueError("Nginx source changed while reading")
+        return bytes(data).decode("utf-8")
+    finally:
+        os.close(fd)
+
+
+def _resolve_nginx_include(pattern, source_paths):
+    if not isinstance(pattern, str) or not pattern.startswith("/") or "$" in pattern:
+        raise ValueError("Nginx include path is relative or dynamic")
+    if posixpath.normpath(pattern) != pattern or ".." in PurePosixPath(pattern).parts:
+        raise ValueError("Nginx include path is non-canonical")
+    matches = sorted(os.path.normpath(item) for item in glob.glob(pattern))
+    dumped = sorted(path for path in source_paths if fnmatch.fnmatchcase(path, pattern))
+    if not matches or matches != dumped:
+        raise ValueError("Nginx include resolution differs from dumped sources")
+    return matches
+
+
+def _tokenize_nginx_config(text):
+    tokens = []
+    token = []
+    quote = None
+    escaped = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if escaped:
+                token.append(ch)
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            else:
+                token.append(ch)
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "#":
+            while i < len(text) and text[i] != "\n":
+                i += 1
+            if token:
+                tokens.append("".join(token))
+                token = []
+        elif ch.isspace():
+            if token:
+                tokens.append("".join(token))
+                token = []
+        elif ch in "{};":
+            if token:
+                tokens.append("".join(token))
+                token = []
+            tokens.append(ch)
+        elif ch == "\\" and i + 1 < len(text):
+            token.extend((ch, text[i + 1]))
+            i += 1
+        else:
+            token.append(ch)
+        i += 1
+    if quote or escaped:
+        raise ValueError("unterminated Nginx quoted argument")
+    if token:
+        tokens.append("".join(token))
+    if len(tokens) > NGINX_CONFIG_MAX_EXPANDED_NODES:
+        raise ValueError("Nginx configuration has too many tokens")
+    return tokens
+
+
+def _parse_nginx_nodes(tokens, source):
+    index = 0
+
+    def parse_items(expect_close=False):
+        nonlocal index
+        nodes = []
+        statement = []
+        while index < len(tokens):
+            token = tokens[index]
+            index += 1
+            if token == "}":
+                if not expect_close or statement:
+                    raise ValueError("unexpected Nginx closing brace")
+                return nodes
+            if token in (";", "{"):
+                if not statement:
+                    raise ValueError("empty Nginx directive")
+                name, *args = statement
+                if token == ";":
+                    nodes.append({"kind": "directive", "name": name, "args": args, "source": source})
+                else:
+                    children = parse_items(expect_close=True)
+                    nodes.append({"kind": "block", "name": name, "args": args, "children": children, "source": source})
+                statement = []
+            else:
+                statement.append(token)
+        if expect_close or statement:
+            raise ValueError("unterminated Nginx directive or block")
+        return nodes
+
+    parsed = parse_items()
+    if index != len(tokens):
+        raise ValueError("unparsed Nginx tokens")
+    return parsed
+
+
+def _expand_nginx_includes(nodes, sections, parsed, source_reader, include_resolver, stack, reached, counter):
+    if len(stack) > NGINX_CONFIG_MAX_DEPTH:
+        raise ValueError("Nginx include nesting exceeds the bound")
+    expanded = []
+    for node in nodes:
+        counter[0] += 1
+        if counter[0] > NGINX_CONFIG_MAX_EXPANDED_NODES:
+            raise ValueError("expanded Nginx configuration exceeds the bound")
+        if node["kind"] == "directive" and node["name"] == "include":
+            if len(node["args"]) != 1:
+                raise ValueError("Nginx include must have exactly one path")
+            targets = include_resolver(node["args"][0], sections.keys())
+            children = []
+            for target in targets:
+                if target not in sections:
+                    raise ValueError("Nginx include target is absent from nginx -T")
+                if target in stack:
+                    raise ValueError("Nginx include cycle detected")
+                reached.add(target)
+                child_nodes = parsed.get(target)
+                if child_nodes is None:
+                    child_nodes = _parse_nginx_nodes(_tokenize_nginx_config(sections[target]), target)
+                    parsed[target] = child_nodes
+                children.extend(_expand_nginx_includes(
+                    child_nodes, sections, parsed, source_reader, include_resolver,
+                    (*stack, target), reached, counter,
+                ))
+            expanded.append({"kind": "include", "path": node["args"][0], "targets": targets, "children": children, "source": node["source"]})
+        elif node["kind"] == "block":
+            node = dict(node)
+            node["children"] = _expand_nginx_includes(
+                node["children"], sections, parsed, source_reader, include_resolver,
+                stack, reached, counter,
+            )
+            expanded.append(node)
+        else:
+            expanded.append(node)
+    return expanded
+
+
+def validate_nginx_runtime_dump(output, *, source_reader=None, include_resolver=None):
+    """Resolve the bounded nginx -T include graph and validate effective routing context."""
+    source_reader = source_reader or _read_trusted_nginx_source
+    include_resolver = include_resolver or _resolve_nginx_include
+    sections = _nginx_dump_sections(output)
+    total_bytes = 0
+    for path, contents in sections.items():
+        source = source_reader(path)
+        total_bytes += len(source.encode("utf-8"))
+        if total_bytes > NGINX_CONFIG_MAX_BYTES:
+            raise ValueError("combined Nginx configuration exceeds the bound")
+        if source.replace("\r\n", "\n") != contents.replace("\r\n", "\n"):
+            raise ValueError("nginx -T source differs from the trusted file")
+
+    parsed = {path: _parse_nginx_nodes(_tokenize_nginx_config(text), path) for path, text in sections.items()}
+    reached = {NGINX_ROOT_CONFIG}
+    expanded = _expand_nginx_includes(
+        parsed[NGINX_ROOT_CONFIG], sections, parsed, source_reader, include_resolver,
+        (NGINX_ROOT_CONFIG,), reached, [0],
+    )
+    if reached != set(sections):
+        raise ValueError("nginx -T contains unreachable or unproven source sections")
+
+    selector_uses = []
+    servers = []
+
+    def visit(nodes, context):
+        for node in nodes:
+            if node["kind"] == "include":
+                if node["path"] == PHP_RUNTIME_LINK.as_posix():
+                    selector_uses.append((context, node))
+                visit(node["children"], context)
+            elif node["kind"] == "block":
+                if node["name"] == "server":
+                    servers.append((node, context))
+                visit(node["children"], (*context, node))
+
+    visit(expanded, ())
+    if len(selector_uses) != 1:
+        raise ValueError("PHP runtime selector is not uniquely included")
+    selector_context, _ = selector_uses[0]
+    server_contexts = [node for node in selector_context if node["name"] == "server"]
+    location_contexts = [node for node in selector_context if node["name"] == "location"]
+    http_contexts = [node for node in selector_context if node["name"] == "http"]
+    if len(server_contexts) != 1 or not http_contexts or not location_contexts:
+        raise ValueError("PHP runtime selector is not inside an HTTP staging location")
+    selected_server = server_contexts[0]
+    if not any(server is selected_server for server, _ in servers):
+        raise ValueError("PHP runtime selector server context is not effective")
+
+    def direct_directives(nodes, name):
+        found = []
+        for node in nodes:
+            if node["kind"] == "include":
+                found.extend(direct_directives(node["children"], name))
+            elif node["kind"] == "directive" and node["name"] == name:
+                found.append(node)
+        return found
+
+    def descendant_directives(nodes, name):
+        found = []
+        for node in nodes:
+            if node["kind"] == "include":
+                found.extend(descendant_directives(node["children"], name))
+            elif node["kind"] == "directive" and node["name"] == name:
+                found.append(node)
+            elif node["kind"] == "block":
+                found.extend(descendant_directives(node["children"], name))
+        return found
+
+    for server, _ in servers:
+        name_directives = direct_directives(server["children"], "server_name")
+        names = {name.lower() for directive in name_directives for name in directive["args"]}
+        routes = descendant_directives(server["children"], "fastcgi_pass")
+        has_selector = server is selected_server
+        is_staging = PHP_RUNTIME_VHOST in names
+        if has_selector:
+            if len(name_directives) != 1 or names != {PHP_RUNTIME_VHOST}:
+                raise ValueError("PHP runtime selector server_name must be exactly the staging vhost")
+            if len(routes) != 1 or routes[0]["args"] != [f"unix:{PHP_RUNTIME_SOCKETS[active_php_profile()].as_posix()}"]:
+                raise ValueError("staging server has a missing or competing FastCGI route")
+        elif is_staging and routes:
+            if names != {PHP_RUNTIME_VHOST}:
+                raise ValueError("staging PHP route shares a server block with another hostname")
+            raise ValueError("staging PHP route does not use the runtime selector")
+
+
+def supervisor_runtime_contract(*, allow_legacy=False):
+    acl = run(["/usr/bin/getfacl", "-cp", str(SUPERVISOR_CONFIG)], check=False, stdout=subprocess.PIPE)
+    expected_acl = "user::rw-\ngroup::r--\nother::r--\n"
+    if acl.returncode or (acl.stdout or "") != expected_acl:
+        raise ValueError("Supervisor configuration ACL is not the fixed root-only baseline")
+    data = trusted_file_bytes(SUPERVISOR_CONFIG, mode=0o644, max_size=32768)
+    text = data.decode("utf-8")
+    for name, expected in WORKER_COMMANDS.items():
+        section = re.search(rf"(?ms)^\[program:{re.escape(name)}\][ \t]*\r?\n(.*?)(?=^\[|\Z)", text)
+        if not section:
+            raise ValueError("required Supervisor program is missing")
+        commands = re.findall(r"(?m)^[ \t]*command[ \t]*=[ \t]*(.*?)[ \t]*\r?$", section.group(1))
+        legacy = expected.replace("/usr/local/bin/wpcaregrid-php ", "php ", 1)
+        if commands == [expected]:
+            continue
+        if allow_legacy and commands == [legacy]:
+            continue
+        raise ValueError("Supervisor runtime command differs from the fixed worker contract")
+
+
+def rewrite_supervisor_runtime_commands(text):
+    updated = text
+    for name, command in WORKER_COMMANDS.items():
+        legacy = command.replace("/usr/local/bin/wpcaregrid-php ", "php ", 1)
+        section = re.search(rf"(?ms)^\[program:{re.escape(name)}\][ \t]*\r?\n(.*?)(?=^\[|\Z)", updated)
+        if not section:
+            raise ValueError("required Supervisor program is missing")
+        commands = re.findall(r"(?m)^[ \t]*command[ \t]*=[ \t]*(.*?)[ \t]*\r?$", section.group(1))
+        if commands == [command]:
+            continue
+        if commands != [legacy]:
+            raise ValueError("Supervisor runtime command differs from the fixed migration source")
+        pattern = rf"(?ms)(^\[program:{re.escape(name)}\][ \t]*\r?\n(?:(?!^\[).)*?^[ \t]*command[ \t]*=[ \t]*){re.escape(legacy)}([ \t]*\r?$)"
+        updated, count = re.subn(pattern, rf"\g<1>{command}\g<2>", updated, count=1)
+        if count != 1:
+            raise ValueError("Supervisor worker command could not be updated exactly once")
+    return updated
+
+
+def validate_fpm_pool_listen(profile, output):
+    """Validate the effective listener and least-privilege worker identity for each FPM pool."""
+    profile = php_profile(profile)
+    expected_socket = PHP_RUNTIME_SOCKETS[profile].as_posix()
+    current_pool = None
+    settings = {}
+    for raw_line in output.splitlines():
+        line = re.sub(r"^\[[^]]+\]\s+NOTICE:\s*", "", raw_line).strip()
+        if line.startswith("[") and line.endswith("]"):
+            current_pool = line[1:-1].strip()
+            continue
+        match = re.fullmatch(r"(user|group|listen)\s*=\s*(\S+)\s*", line)
+        if match and current_pool is not None:
+            settings.setdefault(current_pool, {}).setdefault(match.group(1), []).append(match.group(2))
+
+    www = settings.get("www", {})
+    if www.get("user") != ["www-data"]:
+        raise ValueError("effective www FPM worker user differs from www-data")
+    if www.get("group") != ["www-data"]:
+        raise ValueError("effective www FPM worker group differs from www-data")
+    if www.get("listen") != [expected_socket]:
+        raise ValueError("effective www FPM pool listener differs from the selected socket")
+    if any(pool != "www" and expected_socket in values.get("listen", []) for pool, values in settings.items()):
+        raise ValueError("another FPM pool also claims the selected socket")
+
+
+def parse_unix_listener_records(output, expected_socket):
+    """Parse ss -xlepH evidence for one pathname Unix LISTEN socket."""
+    records = []
+    for line in output.splitlines():
+        fields = line.split()
+        if expected_socket not in fields:
+            continue
+        if len(fields) < 5 or fields[0] != "u_str" or fields[1] != "LISTEN":
+            raise ValueError("expected Unix socket path is not in LISTEN state")
+        inode_match = re.search(r"(?:^|\s)ino:(\d+)(?:\s|$)", line)
+        owners = [(int(pid), int(fd)) for pid, fd in re.findall(r"pid=(\d+),fd=(\d+)", line)]
+        if not inode_match or not owners:
+            raise ValueError("Unix listener lacks inode or process evidence")
+        records.append((int(inode_match.group(1)), owners))
+    if len(records) != 1:
+        raise ValueError("expected exactly one active Unix listener")
+    return records[0]
+
+
+def process_cgroup_paths(pid):
+    try:
+        data = Path(f"/proc/{pid}/cgroup").read_text(encoding="ascii")
+    except (OSError, UnicodeError):
+        raise ValueError("FPM process cgroup is unavailable") from None
+    paths = set()
+    for line in data.splitlines():
+        fields = line.split(":", 2)
+        if len(fields) == 3:
+            paths.add(fields[2])
+    return paths
+
+
+def command_line_uses_fpm_config(profile, argv):
+    config = PHP_RUNTIME_FPM_CONFIGS[profile].as_posix()
+    for index, arg in enumerate(argv[:-1]):
+        if arg in {"--fpm-config", "-y"}:
+            return argv[index + 1] == config
+    return f"master process ({config})" in " ".join(argv)
+
+
+def process_uses_fpm_config(pid, profile):
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        argv = [part.decode("utf-8") for part in raw if part]
+    except (OSError, UnicodeError):
+        raise ValueError("FPM master command line is unavailable") from None
+    return command_line_uses_fpm_config(profile, argv)
+
+
+def validate_fpm_main_process(profile, *, pid, executable, cgroup_paths, command_line_uses_config):
+    profile = php_profile(profile)
+    if (not re.fullmatch(r"[1-9][0-9]{0,8}", str(pid))
+            or executable != PHP_RUNTIME_FPM_BINARIES[profile].as_posix()
+            or PHP_RUNTIME_FPM_CGROUPS[profile] not in cgroup_paths
+            or command_line_uses_config is not True):
+        raise ValueError("active FPM master identity or configuration differs from profile")
+
+
+def validate_fpm_listener_processes(profile, inode, socket_path_inode, owners, process_evidence):
+    profile = php_profile(profile)
+    # `ss -e` reports the bound pathname's VFS inode; /proc/<pid>/fd points
+    # at the socket object and has a distinct sockfs inode. Bind the listener
+    # row to the configured path, then verify each `ss`-reported PID/FD still
+    # names a socket held by the selected FPM service.
+    if (not isinstance(inode, int) or inode <= 0 or not owners
+            or not isinstance(socket_path_inode, int) or socket_path_inode != inode):
+        raise ValueError("invalid FPM listener evidence")
+    for pid, fd in owners:
+        evidence = process_evidence(pid, fd)
+        if (evidence.get("executable") != PHP_RUNTIME_FPM_BINARIES[profile].as_posix()
+                or PHP_RUNTIME_FPM_CGROUPS[profile] not in evidence.get("cgroup_paths", set())
+                or evidence.get("fd_is_socket") is not True):
+            raise ValueError("FPM listener is not owned by the selected FPM service")
+
+
+def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
+    profile = php_profile(profile)
+    runtime_snippet(profile)
+    binary = PHP_RUNTIME_BINARIES[profile]
+    binary_parent = open_root_trusted_directory(binary.parent)
+    os.close(binary_parent)
+    info = binary.lstat()
+    binary_ok = stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(binary, os.X_OK)
+    result = run([str(binary), "-r", "echo PHP_MAJOR_VERSION, '.', PHP_MINOR_VERSION;"], check=False, stdout=subprocess.PIPE) if binary_ok else subprocess.CompletedProcess([], 1, stdout="")
+    cli_version = (result.stdout or "").strip() if result.returncode == 0 else ""
+    service = run(["/usr/bin/systemctl", "is-active", "--quiet", PHP_RUNTIME_SERVICES[profile]], check=False)
+    main_pid = run(["/usr/bin/systemctl", "show", "--property=MainPID", "--value", PHP_RUNTIME_SERVICES[profile]], check=False, stdout=subprocess.PIPE)
+    cgroup = run(["/usr/bin/systemctl", "show", "--property=ControlGroup", "--value", PHP_RUNTIME_SERVICES[profile]], check=False, stdout=subprocess.PIPE)
+    pid = (main_pid.stdout or "").strip()
+    if main_pid.returncode or not re.fullmatch(r"[1-9][0-9]{0,8}", pid):
+        fpm_executable = ""
+        main_cgroups = set()
+        uses_expected_config = False
+    else:
+        try:
+            fpm_executable = os.readlink(f"/proc/{pid}/exe")
+            main_cgroups = process_cgroup_paths(pid)
+            uses_expected_config = process_uses_fpm_config(pid, profile)
+        except (OSError, ValueError):
+            fpm_executable = ""
+            main_cgroups = set()
+            uses_expected_config = False
+    validate_fpm_main_process(
+        profile,
+        pid=pid,
+        executable=fpm_executable,
+        cgroup_paths=main_cgroups,
+        command_line_uses_config=uses_expected_config,
+    )
+    if cgroup.returncode or (cgroup.stdout or "").strip() != PHP_RUNTIME_FPM_CGROUPS[profile]:
+        raise ValueError("PHP-FPM systemd service cgroup differs from profile")
+    fpm_binary = PHP_RUNTIME_FPM_BINARIES[profile]
+    try:
+        fpm_parent = open_root_trusted_directory(fpm_binary.parent)
+        os.close(fpm_parent)
+        fpm_info = fpm_binary.lstat()
+        fpm_binary_ok = stat.S_ISREG(fpm_info.st_mode) and fpm_info.st_uid == 0 and not (fpm_info.st_mode & 0o022) and os.access(fpm_binary, os.X_OK)
+    except OSError:
+        fpm_binary_ok = False
+    fpm_version_result = run([str(fpm_binary), "-v"], check=False, stdout=subprocess.PIPE) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="")
+    fpm_version_match = re.search(r"(?m)^PHP (8\.[0-9]+\.[0-9]+) \(fpm-fcgi\)", fpm_version_result.stdout or "") if fpm_version_result.returncode == 0 else None
+    fpm_config_result = subprocess.run(
+        [str(fpm_binary), "-tt", "--fpm-config", str(PHP_RUNTIME_FPM_CONFIGS[profile])],
+        check=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=SAFE_ENV, close_fds=True, timeout=10,
+    ) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="", stderr="")
+    if fpm_config_result.returncode:
+        raise ValueError("effective PHP-FPM pool configuration could not be inspected")
+    validate_fpm_pool_listen(profile, (fpm_config_result.stdout or "") + "\n" + (fpm_config_result.stderr or ""))
+    fpm_info_result = subprocess.run(
+        [str(fpm_binary), "-i"], check=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, text=True, env=SAFE_ENV, close_fds=True, timeout=10,
+    ) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="")
+    if fpm_info_result.returncode:
+        raise ValueError("PHP-FPM configuration could not be inspected")
+    validate_fpm_runtime_info(fpm_info_result.stdout or "")
+    socket_parent = open_root_trusted_directory(PHP_RUNTIME_SOCKETS[profile].parent)
+    os.close(socket_parent)
+    socket_info = PHP_RUNTIME_SOCKETS[profile].lstat()
+    import grp
+    import pwd
+    socket_mode = stat.S_IMODE(socket_info.st_mode)
+    socket_type = stat.S_ISSOCK(socket_info.st_mode)
+    expected_uid = pwd.getpwnam("www-data").pw_uid
+    expected_gid = grp.getgrnam("www-data").gr_gid
+    validate_runtime_evidence(
+        profile,
+        binary_ok=binary_ok,
+        cli_version=cli_version,
+        fpm_active=service.returncode == 0,
+        fpm_binary_ok=fpm_binary_ok,
+        fpm_executable=fpm_executable,
+        fpm_version=fpm_version_match.group(1) if fpm_version_match else "",
+        socket_type=socket_type,
+        socket_uid=socket_info.st_uid,
+        socket_gid=socket_info.st_gid,
+        socket_mode=socket_mode,
+        expected_uid=expected_uid,
+        expected_gid=expected_gid,
+    )
+    listener_result = subprocess.run(
+        ["/usr/bin/ss", "-xlepH"], check=False, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        env=SAFE_ENV, close_fds=True, timeout=10,
+    )
+    if listener_result.returncode:
+        raise ValueError("active Unix socket listeners could not be inspected")
+    listener_inode, listener_owners = parse_unix_listener_records(
+        listener_result.stdout or "", PHP_RUNTIME_SOCKETS[profile].as_posix()
+    )
+
+    def listener_process_evidence(listener_pid, listener_fd):
+        try:
+            executable = os.readlink(f"/proc/{listener_pid}/exe")
+            cgroups = process_cgroup_paths(listener_pid)
+            fd_info = os.stat(f"/proc/{listener_pid}/fd/{listener_fd}")
+        except OSError:
+            raise ValueError("active FPM listener process evidence is unavailable") from None
+        return {"executable": executable, "cgroup_paths": cgroups, "fd_is_socket": stat.S_ISSOCK(fd_info.st_mode)}
+
+    validate_fpm_listener_processes(
+        profile,
+        listener_inode,
+        socket_info.st_ino,
+        listener_owners,
+        listener_process_evidence,
+    )
+    nginx_runtime_contract(active_php_profile())
+    supervisor_runtime_contract(allow_legacy=allow_legacy_supervisor)
+
+
+def validate_runtime_evidence(profile, *, binary_ok, cli_version, fpm_active, fpm_binary_ok, fpm_executable, fpm_version, socket_type, socket_uid, socket_gid, socket_mode, expected_uid, expected_gid):
+    profile = php_profile(profile)
+    version = "8." + profile.split(".", 1)[1]
+    if not binary_ok or cli_version != version:
+        raise ValueError("PHP CLI binary or version differs from profile")
+    if not fpm_binary_ok or not fpm_active or fpm_executable != PHP_RUNTIME_FPM_BINARIES[profile].as_posix() or not fpm_version.startswith(version + "."):
+        raise ValueError("PHP-FPM process or version differs from profile")
+    if not socket_type or socket_uid != expected_uid or socket_gid != expected_gid or socket_mode != 0o660:
+        raise ValueError("PHP-FPM socket metadata differs from profile")
+
+
+def validate_fpm_runtime_info(output):
+    modules = set()
+    in_modules = False
+    settings = {}
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped == "[PHP Modules]":
+            in_modules = True
+            continue
+        if stripped == "[Zend Modules]":
+            in_modules = False
+            continue
+        if in_modules and re.fullmatch(r"[A-Za-z0-9_]+", stripped):
+            modules.add(stripped.lower())
+        match = re.fullmatch(r"(opcache\.validate_timestamps|opcache\.revalidate_freq)\s*=>\s*(.*?)\s*=>\s*.*", stripped)
+        if match:
+            settings[match.group(1)] = match.group(2)
+    required = {
+        "ctype", "curl", "dom", "fileinfo", "filter", "hash", "iconv", "intl", "json",
+        "libxml", "mbstring", "openssl", "pcre", "pdo", "pdo_mysql", "session", "simplexml",
+        "sodium", "tokenizer", "xml", "zip",
+    }
+    if not required.issubset(modules):
+        raise ValueError("required PHP-FPM modules are absent")
+    if settings.get("opcache.validate_timestamps", "").lower() != "on":
+        raise ValueError("PHP-FPM OPcache timestamp validation is disabled")
+    try:
+        revalidate_freq = int(settings["opcache.revalidate_freq"])
+    except (KeyError, ValueError):
+        raise ValueError("PHP-FPM OPcache revalidation interval is unavailable") from None
+    if not 0 <= revalidate_freq <= 2:
+        raise ValueError("PHP-FPM OPcache revalidation interval is too high")
+
+
+def install_runtime_assets():
+    try:
+        require_regular(GATE, owner=0)
+        require_regular(SCHEDULER_PAUSE, owner=0)
+    except OSError:
+        raise ValueError("runtime assets may be installed only behind the maintenance gate") from None
+    except ValueError:
+        raise ValueError("runtime assets may be installed only behind the maintenance gate")
+    require_regular(WORKERS_DISABLED, owner=0)
+    worker_states = {}
+    for name in WORKERS:
+        output = run(["/usr/bin/supervisorctl", "status", name], check=False, stdout=subprocess.PIPE).stdout or ""
+        worker_states[name] = normalize_worker_status(name, output).split()[1]
+    if not runtime_switch_preconditions(True, True, worker_states):
+        raise ValueError("workers must be stopped before runtime asset installation")
+    launcher_data = deploy_source_bytes("scripts/run-php-runtime.sh", max_size=8192)
+    if hashlib.sha256(launcher_data).hexdigest() != PHP_RUNTIME_LAUNCHER_SHA256:
+        raise ValueError("PHP runtime launcher provenance mismatch")
+    scheduler_data = deploy_source_bytes("scripts/run-scheduler.sh", max_size=32768)
+    if hashlib.sha256(scheduler_data).hexdigest() != SCHEDULER_RUNTIME_SOURCE_SHA256:
+        raise ValueError("scheduler runtime wrapper provenance mismatch")
+    if not launcher_data.startswith(b"#!/usr/bin/env bash\n") or b"/etc/nginx/snippets/wpcaregrid-staging-runtime.conf" not in launcher_data:
+        raise ValueError("PHP runtime launcher contract mismatch")
+    if not scheduler_data.startswith(b"#!/usr/bin/env bash\n") or b"exec /usr/local/bin/wpcaregrid-php /var/www/wpcaregrid/artisan schedule:run" not in scheduler_data:
+        raise ValueError("scheduler wrapper runtime contract mismatch")
+    atomic_root_file(PHP_RUNTIME_LAUNCHER_DEST, launcher_data, mode=0o755)
+    atomic_root_file(SCHEDULER_DEST, scheduler_data, mode=0o755)
+    supervisor_runtime_contract(allow_legacy=True)
+    data = trusted_file_bytes(SUPERVISOR_CONFIG, mode=0o644, max_size=32768).decode("utf-8")
+    updated = rewrite_supervisor_runtime_commands(data)
+    atomic_root_file(SUPERVISOR_CONFIG, updated.encode("utf-8"), mode=0o644)
+    supervisor_runtime_contract()
+
+
+def switch_php_runtime(profile):
+    profile = php_profile(profile)
+    try:
+        require_regular(GATE, owner=0)
+        require_regular(SCHEDULER_PAUSE, owner=0)
+    except OSError:
+        raise ValueError("runtime switch requires both maintenance markers") from None
+    except ValueError:
+        raise ValueError("runtime switch requires both maintenance markers")
+    require_regular(WORKERS_DISABLED, owner=0)
+    worker_states = {}
+    for name in WORKERS:
+        result = run(["/usr/bin/supervisorctl", "status", name], check=False, stdout=subprocess.PIPE)
+        worker_states[name] = normalize_worker_status(name, result.stdout or "").split()[1]
+    if not runtime_switch_preconditions(True, True, worker_states):
+        raise ValueError("workers must be stopped during runtime switch")
+    php_runtime_preflight(profile)
+    previous = active_php_profile()
+    if previous == profile:
+        return
+    directory_fd = open_root_trusted_directory(PHP_RUNTIME_LINK.parent)
+    temp_name = PHP_RUNTIME_LINK.name + ".new"
+    rollback_name = PHP_RUNTIME_LINK.name + ".rollback"
+    temp_created = False
+    rollback_created = False
+    try:
+        try:
+            os.stat(temp_name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError("unexpected runtime-selector temporary path")
+        os.symlink(str(PHP_RUNTIME_FILES[profile]), temp_name, dir_fd=directory_fd)
+        temp_created = True
+        try:
+            os.replace(temp_name, PHP_RUNTIME_LINK.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            temp_created = False
+            os.fsync(directory_fd)
+            nginx_runtime_contract(profile)
+            run(["/usr/bin/systemctl", "reload", "nginx"])
+            if active_php_profile() != profile:
+                raise ValueError("runtime selector did not persist")
+            php_runtime_preflight(profile)
+        except Exception:
+            try:
+                os.symlink(str(PHP_RUNTIME_FILES[previous]), rollback_name, dir_fd=directory_fd)
+                rollback_created = True
+                os.replace(rollback_name, PHP_RUNTIME_LINK.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+                rollback_created = False
+                os.fsync(directory_fd)
+                nginx_runtime_contract(previous)
+                run(["/usr/bin/systemctl", "reload", "nginx"])
+                php_runtime_preflight(previous)
+            except Exception:
+                raise ValueError("runtime switch failed and selector rollback requires manual recovery") from None
+            raise ValueError("runtime switch failed; previous selector restored") from None
+    finally:
+        if temp_created:
+            try:
+                os.unlink(temp_name, dir_fd=directory_fd)
+            except OSError:
+                pass
+        if rollback_created:
+            try:
+                os.unlink(rollback_name, dir_fd=directory_fd)
+            except OSError:
+                pass
+        os.close(directory_fd)
+
+
+def update_supervisor_runtime():
+    worker_runtime_enabled()
+    supervisor_runtime_contract()
+    run(["/usr/bin/supervisorctl", "reread"])
+    for name in sorted(WORKERS):
+        run(["/usr/bin/supervisorctl", "update", name])
+
+
+def validate_worker_runtime(profile, name, status, executable, argv):
+    profile = php_profile(profile)
+    if name not in WORKER_COMMANDS:
+        raise ValueError("unsupported worker")
+    normalized = normalize_worker_status(name, status)
+    match = re.fullmatch(rf"{re.escape(name)} RUNNING pid (\d+)\n", normalized)
+    if not match or executable != PHP_RUNTIME_BINARIES[profile].as_posix():
+        raise ValueError("worker is not running the selected PHP executable")
+    expected_tail = WORKER_COMMANDS[name].split()[1:]
+    if argv != [PHP_RUNTIME_BINARIES[profile].as_posix(), *expected_tail]:
+        raise ValueError("worker command line differs from the fixed runtime contract")
+
+
+def worker_runtime_check(profile):
+    profile = php_profile(profile)
+    worker_runtime_enabled()
+    for name in sorted(WORKERS):
+        result = run(["/usr/bin/supervisorctl", "status", name], check=False, stdout=subprocess.PIPE)
+        normalized = normalize_worker_status(name, result.stdout or "")
+        match = re.fullmatch(rf"{re.escape(name)} RUNNING pid (\d+)\n", normalized)
+        if not match:
+            raise ValueError("worker is not running")
+        pid = match.group(1)
+        executable = os.readlink(f"/proc/{pid}/exe")
+        raw_argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        argv = [part.decode("utf-8") for part in raw_argv if part]
+        validate_worker_runtime(profile, name, result.stdout or "", executable, argv)
 
 
 def ensure_scheduler_cron():
@@ -380,6 +1349,22 @@ def dispatch(args):
         run(["/usr/bin/systemctl", "is-active", "--quiet", "cron"])
     elif args == ["vendor-readable"]:
         vendor_readable()
+    elif args == ["php-runtime-status"]:
+        sys.stdout.write(active_php_profile() + "\n")
+    elif len(args) == 2 and args[0] == "php-runtime-preflight":
+        php_runtime_preflight(args[1], allow_legacy_supervisor=True)
+    elif args == ["php-runtime-install"]:
+        install_runtime_assets()
+    elif len(args) == 2 and args[0] == "php-runtime-switch":
+        switch_php_runtime(args[1])
+    elif args == ["php-runtime-supervisor-update"]:
+        update_supervisor_runtime()
+    elif len(args) == 2 and args[0] == "worker-runtime-check":
+        worker_runtime_check(args[1])
+    elif args == ["worker-runtime-disable"]:
+        set_workers_disabled(True)
+    elif args == ["worker-runtime-enable"]:
+        set_workers_disabled(False)
     elif len(args) == 2 and args[0] == "rollback-allowed":
         if not re.fullmatch(r"[0-9a-f]{40}", args[1]) or read_approved_rollback() != args[1]:
             raise ValueError("rollback target is not administrator-approved")
@@ -422,6 +1407,10 @@ def dispatch(args):
         marker(GATE, False)
     elif len(args) == 2 and args[0] == "worker" and args[1] in {"status-all", "stop-all", "start-all"}:
         action = {"status-all": "status", "stop-all": "stop", "start-all": "start"}[args[1]]
+        if args[1] == "stop-all":
+            set_workers_disabled(True)
+        elif args[1] == "start-all":
+            worker_runtime_enabled()
         for name in sorted(WORKERS):
             worker(action, name)
     elif len(args) == 3 and args[0] == "worker":

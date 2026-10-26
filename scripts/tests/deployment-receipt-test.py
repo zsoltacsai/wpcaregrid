@@ -91,6 +91,15 @@ def expect_receipt_failure(call, reason):
 
 
 def main():
+    assert module.validate_php_binary_path("/usr/bin/php8.4") == "/usr/bin/php8.4"
+    assert module.validate_php_binary_path("/usr/bin/php8.5") == "/usr/bin/php8.5"
+    for path in ("/usr/bin/php", "/usr/bin/php7.4", "/tmp/php8.5", "8.5"):
+        try:
+            module.validate_php_binary_path(path)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"receipt accepted a non-allowlisted PHP binary: {path}")
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary) / "app"
         root.mkdir()
