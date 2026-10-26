@@ -303,6 +303,7 @@ sequenceDiagram
     participant W as Isolated restore worker
     participant D as Site DB + volume
     participant C as Connector relay
+    participant A as Per-site unprivileged agent
     participant L as Laravel
     participant O as Authorized recovery operator
     B->>B: Persist APPLYING and mutation_started for generation g
@@ -328,8 +329,15 @@ sequenceDiagram
     B->>B: Reconcile/open in controlled order; ingress opens last
     B-->>C: Durable signed receipt
     C->>L: Relay same receipt idempotently
-    L->>L: Verify and record terminal recovery once
-    Note over B,D: If any evidence/control is missing or recovery fails, remain closed
+    L->>L: Verify and durably record terminal recovery once
+    L->>L: Create stable platform-signed ACK from receipt/work records; no broker generation
+    L-->>C: Signed ACK bound to exact platform-known receipt and work
+    C->>A: Relay ACK through typed interface
+    A->>B: Submit signed ACK
+    B->>B: Resolve exact receipt/digest and work bindings to one accepted-work record
+    B->>B: Check private generation from broker journal; reject missing/ambiguous/mismatch
+    B->>B: Persist ACK; prune receipt only after durable ACK record
+    Note over B,D: ACK is not a gate-release signal. If evidence/control is missing or recovery fails, remain closed
 ~~~
 
 ## 10. Proposed #182 contract/API changes
@@ -386,7 +394,7 @@ This is an architecture contract proposal, not an implemented protocol. The cont
 |---|---|---|
 | Connector-to-host-worker handoff and FPM self-drain | Connector validates immutable input, submits async handoff, persists marker/outbox and returns. Broker drains after caller exits; separate UID/process/mount/DB worker applies. | Duplicate/disconnect/caller-exit/FPM timeout/process-tree/no-PHP-write tests. |
 | Peer credentials are not authorization | Canonical Ed25519 Signed Restore Intent binds tenant/site/active Connector/restore/job/backup digest/scope/provider+host audience/expiry/nonce. Durable anti-replay. | Tamper, expiry, cross-site/tenant/provider, stale Connector, duplicate and nonce tests. |
-| No terminal proof | Broker validates worker evidence, persists/signs generation-bound Terminal Receipt; only valid terminal state can release. Laravel verifies before user-visible success. | Forged/missing/stale/conflicting receipt and crash-before/after-persist tests. |
+| No terminal proof and receipt lifecycle | Broker validates worker evidence and persists/signs a generation-bound Terminal Receipt; only a verified terminal state can release. Laravel durably processes the exact receipt before signing a platform ACK. The ACK omits internal generation; broker resolves its private generation through a unique durable receipt/work mapping before recording ACK or pruning. | Forged/missing/stale/conflicting receipt; forged ACK; wrong/missing/ambiguous generation-to-work mapping; crash/retry and no-prune-on-rejection tests. |
 | Durable-state ownership conflict | Laravel owns business state; Connector owns relay marker/outbox; root broker owns enforcement/generation/replay journal. Contract amendment permits private host state, no platform/log exposure. | Crash-consistency/fsync review, reboot/reconciliation, corruption/mismatch fail-closed tests. |
 | Least privilege | Per-site unprivileged agent, fixed root broker, isolated one-shot worker and site-specific FPM/UID/DB/volume. | Socket/cross-site tests, broker operation/syscall review, artifact pinning and escape tests. |
 
@@ -403,7 +411,8 @@ Before adding a provider ID to the allowlist, test:
 - CDN/cache/direct-origin IPv4/IPv6/aliases/ports/load balancers, all HTTP write routes and policy propagation.
 - Concurrent HTTP, cron, Action Scheduler, queue, CLI, updater, deploy, DB and filesystem writers; open DB sessions and independent non-cooperating filesystem writer.
 - Dedicated DB/volume credentials and sibling-site non-impact.
-- Wrong/stale generation, commit retry, receipt replay, missing/forged receipt, outcome invariants, early finalize request, broker/agent/worker termination at every transition.
+- Wrong/stale generation in broker-private accepted-work state, commit retry, receipt replay, missing/forged receipt, outcome invariants, early finalize request, broker/agent/worker termination at every transition.
+- Signed ACK origin and all platform-known bindings; missing, duplicate/ambiguous, corrupted, or wrong-generation receipt-to-work mapping must reject ACK and preserve the receipt. Assert no generation is transmitted in the ACK, Terminal Receipt, Connector marker or Laravel state.
 - Power loss/reboot between file fsync, directory fsync, DB transaction, edge ack, marker publish, mutation intent, DB/file apply, receipt persistence and release. Corrupt/missing state boots closed.
 - Safe pre-mutation abort, recovery, ambiguous state and no automatic destructive retry.
 - No token, signature, nonce, private key, credential, lease token or generation in logs.
