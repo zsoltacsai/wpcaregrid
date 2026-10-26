@@ -77,7 +77,7 @@ class CustomerBackupDownloadTest extends TestCase
         $this->assertSame(BackupDownloadGrant::READY, $grant->status);
         $this->assertNotSame($content, $grant->getRawOriginal('block_hashes'));
         Log::shouldHaveReceived('info')->with('Customer backup download event.', \Mockery::on(fn (array $context) => ($context['event'] ?? null) === 'grant_ready'
-            && ! array_key_exists('object_key', $context) && ! array_key_exists('sha256', $context) && ! array_key_exists('url', $context)))->once();
+            && !array_key_exists('object_key', $context) && !array_key_exists('sha256', $context) && !array_key_exists('url', $context)))->once();
 
         $first = $this->actingAs($site['website']->customer->user)->withHeader('Range', 'bytes=0-4')
             ->getJson(route('account.backup-downloads.content', $grant));

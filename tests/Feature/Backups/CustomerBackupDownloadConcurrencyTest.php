@@ -101,7 +101,9 @@ class CustomerBackupDownloadConcurrencyTest extends TestCase
                     $process->stop(1);
                 }
             }
-            foreach (glob($directory.DIRECTORY_SEPARATOR.'*') ?: [] as $path) @unlink($path);
+            foreach (glob($directory.DIRECTORY_SEPARATOR.'*') ?: [] as $path) {
+                @unlink($path);
+            }
             @rmdir($directory);
         }
     }
