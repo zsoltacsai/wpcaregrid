@@ -582,7 +582,7 @@ The existing Terminal Receipt exception is unchanged: OVERLAP_VERIFY_ONLY/RETIRE
 
 A separate, explicit verify-only rule applies to Platform Work Acceptance Confirmation v1 (PWAC), under purpose `PLATFORM_WORK_ACCEPTANCE_CONFIRMATION`. Before exposing a newly signed PWAC, Laravel MUST atomically commit (a) its accepted HWA mapping, (b) exact canonical signed PWAC bytes and SHA-256, and (c) one durable outstanding-confirmation inventory item. The item MUST bind: `confirmation_id`; exact canonical signed PWAC envelope SHA-256; exact HWA envelope digest and `acceptance_id`; `work_id` and `work_kind`; the complete RESTORE or RECOVERY authorization binding (including intent ID/digest, parent/trigger where applicable, restore/job, backup/manifest/scope); tenant/site/Connector/provider/host identity; issuer and audience; signing purpose and `key_id`; key validity interval; first-issued time; inventory sequence; rotation ID; signing cutoff; and bounded `verify_until`. The record is immutable and unique by confirmation ID and exact PWAC digest.
 
-Pre-cutoff provenance MUST NOT be established from PWAC `confirmed_at`, `key_id`, a client timestamp, or a late-arriving envelope alone. Before the cutoff, the platform key-management control plane produces an authenticated, append-only `wp-caregrid.platform-key-rotation-inventory.v1` snapshot under domain `WPCAREGRID-PLATFORM-KEY-ROTATION-INVENTORY-V1` and dedicated purpose `PLATFORM_KEY_ROTATION_CONTROL`. Its closed payload binds schema, issuer/audience, control-key ID, provider/host scope, K1→K2 rotation ID and key IDs, monotonic snapshot sequence, created-at, signing cutoff, approved overlap end, and the exact outstanding-confirmation item list and item digests. The closed payload MUST NOT contain `snapshot_digest`, `snapshot_envelope_sha256`, or any field hashing the snapshot itself. After the complete payload is formed and domain-separated Ed25519 signature is produced, the signed outer envelope is serialized once as exact JCS bytes under §3.1; the snapshot identity is `snapshot_envelope_sha256 = SHA-256(exact canonical serialized signed outer-envelope bytes, including the complete signature object)`. The broker MUST calculate this digest itself after validating canonical bytes, signature, key ID, control-key registration, `PLATFORM_KEY_ROTATION_CONTROL` purpose, issuer/audience, provider/host scope, rotation binding, sequence and closed payload. A sender-supplied digest is never evidence. The digest is broker journal metadata only, not part of the signed snapshot payload. The control key is pre-enrolled through the authenticated provider/host key-lifecycle procedure and is separate from restore authorization and PWAC signing keys. The broker MUST durably persist/fsync the exact eligible inventory, computed envelope digest, sequence and rotation/cutoff record before the cutoff becomes effective. That broker commit (not the claimed item timestamp) is the trusted evidence that an item was outstanding before cutoff. A snapshot that arrives after cutoff, has a sequence rollback/gap, is unauthenticated/noncanonical, or conflicts with a prior item is not eligible.
+Pre-cutoff provenance MUST NOT be established from PWAC `confirmed_at`, `key_id`, a client timestamp, or a late-arriving envelope alone. Before the cutoff, the platform key-management control plane produces an authenticated, append-only `wp-caregrid.platform-key-rotation-inventory.v1` snapshot under domain `WPCAREGRID-PLATFORM-KEY-ROTATION-INVENTORY-V1` and dedicated purpose `PLATFORM_KEY_ROTATION_CONTROL`. Its closed payload schema has exactly these top-level members: `schema`, `iss`, `aud`, `control_key_id`, `provider_id`, `host_id`, `rotation_id`, `from_key_id`, `to_key_id`, `snapshot_sequence`, `created_at`, `signing_cutoff`, `approved_overlap_end`, and `outstanding_confirmations`. Each closed `outstanding_confirmations` item has exactly: `confirmation_id`, `pwac_envelope_sha256`, `hwa_envelope_sha256`, `acceptance_id`, `work_id`, `work_kind`, `authorization` (the exact RESTORE/RECOVERY union from §6.1), `tenant_id`, `site_id`, `connector_id`, `provider_id`, `host_id`, `confirmation_iss`, `confirmation_aud`, `signing_purpose`, `key_id`, `key_valid_from`, `key_valid_until`, `first_issued_at`, `inventory_sequence`, `rotation_id`, `signing_cutoff`, and `verify_until`. All IDs, digests, timestamps, enum values, uniqueness constraints and tuple bindings use the §3/§6.1 rules. No unlisted fields are permitted. The closed payload MUST NOT contain `snapshot_digest`, `snapshot_envelope_sha256`, or any field hashing the snapshot itself. After the complete payload is formed and domain-separated Ed25519 signature is produced, the signed outer envelope is serialized once as exact JCS bytes under §3.1; the snapshot identity is `snapshot_envelope_sha256 = SHA-256(exact canonical serialized signed outer-envelope bytes, including the complete signature object)`. The broker MUST calculate this digest itself after validating canonical bytes, signature, key ID, control-key registration, `PLATFORM_KEY_ROTATION_CONTROL` purpose, issuer/audience, provider/host scope, rotation binding, sequence and closed payload. A sender-supplied digest is never evidence. The digest is broker journal metadata only, not part of the signed snapshot payload. The control key is pre-enrolled through the authenticated provider/host key-lifecycle procedure and is separate from restore authorization and PWAC signing keys. The broker MUST durably persist/fsync the exact eligible inventory, computed envelope digest, sequence and rotation/cutoff record before the cutoff becomes effective. That broker commit (not the claimed item timestamp) is the trusted evidence that an item was outstanding before cutoff. A snapshot that arrives after cutoff, has a sequence rollback/gap, is unauthenticated/noncanonical, or conflicts with a prior item is not eligible.
 
 During the approved overlap, and only through each item's signed `verify_until` (bounded by the approved overlap/retention policy), the broker may verify a PWAC under OVERLAP_VERIFY_ONLY or RETIRED_VERIFY_ONLY only when every field and exact envelope digest matches one item in the broker's pre-cutoff committed inventory and the item names the exact HWA/outbox/private work mapping. The broker then applies the ordinary confirmation signature, key-purpose/status, identity, work-kind and generation checks. The same exact PWAC retry is idempotent. A changed byte, ID, binding, key, or inventory entry is rejected. After `verify_until`, or if an unresolved work remains without eligible inventory, fail closed and preserve HWA/work/fence for audited reconciliation; do not infer eligibility or issue a replacement confirmation under K1.
 
@@ -635,7 +635,61 @@ No destructive compensation is automatic. Recovery Intent is distinct and does n
 
 All tests below are mandatory for a future protocol/provider implementation. They are deterministic synthetic tests first; host-specific network, cgroup, filesystem and sibling-site claims also require an isolated disposable host test profile. Every negative test must assert both the returned denial and the absence of unauthorized durable state change.
 
-Rotation-inventory digest fixture `ROTINV-FIXTURE-01` is normative and test-only. The listed fixed identifiers/timestamps and 32-byte Ed25519 seed fully determine the canonical fixture; construct every remaining field from the exact closed §12.2 payload/item schema with fixed, valid fixture values (including one item matching PWAC-19), derive the public key from the seed, sign JCS(payload) with the §12.2 domain separator and NUL, then JCS-serialize the complete `wp-caregrid.signed-message.v1` outer envelope exactly as §3.1 requires. Both producer and broker test code MUST compare their computed digest of those identical envelope bytes. No digest is inserted into the payload. This is a future conformance fixture, not a claim that implementation tests have run.
+Rotation-inventory digest fixture `ROTINV-FIXTURE-01` is normative and test-only. Construct the payload with the exact closed §12.2 schema. Fixed values are:
+
+```json
+{
+  "schema": "wp-caregrid.platform-key-rotation-inventory.v1",
+  "iss": "wpcaregrid-platform-key-control",
+  "aud": "registered-host-broker",
+  "control_key_id": "test-control-k1",
+  "provider_id": "00000000-0000-4000-8000-000000000001",
+  "host_id": "00000000-0000-4000-8000-000000000002",
+  "rotation_id": "00000000-0000-4000-8000-000000000003",
+  "from_key_id": "test-k1",
+  "to_key_id": "test-k2",
+  "snapshot_sequence": 7,
+  "created_at": "2026-01-02T03:04:05Z",
+  "signing_cutoff": "2026-01-02T03:05:00Z",
+  "approved_overlap_end": "2026-01-02T03:10:00Z",
+  "outstanding_confirmations": [
+    {
+      "confirmation_id": "00000000-0000-4000-8000-000000000007",
+      "pwac_envelope_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hwa_envelope_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "acceptance_id": "00000000-0000-4000-8000-000000000008",
+      "work_id": "00000000-0000-4000-8000-000000000009",
+      "work_kind": "RESTORE",
+      "authorization": {
+        "schema": "wp-caregrid.restore-work-binding.v1",
+        "restore_intent_id": "00000000-0000-4000-8000-000000000010",
+        "restore_intent_envelope_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "backup_uuid": "00000000-0000-4000-8000-000000000013",
+        "manifest_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "scope": "files"
+      },
+      "tenant_id": "00000000-0000-4000-8000-000000000005",
+      "site_id": "00000000-0000-4000-8000-000000000004",
+      "connector_id": "00000000-0000-4000-8000-000000000006",
+      "provider_id": "00000000-0000-4000-8000-000000000001",
+      "host_id": "00000000-0000-4000-8000-000000000002",
+      "confirmation_iss": "wpcaregrid-platform",
+      "confirmation_aud": "registered-host-broker",
+      "signing_purpose": "PLATFORM_WORK_ACCEPTANCE_CONFIRMATION",
+      "key_id": "test-k1",
+      "key_valid_from": "2025-12-01T00:00:00Z",
+      "key_valid_until": "2026-02-01T00:00:00Z",
+      "first_issued_at": "2026-01-02T03:04:00Z",
+      "inventory_sequence": 7,
+      "rotation_id": "00000000-0000-4000-8000-000000000003",
+      "signing_cutoff": "2026-01-02T03:05:00Z",
+      "verify_until": "2026-01-02T03:10:00Z"
+    }
+  ]
+}
+```
+
+Use the test-only Ed25519 seed `9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60`; derive its public key and sign JCS(payload) using `WPCAREGRID-PLATFORM-KEY-ROTATION-INVENTORY-V1` plus NUL. Set the outer envelope to the §3.1 `wp-caregrid.signed-message.v1` schema, `alg=Ed25519`, `key_id=test-control-k1`, and the deterministic signature; serialize the full envelope as JCS with no newline. Compute `snapshot_envelope_sha256` only over those complete serialized envelope bytes. A conforming implementation test MUST record this fixture's resulting digest as a literal golden value and assert producer and broker both match it; the contract document does not claim that this vector has been executed. A fixture mutation changes one item field (for example `scope=database`) while retaining the old signature: the changed payload's envelope digest differs and signature verification fails. A separately validly re-signed envelope with the same sequence and rotation ID but a different digest is a journal conflict; exact byte-identical replay is idempotent. Noncanonical bytes or invalid signature create no cutoff evidence. The seed is test-only and MUST never be used outside conformance fixtures.
 
 | ID | Scenario / fixture | Required expected state/result | Forbidden assertion |
 |---|---|---|---|
