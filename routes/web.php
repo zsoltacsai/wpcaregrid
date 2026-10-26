@@ -102,7 +102,7 @@ Route::middleware(['auth', 'customer', EnsureCurrentLegalAcceptance::class, Ensu
     Route::post('/websites/{website}/admin-access/full-admin', [AdminAccessController::class, 'fullAdmin'])->middleware(['throttle:admin-access', 'throttle:admin-access-full'])->name('websites.admin-access.full-admin.store');
     Route::post('/websites/{website}/admin-access/{adminAccessRequest}/revoke', [AdminAccessController::class, 'revoke'])->scopeBindings()->middleware('throttle:20,1')->name('websites.admin-access.revoke');
     Route::get('/websites/{website}/backups', [BackupController::class, 'index'])->name('websites.backups.index');
-    Route::post('/websites/{website}/backups/{backup}/download-grants/{object}', [BackupDownloadController::class, 'create'])->scopeBindings()->where('object', 'files|database|manifest')->middleware('throttle:account')->name('websites.backups.download-grants.store');
+    Route::post('/websites/{website}/backups/{backup}/download-grants/{object}', [BackupDownloadController::class, 'create'])->scopeBindings()->middleware('throttle:account')->name('websites.backups.download-grants.store');
     Route::get('/backup-download-grants/{grant}', [BackupDownloadController::class, 'status'])->middleware('throttle:60,1')->name('backup-downloads.status');
     Route::get('/backup-download-grants/{grant}/content', [BackupDownloadController::class, 'content'])->middleware('throttle:6,1')->name('backup-downloads.content');
     Route::delete('/backup-download-grants/{grant}', [BackupDownloadController::class, 'revoke'])->middleware('throttle:account')->name('backup-downloads.revoke');
