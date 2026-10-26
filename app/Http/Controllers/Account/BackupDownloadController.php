@@ -21,11 +21,11 @@ final class BackupDownloadController extends Controller
     public function create(Request $request, Website $website, Backup $backup, string $object, BackupDownloadGrants $grants): JsonResponse
     {
         $name = BackupObjectName::tryFrom($object);
-        if (!$name) {
+        if ($name === null) {
             return response()->json(['code' => 'NOT_FOUND'], 404);
         }
         $backupObject = $backup->objects()->where('name', $name->value)->first();
-        if (!$backupObject) {
+        if ($backupObject === null) {
             return response()->json(['code' => 'NOT_FOUND'], 404);
         }
 
