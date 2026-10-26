@@ -785,22 +785,28 @@ def rewrite_supervisor_runtime_commands(text):
 
 
 def validate_fpm_pool_listen(profile, output):
-    """Validate the effective fixed FPM pool dump, not merely a source file."""
+    """Validate the effective listener and least-privilege worker identity for each FPM pool."""
     profile = php_profile(profile)
     expected_socket = PHP_RUNTIME_SOCKETS[profile].as_posix()
     current_pool = None
-    listens = {}
+    settings = {}
     for raw_line in output.splitlines():
         line = re.sub(r"^\[[^]]+\]\s+NOTICE:\s*", "", raw_line).strip()
         if line.startswith("[") and line.endswith("]"):
             current_pool = line[1:-1].strip()
             continue
-        match = re.fullmatch(r"listen\s*=\s*(\S+)\s*", line)
+        match = re.fullmatch(r"(user|group|listen)\s*=\s*(\S+)\s*", line)
         if match and current_pool is not None:
-            listens.setdefault(current_pool, []).append(match.group(1))
-    if listens.get("www") != [expected_socket]:
+            settings.setdefault(current_pool, {}).setdefault(match.group(1), []).append(match.group(2))
+
+    www = settings.get("www", {})
+    if www.get("user") != ["www-data"]:
+        raise ValueError("effective www FPM worker user differs from www-data")
+    if www.get("group") != ["www-data"]:
+        raise ValueError("effective www FPM worker group differs from www-data")
+    if www.get("listen") != [expected_socket]:
         raise ValueError("effective www FPM pool listener differs from the selected socket")
-    if any(pool != "www" and expected_socket in values for pool, values in listens.items()):
+    if any(pool != "www" and expected_socket in values.get("listen", []) for pool, values in settings.items()):
         raise ValueError("another FPM pool also claims the selected socket")
 
 
