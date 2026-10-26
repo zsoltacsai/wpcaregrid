@@ -1,7 +1,7 @@
 # M15 Host Isolation Protocol Contract v1 — Draft for Independent Review
 
 - **Status:** Documentation-only protocol contract proposal; requires independent M17 AppSec review, Integration & QA review, and separate Owner approval before any implementation.
-- **Authoritative base:** `claude/ecstatic-wozniak-oemyuf` at merge commit `14660549e9e91a03d00395133f6980651b54eb37` (PR #190).
+- **Review base:** `claude/ecstatic-wozniak-oemyuf` at primary HEAD `74f5b81e0d4e5589d255be4ba16b1b37ee987a98` (after PR #192 merge). The #190 architecture basis remains separately identified below.
 - **Architecture basis:** [M15 ADR #190](https://github.com/zsoltacsai/wpcaregrid/pull/190), approved at architecture level only; final independent M17 review [comment 6413144187](https://github.com/zsoltacsai/wpcaregrid/pull/190#issuecomment-6413144187) leaves exact contract, retention, clock/key, crash and conformance gates mandatory.
 - **Fail-closed contract:** [M15 RestoreIsolationGate contract](m15-restore-isolation-gate-contract.md), merged with #182.
 - **Tracking:** [#189](https://github.com/zsoltacsai/wpcaregrid/issues/189); integration ledger #174.
@@ -66,7 +66,7 @@ The nested payload has its own schema identifier. The envelope is serialized as 
 
     ASCII(domain_separator) || 0x00 || UTF8(JCS(payload))
 
-The `key_id` in the signature object MUST exactly equal the payload's `key_id` where that payload defines one. It is not itself a substitute for key lookup or identity binding. A signed-envelope digest is SHA-256 over the exact canonical serialized outer-envelope bytes, including the signature object. Receivers reject noncanonical envelope bytes rather than normalizing before digest verification. Every signed schema version is closed: unknown fields are rejected.
+The `key_id` in the signature object MUST exactly equal the payload's `key_id` where that payload defines one. For Terminal Receipt v2, `signature.key_id MUST equal payload.host_key_id` byte-for-byte; this is an additional mandatory field-name-specific rule, not an exception to key lookup. It is not itself a substitute for issuer, host/provider, signing-purpose, key-state or validity checks. A signed-envelope digest is SHA-256 over the exact canonical serialized outer-envelope bytes, including the signature object. Receivers reject noncanonical envelope bytes rather than normalizing before digest verification. Every signed schema version is closed: unknown fields are rejected.
 
 ### 3.2 Shared identifier types
 
@@ -167,9 +167,43 @@ The recovery `work_id` equals `recovery_work_id`; the restore `work_id` equals t
 
 The broker MUST persist one stable signed response per exact accepted intent digest. Exact retries return byte-identical acceptance; conflicting intent ID/digest returns a typed denial. An acceptance ID is a correlation identifier, not a bearer capability.
 
+### 6.1 Platform Work Acceptance Confirmation v1
+
+Schema: `wp-caregrid.platform-work-acceptance-confirmation.v1`. Laravel signs with a key whose sole purpose is `PLATFORM_WORK_ACCEPTANCE_CONFIRMATION`, domain `WPCAREGRID-WORK-ACCEPTANCE-CONFIRMATION-V1`. This message confirms only that Laravel durably recorded one exact broker HWA. It is not a Receipt ACK v2, terminal outcome, authorization to mutate, gate-release signal, or capability.
+
+The strict common payload is:
+```json
+{
+  "schema": "wp-caregrid.platform-work-acceptance-confirmation.v1",
+  "iss": "wpcaregrid-platform",
+  "aud": "registered-host-broker",
+  "confirmation_id": "stable UUID",
+  "acceptance_id": "broker HWA acceptance UUID",
+  "acceptance_sha256": "SHA-256 of exact canonical signed HWA envelope bytes",
+  "work_kind": "RESTORE|RECOVERY",
+  "work_id": "exact broker work UUID",
+  "tenant_id": "immutable tenant ID",
+  "site_id": "immutable website ID",
+  "connector_id": "active Connector ID",
+  "provider_id": "registered provider ID",
+  "host_id": "registered host ID",
+  "restore_uuid": "original restore UUID",
+  "job_uuid": "original restore job UUID",
+  "authorization": {},
+  "confirmed_at": "UTC RFC3339 timestamp",
+  "key_id": "registered platform confirmation-signing key ID"
+}
+```
+
+`authorization` is a closed union matching the HWA:
+- `RESTORE`: `schema=wp-caregrid.restore-work-binding.v1`, `restore_intent_id`, `restore_intent_envelope_sha256`, `backup_uuid`, `manifest_sha256`, `scope`.
+- `RECOVERY`: `schema=wp-caregrid.recovery-work-binding.v1`, `original_restore_intent_id`, `recovery_trigger_receipt_id`, `recovery_trigger_receipt_sha256`, `recovery_intent_id`, `recovery_intent_envelope_sha256`, `recovery_work_id`, `safety_backup_uuid`, `safety_manifest_sha256`, `recovery_scope`.
+
+Laravel validates the unique acceptance row under a transaction, allocates/stabilizes confirmation_id and confirmed_at, signs the exact confirmation and atomically commits the accepted HWA mapping plus exact signed confirmation bytes/digest to a durable outbox. Nothing is returned or exposed before commit. A crash before commit leaves no acceptance visible; a crash after commit returns the same stored bytes on retry. It copies fields from the verified HWA and durable authorization; it MUST NOT include broker generation. One confirmation ID and byte-identical signed envelope are stored per exact HWA digest. The broker verifies the platform signature, key purpose/status, exact HWA digest, acceptance/work IDs, strict authorization union and registered identity tuple against its one private durable mapping. It durably records the confirmation before changing work from `ACCEPTANCE_PENDING_PLATFORM` to `ACCEPTED`. Duplicate exact submission is idempotent; any changed/missing/ambiguous mapping is rejected and leaves work unactivated and the site gate unchanged. The confirmation never releases a gate.
+
 ## 7. Terminal Receipt v2
 
-Schema: `wp-caregrid.restore-terminal.v2`. Host-broker signature domain: `WPCAREGRID-RESTORE-TERMINAL-V2`. The broker creates it only after verifying accepted work, private generation, worker identity/exit, durable mutation state, exact input manifest, result evidence and the outcome invariant. It persists/fsyncs the complete signed envelope to its outbox before any eligible gate release. The worker cannot sign, release, or select an outcome.
+Schema: `wp-caregrid.restore-terminal.v2`. Host Terminal Receipt key-purpose domain: `WPCAREGRID-RESTORE-TERMINAL-V2`. The broker creates it only after verifying a work whose exact HWA and platform Work Acceptance Confirmation are durably bound, plus private generation, worker identity/exit, durable mutation state, exact input manifest, result evidence and the outcome invariant. It persists/fsyncs the complete signed envelope to its outbox before any eligible gate release. The worker cannot sign, release, or select an outcome.
 
 ### 7.1 Common envelope
 
@@ -189,10 +223,10 @@ Schema: `wp-caregrid.restore-terminal.v2`. Host-broker signature domain: `WPCARE
       "result": {},
       "evidence_sha256": "64-lowercase-hex",
       "finished_at": "UTC RFC3339 timestamp",
-      "host_key_id": "registered-host-signing-key-id"
+      "host_key_id": "registered host Terminal Receipt signing-key ID; exactly equal to outer signature.key_id"
     }
 
-There is no common `intent_id`, `backup_uuid`, `manifest_sha256`, `scope`, `mutation_started`, or `generation`. The common restore/job IDs always identify the original restore/job. Unknown/missing/cross-outcome fields reject the entire receipt.
+There is no common `intent_id`, `backup_uuid`, `manifest_sha256`, `scope`, `mutation_started`, or `generation`. The common restore/job IDs always identify the original restore/job. For every Terminal Receipt v2, the outer signed-envelope `signature.key_id` MUST equal `payload.host_key_id` byte-for-byte; the payload value is the registered host Terminal Receipt signing-key ID and is covered by the signature. Unknown/missing/cross-outcome fields reject the entire receipt.
 
 ### 7.2 Outcome result schemas
 
@@ -205,16 +239,16 @@ For all outcomes, tenant/site/Connector/provider/host and original restore/job t
 
 ### 7.3 Laravel receipt acceptance
 
-Laravel verifies strict canonical envelope encoding, host signature and key status, host registration, common identity tuple, outcome-specific schema, and exact durable authorization/work records before a state transition. RECOVERY_SUCCESS requires exactly one durable recovery-authorization record matching recovery intent ID and exact signed-envelope digest, original restore/work and restore/job, trigger receipt ID/digest, tenant/site/Connector/provider/host, safety backup UUID/manifest and scope. It also matches the `recovery_work_id` persisted from the broker acceptance response to the same authorization. A valid host signature alone is insufficient.
+Laravel verifies strict canonical envelope encoding; byte-for-byte equality of outer `signature.key_id` and payload `host_key_id`; Ed25519 signature; registered provider/host ownership; `HOST_TERMINAL_RECEIPT` signing purpose; key status/validity and the rotation/outstanding-receipt policy in §12.2; common identity tuple; outcome schema; and exactly one durable platform acceptance/work record matching the HWA, authorization digest and work before any state transition. A signature that verifies under an HWA, ACK, intent, unknown, revoked or compromised key is not a valid receipt. RESTORE_SUCCESS and SAFE_PRE_MUTATION_ABORT require exactly one durable RESTORE acceptance record linked to the original restore/job and exact Restore Intent envelope digest. RECOVERY_SUCCESS requires exactly one durable recovery-authorization record matching recovery intent ID and exact signed-envelope digest, original restore/work and restore/job, trigger receipt ID/digest, tenant/site/Connector/provider/host, safety backup UUID/manifest and scope. It also matches the `recovery_work_id` persisted from the broker acceptance response to the same authorization. A valid host signature alone is insufficient.
 
-RECOVERY_REQUIRED with `failure_origin=RECOVERY_ATTEMPT` must match exactly one accepted recovery-work record, including the nested trigger, intent digest, work ID and backup/scope tuple. A rejected/unaccepted recovery request cannot be represented as a completed failed recovery work item. Mismatched, stale, replayed, duplicate, conflicting, or ambiguous receipt causes no successful platform transition and no positive ACK.
+RECOVERY_REQUIRED with `failure_origin=RECOVERY_ATTEMPT` must match exactly one accepted recovery-work record, including the nested trigger, intent digest, work ID and backup/scope tuple. A rejected/unaccepted recovery request cannot be represented as a completed failed recovery work item. Mismatched, stale, replayed, duplicate, conflicting, premature (receipt before accepted HWA), or ambiguous receipt causes no successful platform transition and no positive ACK; the exact broker receipt remains durable for retry after acceptance reconciliation.
 
 ### 7.4 Gate invariants
 
 | Outcome | Durable platform state | Broker gate action |
 |---|---|---|
-| RESTORE_SUCCESS | Original restore succeeded after exact result reconciliation | May reopen only after signed receipt/outbox durability and all host release checks pass |
-| SAFE_PRE_MUTATION_ABORT | Original work terminal; durable proof no mutation started | May release only the original gate after control reconciliation; cannot retry same work |
+| RESTORE_SUCCESS | Original restore succeeded after exact HWA/PWAC acceptance mapping and result reconciliation | May reopen only after signed receipt/outbox durability and all host release checks pass |
+| SAFE_PRE_MUTATION_ABORT | Original work terminal; exact acceptance mapping plus durable proof no mutation started | May release only the original gate after control reconciliation; cannot retry same work |
 | RECOVERY_REQUIRED | Restore or recovery state destructive/ambiguous | MUST remain fenced; receipt is not authorization; no automatic recovery or release |
 | RECOVERY_SUCCESS | One separately authorized recovery work completed and reconciled | May reopen only after exact recovery proof and all release checks; ACK is never a gate signal |
 
@@ -286,12 +320,12 @@ Schema: `wp-caregrid.hmr-delivery.v1`; delivered over the authenticated channel.
 
 ### 9.3 HMR submission to platform
 
-Schema: wp-caregrid.hmr-submit.v1. The fixed kind union is HOST_SIGNED_TERMINAL_RECEIPT or HOST_SIGNED_WORK_ACCEPTANCE. The exact request payload is:
+Schema: `wp-caregrid.hmr-submit.v1`. The fixed kind union is `HOST_SIGNED_TERMINAL_RECEIPT` or `HOST_SIGNED_WORK_ACCEPTANCE`. The exact request payload is:
 
     {
       "schema": "wp-caregrid.hmr-submit.v1",
       "request_id": "uuid",
-      "host_message_id": "64 lowercase hexadecimal characters; deterministic broker outbox ID",
+      "host_message_id": "64 lowercase hexadecimal deterministic broker outbox ID",
       "relay_id": "registered HMR ID",
       "provider_id": "registered provider ID",
       "host_id": "registered host ID",
@@ -302,38 +336,48 @@ Schema: wp-caregrid.hmr-submit.v1. The fixed kind union is HOST_SIGNED_TERMINAL_
       "sent_at": "UTC RFC3339 timestamp"
     }
 
-host_message_id is a deterministic 64-lowercase-hex ID computed by the broker as SHA-256(ASCII(WPCAREGRID-HOST-MESSAGE-V1) || 0x00 || UTF8(JCS({provider_id,host_id,relay_id,kind,payload_sha256}))). The broker MUST persist that value with the host-originated outbox row, payload bytes/digest, acceptance/receipt ID and work tuple. Laravel independently recomputes it from the authenticated relay registration and exact payload digest before processing. Thus kind, provider/host/relay and exact signed payload digest are bound; work binding is then verified from the nested signed HWA/receipt. It is a transport correlation ID, not a bearer authorization and not part of the nested signed payload. A Terminal Receipt's receipt_id remains its protocol identity. A HWA's acceptance_id and recovery_work_id remain its protocol identities. No platform delivery_id is present on host-originated submits.
+`host_message_id` is computed and persisted as defined in §9.5. It identifies only the exact broker-originated durable outbox row; it is not a bearer authorization. For a receipt, the nested protocol identity is `receipt_id`; for HWA, it is `acceptance_id` plus the exact work binding. No platform `delivery_id` is present.
 
-Laravel verifies the nested host signature and exact message-kind-specific bindings. For HOST_SIGNED_TERMINAL_RECEIPT, Laravel commits receipt processing before emitting ACK v2. For HOST_SIGNED_WORK_ACCEPTANCE, Laravel verifies the HWA against exactly one durable recovery authorization record—including Recovery Intent ID and exact envelope digest, tenant/site/provider/host/Connector, original restore/job, acceptance ID and recovery_work_id—then commits the HWA digest and accepted work ID to that record. This is nonterminal authorization bookkeeping, not receipt processing.
+Laravel verifies the nested host signature and the exact identity, key purpose/state, and authorization/work mapping. For a Terminal Receipt, it commits the receipt reconciliation before returning ACK v2. For HWA, it verifies against exactly one durable authorization/work record, commits the acceptance, then returns a stable platform Work Acceptance Confirmation v1. HWA does not receive Receipt ACK v2.
 
-The exact response schema is wp-caregrid.hmr-submit-response.v1:
+Response schema: `wp-caregrid.hmr-submit-response.v1`:
 
     {
       "schema": "wp-caregrid.hmr-submit-response.v1",
       "request_id": "uuid",
-      "host_message_id": "echo of submitted 64-character broker outbox ID",
+      "host_message_id": "echo of submitted broker outbox ID",
       "relay_id": "authenticated relay ID",
       "provider_id": "registered provider ID",
       "host_id": "registered host ID",
       "result": "ACK_READY|ACCEPTANCE_RECORDED|DENIED",
       "ack_sha256": "sha256 or null",
       "ack_b64url": "canonical nested ACK v2 bytes or null",
+      "acceptance_confirmation_sha256": "sha256 or null",
+      "acceptance_confirmation_b64url": "canonical platform-signed confirmation bytes or null",
       "completed_at": "UTC RFC3339 timestamp",
       "error_code": "stable error enum or null"
     }
 
-The result is a strict union. ACK_READY is permitted only for a verified, durably processed Terminal Receipt; both ACK fields are then non-null and contain the stable signed ACK v2. ACCEPTANCE_RECORDED is permitted only for a verified, durably persisted HWA; both ACK fields and error_code are null. DENIED has both ACK fields null and a stable non-sensitive error_code; it must not commit acceptance or receipt success. An HWA never receives a Receipt ACK. Exact retries use the same host_message_id and digest: Laravel returns the same semantic success and same ACK bytes, if applicable. Reusing a host message ID with changed digest, kind, host, relay or work binding is denied as HOST_MESSAGE_CONFLICT.
+This is a strict discriminated union:
+- `ACK_READY`: Terminal Receipt only; both ACK fields non-null and both confirmation fields null.
+- `ACCEPTANCE_RECORDED`: verified HWA only; both ACK fields null and both Work Acceptance Confirmation fields non-null. The confirmation is signed by Laravel only after durable acceptance commit. It does not release a gate.
+- `DENIED`: all four artifact/digest fields null; stable non-sensitive `error_code`; no successful durable transition.
 
-### 9.4 HMR delivery to broker
+Exact retries with the same `host_message_id`, digest, kind and bindings return the same semantic result and byte-identical ACK or confirmation. Changed binding is `HOST_MESSAGE_CONFLICT`; no receipt/HWA outbox row is deleted by a response.
+
+### 9.4 HMR delivery to broker and platform confirmation
 
 Broker IPC permits only these closed operations over the fixed per-site host socket:
 
-- read_pending_host_messages.v1: request contains request_id, OS-authenticated relay/provider/host binding, bounded page_size, and opaque broker cursor. Response contains exact rows host_message_id, kind, payload_sha256, and unchanged nested payload_b64url. It returns pending Terminal Receipts and persisted HWAs from the broker's durable outbox; it reveals no gate or generation.
-- submit_platform_receipt_ack.v1: request contains request_id, exact nested ACK v2 bytes and digest. Broker verifies §8 and the private work/generation mapping before durable ACK recording.
-- submit_platform_recovery_intent.v1: request contains request_id, exact signed Recovery Intent bytes and digest. Broker verifies §5, persists the unique recovery work and signed HWA, allocates a stable host_message_id, and returns the byte-identical HWA plus ID. The same request ID/digest returns the same HWA/outbox ID; conflicting bytes are denied.
-- read_hmr_channel_status.v1: request contains request_id and registered relay identity; response returns bounded sequence/health metadata only.
+- `read_pending_host_messages.v1`: returns exact pending broker outbox rows (`host_message_id`, kind, payload digest and unchanged nested bytes) for receipts and HWAs. It reveals no gate/generation.
+- `submit_platform_receipt_ack.v1`: carries exact ACK v2 bytes/digest; broker verifies §8 and its private mapping before durable ACK recording.
+- `submit_platform_work_acceptance_confirmation.v1`: carries exact platform-signed Work Acceptance Confirmation v1 bytes/digest. Broker verifies its signing purpose and exact HWA/outbox/work tuple; durable confirmation changes only the work-acceptance substate, never the gate.
+- `submit_platform_recovery_intent.v1`: verifies §5, commits unique recovery work and HWA outbox before returning the byte-identical HWA and stable host message ID. Exact retries return the same record; conflict/replay is denied.
+- `read_hmr_channel_status.v1`: bounded registered-relay sequence/health metadata only.
 
-The OS peer identity is checked against fixed broker registration; nested signatures and durable bindings remain authoritative. The HWA and receipt outbox record is committed before it can be returned or read by HMR. If the broker crashes after commit, HMR can retrieve the same row by cursor or retry the same Recovery Intent; if it crashes before commit, no acceptance is returned. If HMR crashes after read or before/after network submit, its durable journal retries the same host_message_id and exact bytes. If the network response is lost, Laravel idempotently repeats ACCEPTANCE_RECORDED for the HWA or the same ACK_READY for a receipt. These bookkeeping responses cannot release a gate.
+HMR may submit a host HWA to Laravel; on `ACCEPTANCE_RECORDED`, it forwards the returned signed confirmation unchanged through `submit_platform_work_acceptance_confirmation.v1`. It MUST NOT treat the transport response itself as broker-verifiable proof. The same confirmation operation is used by the normal Connector after Laravel returns it from the dedicated acceptance endpoint.
+
+The broker commits HWA and receipt outbox rows before exposure. A normal Connector can re-read an HWA through `read_work_acceptance.v1` (exact intent digest and registered tuple) or repeat `begin_restore_handoff.v1`; both return the same bytes and outbox identity. HMR retrieves the same durable rows by cursor. After Laravel commits acceptance but its response is lost, exact HWA resubmission returns the same confirmation. After the broker commits a confirmation but the response is lost, exact confirmation resubmission returns the same durable result. Before the confirmation commit the broker MUST NOT permit artifact staging that can lead to execution, handoff activation, fence acquisition or worker launch. Crashes never create a second work item; uncertainty leaves work pending and the site unchanged/fenced as appropriate.
 
 ### 9.5 HMR queue, ordering and replay rules
 
@@ -341,7 +385,7 @@ Platform-originated delivery_id exists only in §9.2 hmr-delivery.v1, is generat
 
 Broker-originated host_message_id exists only in §9.3 submits and §9.4 broker outbox responses. The broker computes it from host/provider/relay, kind and exact payload digest using §9.3's domain-separated formula, then persists it with work, nested protocol ID (receipt_id or acceptance_id), digest and bytes. HMR stores host_message_id and digest before network submission. Laravel's idempotency key is (host_id, host_message_id); exact same digest/kind/bindings returns the prior durable result, while any change is rejected and audited. The broker's ID/digest/outbox mapping is authoritative; Laravel's accepted HWA record or receipt-processing row is authoritative for platform state; HMR's journal/cursor is only a retry aid.
 
-A lost, reordered, duplicate, or crashed delivery never acknowledges or deletes the broker row. HMR retries exact bytes with the same host_message_id and monotonic channel sequence. Reusing an ID with a different digest, cross-host/relay identity, unsupported kind, or sequence rollback is rejected. The ACK v2 remains independently submitted through submit_platform_receipt_ack.v1; ACCEPTANCE_RECORDED is never an ACK and is never a gate signal. HMR spool is encrypted at rest and bounded; if it cannot durably journal an item, it stops forwarding it.
+A lost, reordered, duplicate, or crashed delivery never acknowledges or deletes the broker row. HMR retries exact bytes with the same host_message_id and monotonic channel sequence. For HWA, HMR also persists and forwards the exact platform-signed Work Acceptance Confirmation returned with ACCEPTANCE_RECORDED; the broker durably records it before activation. Reusing an ID with a different digest, cross-host/relay identity, unsupported kind, or sequence rollback is rejected. Receipt ACK v2 remains independently submitted through submit_platform_receipt_ack.v1 and applies only to a terminal receipt; ACCEPTANCE_RECORDED/PWAC is never a Receipt ACK or gate signal. HMR spool is encrypted at rest and bounded; if it cannot durably journal an item, it stops forwarding it.
 
 ## 10. Typed API contracts
 
@@ -361,13 +405,15 @@ The wrapper is JCS-encoded, limited to a registered maximum size, and accepted o
 
 | Operation | Request / response | Authority and preconditions | Timeout / retry / idempotency | Audit and fail-closed behavior |
 |---|---|---|---|---|
-| `begin_restore_handoff.v1` | Request: signed Restore Intent bytes/digest + immutable manifest and fixed object descriptors. Response: signed Host Work Acceptance or typed denial. | Connector/agent may submit; broker verifies Laravel signature and every binding. | 5 s per call; identical request retry returns byte-identical acceptance; conflicting digest denied. | Record request ID, intent digest, result code and work ID; no generation. No gate acquisition or mutation in this call. |
-| `append_restore_object.v1` | Request: work ID, fixed object enum, offset, bounded chunk bytes, chunk digest, final flag. Response: accepted offset and object state. | Only accepted work; broker compares expected manifest object, length, digest, and current staging state. | 30 s/chunk; exact duplicate chunk idempotent; offset/content conflict denied. Object-level limit/timeouts configured by reviewed provider; partial input never executable. | Audit byte count and digest only; interrupted transfer remains incomplete/quarantined. |
-| `activate_handoff.v1` | Request: accepted work ID + acceptance digest. Response: current bounded work state. | Triggers asynchronous fence saga only after complete immutable objects are verified. | 5 s; repeat returns same saga/work. | No synchronous FPM self-drain. Unknown/active conflict denies; no work mutation unless durable acceptance exists. |
+| `begin_restore_handoff.v1` | Request: exact signed Restore Intent bytes/digest and fixed object descriptors. Response: RESTORE HWA or typed denial. | Connector/agent submits; broker verifies Laravel signature, current site mapping and all fields. | 5 s; idempotency key is registered site + restore/job + intent ID + exact envelope digest; exact retry returns byte-identical HWA/outbox row. | Persist work as ACCEPTANCE_PENDING_PLATFORM and HWA outbox. No object transfer, gate acquisition, mutation, or worker before a valid platform confirmation. |
+| `append_restore_object.v1` | Request: work ID, fixed object enum, offset, bounded chunk bytes, chunk digest, final flag. Response: accepted offset and object state. | Only work with broker-durable platform acceptance confirmation; broker compares expected manifest object, length, digest, and current staging state. | 30 s/chunk; exact duplicate chunk idempotent; offset/content conflict denied. Object-level limits/timeouts are provider-bound; partial input never executable. | Before confirmation: deny without staging writes. After confirmation: audit byte count/digest only; interrupted input remains incomplete/quarantined. |
+| `activate_handoff.v1` | Request: work ID + platform Work Acceptance Confirmation ID/digest + complete immutable-object digest. Response: bounded state. | Broker requires durable confirmation, complete manifest-verified objects and one exact work mapping. | 5 s; exact repeat returns same saga/work. | Starts asynchronous fence saga only after all checks; no synchronous FPM self-drain. Missing/ambiguous confirmation denies before gate change. |
 | `query_handoff.v1` | Request: work ID + exact binding digest. Response: allowlisted state and last transition time. | Read-only; exact registered site/work. | 2 s; safe repeat. | No IDs of other sites or internal generation. Missing/corrupt state returns UNKNOWN/deny and leaves gate unchanged. |
 | `read_terminal_receipt.v1` | Request: work ID + outcome cursor. Response: exact stored signed receipt bytes/digest or NOT_READY. | Read-only authorized Connector after safe reopen, or HMR while site fenced. | 5 s; repeat exact bytes. | Receipt retained until ACK v2 committed; never consumes/prunes. |
 | `submit_terminal_ack.v1` | Request: exact ACK v2 bytes/digest. Response: ACK_RECORDED, ALREADY_RECORDED, or typed denial. | Broker verifies platform ACK signature and exact unique mapping. | 5 s; exact duplicate is idempotent; any changed binding denied. | Durable ACK record precedes pruning; denial preserves receipt and gate state. ACK is not release. |
-| `submit_recovery_intent.v1` | Request: exact signed Recovery Intent bytes/digest. Response: exact broker-signed HWA + stable host_message_id or typed denial. | HMR/fixed audited operator interface while site fenced; broker verifies exact trigger and separate durable authorization. | 5 s; exact retry yields same HWA/outbox ID; conflicting/replay denied. | Broker commits acceptance/outbox before response; platform later persists HWA and returns ACCEPTANCE_RECORDED, never ACK; site remains fenced. |
+| `submit_recovery_intent.v1` | Request: exact signed Recovery Intent bytes/digest. Response: exact broker-signed RECOVERY HWA + stable host_message_id or typed denial. | HMR/fixed audited operator interface while site fenced; broker verifies exact trigger and separate authorization. | 5 s; exact retry yields same HWA/outbox ID; conflicting/replay denied. | Commit HWA/outbox as ACCEPTANCE_PENDING_PLATFORM. Laravel later persists HWA, returns ACCEPTANCE_RECORDED plus signed confirmation (never Receipt ACK); broker requires that confirmation before recovery worker activation. Site remains fenced throughout. |
+| `read_work_acceptance.v1` | Request: registered site, restore/job, intent ID and exact intent-envelope digest. Response: unchanged RESTORE HWA bytes/digest or typed NOT_READY/denial. | Registered Connector/agent; broker reads one exact durable acceptance/outbox row. | 5 s; exact retry byte-identical; conflicting mapping denied. | Read-only; never consumes/prunes HWA; no generation or gate state. |
+| `submit_platform_work_acceptance_confirmation.v1` | Request: exact platform-signed confirmation bytes/digest. Response: ACCEPTANCE_RECORDED or ALREADY_RECORDED, otherwise typed denial. | Connector/agent or HMR delivers to broker; broker verifies platform key purpose, HWA digest and one exact private work mapping. | 5 s; exact duplicate idempotent; different bytes/bindings conflict. | Persist confirmation before work activation; no gate release. HWA outbox bytes may be pruned only after durable confirmation plus retention, preserving tombstone/digest. |
 | `read_broker_status.v1` | Request: registered site ID and request ID. Response: coarse state and fencing status. | Read-only operator/agent role, site-bound. | 2 s; repeat safe. | Never returns generation, secret, path, commands or another site's data. |
 
 ### 10.1 Broker-private worker operations
@@ -381,7 +427,6 @@ These are target-architecture internal operations, separate from the per-site Co
 | finalize_terminal_outcome.v1 | Request: work_id, receipt_id, receipt_digest, outcome; response: RELEASE_ELIGIBLE or DENIED | Broker verifies worker exit, durable outcome invariants, receipt outbox persistence and exact private mapping | Idempotent exact retry; crash leaves gate fenced until journal reconciliation | ACK or HMR acceptance result cannot release gate; no generation in request/response |
 
 ### 10.2 #182-to-broker/worker migration boundary
-
 This contract distinguishes the implementation in #182 from the future #190 target:
 
 - Implemented today in #182: absent or unreviewed provider returns RESTORE_ISOLATION_UNAVAILABLE before maintenance activation or live file/database mutation. The reviewed RestoreIsolationGateProvider PHP interface is fail-closed and its lease checks guard the current Connector-side restore path. This is the present compatibility safeguard; it does not prove arbitrary-host isolation.
@@ -399,17 +444,59 @@ This contract distinguishes the implementation in #182 from the future #190 targ
 
 The broker-private operations above are internal typed contract operations, not public Connector endpoints. work_id is a lookup key, not a capability: peer identity, durable mapping, signed-intent binding and work state must also validate. No migration code is part of this documentation PR.
 
-### 10.3 Connector ↔ agent boundary
+### 10.3 Connector-to-Laravel RESTORE HWA ingestion
+
+The following proposed operation is the only Laravel path that records a normal RESTORE HWA; it is not current deployed behavior until a separately reviewed implementation PR exists.
+
+`POST /api/v1/connector/restore/work-acceptance`; authenticated by the existing paired Connector v1 credential over HTTPS. Site, tenant and Connector identities are derived from the authenticated pairing, never trusted from request-supplied identity fields. Request body is closed and size-bounded:
+
+```json
+{
+  "schema": "wp-caregrid.connector-restore-work-acceptance.v1",
+  "request_id": "uuid",
+  "restore_uuid": "original restore UUID",
+  "job_uuid": "original restore job UUID",
+  "acceptance_id": "broker acceptance UUID",
+  "work_id": "broker restore work UUID",
+  "hwa_sha256": "SHA-256 of exact canonical signed HWA envelope bytes",
+  "hwa_b64url": "canonical unpadded base64url of exact HWA envelope bytes"
+}
+```
+
+Laravel derives `tenant_id/site_id/connector_id` from the credential, resolves exactly one active restore/job and previously issued intent, verifies byte digest and canonical envelope, broker host signature and key purpose/status, then requires `work_kind=RESTORE`, `authorization.schema=wp-caregrid.restore-work-binding.v1`, exact acceptance/work IDs, intent ID and exact signed-intent envelope digest, original restore/job, backup UUID, manifest digest, scope, tenant/site/Connector/provider/host tuple. It commits a unique acceptance row linked to the original restore/job before returning success.
+
+Acceptance idempotency key: `(site_id, restore_uuid, job_uuid, work_kind=RESTORE, restore_intent_id, restore_intent_envelope_sha256)`; separate unique constraints require `acceptance_id` and `work_id` to each map to exactly that same row. Only one active/unresolved restore work chain may exist for a site. Exact HWA retry returns the same durable acceptance and byte-identical signed Work Acceptance Confirmation; same key with changed HWA digest or any binding, or acceptance/work ID mapped elsewhere, returns `409 ACCEPTANCE_BINDING_MISMATCH`/`WORK_CONFLICT` without state mutation.
+
+Response is closed:
+
+```json
+{
+  "schema": "wp-caregrid.connector-restore-work-acceptance-response.v1",
+  "request_id": "same request UUID",
+  "result": "ACCEPTANCE_RECORDED|ALREADY_RECORDED|DENIED",
+  "confirmation_sha256": "SHA-256 of exact signed Work Acceptance Confirmation bytes or null",
+  "confirmation_b64url": "canonical bytes or null",
+  "error_code": "stable enum or null"
+}
+```
+
+For either success result both confirmation fields are non-null; DENIED has them null. Laravel signs and returns the same durable confirmation on exact retries. Connector persists it in its bounded outbox and sends the unchanged bytes/digest to `submit_platform_work_acceptance_confirmation.v1`. It is transport-authenticated by the existing Connector pairing on upload and by the platform signature when broker accepts it. Retries are bounded with backoff; retry after timeout uses same request_id and bytes. No endpoint response starts work. The broker's durable confirmation is the sole precondition for subsequent object staging/activation.
+
+If a receipt arrives before this acceptance is durably recorded, Laravel returns `409 ACCEPTANCE_NOT_FOUND`, performs no restore-success/job state transition, emits no ACK and retains the broker receipt. After the exact HWA is processed, the same receipt may be retried and reconciled once. Missing, duplicate, out-of-order or ambiguous acceptance never yields success.
+
+
+
+### 10.4 Connector ↔ agent boundary
 
 The Connector may use only fixed object enums and accepted work IDs. It cannot supply an arbitrary path, SQL, URL, command, unit, host ID, tenant ID override, generation, or gate action. The agent validates local site registration, caller identity and bounds, then relays typed messages to broker. The broker still verifies signed intent and authorization; Connector/agent transport authentication is not authorization.
 
-### 10.4 HMR ↔ broker boundary
+### 10.5 HMR ↔ broker boundary
 
 HMR has only the typed methods in §9.4. HMR cannot call broker-private assert_work_active, commit_gate_handoff, or finalize_terminal_outcome, nor worker launch, arbitrary status, marker operation, filesystem operation, SQL operation, or a generic broker method. HMR unavailability leaves durable messages and gate state unchanged.
 
-### 10.5 Error codes
+### 10.6 Error codes
 
-Externally visible codes are stable, non-sensitive enums: `INVALID_ENVELOPE`, `UNSUPPORTED_SCHEMA`, `SIGNATURE_INVALID`, `KEY_UNKNOWN`, `KEY_REVOKED`, `KEY_RETIRED`, `MESSAGE_EXPIRED`, `CLOCK_UNSAFE`, `NONCE_REPLAY`, `IDENTITY_MISMATCH`, `AUTHORIZATION_MISMATCH`, `ACCEPTANCE_BINDING_MISMATCH`, `HOST_MESSAGE_CONFLICT`, `WORK_CONFLICT`, `WORK_NOT_FOUND`, `ARTIFACT_INCOMPLETE`, `ARTIFACT_DIGEST_MISMATCH`, `RESOURCE_LIMIT`, `FENCE_INCOMPLETE`, `LEASE_LOST`, `RECEIPT_NOT_READY`, `ACK_BINDING_MISMATCH`, `WORK_MAPPING_AMBIGUOUS`, `STATE_CORRUPT`, `RETRY_LATER`, and `UNSUPPORTED_PROVIDER`. Internal diagnostics are separately access-controlled and redact credentials, signed envelopes, nonce, signature, raw artifact content and private generation.
+Externally visible codes are stable, non-sensitive enums: `INVALID_ENVELOPE`, `UNSUPPORTED_SCHEMA`, `SIGNATURE_INVALID`, `KEY_UNKNOWN`, `KEY_PURPOSE_MISMATCH`, `KEY_REVOKED`, `KEY_RETIRED`, `MESSAGE_EXPIRED`, `CLOCK_UNSAFE`, `NONCE_REPLAY`, `IDENTITY_MISMATCH`, `AUTHORIZATION_MISMATCH`, `ACCEPTANCE_NOT_FOUND`, `ACCEPTANCE_PENDING`, `ACCEPTANCE_BINDING_MISMATCH`, `HOST_MESSAGE_CONFLICT`, `WORK_CONFLICT`, `WORK_NOT_FOUND`, `ARTIFACT_INCOMPLETE`, `ARTIFACT_DIGEST_MISMATCH`, `RESOURCE_LIMIT`, `FENCE_INCOMPLETE`, `LEASE_LOST`, `RECEIPT_NOT_READY`, `ACK_BINDING_MISMATCH`, `WORK_MAPPING_AMBIGUOUS`, `STATE_CORRUPT`, `RETRY_LATER`, and `UNSUPPORTED_PROVIDER`. `ACCEPTANCE_NOT_FOUND` means no unique committed platform acceptance row is available to reconcile a terminal receipt; `ACCEPTANCE_PENDING` means the exact HWA exists but the platform confirmation has not been committed by the broker. Internal diagnostics are separately access-controlled and redact credentials, signed envelopes, nonce, signature, raw artifact content and private generation.
 
 ## 11. Broker durable state machine
 
@@ -419,34 +506,31 @@ The state machine has two related dimensions: **work lifecycle** and **site gate
 
 | From → To | Trigger and actor | Durable precondition/write | Duplicate/crash behavior |
 |---|---|---|---|
-| NONE → AUTHORIZED | Laravel issues signed Restore Intent | Laravel restore/job/backup authorization record committed | Same intent ID/digest is stable; conflict denied |
-| AUTHORIZED → ACCEPTED | Broker verifies intent | Persist intent/nonce tombstone, intent digest, immutable tuple, one site work and private generation mapping in broker journal | Broker restart reconciles exact accepted record; duplicate gives same acceptance |
-| ACCEPTED → STAGING | Connector/agent uploads fixed objects | Persist per-object offsets/digests and completeness bitmap; published object becomes immutable only after full digest verification | Partial upload never executes; restart resumes same work only |
+| NONE → AUTHORIZED | Laravel issues signed Restore Intent | Laravel restore/job/backup authorization and exact signed intent envelope/digest committed | Same intent ID/digest stable; conflicting issuance denied |
+| AUTHORIZED → ACCEPTANCE_PENDING_PLATFORM | Broker verifies Restore Intent in begin_restore_handoff.v1 | Persist nonce/intent tombstone, exact tuple, unique restore work, private generation mapping, stable signed RESTORE HWA and HWA outbox row | Exact intent retry returns same HWA/work; no object transfer, fence, worker or mutation |
+| ACCEPTANCE_PENDING_PLATFORM → ACCEPTED | Broker verifies Laravel-signed Work Acceptance Confirmation v1 | Persist exact confirmation digest, acceptance/work/intent binding and platform-confirmed timestamp before exposing accepted state | Exact confirmation retry is idempotent; mismatch/crash leaves pending and no execution |
+| ACCEPTED → STAGING | Connector/agent uploads fixed objects | Persist per-object offsets/digests and completeness bitmap; published object immutable only after full digest verification | Partial upload never executes; restart resumes same confirmed work only |
 | STAGING → READY | Broker verifies all expected objects and manifest | Persist immutable input-set digest and ready state | Duplicate activation returns same work |
-| READY → FENCING | Broker starts asynchronous gate saga | Persist fencing intent before external fence actions | Crash resumes reconciliation; unknown writer blocks |
+| READY → FENCING | Broker starts asynchronous gate saga | Persist fencing intent before external fence actions; requires confirmed acceptance and complete immutable input | Crash resumes reconciliation; unknown writer blocks |
 | FENCING → QUIESCENT | Broker verifies all origin/CDN, in-flight, FPM/cgroup, cron/queue/CLI/deploy/DB/file writer controls | Persist exact site/work/private generation and fence proof refs | Any missing proof stays FENCING/fenced; no worker |
-| QUIESCENT → APPLYING | Broker launches fixed worker once | Persist mutation-start evidence before each first live mutation boundary | Before first mutation, safe abort only with durable no-mutation proof; after any ambiguity RECOVERY_REQUIRED |
-| APPLYING → TERMINAL_DURABLE | Broker verifies worker evidence and writes strict receipt/outbox | Persist canonical signed receipt and exact receipt digest before any eligible reopen | Reconstruct only from durable journal; ambiguity creates RECOVERY_REQUIRED and keeps gate closed |
+| QUIESCENT → APPLYING | Broker launches fixed worker once | Persist mutation-start evidence before each first live mutation boundary | Before first mutation, safe abort only with durable no-mutation proof; after ambiguity RECOVERY_REQUIRED |
+| APPLYING → TERMINAL_DURABLE | Broker verifies worker evidence and writes strict receipt/outbox | Persist canonical signed receipt and exact digest before eligible reopen | Reconstruct only from durable journal; ambiguity creates RECOVERY_REQUIRED and keeps gate closed |
 | TERMINAL_DURABLE → ACKED | Broker verifies ACK v2 | Persist ACK ID/digest and exact work/generation mapping | Exact duplicate no-op; invalid/conflicting ACK rejected; receipt retained until durable commit |
-| ACKED → RETAINED_TOMBSTONE | Broker prunes receipt bytes after retention policy | Preserve identity/digest/outcome/work tombstone for replay detection | Tombstone prevents old receipt/ACK from being rebound |
-| RECOVERY_REQUIRED → RECOVERY_AUTHORIZED | Broker verifies separate Recovery Intent | Persist exact trigger receipt/digest, recovery authorization/envelope digest, unique recovery_work_id and private generation mapping | Identical intent returns same work; no second attempt on conflict/ambiguity |
+| ACKED → RETAINED_TOMBSTONE | Broker prunes receipt bytes after retention policy | Preserve identity/digest/outcome/work tombstone for replay detection | Tombstone prevents old receipt/ACK rebinding |
+| RECOVERY_REQUIRED → RECOVERY_ACCEPTANCE_PENDING | Broker verifies separate Recovery Intent and commits unique recovery HWA/outbox | Persist exact trigger receipt/digest, recovery authorization/envelope digest, recovery_work_id and private generation mapping | Identical intent returns same HWA/work; no worker or gate release |
+| RECOVERY_ACCEPTANCE_PENDING → RECOVERY_AUTHORIZED | Broker verifies Laravel Work Acceptance Confirmation v1 for exact Recovery HWA | Persist confirmation digest and exact work binding | Retry idempotent; mismatch leaves fenced pending state |
 | RECOVERY_AUTHORIZED → RECOVERING | Broker re-proves fence and launches fixed recovery worker | Persist recovery mutation-start state before first change | Any uncertain step stays fenced; no automatic destructive retry |
 | RECOVERING → RECOVERY_TERMINAL_DURABLE | Broker validates RECOVERY_SUCCESS or nested RECOVERY_REQUIRED | Persist exact outcome receipt/outbox before eligible release | Lost delivery retries exact bytes; no regenerated identity |
 | RECOVERY_TERMINAL_DURABLE → ACKED | Same ACK v2 checks, with exact recovery-work binding | Persist before pruning | Missing/invalid ACK retains exact recovery receipt |
 
 
-
-#### Platform recovery-acceptance bookkeeping (not a host gate state)
+#### Platform durable acceptance bookkeeping (not a broker gate state)
 
 | From → To | Trigger and actor | Durable precondition/write | Duplicate/crash behavior |
 |---|---|---|---|
-| RECOVERY_AUTHORIZED → ACCEPTANCE_RECORDED | Laravel receives broker-signed HWA via HMR | Verify host signature/key purpose and exact Recovery Intent ID+envelope digest, tenant/site/Connector/provider/host, original restore/job, acceptance ID, recovery_work_id and host_message_id/digest; commit these to the unique durable recovery authorization row | Exact same HWA is an idempotent no-op. Missing/ambiguous/different mapping is denied with no transition. Lost response causes same HWA retry and same semantic ACCEPTANCE_RECORDED result. No ACK v2 is created. |
-| ACCEPTANCE_RECORDED → RECOVERY_RUNNING | Existing separately authorized broker execution lifecycle proceeds | Broker checks only its private work/generation record and re-proves fence before launching its fixed worker | HMR response does not trigger work, mutate state or release gate; receipt and gate state stay independently governed by §11.1 |
-
-The platform's ACCEPTANCE_RECORDED state is workflow bookkeeping only. It does not change the broker gate, authorize execution beyond the already signed Recovery Intent, create terminal success, issue a receipt ACK, or prune any terminal receipt.
-
-A site's gate moves independently: `OPEN → FENCE_PENDING → FENCED → RELEASE_ELIGIBLE → OPEN`. Any uncertainty moves/remains at `FENCED`, not OPEN. `RECOVERY_REQUIRED` is always FENCED. Only broker-controlled finalization after valid outcome-specific durable evidence can move from FENCED to RELEASE_ELIGIBLE. ACK receipt bookkeeping never changes gate state.
-
+| RESTORE_AUTHORIZED → ACCEPTANCE_RECORDED | Laravel receives RESTORE HWA through the Connector acceptance API | Verify HWA signature/key purpose and exact Restore Intent envelope digest, tenant/site/Connector/provider/host, original restore/job, acceptance ID/work ID, backup/manifest/scope; commit one acceptance row to the original restore/job, then persist/sign its Work Acceptance Confirmation | Exact same HWA returns the same confirmation; changed/ambiguous mapping denied. Lost response retries exact HWA; no worker, ACK v2, or gate change |
+| RECOVERY_AUTHORIZED → ACCEPTANCE_RECORDED | Laravel receives RECOVERY HWA through HMR | Verify HWA signature/key purpose and exact Recovery Intent ID/digest, trigger receipt, tenant/site/Connector/provider/host, original restore/job, acceptance ID/recovery_work_id; commit the unique recovery authorization row, then persist/sign its Work Acceptance Confirmation | Exact retry is idempotent; conflict denied. HMR returns ACCEPTANCE_RECORDED plus confirmation, never Receipt ACK v2; gate unchanged |
+The broker does not share this platform workflow state machine. Upon receiving the exact signed Work Acceptance Confirmation, it validates the one durable HWA/outbox/private work mapping and transitions its own work row from `ACCEPTANCE_PENDING_PLATFORM` to `ACCEPTED` (or `RECOVERY_AUTHORIZED` for the recovery child). Lost responses retry the same confirmation; no execution starts before this broker commit. The platform `ACCEPTANCE_RECORDED` state is workflow bookkeeping only. It does not itself activate work, change the broker gate, create terminal success, issue Receipt ACK v2, or prune a terminal receipt. The broker's durable validation of the separate platform-signed confirmation is the prerequisite for object staging and later activation. Normal RESTORE and RECOVERY use the same confirmation purpose but distinct strict authorization unions and durable parent records; neither confirmation is a terminal ACK.
 ### 11.2 Broker-private work/generation mapping
 
 This subsection describes the future #190 broker target, not the present #182 implementation: the #182 maintenance-marker behavior remains as documented until a separately reviewed migration changes it. For each site the target broker stores a private record mapping `(site_id, generation)` to exactly one `work_id`, authorization digest, current gate state, mutation state, receipt ID/digest/outbox row, HWA/host-message outbox rows, and prior-generation handoff. For recovery it stores one unique child `recovery_work_id` mapped to the exact parent work, trigger receipt, recovery intent digest, safety backup/manifest/scope and private generation. The internal generation is generated by the broker, inaccessible to Connector/agent/HMR/Laravel, omitted from every wire schema, and redacted from logs.
@@ -455,13 +539,13 @@ For any receipt or ACK, the broker must resolve exactly one matching durable wor
 
 ### 11.3 Crash and restart rules
 
-- Persist authorization/replay reservation before returning acceptance.
-- Persist each immutable object as non-executable staging; fsync file and containing directory before marking complete.
+- Persist authorization/replay reservation and exact HWA outbox before returning HWA; keep broker work in ACCEPTANCE_PENDING_PLATFORM until the platform confirmation is durable. No object staging, fence, activation or worker starts before that confirmation.
+- Persist Laravel's HWA acceptance and exact signed Work Acceptance Confirmation bytes atomically before returning them; persist broker confirmation before any immutable object staging. Persist each immutable object as non-executable staging; fsync file and containing directory before marking complete.
 - Persist fence-intent before changing ingress/writer controls; reconcile actual controls after restart.
 - Persist QUIESCENT only after independently verifying all required controls.
 - Persist mutation-start evidence before each first live file/DB mutation boundary.
-- Persist/fsync signed terminal receipt/outbox before any release-eligible transition.
-- Persist ACK and its unique work/generation reconciliation before pruning receipt bytes.
+- Persist/fsync signed terminal receipt/outbox before any release-eligible transition; persist the exact terminal-signing key ID and allowlist/outstanding receipt state consistently with §12.
+- Persist ACK and its unique work/generation reconciliation before pruning receipt bytes. Retain HWA/confirmation retry rows until broker durable confirmation is known, then keep replay tombstones through audit retention.
 - Boot begins with ingress/writers fenced for any nonterminal/ambiguous work. Broker journal reconciliation runs before site services; HMR reconnect does not reopen anything.
 - A crash where durable ordering cannot be proven is classified ambiguous and fenced. No TTL, process-exit heuristic, stale-marker cleanup or automatic SQL staging-table deletion releases protection.
 
@@ -473,8 +557,10 @@ For any receipt or ACK, the broker must resolve exactly one matching durable wor
 |---|---|---|---|
 | Platform Restore Intent key | Laravel key-management service | Sign Restore Intent v1 only | Sign recovery intents, ACKs, or host receipts |
 | Platform Recovery Intent key | Laravel key-management service | Sign Recovery Intent v1 only | Sign normal restore intents or ACKs |
-| Platform ACK key | Laravel key-management service | Sign Receipt ACK v2 only | Sign intents or host receipts |
-| Host receipt/acceptance key | Root broker security boundary | Sign Host Work Acceptance and Terminal Receipt v2 | Be available to Connector, agent, HMR or worker |
+| Platform ACK key | Laravel key-management service | Sign Receipt ACK v2 only | Sign intents, work-acceptance confirmations, or host receipts |
+| Platform Work Acceptance Confirmation key | Laravel key-management service | Sign Platform Work Acceptance Confirmation v1 only after exact HWA durable acceptance | Sign terminal ACKs, intents, or host receipts |
+| Host Work Acceptance key | Root broker security boundary | Sign Host Work Acceptance v1 only, with acceptance purpose | Be available to Connector, agent, HMR or worker; sign terminal receipts |
+| Host Terminal Receipt key | Root broker security boundary | Sign Terminal Receipt v2 only, with terminal-receipt purpose; `signature.key_id` MUST equal `payload.host_key_id` | Sign HWA or be available outside the broker |
 | HMR mTLS identity key/certificate | HMR OS identity | Authenticate outbound transport | Authorize protocol messages, recovery, gate changes or broker operations |
 
 | Worker identity | One-shot worker runtime | Authenticate local result channel | Sign receipts or control gate |
@@ -485,7 +571,7 @@ Key IDs are immutable, globally unique within issuer and purpose, and bound to a
 
 Platform and host public keys enter the opposite trust store only through separately authenticated provider enrollment/release procedures. Connector inventory, HMR poll or an untrusted receipt cannot enroll/replace a key. Registration and rotation produce auditable records with approver, key ID, fingerprint, scope, validity interval and exact provider/host/site binding.
 
-Rotation uses a bounded overlap at least as long as maximum intent lifetime plus allowed skew and delivery retry interval. New messages use only the active key. Old verification keys remain available for outstanding durable receipts/ACK retries until those cases are reconciled or separately escalated; retiring a signing key does not delete its public verification record or replay tombstones.
+Rotation uses a bounded overlap at least as long as maximum intent lifetime plus allowed skew and delivery retry interval. Key state is one of ACTIVE_SIGN_VERIFY, OVERLAP_VERIFY_ONLY, RETIRED_VERIFY_ONLY, REVOKED, or COMPROMISED, scoped to issuer, provider, host and purpose. New messages use only ACTIVE_SIGN_VERIFY. OVERLAP_VERIFY_ONLY and RETIRED_VERIFY_ONLY may verify only an exact receipt_id + canonical receipt digest already present in the durable outstanding-receipt inventory before the signing cutoff; they cannot sign or authorize new work. A late first delivery is eligible only if its exact receipt was durably registered as outstanding before cutoff by the authenticated broker enrollment/receipt inventory; `finished_at` alone is not sufficient proof. Retiring a signing key does not delete its public verification record or replay tombstones. REVOKED and COMPROMISED are never accepted for new or outstanding receipt verification; preserve receipt/outbox/fence and require audited reconciliation, with no ACK, pruning or release.
 
 Revoked keys are rejected for new authorization immediately. If compromise is suspected, the verifier fails closed for affected unacknowledged receipts/intents and does not silently accept them under a replacement key; preserve fence/outbox and require an auditable reauthorization/reconciliation decision. HMR certificate renewal is bound to the same registered relay/provider/host and uses overlapping trust only during approved rotation. Expired, revoked, wrong-host or unknown certificates stop channel processing, not broker state retention.
 
@@ -505,7 +591,7 @@ First acceptance lifetime is at most 120 seconds. Maximum permitted clock differ
 
 ### 12.5 Canonicalization and signature failure behavior
 
-Every verifier checks exact schema/version, canonical bytes, signer purpose/status, signature, then issuer/audience and all durable bindings before state change. Signature and digest comparison are constant-time where applicable. Signature failure, unknown key, invalid encoding, duplicate key, unknown field, expired message, or clock uncertainty causes no work creation, no state success, no ACK/pruning and no gate release. Error responses are bounded and avoid disclosing which secret/key material failed.
+Every verifier checks exact schema/version, canonical bytes, outer/payload key-ID equality where specified, signer registration and host/provider ownership, purpose, key status/validity and rotation policy, signature, then issuer/audience and all durable bindings before state change. Signature and digest comparison are constant-time where applicable. Signature failure, unknown key, invalid encoding, duplicate key, unknown field, expired message, or clock uncertainty causes no work creation, no state success, no ACK/pruning and no gate release. Error responses are bounded and avoid disclosing which secret/key material failed.
 
 ## 13. Failure, retry and fencing behavior
 
@@ -520,6 +606,7 @@ Every verifier checks exact schema/version, canonical bytes, signer purpose/stat
 | HMR/network outage | Persist and retry identical envelopes; site remains fenced; no Connector fallback if fenced |
 | Invalid Recovery Intent | No recovery work, no worker, no unlock; preserve trigger receipt and gate |
 | Receipt delivery failure | Durable exact receipt remains in outbox; no regenerated ID |
+| HWA/Work Acceptance Confirmation delivery loss | Durable HWA/confirmation bytes and one work remain pending; exact retry resumes; no object staging/activation before broker confirmation |
 | ACK failure/loss | Durable receipt remains; Laravel returns same ACK after retry once processing was committed |
 | Ambiguous mapping/journal corruption | No state transition or pruning; fence and require audited reconciliation |
 | Duplicate exact request | Idempotent response tied to same work |
@@ -533,7 +620,7 @@ All tests below are mandatory for a future protocol/provider implementation. The
 
 | ID | Scenario / fixture | Required expected state/result | Forbidden assertion |
 |---|---|---|---|
-| MSG-01 | Valid Restore Intent v1, correct signature and bindings | One durable ACCEPTED work; stable signed acceptance | No generation in response |
+| MSG-01 | Valid Restore Intent v1, correct signature and bindings | One durable `ACCEPTANCE_PENDING_PLATFORM` work/HWA outbox; after exact HWA is durably recorded by Laravel and its signed Work Acceptance Confirmation is committed by the broker, one `ACCEPTED` work | No object staging, fence, worker, mutation or generation disclosure before broker commits confirmation |
 | MSG-02 | Duplicate key, unknown field, wrong canonical bytes, bad UTF-8 | `INVALID_ENVELOPE` or `UNSUPPORTED_SCHEMA`; no work | No parser normalization then acceptance |
 | MSG-03 | Wrong domain, signature, algorithm, key purpose or key ID | Deny; journal unchanged | No downgrade/alternate algorithm |
 | MSG-04 | Expired intent, >120 s lifetime, >30 s skew, clock rollback | `MESSAGE_EXPIRED`/`CLOCK_UNSAFE`; no acceptance | No gate open/closed change from unauthenticated request |
@@ -542,12 +629,28 @@ All tests below are mandatory for a future protocol/provider implementation. The
 | AUTH-01 | Wrong tenant/site/Connector/provider/host/audience | Deny before staging or mutation | No cross-tenant/site read or write |
 | AUTH-02 | Wrong restore/job/backup/manifest/scope | Deny; no accepted work | No substitute backup or broadened scope |
 | AUTH-03 | Stale/revoked Connector or provider registration | Deny and audit | No readiness snapshot treated as active lease |
-| HWA-01 | Broker commits accepted recovery work, signs HWA and host outbox row, then crashes before returning response | Recovery Intent retry returns byte-identical HWA, acceptance_id, recovery_work_id and host_message_id from durable journal | No second work or generation; no PHP executor fallback |
-| HWA-02 | Broker crashes before acceptance/outbox transaction is durable | No HWA/host_message_id is exposed; exact Recovery Intent retry may create one accepted work | No phantom platform acceptance or mutation |
-| HWA-03 | Valid broker-signed HWA; durable platform recovery authorization already exists for the exact Recovery Intent ID/digest and tuple | Persist acceptance_id, HWA digest and recovery_work_id; return ACCEPTANCE_RECORDED; broker gate remains unchanged/fenced | No Receipt ACK v2, terminal state, second work or gate release |
-| HWA-04 | Platform response is lost after HWA durable commit; resend same host_message_id and exact bytes | Return same semantic ACCEPTANCE_RECORDED; exactly one platform acceptance record | No duplicate authorization row or recovery_work_id |
+| HWA-01 | Broker commits recovery work as ACCEPTANCE_PENDING_PLATFORM, signs HWA and host outbox row, then crashes before returning response | Recovery Intent retry returns byte-identical HWA, acceptance_id, recovery_work_id and host_message_id from durable journal | No second work or generation; no worker activation, gate change or PHP executor fallback before confirmation |
+| HWA-02 | Broker crashes before HWA/outbox transaction is durable | No HWA/host_message_id is exposed; exact Recovery Intent retry may create one `ACCEPTANCE_PENDING_PLATFORM` work | No phantom platform acceptance, worker activation or mutation |
+| HWA-03 | Valid broker-signed HWA; durable platform recovery authorization exists for the exact Recovery Intent ID/digest and tuple | Persist exact HWA acceptance; return `ACCEPTANCE_RECORDED` with the same durable Work Acceptance Confirmation; broker remains `ACCEPTANCE_PENDING_PLATFORM` until that confirmation is verified and committed | No Receipt ACK v2, terminal state, worker activation, second work or gate release before confirmation |
+| HWA-04 | Platform response is lost after HWA durable commit; resend same host_message_id and exact bytes | Return same semantic `ACCEPTANCE_RECORDED` and byte-identical confirmation; exactly one platform acceptance record | No duplicate authorization row, confirmation, recovery_work_id or activation |
 | HWA-05 | Same host_message_id with changed HWA digest, work, site, tenant, Recovery Intent digest or recovery_work_id | DENIED/HOST_MESSAGE_CONFLICT; platform state unchanged and broker outbox retained | No acceptance, ACK, gate release or outbox deletion |
-| HWA-06 | Broker/HMR/network crash at each boundary before broker commit, after broker commit, after HMR journal, after platform commit and before response | Before commit: no HWA; after commit: exact same HWA/outbox row is retrievable; after platform commit: retry is idempotent | No phantom work, rebinding, duplicate work, Receipt ACK for HWA or gate change |
+| HWA-06 | Broker/HMR/network crash before/after HWA commit, during transfer, after platform HWA-acceptance commit, during confirmation relay, or after broker confirmation commit but before response | Before HWA commit: no exposed HWA/work; after HWA commit: exact HWA is retrievable and pending; after platform commit: same confirmation is returned; after broker confirmation commit: exact retry is idempotently accepted | No phantom or duplicate work, rebinding, worker activation before durable confirmation, Receipt ACK for HWA, or gate change |
+| RHA-01 | Laravel issues and persists one Restore Intent; broker accepts it and signs RESTORE HWA; Laravel receives exact HWA | One original restore/job row transitions to ACCEPTANCE_RECORDED with exact intent/HWA/acceptance/work/backup/manifest/scope/site tuple; same PWAC is durably issued | No broker object staging, fence, worker, restore-success state, Receipt ACK or gate change before broker stores PWAC |
+| RHA-02 | Valid-looking HWA has forged signature, unknown key, wrong purpose, or wrong acceptance signing key | Reject; original authorization/restore/job and broker work remain unchanged/pending | No acceptance record, PWAC, object transfer, ACK or activation |
+| RHA-03 | HWA has wrong/missing intent ID or digest, restore/job, backup/manifest/scope, tenant/site/Connector/provider/host, acceptance ID or work ID | Reject before state mutation; preserve exact broker HWA outbox | No success state, PWAC, cross-site mapping, Receipt ACK or gate change |
+| RHA-04 | Exact same RESTORE HWA resubmitted after committed Laravel response was lost | Return ALREADY_RECORDED and byte-identical PWAC for the unique original restore/job mapping | No second acceptance row, confirmation ID, broker work, or mutation |
+| RHA-05 | Same acceptance_id or work_id re-submitted with changed HWA digest or a different intent/restore/job/site | ACCEPTANCE_BINDING_MISMATCH/WORK_CONFLICT; preserve original row/outbox and broker state | No remapping, second active work, success, ACK, or gate release |
+| RHA-06 | Broker commits RESTORE HWA/outbox then Connector loses begin response or crashes | Exact begin retry/read_work_acceptance returns same HWA bytes, acceptance_id, work_id and digest | No duplicate work/generation; no activation before PWAC |
+| RHA-07 | Laravel commits acceptance and PWAC but API response is lost; Connector resubmits exact HWA | Same durable acceptance and byte-identical PWAC are returned; broker accepts exact PWAC once | No duplicate row/confirmation, no terminal success or gate release |
+| RHA-08 | Crash at each boundary: before broker HWA commit; after HWA commit; during HWA transfer; after Laravel acceptance commit; during PWAC delivery; after broker PWAC commit before response | Before durable HWA: no work exposed; after HWA: exact row retrievable; after Laravel commit: same PWAC recoverable; after broker confirmation commit: exact idempotent confirmation result | No phantom work, duplicate, premature object staging/fence/worker, ACK or gate change |
+| RHA-09 | Valid-looking Terminal Receipt arrives before HWA acceptance or without a unique matching RESTORE acceptance | ACCEPTANCE_NOT_FOUND/pending; no restore/job success transition; receipt retained for exact retry after HWA | No positive ACK v2, receipt prune, gate release or guessed mapping |
+| RHA-10 | RECOVERY HWA is submitted to RESTORE acceptance endpoint or RESTORE HWA to recovery route | Strict kind/schema mismatch denial; both durable authorization records unchanged | No cross-lifecycle acceptance, ACK, work substitution or gate action |
+| RKEY-01 | Receipt outer signature.key_id equals payload host_key_id; registered host/provider Terminal Receipt key active and valid; exact accepted work | Accept exact receipt if all other bindings hold; persist one outcome | No acceptance under another signing purpose |
+| RKEY-02 | Outer signature.key_id differs from payload host_key_id (even if one signature verifies under either key) | Reject before durable transition | No success state, ACK v2, pruning or gate release |
+| RKEY-03 | Cryptographically correct receipt signature uses HWA, ACK, intent, unknown or wrong-purpose key | Reject KEY_PURPOSE_MISMATCH/KEY_UNKNOWN; records unchanged | No receipt acceptance or positive ACK |
+| RKEY-04 | Correctly signed receipt key is registered to a different provider/host or outside validity | Reject; preserve receipt/outbox and current platform state | No cross-host acceptance, ACK, pruning or gate release |
+| RKEY-05 | Key is RETIRED_VERIFY_ONLY with exact receipt ID/digest pre-registered outstanding before cutoff; then REVOKED or COMPROMISED variant | Uncompromised retired exact outstanding receipt may verify under §12.2; revoked/compromised variants reject and require audited reconciliation | No new receipt accepted under retired key; no revoked/compromised acceptance, ACK, prune or gate release |
+| RKEY-06 | Exact outstanding receipt under K1 arrives during approved K1/K2 overlap; new receipts use active K2 | Verify K1 only for exact pre-registered outstanding digest; K2 validates new receipts | No old key for new outcome; no loss/rebinding of outstanding receipt or replay state |
 | HMR-06 | Host-originated message submitted with missing/forged host_message_id or a platform delivery_id substituted | Reject unless ID/digest/kind/host/relay/work matches exact broker outbox record | No cross-namespace replay or message acceptance |
 | OBJ-01 | Interrupted fixed-object transfer | Work remains STAGING; resume exact offsets/digests | No execution of partial object |
 | OBJ-02 | Duplicate chunk, conflicting offset/content, bad final digest | Exact duplicate idempotent; conflict/mismatch denied | No overwrite of accepted immutable object |
@@ -619,7 +722,21 @@ Required test evidence records exact broker/platform states, durable records bef
 | Platform delivery ID | Not applicable | Not applicable | Not embedded in broker receipt/HWA | Not embedded in ACK | Laravel durable delivery row only; never identifies host-originated messages |
 | Host message ID | Not applicable | Not a signed-intent field | Not embedded in signed receipt/HWA | Not embedded in ACK | Broker durable outbox row binds host_message_id to kind, host/relay, nested digest, receipt_id or acceptance_id and work; HMR retries same row |
 
-Every API operation MUST follow this ledger. In the normal path the Connector retrieves an exact durable broker receipt after an eligible site reopen, Laravel processes it once and returns ACK v2 through the Connector. In the closed-site path HMR submits a host-originated receipt or HWA using broker host_message_id; Laravel returns ACK_READY only for terminal receipts and ACCEPTANCE_RECORDED only for a persisted HWA. Platform-originated Recovery Intent uses the separate platform delivery_id namespace. Manual fallback uses the same nested signatures and broker validations through fixed audited interfaces. The broker's private generation lookup remains internal.
+### RESTORE/RECOVERY HWA acceptance and confirmation source ledger
+
+| Value | Normal RESTORE source/binding | RECOVERY source/binding | Creator/verifier and durable state |
+|---|---|---|---|
+| Signed Restore Intent ID and envelope digest | Laravel durable restore/job authorization; exact canonical outer-envelope bytes | Parent Restore Intent plus separately approved Recovery Intent ID/digest | Laravel signs and stores before dispatch; broker reserves one exact intent/work |
+| HWA `acceptance_id` / `work_id` | Broker durable RESTORE work and HWA outbox | Broker durable recovery child work and HWA outbox | Broker signs after durable commit; Laravel verifies against exactly one matching intent/authorization |
+| HWA authorization tuple | Exact restore intent, restore/job, backup/manifest/scope, tenant/site/Connector/provider/host | Exact parent restore/job, trigger receipt, Recovery Intent, recovery work, safety backup/manifest/scope, same identity tuple | Broker derives from verified signed intent, host map and durable work; Laravel independently compares |
+| Platform Work Acceptance Confirmation | HWA exact envelope digest and normal RESTORE tuple | HWA exact envelope digest and recovery authorization tuple | Laravel signs only after acceptance row commit; broker verifies against its HWA/outbox/private work record and persists before activation |
+| Platform acceptance idempotency | (site_id, restore_uuid, job_uuid, RESTORE, restore_intent_id, exact intent digest); acceptance_id and work_id unique | Exact recovery authorization row keyed by recovery intent ID/digest and exact trigger/parent; acceptance_id and recovery_work_id unique | Same bytes return same durable confirmation; any conflicting mapping denies without mutation |
+| Broker activation authority | Durable Work Acceptance Confirmation plus complete verified immutable input; broker then controls fence/generation | Same confirmation requirement; separate Recovery Intent still required; site stays fenced | Broker-private journal only; Laravel/Connector/HMR confirmation does not itself release a gate |
+| HWA / confirmation retry source | Broker HWA outbox/read_work_acceptance; Laravel durable acceptance/confirmation row; Connector outbox | Broker HWA outbox/cursor; Laravel recovery authorization/confirmation row; HMR journal | Exact bytes/digest survive lost response and process/network crash; retries never allocate new work |
+
+
+
+Every API operation MUST follow this ledger. Normal RESTORE is: Laravel persists and signs Restore Intent → Connector/agent submits exact bytes to begin_restore_handoff.v1 → broker durably records work and RESTORE HWA/outbox in ACCEPTANCE_PENDING_PLATFORM → Connector reads/relays unchanged HWA to the dedicated Laravel acceptance API → Laravel verifies and commits the exact HWA to the original restore/job, then returns a stable signed Work Acceptance Confirmation → Connector relays exact confirmation to the broker → broker durably confirms before allowing object staging/activation → isolated worker executes → broker persists Terminal Receipt v2 → Laravel reconciles only against the accepted work and signs ACK v2 → broker records ACK, then applies separate gate policy. Lost responses repeat identical IDs and bytes; out-of-order receipt before HWA acceptance has no success transition or ACK. Closed-site RECOVERY keeps its HMR route: HMR submits recovery HWA to Laravel, receives ACCEPTANCE_RECORDED plus the signed confirmation (never Receipt ACK), and relays it to the broker. In both flows the confirmation only proves durable platform acceptance and cannot release the gate; Receipt ACK v2 is terminal-only. Platform-originated Recovery Intent uses the separate delivery_id namespace. The broker's private generation lookup remains internal.
 
 
 ### 15.1 Complete payload-field provenance registry
@@ -636,7 +753,7 @@ The following registry closes the field-level source gap for each wire payload. 
 | `signature.key_id` | Registered key ID; signer key registry | Signer → receiver | Must resolve to correct issuer, purpose, owner, validity and key; equal payload `key_id` where defined |
 | `signature.value` | Canonical unpadded base64url of 64 signature bytes | Signer → receiver | Verify over schema-specific domain separator, NUL, and JCS(payload) |
 
-Restore Intent and Recovery Intent payload fields have their individual type, source, producer/verifier, and binding rows in §§4–5. Those tables are normative and complete for those two payloads.
+Restore Intent, Recovery Intent, HWA and Work Acceptance Confirmation fields have their individual source, producer/verifier, and binding rows in §§4–6 and in this registry. Those tables are normative and complete for each closed payload.
 
 #### Host Work Acceptance v1
 
@@ -662,13 +779,29 @@ Restore Intent and Recovery Intent payload fields have their individual type, so
 | `accepted_at` | Broker trusted clock | Broker → Laravel | UTC RFC3339; covered by host signature |
 | `key_id` | Host acceptance signing-key registry | Broker → Laravel | Acceptance-purpose active/overlap key; not a generation |
 
+#### Platform Work Acceptance Confirmation v1
+
+| Field | Type / authoritative source | Producer → verifier | Binding / validation |
+|---|---|---|---|
+| `schema`, `iss`, `aud` | Literal schema, Laravel issuer, registered broker audience | Laravel → broker | Exact protocol version and direction |
+| `confirmation_id` | UUID stored with the one committed platform acceptance row | Laravel → broker | Stable for exact HWA digest; unique per acceptance |
+| `acceptance_id`, `acceptance_sha256` | Verified broker HWA and exact canonical envelope bytes | Laravel → broker | Exact HWA and broker outbox row |
+| `work_kind`, `work_id` | Verified HWA and durable platform authorization | Laravel → broker | Strict RESTORE/RECOVERY union and exact broker work |
+| identity tuple and `restore_uuid/job_uuid` | Authenticated Connector pairing or HMR identity plus durable website/job records, checked against HWA | Laravel → broker | Exact tenant/site/Connector/provider/host and original restore/job |
+| `authorization` | Closed union copied from verified HWA and durable authorization row | Laravel → broker | RESTORE binds intent ID/digest, backup/manifest/scope; RECOVERY binds parent/trigger/Recovery Intent/work/safety backup/manifest/scope |
+| `confirmed_at`, `key_id` | Laravel trusted clock and dedicated confirmation-key registry | Laravel → broker | Signed timestamp; key purpose PLATFORM_WORK_ACCEPTANCE_CONFIRMATION, registered active key; no host generation |
+| `signature` | Ed25519 over domain separator + NUL + JCS(payload) | Laravel → broker | Canonical bytes, exact purpose/key status; not ACK v2, not gate-release authority |
+
+
+
 #### Terminal Receipt v2 and ACK v2
 
 The common receipt and ACK field types and source rules are fully specified in §§7–8. The table below makes the required origin and verification path explicit; outcome-result unions remain exactly those listed in §§7.2 and 8.
 
 | Field group | Authoritative source / creator | Verifier | Exact binding |
 |---|---|---|---|
-| Receipt `schema`, `issuer`, `audience`, `host_key_id` | Protocol registry and host broker key registry; broker creates | Laravel | Exact v2 schema, registered host, intended platform, receipt-signing purpose |
+| Receipt `schema`, `issuer`, `audience`, `host_key_id` | Protocol registry and host broker key registry; broker creates | Laravel | Exact v2 schema; `signature.key_id == payload.host_key_id`; key belongs to provider/host, Terminal Receipt signing purpose and allowed lifecycle status |
+| Receipt outer `signature.key_id` | Host Terminal Receipt key registry | Broker signs; Laravel verifies | MUST equal `payload.host_key_id` byte-for-byte; registered provider/host and Terminal Receipt purpose/status checked before signature acceptance |
 | Receipt `receipt_id` | Broker CSPRNG and durable receipt row | Laravel and broker on retries | One immutable outcome/work row; never reused with different digest |
 | Receipt tenant/site/Connector/provider/host tuple | Broker's verified immutable registration and accepted work | Laravel | Exact original work's identity tuple |
 | Receipt `restore_uuid`, `job_uuid` | Original accepted restore record | Laravel | Remain original IDs for all recovery outcomes |
@@ -713,7 +846,7 @@ The WAN schemas are authenticated by the registered mTLS certificate; local HMR-
 
 Closed responses:
 - Poll response, wp-caregrid.hmr-poll-response.v1: schema, request_id, relay_id, provider_id, host_id, result, next_platform_delivery_id, delivery, server_time. result is OK or a stable denial enum. OK has one delivery or null when none is available; denial has null delivery and cursor.
-- Submit response, wp-caregrid.hmr-submit-response.v1: schema, request_id, host_message_id, relay_id, provider_id, host_id, result, ack_sha256, ack_b64url, completed_at, error_code. ACK_READY is Terminal Receipt only and requires both ACK fields. ACCEPTANCE_RECORDED is HWA only and requires null ACK fields/error_code. DENIED requires null ACK fields and a stable error_code.
+- Submit response, wp-caregrid.hmr-submit-response.v1: schema, request_id, host_message_id, relay_id, provider_id, host_id, result, ack_sha256, ack_b64url, acceptance_confirmation_sha256, acceptance_confirmation_b64url, completed_at, error_code. ACK_READY is Terminal Receipt only; only ACK fields are non-null. ACCEPTANCE_RECORDED is HWA only; only Work Acceptance Confirmation fields are non-null. DENIED has all four artifact fields null and a stable error_code.
 - HMR-broker request, wp-caregrid.hmr-broker-rpc.v1: schema, request_id, relay_id, provider_id, host_id, operation, payload. Response, wp-caregrid.hmr-broker-response.v1: schema, request_id, result, payload; payload is a strict operation-specific union.
 
 | Schema / field | Type and authoritative source | Producer → verifier | Binding / idempotency |
@@ -743,6 +876,7 @@ Closed responses:
 | response.host_message_id/request_id/relay_id/provider_id/host_id | Echo of authenticated request plus registration | Laravel → HMR | Must match exact submitted row |
 | response.result | Laravel durable processing result | Laravel → HMR | ACK_READY iff receipt; ACCEPTANCE_RECORDED iff verified HWA; DENIED has no success side effect |
 | response.ack_sha256/ack_b64url | Laravel durable receipt processing row; absent for HWA | Laravel → HMR | Exact platform-signed ACK v2 only for ACK_READY; null otherwise |
+| response.acceptance_confirmation_sha256/b64url | Laravel durable HWA acceptance row and deterministic confirmation envelope | Laravel → HMR | Exact platform-signed Work Acceptance Confirmation only for ACCEPTANCE_RECORDED; null otherwise; never a Receipt ACK |
 | response.completed_at/error_code | Laravel trusted clock/stable error enum | Laravel → HMR | UTC RFC3339; no secret diagnostic |
 | broker RPC request_id | HMR durable local request journal | HMR → broker | Exact retry idempotent |
 | broker RPC relay_id/provider_id/host_id | OS peer credential plus fixed broker registration | HMR ↔ broker | Request values must equal socket identity |
