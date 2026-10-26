@@ -2,7 +2,7 @@
 
 - **Status:** Proposed for independent M17 AppSec re-review; final Owner architecture approval required before implementation
 - **Date:** 2026-10-26
-- **Review basis:** M17 identified the closed-site recovery transport gap at [PR #190 comment 6410907234](https://github.com/zsoltacsai/wpcaregrid/pull/190#issuecomment-6410907234). This revision proposes an independent host management control plane and an audited manual host-console fallback; it does not claim either is implemented or validated.
+- **Review basis:** M17 identified the closed-site recovery transport gap at [PR #190 comment 6410907234](https://github.com/zsoltacsai/wpcaregrid/pull/190#issuecomment-6410907234), then found outcome-ambiguous recovery authorization binding at [comment 6411511806](https://github.com/zsoltacsai/wpcaregrid/pull/190#issuecomment-6411511806). This revision proposes an independent host management control plane, audited manual fallback, and outcome-specific receipt/ACK bindings; none is implemented or operationally validated.
 - **Tracking:** [Issue #189](https://github.com/zsoltacsai/wpcaregrid/issues/189)
 - **Architecture review:** M17 v1 review was BLOCKED at [PR #190 comment 6404599176](https://github.com/zsoltacsai/wpcaregrid/pull/190#issuecomment-6404599176). This v2 addresses its five technical blockers; it does not claim M17 has accepted them.
 - **Baseline:** claude/ecstatic-wozniak-oemyuf at de54ed273478ec6739cf27a40c8eda27697f0974
@@ -121,22 +121,22 @@ Recovery is a distinct mutation class and uses a separate Signed Recovery Intent
       "tenant_id": "immutable-tenant-id",
       "site_id": "immutable-website-id",
       "connector_id": "active-connector-id",
-      "receipt_id": "RECOVERY_REQUIRED receipt UUID",
-      "receipt_sha256": "64-lowercase-hex-of-exact-signed-receipt-envelope",
-      "intent_id": "original restore intent UUID",
+      "recovery_trigger_receipt_id": "RECOVERY_REQUIRED receipt UUID",
+      "recovery_trigger_receipt_sha256": "64-lowercase-hex-of-exact-signed-receipt-envelope",
+      "original_restore_intent_id": "original restore intent UUID",
       "recovery_intent_id": "new UUID",
-      "restore_uuid": "original restore UUID",
-      "job_uuid": "original restore job UUID",
+      "original_restore_uuid": "original restore UUID",
+      "original_job_uuid": "original restore job UUID",
       "safety_backup_uuid": "immutable safety backup UUID",
       "safety_manifest_sha256": "64-lowercase-hex",
-      "scope": "files|database|full",
+      "recovery_scope": "files|database|full",
       "nonce": "base64url-32-random-bytes",
       "issued_at": "UTC RFC3339 timestamp",
       "expires_at": "UTC RFC3339 timestamp",
       "key_id": "platform-recovery-signing-key-id"
     }
 
-The platform signature uses a distinct domain separator such as WPCAREGRID-RESTORE-RECOVERY-INTENT-V1 followed by NUL and a recovery-authorized key purpose. It does not contain broker_generation. Laravel sources fields from its durable receipt, original restore/job, tenant/site/Connector, registered provider/host and separately approved safety-backup records. The broker binds the receipt ID and exact digest to its durable RECOVERY_REQUIRED work record, checks its private current generation and site mapping, and rejects missing, stale, ambiguous, terminal-incompatible or wrong-generation mappings. It atomically reserves the recovery intent ID and nonce before acknowledging. Identical retransmission returns the same recovery work; changed payload, duplicate nonce for another work, expiry, revoked key or clock rollback is rejected. Exact lifetime, clock skew, retention and key rotation policy remain contract-PR requirements.
+The platform signature uses a distinct domain separator such as WPCAREGRID-RESTORE-RECOVERY-INTENT-V1 followed by NUL and a recovery-authorized key purpose. It does not contain broker_generation. After signing the canonical envelope, Laravel computes SHA-256 over the exact signed envelope bytes and persists that digest with the approved Recovery Intent ID and immutable authorization tuple before delivery. Laravel sources fields from its durable RECOVERY_REQUIRED receipt, original restore/job, tenant/site/Connector, registered provider/host and separately approved safety-backup records. The broker binds the receipt ID and exact digest to its durable RECOVERY_REQUIRED work record, checks its private current generation and site mapping, and rejects missing, stale, ambiguous, terminal-incompatible or wrong-generation mappings. It atomically reserves the recovery intent ID and nonce before acknowledging. Identical retransmission returns the same recovery_work_id; changed payload, duplicate nonce for another work, expiry, revoked key or clock rollback is rejected. A distinct later attempt requires a new separately approved Recovery Intent bound to the then-current RECOVERY_REQUIRED receipt and cannot overlap an active or ambiguous recovery work item. Exact lifetime, clock skew, retention and key rotation policy remain contract-PR requirements.
 
 ## 5. Connector-to-host-worker handoff
 
@@ -144,13 +144,13 @@ The current #182 path runs restore mutation in Connector PHP. The supported-prov
 
 1. **Platform authorization:** Laravel stores the restore/job and exact immutable backup/manifest/scope binding, then returns the signed intent with the authenticated job. A duplicate request is rejected or resolves to the same active restore.
 2. **Connector validation and transfer:** Connector validates the authenticated response and performs only non-destructive manifest/object checks. It streams bounded backup objects to the per-site agent. It does not unzip into the live site.
-3. **Durable host acceptance:** Agent relays intent and stream to the broker. Broker verifies intent and bindings, records nonce/work reservation, validates complete object digests, and durably records ACCEPTED. It returns a bounded acknowledgement with only required correlation IDs; no host generation or lease secret is returned to Laravel.
+3. **Durable host acceptance:** Agent relays the normal Restore Intent and stream to the broker. Broker verifies intent and bindings, records nonce/work reservation, validates complete object digests, and durably records ACCEPTED. Recovery Intent acceptance is a separate state-specific operation: broker verifies the exact trigger receipt/digest, recovery authorization envelope/digest and backup/scope bindings, allocates exactly one recovery_work_id, and durably records that recovery work before acknowledging it. It returns only required correlation IDs; no host generation or lease secret is returned to Laravel.
 4. **Durable Connector handoff:** Connector writes its restricted restore marker/outbox entry for the accepted work item and returns from the poll/request promptly. It records HANDOFF_ACCEPTED, not restore success. The marker is recovery linkage, not host enforcement.
 5. **No FPM self-drain:** Broker starts gate acquisition asynchronously after handoff acceptance. It never waits for the calling PHP-FPM request inside that request. It closes ingress, then waits until the current request and all site cgroup descendants have exited. Only then does it stop/fence the dedicated pool and prove the cgroup empty. If the caller does not exit within the bound, restore mutation does not start; the site remains closed/blocked for reconciliation. It does not kill an unknown process and assume safety.
 6. **Writer fencing and gate acquisition:** Broker confirms every control in §6, persists QUIESCENT for the exact internal generation, and only then allows worker launch.
 7. **Isolated execution:** Broker starts the fixed verified worker under a separate restore-worker identity, private mount namespace, site-only writable volume, exact site DB credentials, bounded resources and no arbitrary network/subprocess access. FPM/Connector has no live write path.
-8. **Authenticated result relay:** Broker verifies worker exit, work binding, durable mutation state, DB/filesystem evidence and required checks. It creates, signs and fsyncs a Terminal Receipt in its durable host outbox. The broker reopens the site only after the verified terminal state is durable and all release conditions pass. Once the Connector is safely available again, it retrieves the exact stored receipt through the agent's read-only typed interface and relays it to Laravel over the existing authenticated platform channel. Laravel durably processes the exact receipt before issuing a platform-signed ACK; the agent does not relay directly to Laravel.
-9. **Idempotent retry and receipt lifecycle:** Interrupted delivery retransmits the same stored receipt. Laravel returns the same durable ACK for an already processed receipt; the broker retains the receipt until it verifies and durably records that signed ACK. Invalid, absent, mismatched, replayed, delayed, or lost ACKs cannot authorize pruning. Duplicate identical receipts/ACKs do not create another transition or work item. The ACK contains no broker generation: the broker resolves the ACK's receipt ID/digest and platform-known work bindings to exactly one durable accepted-work record, then checks that record's private generation against its receipt/outbox state. Missing, ambiguous, corrupt, or wrong-generation work mapping rejects the ACK and preserves the receipt. Conflicting, stale, invalidly signed, wrong-tenant/scope/backup receipts are rejected and cannot release the host gate. Exact retention, acknowledgement, pruning and recovery semantics are contract-PR acceptance criteria.
+8. **Authenticated result relay:** Broker verifies worker exit, exact work binding, durable mutation state, DB/filesystem evidence and required checks. It creates the strict outcome-specific Terminal Receipt v2 (including the exact recovery authorization and trigger bindings for RECOVERY_SUCCESS), signs and fsyncs it in the durable host outbox. The broker reopens the site only after the verified terminal state is durable and all release conditions pass. Once the Connector is safely available again, it retrieves the exact stored receipt through the agent's read-only typed interface and relays it to Laravel over the existing authenticated platform channel. Laravel durably processes the exact receipt before issuing a platform-signed ACK; the agent does not relay directly to Laravel.
+9. **Idempotent retry and receipt lifecycle:** Interrupted delivery retransmits the same stored receipt. Laravel returns the same durable outcome-specific ACK for an already processed receipt; the broker retains the receipt until it verifies and durably records that signed ACK. Invalid, absent, mismatched, replayed, delayed, or lost ACKs cannot authorize pruning. Duplicate identical receipts/ACKs do not create another transition or work item. The ACK contains no broker generation: for normal outcomes the broker resolves the ACK's receipt ID/digest and outcome binding to exactly one durable restore-work record; for RECOVERY_SUCCESS it resolves the recovery receipt ID/digest, recovery intent ID/digest, recovery-work ID, original-work and backup/scope bindings to exactly one durable recovery-work record. It then checks the record's private generation and receipt/outbox state. Missing, ambiguous, corrupt, or wrong-generation work mapping rejects the ACK and preserves the receipt. Conflicting, stale, invalidly signed, wrong-tenant/scope/backup receipts are rejected and cannot release the host gate. Exact retention, acknowledgement, pruning and recovery semantics are contract-PR acceptance criteria.
 
 ~~~mermaid
 sequenceDiagram
@@ -186,10 +186,10 @@ sequenceDiagram
     C->>L: Relay over authenticated platform channel (retryable/idempotent)
     L->>L: Verify signature and intent binding; update once
     L->>L: Durably process exact receipt; persist stable ACK record
-    L-->>C: Sign ACK from platform-known receipt/work bindings; no broker generation
+    L-->>C: Sign outcome-specific ACK v2 from verified receipt and durable authorization/work bindings; no broker generation
     C->>A: Relay signed ACK through typed interface
     A->>B: Submit signed ACK; broker verifies signature/bindings
-    B->>B: Resolve unique accepted work by receipt/digest + intent/site bindings
+    B->>B: Resolve unique restore-work record by receipt/digest and exact normal outcome binding
     B->>B: Verify private generation mapping; fail closed on missing/ambiguous/mismatch
     B->>B: Persist ACK idempotently; prune receipt only after durable ACK
 ~~~
@@ -198,13 +198,13 @@ Handoff does not authorize scanner jobs, backups, notifications, remediation, qu
 
 ### 5.1 Closed-site host management control plane
 
-The normal path above remains Connector-mediated while the site runtime is healthy and has been safely reopened. It is not the recovery transport. When the site is fenced or in RECOVERY_REQUIRED, the Connector/PHP/FPM process is assumed unavailable.
+The normal path above uses outcome-specific receipt v2 and ACK v2; it remains Connector-mediated while the site runtime is healthy and has been safely reopened. It is not the recovery transport. When the site is fenced or in RECOVERY_REQUIRED, the Connector/PHP/FPM process is assumed unavailable.
 
 In that state the independent HMR drains the broker's durable, host-signed receipt outbox over fixed local IPC and sends the exact signed envelope to Laravel over outbound mTLS. Laravel verifies the enrolled host key and receipt bindings, then durably processes the receipt before returning the existing platform-signed ACK. HMR forwards that exact ACK to the broker. The broker independently verifies platform signature, receipt digest and exact durable work bindings, resolves its private generation mapping, and persists ACK before pruning. ACK is never an unlock command.
 
-Separately, only after the platform's Owner/customer authorization workflow approves recovery, Laravel issues a new platform-signed **Recovery Intent** with a distinct protocol/domain and key purpose. It binds the registered host/provider and exact tenant/site/Connector, RECOVERY_REQUIRED receipt ID and digest, restore/job IDs, immutable safety-backup ID and digest, permitted recovery scope, expiry, nonce and key ID. The HMR obtains this envelope through its authenticated outbound channel and forwards bytes over the fixed broker IPC. The broker—not Laravel, HMR, or a caller UID—checks signature, issuer/audience, registered host/site/work mapping, current broker-private generation, exact receipt state, backup/scope binding, expiry, durable nonce/intent replay state, key status and permitted recovery transition. Recovery begins only after the broker durably accepts this distinct intent and re-proves the site's writer/ingress fence. A RECOVERY_REQUIRED receipt alone never authorizes mutation.
+Separately, only after the platform's Owner/customer authorization workflow approves recovery, Laravel issues a new platform-signed **Recovery Intent** with a distinct protocol/domain and key purpose. It binds the registered host/provider and exact tenant/site/Connector, RECOVERY_REQUIRED receipt ID and digest, original Restore Intent/restore/job IDs, immutable safety-backup ID and manifest digest, permitted recovery scope, expiry, nonce and key ID. Laravel stores the Recovery Intent ID and SHA-256 of the exact signed envelope in the durable authorization record before delivery. The HMR obtains this envelope through its authenticated outbound channel and forwards the exact bytes over fixed broker IPC. The broker—not Laravel, HMR, or a caller UID—checks signature, issuer/audience, signed-envelope digest, registered host/site/work mapping, current broker-private generation, exact RECOVERY_REQUIRED receipt ID/digest and original work, backup/manifest/scope binding, expiry, durable nonce/intent replay state, key status and permitted recovery transition. It creates one unique recovery_work_id and durably binds it to that exact authorization before returning the correlation ID; Laravel persists the returned ID against the same authorization. Recovery begins only after the broker durably accepts this distinct intent and re-proves the site's writer/ingress fence. A RECOVERY_REQUIRED receipt alone never authorizes mutation. On completion, the broker's RECOVERY_SUCCESS result identifies both original work and recovery work, the exact trigger receipt and its digest, the accepted Recovery Intent ID and signed-envelope digest, and the actual safety backup/manifest/scope used.
 
-HMR's broker IPC accepts only typed operations such as read_pending_signed_receipt, submit_platform_signed_receipt_ack, submit_platform_signed_recovery_intent, and bounded read_channel_status. The actual API names are proposals. The interface has no arbitrary method, path, SQL, command, unit, environment, URL, unlock, gate-release, receipt-prune, or restore operation. Broker IPC caller identity is an additional restriction, never a substitute for cryptographic message verification. Host/site identity and authorization source for every envelope are recorded in the protocol matrix below.
+HMR's broker IPC accepts only typed operations such as read_pending_signed_receipt, submit_platform_signed_receipt_ack, submit_platform_signed_recovery_intent, and bounded read_channel_status. The actual API names are proposals. The interface has no arbitrary method, path, SQL, command, unit, environment, URL, unlock, gate-release, receipt-prune, or restore operation. Broker IPC caller identity is an additional restriction, never a substitute for cryptographic message verification. Host/site identity and authorization source for every envelope are recorded in the protocol matrix below. The outcome-specific receipt/ACK binding is matched to one Laravel authorization and one broker recovery-work record; no generic outcome-dependent intent or backup field is used.
 
 If the HMR, platform endpoint, DNS/TLS path, or network is unavailable, messages remain durable and retry idempotently; the HMR uses an outbound authenticated long-poll/request-response channel so the platform can return pending signed intents without opening inbound host ingress. There is no automatic unlock, implicit success, destructive retry, expiry-based discard, or switch to Connector PHP while fenced. A host reboot starts with ingress and writers fenced before site services start; broker reconciliation runs first, and HMR reconnects afterward to deliver the same receipt or retrieve the same pending authorized intent. A missing/invalid/revoked identity or replayed/stale envelope is rejected and audited; the site remains fenced.
 
@@ -234,53 +234,81 @@ Broker fences:
 
 Broker reports acquired only after every control acknowledges the exact site/state, no in-flight writers remain, and durable state agrees. Missing evidence, unsupported edge/DB/provider APIs, shared PHP-FPM, shared writable storage, direct DB access or unknown writer is NO-GO. flock and Connector locks are cooperative serialization only, not isolation.
 
-## 7. Verified Terminal Receipt v1 proposal
+## 7. Outcome-specific Verified Terminal Receipt v2
 
-Only the root broker creates a terminal receipt, after independently checking the accepted intent, internal current generation, worker identity/exit, durable mutation marker, exact input manifest, output/evidence digest, DB/filesystem result, and required non-mutating health checks. Worker cannot release the gate or sign a host receipt. Broker stores the receipt durably before a release transition. A caller-supplied success flag is insufficient.
+Only the root broker creates a terminal receipt after independently checking accepted work, the current private generation, worker identity/exit, durable mutation state, exact input manifest, output/evidence digest, site DB/filesystem result and required non-mutating checks. The worker cannot release the gate or sign a host receipt. Broker durably stores the signed receipt/outbox before any release transition. A caller-supplied success flag is insufficient.
 
-The receipt is canonical JSON signed with a site/provider-specific Ed25519 host key. Laravel pins the public key through a separately approved provider-enrollment flow. It includes:
+The canonical JSON envelope is signed with the enrolled site/provider Ed25519 host key. Laravel pins and validates that key through provider enrollment. The common envelope uses `wp-caregrid.restore-terminal.v2` and contains only fields whose meanings are invariant across outcomes:
 
     {
-      "schema": "wp-caregrid.restore-terminal.v1",
+      "schema": "wp-caregrid.restore-terminal.v2",
       "issuer": "registered-host-broker",
       "audience": "wpcaregrid-platform",
-      "receipt_id": "uuid",
-      "intent_id": "uuid",
+      "receipt_id": "unique UUID",
       "tenant_id": "immutable-tenant-id",
       "site_id": "immutable-website-id",
       "connector_id": "active-connector-id",
-      "restore_uuid": "uuid",
-      "job_uuid": "uuid",
-      "backup_uuid": "uuid",
-      "manifest_sha256": "64-lowercase-hex",
-      "scope": "files|database|full",
-      "outcome": "RESTORE_SUCCESS|SAFE_PRE_MUTATION_ABORT|RECOVERY_SUCCESS|RECOVERY_REQUIRED",
-      "mutation_started": true,
-      "failure_stage": "bounded-enum-or-null",
+      "provider_id": "reviewed-provider-id",
+      "host_id": "registered-host-id",
+      "restore_uuid": "original restore UUID",
+      "job_uuid": "original restore job UUID",
+      "outcome": "RESTORE_SUCCESS|SAFE_PRE_MUTATION_ABORT|RECOVERY_REQUIRED|RECOVERY_SUCCESS",
+      "result": "strict outcome-specific object defined below",
       "evidence_sha256": "64-lowercase-hex",
-      "started_at": "UTC RFC3339 timestamp",
       "finished_at": "UTC RFC3339 timestamp",
       "host_key_id": "registered-host-signing-key-id"
     }
 
-The receipt omits the internal generation and lease token. Broker durably binds intent/receipt IDs to the exact internal generation, so the signed receipt is generation-bound without disclosing that generation to Laravel or logs. Platform verifies it against the original intent and atomically records its unique receipt ID and final state. Identical replay is idempotent; conflicting replay is rejected.
+There is deliberately no common `intent_id`, `backup_uuid`, `manifest_sha256`, `scope`, or `mutation_started`: those values are outcome-specific. Each `outcome` selects exactly one result schema; fields from another variant, missing required fields, unknown fields, or mismatched outcome/result schema are rejected.
 
-Outcome rules:
+### Outcome-specific result schemas
 
-- **RESTORE_SUCCESS:** apply and approved integrity/health checks completed; broker persists terminal evidence; gate may reopen in controlled order.
-- **SAFE_PRE_MUTATION_ABORT:** broker proves no live DB/file write intent or mutation occurred and the work item is abandoned. Missing proof forbids this outcome.
-- **RECOVERY_SUCCESS:** separately authorized recovery completed and passed checks under a new bound recovery intent/generation. Only then may the broker reopen.
-- **RECOVERY_REQUIRED:** mutation began or state is ambiguous, checks failed, evidence is missing, or a critical process crashed. Gate stays closed. This receipt reports state; it never authorizes release.
+- **RESTORE_SUCCESS — `wp-caregrid.restore-success.v1`**: `restore_intent_id`, unique `restore_work_id`, `backup_uuid`, `manifest_sha256`, `restore_scope`, and `restore_mutation_started=true`. These identify the original authorized restore inputs and work.
+- **SAFE_PRE_MUTATION_ABORT — `wp-caregrid.restore-safe-abort.v1`**: `restore_intent_id`, unique `restore_work_id`, `backup_uuid`, `manifest_sha256`, `restore_scope`, `restore_mutation_started=false`, and `no_mutation_proof_sha256`. This outcome applies only to original restore work before any mutation; a recovery attempt that aborts before its own mutation retains the prior RECOVERY_REQUIRED state and cannot emit this outcome as if the original restore were safe.
+- **RECOVERY_REQUIRED — `wp-caregrid.restore-recovery-required.v1`**: common result fields are `failure_origin=ORIGINAL_RESTORE|RECOVERY_ATTEMPT`, `original_restore_intent_id`, `original_restore_work_id`, `original_backup_uuid`, `original_manifest_sha256`, `original_restore_scope`, durable `overall_mutation_state=STARTED|AMBIGUOUS`, and bounded `failure_stage`. For `ORIGINAL_RESTORE`, only that variant is present. For `RECOVERY_ATTEMPT`, a required nested `failed_recovery` object with schema `wp-caregrid.restore-failed-recovery.v1` binds `recovery_trigger_receipt_id`, `recovery_trigger_receipt_sha256`, `recovery_intent_id`, `recovery_intent_envelope_sha256`, `recovery_work_id`, `safety_backup_uuid`, `safety_manifest_sha256`, `recovery_scope`, and `recovery_mutation_state=NOT_STARTED|STARTED|AMBIGUOUS`. No optional ambiguous fields are allowed. Either variant leaves the site RECOVERY_REQUIRED and fenced; a pre-mutation recovery abort cannot be misreported as SAFE_PRE_MUTATION_ABORT for the original restore.
+- **RECOVERY_SUCCESS — `wp-caregrid.restore-recovery-success.v1`**: the exact bindings below; no generic intent/backup/scope field is used.
 
-Before the first live DB/file write, broker durably records mutation_started=true and verifies the active gate. A crash between that record and the first write is conservatively treated as destructive/ambiguous. No automatic destructive compensation is allowed. Pre-release health checks must be enumerated and proven non-mutating. If WordPress boot requires writes, use an isolated verification copy or keep the site closed for manual review.
+    {
+      "schema": "wp-caregrid.restore-recovery-success.v1",
+      "original_restore_intent_id": "original Signed Restore Intent UUID",
+      "original_restore_work_id": "original accepted restore-work UUID",
+      "recovery_trigger_receipt_id": "RECOVERY_REQUIRED receipt UUID",
+      "recovery_trigger_receipt_sha256": "digest of exact signed receipt envelope",
+      "recovery_intent_id": "separately authorized Recovery Intent UUID",
+      "recovery_intent_envelope_sha256": "digest of exact signed Recovery Intent envelope",
+      "recovery_work_id": "unique broker-accepted recovery-work UUID",
+      "recovery_scope": "files|database|full",
+      "safety_backup_uuid": "exact immutable backup actually used",
+      "safety_manifest_sha256": "digest of the exact safety-backup manifest",
+      "recovery_mutation_started": true
+    }
+
+For RECOVERY_SUCCESS, the common `restore_uuid` and `job_uuid` always identify the original restore/job. The result object's `original_restore_intent_id` and `original_restore_work_id` identify the original accepted work; the trigger receipt fields bind the exact RECOVERY_REQUIRED event; the Recovery Intent ID plus signed-envelope digest bind the platform authorization that the broker actually accepted; and the recovery work, scope and safety-backup fields identify the distinct recovery execution and its actual source. Tenant/site/Connector/provider/host remain common immutable bindings. No field changes meaning by outcome.
+
+The Recovery Intent envelope digest is computed over the exact canonical signed envelope bytes, including its signature and key identifier, and stored by Laravel in the durable recovery-authorization record when that authorization is issued. The broker records the same exact digest when accepting the envelope. The RECOVERY_SUCCESS result copies that value from the broker's accepted recovery-work record, not from worker-supplied data.
+
+### Laravel receipt acceptance
+
+Laravel verifies the host signature/key status, common identity tuple and outcome/result schema before state transition. For RESTORE_SUCCESS and SAFE_PRE_MUTATION_ABORT it reconciles the exact restore-intent ID, restore-work ID, original restore/job, backup/manifest/scope and outcome invariants to the durable original authorization. For RECOVERY_REQUIRED it does the same against the original restore authorization and records the exact signed receipt ID/digest as the recovery trigger. For RECOVERY_SUCCESS it additionally requires exactly one durable Laravel recovery-authorization record matching recovery intent ID **and exact signed-envelope digest**, original intent/work and restore/job, trigger receipt ID/digest, site/tenant/Connector/provider/host, safety-backup UUID/manifest and scope. The record must represent the Recovery Intent actually approved and issued; merely valid host signature is insufficient. A RECOVERY_REQUIRED result with failure_origin=RECOVERY_ATTEMPT must also match exactly one prior Laravel recovery-authorization record and the referenced failed recovery-work ID, trigger receipt digest, attempted backup/manifest/scope and nested failed_recovery fields; an unaccepted/rejected Recovery Intent cannot be fabricated into a terminal attempt receipt.
+
+Missing, mismatched, stale, replayed, duplicate/ambiguous, or cross-attempt bindings cause no successful platform state transition and no positive ACK. Identical receipt replay returns the same durable outcome/ACK only after full reconciliation; conflicting reuse of a receipt ID is rejected. The signed receipt contains no internal generation or lease token. Broker retains its own exact work-to-generation mapping privately.
+
+### Outcome and gate invariants
+
+- **RESTORE_SUCCESS:** the original restore inputs were applied and approved checks passed. Broker may reopen only after verified terminal state is durable and controlled-release checks pass.
+- **SAFE_PRE_MUTATION_ABORT:** durable proof shows no mutation intent/write occurred; that work item is terminal and cannot execute later.
+- **RECOVERY_REQUIRED:** mutation started or state is ambiguous; gate stays closed. The receipt reports this state and does not authorize recovery.
+- **RECOVERY_SUCCESS:** a separately authorized Recovery Intent was accepted, one exact recovery work item used the specified safety backup/scope and passed verification. Broker may reopen only after the recovery result and required checks are durably verified. ACK is not a gate-release signal.
+
+Before every first live DB/file mutation, broker durably records that operation's mutation-started state and verifies its active private generation. A crash between that record and first write is conservatively destructive/ambiguous. No automatic destructive compensation or retry is allowed. Pre-release health checks must be enumerated and non-mutating; if WordPress boot needs writes, use an isolated verification copy or keep the site closed.
 
 ## 8. Durable state ownership, atomicity and reconciliation
 
 ### Authoritative state
 
-- **Laravel database:** business request, selected backup/scope, tenant authorization, platform job and customer-facing state. Stores signed-intent digest/key IDs and verified receipt, not host generation, lease token, broker journal or secrets.
+- **Laravel database:** business request, selected backup/scope, tenant authorization, platform job and customer-facing state. Stores normal/recovery intent IDs and exact signed-envelope digests, immutable approval bindings, broker-returned recovery_work_id, verified outcome-specific receipts and ACK records, not host generation, lease token, broker journal or secrets.
 - **Connector marker/outbox:** durable relay pointer from Connector job to handoff/receipt. Not authority to open the host gate.
-- **Root broker state store:** authoritative host enforcement state. Stores accepted intent ID/hash/nonce, work state, site/restore/job binding, internal generation and previous/pending/current generations, control acknowledgements, mutation state, signed receipt/outbox, ACK retention state, and durable recovery authorization/replay state.
+- **Root broker state store:** authoritative host enforcement state. Stores accepted normal/recovery intent IDs and exact envelope digests/nonces, unique original and recovery work IDs, trigger receipt IDs/digests, site/restore/job/backup/scope bindings, internal generation and previous/pending/current generations, control acknowledgements, mutation state, outcome-specific signed receipt/outbox, ACK retention state, and durable recovery authorization/replay state.
 - **Host Management Relay:** transport cursor/retry metadata only; not authoritative work, receipt, ACK, generation, replay, or gate state. Its authenticated host identity proves the channel endpoint, while each protocol envelope is separately signature-verified by Laravel or broker.
 - **Per-site agent:** ephemeral orchestration/cache only.
 - **Restore worker:** immutable accepted input plus ephemeral work; never gate/terminal authority.
@@ -338,7 +366,7 @@ No TTL, Connector disappearance, PHP restart, reboot, absent marker or stale pro
 | After ACCEPTED, before gate | Query returns the same work item; activation is idempotent. Cancellation only after broker reconciles its own effects and proves no mutation. |
 | During caller/FPM drain | Worker does not start. Unknown writer means remain closed and require reconciliation. |
 | During gate acquire | Resume the same generation and inspect each control. No unrelated generation. |
-| Before first live mutation | Safe abort only with durable proof no mutation intent/write occurred; reopen only after own control state is reconciled. |
+| Before first live mutation | For original restore work, SAFE_PRE_MUTATION_ABORT requires durable proof of no mutation and may reopen only after its control state is reconciled. For a recovery attempt, preserve the parent RECOVERY_REQUIRED fence and report that attempt distinctly; never relabel it as an original restore abort or reopen. |
 | During/after DB or file mutation | No automatic duplicate restore. Preserve artifacts/gate; issue RECOVERY_REQUIRED and require a separately authorized Recovery Intent. |
 | After worker result, before receipt persistence | Reconstruct only from durable evidence; otherwise persist RECOVERY_REQUIRED and remain closed. |
 | After receipt persistence, before delivery/ACK | HMR retries the exact signed receipt; Laravel processes once and returns the same durable signed ACK. Broker retains receipt until ACK signature, exact work mapping and persistence are verified. |
@@ -363,6 +391,18 @@ Recovery uses named roles, exact site/restore/work/backup/scope, dual approval w
 | Manual fallback | Provider-authenticated console, fixed broker-owned typed submission/status interface, audited evidence transfer | Same signed Recovery Intent and broker validation; separate Owner operation approval and named operator; signed receipt/ACK retain normal verification | Provider console authenticates operator access, not recovery authorization; broker/Laravel remain authoritative for their respective state |
 
 The HMR's mTLS identity is enrolled/revoked independently from platform signing keys. It is scoped to one registered host and only to the registered site set; each message carries a site ID that the broker maps locally to an immutable site/provider/host tuple. The relay cannot assert or rebind that mapping. HMR certificates, broker host-signing keys, Laravel intent/ACK keys, rotation overlap, revocation propagation, clock-skew/rollback policy, audit retention, payload bounds, retry limits and protocol version negotiation are mandatory contract-PR requirements. No single transport credential is accepted as a protocol signature.
+
+### Outcome field-source and correlation invariants
+
+| Signed message/result | Issuer-side source | Durable receiver-side record and acceptance rule |
+|---|---|---|
+| Signed Restore Intent | Laravel's committed restore/job authorization, immutable backup manifest, selected scope, tenant/site/active Connector and registered provider/host; platform key record | Broker verifies signature and exact bindings, then persists intent ID, exact envelope digest, nonce and one original restore_work_id before acceptance. |
+| Signed Recovery Intent | Laravel's approved RECOVERY_REQUIRED receipt and exact signed receipt digest, original restore/job, a separately approved safety-backup manifest/scope, host/site identity and recovery key record; Laravel persists the exact signed envelope digest | Broker verifies all envelope fields and signature, current RECOVERY_REQUIRED state, exact private generation mapping and replay state; it creates one recovery_work_id and durably records the full tuple before returning the ID for Laravel to persist. |
+| RESTORE_SUCCESS / SAFE_PRE_MUTATION_ABORT / RECOVERY_REQUIRED receipt | Broker's authoritative work journal, mutation evidence, immutable input manifest and current private generation; each result branch has its own strict schema | Laravel checks the branch against its exact normal Restore Intent and job/backup records; SAFE abort additionally requires durable no-mutation evidence, and RECOVERY_REQUIRED records the exact signed receipt ID/digest used by any later recovery. A RECOVERY_ATTEMPT result also matches one durable prior recovery authorization/work record and its exact failed-recovery nested binding. |
+| RECOVERY_SUCCESS receipt | Broker's accepted recovery-work record, exact trigger receipt, accepted Recovery Intent signed-envelope digest, original work mapping, actual safety-backup input/manifest, scope and private generation | Laravel requires one exact durable recovery-authorization record matching the complete result and common tenant/site/Connector/provider/host bindings before it may transition to success or issue ACK v2. |
+| Outcome-specific platform ACK v2 | Laravel's committed outcome transition, exact verified receipt, matching durable authorization/work record and ACK signing-key record | Broker matches receipt ID/digest, outcome and full result_binding to exactly one original or recovery work record, checks its private generation, then durably records ACK before receipt pruning. |
+
+The recovery_work_id is assigned by the broker only after durable acceptance and returned as a bounded correlation value; Laravel persists it against the exact recovery authorization. If that response is lost, identical Recovery Intent retry returns the same ID. The value is not a bearer capability. The platform-signed Recovery Intent digest is computed over the exact canonical signed envelope including signature and key ID, and is never supplied by the worker.
 
 ### Crash/recovery sequence diagram
 
@@ -394,10 +434,10 @@ sequenceDiagram
         B->>H: Expose pending signed receipt via fixed local IPC
         H->>L: Relay exact receipt over outbound mTLS
         L->>L: Verify host signature/bindings; durably record once
-        L-->>H: Return platform-signed receipt ACK
+        L-->>H: Return outcome-specific platform-signed ACK v2 binding receipt and exact result
         H->>B: Forward exact ACK via fixed broker IPC
         B->>B: Verify ACK, exact receipt/work map and private generation; persist before prune
-        L->>L: Obtain separate Owner recovery authorization; bind exact safety backup/scope
+        L->>L: Persist separate Owner recovery authorization and signed-envelope digest; bind exact safety backup/scope
         L-->>H: Deliver distinct signed Recovery Intent through management channel
         H->>B: Forward opaque intent via fixed IPC
         B->>B: Verify platform signature, identity, nonce/replay, expiry, receipt/work/generation and scope
@@ -405,11 +445,11 @@ sequenceDiagram
         B->>W: Start only the accepted recovery work
         W->>D: Apply exact authorized safety recovery
         W-->>B: Bounded result and evidence digest
-        B->>B: Verify result; persist/sign RECOVERY_SUCCESS receipt
+        B->>B: Sign RECOVERY_SUCCESS with original work, trigger receipt digest, Recovery Intent envelope digest, recovery_work_id, actual safety backup/manifest/scope
         B->>E: Reopen in controlled order only after verified recovery success
         B->>H: Publish recovery receipt in durable outbox
         H->>L: Relay exact signed receipt while Connector/FPM may remain stopped
-        L->>L: Durably process receipt and return stable signed ACK
+        L->>L: Durably process receipt and return stable outcome-specific signed ACK v2
         H->>B: Forward ACK; broker verifies mapping and persists before pruning
     else HMR or network unavailable
         Note over B,H: Retain receipt/state; no unlock, no Connector fallback, no destructive retry
@@ -457,35 +497,62 @@ Current RestoreIsolationGateProvider methods alone are insufficient for async ho
 
 Exact method signatures, result enums, schema migrations, key enrollment/rotation, backwards compatibility, and Laravel job-state mapping require contract review. Old Connector mutation code must not remain as fallback when provider is absent. Unsupported hosts continue to refuse before live mutation. Backup creation, verification and download remain independent.
 
-The separate contract PR must make the following mandatory acceptance criteria explicit and testable: (1) nonce and intent-ID retention, replay prevention, and safe pruning; (2) receipt identity, durable outbox, platform-acknowledgement, retry, retention/pruning, and crash-recovery lifecycle; (3) host/platform key enrollment, rotation overlap, revocation, and compromised-key handling; (4) clock-skew bounds, monotonic/rollback behavior, expiry and reboot handling; (5) terminal-outcome invariants, including that SAFE_PRE_MUTATION_ABORT is impossible after any durable mutation-start evidence and RECOVERY_REQUIRED never reopens the site; and (6) ACK-to-work reconciliation using receipt ID/digest plus exact platform-known work bindings, with deterministic rejection tests for absent, ambiguous, corrupt, or wrong-generation broker mappings and proof that rejection preserves the receipt; (7) closed-site HMR transport authentication, host/site enrollment and scoping, outbound-only reconnect/retry, message integrity, and no dependence on PHP/FPM/Connector; (8) distinct recovery-intent signature purpose, exact RECOVERY_REQUIRED receipt/work/backup/scope/generation mapping, expiry/nonce/replay/revocation, and denial with durable fencing; (9) HMR/network loss, host reboot, lost/duplicate receipt or intent, and connector-stopped delivery; (10) ACK and receipt retention/pruning over HMR and manual fallback; and (11) manual-console receipt/intent/ACK transfer, dual authorization/audit and Laravel reconciliation, with no generic root command. ADR v2 records these as unresolved contract requirements; it does not define final wire encodings, availability guarantees, recovery-time SLOs or operational proof.
+The separate contract PR must make the following mandatory acceptance criteria explicit and testable: (1) nonce and intent-ID retention, replay prevention, and safe pruning; (2) receipt identity, durable outbox, platform-acknowledgement, retry, retention/pruning, and crash-recovery lifecycle; (3) host/platform key enrollment, rotation overlap, revocation, and compromised-key handling; (4) clock-skew bounds, monotonic/rollback behavior, expiry and reboot handling; (5) terminal-outcome invariants, including that SAFE_PRE_MUTATION_ABORT is impossible after any durable mutation-start evidence and RECOVERY_REQUIRED never reopens the site; and (6) ACK-to-work reconciliation using receipt ID/digest plus exact platform-known work bindings, with deterministic rejection tests for absent, ambiguous, corrupt, or wrong-generation broker mappings and proof that rejection preserves the receipt; (7) closed-site HMR transport authentication, host/site enrollment and scoping, outbound-only reconnect/retry, message integrity, and no dependence on PHP/FPM/Connector; (8) distinct recovery-intent signature purpose, exact RECOVERY_REQUIRED receipt/work/backup/scope/generation mapping, expiry/nonce/replay/revocation, and denial with durable fencing; (9) HMR/network loss, host reboot, lost/duplicate receipt or intent, and connector-stopped delivery; (10) ACK and receipt retention/pruning over HMR and manual fallback; and (11) manual-console receipt/intent/ACK transfer, dual authorization/audit and Laravel reconciliation, with no generic root command; (12) strict outcome-specific Terminal Receipt and ACK schemas, with field-source proofs and no outcome-dependent generic intent/backup/scope fields; (13) RECOVERY_SUCCESS correlation to exactly one persisted Laravel recovery authorization and broker recovery-work record, including trigger receipt ID/digest, Recovery Intent ID/exact signed-envelope digest, original intent/restore/job, recovery_work_id, actual safety backup/manifest and scope; and (14) negative tests for every missing/wrong/duplicate/stale/ambiguous binding and private-generation mismatch, proving no success transition, no gate release, no positive ACK and no receipt pruning. ADR v2 records these as unresolved contract requirements; it does not define final wire encodings, availability guarantees, recovery-time SLOs or operational proof.
 
-### Proposed platform-signed Terminal Receipt ACK v1
+### Outcome-specific platform-signed Terminal Receipt ACK v2
 
-Laravel emits an ACK only after it has durably processed the exact signed receipt and committed the corresponding idempotent platform state transition. The ACK is a protocol message signed with an Ed25519 platform key over RFC 8785 canonical JSON with a domain separator such as `WPCAREGRID-TERMINAL-RECEIPT-ACK-V1\0`. The broker trusts only explicitly enrolled platform public keys and verifies the signature before accepting the ACK.
+Laravel signs an ACK only after verifying the host-signed receipt, matching its outcome-specific binding to durable authorization/work records, and committing the corresponding idempotent platform state transition. It uses Ed25519 over RFC 8785 canonical JSON with a distinct domain such as `WPCAREGRID-TERMINAL-RECEIPT-ACK-V2\0`. The broker accepts only enrolled, currently valid platform ACK keys.
 
-Proposed signed fields (all are covered by the signature):
+The ACK common envelope is `wp-caregrid.terminal-receipt-ack.v2`. It has a strict `outcome`-discriminated `result_binding` union; no generic `intent_id`, `backup_uuid`, or `scope` appears in the common envelope.
 
     {
-      "schema": "wp-caregrid.terminal-receipt-ack.v1",
+      "schema": "wp-caregrid.terminal-receipt-ack.v2",
       "iss": "wpcaregrid-platform",
-      "ack_id": "uuid",
-      "receipt_id": "uuid",
-      "receipt_sha256": "64-lowercase-hex-of-exact-stored-signed-receipt-envelope",
-      "intent_id": "uuid",
-      "restore_uuid": "uuid",
-      "job_uuid": "uuid",
+      "ack_id": "stable UUID for this receipt/outcome",
+      "receipt_id": "host-signed receipt UUID",
+      "receipt_sha256": "SHA-256 of exact signed receipt envelope bytes",
+      "outcome": "RECOVERY_SUCCESS",
       "tenant_id": "immutable-tenant-id",
       "site_id": "immutable-website-id",
       "connector_id": "active-connector-id",
       "provider_id": "reviewed-provider-id",
       "host_id": "registered-host-id",
+      "restore_uuid": "original restore UUID",
+      "job_uuid": "original restore job UUID",
+      "result_binding": {
+        "schema": "wp-caregrid.restore-recovery-ack-binding.v2",
+        "original_restore_intent_id": "original Signed Restore Intent UUID",
+        "original_restore_work_id": "original accepted restore-work UUID",
+        "recovery_trigger_receipt_id": "RECOVERY_REQUIRED receipt UUID",
+        "recovery_trigger_receipt_sha256": "digest of exact signed trigger receipt envelope",
+        "recovery_intent_id": "approved Recovery Intent UUID",
+        "recovery_intent_envelope_sha256": "digest of exact signed Recovery Intent envelope",
+        "recovery_work_id": "unique broker-accepted recovery-work UUID",
+        "recovery_scope": "files|database|full",
+        "safety_backup_uuid": "exact immutable backup actually used",
+        "safety_manifest_sha256": "digest of exact safety-backup manifest",
+        "recovery_mutation_started": true
+      },
       "processed_at": "UTC RFC3339 timestamp",
-      "key_id": "platform-ack-signing-key-id"
+      "key_id": "platform ACK signing-key ID"
     }
 
-Every signed ACK field is available to Laravel from the receipt it received, its durable restore/job/site/tenant records, the active Connector and registered provider/host bindings, or its durable ACK/signing-key record; none requires reading broker-private state. The broker verifies the ACK signature and platform-known bindings, finds exactly one accepted-work record by the exact receipt ID and digest plus intent/restore/job/tenant/site/Connector/provider/host bindings, then checks the receipt's durable broker-private generation against that record and outbox entry. Generation is never sent to Laravel, included in the Terminal Receipt, or accepted from the ACK. Missing, duplicate/ambiguous, corrupted, or wrong-generation mappings reject ACK acceptance and leave the receipt unpruned. Only after successful verification does the broker atomically persist the ACK identity/digest and acknowledged receipt state (with implementation-reviewed durability guarantees) before pruning receipt bytes. A repeated identical ACK is an idempotent no-op; conflicting ACK IDs or bindings are rejected. A missing, invalid, late, replayed, or lost ACK never triggers automatic receipt deletion. If the platform committed ingestion but the ACK was lost, it returns the same durable ACK on receipt retry; pruning remains prohibited until the broker receives and commits it.
+Laravel's `result_binding` is a strict outcome-specific schema and mirrors the Terminal Receipt v2 result exactly:
 
-This is an architecture contract proposal, not an implemented protocol. The contract PR must define nonce and ACK-ID retention/pruning, stable ACK replay behavior, receipt/ACK recovery after either-side crash, public-key enrollment/rotation/revocation and compromise response, clock skew/rollback, and terminal-outcome invariants with deterministic negative and crash tests.
+| ACK outcome | Required result-binding fields |
+|---|---|
+| RESTORE_SUCCESS | `schema=wp-caregrid.restore-success-ack-binding.v2`, `restore_intent_id`, `restore_work_id`, `backup_uuid`, `manifest_sha256`, `restore_scope`, `restore_mutation_started=true` |
+| SAFE_PRE_MUTATION_ABORT | `schema=wp-caregrid.restore-safe-abort-ack-binding.v2`, `restore_intent_id`, `restore_work_id`, `backup_uuid`, `manifest_sha256`, `restore_scope`, `restore_mutation_started=false`, `no_mutation_proof_sha256` |
+| RECOVERY_REQUIRED | `schema=wp-caregrid.restore-recovery-required-ack-binding.v2`, `failure_origin`, `original_restore_intent_id`, `original_restore_work_id`, `original_backup_uuid`, `original_manifest_sha256`, `original_restore_scope`, `overall_mutation_state=STARTED|AMBIGUOUS`, `failure_stage`; for RECOVERY_ATTEMPT, exact `failed_recovery` object (schema and fields from §7) is mandatory |
+| RECOVERY_SUCCESS | `schema=wp-caregrid.restore-recovery-ack-binding.v2`, `original_restore_intent_id`, `original_restore_work_id`, `recovery_trigger_receipt_id`, `recovery_trigger_receipt_sha256`, `recovery_intent_id`, `recovery_intent_envelope_sha256`, `recovery_work_id`, `recovery_scope`, `safety_backup_uuid`, `safety_manifest_sha256`, `recovery_mutation_started=true` |
+
+The ACK `outcome` must equal the signed receipt outcome and its binding must exactly mirror that receipt's corresponding result object. Unknown/missing or cross-outcome fields are rejected.
+
+Laravel sources common values from the verified receipt and registered tenant/site/Connector/provider/host plus the original restore/job records; the result binding is copied from the signed receipt only after exact comparison with the durable source records. For RECOVERY_SUCCESS, Laravel also requires a unique durable recovery-authorization record containing the exact Recovery Intent ID and signed-envelope digest, trigger receipt ID/digest, original intent/work and restore/job, safety-backup UUID/manifest, scope and host/site identity. The ACK's `recovery_work_id` comes from the verified signed receipt and broker acceptance response, persisted in that same authorization/work record. `ack_id` and `processed_at` come from the durable ACK transaction; `key_id` comes from the platform signing-key record. No ACK field is sourced from broker-private generation state.
+
+The broker verifies the platform signature and `receipt_sha256`, outcome, receipt ID, all common bindings, and the exact outcome-specific result binding. For RECOVERY_SUCCESS it must match the ACK to exactly one durable accepted recovery-work record, including the exact Recovery Intent envelope digest and trigger receipt digest, then verify the broker-private generation mapping and the receipt/outbox record. Missing, malformed, replayed, conflicting, wrong-attempt, wrong-backup/scope, ambiguous or wrong-generation binding means no ACK acceptance, no positive terminal reconciliation and no receipt pruning. Generation is never transmitted to Laravel or included in any signed platform message. Broker persists the verified ACK ID/digest and acknowledged state durably before pruning receipt bytes. A byte-identical retry is idempotent; a conflicting reuse is rejected. Missing/lost ACK retains the receipt; Laravel returns the same durable ACK after retry.
+
+This is a proposed contract, not an implemented protocol. The future contract PR must define ACK/receipt retention and replay windows, stable outcome-specific ACK generation, crash recovery on both sides, host/platform key enrollment/rotation/revocation/compromise, clock policy, and strict schema-version migration with no ambiguous v1 fallback.
 
 ## 11. Answers to M17 v1 blockers
 
@@ -493,10 +560,11 @@ This is an architecture contract proposal, not an implemented protocol. The cont
 |---|---|---|
 | Connector-to-host-worker handoff and FPM self-drain | Connector validates immutable input, submits async handoff, persists marker/outbox and returns. Broker drains after caller exits; separate UID/process/mount/DB worker applies. | Duplicate/disconnect/caller-exit/FPM timeout/process-tree/no-PHP-write tests. |
 | Peer credentials are not authorization | Canonical Ed25519 Signed Restore Intent binds tenant/site/active Connector/restore/job/backup digest/scope/provider+host audience/expiry/nonce. Durable anti-replay. | Tamper, expiry, cross-site/tenant/provider, stale Connector, duplicate and nonce tests. |
-| No terminal proof and receipt lifecycle | Broker validates worker evidence and persists/signs a generation-bound Terminal Receipt; only a verified terminal state can release. Laravel durably processes the exact receipt before signing a platform ACK. The ACK omits internal generation; broker resolves its private generation through a unique durable receipt/work mapping before recording ACK or pruning. | Forged/missing/stale/conflicting receipt; forged ACK; wrong/missing/ambiguous generation-to-work mapping; crash/retry and no-prune-on-rejection tests. |
+| No terminal proof and receipt lifecycle | Broker validates worker evidence and persists/signs an outcome-specific Terminal Receipt. It binds the receipt/outbox to the broker-private generation in durable work state; generation is absent from the signed receipt and platform messages. Laravel durably processes the exact receipt and matching outcome-specific bindings before signing an ACK. The broker resolves its private generation through one unique durable work mapping before accepting the ACK or pruning. | Forged/missing/stale/conflicting receipt; forged ACK; wrong/missing/ambiguous generation-to-work mapping; crash/retry and no-prune-on-rejection tests. |
 | Durable-state ownership conflict | Laravel owns business state; Connector owns relay marker/outbox; root broker owns enforcement/generation/replay journal. Contract amendment permits private host state, no platform/log exposure. | Crash-consistency/fsync review, reboot/reconciliation, corruption/mismatch fail-closed tests. |
 | Least privilege | Per-site unprivileged agent, fixed root broker, isolated one-shot worker and site-specific FPM/UID/DB/volume. | Socket/cross-site tests, broker operation/syscall review, artifact pinning and escape tests. |
 | Closed-site recovery transport | Independent HMR with host-scoped mTLS and fixed typed IPC; signed envelopes remain end-to-end verified; manual fallback uses the same envelopes through audited fixed console interfaces. | FPM/Connector-stopped receipt/ACK tests; signed recovery-intent/replay tests; HMR/network/reboot faults; manual audit and Laravel reconciliation tests; unavailable paths stay fenced. |
+| Outcome-specific recovery proof | RECOVERY_SUCCESS and ACK v2 bind exact original restore, trigger receipt, approved Recovery Intent envelope digest, unique recovery work, actual safety backup/manifest/scope and host/site identity; broker checks its private generation mapping. | Field-source audit plus positive exact-match and negative wrong/missing/duplicate/old/ambiguous binding tests; no transition/ACK/prune/release on mismatch. |
 
 These are proposed resolutions, not completed implementation or evidence.
 
@@ -512,12 +580,15 @@ Before adding a provider ID to the allowlist, test:
 - Concurrent HTTP, cron, Action Scheduler, queue, CLI, updater, deploy, DB and filesystem writers; open DB sessions and independent non-cooperating filesystem writer.
 - Dedicated DB/volume credentials and sibling-site non-impact.
 - Wrong/stale generation in broker-private accepted-work state, commit retry, receipt replay, missing/forged receipt, outcome invariants, early finalize request, broker/agent/worker termination at every transition.
-- Signed ACK origin and all platform-known bindings; missing, duplicate/ambiguous, corrupted, or wrong-generation receipt-to-work mapping must reject ACK and preserve the receipt. Assert no generation is transmitted in the ACK, Terminal Receipt, Connector marker or Laravel state.
+- Signed ACK v2 origin and all platform-known bindings; each outcome ACK names the acknowledged receipt and strict result binding. For RECOVERY_SUCCESS, prove all Recovery Intent, trigger receipt, original work, unique recovery_work_id, actual backup/manifest and scope fields are available to Laravel from its receipt and durable authorization record. Missing, duplicate/ambiguous, corrupted, wrong-attempt, or wrong-generation receipt-to-work mapping rejects ACK and preserves the receipt. Assert no generation is transmitted in the ACK, Terminal Receipt, Connector marker or Laravel state.
 - Power loss/reboot between file fsync, directory fsync, DB transaction, edge ack, marker publish, mutation intent, DB/file apply, receipt persistence and release. Corrupt/missing state boots closed.
 - Stop WordPress, PHP-FPM and Connector and fence public ingress; prove HMR alone delivers the broker-signed RECOVERY_REQUIRED receipt to Laravel and relays the platform-signed ACK back without site-runtime execution.
 - HMR mTLS host identity enrollment, wrong-host/wrong-site mapping, expired/revoked host certificate or platform key, endpoint/certificate/key rotation, lost channel, reconnect after host reboot, outbound-only restriction, bounded payloads and audit records.
 - Lost, duplicated, reordered and delayed receipts, ACKs and recovery intents across HMR retries; exact duplicates are idempotent, conflicts/replays reject, and missing ACK retains the durable receipt.
 - Recovery Intent denial, expired/revoked/replayed key and nonce, altered receipt digest, wrong site/tenant/Connector/host/work/backup/scope, stale private generation mapping, and corrupted/ambiguous work mapping; assert no worker/mutation, no unlock, and durable RECOVERY_REQUIRED state.
+- RECOVERY_SUCCESS receipt field-source and Laravel authorization reconciliation: reject missing/wrong Recovery Intent ID or exact envelope digest; wrong original restore intent/work/restore/job; wrong trigger RECOVERY_REQUIRED receipt ID/digest; another safety backup or manifest; wrong scope/site/tenant/Connector/provider/host; another/duplicate recovery attempt; repeated, old, conflicting or ambiguous receipt; and wrong/missing/ambiguous private generation-to-recovery-work mapping, including every nested failed-recovery binding.
+- For every negative recovery-receipt/ACK case, assert no successful platform state transition, no positive ACK, no gate release, no ACK acceptance, and no receipt pruning. Positive controls prove one exact accepted recovery attempt can be reconciled idempotently and ACKed once.
+- Outcome-union schema tests: each of RESTORE_SUCCESS, SAFE_PRE_MUTATION_ABORT, RECOVERY_REQUIRED and RECOVERY_SUCCESS accepts only its own required fields; reject missing fields, unknown fields, cross-outcome result schemas, ambiguous generic intent/backup/scope fields, and inconsistent mutation/outcome invariants.
 - Management relay/network outage before receipt delivery, during intent delivery, during recovery, and before ACK; assert no Connector fallback, automatic unlock, implicit success, destructive retry, or receipt pruning.
 - Same-host sibling-site availability and isolation while HMR, broker and target-site gate operate; no relay identity or broker command can address another site.
 - Manual fallback: separate Owner approvals, provider-console identity, fixed typed interface, signed receipt export, Laravel verification/ACK, exact signed Recovery Intent submission, audit completeness and reconciliation. Any unavailable/ambiguous evidence leaves the site fenced.
@@ -555,7 +626,7 @@ M17 must explicitly accept or block this ADR and list residual gaps. Then reques
 
 ## 15. Current status and boundary
 
-- This revision proposes the independent closed-site HMR and fixed-interface manual host-console fallback in response to M17 comment 6410907234; M17 acceptance remains pending.
+- This revision addresses M17 comments 6410907234 and 6411511806 with an independent closed-site HMR/manual fallback and strict outcome-specific terminal-receipt/ACK bindings; independent M17 acceptance remains pending.
 - Customer backup/download is the default recovery capability. Host isolation is optional restore only for qualified hosts.
 - #191 remains separate.
 - Provider, HMR and manual-console interfaces are not implemented; COMPATIBILITY_RESTORE_ISOLATION_PROVIDER_IDS remains empty.
