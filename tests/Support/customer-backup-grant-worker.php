@@ -28,7 +28,9 @@ $app->make(Kernel::class)->bootstrap();
 Queue::fake();
 file_put_contents($directory.DIRECTORY_SEPARATOR.'ready-'.$index, (string) getmypid(), LOCK_EX);
 $deadline = microtime(true) + 20;
-while (! is_file($directory.DIRECTORY_SEPARATOR.'start') && microtime(true) < $deadline) usleep(1000);
+while (! is_file($directory.DIRECTORY_SEPARATOR.'start') && microtime(true) < $deadline) {
+    usleep(1000);
+}
 if (! is_file($directory.DIRECTORY_SEPARATOR.'start')) {
     fwrite(STDERR, "Customer download grant process barrier timed out.\n");
     exit(3);

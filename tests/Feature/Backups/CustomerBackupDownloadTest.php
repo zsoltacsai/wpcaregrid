@@ -249,14 +249,27 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
 {
     /** @var array<string, string> */
     public array $objects = [];
+
     public int $largestRead = 0;
+
     public int $largestConsumerChunk = 0;
+
     public bool $failWithSensitiveProviderMessage = false;
+
     public ?\Closure $afterRangeRead = null;
 
-    public function name(): string { return 'sftp'; }
+    public function name(): string
+    {
+        return 'sftp';
+    }
+
     public function put(string $key, $stream, int $size, string $sha256): void {}
-    public function verify(string $key, int $size, string $sha256): Verification { return Verification::passed(Verification::READBACK, $size); }
+
+    public function verify(string $key, int $size, string $sha256): Verification
+    {
+        return Verification::passed(Verification::READBACK, $size);
+    }
+
     public function readRange(string $key, int $offset, int $length): string
     {
         $this->largestRead = max($this->largestRead, $length);
@@ -268,7 +281,9 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
     }
     public function streamObject(string $key, callable $consume): int
     {
-        if ($this->failWithSensitiveProviderMessage) throw new \RuntimeException('private-fixture-secret');
+        if ($this->failWithSensitiveProviderMessage) {
+            throw new \RuntimeException('private-fixture-secret');
+        }
         $data = $this->objects[$key] ?? '';
         $bytes = 0;
         foreach (str_split($data, 16 * 1024) as $chunk) {
@@ -278,5 +293,8 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
         }
         return $bytes;
     }
-    public function delete(string $key): void { unset($this->objects[$key]); }
+    public function delete(string $key): void
+    {
+        unset($this->objects[$key]);
+    }
 }

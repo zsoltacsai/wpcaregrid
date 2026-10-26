@@ -43,7 +43,9 @@ class CustomerBackupDownloadConcurrencyTest extends TestCase
 
     protected function tearDown(): void
     {
-        if (isset($this->storageRoot)) $this->tearDownBackups();
+        if (isset($this->storageRoot)) {
+            $this->tearDownBackups();
+        }
         parent::tearDown();
     }
 
@@ -78,7 +80,9 @@ class CustomerBackupDownloadConcurrencyTest extends TestCase
             file_put_contents($directory.DIRECTORY_SEPARATOR.'start', 'go', LOCK_EX);
             $this->awaitFiles($directory, ['attempting-0', 'attempting-1']);
             DB::commit();
-            foreach ($processes as $process) $process->wait();
+            foreach ($processes as $process) {
+                $process->wait();
+            }
 
             $this->assertSame([true, true], array_map(static fn (Process $process) => $process->isSuccessful(), $processes), implode("\n", array_map(static fn (Process $process) => $process->getErrorOutput(), $processes)));
             $results = [
@@ -89,8 +93,14 @@ class CustomerBackupDownloadConcurrencyTest extends TestCase
             $this->assertSame($results[0]['grant_id'], $results[1]['grant_id']);
             $this->assertSame(1, BackupDownloadGrant::query()->where('backup_object_id', $object->id)->count());
         } finally {
-            if (DB::transactionLevel() > 0) DB::rollBack();
-            foreach ($processes as $process) if ($process->isRunning()) $process->stop(1);
+            if (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
+            foreach ($processes as $process) {
+                if ($process->isRunning()) {
+                    $process->stop(1);
+                }
+            }
             foreach (glob($directory.DIRECTORY_SEPARATOR.'*') ?: [] as $path) @unlink($path);
             @rmdir($directory);
         }
@@ -114,7 +124,9 @@ class CustomerBackupDownloadConcurrencyTest extends TestCase
     {
         $deadline = microtime(true) + 20;
         while (microtime(true) < $deadline) {
-            if (count(array_filter($names, static fn (string $name) => is_file($directory.DIRECTORY_SEPARATOR.$name))) === count($names)) return;
+            if (count(array_filter($names, static fn (string $name) => is_file($directory.DIRECTORY_SEPARATOR.$name))) === count($names)) {
+                return;
+            }
             usleep(1000);
         }
         $this->fail('Customer download grant processes did not reach the deterministic barrier.');

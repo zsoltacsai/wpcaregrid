@@ -2,9 +2,9 @@
 
 namespace App\Backups\Storage;
 
+use Closure;
 use phpseclib3\Crypt\PublicKeyLoader;
 use phpseclib3\Net\SFTP;
-use Closure;
 
 /**
  * SFTP storage. The server's host key must match the configured SHA256

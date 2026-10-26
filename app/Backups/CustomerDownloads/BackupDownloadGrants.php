@@ -303,16 +303,22 @@ final class BackupDownloadGrants
         }
         if ($match[1] === '') {
             $suffix = (int) $match[2];
-            if ($suffix < 1) throw new BackupDownloadRefused('RANGE_INVALID');
+            if ($suffix < 1) {
+                throw new BackupDownloadRefused('RANGE_INVALID');
+            }
             $length = min($suffix, $total);
             $start = $total - $length;
         } else {
             $start = (int) $match[1];
             $end = $match[2] === '' ? $total - 1 : min((int) $match[2], $total - 1);
-            if ($start >= $total || $end < $start) throw new BackupDownloadRefused('RANGE_INVALID');
+            if ($start >= $total || $end < $start) {
+                throw new BackupDownloadRefused('RANGE_INVALID');
+            }
             $length = $end - $start + 1;
         }
-        if ($length > $max) throw new BackupDownloadRefused('RANGE_TOO_LARGE');
+        if ($length > $max) {
+            throw new BackupDownloadRefused('RANGE_TOO_LARGE');
+        }
         return new DownloadRange($start, $length, $total, '');
     }
 
@@ -339,7 +345,9 @@ final class BackupDownloadGrants
 
     private function requireEnabled(): void
     {
-        if (! $this->enabled()) throw new BackupDownloadRefused('NOT_FOUND');
+        if (! $this->enabled()) {
+            throw new BackupDownloadRefused('NOT_FOUND');
+        }
     }
 
     private function recordFailure(BackupDownloadGrant $grant, string $code): void
