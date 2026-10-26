@@ -125,6 +125,7 @@ class CustomerBackupDownloadConcurrencyTest extends TestCase
         $deadline = microtime(true) + 20;
         while (microtime(true) < $deadline) {
             if (count(array_filter($names, static fn (string $name) => is_file($directory.DIRECTORY_SEPARATOR.$name))) === count($names)) {
+
                 return;
             }
             usleep(1000);

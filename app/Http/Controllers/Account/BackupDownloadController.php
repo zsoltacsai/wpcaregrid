@@ -117,6 +117,7 @@ final class BackupDownloadController extends Controller
             'OBJECT_INTEGRITY_MISMATCH', 'OBJECT_SIZE_MISMATCH', 'STORAGE_UNAVAILABLE', 'STORAGE_UNSUPPORTED' => 503,
             default => 409,
         };
+
         return response()->json(['code' => $exception->errorCode], $status, $status === 416 ? ['Content-Range' => 'bytes */'.max(0, $total ?? 0)] : []);
     }
 }

@@ -264,8 +264,7 @@ final class FakeStreamableBackupStorage implements BackupStorage, StreamableBack
         return 'sftp';
     }
 
-    public function put(string $key, $stream, int $size, string $sha256): void
-    {}
+    public function put(string $key, $stream, int $size, string $sha256): void {}
 
     public function verify(string $key, int $size, string $sha256): Verification
     {
