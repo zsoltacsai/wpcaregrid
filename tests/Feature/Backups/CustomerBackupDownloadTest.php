@@ -157,7 +157,7 @@ class CustomerBackupDownloadTest extends TestCase
         $response = $this->actingAs($user)->withHeader('Range', 'bytes=0-5')
             ->getJson(route('account.backup-downloads.content', $grant));
 
-        $response->assertGone()->assertExactJson(['code' => 'OBJECT_UNAVAILABLE']);
+        $response->assertGone()->assertExactJson(['code' => 'BACKUP_UNAVAILABLE']);
         $this->assertNotInstanceOf(StreamedResponse::class, $response->baseResponse);
     }
 

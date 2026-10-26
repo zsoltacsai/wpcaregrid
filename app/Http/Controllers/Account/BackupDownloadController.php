@@ -73,12 +73,9 @@ final class BackupDownloadController extends Controller
 
         $filename = 'backup-'.$grant->backup->uuid.'-'.$grant->backupObject->objectName()->filename();
         $response = response()->stream(function () use ($range, $grant, $grants): void {
-            $sent = 0;
+            $sent = strlen($range->bytes);
             try {
-                if (connection_aborted() === false) {
-                    echo $range->bytes;
-                    $sent = strlen($range->bytes);
-                }
+                echo $range->bytes;
             } finally {
                 $grants->recordResponse($grant, $sent, $sent === $range->length && connection_aborted() === false);
             }
