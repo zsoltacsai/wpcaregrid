@@ -63,3 +63,35 @@ Required evidence before the Owner can approve cutover:
 - Exclusive staging window, rollback SHA, operator, stop conditions, and post-cutover health checklist.
 
 Until these are independently verified and approved, staging cutover is **NO-GO**. Production remains out of scope.
+
+## Compatibility and release-gate matrix (reviewed 2026-10-28)
+
+This is a CI/source snapshot, not host evidence. Recheck the primary branch, ruleset and exact-SHA push run immediately before any later cutover.
+
+| Layer | Current automated coverage | Limit |
+| --- | --- | --- |
+| Laravel server | PHP 8.4 and 8.5, each against MySQL 8.4; full server test suite and that PHP lane's MySQL process-concurrency gate | No Laravel PHP 8.5 SQLite or MariaDB lane |
+| Laravel SQLite regression | PHP 8.4 targeted SQLite regression gate | Does not establish PHP 8.5 SQLite compatibility |
+| WordPress Connector | PHP 8.2–8.5 across WordPress 6.8/7.1 and the workflow database matrix; protected PHP 8.4 / WordPress 7.1 SQLite, MySQL and MariaDB contexts | Connector compatibility is separate from Laravel server runtime coverage |
+
+The seven protected contexts at review time are Quality; Server PHP 8.4/MySQL; Server PHP 8.5/MySQL; Server SQLite/PHP 8.4; and Connector PHP 8.4/WordPress 7.1 SQLite, MySQL and MariaDB. Both server MySQL jobs include their own process-concurrency gate. Do not remove the PHP 8.4 rollback lane, change the workflow, or infer host readiness from these tests.
+
+At this snapshot, the application declares PHP `^8.3`, Laravel `^13.17`, and Composer's lock platform is PHP `^8.3`; the resolved Laravel lock version is 13.33.0. These constraints admit PHP 8.5 but are not a substitute for runtime validation. Laravel 13's documented minimum is PHP 8.3 and its documented extension set includes Ctype, cURL, DOM, Fileinfo, Filter, Hash, Mbstring, OpenSSL, PCRE, PDO, Session, Tokenizer and XML. The deployment contract additionally requires `intl`, `zip`, `pdo_mysql`, and `pcntl` for CLI queue workers. Validate the real PHP 8.5 CLI and FPM runtimes with the protected `composer check-platform-reqs --no-dev --lock` gate plus the application-specific extension checks; do not use `--ignore-platform-reqs`. The Composer command checks locked package requirements, so it does not replace checks for application-specific extensions.
+
+## PHP security advisory preflight
+
+The PHP project lists PHP 8.4.27 and 8.5.12 as the October 2026 releases fixing CVE-2026-109618 and CVE-2026-109619. The version alone does not prove that a distro package came from the expected signer; the Ondřej PHP PPA signer and cached InRelease signature must be independently verified before package use.
+
+A separate PHP notice dated 2026-10-23 recommends setting `session.upload_progress.enabled=0` until a later regular bugfix release, for an unusual session-serialization configuration that can expose an RCE path. Before cutover, recheck the current PHP advisory and the effective setting for both CLI and FPM profiles, and verify the application does not switch `session.serialize_handler` at runtime before session start. If the notice still applies and the effective setting or application behavior is unknown, STOP; any configuration change needs its own Owner approval and verification. Do not expose a public phpinfo page.
+
+## Time-bounded rehearsal and acceptance
+
+Proposed window: one exclusive 60-minute staging window, with its calendar start approved by the Owner and Integration & QA. If the window starts without all gates green, or a required step cannot complete before expiry, retain the maintenance gate and stop for review. This proposal does not authorize a backup, package change, service restart or cutover.
+
+1. **Before the window:** capture a same-day sanitized read-only host inventory; verify PPA key fingerprint and signed InRelease; record exact primary release SHA and all seven protected checks; verify PHP 8.5 CLI/FPM package versions, required extensions, FPM pool UID/GID, socket owner/mode, selector scope, Supervisor commands and live worker binaries; resolve the PHP 7.4 inventory; verify current PHP advisories and effective session settings.
+2. **Backup and drain gate:** obtain a separate Owner GO for a fresh staging backup using the documented protected backup mechanism. Confirm the backup worker is idle and no backup transfer/job is active; never interrupt a running backup. Drain queue work gracefully under the controller's pause/lock procedure. Verify the backup manifest and integrity, confirm the recorded database recovery point, and obtain recoverability evidence from an approved isolated verification. If drain or integrity verification fails, do not switch PHP.
+3. **Cutover:** only after the exact branch-tip / CI gate, host preparation and approvals pass, run the protected controller with the exact approved SHA and `--php-runtime 8.5`. Do not manually edit the Nginx selector, Supervisor, scheduler, alternatives or service state.
+4. **Post-switch checks:** while the maintenance gate remains active, verify the selected FPM socket/pool and worker identity, run `composer check-platform-reqs --no-dev --lock` under PHP 8.5, verify both Supervisor workers' live executable and version, scheduler heartbeat/interpreter, Laravel system health, HTTPS smoke checks, and unchanged behavior for sibling vhosts using PHP 8.4. Compare against the recorded PHP 8.4 baseline (including its existing Connector and backup-storage warnings); any new error, 5xx, missing heartbeat, wrong executable/socket, extension mismatch or unexplained warning is STOP.
+5. **Rollback:** use the controller's separately approved PHP 8.4 baseline SHA with `--rollback ... --php-runtime 8.4`. Keep PHP 8.4.27 CLI/FPM packages, shared FPM service/socket and worker/scheduler profile intact. Confirm PHP 8.4.27 is selected, both workers and scheduler resolve to the 8.4 profile, platform requirements and health pass, sibling vhosts are healthy, and only then clear the gate. Do not automatically roll back or restore database state; if the release applied migrations or changed data, keep the gate and obtain a separate database recovery decision.
+6. **Integration & QA acceptance:** accept only after reviewing sanitized pre/post receipts, the exact SHA and CI, package-signature evidence, backup integrity/recoverability evidence, selected PHP versions for FPM/CLI/workers/scheduler, smoke/health results, and rollback readiness. Owner cutover approval remains a separate decision.
+
