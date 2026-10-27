@@ -1,7 +1,7 @@
-@props(['content', 'trustIndicators', 'sites', 'updateRun'])
+@props(['content', 'trustIndicators'])
 
 <section aria-labelledby="hero-title" class="pt-8 pb-16 sm:pt-12 sm:pb-20 lg:pt-16 lg:pb-24" @if ($content->fallbackLang()) lang="{{ $content->fallbackLang() }}" @endif>
-    <x-ui.container class="grid items-center gap-12 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] lg:gap-16">
+    <x-ui.container class="max-w-3xl">
         <div>
             <p class="mb-4 text-xs font-semibold tracking-[0.12em] text-muted uppercase">{{ $content['eyebrow'] }}</p>
 
@@ -26,6 +26,5 @@
             </ul>
         </div>
 
-        <x-dashboard.dashboard-preview :sites="$sites" :update-run="$updateRun" />
     </x-ui.container>
 </section>
