@@ -58,8 +58,8 @@ return [
         'title' => 'What maintenance includes',
         'items' => [
             'updates' => ['title' => 'Updates', 'text' => 'WordPress, plugins and themes'],
-            'backups' => ['title' => 'Backups', 'text' => 'Files and database stored remotely'],
-            'security' => ['title' => 'Security', 'text' => 'Vulnerability and malware checks'],
+            'backups' => ['title' => 'Backups', 'text' => 'Backups for supported setups; separate storage where configured'],
+            'security' => ['title' => 'Security', 'text' => 'Plan-specific scheduled security checks'],
             'functional' => ['title' => 'Functional checks', 'text' => 'We verify important functions after updates'],
         ],
     ],
@@ -78,10 +78,10 @@ return [
     'verification' => [
         'eyebrow' => 'Update process',
         'title' => "We don't just update. We check.",
-        'lead' => 'Our maintenance process includes a backup, update, technical check and functional verification.',
+        'lead' => 'Where supported by the plan and site setup, maintenance includes a backup, updates, technical checks and functional verification.',
         'step_label' => 'Step :number',
         'steps' => [
-            'backup' => ['title' => 'Backup', 'text' => 'A fresh backup is made before anything changes.', 'result' => 'Verified'],
+            'backup' => ['title' => 'Backup', 'text' => 'A pre-update backup is made where the plan and site setup support it.', 'result' => 'Verified'],
             'update' => ['title' => 'Update', 'text' => 'Core, plugins and themes are updated in a controlled order.', 'result' => 'Updated'],
             'check' => ['title' => 'Check', 'text' => 'We confirm the site loads without errors.', 'result' => 'No errors'],
             'functional' => ['title' => 'Functional test', 'text' => 'Key pages, forms and logins are tested.', 'result' => 'Passed'],
@@ -98,7 +98,7 @@ return [
     'dashboard' => [
         'eyebrow' => 'Dashboard',
         'title' => 'All your websites in one place.',
-        'lead' => 'Health, backups, updates, security and license status for every site you have with us.',
+        'lead' => 'Review available health, backup, update, security and license information for websites connected to your account.',
         'demo_note' => 'Illustrative figures, not real customer data.',
         'metrics_label' => 'Example dashboard metrics (demo data)',
     ],
@@ -145,10 +145,10 @@ return [
         'eyebrow' => 'How it works',
         'title' => 'Up and running in four steps.',
         'steps' => [
-            'plan' => ['title' => 'Choose a plan', 'text' => 'Select a plan and pay online.'],
+            'plan' => ['title' => 'Explore the plans', 'text' => 'Review the available options and contact us to ask about service availability for your site.'],
             'connect' => ['title' => 'Connect your website', 'text' => 'Connect your WordPress site using a secure connection.'],
-            'audit' => ['title' => 'Initial check', 'text' => 'Initial audit, backup and system setup.'],
-            'ongoing' => ['title' => 'Ongoing maintenance', 'text' => 'Regular updates, backups, checks and monitoring.'],
+            'audit' => ['title' => 'Initial check', 'text' => 'We assess the site setup and available service options; backups are subject to plan and site support.'],
+            'ongoing' => ['title' => 'Ongoing maintenance', 'text' => 'Updates, backups, checks and monitoring according to the plan and supported site setup.'],
         ],
     ],
 
@@ -180,7 +180,7 @@ return [
             ],
             'backup_frequency' => [
                 'question' => 'How often are backups made?',
-                'answer' => 'It depends on the plan. WordPress: monthly on Basic, weekly on Business, daily on Secure. WooCommerce: weekly on Basic, daily on Business and Secure. A backup is also made before updates.',
+                'answer' => 'It depends on the plan. WordPress: monthly on Basic, weekly on Business, daily on Secure. WooCommerce: weekly on Basic, daily on Business and Secure. Additional pre-update backups are made where the plan and site setup support them.',
             ],
             'license' => [
                 'question' => 'What happens if a plugin license expires?',
@@ -188,7 +188,7 @@ return [
             ],
             'infected' => [
                 'question' => 'What happens if my website is infected?',
-                'answer' => 'We notify you when a security check finds a problem and agree the next steps with you. Malware cleanup is included in Secure plans; on other plans it is quoted separately.',
+                'answer' => 'We notify you when an applicable security check reports a finding and agree the next steps with you. Malware cleanup is available for eligible Secure-plan cases and supported sites; other cases are assessed and quoted separately.',
             ],
             'custom_plugins' => [
                 'question' => 'Can you develop custom plugins?',
@@ -199,7 +199,7 @@ return [
 
     'cta' => [
         'title' => 'Keep your WordPress maintained.',
-        'text' => 'Choose a plan and let us handle the routine technical work.',
+        'text' => 'Explore the plans and contact us to discuss your website and service availability.',
         'primary' => 'View plans',
         'secondary' => 'Contact us',
     ],

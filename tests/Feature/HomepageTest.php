@@ -111,7 +111,7 @@ class HomepageTest extends TestCase
     public function test_key_service_messages_are_present(): void
     {
         $this->get('/en/')
-            ->assertSee('Our maintenance process includes a backup, update, technical check and functional verification.')
+            ->assertSee('Where supported by the plan and site setup, maintenance includes a backup, updates, technical checks and functional verification.')
             ->assertSeeInOrder(['Step 01', 'Backup', 'Step 02', 'Update', 'Step 03', 'Check', 'Step 04', 'Functional test', 'Step 05', 'Done'])
             ->assertSee('WP CareGrid records it and notifies the website owner')
             ->assertSee('Not every plugin license can be checked automatically')
@@ -230,7 +230,9 @@ class HomepageTest extends TestCase
                 foreach ($offer->highlightedFeatures() as $feature) {
                     $this->assertContains($feature, $offer->plan->featureLabels());
                 }
-                $this->assertStringContainsString(ucfirst($offer->plan->backupFrequency).' remote backups', $card[0]);
+                $backupFeature = collect($offer->plan->features)->first(fn ($feature) => $feature->key === 'remote_backups');
+                $this->assertNotNull($backupFeature, "Plan {$offer->plan->id()} must retain its backup feature.");
+                $this->assertStringContainsString($backupFeature->label, $card[0]);
             }
         }
     }

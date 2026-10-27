@@ -65,7 +65,7 @@ return [
         'wordpress' => [
             'basic' => ['name' => 'Basic', 'description' => 'Essential maintenance for smaller WordPress sites.'],
             'business' => ['name' => 'Business', 'description' => 'Regular maintenance for business websites.'],
-            'secure' => ['name' => 'Secure', 'description' => 'Extra security and faster response.'],
+            'secure' => ['name' => 'Secure', 'description' => 'Additional plan-specific security checks and eligible malware-cleanup support.'],
         ],
         'woocommerce' => [
             'basic' => ['name' => 'Basic', 'description' => 'Core maintenance for smaller WooCommerce stores.'],
@@ -78,23 +78,23 @@ return [
         'core_plugin_theme_updates' => 'WordPress, plugin and theme updates',
         'core_woocommerce_plugin_theme_updates' => 'WordPress, WooCommerce, plugin and theme updates',
         'remote_backups' => [
-            'daily' => 'Daily remote backups',
-            'weekly' => 'Weekly remote backups',
-            'monthly' => 'Monthly remote backups',
+            'daily' => 'Daily backups; separate storage where configured',
+            'weekly' => 'Weekly backups; separate storage where configured',
+            'monthly' => 'Monthly backups; separate storage where configured',
         ],
         'security_check' => [
             'daily' => 'Daily security check',
             'weekly' => 'Weekly security check',
             'monthly' => 'Monthly security check',
         ],
-        'uptime_monitoring' => 'Uptime monitoring',
+        'uptime_monitoring' => 'Uptime monitoring for supported sites',
         'activity_log' => 'Activity log',
         'functional_checks' => 'Functional checks after important updates',
         'license_check' => 'Plugin and theme license check',
         'checkout_flow_check' => 'Checkout flow check after updates',
         'payment_email_checks' => 'Payment and order email checks',
-        'malware_cleanup' => 'Malware cleanup',
-        'priority_response' => 'Priority response',
+        'malware_cleanup' => 'Malware cleanup for eligible, supported cases',
+        'priority_response' => 'Priority support according to plan scope',
         'monthly_report' => 'Monthly maintenance report',
     ],
 
