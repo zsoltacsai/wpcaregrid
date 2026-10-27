@@ -100,7 +100,7 @@ Before beta, prepare—do not execute under this authorization:
 
 ### PR and I&QA coordination
 
-PR #200 has been synchronized to current primary `71155b3182fbd83e05a094360027add1adab9669` through GitHub's supported Update branch operation. The synchronized report branch is at `8d7c1b4388ecaadec7e77da57d10d85b5a525d29`; exact-head CI run [40499598931](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40499598931) is pending. Integration & QA review and delta review remain pending. M17 keeps the single-report-file scope. No merge or deployment is requested.
+PR #200 targets current primary `71155b3182fbd83e05a094360027add1adab9669`. Before this report edit, its HEAD was `a544797eafa2e24ec3fd86a4c944c1b65d7ce572`; exact-head CI run [40504258279](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40504258279) completed with 37/37 successful check-runs, all seven required contexts passed, and both PHP 8.4/8.5 MySQL process-concurrency gates passed. Integration & QA's preliminary review is recorded in [#174 comment 6439872858](https://github.com/zsoltacsai/wpcaregrid/issues/174#issuecomment-6439872858); it requested delta review after primary synchronization. This report-only update requires fresh exact-head CI; I&QA delta review is requested after that result. The PR remains open and unmerged. M17 keeps the single-report-file scope. No merge or deployment is requested; Production remains NO-GO.
 
 ## Launch-gate matrix
 
