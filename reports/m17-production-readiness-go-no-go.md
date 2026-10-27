@@ -1,0 +1,197 @@
+# M17 Production Readiness — Launch GO/NO-GO
+
+**Assessment date:** 2026-10-27 (Europe/Budapest)  
+**Authoritative source snapshot:** `71155b3182fbd83e05a094360027add1adab9669` on `claude/ecstatic-wozniak-oemyuf`  
+**Decision:** **PRODUCTION NO-GO — no launch authorization**  
+**Operational scope:** Repository and documented-evidence review only. No staging/production access, deployment, credential operation, payment, backup, restore, or destructive action was performed.
+
+This is a point-in-time readiness assessment. It separates repository implementation and CI evidence from staging observations, production verification, and external approvals. Missing or stale evidence is not a pass.
+
+## Evidence labels and freshness
+
+- **VERIFIED** — direct evidence is current, attributable to the exact source/environment and operation.
+- **PARTIAL** — some bounded implementation or verification exists; required operational or external evidence is missing.
+- **STALE** — evidence exists but is old, tied to an earlier release/configuration, or its freshness window has elapsed.
+- **UNKNOWN** — current evidence was not available or cannot be safely inferred.
+- **BLOCKED** — a required safety, authorization, compatibility, recovery, or external decision prevents GO.
+- **NOT CONFIGURED** — an explicitly absent or default-disabled capability is evidenced.
+
+Evidence domains are identified separately: **Code**, **CI**, **Staging**, **Production**, and **External**. A green CI result proves only the code and tests in that run; it does not prove a deployed environment is configured or safe.
+
+## Current authoritative evidence
+
+- Primary branch currently points to **71155b3182fbd83e05a094360027add1adab9669**, merge commit for PR #198, dated 2026-10-27.
+- Exact merge-SHA workflow [40487152200](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40487152200) completed successfully on c390ff3; #174 records 37/37 passing jobs. This is code/CI evidence, not staging or production deployment evidence.
+- PR [#198](https://github.com/zsoltacsai/wpcaregrid/pull/198) has merged. Its persisted-data-only readiness projection is not a production deployment receipt and does not establish live operational readiness.
+- Current source defaults in [config/backup.php](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/config/backup.php) leave customer backup downloads and live restore disabled.
+- The production checklist and older M17 report were last refreshed on 2026-10-24. They are documentary evidence, not current environment readbacks. No current production deployment receipt or production system-check evidence was available for this assessment.
+
+## Owner priority: two independent production gates
+
+The Owner's 2026-10-27 decision sets the sequence to public marketing-only production, then a small invitation-only paid beta. This is priority and scope direction only; it is not merge, deployment, payment, customer activation, destructive-operation, or production GO approval. See the [Owner decision in #174](https://github.com/zsoltacsai/wpcaregrid/issues/174#issuecomment-6439708526).
+
+| Release gate | Current decision | Scope | GO acceptance evidence |
+|---|---|---|---|
+| **A. Public marketing-only production** | **NO-GO / BLOCKED** | Approved public marketing and approved legal/content pages only. No signup, account, checkout, billing, subscription, Connector, scan, backup, restore, or administration operation. | Exact production SHA/receipt; edge and origin route/method allowlist proof; TLS, alert delivery and rollback evidence; legal/privacy/content approval; separate Owner GO. |
+| **B. Invitation-only paid beta, 3–5 customers** | **NO-GO / BLOCKED** | Manually supervised invitees and only individually supported operations. Marketing GO does not imply beta GO. | Marketing gates plus current production/access inventory, compliant contract/payment/invoicing, consent/privacy decisions, supported host/Connector scope, platform DB/key/object recovery evidence, on-call support and separate Owner GO. Stripe live stays OFF absent its own decision; manual payment is only an option after Legal/Accounting approval. |
+
+### Current production inventory requirements (read-only, sanitized)
+
+No inventory has been collected from production. When separately authorized, capture the following from authoritative sources with timestamp, environment name, exact release SHA, collector/approval reference and freshness window. Redact secret values and customer data; record presence, mode, version or opaque identifier only.
+
+| Inventory area | Sanitized evidence to record |
+|---|---|
+| Target and ingress | Production environment identifier; canonical and alternate hostnames; DNS answers, CDN/load-balancer/origin path, exposed listeners and direct-origin policy. |
+| Release identity | Deployed Git SHA, immutable artifact digest, deployment receipt/controller, deployment timestamp and rollback artifact SHA. |
+| Application/runtime | APP_ENV and APP_DEBUG booleans, HTTPS APP_URL hostname, CLI/FPM PHP versions, required-extension check result, config/route cache status and safe system-check summary. Never include config contents. |
+| Public/backend surface | Exact route+method allowlist/policy hash; auth/role boundary version; counts/results for denied checkout, auth, account, Owner/Operator and Connector/API probes; direct-origin bypass result. No tokens or response bodies containing private data. |
+| TLS/security edge | Certificate names, issuer/chain result, validity interval, renewal status, HTTPS redirect/HSTS/cookie/header checks, WAF/firewall policy version. |
+| Database and queue | Engine/version, schema migration level, app DB account privilege summary, queue/cache/session driver labels, worker and scheduler process/heartbeat state. Do not expose DSNs or credentials. |
+| Secrets and integrations | Secret-store reference IDs/key versions and rotation/escrow evidence IDs only; booleans/modes for Stripe live, mail, invoice and storage configuration. No key values, endpoints with credentials, or webhook secrets. |
+| Safety controls | Effective booleans for customer backup downloads, restore, security remediation and destructive retention; record exact source and readback time. Expected safe defaults must be verified, not inferred. |
+| Backup and DR | Platform DB last successful verified backup timestamp, opaque destination/provider ID, ciphertext/checksum verification, key-escrow version, monitoring alert result, isolated drill ID and measured RPO/RTO. Separately inventory customer backup object verification/version lifecycle. |
+| Access, monitoring, capacity | Human/service role counts and access-review date; on-call/alert test reference; disk/CPU/memory headroom bands and last capacity alert check. No usernames or customer identifiers in public report. |
+
+Evidence expires after any release, configuration, credential, route/edge, hosting or ownership change relevant to that inventory area. Mark unavailable, ambiguous or too-old evidence UNKNOWN/STALE; do not fill gaps from old screenshots or CI.
+
+### Public route and backend isolation
+
+**Source review, not a live probe:** in primary c390ff3, public marketing/legal, checkout, login/password/activation, customer account, Connector API, and Owner/Operator route groups are registered in the same Laravel application. See [web routes](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/routes/web.php), [API routes](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/routes/api.php), [Owner routes](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/routes/owner.php), [Operator routes](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/routes/operator.php) and [middleware registration](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/bootstrap/app.php). Authorization middleware exists for protected areas, but no current production route map, edge policy, origin firewall evidence or direct-origin bypass test was available. Marketing backend isolation is therefore **UNKNOWN**, not VERIFIED.
+
+Marketing GO requires one enforceable boundary: preferably a separate content-only deployment with no backend routes on its public origin; otherwise an explicit method/path allowlist at the public edge and an origin-side control that direct-origin access cannot bypass. Allow only reviewed GET/HEAD marketing pages, approved public legal pages, static assets, robots/sitemap and a sanitized health probe if needed. Deny every method/path variant for checkout, Stripe webhook, login/reset/activation/logout, all customer/account routes, Owner/Operator routes (including login), Connector/API pairing/jobs/backups/admin-access, and any unreviewed or aliased route. Pricing calls to action must not create checkout intents, accounts, subscriptions or payments. Test trailing slashes, encoded paths, alternate hosts and direct-origin access. A CDN-only deny with reachable origin is insufficient; hiding links is not isolation.
+
+### Marketing TLS, monitoring and rollback gates
+
+- **TLS — UNKNOWN:** verify DNS points only to approved ingress; certificate SAN and chain match every public name; an external TLS check passes; renewal is active and alert-tested; HTTPS redirect, secure cookies and HSTS are verified for the actual topology; no mixed content or origin bypass. Record host, validity dates and timestamp, never private keys.
+- **Monitoring — UNKNOWN:** external probes cover the selected pages and sanitized health endpoint; alerts cover DNS/TLS expiry, 5xx/latency, deployment failure, disk, application errors and security events; prove delivery to the named on-call recipient. Record severity, acknowledgement/escalation and stop/rollback authority.
+- **Rollback — PARTIAL:** steps are documented and CI covers migration rollback; production rollback has not been rehearsed. Retain the previous immutable release/SHA, define triggers and decision owner, prove controller-based rollback without file copying, preserve route isolation through rollback, smoke-test afterward, and show no incompatible database migration. Require a production-equivalent isolated rehearsal receipt before Marketing GO.
+
+### Sanitized deployment checklist
+
+Capture only safe metadata; never include env-file contents, tokens, keys, passwords, customer IDs or raw private logs.
+
+- [ ] Primary and merge SHA, exact-head CI link, required-context result.
+- [ ] Build/artifact digest and protected deployment-controller receipt ID.
+- [ ] Target environment, public hostnames and approval reference; no credential.
+- [ ] Safe runtime/config-presence booleans. Confirm PHP 8.4 rollback remains available and PHP 8.5 cutover did not occur.
+- [ ] Route allowlist policy version/hash and positive/negative method/path test summary.
+- [ ] Origin ingress/firewall result, including direct-origin denial.
+- [ ] TLS name/chain/validity, HTTPS redirect and renewal-alert result.
+- [ ] Public-page and optional sanitized health smoke status, latency and timestamp.
+- [ ] Confirm checkout, account, billing, Connector, Owner/Operator, backup, restore, scan and mutation routes are unreachable in the marketing profile.
+- [ ] Alert test reference, on-call role and escalation acknowledgement.
+- [ ] Previous release SHA/artifact and rollback rehearsal reference plus post-rollback smoke result.
+- [ ] Separate Marketing GO decision; paid beta remains NO-GO until its own evidence and Owner approval.
+
+### Paid-beta platform backup and DR evidence plan — planning only
+
+The platform database/configuration recovery plane is distinct from customer WordPress backup objects. The [platform DR policy](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/PLATFORM_DISASTER_RECOVERY.md) describes 24-hour RPO / 4-hour RTO as unmeasured targets and says actual application DB RPO is unbounded until independent off-host backups are deployed and monitored. A local synthetic MySQL drill is not remote-provider or application-boot evidence.
+
+Before beta, prepare—do not execute under this authorization:
+
+1. Inventory platform DB, customer backup objects and metadata, queues/audit, release/config, APP_KEY, independent backup keyring, Stripe/webhook ledger and dependencies. Assign custodians and distinct access paths.
+2. Specify encrypted off-host platform DB schedule, versioned/immutable retention, monitoring, restore scratch environment, and DB/object metadata reconciliation. Owner must approve RPO/RTO; measure them in an isolated drill rather than reporting targets as achieved.
+3. Define APP_KEY escrow/recovery separately from backup-encryption-key recovery. Test authorized retrieval/decryption only in isolation. Keep values out of Git, CI artifacts, issues and this report.
+4. For customer backups, verify provider, encryption, checksum/readback, object version/lifecycle and object-to-record reconciliation for the beta's supported host/plan. Backup capability does not imply restore capability.
+5. Rehearse with disposable synthetic data in an isolated app/database: restore platform DB and keys, boot the exact release, reconcile objects/queues/event ledger, run system/health and tenant-isolation checks, record measured RPO/RTO and cleanup evidence.
+6. Keep restore disabled for unsupported hosts. No beta promise or test may bypass the #189 provider gate; the [M15 pilot runbook](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/PILOT.md) authorizes no production operation.
+
+**Paid-beta acceptance:** independently witnessed isolated recovery meets Owner-approved RPO/RTO; keys recover; integrity and tenant isolation pass; object/DB reconciliation is complete; alerts are delivered; residual risks are accepted. Until then beta remains NO-GO.
+
+### PR and I&QA coordination
+
+PR #200 targets current primary `71155b3182fbd83e05a094360027add1adab9669`. Before this report edit, its HEAD was `a544797eafa2e24ec3fd86a4c944c1b65d7ce572`; exact-head CI run [40504258279](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40504258279) completed with 37/37 successful check-runs, all seven required contexts passed, and both PHP 8.4/8.5 MySQL process-concurrency gates passed. Integration & QA's preliminary review is recorded in [#174 comment 6439872858](https://github.com/zsoltacsai/wpcaregrid/issues/174#issuecomment-6439872858); it requested delta review after primary synchronization. This report-only update requires fresh exact-head CI; I&QA delta review is requested after that result. The PR remains open and unmerged. M17 keeps the single-report-file scope. No merge or deployment is requested; Production remains NO-GO.
+
+## Launch-gate matrix
+
+| Gate | Status and evidence | Commit / date / environment / freshness | Risk and owner | Required action and dependency | Objective acceptance / Owner approval |
+|---|---|---|---|---|---|
+| **1. Production infrastructure and release controls** | **PARTIAL.** Protected GitHub integration is evidenced by #199 and its exact merge-SHA CI. The release checklist states production APP_ENV/URL/database, workers, mail, storage, CSP and trusted-proxy configuration were not configured; that checklist is dated Oct 24 and is now stale. No current production inventory or deployment receipt was supplied. [Release checklist](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/RELEASE_CHECKLIST.md), [deployment guide](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/DEPLOYMENT.md), [#199 CI](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40481560739) | Code/CI: c390ff3, Oct 27, current for source. Environment checklist: Oct 24, stale. Production: unknown. | **Critical.** Infrastructure + Release Engineering; Owner accountable for launch. | Obtain a current, approved read-only production inventory; complete production configuration and release-controller evidence without exposing secret values. Keep PHP 8.5 staging cutover blocked and retain PHP 8.4 rollback baseline. | Exact production release SHA, controller receipt, required health/system checks, hardened web/TLS/proxy configuration, tested rollback, and no unauthorized runtime change. **Separate Owner launch approval: yes.** |
+| **2. Secrets, credential lifecycle and APP_KEY recovery** | **PARTIAL.** Secret categories and handling are documented; platform DR describes encrypted database backups and independent keyring concepts. It explicitly says APP_KEY escrow/recovery is unverified and loss can invalidate encrypted values. No production secret inventory, escrow proof, recovery drill, or live rotation evidence is available. [Platform DR](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/PLATFORM_DISASTER_RECOVERY.md), [deployment guide](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/DEPLOYMENT.md) | Documentation snapshot c390ff3, Oct 27; underlying operational status unknown; no production evidence date. | **Critical.** Security/Infrastructure + Owner. | Define approved secret store, access/rotation/revocation ownership, APP_KEY escrow and recovery procedure. Verify recovery in an isolated non-production drill. Never include values in reports. | Independent authorized operator restores encrypted app configuration from escrow in an isolated drill; rotation/revocation and audit trail demonstrated; no secret appears in logs/artifacts. **Owner approval: yes.** |
+| **3. Production access and least privilege** | **UNKNOWN.** Repository documents a constrained deploy privilege controller and admin access boundaries; no current production account, SSH, sudo, break-glass, or access-review evidence is available. The old checklist is not a current inventory. [Admin access](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/ADMIN_ACCESS.md), [deployment guide](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/DEPLOYMENT.md) | Code docs at c390ff3; production access evidence absent/unknown as of Oct 27. | **High.** Infrastructure/Security; Owner for privileged identities. | Inventory named human/service identities, SSH keys, sudo rules, CI deploy identity, break-glass path and offboarding. Remove stale access through an approved change. | Reviewed access register, least-privilege tests, MFA where supported, successful break-glass/revocation drill, and dated approval. **Owner approval: yes.** |
+| **4. Owner/Operator authorization boundaries** | **PARTIAL.** Route/role authorization is implemented and exercised by automated tests; the system docs describe Owner/Operator scope and temporary admin access. No production role assignment, real operator review, or production session/audit verification is available. [Admin access](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/ADMIN_ACCESS.md), current CI evidence above. | Code/CI at c390ff3, Oct 27. Production role evidence unknown. | **High.** Application Security + Owner/Operations. | Review production Owner accounts, Operator grants, sensitive permissions, invitation/reset flows and audit alerts using a current production read-only review. | Authorization matrix passes on the release SHA; production grants are enumerated, approved, attributable and periodically reviewed; no default full-admin grant. **Owner approval: yes.** |
+| **5. Platform database backup and isolated disaster recovery** | **PARTIAL / BLOCKED.** Backup/verification implementation and a synthetic local MySQL 8.4 create→encrypt→local-storage readback→decrypt→import drill are documented. The DR policy says the local drill did not test remote S3 or boot a separate application; until a remote independent schedule is deployed and monitored, actual application DB RPO is unbounded. APP_KEY recovery and isolated recovery remain unverified. [Platform DR](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/PLATFORM_DISASTER_RECOVERY.md) | Code/CI and local synthetic drill documented in c390ff3; the drill’s date is historical and is not production evidence. Production: unknown/not verified. | **Critical.** Infrastructure/Database Operations + Security; Owner accepts RPO/RTO. | Configure independent encrypted off-host DB backup, monitoring and key escrow through an approved infrastructure procedure; conduct an isolated restore and application integrity drill. | Fresh backup artifact independently read back, authenticated/decrypted/imported into isolated environment; measured RPO/RTO recorded; APP_KEY and object/metadata reconciliation proven. **Owner approval: yes.** |
+| **6. Monitoring, alert delivery and incident response** | **UNKNOWN.** The runbooks specify system checks, queue/scheduler monitoring and incident handling, but the prior checklist marked external uptime, system-check monitoring, failed-job, offline-Connector and backup alerts as not configured. That status is Oct 24 and stale; no current delivery test or on-call evidence exists. [Release checklist](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/RELEASE_CHECKLIST.md), [DR runbook](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/PLATFORM_DISASTER_RECOVERY.md) | Historical checklist Oct 24, stale. Current staging/production alerting unknown. | **High.** Operations/SRE + Owner incident lead. | Select monitor and alert destination, define severity/on-call/escalation, cover uptime, failed jobs, scheduler, backup, storage and security events; prove delivery. | Controlled test alerts reach a monitored channel; runbook names responder and escalation; incident tabletop records detection, containment, recovery and customer communications. **Owner approval: yes.** |
+| **7. Stripe live billing readiness** | **NOT CONFIGURED / BLOCKED.** Current documented policy keeps live mode disabled; test-mode E2E is not live readiness. Live credentials, production webhook endpoint/signing secret, product/price reconciliation, tax behavior and live failure/replay handling are not evidenced. [Stripe test-mode policy](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/STRIPE_TEST_MODE.md) | Code/docs c390ff3, Oct 27; live environment verification absent. | **Critical.** Billing Engineering + Owner; Stripe account administrator. | Keep live mode disabled. Complete live account and webhook configuration only after separate approval; reconcile catalog and exercise approved test-mode failure cases before any live activation. | Live account settings, price catalog, webhook signatures/idempotency, refunds/disputes/cancellation flows, reconciliation and monitoring reviewed without exposing keys; documented go decision. **Separate Owner approval: required.** |
+| **8. Subscription and entitlement lifecycle** | **PARTIAL.** Subscription lifecycle and webhook-authoritative entitlement logic have test coverage; test-mode customer workflows are not proof of production event delivery or reconciliation. No production subscription, entitlement, delayed/replayed webhook, failed-payment or cancellation evidence was supplied. | Code/CI c390ff3, Oct 27; production operations unknown. | **High.** Billing Engineering + Operations. | Prepare a production-safe lifecycle test plan and reconciliation/repair procedure; verify no browser success path grants service and replay remains idempotent on release SHA. | End-to-end approved non-live rehearsal plus production configuration review; signed webhook, retry, delayed/out-of-order event, cancellation and entitlement reconciliation evidence. **Owner approval: yes before any live transaction.** |
+| **9. Invoicing, accounting and tax** | **BLOCKED.** Invoice adapter exists, but its documented configuration is dry-run/disabled and required seller/VAT/place-of-supply/service-classification decisions are outstanding. No accountant/legal approval or production invoice issuance is evidenced. [Számlázz.hu integration](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/SZAMLAZZ_HU_INTEGRATION.md), [Stripe policy](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/STRIPE_TEST_MODE.md) | Docs at c390ff3; external decisions not recorded as approved. | **Critical.** Accountant + Legal + Owner; Billing Engineering implements decisions. | Obtain written tax/accounting/legal decisions for seller, VAT, service classification, place of supply, invoice language/currency, zero-total and refund cases. Only then configure provider and perform authorized non-live validation. | Signed decision record; invoice scenarios reconciled to ledger and payment; accountant-approved examples; production provider remains disabled until separate Owner approval. |
+| **10. Customer data retention, deletion and M12 gates** | **BLOCKED.** M12 code exposes safety gates and destructive retention remains disabled. Reports explicitly state retention durations, lawful bases, legal holds, subprocessors, data roles and physical erasure claims are unresolved; current live settings have not been read back. [M12 legal decisions](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/reports/m12-privacy/owner-legal-decisions.md), [retention/erasure report](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/reports/m12-privacy/backup-retention-and-erasure.md), [M12 closure criteria](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/reports/m12-privacy/wave8-final-closure-criteria.md) | Code/docs c390ff3; underlying staging/production config unknown. Legal decisions not approved. | **Critical.** Legal/Privacy + Owner; Engineering and storage provider for implementation/evidence. | Resolve lawful bases, data roles, retention schedule, legal holds, subject requests, provider/versioned-object deletion limits and all six M12 gates. Keep destructive jobs off until approved. | Written legal/privacy decision; current authoritative gate readback; tested non-destructive report and separately approved deletion proof covering versions/replicas and audit. **Owner and Legal approval: yes.** |
+| **11. Customer backup downloads and #191 offboarding** | **NOT CONFIGURED / BLOCKED.** The merged Customer Backup Browser code is default-OFF in current source. Issue #191 records 14 calendar days’ download access after effective termination as product direction only; activation, retention, deletion and legal/privacy reconciliation are not authorized. | Code default c390ff3, current Oct 27. Product direction in [#191](https://github.com/zsoltacsai/wpcaregrid/issues/191), current policy; no production activation evidence. | **High.** Product/Owner + Legal/Privacy + Backup Engineering. | Keep download feature disabled. Reconcile the 14-day policy with legal retention/deletion duties, entitlement revocation, object lifecycle and M12 gates; specify audit and support flow before rollout. | Approved lifecycle decision; tests for termination timestamp, grant expiry/revocation, deletion/legal hold and customer isolation; explicit reviewed rollout approval. **Owner approval: yes.** |
+| **12. Hosting compatibility and #189 restore-provider constraints** | **PARTIAL for tested compatibility; BLOCKED for restore.** Required Laravel CI covers PHP 8.4/8.5 on MySQL 8.4; Connector compatibility matrix is covered by required CI contexts. This proves tested CI fixtures, not arbitrary customer hosts. Unsupported restore remains fail-closed; #189 host-provider architecture/implementation and production-grade isolation are not accepted/active. PHP 8.5 staging migration is separately NO-GO; PHP 8.4 rollback baseline must remain intact. [Connector compatibility](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/CONNECTOR_COMPATIBILITY.md), [pilot gates](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/PILOT.md), [#189](https://github.com/zsoltacsai/wpcaregrid/issues/189) | CI c390ff3, Oct 27, fresh for source tests. Staging PHP evidence stale/unknown; production host matrix unknown. | **Critical for restore; high overall.** M15/Infrastructure + Connector Engineering; Owner for provider decision. | Keep unsupported restore BLOCKED. Maintain operation-specific compatibility and fail-closed unknown hosts. Resolve host-isolation provider decision and test contract separately; do not migrate staging PHP 8.5 here. | Per-operation compatibility evidence from supported host profiles; provider/worker isolation independently reviewed and tested; exact deployment/host identity verified; restore gate denies every unknown/unsupported host. **Owner approval: yes.** |
+| **13. Independent security audit and remediation** | **BLOCKED / UNKNOWN.** CI includes automated quality/security checks, but no independent full application/production AppSec assessment and tracked remediation closure was supplied. Prior M17 reviews are scoped PR reviews, not a complete production penetration test or organizational risk acceptance. | CI c390ff3, Oct 27; independent audit evidence absent. | **Critical.** Independent security assessor + Security Engineering + Owner accepts residual risk. | Commission scoped independent audit covering web/API, tenant isolation, auth/session, billing/webhooks, backup/download, Connector protocol, deployment/secrets and recovery. Triage findings and retest fixes. | Signed report, severity-ranked findings, reproducible remediation evidence, retest closure or explicit authorized risk acceptance. **Owner approval: yes for residual risks.** |
+| **14. Production rollback and recovery procedures** | **PARTIAL / BLOCKED.** Rollback steps are documented and CI exercises migration/rollback behavior. DR policy sets initial 24h RPO/4h RTO targets but labels them unmeasured; production backup, secret recovery, isolated restore and rollback rehearsal are absent/unknown. [Deployment guide](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/DEPLOYMENT.md), [platform DR](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/PLATFORM_DISASTER_RECOVERY.md) | Docs/CI c390ff3; production rehearsal evidence absent. | **Critical.** Infrastructure/Release Engineering + Database Operations; Owner accepts recovery targets. | Define rollback triggers and data/schema compatibility rules; rehearse application rollback and isolated DB recovery against a production-equivalent disposable environment. | Timed, witnessed drill with exact release SHA, restored DB integrity, secret/key availability, measured RPO/RTO, queue/worker restart and customer-facing health checks. **Owner approval: yes.** |
+
+## Prioritized launch blockers
+
+1. **No current production inventory or deployment receipt** — production configuration and deployed SHA are not verified.
+2. **No proven remote platform DB backup + isolated recovery/APP_KEY drill** — actual RPO is not established; DR targets remain targets.
+3. **No completed legal/privacy decisions for M12 retention, deletion, legal holds and data roles** — destructive controls must remain disabled.
+4. **Stripe live is disabled and live catalog/webhook/reconciliation is unverified.**
+5. **Accounting/tax/invoicing decisions are outstanding; provider remains dry-run/disabled.**
+6. **No verified production monitoring, alert delivery, on-call ownership or incident tabletop.**
+7. **Production access grants, least privilege, break-glass and revocation are not evidenced.**
+8. **No independent end-to-end production security audit and remediation closure.**
+9. **Customer backup download remains default-OFF; #191 policy is not an activation/retention/deletion authorization.**
+10. **Restore is not a supported production capability for unknown hosts; #189 provider/isolation remains gated.** PHP 8.5 staging cutover remains NO-GO; preserve PHP 8.4 rollback.
+
+## Dependencies by decision owner
+
+### Technical engineering
+- Produce a production configuration/evidence inventory and exact release receipt without disclosing secrets.
+- Implement and rehearse production monitoring, alert delivery, backup verification, rollback and recovery procedures after Infrastructure provides an isolated target.
+- Keep customer backup downloads and restore disabled until policy and independent gates pass.
+- Keep compatibility and restore decisions operation-specific and fail-closed.
+
+### Owner decisions
+- Approve RPO/RTO and acceptable recovery loss after measured drills.
+- Assign accountable production operators, on-call incident lead and security-risk acceptor.
+- Make separate decisions for Stripe live activation, customer-download rollout, destructive retention, and any provider/restore activation.
+- Do not infer any of these approvals from this report or from CI.
+
+### Legal / privacy
+- Decide lawful bases, data roles, retention periods, legal holds, erasure limitations, subprocessors and customer-facing disclosures.
+- Review the #191 14-day access policy against termination, legal retention and deletion obligations.
+
+### Accounting / tax
+- Confirm seller/VAT registrations, service classification, place of supply, invoice wording, currency and refund/zero-charge treatment.
+- Approve invoice examples and reconciliation before live issuance.
+
+### Infrastructure
+- Provide current production inventory, approved secret store/APP_KEY escrow, least-privilege access map, independent backup destination, alert path and isolated recovery target.
+- Keep the PHP 8.5 staging migration blocked until its separate prerequisites and approval are recorded; maintain PHP 8.4 rollback.
+
+## Next three independently actionable readiness tasks
+
+1. **Evidence inventory (M17 + Infrastructure):** prepare a sanitized, read-only production inventory template covering release SHA, runtime/config presence, access identities, workers/scheduler, mail, storage, backup, monitoring and system-check output. Populate only through an approved read-only procedure; record unknowns rather than guessing. Estimated effort: 0.5–1 engineering day plus infrastructure coordination.
+2. **Platform DR proof plan (M17 + Database/Infrastructure):** turn the documented DR targets into a non-production drill plan with APP_KEY escrow checks, remote-object verification, isolated import/boot, queue recovery and measured RPO/RTO. No production backup or restore is authorized by this task. Estimated effort: 1–2 engineering days to prepare; execution depends on approved isolated infrastructure and Owner decision.
+3. **External decision register handoff (M17 → I&QA/Owner/Legal/Accounting):** map each unresolved M12, #191, tax and Stripe decision to a named approver and objective evidence. I&QA retains ownership of shared status/checklist documents and #174 coordination. Estimated effort: 0.5 day to reconcile; calendar time depends on external reviewers.
+
+## Evidence references
+
+All repository links below are pinned to the assessment source SHA, not a moving branch:
+
+- [Primary commit c390ff3](https://github.com/zsoltacsai/wpcaregrid/commit/71155b3182fbd83e05a094360027add1adab9669)
+- [Merge-SHA CI run 40481560739](https://github.com/zsoltacsai/wpcaregrid/actions/runs/40481560739)
+- [M17 historical readiness report (Oct 24; stale)](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/reports/m17-production-readiness-2026-10-24.md)
+- [Release checklist (last refreshed Oct 24; stale)](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/RELEASE_CHECKLIST.md)
+- [Platform disaster recovery policy](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/PLATFORM_DISASTER_RECOVERY.md)
+- [M15 pilot readiness (Oct 26; non-production only)](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/PILOT.md)
+- [M12 legal decisions](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/reports/m12-privacy/owner-legal-decisions.md)
+- [M12 retention/erasure assessment](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/reports/m12-privacy/backup-retention-and-erasure.md)
+- [M12 closure criteria](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/reports/m12-privacy/wave8-final-closure-criteria.md)
+- [#191 Customer Backup Browser/offboarding policy](https://github.com/zsoltacsai/wpcaregrid/issues/191)
+- [#189 restore-provider decision gate](https://github.com/zsoltacsai/wpcaregrid/issues/189)
+- [Admin access policy](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/ADMIN_ACCESS.md)
+- [Stripe test-mode and live-mode separation](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/STRIPE_TEST_MODE.md)
+- [Invoice provider integration](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/SZAMLAZZ_HU_INTEGRATION.md)
+- [Connector compatibility matrix](https://github.com/zsoltacsai/wpcaregrid/blob/71155b3182fbd83e05a094360027add1adab9669/docs/CONNECTOR_COMPATIBILITY.md)
+
+## Scope, limitations and coordination
+
+This report does not certify legal compliance, accounting readiness, security assurance, production availability, backup durability, or restore capability. It does not grant launch, deployment, credential, payment, backup, restore, retention, or PHP 8.5 migration approval.
+
+The old production checklist and the Oct 24 M17 report are intentionally cited as **stale historical evidence**, not as current server readbacks. No production credentials, private values, customer records, or secret material are included.
+
+Only this M17-owned path is in scope: `reports/m17-production-readiness-go-no-go.md`. Integration & QA retains ownership of `docs/PROJECT_STATUS.md`, `docs/RELEASE_CHECKLIST.md`, shared evidence indexes and issue #174 coordination. This report requests I&QA review through its PR and does not edit those shared artifacts.
+
+**Final decision: PRODUCTION NO-GO.** Reassessment requires fresh environment evidence and explicit resolution of the listed technical and external gates.
