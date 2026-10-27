@@ -42,6 +42,11 @@ final class ConnectorReadinessProjectionTest extends TestCase
             'requested_by' => 'system',
         ]);
 
+        $queuedBefore = WebsiteJob::query()
+            ->where('website_id', $site['website']->id)
+            ->where('status', 'queued')
+            ->count();
+
         Queue::fake();
         Http::preventStrayRequests();
         $writes = [];
@@ -65,7 +70,7 @@ final class ConnectorReadinessProjectionTest extends TestCase
         $this->assertSame([], $writes);
         Queue::assertNothingPushed();
         Http::assertNothingSent();
-        $this->assertSame(1, WebsiteJob::query()->where('website_id', $site['website']->id)->where('status', 'queued')->count());
+        $this->assertSame($queuedBefore, WebsiteJob::query()->where('website_id', $site['website']->id)->where('status', 'queued')->count());
         $this->assertSame(0, WebsiteJob::query()->where('website_id', $other['website']->id)->count());
     }
 
