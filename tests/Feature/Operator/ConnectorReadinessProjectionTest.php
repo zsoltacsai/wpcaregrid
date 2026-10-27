@@ -3,6 +3,7 @@
 namespace Tests\Feature\Operator;
 
 use App\Connector\JobType;
+use App\Models\User;
 use App\Models\WebsiteJob;
 use App\Operator\Permission;
 use Illuminate\Database\Events\QueryExecuted;
@@ -92,7 +93,7 @@ final class ConnectorReadinessProjectionTest extends TestCase
         $this->actingAs($site['website']->customer->user)->get(route('operator.websites.show', $site['website']))
             ->assertRedirect(route('operator.login'));
 
-        $owner = \App\Models\User::factory()->owner()->create();
+        $owner = User::factory()->owner()->create();
         $this->actingAs($owner, 'owner')->get(route('operator.websites.show', $site['website']))
             ->assertRedirect(route('operator.login'));
     }
