@@ -33,6 +33,7 @@ class HungarianContentTest extends TestCase
         'WordPress', 'WooCommerce', 'Basic', 'Business', 'Secure', 'shop.example.com',
         '© :year WP CareGrid', ':currency / :unit', ':name', 'Belgium', 'Liechtenstein', 'Moldova',
         'index,follow', ':page – WP CareGrid', '—', 'PHP', 'VIES',
+        'mailto:contact@zsoltacsai.com',
     ];
 
     private function useHungarian(): void

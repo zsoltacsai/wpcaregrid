@@ -189,7 +189,7 @@ class CheckoutTest extends TestCase
             ->assertSee('WooCommerce Secure')
             ->assertSee('399,000')
             ->assertSee('39,900')
-            ->assertSee('Daily remote backups')
+            ->assertSee('Daily backups; separate storage where configured')
             ->assertSee('value="annual"', false)
             ->assertDontSee('price_woocommerce', false);
     }
