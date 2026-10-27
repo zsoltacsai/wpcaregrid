@@ -35,6 +35,25 @@ The Owner's 2026-10-27 decision sets the sequence to public marketing-only produ
 | **A. Public marketing-only production** | **NO-GO / BLOCKED** | Approved public marketing and approved legal/content pages only. No signup, account, checkout, billing, subscription, Connector, scan, backup, restore, or administration operation. | Exact production SHA/receipt; edge and origin route/method allowlist proof; TLS, alert delivery and rollback evidence; legal/privacy/content approval; separate Owner GO. |
 | **B. Invitation-only paid beta, 3–5 customers** | **NO-GO / BLOCKED** | Manually supervised invitees and only individually supported operations. Marketing GO does not imply beta GO. | Marketing gates plus current production/access inventory, compliant contract/payment/invoicing, consent/privacy decisions, supported host/Connector scope, platform DB/key/object recovery evidence, on-call support and separate Owner GO. Stripe live stays OFF absent its own decision; manual payment is only an option after Legal/Accounting approval. |
 
+### Current production inventory requirements (read-only, sanitized)
+
+No inventory has been collected from production. When separately authorized, capture the following from authoritative sources with timestamp, environment name, exact release SHA, collector/approval reference and freshness window. Redact secret values and customer data; record presence, mode, version or opaque identifier only.
+
+| Inventory area | Sanitized evidence to record |
+|---|---|
+| Target and ingress | Production environment identifier; canonical and alternate hostnames; DNS answers, CDN/load-balancer/origin path, exposed listeners and direct-origin policy. |
+| Release identity | Deployed Git SHA, immutable artifact digest, deployment receipt/controller, deployment timestamp and rollback artifact SHA. |
+| Application/runtime | APP_ENV and APP_DEBUG booleans, HTTPS APP_URL hostname, CLI/FPM PHP versions, required-extension check result, config/route cache status and safe system-check summary. Never include config contents. |
+| Public/backend surface | Exact route+method allowlist/policy hash; auth/role boundary version; counts/results for denied checkout, auth, account, Owner/Operator and Connector/API probes; direct-origin bypass result. No tokens or response bodies containing private data. |
+| TLS/security edge | Certificate names, issuer/chain result, validity interval, renewal status, HTTPS redirect/HSTS/cookie/header checks, WAF/firewall policy version. |
+| Database and queue | Engine/version, schema migration level, app DB account privilege summary, queue/cache/session driver labels, worker and scheduler process/heartbeat state. Do not expose DSNs or credentials. |
+| Secrets and integrations | Secret-store reference IDs/key versions and rotation/escrow evidence IDs only; booleans/modes for Stripe live, mail, invoice and storage configuration. No key values, endpoints with credentials, or webhook secrets. |
+| Safety controls | Effective booleans for customer backup downloads, restore, security remediation and destructive retention; record exact source and readback time. Expected safe defaults must be verified, not inferred. |
+| Backup and DR | Platform DB last successful verified backup timestamp, opaque destination/provider ID, ciphertext/checksum verification, key-escrow version, monitoring alert result, isolated drill ID and measured RPO/RTO. Separately inventory customer backup object verification/version lifecycle. |
+| Access, monitoring, capacity | Human/service role counts and access-review date; on-call/alert test reference; disk/CPU/memory headroom bands and last capacity alert check. No usernames or customer identifiers in public report. |
+
+Evidence expires after any release, configuration, credential, route/edge, hosting or ownership change relevant to that inventory area. Mark unavailable, ambiguous or too-old evidence UNKNOWN/STALE; do not fill gaps from old screenshots or CI.
+
 ### Public route and backend isolation
 
 **Source review, not a live probe:** in primary c390ff3, public marketing/legal, checkout, login/password/activation, customer account, Connector API, and Owner/Operator route groups are registered in the same Laravel application. See [web routes](https://github.com/zsoltacsai/wpcaregrid/blob/c390ff3ef91b7b892f02e5d920e7da778812fb35/routes/web.php), [API routes](https://github.com/zsoltacsai/wpcaregrid/blob/c390ff3ef91b7b892f02e5d920e7da778812fb35/routes/api.php), [Owner routes](https://github.com/zsoltacsai/wpcaregrid/blob/c390ff3ef91b7b892f02e5d920e7da778812fb35/routes/owner.php), [Operator routes](https://github.com/zsoltacsai/wpcaregrid/blob/c390ff3ef91b7b892f02e5d920e7da778812fb35/routes/operator.php) and [middleware registration](https://github.com/zsoltacsai/wpcaregrid/blob/c390ff3ef91b7b892f02e5d920e7da778812fb35/bootstrap/app.php). Authorization middleware exists for protected areas, but no current production route map, edge policy, origin firewall evidence or direct-origin bypass test was available. Marketing backend isolation is therefore **UNKNOWN**, not VERIFIED.
