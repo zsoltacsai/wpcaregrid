@@ -1,100 +1,54 @@
-<?php
+Û^š›bžh¥êß¢¹­…â'ŠØš–,ÞçÚº[C®+Þ²Š^­«b¢z'¶…ŠW’ÊË^ššè¾'^­ö¢•çOÜ‚›˜[Y\ÜXÙH\Ý×™X]\™WÜ\˜]ÜŽÂ‚\ÙH\ÛÛ›™XÝÜ—›Ø•\NÂ\ÙH\[Ù[×\Ù\ŽÂ\ÙH\Ý\Ü\Ü^Q]U[YNÂ\ÙH\[Ù[×ÙXœÚ]R›ØŽÂ\ÙH\Ü\˜]Ü—\›Z\ÜÚ[ÛŽÂ\ÙH[[Z[˜]W]X˜\ÙW]™[×]Y\žQ^XÝ]YÂ\ÙH[[Z[˜]W›Ý[™][Û—\Ý[™×™Yœ™\Ú]X˜\ÙNÂ\ÙH[[Z[˜]WÝ\Ü˜XØY\×ŽÂ\ÙH[[Z[˜]WÝ\Ü˜XØY\×Â\ÙH[[Z[˜]WÝ\Ü˜XØY\×]Y]YNÂ\ÙH\Ý×ÛÛ˜Ù\›œ×Ü\˜]\ÐÛÛœÛÛNÂ\ÙH\Ý×\ÝØ\ÙNÂ‚™š[˜[Û\ÜÈÛÛ›™XÝÜ”™XY[™\ÜÔ›Ú™XÝ[Û•\Ý^[™È\ÝØ\ÙBžÂˆ\ÙHÜ\˜]\ÐÛÛœÛÛK™Yœ™\Ú]X˜\ÙNÂ‚ˆ›ÝXÝY[˜Ý[ÛˆÙ]\
 
-namespace Tests\Feature\Operator;
+Nˆ›ÚYˆÂˆ\™[ŽœÙ]\
 
-use App\Connector\JobType;
-use App\Models\User;
-use App\Models\WebsiteJob;
-use App\Operator\Permission;
-use Illuminate\Database\Events\QueryExecuted;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Queue;
-use Tests\Concerns\OperatesConsole;
-use Tests\TestCase;
+NÂˆ	\ËOœÙ]\˜XÚÝ\ÊÉÛX[X[	ÈOˆYK	Ü™\ÝÜ™IÈOˆYK	Ü™WÝ\]WØ˜XÚÝ\	ÈOˆ˜[ÙWJNÂˆB‚ˆ›ÝXÝY[˜Ý[ÛˆX\‘ÝÛŠ
+Nˆ›ÚYˆÂˆ	\ËOX\‘ÝÛ˜XÚÝ\Ê
+NÂˆ\™[ŽX\‘ÝÛŠ
+NÂˆB‚ˆX›XÈ[˜Ý[Ûˆ\ÝÛÜ\˜]Ü—ÝÚ]ÝÙXœÚ]WÝšY]×Ü\›Z\ÜÚ[Û—ÜÙY\×ÜØÛÜYÜ\œÚ\ÝYÜ™XY[™\Ü×ÛÛ›J
+Nˆ›ÚYˆÂˆ	\ËO˜\ÓÜ\˜]ÜŠÔ\›Z\ÜÚ[ÛŽŽ•ÙXœÚ]\ÕšY]×JNÂˆ	Ú]HH	\ËO˜ÛÛœÛÛTÚ]J	ÚÎ‹ËÜ™XY[™\ÜË[Ü\˜]Ü‹XK™^[\IÊNÂˆ	Ý\ˆH	\ËO˜ÛÛœÛÛTÚ]J	ÚÎ‹ËÜ™XY[™\ÜË[Ü\˜]Ü‹X‹™^[\IÊNÂˆ	ÙXœÚ]HH	Ú]VÉÝÙXœÚ]I×NÂˆ	ÛÛ›™XÝÜˆH	ÙXœÚ]KO˜XÝ]™PÛÛ›™XÝÜŽÂˆ	X\™X]]H›ÝÊ
+KOœÝ\Ù”ÙXÛÛ™
 
-final class ConnectorReadinessProjectionTest extends TestCase
-{
-    use OperatesConsole, RefreshDatabase;
+NÂˆ	ÛÛ›™XÝÜ‹O\]JÂˆ	Û\ÝÜÙY[—Ø]	ÈOˆ	X\™X]]ˆ	Û\ÝÚX\™X]Ø]	ÈOˆ	X\™X]]ˆ	Û\ÝÜÝXØÙ\ÜÙ[ÜÛØ]	ÈOˆ	X\™X]]ˆJNÂˆ	Ý\–ÉÝÙXœÚ]I×KO˜XÝ]™PÛÛ›™XÝÜ‹O\]JÉØÛÛ›™XÝÜ—Ý™\œÚ[Û‰ÈOˆ	ÓÕT—ÔÒUWÔ’UUWÓPT’ÑT‰×JNÂˆ	ÙXœÚ]KOš›ØœÊ
+KO˜Ü™X]JÂˆ	Ý\IÈOˆ›Ø•\NŽ‘Ù][™[ÜžKˆ	ÜÝ]\ÉÈOˆ	ÝØZ][™ÉËˆ	Ü^[ØY	ÈOˆÉÜš]˜]WÛX\šÙ\‰ÈOˆ	Ò“Ð—ÔVSÐQÓUTÕÓ“ÕÔ‘S‘T‰×Kˆ	Ü™\]Y\ÝYØžIÈOˆ	ÜÞ\Ý[IËˆJNÂ‚ˆ]Y]YNŽ™˜ZÙJ
+NÂˆŽœ™]™[Ý˜^T™\]Y\ÝÊ
+NÂˆ	Üš]\ÈH×NÂˆŽŽ›\Ý[ŠÝ]XÈ[˜Ý[Ûˆ
+]Y\žQ^XÝ]Y	]Y\žJH\ÙH
+	‰Üš]\ÊNˆ›ÚYÂˆYˆ
+™Y×ÛX]Ú
+	Ë×—ÊŠ[œÙ\\]_[]_™\XÙ_[\Ÿ›ÜÜ™X]JW‹ÚIË	]Y\žKOœÜ[
+JHÂˆ	Üš]\Ö×HH	]Y\žKOœÜ[ÂˆBˆJNÂ‚ˆ	™\ÜÛœÙHH	\ËO™Ù]
+›Ý]J	ÛÜ\˜]Ü‹ÙXœÚ]\ËœÚÝÉË	ÙXœÚ]JJKO˜\ÜÙ\ÚÊ
+BˆO˜\ÜÙ\ÙYJ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XÝÜ‹œ™XY[™\ÜË]IÊJBˆO˜\ÜÙ\ÙYJ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XÝÜ‹œ™XY[™\ÜË›Ü\˜][Û—ØØ\Xš[]Y\ÉÊJBˆO˜\ÜÙ\ÙYJ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XÝÜ‹œ™XY[™\ÜËœ[›š[™×Ý[šÛ›ÝÛ‰ÊJBˆO˜\ÜÙ\ÙYJ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XÝÜ‹œ™XY[™\ÜËšX\™X]	ÊJBˆO˜\ÜÙ\ÙYJ\
+\Ü^Q]U[YNŽ˜Û\ÜÊKO™›Ü›X]
+	X\™X]]
+JBˆO˜\ÜÙ\ÙYJ	ÌIÊNÂ‚ˆ	\ËO˜\ÜÙ\Ýš[™Ó›ÝÛÛZ[œÔÝš[™Ê	ÓÕT—ÔÒUWÔ’UUWÓPT’ÑT‰Ë	™\ÜÛœÙKO™Ù]ÛÛ[
 
-    protected function setUp(): void
-    {
-        parent::setUp();
-        $this->setUpBackups(['manual' => true, 'restore' => true, 'pre_update_backup' => false]);
-    }
+JNÂˆ	\ËO˜\ÜÙ\Ýš[™Ó›ÝÛÛZ[œÔÝš[™Ê	Ò“Ð—ÔVSÐQÓUTÕÓ“ÕÔ‘S‘T‰Ë	™\ÜÛœÙKO™Ù]ÛÛ[
 
-    protected function tearDown(): void
-    {
-        $this->tearDownBackups();
-        parent::tearDown();
-    }
+JNÂˆ	\ËO˜\ÜÙ\Ýš[™Ó›ÝÛÛZ[œÔÝš[™Ê	Ú]VÉØÜ™Y[X[	×K	™\ÜÛœÙKO™Ù]ÛÛ[
 
-    public function test_operator_with_website_view_permission_sees_scoped_persisted_readiness_only(): void
-    {
-        $this->asOperator([Permission::WebsitesView]);
-        $site = $this->consoleSite('https://readiness-operator-a.example');
-        $other = $this->consoleSite('https://readiness-operator-b.example');
-        $website = $site['website'];
-        $connector = $website->activeConnector;
-        $connector->update([
-            'last_seen_at' => now(),
-            'last_heartbeat_at' => now(),
-            'last_successful_poll_at' => now(),
-        ]);
-        $other['website']->activeConnector->update(['connector_version' => 'OTHER_SITE_PRIVATE_MARKER']);
-        $website->jobs()->create([
-            'type' => JobType::GetInventory,
-            'status' => 'waiting',
-            'payload' => ['private_marker' => 'JOB_PAYLOAD_MUST_NOT_RENDER'],
-            'requested_by' => 'system',
-        ]);
+JNÂˆ	\ËO˜\ÜÙ\Ø[YJ×K	Üš]\ÊNÂˆ]Y]YNŽ˜\ÜÙ\›Ý[™Ô\ÚY
 
-        Queue::fake();
-        Http::preventStrayRequests();
-        $writes = [];
-        DB::listen(static function (QueryExecuted $query) use (&$writes): void {
-            if (preg_match('/^\s*(insert|update|delete|replace|alter|drop|create)\b/i', $query->sql)) {
-                $writes[] = $query->sql;
-            }
-        });
+NÂˆŽ˜\ÜÙ\›Ý[™ÔÙ[
 
-        $response = $this->get(route('operator.websites.show', $website))->assertOk()
-            ->assertSee(__('operator.connector.readiness.title'))
-            ->assertSee(__('operator.connector.readiness.operation_capabilities'))
-            ->assertSee(__('operator.connector.readiness.running_unknown'))
-            ->assertSee(__('operator.connector.readiness.heartbeat'))
-            ->assertSee('1');
+NÂˆ	\ËO˜\ÜÙ\Ø[YJKÙXœÚ]R›ØŽŽœ]Y\žJ
+KOÚ\™J	ÝÙXœÚ]WÚY	Ë	ÙXœÚ]KOšY
+KOÚ\™J	ÜÝ]\ÉË	ÝØZ][™ÉÊKO˜ÛÝ[
 
-        $this->assertStringNotContainsString('OTHER_SITE_PRIVATE_MARKER', $response->getContent());
-        $this->assertStringNotContainsString('JOB_PAYLOAD_MUST_NOT_RENDER', $response->getContent());
-        $this->assertStringNotContainsString($site['credential'], $response->getContent());
-        $this->assertSame([], $writes);
-        Queue::assertNothingPushed();
-        Http::assertNothingSent();
-        $this->assertSame(1, WebsiteJob::query()->where('website_id', $website->id)->where('status', 'waiting')->count());
-        $this->assertSame(0, WebsiteJob::query()->where('website_id', $other['website']->id)->count());
-    }
+JNÂˆ	\ËO˜\ÜÙ\Ø[YJÙXœÚ]R›ØŽŽœ]Y\žJ
+KOÚ\™J	ÝÙXœÚ]WÚY	Ë	Ý\–ÉÝÙXœÚ]I×KOšY
+KO˜ÛÝ[
 
-    public function test_operator_without_website_view_permission_cannot_read_readiness(): void
-    {
-        $site = $this->consoleSite('https://readiness-denied.example');
-        $this->asOperator([]);
-
-        $this->get(route('operator.websites.show', $site['website']))
-            ->assertForbidden()
-            ->assertDontSee(__('operator.connector.readiness.title'));
-    }
-
-    public function test_owner_and_customer_sessions_cannot_read_operator_readiness(): void
-    {
-        $site = $this->consoleSite('https://operator-auth.example');
-
-        $this->actingAs($site['website']->customer->user)->get(route('operator.websites.show', $site['website']))
-            ->assertRedirect(route('operator.login'));
-
-        $owner = User::factory()->owner()->create();
-        $this->actingAs($owner, 'owner')->get(route('operator.websites.show', $site['website']))
-            ->assertRedirect(route('operator.login'));
-    }
-}
+JNÂˆB‚ˆX›XÈ[˜Ý[Ûˆ\ÝÛÜ\˜]Ü—ÝÚ]Ý]ÝÙXœÚ]WÝšY]×Ü\›Z\ÜÚ[Û—ØØ[››ÝÜ™XYÜ™XY[™\ÜÊ
+Nˆ›ÚYˆÂˆ	Ú]HH	\ËO˜ÛÛœÛÛTÚ]J	ÚÎ‹ËÜ™XY[™\ÜËY[šYY™^[\IÊNÂˆ	\ËO˜\ÓÜ\˜]ÜŠ×JNÂ‚ˆ	\ËO™Ù]
+›Ý]J	ÛÜ\˜]Ü‹ÙXœÚ]\ËœÚÝÉË	Ú]VÉÝÙXœÚ]I×JJBˆO˜\ÜÙ\›Ü˜šY[Š
+BˆO˜\ÜÙ\ÛÙYJ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XÝÜ‹œ™XY[™\ÜË]IÊJNÂˆB‚ˆX›XÈ[˜Ý[Ûˆ\ÝÛÝÛ™\—Ø[™ØÝ\ÝÛY\—ÜÙ\ÜÚ[Ûœ×ØØ[››ÝÜ™XYÛÜ\˜]Ü—Ü™XY[™\ÜÊ
+Nˆ›ÚYˆÂˆ	Ú]HH	\ËO˜ÛÛœÛÛTÚ]J	ÚÎ‹ËÛÜ\˜]Ü‹X]]™^[\IÊNÂ‚ˆ	\ËO˜XÝ[™Ð\Ê	Ú]VÉÝÙXœÚ]I×KO˜Ý\ÝÛY\‹O\Ù\ŠKO™Ù]
+›Ý]J	ÛÜ\˜]Ü‹ÙXœÚ]\ËœÚÝÉË	Ú]VÉÝÙXœÚ]I×JJBˆO˜\ÜÙ\™Y\™XÝ
+›Ý]J	ÛÜ\˜]Ü‹›ÙÚ[‰ÊJNÂ‚ˆ	ÝÛ™\ˆH\Ù\ŽŽ™˜XÝÜžJ
+KO›ÝÛ™\Š
+KO˜Ü™X]J
+NÂˆ	\ËO˜XÝ[™Ð\Ê	ÝÛ™\‹	ÛÝÛ™\‰ÊKO™Ù]
+›Ý]J	ÛÜ\˜]Ü‹ÙXœÚ]\ËœÚÝÉË	Ú]VÉÝÙXœÚ]I×JJBˆO˜\ÜÙ\™Y\™XÝ
+›Ý]J	ÛÜ\˜]Ü‹›ÙÚ[‰ÊJNÂˆBŸB
