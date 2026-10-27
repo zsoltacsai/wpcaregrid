@@ -3,8 +3,12 @@ import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
 const baseUrl = process.env.E2E_BASE_URL;
+const localBaseUrl = baseUrl ? new URL(baseUrl) : null;
 
-test.skip(!baseUrl, 'Set E2E_BASE_URL to a running synthetic local application.');
+test.skip(
+    !localBaseUrl || localBaseUrl.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(localBaseUrl.hostname),
+    'Set E2E_BASE_URL to a running synthetic application on localhost or 127.0.0.1.',
+);
 
 for (const locale of ['en', 'hu'] as const) {
     for (const viewport of [
