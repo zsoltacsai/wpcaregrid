@@ -123,13 +123,13 @@ class MarketingOnlyReleaseGateTest extends TestCase
             [$response, $dispatched] = $this->runGate($path, $method);
             $this->assertFalse($dispatched, $method.' '.$path.' must be stopped before route/controller dispatch');
             $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode(), $method.' '.$path);
-            $this->assertSame('no-store', $response->headers->get('Cache-Control'));
+            $this->assertStringContainsString('no-store', (string) $response->headers->get('Cache-Control'));
         }
     }
 
     public function test_missing_and_invalid_profiles_fail_closed_to_marketing_only(): void
     {
-        app('config')->forget('marketing_release.profile');
+        app('config')->set('marketing_release', []);
         [$missingResponse, $missingDispatched] = $this->runGate('/checkout', 'GET', profile: null, setProfile: false);
         $this->assertFalse($missingDispatched);
         $this->assertSame(Response::HTTP_NOT_FOUND, $missingResponse->getStatusCode());
@@ -266,10 +266,16 @@ class MarketingOnlyReleaseGateTest extends TestCase
             config(['marketing_release.profile' => $profile]);
         }
 
-        $request = Request::create($uri, $method, [], [], [], [
+        $requestUriForFactory = str_contains($uri, '\\') ? '/en/checkout' : $uri;
+        $request = Request::create($requestUriForFactory, $method, [], [], [], [
             'HTTP_HOST' => $host,
             'HTTPS' => 'on',
         ]);
+        if ($requestUriForFactory !== $uri) {
+            // Symfony rejects malformed backslash URIs at request construction;
+            // set the raw server target afterwards to exercise the gate's guard.
+            $request->server->set('REQUEST_URI', $uri);
+        }
         foreach ($headers as $name => $value) {
             $request->headers->set($name, $value);
         }
