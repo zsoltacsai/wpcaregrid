@@ -72,7 +72,7 @@ This is a CI/source snapshot, not host evidence. Recheck the primary branch, rul
 | --- | --- | --- |
 | Laravel server | PHP 8.4 and 8.5, each against MySQL 8.4; full server test suite and that PHP lane's MySQL process-concurrency gate | No Laravel PHP 8.5 SQLite or MariaDB lane |
 | Laravel SQLite regression | PHP 8.4 targeted SQLite regression gate | Does not establish PHP 8.5 SQLite compatibility |
-| WordPress Connector | PHP 8.2–8.5 across WordPress 6.8/7.1 and the workflow database matrix; protected PHP 8.4 / WordPress 7.1 SQLite, MySQL and MariaDB contexts | Connector compatibility is separate from Laravel server runtime coverage |
+| WordPress Connector | PHP 8.2–8.5 across WordPress 6.8/7.1 with MySQL 5.7, MySQL 8.0, MySQL 8.4 and MariaDB 10.11; the protected PHP 8.4 / WordPress 7.1 SQLite, MySQL 8.4 and MariaDB 10.11 contexts | Connector compatibility is separate from Laravel server runtime coverage |
 
 The seven protected contexts at review time are Quality; Server PHP 8.4/MySQL; Server PHP 8.5/MySQL; Server SQLite/PHP 8.4; and Connector PHP 8.4/WordPress 7.1 SQLite, MySQL and MariaDB. Both server MySQL jobs include their own process-concurrency gate. Do not remove the PHP 8.4 rollback lane, change the workflow, or infer host readiness from these tests.
 
