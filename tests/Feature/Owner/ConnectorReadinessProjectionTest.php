@@ -1,47 +1,83 @@
-Û^š›bžh¥êß¢¹­…â'ŠØš–,ÞçÚº[C®+Þ²Š^­«b¢z'¶…ŠW’ÊË^ššè¾'^­ö¢•çOÜ‚›˜[Y\ÜXÙH\Ý×™X]\™WÝÛ™\ŽÂ‚\ÙH\ÛÛ›™XÝÜ—›Ø•\NÂ\ÙH\Ý\Ü\Ü^Q]U[YNÂ\ÙH\[Ù[×\Ù\ŽÂ\ÙH\[Ù[×ÙXœÚ]R›ØŽÂ\ÙH[[Z[˜]W]X˜\ÙW]™[×]Y\žQ^XÝ]YÂ\ÙH[[Z[˜]W›Ý[™][Û—\Ý[™×™Yœ™\Ú]X˜\ÙNÂ\ÙH[[Z[˜]WÝ\Ü˜XØY\×ŽÂ\ÙH[[Z[˜]WÝ\Ü˜XØY\×Â\ÙH[[Z[˜]WÝ\Ü˜XØY\×]Y]YNÂ\ÙH\Ý×ÛÛ˜Ù\›œ×XÝÐ\ÓÝÛ™\ŽÂ\ÙH\Ý×ÛÛ˜Ù\›œ×Z\œÐÛÛ›™XÝÜœÎÂ\ÙH\Ý×\ÝØ\ÙNÂ‚™š[˜[Û\ÜÈÛÛ›™XÝÜ”™XY[™\ÜÔ›Ú™XÝ[Û•\Ý^[™È\ÝØ\ÙBžÂˆ\ÙHXÝÐ\ÓÝÛ™\‹Z\œÐÛÛ›™XÝÜœË™Yœ™\Ú]X˜\ÙNÂ‚ˆX›XÈ[˜Ý[Ûˆ\ÝÛÝÛ™\—ÜÙY\×Ü™XYÛÛ›WÜ™XY[™\Ü×Ù›Ü—ÛÛ›WÝWÜ™\]Y\ÝYÝÙXœÚ]J
-Nˆ›ÚYˆÂˆ	\ËO˜\ÓÝÛ™\Š
-NÂˆ	Ú]HH	\ËOœZ\™YÙXœÚ]J	ÚÎ‹ËÜ™XY[™\ÜË[ÝÛ™\‹XK™^[\IÊNÂˆ	Ý\ˆH	\ËOœZ\™YÙXœÚ]J	ÚÎ‹ËÜ™XY[™\ÜË[ÝÛ™\‹X‹™^[\IÊNÂˆ	\ËOÚ]XY\œÊ	\ËO˜ÛÛ›™XÝÜ’XY\œÊ	Ú]JJBˆOœÜÝœÛÛŠ›Ý]J	Ø\KŒK˜ÛÛ›™XÝÜ‹š[™[ÜžIÊK	\ËOš[™[ÜžT^[ØY
+<?php
 
-JBˆO˜\ÜÙ\ÝXØÙ\ÜÙ[
+namespace Tests\Feature\Owner;
 
-NÂˆ	ÛÛ›™XÝÜˆH	Ú]VÉÝÙXœÚ]I×KO˜XÝ]™PÛÛ›™XÝÜŽÂˆ	X\™X]]H›ÝÊ
-KOœÝ\Ù”ÙXÛÛ™
+use App\Connector\JobType;
+use App\Models\User;
+use App\Support\DisplayDateTime;
+use App\Models\WebsiteJob;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use Tests\Concerns\ActsAsOwner;
+use Tests\Concerns\PairsConnectors;
+use Tests\TestCase;
 
-NÂˆ	ÛÛ›™XÝÜ‹O\]JÂˆ	Û\ÝÜÙY[—Ø]	ÈOˆ	X\™X]]ˆ	Û\ÝÚX\™X]Ø]	ÈOˆ	X\™X]]ˆ	Û\ÝÜÝXØÙ\ÜÙ[ÜÛØ]	ÈOˆ	X\™X]]ˆJNÂˆ	Ý\–ÉÝÙXœÚ]I×KO˜XÝ]™PÛÛ›™XÝÜ‹O\]JÉØÛÛ›™XÝÜ—Ý™\œÚ[Û‰ÈOˆ	ÓÕT—ÔÒUWÔ’UUWÓPT’ÑT‰×JNÂˆ	Ú]VÉÝÙXœÚ]I×KOš›ØœÊ
-KO˜Ü™X]JÂˆ	Ý\IÈOˆ›Ø•\NŽ‘Ù][™[ÜžKˆ	ÜÝ]\ÉÈOˆ	Ü]Y]YY	Ëˆ	Ü^[ØY	ÈOˆÉÜš]˜]WÛX\šÙ\‰ÈOˆ	Ò“Ð—ÔVSÐQÓUTÕÓ“ÕÔ‘S‘T‰×Kˆ	Ü™\]Y\ÝYØžIÈOˆ	ÜÞ\Ý[IËˆJNÂ‚ˆ]Y]YNŽ™˜ZÙJ
-NÂˆŽœ™]™[Ý˜^T™\]Y\ÝÊ
-NÂˆ	Üš]\ÈH×NÂˆŽŽ›\Ý[ŠÝ]XÈ[˜Ý[Ûˆ
-]Y\žQ^XÝ]Y	]Y\žJH\ÙH
-	‰Üš]\ÊNˆ›ÚYÂˆYˆ
-™Y×ÛX]Ú
-	Ë×—ÊŠ[œÙ\\]_[]_™\XÙ_[\Ÿ›ÜÜ™X]JW‹ÚIË	]Y\žKOœÜ[
-JHÂˆ	Üš]\Ö×HH	]Y\žKOœÜ[ÂˆBˆJNÂ‚ˆ	™\ÜÛœÙHH	\ËO™Ù]
-›Ý]J	ÛÝÛ™\‹ÙXœÚ]\ËœÚÝÉË	Ú]VÉÝÙXœÚ]I×JJKO˜\ÜÙ\ÚÊ
-BˆO˜\ÜÙ\ÙYJ×Ê	ÛÝÛ™\‹ÙXœÚ]\Ëœ™XY[™\ÜË]IÊJBˆO˜\ÜÙ\ÙYJ×Ê	ÛÝÛ™\‹ÙXœÚ]\Ëœ™XY[™\ÜË›Ü\˜][Û—ØØ\Xš[]Y\ÉÊJBˆO˜\ÜÙ\ÙYJ×Ê	ÛÝÛ™\‹ÙXœÚ]\Ëœ™XY[™\ÜËœ[›š[™×Ý[šÛ›ÝÛ‰ÊJBˆO˜\ÜÙ\ÙYJ×Ê	ÛÝÛ™\‹ÙXœÚ]\Ëœ™XY[™\ÜËšX\™X]	ÊJBˆO˜\ÜÙ\ÙYJ×Ê	ÛÝÛ™\‹ÙXœÚ]\Ëœ™XY[™\ÜËš[™[ÜžWØÛÛXÝY	ÊJBˆO˜\ÜÙ\ÙYJ\
-\Ü^Q]U[YNŽ˜Û\ÜÊKO™›Ü›X]
-	X\™X]]
-JBˆO˜\ÜÙ\ÙYJ	ÌIÊNÂ‚ˆ	\ËO˜\ÜÙ\Ýš[™Ó›ÝÛÛZ[œÔÝš[™Ê	ÓÕT—ÔÒUWÔ’UUWÓPT’ÑT‰Ë	™\ÜÛœÙKO™Ù]ÛÛ[
+final class ConnectorReadinessProjectionTest extends TestCase
+{
+    use ActsAsOwner, PairsConnectors, RefreshDatabase;
 
-JNÂˆ	\ËO˜\ÜÙ\Ýš[™Ó›ÝÛÛZ[œÔÝš[™Ê	Ò“Ð—ÔVSÐQÓUTÕÓ“ÕÔ‘S‘T‰Ë	™\ÜÛœÙKO™Ù]ÛÛ[
+    public function test_owner_sees_read_only_readiness_for_only_the_requested_website(): void
+    {
+        $this->asOwner();
+        $site = $this->pairedWebsite('https://readiness-owner-a.example');
+        $other = $this->pairedWebsite('https://readiness-owner-b.example');
+        $this->withHeaders($this->connectorHeaders($site))
+            ->postJson(route('api.v1.connector.inventory'), $this->inventoryPayload())
+            ->assertSuccessful();
+        $connector = $site['website']->activeConnector;
+        $heartbeatAt = now()->startOfSecond();
+        $connector->update([
+            'last_seen_at' => $heartbeatAt,
+            'last_heartbeat_at' => $heartbeatAt,
+            'last_successful_poll_at' => $heartbeatAt,
+        ]);
+        $other['website']->activeConnector->update(['connector_version' => 'OTHER_SITE_PRIVATE_MARKER']);
+        $site['website']->jobs()->create([
+            'type' => JobType::GetInventory,
+            'status' => 'queued',
+            'payload' => ['private_marker' => 'JOB_PAYLOAD_MUST_NOT_RENDER'],
+            'requested_by' => 'system',
+        ]);
 
-JNÂˆ	\ËO˜\ÜÙ\Ø[YJ×K	Üš]\ÊNÂˆ]Y]YNŽ˜\ÜÙ\›Ý[™Ô\ÚY
+        Queue::fake();
+        Http::preventStrayRequests();
+        $writes = [];
+        DB::listen(static function (QueryExecuted $query) use (&$writes): void {
+            if (preg_match('/^\s*(insert|update|delete|replace|alter|drop|create)\b/i', $query->sql)) {
+                $writes[] = $query->sql;
+            }
+        });
 
-NÂˆŽ˜\ÜÙ\›Ý[™ÔÙ[
+        $response = $this->get(route('owner.websites.show', $site['website']))->assertOk()
+            ->assertSee(__('owner.websites.readiness.title'))
+            ->assertSee(__('owner.websites.readiness.operation_capabilities'))
+            ->assertSee(__('owner.websites.readiness.running_unknown'))
+            ->assertSee(__('owner.websites.readiness.heartbeat'))
+            ->assertSee(__('owner.websites.readiness.inventory_collected'))
+            ->assertSee(app(DisplayDateTime::class)->format($heartbeatAt))
+            ->assertSee('1');
 
-NÂˆ	\ËO˜\ÜÙ\Ø[YJKÙXœÚ]R›ØŽŽœ]Y\žJ
-KOÚ\™J	ÝÙXœÚ]WÚY	Ë	Ú]VÉÝÙXœÚ]I×KOšY
-KOÚ\™J	ÜÝ]\ÉË	Ü]Y]YY	ÊKO˜ÛÝ[
+        $this->assertStringNotContainsString('OTHER_SITE_PRIVATE_MARKER', $response->getContent());
+        $this->assertStringNotContainsString('JOB_PAYLOAD_MUST_NOT_RENDER', $response->getContent());
+        $this->assertSame([], $writes);
+        Queue::assertNothingPushed();
+        Http::assertNothingSent();
+        $this->assertSame(1, WebsiteJob::query()->where('website_id', $site['website']->id)->where('status', 'queued')->count());
+        $this->assertSame(0, WebsiteJob::query()->where('website_id', $other['website']->id)->count());
+    }
 
-JNÂˆ	\ËO˜\ÜÙ\Ø[YJÙXœÚ]R›ØŽŽœ]Y\žJ
-KOÚ\™J	ÝÙXœÚ]WÚY	Ë	Ý\–ÉÝÙXœÚ]I×KOšY
-KO˜ÛÝ[
+    public function test_non_owner_roles_cannot_read_owner_readiness_page(): void
+    {
+        $site = $this->pairedWebsite('https://owner-auth.example');
 
-JNÂˆB‚ˆX›XÈ[˜Ý[Ûˆ\ÝÛ›Û—ÛÝÛ™\—Ü›Û\×ØØ[››ÝÜ™XYÛÝÛ™\—Ü™XY[™\Ü×ÜYÙJ
-Nˆ›ÚYˆÂˆ	Ú]HH	\ËOœZ\™YÙXœÚ]J	ÚÎ‹ËÛÝÛ™\‹X]]™^[\IÊNÂ‚ˆ	\ËO˜XÝ[™Ð\Ê	Ú]VÉÝÙXœÚ]I×KO˜Ý\ÝÛY\‹O\Ù\ŠKO™Ù]
-›Ý]J	ÛÝÛ™\‹ÙXœÚ]\ËœÚÝÉË	Ú]VÉÝÙXœÚ]I×JJBˆO˜\ÜÙ\™Y\™XÝ
-›Ý]J	ÛÝÛ™\‹›ÙÚ[‰ÊJNÂ‚ˆ	Ü\˜]ÜˆH\Ù\ŽŽ™˜XÝÜžJ
-KO›Ü\˜]ÜŠ
-KO˜Ü™X]J
-NÂˆ	\ËO˜XÝ[™Ð\Ê	Ü\˜]Ü‹	ÛÜ\˜]Ü‰ÊKO™Ù]
-›Ý]J	ÛÝÛ™\‹ÙXœÚ]\ËœÚÝÉË	Ú]VÉÝÙXœÚ]I×JJBˆO˜\ÜÙ\™Y\™XÝ
-›Ý]J	ÛÝÛ™\‹›ÙÚ[‰ÊJNÂˆBŸB
+        $this->actingAs($site['website']->customer->user)->get(route('owner.websites.show', $site['website']))
+            ->assertRedirect(route('owner.login'));
+
+        $operator = User::factory()->operator()->create();
+        $this->actingAs($operator, 'operator')->get(route('owner.websites.show', $site['website']))
+            ->assertRedirect(route('owner.login'));
+    }
+}

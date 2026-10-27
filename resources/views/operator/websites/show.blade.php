@@ -1,205 +1,518 @@
-Û^š›bh¥êß¢¹­…â'ŠØš–,ŞçÚº[C®+Ş²Š^­«b¢z'¶…ŠW’ÊË^ššè¾'^­ö¢•çP\ÙJ	Ğ\YZ[XØÙ\Ü×XØÙ\ÜÓ]™[	ÊB\ÙJ	Ğ\˜XÚİ\×˜XÚİ\İ]\ÉÊB\ÙJ	Ğ\˜XÚİ\×˜XÚİ\^	ÊB\ÙJ	Ğ\ÛÛ›™XİÜ—X[İ]\ÉÊB\ÙJ	Ğ\ÛÛ›™XİÜ—XÙ[œÙTİ]\ÉÊB\ÙJ	Ğ\ÛÛ›™XİÜ—›Ø”]Y]YIÊB\ÙJ	Ğ\Ü\˜]Ü—ÛÛ›™XİÜ”İ]IÊB\ÙJ	Ğ\Ü\˜]Ü—™Y\Ø[	ÊB‚[^[İ]Ë›Ü\˜]Üˆ]OH‰ÙXœÚ]KOšÜİ
+@use('App\AdminAccess\AccessLevel')
+@use('App\Backups\BackupStatus')
+@use('App\Backups\BackupText')
+@use('App\Connector\HealthStatus')
+@use('App\Connector\LicenseStatus')
+@use('App\Connector\JobQueue')
+@use('App\Operator\ConnectorState')
+@use('App\Operator\Refusal')
 
-H‚ˆˆ	\Ù\ˆH]]
-	ÛÜ\˜]Ü‰ÊKO\Ù\Š
-NÂˆ	X[H	ÙXœÚ]KOšX[Üİ]\ÈÏÈX[İ]\Î•[šÛ›İÛÂˆ	YÚ[œÈHÛÛXİ
-	[™[ÜOËOœYÚ[œÊNÂˆ	[Y\ÈHÛÛXİ
-	[™[ÜOËO[Y\ÊNÂˆ	ÛÜ™HH	[™[ÜOËO˜ÛÜ™HÏÈ×NÂˆ	ÛÛÈH	[™[ÜOËOÛÛØÛÛ[Y\˜ÙHÏÈ×NÂˆ	[™[™ÔYÚ[œÈH	YÚ[œËOÚ\™J	İ\]WØ]˜Z[X›IËYJNÂˆ	[™[™Õ[Y\ÈH	[Y\ËOÚ\™J	İ\]WØ]˜Z[X›IËYJNÂˆ	\İ\]HH	\]R›ØœËO™š\œİ
-›ˆ
-	›ØŠHOˆ	›Ø‹Oœİ]\ËOš\Ñš[˜[
+<x-layouts.operator :title="$website->host()">
+    @php
+        $user = auth('operator')->user();
+        $health = $website->health_status ?? HealthStatus::Unknown;
+        $plugins = collect($inventory?->plugins);
+        $themes = collect($inventory?->themes);
+        $core = $inventory?->core ?? [];
+        $woo = $inventory?->woocommerce ?? [];
+        $pendingPlugins = $plugins->where('update_available', true);
+        $pendingThemes = $themes->where('update_available', true);
+        $lastUpdate = $updateJobs->first(fn ($job) => $job->status->isFinal());
+        $time = fn ($at) => app(\App\Support\DisplayDateTime::class)->format($at) ?? __('operator.never');
+        $readinessTime = fn ($at) => $at ? $time(\Illuminate\Support\Carbon::parse($at)) : __('operator.never');
+        // Jump links only for the sections this operator can see.
+        $sections = array_keys(array_filter([
+            'overview' => true, 'connector' => true, 'wordpress' => true, 'plugins' => true, 'themes' => true, 'woocommerce' => true,
+            'backups' => $user->can('operator.backups.view'),
+            'security' => $user->can('operator.security.view'),
+            'admin_access' => true,
+            'activity' => $user->can('operator.audit.view'),
+        ]));
+        $tableHead = 'bg-canvas text-[11px] font-semibold tracking-[0.08em] text-muted uppercase';
+    @endphp
 
-JNÂˆ	[YHH›ˆ
-	]
-HOˆ\
-\İ\Ü\Ü^Q]U[YN˜Û\ÜÊKO™›Ü›X]
-	]
-HÏÈ×Ê	ÛÜ\˜]Ü‹›™]™\‰ÊNÂˆ	™XY[™\ÜÕ[YHH›ˆ
-	]
-HOˆ	]È	[YJ[[Z[˜]Wİ\ÜØ\˜›Ûœ\œÙJ	]
-JHˆ×Ê	ÛÜ\˜]Ü‹›™]™\‰ÊNÂˆËÈ[\[šÜÈÛ›H›ÜˆHÙXİ[ÛœÈ\ÈÜ\˜]ÜˆØ[ˆÙYK‚ˆ	ÙXİ[ÛœÈH\œ˜^WÚÙ^\Ê\œ˜^WÙš[\ŠÂˆ	Ûİ™\šY]ÉÈOˆYK	ØÛÛ›™XİÜ‰ÈOˆYK	İÛÜ™™\ÜÉÈOˆYK	ÜYÚ[œÉÈOˆYK	İ[Y\ÉÈOˆYK	İÛÛØÛÛ[Y\˜ÙIÈOˆYKˆ	Ø˜XÚİ\ÉÈOˆ	\Ù\‹O˜Ø[Š	ÛÜ\˜]Ü‹˜˜XÚİ\ËšY]ÉÊKˆ	ÜÙXİ\š]IÈOˆ	\Ù\‹O˜Ø[Š	ÛÜ\˜]Ü‹œÙXİ\š]KšY]ÉÊKˆ	ØYZ[—ØXØÙ\ÜÉÈOˆYKˆ	ØXİ]š]IÈOˆ	\Ù\‹O˜Ø[Š	ÛÜ\˜]Ü‹˜]Y]šY]ÉÊKˆJJNÂˆ	X›RXYH	Ø™ËXØ[˜\È^VÌL\H›Û\Ù[ZX›Û˜XÚÚ[™ËVÌŒ[WH^[]]Y\\˜Ø\ÙIÎÂˆ[™‚ˆ[Ü\˜]Ü‹œYÙKZXY\ˆ]OH‰ÙXœÚ]KOšÜİ
+    <x-operator.page-header :title="$website->host()" :lead="$website->url">
+        <x-slot:eyebrow>
+            <a href="{{ route('operator.websites.index') }}" class="underline underline-offset-2 hover:text-primary">{{ __('operator.detail.back') }}</a>
+            Â· <span class="font-mono">{{ $website->uuid }}</span>
+        </x-slot:eyebrow>
+        <x-slot:actions>
+            @if ($website->syntheticFixture)<x-ui.status-badge tone="warning">{{ __('owner.synthetic_fixture_badge') }}</x-ui.status-badge>@endif
+            <x-ui.status-badge :tone="$health->tone()">{{ $health->label() }}</x-ui.status-badge>
+            <x-ui.status-badge :tone="$connectorState->tone()">{{ $connectorState->label() }}</x-ui.status-badge>
+            <a class="inline-flex h-9 items-center rounded-sm border border-line px-3 text-sm font-medium hover:border-primary" href="{{ route('operator.websites.monitoring', $website) }}">{{ __('m10.site_incidents') }}</a>
+        </x-slot:actions>
+    </x-operator.page-header>
 
-Hˆ›XYH‰ÙXœÚ]KO\›‚ˆ\Ûİ™^YXœ›İÏ‚ˆH™YHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ëš[™^	ÊH_HˆÛ\ÜÏH[™\›[™H[™\›[™K[Ù™œÙ]Lˆİ™\^\š[X\HŞÈ×Ê	ÛÜ\˜]Ü‹™]Z[˜˜XÚÉÊH_OØO‚ˆ0­ÈÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	ÙXœÚ]KO]ZY_OÜÜ[‚ˆŞ\Ûİ™^YXœ›İÏ‚ˆ\Ûİ˜Xİ[ÛœÏ‚ˆYˆ
-	ÙXœÚ]KOœŞ[]XÑš^\™JO]ZKœİ]\ËX˜YÙHÛ™OHØ\›š[™ÈŞÈ×Ê	ÛİÛ™\‹œŞ[]X×Ùš^\™WØ˜YÙIÊH_OŞ]ZKœİ]\ËX˜YÙO[™Y‚ˆ]ZKœİ]\ËX˜YÙHÛ™OH‰X[OÛ™J
-HŞÈ	X[O›X™[
+    <nav aria-label="{{ __('operator.detail.sections.overview') }}" class="-mx-4 mb-5 relative overflow-x-auto px-4 sm:mx-0 sm:px-0">
+        <ul class="flex gap-1 text-sm whitespace-nowrap">
+            @foreach ($sections as $section)
+                <li><a href="#{{ str_replace('_', '-', $section) }}" class="inline-flex h-8 items-center rounded-sm border border-line bg-surface px-3 text-ink hover:border-primary">{{ __('operator.detail.sections.'.$section) }}</a></li>
+            @endforeach
+        </ul>
+    </nav>
 
-H_OŞ]ZKœİ]\ËX˜YÙO‚ˆ]ZKœİ]\ËX˜YÙHÛ™OH‰ÛÛ›™XİÜ”İ]KOÛ™J
-HŞÈ	ÛÛ›™XİÜ”İ]KO›X™[
+    <div class="grid gap-5">
+        {{-- Overview: customer, plan, website and the state of everything at a glance --}}
+        <x-operator.section :title="__('operator.detail.sections.overview')" id="overview">
+            <dl class="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <x-account.detail :label="__('operator.detail.customer')">{{ $customer?->fullName() }}</x-account.detail>
+                <x-account.detail :label="__('operator.detail.company')">{{ $customer?->company_name }}</x-account.detail>
+                <x-account.detail :label="__('operator.detail.email')">{{ $customer?->email }}</x-account.detail>
+                <x-account.detail :label="__('operator.detail.country')">@if ($customer){{ __('countries.'.$customer->country_code) !== 'countries.'.$customer->country_code ? __('countries.'.$customer->country_code) : $customer->country_code }}@endif</x-account.detail>
+                <x-account.detail :label="__('operator.detail.plan')">{{ $subscription ? $subscription->product_type->label().' Â· '.$subscription->planName() : __('operator.detail.no_subscription') }}</x-account.detail>
+                <x-account.detail :label="__('operator.detail.subscription_status')">
+                    @if ($subscription)<x-ui.status-badge :tone="$subscription->status->tone()">{{ $subscription->status->label() }}</x-ui.status-badge>@endif
+                </x-account.detail>
+                <x-account.detail :label="__('operator.detail.website_type')">{{ $website->type->label() }}</x-account.detail>
+                <x-account.detail :label="__('operator.detail.website_status')"><x-ui.status-badge :tone="$website->status->tone()">{{ $website->status->label() }}</x-ui.status-badge></x-account.detail>
+                <x-account.detail :label="__('operator.detail.connector_version')">@if ($connector?->connector_version)<span class="font-mono">{{ $connector->connector_version }}</span>@endif</x-account.detail>
+                <x-account.detail :label="__('operator.detail.connector_state')"><x-ui.status-badge :tone="$connectorState->tone()">{{ $connectorState->label() }}</x-ui.status-badge></x-account.detail>
+                <x-account.detail :label="__('operator.detail.last_heartbeat')"><span class="font-mono">{{ $time($connector?->last_heartbeat_at) }}</span></x-account.detail>
+                <x-account.detail :label="__('operator.detail.wordpress_version')">@if ($core['version'] ?? $website->wordpress_version)<span class="font-mono">{{ $core['version'] ?? $website->wordpress_version }}</span>@endif</x-account.detail>
+                <x-account.detail :label="__('operator.detail.php_version')">@if ($inventory?->php_version ?? $website->php_version)<span class="font-mono">{{ $inventory?->php_version ?? $website->php_version }}</span>@endif</x-account.detail>
+                <x-account.detail :label="__('operator.detail.woocommerce_version')">
+                    @if ($woo['installed'] ?? false)<span class="font-mono">{{ $woo['version'] ?? '' }}</span>@else{{ __('operator.detail.not_installed') }}@endif
+                </x-account.detail>
+                <x-account.detail :label="__('operator.detail.last_verified_backup')">@if ($latestVerified)<span class="font-mono">{{ $time($latestVerified->verified_at) }}</span>@endif</x-account.detail>
+                <x-account.detail :label="__('operator.detail.pending_updates')">{{ $inventory ? $inventory->updates_pending : __('operator.detail.none_reported') }}</x-account.detail>
+                <x-account.detail :label="__('operator.detail.security_state')"><x-ui.status-badge :tone="$security->state->tone()">{{ $security->state->label() }}</x-ui.status-badge></x-account.detail>
+            </dl>
 
-H_OŞ]ZKœİ]\ËX˜YÙO‚ˆHÛ\ÜÏHš[›[™KY›^NH][\ËXÙ[\ˆ›İ[™Y\ÛH›Ü™\ˆ›Ü™\‹[[™HLÈ^\ÛH›Û[YY][Hİ™\˜›Ü™\‹\š[X\Hˆ™YHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ë›[Ûš]Üš[™ÉË	ÙXœÚ]JH_HŞÈ×Ê	ÛLLœÚ]WÚ[˜ÚY[ÉÊH_OØO‚ˆŞ\Ûİ˜Xİ[ÛœÏ‚ˆŞ[Ü\˜]Ü‹œYÙKZXY\‚‚ˆ˜]ˆ\šXK[X™[HŞÈ×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ[ÛœË›İ™\šY]ÉÊH_HˆÛ\ÜÏH‹[^MX‹MH™[]]™Hİ™\™›İË^X]]ÈMÛN›^LÛNœL‚ˆ[Û\ÜÏH™›^Ø\LH^\ÛHÚ]\ÜXÙK[›İÜ˜\‚ˆ›Ü™XXÚ
-	ÙXİ[ÛœÈ\È	ÙXİ[ÛŠBˆOH™YHˆŞŞÈİ—Ü™\XÙJ	×ÉË	ËIË	ÙXİ[ÛŠH_HˆÛ\ÜÏHš[›[™KY›^N][\ËXÙ[\ˆ›İ[™Y\ÛH›Ü™\ˆ›Ü™\‹[[™H™Ë\İ\™˜XÙHLÈ^Z[šÈİ™\˜›Ü™\‹\š[X\HŞÈ×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ[ÛœË‰Ë‰ÙXİ[ÛŠH_OØOÛO‚ˆ[™›Ü™XXÚˆİ[‚ˆÛ˜]‚‚ˆ]ˆÛ\ÜÏH™ÜšYØ\MH‚ˆŞËKHİ™\šY]Îˆİ\İÛY\‹[‹ÙXœÚ]H[™Hİ]HÙˆ]™\][™È]HÛ[˜ÙHK__Bˆ[Ü\˜]Ü‹œÙXİ[Ûˆ]OH—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ[ÛœË›İ™\šY]ÉÊHˆYH›İ™\šY]È‚ˆÛ\ÜÏH™ÜšYØ\^MˆØ\^KM^\ÛHÛN™ÜšYXÛÛËLˆÎ™ÜšYXÛÛËM‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[˜İ\İÛY\‰ÊHŞÈ	İ\İÛY\ËO™[˜[YJ
-H_OŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[˜ÛÛ\[IÊHŞÈ	İ\İÛY\ËO˜ÛÛ\[WÛ˜[YH_OŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[™[XZ[	ÊHŞÈ	İ\İÛY\ËO™[XZ[_OŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[˜Ûİ[IÊHYˆ
-	İ\İÛY\Š^ŞÈ×Ê	ØÛİ[šY\Ë‰Ë‰İ\İÛY\‹O˜Ûİ[WØÛÙJHOOH	ØÛİ[šY\Ë‰Ë‰İ\İÛY\‹O˜Ûİ[WØÛÙHÈ×Ê	ØÛİ[šY\Ë‰Ë‰İ\İÛY\‹O˜Ûİ[WØÛÙJHˆ	İ\İÛY\‹O˜Ûİ[WØÛÙH_P[™YŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[œ[‰ÊHŞÈ	İXœØÜš\[ÛˆÈ	İXœØÜš\[Û‹Oœ›ÙXİİ\KO›X™[
+            @if (! empty($website->health_findings))
+                <h3 class="mt-5 text-xs font-semibold tracking-[0.08em] text-muted uppercase">{{ __('operator.detail.health_findings') }}</h3>
+                <ul class="mt-2 grid gap-1.5 text-sm sm:grid-cols-2">
+                    @foreach ($website->health_findings as $finding)
+                        @php $tone = ['pass' => 'positive', 'warning' => 'warning', 'fail' => 'danger'][$finding['status']] ?? 'neutral'; @endphp
+                        <li class="flex items-start justify-between gap-3 rounded-sm border border-line px-3 py-2">
+                            <span class="min-w-0">
+                                <span class="block text-primary">{{ $finding['label'] ?? $finding['id'] }}</span>
+                                @if (! empty($finding['message']))<span class="block text-xs text-muted">{{ $finding['message'] }}</span>@endif
+                            </span>
+                            <x-ui.status-badge :tone="$tone">{{ __('connector.finding_statuses.'.$finding['status']) }}</x-ui.status-badge>
+                        </li>
+                    @endforeach
+                </ul>
+            @endif
+        </x-operator.section>
 
-K‰È0­È	Ë‰İXœØÜš\[Û‹Oœ[“˜[YJ
-Hˆ×Ê	ÛÜ\˜]Ü‹™]Z[››×ÜİXœØÜš\[Û‰ÊH_OŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[œİXœØÜš\[Û—Üİ]\ÉÊH‚ˆYˆ
-	İXœØÜš\[ÛŠO]ZKœİ]\ËX˜YÙHÛ™OH‰İXœØÜš\[Û‹Oœİ]\ËOÛ™J
-HŞÈ	İXœØÜš\[Û‹Oœİ]\ËO›X™[
+        <x-compatibility.summary :website="$website" :snapshot="$capabilitySnapshot" :operator="true" :request-route="route('operator.websites.compatibility-check', $website)" />
 
-H_OŞ]ZKœİ]\ËX˜YÙO[™Y‚ˆŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[ÙXœÚ]Wİ\IÊHŞÈ	ÙXœÚ]KO\KO›X™[
+        {{-- Connector --}}
+        <x-operator.section :title="__('operator.detail.sections.connector')" id="connector">
+            <dl class="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <x-account.detail :label="__('operator.detail.connector_state')"><x-ui.status-badge :tone="$connectorState->tone()">{{ $connectorState->label() }}</x-ui.status-badge></x-account.detail>
+                <x-account.detail :label="__('operator.detail.last_seen')"><span class="font-mono">{{ $time($connector?->last_seen_at) }}</span></x-account.detail>
+                <x-account.detail :label="__('operator.detail.last_poll')"><span class="font-mono">{{ $time($connector?->last_successful_poll_at) }}</span></x-account.detail>
+                <x-account.detail :label="__('operator.detail.connector_version')">@if ($connector?->connector_version)<span class="font-mono">{{ $connector->connector_version }}</span>@endif</x-account.detail>
+            </dl>
+            @if ($connector?->capabilities)
+                <p class="mt-4 text-xs text-muted">{{ __('operator.connector.capabilities') }}:
+                    @foreach ($connector->capabilities as $capability)<span class="ml-1 inline-block rounded-sm bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-ink">{{ $capability }}</span>@endforeach
+                </p>
+            @endif
+            @if ($connector?->isOutdated())
+                <x-account.notice tone="warning" class="mt-4">{{ __('operator.connector.update_required', ['version' => $connector->connector_version, 'latest' => config('connector.latest_version')]) }}</x-account.notice>
+            @endif
+            <h3 class="mt-5 text-xs font-semibold tracking-[0.08em] text-muted uppercase">{{ __('operator.connector.readiness.title') }}</h3>
+            <p class="mt-2 text-xs text-muted">{{ __('operator.connector.readiness.explanation') }}</p>
+            <dl class="mt-3 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <x-account.detail :label="__('operator.connector.readiness.activity')"><x-ui.status-badge :tone="$readiness['connection']['activity_state'] === 'VERIFIED' ? 'positive' : ($readiness['connection']['activity_state'] === 'STALE' || $readiness['connection']['activity_state'] === 'REVOKED' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['connection']['activity_state']) }}</x-ui.status-badge></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.heartbeat')"><x-ui.status-badge :tone="$readiness['connection']['heartbeat_state'] === 'VERIFIED' ? 'positive' : ($readiness['connection']['heartbeat_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['connection']['heartbeat_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['connection']['last_heartbeat_at']) }}</span></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.successful_poll')"><x-ui.status-badge :tone="$readiness['connection']['poll_state'] === 'VERIFIED' ? 'positive' : ($readiness['connection']['poll_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['connection']['poll_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['connection']['last_successful_poll_at']) }}</span></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.inventory_collected')"><x-ui.status-badge :tone="$readiness['inventory']['collection_state'] === 'VERIFIED' ? 'positive' : ($readiness['inventory']['collection_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['inventory']['collection_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['inventory']['collected_at']) }}</span></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.inventory_ingested')"><x-ui.status-badge :tone="$readiness['inventory']['ingestion_state'] === 'VERIFIED' ? 'positive' : ($readiness['inventory']['ingestion_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['inventory']['ingestion_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['inventory']['ingested_at']) }}</span></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.capability_snapshot')"><x-ui.status-badge :tone="$readiness['capability_snapshot']['state'] === 'VERIFIED' ? 'positive' : ($readiness['capability_snapshot']['state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['capability_snapshot']['state']) }}</x-ui.status-badge></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.queued')">{{ $readiness['jobs']['queued'] }}</x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.waiting')">{{ $readiness['jobs']['waiting'] }}</x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.delivered')">{{ $readiness['jobs']['delivered'] }}</x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.running')"><x-ui.status-badge tone="neutral">{{ __('operator.connector.readiness.running_unknown') }}</x-ui.status-badge></x-account.detail>
+            </dl>
+            <h4 class="mt-5 text-xs font-semibold tracking-[0.08em] text-muted uppercase">{{ __('operator.connector.readiness.operation_capabilities') }}</h4>
+            <ul class="mt-2 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                @foreach ($readiness['capability_snapshot']['capabilities'] as $capability => $state)
+                    <li class="flex items-center justify-between gap-2 rounded-sm border border-line px-3 py-2"><span>{{ __('operator.connector.readiness.capabilities.'.$capability) }}</span><x-ui.status-badge :tone="$state === 'PASS' ? 'positive' : ($state === 'BLOCK' ? 'danger' : ($state === 'WARN' ? 'warning' : 'neutral'))">{{ __('operator.connector.readiness.capability_states.'.$state) }}</x-ui.status-badge></li>
+                @endforeach
+            </ul>
+            <p class="mt-4 flex items-center gap-2 text-xs text-muted"><x-ui.icon name="lock" class="size-4 text-accent-ink" />{{ __('operator.connector.credential_note') }}</p>
 
-H_OŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[ÙXœÚ]WÜİ]\ÉÊH]ZKœİ]\ËX˜YÙHÛ™OH‰ÙXœÚ]KOœİ]\ËOÛ™J
-HŞÈ	ÙXœÚ]KOœİ]\ËO›X™[
+            @can('operator.websites.manage')
+                @if ($pairingCode)
+                    <div class="mt-4 rounded-md border border-accent bg-accent-soft p-3">
+                        <p class="text-xs font-semibold tracking-[0.12em] text-muted uppercase">{{ __('operator.connector.code_label') }}</p>
+                        <p class="mt-1 font-mono text-xl font-medium tracking-[0.08em] text-primary select-all">{{ $pairingCode['code'] }}</p>
+                        <p class="mt-1 text-xs text-ink">{{ __('operator.connector.code_note', ['time' => app(\App\Support\DisplayDateTime::class)->format($pairingCode['expires_at'], 'H:i T')]) }}</p>
+                    </div>
+                @endif
+                <div class="mt-4 grid gap-3 border-t border-line pt-4 md:grid-cols-2">
+                    <form method="POST" action="{{ route('operator.websites.pairing-code', $website) }}" class="flex flex-col gap-2 rounded-sm border border-line p-3">
+                        @csrf
+                        <p class="text-xs text-muted">{{ __('operator.connector.repair_text') }}</p>
+                        <div><x-ui.button type="submit" variant="secondary" size="sm">{{ __('operator.connector.repair') }}</x-ui.button></div>
+                    </form>
+                    @if ($connector)
+                        <form method="POST" action="{{ route('operator.websites.disconnect', $website) }}" class="flex flex-col gap-2 rounded-sm border border-line p-3">
+                            @csrf
+                            <p class="text-xs text-muted">{{ __('operator.connector.disconnect_text') }}</p>
+                            <label class="flex items-start gap-2 text-xs text-ink">
+                                <input type="checkbox" name="confirm" value="1" required class="mt-0.5 size-4 rounded-sm border-line-strong accent-action">
+                                {{ __('operator.connector.disconnect_confirm') }}
+                            </label>
+                            <div><x-ui.button type="submit" variant="danger" size="sm">{{ __('operator.connector.disconnect_submit') }}</x-ui.button></div>
+                        </form>
+                    @endif
+                </div>
+            @endcan
+        </x-operator.section>
 
-H_OŞ]ZKœİ]\ËX˜YÙOŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[˜ÛÛ›™XİÜ—İ™\œÚ[Û‰ÊHYˆ
-	ÛÛ›™XİÜËO˜ÛÛ›™XİÜ—İ™\œÚ[ÛŠOÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	ÛÛ›™XİÜ‹O˜ÛÛ›™XİÜ—İ™\œÚ[Ûˆ_OÜÜ[[™YŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[˜ÛÛ›™XİÜ—Üİ]IÊH]ZKœİ]\ËX˜YÙHÛ™OH‰ÛÛ›™XİÜ”İ]KOÛ™J
-HŞÈ	ÛÛ›™XİÜ”İ]KO›X™[
+        {{-- WordPress core --}}
+        <x-operator.section :title="__('operator.detail.sections.wordpress')" id="wordpress">
+            @if ($inventory)
+                <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
+                    <span>
+                        <span class="text-muted">{{ __('operator.updates.current') }}</span> <span class="font-mono text-primary">{{ $core['version'] ?? '' }}</span>
+                        @if (($core['update_available'] ?? null) === true)
+                            Â· <span class="text-muted">{{ __('operator.updates.available') }}</span> <span class="font-mono text-warning-ink">{{ $core['latest_version'] ?? '' }}</span>
+                        @elseif (($core['update_available'] ?? null) === false)
+                            Â· <span class="text-muted">{{ __('connector.account.up_to_date') }}</span>
+                        @endif
+                    </span>
+                    @if (($core['update_available'] ?? null) === true)
+                        @can('operator.updates.run')
+                            <form method="POST" action="{{ route('operator.websites.updates.store', $website) }}">
+                                @csrf
+                                <input type="hidden" name="kind" value="core">
+                                <x-ui.button type="submit" size="sm">{{ __('operator.updates.update_core') }}</x-ui.button>
+                            </form>
+                        @endcan
+                    @endif
+                </div>
+            @else
+                <p class="text-sm text-muted">{{ __('operator.detail.none_reported') }}</p>
+            @endif
 
-H_OŞ]ZKœİ]\ËX˜YÙOŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[›\İÚX\™X]	ÊHÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	[YJ	ÛÛ›™XİÜËO›\İÚX\™X]Ø]
-H_OÜÜ[ŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[ÛÜ™™\Ü×İ™\œÚ[Û‰ÊHYˆ
-	ÛÜ™VÉİ™\œÚ[Û‰×HÏÈ	ÙXœÚ]KOÛÜ™™\Ü×İ™\œÚ[ÛŠOÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	ÛÜ™VÉİ™\œÚ[Û‰×HÏÈ	ÙXœÚ]KOÛÜ™™\Ü×İ™\œÚ[Ûˆ_OÜÜ[[™YŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[œİ™\œÚ[Û‰ÊHYˆ
-	[™[ÜOËOœİ™\œÚ[ÛˆÏÈ	ÙXœÚ]KOœİ™\œÚ[ÛŠOÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	[™[ÜOËOœİ™\œÚ[ÛˆÏÈ	ÙXœÚ]KOœİ™\œÚ[Ûˆ_OÜÜ[[™YŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[ÛÛØÛÛ[Y\˜ÙWİ™\œÚ[Û‰ÊH‚ˆYˆ
-	ÛÛÖÉÚ[œİ[Y	×HÏÈ˜[ÙJOÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	ÛÛÖÉİ™\œÚ[Û‰×HÏÈ	ÉÈ_OÜÜ[[Ù^ŞÈ×Ê	ÛÜ\˜]Ü‹™]Z[››İÚ[œİ[Y	ÊH_P[™Y‚ˆŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[›\İİ™\šYšYYØ˜XÚİ\	ÊHYˆ
-	]\İ™\šYšYY
-OÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	[YJ	]\İ™\šYšYYO™\šYšYYØ]
-H_OÜÜ[[™YŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[œ[™[™×İ\]\ÉÊHŞÈ	[™[ÜHÈ	[™[ÜKO\]\×Ü[™[™Èˆ×Ê	ÛÜ\˜]Ü‹™]Z[››Û™WÜ™\ÜY	ÊH_OŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ\š]WÜİ]IÊH]ZKœİ]\ËX˜YÙHÛ™OH‰ÙXİ\š]KOœİ]KOÛ™J
-HŞÈ	ÙXİ\š]KOœİ]KO›X™[
+            @can('operator.updates.view')
+                <h3 class="mt-5 text-xs font-semibold tracking-[0.08em] text-muted uppercase">{{ __('operator.updates.history') }}</h3>
+                @if ($lastUpdate)
+                    <p class="mt-1 text-xs text-muted">{{ __('operator.updates.last_result') }}:
+                        <span class="font-medium text-primary">{{ __('connector.jobs.types.'.$lastUpdate->type->value) }} Â· {{ JobQueue::updateTarget($lastUpdate->payload ?? []) }}</span>
+                        Â· {{ __('connector.jobs.statuses.'.$lastUpdate->status->value) }}@if ($lastUpdate->result_code) <span class="font-mono">({{ $lastUpdate->result_code }})</span>@endif
+                    </p>
+                @endif
+                @if ($updateJobs->isEmpty())
+                    <p class="mt-2 text-sm text-muted">{{ __('operator.updates.history_none') }}</p>
+                @else
+                    <div class="mt-2 relative overflow-x-auto rounded-sm border border-line">
+                        <table class="w-full min-w-[640px] text-left text-sm">
+                            <thead class="{{ $tableHead }}">
+                                <tr>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.updates.job') }}</th>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.updates.target') }}</th>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.updates.status') }}</th>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.updates.requested_by') }}</th>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.updates.time') }}</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-line">
+                                @foreach ($updateJobs as $job)
+                                    @php $tone = ['success' => 'positive', 'failed' => 'danger', 'partial' => 'warning', 'expired' => 'warning', 'cancelled' => 'neutral'][$job->status->value] ?? 'neutral'; @endphp
+                                    <tr>
+                                        <td class="px-3 py-2">{{ __('connector.jobs.types.'.$job->type->value) }}
+                                            @if ($job->backup?->status === BackupStatus::Verified)<span class="mt-0.5 flex items-center gap-1 text-xs text-accent-ink"><x-ui.icon name="shield" class="size-3.5" />{{ __('operator.updates.protected') }}</span>@endif
+                                        </td>
+                                        <td class="px-3 py-2 font-mono text-xs break-all">{{ JobQueue::updateTarget($job->payload ?? []) }}</td>
+                                        <td class="px-3 py-2"><x-ui.status-badge :tone="$tone" variant="code">{{ __('connector.jobs.statuses.'.$job->status->value) }}</x-ui.status-badge>
+                                            @if ($job->result_code)<span class="mt-1 block font-mono text-[11px] text-muted">{{ $job->result_code }}</span>@endif
+                                        </td>
+                                        <td class="px-3 py-2 font-mono text-xs">{{ $job->requested_by }}</td>
+                                        <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ $time($job->completed_at ?? $job->created_at) }}</td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                @endif
+            @endcan
+        </x-operator.section>
 
-H_OŞ]ZKœİ]\ËX˜YÙOŞXXØÛİ[™]Z[‚ˆÙ‚‚ˆYˆ
-H[\J	ÙXœÚ]KOšX[Ùš[™[™ÜÊJBˆÈÛ\ÜÏH›]MH^^È›Û\Ù[ZX›Û˜XÚÚ[™ËVÌŒ[WH^[]]Y\\˜Ø\ÙHŞÈ×Ê	ÛÜ\˜]Ü‹™]Z[šX[Ùš[™[™ÜÉÊH_OÚÏ‚ˆ[Û\ÜÏH›]LˆÜšYØ\LKH^\ÛHÛN™ÜšYXÛÛËLˆ‚ˆ›Ü™XXÚ
-	ÙXœÚ]KOšX[Ùš[™[™ÜÈ\È	š[™[™ÊBˆ	Û™HHÉÜ\ÜÉÈOˆ	ÜÜÚ]]™IË	İØ\›š[™ÉÈOˆ	İØ\›š[™ÉË	Ù˜Z[	ÈOˆ	Ù[™Ù\‰×VÉš[™[™ÖÉÜİ]\É×WHÏÈ	Û™]]˜[	ÎÈ[™ˆHÛ\ÜÏH™›^][\Ë\İ\\İYKX™]ÙY[ˆØ\LÈ›İ[™Y\ÛH›Ü™\ˆ›Ü™\‹[[™HLÈKLˆ‚ˆÜ[ˆÛ\ÜÏH›Z[‹]ËL‚ˆÜ[ˆÛ\ÜÏH˜›ØÚÈ^\š[X\HŞÈ	š[™[™ÖÉÛX™[	×HÏÈ	š[™[™ÖÉÚY	×H_OÜÜ[‚ˆYˆ
-H[\J	š[™[™ÖÉÛY\ÜØYÙI×JJOÜ[ˆÛ\ÜÏH˜›ØÚÈ^^È^[]]YŞÈ	š[™[™ÖÉÛY\ÜØYÙI×H_OÜÜ[[™Y‚ˆÜÜ[‚ˆ]ZKœİ]\ËX˜YÙHÛ™OH‰Û™HŞÈ×Ê	ØÛÛ›™XİÜ‹™š[™[™×Üİ]\Ù\Ë‰Ë‰š[™[™ÖÉÜİ]\É×JH_OŞ]ZKœİ]\ËX˜YÙO‚ˆÛO‚ˆ[™›Ü™XXÚˆİ[‚ˆ[™Y‚ˆŞ[Ü\˜]Ü‹œÙXİ[Û‚‚ˆXÛÛ\]Xš[]Kœİ[[X\HÙXœÚ]OH‰ÙXœÚ]HˆœÛ˜\ÚİH‰Ø\Xš[]TÛ˜\Úİˆ›Ü\˜]ÜHYHˆœ™\]Y\İ\›İ]OHœ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ë˜ÛÛ\]Xš[]KXÚXÚÉË	ÙXœÚ]JHˆÏ‚‚ˆŞËKHÛÛ›™XİÜˆK__Bˆ[Ü\˜]Ü‹œÙXİ[Ûˆ]OH—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ[ÛœË˜ÛÛ›™XİÜ‰ÊHˆYH˜ÛÛ›™XİÜˆ‚ˆÛ\ÜÏH™ÜšYØ\^MˆØ\^KM^\ÛHÛN™ÜšYXÛÛËLˆÎ™ÜšYXÛÛËM‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[˜ÛÛ›™XİÜ—Üİ]IÊH]ZKœİ]\ËX˜YÙHÛ™OH‰ÛÛ›™XİÜ”İ]KOÛ™J
-HŞÈ	ÛÛ›™XİÜ”İ]KO›X™[
+        {{-- Plugins and themes: pending updates first, licenses (plugins) --}}
+        @foreach (['plugins' => $plugins, 'themes' => $themes] as $group => $items)
+            <x-operator.section :title="__('operator.detail.sections.'.$group).' ('.$items->count().')'" :id="$group">
+                @if (! $inventory)
+                    <p class="text-sm text-muted">{{ __('operator.detail.none_reported') }}</p>
+                @elseif ($items->isEmpty())
+                    <p class="text-sm text-muted">{{ __('operator.updates.none') }}</p>
+                @else
+                    @php $sorted = $items->sortByDesc(fn ($item) => $item['update_available'] === true)->values(); @endphp
+                    <div class="relative overflow-x-auto rounded-sm border border-line">
+                        <table class="w-full min-w-[640px] text-left text-sm">
+                            <thead class="{{ $tableHead }}">
+                                <tr>
+                                    <th scope="col" class="px-3 py-2">{{ __('connector.account.'.($group === 'plugins' ? 'plugin' : 'theme')) }}</th>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.updates.current') }}</th>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.updates.available') }}</th>
+                                    @if ($group === 'plugins')
+                                        @can('operator.licenses.view')<th scope="col" class="px-3 py-2">{{ __('operator.licenses.title') }}</th>@endcan
+                                    @endif
+                                    <th scope="col" class="px-3 py-2"><span class="sr-only">{{ __('operator.updates.update') }}</span></th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-line">
+                                @foreach ($sorted as $item)
+                                    @php $identifier = $group === 'plugins' ? $item['file'] : $item['stylesheet']; @endphp
+                                    <tr class="align-top">
+                                        <td class="px-3 py-2">
+                                            <span class="text-primary">{{ $item['name'] }}</span>
+                                            @if ($item['active'])<span class="text-xs text-accent-ink"> Â· {{ __('connector.account.active') }}</span>@endif
+                                            <span class="block font-mono text-[11px] break-all text-muted">{{ $identifier }}</span>
+                                        </td>
+                                        <td class="px-3 py-2 font-mono text-xs">{{ $item['version'] ?? '' }}</td>
+                                        <td class="px-3 py-2 text-xs">
+                                            @if ($item['update_available'] === true)<span class="font-mono font-medium text-warning-ink">{{ $item['new_version'] ?? '' }}</span>
+                                            @elseif ($item['update_available'] === false)<span class="text-muted">{{ __('connector.account.up_to_date') }}</span>
+                                            @else<span class="text-muted">{{ __('connector.account.not_checked') }}</span>@endif
+                                        </td>
+                                        @if ($group === 'plugins')
+                                            @can('operator.licenses.view')
+                                                @php $license = LicenseStatus::tryFrom($item['license']['status'] ?? '') ?? LicenseStatus::Unknown; @endphp
+                                                <td class="px-3 py-2">
+                                                    <details class="group">
+                                                        <summary class="flex cursor-pointer list-none items-center gap-2">
+                                                            <x-ui.status-badge :tone="$license->tone()">{{ __('operator.licenses.states.'.$license->value) }}</x-ui.status-badge>
+                                                            <span class="text-[11px] text-muted underline underline-offset-2">{{ __('operator.licenses.details') }}</span>
+                                                        </summary>
+                                                        <dl class="mt-2 grid gap-1 text-xs">
+                                                            <div><dt class="inline text-muted">{{ __('operator.licenses.status') }}:</dt> <dd class="inline font-mono">{{ $license->value }}</dd></div>
+                                                            <div><dt class="inline text-muted">{{ __('operator.licenses.expires') }}:</dt> <dd class="inline font-mono">{{ $item['license']['expires_at'] ?? __('operator.none') }}</dd></div>
+                                                            <div><dt class="inline text-muted">{{ __('operator.licenses.source') }}:</dt> <dd class="inline font-mono">{{ $item['license']['source'] ?? __('operator.none') }}</dd></div>
+                                                        </dl>
+                                                    </details>
+                                                </td>
+                                            @endcan
+                                        @endif
+                                        <td class="px-3 py-2 text-right">
+                                            @if ($item['update_available'] === true)
+                                                @can('operator.updates.run')
+                                                    <form method="POST" action="{{ route('operator.websites.updates.store', $website) }}">
+                                                        @csrf
+                                                        <input type="hidden" name="kind" value="{{ $group === 'plugins' ? 'plugin' : 'theme' }}">
+                                                        <input type="hidden" name="target" value="{{ $identifier }}">
+                                                        <x-ui.button type="submit" size="sm">{{ __('operator.updates.update') }}</x-ui.button>
+                                                    </form>
+                                                @endcan
+                                            @endif
+                                        </td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                    @if ($group === 'plugins')
+                        @can('operator.licenses.view')<p class="mt-2 text-xs text-muted">{{ __('operator.licenses.note') }}</p>@endcan
+                    @endif
+                @endif
+            </x-operator.section>
+        @endforeach
 
-H_OŞ]ZKœİ]\ËX˜YÙOŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[›\İÜÙY[‰ÊHÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	[YJ	ÛÛ›™XİÜËO›\İÜÙY[—Ø]
-H_OÜÜ[ŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[›\İÜÛ	ÊHÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	[YJ	ÛÛ›™XİÜËO›\İÜİXØÙ\ÜÙ[ÜÛØ]
-H_OÜÜ[ŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[˜ÛÛ›™XİÜ—İ™\œÚ[Û‰ÊHYˆ
-	ÛÛ›™XİÜËO˜ÛÛ›™XİÜ—İ™\œÚ[ÛŠOÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	ÛÛ›™XİÜ‹O˜ÛÛ›™XİÜ—İ™\œÚ[Ûˆ_OÜÜ[[™YŞXXØÛİ[™]Z[‚ˆÙ‚ˆYˆ
-	ÛÛ›™XİÜËO˜Ø\Xš[]Y\ÊBˆÛ\ÜÏH›]M^^È^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹˜Ø\Xš[]Y\ÉÊH_N‚ˆ›Ü™XXÚ
-	ÛÛ›™XİÜ‹O˜Ø\Xš[]Y\È\È	Ø\Xš[]JOÜ[ˆÛ\ÜÏH›[LH[›[™KX›ØÚÈ›İ[™Y\ÛH™Ë\İXHLKHKLH›Û[[Û›È^VÌL\H^Z[šÈŞÈ	Ø\Xš[]H_OÜÜ[[™›Ü™XXÚˆÜ‚ˆ[™Y‚ˆYˆ
-	ÛÛ›™XİÜËOš\Óİ]]Y
+        {{-- WooCommerce --}}
+        <x-operator.section :title="__('operator.detail.sections.woocommerce')" id="woocommerce">
+            @if (! $inventory)
+                <p class="text-sm text-muted">{{ __('operator.detail.none_reported') }}</p>
+            @elseif ($woo['installed'] ?? false)
+                <p class="text-sm"><span class="font-mono text-primary">{{ $woo['version'] ?? '' }}</span>@unless ($woo['active'] ?? false) Â· <span class="text-muted">{{ __('operator.detail.inactive') }}</span>@endunless</p>
+            @else
+                <p class="text-sm text-muted">{{ __('operator.detail.not_installed') }}</p>
+            @endif
+        </x-operator.section>
 
-JBˆXXØÛİ[››İXÙHÛ™OHØ\›š[™ÈˆÛ\ÜÏH›]MŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹\]WÜ™\]Z\™Y	ËÉİ™\œÚ[Û‰ÈOˆ	ÛÛ›™XİÜ‹O˜ÛÛ›™XİÜ—İ™\œÚ[Û‹	Û]\İ	ÈOˆÛÛ™šYÊ	ØÛÛ›™XİÜ‹›]\İİ™\œÚ[Û‰ÊWJH_OŞXXØÛİ[››İXÙO‚ˆ[™Y‚ˆÈÛ\ÜÏH›]MH^^È›Û\Ù[ZX›Û˜XÚÚ[™ËVÌŒ[WH^[]]Y\\˜Ø\ÙHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜË]IÊH_OÚÏ‚ˆÛ\ÜÏH›]Lˆ^^È^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜË™^[˜][Û‰ÊH_OÜ‚ˆÛ\ÜÏH›]LÈÜšYØ\^MˆØ\^KLÈ^\ÛHÛN™ÜšYXÛÛËLˆÎ™ÜšYXÛÛËM‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜË˜Xİ]š]IÊH]ZKœİ]\ËX˜YÙHÛ™OH‰™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉØXİ]š]WÜİ]I×HOOH	Õ‘T’Q’QQ	ÈÈ	ÜÜÚ]]™IÈˆ
-	™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉØXİ]š]WÜİ]I×HOOH	ÔÕSIÈ	™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉØXİ]š]WÜİ]I×HOOH	Ô‘U“ÒÑQ	ÈÈ	İØ\›š[™ÉÈˆ	Û™]]˜[	ÊHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËœİ]\Ë‰Ë‰™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉØXİ]š]WÜİ]I×JH_OŞ]ZKœİ]\ËX˜YÙOŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËšX\™X]	ÊH]ZKœİ]\ËX˜YÙHÛ™OH‰™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉÚX\™X]Üİ]I×HOOH	Õ‘T’Q’QQ	ÈÈ	ÜÜÚ]]™IÈˆ
-	™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉÚX\™X]Üİ]I×HOOH	ÔÕSIÈÈ	İØ\›š[™ÉÈˆ	Û™]]˜[	ÊHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËœİ]\Ë‰Ë‰™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉÚX\™X]Üİ]I×JH_OŞ]ZKœİ]\ËX˜YÙOˆÜ[ˆÛ\ÜÏH™›Û[[Û›È^^ÈŞÈ	™XY[™\ÜÕ[YJ	™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉÛ\İÚX\™X]Ø]	×JH_OÜÜ[ŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËœİXØÙ\ÜÙ[ÜÛ	ÊH]ZKœİ]\ËX˜YÙHÛ™OH‰™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉÜÛÜİ]I×HOOH	Õ‘T’Q’QQ	ÈÈ	ÜÜÚ]]™IÈˆ
-	™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉÜÛÜİ]I×HOOH	ÔÕSIÈÈ	İØ\›š[™ÉÈˆ	Û™]]˜[	ÊHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËœİ]\Ë‰Ë‰™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉÜÛÜİ]I×JH_OŞ]ZKœİ]\ËX˜YÙOˆÜ[ˆÛ\ÜÏH™›Û[[Û›È^^ÈŞÈ	™XY[™\ÜÕ[YJ	™XY[™\ÜÖÉØÛÛ›™Xİ[Û‰×VÉÛ\İÜİXØÙ\ÜÙ[ÜÛØ]	×JH_OÜÜ[ŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËš[™[ÜWØÛÛXİY	ÊH]ZKœİ]\ËX˜YÙHÛ™OH‰™XY[™\ÜÖÉÚ[™[ÜI×VÉØÛÛXİ[Û—Üİ]I×HOOH	Õ‘T’Q’QQ	ÈÈ	ÜÜÚ]]™IÈˆ
-	™XY[™\ÜÖÉÚ[™[ÜI×VÉØÛÛXİ[Û—Üİ]I×HOOH	ÔÕSIÈÈ	İØ\›š[™ÉÈˆ	Û™]]˜[	ÊHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËœİ]\Ë‰Ë‰™XY[™\ÜÖÉÚ[™[ÜI×VÉØÛÛXİ[Û—Üİ]I×JH_OŞ]ZKœİ]\ËX˜YÙOˆÜ[ˆÛ\ÜÏH™›Û[[Û›È^^ÈŞÈ	™XY[™\ÜÕ[YJ	™XY[™\ÜÖÉÚ[™[ÜI×VÉØÛÛXİYØ]	×JH_OÜÜ[ŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËš[™[ÜWÚ[™Ù\İY	ÊH]ZKœİ]\ËX˜YÙHÛ™OH‰™XY[™\ÜÖÉÚ[™[ÜI×VÉÚ[™Ù\İ[Û—Üİ]I×HOOH	Õ‘T’Q’QQ	ÈÈ	ÜÜÚ]]™IÈˆ
-	™XY[™\ÜÖÉÚ[™[ÜI×VÉÚ[™Ù\İ[Û—Üİ]I×HOOH	ÔÕSIÈÈ	İØ\›š[™ÉÈˆ	Û™]]˜[	ÊHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËœİ]\Ë‰Ë‰™XY[™\ÜÖÉÚ[™[ÜI×VÉÚ[™Ù\İ[Û—Üİ]I×JH_OŞ]ZKœİ]\ËX˜YÙOˆÜ[ˆÛ\ÜÏH™›Û[[Û›È^^ÈŞÈ	™XY[™\ÜÕ[YJ	™XY[™\ÜÖÉÚ[™[ÜI×VÉÚ[™Ù\İYØ]	×JH_OÜÜ[ŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜË˜Ø\Xš[]WÜÛ˜\Úİ	ÊH]ZKœİ]\ËX˜YÙHÛ™OH‰™XY[™\ÜÖÉØØ\Xš[]WÜÛ˜\Úİ	×VÉÜİ]I×HOOH	Õ‘T’Q’QQ	ÈÈ	ÜÜÚ]]™IÈˆ
-	™XY[™\ÜÖÉØØ\Xš[]WÜÛ˜\Úİ	×VÉÜİ]I×HOOH	ÔÕSIÈÈ	İØ\›š[™ÉÈˆ	Û™]]˜[	ÊHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËœİ]\Ë‰Ë‰™XY[™\ÜÖÉØØ\Xš[]WÜÛ˜\Úİ	×VÉÜİ]I×JH_OŞ]ZKœİ]\ËX˜YÙOŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËœ]Y]YY	ÊHŞÈ	™XY[™\ÜÖÉÚ›ØœÉ×VÉÜ]Y]YY	×H_OŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËØZ][™ÉÊHŞÈ	™XY[™\ÜÖÉÚ›ØœÉ×VÉİØZ][™É×H_OŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜË™[]™\™Y	ÊHŞÈ	™XY[™\ÜÖÉÚ›ØœÉ×VÉÙ[]™\™Y	×H_OŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËœ[›š[™ÉÊH]ZKœİ]\ËX˜YÙHÛ™OH›™]]˜[ŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËœ[›š[™×İ[šÛ›İÛ‰ÊH_OŞ]ZKœİ]\ËX˜YÙOŞXXØÛİ[™]Z[‚ˆÙ‚ˆÛ\ÜÏH›]MH^^È›Û\Ù[ZX›Û˜XÚÚ[™ËVÌŒ[WH^[]]Y\\˜Ø\ÙHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜË›Ü\˜][Û—ØØ\Xš[]Y\ÉÊH_OÚ‚ˆ[Û\ÜÏH›]LˆÜšYØ\Lˆ^\ÛHÛN™ÜšYXÛÛËLˆÎ™ÜšYXÛÛËM‚ˆ›Ü™XXÚ
-	™XY[™\ÜÖÉØØ\Xš[]WÜÛ˜\Úİ	×VÉØØ\Xš[]Y\É×H\È	Ø\Xš[]HOˆ	İ]JBˆHÛ\ÜÏH™›^][\ËXÙ[\ˆ\İYKX™]ÙY[ˆØ\Lˆ›İ[™Y\ÛH›Ü™\ˆ›Ü™\‹[[™HLÈKLˆÜ[ŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜË˜Ø\Xš[]Y\Ë‰Ë‰Ø\Xš[]JH_OÜÜ[]ZKœİ]\ËX˜YÙHÛ™OH‰İ]HOOH	ÔTÔÉÈÈ	ÜÜÚ]]™IÈˆ
-	İ]HOOH	Ğ“ĞÒÉÈÈ	Ù[™Ù\‰Èˆ
-	İ]HOOH	ÕĞT“‰ÈÈ	İØ\›š[™ÉÈˆ	Û™]]˜[	ÊJHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜË˜Ø\Xš[]WÜİ]\Ë‰Ë‰İ]JH_OŞ]ZKœİ]\ËX˜YÙOÛO‚ˆ[™›Ü™XXÚˆİ[‚ˆÛ\ÜÏH›]M›^][\ËXÙ[\ˆØ\Lˆ^^È^[]]Y]ZKšXÛÛˆ˜[YOH›ØÚÈˆÛ\ÜÏHœÚ^™KM^XXØÙ[Z[šÈˆÏŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹˜Ü™Y[X[Û›İIÊH_OÜ‚‚ˆØ[Š	ÛÜ\˜]Ü‹ÙXœÚ]\Ë›X[˜YÙIÊBˆYˆ
-	Z\š[™ĞÛÙJBˆ]ˆÛ\ÜÏH›]M›İ[™Y[Y›Ü™\ˆ›Ü™\‹XXØÙ[™ËXXØÙ[\ÛÙLÈ‚ˆÛ\ÜÏH^^È›Û\Ù[ZX›Û˜XÚÚ[™ËVÌŒL™[WH^[]]Y\\˜Ø\ÙHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹˜ÛÙWÛX™[	ÊH_OÜ‚ˆÛ\ÜÏH›]LH›Û[[Û›È^^›Û[YY][H˜XÚÚ[™ËVÌŒ[WH^\š[X\HÙ[XİX[ŞÈ	Z\š[™ĞÛÙVÉØÛÙI×H_OÜ‚ˆÛ\ÜÏH›]LH^^È^Z[šÈŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹˜ÛÙWÛ›İIËÉİ[YIÈOˆ\
-\İ\Ü\Ü^Q]U[YN˜Û\ÜÊKO™›Ü›X]
-	Z\š[™ĞÛÙVÉÙ^\™\×Ø]	×K	ÒšH	ÊWJH_OÜ‚ˆÙ]‚ˆ[™Y‚ˆ]ˆÛ\ÜÏH›]MÜšYØ\LÈ›Ü™\‹]›Ü™\‹[[™HMY™ÜšYXÛÛËLˆ‚ˆ›Ü›HY]ÙH”ÔÕˆXİ[ÛHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\ËœZ\š[™ËXÛÙIË	ÙXœÚ]JH_HˆÛ\ÜÏH™›^›^XÛÛØ\Lˆ›İ[™Y\ÛH›Ü™\ˆ›Ü™\‹[[™HLÈ‚ˆÜÜ™‚ˆÛ\ÜÏH^^È^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™\Z\—İ^	ÊH_OÜ‚ˆ]]ZK˜]Ûˆ\OHœİX›Z]ˆ˜\šX[HœÙXÛÛ™\HˆÚ^™OHœÛHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™\Z\‰ÊH_OŞ]ZK˜]ÛÙ]‚ˆÙ›Ü›O‚ˆYˆ
-	ÛÛ›™XİÜŠBˆ›Ü›HY]ÙH”ÔÕˆXİ[ÛHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ë™\ØÛÛ›™Xİ	Ë	ÙXœÚ]JH_HˆÛ\ÜÏH™›^›^XÛÛØ\Lˆ›İ[™Y\ÛH›Ü™\ˆ›Ü™\‹[[™HLÈ‚ˆÜÜ™‚ˆÛ\ÜÏH^^È^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹™\ØÛÛ›™Xİİ^	ÊH_OÜ‚ˆX™[Û\ÜÏH™›^][\Ë\İ\Ø\Lˆ^^È^Z[šÈ‚ˆ[œ]\OH˜ÚXÚØ›Şˆ˜[YOH˜ÛÛ™š\›Hˆ˜[YOHŒHˆ™\]Z\™YÛ\ÜÏH›]LHÚ^™KM›İ[™Y\ÛH›Ü™\‹[[™K\İ›Û™ÈXØÙ[XXİ[Ûˆ‚ˆŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹™\ØÛÛ›™XİØÛÛ™š\›IÊH_BˆÛX™[‚ˆ]]ZK˜]Ûˆ\OHœİX›Z]ˆ˜\šX[H™[™Ù\ˆˆÚ^™OHœÛHŞÈ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹™\ØÛÛ›™XİÜİX›Z]	ÊH_OŞ]ZK˜]ÛÙ]‚ˆÙ›Ü›O‚ˆ[™Y‚ˆÙ]‚ˆ[™Ø[‚ˆŞ[Ü\˜]Ü‹œÙXİ[Û‚‚ˆŞËKHÛÜ™™\ÜÈÛÜ™HK__Bˆ[Ü\˜]Ü‹œÙXİ[Ûˆ]OH—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ[ÛœËÛÜ™™\ÜÉÊHˆYHÛÜ™™\ÜÈ‚ˆYˆ
-	[™[ÜJBˆ]ˆÛ\ÜÏH™›^›^]Ü˜\][\ËXÙ[\ˆ\İYKX™]ÙY[ˆØ\LÈ^\ÛH‚ˆÜ[‚ˆÜ[ˆÛ\ÜÏH^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ë˜İ\œ™[	ÊH_OÜÜ[ˆÜ[ˆÛ\ÜÏH™›Û[[Û›È^\š[X\HŞÈ	ÛÜ™VÉİ™\œÚ[Û‰×HÏÈ	ÉÈ_OÜÜ[‚ˆYˆ
+        {{-- Backups --}}
+        @can('operator.backups.view')
+            <x-operator.section :title="__('operator.detail.sections.backups')" id="backups">
+                @can('operator.backups.run')
+                    <x-slot:action>
+                        <form method="POST" action="{{ route('operator.websites.backups.store', $website) }}">
+                            @csrf
+                            <x-ui.button type="submit" size="sm">{{ __('operator.backups.request') }}</x-ui.button>
+                        </form>
+                    </x-slot:action>
+                @endcan
 
-	ÛÜ™VÉİ\]WØ]˜Z[X›I×HÏÈ[
-HOOHYJBˆ0­ÈÜ[ˆÛ\ÜÏH^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ë˜]˜Z[X›IÊH_OÜÜ[ˆÜ[ˆÛ\ÜÏH™›Û[[Û›È^]Ø\›š[™ËZ[šÈŞÈ	ÛÜ™VÉÛ]\İİ™\œÚ[Û‰×HÏÈ	ÉÈ_OÜÜ[‚ˆ[ÙZYˆ
+                <dl class="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                    <x-account.detail :label="__('operator.backups.schedule')">{{ $backupPolicy->frequency ? __('backups.account.frequencies.'.$backupPolicy->frequency) : '' }}</x-account.detail>
+                    <x-account.detail :label="__('operator.backups.retention')">
+                        @if ($backupPolicy->retentionCount && $backupPolicy->retentionDays){{ __('operator.backups.retention_value', ['count' => $backupPolicy->retentionCount, 'days' => $backupPolicy->retentionDays]) }}@elseif ($backupPolicy->retentionCount){{ __('operator.backups.retention_count', ['count' => $backupPolicy->retentionCount]) }}@elseif ($backupPolicy->retentionDays){{ __('operator.backups.retention_days', ['days' => $backupPolicy->retentionDays]) }}@endif
+                    </x-account.detail>
+                    <x-account.detail :label="__('operator.backups.storage')">@if ($backupPolicy->storage)<span class="font-mono">{{ $backupPolicy->storage }}</span>@endif</x-account.detail>
+                    <x-account.detail :label="__('operator.detail.last_verified_backup')">@if ($latestVerified)<span class="font-mono">{{ $time($latestVerified->verified_at) }}</span>@endif</x-account.detail>
+                </dl>
+                @unless ($backupPolicy->eligible)
+                    <p class="mt-3 text-xs text-warning-ink">{{ Refusal::message($backupPolicy->refusal) }}</p>
+                @endunless
 
-	ÛÜ™VÉİ\]WØ]˜Z[X›I×HÏÈ[
-HOOH˜[ÙJBˆ0­ÈÜ[ˆÛ\ÜÏH^[]]YŞÈ×Ê	ØÛÛ›™XİÜ‹˜XØÛİ[\İ×Ù]IÊH_OÜÜ[‚ˆ[™Y‚ˆÜÜ[‚ˆYˆ
+                @if ($backups->isEmpty())
+                    <p class="mt-4 text-sm text-muted">{{ __('operator.backups.none') }}</p>
+                @else
+                    <div class="mt-4 relative overflow-x-auto rounded-sm border border-line">
+                        <table class="w-full min-w-[720px] text-left text-sm">
+                            <thead class="{{ $tableHead }}">
+                                <tr>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.backups.created') }}</th>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.backups.type') }}</th>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.backups.reason') }}</th>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.backups.status') }}</th>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.backups.size') }}</th>
+                                    <th scope="col" class="px-3 py-2">{{ __('operator.backups.expires') }}</th>
+                                    <th scope="col" class="px-3 py-2"><span class="sr-only">{{ __('operator.backups.restore') }}</span></th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-line">
+                                @foreach ($backups as $backup)
+                                    <tr class="align-top">
+                                        <td class="px-3 py-2 font-mono text-xs whitespace-nowrap">{{ $time($backup->created_at) }}</td>
+                                        <td class="px-3 py-2 text-xs">{{ $backup->type->label() }}</td>
+                                        <td class="px-3 py-2 text-xs">{{ $backup->reason->label() }}</td>
+                                        <td class="px-3 py-2">
+                                            <x-ui.status-badge :tone="$backup->status->tone()" variant="code">{{ $backup->status->label() }}</x-ui.status-badge>
+                                            @if ($backup->verified_at)<span class="mt-1 block font-mono text-[11px] text-muted">{{ __('operator.backups.verified') }} {{ $time($backup->verified_at) }}</span>@endif
+                                            @if ($backup->error_code)<span class="mt-1 block text-[11px] text-danger-ink">{{ BackupText::error($backup->error_code) }} <span class="font-mono">({{ $backup->error_code }})</span></span>@endif
+                                        </td>
+                                        <td class="px-3 py-2 font-mono text-xs">{{ BackupText::size($backup->total_size) }}</td>
+                                        <td class="px-3 py-2 font-mono text-xs whitespace-nowrap text-muted">{{ app(\App\Support\DisplayDateTime::class)->format($backup->expires_at) ?? __('operator.none') }}</td>
+                                        <td class="px-3 py-2 text-right">
+                                            @if (in_array($backup->id, $restorable, true))
+                                                <x-ui.button :href="route('operator.websites.backups.restore', [$website, $backup])" variant="secondary" size="sm">{{ __('operator.backups.restore') }}</x-ui.button>
+                                            @endif
+                                        </td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                    @can('operator.backups.restore')
+                        @if (! $restoreIsolationSupported && $backups->isNotEmpty())
+                            <x-account.notice class="mt-2">{{ __('operator.backups.restore_isolation_unavailable') }}</x-account.notice>
+                        @else
+                            <p class="mt-2 text-xs text-muted">{{ __('operator.backups.restore_when') }}</p>
+                        @endif
+                    @endcan
+                @endif
 
-	ÛÜ™VÉİ\]WØ]˜Z[X›I×HÏÈ[
-HOOHYJBˆØ[Š	ÛÜ\˜]Ü‹\]\Ëœ[‰ÊBˆ›Ü›HY]ÙH”ÔÕˆXİ[ÛHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ë\]\ËœİÜ™IË	ÙXœÚ]JH_H‚ˆÜÜ™‚ˆ[œ]\OHšY[ˆˆ˜[YOHšÚ[™ˆ˜[YOH˜ÛÜ™H‚ˆ]ZK˜]Ûˆ\OHœİX›Z]ˆÚ^™OHœÛHŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ë\]WØÛÜ™IÊH_OŞ]ZK˜]Û‚ˆÙ›Ü›O‚ˆ[™Ø[‚ˆ[™Y‚ˆÙ]‚ˆ[ÙBˆÛ\ÜÏH^\ÛH^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹™]Z[››Û™WÜ™\ÜY	ÊH_OÜ‚ˆ[™Y‚‚ˆØ[Š	ÛÜ\˜]Ü‹\]\ËšY]ÉÊBˆÈÛ\ÜÏH›]MH^^È›Û\Ù[ZX›Û˜XÚÚ[™ËVÌŒ[WH^[]]Y\\˜Ø\ÙHŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ëš\İÜIÊH_OÚÏ‚ˆYˆ
-	\İ\]JBˆÛ\ÜÏH›]LH^^È^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ë›\İÜ™\İ[	ÊH_N‚ˆÜ[ˆÛ\ÜÏH™›Û[YY][H^\š[X\HŞÈ×Ê	ØÛÛ›™XİÜ‹š›ØœË\\Ë‰Ë‰\İ\]KO\KO˜[YJH_H0­ÈŞÈ›Ø”]Y]YN\]U\™Ù]
-	\İ\]KOœ^[ØYÏÈ×JH_OÜÜ[‚ˆ0­ÈŞÈ×Ê	ØÛÛ›™XİÜ‹š›ØœËœİ]\Ù\Ë‰Ë‰\İ\]KOœİ]\ËO˜[YJH_PYˆ
-	\İ\]KOœ™\İ[ØÛÙJHÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŠŞÈ	\İ\]KOœ™\İ[ØÛÙH_JOÜÜ[[™Y‚ˆÜ‚ˆ[™Y‚ˆYˆ
-	\]R›ØœËOš\Ñ[\J
-JBˆÛ\ÜÏH›]Lˆ^\ÛH^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ëš\İÜWÛ›Û™IÊH_OÜ‚ˆ[ÙBˆ]ˆÛ\ÜÏH›]Lˆ™[]]™Hİ™\™›İË^X]]È›İ[™Y\ÛH›Ü™\ˆ›Ü™\‹[[™H‚ˆX›HÛ\ÜÏHËY[Z[‹]ËVÍH^[Y^\ÛH‚ˆXYÛ\ÜÏHŞÈ	X›RXY_H‚ˆ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ëš›Ø‰ÊH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ë\™Ù]	ÊH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ëœİ]\ÉÊH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ëœ™\]Y\İYØIÊH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ë[YIÊH_Oİ‚ˆİ‚ˆİXY‚ˆ›ÙHÛ\ÜÏH™]šYK^H]šYK[[™H‚ˆ›Ü™XXÚ
-	\]R›ØœÈ\È	›ØŠBˆ	Û™HHÉÜİXØÙ\ÜÉÈOˆ	ÜÜÚ]]™IË	Ù˜Z[Y	ÈOˆ	Ù[™Ù\‰Ë	Ü\X[	ÈOˆ	İØ\›š[™ÉË	Ù^\™Y	ÈOˆ	İØ\›š[™ÉË	ØØ[˜Ù[Y	ÈOˆ	Û™]]˜[	×VÉ›Ø‹Oœİ]\ËO˜[YWHÏÈ	Û™]]˜[	ÎÈ[™ˆ‚ˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ØÛÛ›™XİÜ‹š›ØœË\\Ë‰Ë‰›Ø‹O\KO˜[YJH_BˆYˆ
-	›Ø‹O˜˜XÚİ\ËOœİ]\ÈOOH˜XÚİ\İ]\Î•™\šYšYY
-OÜ[ˆÛ\ÜÏH›]LH›^][\ËXÙ[\ˆØ\LH^^È^XXØÙ[Z[šÈ]ZKšXÛÛˆ˜[YOHœÚY[ˆÛ\ÜÏHœÚ^™KLËHˆÏŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ëœ›İXİY	ÊH_OÜÜ[[™Y‚ˆİ‚ˆÛ\ÜÏHœLÈKLˆ›Û[[Û›È^^Èœ™XZËX[ŞÈ›Ø”]Y]YN\]U\™Ù]
-	›Ø‹Oœ^[ØYÏÈ×JH_Oİ‚ˆÛ\ÜÏHœLÈKLˆ]ZKœİ]\ËX˜YÙHÛ™OH‰Û™Hˆ˜\šX[H˜ÛÙHŞÈ×Ê	ØÛÛ›™XİÜ‹š›ØœËœİ]\Ù\Ë‰Ë‰›Ø‹Oœİ]\ËO˜[YJH_OŞ]ZKœİ]\ËX˜YÙO‚ˆYˆ
-	›Ø‹Oœ™\İ[ØÛÙJOÜ[ˆÛ\ÜÏH›]LH›ØÚÈ›Û[[Û›È^VÌL\H^[]]YŞÈ	›Ø‹Oœ™\İ[ØÛÙH_OÜÜ[[™Y‚ˆİ‚ˆÛ\ÜÏHœLÈKLˆ›Û[[Û›È^^ÈŞÈ	›Ø‹Oœ™\]Y\İYØH_Oİ‚ˆÛ\ÜÏHœLÈKLˆ›Û[[Û›È^^ÈÚ]\ÜXÙK[›İÜ˜\^[]]YŞÈ	[YJ	›Ø‹O˜ÛÛ\]YØ]ÏÈ	›Ø‹O˜Ü™X]YØ]
-H_Oİ‚ˆİ‚ˆ[™›Ü™XXÚˆİ›ÙO‚ˆİX›O‚ˆÙ]‚ˆ[™Y‚ˆ[™Ø[‚ˆŞ[Ü\˜]Ü‹œÙXİ[Û‚‚ˆŞËKHYÚ[œÈ[™[Y\Îˆ[™[™È\]\Èš\œİXÙ[œÙ\È
-YÚ[œÊHK__Bˆ›Ü™XXÚ
-ÉÜYÚ[œÉÈOˆ	YÚ[œË	İ[Y\ÉÈOˆ	[Y\×H\È	Ü›İ\Oˆ	][\ÊBˆ[Ü\˜]Ü‹œÙXİ[Ûˆ]OH—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ[ÛœË‰Ë‰Ü›İ\
-K‰È
-	Ë‰][\ËO˜Ûİ[
+                @if ($restores->isNotEmpty())
+                    <h3 class="mt-5 text-xs font-semibold tracking-[0.08em] text-muted uppercase">{{ __('operator.backups.restores') }}</h3>
+                    <ul class="mt-2 divide-y divide-line text-sm">
+                        @foreach ($restores as $restore)
+                            <li class="flex flex-wrap items-center justify-between gap-2 py-2">
+                                <span>{{ $restore->scope->label() }} Â· <span class="font-mono text-xs text-muted">{{ $time($restore->backup?->created_at) }}</span>
+                                    @if ($restore->error_code)<span class="block font-mono text-[11px] text-danger-ink">{{ $restore->error_code }}</span>@endif
+                                </span>
+                                <span class="flex items-center gap-2">
+                                    <span class="font-mono text-xs text-muted">{{ $restore->requested_by }}</span>
+                                    <x-ui.status-badge :tone="$restore->status->tone()">{{ $restore->status->label() }}</x-ui.status-badge>
+                                </span>
+                            </li>
+                        @endforeach
+                    </ul>
+                @endif
+            </x-operator.section>
+        @endcan
 
-K‰ÊIÈˆšYH‰Ü›İ\‚ˆYˆ
-H	[™[ÜJBˆÛ\ÜÏH^\ÛH^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹™]Z[››Û™WÜ™\ÜY	ÊH_OÜ‚ˆ[ÙZYˆ
-	][\ËOš\Ñ[\J
-JBˆÛ\ÜÏH^\ÛH^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ë››Û™IÊH_OÜ‚ˆ[ÙBˆ	ÛÜYH	][\ËOœÛÜQ\ØÊ›ˆ
-	][JHOˆ	][VÉİ\]WØ]˜Z[X›I×HOOHYJKO˜[Y\Ê
-NÈ[™ˆ]ˆÛ\ÜÏHœ™[]]™Hİ™\™›İË^X]]È›İ[™Y\ÛH›Ü™\ˆ›Ü™\‹[[™H‚ˆX›HÛ\ÜÏHËY[Z[‹]ËVÍH^[Y^\ÛH‚ˆXYÛ\ÜÏHŞÈ	X›RXY_H‚ˆ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ØÛÛ›™XİÜ‹˜XØÛİ[‰ËŠ	Ü›İ\OOH	ÜYÚ[œÉÈÈ	ÜYÚ[‰Èˆ	İ[YIÊJH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ë˜İ\œ™[	ÊH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ë˜]˜Z[X›IÊH_Oİ‚ˆYˆ
-	Ü›İ\OOH	ÜYÚ[œÉÊBˆØ[Š	ÛÜ\˜]Ü‹›XÙ[œÙ\ËšY]ÉÊOØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹›XÙ[œÙ\Ë]IÊH_Oİ[™Ø[‚ˆ[™Y‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆÜ[ˆÛ\ÜÏHœÜ‹[Û›HŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ë\]IÊH_OÜÜ[İ‚ˆİ‚ˆİXY‚ˆ›ÙHÛ\ÜÏH™]šYK^H]šYK[[™H‚ˆ›Ü™XXÚ
-	ÛÜY\È	][JBˆ	Y[YšY\ˆH	Ü›İ\OOH	ÜYÚ[œÉÈÈ	][VÉÙš[I×Hˆ	][VÉÜİ[\ÚY]	×NÈ[™ˆˆÛ\ÜÏH˜[YÛ‹]Ü‚ˆÛ\ÜÏHœLÈKLˆ‚ˆÜ[ˆÛ\ÜÏH^\š[X\HŞÈ	][VÉÛ˜[YI×H_OÜÜ[‚ˆYˆ
-	][VÉØXİ]™I×JOÜ[ˆÛ\ÜÏH^^È^XXØÙ[Z[šÈˆ0­ÈŞÈ×Ê	ØÛÛ›™XİÜ‹˜XØÛİ[˜Xİ]™IÊH_OÜÜ[[™Y‚ˆÜ[ˆÛ\ÜÏH˜›ØÚÈ›Û[[Û›È^VÌL\Hœ™XZËX[^[]]YŞÈ	Y[YšY\ˆ_OÜÜ[‚ˆİ‚ˆÛ\ÜÏHœLÈKLˆ›Û[[Û›È^^ÈŞÈ	][VÉİ™\œÚ[Û‰×HÏÈ	ÉÈ_Oİ‚ˆÛ\ÜÏHœLÈKLˆ^^È‚ˆYˆ
-	][VÉİ\]WØ]˜Z[X›I×HOOHYJOÜ[ˆÛ\ÜÏH™›Û[[Û›È›Û[YY][H^]Ø\›š[™ËZ[šÈŞÈ	][VÉÛ™]×İ™\œÚ[Û‰×HÏÈ	ÉÈ_OÜÜ[‚ˆ[ÙZYˆ
-	][VÉİ\]WØ]˜Z[X›I×HOOH˜[ÙJOÜ[ˆÛ\ÜÏH^[]]YŞÈ×Ê	ØÛÛ›™XİÜ‹˜XØÛİ[\İ×Ù]IÊH_OÜÜ[‚ˆ[ÙOÜ[ˆÛ\ÜÏH^[]]YŞÈ×Ê	ØÛÛ›™XİÜ‹˜XØÛİ[››İØÚXÚÙY	ÊH_OÜÜ[[™Y‚ˆİ‚ˆYˆ
-	Ü›İ\OOH	ÜYÚ[œÉÊBˆØ[Š	ÛÜ\˜]Ü‹›XÙ[œÙ\ËšY]ÉÊBˆ	XÙ[œÙHHXÙ[œÙTİ]\ÎQœ›ÛJ	][VÉÛXÙ[œÙI×VÉÜİ]\É×HÏÈ	ÉÊHÏÈXÙ[œÙTİ]\Î•[šÛ›İÛÈ[™ˆÛ\ÜÏHœLÈKLˆ‚ˆ]Z[ÈÛ\ÜÏH™Ü›İ\‚ˆİ[[X\HÛ\ÜÏH™›^İ\œÛÜ‹\Ú[\ˆ\İ[›Û™H][\ËXÙ[\ˆØ\Lˆ‚ˆ]ZKœİ]\ËX˜YÙHÛ™OH‰XÙ[œÙKOÛ™J
-HŞÈ×Ê	ÛÜ\˜]Ü‹›XÙ[œÙ\Ëœİ]\Ë‰Ë‰XÙ[œÙKO˜[YJH_OŞ]ZKœİ]\ËX˜YÙO‚ˆÜ[ˆÛ\ÜÏH^VÌL\H^[]]Y[™\›[™H[™\›[™K[Ù™œÙ]LˆŞÈ×Ê	ÛÜ\˜]Ü‹›XÙ[œÙ\Ë™]Z[ÉÊH_OÜÜ[‚ˆÜİ[[X\O‚ˆÛ\ÜÏH›]LˆÜšYØ\LH^^È‚ˆ]Û\ÜÏHš[›[™H^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹›XÙ[œÙ\Ëœİ]\ÉÊH_NÙˆÛ\ÜÏHš[›[™H›Û[[Û›ÈŞÈ	XÙ[œÙKO˜[YH_OÙÙ]‚ˆ]Û\ÜÏHš[›[™H^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹›XÙ[œÙ\Ë™^\™\ÉÊH_NÙˆÛ\ÜÏHš[›[™H›Û[[Û›ÈŞÈ	][VÉÛXÙ[œÙI×VÉÙ^\™\×Ø]	×HÏÈ×Ê	ÛÜ\˜]Ü‹››Û™IÊH_OÙÙ]‚ˆ]Û\ÜÏHš[›[™H^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹›XÙ[œÙ\ËœÛİ\˜ÙIÊH_NÙˆÛ\ÜÏHš[›[™H›Û[[Û›ÈŞÈ	][VÉÛXÙ[œÙI×VÉÜÛİ\˜ÙI×HÏÈ×Ê	ÛÜ\˜]Ü‹››Û™IÊH_OÙÙ]‚ˆÙ‚ˆÙ]Z[Ï‚ˆİ‚ˆ[™Ø[‚ˆ[™Y‚ˆÛ\ÜÏHœLÈKLˆ^\šYÚ‚ˆYˆ
-	][VÉİ\]WØ]˜Z[X›I×HOOHYJBˆØ[Š	ÛÜ\˜]Ü‹\]\Ëœ[‰ÊBˆ›Ü›HY]ÙH”ÔÕˆXİ[ÛHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ë\]\ËœİÜ™IË	ÙXœÚ]JH_H‚ˆÜÜ™‚ˆ[œ]\OHšY[ˆˆ˜[YOHšÚ[™ˆ˜[YOHŞÈ	Ü›İ\OOH	ÜYÚ[œÉÈÈ	ÜYÚ[‰Èˆ	İ[YIÈ_H‚ˆ[œ]\OHšY[ˆˆ˜[YOH\™Ù]ˆ˜[YOHŞÈ	Y[YšY\ˆ_H‚ˆ]ZK˜]Ûˆ\OHœİX›Z]ˆÚ^™OHœÛHŞÈ×Ê	ÛÜ\˜]Ü‹\]\Ë\]IÊH_OŞ]ZK˜]Û‚ˆÙ›Ü›O‚ˆ[™Ø[‚ˆ[™Y‚ˆİ‚ˆİ‚ˆ[™›Ü™XXÚˆİ›ÙO‚ˆİX›O‚ˆÙ]‚ˆYˆ
-	Ü›İ\OOH	ÜYÚ[œÉÊBˆØ[Š	ÛÜ\˜]Ü‹›XÙ[œÙ\ËšY]ÉÊOÛ\ÜÏH›]Lˆ^^È^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹›XÙ[œÙ\Ë››İIÊH_OÜ[™Ø[‚ˆ[™Y‚ˆ[™Y‚ˆŞ[Ü\˜]Ü‹œÙXİ[Û‚ˆ[™›Ü™XXÚ‚ˆŞËKHÛÛĞÛÛ[Y\˜ÙHK__Bˆ[Ü\˜]Ü‹œÙXİ[Ûˆ]OH—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ[ÛœËÛÛØÛÛ[Y\˜ÙIÊHˆYHÛÛØÛÛ[Y\˜ÙH‚ˆYˆ
-H	[™[ÜJBˆÛ\ÜÏH^\ÛH^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹™]Z[››Û™WÜ™\ÜY	ÊH_OÜ‚ˆ[ÙZYˆ
-	ÛÛÖÉÚ[œİ[Y	×HÏÈ˜[ÙJBˆÛ\ÜÏH^\ÛHÜ[ˆÛ\ÜÏH™›Û[[Û›È^\š[X\HŞÈ	ÛÛÖÉİ™\œÚ[Û‰×HÏÈ	ÉÈ_OÜÜ[[›\ÜÈ
-	ÛÛÖÉØXİ]™I×HÏÈ˜[ÙJH0­ÈÜ[ˆÛ\ÜÏH^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹™]Z[š[˜Xİ]™IÊH_OÜÜ[[™[›\ÜÏÜ‚ˆ[ÙBˆÛ\ÜÏH^\ÛH^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹™]Z[››İÚ[œİ[Y	ÊH_OÜ‚ˆ[™Y‚ˆŞ[Ü\˜]Ü‹œÙXİ[Û‚‚ˆŞËKH˜XÚİ\ÈK__BˆØ[Š	ÛÜ\˜]Ü‹˜˜XÚİ\ËšY]ÉÊBˆ[Ü\˜]Ü‹œÙXİ[Ûˆ]OH—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ[ÛœË˜˜XÚİ\ÉÊHˆYH˜˜XÚİ\È‚ˆØ[Š	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ[‰ÊBˆ\Ûİ˜Xİ[Û‚ˆ›Ü›HY]ÙH”ÔÕˆXİ[ÛHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ë˜˜XÚİ\ËœİÜ™IË	ÙXœÚ]JH_H‚ˆÜÜ™‚ˆ]ZK˜]Ûˆ\OHœİX›Z]ˆÚ^™OHœÛHŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™\]Y\İ	ÊH_OŞ]ZK˜]Û‚ˆÙ›Ü›O‚ˆŞ\Ûİ˜Xİ[Û‚ˆ[™Ø[‚‚ˆÛ\ÜÏH™ÜšYØ\^MˆØ\^KLÈ^\ÛHÛN™ÜšYXÛÛËLˆÎ™ÜšYXÛÛËM‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\ËœØÚY[IÊHŞÈ	˜XÚİ\ÛXŞKO™œ™\]Y[˜ŞHÈ×Ê	Ø˜XÚİ\Ë˜XØÛİ[™œ™\]Y[˜ÚY\Ë‰Ë‰˜XÚİ\ÛXŞKO™œ™\]Y[˜ŞJHˆ	ÉÈ_OŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™][[Û‰ÊH‚ˆYˆ
-	˜XÚİ\ÛXŞKOœ™][[ÛÛİ[	‰ˆ	˜XÚİ\ÛXŞKOœ™][[Û‘^\Ê^ŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™][[Û—İ˜[YIËÉØÛİ[	ÈOˆ	˜XÚİ\ÛXŞKOœ™][[ÛÛİ[	Ù^\ÉÈOˆ	˜XÚİ\ÛXŞKOœ™][[Û‘^\×JH_P[ÙZYˆ
-	˜XÚİ\ÛXŞKOœ™][[ÛÛİ[
-^ŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™][[Û—ØÛİ[	ËÉØÛİ[	ÈOˆ	˜XÚİ\ÛXŞKOœ™][[ÛÛİ[JH_P[ÙZYˆ
-	˜XÚİ\ÛXŞKOœ™][[Û‘^\Ê^ŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™][[Û—Ù^\ÉËÉÙ^\ÉÈOˆ	˜XÚİ\ÛXŞKOœ™][[Û‘^\×JH_P[™Y‚ˆŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\ËœİÜ˜YÙIÊHYˆ
-	˜XÚİ\ÛXŞKOœİÜ˜YÙJOÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	˜XÚİ\ÛXŞKOœİÜ˜YÙH_OÜÜ[[™YŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[›\İİ™\šYšYYØ˜XÚİ\	ÊHYˆ
-	]\İ™\šYšYY
-OÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	[YJ	]\İ™\šYšYYO™\šYšYYØ]
-H_OÜÜ[[™YŞXXØÛİ[™]Z[‚ˆÙ‚ˆ[›\ÜÈ
-	˜XÚİ\ÛXŞKO™[YÚX›JBˆÛ\ÜÏH›]LÈ^^È^]Ø\›š[™ËZ[šÈŞÈ™Y\Ø[›Y\ÜØYÙJ	˜XÚİ\ÛXŞKOœ™Y\Ø[
-H_OÜ‚ˆ[™[›\ÜÂ‚ˆYˆ
-	˜XÚİ\ËOš\Ñ[\J
-JBˆÛ\ÜÏH›]M^\ÛH^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ë››Û™IÊH_OÜ‚ˆ[ÙBˆ]ˆÛ\ÜÏH›]M™[]]™Hİ™\™›İË^X]]È›İ[™Y\ÛH›Ü™\ˆ›Ü™\‹[[™H‚ˆX›HÛ\ÜÏHËY[Z[‹]ËVÍÌŒH^[Y^\ÛH‚ˆXYÛ\ÜÏHŞÈ	X›RXY_H‚ˆ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ë˜Ü™X]Y	ÊH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ë\IÊH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™X\ÛÛ‰ÊH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœİ]\ÉÊH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\ËœÚ^™IÊH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ë™^\™\ÉÊH_Oİ‚ˆØÛÜOH˜ÛÛˆÛ\ÜÏHœLÈKLˆÜ[ˆÛ\ÜÏHœÜ‹[Û›HŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™\İÜ™IÊH_OÜÜ[İ‚ˆİ‚ˆİXY‚ˆ›ÙHÛ\ÜÏH™]šYK^H]šYK[[™H‚ˆ›Ü™XXÚ
-	˜XÚİ\È\È	˜XÚİ\
-BˆˆÛ\ÜÏH˜[YÛ‹]Ü‚ˆÛ\ÜÏHœLÈKLˆ›Û[[Û›È^^ÈÚ]\ÜXÙK[›İÜ˜\ŞÈ	[YJ	˜XÚİ\O˜Ü™X]YØ]
-H_Oİ‚ˆÛ\ÜÏHœLÈKLˆ^^ÈŞÈ	˜XÚİ\O\KO›X™[
+        {{-- Security: the state SecurityPosture keeps, and the way to the details --}}
+        @can('operator.security.view')
+            <x-operator.section :title="__('operator.detail.sections.security')" id="security">
+                <x-slot:action>
+                    <a href="{{ route('operator.websites.security', $website) }}" class="text-xs font-medium text-primary underline underline-offset-2">{{ __('operator.detail.security_details') }}</a>
+                </x-slot:action>
+                @if (! $securityConfigured)
+                    <p class="text-sm font-medium text-primary">{{ __('operator.security.not_configured') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ __('operator.security.not_configured_text') }}</p>
+                @else
+                    @php $securityState = $website->security_status; @endphp
+                    <dl class="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+                        <x-account.detail :label="__('operator.detail.security_state')"><x-ui.status-badge :tone="$securityState?->tone() ?? 'neutral'">{{ __('security.states.'.($securityState?->value ?? 'unknown')) }}</x-ui.status-badge></x-account.detail>
+                        <x-account.detail :label="__('operator.detail.security_open')">{{ $security->findings }}</x-account.detail>
+                        <x-account.detail :label="__('operator.security.severity')">@if ($security->highestSeverity)<x-ui.status-badge :tone="$security->highestSeverity->tone()">{{ $security->highestSeverity->label() }}</x-ui.status-badge>@endif</x-account.detail>
+                        <x-account.detail :label="__('operator.security.last_scan')"><span class="font-mono">{{ $time($security->lastScanAt) }}</span></x-account.detail>
+                    </dl>
+                    @can('operator.security.scan')
+                        <form method="POST" action="{{ route('operator.websites.security.scans.store', $website) }}" class="mt-4">
+                            @csrf
+                            <input type="hidden" name="type" value="full">
+                            <x-ui.button type="submit" size="sm" variant="secondary">{{ __('operator.security.run_scan') }}</x-ui.button>
+                        </form>
+                    @endcan
+                @endif
+            </x-operator.section>
+        @endcan
 
-H_Oİ‚ˆÛ\ÜÏHœLÈKLˆ^^ÈŞÈ	˜XÚİ\Oœ™X\ÛÛ‹O›X™[
+        {{-- WordPress admin access --}}
+        <x-operator.section :title="__('operator.detail.sections.admin_access')" id="admin-access">
+            @php
+                $live = $openAccess->filter(fn ($request) => $request->isLive());
+                $waiting = $openAccess->reject(fn ($request) => $request->isLive());
+            @endphp
+            <div class="grid gap-2">
+                @forelse ($live as $request)
+                    @php $minutes = (int) floor(now()->diffInMinutes($request->session_expires_at)); @endphp
+                    <div class="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-line px-3 py-2">
+                        <span class="flex flex-wrap items-center gap-2 text-sm">
+                            <x-ui.status-badge :tone="$request->access_level === AccessLevel::FullAdmin ? 'danger' : 'warning'">{{ $request->access_level === AccessLevel::FullAdmin ? __('operator.admin_access.full_active') : __('operator.admin_access.maintenance_active') }}</x-ui.status-badge>
+                            <span class="font-mono text-xs text-muted">{{ $minutes >= 1 ? __('operator.admin_access.expires_in', ['minutes' => $minutes]) : __('operator.admin_access.expires_soon') }}</span>
+                            <span class="text-xs text-muted">{{ __('operator.admin_access.requested_by', ['who' => __('operator.actors.'.$request->actor_type->value).($request->requestedBy ? ' '.$request->requestedBy->email : '')]) }}</span>
+                        </span>
+                        @can('operator.admin_access.request')
+                            <form method="POST" action="{{ route('operator.websites.admin-access.revoke', [$website, $request]) }}">
+                                @csrf
+                                <x-ui.button type="submit" variant="secondary" size="sm">{{ __('operator.admin_access.revoke') }}</x-ui.button>
+                            </form>
+                        @endcan
+                    </div>
+                @empty
+                    @if ($waiting->isEmpty())
+                        <p><x-ui.status-badge tone="neutral">{{ __('operator.admin_access.none') }}</x-ui.status-badge></p>
+                    @endif
+                @endforelse
+                @foreach ($waiting as $request)
+                    <div class="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-dashed border-line px-3 py-2 text-xs text-muted">
+                        <span>{{ $request->access_level->label() }}: {{ __('operator.admin_access.pending') }}</span>
+                        @can('operator.admin_access.request')
+                            <form method="POST" action="{{ route('operator.websites.admin-access.revoke', [$website, $request]) }}">
+                                @csrf
+                                <x-ui.button type="submit" variant="ghost" size="sm">{{ __('operator.admin_access.revoke') }}</x-ui.button>
+                            </form>
+                        @endcan
+                    </div>
+                @endforeach
+            </div>
 
-H_Oİ‚ˆÛ\ÜÏHœLÈKLˆ‚ˆ]ZKœİ]\ËX˜YÙHÛ™OH‰˜XÚİ\Oœİ]\ËOÛ™J
-Hˆ˜\šX[H˜ÛÙHŞÈ	˜XÚİ\Oœİ]\ËO›X™[
+            @can('operator.admin_access.request')
+                <div class="mt-4 flex flex-wrap items-start gap-3 border-t border-line pt-4">
+                    @if ($maintenanceRefusal === null)
+                        <form method="POST" action="{{ route('operator.websites.admin-access.maintenance', $website) }}" target="_blank">
+                            @csrf
+                            <x-ui.button type="submit" size="sm" icon="arrow-right">{{ __('operator.admin_access.open') }}</x-ui.button>
+                        </form>
+                        <p class="max-w-md text-xs text-muted">{{ __('operator.admin_access.open_text', ['minutes' => AccessLevel::Maintenance->minutes()]) }}</p>
+                    @else
+                        <p class="text-xs text-muted">{{ __('operator.admin_access.unavailable', ['reason' => Refusal::message($maintenanceRefusal)]) }}
+                            <span class="font-mono">({{ __('operator.kinds.'.Refusal::kind($maintenanceRefusal)) }})</span></p>
+                    @endif
+                    @can('operator.admin_access.full')
+                        <x-ui.button :href="route('operator.websites.admin-access.full-admin', $website)" variant="secondary" size="sm" icon="shield" class="ml-auto">{{ __('operator.admin_access.request_full') }}</x-ui.button>
+                    @endcan
+                </div>
+            @endcan
+            <p class="mt-3 flex items-center gap-2 text-xs text-muted"><x-ui.icon name="lock" class="size-4 text-accent-ink" />{{ __('operator.admin_access.no_password') }}</p>
+        </x-operator.section>
 
-H_OŞ]ZKœİ]\ËX˜YÙO‚ˆYˆ
-	˜XÚİ\O™\šYšYYØ]
-OÜ[ˆÛ\ÜÏH›]LH›ØÚÈ›Û[[Û›È^VÌL\H^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ë™\šYšYY	ÊH_HŞÈ	[YJ	˜XÚİ\O™\šYšYYØ]
-H_OÜÜ[[™Y‚ˆYˆ
-	˜XÚİ\O™\œ›Ü—ØÛÙJOÜ[ˆÛ\ÜÏH›]LH›ØÚÈ^VÌL\H^Y[™Ù\‹Z[šÈŞÈ˜XÚİ\^™\œ›ÜŠ	˜XÚİ\O™\œ›Ü—ØÛÙJH_HÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŠŞÈ	˜XÚİ\O™\œ›Ü—ØÛÙH_JOÜÜ[ÜÜ[[™Y‚ˆİ‚ˆÛ\ÜÏHœLÈKLˆ›Û[[Û›È^^ÈŞÈ˜XÚİ\^œÚ^™J	˜XÚİ\Oİ[ÜÚ^™JH_Oİ‚ˆÛ\ÜÏHœLÈKLˆ›Û[[Û›È^^ÈÚ]\ÜXÙK[›İÜ˜\^[]]YŞÈ\
-\İ\Ü\Ü^Q]U[YN˜Û\ÜÊKO™›Ü›X]
-	˜XÚİ\O™^\™\×Ø]
-HÏÈ×Ê	ÛÜ\˜]Ü‹››Û™IÊH_Oİ‚ˆÛ\ÜÏHœLÈKLˆ^\šYÚ‚ˆYˆ
-[—Ø\œ˜^J	˜XÚİ\OšY	™\İÜ˜X›KYJJBˆ]ZK˜]Ûˆš™YHœ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ë˜˜XÚİ\Ëœ™\İÜ™IËÉÙXœÚ]K	˜XÚİ\JHˆ˜\šX[HœÙXÛÛ™\HˆÚ^™OHœÛHŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™\İÜ™IÊH_OŞ]ZK˜]Û‚ˆ[™Y‚ˆİ‚ˆİ‚ˆ[™›Ü™XXÚˆİ›ÙO‚ˆİX›O‚ˆÙ]‚ˆØ[Š	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™\İÜ™IÊBˆYˆ
-H	™\İÜ™R\ÛÛ][Û”İ\ÜY	‰ˆ	˜XÚİ\ËOš\Ó›İ[\J
-JBˆXXØÛİ[››İXÙHÛ\ÜÏH›]LˆŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™\İÜ™WÚ\ÛÛ][Û—İ[˜]˜Z[X›IÊH_OŞXXØÛİ[››İXÙO‚ˆ[ÙBˆÛ\ÜÏH›]Lˆ^^È^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™\İÜ™WİÚ[‰ÊH_OÜ‚ˆ[™Y‚ˆ[™Ø[‚ˆ[™Y‚‚ˆYˆ
-	™\İÜ™\ËOš\Ó›İ[\J
-JBˆÈÛ\ÜÏH›]MH^^È›Û\Ù[ZX›Û˜XÚÚ[™ËVÌŒ[WH^[]]Y\\˜Ø\ÙHŞÈ×Ê	ÛÜ\˜]Ü‹˜˜XÚİ\Ëœ™\İÜ™\ÉÊH_OÚÏ‚ˆ[Û\ÜÏH›]Lˆ]šYK^H]šYK[[™H^\ÛH‚ˆ›Ü™XXÚ
-	™\İÜ™\È\È	™\İÜ™JBˆHÛ\ÜÏH™›^›^]Ü˜\][\ËXÙ[\ˆ\İYKX™]ÙY[ˆØ\LˆKLˆ‚ˆÜ[ŞÈ	™\İÜ™KOœØÛÜKO›X™[
-
-H_H0­ÈÜ[ˆÛ\ÜÏH™›Û[[Û›È^^È^[]]YŞÈ	[YJ	™\İÜ™KO˜˜XÚİ\ËO˜Ü™X]YØ]
-H_OÜÜ[‚ˆYˆ
-	™\İÜ™KO™\œ›Ü—ØÛÙJOÜ[ˆÛ\ÜÏH˜›ØÚÈ›Û[[Û›È^VÌL\H^Y[™Ù\‹Z[šÈŞÈ	™\İÜ™KO™\œ›Ü—ØÛÙH_OÜÜ[[™Y‚ˆÜÜ[‚ˆÜ[ˆÛ\ÜÏH™›^][\ËXÙ[\ˆØ\Lˆ‚ˆÜ[ˆÛ\ÜÏH™›Û[[Û›È^^È^[]]YŞÈ	™\İÜ™KOœ™\]Y\İYØH_OÜÜ[‚ˆ]ZKœİ]\ËX˜YÙHÛ™OH‰™\İÜ™KOœİ]\ËOÛ™J
-HŞÈ	™\İÜ™KOœİ]\ËO›X™[
-
-H_OŞ]ZKœİ]\ËX˜YÙO‚ˆÜÜ[‚ˆÛO‚ˆ[™›Ü™XXÚˆİ[‚ˆ[™Y‚ˆŞ[Ü\˜]Ü‹œÙXİ[Û‚ˆ[™Ø[‚‚ˆŞËKHÙXİ\š]NˆHİ]HÙXİ\š]TÜİ\™HÙY\Ë[™HØ^HÈH]Z[ÈK__BˆØ[Š	ÛÜ\˜]Ü‹œÙXİ\š]KšY]ÉÊBˆ[Ü\˜]Ü‹œÙXİ[Ûˆ]OH—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ[ÛœËœÙXİ\š]IÊHˆYHœÙXİ\š]H‚ˆ\Ûİ˜Xİ[Û‚ˆH™YHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\ËœÙXİ\š]IË	ÙXœÚ]JH_HˆÛ\ÜÏH^^È›Û[YY][H^\š[X\H[™\›[™H[™\›[™K[Ù™œÙ]LˆŞÈ×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ\š]WÙ]Z[ÉÊH_OØO‚ˆŞ\Ûİ˜Xİ[Û‚ˆYˆ
-H	ÙXİ\š]PÛÛ™šYİ\™Y
-BˆÛ\ÜÏH^\ÛH›Û[YY][H^\š[X\HŞÈ×Ê	ÛÜ\˜]Ü‹œÙXİ\š]K››İØÛÛ™šYİ\™Y	ÊH_OÜ‚ˆÛ\ÜÏH›]LH^^È^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹œÙXİ\š]K››İØÛÛ™šYİ\™Yİ^	ÊH_OÜ‚ˆ[ÙBˆ	ÙXİ\š]Tİ]HH	ÙXœÚ]KOœÙXİ\š]WÜİ]\ÎÈ[™ˆÛ\ÜÏH™ÜšYØ\^MˆØ\^KLÈ^\ÛHÛN™ÜšYXÛÛËM‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ\š]WÜİ]IÊH]ZKœİ]\ËX˜YÙHÛ™OH‰ÙXİ\š]Tİ]OËOÛ™J
-HÏÈ	Û™]]˜[	ÈŞÈ×Ê	ÜÙXİ\š]Kœİ]\Ë‰ËŠ	ÙXİ\š]Tİ]OËO˜[YHÏÈ	İ[šÛ›İÛ‰ÊJH_OŞ]ZKœİ]\ËX˜YÙOŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ\š]WÛÜ[‰ÊHŞÈ	ÙXİ\š]KO™š[™[™ÜÈ_OŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹œÙXİ\š]KœÙ]™\š]IÊHYˆ
-	ÙXİ\š]KOšYÚ\İÙ]™\š]JO]ZKœİ]\ËX˜YÙHÛ™OH‰ÙXİ\š]KOšYÚ\İÙ]™\š]KOÛ™J
-HŞÈ	ÙXİ\š]KOšYÚ\İÙ]™\š]KO›X™[
-
-H_OŞ]ZKœİ]\ËX˜YÙO[™YŞXXØÛİ[™]Z[‚ˆXXØÛİ[™]Z[›X™[H—×Ê	ÛÜ\˜]Ü‹œÙXİ\š]K›\İÜØØ[‰ÊHÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŞÈ	[YJ	ÙXİ\š]KO›\İØØ[]
-H_OÜÜ[ŞXXØÛİ[™]Z[‚ˆÙ‚ˆØ[Š	ÛÜ\˜]Ü‹œÙXİ\š]KœØØ[‰ÊBˆ›Ü›HY]ÙH”ÔÕˆXİ[ÛHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\ËœÙXİ\š]KœØØ[œËœİÜ™IË	ÙXœÚ]JH_HˆÛ\ÜÏH›]M‚ˆÜÜ™‚ˆ[œ]\OHšY[ˆˆ˜[YOH\Hˆ˜[YOH™[‚ˆ]ZK˜]Ûˆ\OHœİX›Z]ˆÚ^™OHœÛHˆ˜\šX[HœÙXÛÛ™\HŞÈ×Ê	ÛÜ\˜]Ü‹œÙXİ\š]Kœ[—ÜØØ[‰ÊH_OŞ]ZK˜]Û‚ˆÙ›Ü›O‚ˆ[™Ø[‚ˆ[™Y‚ˆŞ[Ü\˜]Ü‹œÙXİ[Û‚ˆ[™Ø[‚‚ˆŞËKHÛÜ™™\ÜÈYZ[ˆXØÙ\ÜÈK__Bˆ[Ü\˜]Ü‹œÙXİ[Ûˆ]OH—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ[ÛœË˜YZ[—ØXØÙ\ÜÉÊHˆYH˜YZ[‹XXØÙ\ÜÈ‚ˆˆ	]™HH	Ü[XØÙ\ÜËO™š[\Š›ˆ
-	™\]Y\İ
-HOˆ	™\]Y\İOš\Ó]™J
-JNÂˆ	ØZ][™ÈH	Ü[XØÙ\ÜËOœ™Z™Xİ
-›ˆ
-	™\]Y\İ
-HOˆ	™\]Y\İOš\Ó]™J
-JNÂˆ[™ˆ]ˆÛ\ÜÏH™ÜšYØ\Lˆ‚ˆ›Ü™[ÙH
-	]™H\È	™\]Y\İ
-Bˆ	Z[]\ÈH
-[
-H›ÛÜŠ›İÊ
-KO™Y™’[“Z[]\Ê	™\]Y\İOœÙ\ÜÚ[Û—Ù^\™\×Ø]
-JNÈ[™ˆ]ˆÛ\ÜÏH™›^›^]Ü˜\][\ËXÙ[\ˆ\İYKX™]ÙY[ˆØ\Lˆ›İ[™Y\ÛH›Ü™\ˆ›Ü™\‹[[™HLÈKLˆ‚ˆÜ[ˆÛ\ÜÏH™›^›^]Ü˜\][\ËXÙ[\ˆØ\Lˆ^\ÛH‚ˆ]ZKœİ]\ËX˜YÙHÛ™OH‰™\]Y\İO˜XØÙ\Ü×Û]™[OOHXØÙ\ÜÓ]™[‘[YZ[ˆÈ	Ù[™Ù\‰Èˆ	İØ\›š[™ÉÈŞÈ	™\]Y\İO˜XØÙ\Ü×Û]™[OOHXØÙ\ÜÓ]™[‘[YZ[ˆÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜË™[ØXİ]™IÊHˆ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜË›XZ[[˜[˜ÙWØXİ]™IÊH_OŞ]ZKœİ]\ËX˜YÙO‚ˆÜ[ˆÛ\ÜÏH™›Û[[Û›È^^È^[]]YŞÈ	Z[]\ÈHHÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜË™^\™\×Ú[‰ËÉÛZ[]\ÉÈOˆ	Z[]\×JHˆ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜË™^\™\×ÜÛÛÛ‰ÊH_OÜÜ[‚ˆÜ[ˆÛ\ÜÏH^^È^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜËœ™\]Y\İYØIËÉİÚÉÈOˆ×Ê	ÛÜ\˜]Ü‹˜XİÜœË‰Ë‰™\]Y\İO˜XİÜ—İ\KO˜[YJKŠ	™\]Y\İOœ™\]Y\İYHÈ	È	Ë‰™\]Y\İOœ™\]Y\İYKO™[XZ[ˆ	ÉÊWJH_OÜÜ[‚ˆÜÜ[‚ˆØ[Š	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜËœ™\]Y\İ	ÊBˆ›Ü›HY]ÙH”ÔÕˆXİ[ÛHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ë˜YZ[‹XXØÙ\ÜËœ™]›ÚÙIËÉÙXœÚ]K	™\]Y\İJH_H‚ˆÜÜ™‚ˆ]ZK˜]Ûˆ\OHœİX›Z]ˆ˜\šX[HœÙXÛÛ™\HˆÚ^™OHœÛHŞÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜËœ™]›ÚÙIÊH_OŞ]ZK˜]Û‚ˆÙ›Ü›O‚ˆ[™Ø[‚ˆÙ]‚ˆ[\BˆYˆ
-	ØZ][™ËOš\Ñ[\J
-JBˆ]ZKœİ]\ËX˜YÙHÛ™OH›™]]˜[ŞÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜË››Û™IÊH_OŞ]ZKœİ]\ËX˜YÙOÜ‚ˆ[™Y‚ˆ[™›Ü™[ÙBˆ›Ü™XXÚ
-	ØZ][™È\È	™\]Y\İ
-Bˆ]ˆÛ\ÜÏH™›^›^]Ü˜\][\ËXÙ[\ˆ\İYKX™]ÙY[ˆØ\Lˆ›İ[™Y\ÛH›Ü™\ˆ›Ü™\‹Y\ÚY›Ü™\‹[[™HLÈKLˆ^^È^[]]Y‚ˆÜ[ŞÈ	™\]Y\İO˜XØÙ\Ü×Û]™[O›X™[
-
-H_NˆŞÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜËœ[™[™ÉÊH_OÜÜ[‚ˆØ[Š	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜËœ™\]Y\İ	ÊBˆ›Ü›HY]ÙH”ÔÕˆXİ[ÛHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ë˜YZ[‹XXØÙ\ÜËœ™]›ÚÙIËÉÙXœÚ]K	™\]Y\İJH_H‚ˆÜÜ™‚ˆ]ZK˜]Ûˆ\OHœİX›Z]ˆ˜\šX[H™ÚÜİˆÚ^™OHœÛHŞÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜËœ™]›ÚÙIÊH_OŞ]ZK˜]Û‚ˆÙ›Ü›O‚ˆ[™Ø[‚ˆÙ]‚ˆ[™›Ü™XXÚˆÙ]‚‚ˆØ[Š	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜËœ™\]Y\İ	ÊBˆ]ˆÛ\ÜÏH›]M›^›^]Ü˜\][\Ë\İ\Ø\LÈ›Ü™\‹]›Ü™\‹[[™HM‚ˆYˆ
-	XZ[[˜[˜ÙT™Y\Ø[OOH[
-Bˆ›Ü›HY]ÙH”ÔÕˆXİ[ÛHŞÈ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ë˜YZ[‹XXØÙ\ÜË›XZ[[˜[˜ÙIË	ÙXœÚ]JH_Hˆ\™Ù]H—Ø›[šÈ‚ˆÜÜ™‚ˆ]ZK˜]Ûˆ\OHœİX›Z]ˆÚ^™OHœÛHˆXÛÛH˜\œ›İË\šYÚŞÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜË›Ü[‰ÊH_OŞ]ZK˜]Û‚ˆÙ›Ü›O‚ˆÛ\ÜÏH›X^]Ë[Y^^È^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜË›Ü[—İ^	ËÉÛZ[]\ÉÈOˆXØÙ\ÜÓ]™[“XZ[[˜[˜ÙKO›Z[]\Ê
-WJH_OÜ‚ˆ[ÙBˆÛ\ÜÏH^^È^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜË[˜]˜Z[X›IËÉÜ™X\ÛÛ‰ÈOˆ™Y\Ø[›Y\ÜØYÙJ	XZ[[˜[˜ÙT™Y\Ø[
-WJH_BˆÜ[ˆÛ\ÜÏH™›Û[[Û›ÈŠŞÈ×Ê	ÛÜ\˜]Ü‹šÚ[™Ë‰Ë”™Y\Ø[šÚ[™
-	XZ[[˜[˜ÙT™Y\Ø[
-JH_JOÜÜ[Ü‚ˆ[™Y‚ˆØ[Š	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜË™[	ÊBˆ]ZK˜]Ûˆš™YHœ›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\Ë˜YZ[‹XXØÙ\ÜË™[XYZ[‰Ë	ÙXœÚ]JHˆ˜\šX[HœÙXÛÛ™\HˆÚ^™OHœÛHˆXÛÛHœÚY[ˆÛ\ÜÏH›[X]]ÈŞÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜËœ™\]Y\İÙ[	ÊH_OŞ]ZK˜]Û‚ˆ[™Ø[‚ˆÙ]‚ˆ[™Ø[‚ˆÛ\ÜÏH›]LÈ›^][\ËXÙ[\ˆØ\Lˆ^^È^[]]Y]ZKšXÛÛˆ˜[YOH›ØÚÈˆÛ\ÜÏHœÚ^™KM^XXØÙ[Z[šÈˆÏŞÈ×Ê	ÛÜ\˜]Ü‹˜YZ[—ØXØÙ\ÜË››×Ü\ÜİÛÜ™	ÊH_OÜ‚ˆŞ[Ü\˜]Ü‹œÙXİ[Û‚‚ˆŞËKHXİ]š]HK__BˆØ[Š	ÛÜ\˜]Ü‹˜]Y]šY]ÉÊBˆ[Ü\˜]Ü‹œÙXİ[Ûˆ]OH—×Ê	ÛÜ\˜]Ü‹™]Z[œÙXİ[ÛœË˜Xİ]š]IÊHˆYH˜Xİ]š]H‚ˆYˆ
-	]™[ËOš\Ñ[\J
-JBˆÛ\ÜÏH^\ÛH^[]]YŞÈ×Ê	ÛÜ\˜]Ü‹˜Xİ]š]K™[\IÊH_OÜ‚ˆ[ÙBˆ[Ü\˜]Ü‹™]™[Ë]X›H™]™[ÏH‰]™[ÈˆœÚİË]ÙXœÚ]OH™˜[ÙHˆÛ\ÜÏH‹[^M[^KLˆˆÏ‚ˆ[™Y‚ˆŞ[Ü\˜]Ü‹œÙXİ[Û‚ˆ[™Ø[‚ˆÙ]‚Ş[^[İ]Ë›Ü\˜]Ü‚
+        {{-- Activity --}}
+        @can('operator.audit.view')
+            <x-operator.section :title="__('operator.detail.sections.activity')" id="activity">
+                @if ($events->isEmpty())
+                    <p class="text-sm text-muted">{{ __('operator.activity.empty') }}</p>
+                @else
+                    <x-operator.events-table :events="$events" :show-website="false" class="-mx-4 -my-2" />
+                @endif
+            </x-operator.section>
+        @endcan
+    </div>
+</x-layouts.operator>

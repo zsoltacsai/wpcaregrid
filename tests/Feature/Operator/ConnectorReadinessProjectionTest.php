@@ -1,54 +1,103 @@
-Û^š›bh¥êß¢¹­…â'ŠØš–,ŞçÚº[C®+Ş²Š^­«b¢z'¶…ŠW’ÊË^ššè¾'^­ö¢•çOÜ‚›˜[Y\ÜXÙH\İ×™X]\™WÜ\˜]ÜÂ‚\ÙH\ÛÛ›™XİÜ—›Ø•\NÂ\ÙH\[Ù[×\Ù\Â\ÙH\İ\Ü\Ü^Q]U[YNÂ\ÙH\[Ù[×ÙXœÚ]R›ØÂ\ÙH\Ü\˜]Ü—\›Z\ÜÚ[ÛÂ\ÙH[[Z[˜]W]X˜\ÙW]™[×]Y\Q^Xİ]YÂ\ÙH[[Z[˜]W›İ[™][Û—\İ[™×™Yœ™\Ú]X˜\ÙNÂ\ÙH[[Z[˜]Wİ\Ü˜XØY\×Â\ÙH[[Z[˜]Wİ\Ü˜XØY\×Â\ÙH[[Z[˜]Wİ\Ü˜XØY\×]Y]YNÂ\ÙH\İ×ÛÛ˜Ù\›œ×Ü\˜]\ĞÛÛœÛÛNÂ\ÙH\İ×\İØ\ÙNÂ‚™š[˜[Û\ÜÈÛÛ›™XİÜ”™XY[™\ÜÔ›Ú™Xİ[Û•\İ^[™È\İØ\ÙBÂˆ\ÙHÜ\˜]\ĞÛÛœÛÛK™Yœ™\Ú]X˜\ÙNÂ‚ˆ›İXİY[˜İ[ÛˆÙ]\
+<?php
 
-Nˆ›ÚYˆÂˆ\™[œÙ]\
+namespace Tests\Feature\Operator;
 
-NÂˆ	\ËOœÙ]\˜XÚİ\ÊÉÛX[X[	ÈOˆYK	Ü™\İÜ™IÈOˆYK	Ü™Wİ\]WØ˜XÚİ\	ÈOˆ˜[ÙWJNÂˆB‚ˆ›İXİY[˜İ[ÛˆX\‘İÛŠ
-Nˆ›ÚYˆÂˆ	\ËOX\‘İÛ˜XÚİ\Ê
-NÂˆ\™[X\‘İÛŠ
-NÂˆB‚ˆX›XÈ[˜İ[Ûˆ\İÛÜ\˜]Ü—İÚ]İÙXœÚ]WİšY]×Ü\›Z\ÜÚ[Û—ÜÙY\×ÜØÛÜYÜ\œÚ\İYÜ™XY[™\Ü×ÛÛ›J
-Nˆ›ÚYˆÂˆ	\ËO˜\ÓÜ\˜]ÜŠÔ\›Z\ÜÚ[Û•ÙXœÚ]\ÕšY]×JNÂˆ	Ú]HH	\ËO˜ÛÛœÛÛTÚ]J	ÚÎ‹ËÜ™XY[™\ÜË[Ü\˜]Ü‹XK™^[\IÊNÂˆ	İ\ˆH	\ËO˜ÛÛœÛÛTÚ]J	ÚÎ‹ËÜ™XY[™\ÜË[Ü\˜]Ü‹X‹™^[\IÊNÂˆ	ÙXœÚ]HH	Ú]VÉİÙXœÚ]I×NÂˆ	ÛÛ›™XİÜˆH	ÙXœÚ]KO˜Xİ]™PÛÛ›™XİÜÂˆ	X\™X]]H›İÊ
-KOœİ\Ù”ÙXÛÛ™
+use App\Connector\JobType;
+use App\Models\User;
+use App\Support\DisplayDateTime;
+use App\Models\WebsiteJob;
+use App\Operator\Permission;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use Tests\Concerns\OperatesConsole;
+use Tests\TestCase;
 
-NÂˆ	ÛÛ›™XİÜ‹O\]JÂˆ	Û\İÜÙY[—Ø]	ÈOˆ	X\™X]]ˆ	Û\İÚX\™X]Ø]	ÈOˆ	X\™X]]ˆ	Û\İÜİXØÙ\ÜÙ[ÜÛØ]	ÈOˆ	X\™X]]ˆJNÂˆ	İ\–ÉİÙXœÚ]I×KO˜Xİ]™PÛÛ›™XİÜ‹O\]JÉØÛÛ›™XİÜ—İ™\œÚ[Û‰ÈOˆ	ÓÕT—ÔÒUWÔ’UUWÓPT’ÑT‰×JNÂˆ	ÙXœÚ]KOš›ØœÊ
-KO˜Ü™X]JÂˆ	İ\IÈOˆ›Ø•\N‘Ù][™[ÜKˆ	Üİ]\ÉÈOˆ	İØZ][™ÉËˆ	Ü^[ØY	ÈOˆÉÜš]˜]WÛX\šÙ\‰ÈOˆ	Ò“Ğ—ÔVSĞQÓUTÕÓ“ÕÔ‘S‘T‰×Kˆ	Ü™\]Y\İYØIÈOˆ	ÜŞ\İ[IËˆJNÂ‚ˆ]Y]YN™˜ZÙJ
-NÂˆœ™]™[İ˜^T™\]Y\İÊ
-NÂˆ	Üš]\ÈH×NÂˆ›\İ[Šİ]XÈ[˜İ[Ûˆ
-]Y\Q^Xİ]Y	]Y\JH\ÙH
-	‰Üš]\ÊNˆ›ÚYÂˆYˆ
-™Y×ÛX]Ú
-	Ë×—ÊŠ[œÙ\\]_[]_™\XÙ_[\Ÿ›ÜÜ™X]JW‹ÚIË	]Y\KOœÜ[
-JHÂˆ	Üš]\Ö×HH	]Y\KOœÜ[ÂˆBˆJNÂ‚ˆ	™\ÜÛœÙHH	\ËO™Ù]
-›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\ËœÚİÉË	ÙXœÚ]JJKO˜\ÜÙ\ÚÊ
-BˆO˜\ÜÙ\ÙYJ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜË]IÊJBˆO˜\ÜÙ\ÙYJ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜË›Ü\˜][Û—ØØ\Xš[]Y\ÉÊJBˆO˜\ÜÙ\ÙYJ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËœ[›š[™×İ[šÛ›İÛ‰ÊJBˆO˜\ÜÙ\ÙYJ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜËšX\™X]	ÊJBˆO˜\ÜÙ\ÙYJ\
-\Ü^Q]U[YN˜Û\ÜÊKO™›Ü›X]
-	X\™X]]
-JBˆO˜\ÜÙ\ÙYJ	ÌIÊNÂ‚ˆ	\ËO˜\ÜÙ\İš[™Ó›İÛÛZ[œÔİš[™Ê	ÓÕT—ÔÒUWÔ’UUWÓPT’ÑT‰Ë	™\ÜÛœÙKO™Ù]ÛÛ[
+final class ConnectorReadinessProjectionTest extends TestCase
+{
+    use OperatesConsole, RefreshDatabase;
 
-JNÂˆ	\ËO˜\ÜÙ\İš[™Ó›İÛÛZ[œÔİš[™Ê	Ò“Ğ—ÔVSĞQÓUTÕÓ“ÕÔ‘S‘T‰Ë	™\ÜÛœÙKO™Ù]ÛÛ[
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->setUpBackups(['manual' => true, 'restore' => true, 'pre_update_backup' => false]);
+    }
 
-JNÂˆ	\ËO˜\ÜÙ\İš[™Ó›İÛÛZ[œÔİš[™Ê	Ú]VÉØÜ™Y[X[	×K	™\ÜÛœÙKO™Ù]ÛÛ[
+    protected function tearDown(): void
+    {
+        $this->tearDownBackups();
+        parent::tearDown();
+    }
 
-JNÂˆ	\ËO˜\ÜÙ\Ø[YJ×K	Üš]\ÊNÂˆ]Y]YN˜\ÜÙ\›İ[™Ô\ÚY
+    public function test_operator_with_website_view_permission_sees_scoped_persisted_readiness_only(): void
+    {
+        $this->asOperator([Permission::WebsitesView]);
+        $site = $this->consoleSite('https://readiness-operator-a.example');
+        $other = $this->consoleSite('https://readiness-operator-b.example');
+        $website = $site['website'];
+        $connector = $website->activeConnector;
+        $heartbeatAt = now()->startOfSecond();
+        $connector->update([
+            'last_seen_at' => $heartbeatAt,
+            'last_heartbeat_at' => $heartbeatAt,
+            'last_successful_poll_at' => $heartbeatAt,
+        ]);
+        $other['website']->activeConnector->update(['connector_version' => 'OTHER_SITE_PRIVATE_MARKER']);
+        $website->jobs()->create([
+            'type' => JobType::GetInventory,
+            'status' => 'waiting',
+            'payload' => ['private_marker' => 'JOB_PAYLOAD_MUST_NOT_RENDER'],
+            'requested_by' => 'system',
+        ]);
 
-NÂˆ˜\ÜÙ\›İ[™ÔÙ[
+        Queue::fake();
+        Http::preventStrayRequests();
+        $writes = [];
+        DB::listen(static function (QueryExecuted $query) use (&$writes): void {
+            if (preg_match('/^\s*(insert|update|delete|replace|alter|drop|create)\b/i', $query->sql)) {
+                $writes[] = $query->sql;
+            }
+        });
 
-NÂˆ	\ËO˜\ÜÙ\Ø[YJKÙXœÚ]R›Øœ]Y\J
-KOÚ\™J	İÙXœÚ]WÚY	Ë	ÙXœÚ]KOšY
-KOÚ\™J	Üİ]\ÉË	İØZ][™ÉÊKO˜Ûİ[
+        $response = $this->get(route('operator.websites.show', $website))->assertOk()
+            ->assertSee(__('operator.connector.readiness.title'))
+            ->assertSee(__('operator.connector.readiness.operation_capabilities'))
+            ->assertSee(__('operator.connector.readiness.running_unknown'))
+            ->assertSee(__('operator.connector.readiness.heartbeat'))
+            ->assertSee(app(DisplayDateTime::class)->format($heartbeatAt))
+            ->assertSee('1');
 
-JNÂˆ	\ËO˜\ÜÙ\Ø[YJÙXœÚ]R›Øœ]Y\J
-KOÚ\™J	İÙXœÚ]WÚY	Ë	İ\–ÉİÙXœÚ]I×KOšY
-KO˜Ûİ[
+        $this->assertStringNotContainsString('OTHER_SITE_PRIVATE_MARKER', $response->getContent());
+        $this->assertStringNotContainsString('JOB_PAYLOAD_MUST_NOT_RENDER', $response->getContent());
+        $this->assertStringNotContainsString($site['credential'], $response->getContent());
+        $this->assertSame([], $writes);
+        Queue::assertNothingPushed();
+        Http::assertNothingSent();
+        $this->assertSame(1, WebsiteJob::query()->where('website_id', $website->id)->where('status', 'waiting')->count());
+        $this->assertSame(0, WebsiteJob::query()->where('website_id', $other['website']->id)->count());
+    }
 
-JNÂˆB‚ˆX›XÈ[˜İ[Ûˆ\İÛÜ\˜]Ü—İÚ]İ]İÙXœÚ]WİšY]×Ü\›Z\ÜÚ[Û—ØØ[››İÜ™XYÜ™XY[™\ÜÊ
-Nˆ›ÚYˆÂˆ	Ú]HH	\ËO˜ÛÛœÛÛTÚ]J	ÚÎ‹ËÜ™XY[™\ÜËY[šYY™^[\IÊNÂˆ	\ËO˜\ÓÜ\˜]ÜŠ×JNÂ‚ˆ	\ËO™Ù]
-›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\ËœÚİÉË	Ú]VÉİÙXœÚ]I×JJBˆO˜\ÜÙ\›Ü˜šY[Š
-BˆO˜\ÜÙ\ÛÙYJ×Ê	ÛÜ\˜]Ü‹˜ÛÛ›™XİÜ‹œ™XY[™\ÜË]IÊJNÂˆB‚ˆX›XÈ[˜İ[Ûˆ\İÛİÛ™\—Ø[™Øİ\İÛY\—ÜÙ\ÜÚ[Ûœ×ØØ[››İÜ™XYÛÜ\˜]Ü—Ü™XY[™\ÜÊ
-Nˆ›ÚYˆÂˆ	Ú]HH	\ËO˜ÛÛœÛÛTÚ]J	ÚÎ‹ËÛÜ\˜]Ü‹X]]™^[\IÊNÂ‚ˆ	\ËO˜Xİ[™Ğ\Ê	Ú]VÉİÙXœÚ]I×KO˜İ\İÛY\‹O\Ù\ŠKO™Ù]
-›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\ËœÚİÉË	Ú]VÉİÙXœÚ]I×JJBˆO˜\ÜÙ\™Y\™Xİ
-›İ]J	ÛÜ\˜]Ü‹›ÙÚ[‰ÊJNÂ‚ˆ	İÛ™\ˆH\Ù\™˜XİÜJ
-KO›İÛ™\Š
-KO˜Ü™X]J
-NÂˆ	\ËO˜Xİ[™Ğ\Ê	İÛ™\‹	ÛİÛ™\‰ÊKO™Ù]
-›İ]J	ÛÜ\˜]Ü‹ÙXœÚ]\ËœÚİÉË	Ú]VÉİÙXœÚ]I×JJBˆO˜\ÜÙ\™Y\™Xİ
-›İ]J	ÛÜ\˜]Ü‹›ÙÚ[‰ÊJNÂˆBŸB
+    public function test_operator_without_website_view_permission_cannot_read_readiness(): void
+    {
+        $site = $this->consoleSite('https://readiness-denied.example');
+        $this->asOperator([]);
+
+        $this->get(route('operator.websites.show', $site['website']))
+            ->assertForbidden()
+            ->assertDontSee(__('operator.connector.readiness.title'));
+    }
+
+    public function test_owner_and_customer_sessions_cannot_read_operator_readiness(): void
+    {
+        $site = $this->consoleSite('https://operator-auth.example');
+
+        $this->actingAs($site['website']->customer->user)->get(route('operator.websites.show', $site['website']))
+            ->assertRedirect(route('operator.login'));
+
+        $owner = User::factory()->owner()->create();
+        $this->actingAs($owner, 'owner')->get(route('operator.websites.show', $site['website']))
+            ->assertRedirect(route('operator.login'));
+    }
+}
