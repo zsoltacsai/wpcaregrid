@@ -1,12 +1,37 @@
-# Pilot and end-to-end smoke test
+# M15 pilot readiness and controlled non-production smoke test
 
-How to take WP CareGrid from a configured server to the first real customer sites: a full end-to-end smoke test on non-production sites, then a controlled pilot with 1–3 websites. Server setup: [DEPLOYMENT.md](DEPLOYMENT.md). Release gates: [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
+**Current disposition (2026-10-26): NOT READY TO START A PILOT.** This runbook defines evidence and decision gates; it does not authorize a staging/customer operation, production activity, scan, update, backup, restore, Connector pairing, or deployment.
 
-Nothing here is automated against real customers. No destructive remediation runs during the pilot (`SECURITY_REMEDIATION_ENABLED=false`).
+This runbook applies only to an explicitly approved non-production pilot target. Production readiness and release authorization are separate gates; this document must not be used to authorize production tests.
+
+Server setup: [DEPLOYMENT.md](DEPLOYMENT.md). Release gates: [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md). Connector compatibility: [CONNECTOR_COMPATIBILITY.md](CONNECTOR_COMPATIBILITY.md). Backup behavior: [BACKUP_ENGINE.md](BACKUP_ENGINE.md). Restore fail-closed contract: [M15 RestoreIsolationGate contract](../reports/m15-restore-isolation-gate-contract.md). Current evidence reconciliation: [M15 evidence report](../reports/m15-evidence-reconciliation-2026-10-25.md).
+
+## Evidence labels and operating boundaries
+
+Use one of these labels for every target-specific readiness claim:
+
+- **VERIFIED** — current, timestamped evidence from the exact environment, site, Connector and operation.
+- **STALE** — evidence exists but exceeds its freshness window, predates a relevant code/configuration change, or cannot be tied to the current target.
+- **UNKNOWN** — evidence is absent, ambiguous, unreadable, or was not safely collected.
+- **NOT CONFIGURED** — the required capability or operational integration is confirmed absent.
+- **BLOCKED** — a required safety, authorization, compatibility, recovery, or side-effect condition is unmet.
+
+Unknown or stale evidence is never a pass. Repository defaults, CI results, old screenshots, and historical site observations do not establish current staging state.
+
+Before any pilot action, require:
+
+1. Exact non-production target, tenant, Website and Connector identities, named site owner, authorized operator, time window, approved operation list, stop authority, and evidence/retention method.
+2. Written site-owner consent and Owner authorization scoped to the exact site and operation. Existing subscription, previous consent, an earlier M14 scan, or this runbook is not blanket pilot consent.
+3. A fresh application/Connector release identity and operation-specific compatibility evidence. The repository's Connector version is an expectation, not proof of the installed artifact; record installed version and approved artifact fingerprint.
+4. Queue, incident, backup, notification and external-integration effects understood and bounded before any action that can trigger them.
+5. A verified backup before a site-changing operation. Backup verification is not proof that restoration will work; the recovery path must be independently credible for the target.
+6. Explicit per-operation Owner GO. One operation's approval does not authorize another.
+
+Never use synthetic identities to bypass authorization. Do not probe customer sites, reconnect a Connector, create a pairing, trigger work, or poll a Connector merely to establish status.
 
 ## 1. End-to-end smoke test
 
-On the staging (or production) installation, with Stripe in **test mode** and **non-production WordPress sites** you control (a staging copy or a throw-away site). Record the result of each step.
+On one explicitly approved non-production Laravel installation and a non-production WordPress site that the site owner has authorized. Production is out of scope. Stripe/payment testing is a separate approval and environment; do not create a real payment or subscription as part of this pilot.
 
 | # | Step | How | Expected |
 | --- | --- | --- | --- |
@@ -18,25 +43,28 @@ On the staging (or production) installation, with Stripe in **test mode** and **
 | 6 | Pairing code | Website page → Generate pairing code | 12-character code, valid 30 minutes, shown once |
 | 7 | Install connector | Download the plugin ZIP from the account; Plugins → Add New → Upload | Connector active |
 | 8 | Pair | Settings → WP CareGrid → enter the code | "Connected", capabilities listed (database backups need MySQL/MariaDB) |
-| 9 | Heartbeat | wait for WP-Cron, or "Check connection now" | Last seen updates; connector reporting in |
+| 9 | Connector status | Read an already persisted, safely exposed status snapshot; do not trigger a poll to test liveness | Pairing and last-seen/poll evidence are current for this exact Connector/site; queued work is known before any separately approved poll |
 | 10 | Inventory | automatic after pairing | Plugins, themes, versions, updates in the account and console |
-| 11 | Manual backup | Customer → Backups → Backup now | Queued, then running on the site |
+| 11 | Manual backup | Only after separate operation approval and preflight | Exact site-bound backup job is authorized; storage and temporary capacity are isolated and sufficient |
 | 12 | Verify backup | wait for the `backups` worker | Status **verified**; activity: requested → started → uploaded → verified |
 | 13 | Queue a plugin update | Operator → website → Update (a plugin with an update) | "Runs after the required pre-update backup has been verified" |
 | 14 | Pre-update backup | automatic | A `pre_update` full backup verified **before** the update starts |
 | 15 | Update | automatic | `PLUGIN_UPDATED`; new version reported |
 | 16 | Health check | part of the update result | Health and inventory refreshed; Site Health updated |
 | 17 | Functional check | **manual**: front page, login, contact form / checkout | Site works; record who checked (the platform does not yet automate functional checks) |
-| 18 | Security scan | Operator → Security → Full scan | Completed; integrity and malware covered; vulnerability "not configured" unless a feed is set |
+| 18 | Security scan | Only the exact scan type/scope in a separate operation approval | Record each scanner's version, covered/missing/unavailable paths and side effects. Integrity success does not prove complete malware coverage; vulnerability coverage requires a separately verified feed |
 | 19 | Admin access | Customer → Open Admin | WordPress admin opens as "WP CareGrid (maintenance access)"; user management, plugin installation, file editor and settings refused |
 | 20 | Audit review | Operator → Activity; Owner → Overview / customer page | Every step above recorded with the right actor (customer, operator, owner, system) |
 | 21 | Revoke access | Customer → website → revoke | The site ends the session at its next check-in; `/wp-admin` asks for login again |
 
-Afterwards: `php tests/smoke/http-smoke.php https://<APP_URL>` (read-only HTTP checks) and the restore rehearsal below.
+Any HTTP smoke test must target the exact approved non-production URL and stay within its documented read-only checks. It does not authorize a poll, scan, backup, restore, update, or production request.
 
-### Restore rehearsal (staging only)
 
-On a staging site only, with `BACKUP_RESTORE_ENABLED=true` on a **staging** installation: Operator → website → backup → Restore, scope "Files and database", type the domain, confirm. Expected: a wrong confirmation is refused (`CONFIRMATION_MISMATCH`); a safety backup of the current site is made and verified **first**; then the restore runs, the site comes back in the backup's state and passes the post-restore checks; the activity log shows restore.requested → backup (pre_restore) verified → restore.started → restore.completed. Then restore the safety backup to undo it. Only after this rehearsal (and its sign-off in RELEASE_CHECKLIST.md) may live restore be enabled in production.
+### Restore and recovery (blocked unless the host is supported)
+
+The merged [RestoreIsolationGate contract](../reports/m15-restore-isolation-gate-contract.md) is fail-closed: without a present, reviewed provider, live files-only, database, full, recovery and compensating restore operations are refused before maintenance activation or live mutation. A provider ID or capability snapshot alone is not proof of an active host gate. The wider host-provider architecture and implementation remain open under [issue #189](https://github.com/zsoltacsai/wpcaregrid/issues/189), and require separate Owner architecture approval, independent review, and target-host compatibility evidence.
+
+A later isolated restore rehearsal requires a disposable copy, exact approved provider and host profile, verified safety backup, documented recovery authorization, explicit Owner approval, and independent observation of gate/receipt/reconciliation behavior. This runbook does not authorize a restore or enable restore on production. If any prerequisite is unsupported or unknown, do not run the rehearsal and keep the site operation blocked.
 
 ### Local run, 2026-10-04 (development machine)
 
@@ -46,7 +74,7 @@ Run against a local installation (`APP_ENV=e2e`, SQLite, local backup storage, b
 | --- | --- |
 | 1–2 | Owner signed in; System and `system:check` showed the real state (Stripe and mail not configured, as expected locally) |
 | 3 | Operator invited from the owner area; the queued invitation email used `APP_URL`; activated through the link; signed in to the console |
-| 4 | **Not run in this pilot run:** Stripe was not configured yet; customer and subscription were created directly in the database. Since run with real Stripe test mode locally through an https tunnel (STRIPE_TEST_MODE.md, 2026-10-04); still to repeat on staging. |
+| 4 | Stripe was not configured for this recorded local run; customer and subscription records were created directly in the local database. A separate Stripe test-mode exercise through an HTTPS tunnel was reported on 2026-10-04, but it is not evidence for this run or for current staging readiness. |
 | 5 | Website created directly (the customer form only accepts public addresses; this site was on 127.0.0.1) |
 | 6–10 | Pairing code generated in the account; paired from WordPress admin; heartbeat, inventory, health and license check reported |
 | 11–12 | Manual FULL backup (13 MB) uploaded, transferred by the `backups` worker, **verified** |
@@ -60,45 +88,53 @@ Run against a local installation (`APP_ENV=e2e`, SQLite, local backup storage, b
 
 Found and fixed during this milestone's verification (not by this run alone): customer disconnect failed on MySQL (column too short, now widened and transactional); file restores on Windows hosts refused every file (connector 0.4.1); backup transfers could be picked up twice by a second worker (own queue connection). The in-app browser pane cannot display the admin access hand-over page (it is `X-Frame-Options: DENY` on purpose); a normal browser tab is not affected.
 
-## 2. First customer safety gates
 
-Before the first real customer site, every item must be confirmed **on the production installation** (not locally):
 
-- [ ] Backup storage works: a backup of a test site is **verified** in the production storage (S3 or SFTP), and the object is visible there under `{website_uuid}/{backup_uuid}/`
-- [ ] Mail works: an invitation and a password reset arrive, links use the production domain over HTTPS
-- [ ] Stripe test flow works end to end (step 4), then the switch to live keys is a separate, deliberate step
-- [ ] Connector pairing works over HTTPS (no `ALLOW_INSECURE_LOCALHOST` anywhere)
-- [ ] Backup and backup verification work (steps 11–12)
-- [ ] Update protection works: an update waits for the verified pre-update backup (steps 13–14)
-- [ ] Site Health shows the five dimensions and is not "healthy" for unknown parts
-- [ ] Security scan works (step 18)
-- [ ] Admin access works and can be revoked (steps 19, 21)
-- [ ] Audit logs show every action with the right actor (step 20)
-- [ ] Authorization isolation: a second test customer cannot see the first one's website, backups, findings or billing (CI covers this; spot-check once by hand)
-- [ ] `php artisan system:check` shows no ERROR; the safety switches are as intended
+## 2. Non-production pilot entry gates
 
-## 3. Controlled pilot (1–3 websites)
+Before any pilot operation, every applicable item must be **VERIFIED for that exact target and operation**. Keep missing items UNKNOWN or BLOCKED; do not use production to fill an evidence gap.
 
-Not a batch. One site at a time, each with the customer's knowledge.
+- [ ] Site owner and tenant are identified; written consent names the exact site, operation, scope, exclusions and time window.
+- [ ] Owner authorization names the exact operator, stop authority, escalation contact, allowed operation and its side effects.
+- [ ] Application revision, WordPress version, Connector version and approved package fingerprint are recorded. A version string alone does not prove package identity.
+- [ ] Pairing identity, heartbeat/poll evidence and inventory collection time are current for the same site and Connector, read from an approved persisted-status view. Do not poll, reconnect or re-pair to establish status.
+- [ ] Connector capabilities and queued/reserved work are known; no unapproved job can be delivered by an approved poll. If this cannot be determined without a state-changing poll, the operation is BLOCKED pending separate authorization.
+- [ ] Runtime, database, filesystem/layout and capacity facts meet the operation's compatibility requirements and are fresh for the target.
+- [ ] Any required backup is verified and bound to this site; manifest/checksum, required objects, age and isolated destination are evidenced. A successful upload or status label alone is insufficient.
+- [ ] Recovery readiness is separately evidenced. Backup verification does not prove restoration. Without a reviewed supported host provider for the exact host, every live restore and recovery operation remains BLOCKED under #182/#189.
+- [ ] Incident auto-open, automatic backup, email/webhook notification, queue routing and external integrations are known and isolated; every possible side effect is within the approved operation scope.
+- [ ] Monitoring owner, observation window, alert path and manual functional-check owner are assigned; monitoring and routing have been verified without sending unauthorized test notifications.
+- [ ] Free disk capacity is known for the exact operation, including temporary scan, backup and update requirements where applicable. No generic threshold should be invented if the implementation does not define one.
+- [ ] Per-operation authorization, evidence retention, cleanup owner and stop criteria are written down before execution. Approval of one operation does not authorize another.
 
-1. Choose 1–3 sites whose owners agree to a pilot; prefer one WordPress and one WooCommerce site; note hosting (Apache/nginx, PHP, MySQL/MariaDB).
-2. Install the connector, set `WP_CAREGRID_QUARANTINE_DIR` outside the web root where the host allows it, pair.
-3. Inventory and initial health check; review every finding with the customer before acting on it.
-4. First backup; check it is verified and has a plausible size.
-5. One plugin update with the pre-update backup; manual functional check of the important pages (contact form, checkout on WooCommerce).
-6. Security scan; review medium/high findings for false positives (feed improvements back into the rule set).
-7. Admin access once, revoked afterwards.
-8. Restore rehearsal: **only** on a staging copy of the pilot site, never on the live pilot site during the pilot.
-9. Watch for a week: scheduled backups per plan, connector reporting in, Site Health, failed jobs.
+## 3. Controlled pilot (one site at a time)
 
-Stop criteria: an unverified backup, an update that did not wait for its backup, a scan that changes anything on a site, a cross-customer visibility issue, or any secret in a log. Fix before continuing.
+This is a proposed bounded pilot sequence, not a batch authorization or standing consent. Start with one explicitly approved non-production site. A second site requires review of the first site's evidence, residual risks and a new target-specific decision.
 
-## Known limitations to keep in mind
+1. Reconfirm the exact approved site, tenant, operator, consent, operation, exclusions and execution window.
+2. Do not install, update, pair or re-pair a Connector unless that precise operation is separately approved and the release artifact is verified.
+3. Review existing persisted health, inventory and status evidence. Do not trigger a poll, reconnect or retry to refresh it without separate operation authorization; first establish the queued-work boundary.
+4. Request a backup only when separately authorized. Verify exact site binding, manifest/checksum, required objects, age, destination isolation and sufficient capacity.
+5. Perform one named update only after a verified pre-update backup, fresh compatibility evidence, site-owner consent, operation-specific Owner authorization and a credible recovery path. Manually check only the approved critical pages.
+6. Run only the explicitly approved scan type and scope. Record scanner versions, covered/missing/unavailable paths, findings and incident, backup, queue and notification deltas. An Integrity scan does not establish malware coverage or a malware-free site.
+7. Use temporary admin access only if specifically approved; verify least privilege and revoke it at the agreed time.
+8. Do not perform restore or recovery unless a reviewed, supported provider exists for the exact host and a separately approved isolated rehearsal is in place. Otherwise record BLOCKED and do not attempt it.
+9. Observe only after monitoring, routing and capacity are verified, using the approved window and named operator.
 
-- Malware detection is rule-based and not perfect; JavaScript skimmers inside `.js` files are not scanned; themes and premium plugins have no authoritative checksums.
+Stop immediately for uncertain target or authorization, stale/unknown prerequisites, unexpected queued work, unverified backup, missing provider/recovery path, unexpected mutation or incident/backup/notification, cross-tenant disclosure, partial result, lost lease, unhealthy site, insufficient capacity or secret in logs. Do not automatically retry, clean up, restore or change configuration; preserve sanitized evidence and escalate.
+
+## Known limitations and backlog
+
+- Historical Integrity results are point-in-time checks of the configured file baseline. They do not prove malware-free status or complete malware coverage. Malware detection has rule and path limitations; JavaScript skimmers inside `.js` files are not scanned, and themes/premium plugins may lack authoritative checksums.
+- The 2026-10-04 local smoke-test record above is historical development evidence only (Connector 0.4.1 and WordPress 7.1.2). It is not evidence of current staging or customer-site state and is not a current pilot acceptance result. Its reported scan result does not establish complete malware coverage.
+- The 2026-10-24 `kiszov-szeged.hu` Integrity result in the evidence report is an Owner-reported historical observation, not current liveness, current inventory, or a malware verdict. Its missing/unavailable counts and notification delta remain limitations; do not label it a current VERIFIED state.
+- Backup success or integrity verification does not prove restore capability. Restore/recovery stays fail-closed for unsupported or unknown hosts until the #189 provider architecture has separate Owner approval and a reviewed implementation supports the exact host.
+- Current Connector heartbeat, polling and inventory freshness must be established from fresh target-specific evidence. Historical job completion does not prove current connectivity. Do not automatically reconnect or operate a customer site to refresh status.
+- Monitoring and notification routing are not established merely because application monitoring code exists. The current release checklist records operational monitoring/alerting as not configured or not ready; require fresh evidence and accountable ownership before a pilot operation.
+- `EnvironmentFacts` reports point-in-time free disk bytes and backup code performs a capacity precheck; this is not a continuous disk-space monitoring or warning capability. Add the following to the future operational backlog, with scope/ownership assigned before implementation: (1) Connector-side disk-space reporting, (2) customer-visible WordPress warning, (3) WP CareGrid dashboard warning, and (4) backup/update/restore capacity implications and safeguards. This runbook does not assign implementation ownership across M15/M16/M17 or authorize implementation.
 - Not every premium plugin license can be checked; "unknown" is never reported as "expired".
 - Functional verification after updates is a manual operator step today.
-- Automatic remediation is off and is not safe everywhere; quarantine and repairs are operator-initiated, one finding at a time, behind a verified backup.
-- A restore can end partially if a site fails midway; the safety backup is the way back.
-- International taxes are not calculated; only the Hungarian market has prices.
-- Database backups need MySQL/MariaDB on the site (SQLite sites get files-only backups).
+- Automatic remediation is off and is not safe everywhere; quarantine and repairs require their own authorization and must not be inferred from scan approval.
+- Database backups need MySQL/MariaDB on the site; SQLite sites receive files-only backups.
+- PHP 8.5 staging cutover remains NO-GO until separately validated and approved; CI compatibility alone is not staging approval.
+
