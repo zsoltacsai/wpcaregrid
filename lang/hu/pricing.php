@@ -68,7 +68,7 @@ return [
         'wordpress' => [
             'basic' => ['name' => 'Basic', 'description' => 'Alapvető karbantartás kisebb WordPress-oldalakhoz.'],
             'business' => ['name' => 'Business', 'description' => 'Rendszeres karbantartás céges weboldalakhoz.'],
-            'secure' => ['name' => 'Secure', 'description' => 'Fokozott biztonság és gyorsabb reagálás.'],
+            'secure' => ['name' => 'Secure', 'description' => 'A csomag szerinti további biztonsági ellenőrzések és jogosultsághoz kötött malware-eltávolítási támogatás.'],
         ],
         'woocommerce' => [
             'basic' => ['name' => 'Basic', 'description' => 'Alapvető karbantartás kisebb WooCommerce-webáruházakhoz.'],
@@ -81,23 +81,23 @@ return [
         'core_plugin_theme_updates' => 'WordPress-, bővítmény- és témafrissítések',
         'core_woocommerce_plugin_theme_updates' => 'WordPress-, WooCommerce-, bővítmény- és témafrissítések',
         'remote_backups' => [
-            'daily' => 'Napi távoli mentés',
-            'weekly' => 'Heti távoli mentés',
-            'monthly' => 'Havi távoli mentés',
+            'daily' => 'Napi mentés; elkülönített tárhely, ahol be van állítva',
+            'weekly' => 'Heti mentés; elkülönített tárhely, ahol be van állítva',
+            'monthly' => 'Havi mentés; elkülönített tárhely, ahol be van állítva',
         ],
         'security_check' => [
             'daily' => 'Napi biztonsági ellenőrzés',
             'weekly' => 'Heti biztonsági ellenőrzés',
             'monthly' => 'Havi biztonsági ellenőrzés',
         ],
-        'uptime_monitoring' => 'Elérhetőség-figyelés',
+        'uptime_monitoring' => 'Elérhetőség-figyelés támogatott webhelyeken',
         'activity_log' => 'Tevékenységnapló',
         'functional_checks' => 'Funkcionális ellenőrzés a fontos frissítések után',
         'license_check' => 'Bővítmény- és témalicencek ellenőrzése',
         'checkout_flow_check' => 'Pénztári folyamat ellenőrzése frissítések után',
         'payment_email_checks' => 'Fizetési és rendelési e-mailek ellenőrzése',
-        'malware_cleanup' => 'Malware-eltávolítás',
-        'priority_response' => 'Elsőbbségi reagálás',
+        'malware_cleanup' => 'Malware-eltávolítás jogosult, támogatott esetekben',
+        'priority_response' => 'Elsőbbségi támogatás a csomag szerint',
         'monthly_report' => 'Havi karbantartási jelentés',
     ],
 

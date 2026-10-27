@@ -60,8 +60,8 @@ return [
         'title' => 'Mit tartalmaz a karbantartás',
         'items' => [
             'updates' => ['title' => 'Frissítések', 'text' => 'WordPress, bővítmények és témák'],
-            'backups' => ['title' => 'Mentések', 'text' => 'Fájlok és adatbázis, távoli helyen tárolva'],
-            'security' => ['title' => 'Biztonság', 'text' => 'Sérülékenység- és malware-ellenőrzés'],
+            'backups' => ['title' => 'Mentések', 'text' => 'Mentések támogatott beállításokhoz; elkülönített tárhely, ahol be van állítva'],
+            'security' => ['title' => 'Biztonság', 'text' => 'A csomag szerinti, ütemezett biztonsági ellenőrzések'],
             'functional' => ['title' => 'Funkcionális ellenőrzés', 'text' => 'A frissítések után ellenőrizzük a fontos funkciókat'],
         ],
     ],
@@ -80,10 +80,10 @@ return [
     'verification' => [
         'eyebrow' => 'Frissítési folyamat',
         'title' => 'Nemcsak frissítünk. Ellenőrzünk is.',
-        'lead' => 'A karbantartási folyamat része a mentés, a frissítés, a technikai ellenőrzés és a funkcionális ellenőrzés.',
+        'lead' => 'A csomag és a webhely beállításainak támogatása esetén a karbantartás mentést, frissítéseket, technikai és funkcionális ellenőrzéseket is tartalmaz.',
         'step_label' => ':number. lépés',
         'steps' => [
-            'backup' => ['title' => 'Mentés', 'text' => 'Mielőtt bármi megváltozna, friss mentés készül.', 'result' => 'Ellenőrizve'],
+            'backup' => ['title' => 'Mentés', 'text' => 'Frissítés előtti mentés ott készül, ahol ezt a csomag és a webhely beállítása támogatja.', 'result' => 'Ellenőrizve'],
             'update' => ['title' => 'Frissítés', 'text' => 'A WordPress-mag, a bővítmények és a témák ellenőrzött sorrendben frissülnek.', 'result' => 'Frissítve'],
             'check' => ['title' => 'Ellenőrzés', 'text' => 'Meggyőződünk arról, hogy az oldal hibák nélkül betöltődik.', 'result' => 'Nincs hiba'],
             'functional' => ['title' => 'Funkcionális teszt', 'text' => 'A fontos oldalakat, űrlapokat és a belépést teszteljük.', 'result' => 'Sikeres'],
@@ -100,7 +100,7 @@ return [
     'dashboard' => [
         'eyebrow' => 'Vezérlőpult',
         'title' => 'Minden weboldala egy helyen.',
-        'lead' => 'Állapot, mentések, frissítések, biztonság és licencek minden nálunk lévő weboldalához.',
+        'lead' => 'A fiókjához csatlakoztatott webhelyek elérhető állapot-, mentési, frissítési, biztonsági és licencadatai.',
         'demo_note' => 'Szemléltető adatok, nem valódi ügyféladatok.',
         'metrics_label' => 'Példa vezérlőpult-mutatók (demóadatok)',
     ],
@@ -147,10 +147,10 @@ return [
         'eyebrow' => 'Hogyan működik',
         'title' => 'Négy lépésben indul a karbantartás.',
         'steps' => [
-            'plan' => ['title' => 'Csomagválasztás', 'text' => 'Válasszon csomagot, és fizessen online.'],
+            'plan' => ['title' => 'Csomagok megismerése', 'text' => 'Tekintse át a lehetőségeket, és érdeklődjön e-mailben a webhelye szolgáltatásának elérhetőségéről.'],
             'connect' => ['title' => 'Weboldal csatlakoztatása', 'text' => 'Csatlakoztassa a WordPress-oldalt biztonságos kapcsolaton keresztül.'],
-            'audit' => ['title' => 'Első ellenőrzés', 'text' => 'Kezdeti átvilágítás, mentés és a rendszer beállítása.'],
-            'ongoing' => ['title' => 'Folyamatos karbantartás', 'text' => 'Rendszeres frissítések, mentések, ellenőrzések és felügyelet.'],
+            'audit' => ['title' => 'Első ellenőrzés', 'text' => 'Felmérjük a webhely beállításait és az elérhető szolgáltatási lehetőségeket; a mentés a csomagtól és a webhely támogatásától függ.'],
+            'ongoing' => ['title' => 'Folyamatos karbantartás', 'text' => 'Frissítések, mentések, ellenőrzések és felügyelet a csomag és a támogatott webhelybeállítás szerint.'],
         ],
     ],
 
@@ -182,7 +182,7 @@ return [
             ],
             'backup_frequency' => [
                 'question' => 'Milyen gyakran készül mentés?',
-                'answer' => 'Ez a csomagtól függ. WordPress: a Basic csomagban havonta, a Business csomagban hetente, a Secure csomagban naponta. WooCommerce: a Basic csomagban hetente, a Business és a Secure csomagban naponta. A frissítések előtt is készül mentés.',
+                'answer' => 'Ez a csomagtól függ. WordPress: a Basic csomagban havonta, a Business csomagban hetente, a Secure csomagban naponta. WooCommerce: a Basic csomagban hetente, a Business és a Secure csomagban naponta. Ezen felül frissítés előtti mentés ott készül, ahol ezt a csomag és a webhely beállítása támogatja.',
             ],
             'license' => [
                 'question' => 'Mi történik, ha egy bővítmény licence lejár?',
@@ -190,7 +190,7 @@ return [
             ],
             'infected' => [
                 'question' => 'Mi történik, ha a weboldalam megfertőződik?',
-                'answer' => 'Értesítjük, ha egy biztonsági ellenőrzés problémát talál, és Önnel egyeztetjük a következő lépéseket. A malware eltávolítása a Secure csomagokban benne van, a többi csomagnál külön árajánlatot kap rá.',
+                'answer' => 'Értesítjük, ha az adott webhelyre érvényes biztonsági ellenőrzés találatot jelez, és egyeztetjük a következő lépéseket. Malware-eltávolítás a Secure csomaggal, jogosultsági és támogatott webhelyfeltételek mellett érhető el; más eseteket felmérünk és külön árazunk.',
             ],
             'custom_plugins' => [
                 'question' => 'Fejlesztenek egyedi bővítményeket?',
@@ -201,7 +201,7 @@ return [
 
     'cta' => [
         'title' => 'Tartsa karbantartva a WordPress-oldalát.',
-        'text' => 'Válasszon csomagot, a rutinszerű technikai munkát pedig bízza ránk.',
+        'text' => 'Tekintse át a csomagokat, és egyeztessünk a webhelyéről és a szolgáltatás elérhetőségéről.',
         'primary' => 'Csomagok megtekintése',
         'secondary' => 'Kapcsolatfelvétel',
     ],

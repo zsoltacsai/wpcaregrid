@@ -166,7 +166,7 @@ final class ContentSchema
                 Field::text('title'),
                 Field::textarea('description', max: 400),
                 Field::text('cta_label', max: 40),
-                // Contact links may be unset (MARKETING_CONTACT_URL): optional, like the config.
+                // The approved public contact destination is an email link; no contact route/form exists.
                 Field::url('cta_url', false),
                 Field::textarea('note', false, 300),
                 Field::group('items', ['plugins', 'api', 'woocommerce', 'automation'], [Field::text('title', max: 60), Field::text('text', max: 160), Field::boolean('enabled')]),
