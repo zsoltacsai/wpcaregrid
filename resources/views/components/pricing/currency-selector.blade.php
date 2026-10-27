@@ -4,11 +4,11 @@
     and the selected supported currency.
 --}}
 @use('App\Pricing\DisplayCurrency')
-@props(['catalog'])
+@props(['catalog', 'locale' => null])
 
 @php
     $display = app(DisplayCurrency::class);
-    $selected = $display->selected();
+    $selected = $display->selected($locale ?? app()->getLocale());
 @endphp
 
 @if ($display->canChoose())

@@ -7,6 +7,9 @@ use App\Content\ContentValues;
 use App\Content\Schema\ContentSchema;
 use App\Models\ContentEntry;
 use App\Models\User;
+use App\Pricing\BillingInterval;
+use App\Pricing\PricingCatalog;
+use App\Pricing\ProductType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Route;
@@ -100,6 +103,70 @@ class LocalizedMarketingRoutesTest extends TestCase
         $this->assertStringContainsString('role="group" aria-label="Billing period"', $html);
         $this->assertStringContainsString('data-price="monthly"', $html);
         $this->assertStringContainsString('data-price="annual"', $html);
+    }
+
+    public function test_hungarian_pricing_suggests_huf_regardless_of_browser_language(): void
+    {
+        foreach (['en-GB', 'en-US', 'de-DE', 'hu-HU'] as $browserLocale) {
+            $response = $this->withHeaders(['Accept-Language' => $browserLocale])
+                ->get('/hu/pricing')
+                ->assertOk()
+                ->assertSee('<option value="HUF" selected', false);
+
+            $this->assertSelectedPricingCurrencyMatchesRenderedMarket($response->getContent(), 'HUF');
+        }
+    }
+
+    public function test_english_pricing_keeps_browser_region_currency_suggestions(): void
+    {
+        foreach ([
+            'en-GB' => 'GBP',
+            'en-US' => 'USD',
+            'de-DE' => 'EUR',
+        ] as $browserLocale => $currency) {
+            $response = $this->withHeaders(['Accept-Language' => $browserLocale])
+                ->get('/en/pricing')
+                ->assertOk()
+                ->assertSee('<option value="'.$currency.'" selected', false);
+
+            $this->assertSelectedPricingCurrencyMatchesRenderedMarket($response->getContent(), $currency);
+        }
+    }
+
+    public function test_explicit_display_currency_persists_across_localized_pricing_routes(): void
+    {
+        $this->withHeaders(['Accept-Language' => 'en-GB'])
+            ->withSession(['display_currency' => 'GBP'])
+            ->get('/hu/pricing')
+            ->assertOk()
+            ->assertSee('<option value="GBP" selected', false);
+
+        $response = $this->get('/en/pricing')
+            ->assertOk()
+            ->assertSee('<option value="GBP" selected', false);
+
+        $this->assertSelectedPricingCurrencyMatchesRenderedMarket($response->getContent(), 'GBP');
+    }
+
+    private function assertSelectedPricingCurrencyMatchesRenderedMarket(string $html, string $currency): void
+    {
+        $catalog = app(PricingCatalog::class);
+        $market = $catalog->marketForCurrency($currency);
+        $this->assertNotNull($market, "Expected a configured market for {$currency}.");
+
+        $offer = $catalog->offers(ProductType::WordPress, $market)[0];
+        $price = $offer->price(BillingInterval::Monthly)->money;
+        $this->assertStringContainsString('aria-labelledby="plan-wordpress-basic"', $html);
+        preg_match('/<article\b(?=[^>]*\baria-labelledby="plan-wordpress-basic")[^>]*>(.*?)<\/article>/s', $html, $card);
+
+        $this->assertNotEmpty($card[1] ?? null, 'Expected the WordPress Basic pricing card to render.');
+        preg_match('/<div\b(?=[^>]*\bdata-price="monthly")[^>]*>(.*?)<\/div>/s', $card[1], $monthlyPrice);
+        $this->assertNotEmpty($monthlyPrice[1] ?? null, 'Expected the monthly price to render.');
+
+        $renderedPrice = html_entity_decode(strip_tags($monthlyPrice[1]));
+        $expectedDigits = preg_replace('/\D+/', '', $price->format());
+        $this->assertStringContainsString($expectedDigits, preg_replace('/\D+/', '', $renderedPrice));
+        $this->assertStringContainsString($price->currency->symbol, $renderedPrice);
     }
 
     public function test_legacy_get_urls_redirect_permanently_to_configured_origin_and_keep_only_safe_query_data(): void

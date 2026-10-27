@@ -10,8 +10,16 @@
     $productTypes = $catalog->productTypes();
     $defaultLine = $catalog->defaultProductType->value;
     $defaultInterval = $catalog->defaultInterval;
-    $market = app(\App\Pricing\DisplayCurrency::class)->market();
-    $selectedCurrency = app(\App\Pricing\DisplayCurrency::class)->selected();
+    $displayCurrency = app(\App\Pricing\DisplayCurrency::class);
+    // The Hungarian marketing route is the stronger display hint. On English
+    // routes keep the established browser-region suggestion (for example,
+    // en-GB → GBP and en-US → USD). An explicit session selection still wins.
+    $currencyLocale = app()->getLocale() === 'hu'
+        ? app()->getLocale()
+        : (request()->getLanguages()[0] ?? app()->getLocale());
+    $selectedCurrency = $displayCurrency->selected($currencyLocale);
+    $market = $catalog->marketForCurrency($selectedCurrency)
+        ?? $catalog->market(config('pricing.display_market'));
     $freeMonths = $catalog->annualFreeMonths($market);
     $freeMonthsLabel = $freeMonths > 0 ? trans_choice('pricing.free_months', $freeMonths) : null;
     $taxNote = __('pricing.tax_notes.'.$market->taxTreatment->value);
@@ -50,7 +58,7 @@
         </div>
 
         <div class="flex flex-col items-start gap-3 md:flex-row md:flex-wrap md:items-center">
-            <x-pricing.currency-selector :catalog="$catalog" />
+            <x-pricing.currency-selector :catalog="$catalog" :locale="$currencyLocale" />
             <div role="group" aria-label="{{ __('pricing.billing_label') }}" class="inline-grid grid-cols-2 rounded-md border border-line bg-surface p-1">
                 @foreach (BillingInterval::cases() as $interval)
                     @php $isDefault = $interval === $defaultInterval; @endphp
