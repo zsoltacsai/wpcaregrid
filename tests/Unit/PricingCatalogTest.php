@@ -111,13 +111,17 @@ class PricingCatalogTest extends TestCase
     #[DataProvider('backupFrequencies')]
     public function test_backup_frequency(string $product, string $tier, string $frequency): void
     {
-        $plan = $this->catalog()->plan(ProductType::from($product), PlanTier::from($tier));
+        $catalog = $this->catalog();
+        $productType = ProductType::from($product);
+        $planTier = PlanTier::from($tier);
+        $plan = $catalog->plan($productType, $planTier);
         $backups = array_values(array_filter($plan->features, fn ($f) => $f->key === 'remote_backups'));
 
+        $this->assertSame("{$product}-{$tier}", $plan->id());
         $this->assertSame($frequency, $plan->backupFrequency);
         $this->assertCount(1, $backups);
         $this->assertSame($frequency, $backups[0]->frequency);
-        $this->assertSame(ucfirst($frequency).' remote backups', $backups[0]->label);
+        $this->assertSame(ucfirst($frequency).' backups; separate storage where configured', $backups[0]->label);
     }
 
     /** @return array<string, array{string, string, string, int, int, int}> */
@@ -177,7 +181,7 @@ class PricingCatalogTest extends TestCase
             $this->assertSame(
                 $type === ProductType::WooCommerce
                     ? ['Core maintenance for smaller WooCommerce stores.', 'Regular maintenance for active WooCommerce stores.', 'Expanded maintenance and security checks for WooCommerce stores.']
-                    : ['Essential maintenance for smaller WordPress sites.', 'Regular maintenance for business websites.', 'Extra security and faster response.'],
+                    : ['Essential maintenance for smaller WordPress sites.', 'Regular maintenance for business websites.', 'Additional plan-specific security checks and eligible malware-cleanup support.'],
                 array_map(fn ($plan) => $plan->description, $this->catalog()->plans($type)),
             );
         }
