@@ -19,6 +19,7 @@
         $pendingThemes = $themes->where('update_available', true);
         $lastUpdate = $updateJobs->first(fn ($job) => $job->status->isFinal());
         $time = fn ($at) => app(\App\Support\DisplayDateTime::class)->format($at) ?? __('operator.never');
+        $readinessTime = fn ($at) => $at ? $time(\Illuminate\Support\Carbon::parse($at)) : __('operator.never');
         // Jump links only for the sections this operator can see.
         $sections = array_keys(array_filter([
             'overview' => true, 'connector' => true, 'wordpress' => true, 'plugins' => true, 'themes' => true, 'woocommerce' => true,
@@ -113,6 +114,26 @@
             @if ($connector?->isOutdated())
                 <x-account.notice tone="warning" class="mt-4">{{ __('operator.connector.update_required', ['version' => $connector->connector_version, 'latest' => config('connector.latest_version')]) }}</x-account.notice>
             @endif
+            <h3 class="mt-5 text-xs font-semibold tracking-[0.08em] text-muted uppercase">{{ __('operator.connector.readiness.title') }}</h3>
+            <p class="mt-2 text-xs text-muted">{{ __('operator.connector.readiness.explanation') }}</p>
+            <dl class="mt-3 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <x-account.detail :label="__('operator.connector.readiness.activity')"><x-ui.status-badge :tone="$readiness['connection']['activity_state'] === 'VERIFIED' ? 'positive' : ($readiness['connection']['activity_state'] === 'STALE' || $readiness['connection']['activity_state'] === 'REVOKED' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['connection']['activity_state']) }}</x-ui.status-badge></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.heartbeat')"><x-ui.status-badge :tone="$readiness['connection']['heartbeat_state'] === 'VERIFIED' ? 'positive' : ($readiness['connection']['heartbeat_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['connection']['heartbeat_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['connection']['last_heartbeat_at']) }}</span></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.successful_poll')"><x-ui.status-badge :tone="$readiness['connection']['poll_state'] === 'VERIFIED' ? 'positive' : ($readiness['connection']['poll_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['connection']['poll_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['connection']['last_successful_poll_at']) }}</span></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.inventory_collected')"><x-ui.status-badge :tone="$readiness['inventory']['collection_state'] === 'VERIFIED' ? 'positive' : ($readiness['inventory']['collection_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['inventory']['collection_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['inventory']['collected_at']) }}</span></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.inventory_ingested')"><x-ui.status-badge :tone="$readiness['inventory']['ingestion_state'] === 'VERIFIED' ? 'positive' : ($readiness['inventory']['ingestion_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['inventory']['ingestion_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['inventory']['ingested_at']) }}</span></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.capability_snapshot')"><x-ui.status-badge :tone="$readiness['capability_snapshot']['state'] === 'VERIFIED' ? 'positive' : ($readiness['capability_snapshot']['state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('operator.connector.readiness.states.'.$readiness['capability_snapshot']['state']) }}</x-ui.status-badge></x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.queued')">{{ $readiness['jobs']['queued'] }}</x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.waiting')">{{ $readiness['jobs']['waiting'] }}</x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.delivered')">{{ $readiness['jobs']['delivered'] }}</x-account.detail>
+                <x-account.detail :label="__('operator.connector.readiness.running')"><x-ui.status-badge tone="neutral">{{ __('operator.connector.readiness.running_unknown') }}</x-ui.status-badge></x-account.detail>
+            </dl>
+            <h4 class="mt-5 text-xs font-semibold tracking-[0.08em] text-muted uppercase">{{ __('operator.connector.readiness.operation_capabilities') }}</h4>
+            <ul class="mt-2 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                @foreach ($readiness['capability_snapshot']['capabilities'] as $capability => $state)
+                    <li class="flex items-center justify-between gap-2 rounded-sm border border-line px-3 py-2"><span>{{ __('operator.connector.readiness.capabilities.'.$capability) }}</span><x-ui.status-badge :tone="$state === 'PASS' ? 'positive' : ($state === 'BLOCK' ? 'danger' : ($state === 'WARN' ? 'warning' : 'neutral'))">{{ __('operator.connector.readiness.capability_states.'.$state) }}</x-ui.status-badge></li>
+                @endforeach
+            </ul>
             <p class="mt-4 flex items-center gap-2 text-xs text-muted"><x-ui.icon name="lock" class="size-4 text-accent-ink" />{{ __('operator.connector.credential_note') }}</p>
 
             @can('operator.websites.manage')

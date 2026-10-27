@@ -7,7 +7,9 @@ use App\Backups\BackupRefused;
 use App\Backups\BackupService;
 use App\Connector\ConnectorPackageArtifact;
 use App\Connector\PairingCodes;
+use App\Connector\ReadinessProjection;
 use App\Http\Controllers\Controller;
+use App\Models\Connector;
 use App\Models\ConnectorPairingCode;
 use App\Models\Website;
 use App\Operator\BackupState;
@@ -60,13 +62,15 @@ class WebsiteController extends Controller
         ]);
     }
 
-    public function show(Website $website, SiteHealth $health, SecurityScanner $security, SyntheticFixturePolicy $fixtures): View
+    public function show(Website $website, SiteHealth $health, SecurityScanner $security, SyntheticFixturePolicy $fixtures, ReadinessProjection $readinessProjection): View
     {
         $website->load(['customer.syntheticFixture', 'syntheticFixture', 'subscription', 'activeConnector', 'inventory']);
+        $readiness = $readinessProjection->project($website, $website->activeConnector ?? new Connector);
         $backups = $website->backups()->latest('id')->limit(5)->get();
 
         return view('owner.websites.show', [
             'website' => $website,
+            'readiness' => $readiness,
             'report' => $health->for($website),
             'connector' => ConnectorState::of($website),
             'security' => $security->summaries([$website])[$website->id],

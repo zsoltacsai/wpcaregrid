@@ -89,6 +89,33 @@
         </x-operator.section>
     </div>
 
+    @php
+        $readinessTime = fn ($at) => $at
+            ? app(\App\Support\DisplayDateTime::class)->format(\Illuminate\Support\Carbon::parse($at))
+            : __('owner.never');
+    @endphp
+    <x-operator.section :title="__('owner.websites.readiness.title')" id="connector-readiness" class="mt-4">
+        <p class="mb-4 text-sm text-muted">{{ __('owner.websites.readiness.explanation') }}</p>
+        <dl class="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div><dt class="text-muted">{{ __('owner.websites.readiness.activity') }}</dt><dd><x-ui.status-badge :tone="$readiness['connection']['activity_state'] === 'VERIFIED' ? 'positive' : ($readiness['connection']['activity_state'] === 'STALE' || $readiness['connection']['activity_state'] === 'REVOKED' ? 'warning' : 'neutral')">{{ __('owner.websites.readiness.states.'.$readiness['connection']['activity_state']) }}</x-ui.status-badge></dd></div>
+            <div><dt class="text-muted">{{ __('owner.websites.readiness.heartbeat') }}</dt><dd><x-ui.status-badge :tone="$readiness['connection']['heartbeat_state'] === 'VERIFIED' ? 'positive' : ($readiness['connection']['heartbeat_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('owner.websites.readiness.states.'.$readiness['connection']['heartbeat_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['connection']['last_heartbeat_at']) }}</span></dd></div>
+            <div><dt class="text-muted">{{ __('owner.websites.readiness.successful_poll') }}</dt><dd><x-ui.status-badge :tone="$readiness['connection']['poll_state'] === 'VERIFIED' ? 'positive' : ($readiness['connection']['poll_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('owner.websites.readiness.states.'.$readiness['connection']['poll_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['connection']['last_successful_poll_at']) }}</span></dd></div>
+            <div><dt class="text-muted">{{ __('owner.websites.readiness.inventory_collected') }}</dt><dd><x-ui.status-badge :tone="$readiness['inventory']['collection_state'] === 'VERIFIED' ? 'positive' : ($readiness['inventory']['collection_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('owner.websites.readiness.states.'.$readiness['inventory']['collection_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['inventory']['collected_at']) }}</span></dd></div>
+            <div><dt class="text-muted">{{ __('owner.websites.readiness.inventory_ingested') }}</dt><dd><x-ui.status-badge :tone="$readiness['inventory']['ingestion_state'] === 'VERIFIED' ? 'positive' : ($readiness['inventory']['ingestion_state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('owner.websites.readiness.states.'.$readiness['inventory']['ingestion_state']) }}</x-ui.status-badge> <span class="font-mono text-xs">{{ $readinessTime($readiness['inventory']['ingested_at']) }}</span></dd></div>
+            <div><dt class="text-muted">{{ __('owner.websites.readiness.capability_snapshot') }}</dt><dd><x-ui.status-badge :tone="$readiness['capability_snapshot']['state'] === 'VERIFIED' ? 'positive' : ($readiness['capability_snapshot']['state'] === 'STALE' ? 'warning' : 'neutral')">{{ __('owner.websites.readiness.states.'.$readiness['capability_snapshot']['state']) }}</x-ui.status-badge></dd></div>
+            <div><dt class="text-muted">{{ __('owner.websites.readiness.queued') }}</dt><dd>{{ $readiness['jobs']['queued'] }}</dd></div>
+            <div><dt class="text-muted">{{ __('owner.websites.readiness.waiting') }}</dt><dd>{{ $readiness['jobs']['waiting'] }}</dd></div>
+            <div><dt class="text-muted">{{ __('owner.websites.readiness.delivered') }}</dt><dd>{{ $readiness['jobs']['delivered'] }}</dd></div>
+            <div><dt class="text-muted">{{ __('owner.websites.readiness.running') }}</dt><dd><x-ui.status-badge tone="neutral">{{ __('owner.websites.readiness.running_unknown') }}</x-ui.status-badge></dd></div>
+        </dl>
+        <h3 class="mt-5 text-xs font-semibold tracking-[0.08em] text-muted uppercase">{{ __('owner.websites.readiness.operation_capabilities') }}</h3>
+        <ul class="mt-2 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            @foreach ($readiness['capability_snapshot']['capabilities'] as $capability => $state)
+                <li class="flex items-center justify-between gap-2 rounded-sm border border-line px-3 py-2"><span>{{ __('owner.websites.readiness.capabilities.'.$capability) }}</span><x-ui.status-badge :tone="$state === 'PASS' ? 'positive' : ($state === 'BLOCK' ? 'danger' : ($state === 'WARN' ? 'warning' : 'neutral'))">{{ __('owner.websites.readiness.capability_states.'.$state) }}</x-ui.status-badge></li>
+            @endforeach
+        </ul>
+    </x-operator.section>
+
     <x-operator.section :title="__('owner.websites.sections.activity')" id="website-activity" class="mt-4">
         <x-owner.event-list :events="$events" :show-website="false" />
     </x-operator.section>

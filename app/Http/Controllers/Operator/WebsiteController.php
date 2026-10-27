@@ -14,8 +14,10 @@ use App\Connector\HealthStatus;
 use App\Connector\JobQueue;
 use App\Connector\JobType;
 use App\Connector\PairingCodes;
+use App\Connector\ReadinessProjection;
 use App\Http\Controllers\Controller;
 use App\Models\Backup;
+use App\Models\Connector;
 use App\Models\Website;
 use App\Operator\BackupState;
 use App\Operator\ConnectorState;
@@ -56,13 +58,14 @@ class WebsiteController extends Controller
         ]);
     }
 
-    public function show(Request $request, Website $website, BackupPolicy $policy, RestoreService $restores, AdminAccessService $access, SecurityScanner $security): View
+    public function show(Request $request, Website $website, BackupPolicy $policy, RestoreService $restores, AdminAccessService $access, SecurityScanner $security, ReadinessProjection $readinessProjection): View
     {
         $website->load(['customer', 'syntheticFixture', 'subscription', 'activeConnector', 'inventory']);
         $website->loadExists('connectors');
         $user = $request->user();
         $can = fn (Permission $permission) => $user->hasOperatorPermission($permission);
         $connectorState = ConnectorState::of($website);
+        $readiness = $readinessProjection->project($website, $website->activeConnector ?? new Connector);
 
         $backups = $can(Permission::BackupsView) ? $website->backups()->latest('id')->limit(15)->get() : collect();
 
@@ -74,6 +77,7 @@ class WebsiteController extends Controller
             'inventory' => $website->inventory,
             'capabilitySnapshot' => $website->capabilitySnapshot,
             'connectorState' => $connectorState,
+            'readiness' => $readiness,
             'security' => $security->summaries([$website])[$website->id],
             'securityConfigured' => $security->isConfigured(),
             'latestVerified' => $website->backups()->usableRecoveryPoint()->latest('verified_at')->first(),
