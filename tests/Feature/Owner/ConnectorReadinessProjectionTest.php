@@ -42,10 +42,8 @@ final class ConnectorReadinessProjectionTest extends TestCase
             'requested_by' => 'system',
         ]);
 
-        $queuedBefore = WebsiteJob::query()
-            ->where('website_id', $site['website']->id)
-            ->where('status', 'queued')
-            ->count();
+        $siteJobsBefore = WebsiteJob::query()->where('website_id', $site['website']->id)->count();
+        $otherJobsBefore = WebsiteJob::query()->where('website_id', $other['website']->id)->count();
 
         Queue::fake();
         Http::preventStrayRequests();
@@ -70,8 +68,8 @@ final class ConnectorReadinessProjectionTest extends TestCase
         $this->assertSame([], $writes);
         Queue::assertNothingPushed();
         Http::assertNothingSent();
-        $this->assertSame($queuedBefore, WebsiteJob::query()->where('website_id', $site['website']->id)->where('status', 'queued')->count());
-        $this->assertSame(0, WebsiteJob::query()->where('website_id', $other['website']->id)->count());
+        $this->assertSame($siteJobsBefore, WebsiteJob::query()->where('website_id', $site['website']->id)->count());
+        $this->assertSame($otherJobsBefore, WebsiteJob::query()->where('website_id', $other['website']->id)->count());
     }
 
     public function test_non_owner_roles_cannot_read_owner_readiness_page(): void

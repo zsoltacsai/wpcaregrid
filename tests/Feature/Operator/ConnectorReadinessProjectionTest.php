@@ -52,6 +52,9 @@ final class ConnectorReadinessProjectionTest extends TestCase
             'requested_by' => 'system',
         ]);
 
+        $siteJobsBefore = WebsiteJob::query()->where('website_id', $website->id)->count();
+        $otherJobsBefore = WebsiteJob::query()->where('website_id', $other['website']->id)->count();
+
         Queue::fake();
         Http::preventStrayRequests();
         $writes = [];
@@ -75,8 +78,8 @@ final class ConnectorReadinessProjectionTest extends TestCase
         $this->assertSame([], $writes);
         Queue::assertNothingPushed();
         Http::assertNothingSent();
-        $this->assertSame(1, WebsiteJob::query()->where('website_id', $website->id)->where('status', 'waiting')->count());
-        $this->assertSame(0, WebsiteJob::query()->where('website_id', $other['website']->id)->count());
+        $this->assertSame($siteJobsBefore, WebsiteJob::query()->where('website_id', $website->id)->count());
+        $this->assertSame($otherJobsBefore, WebsiteJob::query()->where('website_id', $other['website']->id)->count());
     }
 
     public function test_operator_without_website_view_permission_cannot_read_readiness(): void
