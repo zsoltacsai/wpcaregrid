@@ -87,7 +87,9 @@ final class ReadinessProjection
 
         return [
             'connection' => [
-                'state' => $activityState,
+                // VERIFIED describes only fresh last-seen evidence, never a
+                // claim that a Connector process is currently running.
+                'activity_state' => $activityState,
                 'last_activity_at' => $this->timestamp($connector->last_seen_at),
                 // This records a heartbeat accepted by the application. It does
                 // not prove that the Connector received the response.
@@ -207,7 +209,7 @@ final class ReadinessProjection
 
         return [
             'connection' => [
-                'state' => 'UNKNOWN',
+                'activity_state' => 'UNKNOWN',
                 'last_activity_at' => null,
                 'last_heartbeat_at' => null,
                 'heartbeat_state' => 'UNKNOWN',

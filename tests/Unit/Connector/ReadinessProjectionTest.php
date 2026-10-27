@@ -35,7 +35,7 @@ final class ReadinessProjectionTest extends TestCase
 
         $projection = app(ReadinessProjection::class)->project($website, $connector);
 
-        $this->assertSame('VERIFIED', $projection['connection']['state']);
+        $this->assertSame('VERIFIED', $projection['connection']['activity_state']);
         $this->assertSame($now->toIso8601String(), $projection['connection']['last_activity_at']);
         $this->assertSame($now->toIso8601String(), $projection['connection']['last_heartbeat_at']);
         $this->assertSame('VERIFIED', $projection['connection']['heartbeat_state']);
@@ -63,7 +63,7 @@ final class ReadinessProjectionTest extends TestCase
 
         $projection = app(ReadinessProjection::class)->project($website, $connector);
 
-        $this->assertSame('UNKNOWN', $projection['connection']['state']);
+        $this->assertSame('UNKNOWN', $projection['connection']['activity_state']);
         $this->assertSame('UNKNOWN', $projection['connection']['heartbeat_state']);
         $this->assertSame('UNKNOWN', $projection['connection']['poll_state']);
         $this->assertSame('UNKNOWN', $projection['inventory']['collection_state']);
@@ -97,7 +97,7 @@ final class ReadinessProjectionTest extends TestCase
 
         $projection = app(ReadinessProjection::class)->project($website, $connector);
 
-        $this->assertSame('STALE', $projection['connection']['state']);
+        $this->assertSame('STALE', $projection['connection']['activity_state']);
         $this->assertSame('STALE', $projection['connection']['heartbeat_state']);
         $this->assertSame('UNKNOWN', $projection['connection']['poll_state']);
         $this->assertSame('STALE', $projection['inventory']['collection_state']);
@@ -157,7 +157,7 @@ final class ReadinessProjectionTest extends TestCase
 
         $projection = app(ReadinessProjection::class)->project($first['website'], $secondConnector);
 
-        $this->assertSame('UNKNOWN', $projection['connection']['state']);
+        $this->assertSame('UNKNOWN', $projection['connection']['activity_state']);
         $this->assertNull($projection['connection']['last_activity_at']);
         $this->assertSame('UNKNOWN', $projection['capability_snapshot']['state']);
         $this->assertSame(0, $projection['jobs']['queued']);
