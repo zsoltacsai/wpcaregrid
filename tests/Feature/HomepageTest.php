@@ -63,6 +63,7 @@ class HomepageTest extends TestCase
         $this->get('/en/')->assertSeeInOrder([
             'WordPress maintenance, without the hassle.',
             'Functional checks',
+            'Up and running in four steps.',
             'WordPress doesn&#039;t maintain itself.',
             'We don&#039;t just update. We check.',
             'Plans and pricing',
@@ -70,7 +71,6 @@ class HomepageTest extends TestCase
             'Expired licenses don&#039;t go unnoticed.',
             'For stores, we check more.',
             'Need more than maintenance?',
-            'Up and running in four steps.',
             'See recorded site activity.',
             'Frequently asked questions',
             'Keep your WordPress maintained.',
@@ -121,13 +121,44 @@ class HomepageTest extends TestCase
 
     public function test_dashboard_previews_are_labelled_as_demo_data(): void
     {
-        $this->get('/en/')
+        $html = $this->get('/en/')
             ->assertSee('Demo data')
             ->assertSee('Illustrative figures, not real customer data.')
             ->assertSeeInOrder(['Last backup', 'Updates', 'Security', 'License', 'Status'])
             ->assertSee('Issue found')
             ->assertSee('3 pending')
-            ->assertSee("Third-party plugin and theme licenses remain the customer's responsibility.");
+            ->assertSee("Third-party plugin and theme licenses remain the customer's responsibility.")
+            ->getContent();
+
+        $document = new \DOMDocument;
+        $previousErrorMode = libxml_use_internal_errors(true);
+        $document->loadHTML($html);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previousErrorMode);
+        $xpath = new \DOMXPath($document);
+
+        $this->assertSame(0, $xpath->query('//section[@aria-labelledby="hero-title"]//figure')->length, 'The hero should not contain a dashboard preview.');
+        $this->assertSame(1, $xpath->query('//section[@aria-labelledby="dashboard-title"]//figure')->length, 'The complete dashboard section should retain one demonstration.');
+    }
+
+    public function test_localized_homepages_preserve_hero_calls_to_action_and_how_anchor(): void
+    {
+        foreach ([
+            '/en/' => ['WordPress maintenance, without the hassle.', 'View plans', 'How it works'],
+            '/hu/' => ['WordPress-karbantartás, gond nélkül.', 'Csomagok megtekintése', 'Hogyan működik'],
+        ] as $path => [$heading, $primary, $secondary]) {
+            $html = $this->get($path)->assertOk()->assertSee($heading)->getContent();
+            preg_match('#<section aria-labelledby="hero-title".*?</section>#s', $html, $hero);
+            $this->assertNotEmpty($hero, "The localized hero is missing on {$path}.");
+            preg_match_all('#<a\\b[^>]*href="([^"]*)"[^>]*>(.*?)</a>#s', $hero[0], $links);
+
+            $this->assertCount(2, $links[0], "Both existing hero CTAs must remain on {$path}.");
+            $this->assertStringContainsString('#pricing', $links[1][0]);
+            $this->assertStringContainsString('#how-it-works', $links[1][1]);
+            $this->assertStringContainsString($primary, html_entity_decode(strip_tags($links[2][0])));
+            $this->assertStringContainsString($secondary, html_entity_decode(strip_tags($links[2][1])));
+            $this->assertStringNotContainsString('<figure', $hero[0]);
+        }
     }
 
     public function test_interactive_controls_expose_their_state(): void
