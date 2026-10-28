@@ -172,8 +172,8 @@ class RecoveryPackageVerificationTest extends TestCase
         $second = $this->actingAs($user)->withHeader('Range', 'bytes=10-19')
             ->get(route('account.backup-downloads.content', $grant));
 
-        $second->assertStatus(503);
-        $this->assertSame('', $second->streamedContent());
+        $second->assertStatus(503)->assertJson(['code' => 'OBJECT_INTEGRITY_MISMATCH']);
+        $this->assertStringNotContainsString('BBBB', $second->getContent());
         $this->assertNoRestoreSideEffects($fixture['backup']);
     }
 
@@ -283,12 +283,23 @@ class RecoveryPackageVerificationTest extends TestCase
         } catch (\JsonException) {
             return false;
         }
-        if (($manifest['backup_uuid'] ?? null) !== $backup->uuid || ($manifest['type'] ?? null) !== $backup->type->value) {
+        if (($manifest['backup_uuid'] ?? null) !== $backup->uuid
+            || ($manifest['website_uuid'] ?? null) !== $backup->website->uuid
+            || ($manifest['type'] ?? null) !== $backup->type->value) {
             return false;
         }
 
         $expectedNames = [...$backup->type->objects(), 'manifest'];
         if (array_diff(array_keys($downloaded), $expectedNames) !== [] || array_diff($expectedNames, array_keys($downloaded)) !== []) {
+            return false;
+        }
+        $checksums = $manifest['checksums'] ?? null;
+        if (! is_array($checksums)) {
+            return false;
+        }
+        $expectedChecksums = ['algorithm', ...array_map(fn (string $name): string => BackupObjectName::from($name)->filename(), $backup->type->objects())];
+        if (array_diff(array_keys($checksums), $expectedChecksums) !== []
+            || array_diff($expectedChecksums, array_keys($checksums)) !== []) {
             return false;
         }
 
@@ -300,12 +311,12 @@ class RecoveryPackageVerificationTest extends TestCase
                 || ($entry['object'] ?? null) !== $filename
                 || ($entry['size'] ?? null) !== strlen($bytes)
                 || ! hash_equals((string) ($entry['sha256'] ?? ''), hash('sha256', $bytes))
-                || ! hash_equals((string) ($manifest['checksums'][$filename] ?? ''), hash('sha256', $bytes))) {
+                || ! hash_equals((string) ($checksums[$filename] ?? ''), hash('sha256', $bytes))) {
                 return false;
             }
         }
 
-        return ($manifest['checksums']['algorithm'] ?? null) === 'sha256';
+        return ($checksums['algorithm'] ?? null) === 'sha256';
     }
 
     private function assertNoRestoreSideEffects(Backup $backup): void
