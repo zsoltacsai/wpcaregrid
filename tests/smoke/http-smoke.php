@@ -18,13 +18,13 @@ if (count($extraArguments) > 1) {
     exit(2);
 }
 if (isset($extraArguments[0])) {
-    if (!(preg_match('/^--expect=(application|marketing_only)$/D', $extraArguments[0], $matches)) {
+    if (!(preg_match('/^--expect=(application|marketing_only)$/D', $extraArguments[0], $matches))) {
         fwrite(STDERR, "Usage: php tests/smoke/http-smoke.php https://your-host [--expect=application|marketing_only]\n");
         exit(2);
     }
     $expectation = $matches[1];
 }
-if (!(preg_match('#^https?://#', $base)) {
+if (!(preg_match('#^https?://#', $base))) {
     fwrite(STDERR, "Usage: php tests/smoke/http-smoke.php https://your-host [--expect=application|marketing_only]\n");
     exit(2);
 }
