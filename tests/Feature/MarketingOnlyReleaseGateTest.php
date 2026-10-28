@@ -3,6 +3,10 @@
 namespace Tests\Feature;
 
 use App\Http\Middleware\MarketingOnlyReleaseGate;
+use App\Http\Middleware\SecurityHeaders;
+use Illuminate\Contracts\Encryption\Encrypter;
+use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
 use Symfony\Component\HttpFoundation\Response;
@@ -17,6 +21,9 @@ class MarketingOnlyReleaseGateTest extends TestCase
         config([
             'app.url' => 'https://wpcaregrid.com',
             'marketing_release.profile' => 'marketing_only',
+            'marketing_release.enforcement_mode' => 'enforced',
+            'app.env' => 'production',
+            'app.deployment_environment' => 'production',
         ]);
     }
 
@@ -100,6 +107,8 @@ class MarketingOnlyReleaseGateTest extends TestCase
             ['GET', '/checkout/success'],
             ['POST', '/stripe/webhook'],
             ['GET', '/login'],
+            ['GET', '/operator/login'],
+            ['GET', '/owner/login'],
             ['POST', '/login'],
             ['GET', '/forgot-password'],
             ['POST', '/forgot-password'],
@@ -114,9 +123,9 @@ class MarketingOnlyReleaseGateTest extends TestCase
             ['GET', '/operator'],
             ['POST', '/operator/login'],
             ['POST', '/api/v1/connector/pair'],
+            ['POST', '/api/v1/connector/heartbeat'],
             ['GET', '/api/v1/connector/jobs'],
             ['POST', '/api/v1/connector/inventory'],
-            ['GET', '/up'],
         ];
 
         foreach ($requests as [$method, $path]) {
@@ -252,6 +261,254 @@ class MarketingOnlyReleaseGateTest extends TestCase
             $this->assertFalse($dispatched, 'Ambiguous/unreviewed path must be denied: '.$path);
             $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode(), $path);
         }
+    }
+
+    public function test_test_exemption_requires_all_three_exact_server_side_values(): void
+    {
+        $cases = [
+            ['testing', 'testing', 'testing', true],
+            ['testing', 'production', 'testing', false],
+            ['production', 'testing', 'testing', false],
+            ['testing', 'testing', 'enforced', false],
+            ['testing', 'testing', 'unknown', false],
+            ['testing', 'testing', null, false],
+            ['unknown', 'testing', 'testing', false],
+            ['testing', 'unknown', 'testing', false],
+        ];
+
+        foreach ($cases as [$appEnv, $deployment, $mode, $exempt]) {
+            config([
+                'app.env' => $appEnv,
+                'app.deployment_environment' => $deployment,
+                'marketing_release.test_app_environment' => $appEnv,
+                'marketing_release.test_deployment_environment' => $deployment,
+                'marketing_release.enforcement_mode' => $mode,
+            ]);
+
+            [$response, $dispatched] = $this->runGate('/checkout');
+            $this->assertSame($exempt, $dispatched, implode('/', [$appEnv, $deployment, (string) $mode]));
+            if (! $exempt) {
+                $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
+            }
+        }
+    }
+
+    public function test_request_controlled_values_cannot_activate_the_test_exemption(): void
+    {
+        config([
+            'app.env' => 'production',
+            'app.deployment_environment' => 'production',
+            'marketing_release.enforcement_mode' => 'enforced',
+            'marketing_release.profile' => 'marketing_only',
+            'marketing_release.test_app_environment' => 'production',
+            'marketing_release.test_deployment_environment' => 'production',
+        ]);
+
+        foreach ([
+            ['X-Marketing-Release-Mode' => 'testing'],
+            ['X-Deployment-Environment' => 'testing'],
+            ['X-App-Environment' => 'testing'],
+        ] as $headers) {
+            [$response, $dispatched] = $this->runGate(
+                '/checkout?profile=invitation_beta&mode=testing',
+                headers: $headers,
+            );
+            $this->assertFalse($dispatched);
+            $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
+        }
+    }
+
+    public function test_health_endpoint_is_generic_for_get_head_and_denies_unsupported_methods(): void
+    {
+        config([
+            'app.env' => 'production',
+            'app.deployment_environment' => 'production',
+            'marketing_release.enforcement_mode' => 'enforced',
+            'marketing_release.profile' => 'marketing_only',
+            'marketing_release.test_app_environment' => 'production',
+            'marketing_release.test_deployment_environment' => 'production',
+            'app.url' => 'https://wpcaregrid.com',
+        ]);
+
+        $route = app('router')->getRoutes()->match(Request::create('https://wpcaregrid.com/up', 'GET'));
+        $this->assertNotNull($route, 'Laravel health route must exist');
+
+        foreach (['GET', 'HEAD'] as $method) {
+            $response = $this->call($method, 'https://wpcaregrid.com/up', [], [], [], [
+                'HTTP_HOST' => 'wpcaregrid.com',
+                'HTTPS' => 'on',
+            ]);
+
+            $response->assertOk();
+            $this->assertSame('', $response->getContent(), 'Health response must have no operational details');
+            $cacheControlDirectives = array_map('trim', explode(',', strtolower((string) $response->headers->get('Cache-Control'))));
+            $this->assertContains('no-store', $cacheControlDirectives);
+            foreach (['database', 'queue', 'redis', 'deployment', 'environment'] as $sensitiveTerm) {
+                $this->assertStringNotContainsString($sensitiveTerm, strtolower((string) $response->getContent()));
+            }
+        }
+
+        foreach (['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as $method) {
+            $response = $this->call($method, 'https://wpcaregrid.com/up', [], [], [], [
+                'HTTP_HOST' => 'wpcaregrid.com',
+                'HTTPS' => 'on',
+            ]);
+
+            $response->assertNotFound();
+            $this->assertSame('', $response->getContent());
+        }
+    }
+
+    public function test_real_http_kernel_has_global_gate_after_security_headers_and_denies_registered_backend_routes(): void
+    {
+        config([
+            'app.env' => 'production',
+            'app.deployment_environment' => 'production',
+            'marketing_release.enforcement_mode' => 'enforced',
+            'marketing_release.profile' => 'marketing_only',
+            'marketing_release.test_app_environment' => 'production',
+            'marketing_release.test_deployment_environment' => 'production',
+            'app.url' => 'https://wpcaregrid.com',
+        ]);
+
+        $kernelMiddleware = app(Kernel::class)->getGlobalMiddleware();
+        $securityHeadersIndex = array_search(SecurityHeaders::class, $kernelMiddleware, true);
+        $gateIndex = array_search(MarketingOnlyReleaseGate::class, $kernelMiddleware, true);
+        $this->assertNotFalse($securityHeadersIndex, 'SecurityHeaders must be globally registered');
+        $this->assertNotFalse($gateIndex, 'MarketingOnlyReleaseGate must be globally registered');
+        $this->assertGreaterThan($securityHeadersIndex, $gateIndex, 'Gate must run after SecurityHeaders');
+
+        $requests = [
+            ['GET', '/checkout'],
+            ['POST', '/checkout'],
+            ['POST', '/checkout/promotion-preview'],
+            ['POST', '/stripe/webhook'],
+            ['GET', '/login'],
+            ['GET', '/operator/login'],
+            ['GET', '/owner/login'],
+            ['GET', '/forgot-password'],
+            ['GET', '/account'],
+            ['GET', '/account/billing'],
+            ['GET', '/account/websites/1/backups'],
+            ['POST', '/account/websites/1/backups/1/restore'],
+            ['GET', '/operator'],
+            ['GET', '/owner'],
+            ['POST', '/api/v1/connector/pair'],
+            ['POST', '/api/v1/connector/heartbeat'],
+        ];
+
+        foreach ($requests as [$method, $uri]) {
+            $route = app('router')->getRoutes()->match(Request::create($uri, $method));
+            $this->assertNotNull($route, $method.' '.$uri.' must match a registered route');
+            $this->call($method, $uri, [], [], [], [
+                'HTTP_HOST' => 'wpcaregrid.com',
+                'HTTPS' => 'on',
+            ])->assertNotFound();
+        }
+    }
+
+    public function test_real_http_kernel_allows_public_requests_and_keeps_presentation_guards(): void
+    {
+        config([
+            'app.env' => 'production',
+            'app.deployment_environment' => 'production',
+            'marketing_release.enforcement_mode' => 'enforced',
+            'marketing_release.profile' => 'marketing_only',
+            'marketing_release.test_app_environment' => 'production',
+            'marketing_release.test_deployment_environment' => 'production',
+            'app.url' => 'https://wpcaregrid.com',
+        ]);
+
+        $route = app('router')->getRoutes()->match(Request::create('https://wpcaregrid.com/pricing', 'GET'));
+        $this->assertSame('legacy.pricing', $route->getName());
+
+        $this->get('https://wpcaregrid.com/pricing')
+            ->assertRedirect('https://wpcaregrid.com/en/pricing');
+
+        $locale = app('router')->getRoutes()->getByName('locale.update');
+        $this->assertInstanceOf(Route::class, $locale);
+        $this->assertContains('web', $locale->gatherMiddleware());
+        $this->assertContains('throttle:60,1', $locale->gatherMiddleware());
+        $webMiddleware = app('router')->getMiddlewareGroups()['web'];
+        $this->assertContains(PreventRequestForgery::class, $webMiddleware);
+
+        // Laravel's default test shortcut skips CSRF. Force the actual web middleware path here.
+        $csrf = new class(app(), app(Encrypter::class)) extends PreventRequestForgery
+        {
+            protected function runningUnitTests()
+            {
+                return false;
+            }
+        };
+        $this->app->instance(PreventRequestForgery::class, $csrf);
+        $token = str_repeat('a', 40);
+        $this->withSession(['_token' => $token]);
+
+        $this->call('POST', '/locale', ['locale' => 'hu'], [], [], [
+            'HTTP_HOST' => 'wpcaregrid.com',
+            'HTTPS' => 'on',
+            'HTTP_REFERER' => 'https://wpcaregrid.com/en/pricing',
+        ])->assertStatus(419);
+
+        $csrfServer = ['HTTP_HOST' => 'wpcaregrid.com', 'HTTPS' => 'on', 'HTTP_REFERER' => 'https://wpcaregrid.com/en/pricing', 'HTTP_X_CSRF_TOKEN' => $token];
+        $this->call('POST', '/locale', ['locale' => 'hu'], [], [], $csrfServer)->assertRedirect();
+
+        $this->call('POST', '/locale', ['locale' => 'invalid'], [], [], $csrfServer)->assertSessionHasErrors('locale');
+
+        for ($attempt = 1; $attempt <= 60; $attempt++) {
+            $this->call('POST', '/locale', ['locale' => 'en'], [], [], [
+                'HTTP_HOST' => 'wpcaregrid.com',
+                'HTTPS' => 'on',
+                'REMOTE_ADDR' => '198.51.100.42',
+                'HTTP_REFERER' => 'https://wpcaregrid.com/en/pricing',
+                'HTTP_X_CSRF_TOKEN' => $token,
+            ])->assertRedirect();
+        }
+        $this->call('POST', '/locale', ['locale' => 'en'], [], [], [
+            'HTTP_HOST' => 'wpcaregrid.com',
+            'HTTPS' => 'on',
+            'REMOTE_ADDR' => '198.51.100.42',
+            'HTTP_REFERER' => 'https://wpcaregrid.com/en/pricing',
+            'HTTP_X_CSRF_TOKEN' => $token,
+        ])->assertTooManyRequests();
+
+        $this->get('https://attacker.example/pricing')->assertNotFound();
+        $this->call('GET', 'https://wpcaregrid.com/pricing', [], [], [], [
+            'HTTP_X_FORWARDED_HOST' => 'attacker.example',
+        ])->assertNotFound();
+
+        config(['app.url' => 'http://localhost', 'http.force_https' => false]);
+        $this->get('http://localhost:8000/pricing')->assertRedirect('http://localhost/en/pricing');
+
+        config(['app.url' => 'https://wpcaregrid.com']);
+        $this->get('http://localhost:8000/pricing')->assertNotFound();
+    }
+
+    public function test_invalid_profile_and_invitation_beta_remain_fail_closed_in_http_kernel(): void
+    {
+        foreach ([null, 'unexpected'] as $profile) {
+            config([
+                'app.env' => 'production',
+                'app.deployment_environment' => 'production',
+                'marketing_release.enforcement_mode' => 'enforced',
+                'marketing_release.profile' => $profile,
+            ]);
+            $this->call('GET', '/checkout', [], [], [], [
+                'HTTP_HOST' => 'wpcaregrid.com',
+                'HTTPS' => 'on',
+            ])->assertNotFound();
+        }
+
+        config([
+            'app.env' => 'production',
+            'app.deployment_environment' => 'production',
+            'marketing_release.enforcement_mode' => 'enforced',
+            'marketing_release.profile' => 'invitation_beta',
+        ]);
+        $this->call('GET', '/checkout', [], [], [], [
+            'HTTP_HOST' => 'wpcaregrid.com',
+            'HTTPS' => 'on',
+        ])->assertNotFound();
     }
 
     private function runGate(

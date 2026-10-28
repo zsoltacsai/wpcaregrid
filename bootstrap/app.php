@@ -5,6 +5,7 @@ use App\Http\Middleware\AuthenticateConnector;
 use App\Http\Middleware\EnsureCustomerAccount;
 use App\Http\Middleware\EnsureOperator;
 use App\Http\Middleware\EnsureOwner;
+use App\Http\Middleware\MarketingOnlyReleaseGate;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\SetLocale;
 use App\Localization\Locales;
@@ -36,6 +37,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // Security headers and HTTPS redirect on every response (config/http.php).
         $middleware->append(SecurityHeaders::class);
+        $middleware->append(MarketingOnlyReleaseGate::class);
 
         // The display language of every web request (config/localization.php); after the session starts.
         $middleware->web(append: [SetLocale::class]);

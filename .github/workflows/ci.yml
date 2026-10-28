@@ -317,6 +317,11 @@ jobs:
       - name: Restore disposable schema for post-test checks
         run: php artisan migrate:fresh --force
 
+      - name: Seed synthetic published legal documents for marketing-only smoke
+        env:
+          CAREGRID_SEED_SYNTHETIC_LEGAL_FIXTURE: '1'
+        run: php tests/smoke/fixtures/seed-synthetic-published-legal-documents.php
+
       - name: System check (runs, never prints secrets)
         run: php artisan system:check
 
@@ -327,8 +332,136 @@ jobs:
           php artisan view:cache
           php artisan serve --host=127.0.0.1 --port=8000 > "$RUNNER_TEMP/serve.log" 2>&1 &
           for i in $(seq 1 50); do curl -fsS http://127.0.0.1:8000/up > /dev/null && break; sleep 0.2; done
-          php tests/smoke/http-smoke.php http://localhost:8000
+          php tests/smoke/http-smoke.php http://localhost:8000 --expect=marketing_only
           php artisan optimize:clear
+
+      - name: HTTP smoke test in application mode (isolated loopback server)
+        env:
+          APP_ENV: testing
+          CAREGRID_DEPLOYMENT_ENV: testing
+          MARKETING_RELEASE_ENFORCEMENT_MODE: testing
+          MARKETING_RELEASE_PROFILE: marketing_only
+          APP_URL: http://127.0.0.1:8001
+          APP_DEBUG: 'false'
+          MAIL_MAILER: array
+          QUEUE_CONNECTION: sync
+          SESSION_DRIVER: array
+          STRIPE_ALLOW_LIVE_MODE: 'false'
+          STRIPE_MODE: test
+        run: |
+          set -euo pipefail
+
+          server_pid=''
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if [[ -n "$server_pid" ]]; then
+              kill "$server_pid" 2>/dev/null || true
+              wait "$server_pid" 2>/dev/null || true
+            fi
+            if ! php artisan optimize:clear > /dev/null 2>&1; then
+              echo "Application-mode smoke cache cleanup failed." >&2
+              status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          [[ "$DB_CONNECTION" == mysql \
+            && "$DB_HOST" == 127.0.0.1 \
+            && "$DB_PORT" == 3306 \
+            && "$DB_DATABASE" == caregrid_test \
+            && "$DB_USERNAME" == caregrid_ci \
+            && -z "$DB_URL" \
+            && "$CAREGRID_EXPECTED_DATABASE_DRIVER" == mysql ]]
+
+          stripe_variable_count=0
+          while IFS= read -r stripe_variable; do
+            case "$stripe_variable" in
+              STRIPE_ALLOW_LIVE_MODE) export "$stripe_variable=false" ;;
+              STRIPE_MODE) export "$stripe_variable=test" ;;
+              *) export "$stripe_variable=" ;;
+            esac
+            stripe_variable_count=$((stripe_variable_count + 1))
+          done < <(sed -nE 's/^(STRIPE_[A-Z0-9_]+)=.*/\1/p' .env.example)
+          [[ "$stripe_variable_count" -gt 0 ]]
+
+          php artisan optimize:clear
+          php artisan config:cache
+
+          php <<'PHP'
+          <?php
+          require __DIR__.'/vendor/autoload.php';
+          $app = require __DIR__.'/bootstrap/app.php';
+          $app->make(\Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+
+          $expected = [
+              'app.env' => 'testing',
+              'app.deployment_environment' => 'testing',
+              'app.url' => 'http://127.0.0.1:8001',
+              'app.debug' => false,
+              'marketing_release.profile' => 'marketing_only',
+              'marketing_release.enforcement_mode' => 'testing',
+              'marketing_release.test_app_environment' => 'testing',
+              'marketing_release.test_deployment_environment' => 'testing',
+              'mail.default' => 'array',
+              'queue.default' => 'sync',
+              'session.driver' => 'array',
+              'services.stripe.allow_live_mode' => false,
+              'services.stripe.mode' => 'test',
+          ];
+
+          foreach ($expected as $key => $value) {
+              if (config($key) !== $value) {
+                  fwrite(STDERR, "Application-mode smoke cached configuration mismatch: {$key}\n");
+                  exit(1);
+              }
+          }
+
+          foreach (['wordpress', 'woocommerce'] as $product) {
+              if (! in_array(config("pricing.stripe_products.{$product}"), [null, ''], true)) {
+                  fwrite(STDERR, "Application-mode smoke cached Stripe product is configured.\n");
+                  exit(1);
+              }
+          }
+
+          foreach (['key', 'secret', 'webhook_secret', 'payment_method_portal_configuration'] as $stripeSetting) {
+              if (! in_array(config("services.stripe.{$stripeSetting}"), [null, ''], true)) {
+                  fwrite(STDERR, "Application-mode smoke cached Stripe credential/configuration is present.\n");
+                  exit(1);
+              }
+          }
+
+          foreach (config('pricing.prices', []) as $price) {
+              if (! in_array($price['stripe_price_id'] ?? null, [null, ''], true)) {
+                  fwrite(STDERR, "Application-mode smoke cached Stripe price is configured.\n");
+                  exit(1);
+              }
+          }
+
+          echo "Application-mode smoke cache identity and disabled billing configuration verified.\n";
+          PHP
+
+          php -S 127.0.0.1:8001 -t public public/index.php > "$RUNNER_TEMP/application-smoke-server.log" 2>&1 &
+          server_pid=$!
+
+          ready=0
+          for attempt in $(seq 1 50); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8001/up; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 0.2
+          done
+          if [[ "$ready" != 1 ]]; then
+            echo "Application-mode loopback server did not become ready." >&2
+            exit 1
+          fi
+
+          php tests/smoke/http-smoke.php http://127.0.0.1:8001 --expect=application
 
   sqlite_regressions:
     name: Server SQLite regression gate (PHP 8.4)
