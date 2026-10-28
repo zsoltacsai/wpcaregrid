@@ -50,9 +50,25 @@ cat >"$temp_dir/bin/curl" <<'CURL_STUB'
 set -eu
 
 dump_headers=0
-for arg in "$@"; do
-    [[ "$arg" == '--dump-header' ]] && dump_headers=1
-    [[ "$arg" == '-L' || "$arg" == '--location' ]] && { printf 'Redirect following is forbidden in this test.\n' >&2; exit 98; }
+write_out_format=''
+while (($#)); do
+    case "$1" in
+        --dump-header)
+            dump_headers=1
+            shift 2
+            ;;
+        --write-out)
+            write_out_format="$2"
+            shift 2
+            ;;
+        -L|--location)
+            printf 'Redirect following is forbidden in this test.\\n' >&2
+            exit 98
+            ;;
+        *)
+            shift
+            ;;
+    esac
 done
 
 url="${!#}"
@@ -108,8 +124,14 @@ if (( dump_headers )); then
     printf 'HTTP/1.1 %s Stub\r\n' "$status"
     [[ -z "$location" ]] || printf 'Location: %s\r\n' "$location"
     [[ -z "$cache_control" ]] || printf 'Cache-Control: %s\r\n' "$cache_control"
-    printf 'Content-Length: 0\r\n\r\n'
-    printf '\n%s\t%s' "$status" "$download_size"
+    printf 'Content-Length: %s\\r\\n\\r\\n' "$download_size"
+    if [[ "$write_out_format" == $'\\n%{http_code}\\t%{size_download}' ]]; then
+        printf '\\n%s\\t%s' "$status" "$download_size"
+    elif [[ "$write_out_format" == $'\\n%{http_code}' ]]; then
+        printf '\\n%s' "$status"
+    else
+        printf '%s' "$status"
+    fi
 else
     printf '%s' "$status"
 fi
