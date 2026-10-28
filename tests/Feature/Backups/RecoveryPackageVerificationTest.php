@@ -237,9 +237,9 @@ class RecoveryPackageVerificationTest extends TestCase
             }
 
             $response = $this->actingAs($fixture['website']->customer->user)
-                ->withHeader('Range', 'bytes=0-'.($grant->object_size - 1))
+                ->withHeader('Range', 'bytes=0-' . ($grant->object_size - 1))
                 ->get(route('account.backup-downloads.content', $grant));
-            if ($response->status() === 206) {
+            if ($response->getStatusCode() === 206) {
                 $downloaded[$name] = $response->streamedContent();
             }
         }
