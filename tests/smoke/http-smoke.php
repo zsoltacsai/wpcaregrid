@@ -18,13 +18,13 @@ if (count($extraArguments) > 1) {
     exit(2);
 }
 if (isset($extraArguments[0])) {
-    if (!(preg_match('/^--expect=(application|marketing_only)$/D', $extraArguments[0], $matches))) {
+    if (! (preg_match('/^--expect=(application|marketing_only)$/D', $extraArguments[0], $matches))) {
         fwrite(STDERR, "Usage: php tests/smoke/http-smoke.php https://your-host [--expect=application|marketing_only]\n");
         exit(2);
     }
     $expectation = $matches[1];
 }
-if (!(preg_match('#^https?://#', $base))) {
+if (! (preg_match('#^https?://#', $base))) {
     fwrite(STDERR, "Usage: php tests/smoke/http-smoke.php https://your-host [--expect=application|marketing_only]\n");
     exit(2);
 }
@@ -53,7 +53,7 @@ $get = fn (string $path): array => $request('GET', $path);
 
 $expect = function (bool $ok, string $what) use (&$failures, &$checks): void {
     $checks++;
-    if (!($ok)) {
+    if (! ($ok)) {
         $failures[] = $what;
     }
 };
@@ -86,7 +86,7 @@ foreach ($publicPages as $path => [$marker, $locale]) {
     if ($locale !== null) {
         $expect(($headers['content-language'] ?? '') === $locale, "{$path} sends Content-Language: {$locale}");
     }
-    $expect(!(preg_match('/>\s*(home|pricing|owner|operator|account|content|security|checkout)\.[a-z_]+(\.[a-z_]+)+\s*</', $body)), "{$path} shows no translation keys");
+    $expect(! (preg_match('/>\s*(home|pricing|owner|operator|account|content|security|checkout)\.[a-z_]+(\.[a-z_]+)+\s*</', $body)), "{$path} shows no translation keys");
     $expect(stripos($body, 'Stack trace') === false && stripos($body, 'Whoops') === false, "{$path} shows no error details");
     $expect(($headers['x-content-type-options'] ?? '') === 'nosniff', "{$path} sends X-Content-Type-Options: nosniff");
     $expect(in_array(strtoupper($headers['x-frame-options'] ?? ''), ['DENY', 'SAMEORIGIN'], true), "{$path} sends X-Frame-Options");
@@ -110,7 +110,7 @@ foreach (['GET', 'HEAD'] as $method) {
     $expect($body === '', "{$method} /up has no operational details");
     $cacheControl = strtolower($headers['cache-control'] ?? '');
     $expect(in_array('no-store', array_map('trim', explode(',', $cacheControl)), true), "{$method} /up is not cacheable");
-    $expect(!(isset($headers['set-cookie'])), "{$method} /up does not set a cookie");
+    $expect(! (isset($headers['set-cookie'])), "{$method} /up does not set a cookie");
 }
 
 // Both localized homepages have one h1 and their pricing section.
@@ -132,7 +132,7 @@ if ($expectation === 'application') {
         [$status, $headers, $body] = $get($path);
         $expect($status === 200, "{$path} returns 200 in application mode (got {$status})");
         $expect(stripos($body, $marker) !== false, "{$path} contains \"{$marker}\"");
-        $expect(!(preg_match('/>\s*(home|pricing|owner|operator|account|content|security|checkout)\.[a-z_]+(\.[a-z_]+)+\s*</', $body)), "{$path} shows no translation keys");
+        $expect(! (preg_match('/>\s*(home|pricing|owner|operator|account|content|security|checkout)\.[a-z_]+(\.[a-z_]+)+\s*</', $body)), "{$path} shows no translation keys");
         $expect(stripos($body, 'Stack trace') === false && stripos($body, 'Whoops') === false, "{$path} shows no error details");
         $expect(($headers['x-content-type-options'] ?? '') === 'nosniff', "{$path} sends X-Content-Type-Options: nosniff");
         $expect(in_array(strtoupper($headers['x-frame-options'] ?? ''), ['DENY', 'SAMEORIGIN'], true), "{$path} sends X-Frame-Options");
