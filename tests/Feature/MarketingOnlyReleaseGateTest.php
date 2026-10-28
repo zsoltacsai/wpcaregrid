@@ -334,7 +334,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         $this->assertNotNull($route, 'Laravel health route must exist');
 
         foreach (['GET', 'HEAD'] as $method) {
-            $response = $this->call($method, '/up', [], [], [], [
+            $response = $this->call($method, 'https://wpcaregrid.com/up', [], [], [], [
                 'HTTP_HOST' => 'wpcaregrid.com',
                 'HTTPS' => 'on',
             ]);
@@ -348,7 +348,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         }
 
         foreach (['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as $method) {
-            $response = $this->call($method, '/up', [], [], [], [
+            $response = $this->call($method, 'https://wpcaregrid.com/up', [], [], [], [
                 'HTTP_HOST' => 'wpcaregrid.com',
                 'HTTPS' => 'on',
             ]);
