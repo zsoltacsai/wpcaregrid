@@ -41,7 +41,7 @@ Nginx configuration is outside the authorized scope of this PR and remains uncha
 - `wpcaregrid-staging-php85.conf`: `fastcgi_pass unix:/run/php/php8.5-fpm.sock;`
 
 Set `wpcaregrid-staging-runtime.conf` to a root-owned symlink to the 8.4 profile initially. Change only the `staging.wpcaregrid.com` vhost to include this selector at its PHP FastCGI location. Do not change other vhosts. The helper verifies expanded Nginx configuration and fails unless that exact include is used once and only in the staging vhost. PHP 8.4 FPM/socket remains shared with other vhosts and must not be repointed.
-The protected controller must not be used for these preparation steps until its reviewed PHP 8.4 dispatcher path and consumer pinning have passed Gate 1. No staging package or configuration operation was performed for this PR.
+Use the protected controller for Gate 1 only if its reviewed PHP 8.4 bootstrap preconditions already pass on the host. If a missing dispatcher or selector prevents its preflight, stop and obtain a separately reviewed bootstrap route before beginning Gate 1. No staging package or configuration operation was performed for this PR.
 ## Protected cutover
 
 After the prerequisites, backup, idle/drain plan, exact-SHA CI, and exclusive staging window have separate Owner approval, execute the existing approved protected controller as `deploy` from `/var/www/wpcaregrid`:
