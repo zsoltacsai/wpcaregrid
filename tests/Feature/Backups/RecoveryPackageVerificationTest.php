@@ -338,7 +338,7 @@ class RecoveryPackageVerificationTest extends TestCase
             . str_repeat(' ', 8)
             . '0'
             . str_repeat("\0", 100)
-            .'ustar' . "\0" . '00'
+            . 'ustar' . "\0" . '00'
             . str_repeat("\0", 32 * 2 + 8 * 2 + 155 + 12);
         $this->assertSame(512, strlen($header));
         $checksum = array_sum(array_map('ord', str_split($header)));
