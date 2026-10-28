@@ -114,12 +114,13 @@ foreach (['GET', 'HEAD'] as $method) {
         $cacheControl = strtolower($headers['cache-control'] ?? '');
         $expect(in_array('no-store', array_map('trim', explode(',', $cacheControl)), true), "{$method} /up is not cacheable");
     } else {
-        $unsafeHealthDetails = preg_match('/(?:stack trace|whoops|exception|sqlstate|app_key|db_password|db_host|\/(?:var|home)\/|[a-z]:\\\\)/i', $body);
+        $unsafeHealthDetails = preg_match('/(?:stack trace|whoops|exception|sqlstate|app_key|db_(?:password|host|database|username)|redis_password|mail_password|stripe_secret|aws_secret_access_key|\/(?:var|home|srv|etc|opt|root)\/|[a-z]:\\\\)/i', $body);
         $expect($unsafeHealthDetails === 0, "{$method} /up exposes no exception or operational details");
 
         if ($method === 'GET') {
             $contentType = strtolower($headers['content-type'] ?? '');
-            $expect($body !== '' && str_contains($contentType, 'text/html'), 'GET /up accepts Laravel’s generic HTML health response');
+            $healthText = strtolower(strip_tags($body));
+            $expect($body !== '' && str_contains($contentType, 'text/html') && str_contains($healthText, 'application up'), 'GET /up accepts Laravel’s generic HTML health response');
         }
     }
 }
