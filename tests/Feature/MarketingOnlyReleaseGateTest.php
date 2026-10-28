@@ -3,6 +3,10 @@
 namespace Tests\Feature;
 
 use App\Http\Middleware\MarketingOnlyReleaseGate;
+use App\Http\Middleware\SecurityHeaders;
+use Illuminate\Contracts\Encryption\Encrypter;
+use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
 use Symfony\Component\HttpFoundation\Response;
@@ -356,8 +360,8 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'app.url' => 'https://wpcaregrid.com',
         ]);
 
-        $kernelMiddleware = app(\Illuminate\Contracts\Http\Kernel::class)->getGlobalMiddleware();
-        $securityHeadersIndex = array_search(\App\Http\Middleware\SecurityHeaders::class, $kernelMiddleware, true);
+        $kernelMiddleware = app(Kernel::class)->getGlobalMiddleware();
+        $securityHeadersIndex = array_search(SecurityHeaders::class, $kernelMiddleware, true);
         $gateIndex = array_search(MarketingOnlyReleaseGate::class, $kernelMiddleware, true);
         $this->assertNotFalse($securityHeadersIndex, 'SecurityHeaders must be globally registered');
         $this->assertNotFalse($gateIndex, 'MarketingOnlyReleaseGate must be globally registered');
@@ -418,17 +422,17 @@ class MarketingOnlyReleaseGateTest extends TestCase
         $this->assertContains('web', $locale->gatherMiddleware());
         $this->assertContains('throttle:60,1', $locale->gatherMiddleware());
         $webMiddleware = app('router')->getMiddlewareGroups()['web'];
-        $this->assertContains(\Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class, $webMiddleware);
+        $this->assertContains(ValidateCsrfToken::class, $webMiddleware);
 
         // Laravel's default test shortcut skips CSRF. Force the real middleware path here.
-        $csrf = new class(app(), app(\Illuminate\Contracts\Encryption\Encrypter::class)) extends \Illuminate\Foundation\Http\Middleware\ValidateCsrfToken
+        $csrf = new class(app(), app(Encrypter::class)) extends ValidateCsrfToken
         {
             protected function runningUnitTests()
             {
                 return false;
             }
         };
-        $this->app->instance(\Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class, $csrf);
+        $this->app->instance(ValidateCsrfToken::class, $csrf);
         $token = str_repeat('a', 40);
         $this->withSession(['_token' => $token]);
 
@@ -536,4 +540,3 @@ class MarketingOnlyReleaseGateTest extends TestCase
         return [$response, $dispatched];
     }
 }
-
