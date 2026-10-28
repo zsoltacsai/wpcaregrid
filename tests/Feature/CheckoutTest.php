@@ -1087,15 +1087,15 @@ class CheckoutTest extends TestCase
 
             $assertCheckoutUrl($action->getAttribute('href'), $product, $plan, 'monthly');
 
-            $expectedBinding = "interval === 'annual' ? "
+            $expectedBinding = 'interval === \'annual\' ? '
                 .route('checkout.show', ['product' => $product, 'plan' => $plan, 'interval' => 'annual'])
-                ." : "
+                .' : '
                 .route('checkout.show', ['product' => $product, 'plan' => $plan, 'interval' => 'monthly']);
             $this->assertSame($expectedBinding, $action->getAttribute('x-bind:href'));
 
             // The expression's annual and monthly branches must independently
             // resolve to the matching logical checkout URL.
-            preg_match("/^interval === 'annual' \? (.+) : (.+)$/", $action->getAttribute('x-bind:href'), $branches);
+            preg_match('/^interval === \'annual\' \? (.+) : (.+)$/', $action->getAttribute('x-bind:href'), $branches);
             $this->assertCount(3, $branches);
             $assertCheckoutUrl($branches[1], $product, $plan, 'annual');
             $assertCheckoutUrl($branches[2], $product, $plan, 'monthly');
