@@ -63,7 +63,7 @@ while (($#)); do
             shift 2
             ;;
         -L|--location)
-            printf 'Redirect following is forbidden in this test.\\n' >&2
+            printf 'Redirect following is forbidden in this test.\n' >&2
             exit 98
             ;;
         *)
@@ -124,11 +124,11 @@ if (( dump_headers )); then
     printf 'HTTP/1.1 %s Stub\r\n' "$status"
     [[ -z "$location" ]] || printf 'Location: %s\r\n' "$location"
     [[ -z "$cache_control" ]] || printf 'Cache-Control: %s\r\n' "$cache_control"
-    printf 'Content-Length: %s\\r\\n\\r\\n' "$download_size"
-    if [[ "$write_out_format" == $'\\n%{http_code}\\t%{size_download}' ]]; then
-        printf '\\n%s\\t%s' "$status" "$download_size"
-    elif [[ "$write_out_format" == $'\\n%{http_code}' ]]; then
-        printf '\\n%s' "$status"
+    printf 'Content-Length: %s\r\n\r\n' "$download_size"
+    if [[ "$write_out_format" == $'\n%{http_code}\t%{size_download}' ]]; then
+        printf '\n%s\t%s' "$status" "$download_size"
+    elif [[ "$write_out_format" == $'\n%{http_code}' ]]; then
+        printf '\n%s' "$status"
     else
         printf '%s' "$status"
     fi
