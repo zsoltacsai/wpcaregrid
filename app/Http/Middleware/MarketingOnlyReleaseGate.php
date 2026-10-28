@@ -39,6 +39,10 @@ final class MarketingOnlyReleaseGate
             $profile = 'marketing_only';
         }
 
+        if (! $this->mustEnforce()) {
+            return $next($request);
+        }
+
         if (! $this->isAllowedPublicRequest($request)) {
             return response('', Response::HTTP_NOT_FOUND, ['Cache-Control' => 'no-store']);
         }
@@ -46,6 +50,20 @@ final class MarketingOnlyReleaseGate
         // invitation_beta is not an access grant. This gate has no independent
         // invitation resolver, so it deliberately keeps backend paths closed.
         return $next($request);
+    }
+
+    /** Exemptions require exact server-side test or approved staging identity markers. */
+    private function mustEnforce(): bool
+    {
+        $testingExemption = config('marketing_release.enforcement_mode') === 'testing'
+            && config('app.env') === 'testing'
+            && config('app.deployment_environment') === 'testing';
+
+        $stagingExemption = config('marketing_release.staging_exempt') === true
+            && config('app.env') === 'staging'
+            && config('app.deployment_environment') === 'staging';
+
+        return ! ($testingExemption || $stagingExemption);
     }
 
     private function isAllowedPublicRequest(Request $request): bool
