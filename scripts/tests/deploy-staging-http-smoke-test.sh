@@ -49,6 +49,7 @@ cat >"$temp_dir/bin/curl" <<'CURL_STUB'
 #!/usr/bin/env bash
 set -eu
 
+url="${!#}"
 dump_headers=0
 write_out_format=''
 while (($#)); do
@@ -71,7 +72,6 @@ while (($#)); do
     esac
 done
 
-url="${!#}"
 [[ "$url" == https://staging.wpcaregrid.com/* ]] || { printf 'Unexpected smoke origin: %s\n' "$url" >&2; exit 99; }
 path="${url#https://staging.wpcaregrid.com}"
 status=404
