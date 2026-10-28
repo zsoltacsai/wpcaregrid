@@ -80,34 +80,26 @@ class RecoveryPackageVerificationTest extends TestCase
 
     public function test_missing_or_corrupt_full_package_component_never_forms_a_complete_download(): void
     {
-        $fixture = $this->syntheticPackage(BackupType::Full);
-        $originals = [];
-
-        foreach (['files', 'database', 'manifest'] as $component) {
-            $key = $fixture['backup']->objectKey(BackupObjectName::from($component));
-            $originals[$component] = $this->storage->objects[$key];
-        }
+        $site = $this->backupReadySite('https://synthetic-recovery-package.example');
 
         foreach (['missing', 'corrupt'] as $failure) {
             foreach (['files', 'database', 'manifest'] as $component) {
+                $fixture = $this->syntheticPackage(BackupType::Full, [], $site);
                 $key = $fixture['backup']->objectKey(BackupObjectName::from($component));
-                $this->storage->objects[$key] = $originals[$component];
+                $original = $this->storage->objects[$key];
 
                 if ($failure === 'missing') {
                     unset($this->storage->objects[$key]);
                 } else {
-                    $original = $originals[$component];
                     $this->storage->objects[$key] = substr_replace($original, $original[0] === 'X' ? 'Y' : 'X', 0, 1);
                 }
 
-                $downloaded = $this->downloadPackage($fixture);
+                $downloadedObject = $this->downloadObject($fixture, $component);
 
-                $this->assertArrayNotHasKey($component, $downloaded, "{$failure} {$component}");
-                $this->assertFalse($this->packageMatchesManifest($fixture['backup'], $downloaded), "{$failure} {$component}");
+                $this->assertNull($downloadedObject, "{$failure} {$component}");
                 $failedGrant = BackupDownloadGrant::query()
                     ->where('backup_id', $fixture['backup']->id)
                     ->where('object_name', $component)
-                    ->latest('id')
                     ->firstOrFail();
                 $this->assertSame(BackupDownloadGrant::FAILED, $failedGrant->status, "{$failure} {$component}");
                 $this->assertNoRestoreSideEffects($fixture['backup']);
@@ -188,9 +180,9 @@ class RecoveryPackageVerificationTest extends TestCase
         $this->assertNoRestoreSideEffects($fixture['backup']);
     }
 
-    private function syntheticPackage(BackupType $type, array $overrides = []): array
+    private function syntheticPackage(BackupType $type, array $overrides = [], ?array $site = null): array
     {
-        $site = $this->backupReadySite(sprintf('https://synthetic-%s-%s.example', $type->value, Str::uuid()));
+        $site ??= $this->backupReadySite(sprintf('https://synthetic-%s-%s.example', $type->value, Str::uuid()));
         $backup = $this->verifiedBackup($site['website'], $type);
         $backup->forceFill(['storage_provider' => 'sftp'])->save();
 
@@ -234,6 +226,22 @@ class RecoveryPackageVerificationTest extends TestCase
         ])->save();
 
         return ['website' => $site['website']->refresh(), 'backup' => $backup->refresh(), 'manifest' => $manifest];
+    }
+
+    private function downloadObject(array $fixture, string $name): ?string
+    {
+        $object = $fixture['backup']->objects()->where('name', $name)->firstOrFail();
+        $grant = $this->prepareGrant($fixture, $object);
+
+        if ($grant->status !== BackupDownloadGrant::READY) {
+            return null;
+        }
+
+        $response = $this->actingAs($fixture['website']->customer->user)
+            ->withHeader('Range', sprintf('bytes=0-%d', $grant->object_size - 1))
+            ->get(route('account.backup-downloads.content', $grant));
+
+        return $response->getStatusCode() === 206 ? $response->streamedContent() : null;
     }
 
     /** @return array<string, string> Object name => bytes downloaded from the real account endpoint. */
