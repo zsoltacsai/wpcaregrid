@@ -410,10 +410,11 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'app.url' => 'https://wpcaregrid.com',
         ]);
 
-        $this->call('GET', '/pricing', [], [], [], [
-            'HTTP_HOST' => 'wpcaregrid.com',
-            'HTTPS' => 'on',
-        ])->assertRedirect('https://wpcaregrid.com/en/pricing');
+        $route = app('router')->getRoutes()->match(Request::create('https://wpcaregrid.com/pricing', 'GET'));
+        $this->assertSame('legacy.pricing', $route->getName());
+
+        $this->get('https://wpcaregrid.com/pricing')
+            ->assertRedirect('https://wpcaregrid.com/en/pricing');
 
         $locale = app('router')->getRoutes()->getByName('locale.update');
         $this->assertInstanceOf(Route::class, $locale);
