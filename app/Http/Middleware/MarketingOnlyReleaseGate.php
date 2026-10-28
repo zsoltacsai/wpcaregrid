@@ -56,8 +56,8 @@ final class MarketingOnlyReleaseGate
     private function mustEnforce(): bool
     {
         $testingExemption = config('marketing_release.enforcement_mode') === 'testing'
-            && config('app.env') === 'testing'
-            && config('app.deployment_environment') === 'testing';
+            && config('marketing_release.test_app_environment') === 'testing'
+            && config('marketing_release.test_deployment_environment') === 'testing';
 
         $stagingExemption = config('marketing_release.staging_exempt') === true
             && config('app.env') === 'staging'

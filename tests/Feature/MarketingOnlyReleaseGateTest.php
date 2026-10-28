@@ -278,6 +278,8 @@ class MarketingOnlyReleaseGateTest extends TestCase
             config([
                 'app.env' => $appEnv,
                 'app.deployment_environment' => $deployment,
+                'marketing_release.test_app_environment' => $appEnv,
+                'marketing_release.test_deployment_environment' => $deployment,
                 'marketing_release.enforcement_mode' => $mode,
             ]);
 
@@ -322,6 +324,8 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'marketing_release.enforcement_mode' => 'enforced',
             'marketing_release.staging_exempt' => false,
             'marketing_release.profile' => 'marketing_only',
+            'marketing_release.test_app_environment' => 'production',
+            'marketing_release.test_deployment_environment' => 'production',
         ]);
 
         foreach ([
@@ -346,6 +350,8 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'marketing_release.enforcement_mode' => 'enforced',
             'marketing_release.staging_exempt' => false,
             'marketing_release.profile' => 'marketing_only',
+            'marketing_release.test_app_environment' => 'production',
+            'marketing_release.test_deployment_environment' => 'production',
             'app.url' => 'https://wpcaregrid.com',
         ]);
 
@@ -394,6 +400,8 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'marketing_release.enforcement_mode' => 'enforced',
             'marketing_release.staging_exempt' => false,
             'marketing_release.profile' => 'marketing_only',
+            'marketing_release.test_app_environment' => 'production',
+            'marketing_release.test_deployment_environment' => 'production',
             'app.url' => 'https://wpcaregrid.com',
         ]);
 
