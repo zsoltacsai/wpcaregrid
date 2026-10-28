@@ -1028,19 +1028,42 @@ class CheckoutTest extends TestCase
         $this->submit(['email' => 'c11@company.example'])->assertStatus(429);
     }
 
-    public function test_homepage_plan_buttons_link_to_checkout_with_a_logical_selection_only(): void
+    public function test_homepage_plan_buttons_use_contact_only_actions_in_marketing_only_mode(): void
     {
-        $html = $this->get('/en/')->getContent();
+        config([
+            'marketing.links.contact' => 'mailto:contact@zsoltacsai.com',
+            'marketing_release.profile' => 'marketing_only',
+        ]);
 
-        preg_match_all('#href="(http://[^"]+/checkout\?[^"]+)"#', $html, $matches);
-        $this->assertCount(6, $matches[1], 'One default-interval link per plan card.');
+        $html = $this->get('/en/')->assertOk()->getContent();
+        $document = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $this->assertTrue($document->loadHTML('<?xml encoding="UTF-8">'.$html));
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
 
-        foreach ($matches[1] as $url) {
-            parse_str(parse_url(html_entity_decode($url), PHP_URL_QUERY), $query);
-            $this->assertSame(['product', 'plan', 'interval'], array_keys($query));
+        $xpath = new \DOMXPath($document);
+        $sections = $xpath->query('//*[@id="pricing"]');
+        $this->assertInstanceOf(\DOMNodeList::class, $sections);
+        $this->assertSame(1, $sections->length);
+
+        $pricingSection = $sections->item(0);
+        $this->assertInstanceOf(\DOMElement::class, $pricingSection);
+        $actions = $xpath->query('.//*[@data-marketing-plan]', $pricingSection);
+        $this->assertInstanceOf(\DOMNodeList::class, $actions);
+        $this->assertSame(6, $actions->length, 'Every plan card keeps one action.');
+
+        $pricingMarkup = $document->saveHTML($pricingSection);
+        $this->assertIsString($pricingMarkup);
+        $this->assertStringNotContainsString('/checkout', $pricingMarkup, 'Marketing-only pricing cards must not expose actionable checkout URLs.');
+
+        foreach ($actions as $action) {
+            $this->assertInstanceOf(\DOMElement::class, $action);
+            $this->assertSame('mailto:contact@zsoltacsai.com', $action->getAttribute('href'));
+            $this->assertFalse($action->hasAttribute('x-bind:href'), 'Marketing-only actions must not carry hidden checkout URLs.');
         }
 
-        $this->assertStringNotContainsString('price_wordpress', $html);
-        $this->assertStringNotContainsString('stripe', strtolower(strip_tags($html)));
+        $this->assertStringNotContainsString('price_wordpress', $pricingMarkup);
+        $this->assertStringNotContainsString('stripe', strtolower(strip_tags($pricingMarkup)));
     }
 }
