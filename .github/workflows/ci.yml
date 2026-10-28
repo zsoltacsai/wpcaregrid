@@ -327,7 +327,7 @@ jobs:
           php artisan view:cache
           php artisan serve --host=127.0.0.1 --port=8000 > "$RUNNER_TEMP/serve.log" 2>&1 &
           for i in $(seq 1 50); do curl -fsS http://127.0.0.1:8000/up > /dev/null && break; sleep 0.2; done
-          php tests/smoke/http-smoke.php http://localhost:8000
+          php tests/smoke/http-smoke.php http://localhost:8000 --expect=marketing_only
           php artisan optimize:clear
 
   sqlite_regressions:
