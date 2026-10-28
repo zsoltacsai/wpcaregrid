@@ -6,8 +6,7 @@ use App\Http\Middleware\MarketingOnlyReleaseGate;
 use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Contracts\Http\Kernel;
-use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
-use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
 use Symfony\Component\HttpFoundation\Response;
@@ -422,20 +421,17 @@ class MarketingOnlyReleaseGateTest extends TestCase
         $this->assertContains('web', $locale->gatherMiddleware());
         $this->assertContains('throttle:60,1', $locale->gatherMiddleware());
         $webMiddleware = app('router')->getMiddlewareGroups()['web'];
-        $csrfMiddleware = collect($webMiddleware)->first(
-            static fn ($middleware) => in_array($middleware, [ValidateCsrfToken::class, VerifyCsrfToken::class], true),
-        );
-        $this->assertNotNull($csrfMiddleware, 'The web group must retain Laravel CSRF middleware.');
+        $this->assertContains(PreventRequestForgery::class, $webMiddleware);
 
-        // Laravel's default test shortcut skips CSRF. Force the configured middleware path here.
-        $csrf = new class(app(), app(Encrypter::class)) extends ValidateCsrfToken
+        // Laravel's default test shortcut skips CSRF. Force the actual web middleware path here.
+        $csrf = new class(app(), app(Encrypter::class)) extends PreventRequestForgery
         {
             protected function runningUnitTests()
             {
                 return false;
             }
         };
-        $this->app->instance($csrfMiddleware, $csrf);
+        $this->app->instance(PreventRequestForgery::class, $csrf);
         $token = str_repeat('a', 40);
         $this->withSession(['_token' => $token]);
 
