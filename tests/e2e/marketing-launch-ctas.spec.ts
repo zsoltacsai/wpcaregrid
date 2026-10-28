@@ -131,7 +131,7 @@ for (const { locale, label, viewportName, viewport } of cases) {
         await expect(annualPrice).toBeVisible();
         await expect(monthlyPrice).toBeHidden();
 
-        await planActions.first().focus();
+        await page.keyboard.press('Tab');
         await expect(planActions.first()).toBeFocused();
         expect(await planActions.first().evaluate(element => element.matches(':focus-visible'))).toBe(true);
         await page.keyboard.press('Enter');
