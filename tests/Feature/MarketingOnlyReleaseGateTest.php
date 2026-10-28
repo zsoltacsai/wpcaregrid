@@ -356,7 +356,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'app.url' => 'https://wpcaregrid.com',
         ]);
 
-        $kernelMiddleware = app(\Illuminate\Contracts\Http\Kernel::class)->getMiddleware();
+        $kernelMiddleware = app(\Illuminate\Contracts\Http\Kernel::class)->getGlobalMiddleware();
         $securityHeadersIndex = array_search(\App\Http\Middleware\SecurityHeaders::class, $kernelMiddleware, true);
         $gateIndex = array_search(MarketingOnlyReleaseGate::class, $kernelMiddleware, true);
         $this->assertNotFalse($securityHeadersIndex, 'SecurityHeaders must be globally registered');
@@ -406,7 +406,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'app.url' => 'https://wpcaregrid.com',
         ]);
 
-        $this->call('GET', '/robots.txt', [], [], [], [
+        $this->call('GET', '/en/pricing', [], [], [], [
             'HTTP_HOST' => 'wpcaregrid.com',
             'HTTPS' => 'on',
         ])->assertOk();
