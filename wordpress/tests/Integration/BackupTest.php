@@ -146,8 +146,19 @@ final class BackupTest extends TestCase
         $jobsSentinel = 'M15_SYNTHETIC_CONNECTOR_JOB_MUST_NOT_EXPORT_9f1b62';
         $jobs = get_option('wp_caregrid_jobs', []);
         $jobs['m15-synthetic-exclusion-fixture'] = [
+            'type' => 'INVENTORY',
+            'payload' => ['synthetic' => true],
             'state' => 'completed',
-            'synthetic_value' => $jobsSentinel,
+            'started_at' => gmdate('c'),
+            'completed_at' => gmdate('c'),
+            'result' => [
+                'status' => 'success',
+                'result_code' => 'OK',
+                'data' => ['synthetic_value' => $jobsSentinel],
+                'error' => null,
+            ],
+            'delivered' => true,
+            'delivery_attempts' => 1,
         ];
         update_option('wp_caregrid_jobs', $jobs, false);
 
