@@ -63,19 +63,34 @@
         @endforeach
     </div>
 
-    <x-ui.button
-        :href="$checkoutUrl($defaultInterval)"
-        x-bind:href="interval === 'annual' ? '{{ $checkoutUrl(BillingInterval::Annual) }}' : '{{ $checkoutUrl(BillingInterval::Monthly) }}'"
-        :variant="$plan->highlighted ? 'primary' : 'secondary'"
-        size="lg"
-        class="mt-6 w-full"
-        data-marketing-plan
-        data-product-type="{{ $plan->productType->value }}"
-        data-plan-tier="{{ $plan->tier->value }}"
-        x-bind:data-billing-interval="interval"
-    >
-        {{ $plan->cta ?? __('pricing.choose', ['plan' => $plan->name]) }}<span class="sr-only"> ({{ $plan->productType->label() }})</span>
-    </x-ui.button>
+    @if (config('marketing_release.profile', 'marketing_only') === 'invitation_beta')
+        <x-ui.button
+            :href="$checkoutUrl($defaultInterval)"
+            x-bind:href="interval === 'annual' ? '{{ $checkoutUrl(BillingInterval::Annual) }}' : '{{ $checkoutUrl(BillingInterval::Monthly) }}'"
+            :variant="$plan->highlighted ? 'primary' : 'secondary'"
+            size="lg"
+            class="mt-6 w-full"
+            data-marketing-plan
+            data-product-type="{{ $plan->productType->value }}"
+            data-plan-tier="{{ $plan->tier->value }}"
+            x-bind:data-billing-interval="interval"
+        >
+            {{ $plan->cta ?? __('pricing.choose', ['plan' => $plan->name]) }}<span class="sr-only"> ({{ $plan->productType->label() }})</span>
+        </x-ui.button>
+    @else
+        <x-ui.button
+            :href="config('marketing.links.contact', 'mailto:contact@zsoltacsai.com')"
+            :variant="$plan->highlighted ? 'primary' : 'secondary'"
+            size="lg"
+            class="mt-6 w-full"
+            data-marketing-plan
+            data-product-type="{{ $plan->productType->value }}"
+            data-plan-tier="{{ $plan->tier->value }}"
+            x-bind:data-billing-interval="interval"
+        >
+            {{ __('pricing.contact_for_plan') }}<span class="sr-only"> ({{ $plan->productType->label() }})</span>
+        </x-ui.button>
+    @endif
 
     <ul class="mt-6 space-y-3 text-sm">
         @if ($offer->previousPlan)

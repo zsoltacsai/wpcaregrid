@@ -1,0 +1,154 @@
+name: Marketing browser E2E
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/marketing-browser-e2e.yml'
+      - 'app/**'
+      - 'config/**'
+      - 'lang/**'
+      - 'resources/**'
+      - 'routes/**'
+      - 'database/migrations/**'
+      - 'tests/Feature/MarketingConversionLinksTest.php'
+      - 'tests/e2e/marketing-homepage-ux.spec.ts'
+      - 'tests/e2e/marketing-launch-ctas.spec.ts'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'playwright.config.ts'
+      - 'vite.config.*'
+  push:
+    branches:
+      - claude/ecstatic-wozniak-oemyuf
+    paths:
+      - '.github/workflows/marketing-browser-e2e.yml'
+      - 'app/**'
+      - 'config/**'
+      - 'lang/**'
+      - 'resources/**'
+      - 'routes/**'
+      - 'database/migrations/**'
+      - 'tests/Feature/MarketingConversionLinksTest.php'
+      - 'tests/e2e/marketing-homepage-ux.spec.ts'
+      - 'tests/e2e/marketing-launch-ctas.spec.ts'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'playwright.config.ts'
+      - 'vite.config.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketing-browser-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chromium-marketing:
+    name: Chromium marketing E2E (synthetic SQLite)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      APP_ENV: testing
+      APP_DEBUG: 'false'
+      APP_URL: http://127.0.0.1:8000
+      CAREGRID_DEPLOYMENT_ENV: testing
+      MARKETING_RELEASE_ENFORCEMENT_MODE: testing
+      MARKETING_RELEASE_PROFILE: marketing_only
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ${{ github.workspace }}/database/marketing-browser.sqlite
+      CACHE_STORE: array
+      SESSION_DRIVER: array
+      QUEUE_CONNECTION: sync
+      MAIL_MAILER: array
+      STRIPE_KEY: ''
+      STRIPE_SECRET: ''
+      STRIPE_WEBHOOK_SECRET: ''
+      STRIPE_ALLOW_LIVE_MODE: 'false'
+      MARKETING_ANALYTICS_ENABLED: 'false'
+      MARKETING_ANALYTICS_POLICY_AUTHORIZED: 'false'
+      GA4_MEASUREMENT_ID: ''
+      E2E_BASE_URL: http://127.0.0.1:8000
+      PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/html
+      PLAYWRIGHT_JUNIT_OUTPUT_NAME: playwright-report/junit.xml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          extensions: mbstring, intl, gd, zip, sodium, pdo_sqlite, sqlite3, pdo_mysql, mysqli, fileinfo, openssl, curl, posix, pcntl, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install locked PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Install locked frontend dependencies and build assets
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Chromium and required system libraries
+        run: npx playwright install --with-deps chromium
+
+      - name: Prepare isolated synthetic SQLite application
+        run: |
+          cp .env.example .env
+          mkdir -p database
+          touch database/marketing-browser.sqlite
+          php artisan key:generate --force
+          php artisan migrate --force
+
+      - name: Run focused marketing feature test
+        run: vendor/bin/phpunit --fail-on-skipped tests/Feature/MarketingConversionLinksTest.php
+
+      - name: Execute actual Chromium browser tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          php artisan serve --host=127.0.0.1 --port=8000 > "$RUNNER_TEMP/marketing-laravel.log" 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8000/en/ > /dev/null; then
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat "$RUNNER_TEMP/marketing-laravel.log"
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8000/en/ > /dev/null
+          npx playwright test \
+            tests/e2e/marketing-homepage-ux.spec.ts \
+            tests/e2e/marketing-launch-ctas.spec.ts \
+            --trace=off \
+            --reporter=list,html,junit
+
+      - name: Upload sanitized browser reports and screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marketing-browser-e2e-${{ github.sha }}
+          path: |
+            playwright-report/
+            storage/playwright/
+          if-no-files-found: warn
+          retention-days: 7
