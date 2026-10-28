@@ -27,6 +27,64 @@ class MarketingConversionLinksTest extends TestCase
         }
     }
 
+    public function test_marketing_only_pricing_cards_render_contact_links_without_checkout_urls(): void
+    {
+        config([
+            'marketing.links.contact' => 'mailto:contact@zsoltacsai.com',
+            'marketing_release.profile' => 'marketing_only',
+        ]);
+
+        foreach (['en', 'hu'] as $locale) {
+            $html = $this->get('/'.$locale.'/pricing')->assertOk()->getContent();
+            $pricingMarkup = $this->pricingMarkup($html);
+            $links = $this->marketingPlanLinks($pricingMarkup);
+
+            $this->assertNotEmpty($links, $locale.' should render plan actions');
+            $this->assertStringNotContainsString('/checkout', $pricingMarkup, $locale.' pricing markup must not contain a checkout URL');
+
+            foreach ($links as $link) {
+                $this->assertSame('mailto:contact@zsoltacsai.com', $link->getAttribute('href'));
+                $this->assertFalse($link->hasAttribute('x-bind:href'), 'Marketing-only plan actions must not carry an Alpine checkout URL.');
+                $this->assertStringContainsString(
+                    $locale === 'en' ? 'Contact us about this plan' : 'Érdeklődj a csomagról',
+                    trim($link->textContent),
+                );
+            }
+        }
+    }
+
+    public function test_invalid_marketing_profile_fails_closed_to_contact_only_pricing_actions(): void
+    {
+        config([
+            'marketing.links.contact' => 'mailto:contact@zsoltacsai.com',
+            'marketing_release.profile' => 'unexpected-profile',
+        ]);
+
+        $html = $this->get('/en/pricing')->assertOk()->getContent();
+        $pricingMarkup = $this->pricingMarkup($html);
+
+        $this->assertNotEmpty($this->marketingPlanLinks($pricingMarkup));
+        $this->assertStringNotContainsString('/checkout', $pricingMarkup);
+        $this->assertStringContainsString('mailto:contact@zsoltacsai.com', $pricingMarkup);
+    }
+
+    public function test_invitation_beta_pricing_keeps_the_existing_server_resolved_checkout_selection(): void
+    {
+        config(['marketing_release.profile' => 'invitation_beta']);
+
+        $html = $this->get('/en/pricing')->assertOk()->getContent();
+        $pricingMarkup = $this->pricingMarkup($html);
+        $links = $this->marketingPlanLinks($pricingMarkup);
+
+        $this->assertNotEmpty($links);
+        $this->assertStringContainsString('/checkout?', $pricingMarkup);
+
+        foreach ($links as $link) {
+            $this->assertStringContainsString('/checkout?', $link->getAttribute('href'));
+            $this->assertStringContainsString('/checkout?', $link->getAttribute('x-bind:href'));
+        }
+    }
+
     public function test_legacy_published_contact_paths_are_replaced_with_email_without_rewriting_other_cms_links(): void
     {
         config(['marketing.links.contact' => 'mailto:contact@zsoltacsai.com']);
@@ -77,5 +135,34 @@ class MarketingConversionLinksTest extends TestCase
         $this->assertStringNotContainsString('gyorsabb reagálás', strtolower($hungarianPricing['plans']['wordpress']['secure']['description']));
         $this->assertStringContainsString('where configured', $englishPricing['features']['remote_backups']['daily']);
         $this->assertStringContainsString('ahol be van állítva', $hungarianPricing['features']['remote_backups']['daily']);
+    }
+
+    /** @return list<\DOMElement> */
+    private function marketingPlanLinks(string $html): array
+    {
+        $document = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $document->loadHTML('<?xml encoding="UTF-8">'.$html);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+
+        $nodes = (new \DOMXPath($document))->query('//*[@data-marketing-plan]');
+
+        return $nodes === false ? [] : iterator_to_array($nodes);
+    }
+
+    private function pricingMarkup(string $html): string
+    {
+        $document = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $document->loadHTML('<?xml encoding="UTF-8">'.$html);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+
+        $nodes = (new \DOMXPath($document))->query('//*[@id="pricing"]');
+
+        return $nodes === false || $nodes->length === 0
+            ? ''
+            : $document->saveHTML($nodes->item(0));
     }
 }
