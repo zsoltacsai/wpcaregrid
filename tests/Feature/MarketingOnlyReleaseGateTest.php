@@ -316,6 +316,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
             }
         }
     }
+
     public function test_request_controlled_values_cannot_activate_the_test_exemption(): void
     {
         config([
@@ -417,17 +418,28 @@ class MarketingOnlyReleaseGateTest extends TestCase
         $webMiddleware = app('router')->getMiddlewareGroups()['web'];
         $this->assertContains(\Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class, $webMiddleware);
 
+        // Laravel's default test shortcut skips CSRF. Force the real middleware path here.
+        $csrf = new class(app(), app(\Illuminate\Contracts\Encryption\Encrypter::class)) extends \Illuminate\Foundation\Http\Middleware\ValidateCsrfToken
+        {
+            protected function runningUnitTests()
+            {
+                return false;
+            }
+        };
+        $this->app->instance(\Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class, $csrf);
+        $token = str_repeat('a', 40);
+        $this->withSession(['_token' => $token]);
+
         $this->call('POST', '/locale', ['locale' => 'hu'], [], [], [
             'HTTP_HOST' => 'wpcaregrid.com',
             'HTTPS' => 'on',
             'HTTP_REFERER' => 'https://wpcaregrid.com/en/pricing',
-        ])->assertRedirect();
+        ])->assertStatus(419);
 
-        $this->call('POST', '/locale', ['locale' => 'invalid'], [], [], [
-            'HTTP_HOST' => 'wpcaregrid.com',
-            'HTTPS' => 'on',
-            'HTTP_REFERER' => 'https://wpcaregrid.com/en/pricing',
-        ])->assertSessionHasErrors('locale');
+        $csrfServer = ['HTTP_HOST' => 'wpcaregrid.com', 'HTTPS' => 'on', 'HTTP_REFERER' => 'https://wpcaregrid.com/en/pricing', 'HTTP_X_CSRF_TOKEN' => $token];
+        $this->call('POST', '/locale', ['locale' => 'hu'], [], [], $csrfServer)->assertRedirect();
+
+        $this->call('POST', '/locale', ['locale' => 'invalid'], [], [], $csrfServer)->assertSessionHasErrors('locale');
 
         for ($attempt = 1; $attempt <= 60; $attempt++) {
             $this->call('POST', '/locale', ['locale' => 'en'], [], [], [
@@ -435,6 +447,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
                 'HTTPS' => 'on',
                 'REMOTE_ADDR' => '198.51.100.42',
                 'HTTP_REFERER' => 'https://wpcaregrid.com/en/pricing',
+                'HTTP_X_CSRF_TOKEN' => $token,
             ])->assertRedirect();
         }
         $this->call('POST', '/locale', ['locale' => 'en'], [], [], [
@@ -442,6 +455,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'HTTPS' => 'on',
             'REMOTE_ADDR' => '198.51.100.42',
             'HTTP_REFERER' => 'https://wpcaregrid.com/en/pricing',
+            'HTTP_X_CSRF_TOKEN' => $token,
         ])->assertTooManyRequests();
 
         $this->call('GET', '/pricing', [], [], [], [
@@ -462,7 +476,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
                 'app.env' => 'production',
                 'app.deployment_environment' => 'production',
                 'marketing_release.enforcement_mode' => 'enforced',
-            'marketing_release.staging_exempt' => false,
+                'marketing_release.staging_exempt' => false,
                 'marketing_release.profile' => $profile,
             ]);
             $this->call('GET', '/checkout', [], [], [], [
@@ -519,3 +533,4 @@ class MarketingOnlyReleaseGateTest extends TestCase
         return [$response, $dispatched];
     }
 }
+
