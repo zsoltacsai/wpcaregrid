@@ -18,7 +18,6 @@ use App\Models\BackupRestore;
 use App\Models\WebsiteJob;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
-use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Tests\Concerns\CreatesBackups;
 use Tests\TestCase;
@@ -81,14 +80,23 @@ class RecoveryPackageVerificationTest extends TestCase
 
     public function test_missing_or_corrupt_full_package_component_never_forms_a_complete_download(): void
     {
+        $fixture = $this->syntheticPackage(BackupType::Full);
+        $originals = [];
+
+        foreach (['files', 'database', 'manifest'] as $component) {
+            $key = $fixture['backup']->objectKey(BackupObjectName::from($component));
+            $originals[$component] = $this->storage->objects[$key];
+        }
+
         foreach (['missing', 'corrupt'] as $failure) {
             foreach (['files', 'database', 'manifest'] as $component) {
-                $fixture = $this->syntheticPackage(BackupType::Full);
                 $key = $fixture['backup']->objectKey(BackupObjectName::from($component));
+                $this->storage->objects[$key] = $originals[$component];
+
                 if ($failure === 'missing') {
                     unset($this->storage->objects[$key]);
                 } else {
-                    $original = $this->storage->objects[$key];
+                    $original = $originals[$component];
                     $this->storage->objects[$key] = substr_replace($original, $original[0] === 'X' ? 'Y' : 'X', 0, 1);
                 }
 
@@ -99,8 +107,10 @@ class RecoveryPackageVerificationTest extends TestCase
                 $failedGrant = BackupDownloadGrant::query()
                     ->where('backup_id', $fixture['backup']->id)
                     ->where('object_name', $component)
+                    ->latest('id')
                     ->firstOrFail();
                 $this->assertSame(BackupDownloadGrant::FAILED, $failedGrant->status, "{$failure} {$component}");
+                $this->assertNoRestoreSideEffects($fixture['backup']);
             }
         }
     }
@@ -180,8 +190,6 @@ class RecoveryPackageVerificationTest extends TestCase
 
     private function syntheticPackage(BackupType $type, array $overrides = []): array
     {
-        // Pairing throttles are covered elsewhere; reset only the synthetic test client's key.
-        RateLimiter::clear('127.0.0.1');
         $site = $this->backupReadySite(sprintf('https://synthetic-%s-%s.example', $type->value, Str::uuid()));
         $backup = $this->verifiedBackup($site['website'], $type);
         $backup->forceFill(['storage_provider' => 'sftp'])->save();
