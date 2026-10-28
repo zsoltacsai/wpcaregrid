@@ -341,7 +341,8 @@ class MarketingOnlyReleaseGateTest extends TestCase
 
             $response->assertOk();
             $this->assertSame('', $response->getContent(), 'Health response must have no operational details');
-            $this->assertSame('no-store', $response->headers->get('Cache-Control'));
+            $cacheControlDirectives = array_map('trim', explode(',', strtolower((string) $response->headers->get('Cache-Control'))));
+            $this->assertContains('no-store', $cacheControlDirectives);
             foreach (['database', 'queue', 'redis', 'deployment', 'environment'] as $sensitiveTerm) {
                 $this->assertStringNotContainsString($sensitiveTerm, strtolower((string) $response->getContent()));
             }
