@@ -423,7 +423,6 @@ class MarketingOnlyReleaseGateTest extends TestCase
         // Laravel's default test shortcut skips CSRF. Force the real middleware path here.
         $csrf = new class(app(), app(\Illuminate\Contracts\Encryption\Encrypter::class)) extends \Illuminate\Foundation\Http\Middleware\ValidateCsrfToken
         {
-
             protected function runningUnitTests()
             {
                 return false;
