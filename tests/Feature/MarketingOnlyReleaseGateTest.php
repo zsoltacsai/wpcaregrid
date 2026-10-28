@@ -490,7 +490,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
                 'app.env' => 'production',
                 'app.deployment_environment' => 'production',
                 'marketing_release.enforcement_mode' => 'enforced',
-                    'marketing_release.profile' => $profile,
+                'marketing_release.profile' => $profile,
             ]);
             $this->call('GET', '/checkout', [], [], [], [
                 'HTTP_HOST' => 'wpcaregrid.com',
