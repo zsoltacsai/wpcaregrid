@@ -19,6 +19,7 @@ final class MarketingOnlyReleaseGate
 
     private const PUBLIC_PATHS = [
         '/',
+        '/up',
         '/pricing',
         '/robots.txt',
         '/sitemap.xml',
@@ -47,23 +48,27 @@ final class MarketingOnlyReleaseGate
             return response('', Response::HTTP_NOT_FOUND, ['Cache-Control' => 'no-store']);
         }
 
+        // A bodyless liveness response preserves the approved health probe without
+        // exposing framework, dependency, deployment, or operational details.
+        // The request method has already been restricted to GET or HEAD by the
+        // public-request allowlist.
+        if ($request->getPathInfo() === '/up') {
+            return response('', Response::HTTP_OK, ['Cache-Control' => 'no-store']);
+        }
+
         // invitation_beta is not an access grant. This gate has no independent
         // invitation resolver, so it deliberately keeps backend paths closed.
         return $next($request);
     }
 
-    /** Exemptions require exact server-side test or approved staging identity markers. */
+    /** The only exemption is the exact server-side PHPUnit test identity. */
     private function mustEnforce(): bool
     {
         $testingExemption = config('marketing_release.enforcement_mode') === 'testing'
             && config('marketing_release.test_app_environment') === 'testing'
             && config('marketing_release.test_deployment_environment') === 'testing';
 
-        $stagingExemption = config('marketing_release.staging_exempt') === true
-            && config('app.env') === 'staging'
-            && config('app.deployment_environment') === 'staging';
-
-        return ! ($testingExemption || $stagingExemption);
+        return ! $testingExemption;
     }
 
     private function isAllowedPublicRequest(Request $request): bool

@@ -4,7 +4,6 @@ $configuredProfile = env('MARKETING_RELEASE_PROFILE', 'marketing_only');
 $configuredTestAppEnvironment = env('APP_ENV', 'production');
 $configuredTestDeploymentEnvironment = env('CAREGRID_DEPLOYMENT_ENV', 'production');
 $configuredEnforcementMode = env('MARKETING_RELEASE_ENFORCEMENT_MODE', 'enforced');
-$configuredStagingExempt = env('MARKETING_RELEASE_STAGING_EXEMPT', false);
 
 return [
     /*
@@ -20,9 +19,6 @@ return [
         && in_array($configuredProfile, ['marketing_only', 'invitation_beta'], true)
             ? $configuredProfile
             : 'marketing_only',
-    // Both exemptions are disabled by default and require exact server-side identities.
-    'staging_exempt' => $configuredStagingExempt === true,
-
     // Snapshot server-side test identity at configuration load; request/runtime changes cannot alter it.
     'test_app_environment' => $configuredTestAppEnvironment,
     'test_deployment_environment' => $configuredTestDeploymentEnvironment,

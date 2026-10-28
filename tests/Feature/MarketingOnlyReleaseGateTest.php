@@ -22,7 +22,6 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'app.url' => 'https://wpcaregrid.com',
             'marketing_release.profile' => 'marketing_only',
             'marketing_release.enforcement_mode' => 'enforced',
-            'marketing_release.staging_exempt' => false,
             'app.env' => 'production',
             'app.deployment_environment' => 'production',
         ]);
@@ -127,7 +126,6 @@ class MarketingOnlyReleaseGateTest extends TestCase
             ['POST', '/api/v1/connector/heartbeat'],
             ['GET', '/api/v1/connector/jobs'],
             ['POST', '/api/v1/connector/inventory'],
-            ['GET', '/up'],
         ];
 
         foreach ($requests as [$method, $path]) {
@@ -295,39 +293,12 @@ class MarketingOnlyReleaseGateTest extends TestCase
         }
     }
 
-    public function test_staging_exemption_requires_explicit_flag_and_exact_staging_identity(): void
-    {
-        $cases = [
-            ['staging', 'staging', true, true],
-            ['staging', 'production', true, false],
-            ['production', 'staging', true, false],
-            ['staging', 'staging', false, false],
-            ['staging', 'unknown', true, false],
-        ];
-
-        foreach ($cases as [$appEnv, $deployment, $flag, $exempt]) {
-            config([
-                'app.env' => $appEnv,
-                'app.deployment_environment' => $deployment,
-                'marketing_release.enforcement_mode' => 'enforced',
-                'marketing_release.staging_exempt' => $flag,
-            ]);
-
-            [$response, $dispatched] = $this->runGate('/checkout');
-            $this->assertSame($exempt, $dispatched, implode('/', [$appEnv, $deployment, (string) $flag]));
-            if (! $exempt) {
-                $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
-            }
-        }
-    }
-
     public function test_request_controlled_values_cannot_activate_the_test_exemption(): void
     {
         config([
             'app.env' => 'production',
             'app.deployment_environment' => 'production',
             'marketing_release.enforcement_mode' => 'enforced',
-            'marketing_release.staging_exempt' => false,
             'marketing_release.profile' => 'marketing_only',
             'marketing_release.test_app_environment' => 'production',
             'marketing_release.test_deployment_environment' => 'production',
@@ -347,13 +318,52 @@ class MarketingOnlyReleaseGateTest extends TestCase
         }
     }
 
+    public function test_health_endpoint_is_generic_for_get_head_and_denies_unsupported_methods(): void
+    {
+        config([
+            'app.env' => 'production',
+            'app.deployment_environment' => 'production',
+            'marketing_release.enforcement_mode' => 'enforced',
+            'marketing_release.profile' => 'marketing_only',
+            'marketing_release.test_app_environment' => 'production',
+            'marketing_release.test_deployment_environment' => 'production',
+            'app.url' => 'https://wpcaregrid.com',
+        ]);
+
+        $route = app('router')->getRoutes()->match(Request::create('https://wpcaregrid.com/up', 'GET'));
+        $this->assertNotNull($route, 'Laravel health route must exist');
+
+        foreach (['GET', 'HEAD'] as $method) {
+            $response = $this->call($method, '/up', [], [], [], [
+                'HTTP_HOST' => 'wpcaregrid.com',
+                'HTTPS' => 'on',
+            ]);
+
+            $response->assertOk();
+            $this->assertSame('', $response->getContent(), 'Health response must have no operational details');
+            $this->assertSame('no-store', $response->headers->get('Cache-Control'));
+            foreach (['database', 'queue', 'redis', 'deployment', 'environment'] as $sensitiveTerm) {
+                $this->assertStringNotContainsString($sensitiveTerm, strtolower((string) $response->getContent()));
+            }
+        }
+
+        foreach (['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as $method) {
+            $response = $this->call($method, '/up', [], [], [], [
+                'HTTP_HOST' => 'wpcaregrid.com',
+                'HTTPS' => 'on',
+            ]);
+
+            $response->assertNotFound();
+            $this->assertSame('', $response->getContent());
+        }
+    }
+
     public function test_real_http_kernel_has_global_gate_after_security_headers_and_denies_registered_backend_routes(): void
     {
         config([
             'app.env' => 'production',
             'app.deployment_environment' => 'production',
             'marketing_release.enforcement_mode' => 'enforced',
-            'marketing_release.staging_exempt' => false,
             'marketing_release.profile' => 'marketing_only',
             'marketing_release.test_app_environment' => 'production',
             'marketing_release.test_deployment_environment' => 'production',
@@ -384,7 +394,6 @@ class MarketingOnlyReleaseGateTest extends TestCase
             ['GET', '/owner'],
             ['POST', '/api/v1/connector/pair'],
             ['POST', '/api/v1/connector/heartbeat'],
-            ['GET', '/up'],
         ];
 
         foreach ($requests as [$method, $uri]) {
@@ -403,7 +412,6 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'app.env' => 'production',
             'app.deployment_environment' => 'production',
             'marketing_release.enforcement_mode' => 'enforced',
-            'marketing_release.staging_exempt' => false,
             'marketing_release.profile' => 'marketing_only',
             'marketing_release.test_app_environment' => 'production',
             'marketing_release.test_deployment_environment' => 'production',
@@ -482,8 +490,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
                 'app.env' => 'production',
                 'app.deployment_environment' => 'production',
                 'marketing_release.enforcement_mode' => 'enforced',
-                'marketing_release.staging_exempt' => false,
-                'marketing_release.profile' => $profile,
+                    'marketing_release.profile' => $profile,
             ]);
             $this->call('GET', '/checkout', [], [], [], [
                 'HTTP_HOST' => 'wpcaregrid.com',
@@ -495,7 +502,6 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'app.env' => 'production',
             'app.deployment_environment' => 'production',
             'marketing_release.enforcement_mode' => 'enforced',
-            'marketing_release.staging_exempt' => false,
             'marketing_release.profile' => 'invitation_beta',
         ]);
         $this->call('GET', '/checkout', [], [], [], [
