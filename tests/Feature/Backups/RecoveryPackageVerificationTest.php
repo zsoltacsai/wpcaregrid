@@ -89,7 +89,7 @@ class RecoveryPackageVerificationTest extends TestCase
                     unset($this->storage->objects[$key]);
                 } else {
                     $original = $this->storage->objects[$key];
-                    $this->storage->objects[$key] = ($original[0] === 'X' ? 'Y' : 'X') . substr($original, 1);
+                    $this->storage->objects[$key] = ($original[0] === 'X' ? 'Y' : 'X').substr($original, 1);
                 }
 
                 $downloaded = $this->downloadPackage($fixture);
@@ -182,7 +182,7 @@ class RecoveryPackageVerificationTest extends TestCase
     {
         // Pairing throttles are covered elsewhere; reset only the synthetic test client's key.
         RateLimiter::clear('127.0.0.1');
-        $site = $this->backupReadySite('https://synthetic-' . $type->value . '-' . Str::uuid() . '.example');
+        $site = $this->backupReadySite('https://synthetic-'.$type->value.'-'.Str::uuid().'.example');
         $backup = $this->verifiedBackup($site['website'], $type);
         $backup->forceFill(['storage_provider' => 'sftp'])->save();
 
@@ -240,7 +240,7 @@ class RecoveryPackageVerificationTest extends TestCase
             }
 
             $response = $this->actingAs($fixture['website']->customer->user)
-                ->withHeader('Range', 'bytes=0-' . ($grant->object_size - 1))
+                ->withHeader('Range', 'bytes=0-'.($grant->object_size - 1))
                 ->get(route('account.backup-downloads.content', $grant));
             if ($response->getStatusCode() === 206) {
                 $downloaded[$name] = $response->streamedContent();
@@ -333,22 +333,22 @@ class RecoveryPackageVerificationTest extends TestCase
     private function ustar(string $path, string $contents): string
     {
         $header = str_pad($path, 100, "\0")
-            . str_pad('0000644', 8, "\0")
+            .str_pad('0000644', 8, "\0")
             . str_pad('0000000', 8, "\0")
             . str_pad('0000000', 8, "\0")
             . str_pad(sprintf('%011o', strlen($contents)), 12, "\0")
             . str_pad(sprintf('%011o', time()), 12, "\0")
-            . str_repeat(' ', 8)
-            . '0'
+            .str_repeat(' ', 8)
+            .'0'
             . str_repeat("\0", 100)
-            . 'ustar' . "\0" . '00'
+            .'ustar'."\0".'00'
             . str_repeat("\0", 32 * 2 + 8 * 2 + 155 + 12);
         $this->assertSame(512, strlen($header));
         $checksum = array_sum(array_map('ord', str_split($header)));
-        $header = substr_replace($header, sprintf('%06o' . "\0 ", $checksum), 148, 8);
+        $header = substr_replace($header, sprintf('%06o'."\0 ", $checksum), 148, 8);
         $padding = (512 - (strlen($contents) % 512)) % 512;
 
-        return $header . $contents . str_repeat("\0", $padding) . str_repeat("\0", 1024);
+        return $header.$contents.str_repeat("\0", $padding).str_repeat("\0", 1024);
     }
 }
 
