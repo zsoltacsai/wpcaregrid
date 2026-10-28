@@ -467,6 +467,12 @@ class MarketingOnlyReleaseGateTest extends TestCase
         $this->call('GET', 'https://wpcaregrid.com/pricing', [], [], [], [
             'HTTP_X_FORWARDED_HOST' => 'attacker.example',
         ])->assertNotFound();
+
+        config(['app.url' => 'http://localhost', 'http.force_https' => false]);
+        $this->get('http://localhost:8000/pricing')->assertRedirect('http://localhost/en/pricing');
+
+        config(['app.url' => 'https://wpcaregrid.com']);
+        $this->get('http://localhost:8000/pricing')->assertNotFound();
     }
 
     public function test_invalid_profile_and_invitation_beta_remain_fail_closed_in_http_kernel(): void
