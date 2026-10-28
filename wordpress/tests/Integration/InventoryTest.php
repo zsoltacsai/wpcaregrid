@@ -30,7 +30,7 @@ final class InventoryTest extends TestCase
         // The harness deliberately places writable wp-content outside the
         // read-only Composer WordPress root, so it is correctly classified custom.
         $this->assertSame('custom', $inventory['compatibility']['layout']);
-        $this->assertSame(['version' => '7.1.3', 'update_available' => true, 'latest_version' => '7.2.0'], $inventory['core']);
+        $this->assertSame(['version' => get_bloginfo('version'), 'update_available' => true, 'latest_version' => '7.2.0'], $inventory['core']);
         $this->assertSame(PHP_VERSION, $inventory['php_version']);
         $this->assertSame(['installed' => false, 'active' => false, 'version' => null], $inventory['woocommerce']);
 
