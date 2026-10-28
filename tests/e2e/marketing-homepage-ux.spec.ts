@@ -18,6 +18,7 @@ for (const locale of ['en', 'hu'] as const) {
         test(`${locale} homepage ${viewport.name}: focused layout, CTA and anchor regressions`, async ({ page }, testInfo) => {
             const pageErrors: string[] = [];
             const consoleErrors: string[] = [];
+            const externalRequests: string[] = [];
             page.on('pageerror', (error) => pageErrors.push(error.message));
             page.on('console', (message) => {
                 if (message.type() === 'error') consoleErrors.push(message.text());
@@ -53,6 +54,17 @@ for (const locale of ['en', 'hu'] as const) {
                 }
 
                 await route.fulfill({ body: await readFile(assetPath), contentType });
+            });
+            await page.route('**/*', async (route) => {
+                const requestUrl = new URL(route.request().url());
+                if (!localBaseUrl || requestUrl.origin !== localBaseUrl.origin) {
+                    externalRequests.push(requestUrl.origin);
+                    await route.abort();
+                    return;
+                }
+
+                // Give the local build-asset shim above first chance to serve the asset.
+                await route.fallback();
             });
 
             await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -121,6 +133,18 @@ for (const locale of ['en', 'hu'] as const) {
 
             expect(pageErrors).toEqual([]);
             expect(consoleErrors).toEqual([]);
+            expect(externalRequests).toEqual([]);
+
+            if (viewport.width < 1024) {
+                const menuButton = page.locator('header button[x-ref="menuButton"]');
+                await menuButton.focus();
+                await page.keyboard.press('Enter');
+                await expect(page.locator('#mobile-menu')).toBeVisible();
+                await page.keyboard.press('Escape');
+                await expect(page.locator('#mobile-menu')).toBeHidden();
+                await expect(menuButton).toBeFocused();
+                expect(await menuButton.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+            }
         });
     }
 }
