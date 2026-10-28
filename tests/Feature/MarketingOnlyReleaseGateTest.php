@@ -500,6 +500,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'HTTPS' => 'on',
         ])->assertNotFound();
     }
+
     private function runGate(
         string $uri,
         string $method = 'GET',
