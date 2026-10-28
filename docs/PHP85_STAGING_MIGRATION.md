@@ -8,23 +8,40 @@ The migration uses only the fixed profiles `/usr/bin/php8.4` and `/usr/bin/php8.
 
 The existing exact-SHA CI verifier, branch-tip check, deployment lock, protected DB backup, maintenance gate, scheduler lock/pause, queue drain, application health checks, and fail-closed recovery remain required. The profile switch is attempted only after the gate and scheduler pause are active and both queue workers are stopped. The helper rejects arbitrary profile names, paths, commands, Nginx changes, and Supervisor commands.
 
-## Required host preparation (separate Owner approval)
+## Required host preparation (ordered gates; each write needs separate Owner approval)
 
-Before the protected controller can use runtime profiles, an administrator must prepare and verify the following on staging. Do not perform these steps from the development workstation or through the normal deploy controller until separately approved:
+This section is a preparation plan, not authorization to act. Complete Gate 1 and verify it before requesting a separate Gate 2 package-install GO. PHP 8.5 installation, staging cutover, production release and infrastructure changes remain NO-GO absent their own approvals.
 
-1. Verify the package signer and cached repository metadata; confirm PHP 8.5 package provenance, required extensions, and CLI/FPM package versions. The PPA signer/InRelease evidence is currently UNKNOWN.
-2. Install PHP 8.5 side-by-side with patched PHP 8.4 only after package provenance is verified. Do not change alternatives or remove PHP 8.4.
-3. Confirm `/usr/bin/php8.4`, `/usr/bin/php8.5`, both FPM services, and sockets `/run/php/php8.4-fpm.sock` and `/run/php/php8.5-fpm.sock`. The effective `[www]` pool in each PHP-FPM configuration must run as `user = www-data` and `group = www-data`; the protected preflight validates these worker identities from `php-fpm -tt` output. Both sockets must independently be `www-data:www-data` mode `0660`; socket ownership does not prove the PHP worker UID/GID. Both FPM services remain active. The 8.4 pool/socket is shared by other vhosts and must not be repointed.
-4. Install root-owned mode-0644 snippets with exactly one directive each:
-   - `wpcaregrid-staging-php84.conf`: `fastcgi_pass unix:/run/php/php8.4-fpm.sock;`
-   - `wpcaregrid-staging-php85.conf`: `fastcgi_pass unix:/run/php/php8.5-fpm.sock;`
-   Set `wpcaregrid-staging-runtime.conf` to a root-owned symlink to the 8.4 profile initially. Change only the staging vhost to include this selector at its PHP FastCGI location. Do not change other vhosts. The helper verifies Nginx’s expanded config and fails unless that exact include is used once and only in the staging vhost.
-5. Confirm `/etc/supervisor/conf.d/wpcaregrid.conf` is root-owned mode 0644 with no named/default ACLs and contains the two documented worker commands. The protected helper converts only those exact commands to `/usr/local/bin/wpcaregrid-php` while the gate is active and workers are stopped. Any differing configuration is a stop condition.
-6. Confirm the `www-data` crontab remains the fixed root-installed scheduler wrapper entry. The helper installs the hash-pinned wrapper from the exact deployed commit; it calls the same runtime dispatcher.
-7. Keep the existing deploy-only sudo policy. The root helper must be installed from the reviewed merge commit, with its reviewed source hash. No general sudo, root SSH, package-manager access, or direct service command is added for `deploy`.
+### Gate 1 — pin application consumers to PHP 8.4 first
 
-The current source review cannot prove the live host satisfies these prerequisites. No staging package or configuration operation was performed for this PR.
+Before any PHP 8.5 package is installed:
 
+1. Read-only record the current PHP 8.4 CLI/FPM versions, shared 8.4 FPM service/socket state, the global `php` alternatives mode and selection, and the exact Supervisor and scheduler consumer commands. The current alternatives mode is auto; do not change it as part of this runbook step.
+2. Obtain a separate Owner GO for the PHP 8.4-only protected deployment that prepares the root-owned `/usr/local/bin/wpcaregrid-php` dispatcher and the fixed scheduler wrapper. Its exact source and hashes must come from the reviewed primary commit. Keep the dispatcher's active/default profile on `/usr/bin/php8.4`.
+3. Under that approved deployment, first verify the Supervisor file is root-owned mode 0644, has no named/default ACLs, and contains only the two documented worker commands. Pin both commands and the scheduler entry to the protected dispatcher/wrapper. Drain workers safely and follow the protected controller; do not edit Supervisor or scheduler files manually. Keep PHP 8.4 FPM and its shared socket available to sibling vhosts.
+4. Before Gate 1 is accepted, read-only verify both live workers resolve to `/usr/bin/php8.4`, their command lines use the dispatcher, and the scheduler invokes the fixed wrapper/dispatcher with the 8.4 profile. Confirm no application worker or scheduler command relies on unversioned `php` or PATH lookup. Record sanitized evidence only.
+5. Keep the existing deploy-only sudo policy. Install the root helper only from its reviewed merge commit and source hash; do not grant general sudo, root SSH, package-manager access, or direct service commands to deploy.
+6. If any consumer cannot be pinned and verified, stop. Do not proceed to PHP 8.5 package installation. Do not alter global alternatives, Nginx, FPM configuration, or services during this gate unless a separate Owner GO explicitly covers that exact change.
+
+### Gate 2 — separately approved PHP 8.5 side-by-side package installation
+
+Only after Gate 1 is complete and independently verified, prepare a distinct package-install request:
+
+1. Revalidate the Ondřej PHP PPA signer, signed repository metadata, candidate package hashes, host architecture, required extensions and exact CLI/FPM package versions. The supplied 2026-10-28 evidence records the signer and inspected candidate integrity as verified; refresh that evidence immediately before package use.
+2. Inspect the exact package maintainer scripts and a fresh APT simulation. The PHP 8.5 CLI package can register priority-85 `php` alternatives while global alternatives are in auto mode. Do not run `update-alternatives` or change its mode under this plan. The dispatcher/consumer pinning in Gate 1 is a prerequisite, not proof that unrelated host consumers are unaffected; account for and verify the package-script effect within the separately approved installation plan.
+3. Review and explicitly approve the PHP 8.5 FPM package's service-start behavior before installation. It may attempt to start its versioned FPM service. If the effect cannot be safely controlled and verified without changing Nginx or disturbing PHP 8.4/shared services, stop and revise the installation plan before requesting GO.
+4. After a distinct Owner GO, install only the reviewed PHP 8.5 CLI/FPM packages and required extensions side-by-side. Do not remove or upgrade the PHP 8.4 rollback packages. Keep PHP 8.4 FPM and its shared socket available; do not change Nginx selectors or any vhost in this installation-only step.
+5. After installation, perform read-only checks of `/usr/bin/php8.5`, package versions, both FPM services and sockets, `[www]` worker UID/GID (`www-data`), and socket owner/mode (`www-data:www-data`, `0660`). Confirm the effective PHP 8.5 FPM settings, including Zend OPcache availability and `opcache.enable`, `opcache.validate_timestamps`, and `opcache.revalidate_freq`; PHP 8.5 OPcache is statically built in, so a separate OPcache package or `.so` is not expected. Keep the shared PHP 8.4 FPM pool/socket available to sibling vhosts. Unknown or out-of-contract values block any later cutover.
+
+### Later cutover-only Nginx preparation (separate Owner GO)
+
+Nginx configuration is outside both preparation gates and remains unchanged during package installation. Only after Gate 2, backup/drain readiness, exact-SHA CI and a separate cutover GO may an administrator prepare root-owned mode-0644 snippets with exactly one directive each:
+
+- `wpcaregrid-staging-php84.conf`: `fastcgi_pass unix:/run/php/php8.4-fpm.sock;`
+- `wpcaregrid-staging-php85.conf`: `fastcgi_pass unix:/run/php/php8.5-fpm.sock;`
+
+Set `wpcaregrid-staging-runtime.conf` to a root-owned symlink to the 8.4 profile initially. Change only the `staging.wpcaregrid.com` vhost to include this selector at its PHP FastCGI location. Do not change other vhosts. The helper verifies expanded Nginx configuration and fails unless that exact include is used once and only in the staging vhost. PHP 8.4 FPM/socket remains shared with other vhosts and must not be repointed.
+The protected controller must not be used for these preparation steps until its reviewed PHP 8.4 dispatcher path and consumer pinning have passed Gate 1. No staging package or configuration operation was performed for this PR.
 ## Protected cutover
 
 After the prerequisites, backup, idle/drain plan, exact-SHA CI, and exclusive staging window have separate Owner approval, execute the existing approved protected controller as `deploy` from `/var/www/wpcaregrid`:
