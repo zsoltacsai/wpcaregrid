@@ -317,6 +317,11 @@ jobs:
       - name: Restore disposable schema for post-test checks
         run: php artisan migrate:fresh --force
 
+      - name: Seed synthetic published legal documents for marketing-only smoke
+        env:
+          CAREGRID_SEED_SYNTHETIC_LEGAL_FIXTURE: '1'
+        run: php tests/smoke/fixtures/seed-synthetic-published-legal-documents.php
+
       - name: System check (runs, never prints secrets)
         run: php artisan system:check
 
