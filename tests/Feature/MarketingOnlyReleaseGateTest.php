@@ -463,14 +463,9 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'HTTP_X_CSRF_TOKEN' => $token,
         ])->assertTooManyRequests();
 
-        $this->call('GET', '/pricing', [], [], [], [
-            'HTTP_HOST' => 'attacker.example',
-            'HTTPS' => 'on',
-        ])->assertNotFound();
-        $this->call('GET', '/pricing', [], [], [], [
-            'HTTP_HOST' => 'wpcaregrid.com',
+        $this->get('https://attacker.example/pricing')->assertNotFound();
+        $this->call('GET', 'https://wpcaregrid.com/pricing', [], [], [], [
             'HTTP_X_FORWARDED_HOST' => 'attacker.example',
-            'HTTPS' => 'on',
         ])->assertNotFound();
     }
 
