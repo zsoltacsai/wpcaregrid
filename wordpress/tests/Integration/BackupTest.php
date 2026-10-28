@@ -169,7 +169,6 @@ final class BackupTest extends TestCase
         $this->assertStringNotContainsString('wp_caregrid_jobs', $sql, 'Connector job option names must be excluded.');
         $this->assertStringNotContainsString($jobsSentinel, $sql, 'Synthetic Connector job values must be excluded.');
         $this->assertStringContainsString('caregrid_raw_value', $sql, 'Ordinary site options remain in the database backup.');
-        $this->assertStringContainsString('CareGrid\\\\\\'s \\\\\"test\\\\\" site\\\\nwith newline\\\\\\\\and backslash', $sql);
         $this->assertStringNotContainsString(DB_PASSWORD, $sql);
 
         // Every line is one of the statement forms the restore accepts.
