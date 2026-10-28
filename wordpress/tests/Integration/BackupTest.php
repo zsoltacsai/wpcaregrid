@@ -164,7 +164,7 @@ final class BackupTest extends TestCase
 
         $this->assertSame('TRANSIENT-VALUE', get_transient('caregrid_cached'));
         $this->assertSame($stateSentinel, get_option('wp_caregrid_state')['m15_exclusion_sentinel']);
-        $this->assertSame($jobsSentinel, get_option('wp_caregrid_jobs')['m15-synthetic-exclusion-fixture']['synthetic_value']);
+        $this->assertSame($jobsSentinel, get_option('wp_caregrid_jobs')['m15-synthetic-exclusion-fixture']['result']['data']['synthetic_value']);
         $this->assertSame("CareGrid's \"test\" site\nwith newline\\and backslash", get_option('caregrid_raw_value'));
 
         $result = $this->run_backup('BACKUP_DATABASE');
