@@ -15,7 +15,6 @@ use App\Models\Backup;
 use App\Models\BackupDownloadGrant;
 use App\Models\BackupObject;
 use App\Models\BackupRestore;
-use App\Models\User;
 use App\Models\WebsiteJob;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -75,6 +74,7 @@ class RecoveryPackageVerificationTest extends TestCase
             $this->assertSame($type->value, $manifest['type']);
             $this->assertSame($type === BackupType::Files || $type === BackupType::Full, is_array($manifest['files']));
             $this->assertSame($type === BackupType::Database || $type === BackupType::Full, is_array($manifest['database']));
+            $this->assertNoRestoreSideEffects($fixture['backup']);
         }
     }
 
