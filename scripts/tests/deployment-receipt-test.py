@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Receipt provenance, immutable Connector reuse and no-secret fixtures."""
 
+import contextlib
 import hashlib
+import io
 import importlib.util
 import json
 import os
@@ -10,6 +12,8 @@ import stat
 import subprocess
 import tempfile
 import zipfile
+from types import SimpleNamespace
+from unittest import mock
 from pathlib import Path
 
 
@@ -90,9 +94,172 @@ def expect_receipt_failure(call, reason):
         raise AssertionError(f"receipt accepted invalid fixture: {reason}")
 
 
+def run_receipt_cli(root, receipt_directory, arguments, php_version, *, binary_state="valid"):
+    old_application = module.APPLICATION
+    old_receipts = module.RECEIPTS
+    old_writer = module.write_receipt
+    real_run = subprocess.run
+    calls = []
+    binary = next(
+        (arguments[index + 1] for index, value in enumerate(arguments[:-1]) if value == "--php-binary"),
+        module.LEGACY_PHP_BINARY,
+    )
+    real_lstat = Path.lstat
+    real_access = os.access
+    real_is_file = Path.is_file
+    real_is_symlink = Path.is_symlink
+    real_stat = Path.stat
+
+    def fake_lstat(path):
+        if path.as_posix() == binary:
+            if binary_state == "missing":
+                raise FileNotFoundError(binary)
+            mode = stat.S_IFREG | (0o666 if binary_state == "writable" else 0o755)
+            owner = 1000 if binary_state == "wrong_owner" else 0
+            if binary_state == "symlink":
+                mode = stat.S_IFLNK | 0o777
+            return SimpleNamespace(st_mode=mode, st_uid=owner)
+        return real_lstat(path)
+
+    def fake_is_file(path):
+        if path.as_posix() == "/usr/bin/composer":
+            return True
+        return real_is_file(path)
+
+    def fake_is_symlink(path):
+        if path.as_posix() == "/usr/bin/composer":
+            return False
+        return real_is_symlink(path)
+
+    def fake_stat(path, *args, **kwargs):
+        if path.as_posix() == "/usr/bin/composer":
+            return SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o755)
+        return real_stat(path, *args, **kwargs)
+
+    def fake_access(path, mode, *args, **kwargs):
+        if str(path).replace(chr(92), "/") == binary:
+            return binary_state != "not_executable"
+        return real_access(path, mode, *args, **kwargs)
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        if command[0] == "/usr/bin/git" and "HEAD^{commit}" in command:
+            head = real_run(
+                ["git", "-C", str(root), "rev-parse", "--verify", "HEAD^{commit}"],
+                check=True, capture_output=True, text=True,
+            ).stdout
+            return subprocess.CompletedProcess(command, 0, stdout=head, stderr="")
+        if command[0] in module.APPROVED_PHP_BINARIES:
+            if command[1] == "-r":
+                return subprocess.CompletedProcess(command, 0, stdout=php_version, stderr="")
+            if command[1].replace(chr(92), "/") == "/usr/bin/composer":
+                return subprocess.CompletedProcess(command, 0, stdout="Composer version 2.8.0\n", stderr="")
+        if command[0] == "/usr/bin/node":
+            return subprocess.CompletedProcess(command, 0, stdout="v22.0.0\n", stderr="")
+        if command[0] == "/usr/bin/git":
+            return real_run(["git", *command[1:]], *args, **kwargs)
+        return real_run(command, *args, **kwargs)
+
+    def safe_write(data, directory):
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / Path('receipt-fixture.json')
+        destination.write_text(json.dumps(data), encoding='utf-8')
+        return destination
+
+    module.APPLICATION = root
+    module.RECEIPTS = receipt_directory
+    module.write_receipt = safe_write
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    try:
+        with mock.patch.object(Path, "lstat", fake_lstat):
+            with mock.patch.object(os, "access", fake_access):
+                with mock.patch.object(Path, "is_file", fake_is_file):
+                    with mock.patch.object(Path, "is_symlink", fake_is_symlink):
+                        with mock.patch.object(Path, "stat", fake_stat):
+                            with mock.patch.object(subprocess, "run", fake_run):
+                                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                                    result = module.main(arguments)
+    finally:
+        module.APPLICATION = old_application
+        module.RECEIPTS = old_receipts
+        module.write_receipt = old_writer
+    return result, stdout.getvalue(), stderr.getvalue(), calls
+
+
+def test_cli_runtime_transition(root, temporary, baseline, target, version):
+    legacy_args = [
+        "--baseline", baseline, "--target", target,
+        "--workflow-run-id", "12345", "--mode", "forward",
+    ]
+    # Exact deployed legacy call shape selects only fixed PHP 8.4.
+    legacy_receipts = Path(temporary) / "legacy-receipts"
+    result, stdout, stderr, calls = run_receipt_cli(root, legacy_receipts, legacy_args, "8.4.27")
+    assert result == 0 and stdout.strip() and not stderr, (result, stdout, stderr, calls)
+    legacy_receipt = legacy_receipts / "receipt-fixture.json"
+    assert json.loads(legacy_receipt.read_text(encoding="utf-8"))["toolchain"]["php"] == "8.4.27"
+    assert any(call[0] == "/usr/bin/php8.4" and call[1].replace(chr(92), "/") == "/usr/bin/composer" for call in calls)
+    assert not any(call and call[0] == "/usr/bin/php" for call in calls)
+
+    # Modern callers use the explicit allowlisted interpreter for PHP and Composer.
+    for binary, php_version in (("/usr/bin/php8.4", "8.4.27"), ("/usr/bin/php8.5", "8.5.12")):
+        receipts = Path(temporary) / ("modern-" + binary.rsplit(".", 1)[1])
+        result, stdout, stderr, calls = run_receipt_cli(
+            root, receipts, legacy_args + ["--php-binary", binary], php_version,
+        )
+        assert result == 0 and stdout.strip() and not stderr
+        assert any(call[0] == binary and call[1].replace(chr(92), "/") == "/usr/bin/composer" for call in calls)
+        modern_receipt = json.loads((receipts / "receipt-fixture.json").read_text(encoding="utf-8"))
+        assert modern_receipt["toolchain"]["php"] == php_version
+
+    # Legacy rollback remains valid and explicitly records rollback mode.
+    git(root, "checkout", "--detach", baseline)
+    rollback_receipts = Path(temporary) / "legacy-rollback-receipts"
+    rollback_args = [
+        "--baseline", target, "--target", baseline,
+        "--workflow-run-id", "12346", "--mode", "rollback",
+    ]
+    result, stdout, stderr, calls = run_receipt_cli(root, rollback_receipts, rollback_args, "8.4.27")
+    assert result == 0 and stdout.strip() and not stderr
+    receipt_path = rollback_receipts / "receipt-fixture.json"
+    assert json.loads(receipt_path.read_text(encoding="utf-8"))["mode"] == "rollback"
+    git(root, "checkout", "--detach", target)
+
+    rejected = [
+        (["--php-binary", "/usr/bin/php"], "8.4.27", "valid", "receipt_validation_failed"),
+        (["--php-binary", "/usr/bin/php8.5"], "8.4.27", "valid", "php_runtime_invalid"),
+        (["--php-binary", "/usr/bin/php8.4"], "8.4.27", "missing", "php_runtime_unavailable"),
+        (["--php-binary", "/usr/bin/php8.4"], "8.4.27", "writable", "php_runtime_unavailable"),
+        (["--php-binary", "/usr/bin/php8.4"], "8.4.27", "wrong_owner", "php_runtime_unavailable"),
+        (["--php-binary", "/usr/bin/php8.4"], "8.4.27", "not_executable", "php_runtime_unavailable"),
+        (["--php-binary", "/usr/bin/php8.4"], "8.4.27", "symlink", "php_runtime_unavailable"),
+        ([], "8.5.12", "valid", "php_runtime_invalid"),
+    ]
+    for index, (extra, php_version, state, classification) in enumerate(rejected):
+        directory = Path(temporary) / ("rejected-" + str(index))
+        result, stdout, stderr, calls = run_receipt_cli(
+            root, directory, legacy_args + extra, php_version, binary_state=state,
+        )
+        assert result == 1 and not stdout
+        assert classification in stderr
+        assert not directory.exists(), "failed runtime evidence must not create a receipt"
+
+    duplicate = legacy_args + ["--php-binary", "/usr/bin/php8.4",
+                               "--php-binary", "/usr/bin/php8.5"]
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            module.main(duplicate)
+    except SystemExit as error:
+        assert error.code == 2
+    else:
+        raise AssertionError("receipt parser accepted repeated runtime options")
+
+
 def main():
     assert module.validate_php_binary_path("/usr/bin/php8.4") == "/usr/bin/php8.4"
     assert module.validate_php_binary_path("/usr/bin/php8.5") == "/usr/bin/php8.5"
+    modern_controller = (ROOT / "scripts/deploy-staging.sh").read_text(encoding="utf-8")
+    assert '--php-binary "$PHP_BIN"' in modern_controller
     for path in ("/usr/bin/php", "/usr/bin/php7.4", "/tmp/php8.5", "8.5"):
         try:
             module.validate_php_binary_path(path)
@@ -129,6 +296,7 @@ def main():
         git(root, "add", "release-target-marker.txt")
         git(root, "commit", "--quiet", "-m", "fixture application release")
         target = git(root, "rev-parse", "HEAD")
+        test_cli_runtime_transition(root, temporary, origin, target, version)
         data = receipt(root, origin, target)
         serialized = json.dumps(data)
         assert "RECEIPT_SECRET_SENTINEL" not in serialized and "do-not-copy" not in serialized

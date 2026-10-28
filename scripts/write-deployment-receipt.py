@@ -17,6 +17,8 @@ from pathlib import Path
 
 APPLICATION = Path("/var/www/wpcaregrid")
 APPROVED_PHP_BINARIES = {"/usr/bin/php8.4", "/usr/bin/php8.5"}
+PHP_BINARY_MINORS = {"/usr/bin/php8.4": "8.4", "/usr/bin/php8.5": "8.5"}
+LEGACY_PHP_BINARY = "/usr/bin/php8.4"
 RECEIPTS = Path("/home/deploy/private-backups/deployment-receipts")
 LOCKFILES = ("composer.lock", "wordpress/composer.lock", "package-lock.json")
 
@@ -33,6 +35,21 @@ def validate_php_binary_path(value):
     if value not in APPROVED_PHP_BINARIES:
         raise ValueError("unsupported PHP runtime binary")
     return value
+
+
+def resolve_php_binary(value):
+    # The deployed legacy controller omits --php-binary; keep it on PHP 8.4.
+    selected = LEGACY_PHP_BINARY if value is None else value
+    return validate_php_binary_path(selected)
+
+
+def validate_php_runtime_version(binary_path, version):
+    expected_minor = PHP_BINARY_MINORS[binary_path]
+    if (not isinstance(version, str)
+            or not re.fullmatch(r"8\.(?:4|5)\.\d+", version)
+            or not version.startswith(expected_minor + ".")):
+        raise ReceiptFailure("php_runtime_invalid")
+    return version
 
 
 def connector_revision_matches_release_history(application, source_revision, target_sha, mode):
@@ -268,14 +285,22 @@ def write_receipt(data, directory=RECEIPTS, expected_owner=None, expected_mode=0
     return destination
 
 
-def main():
-    parser = argparse.ArgumentParser()
+def main(argv=None):
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--workflow-run-id", required=True)
     parser.add_argument("--mode", choices=("forward", "rollback"), required=True)
-    parser.add_argument("--php-binary", choices=("/usr/bin/php8.4", "/usr/bin/php8.5"), required=True)
-    args = parser.parse_args()
+    parser.add_argument("--php-binary")
+    raw_args = __import__("sys").argv[1:] if argv is None else list(argv)
+    seen_options = set()
+    for token in raw_args:
+        option = token.partition("=")[0]
+        if option in {"--baseline", "--target", "--workflow-run-id", "--mode", "--php-binary"}:
+            if option in seen_options:
+                parser.error("receipt options may not be repeated")
+            seen_options.add(option)
+    args = parser.parse_args(raw_args)
     try:
         git_head = (APPLICATION / ".git").exists()
         if git_head:
@@ -291,18 +316,28 @@ def main():
         import subprocess
 
         safe_env = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
-        php_binary = Path(validate_php_binary_path(args.php_binary))
-        php_info = php_binary.lstat()
-        if not stat.S_ISREG(php_info.st_mode) or php_info.st_uid != 0 or php_info.st_mode & 0o022 or not os.access(php_binary, os.X_OK):
-            raise ValueError("selected PHP binary is unavailable")
-        php = subprocess.run([str(php_binary), "-r", "echo PHP_VERSION;"], check=True, capture_output=True, text=True, timeout=5, env=safe_env).stdout.strip()
+        php_binary_value = resolve_php_binary(args.php_binary)
+        php_binary = Path(php_binary_value)
+        try:
+            php_info = php_binary.lstat()
+            php_executable = os.access(php_binary, os.X_OK)
+        except OSError as error:
+            raise ReceiptFailure("php_runtime_unavailable") from error
+        if (not stat.S_ISREG(php_info.st_mode) or php_info.st_uid != 0
+                or php_info.st_mode & 0o022 or not php_executable):
+            raise ReceiptFailure("php_runtime_unavailable")
+        php_output = subprocess.run(
+            [php_binary_value, "-r", "echo PHP_VERSION;"],
+            check=True, capture_output=True, text=True, timeout=5, env=safe_env,
+        ).stdout.strip()
+        php = validate_php_runtime_version(php_binary_value, php_output)
         node = subprocess.run(["/usr/bin/node", "--version"], check=True, capture_output=True, text=True, timeout=5, env=safe_env).stdout.strip()
         import shutil
 
         composer_path = Path("/usr/bin/composer")
         if not composer_path.is_file() or composer_path.is_symlink() or composer_path.stat().st_uid != 0 or composer_path.stat().st_mode & 0o022:
             raise ValueError("Composer is unavailable")
-        composer = subprocess.run([str(php_binary), str(composer_path), "--version", "--no-ansi"], check=True, capture_output=True, text=True, timeout=5, env=safe_env).stdout.splitlines()[0].strip()
+        composer = subprocess.run([php_binary_value, str(composer_path), "--version", "--no-ansi"], check=True, capture_output=True, text=True, timeout=5, env=safe_env).stdout.splitlines()[0].strip()
         data = receipt_data(
             APPLICATION,
             baseline_sha=args.baseline,
@@ -316,7 +351,7 @@ def main():
             migrations="passed",
             health="passed",
         )
-        receipt = write_receipt(data)
+        receipt = write_receipt(data, RECEIPTS)
     except ReceiptFailure as error:
         print(f"Deployment receipt could not be safely written ({error.code}).", file=__import__("sys").stderr)
         return 1

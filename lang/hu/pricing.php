@@ -40,6 +40,7 @@ return [
     'billed_annually' => 'Éves számlázás.',
     'save' => 'Megtakarítás: :amount',
     'choose' => ':plan választása',
+    'contact_for_plan' => 'Érdeklődj a csomagról',
     'everything_in' => 'A :plan csomag minden funkciója',
 
     'badges' => [

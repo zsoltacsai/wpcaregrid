@@ -37,6 +37,7 @@ return [
     'billed_annually' => 'Billed annually.',
     'save' => 'Save :amount',
     'choose' => 'Choose :plan',
+    'contact_for_plan' => 'Contact us about this plan',
     'everything_in' => 'Everything in :plan',
 
     'badges' => [

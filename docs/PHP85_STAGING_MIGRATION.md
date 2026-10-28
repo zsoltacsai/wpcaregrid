@@ -8,6 +8,14 @@ The migration uses only the fixed profiles `/usr/bin/php8.4` and `/usr/bin/php8.
 
 The existing exact-SHA CI verifier, branch-tip check, deployment lock, protected DB backup, maintenance gate, scheduler lock/pause, queue drain, application health checks, and fail-closed recovery remain required. The profile switch is attempted only after the gate and scheduler pause are active and both queue workers are stopped. The helper rejects arbitrary profile names, paths, commands, Nginx changes, and Supervisor commands.
 
+## Current release-gate compatibility — blocking for staging
+
+Protected primary `cab17e383d8f121a0b7bc4b05f47e270842ee289` has a successful exact-SHA CI run with 37/37 checks and all seven required contexts passing. This is repository validation only. It does not establish staging-host readiness, effective server configuration, successful deployment, or production readiness.
+
+PR #209 registers `MarketingOnlyReleaseGate` globally and removes the staging exemption. With the documented staging identity (`APP_ENV=production`, `CAREGRID_DEPLOYMENT_ENV=staging`), the exact three-value testing exemption cannot apply. Under the current gate, requests outside its explicit public marketing/legal/health allowlist return an empty 404 before route dispatch; authentication, Owner, Operator, account, and `/api/v1/connector/*` endpoints are among the denied routes. `invitation_beta` also does not grant backend access. The live staging configuration cache was not inspected for this documentation update, so this is the source-defined result for the documented configuration and must be verified against approved, sanitized host evidence before any operation.
+
+The protected deployment smoke requires `/owner/integrations` to return an authentication redirect. The globally registered gate returns 404 first under the documented staging identity, so the post-deployment smoke fails and the controller enters its failure/recovery path. Do not deploy a transition release to staging until a separately reviewed, fail-closed staging access contract preserves required staging endpoints and makes the smoke expectations accurate. Do not restore `staging_exempt`, use PHPUnit testing identity values to enable staging, or weaken the production marketing gate. This compatibility blocker is independent of the PHP runtime gates below.
+
 ## Required host preparation (ordered gates; each write needs separate Owner approval)
 
 This section is a preparation plan, not authorization to act. Complete Gate 1 and verify it before requesting a separate Gate 2 package-install GO. PHP 8.5 installation, staging cutover, production release and infrastructure changes remain NO-GO absent their own approvals.
@@ -94,6 +102,16 @@ This is a CI/source snapshot, not host evidence. Recheck the primary branch, rul
 | WordPress Connector | PHP 8.2–8.5 across WordPress 6.8/7.1 with MySQL 5.7, MySQL 8.0, MySQL 8.4 and MariaDB 10.11; the protected PHP 8.4 / WordPress 7.1 SQLite, MySQL 8.4 and MariaDB 10.11 contexts | Connector compatibility is separate from Laravel server runtime coverage |
 
 The seven protected contexts at review time are Quality; Server PHP 8.4/MySQL; Server PHP 8.5/MySQL; Server SQLite/PHP 8.4; and Connector PHP 8.4/WordPress 7.1 SQLite, MySQL and MariaDB. Both server MySQL jobs include their own process-concurrency gate. Do not remove the PHP 8.4 rollback lane, change the workflow, or infer host readiness from these tests.
+
+The merged changes represented by PRs #209, #210, #214, #215 and #216 must be interpreted within their scope:
+
+- PR #209's marketing gate is global; its synthetic test identity is not a staging configuration. The staging endpoint and smoke incompatibility above remains a release blocker.
+- PR #210's Chromium marketing tests use an isolated loopback server, synthetic SQLite and testing-only configuration. They validate rendered marketing UX and contact-only pricing presentation, not staging authentication, Connector APIs, deployment smoke or backend readiness.
+- PR #214 makes the legacy receipt writer default an omitted PHP binary to validated `/usr/bin/php8.4`, while current callers can pass their selected binary explicitly. This fixes receipt compatibility only; it does not install the root helper, create the runtime dispatcher, seed the Nginx selector, or make a controller with unmet preflight prerequisites a bootstrap path.
+- PR #215 updates the locked `symfony/mime` dependency from 8.1.7 to 8.1.10. Deploy and rollback checks must use the exact approved release's `composer.lock` and run platform checks under the selected pinned PHP binary; the dependency fix does not prove host compatibility.
+- PR #216 makes the Connector inventory test assert the WordPress core version supplied by the test runtime instead of a hard-coded patch release. The resulting WordPress 6.8/7.1 matrix is repository test coverage, not live Connector or staging evidence.
+
+The exact primary CI run includes both PHP 8.4/8.5 MySQL process-concurrency gates, the PHP 8.4 SQLite regression, and the complete Connector matrix. These results support source review only. They do not clear the marketing-gate blocker or authorize deployment, package installation, cutover, or production release.
 
 At this snapshot, the application declares PHP `^8.3`, Laravel `^13.17`, and Composer's lock platform is PHP `^8.3`; the resolved Laravel lock version is 13.33.0. These constraints admit PHP 8.5 but are not a substitute for runtime validation. Laravel 13's documented minimum is PHP 8.3 and its documented extension set includes Ctype, cURL, DOM, Fileinfo, Filter, Hash, Mbstring, OpenSSL, PCRE, PDO, Session, Tokenizer and XML. The deployment contract additionally requires `intl`, `zip`, `pdo_mysql`, and `pcntl` for CLI queue workers. Validate the real PHP 8.5 CLI and FPM runtimes with the protected `composer check-platform-reqs --no-dev --lock` gate plus the application-specific extension checks; do not use `--ignore-platform-reqs`. The Composer command checks locked package requirements, so it does not replace checks for application-specific extensions.
 
