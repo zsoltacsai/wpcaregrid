@@ -103,14 +103,25 @@ foreach (['/' => '/en/', '/pricing' => '/en/pricing'] as $path => $destination) 
     $expect($status === 301 && ($headers['location'] ?? '') === $expectedLocation, "{$path} permanently redirects to {$expectedLocation} (got {$status} ".($headers['location'] ?? '-').')');
 }
 
-// Both modes expose only the generic, bodyless health response to GET/HEAD.
+// Health output is profile-specific, while methods stay read-only and generic.
 foreach (['GET', 'HEAD'] as $method) {
     [$status, $headers, $body] = $request($method, '/up');
     $expect($status === 200, "{$method} /up returns 200 (got {$status})");
-    $expect($body === '', "{$method} /up has no operational details");
-    $cacheControl = strtolower($headers['cache-control'] ?? '');
-    $expect(in_array('no-store', array_map('trim', explode(',', $cacheControl)), true), "{$method} /up is not cacheable");
     $expect(! (isset($headers['set-cookie'])), "{$method} /up does not set a cookie");
+
+    if ($expectation === 'marketing_only') {
+        $expect($body === '', "{$method} /up has no operational details");
+        $cacheControl = strtolower($headers['cache-control'] ?? '');
+        $expect(in_array('no-store', array_map('trim', explode(',', $cacheControl)), true), "{$method} /up is not cacheable");
+    } else {
+        $unsafeHealthDetails = preg_match('/(?:stack trace|whoops|exception|sqlstate|app_key|db_password|db_host|\/(?:var|home)\/|[a-z]:\\\\)/i', $body);
+        $expect($unsafeHealthDetails === 0, "{$method} /up exposes no exception or operational details");
+
+        if ($method === 'GET') {
+            $contentType = strtolower($headers['content-type'] ?? '');
+            $expect($body !== '' && str_contains($contentType, 'text/html'), 'GET /up accepts Laravel’s generic HTML health response');
+        }
+    }
 }
 
 // Both localized homepages have one h1 and their pricing section.
