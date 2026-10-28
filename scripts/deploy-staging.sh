@@ -511,11 +511,32 @@ post_deploy_smoke() {
 }
 
 check_http_shared() {
-    local path actual
+    local path response actual status_line header cache_control='' body_size location_count=0
 
-    actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}/owner/integrations")" || return 1
-    [[ "$actual" =~ ^30[1278]$ ]] || { log "Guest Owner Integrations route returned ${actual}, expected an authentication redirect"; return 1; }
-    log "Guest Owner Integrations route: ${actual} (authentication redirect)"
+    # MarketingOnlyReleaseGate is registered before route dispatch. Under both
+    # currently supported release profiles, an unauthenticated backend request
+    # must therefore be rejected here rather than redirected by the Owner route.
+    # The deployment smoke treats that denial as a security invariant.
+    response="$(curl --silent --show-error --dump-header - --output /dev/null --write-out $'\n%{http_code}\t%{size_download}' --connect-timeout 5 --max-time 20 "${APP_URL}/owner/integrations")" || return 1
+    status_line="${response##*$'\n'}"
+    actual="${status_line%%$'\t'*}"
+    body_size="${status_line#*$'\t'}"
+
+    while IFS= read -r header; do
+        case "${header,,}" in
+            cache-control:*)
+                cache_control="${header#*:}"
+                cache_control="${cache_control#"${cache_control%%[![:space:]]*}"}"
+                ;;
+            location:*) location_count=$((location_count + 1)) ;;
+        esac
+    done <<<"${response%$'\n'*}"
+
+    [[ "$actual" == '404' ]] || { log "Guest Owner Integrations route returned ${actual}, expected 404 from the marketing release gate"; return 1; }
+    [[ "$body_size" == '0' ]] || { log "Guest Owner Integrations denial returned a non-empty body (${body_size} bytes)"; return 1; }
+    [[ "$location_count" == '0' ]] || { log 'Guest Owner Integrations denial unexpectedly returned a redirect Location.'; return 1; }
+    [[ ",${cache_control,,}," =~ ,[[:space:]]*no-store[[:space:]]*, ]] || { log 'Guest Owner Integrations denial is missing Cache-Control: no-store'; return 1; }
+    log 'Guest Owner Integrations route: 404, empty, no-store (blocked before route dispatch)'
 
     for path in /.env /.git/config; do
         actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}${path}")" || return 1
