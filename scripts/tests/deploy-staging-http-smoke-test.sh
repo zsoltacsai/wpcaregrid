@@ -60,6 +60,8 @@ url="${!#}"
 path="${url#https://staging.wpcaregrid.com}"
 status=404
 location=''
+cache_control=''
+download_size=0
 
 case "${SMOKE_PHASE}:${path}" in
     baseline:/) status=301; location='https://staging.wpcaregrid.com/en/' ;;
@@ -68,7 +70,7 @@ case "${SMOKE_PHASE}:${path}" in
     target:/pricing) status=301; location='https://staging.wpcaregrid.com/en/pricing' ;;
     target:/en/|target:/en/pricing|target:/hu/|target:/hu/pricing) status=200 ;;
     baseline:/up|target:/up) status=200 ;;
-    baseline:/owner/integrations|target:/owner/integrations) status=302 ;;
+    baseline:/owner/integrations|target:/owner/integrations) status=404; cache_control='no-store' ;;
     baseline:/.env|target:/.env) status=403 ;;
     baseline:/.git/config|target:/.git/config) status=404 ;;
     *) printf 'Unexpected URL requested by smoke check: %s\n' "$url" >&2; exit 99 ;;
@@ -94,7 +96,10 @@ case "${SMOKE_CASE}:${path}" in
     missing_en:/en/) status=404 ;;
     missing_hu_pricing:/hu/pricing) status=500 ;;
     up_error:/up) status=503 ;;
-    owner_exposed:/owner/integrations) status=200 ;;
+    owner_exposed:/owner/integrations) status=200; cache_control='' ;;
+    owner_redirect:/owner/integrations) status=302; location='https://staging.wpcaregrid.com/owner/login' ;;
+    owner_missing_no_store:/owner/integrations) cache_control='' ;;
+    owner_body:/owner/integrations) download_size=7 ;;
     env_exposed:/.env) status=200 ;;
     network_error:/) exit 7 ;;
 esac
@@ -102,7 +107,9 @@ esac
 if (( dump_headers )); then
     printf 'HTTP/1.1 %s Stub\r\n' "$status"
     [[ -z "$location" ]] || printf 'Location: %s\r\n' "$location"
-    printf 'Content-Length: 0\r\n\r\n%s' "$status"
+    [[ -z "$cache_control" ]] || printf 'Cache-Control: %s\r\n' "$cache_control"
+    printf 'Content-Length: 0\r\n\r\n'
+    printf '\n%s\t%s' "$status" "$download_size"
 else
     printf '%s' "$status"
 fi
@@ -192,7 +199,10 @@ run_rejected_case baseline baseline_wrong_host pre_deploy_smoke 'same-origin Loc
 run_rejected_case baseline baseline_redirect_to_up pre_deploy_smoke 'internal or private route'
 run_rejected_case baseline baseline_redirect_target_error pre_deploy_smoke 'redirect target returned 500'
 run_rejected_case baseline baseline_redirect_loop pre_deploy_smoke 'unsafe path'
-run_rejected_case baseline owner_exposed pre_deploy_smoke 'expected an authentication redirect'
+run_rejected_case baseline owner_exposed pre_deploy_smoke 'expected 404 from the marketing release gate'
+run_rejected_case baseline owner_redirect pre_deploy_smoke 'expected 404 from the marketing release gate'
+run_rejected_case baseline owner_missing_no_store pre_deploy_smoke 'missing Cache-Control: no-store'
+run_rejected_case baseline owner_body pre_deploy_smoke 'non-empty body'
 run_rejected_case baseline env_exposed pre_deploy_smoke 'Protected path /.env returned 200'
 run_rejected_case baseline network_error pre_deploy_smoke ''
 
@@ -209,7 +219,7 @@ run_rejected_case target wrong_pricing_location post_deploy_smoke 'Location was'
 run_rejected_case target missing_en post_deploy_smoke 'HTTP /en/ returned 404, expected 200'
 run_rejected_case target missing_hu_pricing post_deploy_smoke 'HTTP /hu/pricing returned 500, expected 200'
 run_rejected_case target up_error post_deploy_smoke 'HTTP /up returned 503, expected 200'
-run_rejected_case target owner_exposed post_deploy_smoke 'expected an authentication redirect'
+run_rejected_case target owner_exposed post_deploy_smoke 'expected 404 from the marketing release gate'
 run_rejected_case target env_exposed post_deploy_smoke 'Protected path /.env returned 200'
 run_rejected_case target network_error post_deploy_smoke ''
 
