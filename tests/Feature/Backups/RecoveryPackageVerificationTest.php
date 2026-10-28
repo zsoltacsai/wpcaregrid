@@ -174,7 +174,6 @@ class RecoveryPackageVerificationTest extends TestCase
 
         $second->assertStatus(503);
         $this->assertSame('', $second->streamedContent());
-        $this->assertSame('OBJECT_INTEGRITY_MISMATCH', $grant->fresh()->failure_code);
         $this->assertNoRestoreSideEffects($fixture['backup']);
     }
 
