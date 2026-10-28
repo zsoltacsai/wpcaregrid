@@ -94,8 +94,14 @@ final class MarketingOnlyReleaseGate
             return false;
         }
 
-        $host = strtolower($rawHost);
-        if (! $this->isDnsHostname($host)) {
+        if (preg_match('/^([^:]+)(?::([0-9]{1,5}))?$/D', strtolower($rawHost), $hostParts) !== 1) {
+            return false;
+        }
+
+        $host = $hostParts[1];
+        $requestPort = isset($hostParts[2]) ? (int) $hostParts[2] : null;
+        if (($requestPort !== null && ($requestPort < 1 || $requestPort > 65535))
+            || ! $this->isDnsHostname($host)) {
             return false;
         }
 
@@ -103,7 +109,7 @@ final class MarketingOnlyReleaseGate
         // allowlist. If a proxy provides this header, it must agree exactly.
         if ($request->headers->has('x-forwarded-host')) {
             $forwardedHost = $request->headers->get('x-forwarded-host');
-            if (! is_string($forwardedHost) || strtolower($forwardedHost) !== $host) {
+            if (! is_string($forwardedHost) || strtolower($forwardedHost) !== strtolower($rawHost)) {
                 return false;
             }
         }
@@ -121,8 +127,19 @@ final class MarketingOnlyReleaseGate
         if (! is_string($configuredHost) || ! $this->isDnsHostname(strtolower($configuredHost))) {
             return false;
         }
+        $configuredHost = strtolower($configuredHost);
+        $configuredPort = parse_url($appUrl, PHP_URL_PORT);
 
-        $canonicalHost = strtolower($configuredHost);
+        // The built-in CI/dev server uses localhost:PORT. Accept that loopback
+        // Host only when the configured application URL itself names localhost.
+        // Production FQDNs never inherit this exception.
+        if ($requestPort !== null
+            && $configuredPort !== $requestPort
+            && ! ($host === 'localhost' && $configuredHost === 'localhost')) {
+            return false;
+        }
+
+        $canonicalHost = $configuredHost;
         if (str_starts_with($canonicalHost, 'www.')) {
             $canonicalHost = substr($canonicalHost, 4);
         }
@@ -134,6 +151,10 @@ final class MarketingOnlyReleaseGate
     {
         if ($host === '' || str_ends_with($host, '.') || filter_var($host, FILTER_VALIDATE_IP)) {
             return false;
+        }
+
+        if ($host === 'localhost') {
+            return true;
         }
 
         return preg_match(
