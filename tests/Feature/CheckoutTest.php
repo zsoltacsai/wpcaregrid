@@ -1087,18 +1087,15 @@ class CheckoutTest extends TestCase
 
             $assertCheckoutUrl($action->getAttribute('href'), $product, $plan, 'monthly');
 
-            $expectedBinding = 'interval === \'annual\' ? '
-                .route('checkout.show', ['product' => $product, 'plan' => $plan, 'interval' => 'annual'])
-                .' : '
-                .route('checkout.show', ['product' => $product, 'plan' => $plan, 'interval' => 'monthly']);
+            $annualUrl = route('checkout.show', ['product' => $product, 'plan' => $plan, 'interval' => 'annual']);
+            $monthlyUrl = route('checkout.show', ['product' => $product, 'plan' => $plan, 'interval' => 'monthly']);
+            $expectedBinding = 'interval === \'annual\' ? \''.$annualUrl.'\' : \''.$monthlyUrl.'\'';
             $this->assertSame($expectedBinding, $action->getAttribute('x-bind:href'));
 
-            // The expression's annual and monthly branches must independently
-            // resolve to the matching logical checkout URL.
-            preg_match('/^interval === \'annual\' \? (.+) : (.+)$/', $action->getAttribute('x-bind:href'), $branches);
-            $this->assertCount(3, $branches);
-            $assertCheckoutUrl($branches[1], $product, $plan, 'annual');
-            $assertCheckoutUrl($branches[2], $product, $plan, 'monthly');
+            // Both branches of the exact Alpine expression are validated
+            // against the selected logical plan and billing interval.
+            $assertCheckoutUrl($annualUrl, $product, $plan, 'annual');
+            $assertCheckoutUrl($monthlyUrl, $product, $plan, 'monthly');
         }
 
         sort($seenPlans);
