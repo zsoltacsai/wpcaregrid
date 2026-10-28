@@ -142,7 +142,7 @@ class MarketingConversionLinksTest extends TestCase
     {
         $document = new \DOMDocument;
         $previous = libxml_use_internal_errors(true);
-        $document->loadHTML($html);
+        $document->loadHTML('<?xml encoding="UTF-8">'.$html);
         libxml_clear_errors();
         libxml_use_internal_errors($previous);
 
@@ -155,7 +155,7 @@ class MarketingConversionLinksTest extends TestCase
     {
         $document = new \DOMDocument;
         $previous = libxml_use_internal_errors(true);
-        $document->loadHTML($html);
+        $document->loadHTML('<?xml encoding="UTF-8">'.$html);
         libxml_clear_errors();
         libxml_use_internal_errors($previous);
 
