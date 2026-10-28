@@ -10,6 +10,7 @@ use Tests\TestCase;
 
 class MarketingOnlyReleaseGateTest extends TestCase
 {
+
     protected function setUp(): void
     {
         parent::setUp();
