@@ -18,9 +18,10 @@
         </include>
     </source>
     <php>
-        <env name="APP_ENV" value="testing"/>
+        <env name="APP_ENV" value="testing" force="true"/>
         <env name="APP_KEY" value="base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" force="true"/>
         <env name="CAREGRID_DEPLOYMENT_ENV" value="testing" force="true"/>
+        <env name="MARKETING_RELEASE_ENFORCEMENT_MODE" value="testing" force="true"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>
@@ -93,6 +94,9 @@
         <env name="STRIPE_PRICE_WOOCOMMERCE_BUSINESS_ANNUAL_GBP" value="" force="true"/>
         <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_MONTHLY_GBP" value="" force="true"/>
         <env name="STRIPE_PRICE_WOOCOMMERCE_SECURE_ANNUAL_GBP" value="" force="true"/>
+        <server name="APP_ENV" value="testing" force="true"/>
+        <server name="CAREGRID_DEPLOYMENT_ENV" value="testing" force="true"/>
+        <server name="MARKETING_RELEASE_ENFORCEMENT_MODE" value="testing" force="true"/>
         <server name="APP_URL" value="http://localhost" force="true"/>
         <server name="APP_LOCALE" value="en" force="true"/>
         <server name="TRUSTED_PROXIES" value="" force="true"/>
