@@ -404,6 +404,8 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'marketing_release.test_app_environment' => 'production',
             'marketing_release.test_deployment_environment' => 'production',
             'app.url' => 'https://wpcaregrid.com',
+            'seo.indexing_enabled' => true,
+            'seo.production_host' => 'wpcaregrid.com',
         ]);
 
         $this->call('GET', '/en/pricing', [], [], [], [
