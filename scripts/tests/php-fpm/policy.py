@@ -76,9 +76,11 @@ def has_background_consumer(proc_root=Path("/proc")):
         if not proc.name.isdigit():
             continue
         try:
-            args = (proc / "cmdline").read_bytes().replace(b"\\0", b" ").decode("utf-8", "replace")
-        except (OSError, PermissionError):
+            args = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+        except FileNotFoundError:
             continue
+        except OSError as error:
+            raise RuntimeError("Cannot establish the isolated consumer process state.") from error
         if any(marker in args for marker in BACKGROUND_CONSUMER_MARKERS):
             return True
     return False
