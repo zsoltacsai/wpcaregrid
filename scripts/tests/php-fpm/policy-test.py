@@ -23,6 +23,9 @@ entrypoint = (HARNESS / "entrypoint.py").read_text()
 
 require("php:8.5.12-fpm@sha256:8b4b4a764f7985137b13e4cb49dd59e967d9daa7946a731f9d06e31e748e39bb" in dockerfile,
         "FPM base must pin the reviewed PHP patch and immutable image digest.")
+require("extension_loaded($argv[1])" in dockerfile
+        and "docker-php-ext-install" in dockerfile,
+        "The image build must avoid reinstalling extensions already present in the pinned PHP base.")
 require("USER www-data:www-data" in dockerfile and "posix_geteuid() === 33" in (HARNESS / "probe.php").read_text(),
         "FPM must run as a dedicated unprivileged UID.")
 for flag in ("--network none", "--pid private", "--cap-drop ALL", "--security-opt no-new-privileges:true",
