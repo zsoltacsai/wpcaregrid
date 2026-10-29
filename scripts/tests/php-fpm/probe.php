@@ -58,7 +58,8 @@ $check('no_docker_socket', ! file_exists('/var/run/docker.sock') && ! file_exist
 
 require '/app/vendor/autoload.php';
 $app = require '/app/bootstrap/app.php';
-$app->make(Kernel::class)->bootstrap();
+$request = Illuminate\Http\Request::capture();
+$response = $app->make(Kernel::class)->handle($request);
 $check('application_debug_disabled', config('app.debug') === false);
 $check('database_queue_not_inline_sync', config('queue.default') === 'database');
 $check('mail_sink_is_array', config('mail.default') === 'array');
