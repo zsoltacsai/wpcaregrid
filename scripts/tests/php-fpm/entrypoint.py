@@ -98,10 +98,20 @@ try:
     if not ready:
         fail("The loopback HTTP request did not complete through FastCGI/FPM.")
 
-    with urllib.request.urlopen("http://127.0.0.1:8080/__ci_fpm_probe", timeout=10) as response:
-        probe = json.loads(response.read().decode("utf-8"))
-        if response.status != 200:
-            fail("The FPM compatibility or isolation probe returned failure.")
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8080/__ci_fpm_probe", timeout=10) as response:
+            probe = json.loads(response.read().decode("utf-8"))
+            if response.status != 200:
+                fail("The FPM compatibility or isolation probe returned failure.")
+    except urllib.error.HTTPError as error:
+        try:
+            payload = json.loads(error.read(16384).decode("utf-8"))
+            failures = payload.get("failures")
+            if not isinstance(failures, list) or any(not isinstance(item, str) for item in failures):
+                raise ValueError
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            fail(f"FPM probe returned HTTP {error.code} with a nonconforming response.")
+        fail(f"FPM probe returned HTTP {error.code}; failed checks: {', '.join(failures)[:500]}")
     if probe.get("failures"):
         fail("FPM probe failed checks: " + ", ".join(probe["failures"]))
 
