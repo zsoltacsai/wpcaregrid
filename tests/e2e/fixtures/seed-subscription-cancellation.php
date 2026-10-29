@@ -247,9 +247,9 @@ try {
     $subscriptions['confirmed_cancellation'] = $createSubscription($english, true);
     $createOperation($english, $subscriptions['confirmed_cancellation'], 'cancel_at_period_end', 'confirmed', true, true);
 
-    $subscriptions['pending_reactivation'] = $createSubscription($english, true);
-    $createOperation($english, $subscriptions['pending_reactivation'], 'cancel_at_period_end', 'confirmed', true, true);
-    $createOperation($english, $subscriptions['pending_reactivation'], 'reactivate', 'awaiting_confirmation', false);
+    $subscriptions['pending_reactivation'] = $createSubscription($hungarian, true);
+    $createOperation($hungarian, $subscriptions['pending_reactivation'], 'cancel_at_period_end', 'confirmed', true, true);
+    $createOperation($hungarian, $subscriptions['pending_reactivation'], 'reactivate', 'awaiting_confirmation', false);
 
     $subscriptions['confirmed_reactivation'] = $createSubscription($hungarian, false);
     $createOperation($hungarian, $subscriptions['confirmed_reactivation'], 'cancel_at_period_end', 'confirmed', true, true);
