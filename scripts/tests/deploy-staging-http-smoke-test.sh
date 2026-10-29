@@ -292,6 +292,9 @@ run_rejected_case target missing_hu_pricing post_deploy_smoke 'HTTP /hu/pricing 
 run_rejected_case target up_error post_deploy_smoke 'HTTP /up returned 503, expected 200'
 run_rejected_case target owner_exposed post_deploy_smoke 'expected 404 from the marketing release gate'
 run_rejected_case target owner_early_hints_no_store post_deploy_smoke 'Final 404 response is missing Cache-Control: no-store'
+if SMOKE_TARGET_PROFILE=legacy_application assert_marketing_gated_target >"$temp_dir/target-preflight-without-gate.log" 2>&1; then printf 'Target preflight accepted a target without the global gate.\n' >&2; exit 1; fi
+grep -Fq 'Target commit lacks the registered marketing gate' "$temp_dir/target-preflight-without-gate.log" || { cat "$temp_dir/target-preflight-without-gate.log" >&2; exit 1; }
+scenarios=$((scenarios + 1))
 if SMOKE_TARGET_PROFILE=legacy_application SMOKE_PHASE=target SMOKE_CASE=valid post_deploy_smoke >"$temp_dir/target-without-gate.log" 2>&1; then printf 'Target without global gate was accepted.\n' >&2; exit 1; fi
 grep -Fq 'Target commit lacks the registered marketing gate' "$temp_dir/target-without-gate.log" || { cat "$temp_dir/target-without-gate.log" >&2; exit 1; }
 scenarios=$((scenarios + 1))

@@ -539,6 +539,19 @@ release_gate_state_for_commit() {
     fi
 }
 
+assert_marketing_gated_target() {
+    local target_gate_state
+
+    target_gate_state="$(release_gate_state_for_commit "$TARGET_SHA")" || {
+        log 'Target gate provenance is ambiguous; refusing deployment.'
+        return 1
+    }
+    [[ "$target_gate_state" == 'marketing_gated' ]] || {
+        log 'Target commit lacks the registered marketing gate; refusing deployment.'
+        return 1
+    }
+}
+
 check_http_shared() {
     local smoke_stage="$1" commit_sha="${2:-}" path response actual status_line header headers
     local cache_control='' body_size location_count=0 gate_state='' final_status='' location='' malformed_status=0
@@ -902,6 +915,7 @@ main() {
     git fetch --no-tags origin "$DEPLOY_BRANCH"
     fetched_tip="$(git rev-parse FETCH_HEAD^{commit})"
     pin_target_sha "$requested_ref" "$fetched_tip" "$DEPLOYMENT_MODE" || fail 'Forward deployment requires the exact current branch tip; rollback requires a root-approved prior SHA.'
+    assert_marketing_gated_target || fail 'The pinned target must prove the registered marketing gate before deployment.'
     log "Target commit: ${TARGET_SHA}"
     ci_evidence="$(/usr/bin/env -i PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/python3 "${CONTROLLER_DIR}/verify-release-ci.py" "$TARGET_SHA")" || fail 'The exact target SHA lacks completed successful mandatory primary-push CI.'
     CI_RUN_ID="$(/usr/bin/env -i PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["workflow_run_id"])' <<<"$ci_evidence")"
