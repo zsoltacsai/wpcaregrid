@@ -38,7 +38,8 @@ FORBIDDEN_NAMES = {
     "http_proxy", "https_proxy", "all_proxy",
 }
 BACKGROUND_CONSUMER_MARKERS = (
-    "artisan queue:work", "artisan schedule:run", "supervisord",
+    "artisan queue:work", "artisan queue:listen", "artisan horizon",
+    "artisan schedule:run", "artisan schedule:work", "supervisord",
     "wp-caregrid-connector", "JobRunner",
 )
 
