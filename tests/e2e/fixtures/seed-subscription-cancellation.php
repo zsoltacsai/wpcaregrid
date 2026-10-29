@@ -117,15 +117,27 @@ if ($mode === 'verify-read-only') {
         || ! is_string($fixture['operation_state_sha256'] ?? null)
         || ! is_string($fixture['subscription_state_sha256'] ?? null)
         || ! is_string($fixture['legal_acceptance_state_sha256'] ?? null)
-        || ! is_string($fixture['legal_document_state_sha256'] ?? null)
-        || SubscriptionOperation::query()->count() !== $fixture['seeded_operation_count']
-        || Subscription::query()->count() !== $fixture['seeded_subscription_count']
-        || LegalDocumentAcceptance::query()->count() !== $fixture['seeded_legal_acceptance_count']
-        || LegalDocumentVersion::query()->count() !== $fixture['seeded_legal_document_count']
-        || ! hash_equals($fixture['operation_state_sha256'], $stateFingerprint(SubscriptionOperation::class))
-        || ! hash_equals($fixture['subscription_state_sha256'], $stateFingerprint(Subscription::class))
-        || ! hash_equals($fixture['legal_acceptance_state_sha256'], $stateFingerprint(LegalDocumentAcceptance::class))
-        || ! hash_equals($fixture['legal_document_state_sha256'], $stateFingerprint(LegalDocumentVersion::class))) {
+        || ! is_string($fixture['legal_document_state_sha256'] ?? null)) {
+        fwrite(STDERR, "CANCELLATION_FIXTURE=INVALID\n");
+        exit(2);
+    }
+
+    $checks = [
+        'OPERATIONS' => SubscriptionOperation::query()->count() === $fixture['seeded_operation_count']
+            && hash_equals($fixture['operation_state_sha256'], $stateFingerprint(SubscriptionOperation::class)),
+        'SUBSCRIPTIONS' => Subscription::query()->count() === $fixture['seeded_subscription_count']
+            && hash_equals($fixture['subscription_state_sha256'], $stateFingerprint(Subscription::class)),
+        'LEGAL_ACCEPTANCES' => LegalDocumentAcceptance::query()->count() === $fixture['seeded_legal_acceptance_count']
+            && hash_equals($fixture['legal_acceptance_state_sha256'], $stateFingerprint(LegalDocumentAcceptance::class)),
+        'LEGAL_DOCUMENTS' => LegalDocumentVersion::query()->count() === $fixture['seeded_legal_document_count']
+            && hash_equals($fixture['legal_document_state_sha256'], $stateFingerprint(LegalDocumentVersion::class)),
+    ];
+    foreach ($checks as $name => $passed) {
+        if (! $passed) {
+            fwrite(STDERR, "CANCELLATION_GET_SIDE_EFFECTS_{$name}=FAIL\n");
+        }
+    }
+    if (in_array(false, $checks, true)) {
         fwrite(STDERR, "CANCELLATION_GET_SIDE_EFFECTS=FAIL\n");
         exit(1);
     }
