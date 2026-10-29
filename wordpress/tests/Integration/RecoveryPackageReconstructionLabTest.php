@@ -22,7 +22,7 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
     /** @var list<string> */
     private array $ownedPaths = [];
 
-    /** @var list<array{host: string, database: string, username: string}> */
+    /** @var list<array{database: string, username: string}> */
     private array $ownedDatabases = [];
 
     /** @var array<string, mixed> */
@@ -209,7 +209,10 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
             }
         }
 
-        $unsafeSql = $package;
+        // Use an independent valid package so earlier malformed cases cannot
+        // contaminate this SQL validation case.
+        $unsafeSql = $this->generatePackage('full');
+        $this->assertSame('PASS', $this->preparePackage($unsafeSql)['package_integrity']);
         $sql = (string) gzdecode($unsafeSql['objects']['database']);
         $unsafeSql['objects']['database'] = gzencode($sql."DROP DATABASE `wordpress`;\n");
         $unsafeSql['manifest']['database']['size'] = strlen($unsafeSql['objects']['database']);
@@ -653,7 +656,10 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
         $username = 'cglab'.bin2hex(random_bytes(7));
         $password = bin2hex(random_bytes(24));
         $quotedDatabase = '`'.$database.'`';
-        $quotedUser = "'{$username}'@'{$host}'";
+        // Service-container NAT can give PHP and MySQL different views of the
+        // runner address. This random account is short-lived and receives
+        // privileges only on its unique disposable database.
+        $quotedUser = "'{$username}'@'%'";
         try {
             if (! $admin->query("CREATE DATABASE {$quotedDatabase} CHARACTER SET utf8mb4")) {
                 throw new \RuntimeException('Cannot create disposable lab database.');
@@ -671,7 +677,7 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
             $this->markTestSkipped('MySQL test identity lacks disposable database/user provisioning grants.');
         }
         $admin->close();
-        $this->ownedDatabases[] = ['host' => $host, 'database' => $database, 'username' => $username];
+        $this->ownedDatabases[] = ['database' => $database, 'username' => $username];
 
         $root = $this->temporaryDirectory('manual-recovery-target');
         $this->copyTree(ABSPATH, $root, true);
@@ -710,7 +716,7 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
     {
         $login = 'lab-'.bin2hex(random_bytes(6));
         $email = $login.'@invalid.test';
-        $script = "<?php\nfunction wp_mail(...\$args): bool { return true; }\n\$_SERVER['HTTP_HOST']='recovery-lab.invalid';\n\$_SERVER['SERVER_NAME']='recovery-lab.invalid';\n\$_SERVER['REQUEST_URI']='/';\ndefine('WP_INSTALLING', true);\nrequire ".var_export($target['root'].'/wp-load.php', true).";\nrequire_once ABSPATH.'wp-includes/l10n.php';\nrequire_once ABSPATH.'wp-admin/includes/upgrade.php';\n\$password=bin2hex(random_bytes(24));\n\$r=wp_install('Synthetic Recovery Lab',".var_export($login, true).','.var_export($email, true).",false,'',\$password);\nif(is_wp_error(\$r)||empty(\$r['user_id'])){fwrite(STDERR,'install failed');exit(2);}\nupdate_option('home','https://recovery-lab.invalid');\nupdate_option('siteurl','https://recovery-lab.invalid');\necho json_encode(['installed'=>true,'admin_password_generated'=>strlen(\$password)===48]);\n";
+        $script = "<?php\nfunction wp_mail(...\$args): bool { return true; }\n\$_SERVER['HTTP_HOST']='recovery-lab.invalid';\n\$_SERVER['SERVER_NAME']='recovery-lab.invalid';\n\$_SERVER['REQUEST_URI']='/';\ndefine('ABSPATH', ".var_export($target['root'].'/', true).");\nrequire ABSPATH.'wp-config.php';\nrequire ABSPATH.'wp-settings.php';\ndefine('WP_INSTALLING', true);\nrequire_once ABSPATH.'wp-admin/includes/upgrade.php';\n\$password=bin2hex(random_bytes(24));\n\$r=wp_install('Synthetic Recovery Lab',".var_export($login, true).','.var_export($email, true).",false,'',\$password);\nif(is_wp_error(\$r)||empty(\$r['user_id'])){fwrite(STDERR,'install failed');exit(2);}\nupdate_option('home','https://recovery-lab.invalid');\nupdate_option('siteurl','https://recovery-lab.invalid');\necho json_encode(['installed'=>true,'admin_password_generated'=>strlen(\$password)===48]);\n";
         $this->assertSame(['installed' => true, 'admin_password_generated' => true], $this->runTargetScript($target, $script));
     }
 
@@ -917,7 +923,7 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
     {
         $admin = new \mysqli(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME);
         $database = '`'.$owned['database'].'`';
-        $user = "'{$owned['username']}'@'{$owned['host']}'";
+        $user = "'{$owned['username']}'@'%'";
         $admin->query("DROP DATABASE IF EXISTS {$database}");
         $admin->query("DROP USER IF EXISTS {$user}");
         $admin->close();
@@ -957,3 +963,4 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
         }
     }
 }
+
