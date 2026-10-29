@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
+use App\Content\HtmlSanitizer;
 use App\Models\Customer;
 use App\Models\LegalDocumentAcceptance;
 use App\Models\LegalDocumentVersion;
 use App\Models\Subscription;
 use App\Models\SubscriptionOperation;
 use App\Models\User;
-use App\Content\HtmlSanitizer;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Str;
 
