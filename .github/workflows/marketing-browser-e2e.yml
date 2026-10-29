@@ -127,8 +127,8 @@ jobs:
             drift_status=$?
           fi
           test "$drift_status" -ne 0
-          if ! jq -e '(.valid == false) and any(.findings[]?; .category == "not-pinned" and (.retryable != true))' "$report" > /dev/null; then
-            echo "ERROR: lock verifier did not report valid=false with a non-retryable not-pinned finding"
+          if ! jq -e '(.valid == false) and any(.findings[]?; .severity == "error" and ((.category == "not-pinned") or (.category == "ref-changed")) and .dependency == "actions/checkout@main" and (.retryable != true))' "$report" > /dev/null; then
+            echo "ERROR: lock verifier did not reject the injected checkout@main ref as a non-retryable error"
             jq -r '[.valid, ((.findings // []) | map({category, retryable}))] | @json' "$report"
             exit 1
           fi
