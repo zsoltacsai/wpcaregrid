@@ -157,6 +157,13 @@ return [
         'cancel_requested' => 'A lemondási kérelmet elküldtük a Stripe-nak. A szolgáltatás a kifizetett időszak végéig aktív marad.',
         'reactivation_requested' => 'Az újraaktiválási kérelmet elküldtük a Stripe-nak. A változás a szolgáltatói visszaigazolás után jelenik meg.',
         'operation_pending' => 'A szolgáltatói eredmény egyeztetésre vár. Újrapróbálás előtt ellenőrizze az előfizetés állapotát.',
+        'cancellation_status' => [
+            'pending' => 'Megkaptuk a lemondási kérelmet, és várjuk a Stripe visszaigazolását. Az előfizetés állapota a visszaigazolás után frissül; kérjük, ne küldje el újra a kérelmet.',
+            'confirmed' => 'A Stripe visszaigazolta, hogy az előfizetés a jelenlegi számlázási időszak végén megszűnik. Addig a szolgáltatás aktív marad.',
+            'reactivation_pending' => 'Megkaptuk az előfizetés megtartására vonatkozó kérelmet, és várjuk a Stripe visszaigazolását. Kérjük, ne küldje el újra a kérelmet.',
+            'reactivation_confirmed' => 'A Stripe visszaigazolta, hogy az előfizetés aktív marad. Ha meggondolja magát, ismét kérheti a lemondást.',
+            'reconciliation_required' => 'Nem tudtuk ellenőrizni, hogy a Stripe elfogadta-e a legutóbbi előfizetés-módosítást, ezért az állapot egyeztetést igényel. Kérjük, ne küldjön újabb módosítási kérelmet; segítségért lépjen kapcsolatba az ügyfélszolgálattal.',
+        ],
         'website' => 'Weboldal',
         'no_website' => 'Még nincs weboldal hozzáadva',
         'internal' => [

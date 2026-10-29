@@ -145,6 +145,13 @@ return [
         'cancel_requested' => 'Cancellation was sent to Stripe. This subscription remains active until the paid period ends.',
         'reactivation_requested' => 'Reactivation was sent to Stripe. The change appears after provider confirmation.',
         'operation_pending' => 'The provider result needs reconciliation. Check the subscription status before retrying.',
+        'cancellation_status' => [
+            'pending' => 'We received your cancellation request and are waiting for Stripe to confirm it. Your subscription status will update after confirmation; please do not submit the request again.',
+            'confirmed' => 'Stripe confirmed that this subscription will end at the end of the current billing period. You can keep it active until then.',
+            'reactivation_pending' => 'We received your request to keep this subscription active and are waiting for Stripe to confirm it. Please do not submit the request again.',
+            'reactivation_confirmed' => 'Stripe confirmed that this subscription will remain active. You can request cancellation again if you change your mind.',
+            'reconciliation_required' => 'We could not verify whether Stripe accepted the latest subscription change, so its status needs to be checked. Please do not submit another change; contact support for help.',
+        ],
         'website' => 'Website',
         'no_website' => 'No website added yet',
         'internal' => [
