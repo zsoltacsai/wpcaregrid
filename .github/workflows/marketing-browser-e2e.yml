@@ -84,6 +84,8 @@ jobs:
       PLAYWRIGHT_JUNIT_OUTPUT_NAME: playwright-report/junit.xml
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Verify locked Actions dependencies for Marketing workflow
         shell: bash
@@ -149,7 +151,7 @@ jobs:
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.4'
-          extensions: mbstring, intl, gd, zip, sodium, pdo_sqlite, sqlite3, pdo_mysql, mysqli, fileinfo, openssl, curl, posix, pcntl, bcmath
+          extensions: mbstring, intl, gd, zip, sodium, pdo_sqlite, sqlite3, pdo_mysql, mysqli, fileinfo, openssl, curl, posix, pcntl, bcmath, sockets
           coverage: none
           tools: composer:v2
 
@@ -193,25 +195,120 @@ jobs:
           M16_CANCELLATION_FIXTURES_PATH: ${{ github.workspace }}/storage/framework/testing/subscription-cancellation.json
         run: |
           set -euo pipefail
-          php artisan serve --host=127.0.0.1 --port=8000 > "$RUNNER_TEMP/marketing-laravel.log" 2>&1 &
+          # actions/checkout must not leave its token in Git config for this process.
+          if git config --local --get-regexp '^http\..*\.extraheader$' > /dev/null 2>&1; then
+            echo "CHECKOUT_CREDENTIAL_PERSISTENCE=FAIL"
+            exit 1
+          fi
+          echo "CHECKOUT_CREDENTIAL_PERSISTENCE=PASS"
+
+          php_bin="$(command -v php)"
+          test -x "$php_bin"
+          sandbox_unit="m16-marketing-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sandbox_script="$RUNNER_TEMP/m16-marketing-browser-sandbox.sh"
+          trap 'rm -f "$sandbox_script"' EXIT
+
+          cat > "$sandbox_script" <<'SANDBOX_SCRIPT'
+          set -euo pipefail
+
+          # This runs inside the same systemd cgroup and IP filter as Laravel.
+          # A denial is accepted only when connect(2) returns the policy errors
+          # EACCES/EPERM for both address families; routing failures, timeouts,
+          # missing IPv6, and successful connections all fail this probe.
+          "$E2E_PHP_BIN" <<'PHP_EGRESS_PROBE'
+          <?php
+          $fail = static function (string $marker): never {
+              fwrite(STDERR, $marker."=FAIL\n");
+              exit(1);
+          };
+
+          if (!extension_loaded('sockets')) {
+              $fail('PHP_EGRESS_SOCKETS_EXTENSION');
+          }
+
+          foreach (['GH_TOKEN', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN'] as $name) {
+              if (getenv($name) !== false) {
+                  $fail('PHP_GITHUB_CREDENTIAL_ENVIRONMENT');
+              }
+          }
+
+          $descriptors = [
+              0 => ['file', '/dev/null', 'r'],
+              1 => ['file', '/dev/null', 'w'],
+              2 => ['file', '/dev/null', 'w'],
+          ];
+          $git = @proc_open(
+              ['/usr/bin/git', 'config', '--local', '--get-regexp', '^http\\..*\\.extraheader$'],
+              $descriptors,
+              $pipes,
+              getcwd(),
+              []
+          );
+          if (!is_resource($git) || proc_close($git) !== 1) {
+              $fail('PHP_GITHUB_CHECKOUT_CREDENTIAL');
+          }
+          echo "PHP_GITHUB_CREDENTIALS=ABSENT\n";
+
+          $deniedErrors = [SOCKET_EACCES, SOCKET_EPERM];
+          $targets = [
+              ['IPv4', AF_INET, '1.1.1.1'],
+              ['IPv6', AF_INET6, '2606:4700:4700::1111'],
+          ];
+
+          foreach ($targets as [$label, $family, $address]) {
+              $socket = @socket_create($family, SOCK_STREAM, SOL_TCP);
+              if ($socket === false) {
+                  $fail('PHP_EGRESS_'.$label);
+              }
+
+              @socket_set_nonblock($socket);
+              $connected = @socket_connect($socket, $address, 443);
+              $error = socket_last_error($socket);
+
+              if (!$connected && !in_array($error, $deniedErrors, true)) {
+                  $write = [$socket];
+                  $except = [$socket];
+                  $read = [];
+                  $ready = @socket_select($read, $write, $except, 1);
+                  if ($ready > 0) {
+                      $error = @socket_get_option($socket, SOL_SOCKET, SO_ERROR);
+                      if ($error === 0) {
+                          $connected = true;
+                      }
+                  }
+              }
+
+              @socket_close($socket);
+
+              if ($connected || !in_array($error, $deniedErrors, true)) {
+                  $fail('PHP_EGRESS_'.$label);
+              }
+
+              echo "PHP_EGRESS_".$label."=DENIED_BY_POLICY\n";
+          }
+          PHP_EGRESS_PROBE
+
+          "$E2E_PHP_BIN" artisan serve --host=127.0.0.1 --port=8000 > "$RUNNER_TEMP/marketing-laravel.log" 2>&1 &
           server_pid=$!
           cleanup() {
             kill "$server_pid" 2>/dev/null || true
             wait "$server_pid" 2>/dev/null || true
+            rm -f "$RUNNER_TEMP/marketing-laravel.log"
           }
-          trap cleanup EXIT
+          trap cleanup EXIT INT TERM
 
           for attempt in $(seq 1 60); do
             if curl --fail --silent http://127.0.0.1:8000/en/ > /dev/null; then
               break
             fi
             if ! kill -0 "$server_pid" 2>/dev/null; then
-              cat "$RUNNER_TEMP/marketing-laravel.log"
+              echo "LOCAL_LARAVEL_SERVER=FAILED"
               exit 1
             fi
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:8000/en/ > /dev/null
+          echo "LOCAL_LARAVEL_SERVER=PASS"
           npx playwright test \
             tests/e2e/marketing-homepage-ux.spec.ts \
             tests/e2e/marketing-launch-ctas.spec.ts \
@@ -222,7 +319,47 @@ jobs:
             npx playwright test tests/e2e/subscription-cancellation.spec.ts \
               --trace=off \
               --reporter=list,html,junit
-          php tests/e2e/fixtures/seed-subscription-cancellation.php --verify-read-only
+          "$E2E_PHP_BIN" tests/e2e/fixtures/seed-subscription-cancellation.php --verify-read-only
+          SANDBOX_SCRIPT
+          chmod 700 "$sandbox_script"
+
+          runner_user="$(id -un)"
+          service_env=()
+          for name in \
+            PATH HOME GITHUB_ACTIONS GITHUB_WORKSPACE RUNNER_TEMP GITHUB_RUN_ID GITHUB_RUN_ATTEMPT \
+            APP_ENV APP_DEBUG APP_URL CAREGRID_DEPLOYMENT_ENV MARKETING_RELEASE_ENFORCEMENT_MODE \
+            MARKETING_RELEASE_PROFILE DB_CONNECTION DB_DATABASE CACHE_STORE SESSION_DRIVER \
+            QUEUE_CONNECTION MAIL_MAILER STRIPE_KEY STRIPE_SECRET STRIPE_WEBHOOK_SECRET \
+            STRIPE_ALLOW_LIVE_MODE MARKETING_ANALYTICS_ENABLED MARKETING_ANALYTICS_POLICY_AUTHORIZED \
+            GA4_MEASUREMENT_ID E2E_BASE_URL PLAYWRIGHT_HTML_OUTPUT_DIR PLAYWRIGHT_JUNIT_OUTPUT_NAME \
+            M16_CANCELLATION_E2E M16_CANCELLATION_FIXTURES_PATH; do
+            if [[ ! -v "$name" ]]; then
+              echo "SANDBOX_ENVIRONMENT=INCOMPLETE"
+              exit 1
+            fi
+            service_env+=(--setenv="$name=${!name}")
+          done
+          service_env+=(--setenv="E2E_PHP_BIN=$php_bin")
+
+          # systemd applies the AF_INET/AF_INET6 filter to the entire service
+          # cgroup. Both the PHP server and its test descendants inherit it.
+          # Only IPv4/IPv6 loopback is allowed so Playwright can reach Laravel.
+          sudo systemd-run \
+            --system \
+            --quiet \
+            --wait \
+            --pipe \
+            --collect \
+            --unit="$sandbox_unit" \
+            --property="User=$runner_user" \
+            --property="WorkingDirectory=$GITHUB_WORKSPACE" \
+            --property=PrivateNetwork=true \
+            --property=IPAddressDeny=any \
+            --property='IPAddressAllow=127.0.0.1/32 ::1/128' \
+            --property='RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX' \
+            --property='UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy GH_TOKEN GITHUB_TOKEN ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN' \
+            "${service_env[@]}" \
+            /bin/bash "$sandbox_script"
 
       - name: Upload sanitized browser reports and screenshots
         if: always()
