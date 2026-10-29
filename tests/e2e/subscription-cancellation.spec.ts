@@ -38,7 +38,13 @@ async function signIn(page: Page, customerKey: 'en' | 'hu'): Promise<void> {
     await page.goto('/login');
     await page.locator('input[name="email"]').fill(customer.email);
     await page.locator('input[name="password"]').fill(fixtures.password);
+    const loginResponsePromise = page.waitForResponse(response =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/login',
+    );
     await page.getByRole('button', { name: 'Log in' }).click();
+    const loginResponse = await loginResponsePromise;
+    expect(loginResponse.status()).toBe(302);
+    expect(new URL(loginResponse.headers()['location'] ?? '/', fixtures.base_url).pathname).toMatch(/\/account(?:\/|$)/);
     await page.waitForURL(/\/account(?:\/|$)/, { timeout: 15_000, waitUntil: 'domcontentloaded' });
 }
 
