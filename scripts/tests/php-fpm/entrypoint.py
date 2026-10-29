@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from policy import ALLOWED_ENV, fpm_environment, has_background_consumer, validate_environment
+from policy import ALLOWED_ENV, fpm_environment, has_background_consumer, safe_php_fatal_detail, validate_environment
 
 ROOT = Path("/app")
 TEST_DIR = Path("/opt/php-fpm-test")
@@ -156,13 +156,13 @@ for log_path in (fpm_log, nginx_log):
             if exception:
                 runtime_log_failure += " (" + exception.group(1) + ")"
             message = re.search(r"PHP Fatal error: (?:Uncaught [^:]+: )?(.+?)(?: in /app/[^:]+:\d+)?(?:$|, thrown)", line)
+            location = re.search(r" in /app/([A-Za-z0-9_./-]+):(\d+)(?:$|, thrown)", line)
             if message:
-                diagnostic = re.sub(
-                    r"(?i)(app[_ -]?key|password|secret|token)([^\s:=]*\s*[:=]\s*)[^\s]+",
-                    r"\1\2[redacted]",
-                    message.group(1),
-                )
-                runtime_log_failure += ": " + diagnostic[:180]
+                detail = safe_php_fatal_detail(message.group(1))
+                if detail:
+                    runtime_log_failure += ": " + detail
+            if location:
+                runtime_log_failure += f" at {Path(location.group(1)).name}:{location.group(2)}"
             break
     if runtime_log_failure:
         break
