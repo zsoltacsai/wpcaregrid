@@ -28,6 +28,14 @@ case "$1" in
         [[ "${2:-}" == '-t' && "${3:-}" =~ ^[0-9a-f]{40}$ ]] || exit 1
         printf 'commit\n'
         ;;
+    ls-tree)
+        [[ "$2" == '-r' && "$3" == '--name-only' && "$5" == '--' ]] || exit 99
+        case "$4" in
+            "$TARGET_FIXTURE") profile="${SMOKE_TARGET_PROFILE:-marketing_gated}" ;;
+            *) profile="${SMOKE_BASELINE_PROFILE:-marketing_gated}" ;;
+        esac
+        if [[ "$profile" == 'marketing_gated' || "$profile" == 'ambiguous' ]]; then printf 'app/Http/Middleware/MarketingOnlyReleaseGate.php\n'; fi
+        ;;
     status)
         [[ "${2:-}" == '--porcelain' && "${3:-}" == '--untracked-files=all' ]] || exit 99
         [[ "${SMOKE_CASE:-}" != 'status_failure' ]] || exit 1
@@ -36,6 +44,27 @@ case "$1" in
     merge-base)
         [[ "${2:-}" == '--is-ancestor' ]] || exit 99
         [[ "${SMOKE_CASE:-}" != 'not_ancestor' ]]
+        ;;
+    show)
+        case "$2" in
+            "$TARGET_FIXTURE":bootstrap/app.php|"$TARGET_FIXTURE":app/Http/Middleware/MarketingOnlyReleaseGate.php) profile="${SMOKE_TARGET_PROFILE:-marketing_gated}" ;;
+            *:bootstrap/app.php|*:app/Http/Middleware/MarketingOnlyReleaseGate.php) profile="${SMOKE_BASELINE_PROFILE:-marketing_gated}" ;;
+            *) exit 1 ;;
+        esac
+        case "$2" in
+            *:bootstrap/app.php)
+                case "$profile" in
+                    marketing_gated) printf '%s\n' 'use App\Http\Middleware\SecurityHeaders;' 'use App\Http\Middleware\MarketingOnlyReleaseGate;' '        $middleware->append(SecurityHeaders::class);' '        $middleware->append(MarketingOnlyReleaseGate::class);' ;;
+                    legacy_application) printf '%s\n' '<?php' 'return Application::configure();' ;;
+                    ambiguous) printf '%s\n' 'use App\Http\Middleware\MarketingOnlyReleaseGate;' ;;
+                    *) exit 1 ;;
+                esac
+                ;;
+            *:app/Http/Middleware/MarketingOnlyReleaseGate.php)
+                [[ "$profile" == 'marketing_gated' || "$profile" == 'ambiguous' ]] || exit 1
+                printf '%s\n' 'class MarketingOnlyReleaseGate {}'
+                ;;
+        esac
         ;;
     checkout)
         [[ "${2:-}" == '--detach' && "${3:-}" =~ ^[0-9a-f]{40}$ ]] || exit 99
@@ -77,6 +106,7 @@ path="${url#https://staging.wpcaregrid.com}"
 status=404
 location=''
 cache_control=''
+interim_cache_control=''
 download_size=0
 
 case "${SMOKE_PHASE}:${path}" in
@@ -116,11 +146,16 @@ case "${SMOKE_CASE}:${path}" in
     owner_redirect:/owner/integrations) status=302; location='https://staging.wpcaregrid.com/owner/login' ;;
     owner_missing_no_store:/owner/integrations) cache_control='' ;;
     owner_body:/owner/integrations) download_size=7 ;;
+    legacy_owner_redirect:/owner/integrations) status=302; location='https://staging.wpcaregrid.com/owner/login' ;;
+    legacy_owner_404:/owner/integrations) status=404; cache_control='no-store' ;;
+    legacy_owner_wrong_location:/owner/integrations) status=302; location='https://staging.wpcaregrid.com/account/login' ;;
+    owner_early_hints_no_store:/owner/integrations) interim_cache_control='no-store'; cache_control='' ;;
     env_exposed:/.env) status=200 ;;
     network_error:/) exit 7 ;;
 esac
 
 if (( dump_headers )); then
+    if [[ -n "$interim_cache_control" ]]; then printf 'HTTP/1.1 103 Early Hints\r\nCache-Control: %s\r\n\r\n' "$interim_cache_control"; fi
     printf 'HTTP/1.1 %s Stub\r\n' "$status"
     [[ -z "$location" ]] || printf 'Location: %s\r\n' "$location"
     [[ -z "$cache_control" ]] || printf 'Cache-Control: %s\r\n' "$cache_control"
@@ -212,6 +247,16 @@ run_rejected_case() {
 
 run_accepted_case baseline valid pre_deploy_smoke
 run_accepted_case baseline root_200 pre_deploy_smoke
+if SMOKE_PHASE=baseline SMOKE_CASE=legacy_owner_redirect SMOKE_BASELINE_PROFILE=legacy_application pre_deploy_smoke >"$temp_dir/legacy-valid.log" 2>&1; then scenarios=$((scenarios + 1)); else cat "$temp_dir/legacy-valid.log" >&2; exit 1; fi
+if SMOKE_PHASE=baseline SMOKE_CASE=legacy_owner_404 SMOKE_BASELINE_PROFILE=legacy_application pre_deploy_smoke >"$temp_dir/legacy-status.log" 2>&1; then printf 'Legacy baseline incorrectly accepted 404.\n' >&2; exit 1; fi
+grep -Fq 'expected 302 authentication redirect' "$temp_dir/legacy-status.log" || { cat "$temp_dir/legacy-status.log" >&2; exit 1; }
+scenarios=$((scenarios + 1))
+if SMOKE_PHASE=baseline SMOKE_CASE=legacy_owner_wrong_location SMOKE_BASELINE_PROFILE=legacy_application pre_deploy_smoke >"$temp_dir/legacy-location.log" 2>&1; then printf 'Legacy baseline accepted wrong Location.\n' >&2; exit 1; fi
+grep -Fq 'expected exactly https://staging.wpcaregrid.com/owner/login' "$temp_dir/legacy-location.log" || { cat "$temp_dir/legacy-location.log" >&2; exit 1; }
+scenarios=$((scenarios + 1))
+if SMOKE_PHASE=baseline SMOKE_CASE=valid SMOKE_BASELINE_PROFILE=ambiguous pre_deploy_smoke >"$temp_dir/ambiguous-source.log" 2>&1; then printf 'Ambiguous baseline provenance was accepted.\n' >&2; exit 1; fi
+grep -Fq 'Baseline gate provenance is ambiguous' "$temp_dir/ambiguous-source.log" || { cat "$temp_dir/ambiguous-source.log" >&2; exit 1; }
+scenarios=$((scenarios + 1))
 run_rejected_case baseline wrong_sha pre_deploy_smoke 'changed from pinned baseline'
 run_rejected_case baseline dirty_checkout pre_deploy_smoke 'checkout changed after'
 run_rejected_case baseline status_failure pre_deploy_smoke ''
@@ -242,6 +287,10 @@ run_rejected_case target missing_en post_deploy_smoke 'HTTP /en/ returned 404, e
 run_rejected_case target missing_hu_pricing post_deploy_smoke 'HTTP /hu/pricing returned 500, expected 200'
 run_rejected_case target up_error post_deploy_smoke 'HTTP /up returned 503, expected 200'
 run_rejected_case target owner_exposed post_deploy_smoke 'expected 404 from the marketing release gate'
+run_rejected_case target owner_early_hints_no_store post_deploy_smoke 'Final 404 response is missing Cache-Control: no-store'
+if SMOKE_TARGET_PROFILE=legacy_application SMOKE_PHASE=target SMOKE_CASE=valid post_deploy_smoke >"$temp_dir/target-without-gate.log" 2>&1; then printf 'Target without global gate was accepted.\n' >&2; exit 1; fi
+grep -Fq 'Target commit lacks the registered marketing gate' "$temp_dir/target-without-gate.log" || { cat "$temp_dir/target-without-gate.log" >&2; exit 1; }
+scenarios=$((scenarios + 1))
 run_rejected_case target env_exposed post_deploy_smoke 'Protected path /.env returned 200'
 run_rejected_case target network_error post_deploy_smoke ''
 

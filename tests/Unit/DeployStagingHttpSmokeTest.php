@@ -16,7 +16,7 @@ class DeployStagingHttpSmokeTest extends TestCase
         $process->setTimeout(30);
         $process->mustRun();
 
-        $this->assertStringContainsString('passed: 48 scenarios', $process->getOutput());
+        $this->assertStringContainsString('passed: 54 scenarios', $process->getOutput());
     }
 
     public function test_baseline_is_pinned_after_lock_and_rechecked_before_mutation_and_checkout(): void
