@@ -93,6 +93,7 @@ $check('no_non_loopback_network_interface', $interfaces === []);
 if ($port4 !== false && $port6 !== false && $witnessIPv4 !== false) {
     $runnerWitness = 'tcp://'.$witnessIPv4.':'.$port4;
     $check('ipv4_runner_host_witness_denied', ! $canConnect($runnerWitness));
+    $check('ipv6_external_connection_denied', ! $canConnect('tcp://[2606:4700:4700::1111]:53'));
     $check('ipv6_external_route_absent', $interfaces === []);
     foreach (['http' => 'http://example.com/', 'https' => 'https://example.com/'] as $scheme => $url) {
         $proxy = curl_init($url);
@@ -111,6 +112,7 @@ if ($port4 !== false && $port6 !== false && $witnessIPv4 !== false) {
     }
 } else {
     $check('ipv4_runner_host_witness_denied', false);
+    $check('ipv6_external_connection_denied', false);
     $check('ipv6_external_route_absent', false);
     $check('explicit_http_proxy_escape_denied', false);
     $check('explicit_https_proxy_escape_denied', false);
