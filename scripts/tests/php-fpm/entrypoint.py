@@ -37,17 +37,22 @@ for path in ("/tmp/nginx/client", "/tmp/nginx/fastcgi", "/tmp/nginx/proxy",
              "/app/storage/framework/sessions", "/app/storage/framework/views", "/app/storage/logs"):
     Path(path).mkdir(parents=True, exist_ok=True)
 
-def checked(command, env=None, timeout=20, capture=True):
+def checked(stage, command, env=None, timeout=20, capture=True):
     try:
         return subprocess.run(command, env=env, check=True, timeout=timeout,
                               stdout=subprocess.PIPE if capture else None,
                               stderr=subprocess.PIPE if capture else None, text=True)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        fail("A disposable PHP/FPM configuration or preparation command failed.")
+    except subprocess.CalledProcessError as error:
+        fail(f"Disposable {stage} failed (exit code {error.returncode}).")
+    except subprocess.TimeoutExpired:
+        fail(f"Disposable {stage} timed out.")
 
-checked(["php-fpm", "-tt", "-y", str(FPM_CONFIG)], env=fpm_env, timeout=10)
-checked(["nginx", "-t", "-c", str(NGINX_CONFIG)], env={"PATH": fpm_env["PATH"]}, timeout=10)
-checked(["php", "artisan", "migrate", "--force", "--no-interaction"], env=fpm_env, timeout=60)
+checked("PHP-FPM configuration validation", ["php-fpm", "-tt", "-y", str(FPM_CONFIG)],
+        env=fpm_env, timeout=10)
+checked("Nginx configuration validation", ["nginx", "-t", "-c", str(NGINX_CONFIG)],
+        env={"PATH": fpm_env["PATH"]}, timeout=10)
+checked("Laravel SQLite migration", ["php", "artisan", "migrate", "--force", "--no-interaction"],
+        env=fpm_env, timeout=60)
 
 def assert_no_consumers():
     if has_background_consumer():
