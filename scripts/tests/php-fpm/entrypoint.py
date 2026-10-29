@@ -74,6 +74,8 @@ fpm_log.touch()
 nginx_log.touch()
 children = []
 clean_shutdown = True
+probe_failure = None
+probe = {}
 try:
     fpm = subprocess.Popen(["php-fpm", "-F", "-y", str(FPM_CONFIG)], env=fpm_env,
                            stdout=fpm_log.open("ab"), stderr=subprocess.STDOUT)
@@ -109,11 +111,11 @@ try:
             failures = payload.get("failures")
             if not isinstance(failures, list) or any(not isinstance(item, str) for item in failures):
                 raise ValueError
+            probe_failure = f"FPM probe returned HTTP {error.code}; failed checks: {', '.join(failures)[:500]}"
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
-            fail(f"FPM probe returned HTTP {error.code} with a nonconforming response.")
-        fail(f"FPM probe returned HTTP {error.code}; failed checks: {', '.join(failures)[:500]}")
-    if probe.get("failures"):
-        fail("FPM probe failed checks: " + ", ".join(probe["failures"]))
+            probe_failure = f"FPM probe returned HTTP {error.code} with a nonconforming response."
+    if probe_failure is None and probe.get("failures"):
+        probe_failure = "FPM probe failed checks: " + ", ".join(probe["failures"])
 
     listener_lines = checked(["ss", "-H", "-ltn"], env={"PATH": fpm_env["PATH"]}).stdout.splitlines()
     if not listener_lines or any(not re.search(r"127\.0\.0\.1:8080\s*$", line) for line in listener_lines):
@@ -138,11 +140,24 @@ finally:
     if not clean_shutdown:
         fail("FPM or the HTTP gateway required forced shutdown or exited unsuccessfully.")
 
+runtime_log_failure = None
 for log_path in (fpm_log, nginx_log):
     output = log_path.read_text(errors="replace")
-    if re.search(r"PHP (?:Warning|Fatal error|Deprecated)|\b(?:crit|alert)\b", output, re.IGNORECASE):
-        fail("FPM or the HTTP gateway emitted a warning, fatal error, or critical startup error.")
+    for line in output.splitlines():
+        category = re.search(r"PHP (?:Warning|Fatal error|Parse error|Deprecated)|\b(?:crit|alert)\b", line, re.IGNORECASE)
+        if category:
+            exception = re.search(r"Uncaught ([A-Za-z0-9_\\]+)", line)
+            runtime_log_failure = category.group(0)
+            if exception:
+                runtime_log_failure += " (" + exception.group(1) + ")"
+            break
+    if runtime_log_failure:
+        break
 assert_no_consumers()
+if runtime_log_failure:
+    fail("FPM or Nginx logged a runtime error: " + runtime_log_failure)
+if probe_failure:
+    fail(probe_failure)
 print(json.dumps({
     "php_version": probe["php_version"],
     "sapi": probe["sapi"],
