@@ -16,22 +16,21 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-    env:
-      GH_CONFIG_DIR: ${{ runner.temp }}/gh-config
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install immutable gh-actions-lock release and verify binary digest
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          export GH_CONFIG_DIR="$RUNNER_TEMP/gh-config"
           gh extension install github/gh-actions-lock --pin v0.4.0
           binary="$GH_CONFIG_DIR/extensions/gh-actions-lock/gh-actions-lock"
           test -x "$binary"
           echo "f9da98f2a6e9e0ae77deadf9a2319a8a86bb002b541cc3203b247cc59fb04842  $binary" | sha256sum --check
           gh extension list
-          gh actions-lock --version || true
 
       - name: Generate lockfile for CI only without narrowing existing refs
         run: gh actions-lock --no-narrow .github/workflows/ci.yml
