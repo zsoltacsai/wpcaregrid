@@ -3,6 +3,7 @@ import json
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -80,6 +81,26 @@ try:
     fpm = subprocess.Popen(["php-fpm", "-F", "-y", str(FPM_CONFIG)], env=fpm_env,
                            stdout=fpm_log.open("ab"), stderr=subprocess.STDOUT)
     children.append(fpm)
+
+    # Do not let the gateway generate expected upstream errors while FPM is still starting.
+    fpm_socket = Path("/tmp/php-fpm.sock")
+    fpm_socket_ready = False
+    socket_deadline = time.monotonic() + 15
+    while time.monotonic() < socket_deadline:
+        if fpm.poll() is not None:
+            fail("PHP-FPM exited before its FastCGI socket became ready.")
+        if fpm_socket.exists():
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as readiness_probe:
+                    readiness_probe.connect(str(fpm_socket))
+                    fpm_socket_ready = True
+                    break
+            except OSError:
+                pass
+        time.sleep(0.1)
+    if not fpm_socket_ready:
+        fail("PHP-FPM FastCGI socket did not become ready.")
+
     nginx = subprocess.Popen(["nginx", "-g", "daemon off;", "-c", str(NGINX_CONFIG)],
                              env={"PATH": fpm_env["PATH"]},
                              stdout=nginx_log.open("ab"), stderr=subprocess.STDOUT)
@@ -153,6 +174,14 @@ for log_path in (fpm_log, nginx_log):
         if category:
             exception = re.search(r"Uncaught ([A-Za-z0-9_\\]+)", line)
             runtime_log_failure = category.group(0)
+            if category.group(0).lower() in ("crit", "alert"):
+                operation = re.search(r"\\b(connect|open|accept|bind)\\(\\)", line)
+                error = re.search(r"failed \\((\\d+): ([A-Za-z ]+)\\)", line)
+                if operation and error:
+                    runtime_log_failure = (
+                        f"nginx {category.group(0).lower()} "
+                        f"{operation.group(1)} errno={error.group(1)} ({error.group(2)})"
+                    )
             if exception:
                 runtime_log_failure += " (" + exception.group(1) + ")"
             message = re.search(r"PHP Fatal error: (?:Uncaught [^:]+: )?(.+?)(?: in /app/[^:]+:\d+)?(?:$|, thrown)", line)
