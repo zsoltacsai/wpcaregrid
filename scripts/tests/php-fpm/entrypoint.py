@@ -149,12 +149,20 @@ runtime_log_failure = None
 for log_path in (fpm_log, nginx_log):
     output = log_path.read_text(errors="replace")
     for line in output.splitlines():
-        category = re.search(r"PHP (?:Warning|Fatal error|Parse error|Deprecated)|\b(?:crit|alert)\b", line, re.IGNORECASE)
+        category = re.search(r"PHP (?:Warning|Fatal error|Parse error|Deprecated)|\\b(?:crit|alert)\\b", line, re.IGNORECASE)
         if category:
-            exception = re.search(r"Uncaught ([A-Za-z0-9_\\]+)", line)
+            exception = re.search(r"Uncaught ([A-Za-z0-9_\\\\]+)", line)
             runtime_log_failure = category.group(0)
             if exception:
                 runtime_log_failure += " (" + exception.group(1) + ")"
+            message = re.search(r"PHP Fatal error: (?:Uncaught [^:]+: )?(.+?)(?: in /app/[^:]+:\\d+)?(?:$|, thrown)", line)
+            if message:
+                diagnostic = re.sub(
+                    r"(?i)(app[_ -]?key|password|secret|token)([^\\s:=]*\\s*[:=]\\s*)[^\\s]+",
+                    r"\\1\\2[redacted]",
+                    message.group(1),
+                )
+                runtime_log_failure += ": " + diagnostic[:180]
             break
     if runtime_log_failure:
         break
