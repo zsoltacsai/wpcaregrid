@@ -103,3 +103,38 @@ These are planned acceptance actions only; none was executed for this assessment
 | Invitation-only paid beta | **NO-GO** |
 
 No merge, deployment, credential operation, DNS/TLS/Nginx change, PHP installation/cutover, queue/configuration change, customer release, billing activation, backup or restore is authorized by this assessment. Re-evaluate only against fresh, environment-specific evidence and a separate Owner decision for the relevant gate.
+
+
+## Sanitized command templates for a later authorized run (not executed)
+
+Replace placeholders only from a freshly approved inventory. These examples do not authorize connecting to or probing a live target.
+
+```sh
+# DNS inventory: record all returned answers and the query timestamp.
+dig +noall +answer wpcaregrid.com A
+dig +noall +answer wpcaregrid.com AAAA
+dig +noall +answer www.wpcaregrid.com A
+dig +noall +answer www.wpcaregrid.com AAAA
+
+# TLS name/chain verification from an authorized external vantage.
+openssl s_client -connect "${APPROVED_EDGE_IP}:443" \
+  -servername wpcaregrid.com -verify_hostname wpcaregrid.com \
+  -verify_return_error </dev/null
+
+# Safe allowlisted GET and HEAD only; do not follow redirects implicitly.
+curl --silent --show-error --max-redirs 0 \
+  --resolve "wpcaregrid.com:443:${APPROVED_EDGE_IP}" \
+  --dump-header - --output /dev/null https://wpcaregrid.com/
+curl --silent --show-error --head --max-redirs 0 \
+  --resolve "wpcaregrid.com:443:${APPROVED_EDGE_IP}" \
+  https://wpcaregrid.com/up
+
+# On the authorized host, run the safe app health summary as the approved app user.
+php artisan system:check --json
+```
+
+For every allowlisted route, repeat the GET/HEAD probe and validate status, expected same-origin redirect (if any), content type, cache policy, security headers and that no sensitive body is returned. Use the known approved edge address; do not guess it. A `/up` result alone is not a readiness result.
+
+Sensitive paths and non-GET/HEAD methods must be proven blocked using an isolated edge/application harness or a reviewed configuration test that confirms no upstream selection. Do **not** send POST/PUT/PATCH/DELETE to production checkout, webhook, authentication, account, Connector or administrative paths as a negative test: if an upstream bypass exists, those requests could create real side effects. Exercise raw/encoded paths, duplicate separators, Host/SNI mismatch, forwarded-header conflicts and direct-origin bypass only in the approved harness. Production live probes, if later authorized, are restricted to safe GET/HEAD requests after edge configuration is verified.
+
+On the host, inspect effective Nginx/FPM configuration with the reviewed sanitizer/parser and record source hashes, listener order, pool identity and socket metadata. Do not publish raw `nginx -T`, `php-fpm -tt`, environment files, command lines containing credentials, or unredacted `system:check` output. Run `composer check-platform-reqs --no-dev --lock` only under an approved runtime-rehearsal procedure.
