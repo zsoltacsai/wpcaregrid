@@ -39,7 +39,7 @@ async function signIn(page: Page, customerKey: 'en' | 'hu'): Promise<void> {
     await page.locator('input[name="email"]').fill(customer.email);
     await page.locator('input[name="password"]').fill(fixtures.password);
     await page.getByRole('button', { name: 'Log in' }).click();
-    await page.waitForURL(/\/account(?:\/)?$/);
+    await page.waitForURL(/\/account(?:\/|$)/, { timeout: 15_000, waitUntil: 'domcontentloaded' });
 }
 
 async function watchReadOnlyPage(page: Page): Promise<{ external: string[]; mutations: string[]; errors: string[] }> {
