@@ -41,6 +41,9 @@ jobs:
           GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ github.token }}
         run: gh actions-lock --no-narrow .github/workflows/ci.yml
 
+      - name: Print generated lockfile for source review
+        run: cat .github/workflows/actions.lock
+
       - name: Upload generated lockfile for review
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
