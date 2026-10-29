@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Http\Request;
 
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
@@ -58,7 +59,7 @@ $check('no_docker_socket', ! file_exists('/var/run/docker.sock') && ! file_exist
 
 require '/app/vendor/autoload.php';
 $app = require '/app/bootstrap/app.php';
-$request = Illuminate\Http\Request::capture();
+$request = Request::capture();
 $response = $app->make(Kernel::class)->handle($request);
 $check('application_debug_disabled', config('app.debug') === false);
 $check('database_queue_not_inline_sync', config('queue.default') === 'database');
