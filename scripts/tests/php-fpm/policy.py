@@ -105,3 +105,12 @@ def safe_php_fatal_detail(message):
         if match:
             return match.group(0)
     return None
+
+
+def safe_runtime_critical_detail(line):
+    """Return only a known operation and numeric errno from a critical runtime log."""
+    operation = re.search(r"\b(connect|open|accept|bind)\(\)", line)
+    error = re.search(r"failed \((\d{1,3}):", line)
+    if operation is None or error is None:
+        return None
+    return f"{operation.group(1)} errno={error.group(1)}"

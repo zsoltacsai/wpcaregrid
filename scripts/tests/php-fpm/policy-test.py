@@ -9,7 +9,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[3]
 HARNESS = ROOT / "scripts/tests/php-fpm"
 sys.path.insert(0, str(HARNESS))
-from policy import ALLOWED_ENV, REQUIRED_ENV, fpm_environment, has_background_consumer, safe_php_fatal_detail, validate_environment
+from policy import ALLOWED_ENV, REQUIRED_ENV, fpm_environment, has_background_consumer, safe_php_fatal_detail, safe_runtime_critical_detail, validate_environment
 
 def require(condition, message):
     if not condition:
@@ -51,6 +51,8 @@ require("validate_environment(os.environ)" in entrypoint and "fpm_environment(os
         "The entrypoint must use the tested fail-closed environment contract.")
 require("has_background_consumer()" in entrypoint,
         "The entrypoint must reject queue, scheduler, Supervisor, or Connector consumers.")
+require("fpm_socket_ready" in entrypoint and entrypoint.index('if not fpm_socket_ready:') < entrypoint.index('nginx = subprocess.Popen'),
+        "The loopback gateway must start only after the FPM socket accepts a readiness connection.")
 probe_source = (HARNESS / "probe.php").read_text()
 require("docker.sock" in probe_source and "--env " in runner
         and "external_notification_credentials_absent" in probe_source
@@ -124,4 +126,17 @@ require(
     "A known-safe Laravel target-class diagnostic was not retained.",
 )
 
-print("PHP-FPM isolation policy, safe fatal diagnostics, 8 unsafe profiles, and 8 NUL-delimited consumer fixtures passed.")
+critical_log = (
+    '[crit] connect() to unix:/tmp/php-fpm.sock failed (2: No such file or directory), '
+    'request: "GET /?token=synthetic-private-value"'
+)
+require(
+    safe_runtime_critical_detail(critical_log) == "connect errno=2",
+    "A critical log did not produce its bounded operation/errno diagnostic.",
+)
+require(
+    safe_runtime_critical_detail("critical token=synthetic-private-value") is None,
+    "An unrecognized critical log was not suppressed.",
+)
+
+print("PHP-FPM isolation policy, safe log/fatal diagnostics, 8 unsafe profiles, and 8 NUL-delimited consumer fixtures passed.")

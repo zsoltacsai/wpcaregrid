@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from policy import ALLOWED_ENV, fpm_environment, has_background_consumer, safe_php_fatal_detail, validate_environment
+from policy import ALLOWED_ENV, fpm_environment, has_background_consumer, safe_php_fatal_detail, safe_runtime_critical_detail, validate_environment
 
 ROOT = Path("/app")
 TEST_DIR = Path("/opt/php-fpm-test")
@@ -175,13 +175,9 @@ for log_path in (fpm_log, nginx_log):
             exception = re.search(r"Uncaught ([A-Za-z0-9_\\]+)", line)
             runtime_log_failure = category.group(0)
             if category.group(0).lower() in ("crit", "alert"):
-                operation = re.search(r"\b(connect|open|accept|bind)\(\)", line)
-                error = re.search(r"failed \((\d+): ([A-Za-z ]+)\)", line)
-                if operation and error:
-                    runtime_log_failure = (
-                        f"nginx {category.group(0).lower()} "
-                        f"{operation.group(1)} errno={error.group(1)} ({error.group(2)})"
-                    )
+                detail = safe_runtime_critical_detail(line)
+                if detail:
+                    runtime_log_failure = f"critical runtime {detail}"
             if exception:
                 runtime_log_failure += " (" + exception.group(1) + ")"
             message = re.search(r"PHP Fatal error: (?:Uncaught [^:]+: )?(.+?)(?: in /app/[^:]+:\d+)?(?:$|, thrown)", line)
