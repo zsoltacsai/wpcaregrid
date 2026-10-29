@@ -217,12 +217,26 @@ jobs:
           e2e_group="$e2e_user"
           e2e_home="/tmp/$e2e_user"
           sandbox_script="$GITHUB_WORKSPACE/.${e2e_user}-sandbox.sh"
+          egress_ipv6_probe='2606:4700:4700::1111'
+          egress_ipv6_route_installed=0
           acl_paths=()
           [[ "$e2e_user" =~ ^m16e2e[0-9]+$ ]]
           [[ "$e2e_home" == "/tmp/$e2e_user" ]]
           test ! -e "$sandbox_script"
 
           cleanup() {
+            if [[ "$egress_ipv6_route_installed" == 1 ]]; then
+              if ! sudo ip -6 route del "$egress_ipv6_probe/128" dev lo; then
+                echo "EGRESS_PROBE_ROUTE_CLEANUP=FAIL"
+                return 1
+              fi
+              if [[ -n "$(sudo ip -6 route show exact "$egress_ipv6_probe/128" dev lo)" ]]; then
+                echo "EGRESS_PROBE_ROUTE_CLEANUP=FAIL"
+                return 1
+              fi
+              egress_ipv6_route_installed=0
+              echo "EGRESS_PROBE_ROUTE_CLEANUP=PASS"
+            fi
             for path in "${acl_paths[@]}"; do
               sudo setfacl -x -n "u:$e2e_user" "$path" >/dev/null 2>&1 || true
             done
@@ -401,8 +415,10 @@ jobs:
           $assertBlocked('IPv4_LOOPBACK_CONTROL', AF_INET, '127.0.0.2', 1);
           $assertBlocked('IPv6_LOOPBACK_CONTROL', AF_INET6, '::1', 1);
 
-          // Exercise actual external destinations as well. The local controls
-          // distinguish the active cgroup filter from route/firewall failures.
+          // Exercise actual external destinations as well. The workflow has
+          // installed and verified a temporary host route for the IPv6 probe
+          // through loopback, so a missing runner IPv6 default route cannot
+          // be mistaken for successful egress enforcement.
           $assertBlocked('IPv4', AF_INET, '1.1.1.1', 443);
           $assertBlocked('IPv6', AF_INET6, '2606:4700:4700::1111', 443);
           PHP_EGRESS_PROBE
@@ -460,6 +476,22 @@ jobs:
           done
           service_env+=(--setenv="E2E_PHP_BIN=$php_bin")
           service_env+=(--setenv="HOME=$e2e_home")
+
+          # Give the public IPv6 test destination a deterministic route even
+          # on hosted runners without global IPv6. The systemd cgroup filter
+          # must still deny the PHP connect; an unfiltered connect would reach
+          # loopback and fail the negative test rather than being a false PASS.
+          if [[ -n "$(sudo ip -6 route show exact "$egress_ipv6_probe/128" dev lo)" ]]; then
+            echo "EGRESS_PROBE_ROUTE=PREEXISTING"
+            exit 1
+          fi
+          sudo ip -6 route add "$egress_ipv6_probe/128" dev lo
+          egress_ipv6_route_installed=1
+          if ! ip -6 route get "$egress_ipv6_probe" | grep -Fq 'dev lo'; then
+            echo "EGRESS_PROBE_ROUTE=FAIL"
+            exit 1
+          fi
+          echo "EGRESS_PROBE_ROUTE=PASS"
 
           # systemd applies the AF_INET/AF_INET6 filter to the entire service
           # cgroup. Both the PHP server and its test descendants inherit it.
