@@ -217,11 +217,15 @@ jobs:
           e2e_group="$e2e_user"
           e2e_home="/tmp/$e2e_user"
           sandbox_script="$GITHUB_WORKSPACE/.${e2e_user}-sandbox.sh"
+          acl_paths=()
           [[ "$e2e_user" =~ ^m16e2e[0-9]+$ ]]
           [[ "$e2e_home" == "/tmp/$e2e_user" ]]
           test ! -e "$sandbox_script"
 
           cleanup() {
+            for path in "${acl_paths[@]}"; do
+              sudo setfacl -x -n "u:$e2e_user" "$path" >/dev/null 2>&1 || true
+            done
             sudo userdel "$e2e_user" >/dev/null 2>&1 || true
             sudo groupdel "$e2e_group" >/dev/null 2>&1 || true
             sudo rm -rf --one-file-system "$e2e_home" >/dev/null 2>&1 || true
@@ -241,6 +245,29 @@ jobs:
           sudo useradd --system --no-create-home --gid "$e2e_group" \
             --home-dir "$e2e_home" --shell /usr/sbin/nologin "$e2e_user"
           sudo install -d -o "$e2e_user" -g "$e2e_group" -m 0700 "$e2e_home"
+          command -v setfacl >/dev/null
+          workspace_paths=()
+          path="$GITHUB_WORKSPACE"
+          while [[ "$path" != / ]]; do
+            workspace_paths+=("$path")
+            path="$(dirname "$path")"
+          done
+          for ((index=${#workspace_paths[@]} - 1; index >= 0; index--)); do
+            path="${workspace_paths[$index]}"
+            rights=x
+            if [[ "$path" == "$GITHUB_WORKSPACE" ]]; then rights=rx; fi
+            sudo setfacl -n -m "u:$e2e_user:$rights" "$path"
+            acl_paths+=("$path")
+            if ! sudo -u "$e2e_user" test -x "$path"; then
+              echo "SANDBOX_WORKSPACE_TRAVERSE=FAIL"
+              exit 1
+            fi
+            if [[ "$path" == "$GITHUB_WORKSPACE" ]] && ! sudo -u "$e2e_user" test -r "$path"; then
+              echo "SANDBOX_WORKSPACE_READ=FAIL"
+              exit 1
+            fi
+          done
+          echo "SANDBOX_WORKSPACE_ACCESS=PASS"
           test -d storage && test ! -L storage
           test -d bootstrap/cache && test ! -L bootstrap/cache
           mkdir -p playwright-report/html playwright-report/cancellation-html storage/playwright
