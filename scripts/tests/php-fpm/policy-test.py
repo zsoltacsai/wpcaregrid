@@ -112,7 +112,7 @@ with tempfile.TemporaryDirectory() as temporary:
         shutil.rmtree(proc_root / str(index))
 
 require(
-    safe_php_fatal_detail("Call to undefined function App\\\Test\\\probe()") == "Call to undefined function App\\\Test\\\probe",
+    safe_php_fatal_detail("Call to undefined function probe()") == "Call to undefined function probe",
     "A known-safe PHP fatal symbol was not retained.",
 )
 require(
