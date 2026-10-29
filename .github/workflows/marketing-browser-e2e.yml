@@ -14,6 +14,8 @@ on:
       - 'tests/Feature/MarketingConversionLinksTest.php'
       - 'tests/e2e/marketing-homepage-ux.spec.ts'
       - 'tests/e2e/marketing-launch-ctas.spec.ts'
+      - 'tests/e2e/subscription-cancellation.spec.ts'
+      - 'tests/e2e/fixtures/seed-subscription-cancellation.php'
       - 'composer.json'
       - 'composer.lock'
       - 'package.json'
@@ -35,6 +37,8 @@ on:
       - 'tests/Feature/MarketingConversionLinksTest.php'
       - 'tests/e2e/marketing-homepage-ux.spec.ts'
       - 'tests/e2e/marketing-launch-ctas.spec.ts'
+      - 'tests/e2e/subscription-cancellation.spec.ts'
+      - 'tests/e2e/fixtures/seed-subscription-cancellation.php'
       - 'composer.json'
       - 'composer.lock'
       - 'package.json'
@@ -176,8 +180,16 @@ jobs:
       - name: Run focused marketing feature test
         run: vendor/bin/phpunit --fail-on-skipped tests/Feature/MarketingConversionLinksTest.php
 
+      - name: Seed isolated synthetic subscription cancellation states
+        env:
+          M16_CANCELLATION_E2E: '1'
+          M16_CANCELLATION_FIXTURES_PATH: ${{ github.workspace }}/storage/framework/testing/subscription-cancellation.json
+        run: php tests/e2e/fixtures/seed-subscription-cancellation.php
+
       - name: Execute actual Chromium browser tests
         shell: bash
+        env:
+          M16_CANCELLATION_FIXTURES_PATH: ${{ github.workspace }}/storage/framework/testing/subscription-cancellation.json
         run: |
           set -euo pipefail
           php artisan serve --host=127.0.0.1 --port=8000 > "$RUNNER_TEMP/marketing-laravel.log" 2>&1 &
@@ -204,6 +216,12 @@ jobs:
             tests/e2e/marketing-launch-ctas.spec.ts \
             --trace=off \
             --reporter=list,html,junit
+          PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/cancellation-html \
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME=playwright-report/cancellation-junit.xml \
+            npx playwright test tests/e2e/subscription-cancellation.spec.ts \
+              --trace=off \
+              --reporter=list,html,junit
+          php tests/e2e/fixtures/seed-subscription-cancellation.php --verify-read-only
 
       - name: Upload sanitized browser reports and screenshots
         if: always()
