@@ -43,8 +43,10 @@ require("QUEUE_CONNECTION=database" in dockerfile and "env[QUEUE_CONNECTION] = d
 require("MAIL_MAILER=array" in dockerfile and "FILESYSTEM_DISK=local" in dockerfile
         and "BACKUP_STORAGE=" in dockerfile
         and "STRIPE_ALLOW_LIVE_MODE=false" in dockerfile
-        and "env[BACKUP_STORAGE]" not in pool,
-        "External sinks must be disabled and empty FPM env entries must be omitted.")
+        and "env[BACKUP_STORAGE]" not in pool
+        and "env[APP_DEBUG]" not in pool
+        and 'env[STRIPE_ALLOW_LIVE_MODE] = "false"' in pool,
+        "External sinks must be disabled; ambiguous boolean and empty FPM env entries are forbidden.")
 require("validate_environment(os.environ)" in entrypoint and "fpm_environment(os.environ)" in entrypoint,
         "The entrypoint must use the tested fail-closed environment contract.")
 require("has_background_consumer()" in entrypoint,
