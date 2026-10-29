@@ -21,7 +21,7 @@
 
             <div class="mt-6 flex flex-col gap-2 border-t border-line pt-6 sm:flex-row sm:items-center sm:gap-4">
                 @if ($subscription->billing_source === 'stripe' && ! $subscription->isInternal() && in_array($subscription->status, [\App\Billing\SubscriptionStatus::Active, \App\Billing\SubscriptionStatus::Trialing, \App\Billing\SubscriptionStatus::PastDue], true))
-                    @if (! in_array($cancellationStatus, ['pending', 'reconciliation_required'], true))
+                    @if (! in_array($cancellationStatus, ['pending', 'reactivation_pending', 'reconciliation_required'], true))
                         @if ($subscription->cancel_at_period_end)
                             <form method="POST" action="{{ route('account.subscriptions.reactivate', $subscription) }}">@csrf
                                 <x-ui.button type="submit" variant="secondary">{{ __('account.subscription.reactivate') }}</x-ui.button>

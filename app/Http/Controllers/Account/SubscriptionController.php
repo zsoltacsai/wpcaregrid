@@ -46,7 +46,7 @@ class SubscriptionController extends Controller
     }
 
     /**
-     * Load only the newest cancellation operation for these customer-owned subscriptions.
+     * Load the newest cancellation-lifecycle operation for these customer-owned subscriptions.
      * This read path never dispatches a billing operation or contacts Stripe.
      *
      * @param  EloquentCollection<int, Subscription>  $subscriptions
@@ -63,7 +63,7 @@ class SubscriptionController extends Controller
             ->selectRaw('MAX(id)')
             ->where('customer_id', $customer->id)
             ->whereIn('subscription_id', $subscriptionIds)
-            ->where('operation', 'cancel_at_period_end')
+            ->whereIn('operation', ['cancel_at_period_end', 'reactivate'])
             ->groupBy('subscription_id');
 
         $operations = SubscriptionOperation::query()
@@ -87,25 +87,31 @@ class SubscriptionController extends Controller
                 return [$subscription->id => 'reconciliation_required'];
             }
 
-            $snapshotTargetsCancellation = data_get($operation->request_snapshot, 'cancel_at_period_end') === true;
+            $isCancellation = $operation->operation === 'cancel_at_period_end';
+            $targetCancelAtPeriodEnd = $isCancellation;
+            $snapshotMatchesOperation = data_get($operation->request_snapshot, 'cancel_at_period_end') === $targetCancelAtPeriodEnd;
+
             if (in_array($operation->status, ['requested', 'processing', 'awaiting_confirmation'], true)) {
-                return [$subscription->id => $snapshotTargetsCancellation ? 'pending' : 'reconciliation_required'];
+                if (! $snapshotMatchesOperation) {
+                    return [$subscription->id => 'reconciliation_required'];
+                }
+
+                return [$subscription->id => $isCancellation ? 'pending' : 'reactivation_pending'];
             }
 
             if ($operation->status !== 'confirmed') {
                 return [$subscription->id => 'reconciliation_required'];
             }
 
-            // A previously confirmed cancellation is stale after the provider mirror
-            // reports that cancellation is no longer scheduled (for example, after reactivation).
-            if ($subscription->cancel_at_period_end !== true) {
-                return [];
+            $confirmedForCurrentSubscription = $snapshotMatchesOperation
+                && $operation->confirmed_at !== null
+                && $subscription->cancel_at_period_end === $targetCancelAtPeriodEnd;
+
+            if (! $confirmedForCurrentSubscription) {
+                return [$subscription->id => 'reconciliation_required'];
             }
 
-            $confirmedForCurrentSubscription = $snapshotTargetsCancellation
-                && $operation->confirmed_at !== null;
-
-            return [$subscription->id => $confirmedForCurrentSubscription ? 'confirmed' : 'reconciliation_required'];
+            return [$subscription->id => $isCancellation ? 'confirmed' : 'reactivation_confirmed'];
         });
     }
 

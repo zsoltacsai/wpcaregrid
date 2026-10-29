@@ -35,12 +35,13 @@ class SubscriptionCancellationStatusTest extends TestCase
             ->map(fn (string $status): Subscription => $this->subscriptionWithOperation($status));
         $superseded = Subscription::factory()->for($this->customer)->create(['billing_source' => 'stripe']);
         $this->operation($superseded, 'confirmed', $this->customer, ['cancel_at_period_end' => true], now());
-        $this->operation($superseded, 'awaiting_confirmation', $this->customer);
+        $this->operation($superseded, 'awaiting_confirmation', $this->customer, ['cancel_at_period_end' => false], null, 'reactivate');
         $subscriptions->push($superseded);
 
         $before = SubscriptionOperation::query()->count();
         $response = $this->actingAs($this->customer->user)->get(route('account.subscription'))->assertOk();
         $response->assertSee(__('account.subscription.cancellation_status.pending'));
+        $response->assertSee(__('account.subscription.cancellation_status.reactivation_pending'));
         $response->assertSee('role="status" aria-live="polite" aria-atomic="true"', false);
         foreach ($subscriptions as $subscription) {
             $response->assertDontSee('action="'.route('account.subscriptions.cancel', $subscription).'"', false);
@@ -107,8 +108,83 @@ class SubscriptionCancellationStatusTest extends TestCase
         $response = $this->actingAs($this->customer->user)->get(route('account.subscription'))->assertOk();
         $response->assertDontSee(__('account.subscription.cancellation_status.confirmed'));
         $response->assertSee(__('account.subscription.cancellation_status.reconciliation_required'));
-        $response->assertSee('action="'.route('account.subscriptions.cancel', $stale).'"', false);
+        $response->assertDontSee('action="'.route('account.subscriptions.cancel', $stale).'"', false);
+        $response->assertDontSee('action="'.route('account.subscriptions.reactivate', $stale).'"', false);
         $response->assertDontSee('action="'.route('account.subscriptions.cancel', $conflict).'"', false);
+        $response->assertDontSee('action="'.route('account.subscriptions.reactivate', $conflict).'"', false);
+    }
+
+    public function test_pending_reactivation_supersedes_confirmed_cancellation_and_suppresses_both_actions(): void
+    {
+        $subscription = Subscription::factory()->for($this->customer)->create([
+            'billing_source' => 'stripe',
+            'cancel_at_period_end' => true,
+        ]);
+        $this->operation($subscription, 'confirmed', $this->customer, ['cancel_at_period_end' => true], now());
+        $this->operation($subscription, 'awaiting_confirmation', $this->customer, ['cancel_at_period_end' => false], null, 'reactivate');
+
+        $response = $this->actingAs($this->customer->user)->get(route('account.subscriptions.show', $subscription))
+            ->assertOk()
+            ->assertSee(__('account.subscription.cancellation_status.reactivation_pending'))
+            ->assertDontSee(__('account.subscription.cancellation_status.confirmed'));
+
+        $this->assertNoCancellationLifecycleActions($response->getContent(), $subscription);
+        $this->assertSame([], $this->gateway->calls);
+    }
+
+    public function test_reconciliation_required_reactivation_suppresses_both_actions(): void
+    {
+        $subscription = Subscription::factory()->for($this->customer)->create([
+            'billing_source' => 'stripe',
+            'cancel_at_period_end' => true,
+        ]);
+        $this->operation($subscription, 'reconciliation_required', $this->customer, ['cancel_at_period_end' => false], null, 'reactivate');
+
+        $response = $this->actingAs($this->customer->user)->get(route('account.subscription'))->assertOk()
+            ->assertSee(__('account.subscription.cancellation_status.reconciliation_required'));
+
+        $this->assertNoCancellationLifecycleActions($response->getContent(), $subscription);
+        $this->assertSame([], $this->gateway->calls);
+    }
+
+    public function test_confirmed_reactivation_with_stale_provider_mirror_requires_reconciliation(): void
+    {
+        $subscription = Subscription::factory()->for($this->customer)->create([
+            'billing_source' => 'stripe',
+            'cancel_at_period_end' => true,
+        ]);
+        $this->operation($subscription, 'confirmed', $this->customer, ['cancel_at_period_end' => false], now(), 'reactivate');
+
+        $response = $this->actingAs($this->customer->user)->get(route('account.subscriptions.show', $subscription))->assertOk()
+            ->assertSee(__('account.subscription.cancellation_status.reconciliation_required'))
+            ->assertDontSee(__('account.subscription.cancellation_status.reactivation_confirmed'));
+
+        $this->assertNoCancellationLifecycleActions($response->getContent(), $subscription);
+        $this->assertSame([], $this->gateway->calls);
+    }
+
+    public function test_successful_reactivation_requires_a_matching_mirror_and_allows_a_new_cancellation(): void
+    {
+        $subscription = Subscription::factory()->for($this->customer)->create([
+            'billing_source' => 'stripe',
+            'cancel_at_period_end' => true,
+        ]);
+        $this->operation($subscription, 'confirmed', $this->customer, ['cancel_at_period_end' => true], now());
+        $subscription->forceFill(['cancel_at_period_end' => false])->save();
+        $this->operation($subscription, 'confirmed', $this->customer, ['cancel_at_period_end' => false], now(), 'reactivate');
+
+        $reactivated = $this->actingAs($this->customer->user)->get(route('account.subscriptions.show', $subscription))->assertOk()
+            ->assertSee(__('account.subscription.cancellation_status.reactivation_confirmed'))
+            ->assertDontSee(__('account.subscription.cancellation_status.confirmed'));
+        $reactivated->assertSee('action="'.route('account.subscriptions.cancel', $subscription).'"', false);
+        $reactivated->assertDontSee('action="'.route('account.subscriptions.reactivate', $subscription).'"', false);
+
+        $this->operation($subscription, 'awaiting_confirmation', $this->customer, ['cancel_at_period_end' => true], null);
+        $canceling = $this->get(route('account.subscriptions.show', $subscription))->assertOk()
+            ->assertSee(__('account.subscription.cancellation_status.pending'))
+            ->assertDontSee(__('account.subscription.cancellation_status.reactivation_confirmed'));
+        $this->assertNoCancellationLifecycleActions($canceling->getContent(), $subscription);
+        $this->assertSame([], $this->gateway->calls);
     }
 
     public function test_status_lookup_is_scoped_to_authenticated_customer_and_exact_subscription(): void
@@ -166,15 +242,22 @@ class SubscriptionCancellationStatusTest extends TestCase
         Customer $customer,
         ?array $snapshot = null,
         mixed $confirmedAt = null,
+        string $operationName = 'cancel_at_period_end',
     ): SubscriptionOperation {
         return SubscriptionOperation::query()->create([
             'subscription_id' => $subscription->id,
             'customer_id' => $customer->id,
-            'operation' => 'cancel_at_period_end',
+            'operation' => $operationName,
             'operation_key' => 'cancel-status-test-'.Str::uuid(),
             'status' => $status,
-            'request_snapshot' => $snapshot ?? ['cancel_at_period_end' => true],
+            'request_snapshot' => $snapshot ?? ['cancel_at_period_end' => $operationName === 'cancel_at_period_end'],
             'confirmed_at' => $confirmedAt,
         ]);
+    }
+
+    private function assertNoCancellationLifecycleActions(string $html, Subscription $subscription): void
+    {
+        $this->assertStringNotContainsString('action="'.route('account.subscriptions.cancel', $subscription).'"', $html);
+        $this->assertStringNotContainsString('action="'.route('account.subscriptions.reactivate', $subscription).'"', $html);
     }
 }
