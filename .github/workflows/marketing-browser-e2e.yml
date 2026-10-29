@@ -189,6 +189,7 @@ jobs:
       - name: Execute actual Chromium browser tests
         shell: bash
         env:
+          M16_CANCELLATION_E2E: '1'
           M16_CANCELLATION_FIXTURES_PATH: ${{ github.workspace }}/storage/framework/testing/subscription-cancellation.json
         run: |
           set -euo pipefail
