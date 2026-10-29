@@ -45,12 +45,12 @@ def checked(stage, command, env=None, timeout=20, capture=True):
     except subprocess.CalledProcessError as error:
         diagnostics = [
             line.strip() for line in (error.stderr or "").splitlines()
-            if re.search(r"\\b(?:ERROR|ALERT)\\b", line, re.IGNORECASE)
+            if re.search(r"\b(?:ERROR|ALERT)\b", line, re.IGNORECASE)
         ]
         diagnostic = diagnostics[0][:240] if diagnostics else "no safe error-level diagnostic"
         diagnostic = re.sub(
-            r"(?i)(app[_ -]?key|password|secret|token)([^\\s:=]*\\s*[:=]\\s*)[^\\s]+",
-            r"\\1\\2[redacted]",
+            r"(?i)(app[_ -]?key|password|secret|token)([^\s:=]*\s*[:=]\s*)[^\s]+",
+            r"\1\2[redacted]",
             diagnostic,
         )
         fail(f"Disposable {stage} failed (exit code {error.returncode}): {diagnostic}")
