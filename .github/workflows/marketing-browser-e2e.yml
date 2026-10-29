@@ -106,6 +106,7 @@ jobs:
 
           # Verify the committed SHA-pinned workflow and lock before dependencies are installed.
           timeout 120s gh actions-lock --verify "$workflow"
+          echo "ACTIONS_LOCK_BASELINE=PASS"
 
           # Prove stale workflow references fail closed; the test uses an ephemeral runner copy.
           checkout_pin="actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
@@ -123,10 +124,12 @@ jobs:
           fi
           test "$drift_status" -ne 0
           jq -e '(.valid == false) and ((.findings // []) | any(.category == "not-pinned" and ((.retryable // false) == false)))' "$report" > /dev/null
+          echo "ACTIONS_LOCK_DRIFT_REJECTION=PASS"
 
           # Restore the committed workflow and re-verify; cleanup trap remains armed on failure.
           cp "$original" "$workflow"
           timeout 120s gh actions-lock --verify "$workflow"
+          echo "ACTIONS_LOCK_RESTORE=PASS"
           git diff --exit-code -- "$workflow" .github/workflows/actions.lock
           trap - EXIT
           rm -f "$original" "$drifted" "$report" "$error_log"
