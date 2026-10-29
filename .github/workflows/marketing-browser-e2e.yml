@@ -110,7 +110,7 @@ jobs:
 
           # Prove stale workflow references fail closed; the test uses an ephemeral runner copy.
           checkout_pin="actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-          test "$(grep -Fo "$checkout_pin" "$workflow" | wc -l)" -eq 1
+          test "$(grep -E "^[[:space:]]*-[[:space:]]*uses:[[:space:]]*${checkout_pin}([[:space:]]+#.*)?$" "$workflow" | wc -l)" -eq 1
           sed "s|$checkout_pin|actions/checkout@main|" "$original" > "$drifted"
           grep -Fq "actions/checkout@main" "$drifted"
           cp "$drifted" "$workflow"
