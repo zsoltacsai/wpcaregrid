@@ -7,7 +7,7 @@ RUN apt-get update \
         libonig-dev libpng-dev libsqlite3-dev libwebp-dev libzip-dev nginx-light \
         iproute2 procps python3 \
     && if ! php -r 'exit(extension_loaded("gd") ? 0 : 1);'; then docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp; fi \
-    && for extension in bcmath curl gd intl mbstring mysqli pdo_mysql pdo_sqlite sqlite3 zip; do \
+    && for extension in bcmath curl gd intl mbstring mysqli pcntl pdo_mysql pdo_sqlite sqlite3 zip; do \
          if php -r 'exit(extension_loaded($argv[1]) ? 0 : 1);' "$extension"; then \
              echo "PHP extension already present: $extension"; \
          else \

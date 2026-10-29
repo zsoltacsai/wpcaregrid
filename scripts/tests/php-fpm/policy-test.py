@@ -26,6 +26,8 @@ require("php:8.5.12-fpm@sha256:8b4b4a764f7985137b13e4cb49dd59e967d9daa7946a731f9
 require("extension_loaded($argv[1])" in dockerfile
         and "docker-php-ext-install" in dockerfile,
         "The image build must avoid reinstalling extensions already present in the pinned PHP base.")
+require("for extension in bcmath curl gd intl mbstring mysqli pcntl pdo_mysql pdo_sqlite sqlite3 zip;" in dockerfile,
+        "The pinned FPM image must build or enable every required extension, including pcntl.")
 require("USER www-data:www-data" in dockerfile and "posix_geteuid() === 33" in (HARNESS / "probe.php").read_text(),
         "FPM must run as a dedicated unprivileged UID.")
 for flag in ("--network none", "--cap-drop ALL", "--security-opt no-new-privileges:true",
