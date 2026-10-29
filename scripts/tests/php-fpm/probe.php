@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+use Illuminate\Contracts\Http\Kernel;
 
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
@@ -56,7 +57,7 @@ $check('no_runner_credentials_or_proxy_environment', $environmentClean);
 $check('no_docker_socket', ! file_exists('/var/run/docker.sock') && ! file_exists('/run/docker.sock'));
 
 $app = require '/app/bootstrap/app.php';
-$app->make(Illuminate\Contracts\Http\Kernel::class)->bootstrap();
+$app->make(Kernel::class)->bootstrap();
 $check('database_queue_not_inline_sync', config('queue.default') === 'database');
 $check('mail_sink_is_array', config('mail.default') === 'array');
 $check('filesystem_sink_is_local', config('filesystems.default') === 'local');
@@ -94,7 +95,7 @@ try {
     $check('synthetic_sqlite_connectivity', (int) ($dbResult[0]->compatibility_probe ?? 0) === 1);
     $jobsCount = app('db')->table('jobs')->count();
     $check('queue_has_no_work_or_consumers', $jobsCount === 0);
-} catch (\Throwable) {
+} catch (Throwable) {
     $jobsCount = null;
     $check('synthetic_sqlite_connectivity', false);
     $check('queue_has_no_work_or_consumers', false);
@@ -106,8 +107,10 @@ $canConnect = static function (string $target, float $timeout = 0.5): bool {
     $socket = @stream_socket_client($target, $errorNumber, $errorText, $timeout, STREAM_CLIENT_CONNECT);
     if (is_resource($socket)) {
         fclose($socket);
+
         return true;
     }
+
     return false;
 };
 $check('sandbox_loopback_http_witness_reachable', $canConnect('tcp://127.0.0.1:8080'));
