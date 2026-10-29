@@ -176,6 +176,7 @@ chmod 0700 "$temp_dir/bin/git" "$temp_dir/bin/curl"
 export PATH="$temp_dir/bin:$PATH"
 export SMOKE_HEAD_FILE="$temp_dir/current-head"
 export TARGET_FIXTURE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+LEGACY_BASELINE_FIXTURE='761e0e5d37558da808ac961ca2d2a68b4ffab0db'
 printf '%s\n' '175ba57985557a8cf26ebe7b7817a03cbae3097a' >"$SMOKE_HEAD_FILE"
 
 source "$repo_root/scripts/deploy-staging.sh"
@@ -247,12 +248,15 @@ run_rejected_case() {
 
 run_accepted_case baseline valid pre_deploy_smoke
 run_accepted_case baseline root_200 pre_deploy_smoke
-if SMOKE_PHASE=baseline SMOKE_CASE=legacy_owner_redirect SMOKE_BASELINE_PROFILE=legacy_application pre_deploy_smoke >"$temp_dir/legacy-valid.log" 2>&1; then scenarios=$((scenarios + 1)); else cat "$temp_dir/legacy-valid.log" >&2; exit 1; fi
-if SMOKE_PHASE=baseline SMOKE_CASE=legacy_owner_404 SMOKE_BASELINE_PROFILE=legacy_application pre_deploy_smoke >"$temp_dir/legacy-status.log" 2>&1; then printf 'Legacy baseline incorrectly accepted 404.\n' >&2; exit 1; fi
+if SMOKE_PHASE=baseline SMOKE_CASE=legacy_owner_redirect SMOKE_BASELINE_PROFILE=legacy_application check_http_shared baseline "$LEGACY_BASELINE_FIXTURE" >"$temp_dir/legacy-valid.log" 2>&1; then scenarios=$((scenarios + 1)); else cat "$temp_dir/legacy-valid.log" >&2; exit 1; fi
+if SMOKE_PHASE=baseline SMOKE_CASE=legacy_owner_404 SMOKE_BASELINE_PROFILE=legacy_application check_http_shared baseline "$LEGACY_BASELINE_FIXTURE" >"$temp_dir/legacy-status.log" 2>&1; then printf 'Legacy baseline incorrectly accepted 404.\n' >&2; exit 1; fi
 grep -Fq 'expected 302 authentication redirect' "$temp_dir/legacy-status.log" || { cat "$temp_dir/legacy-status.log" >&2; exit 1; }
 scenarios=$((scenarios + 1))
-if SMOKE_PHASE=baseline SMOKE_CASE=legacy_owner_wrong_location SMOKE_BASELINE_PROFILE=legacy_application pre_deploy_smoke >"$temp_dir/legacy-location.log" 2>&1; then printf 'Legacy baseline accepted wrong Location.\n' >&2; exit 1; fi
+if SMOKE_PHASE=baseline SMOKE_CASE=legacy_owner_wrong_location SMOKE_BASELINE_PROFILE=legacy_application check_http_shared baseline "$LEGACY_BASELINE_FIXTURE" >"$temp_dir/legacy-location.log" 2>&1; then printf 'Legacy baseline accepted wrong Location.\n' >&2; exit 1; fi
 grep -Fq 'expected exactly https://staging.wpcaregrid.com/owner/login' "$temp_dir/legacy-location.log" || { cat "$temp_dir/legacy-location.log" >&2; exit 1; }
+scenarios=$((scenarios + 1))
+if SMOKE_PHASE=baseline SMOKE_CASE=legacy_owner_redirect SMOKE_BASELINE_PROFILE=legacy_application check_http_shared baseline 'cccccccccccccccccccccccccccccccccccccccc' >"$temp_dir/legacy-unrecognized.log" 2>&1; then printf 'Unrecognized gate-less baseline was accepted.\n' >&2; exit 1; fi
+grep -Fq 'Unrecognized gate-less baseline commit' "$temp_dir/legacy-unrecognized.log" || { cat "$temp_dir/legacy-unrecognized.log" >&2; exit 1; }
 scenarios=$((scenarios + 1))
 if SMOKE_PHASE=baseline SMOKE_CASE=valid SMOKE_BASELINE_PROFILE=ambiguous pre_deploy_smoke >"$temp_dir/ambiguous-source.log" 2>&1; then printf 'Ambiguous baseline provenance was accepted.\n' >&2; exit 1; fi
 grep -Fq 'Baseline gate provenance is ambiguous' "$temp_dir/ambiguous-source.log" || { cat "$temp_dir/ambiguous-source.log" >&2; exit 1; }
