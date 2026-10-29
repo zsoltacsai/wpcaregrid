@@ -45,7 +45,8 @@ foreach ($requiredEnvironment as $name => $expected) {
 $databasePath = getenv('DB_DATABASE');
 $fixturePath = getenv('M16_CANCELLATION_FIXTURES_PATH');
 $baseUrl = getenv('E2E_BASE_URL');
-$mode = $argv[1] ?? 'seed';
+$requestedMode = $argv[1] ?? 'seed';
+$mode = $requestedMode === '--verify-read-only' ? 'verify-read-only' : $requestedMode;
 if (! is_string($databasePath) || ! is_string($fixturePath) || ! is_string($baseUrl)) {
     $refuse('ARGUMENTS');
 }
