@@ -243,11 +243,11 @@ jobs:
           sudo install -d -o "$e2e_user" -g "$e2e_group" -m 0700 "$e2e_home"
           test -d storage && test ! -L storage
           test -d bootstrap/cache && test ! -L bootstrap/cache
+          mkdir -p playwright-report/html playwright-report/cancellation-html storage/playwright
           sudo chown -R "$e2e_user:$e2e_group" storage bootstrap/cache
           sudo chown "$e2e_user:$e2e_group" .env
           sudo chmod 0640 .env
-          mkdir -p playwright-report/html playwright-report/cancellation-html storage/playwright
-          sudo chown -R "$e2e_user:$e2e_group" playwright-report storage/playwright
+          sudo chown -R "$e2e_user:$e2e_group" playwright-report
 
           cat > "$sandbox_script" <<'SANDBOX_SCRIPT'
           set -euo pipefail
