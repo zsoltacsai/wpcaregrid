@@ -91,6 +91,8 @@ SAFE_FATAL_DETAILS = (
     re.compile(r"Call to undefined function ([A-Za-z_][A-Za-z0-9_\\]*)"),
     re.compile(r"Call to undefined method ([A-Za-z_][A-Za-z0-9_\\]*)::([A-Za-z_][A-Za-z0-9_]*)\(\)"),
     re.compile(r'Class "([A-Za-z_][A-Za-z0-9_\\]*)" not found'),
+    re.compile(r'Class "([A-Za-z_][A-Za-z0-9_\\]*)" does not exist'),
+    re.compile(r'Target class \[([A-Za-z_][A-Za-z0-9_\\]*)\] does not exist\.'),
     re.compile(r"Call to a member function ([A-Za-z_][A-Za-z0-9_]*)\(\) on null"),
     re.compile(r'Undefined constant "([A-Za-z_][A-Za-z0-9_\\]*)"'),
 )
