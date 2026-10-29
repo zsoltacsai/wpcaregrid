@@ -289,23 +289,23 @@ Live restore is off (`BACKUP_RESTORE_ENABLED=false`) until the staging rehearsal
 
 Use the reviewed deployment controller and its co-located `scripts/verify-release-ci.py` from the same exact merged primary commit on the staging VPS only. The controller source SHA is an independently reviewed tool version: update it and both file hashes whenever the controller or CI verifier changes. The deployment target has its own exact-SHA push-CI gate. Prepare the two files from a trusted local clone at the exact source commit, transfer them into a private staging directory, verify both SHA-256 values there, and run the controller as `deploy` with `/var/www/wpcaregrid` as its working directory. Do not run the controller from the application checkout: it resolves `verify-release-ci.py` relative to its own file, and the live checkout may have an outdated or missing verifier. The controller still reads the scheduler wrapper and post-deployment receipt writer from the application checkout at their documented stages.
 
-The reviewed controller source commit is `ebc64a95def535f3f1087f1755f4193ff6d769ab`. Its expected file hashes are:
+The reviewed controller source commit is `bfb456a32cc272d511d52eb20f9cea0db97e4d89`. Its expected file hashes are:
 
-- `scripts/deploy-staging.sh`: `8727167bacf1c9d4ba782afdc2434791db73fa9b4d7eb48a54a2ee43f5575491`
-- `scripts/verify-release-ci.py`: `0243d51fd55ef7ddb21fcc11e2804313ac3537cc0efe74da63a5747d79a7a4c7`
+- `scripts/deploy-staging.sh`: `38294decd627cda0875a49a9fef3bc2c084602ce11c788334e646e3bc8401c97`
+- `scripts/verify-release-ci.py`: `698ee8c257d427977557365f2cb801c79459d25595219ab23fd0ae095f8a4450`
 
 `CONTROLLER_SOURCE_SHA` identifies only the commit used to extract the reviewed controller files. It is not the release target. At the later, separately approved deployment, set `DEPLOYMENT_TARGET_SHA` to the exact then-current primary-branch tip after its push CI has passed all seven mandatory jobs, including the MySQL process-concurrency gate. Never default the target to `CONTROLLER_SOURCE_SHA`; the target may change when this documentation PR or other work merges.
 
 On a trusted workstation with the controller source commit available, extract the Git blobs without checkout filters, then verify the local copies:
 
 ```sh
-CONTROLLER_SOURCE_SHA=ebc64a95def535f3f1087f1755f4193ff6d769ab
+CONTROLLER_SOURCE_SHA=bfb456a32cc272d511d52eb20f9cea0db97e4d89
 git cat-file -e "${CONTROLLER_SOURCE_SHA}^{commit}"
 git cat-file blob "${CONTROLLER_SOURCE_SHA}:scripts/deploy-staging.sh" > deploy-staging.sh
 git cat-file blob "${CONTROLLER_SOURCE_SHA}:scripts/verify-release-ci.py" > verify-release-ci.py
 printf '%s  %s\n' \
-  8727167bacf1c9d4ba782afdc2434791db73fa9b4d7eb48a54a2ee43f5575491 deploy-staging.sh \
-  0243d51fd55ef7ddb21fcc11e2804313ac3537cc0efe74da63a5747d79a7a4c7 verify-release-ci.py \
+  38294decd627cda0875a49a9fef3bc2c084602ce11c788334e646e3bc8401c97 deploy-staging.sh \
+  698ee8c257d427977557365f2cb801c79459d25595219ab23fd0ae095f8a4450 verify-release-ci.py \
   | sha256sum -c -
 ```
 
@@ -314,7 +314,7 @@ For the separately approved deployment preparation, create a new release-specifi
 The target SHA is supplied separately at deployment time. The following guard intentionally stops if that separately approved exact current branch tip has not been provided; do not substitute the controller source SHA:
 
 ```sh
-CONTROLLER_SOURCE_SHA=ebc64a95def535f3f1087f1755f4193ff6d769ab
+CONTROLLER_SOURCE_SHA=bfb456a32cc272d511d52eb20f9cea0db97e4d89
 : "${DEPLOYMENT_TARGET_SHA:?Set this to the separately approved exact current primary-branch tip}"
 [[ "${DEPLOYMENT_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 2
 cd /var/www/wpcaregrid
@@ -328,7 +328,7 @@ Rollback is a separate explicit operation, never an alternate forward-target mod
 The rollback command uses the same protected controller source directory as a forward deployment. Keep the rollback target distinct, and preserve the existing root-approved SHA-file requirement described below:
 
 ```sh
-CONTROLLER_SOURCE_SHA=ebc64a95def535f3f1087f1755f4193ff6d769ab
+CONTROLLER_SOURCE_SHA=bfb456a32cc272d511d52eb20f9cea0db97e4d89
 : "${ROLLBACK_TARGET_SHA:?Set this to the separately authorized rollback SHA}"
 [[ "${ROLLBACK_TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 2
 cd /var/www/wpcaregrid

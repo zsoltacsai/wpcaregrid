@@ -136,6 +136,37 @@ final class BackupTest extends TestCase
         update_option('caregrid_raw_value', "CareGrid's \"test\" site\nwith newline\\and backslash");
         set_transient('caregrid_cached', 'TRANSIENT-VALUE');
 
+        // Seed real Connector-owned option rows and prove their values exist before the dumper runs.
+        // JobStore::begin() during polling will preserve the unrelated synthetic history entry.
+        $stateSentinel = 'M15_SYNTHETIC_CONNECTOR_STATE_MUST_NOT_EXPORT_7c38a4';
+        $state = get_option('wp_caregrid_state', []);
+        $state['m15_exclusion_sentinel'] = $stateSentinel;
+        update_option('wp_caregrid_state', $state, false);
+
+        $jobsSentinel = 'M15_SYNTHETIC_CONNECTOR_JOB_MUST_NOT_EXPORT_9f1b62';
+        $jobs = get_option('wp_caregrid_jobs', []);
+        $jobs['m15-synthetic-exclusion-fixture'] = [
+            'type' => 'INVENTORY',
+            'payload' => ['synthetic' => true],
+            'state' => 'completed',
+            'started_at' => gmdate('c'),
+            'completed_at' => gmdate('c'),
+            'result' => [
+                'status' => 'success',
+                'result_code' => 'OK',
+                'data' => ['synthetic_value' => $jobsSentinel],
+                'error' => null,
+            ],
+            'delivered' => true,
+            'delivery_attempts' => 1,
+        ];
+        update_option('wp_caregrid_jobs', $jobs, false);
+
+        $this->assertSame('TRANSIENT-VALUE', get_transient('caregrid_cached'));
+        $this->assertSame($stateSentinel, get_option('wp_caregrid_state')['m15_exclusion_sentinel']);
+        $this->assertSame($jobsSentinel, get_option('wp_caregrid_jobs')['m15-synthetic-exclusion-fixture']['result']['data']['synthetic_value']);
+        $this->assertSame("CareGrid's \"test\" site\nwith newline\\and backslash", get_option('caregrid_raw_value'));
+
         $result = $this->run_backup('BACKUP_DATABASE');
 
         $this->assertSame('success', $result['status'], wp_json_encode($result['error']));
@@ -144,6 +175,11 @@ final class BackupTest extends TestCase
         $this->assertStringContainsString("'caregrid_raw_value','CareGrid\\'s \\\"test\\\" site\\nwith newline\\\\and backslash'", $sql);
         $this->assertStringNotContainsString('TRANSIENT-VALUE', $sql);
         $this->assertStringNotContainsString('wp_caregrid_credential', $sql, 'The connector credential is not in the backup.');
+        $this->assertStringNotContainsString('wp_caregrid_state', $sql, 'Connector state option names must be excluded.');
+        $this->assertStringNotContainsString($stateSentinel, $sql, 'Synthetic Connector state values must be excluded.');
+        $this->assertStringNotContainsString('wp_caregrid_jobs', $sql, 'Connector job option names must be excluded.');
+        $this->assertStringNotContainsString($jobsSentinel, $sql, 'Synthetic Connector job values must be excluded.');
+        $this->assertStringContainsString('caregrid_raw_value', $sql, 'Ordinary site options remain in the database backup.');
         $this->assertStringNotContainsString(DB_PASSWORD, $sql);
 
         // Every line is one of the statement forms the restore accepts.
