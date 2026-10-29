@@ -8,22 +8,49 @@ The migration uses only the fixed profiles `/usr/bin/php8.4` and `/usr/bin/php8.
 
 The existing exact-SHA CI verifier, branch-tip check, deployment lock, protected DB backup, maintenance gate, scheduler lock/pause, queue drain, application health checks, and fail-closed recovery remain required. The profile switch is attempted only after the gate and scheduler pause are active and both queue workers are stopped. The helper rejects arbitrary profile names, paths, commands, Nginx changes, and Supervisor commands.
 
-## Required host preparation (separate Owner approval)
+## Current release-gate compatibility — blocking for staging
 
-Before the protected controller can use runtime profiles, an administrator must prepare and verify the following on staging. Do not perform these steps from the development workstation or through the normal deploy controller until separately approved:
+Protected primary `cab17e383d8f121a0b7bc4b05f47e270842ee289` has a successful exact-SHA CI run with 37/37 checks and all seven required contexts passing. This is repository validation only. It does not establish staging-host readiness, effective server configuration, successful deployment, or production readiness.
 
-1. Verify the package signer and cached repository metadata; confirm PHP 8.5 package provenance, required extensions, and CLI/FPM package versions. The PPA signer/InRelease evidence is currently UNKNOWN.
-2. Install PHP 8.5 side-by-side with patched PHP 8.4 only after package provenance is verified. Do not change alternatives or remove PHP 8.4.
-3. Confirm `/usr/bin/php8.4`, `/usr/bin/php8.5`, both FPM services, and sockets `/run/php/php8.4-fpm.sock` and `/run/php/php8.5-fpm.sock`. The effective `[www]` pool in each PHP-FPM configuration must run as `user = www-data` and `group = www-data`; the protected preflight validates these worker identities from `php-fpm -tt` output. Both sockets must independently be `www-data:www-data` mode `0660`; socket ownership does not prove the PHP worker UID/GID. Both FPM services remain active. The 8.4 pool/socket is shared by other vhosts and must not be repointed.
-4. Install root-owned mode-0644 snippets with exactly one directive each:
-   - `wpcaregrid-staging-php84.conf`: `fastcgi_pass unix:/run/php/php8.4-fpm.sock;`
-   - `wpcaregrid-staging-php85.conf`: `fastcgi_pass unix:/run/php/php8.5-fpm.sock;`
-   Set `wpcaregrid-staging-runtime.conf` to a root-owned symlink to the 8.4 profile initially. Change only the staging vhost to include this selector at its PHP FastCGI location. Do not change other vhosts. The helper verifies Nginx’s expanded config and fails unless that exact include is used once and only in the staging vhost.
-5. Confirm `/etc/supervisor/conf.d/wpcaregrid.conf` is root-owned mode 0644 with no named/default ACLs and contains the two documented worker commands. The protected helper converts only those exact commands to `/usr/local/bin/wpcaregrid-php` while the gate is active and workers are stopped. Any differing configuration is a stop condition.
-6. Confirm the `www-data` crontab remains the fixed root-installed scheduler wrapper entry. The helper installs the hash-pinned wrapper from the exact deployed commit; it calls the same runtime dispatcher.
-7. Keep the existing deploy-only sudo policy. The root helper must be installed from the reviewed merge commit, with its reviewed source hash. No general sudo, root SSH, package-manager access, or direct service command is added for `deploy`.
+PR #209 registers `MarketingOnlyReleaseGate` globally and removes the staging exemption. With the documented staging identity (`APP_ENV=production`, `CAREGRID_DEPLOYMENT_ENV=staging`), the exact three-value testing exemption cannot apply. Under the current gate, requests outside its explicit public marketing/legal/health allowlist return an empty 404 before route dispatch; authentication, Owner, Operator, account, and `/api/v1/connector/*` endpoints are among the denied routes. `invitation_beta` also does not grant backend access. The live staging configuration cache was not inspected for this documentation update, so this is the source-defined result for the documented configuration and must be verified against approved, sanitized host evidence before any operation.
 
-The current source review cannot prove the live host satisfies these prerequisites. No staging package or configuration operation was performed for this PR.
+The protected deployment smoke requires `/owner/integrations` to return an authentication redirect. The globally registered gate returns 404 first under the documented staging identity, so the post-deployment smoke fails and the controller enters its failure/recovery path. Do not deploy a transition release to staging until a separately reviewed, fail-closed staging access contract preserves required staging endpoints and makes the smoke expectations accurate. Do not restore `staging_exempt`, use PHPUnit testing identity values to enable staging, or weaken the production marketing gate. This compatibility blocker is independent of the PHP runtime gates below.
+
+## Required host preparation (ordered gates; each write needs separate Owner approval)
+
+This section is a preparation plan, not authorization to act. Complete Gate 1 and verify it before requesting a separate Gate 2 package-install GO. PHP 8.5 installation, staging cutover, production release and infrastructure changes remain NO-GO absent their own approvals.
+
+### Gate 1 — pin application consumers to PHP 8.4 first
+
+Before any PHP 8.5 package is installed:
+
+1. Read-only record the current PHP 8.4 CLI/FPM versions, shared 8.4 FPM service/socket state, the global `php` alternatives mode and selection, and the exact Supervisor and scheduler consumer commands. The current alternatives mode is auto; do not change it as part of this runbook step.
+2. Obtain a separate Owner GO for a PHP 8.4-only bootstrap route that prepares the root-owned `/usr/local/bin/wpcaregrid-php` dispatcher and fixed scheduler wrapper. Its exact source and hashes must come from the reviewed primary commit, with the active/default profile set to `/usr/bin/php8.4`. First verify that the selected protected controller can actually bootstrap from the present host state: current source checks the active selector and PHP 8.4 CLI/FPM/Nginx/Supervisor preflight before backup/deployment, then installs runtime assets later behind the gate with the scheduler paused and workers stopped. If the dispatcher or selector is absent, the current controller is not by itself a bootstrap route. Stop and obtain a separately reviewed bootstrap design; do not bypass preflight or make manual Nginx/Supervisor changes. Any required Nginx step needs its own Owner GO.
+3. Under that approved deployment, first verify the Supervisor file is root-owned mode 0644, has no named/default ACLs, and contains only the two documented worker commands. Pin both commands and the scheduler entry to the protected dispatcher/wrapper. Drain workers safely and follow the protected controller; do not edit Supervisor or scheduler files manually. Keep PHP 8.4 FPM and its shared socket available to sibling vhosts.
+4. Before Gate 1 is accepted, read-only verify both live workers resolve to `/usr/bin/php8.4`, their command lines use the dispatcher, and the scheduler invokes the fixed wrapper/dispatcher with the 8.4 profile. Confirm no application worker or scheduler command relies on unversioned `php` or PATH lookup. Record sanitized evidence only.
+5. Keep the existing deploy-only sudo policy. Install the root helper only from its reviewed merge commit and source hash; do not grant general sudo, root SSH, package-manager access, or direct service commands to deploy.
+6. If any consumer cannot be pinned and verified, stop. Do not proceed to PHP 8.5 package installation. Do not alter global alternatives, Nginx, FPM configuration, or services during this gate unless a separate Owner GO explicitly covers that exact change.
+
+### Gate 2 — separately approved PHP 8.5 side-by-side package installation
+
+Only after Gate 1 is complete and independently verified, prepare a distinct package-install request:
+
+1. Revalidate the Ondřej PHP PPA signer, signed repository metadata, candidate package hashes, host architecture, required extensions and exact CLI/FPM package versions. The supplied 2026-10-28 evidence records the signer and inspected candidate integrity as verified; refresh that evidence immediately before package use.
+2. Inspect the exact package maintainer scripts and a fresh APT simulation. The PHP 8.5 CLI package can register priority-85 `php` alternatives while global alternatives are in auto mode. Do not run `update-alternatives` or change its mode under this plan. The dispatcher/consumer pinning in Gate 1 is a prerequisite, not proof that unrelated host consumers are unaffected; account for and verify the package-script effect within the separately approved installation plan.
+3. Review and explicitly approve the PHP 8.5 FPM package's service-start behavior before installation. It may attempt to start its versioned FPM service. If the effect cannot be safely controlled and verified without changing Nginx or disturbing PHP 8.4/shared services, stop and revise the installation plan before requesting GO.
+4. After a distinct Owner GO, install only the reviewed PHP 8.5 CLI/FPM packages and required extensions side-by-side. Do not remove or upgrade the PHP 8.4 rollback packages. Keep PHP 8.4 FPM and its shared socket available; do not change Nginx selectors or any vhost in this installation-only step.
+5. After installation, perform read-only checks of `/usr/bin/php8.5`, package versions, both FPM services and sockets, `[www]` worker UID/GID (`www-data`), and socket owner/mode (`www-data:www-data`, `0660`). Confirm the effective PHP 8.5 FPM settings, including Zend OPcache availability and `opcache.enable`, `opcache.validate_timestamps`, and `opcache.revalidate_freq`; PHP 8.5 OPcache is statically built in, so a separate OPcache package or `.so` is not expected. Keep the shared PHP 8.4 FPM pool/socket available to sibling vhosts. Unknown or out-of-contract values block any later cutover.
+
+### Nginx selector preparation (separate Owner GO)
+
+Nginx configuration is outside the authorized scope of this PR and remains unchanged during both preparation gates. If the reviewed PHP 8.4 bootstrap route needs the runtime selector, obtain a separate Owner GO for this exact prerequisite before using that route. Otherwise, prepare the selector only after Gate 2 and later cutover prerequisites pass. Any Nginx change is limited to an independently approved operation. The required root-owned mode-0644 snippets each contain exactly one directive:
+
+- `wpcaregrid-staging-php84.conf`: `fastcgi_pass unix:/run/php/php8.4-fpm.sock;`
+- `wpcaregrid-staging-php85.conf`: `fastcgi_pass unix:/run/php/php8.5-fpm.sock;`
+
+Set `wpcaregrid-staging-runtime.conf` to a root-owned symlink to the 8.4 profile initially. Change only the `staging.wpcaregrid.com` vhost to include this selector at its PHP FastCGI location. Do not change other vhosts. The helper verifies expanded Nginx configuration and fails unless that exact include is used once and only in the staging vhost. PHP 8.4 FPM/socket remains shared with other vhosts and must not be repointed.
+
+Use the protected controller for Gate 1 only if its reviewed PHP 8.4 bootstrap preconditions already pass on the host. If a missing dispatcher or selector prevents its preflight, stop and obtain a separately reviewed bootstrap route before beginning Gate 1. No staging package or configuration operation was performed for this PR.
 
 ## Protected cutover
 
@@ -75,6 +102,16 @@ This is a CI/source snapshot, not host evidence. Recheck the primary branch, rul
 | WordPress Connector | PHP 8.2–8.5 across WordPress 6.8/7.1 with MySQL 5.7, MySQL 8.0, MySQL 8.4 and MariaDB 10.11; the protected PHP 8.4 / WordPress 7.1 SQLite, MySQL 8.4 and MariaDB 10.11 contexts | Connector compatibility is separate from Laravel server runtime coverage |
 
 The seven protected contexts at review time are Quality; Server PHP 8.4/MySQL; Server PHP 8.5/MySQL; Server SQLite/PHP 8.4; and Connector PHP 8.4/WordPress 7.1 SQLite, MySQL and MariaDB. Both server MySQL jobs include their own process-concurrency gate. Do not remove the PHP 8.4 rollback lane, change the workflow, or infer host readiness from these tests.
+
+The merged changes represented by PRs #209, #210, #214, #215 and #216 must be interpreted within their scope:
+
+- PR #209's marketing gate is global; its synthetic test identity is not a staging configuration. The staging endpoint and smoke incompatibility above remains a release blocker.
+- PR #210's Chromium marketing tests use an isolated loopback server, synthetic SQLite and testing-only configuration. They validate rendered marketing UX and contact-only pricing presentation, not staging authentication, Connector APIs, deployment smoke or backend readiness.
+- PR #214 makes the legacy receipt writer default an omitted PHP binary to validated `/usr/bin/php8.4`, while current callers can pass their selected binary explicitly. This fixes receipt compatibility only; it does not install the root helper, create the runtime dispatcher, seed the Nginx selector, or make a controller with unmet preflight prerequisites a bootstrap path.
+- PR #215 updates the locked `symfony/mime` dependency from 8.1.7 to 8.1.10. Deploy and rollback checks must use the exact approved release's `composer.lock` and run platform checks under the selected pinned PHP binary; the dependency fix does not prove host compatibility.
+- PR #216 makes the Connector inventory test assert the WordPress core version supplied by the test runtime instead of a hard-coded patch release. The resulting WordPress 6.8/7.1 matrix is repository test coverage, not live Connector or staging evidence.
+
+The exact primary CI run includes both PHP 8.4/8.5 MySQL process-concurrency gates, the PHP 8.4 SQLite regression, and the complete Connector matrix. These results support source review only. They do not clear the marketing-gate blocker or authorize deployment, package installation, cutover, or production release.
 
 At this snapshot, the application declares PHP `^8.3`, Laravel `^13.17`, and Composer's lock platform is PHP `^8.3`; the resolved Laravel lock version is 13.33.0. These constraints admit PHP 8.5 but are not a substitute for runtime validation. Laravel 13's documented minimum is PHP 8.3 and its documented extension set includes Ctype, cURL, DOM, Fileinfo, Filter, Hash, Mbstring, OpenSSL, PCRE, PDO, Session, Tokenizer and XML. The deployment contract additionally requires `intl`, `zip`, `pdo_mysql`, and `pcntl` for CLI queue workers. Validate the real PHP 8.5 CLI and FPM runtimes with the protected `composer check-platform-reqs --no-dev --lock` gate plus the application-specific extension checks; do not use `--ignore-platform-reqs`. The Composer command checks locked package requirements, so it does not replace checks for application-specific extensions.
 

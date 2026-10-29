@@ -262,8 +262,24 @@ class ContentManagementTest extends TestCase
         $this->get('/en/')->assertDontSee('Professional');
 
         $this->save('pricing.wordpress.business', 'en', $fields, 'publish')->assertSessionHasNoErrors();
-        $this->get('/en/')->assertSee('Professional')->assertSee('Recommended')->assertSee('Start Professional')->assertSee('Everything in Professional');
-        // Same wording wherever the plan is named.
+
+        config([
+            'marketing.links.contact' => 'mailto:contact@zsoltacsai.com',
+            'marketing_release.profile' => 'marketing_only',
+        ]);
+
+        $this->get('/en/')->assertSee('Professional')
+            ->assertSee('Recommended')
+            ->assertSee('Contact us about this plan')
+            ->assertSee('Everything in Professional')
+            ->assertDontSee('Start Professional');
+
+        $published = ContentEntry::where('key', 'pricing.wordpress.business')->where('locale', 'en')->sole()->published;
+        $this->assertSame('Professional', $published['name']);
+        $this->assertSame('Recommended', $published['badge']);
+        $this->assertSame('Start Professional', $published['cta_label']);
+
+        // Same plan identity wherever the plan is named.
         $site = $this->customerWithWebsite();
         $this->assertSame('Professional', $site['subscription']->planName());
     }

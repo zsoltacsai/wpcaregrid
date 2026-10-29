@@ -1028,19 +1028,117 @@ class CheckoutTest extends TestCase
         $this->submit(['email' => 'c11@company.example'])->assertStatus(429);
     }
 
-    public function test_homepage_plan_buttons_link_to_checkout_with_a_logical_selection_only(): void
+    public function test_homepage_plan_buttons_select_the_correct_checkout_for_every_plan_in_invitation_beta(): void
     {
-        $html = $this->get('/en/')->getContent();
+        config(['marketing_release.profile' => 'invitation_beta']);
 
-        preg_match_all('#href="(http://[^"]+/checkout\?[^"]+)"#', $html, $matches);
-        $this->assertCount(6, $matches[1], 'One default-interval link per plan card.');
+        $html = $this->get('/en/')->assertOk()->getContent();
+        $document = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $this->assertTrue($document->loadHTML('<?xml encoding="UTF-8">'.$html));
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
 
-        foreach ($matches[1] as $url) {
-            parse_str(parse_url(html_entity_decode($url), PHP_URL_QUERY), $query);
-            $this->assertSame(['product', 'plan', 'interval'], array_keys($query));
+        $xpath = new \DOMXPath($document);
+        $actions = $xpath->query('//*[@id="pricing"]//*[@data-marketing-plan]');
+        $this->assertInstanceOf(\DOMNodeList::class, $actions);
+        $this->assertSame(6, $actions->length, 'Every product/plan card must expose one invitation-beta checkout action.');
+
+        $expectedPlans = [
+            'wordpress:basic',
+            'wordpress:business',
+            'wordpress:secure',
+            'woocommerce:basic',
+            'woocommerce:business',
+            'woocommerce:secure',
+        ];
+        $seenPlans = [];
+
+        $assertCheckoutUrl = function (string $url, string $product, string $plan, string $interval): void {
+            $parts = parse_url(html_entity_decode($url, ENT_QUOTES | ENT_HTML5));
+            $this->assertIsArray($parts);
+            $this->assertSame(parse_url(route('checkout.show', [
+                'product' => $product,
+                'plan' => $plan,
+                'interval' => $interval,
+            ]), PHP_URL_PATH), $parts['path'] ?? null);
+
+            parse_str($parts['query'] ?? '', $query);
+            $this->assertSame([
+                'product' => $product,
+                'plan' => $plan,
+                'interval' => $interval,
+            ], $query, 'Checkout URLs must contain only the selected logical product, plan, and interval.');
+        };
+
+        foreach ($actions as $action) {
+            $this->assertInstanceOf(\DOMElement::class, $action);
+            $product = $action->getAttribute('data-product-type');
+            $plan = $action->getAttribute('data-plan-tier');
+            $key = "{$product}:{$plan}";
+
+            $this->assertContains($key, $expectedPlans, 'Unexpected product/plan mapping on a pricing action.');
+            $this->assertNotContains($key, $seenPlans, 'Each product/plan combination must appear exactly once.');
+            $seenPlans[] = $key;
+
+            $this->assertSame('monthly', config('pricing.default_interval'));
+            $this->assertSame($product, $action->getAttribute('data-product-type'));
+            $this->assertSame($plan, $action->getAttribute('data-plan-tier'));
+
+            $assertCheckoutUrl($action->getAttribute('href'), $product, $plan, 'monthly');
+
+            $annualUrl = route('checkout.show', ['product' => $product, 'plan' => $plan, 'interval' => 'annual']);
+            $monthlyUrl = route('checkout.show', ['product' => $product, 'plan' => $plan, 'interval' => 'monthly']);
+            $expectedBinding = 'interval === \'annual\' ? \''.$annualUrl.'\' : \''.$monthlyUrl.'\'';
+            $this->assertSame($expectedBinding, $action->getAttribute('x-bind:href'));
+
+            // Both branches of the exact Alpine expression are validated
+            // against the selected logical plan and billing interval.
+            $assertCheckoutUrl($annualUrl, $product, $plan, 'annual');
+            $assertCheckoutUrl($monthlyUrl, $product, $plan, 'monthly');
         }
 
-        $this->assertStringNotContainsString('price_wordpress', $html);
-        $this->assertStringNotContainsString('stripe', strtolower(strip_tags($html)));
+        sort($seenPlans);
+        sort($expectedPlans);
+        $this->assertSame($expectedPlans, $seenPlans);
+    }
+
+    public function test_homepage_plan_buttons_use_contact_only_actions_in_marketing_only_mode(): void
+    {
+        config([
+            'marketing.links.contact' => 'mailto:contact@zsoltacsai.com',
+            'marketing_release.profile' => 'marketing_only',
+        ]);
+
+        $html = $this->get('/en/')->assertOk()->getContent();
+        $document = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $this->assertTrue($document->loadHTML('<?xml encoding="UTF-8">'.$html));
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+
+        $xpath = new \DOMXPath($document);
+        $sections = $xpath->query('//*[@id="pricing"]');
+        $this->assertInstanceOf(\DOMNodeList::class, $sections);
+        $this->assertSame(1, $sections->length);
+
+        $pricingSection = $sections->item(0);
+        $this->assertInstanceOf(\DOMElement::class, $pricingSection);
+        $actions = $xpath->query('.//*[@data-marketing-plan]', $pricingSection);
+        $this->assertInstanceOf(\DOMNodeList::class, $actions);
+        $this->assertSame(6, $actions->length, 'Every plan card keeps one action.');
+
+        $pricingMarkup = $document->saveHTML($pricingSection);
+        $this->assertIsString($pricingMarkup);
+        $this->assertStringNotContainsString('/checkout', $pricingMarkup, 'Marketing-only pricing cards must not expose actionable checkout URLs.');
+
+        foreach ($actions as $action) {
+            $this->assertInstanceOf(\DOMElement::class, $action);
+            $this->assertSame('mailto:contact@zsoltacsai.com', $action->getAttribute('href'));
+            $this->assertFalse($action->hasAttribute('x-bind:href'), 'Marketing-only actions must not carry hidden checkout URLs.');
+        }
+
+        $this->assertStringNotContainsString('price_wordpress', $pricingMarkup);
+        $this->assertStringNotContainsString('stripe', strtolower(strip_tags($pricingMarkup)));
     }
 }
