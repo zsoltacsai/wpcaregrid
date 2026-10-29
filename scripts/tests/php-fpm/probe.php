@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+
+declare(strict_types=1);
+
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
 
@@ -9,7 +12,7 @@ $checks = [];
 $failures = [];
 $check = static function (string $name, bool $passed) use (&$checks, &$failures): void {
     $checks[$name] = $passed;
-    if (! $passed) {
+    if (!$passed) {
         $failures[] = $name;
     }
 };
@@ -53,7 +56,7 @@ if (is_array($environment)) {
     }
 }
 $check('no_runner_credentials_or_proxy_environment', $environmentClean);
-$check('no_docker_socket', ! file_exists('/var/run/docker.sock') && ! file_exists('/run/docker.sock'));
+$check('no_docker_socket', !file_exists('/var/run/docker.sock') && !file_exists('/run/docker.sock'));
 
 $app = require '/app/bootstrap/app.php';
 $app->make(Illuminate\Contracts\Http\Kernel::class)->bootstrap();
@@ -116,8 +119,8 @@ $check('no_non_loopback_network_interface', $interfaces === []);
 
 if ($port4 !== false && $port6 !== false && $witnessIPv4 !== false) {
     $runnerWitness = 'tcp://'.$witnessIPv4.':'.$port4;
-    $check('ipv4_runner_host_witness_denied', ! $canConnect($runnerWitness));
-    $check('ipv6_external_connection_denied', ! $canConnect('tcp://[2606:4700:4700::1111]:53'));
+    $check('ipv4_runner_host_witness_denied', !$canConnect($runnerWitness));
+    $check('ipv6_external_connection_denied', !$canConnect('tcp://[2606:4700:4700::1111]:53'));
     $check('ipv6_external_route_absent', $interfaces === []);
     foreach (['http' => 'http://example.com/', 'https' => 'https://example.com/'] as $scheme => $url) {
         $proxy = curl_init($url);
@@ -143,13 +146,13 @@ if ($port4 !== false && $port6 !== false && $witnessIPv4 !== false) {
 }
 $resolved = @gethostbyname('example.com');
 $check('external_dns_resolution_denied', $resolved === 'example.com');
-$check('metadata_endpoint_denied', ! $canConnect('tcp://169.254.169.254:80'));
+$check('metadata_endpoint_denied', !$canConnect('tcp://169.254.169.254:80'));
 $check('runner_host_service_denied', $port4 !== false && $witnessIPv4 !== false
-    && ! $canConnect('tcp://host.docker.internal:'.$port4));
+    && !$canConnect('tcp://host.docker.internal:'.$port4));
 $check('staging_endpoint_denied', $port4 !== false && $witnessIPv4 !== false
-    && ! $canConnect('tcp://staging.wpcaregrid.com:'.$port4));
+    && !$canConnect('tcp://staging.wpcaregrid.com:'.$port4));
 $check('production_endpoint_denied', $port4 !== false && $witnessIPv4 !== false
-    && ! $canConnect('tcp://wpcaregrid.com:'.$port4));
+    && !$canConnect('tcp://wpcaregrid.com:'.$port4));
 
 http_response_code($failures === [] ? 200 : 500);
 echo json_encode([
