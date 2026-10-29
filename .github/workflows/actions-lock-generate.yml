@@ -36,6 +36,8 @@ jobs:
           echo "f9da98f2a6e9e0ae77deadf9a2319a8a86bb002b541cc3203b247cc59fb04842  $binary" | sha256sum --check
 
       - name: Generate lockfile for CI only without narrowing existing refs
+        env:
+          GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ github.token }}
         run: gh actions-lock --no-narrow .github/workflows/ci.yml
 
       - name: Upload generated lockfile for review
