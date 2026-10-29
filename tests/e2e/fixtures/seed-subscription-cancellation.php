@@ -3,9 +3,12 @@
 declare(strict_types=1);
 
 use App\Models\Customer;
+use App\Models\LegalDocumentAcceptance;
+use App\Models\LegalDocumentVersion;
 use App\Models\Subscription;
 use App\Models\SubscriptionOperation;
 use App\Models\User;
+use App\Content\HtmlSanitizer;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Str;
 
@@ -107,12 +110,20 @@ if ($mode === 'verify-read-only') {
     if (! is_array($fixture)
         || ! is_int($fixture['seeded_operation_count'] ?? null)
         || ! is_int($fixture['seeded_subscription_count'] ?? null)
+        || ! is_int($fixture['seeded_legal_acceptance_count'] ?? null)
+        || ! is_int($fixture['seeded_legal_document_count'] ?? null)
         || ! is_string($fixture['operation_state_sha256'] ?? null)
         || ! is_string($fixture['subscription_state_sha256'] ?? null)
+        || ! is_string($fixture['legal_acceptance_state_sha256'] ?? null)
+        || ! is_string($fixture['legal_document_state_sha256'] ?? null)
         || SubscriptionOperation::query()->count() !== $fixture['seeded_operation_count']
         || Subscription::query()->count() !== $fixture['seeded_subscription_count']
+        || LegalDocumentAcceptance::query()->count() !== $fixture['seeded_legal_acceptance_count']
+        || LegalDocumentVersion::query()->count() !== $fixture['seeded_legal_document_count']
         || ! hash_equals($fixture['operation_state_sha256'], $stateFingerprint(SubscriptionOperation::class))
-        || ! hash_equals($fixture['subscription_state_sha256'], $stateFingerprint(Subscription::class))) {
+        || ! hash_equals($fixture['subscription_state_sha256'], $stateFingerprint(Subscription::class))
+        || ! hash_equals($fixture['legal_acceptance_state_sha256'], $stateFingerprint(LegalDocumentAcceptance::class))
+        || ! hash_equals($fixture['legal_document_state_sha256'], $stateFingerprint(LegalDocumentVersion::class))) {
         fwrite(STDERR, "CANCELLATION_GET_SIDE_EFFECTS=FAIL\n");
         exit(1);
     }
@@ -157,6 +168,22 @@ $createCustomer = static function (string $suffix, string $locale) use (&$custom
     return $customer;
 };
 
+$createTermsVersion = static function (string $locale): LegalDocumentVersion {
+    $body = '<p>Synthetic terms used only by the isolated cancellation browser test.</p>';
+    return LegalDocumentVersion::query()->create([
+        'document_type' => 'terms_of_service',
+        'version' => 90000001,
+        'locale' => $locale,
+        'title' => 'Synthetic cancellation E2E terms',
+        'body' => $body,
+        'content_sha256' => hash('sha256', HtmlSanitizer::clean($body)),
+        'status' => 'published',
+        'acceptance_mode' => 'acceptance_required_before_account_use',
+        'effective_at' => now('UTC')->subMinute(),
+        'published_at' => now('UTC')->subMinute(),
+    ]);
+};
+
 $createSubscription = static function (Customer $customer, bool $cancelAtPeriodEnd = false): Subscription {
     return Subscription::factory()->for($customer)->create([
         'billing_source' => 'stripe',
@@ -187,6 +214,27 @@ try {
     $english = $createCustomer('en', 'en');
     $hungarian = $createCustomer('hu', 'hu');
     $foreign = $createCustomer('foreign', 'en');
+
+    // The account-use legal gate is part of the real customer journey. Seed
+    // isolated, synthetic EN and HU versions and accept both for each test
+    // user so locale negotiation cannot divert the browser away from accounts.
+    $terms = collect(['en', 'hu'])->mapWithKeys(
+        fn (string $locale): array => [$locale => $createTermsVersion($locale)],
+    );
+    foreach ([$english, $hungarian, $foreign] as $customer) {
+        foreach ($terms as $locale => $document) {
+            LegalDocumentAcceptance::query()->create([
+                'user_id' => $customer->user->id,
+                'customer_id' => $customer->id,
+                'legal_document_version_id' => $document->id,
+                'document_type' => $document->document_type,
+                'locale' => $locale,
+                'content_sha256' => $document->content_sha256,
+                'source' => 'customer_legal_area',
+                'accepted_at' => now('UTC'),
+            ]);
+        }
+    }
 
     $subscriptions = [];
 
@@ -225,8 +273,12 @@ try {
         'subscriptions' => $subscriptionIds,
         'seeded_operation_count' => SubscriptionOperation::query()->count(),
         'seeded_subscription_count' => Subscription::query()->count(),
+        'seeded_legal_acceptance_count' => LegalDocumentAcceptance::query()->count(),
+        'seeded_legal_document_count' => LegalDocumentVersion::query()->count(),
         'operation_state_sha256' => $stateFingerprint(SubscriptionOperation::class),
         'subscription_state_sha256' => $stateFingerprint(Subscription::class),
+        'legal_acceptance_state_sha256' => $stateFingerprint(LegalDocumentAcceptance::class),
+        'legal_document_state_sha256' => $stateFingerprint(LegalDocumentVersion::class),
     ];
     $json = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
     if (
