@@ -15,6 +15,7 @@ $check = static function (string $name, bool $passed) use (&$checks, &$failures)
 };
 $port4 = filter_var(getenv('FPM_WITNESS_PORT4'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]);
 $port6 = filter_var(getenv('FPM_WITNESS_PORT6'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]);
+$witnessIPv4 = filter_var(getenv('FPM_WITNESS_IPV4'), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
 
 $check('real_fpm_sapi', PHP_SAPI === 'fpm-fcgi');
 $check('exact_php_patch', PHP_VERSION === '8.5.12');
@@ -85,14 +86,19 @@ $canConnect = static function (string $target, float $timeout = 0.5): bool {
     }
     return false;
 };
-if ($port4 !== false && $port6 !== false) {
-    $check('ipv4_runner_witness_denied', ! $canConnect('tcp://127.0.0.1:'.$port4));
-    $check('ipv6_runner_witness_denied', ! $canConnect('tcp://[::1]:'.$port6));
+$check('sandbox_loopback_http_witness_reachable', $canConnect('tcp://127.0.0.1:8080'));
+$interfaces = array_values(array_diff(@scandir('/sys/class/net') ?: [], ['.', '..', 'lo']));
+$check('no_non_loopback_network_interface', $interfaces === []);
+
+if ($port4 !== false && $port6 !== false && $witnessIPv4 !== false) {
+    $runnerWitness = 'tcp://'.$witnessIPv4.':'.$port4;
+    $check('ipv4_runner_host_witness_denied', ! $canConnect($runnerWitness));
+    $check('ipv6_external_route_absent', $interfaces === []);
     foreach (['http' => 'http://example.com/', 'https' => 'https://example.com/'] as $scheme => $url) {
         $proxy = curl_init($url);
         curl_setopt_array($proxy, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_PROXY => 'http://127.0.0.1:'.$port4,
+            CURLOPT_PROXY => 'http://'.$witnessIPv4.':'.$port4,
             CURLOPT_NOPROXY => '',
             CURLOPT_CONNECTTIMEOUT_MS => 500,
             CURLOPT_TIMEOUT_MS => 1000,
@@ -104,16 +110,20 @@ if ($port4 !== false && $port6 !== false) {
         curl_close($proxy);
     }
 } else {
-    $check('ipv4_runner_witness_denied', false);
-    $check('ipv6_runner_witness_denied', false);
+    $check('ipv4_runner_host_witness_denied', false);
+    $check('ipv6_external_route_absent', false);
     $check('explicit_http_proxy_escape_denied', false);
+    $check('explicit_https_proxy_escape_denied', false);
 }
 $resolved = @gethostbyname('example.com');
 $check('external_dns_resolution_denied', $resolved === 'example.com');
 $check('metadata_endpoint_denied', ! $canConnect('tcp://169.254.169.254:80'));
-$check('runner_host_service_denied', $port4 !== false && ! $canConnect('tcp://host.docker.internal:'.$port4));
-$check('staging_endpoint_denied', $port4 !== false && ! $canConnect('tcp://staging.wpcaregrid.com:'.$port4));
-$check('production_endpoint_denied', $port4 !== false && ! $canConnect('tcp://wpcaregrid.com:'.$port4));
+$check('runner_host_service_denied', $port4 !== false && $witnessIPv4 !== false
+    && ! $canConnect('tcp://host.docker.internal:'.$port4));
+$check('staging_endpoint_denied', $port4 !== false && $witnessIPv4 !== false
+    && ! $canConnect('tcp://staging.wpcaregrid.com:'.$port4));
+$check('production_endpoint_denied', $port4 !== false && $witnessIPv4 !== false
+    && ! $canConnect('tcp://wpcaregrid.com:'.$port4));
 
 http_response_code($failures === [] ? 200 : 500);
 echo json_encode([
