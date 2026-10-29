@@ -37,6 +37,7 @@ jobs:
 
       - name: Generate lockfile for CI only without narrowing existing refs
         env:
+          GH_TOKEN: ${{ github.token }}
           GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ github.token }}
         run: gh actions-lock --no-narrow .github/workflows/ci.yml
 
