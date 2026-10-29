@@ -56,7 +56,8 @@ if (! in_array($mode, ['seed', 'verify-read-only'], true)) {
 
 $rootRealPath = realpath($root);
 $databaseRealPath = realpath($databasePath);
-$expectedDatabase = $root.DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'marketing-browser.sqlite';
+$expectedDatabase = $root.DIRECTORY_SEPARATOR.'storage'.DIRECTORY_SEPARATOR
+    .'framework'.DIRECTORY_SEPARATOR.'testing'.DIRECTORY_SEPARATOR.'marketing-browser.sqlite';
 $fixtureDirectory = $root.DIRECTORY_SEPARATOR.'storage'.DIRECTORY_SEPARATOR.'framework'.DIRECTORY_SEPARATOR.'testing';
 $fixtureParent = realpath(dirname($fixturePath));
 $parsedUrl = parse_url($baseUrl);

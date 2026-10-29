@@ -67,7 +67,7 @@ jobs:
       MARKETING_RELEASE_ENFORCEMENT_MODE: testing
       MARKETING_RELEASE_PROFILE: marketing_only
       DB_CONNECTION: sqlite
-      DB_DATABASE: ${{ github.workspace }}/database/marketing-browser.sqlite
+      DB_DATABASE: ${{ github.workspace }}/storage/framework/testing/marketing-browser.sqlite
       CACHE_STORE: array
       SESSION_DRIVER: file
       QUEUE_CONNECTION: sync
@@ -82,6 +82,7 @@ jobs:
       E2E_BASE_URL: http://127.0.0.1:8000
       PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/html
       PLAYWRIGHT_JUNIT_OUTPUT_NAME: playwright-report/junit.xml
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -174,8 +175,8 @@ jobs:
       - name: Prepare isolated synthetic SQLite application
         run: |
           cp .env.example .env
-          mkdir -p database
-          touch database/marketing-browser.sqlite
+          mkdir -p storage/framework/testing
+          touch storage/framework/testing/marketing-browser.sqlite
           php artisan key:generate --force
           php artisan migrate --force
 
@@ -211,8 +212,42 @@ jobs:
           php_bin="$(command -v php)"
           test -x "$php_bin"
           sandbox_unit="m16-marketing-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          sandbox_script="$RUNNER_TEMP/m16-marketing-browser-sandbox.sh"
-          trap 'rm -f "$sandbox_script"' EXIT
+          e2e_suffix="${GITHUB_RUN_ID: -10}${GITHUB_RUN_ATTEMPT}"
+          e2e_user="m16e2e${e2e_suffix}"
+          e2e_group="$e2e_user"
+          e2e_home="/tmp/$e2e_user"
+          sandbox_script="$GITHUB_WORKSPACE/.${e2e_user}-sandbox.sh"
+          [[ "$e2e_user" =~ ^m16e2e[0-9]+$ ]]
+          [[ "$e2e_home" == "/tmp/$e2e_user" ]]
+          test ! -e "$sandbox_script"
+
+          cleanup() {
+            sudo userdel "$e2e_user" >/dev/null 2>&1 || true
+            sudo groupdel "$e2e_group" >/dev/null 2>&1 || true
+            sudo rm -rf --one-file-system "$e2e_home" >/dev/null 2>&1 || true
+            rm -f "$sandbox_script"
+            if getent passwd "$e2e_user" >/dev/null || getent group "$e2e_group" >/dev/null || test -e "$e2e_home"; then
+              echo "SANDBOX_CLEANUP=FAIL"
+              return 1
+            fi
+            echo "SANDBOX_CLEANUP=PASS"
+          }
+          trap 'cleanup || true' EXIT INT TERM
+
+          # Do not run untrusted PR test code as the Actions runner account: on
+          # hosted Ubuntu that account may belong to the docker group and can
+          # otherwise reach the host container broker over a Unix socket.
+          sudo groupadd --system "$e2e_group"
+          sudo useradd --system --no-create-home --gid "$e2e_group" \
+            --home-dir "$e2e_home" --shell /usr/sbin/nologin "$e2e_user"
+          sudo install -d -o "$e2e_user" -g "$e2e_group" -m 0700 "$e2e_home"
+          test -d storage && test ! -L storage
+          test -d bootstrap/cache && test ! -L bootstrap/cache
+          sudo chown -R "$e2e_user:$e2e_group" storage bootstrap/cache
+          sudo chown "$e2e_user:$e2e_group" .env
+          sudo chmod 0640 .env
+          mkdir -p playwright-report/html playwright-report/cancellation-html storage/playwright
+          sudo chown -R "$e2e_user:$e2e_group" playwright-report storage/playwright
 
           cat > "$sandbox_script" <<'SANDBOX_SCRIPT'
           set -euo pipefail
@@ -231,6 +266,33 @@ jobs:
           if (!extension_loaded('sockets')) {
               $fail('PHP_EGRESS_SOCKETS_EXTENSION');
           }
+
+          if (!function_exists('posix_geteuid') || posix_geteuid() === 0) {
+              $fail('PHP_SANDBOX_IDENTITY');
+          }
+          $dockerGroup = posix_getgrnam('docker');
+          if (is_array($dockerGroup) && in_array((int) $dockerGroup['gid'], posix_getgroups(), true)) {
+              $fail('PHP_DOCKER_GROUP_ACCESS');
+          }
+
+          // The untrusted browser test must not reach a host container broker
+          // through a Unix socket to escape the AF_INET/AF_INET6 cgroup filter.
+          foreach (['/run/docker.sock', '/var/run/docker.sock', '/run/podman/podman.sock', '/run/containerd/containerd.sock'] as $path) {
+              if (!file_exists($path)) {
+                  continue;
+              }
+              $broker = @socket_create(AF_UNIX, SOCK_STREAM, 0);
+              if ($broker === false) {
+                  $fail('PHP_LOCAL_BROKER_SOCKET');
+              }
+              $connected = @socket_connect($broker, $path);
+              $error = socket_last_error($broker);
+              @socket_close($broker);
+              if ($connected || !in_array($error, [SOCKET_EACCES, SOCKET_EPERM], true)) {
+                  $fail('PHP_LOCAL_BROKER_ACCESS');
+              }
+          }
+          echo "PHP_PRIVILEGE_BOUNDARY=PASS\n";
 
           foreach (['GH_TOKEN', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN'] as $name) {
               if (getenv($name) !== false) {
@@ -293,13 +355,13 @@ jobs:
               echo "PHP_EGRESS_".$label."=DENIED_BY_POLICY\n";
           }
           PHP_EGRESS_PROBE
+          echo "PHP_EGRESS_NEGATIVE_TEST=PASS"
 
-          "$E2E_PHP_BIN" artisan serve --host=127.0.0.1 --port=8000 > "$RUNNER_TEMP/marketing-laravel.log" 2>&1 &
+          "$E2E_PHP_BIN" artisan serve --host=127.0.0.1 --port=8000 > /dev/null 2>&1 &
           server_pid=$!
           cleanup() {
             kill "$server_pid" 2>/dev/null || true
             wait "$server_pid" 2>/dev/null || true
-            rm -f "$RUNNER_TEMP/marketing-laravel.log"
           }
           trap cleanup EXIT INT TERM
 
@@ -315,29 +377,29 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:8000/en/ > /dev/null
           echo "LOCAL_LARAVEL_SERVER=PASS"
-          npx playwright test \
+          ./node_modules/.bin/playwright test \
             tests/e2e/marketing-homepage-ux.spec.ts \
             tests/e2e/marketing-launch-ctas.spec.ts \
             --trace=off \
             --reporter=list,html,junit
           PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/cancellation-html \
           PLAYWRIGHT_JUNIT_OUTPUT_NAME=playwright-report/cancellation-junit.xml \
-            npx playwright test tests/e2e/subscription-cancellation.spec.ts \
+            ./node_modules/.bin/playwright test tests/e2e/subscription-cancellation.spec.ts \
               --trace=off \
               --reporter=list,html,junit
           "$E2E_PHP_BIN" tests/e2e/fixtures/seed-subscription-cancellation.php --verify-read-only
           SANDBOX_SCRIPT
-          chmod 700 "$sandbox_script"
+          chmod 500 "$sandbox_script"
+          sudo chown "$e2e_user:$e2e_group" "$sandbox_script"
 
-          runner_user="$(id -un)"
           service_env=()
           for name in \
-            PATH HOME GITHUB_ACTIONS GITHUB_WORKSPACE RUNNER_TEMP GITHUB_RUN_ID GITHUB_RUN_ATTEMPT \
+            PATH GITHUB_ACTIONS \
             APP_ENV APP_DEBUG APP_URL CAREGRID_DEPLOYMENT_ENV MARKETING_RELEASE_ENFORCEMENT_MODE \
             MARKETING_RELEASE_PROFILE DB_CONNECTION DB_DATABASE CACHE_STORE SESSION_DRIVER \
             QUEUE_CONNECTION MAIL_MAILER STRIPE_KEY STRIPE_SECRET STRIPE_WEBHOOK_SECRET \
             STRIPE_ALLOW_LIVE_MODE MARKETING_ANALYTICS_ENABLED MARKETING_ANALYTICS_POLICY_AUTHORIZED \
-            GA4_MEASUREMENT_ID E2E_BASE_URL PLAYWRIGHT_HTML_OUTPUT_DIR PLAYWRIGHT_JUNIT_OUTPUT_NAME \
+            GA4_MEASUREMENT_ID E2E_BASE_URL PLAYWRIGHT_HTML_OUTPUT_DIR PLAYWRIGHT_JUNIT_OUTPUT_NAME PLAYWRIGHT_BROWSERS_PATH \
             M16_CANCELLATION_E2E M16_CANCELLATION_FIXTURES_PATH; do
             if [[ ! -v "$name" ]]; then
               echo "SANDBOX_ENVIRONMENT=INCOMPLETE"
@@ -346,12 +408,12 @@ jobs:
             service_env+=(--setenv="$name=${!name}")
           done
           service_env+=(--setenv="E2E_PHP_BIN=$php_bin")
+          service_env+=(--setenv="HOME=$e2e_home")
 
           # systemd applies the AF_INET/AF_INET6 filter to the entire service
           # cgroup. Both the PHP server and its test descendants inherit it.
-          # PrivateNetwork removes host interfaces; only loopback is available
-          # for Playwright-to-Laravel traffic. Hide runner service sockets and
-          # prevent test code from elevating privileges outside this cgroup.
+          # A dedicated account has no runner/docker group access; no network
+          # namespace is used because this hosted runner cannot create one.
           sudo systemd-run \
             --system \
             --quiet \
@@ -359,18 +421,20 @@ jobs:
             --pipe \
             --collect \
             --unit="$sandbox_unit" \
-            --property="User=$runner_user" \
+            --property="User=$e2e_user" \
+            --property="Group=$e2e_group" \
             --property="WorkingDirectory=$GITHUB_WORKSPACE" \
             --property=NoNewPrivileges=true \
-            --property=PrivateTmp=true \
-            --property=PrivateNetwork=true \
             --property=IPAddressDeny=any \
-            --property='IPAddressAllow=127.0.0.1/32 ::1/128' \
+            --property='IPAddressAllow=127.0.0.1/32' \
             --property='RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX' \
-            --property='InaccessiblePaths=/run' \
             --property='UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy GH_TOKEN GITHUB_TOKEN ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN' \
             "${service_env[@]}" \
             /bin/bash "$sandbox_script"
+
+          sudo chown -R "$(id -u):$(id -g)" playwright-report storage/playwright
+          cleanup
+          trap - EXIT INT TERM
 
       - name: Upload sanitized browser reports and screenshots
         if: always()
