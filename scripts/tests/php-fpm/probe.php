@@ -58,6 +58,7 @@ $check('no_docker_socket', ! file_exists('/var/run/docker.sock') && ! file_exist
 
 $app = require '/app/bootstrap/app.php';
 $app->make(Kernel::class)->bootstrap();
+$check('application_debug_disabled', config('app.debug') === false);
 $check('database_queue_not_inline_sync', config('queue.default') === 'database');
 $check('mail_sink_is_array', config('mail.default') === 'array');
 $check('filesystem_sink_is_local', config('filesystems.default') === 'local');
