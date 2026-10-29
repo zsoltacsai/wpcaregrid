@@ -76,7 +76,7 @@ for key, value in unsafe_profiles:
 with tempfile.TemporaryDirectory() as temporary:
     proc_root = Path(temporary)
     (proc_root / "101").mkdir()
-    (proc_root / "101" / "cmdline").write_bytes(b"python\0entrypoint.py\\0")
+    (proc_root / "101" / "cmdline").write_bytes(b"python\0entrypoint.py\0")
     require(not has_background_consumer(proc_root), "A safe process fixture was rejected.")
     with patch("pathlib.Path.read_bytes", side_effect=PermissionError("fixture denial")):
         try:
@@ -86,11 +86,11 @@ with tempfile.TemporaryDirectory() as temporary:
         else:
             raise SystemExit("An unreadable process entry was not treated as a hard failure.")
     for index, argv in enumerate((
-        b"php\\0artisan\\0queue:work\\0",
-        b"php\\0artisan\\0schedule:run\\0",
-        b"supervisord\\0",
-        b"php\\0wp-caregrid-connector\\0",
-        b"php\\0JobRunner\\0",
+        b"php\0artisan\0queue:work\0",
+        b"php\0artisan\0schedule:run\0",
+        b"supervisord\0",
+        b"php\0wp-caregrid-connector\0",
+        b"php\0JobRunner\0",
     ), start=200):
         (proc_root / str(index)).mkdir()
         (proc_root / str(index) / "cmdline").write_bytes(argv)
