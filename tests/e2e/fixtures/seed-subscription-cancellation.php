@@ -170,6 +170,7 @@ $createCustomer = static function (string $suffix, string $locale) use (&$custom
 
 $createTermsVersion = static function (string $locale): LegalDocumentVersion {
     $body = '<p>Synthetic terms used only by the isolated cancellation browser test.</p>';
+
     return LegalDocumentVersion::query()->create([
         'document_type' => 'terms_of_service',
         'version' => 90000001,
