@@ -175,8 +175,8 @@ for log_path in (fpm_log, nginx_log):
             exception = re.search(r"Uncaught ([A-Za-z0-9_\\]+)", line)
             runtime_log_failure = category.group(0)
             if category.group(0).lower() in ("crit", "alert"):
-                operation = re.search(r"\\b(connect|open|accept|bind)\\(\\)", line)
-                error = re.search(r"failed \\((\\d+): ([A-Za-z ]+)\\)", line)
+                operation = re.search(r"\b(connect|open|accept|bind)\(\)", line)
+                error = re.search(r"failed \((\d+): ([A-Za-z ]+)\)", line)
                 if operation and error:
                     runtime_log_failure = (
                         f"nginx {category.group(0).lower()} "
