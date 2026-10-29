@@ -14,8 +14,8 @@ use Illuminate\Support\Str;
 
 $root = dirname(__DIR__, 3);
 
-$refuse = static function (): never {
-    fwrite(STDERR, "CANCELLATION_FIXTURE=REJECTED\n");
+$refuse = static function (string $code): never {
+    fwrite(STDERR, "CANCELLATION_FIXTURE=REJECTED code={$code}\n");
     exit(2);
 };
 
@@ -38,7 +38,7 @@ $requiredEnvironment = [
 foreach ($requiredEnvironment as $name => $expected) {
     $actual = getenv($name);
     if ($actual === false || $actual !== $expected) {
-        $refuse();
+        $refuse('ENVIRONMENT');
     }
 }
 
@@ -47,10 +47,10 @@ $fixturePath = getenv('M16_CANCELLATION_FIXTURES_PATH');
 $baseUrl = getenv('E2E_BASE_URL');
 $mode = $argv[1] ?? 'seed';
 if (! is_string($databasePath) || ! is_string($fixturePath) || ! is_string($baseUrl)) {
-    $refuse();
+    $refuse('ARGUMENTS');
 }
 if (! in_array($mode, ['seed', 'verify-read-only'], true)) {
-    $refuse();
+    $refuse('MODE');
 }
 
 $rootRealPath = realpath($root);
@@ -78,7 +78,7 @@ if (
     || ($mode === 'seed' && file_exists($fixturePath))
     || ($mode === 'verify-read-only' && (! is_file($fixturePath) || ! is_readable($fixturePath)))
 ) {
-    $refuse();
+    $refuse('PATH_OR_FILE');
 }
 
 require $root.'/vendor/autoload.php';
@@ -104,7 +104,7 @@ if (
     || (string) config('services.stripe.webhook_secret') !== ''
     || (string) config('services.stripe.key') !== ''
 ) {
-    $refuse();
+    $refuse('RUNTIME_CONFIG');
 }
 
 if ($mode === 'verify-read-only') {
@@ -147,10 +147,10 @@ if ($mode === 'verify-read-only') {
 }
 
 if (! is_dir($fixtureDirectory) && ! mkdir($fixtureDirectory, 0700, true) && ! is_dir($fixtureDirectory)) {
-    $refuse();
+    $refuse('FIXTURE_DIRECTORY');
 }
 if (is_link($fixtureDirectory) || realpath($fixtureDirectory) !== $fixtureDirectory) {
-    $refuse();
+    $refuse('FIXTURE_PATH');
 }
 
 $password = 'Synthetic-Cancel-Only-2026!';
@@ -302,10 +302,10 @@ try {
         || (fileperms($fixturePath) & 0777) !== 0600
     ) {
         @unlink($fixturePath);
-        $refuse();
+        $refuse('FIXTURE_WRITE');
     }
 } catch (Throwable) {
-    $refuse();
+    $refuse('SEED_OPERATION');
 }
 
 echo "CANCELLATION_FIXTURE=READY\n";
