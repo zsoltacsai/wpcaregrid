@@ -91,7 +91,10 @@ with tempfile.TemporaryDirectory() as temporary:
             raise SystemExit("An unreadable process entry was not treated as a hard failure.")
     for index, argv in enumerate((
         b"php\0artisan\0queue:work\0",
+        b"php\0artisan\0queue:listen\0",
+        b"php\0artisan\0horizon\0",
         b"php\0artisan\0schedule:run\0",
+        b"php\0artisan\0schedule:work\0",
         b"supervisord\0",
         b"php\0wp-caregrid-connector\0",
         b"php\0JobRunner\0",
@@ -102,4 +105,4 @@ with tempfile.TemporaryDirectory() as temporary:
                 "A background-consumer process fixture was not rejected.")
         shutil.rmtree(proc_root / str(index))
 
-print("PHP-FPM isolation policy, 8 unsafe profiles, and 5 NUL-delimited consumer fixtures passed.")
+print("PHP-FPM isolation policy, 8 unsafe profiles, and 8 NUL-delimited consumer fixtures passed.")
