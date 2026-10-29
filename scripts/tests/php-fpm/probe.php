@@ -2,9 +2,6 @@
 
 declare(strict_types=1);
 
-
-declare(strict_types=1);
-
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
 
