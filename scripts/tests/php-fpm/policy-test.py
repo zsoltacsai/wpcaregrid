@@ -98,4 +98,4 @@ with tempfile.TemporaryDirectory() as temporary:
                 "A background-consumer process fixture was not rejected.")
         shutil.rmtree(proc_root / str(index))
 
-print("PHP-FPM isolation policy, 8 unsafe profiles, and 5 consumer fixtures passed.")
+print("PHP-FPM isolation policy, 8 unsafe profiles, and 5 NUL-delimited consumer fixtures passed.")
