@@ -87,7 +87,7 @@ $check('cloud_backup_disk_disabled',
     && blank(config('filesystems.disks.platform_backups.key'))
     && blank(config('filesystems.disks.platform_backups.secret'))
     && blank(config('filesystems.disks.platform_backups.bucket')
-        ?? config('filesystems.disks.platform_backups.s3_bucket'));
+        ?? config('filesystems.disks.platform_backups.s3_bucket')));
 
 try {
     $dbResult = app('db')->connection()->select('SELECT 1 AS compatibility_probe');
