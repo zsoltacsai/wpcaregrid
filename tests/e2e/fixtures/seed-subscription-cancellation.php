@@ -26,6 +26,7 @@ $requiredEnvironment = [
     'CAREGRID_DEPLOYMENT_ENV' => 'testing',
     'APP_URL' => 'http://127.0.0.1:8000',
     'DB_CONNECTION' => 'sqlite',
+    'SESSION_DRIVER' => 'file',
     'MAIL_MAILER' => 'array',
     'QUEUE_CONNECTION' => 'sync',
     'STRIPE_KEY' => '',
@@ -96,6 +97,7 @@ if (
     || config('marketing_release.test_deployment_environment') !== 'testing'
     || config('database.default') !== 'sqlite'
     || realpath((string) config('database.connections.sqlite.database')) !== $databaseRealPath
+    || config('session.driver') !== 'file'
     || config('mail.default') !== 'array'
     || config('queue.default') !== 'sync'
     || (string) config('services.stripe.secret') !== ''

@@ -69,7 +69,7 @@ jobs:
       DB_CONNECTION: sqlite
       DB_DATABASE: ${{ github.workspace }}/database/marketing-browser.sqlite
       CACHE_STORE: array
-      SESSION_DRIVER: array
+      SESSION_DRIVER: file
       QUEUE_CONNECTION: sync
       MAIL_MAILER: array
       STRIPE_KEY: ''
