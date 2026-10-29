@@ -41,6 +41,33 @@ jobs:
           GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ github.token }}
         run: gh actions-lock --no-narrow .github/workflows/ci.yml
 
+      - name: Verify lockfile and prove intentional action-ref drift fails
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh actions-lock --verify .github/workflows/ci.yml
+          cp .github/workflows/ci.yml "$RUNNER_TEMP/ci.yml.original"
+          restore() {
+            cp "$RUNNER_TEMP/ci.yml.original" .github/workflows/ci.yml
+          }
+          trap restore EXIT
+          sed -i 's#actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1#actions/checkout@main#' .github/workflows/ci.yml
+          set +e
+          gh actions-lock --verify .github/workflows/ci.yml
+          status=$?
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            echo "Lock verification accepted intentional action reference drift." >&2
+            exit 1
+          fi
+          echo "Expected result: lock verification rejected an intentional action-ref drift."
+          restore
+          trap - EXIT
+          git diff --exit-code -- .github/workflows/ci.yml
+
       - name: Print generated lockfile for source review
         run: cat .github/workflows/actions.lock
 
