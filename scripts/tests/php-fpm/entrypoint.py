@@ -117,9 +117,13 @@ try:
     if probe_failure is None and probe.get("failures"):
         probe_failure = "FPM probe failed checks: " + ", ".join(probe["failures"])
 
-    listener_lines = checked("TCP listener validation", ["ss", "-H", "-ltn"],
-                            env={"PATH": fpm_env["PATH"]}).stdout.splitlines()
-    if not listener_lines or any(not re.search(r"127\.0\.0\.1:8080\s*$", line) for line in listener_lines):
+    listener_rows = [line.split() for line in checked(
+        "TCP listener validation", ["ss", "-H", "-ltn"],
+        env={"PATH": fpm_env["PATH"]},
+    ).stdout.splitlines() if line.split()]
+    if (len(listener_rows) != 1 or len(listener_rows[0]) < 5
+            or listener_rows[0][0] != "LISTEN"
+            or listener_rows[0][3] != "127.0.0.1:8080"):
         fail("A TCP listener other than the loopback-only HTTP gateway was detected.")
     assert_no_consumers()
 finally:
