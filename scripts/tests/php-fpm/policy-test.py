@@ -45,8 +45,12 @@ require("validate_environment(os.environ)" in entrypoint and "fpm_environment(os
         "The entrypoint must use the tested fail-closed environment contract.")
 require("has_background_consumer()" in entrypoint,
         "The entrypoint must reject queue, scheduler, Supervisor, or Connector consumers.")
-require("docker.sock" in (HARNESS / "probe.php").read_text() and "--env " in runner,
-        "Credential/socket isolation assertions are missing.")
+probe_source = (HARNESS / "probe.php").read_text()
+require("docker.sock" in probe_source and "--env " in runner
+        and "external_notification_credentials_absent" in probe_source
+        and "external_backup_destinations_disabled" in probe_source
+        and "cloud_backup_disk_disabled" in probe_source,
+        "Credential, notification, or backup sink isolation assertions are missing.")
 
 safe_environment = {**REQUIRED_ENV, "PATH": "/usr/bin:/bin", "HOME": "/tmp",
                     "APP_KEY": "base64:" + base64.b64encode(b"x" * 32).decode(),
