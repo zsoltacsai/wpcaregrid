@@ -496,7 +496,7 @@ pre_deploy_smoke() {
     assert_baseline_unchanged || return 1
     check_http_root_reachable || return 1
     check_http_status /up 200 || return 1
-    check_http_shared
+    check_http_shared baseline "$BASELINE_SHA"
 }
 
 post_deploy_smoke() {
@@ -507,23 +507,135 @@ post_deploy_smoke() {
     check_http_status /en/pricing 200 || return 1
     check_http_status /hu/ 200 || return 1
     check_http_status /hu/pricing 200 || return 1
-    check_http_shared
+    check_http_shared target "$TARGET_SHA"
+}
+
+release_gate_state_for_commit() {
+    local commit_sha="$1" bootstrap_source middleware_path middleware_source security_line gate_line
+    local legacy_baseline_sha='761e0e5d37558da808ac961ca2d2a68b4ffab0db'
+
+    [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+    bootstrap_source="$(git show "${commit_sha}:bootstrap/app.php" 2>/dev/null)" || return 1
+    middleware_path="$(git ls-tree -r --name-only "$commit_sha" -- app/Http/Middleware/MarketingOnlyReleaseGate.php)" || return 1
+
+    if [[ "$middleware_path" == 'app/Http/Middleware/MarketingOnlyReleaseGate.php' ]]; then
+        middleware_source="$(git show "${commit_sha}:$middleware_path" 2>/dev/null)" || return 1
+        [[ "$middleware_source" == *'class MarketingOnlyReleaseGate'* ]] || return 1
+        [[ "$(grep -Fxc 'use App\Http\Middleware\MarketingOnlyReleaseGate;' <<<"$bootstrap_source")" == '1' ]] || return 1
+        [[ "$(grep -Fxc '        $middleware->append(SecurityHeaders::class);' <<<"$bootstrap_source")" == '1' ]] || return 1
+        [[ "$(grep -Fxc '        $middleware->append(MarketingOnlyReleaseGate::class);' <<<"$bootstrap_source")" == '1' ]] || return 1
+        security_line="$(grep -Fn '        $middleware->append(SecurityHeaders::class);' <<<"$bootstrap_source" | cut -d: -f1)"
+        gate_line="$(grep -Fn '        $middleware->append(MarketingOnlyReleaseGate::class);' <<<"$bootstrap_source" | cut -d: -f1)"
+        (( gate_line == security_line + 1 )) || return 1
+        printf 'marketing_gated\n'
+        return 0
+    fi
+
+    [[ -z "$middleware_path" && "$bootstrap_source" != *'MarketingOnlyReleaseGate'* ]] || return 1
+    if [[ "$commit_sha" == "$legacy_baseline_sha" ]]; then
+        printf 'legacy_application\n'
+    else
+        printf 'unrecognized_application\n'
+    fi
+}
+
+assert_marketing_gated_target() {
+    local target_gate_state
+
+    target_gate_state="$(release_gate_state_for_commit "$TARGET_SHA")" || {
+        log 'Target gate provenance is ambiguous; refusing deployment.'
+        return 1
+    }
+    [[ "$target_gate_state" == 'marketing_gated' ]] || {
+        log 'Target commit lacks the registered marketing gate; refusing deployment.'
+        return 1
+    }
 }
 
 check_http_shared() {
-    local path actual
+    local smoke_stage="$1" commit_sha="${2:-}" path response actual status_line header headers
+    local cache_control='' body_size location_count=0 gate_state='' final_status='' location='' malformed_status=0
 
-    actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}/owner/integrations")" || return 1
-    [[ "$actual" =~ ^30[1278]$ ]] || { log "Guest Owner Integrations route returned ${actual}, expected an authentication redirect"; return 1; }
-    log "Guest Owner Integrations route: ${actual} (authentication redirect)"
+    case "$smoke_stage" in
+        baseline)
+            commit_sha="${commit_sha:-$BASELINE_SHA}"
+            gate_state="$(release_gate_state_for_commit "$commit_sha")" || { log 'Baseline gate provenance is ambiguous; refusing HTTP expectation.'; return 1; }
+            [[ "$gate_state" == 'legacy_application' || "$gate_state" == 'marketing_gated' ]] || {
+                log "Unrecognized gate-less baseline commit $commit_sha; refusing HTTP expectation."
+                return 1
+            }
+            ;;
+        target)
+            commit_sha="${commit_sha:-$TARGET_SHA}"
+            gate_state="$(release_gate_state_for_commit "$commit_sha")" || { log 'Target gate provenance is ambiguous.'; return 1; }
+            [[ "$gate_state" == 'marketing_gated' ]] || { log 'Target commit lacks the registered marketing gate; refusing deployment.'; return 1; }
+            ;;
+        *)
+            log "Unknown HTTP smoke stage: $smoke_stage"
+            return 1
+            ;;
+    esac
+
+    response="$(curl --silent --show-error --dump-header - --output /dev/null --write-out $'\n%{http_code}\t%{size_download}' --connect-timeout 5 --max-time 20 "${APP_URL}/owner/integrations")" || return 1
+    status_line="${response##*$'\n'}"
+    actual="${status_line%%$'\t'*}"
+    body_size="${status_line#*$'\t'}"
+    [[ "$actual" =~ ^[0-9]{3}$ && "$body_size" =~ ^[0-9]+$ ]] || { log 'Curl did not return a valid final status and body size.'; return 1; }
+    headers="${response%$'\n'*}"
+
+    while IFS= read -r header; do
+        header="${header%$'\r'}"
+        if [[ "$header" =~ ^HTTP/[0-9.]+[[:space:]]+([0-9]{3})([[:space:]]|$) ]]; then
+            final_status="${BASH_REMATCH[1]}"
+            cache_control=''
+            location=''
+            location_count=0
+            continue
+        elif [[ "$header" == HTTP/* ]]; then
+            malformed_status=1
+            continue
+        fi
+
+        case "${header,,}" in
+            cache-control:*)
+                local value="${header#*:}"
+                value="${value#"${value%%[![:space:]]*}"}"
+                cache_control="${cache_control:+$cache_control, }$value"
+                ;;
+            location:*)
+                location="${header#*:}"
+                location="${location#"${location%%[![:space:]]*}"}"
+                location_count=$((location_count + 1))
+                ;;
+        esac
+    done <<<"$headers"
+
+    [[ "$malformed_status" == '0' && -n "$final_status" && "$final_status" == "$actual" ]] || {
+        log 'Final dumped HTTP header block is malformed or does not match curl final response status.'
+        return 1
+    }
+
+    if [[ "$smoke_stage" == baseline && "$gate_state" == legacy_application ]]; then
+        [[ "$actual" == '302' ]] || { log "Verified legacy baseline returned $actual, expected 302 authentication redirect"; return 1; }
+        [[ "$location_count" == '1' && "$location" == "${APP_URL}/owner/login" ]] || {
+            log "Verified legacy baseline Location was '${location:-missing}', expected exactly ${APP_URL}/owner/login"
+            return 1
+        }
+        log 'Pinned legacy baseline: exact 302 to same-origin Owner login.'
+    else
+        [[ "$actual" == '404' ]] || { log "Guest Owner Integrations route returned $actual, expected 404 from the marketing release gate"; return 1; }
+        [[ "$body_size" == '0' ]] || { log "Guest Owner Integrations denial returned a non-empty body ($body_size bytes)"; return 1; }
+        [[ "$location_count" == '0' ]] || { log 'Guest Owner Integrations denial unexpectedly returned a final-response Location.'; return 1; }
+        [[ ",${cache_control,,}," =~ ,[[:space:]]*no-store[[:space:]]*, ]] || { log 'Final 404 response is missing Cache-Control: no-store'; return 1; }
+        log 'Guest Owner Integrations route: final 404, empty, no-store (blocked before route dispatch)'
+    fi
 
     for path in /.env /.git/config; do
-        actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}${path}")" || return 1
-        [[ "$actual" == '403' || "$actual" == '404' ]] || { log "Protected path ${path} returned ${actual}"; return 1; }
-        log "Protected path ${path}: ${actual}"
+        actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 "${APP_URL}$path")" || return 1
+        [[ "$actual" == '403' || "$actual" == '404' ]] || { log "Protected path $path returned $actual"; return 1; }
+        log "Protected path $path: $actual"
     done
 }
-
 rebuild_caches() {
     local file
     local cache_dir
@@ -803,6 +915,7 @@ main() {
     git fetch --no-tags origin "$DEPLOY_BRANCH"
     fetched_tip="$(git rev-parse FETCH_HEAD^{commit})"
     pin_target_sha "$requested_ref" "$fetched_tip" "$DEPLOYMENT_MODE" || fail 'Forward deployment requires the exact current branch tip; rollback requires a root-approved prior SHA.'
+    assert_marketing_gated_target || fail 'The pinned target must prove the registered marketing gate before deployment.'
     log "Target commit: ${TARGET_SHA}"
     ci_evidence="$(/usr/bin/env -i PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/python3 "${CONTROLLER_DIR}/verify-release-ci.py" "$TARGET_SHA")" || fail 'The exact target SHA lacks completed successful mandatory primary-push CI.'
     CI_RUN_ID="$(/usr/bin/env -i PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["workflow_run_id"])' <<<"$ci_evidence")"

@@ -16,7 +16,7 @@ class DeployStagingHttpSmokeTest extends TestCase
         $process->setTimeout(30);
         $process->mustRun();
 
-        $this->assertStringContainsString('passed: 45 scenarios', $process->getOutput());
+        $this->assertStringContainsString('passed: 56 scenarios', $process->getOutput());
     }
 
     public function test_baseline_is_pinned_after_lock_and_rechecked_before_mutation_and_checkout(): void
@@ -30,6 +30,7 @@ class DeployStagingHttpSmokeTest extends TestCase
         $baselineCapture = strpos($main, '    capture_baseline_sha || fail');
         $baselineSmoke = strpos($main, '    pre_deploy_smoke || fail');
         $targetPin = strpos($main, '    pin_target_sha "$requested_ref" "$fetched_tip"');
+        $targetGatePreflight = strpos($main, '    assert_marketing_gated_target || fail');
         $backup = strpos($main, '    privileged db-dump | gzip -c');
         $schedulerMutation = strpos($main, "    install_scheduler_guard\n");
         $beforeGate = strpos($main, "    assert_baseline_unchanged || fail 'The live checkout changed before the deployment gate");
@@ -38,7 +39,7 @@ class DeployStagingHttpSmokeTest extends TestCase
         $targetSmoke = strpos($main, '    if ! post_deploy_smoke ||');
 
         $codeSwitch = strpos($main, '    git checkout --detach "$TARGET_SHA"');
-        foreach ([$backupGuard, $deployLock, $baselineCapture, $baselineSmoke, $targetPin, $backup, $beforeGate, $schedulerMutation, $beforeCheckout, $codeSwitch, $exactShaCheck, $targetSmoke] as $position) {
+        foreach ([$backupGuard, $deployLock, $baselineCapture, $baselineSmoke, $targetPin, $targetGatePreflight, $backup, $beforeGate, $schedulerMutation, $beforeCheckout, $codeSwitch, $exactShaCheck, $targetSmoke] as $position) {
             $this->assertNotFalse($position);
         }
 
@@ -46,7 +47,9 @@ class DeployStagingHttpSmokeTest extends TestCase
         $this->assertLessThan($baselineCapture, $deployLock);
         $this->assertLessThan($baselineSmoke, $baselineCapture);
         $this->assertLessThan($targetPin, $baselineSmoke);
-        $this->assertLessThan($backup, $targetPin);
+        $this->assertLessThan($targetGatePreflight, $targetPin);
+        $this->assertLessThan($backup, $targetGatePreflight);
+        $this->assertLessThan($schedulerMutation, $targetGatePreflight);
         $this->assertLessThan($beforeGate, $backup);
         $this->assertLessThan($schedulerMutation, $beforeGate);
         $this->assertLessThan($schedulerMutation, $baselineSmoke);
