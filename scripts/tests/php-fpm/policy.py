@@ -85,3 +85,21 @@ def has_background_consumer(proc_root=Path("/proc")):
         if any(marker in args for marker in BACKGROUND_CONSUMER_MARKERS):
             return True
     return False
+
+
+SAFE_FATAL_DETAILS = (
+    re.compile(r"Call to undefined function ([A-Za-z_][A-Za-z0-9_\\]*)"),
+    re.compile(r"Call to undefined method ([A-Za-z_][A-Za-z0-9_\\]*)::([A-Za-z_][A-Za-z0-9_]*)\(\)"),
+    re.compile(r'Class "([A-Za-z_][A-Za-z0-9_\\]*)" not found'),
+    re.compile(r"Call to a member function ([A-Za-z_][A-Za-z0-9_]*)\(\) on null"),
+    re.compile(r'Undefined constant "([A-Za-z_][A-Za-z0-9_\\]*)"'),
+)
+
+
+def safe_php_fatal_detail(message):
+    """Return only allowlisted symbol-level details, never arbitrary exception text."""
+    for pattern in SAFE_FATAL_DETAILS:
+        match = pattern.search(message)
+        if match:
+            return match.group(0)
+    return None
