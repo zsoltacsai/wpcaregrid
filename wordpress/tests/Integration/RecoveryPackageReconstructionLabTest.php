@@ -171,6 +171,7 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
     public function test_invalid_manifests_objects_and_archives_are_rejected_before_target_writes(): void
     {
         $this->requires_mysql_and_gzip();
+        $this->writeSourceSentinels();
         $package = $this->generatePackage('full');
         $target = $this->temporaryDirectory('target-untouched');
         file_put_contents($target.'/guard.txt', 'UNCHANGED-TARGET');
@@ -970,4 +971,3 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
         }
     }
 }
-
