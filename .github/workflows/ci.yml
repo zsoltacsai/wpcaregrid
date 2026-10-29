@@ -40,6 +40,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify locked Actions dependencies for ci.yml
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh extension install github/gh-actions-lock --pin v0.4.0
+          verifier="$HOME/.local/share/gh/extensions/gh-actions-lock/gh-actions-lock"
+          test -x "$verifier"
+          echo "f9da98f2a6e9e0ae77deadf9a2319a8a86bb002b541cc3203b247cc59fb04842  $verifier" | sha256sum --check
+          gh actions-lock --verify .github/workflows/ci.yml
+          git diff --exit-code -- .github/workflows/ci.yml .github/workflows/actions.lock
+          test -z "$(git status --porcelain -- .github/workflows/actions.lock)"
+
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ env.PHP_VERSION }}
@@ -127,7 +142,7 @@ jobs:
           bash scripts/tests/connector-release-version-gate-test.sh
 
       - name: Code style (Pint)
-        run: vendor/bin/pint --test
+        run: vendor/bin/pint --test -v
 
       - name: PHP dependency advisories (application and connector test harness)
         run: |
@@ -462,6 +477,37 @@ jobs:
           fi
 
           php tests/smoke/http-smoke.php http://127.0.0.1:8001 --expect=application
+
+  php85_fpm_compat:
+    name: Isolated PHP 8.5 FPM compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      PHP_FPM_BASE: php:8.5.12-fpm@sha256:8b4b4a764f7985137b13e4cb49dd59e967d9daa7946a731f9d06e31e748e39bb
+      PHP_EXTENSIONS: mbstring, intl, gd, zip, sodium, pdo_sqlite, sqlite3, pdo_mysql, mysqli, fileinfo, openssl, curl, posix, pcntl, bcmath
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5.12'
+          extensions: ${{ env.PHP_EXTENSIONS }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Install reviewed Composer dependencies before network isolation
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Verify FPM lane negative isolation policies
+        run: python3 scripts/tests/php-fpm/policy-test.py
+
+      - name: Build then run sealed PHP-FPM compatibility container
+        run: bash scripts/tests/php-fpm/run-ci.sh
 
   sqlite_regressions:
     name: Server SQLite regression gate (PHP 8.4)

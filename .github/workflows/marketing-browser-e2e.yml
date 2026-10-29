@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/marketing-browser-e2e.yml'
+      - '.github/workflows/actions.lock'
       - 'app/**'
       - 'config/**'
       - 'lang/**'
@@ -24,6 +25,7 @@ on:
       - claude/ecstatic-wozniak-oemyuf
     paths:
       - '.github/workflows/marketing-browser-e2e.yml'
+      - '.github/workflows/actions.lock'
       - 'app/**'
       - 'config/**'
       - 'lang/**'
@@ -78,6 +80,67 @@ jobs:
       PLAYWRIGHT_JUNIT_OUTPUT_NAME: playwright-report/junit.xml
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify locked Actions dependencies for Marketing workflow
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          workflow=".github/workflows/marketing-browser-e2e.yml"
+          original="$(mktemp "$RUNNER_TEMP/marketing-workflow.XXXXXX")"
+          drifted="$(mktemp "$RUNNER_TEMP/marketing-workflow-drift.XXXXXX")"
+          report="$(mktemp "$RUNNER_TEMP/actions-lock-report.XXXXXX")"
+          error_log="$(mktemp "$RUNNER_TEMP/actions-lock-error.XXXXXX")"
+          cp "$workflow" "$original"
+          cleanup() {
+            cp "$original" "$workflow"
+            rm -f "$original" "$drifted" "$report" "$error_log"
+          }
+          trap cleanup EXIT
+
+          gh extension install github/gh-actions-lock --pin v0.4.0
+          verifier="$HOME/.local/share/gh/extensions/gh-actions-lock/gh-actions-lock"
+          test -x "$verifier"
+          echo "f9da98f2a6e9e0ae77deadf9a2319a8a86bb002b541cc3203b247cc59fb04842  $verifier" | sha256sum --check
+
+          # Verify the committed SHA-pinned workflow and lock before dependencies are installed.
+          timeout 120s gh actions-lock --verify "$workflow"
+          echo "ACTIONS_LOCK_BASELINE=PASS"
+
+          # Prove stale workflow references fail closed; the test uses an ephemeral runner copy.
+          checkout_pin="actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+          checkout_pin_count="$(grep -E "^[[:space:]]*-[[:space:]]*uses:[[:space:]]*${checkout_pin}([[:space:]]+#.*)?$" "$workflow" | wc -l)"
+          if [ "$checkout_pin_count" -ne 1 ]; then
+            echo "ERROR: expected exactly one checkout SHA uses line; found $checkout_pin_count"
+            exit 1
+          fi
+          sed "s|$checkout_pin|actions/checkout@main|" "$original" > "$drifted"
+          grep -Fq "actions/checkout@main" "$drifted"
+          cp "$drifted" "$workflow"
+
+          drift_status=0
+          if timeout 120s gh actions-lock --verify --json=valid,findings "$workflow" > "$report" 2> "$error_log"; then
+            echo "ERROR: lock verifier accepted an intentionally untracked action ref"
+            exit 1
+          else
+            drift_status=$?
+          fi
+          test "$drift_status" -ne 0
+          if ! jq -e '(.valid == false) and any(.findings[]?; .severity == "error" and ((.category == "not-pinned") or (.category == "ref-changed")) and .dependency == "actions/checkout@main" and (.retryable != true))' "$report" > /dev/null; then
+            echo "ERROR: lock verifier did not reject the injected checkout@main ref as a non-retryable error"
+            jq -r '[.valid, ((.findings // []) | map({category, retryable}))] | @json' "$report"
+            exit 1
+          fi
+          echo "ACTIONS_LOCK_DRIFT_REJECTION=PASS"
+
+          # Restore the committed workflow and re-verify; cleanup trap remains armed on failure.
+          cp "$original" "$workflow"
+          timeout 120s gh actions-lock --verify "$workflow"
+          echo "ACTIONS_LOCK_RESTORE=PASS"
+          git diff --exit-code -- "$workflow" .github/workflows/actions.lock
+          trap - EXIT
+          rm -f "$original" "$drifted" "$report" "$error_log"
 
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:

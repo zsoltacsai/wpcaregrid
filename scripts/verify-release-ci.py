@@ -16,14 +16,18 @@ WORKFLOW = ".github/workflows/ci.yml"
 API = "https://api.github.com"
 REQUIRED_JOBS = (
     "Quality (lint, style, dependencies, build, secrets)",
-    "Server tests (PHP 8.4, sqlite)",
     "Server tests (PHP 8.4, mysql)",
-    "Server tests (PHP 8.4, mariadb)",
     "Connector tests in WordPress (PHP 8.4, sqlite)",
     "Connector tests in WordPress (PHP 8.4, mysql)",
     "Connector tests in WordPress (PHP 8.4, mariadb)",
+    "Server SQLite regression gate (PHP 8.4)",
+    "Server tests (PHP 8.5, mysql)",
 )
 MYSQL_GATE = "Required MySQL process-concurrency gate"
+MYSQL_SERVER_JOBS = (
+    "Server tests (PHP 8.4, mysql)",
+    "Server tests (PHP 8.5, mysql)",
+)
 MAX_RESPONSE_BYTES = 1_000_000
 
 
@@ -121,13 +125,17 @@ def verify_release(sha):
         job = instances[0]
         if job.get("status") != "completed" or job.get("conclusion") != "success":
             raise EvidenceError("an exact-target mandatory CI job did not succeed")
-        if name == "Server tests (PHP 8.4, mysql)":
-            steps = job.get("steps")
-            if not isinstance(steps, list):
-                raise EvidenceError("the exact-target MySQL process gate is missing")
-            gates = [step for step in steps if isinstance(step, dict) and step.get("name") == MYSQL_GATE]
-            if len(gates) != 1 or gates[0].get("status") != "completed" or gates[0].get("conclusion") != "success":
-                raise EvidenceError("the exact-target MySQL process gate did not succeed")
+    for name in MYSQL_SERVER_JOBS:
+        job = by_name[name][0]
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            raise EvidenceError("an exact-target MySQL process gate is missing")
+        gates = [step for step in steps if isinstance(step, dict) and step.get("name") == MYSQL_GATE]
+        if len(gates) != 1:
+            raise EvidenceError("an exact-target MySQL process gate is missing or duplicated")
+        gate = gates[0]
+        if gate.get("status") != "completed" or gate.get("conclusion") != "success":
+            raise EvidenceError("an exact-target MySQL process gate did not succeed")
 
     return {"target_sha": sha, "workflow_run_id": run_id, "mandatory_checks": len(REQUIRED_JOBS)}
 
