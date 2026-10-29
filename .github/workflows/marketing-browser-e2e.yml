@@ -345,26 +345,38 @@ jobs:
           echo "PHP_GITHUB_CREDENTIALS=ABSENT\n";
 
           $deniedErrors = [SOCKET_EACCES, SOCKET_EPERM];
-          $targets = [
-              ['IPv4', AF_INET, '1.1.1.1'],
-              ['IPv6', AF_INET6, '2606:4700:4700::1111'],
-          ];
-
-          foreach ($targets as [$label, $family, $address]) {
+          $assertBlocked = static function (string $label, int $family, string $address, int $port) use ($fail, $deniedErrors): void {
               $socket = @socket_create($family, SOCK_STREAM, SOL_TCP);
               if ($socket === false) {
                   $fail('PHP_EGRESS_'.$label);
               }
 
               @socket_set_nonblock($socket);
-              $connected = @socket_connect($socket, $address, 443);
+              $connected = @socket_connect($socket, $address, $port);
               $error = socket_last_error($socket);
 
               if (!$connected && !in_array($error, $deniedErrors, true)) {
+                  if (!in_array($error, [SOCKET_EINPROGRESS, SOCKET_EWOULDBLOCK], true)) {
+                      @socket_close($socket);
+                      $fail('PHP_EGRESS_'.$label.'_ROUTE_OR_SOCKET');
+                  }
                   $write = [$socket];
                   $except = [$socket];
                   $read = [];
                   $ready = @socket_select($read, $write, $except, 1);
+                  if ($ready === 0) {
+                      // systemd's cgroup BPF IP filter drops packet egress;
+                      // the nonblocking connect remains pending. We accept a
+                      // timeout only after the routable loopback controls below
+                      // prove that this address family is filtered in this unit.
+                      @socket_close($socket);
+                      echo "PHP_EGRESS_".$label."=FILTERED_TIMEOUT\n";
+                      return;
+                  }
+                  if ($ready === false) {
+                      @socket_close($socket);
+                      $fail('PHP_EGRESS_'.$label.'_SELECT');
+                  }
                   if ($ready > 0) {
                       $error = @socket_get_option($socket, SOL_SOCKET, SO_ERROR);
                       if ($error === 0) {
@@ -380,7 +392,19 @@ jobs:
               }
 
               echo "PHP_EGRESS_".$label."=DENIED_BY_POLICY\n";
-          }
+          };
+
+          // Known-routable loopback addresses outside the single explicitly
+          // allowed 127.0.0.1 address verify filtering for both IP families.
+          // An unavailable family, refusal (filter absent), or unexpected
+          // socket error fails rather than being reported as an egress PASS.
+          $assertBlocked('IPv4_LOOPBACK_CONTROL', AF_INET, '127.0.0.2', 1);
+          $assertBlocked('IPv6_LOOPBACK_CONTROL', AF_INET6, '::1', 1);
+
+          // Exercise actual external destinations as well. The local controls
+          // distinguish the active cgroup filter from route/firewall failures.
+          $assertBlocked('IPv4', AF_INET, '1.1.1.1', 443);
+          $assertBlocked('IPv6', AF_INET6, '2606:4700:4700::1111', 443);
           PHP_EGRESS_PROBE
           echo "PHP_EGRESS_NEGATIVE_TEST=PASS"
 
