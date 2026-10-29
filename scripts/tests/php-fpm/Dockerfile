@@ -7,7 +7,7 @@ RUN apt-get update \
         libonig-dev libpng-dev libsqlite3-dev libwebp-dev libzip-dev nginx-light \
         iproute2 procps python3 \
     && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
-    && docker-php-ext-install -j"$(nproc)" bcmath curl gd intl mbstring mysqli opcache pdo_mysql pdo_sqlite sqlite3 zip \
+    && docker-php-ext-install -j"$(nproc)" bcmath curl gd intl mbstring mysqli pdo_mysql pdo_sqlite sqlite3 zip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
