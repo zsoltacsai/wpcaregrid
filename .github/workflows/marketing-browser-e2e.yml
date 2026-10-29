@@ -199,6 +199,12 @@ jobs:
           if git config --local --get-regexp '^http\..*\.extraheader$' > /dev/null 2>&1; then
             echo "CHECKOUT_CREDENTIAL_PERSISTENCE=FAIL"
             exit 1
+          else
+            git_config_status=$?
+            if [[ "$git_config_status" -ne 1 ]]; then
+              echo "CHECKOUT_CREDENTIAL_PERSISTENCE=UNKNOWN"
+              exit 1
+            fi
           fi
           echo "CHECKOUT_CREDENTIAL_PERSISTENCE=PASS"
 
@@ -343,7 +349,9 @@ jobs:
 
           # systemd applies the AF_INET/AF_INET6 filter to the entire service
           # cgroup. Both the PHP server and its test descendants inherit it.
-          # Only IPv4/IPv6 loopback is allowed so Playwright can reach Laravel.
+          # PrivateNetwork removes host interfaces; only loopback is available
+          # for Playwright-to-Laravel traffic. Hide runner service sockets and
+          # prevent test code from elevating privileges outside this cgroup.
           sudo systemd-run \
             --system \
             --quiet \
@@ -353,10 +361,13 @@ jobs:
             --unit="$sandbox_unit" \
             --property="User=$runner_user" \
             --property="WorkingDirectory=$GITHUB_WORKSPACE" \
+            --property=NoNewPrivileges=true \
+            --property=PrivateTmp=true \
             --property=PrivateNetwork=true \
             --property=IPAddressDeny=any \
             --property='IPAddressAllow=127.0.0.1/32 ::1/128' \
             --property='RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX' \
+            --property='InaccessiblePaths=/run' \
             --property='UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy GH_TOKEN GITHUB_TOKEN ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN' \
             "${service_env[@]}" \
             /bin/bash "$sandbox_script"
