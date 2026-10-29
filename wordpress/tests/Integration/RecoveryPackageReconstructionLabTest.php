@@ -243,10 +243,13 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
             $badArchive['objects']['files'] = $bytes;
             $badArchive['manifest']['files']['size'] = strlen($bytes);
             $badArchive['manifest']['files']['sha256'] = hash('sha256', $bytes);
+            $expanded = gzdecode($bytes);
+            $this->assertIsString($expanded);
+            $badArchive['manifest']['files']['uncompressed_size'] = strlen($expanded);
             try {
                 $this->preparePackage($badArchive);
                 $this->fail("Invalid {$name} archive was accepted.");
-            } catch (BackupFailure) {
+            } catch (BackupFailure|\InvalidArgumentException) {
                 $this->assertSame($guard, hash_file('sha256', $target.'/guard.txt'));
             }
         }
@@ -607,16 +610,19 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
             $char = $line[$i];
             if ($escaped) {
                 $escaped = false;
+
                 continue;
             }
             if ($quote !== null && $char === '\\') {
                 $escaped = true;
+
                 continue;
             }
             if ($quote !== null) {
                 if ($char === $quote) {
                     $quote = null;
                 }
+
                 continue;
             }
             if ($char === "'" || $char === '`') {
@@ -704,13 +710,17 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
     {
         $login = 'lab-'.bin2hex(random_bytes(6));
         $email = $login.'@invalid.test';
-        $script = "<?php\nfunction wp_mail(...\$args): bool { return true; }\n\$_SERVER['HTTP_HOST']='recovery-lab.invalid';\n\$_SERVER['SERVER_NAME']='recovery-lab.invalid';\n\$_SERVER['REQUEST_URI']='/';\ndefine('WP_INSTALLING', true);\nrequire ".var_export($target['root'].'/wp-load.php', true).";\nrequire_once ABSPATH.'wp-admin/includes/upgrade.php';\n\$password=bin2hex(random_bytes(24));\n\$r=wp_install('Synthetic Recovery Lab',".var_export($login, true).','.var_export($email, true).",false,'',\$password);\nif(is_wp_error(\$r)||empty(\$r['user_id'])){fwrite(STDERR,'install failed');exit(2);}\nupdate_option('home','https://recovery-lab.invalid');\nupdate_option('siteurl','https://recovery-lab.invalid');\necho json_encode(['installed'=>true,'admin_password_generated'=>strlen(\$password)===48]);\n";
+        $script = "<?php\nfunction wp_mail(...\$args): bool { return true; }\n\$_SERVER['HTTP_HOST']='recovery-lab.invalid';\n\$_SERVER['SERVER_NAME']='recovery-lab.invalid';\n\$_SERVER['REQUEST_URI']='/';\ndefine('WP_INSTALLING', true);\nrequire ".var_export($target['root'].'/wp-load.php', true).";\nrequire_once ABSPATH.'wp-includes/l10n.php';\nrequire_once ABSPATH.'wp-admin/includes/upgrade.php';\n\$password=bin2hex(random_bytes(24));\n\$r=wp_install('Synthetic Recovery Lab',".var_export($login, true).','.var_export($email, true).",false,'',\$password);\nif(is_wp_error(\$r)||empty(\$r['user_id'])){fwrite(STDERR,'install failed');exit(2);}\nupdate_option('home','https://recovery-lab.invalid');\nupdate_option('siteurl','https://recovery-lab.invalid');\necho json_encode(['installed'=>true,'admin_password_generated'=>strlen(\$password)===48]);\n";
         $this->assertSame(['installed' => true, 'admin_password_generated' => true], $this->runTargetScript($target, $script));
     }
 
     private function importSql(array $target, array $statements): void
     {
-        $db = new \mysqli($target['host'], $target['username'], $target['password'], $target['database']);
+        $db = mysqli_init();
+        $db->options(MYSQLI_OPT_CONNECT_TIMEOUT, 5);
+        if (! $db->real_connect($target['host'], $target['username'], $target['password'], $target['database'])) {
+            $this->fail('Disposable target database connection failed with MySQLi error '.$db->connect_errno.'.');
+        }
         $db->set_charset('utf8mb4');
         foreach ($statements as $statement) {
             if (! $db->query($statement)) {
@@ -723,7 +733,11 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
 
     private function deactivateConnectorForLab(array $target, string $prefix): void
     {
-        $db = new \mysqli($target['host'], $target['username'], $target['password'], $target['database']);
+        $db = mysqli_init();
+        $db->options(MYSQLI_OPT_CONNECT_TIMEOUT, 5);
+        if (! $db->real_connect($target['host'], $target['username'], $target['password'], $target['database'])) {
+            $this->fail('Disposable target database connection failed with MySQLi error '.$db->connect_errno.'.');
+        }
         $table = '`'.$prefix.'options`';
         foreach ([['active_plugins', 'a:0:{}'], ['home', 'https://recovery-lab.invalid'], ['siteurl', 'https://recovery-lab.invalid']] as [$name, $value]) {
             $n = $db->real_escape_string($name);
@@ -748,6 +762,7 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
             }
             if ($entry['type'] === 'dir') {
                 wp_mkdir_p($target);
+
                 continue;
             }
             wp_mkdir_p(dirname($target));
