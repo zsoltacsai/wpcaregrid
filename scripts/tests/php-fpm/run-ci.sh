@@ -63,7 +63,6 @@ app_key="base64:$(php -r 'echo base64_encode(random_bytes(32));')"
 
 evidence="$(docker run --rm --pull=never --platform linux/amd64 \
     --network none \
-    --pid private \
     --cap-drop ALL \
     --security-opt no-new-privileges:true \
     --pids-limit 64 \
