@@ -6,8 +6,14 @@ RUN apt-get update \
         curl libcurl4-openssl-dev libfreetype6-dev libicu-dev libjpeg62-turbo-dev \
         libonig-dev libpng-dev libsqlite3-dev libwebp-dev libzip-dev nginx-light \
         iproute2 procps python3 \
-    && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
-    && docker-php-ext-install -j"$(nproc)" bcmath curl gd intl mbstring mysqli pdo_mysql pdo_sqlite sqlite3 zip \
+    && if ! php -r 'exit(extension_loaded("gd") ? 0 : 1);'; then docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp; fi \
+    && for extension in bcmath curl gd intl mbstring mysqli pdo_mysql pdo_sqlite sqlite3 zip; do \
+         if php -r 'exit(extension_loaded($argv[1]) ? 0 : 1);' "$extension"; then \
+             echo "PHP extension already present: $extension"; \
+         else \
+             docker-php-ext-install -j"$(nproc)" "$extension"; \
+         fi; \
+       done \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
