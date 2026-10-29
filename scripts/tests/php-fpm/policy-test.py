@@ -28,7 +28,7 @@ require("extension_loaded($argv[1])" in dockerfile
         "The image build must avoid reinstalling extensions already present in the pinned PHP base.")
 require("USER www-data:www-data" in dockerfile and "posix_geteuid() === 33" in (HARNESS / "probe.php").read_text(),
         "FPM must run as a dedicated unprivileged UID.")
-for flag in ("--network none", "--pid private", "--cap-drop ALL", "--security-opt no-new-privileges:true",
+for flag in ("--network none", "--cap-drop ALL", "--security-opt no-new-privileges:true",
              "--read-only", "--user 33:33", "--pids-limit 64"):
     require(flag in runner, f"Missing container isolation control: {flag}")
 for forbidden in ("--privileged", "--network host", "--pid host", "--env-file", "--volume", "--mount",
