@@ -7,8 +7,22 @@ workflows:
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
         - 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1'
         - 'shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962'
+    '.github/workflows/marketing-browser-e2e.yml':
+        - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
+        - 'actions/checkout@v7.0.1'
+        - 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1'
+        - 'actions/setup-node@v7.1.0'
+        - 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
+        - 'actions/upload-artifact@v4.6.2'
+        - 'shivammathur/setup-php@2.40.0'
+        - 'shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962'
 dependencies:
     'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1':
+        ref: 'v7.0.1'
+        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
+        owner_id: 44036562
+        repo_id: 197814629
+    'actions/checkout@v7.0.1':
         ref: 'v7.0.1'
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
         owner_id: 44036562
@@ -18,6 +32,26 @@ dependencies:
         commit: 'sha1-949feb2413d6458794dcd2491c4babbbce0c15c1'
         owner_id: 44036562
         repo_id: 189476904
+    'actions/setup-node@v7.1.0':
+        ref: 'v7.1.0'
+        commit: 'sha1-949feb2413d6458794dcd2491c4babbbce0c15c1'
+        owner_id: 44036562
+        repo_id: 189476904
+    'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02':
+        ref: 'v4.6.2'
+        commit: 'sha1-ea165f8d65b6e75b540449e92b4886f43607fa02'
+        owner_id: 44036562
+        repo_id: 192625955
+    'actions/upload-artifact@v4.6.2':
+        ref: 'v4.6.2'
+        commit: 'sha1-ea165f8d65b6e75b540449e92b4886f43607fa02'
+        owner_id: 44036562
+        repo_id: 192625955
+    'shivammathur/setup-php@2.40.0':
+        ref: '2.40.0'
+        commit: 'sha1-eb7c497e18156a6bbabfef1d3a82760b9eda3962'
+        owner_id: 1571086
+        repo_id: 206578964
     'shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962':
         ref: '2.40.0'
         commit: 'sha1-eb7c497e18156a6bbabfef1d3a82760b9eda3962'
