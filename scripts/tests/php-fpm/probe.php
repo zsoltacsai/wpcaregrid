@@ -114,7 +114,7 @@ $check('sandbox_loopback_http_witness_reachable', $canConnect('tcp://127.0.0.1:8
 $interfaces = array_values(array_diff(@scandir('/sys/class/net') ?: [], ['.', '..', 'lo']));
 $check('no_non_loopback_network_interface', $interfaces === []);
 
-if ($port4 ! == false && $port6 ! == false && $witnessIPv4 ! == false) {
+if ($port4 !== false && $port6 !== false && $witnessIPv4 !== false) {
     $runnerWitness = 'tcp://'.$witnessIPv4.':'.$port4;
     $check('ipv4_runner_host_witness_denied', ! $canConnect($runnerWitness));
     $check('ipv6_external_connection_denied', ! $canConnect('tcp://[2606:4700:4700::1111]:53'));
@@ -144,11 +144,11 @@ if ($port4 ! == false && $port6 ! == false && $witnessIPv4 ! == false) {
 $resolved = @gethostbyname('example.com');
 $check('external_dns_resolution_denied', $resolved === 'example.com');
 $check('metadata_endpoint_denied', ! $canConnect('tcp://169.254.169.254:80'));
-$check('runner_host_service_denied', $port4 ! == false && $witnessIPv4 ! == false
+$check('runner_host_service_denied', $port4 !== false && $witnessIPv4 !== false
     && ! $canConnect('tcp://host.docker.internal:'.$port4));
-$check('staging_endpoint_denied', $port4 ! == false && $witnessIPv4 ! == false
+$check('staging_endpoint_denied', $port4 !== false && $witnessIPv4 !== false
     && ! $canConnect('tcp://staging.wpcaregrid.com:'.$port4));
-$check('production_endpoint_denied', $port4 ! == false && $witnessIPv4 ! == false
+$check('production_endpoint_denied', $port4 !== false && $witnessIPv4 !== false
     && ! $canConnect('tcp://wpcaregrid.com:'.$port4));
 
 http_response_code($failures === [] ? 200 : 500);
