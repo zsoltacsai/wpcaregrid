@@ -325,6 +325,7 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
         if ($type === 'database' || $type === 'full') {
             $this->requires_mysql_and_gzip();
         }
+        $finalizedBefore = $this->server->finalized;
         $job = $this->job('BACKUP_'.strtoupper($type), [
             'backup_uuid' => wp_generate_uuid4(),
             'reason' => 'manual',
@@ -334,7 +335,7 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
         $this->plugin()->runner()->poll();
         $result = $this->posted_result($job['uuid']);
         $this->assertSame('success', $result['status'] ?? null, wp_json_encode($result['error'] ?? []));
-        $this->assertSame(1, $this->server->finalized, 'The actual Connector backup handler must finalize the synthetic artifact.');
+        $this->assertSame($finalizedBefore + 1, $this->server->finalized, 'The actual Connector backup handler must finalize each synthetic artifact.');
         $package = ['manifest' => $this->server->manifest, 'objects' => $this->server->objects];
         $this->assertSame('wp-caregrid-backup/1', $package['manifest']['format']);
         $this->assertSame($type, $package['manifest']['type']);
@@ -706,7 +707,7 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
             "define('DISABLE_WP_CRON', true);\n".
             "define('AUTOMATIC_UPDATER_DISABLED', true);\n".
             "define('WP_DEBUG', true);\ndefine('WP_DEBUG_DISPLAY', false);\n".
-            '$table_prefix = '.var_export($prefix, true).";\n";
+            '$table_prefix = '.var_export($prefix, true).";\nrequire_once ABSPATH.'wp-settings.php';\n";
         file_put_contents($root.'/wp-config.php', $config, LOCK_EX);
 
         return hash('sha256', $config);
@@ -716,7 +717,7 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
     {
         $login = 'lab-'.bin2hex(random_bytes(6));
         $email = $login.'@invalid.test';
-        $script = "<?php\nfunction wp_mail(...\$args): bool { return true; }\n\$_SERVER['HTTP_HOST']='recovery-lab.invalid';\n\$_SERVER['SERVER_NAME']='recovery-lab.invalid';\n\$_SERVER['REQUEST_URI']='/';\ndefine('ABSPATH', ".var_export($target['root'].'/', true).");\nrequire ABSPATH.'wp-config.php';\nrequire ABSPATH.'wp-settings.php';\ndefine('WP_INSTALLING', true);\nrequire_once ABSPATH.'wp-admin/includes/upgrade.php';\n\$password=bin2hex(random_bytes(24));\n\$r=wp_install('Synthetic Recovery Lab',".var_export($login, true).','.var_export($email, true).",false,'',\$password);\nif(is_wp_error(\$r)||empty(\$r['user_id'])){fwrite(STDERR,'install failed');exit(2);}\nupdate_option('home','https://recovery-lab.invalid');\nupdate_option('siteurl','https://recovery-lab.invalid');\necho json_encode(['installed'=>true,'admin_password_generated'=>strlen(\$password)===48]);\n";
+        $script = "<?php\nfunction wp_mail(...\$args): bool { return true; }\n\$_SERVER['HTTP_HOST']='recovery-lab.invalid';\n\$_SERVER['SERVER_NAME']='recovery-lab.invalid';\n\$_SERVER['REQUEST_URI']='/';\ndefine('WP_INSTALLING', true);\ndefine('ABSPATH', ".var_export($target['root'].'/', true).");\nrequire ABSPATH.'wp-load.php';\nrequire_once ABSPATH.'wp-admin/includes/upgrade.php';\n\$password=bin2hex(random_bytes(24));\n\$r=wp_install('Synthetic Recovery Lab',".var_export($login, true).','.var_export($email, true).",false,'',\$password);\nif(is_wp_error(\$r)||empty(\$r['user_id'])){fwrite(STDERR,'install failed');exit(2);}\nupdate_option('home','https://recovery-lab.invalid');\nupdate_option('siteurl','https://recovery-lab.invalid');\necho json_encode(['installed'=>true,'admin_password_generated'=>strlen(\$password)===48]);\n";
         $this->assertSame(['installed' => true, 'admin_password_generated' => true], $this->runTargetScript($target, $script));
     }
 
