@@ -110,7 +110,11 @@ jobs:
 
           # Prove stale workflow references fail closed; the test uses an ephemeral runner copy.
           checkout_pin="actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-          test "$(grep -E "^[[:space:]]*-[[:space:]]*uses:[[:space:]]*${checkout_pin}([[:space:]]+#.*)?$" "$workflow" | wc -l)" -eq 1
+          checkout_pin_count="$(grep -E "^[[:space:]]*-[[:space:]]*uses:[[:space:]]*${checkout_pin}([[:space:]]+#.*)?$" "$workflow" | wc -l)"
+          if [ "$checkout_pin_count" -ne 1 ]; then
+            echo "ERROR: expected exactly one checkout SHA uses line; found $checkout_pin_count"
+            exit 1
+          fi
           sed "s|$checkout_pin|actions/checkout@main|" "$original" > "$drifted"
           grep -Fq "actions/checkout@main" "$drifted"
           cp "$drifted" "$workflow"
@@ -123,7 +127,11 @@ jobs:
             drift_status=$?
           fi
           test "$drift_status" -ne 0
-          jq -e '(.valid == false) and ((.findings // []) | any(.category == "not-pinned" and ((.retryable // false) == false)))' "$report" > /dev/null
+          if ! jq -e '(.valid == false) and any(.findings[]?; .category == "not-pinned" and (.retryable != true))' "$report" > /dev/null; then
+            echo "ERROR: lock verifier did not report valid=false with a non-retryable not-pinned finding"
+            jq -r '[.valid, ((.findings // []) | map({category, retryable}))] | @json' "$report"
+            exit 1
+          fi
           echo "ACTIONS_LOCK_DRIFT_REJECTION=PASS"
 
           # Restore the committed workflow and re-verify; cleanup trap remains armed on failure.
