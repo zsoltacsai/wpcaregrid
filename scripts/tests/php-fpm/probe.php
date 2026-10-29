@@ -56,6 +56,7 @@ if (is_array($environment)) {
 $check('no_runner_credentials_or_proxy_environment', $environmentClean);
 $check('no_docker_socket', ! file_exists('/var/run/docker.sock') && ! file_exists('/run/docker.sock'));
 
+require '/app/vendor/autoload.php';
 $app = require '/app/bootstrap/app.php';
 $app->make(Kernel::class)->bootstrap();
 $check('application_debug_disabled', config('app.debug') === false);
