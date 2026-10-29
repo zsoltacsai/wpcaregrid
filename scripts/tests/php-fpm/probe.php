@@ -64,6 +64,30 @@ $check('backup_storage_disabled', blank(config('backup.storage')));
 $check('stripe_live_mode_disabled', config('services.stripe.allow_live_mode') === false);
 $check('stripe_credentials_absent', collect(['key', 'secret', 'webhook_secret', 'payment_method_portal_configuration'])
     ->every(static fn (string $key): bool => blank(config('services.stripe.'.$key))));
+$check('external_notification_credentials_absent', collect([
+    config('services.postmark.key'),
+    config('services.resend.key'),
+    config('services.ses.key'),
+    config('services.ses.secret'),
+    config('services.slack.notifications.bot_user_oauth_token'),
+    config('services.cloudflare.api_token'),
+])->every(static fn ($credential): bool => blank($credential)));
+$check('external_backup_destinations_disabled',
+    blank(config('backup.storage'))
+    && blank(config('backup.providers.s3.endpoint'))
+    && blank(config('backup.providers.s3.bucket'))
+    && blank(config('backup.providers.s3.key'))
+    && blank(config('backup.providers.s3.secret'))
+    && blank(config('backup.providers.sftp.host'))
+    && blank(config('backup.providers.sftp.username'))
+    && blank(config('backup.providers.sftp.password'))
+    && blank(config('backup.providers.sftp.private_key')));
+$check('cloud_backup_disk_disabled',
+    config('filesystems.disks.platform_backups.driver') === 'local'
+    && blank(config('filesystems.disks.platform_backups.key'))
+    && blank(config('filesystems.disks.platform_backups.secret'))
+    && blank(config('filesystems.disks.platform_backups.bucket')
+        ?? config('filesystems.disks.platform_backups.s3_bucket'));
 
 try {
     $dbResult = app('db')->connection()->select('SELECT 1 AS compatibility_probe');
