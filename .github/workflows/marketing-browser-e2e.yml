@@ -88,14 +88,25 @@ jobs:
           GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          workflow=".github/workflows/marketing-browser-e2e.yml"
+          original="$RUNNER_TEMP/marketing-browser-e2e.yml.original"
+          cp "$workflow" "$original"
+          restore_workflow() { cp "$original" "$workflow"; }
+          trap restore_workflow EXIT
+
           gh extension install github/gh-actions-lock --pin v0.4.0
           verifier="$HOME/.local/share/gh/extensions/gh-actions-lock/gh-actions-lock"
           test -x "$verifier"
           echo "f9da98f2a6e9e0ae77deadf9a2319a8a86bb002b541cc3203b247cc59fb04842  $verifier" | sha256sum --check
-          gh actions-lock .github/workflows/marketing-browser-e2e.yml
-          git diff --exit-code -- .github/workflows/marketing-browser-e2e.yml
-          cat .github/workflows/actions.lock
+          gh actions-lock "$workflow"
 
+          # The generator may express a lockable action via its release ref.
+          # Restore the checked-in exact SHA pins, then prove they match lock entries.
+          cp "$original" "$workflow"
+          trap - EXIT
+          gh actions-lock --verify "$workflow"
+          git diff --exit-code -- "$workflow"
+          cat .github/workflows/actions.lock
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.4'
