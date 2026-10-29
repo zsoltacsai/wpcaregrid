@@ -38,7 +38,7 @@ async function signIn(page: Page, customerKey: 'en' | 'hu'): Promise<void> {
     await page.goto('/login');
     await page.locator('input[name="email"]').fill(customer.email);
     await page.locator('input[name="password"]').fill(fixtures.password);
-    await page.locator('form button[type="submit"]').click();
+    await page.getByRole('button', { name: 'Log in' }).click();
     await page.waitForURL(/\/account(?:\/)?$/);
 }
 
