@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/marketing-browser-e2e.yml'
+      - '.github/workflows/actions.lock'
       - 'app/**'
       - 'config/**'
       - 'lang/**'
@@ -24,6 +25,7 @@ on:
       - claude/ecstatic-wozniak-oemyuf
     paths:
       - '.github/workflows/marketing-browser-e2e.yml'
+      - '.github/workflows/actions.lock'
       - 'app/**'
       - 'config/**'
       - 'lang/**'
@@ -78,6 +80,21 @@ jobs:
       PLAYWRIGHT_JUNIT_OUTPUT_NAME: playwright-report/junit.xml
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Generate Marketing workflow lock (temporary bootstrap)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh extension install github/gh-actions-lock --pin v0.4.0
+          verifier="$HOME/.local/share/gh/extensions/gh-actions-lock/gh-actions-lock"
+          test -x "$verifier"
+          echo "f9da98f2a6e9e0ae77deadf9a2319a8a86bb002b541cc3203b247cc59fb04842  $verifier" | sha256sum --check
+          gh actions-lock .github/workflows/marketing-browser-e2e.yml
+          git diff --exit-code -- .github/workflows/marketing-browser-e2e.yml
+          cat .github/workflows/actions.lock
 
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
