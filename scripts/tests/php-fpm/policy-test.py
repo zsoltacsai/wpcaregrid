@@ -9,7 +9,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[3]
 HARNESS = ROOT / "scripts/tests/php-fpm"
 sys.path.insert(0, str(HARNESS))
-from policy import ALLOWED_ENV, REQUIRED_ENV, fpm_environment, has_background_consumer, validate_environment
+from policy import ALLOWED_ENV, REQUIRED_ENV, fpm_environment, has_background_consumer, safe_php_fatal_detail, validate_environment
 
 def require(condition, message):
     if not condition:
@@ -111,4 +111,13 @@ with tempfile.TemporaryDirectory() as temporary:
                 "A background-consumer process fixture was not rejected.")
         shutil.rmtree(proc_root / str(index))
 
-print("PHP-FPM isolation policy, 8 unsafe profiles, and 8 NUL-delimited consumer fixtures passed.")
+require(
+    safe_php_fatal_detail("Call to undefined function App\\\Test\\\probe()") == "Call to undefined function App\\\Test\\\probe",
+    "A known-safe PHP fatal symbol was not retained.",
+)
+require(
+    safe_php_fatal_detail("PHP Fatal error: secret token=synthetic-private-value") is None,
+    "An unrecognized PHP fatal message was not suppressed.",
+)
+
+print("PHP-FPM isolation policy, safe fatal diagnostics, 8 unsafe profiles, and 8 NUL-delimited consumer fixtures passed.")
