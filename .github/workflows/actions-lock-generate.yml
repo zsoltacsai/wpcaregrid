@@ -23,6 +23,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           export GH_CONFIG_DIR="$RUNNER_TEMP/gh-config"
