@@ -56,8 +56,9 @@ for _ in $(seq 1 100); do
 done
 [[ -s "$ready_file" ]] || { echo "Controlled IPv4/IPv6 witnesses did not start." >&2; exit 1; }
 python3 "$repo_root/scripts/tests/php-fpm/witness.py" verify "$ready_file"
-port4="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ipv4"])' "$ready_file")"
-port6="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ipv6"])' "$ready_file")"
+host_ipv4="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ipv4_host"])' "$ready_file")"
+port4="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ipv4_port"])' "$ready_file")"
+port6="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ipv6_port"])' "$ready_file")"
 app_key="base64:$(php -r 'echo base64_encode(random_bytes(32));')"
 
 evidence="$(docker run --rm --pull=never --platform linux/amd64 \
@@ -71,9 +72,9 @@ evidence="$(docker run --rm --pull=never --platform linux/amd64 \
     --user 33:33 \
     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m,uid=33,gid=33,mode=1770 \
     --tmpfs /app/storage:rw,noexec,nosuid,nodev,size=128m,uid=33,gid=33,mode=0750 \
-    --add-host host.docker.internal:127.0.0.1 \
-    --add-host staging.wpcaregrid.com:127.0.0.1 \
-    --add-host wpcaregrid.com:127.0.0.1 \
+    --add-host host.docker.internal:$host_ipv4 \
+    --add-host staging.wpcaregrid.com:$host_ipv4 \
+    --add-host wpcaregrid.com:$host_ipv4 \
     --env "APP_KEY=$app_key" \
     --env "FPM_WITNESS_PORT4=$port4" \
     --env "FPM_WITNESS_PORT6=$port6" \
