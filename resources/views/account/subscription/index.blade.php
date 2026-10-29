@@ -6,6 +6,13 @@
         <x-account.panel :title="$subscription->planName().' — '.$subscription->product_type->label()" :heading-id="'subscription-'.$subscription->uuid" class="mb-6">
             <x-account.subscription-details :subscription="$subscription" />
 
+            @php($cancellationStatus = $cancellationStatuses->get($subscription->id))
+            @if ($cancellationStatus)
+                <p class="mt-4 rounded-sm border border-line bg-canvas p-3 text-sm text-muted" role="status" aria-live="polite" aria-atomic="true">
+                    {{ __('account.subscription.cancellation_status.'.$cancellationStatus) }}
+                </p>
+            @endif
+
             @if ($subscription->pending_change_status)
                 <p class="mt-4 rounded-sm border border-line bg-canvas p-3 text-sm text-muted">
                     {{ __('account.subscription.pending_change', ['plan' => app(\App\Pricing\PricingCatalog::class)->plan($subscription->product_type, \App\Pricing\PlanTier::from($subscription->pending_plan))->name, 'interval' => \App\Pricing\BillingInterval::from($subscription->pending_interval)->label(), 'date' => app(\App\Support\DisplayDateTime::class)->date($subscription->pending_change_effective_at, 'j M Y') ?? __('account.subscription.not_available')]) }}
@@ -14,14 +21,16 @@
 
             <div class="mt-6 flex flex-col gap-2 border-t border-line pt-6 sm:flex-row sm:items-center sm:gap-4">
                 @if ($subscription->billing_source === 'stripe' && ! $subscription->isInternal() && in_array($subscription->status, [\App\Billing\SubscriptionStatus::Active, \App\Billing\SubscriptionStatus::Trialing, \App\Billing\SubscriptionStatus::PastDue], true))
-                    @if ($subscription->cancel_at_period_end)
-                        <form method="POST" action="{{ route('account.subscriptions.reactivate', $subscription) }}">@csrf
-                            <x-ui.button type="submit" variant="secondary">{{ __('account.subscription.reactivate') }}</x-ui.button>
-                        </form>
-                    @else
-                        <form method="POST" action="{{ route('account.subscriptions.cancel', $subscription) }}">@csrf
-                            <x-ui.button type="submit" variant="secondary">{{ __('account.subscription.cancel') }}</x-ui.button>
-                        </form>
+                    @if (! in_array($cancellationStatus, ['pending', 'reconciliation_required'], true))
+                        @if ($subscription->cancel_at_period_end)
+                            <form method="POST" action="{{ route('account.subscriptions.reactivate', $subscription) }}">@csrf
+                                <x-ui.button type="submit" variant="secondary">{{ __('account.subscription.reactivate') }}</x-ui.button>
+                            </form>
+                        @else
+                            <form method="POST" action="{{ route('account.subscriptions.cancel', $subscription) }}">@csrf
+                                <x-ui.button type="submit" variant="secondary">{{ __('account.subscription.cancel') }}</x-ui.button>
+                            </form>
+                        @endif
                     @endif
                     @if (! $subscription->pending_change_status)
                         <form method="POST" action="{{ route('account.subscriptions.change', $subscription) }}" class="mt-4 grid gap-3 border-t border-line pt-4 sm:grid-cols-[1fr_1fr_auto]">

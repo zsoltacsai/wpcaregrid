@@ -5,12 +5,16 @@ namespace App\Http\Controllers\Account;
 use App\Billing\PaymentMethodPortalGateway;
 use App\Billing\SubscriptionManagement;
 use App\Http\Controllers\Controller;
+use App\Models\Customer;
 use App\Models\Subscription;
+use App\Models\SubscriptionOperation;
 use App\Pricing\BillingInterval;
 use App\Pricing\PlanTier;
 use Illuminate\Contracts\View\View;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -18,16 +22,91 @@ class SubscriptionController extends Controller
 {
     public function index(Request $request): View
     {
+        /** @var Customer $customer */
+        $customer = $request->attributes->get('customer');
+        $subscriptions = $customer->subscriptions()->with('website')->latest('id')->get();
+
         return view('account.subscription.index', [
-            'subscriptions' => $request->attributes->get('customer')->subscriptions()->with('website')->latest('id')->get(),
+            'subscriptions' => $subscriptions,
+            'cancellationStatuses' => $this->cancellationStatuses($customer, $subscriptions),
         ]);
     }
 
-    public function show(Subscription $subscription): View
+    public function show(Request $request, Subscription $subscription): View
     {
         $this->authorize('view', $subscription);
+        /** @var Customer $customer */
+        $customer = $request->attributes->get('customer');
+        $subscriptions = new EloquentCollection([$subscription->load('website')]);
 
-        return view('account.subscription.index', ['subscriptions' => collect([$subscription->load('website')])]);
+        return view('account.subscription.index', [
+            'subscriptions' => $subscriptions,
+            'cancellationStatuses' => $this->cancellationStatuses($customer, $subscriptions),
+        ]);
+    }
+
+    /**
+     * Load only the newest cancellation operation for these customer-owned subscriptions.
+     * This read path never dispatches a billing operation or contacts Stripe.
+     *
+     * @param  EloquentCollection<int, Subscription>  $subscriptions
+     * @return Collection<int, string>
+     */
+    private function cancellationStatuses(Customer $customer, EloquentCollection $subscriptions): Collection
+    {
+        $subscriptionIds = $subscriptions->modelKeys();
+        if ($subscriptionIds === []) {
+            return collect();
+        }
+
+        $latestOperationIds = SubscriptionOperation::query()
+            ->selectRaw('MAX(id)')
+            ->where('customer_id', $customer->id)
+            ->whereIn('subscription_id', $subscriptionIds)
+            ->where('operation', 'cancel_at_period_end')
+            ->groupBy('subscription_id');
+
+        $operations = SubscriptionOperation::query()
+            ->where('customer_id', $customer->id)
+            ->whereIn('subscription_id', $subscriptionIds)
+            ->whereIn('id', $latestOperationIds)
+            ->get()
+            ->keyBy('subscription_id');
+
+        return $subscriptions->mapWithKeys(function (Subscription $subscription) use ($operations): array {
+            if ($subscription->billing_source !== 'stripe' || $subscription->isInternal()) {
+                return [];
+            }
+
+            $operation = $operations->get($subscription->id);
+            if ($operation === null) {
+                return [];
+            }
+
+            if ($operation->status === 'reconciliation_required') {
+                return [$subscription->id => 'reconciliation_required'];
+            }
+
+            $snapshotTargetsCancellation = data_get($operation->request_snapshot, 'cancel_at_period_end') === true;
+            if (in_array($operation->status, ['requested', 'processing', 'awaiting_confirmation'], true)) {
+                return [$subscription->id => $snapshotTargetsCancellation ? 'pending' : 'reconciliation_required'];
+            }
+
+            if ($operation->status !== 'confirmed') {
+                return [$subscription->id => 'reconciliation_required'];
+            }
+
+            // A previously confirmed cancellation is stale after the provider mirror
+            // reports that cancellation is no longer scheduled (for example, after reactivation).
+            if ($subscription->cancel_at_period_end !== true) {
+                return [];
+            }
+
+            $confirmedForCurrentSubscription = $snapshotTargetsCancellation
+                && $operation->confirmed_at !== null;
+
+            return [$subscription->id => $confirmedForCurrentSubscription ? 'confirmed' : 'reconciliation_required'];
+        });
     }
 
     public function cancel(Request $request, Subscription $subscription, SubscriptionManagement $management): RedirectResponse
