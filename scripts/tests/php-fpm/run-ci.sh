@@ -78,6 +78,7 @@ evidence="$(docker run --rm --pull=never --platform linux/amd64 \
     --env "APP_KEY=$app_key" \
     --env "FPM_WITNESS_PORT4=$port4" \
     --env "FPM_WITNESS_PORT6=$port6" \
+    --env "FPM_WITNESS_IPV4=$host_ipv4" \
     "php85-fpm-lane:$GITHUB_RUN_ID")"
 printf '%s\n' "$evidence"
 python3 -c 'import json,sys; data=json.loads(sys.stdin.read()); assert data["php_version"] == "8.5.12" and data["sapi"] == "fpm-fcgi" and data["worker_uid"] == 33 and data["fpm_fastcgi_http_200"] and data["background_consumers"] == "none"; print("FPM evidence validated.")' <<<"$evidence"
