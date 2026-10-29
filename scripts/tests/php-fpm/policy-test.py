@@ -119,5 +119,9 @@ require(
     safe_php_fatal_detail("PHP Fatal error: secret token=synthetic-private-value") is None,
     "An unrecognized PHP fatal message was not suppressed.",
 )
+require(
+    safe_php_fatal_detail('Target class [App\\Services\\Probe] does not exist.') == "Target class [App\\Services\\Probe] does not exist.",
+    "A known-safe Laravel target-class diagnostic was not retained.",
+)
 
 print("PHP-FPM isolation policy, safe fatal diagnostics, 8 unsafe profiles, and 8 NUL-delimited consumer fixtures passed.")
