@@ -521,21 +521,21 @@ release_gate_state_for_commit() {
     if [[ "$middleware_path" == 'app/Http/Middleware/MarketingOnlyReleaseGate.php' ]]; then
         middleware_source="$(git show "${commit_sha}:$middleware_path" 2>/dev/null)" || return 1
         [[ "$middleware_source" == *'class MarketingOnlyReleaseGate'* ]] || return 1
-        [[ "$(grep -Fxc 'use App\\Http\\Middleware\\MarketingOnlyReleaseGate;' <<<"$bootstrap_source")" == '1' ]] || return 1
+        [[ "$(grep -Fxc 'use App\Http\Middleware\MarketingOnlyReleaseGate;' <<<"$bootstrap_source")" == '1' ]] || return 1
         [[ "$(grep -Fxc '        $middleware->append(SecurityHeaders::class);' <<<"$bootstrap_source")" == '1' ]] || return 1
         [[ "$(grep -Fxc '        $middleware->append(MarketingOnlyReleaseGate::class);' <<<"$bootstrap_source")" == '1' ]] || return 1
         security_line="$(grep -Fn '        $middleware->append(SecurityHeaders::class);' <<<"$bootstrap_source" | cut -d: -f1)"
         gate_line="$(grep -Fn '        $middleware->append(MarketingOnlyReleaseGate::class);' <<<"$bootstrap_source" | cut -d: -f1)"
         (( gate_line == security_line + 1 )) || return 1
-        printf 'marketing_gated\\n'
+        printf 'marketing_gated\n'
         return 0
     fi
 
     [[ -z "$middleware_path" && "$bootstrap_source" != *'MarketingOnlyReleaseGate'* ]] || return 1
     if [[ "$commit_sha" == "$legacy_baseline_sha" ]]; then
-        printf 'legacy_application\\n'
+        printf 'legacy_application\n'
     else
-        printf 'unrecognized_application\\n'
+        printf 'unrecognized_application\n'
     fi
 }
 
