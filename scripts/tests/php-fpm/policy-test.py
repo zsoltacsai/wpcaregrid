@@ -42,8 +42,9 @@ require("QUEUE_CONNECTION=database" in dockerfile and "env[QUEUE_CONNECTION] = d
         "The lane must use a durable test queue with no consumers, never sync/inline execution.")
 require("MAIL_MAILER=array" in dockerfile and "FILESYSTEM_DISK=local" in dockerfile
         and "BACKUP_STORAGE=" in dockerfile
-        and "STRIPE_ALLOW_LIVE_MODE=false" in dockerfile,
-        "External sinks must be disabled in the fixed test profile.")
+        and "STRIPE_ALLOW_LIVE_MODE=false" in dockerfile
+        and "env[BACKUP_STORAGE]" not in pool,
+        "External sinks must be disabled and empty FPM env entries must be omitted.")
 require("validate_environment(os.environ)" in entrypoint and "fpm_environment(os.environ)" in entrypoint,
         "The entrypoint must use the tested fail-closed environment contract.")
 require("has_background_consumer()" in entrypoint,
