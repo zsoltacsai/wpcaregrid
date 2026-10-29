@@ -326,6 +326,12 @@ final class RecoveryPackageReconstructionLabTest extends TestCase
             $this->requires_mysql_and_gzip();
         }
         $finalizedBefore = $this->server->finalized;
+        // The fake API keys objects only by component name, not backup UUID.
+        // Reset that disposable server state so each generated artifact has
+        // bytes belonging to its own manifest instead of a prior test backup.
+        $this->server->objects = [];
+        $this->server->completed = [];
+        $this->server->manifest = null;
         $job = $this->job('BACKUP_'.strtoupper($type), [
             'backup_uuid' => wp_generate_uuid4(),
             'reason' => 'manual',
