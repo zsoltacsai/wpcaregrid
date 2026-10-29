@@ -1,4 +1,3 @@
-Attempting to perform the InitializeDefaultDrives operation on the 'FileSystem' provider failed.
 # Synthetic Manual Recovery Package Reconstruction Lab
 
 ## Purpose and boundary

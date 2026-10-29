@@ -1,4 +1,3 @@
-Attempting to perform the InitializeDefaultDrives operation on the 'FileSystem' provider failed.
 <?php
 
 namespace WPCareGrid\Connector\Tests\Integration;
