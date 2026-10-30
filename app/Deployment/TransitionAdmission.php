@@ -85,6 +85,20 @@ final class TransitionAdmission
         }
     }
 
+    /**
+     * Atomically persist the unique INTENT for one authorized DRAINING step before its effect.
+     * The caller must already hold the stable root lock in SHARED mode.
+     *
+     * @param  array{execution_id:string,work_id:string,payload_hash:string,tenant_id:string,site_id:string,worker_identity:string,step_index:int,step_id:string,idempotency_key:string}  $binding
+     */
+    public function claimDrainStepIntent(
+        DeploymentTransitionFence $fence,
+        DrainPermit $permit,
+        array $binding,
+    ): TransitionExecution {
+        return TransitionExecution::claimFromDrain($this, $fence, $permit, $binding);
+    }
+
     private function requireSharedLock(): void
     {
         if (! ($this->sharedLockHeld)()) {

@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Schema;
 use InvalidArgumentException;
 use RuntimeException;
 use Tests\TestCase;
+use Throwable;
 
 class TransitionCorePhaseOneTest extends TestCase
 {
@@ -32,7 +33,13 @@ class TransitionCorePhaseOneTest extends TestCase
 
     protected function tearDown(): void
     {
-        foreach (['transition-status.json', '.transition-status.next'] as $name) {
+        foreach ([
+            'transition-status.json',
+            '.transition-status.next',
+            'claim-start',
+            'claim-result-1',
+            'claim-result-2',
+        ] as $name) {
             $path = $this->directory.DIRECTORY_SEPARATOR.$name;
             if (is_file($path) || is_link($path)) {
                 unlink($path);
@@ -339,18 +346,204 @@ class TransitionCorePhaseOneTest extends TestCase
         $permit = $this->permit($tuple);
         $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
         $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
-        TransitionExecution::create([
-            'transition_admission_id' => $permit->id,
-            'effect_step_index' => 0,
-            'step_id' => 'send-notice',
-            'idempotency_key' => 'step-0-key',
-            'payload_hash' => $permit->payload_hash,
-            'status' => 'INTENT',
-            'intent_at' => now(),
-        ]);
+        $this->policy()->claimDrainStepIntent($this->fence($tuple, $manifestHash), $permit, $this->binding());
 
         $this->expectException(RuntimeException::class);
         $this->policy()->assertDrainPermit($this->fence($tuple, $manifestHash), $permit, $this->binding());
+    }
+
+    public function test_execution_claim_is_atomic_intent_first_and_rejects_duplicate_claims(): void
+    {
+        $tuple = $this->tuple(['state' => 'DRAINING']);
+        $permit = $this->permit($tuple);
+        $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
+        $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
+
+        $execution = $this->policy()->claimDrainStepIntent($this->fence($tuple, $manifestHash), $permit, $this->binding());
+
+        self::assertSame('INTENT', $execution->status);
+        self::assertSame('send-notice', $execution->step_id);
+        self::assertSame('step-0-key', $execution->idempotency_key);
+        self::assertSame($permit->payload_hash, $execution->payload_hash);
+
+        try {
+            $this->policy()->claimDrainStepIntent($this->fence($tuple, $manifestHash), $permit, $this->binding());
+            self::fail('A duplicate or racing step claim must fail closed.');
+        } catch (RuntimeException) {
+            self::assertDatabaseCount('transition_executions', 1);
+        }
+
+        $execution->status = 'SUCCEEDED';
+        $execution->outcome_at = now();
+        $execution->outcome_digest = str_repeat('a', 64);
+        $execution->save();
+        self::assertSame('SUCCEEDED', $execution->fresh()->status);
+    }
+
+    public function test_execution_model_rejects_terminal_inserts_misbound_steps_and_inactive_permits(): void
+    {
+        $tuple = $this->tuple(['state' => 'DRAINING']);
+        $permit = $this->permit($tuple);
+        $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
+        $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
+
+        $terminal = array_replace($this->executionAttributes($permit), [
+            'status' => 'SUCCEEDED',
+            'outcome_at' => now(),
+            'outcome_digest' => str_repeat('a', 64),
+        ]);
+        try {
+            TransitionExecution::create($terminal);
+            self::fail('A terminal outcome cannot be inserted without a prior INTENT.');
+        } catch (InvalidArgumentException) {
+            self::assertDatabaseCount('transition_executions', 0);
+        }
+
+        foreach ([
+            ['step_id' => 'other-step'],
+            ['idempotency_key' => 'other-key'],
+            ['payload_hash' => str_repeat('b', 64)],
+        ] as $changes) {
+            try {
+                TransitionExecution::create(array_replace($this->executionAttributes($permit), $changes));
+                self::fail('An execution row must match the exact permit step, idempotency key and payload.');
+            } catch (InvalidArgumentException) {
+                self::assertDatabaseCount('transition_executions', 0);
+            }
+
+            try {
+                $this->policy()->claimDrainStepIntent(
+                    $this->fence($tuple, $manifestHash),
+                    $permit,
+                    array_replace($this->binding(), $changes),
+                );
+                self::fail('The atomic claim must reject a mismatched permit step binding.');
+            } catch (RuntimeException) {
+                self::assertDatabaseCount('transition_executions', 0);
+            }
+        }
+
+        foreach ([
+            $this->permit($tuple, ['execution_id' => 'expired-execution', 'work_id' => 'expired-work', 'expires_at' => now()->subSecond()]),
+            $this->permit($tuple, ['execution_id' => 'closed-execution', 'work_id' => 'closed-work', 'status' => 'CLOSED', 'closed_at' => now()]),
+        ] as $inactivePermit) {
+            try {
+                TransitionExecution::create($this->executionAttributes($inactivePermit));
+                self::fail('A new INTENT cannot be inserted for an expired or closed permit.');
+            } catch (InvalidArgumentException) {
+                self::assertDatabaseCount('transition_executions', 0);
+            }
+
+            $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
+            $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
+            try {
+                $this->policy()->claimDrainStepIntent(
+                    $this->fence($tuple, $manifestHash),
+                    $inactivePermit,
+                    array_replace($this->binding(), [
+                        'execution_id' => $inactivePermit->execution_id,
+                        'work_id' => $inactivePermit->work_id,
+                    ]),
+                );
+                self::fail('An expired or closed permit cannot claim a new INTENT.');
+            } catch (RuntimeException) {
+                self::assertDatabaseCount('transition_executions', 0);
+            }
+        }
+    }
+
+    public function test_concurrent_duplicate_intent_claims_fail_closed(): void
+    {
+        $tuple = $this->tuple(['state' => 'DRAINING']);
+        $permit = $this->permit($tuple);
+        $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
+        $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
+        $fence = $this->fence($tuple, $manifestHash);
+
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->policy()->claimDrainStepIntent($fence, $permit, $this->binding());
+            try {
+                $this->policy()->claimDrainStepIntent($fence, $permit, $this->binding());
+                self::fail('A duplicate step claim must fail closed.');
+            } catch (RuntimeException) {
+                self::assertDatabaseCount('transition_executions', 1);
+            }
+
+            return;
+        }
+
+        self::assertTrue(function_exists('pcntl_fork'), 'MySQL process-concurrency coverage requires pcntl.');
+
+        $connection = DB::connection();
+        $connection->commit();
+        $startPath = $this->directory.DIRECTORY_SEPARATOR.'claim-start';
+        $resultPaths = [
+            $this->directory.DIRECTORY_SEPARATOR.'claim-result-1',
+            $this->directory.DIRECTORY_SEPARATOR.'claim-result-2',
+        ];
+        $children = [];
+        $waited = [];
+
+        try {
+            foreach ($resultPaths as $resultPath) {
+                $pid = pcntl_fork();
+                if ($pid === -1) {
+                    throw new RuntimeException('Could not start the duplicate claim test process.');
+                }
+                if ($pid === 0) {
+                    try {
+                        DB::purge();
+                        $deadline = microtime(true) + 30;
+                        while (! is_file($startPath) && microtime(true) < $deadline) {
+                            usleep(10_000);
+                        }
+                        if (! is_file($startPath)) {
+                            throw new RuntimeException('The concurrent claim start barrier timed out.');
+                        }
+
+                        $childFence = DeploymentTransitionFence::query()->whereKey($fence->getKey())->firstOrFail();
+                        $childPermit = TransitionAdmission::query()->whereKey($permit->getKey())->firstOrFail();
+                        $this->policy()->claimDrainStepIntent($childFence, $childPermit, $this->binding());
+                        file_put_contents($resultPath, 'CLAIMED', LOCK_EX);
+                        exit(0);
+                    } catch (RuntimeException) {
+                        file_put_contents($resultPath, 'DENIED', LOCK_EX);
+                        exit(0);
+                    } catch (Throwable $exception) {
+                        file_put_contents($resultPath, 'ERROR:'.get_class($exception), LOCK_EX);
+                        exit(1);
+                    }
+                }
+
+                $children[] = $pid;
+            }
+
+            file_put_contents($startPath, 'go', LOCK_EX);
+            foreach ($children as $pid) {
+                $status = 0;
+                if (pcntl_waitpid($pid, $status) !== $pid || ! pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0) {
+                    throw new RuntimeException('A concurrent claim test process did not exit cleanly.');
+                }
+                $waited[] = $pid;
+            }
+
+            $results = array_map(static fn (string $path): string => (string) file_get_contents($path), $resultPaths);
+            sort($results);
+            self::assertSame(['CLAIMED', 'DENIED'], $results);
+            self::assertDatabaseCount('transition_executions', 1);
+        } finally {
+            foreach (array_diff($children, $waited) as $pid) {
+                posix_kill($pid, SIGTERM);
+                pcntl_waitpid($pid, $status);
+            }
+
+            DB::table('transition_executions')->where('transition_admission_id', $permit->getKey())->delete();
+            DB::table('transition_admissions')->whereKey($permit->getKey())->delete();
+            DB::table('deployment_transition_fences')->whereKey($fence->getKey())->delete();
+            if (DB::connection()->transactionLevel() === 0) {
+                DB::beginTransaction();
+            }
+        }
     }
 
     public function test_drain_manifest_must_match_the_projection_database_and_persisted_permit_set(): void
@@ -472,7 +665,21 @@ class TransitionCorePhaseOneTest extends TestCase
         ], $overrides));
     }
 
-    /** @return array{execution_id:string,work_id:string,payload_hash:string,tenant_id:string,site_id:string,worker_identity:string,step_index:int,idempotency_key:string} */
+    /** @param array<string, mixed> $overrides @return array<string, mixed> */
+    private function executionAttributes(TransitionAdmission $permit, array $overrides = []): array
+    {
+        return array_replace([
+            'transition_admission_id' => $permit->getKey(),
+            'effect_step_index' => 0,
+            'step_id' => 'send-notice',
+            'idempotency_key' => 'step-0-key',
+            'payload_hash' => $permit->payload_hash,
+            'status' => 'INTENT',
+            'intent_at' => now(),
+        ], $overrides);
+    }
+
+    /** @return array{execution_id:string,work_id:string,payload_hash:string,tenant_id:string,site_id:string,worker_identity:string,step_index:int,step_id:string,idempotency_key:string} */
     private function binding(): array
     {
         return [
@@ -483,6 +690,7 @@ class TransitionCorePhaseOneTest extends TestCase
             'site_id' => 'site-1',
             'worker_identity' => 'worker-1',
             'step_index' => 0,
+            'step_id' => 'send-notice',
             'idempotency_key' => 'step-0-key',
         ];
     }

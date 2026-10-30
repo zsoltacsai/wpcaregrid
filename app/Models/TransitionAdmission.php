@@ -72,7 +72,27 @@ class TransitionAdmission extends Model
         return is_array($step)
             && ($step['step_index'] ?? null) === $stepIndex
             && is_string($step['step_id'] ?? null)
-            && ($step['idempotency_key'] ?? null) === ($binding['idempotency_key'] ?? null);
+            && ($step['step_id'] ?? null) === ($binding['step_id'] ?? null)
+            && ($step['idempotency_key'] ?? null) === ($binding['idempotency_key'] ?? null)
+            && self::validPermit($this);
+    }
+
+    public function matchesExecutionBinding(TransitionExecution $execution): bool
+    {
+        if (! $this->exists
+            || (int) $execution->transition_admission_id !== (int) $this->getKey()
+            || ! self::validPermit($this)
+            || ! is_array($this->effect_steps)) {
+            return false;
+        }
+
+        $step = $this->effect_steps[(int) $execution->effect_step_index] ?? null;
+
+        return is_array($step)
+            && ($step['step_index'] ?? null) === (int) $execution->effect_step_index
+            && ($step['step_id'] ?? null) === $execution->step_id
+            && ($step['idempotency_key'] ?? null) === $execution->idempotency_key
+            && hash_equals((string) $this->payload_hash, (string) $execution->payload_hash);
     }
 
     public function executions(): HasMany
