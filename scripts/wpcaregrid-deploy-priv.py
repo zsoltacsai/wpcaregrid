@@ -1408,7 +1408,10 @@ class PosixTransitionLock:
             raise ValueError("invalid transition lock mode")
         parent_fd = open_root_trusted_directory(self.path.parent)
         try:
-            fd = os.open(self.path.name, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+            # flock(LOCK_SH) is valid on a read-only descriptor. The application
+            # group has read-only access to this root:www-data 0640 inode.
+            access = os.O_RDONLY if mode == "shared" else os.O_RDWR
+            fd = os.open(self.path.name, access | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
         finally:
             os.close(parent_fd)
         try:
@@ -1601,7 +1604,9 @@ class RootTransitionAdapter:
     The DB boundary is an injected transaction adapter (the Phase 1 M16 interface):
     read_tuple, read_permit_manifest_hash, verify_transition_preconditions,
     validate_permit_manifest, compare_and_set, nonce_consumed, validate_release,
-    and assert_exact_permit. It performs no SQL or direct Laravel-model access here.
+    assert_exact_permit, record_drain_intent, and record_drain_outcome. The last
+    two methods must durably commit their writes and return True. It performs no
+    SQL or direct Laravel-model access here.
     Tests must use a fake. The constructor intentionally requires every path and
     adapter, so importing this module cannot touch /run, /var/lib, or a database.
     """
@@ -1713,13 +1718,110 @@ class RootTransitionAdapter:
                 raise TransitionHold("admission is closed")
             return current
 
-    def assert_drain_permit(self, binding):
+    def check_drain_permit(self, binding):
+        """Check a permit for diagnostics only; it does not authorize an effect."""
         with self.lock.hold("shared"):
             current = self._read_projection()
             if current["state"] != "DRAINING":
                 raise TransitionHold("drain is closed")
             self.database.assert_exact_permit(current, binding)
             return current
+
+    def assert_drain_permit(self, binding):
+        raise TransitionHold(
+            "check-only drain validation is not authorization; use execute_drain_permit"
+        )
+
+    def execute_drain_permit(self, binding, effect, *, max_duration_seconds=30.0):
+        """Run one bounded effect while SHARED fencing spans intent through outcome.
+
+        The injected DB methods must durably commit their writes and return True.
+        The effect receives a monotonic deadline and must bound all external work
+        by it. A late result is recorded as failed. If an effect ignores its
+        deadline, the SHARED lock remains held, preventing an unsafe transition.
+        """
+        if not callable(effect):
+            raise TypeError("drain effect must be callable")
+        if (type(max_duration_seconds) not in {int, float}
+            or not 0 < max_duration_seconds <= 300):
+            raise ValueError("drain effect bound must be between 0 and 300 seconds")
+        with self.lock.hold("shared"):
+            current = self._read_projection()
+            if current["state"] != "DRAINING":
+                raise TransitionHold("drain is closed")
+            self.database.assert_exact_permit(current, binding)
+            intent_id = _transition_uuid7()
+            if self.database.record_drain_intent(current, binding, intent_id) is not True:
+                raise TransitionHold("durable drain intent was not recorded")
+            revalidated = self._read_projection()
+            if self._tuple(revalidated) != self._tuple(current):
+                raise TransitionHold("drain tuple changed after durable intent")
+            self.database.assert_exact_permit(revalidated, binding)
+            deadline = time.monotonic() + max_duration_seconds
+            try:
+                result = effect(deadline)
+            except BaseException as exc:
+                outcome = {
+                    "status": "failed",
+                    "evidence_digest": hashlib.sha256(
+                        type(exc).__name__.encode("ascii", "replace")
+                    ).hexdigest(),
+                }
+                if self.database.record_drain_outcome(intent_id, outcome) is not True:
+                    raise TransitionHold("failed drain outcome was not durably recorded") from exc
+                raise
+            late = time.monotonic() > deadline
+            try:
+                revalidated = self._read_projection()
+                if self._tuple(revalidated) != self._tuple(current):
+                    raise TransitionHold("drain tuple changed during authorized effect")
+                self.database.assert_exact_permit(revalidated, binding)
+            except TransitionHold as exc:
+                outcome = {
+                    "status": "failed",
+                    "evidence_digest": hashlib.sha256(
+                        type(exc).__name__.encode("ascii", "replace")
+                    ).hexdigest(),
+                }
+                if self.database.record_drain_outcome(intent_id, outcome) is not True:
+                    raise TransitionHold("failed drain outcome was not durably recorded") from exc
+                raise
+            if late:
+                outcome = {
+                    "status": "failed",
+                    "evidence_digest": hashlib.sha256(b"drain-effect-deadline-exceeded").hexdigest(),
+                }
+                if self.database.record_drain_outcome(intent_id, outcome) is not True:
+                    raise TransitionHold("late drain outcome was not durably recorded")
+                raise TransitionHold("drain effect exceeded its bounded deadline")
+            if not isinstance(result, dict) or set(result) != {"status", "evidence_digest"}:
+                raise TransitionHold("drain effect must return a bounded outcome record")
+            if (result["status"] not in {"completed", "failed"}
+                or not isinstance(result["evidence_digest"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", result["evidence_digest"])):
+                raise TransitionHold("drain effect outcome is invalid")
+            if self.database.record_drain_outcome(intent_id, result) is not True:
+                raise TransitionHold("drain outcome was not durably recorded")
+            return result
+
+    def _durability_preflight(self):
+        """Re-establish projection-directory durability before any new commit.
+
+        After a rename plus failed directory fsync, same-boot retry must fsync the
+        parent and verify projection, journal, and authoritative DB equality. A
+        stale boot ID remains a hard hold because post-reboot durability is uncertain.
+        """
+        try:
+            self._fsync_dir(self.status_path.parent)
+            current = self._read_projection()
+            db_tuple = self._tuple(self.database.read_tuple())
+            if db_tuple != {key: current[key] for key in TRANSITION_TUPLE_FIELDS}:
+                raise TransitionHold("durability preflight authoritative tuple mismatch")
+            return current
+        except TransitionHold:
+            raise
+        except OSError as exc:
+            raise TransitionHold("durability preflight could not fsync projection directory") from exc
 
     def _publish(self, source, target, event, *, details, source_sha, target_sha,
                  evidence_digest, permit_manifest_hash=None, release=None,
@@ -1823,7 +1925,7 @@ class RootTransitionAdapter:
         if has_sensitive_key(details):
             raise ValueError("secret-like journal fields are forbidden")
         with self.lock.hold("exclusive"):
-            source = self._read_projection()
+            source = self._durability_preflight()
             if (source["state"], target_state) not in TRANSITION_EDGES:
                 raise TransitionHold("transition is not allowed")
             new_operation = source["state"] == "OPEN" and target_state == "HOLD_REQUESTED"
@@ -1876,8 +1978,18 @@ class RootTransitionAdapter:
                     "approval_ref", "php_profile", "rollback_evidence", "expected_journal_seq", "nonce"}
         if not isinstance(authorization, dict) or set(authorization) != required:
             raise TransitionHold("release authorization shape is invalid")
+        nonce = authorization["nonce"]
+        if not isinstance(nonce, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", nonce):
+            raise TransitionHold("release nonce is invalid")
+        nonce_digest = hashlib.sha256(nonce.encode("ascii")).hexdigest()
         with self.lock.hold("exclusive"):
-            source = self._read_projection()
+            source = self._durability_preflight()
+            if self.database.nonce_consumed(nonce_digest) or any(
+                record.get("event") == "RELEASE_COMMIT"
+                and record.get("details", {}).get("nonce_digest") == nonce_digest
+                for record in self.journal.records()
+            ):
+                raise TransitionHold("release nonce was already used")
             if source["state"] != "READY_PENDING_OWNER":
                 raise TransitionHold("release source state is not ready")
             if authorization["php_profile"] != "8.4" or authorization["host_id"] != self.host_id:
@@ -1892,15 +2004,6 @@ class RootTransitionAdapter:
                 or not isinstance(authorization["rollback_evidence"], str)
                 or not re.fullmatch(r"[0-9a-f]{64}", authorization["rollback_evidence"])):
                 raise TransitionHold("release evidence is incomplete")
-            nonce = authorization["nonce"]
-            if not isinstance(nonce, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", nonce):
-                raise TransitionHold("release nonce is invalid")
-            nonce_digest = hashlib.sha256(nonce.encode("ascii")).hexdigest()
-            if self.database.nonce_consumed(nonce_digest) or any(
-                record.get("event") == "RELEASE_COMMIT" and record.get("details", {}).get("nonce_digest") == hashlib.sha256(nonce.encode()).hexdigest()
-                for record in self.journal.records()
-            ):
-                raise TransitionHold("release nonce was already used")
             target = dict(source, state="OPEN", boot_id=self.boot_id,
                           journal_seq=source["journal_seq"] + 1,
                           evidence_digest=evidence_digest)
