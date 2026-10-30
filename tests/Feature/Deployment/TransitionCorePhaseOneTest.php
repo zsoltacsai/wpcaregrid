@@ -41,6 +41,12 @@ class TransitionCorePhaseOneTest extends TestCase
             'claim-start',
             'claim-result-1',
             'claim-result-2',
+            'scope-claim-start',
+            'scope-claim-result-1',
+            'scope-claim-result-2',
+            'scope-claim-precheck-ready-1',
+            'scope-claim-precheck-ready-2',
+            'scope-claim-precheck-release',
             'terminal-start',
             'terminal-result-1',
             'terminal-result-2',
@@ -355,6 +361,127 @@ class TransitionCorePhaseOneTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         $this->policy()->assertDrainPermit($this->fence($tuple, $manifestHash), $permit, $this->binding());
+    }
+
+    public function test_unresolved_intent_blocks_a_distinct_permit_in_the_same_operation_generation(): void
+    {
+        $tuple = $this->tuple(['state' => 'DRAINING']);
+        $firstPermit = $this->permit($tuple);
+        $secondPermit = $this->permit($tuple, [
+            'execution_id' => 'execution-2',
+            'work_id' => 'work-2',
+            'payload_hash' => str_repeat('a', 64),
+        ]);
+        $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
+        $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
+        $fence = $this->fence($tuple, $manifestHash);
+
+        $this->policy()->claimDrainStepIntent($fence, $firstPermit, $this->binding());
+
+        try {
+            $this->policy()->claimDrainStepIntent($fence, $secondPermit, array_replace($this->binding(), [
+                'execution_id' => 'execution-2',
+                'work_id' => 'work-2',
+                'payload_hash' => str_repeat('a', 64),
+            ]));
+            self::fail('An unresolved INTENT must block a distinct permit in the same operation generation.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('unresolved drain execution', $exception->getMessage());
+        }
+
+        self::assertDatabaseCount('transition_executions', 1);
+        self::assertDatabaseHas('transition_executions', [
+            'transition_admission_id' => $firstPermit->getKey(),
+            'status' => 'INTENT',
+        ]);
+    }
+
+    public function test_unknown_execution_permanently_blocks_a_distinct_permit_in_scope(): void
+    {
+        $tuple = $this->tuple(['state' => 'DRAINING']);
+        $firstPermit = $this->permit($tuple);
+        $secondPermit = $this->permit($tuple, [
+            'execution_id' => 'execution-2',
+            'work_id' => 'work-2',
+            'payload_hash' => str_repeat('a', 64),
+        ]);
+        $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
+        $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
+        $fence = $this->fence($tuple, $manifestHash);
+
+        $execution = $this->policy()->claimDrainStepIntent($fence, $firstPermit, $this->binding());
+        $execution->status = 'UNKNOWN';
+        $execution->outcome_at = now();
+        $execution->outcome_digest = str_repeat('b', 64);
+        $execution->save();
+
+        try {
+            $this->policy()->claimDrainStepIntent($fence, $secondPermit, array_replace($this->binding(), [
+                'execution_id' => 'execution-2',
+                'work_id' => 'work-2',
+                'payload_hash' => str_repeat('a', 64),
+            ]));
+            self::fail('An UNKNOWN outcome must remain permanently fail-closed for the operation generation.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('unresolved drain execution', $exception->getMessage());
+        }
+
+        self::assertDatabaseCount('transition_executions', 1);
+        self::assertSame('UNKNOWN', $execution->fresh()->status);
+    }
+
+    public function test_unresolved_executions_from_other_operations_and_generations_are_isolated(): void
+    {
+        $tuple = $this->tuple(['state' => 'DRAINING']);
+        $permit = $this->permit($tuple);
+        $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
+        $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
+        $this->policy()->claimDrainStepIntent($this->fence($tuple, $manifestHash), $permit, $this->binding());
+
+        foreach ([
+            ['operation_id' => '018f0f8e-7b1c-7abc-8ab3-123456789013'],
+            ['generation' => $tuple['generation'] + 1],
+        ] as $index => $scopeChange) {
+            $isolatedTuple = array_replace($tuple, $scopeChange);
+            $stepId = 'isolated-step-'.$index;
+            $idempotencyKey = 'isolated-step-key-'.$index;
+            $steps = [
+                ['idempotency_key' => $idempotencyKey, 'step_id' => $stepId, 'step_index' => 0],
+                ['idempotency_key' => 'isolated-tail-key-'.$index, 'step_id' => 'isolated-tail-'.$index, 'step_index' => 1],
+            ];
+            $canonicalSteps = array_map(static fn (array $step): array => [
+                'step_index' => $step['step_index'],
+                'step_id' => $step['step_id'],
+                'idempotency_key' => $step['idempotency_key'],
+            ], $steps);
+            $plan = json_encode($canonicalSteps, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+            $isolatedPermit = $this->permit($isolatedTuple, [
+                'execution_id' => 'isolated-execution-'.$index,
+                'work_id' => 'isolated-work-'.$index,
+                'effect_steps' => $steps,
+                'effect_step_plan_hash' => hash('sha256', $plan),
+            ]);
+            $isolatedManifestHash = TransitionAdmission::manifestHashForScope(
+                $isolatedTuple['operation_id'],
+                $isolatedTuple['generation'],
+            );
+            $this->writeProjection(array_replace($isolatedTuple, ['permit_manifest_hash' => $isolatedManifestHash]));
+
+            $claimed = $this->policy()->claimDrainStepIntent(
+                $this->fence($isolatedTuple, $isolatedManifestHash),
+                $isolatedPermit,
+                array_replace($this->binding(), [
+                    'execution_id' => $isolatedPermit->execution_id,
+                    'work_id' => $isolatedPermit->work_id,
+                    'step_id' => $stepId,
+                    'idempotency_key' => $idempotencyKey,
+                ]),
+            );
+
+            self::assertSame('INTENT', $claimed->status);
+            self::assertSame($isolatedTuple['operation_id'], $isolatedPermit->operation_id);
+            self::assertSame($isolatedTuple['generation'], (int) $isolatedPermit->generation);
+        }
     }
 
     public function test_execution_claim_is_atomic_intent_first_and_rejects_duplicate_claims(): void
@@ -722,6 +849,169 @@ class TransitionCorePhaseOneTest extends TestCase
 
             DB::table('transition_executions')->where('transition_admission_id', $permit->getKey())->delete();
             DB::table('transition_admissions')->where('id', $permit->getKey())->delete();
+            DB::table('deployment_transition_fences')->where('id', $fence->getKey())->delete();
+            if (DB::connection()->transactionLevel() === 0) {
+                DB::beginTransaction();
+            }
+        }
+    }
+
+    public function test_concurrent_distinct_permit_claims_serialize_on_the_operation_generation_fence(): void
+    {
+        $tuple = $this->tuple(['state' => 'DRAINING']);
+        $secondSteps = [
+            ['idempotency_key' => 'synthetic-fixture-key-alpha-0000', 'step_id' => 'send-notice-2', 'step_index' => 0],
+            ['idempotency_key' => 'synthetic-fixture-key-beta-0000', 'step_id' => 'record-result-2', 'step_index' => 1],
+        ];
+        $canonicalSecondSteps = array_map(static fn (array $step): array => [
+            'step_index' => $step['step_index'],
+            'step_id' => $step['step_id'],
+            'idempotency_key' => $step['idempotency_key'],
+        ], $secondSteps);
+        $secondStepPlan = json_encode($canonicalSecondSteps, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        $permits = [
+            $this->permit($tuple),
+            $this->permit($tuple, [
+                'execution_id' => 'execution-2',
+                'work_id' => 'work-2',
+                'payload_hash' => str_repeat('a', 64),
+                'effect_steps' => $secondSteps,
+                'effect_step_plan_hash' => hash('sha256', $secondStepPlan),
+            ]),
+        ];
+        $bindings = [
+            $this->binding(),
+            array_replace($this->binding(), [
+                'execution_id' => 'execution-2',
+                'work_id' => 'work-2',
+                'payload_hash' => str_repeat('a', 64),
+                'step_id' => 'send-notice-2',
+                'idempotency_key' => 'synthetic-fixture-key-alpha-0000',
+            ]),
+        ];
+        $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
+        $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
+        $fence = $this->fence($tuple, $manifestHash);
+
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->policy()->claimDrainStepIntent($fence, $permits[0], $bindings[0]);
+            try {
+                $this->policy()->claimDrainStepIntent($fence, $permits[1], $bindings[1]);
+                self::fail('A distinct-permit claim must observe the earlier unresolved INTENT.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('An unresolved drain execution permanently blocks new claims for this operation generation.', $exception->getMessage());
+                self::assertDatabaseCount('transition_executions', 1);
+            }
+
+            return;
+        }
+
+        self::assertTrue(function_exists('pcntl_fork'), 'MySQL process-concurrency coverage requires pcntl.');
+
+        DB::connection()->commit();
+        $startPath = $this->directory.DIRECTORY_SEPARATOR.'scope-claim-start';
+        $precheckReleasePath = $this->directory.DIRECTORY_SEPARATOR.'scope-claim-precheck-release';
+        $precheckReadyPaths = [
+            $this->directory.DIRECTORY_SEPARATOR.'scope-claim-precheck-ready-1',
+            $this->directory.DIRECTORY_SEPARATOR.'scope-claim-precheck-ready-2',
+        ];
+        $resultPaths = [
+            $this->directory.DIRECTORY_SEPARATOR.'scope-claim-result-1',
+            $this->directory.DIRECTORY_SEPARATOR.'scope-claim-result-2',
+        ];
+        $children = [];
+        $waited = [];
+
+        try {
+            foreach ($resultPaths as $index => $resultPath) {
+                $pid = pcntl_fork();
+                if ($pid === -1) {
+                    throw new RuntimeException('Could not start a distinct-permit claim test process.');
+                }
+                if ($pid === 0) {
+                    try {
+                        DB::purge();
+                        $deadline = microtime(true) + 30;
+                        while (! is_file($startPath) && microtime(true) < $deadline) {
+                            usleep(10_000);
+                        }
+                        if (! is_file($startPath)) {
+                            throw new RuntimeException('The distinct-permit claim start barrier timed out.');
+                        }
+
+                        $childFence = DeploymentTransitionFence::query()->whereKey($fence->getKey())->firstOrFail();
+                        $childPermit = TransitionAdmission::query()->whereKey($permits[$index]->getKey())->firstOrFail();
+                        $readyPath = $precheckReadyPaths[$index];
+                        DB::listen(static function ($query) use ($readyPath, $precheckReleasePath): void {
+                            $sql = strtolower($query->sql);
+                            if (! str_contains($sql, 'join')
+                                || ! str_contains($sql, 'transition_executions')
+                                || ! str_contains($sql, 'transition_admissions')) {
+                                return;
+                            }
+
+                            file_put_contents($readyPath, 'guard-query-complete', LOCK_EX);
+                            $deadline = microtime(true) + 30;
+                            while (! is_file($precheckReleasePath) && microtime(true) < $deadline) {
+                                usleep(10_000);
+                            }
+                            if (! is_file($precheckReleasePath)) {
+                                throw new RuntimeException('The concurrent precheck release barrier timed out.');
+                            }
+                        });
+
+                        $this->policy()->claimDrainStepIntent($childFence, $childPermit, $bindings[$index]);
+                        file_put_contents($resultPath, 'CLAIMED', LOCK_EX);
+                        exit(0);
+                    } catch (RuntimeException $exception) {
+                        if ($exception->getMessage() === 'An unresolved drain execution permanently blocks new claims for this operation generation.') {
+                            file_put_contents($resultPath, 'DENIED:UNRESOLVED_SCOPE', LOCK_EX);
+                            exit(0);
+                        }
+
+                        file_put_contents($resultPath, 'ERROR:RuntimeException:'.str_replace(["\r", "\n"], ' ', $exception->getMessage()), LOCK_EX);
+                        exit(1);
+                    } catch (Throwable $exception) {
+                        file_put_contents($resultPath, 'ERROR:'.get_class($exception), LOCK_EX);
+                        exit(1);
+                    }
+                }
+
+                $children[] = $pid;
+            }
+
+            file_put_contents($startPath, 'go', LOCK_EX);
+            $precheckDeadline = microtime(true) + 30;
+            while ((! is_file($precheckReadyPaths[0]) || ! is_file($precheckReadyPaths[1])) && microtime(true) < $precheckDeadline) {
+                usleep(10_000);
+            }
+            if (! is_file($precheckReadyPaths[0]) || ! is_file($precheckReadyPaths[1])) {
+                throw new RuntimeException('Both distinct-permit processes did not complete the precheck guard query.');
+            }
+            file_put_contents($precheckReleasePath, 'go', LOCK_EX);
+
+            foreach ($children as $pid) {
+                $status = 0;
+                if (pcntl_waitpid($pid, $status) !== $pid || ! pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0) {
+                    throw new RuntimeException('A distinct-permit claim process did not exit cleanly.');
+                }
+                $waited[] = $pid;
+            }
+
+            $results = array_map(static fn (string $path): string => (string) file_get_contents($path), $resultPaths);
+            sort($results);
+            self::assertSame(['CLAIMED', 'DENIED:UNRESOLVED_SCOPE'], $results);
+            self::assertDatabaseCount('transition_executions', 1);
+        } finally {
+            foreach (array_diff($children, $waited) as $pid) {
+                posix_kill($pid, SIGTERM);
+                pcntl_waitpid($pid, $status);
+            }
+
+            DB::table('transition_executions')
+                ->whereIn('transition_admission_id', array_map(static fn (TransitionAdmission $permit): int => $permit->getKey(), $permits))
+                ->delete();
+            DB::table('transition_admissions')->whereIn('id', array_map(static fn (TransitionAdmission $permit): int => $permit->getKey(), $permits))->delete();
             DB::table('deployment_transition_fences')->where('id', $fence->getKey())->delete();
             if (DB::connection()->transactionLevel() === 0) {
                 DB::beginTransaction();

@@ -83,6 +83,15 @@ final class TransitionAdmission
             ->exists()) {
             throw new RuntimeException('The drain effect step has already been attempted and cannot be replayed.');
         }
+
+        if (TransitionExecution::query()
+            ->join('transition_admissions', 'transition_executions.transition_admission_id', '=', 'transition_admissions.id')
+            ->where('transition_admissions.operation_id', $tuple['operation_id'])
+            ->where('transition_admissions.generation', $tuple['generation'])
+            ->whereIn('transition_executions.status', ['INTENT', 'UNKNOWN'])
+            ->exists()) {
+            throw new RuntimeException('An unresolved drain execution permanently blocks new claims for this operation generation.');
+        }
     }
 
     /**
