@@ -12,9 +12,12 @@ import fnmatch
 import json
 import posixpath
 import re
+import socket
 import stat
+import struct
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -97,6 +100,24 @@ TRANSITION_TUPLE_FIELDS = (
     "state", "operation_id", "generation", "boot_id", "journal_seq",
     "journal_head_hash", "evidence_digest",
 )
+TRANSITION_RPC_VERSION = 1
+TRANSITION_RPC_MAX_BYTES = 65536
+TRANSITION_RPC_SOCKET_DIR = Path("/run/wpcaregrid")
+TRANSITION_RPC_COMMAND = (
+    str(PHP_RUNTIME_LAUNCHER_DEST), str(APP / "artisan"), "deployment:transition-rpc",
+)
+TRANSITION_RPC_OPERATIONS = frozenset({
+    "read_tuple",
+    "read_permit_manifest_hash",
+    "verify_transition_preconditions",
+    "validate_permit_manifest",
+    "compare_and_set",
+    "nonce_consumed",
+    "validate_release",
+    "assert_no_unresolved_drain_effects",
+    "read_transition_receipt",
+})
+TRANSITION_PRODUCTION_EFFECT_CATALOG = ()
 
 
 def run(argv, *, check=True, stdout=None, input_text=None, pass_fds=()):
@@ -1381,6 +1402,15 @@ class TransitionDurabilityUnconfirmed(TransitionHold):
     """The projection rename committed, but its directory fsync failed."""
 
 
+class TransitionRpcAmbiguous(TransitionHold):
+    """A Laravel RPC may have committed; callers may only perform receipt readback."""
+
+    def __init__(self, request_id, request_digest):
+        super().__init__("Laravel transition RPC response is ambiguous; authoritative receipt readback is required")
+        self.request_id = request_id
+        self.request_digest = request_digest
+
+
 class DrainEffectNotPerformed(TransitionHold):
     """An executor presents a proof reference that the adapter must verify."""
 
@@ -1411,6 +1441,11 @@ class PosixTransitionLock:
 
     def __init__(self, path):
         self.path = Path(path)
+        self._local = threading.local()
+
+    def is_held(self, mode=None):
+        held = getattr(self._local, "mode", None)
+        return held is not None and (mode is None or held == mode)
 
     @contextmanager
     def hold(self, mode):
@@ -1419,6 +1454,8 @@ class PosixTransitionLock:
 
         if mode not in {"shared", "exclusive"}:
             raise ValueError("invalid transition lock mode")
+        if self.is_held():
+            raise TransitionHold("nested transition locks are not supported")
         parent_fd = open_root_trusted_directory(self.path.parent)
         try:
             # flock(LOCK_SH) is valid on a read-only descriptor. The application
@@ -1439,6 +1476,7 @@ class PosixTransitionLock:
             if ((current.st_dev, current.st_ino) != (held.st_dev, held.st_ino)
                 or held.st_nlink != 1):
                 raise TransitionHold("transition lock inode changed")
+            self._local.mode = mode
             yield fd
             current = os.stat(self.path, follow_symlinks=False)
             held = os.fstat(fd)
@@ -1446,10 +1484,338 @@ class PosixTransitionLock:
                 or held.st_nlink != 1):
                 raise TransitionHold("transition lock inode changed")
         finally:
+            if hasattr(self._local, "mode"):
+                del self._local.mode
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
             finally:
                 os.close(fd)
+
+
+class LaravelTransitionDatabaseAdapter:
+    """Fixed, typed root-to-Laravel DB bridge; never exposes generic SQL or DRAIN claims.
+
+    This client is inert unless an explicitly constructed RootTransitionAdapter receives
+    it. Laravel owns every SQL transaction and its durable receipt table. The child command
+    name and runtime launcher are constants, not caller configuration. A lost mutating reply
+    triggers only a read_transition_receipt RPC, never a second compare_and_set request.
+    """
+
+    _PAYLOAD_KEYS = {
+        "read_tuple": set(),
+        "read_permit_manifest_hash": set(),
+        "verify_transition_preconditions": {"source", "target", "details", "permits"},
+        "validate_permit_manifest": {"source", "permits", "digest"},
+        "compare_and_set": {"request_id", "request_digest", "source", "target", "release", "details"},
+        "nonce_consumed": {"nonce_digest"},
+        "validate_release": {"authorization", "source", "nonce_digest"},
+        "assert_no_unresolved_drain_effects": {"operation_id", "generation"},
+        "read_transition_receipt": {"request_id", "request_digest"},
+    }
+
+    def __init__(self, *, socket_dir=TRANSITION_RPC_SOCKET_DIR, timeout_seconds=10.0):
+        if type(timeout_seconds) not in {int, float} or not 0 < timeout_seconds <= 30:
+            raise ValueError("transition RPC timeout must be between 0 and 30 seconds")
+        self.socket_dir = Path(socket_dir)
+        self.timeout_seconds = float(timeout_seconds)
+        self.lock = None
+
+    def bind_lock(self, lock):
+        if not callable(getattr(lock, "is_held", None)):
+            raise TypeError("Laravel transition RPC requires the stable transition lock")
+        self.lock = lock
+
+    @staticmethod
+    def _request_digest(request_id, operation, payload):
+        return hashlib.sha256(_transition_canonical({
+            "version": TRANSITION_RPC_VERSION,
+            "request_id": request_id,
+            "operation": operation,
+            "payload": payload,
+        })).hexdigest()
+
+    @staticmethod
+    def _line(sock):
+        data = bytearray()
+        while len(data) <= TRANSITION_RPC_MAX_BYTES:
+            chunk = sock.recv(min(4096, TRANSITION_RPC_MAX_BYTES + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if b"\n" in chunk:
+                if data.count(b"\n") != 1 or not data.endswith(b"\n"):
+                    raise TransitionHold("Laravel RPC returned multiple or trailing messages")
+                if len(data) > TRANSITION_RPC_MAX_BYTES:
+                    raise TransitionHold("Laravel RPC response exceeds its bound")
+                return bytes(data)
+        raise TransitionHold("Laravel RPC response is incomplete or exceeds its bound")
+
+    @staticmethod
+    def _drop_to_application_identity(uid, gid):
+        os.setgroups([])
+        os.setresgid(gid, gid, gid)
+        os.setresuid(uid, uid, uid)
+
+    def _exchange(self, operation, payload, *, request_id=None, request_digest=None):
+        import grp
+        import pwd
+
+        if operation not in TRANSITION_RPC_OPERATIONS:
+            raise TransitionHold("Laravel RPC operation is not allowlisted")
+        if not isinstance(payload, dict) or set(payload) != self._PAYLOAD_KEYS[operation]:
+            raise TransitionHold("Laravel RPC payload shape is invalid")
+        if os.geteuid() != 0:
+            raise TransitionHold("Laravel transition RPC requires the root lock owner")
+        required_mode = "exclusive" if operation in {
+            "verify_transition_preconditions", "validate_permit_manifest", "compare_and_set",
+            "validate_release", "read_transition_receipt",
+        } else None
+        if self.lock is None or not self.lock.is_held(required_mode):
+            raise TransitionHold("Laravel transition RPC requires the coordinated stable lock")
+        try:
+            app = pwd.getpwnam("www-data")
+            app_group = grp.getgrnam("www-data")
+        except KeyError as exc:
+            raise TransitionHold("Laravel application identity is unavailable") from exc
+        if app.pw_gid != app_group.gr_gid:
+            raise TransitionHold("Laravel application UID/GID mapping is inconsistent")
+
+        request_id = request_id or _transition_uuid7()
+        request_digest = request_digest or self._request_digest(request_id, operation, payload)
+        if (not isinstance(request_id, str)
+            or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", request_id, re.I)
+            or not isinstance(request_digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", request_digest)):
+            raise TransitionHold("Laravel RPC request identity is invalid")
+        envelope = {
+            "version": TRANSITION_RPC_VERSION,
+            "request_id": request_id,
+            "request_digest": request_digest,
+            "operation": operation,
+            "payload": payload,
+        }
+        encoded = _transition_canonical(envelope)
+        if len(encoded) > TRANSITION_RPC_MAX_BYTES:
+            raise TransitionHold("Laravel RPC request exceeds its bound")
+
+        directory_fd = open_root_trusted_directory(self.socket_dir)
+        try:
+            directory = os.fstat(directory_fd)
+            if not stat.S_ISDIR(directory.st_mode):
+                raise TransitionHold("Laravel RPC socket parent is not a directory")
+        finally:
+            os.close(directory_fd)
+
+        socket_path = self.socket_dir / (".transition-rpc-" + uuid.uuid4().hex + ".sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        process = None
+        socket_identity = None
+        connection = None
+        request_sent = False
+        try:
+            if len(os.fsencode(socket_path)) >= 108:
+                raise TransitionHold("Laravel RPC socket path exceeds the Linux AF_UNIX bound")
+            listener.settimeout(self.timeout_seconds)
+            listener.bind(str(socket_path))
+            info = socket_path.lstat()
+            socket_identity = (info.st_dev, info.st_ino)
+            os.chown(socket_path, 0, app_group.gr_gid, follow_symlinks=False)
+            os.chmod(socket_path, 0o620, follow_symlinks=False)
+            info = socket_path.lstat()
+            if (not stat.S_ISSOCK(info.st_mode) or info.st_uid != 0
+                or info.st_gid != app_group.gr_gid or stat.S_IMODE(info.st_mode) != 0o620
+                or info.st_nlink != 1 or (info.st_dev, info.st_ino) != socket_identity):
+                raise TransitionHold("Laravel RPC socket ownership or mode is invalid")
+            listener.listen(1)
+            argv = [*TRANSITION_RPC_COMMAND, "--connect-socket", str(socket_path)]
+            process = subprocess.Popen(
+                argv,
+                cwd=str(APP),
+                env=dict(SAFE_ENV),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE if TRANSITION_RPC_COMMAND[0] == sys.executable else subprocess.DEVNULL,
+                close_fds=True,
+                preexec_fn=lambda: self._drop_to_application_identity(app.pw_uid, app.pw_gid),
+            )
+            connection, _ = listener.accept()
+            connection.settimeout(self.timeout_seconds)
+            peer = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+            peer_pid, peer_uid, peer_gid = struct.unpack("3i", peer)
+            if (peer_pid != process.pid or peer_uid != app.pw_uid or peer_gid != app.pw_gid):
+                raise TransitionHold("Laravel RPC peer identity does not match the dropped CLI child")
+            connection.sendall(encoded)
+            request_sent = True
+            response_bytes = self._line(connection)
+            try:
+                response = json.loads(response_bytes.decode("ascii"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise TransitionHold("Laravel RPC response is malformed") from None
+            if (not isinstance(response, dict)
+                or set(response) != {"version", "request_id", "request_digest", "status", "result"}
+                or response.get("version") != TRANSITION_RPC_VERSION
+                or response.get("request_id") != request_id
+                or response.get("request_digest") != request_digest
+                or not isinstance(response.get("status"), str)
+                or not isinstance(response.get("result"), dict)
+                or _transition_canonical(response) != response_bytes):
+                raise TransitionHold("Laravel RPC response binding is invalid")
+            connection.close()
+            connection = None
+            try:
+                return_code = process.wait(timeout=self.timeout_seconds)
+            except subprocess.TimeoutExpired as exc:
+                process.kill()
+                process.wait()
+                if operation == "compare_and_set":
+                    raise TransitionRpcAmbiguous(request_id, request_digest) from exc
+                raise TransitionHold("Laravel read RPC child did not exit within its bound") from exc
+            if return_code != 0:
+                if operation == "compare_and_set":
+                    raise TransitionRpcAmbiguous(request_id, request_digest)
+                raise TransitionHold("Laravel read RPC child exited unsuccessfully")
+            return response
+        except TransitionRpcAmbiguous:
+            raise
+        except TransitionHold as exc:
+            if operation == "compare_and_set" and request_sent:
+                if process is not None and process.stderr is not None and process.poll() is None:
+                    try:
+                        process.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                if process is not None and process.poll() is not None and process.stderr is not None:
+                    diagnostic = process.stderr.read(16000).decode("utf-8", "replace")
+                    if diagnostic:
+                        raise TransitionHold("fake Laravel CLI failed: " + diagnostic[:1000]) from exc
+                raise TransitionRpcAmbiguous(request_id, request_digest) from exc
+            raise
+        except (OSError, socket.timeout, subprocess.SubprocessError) as exc:
+            if process is not None and process.stderr is not None and process.poll() is None:
+                try:
+                    process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
+            if process is not None and process.poll() is not None and process.stderr is not None:
+                diagnostic = process.stderr.read(16000).decode("utf-8", "replace")
+                if diagnostic:
+                    raise TransitionHold("fake Laravel CLI failed: " + diagnostic[:1000]) from exc
+            if operation == "compare_and_set":
+                raise TransitionRpcAmbiguous(request_id, request_digest) from exc
+            raise TransitionHold("Laravel transition RPC could not be completed") from exc
+        finally:
+            if connection is not None:
+                connection.close()
+            listener.close()
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            if process is not None and process.stderr is not None:
+                process.stderr.close()
+            try:
+                current = socket_path.lstat()
+            except FileNotFoundError:
+                current = None
+            if (current is not None and socket_identity is not None
+                and (current.st_dev, current.st_ino) == socket_identity
+                and stat.S_ISSOCK(current.st_mode)):
+                socket_path.unlink()
+
+    def _call(self, operation, payload):
+        response = self._exchange(operation, payload)
+        if response["status"] != "OK":
+            raise TransitionHold("Laravel transition DB operation was refused")
+        return response["result"]
+
+    def read_tuple(self):
+        return self._call("read_tuple", {})
+
+    def read_permit_manifest_hash(self):
+        return self._call("read_permit_manifest_hash", {})
+
+    def verify_transition_preconditions(self, source, target, details, permits):
+        return self._call("verify_transition_preconditions", {
+            "source": source, "target": target, "details": details, "permits": permits,
+        })
+
+    def validate_permit_manifest(self, source, permits, digest):
+        return self._call("validate_permit_manifest", {
+            "source": source, "permits": permits, "digest": digest,
+        })
+
+    def compare_and_set(self, source, target, *, release=None, details=None):
+        details = dict(details or {})
+        request_id = details.get("rpc_request_id")
+        request_digest = details.get("rpc_request_digest")
+        payload = {
+            "request_id": request_id,
+            "request_digest": request_digest,
+            "source": source,
+            "target": target,
+            "release": release,
+            "details": details,
+        }
+        try:
+            response = self._exchange(
+                "compare_and_set", payload, request_id=request_id, request_digest=request_digest,
+            )
+        except TransitionRpcAmbiguous as ambiguous:
+            return self._verify_transition_receipt(
+                ambiguous.request_id, ambiguous.request_digest, target, cause=ambiguous,
+            )
+        result = response["result"]
+        if (response["status"] == "COMMITTED"
+            and result.get("committed") is True
+            and result.get("request_id") == request_id
+            and result.get("request_digest") == request_digest
+            and result.get("target") == target):
+            return True
+        return self._verify_transition_receipt(request_id, request_digest, target)
+
+    def _verify_transition_receipt(self, request_id, request_digest, target, *, cause=None):
+        receipt = self._call("read_transition_receipt", {
+            "request_id": request_id, "request_digest": request_digest,
+        })
+        if (receipt.get("committed") is not True
+            or receipt.get("request_id") != request_id
+            or receipt.get("request_digest") != request_digest
+            or receipt.get("target") != target):
+            raise TransitionHold("ambiguous Laravel transition lacks a positively verified committed receipt") from cause
+        return True
+
+    def nonce_consumed(self, nonce_digest):
+        return self._call("nonce_consumed", {"nonce_digest": nonce_digest}).get("consumed") is True
+
+    def validate_release(self, authorization, source, nonce_digest):
+        return self._call("validate_release", {
+            "authorization": authorization, "source": source, "nonce_digest": nonce_digest,
+        })
+
+    def assert_no_unresolved_drain_effects(self, operation_id, generation):
+        return self._call("assert_no_unresolved_drain_effects", {
+            "operation_id": operation_id, "generation": generation,
+        }).get("clear") is True
+
+    def read_transition_receipt(self, request_id, request_digest):
+        result = self._call("read_transition_receipt", {
+            "request_id": request_id, "request_digest": request_digest,
+        })
+        return result
+
+    def assert_exact_permit(self, _current, _binding):
+        raise TransitionHold("root transition RPC cannot authorize application DRAIN work")
+
+    def claim_drain_step(self, _current, _binding, _intent_id):
+        raise TransitionHold("root transition RPC cannot create application DRAIN INTENTs")
+
+    def verify_drain_effect_absent(self, *_args):
+        raise TransitionHold("root transition RPC cannot resolve application DRAIN effects")
+
+    def record_drain_outcome(self, *_args):
+        raise TransitionHold("root transition RPC cannot record application DRAIN outcomes")
+
+    def record_drain_reconciliation(self, *_args):
+        raise TransitionHold("root transition RPC cannot reconcile application DRAIN effects")
 
 
 class TransitionJournal:
@@ -1643,6 +2009,8 @@ class RootTransitionAdapter:
         self.pending_path = Path(pending_path)
         self.lock = lock
         self.database = database
+        if isinstance(database, LaravelTransitionDatabaseAdapter):
+            database.bind_lock(lock)
         self.boot_id = boot_id.lower()
         self.host_id = host_id
         self.require_root_owned = require_root_owned
@@ -1765,6 +2133,8 @@ class RootTransitionAdapter:
         verification of authoritative no-effect evidence. INTENT remains durable
         if the process dies before outcome write. SHARED remains held throughout.
         """
+        if self.require_root_owned or isinstance(self.database, LaravelTransitionDatabaseAdapter):
+            raise TransitionHold("production root transition adapter has no enabled DRAIN effect catalog")
         if not callable(effect):
             raise TypeError("drain effect must be callable")
         if (type(max_duration_seconds) not in {int, float}
@@ -1870,6 +2240,8 @@ class RootTransitionAdapter:
         The current M16 TransitionExecution model has no reconciliation table, so
         a live DB adapter must provide that reviewed persistence extension first.
         """
+        if self.require_root_owned or isinstance(self.database, LaravelTransitionDatabaseAdapter):
+            raise TransitionHold("root transition adapter cannot reconcile application DRAIN effects")
         if resolution not in {"SUCCEEDED", "FAILED"}:
             raise ValueError("reconciliation resolution must be SUCCEEDED or FAILED")
         if not isinstance(evidence_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_digest):
@@ -1885,6 +2257,106 @@ class RootTransitionAdapter:
             ) is not True:
                 raise TransitionHold("authoritative reconciliation was not durably recorded")
             return {"status": resolution, "evidence_digest": evidence_digest}
+
+    def recover_uncertain_transition(self):
+        """Finish projection publication only after a positive Laravel commit receipt.
+
+        This path never replays compare_and_set. An absent, mismatched, or ambiguous
+        receipt leaves the pending marker in place and the transition held.
+        """
+        with self.lock.hold("exclusive"):
+            if not self.pending_path.exists() or self.pending_path.is_symlink():
+                raise TransitionHold("no safe pending transition is available for receipt recovery")
+
+            def read_local_projection(path):
+                try:
+                    info = path.lstat()
+                    if not stat.S_ISREG(info.st_mode) or path.is_symlink():
+                        raise TransitionHold("recovery projection is not a regular file")
+                    if self.require_root_owned and (info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o644):
+                        raise TransitionHold("recovery projection ownership or mode is invalid")
+                    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                    try:
+                        opened = os.fstat(fd)
+                        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                            raise TransitionHold("recovery projection changed while opening")
+                        content = os.read(fd, 1024 * 1024 + 1)
+                    finally:
+                        os.close(fd)
+                    value = json.loads(content.decode("ascii"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    raise TransitionHold("recovery projection is missing or corrupt") from None
+                if len(content) > 1024 * 1024 or not isinstance(value, dict):
+                    raise TransitionHold("recovery projection is invalid or too large")
+                if _transition_canonical(value) != content:
+                    raise TransitionHold("recovery projection is not canonical")
+                expected = set(TRANSITION_TUPLE_FIELDS)
+                if value.get("state") == "DRAINING":
+                    expected.add("permit_manifest_hash")
+                if set(value) != expected:
+                    raise TransitionHold("recovery projection shape is invalid")
+                tuple_value = self._tuple(value)
+                if tuple_value["boot_id"] != self.boot_id:
+                    raise TransitionHold("recovery projection belongs to a stale boot")
+                if value["state"] == "DRAINING":
+                    manifest = value.get("permit_manifest_hash")
+                    if not isinstance(manifest, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest):
+                        raise TransitionHold("recovery drain manifest is invalid")
+                    tuple_value["permit_manifest_hash"] = manifest
+                return tuple_value
+
+            if self.require_root_owned:
+                for parent in (self.pending_path.parent, self.status_path.parent):
+                    parent_fd = open_root_trusted_directory(parent)
+                    os.close(parent_fd)
+            source = read_local_projection(self.status_path)
+            target = read_local_projection(self.pending_path)
+            records = self.journal.records()
+            if not records:
+                raise TransitionHold("pending transition has no durable journal record")
+            record = records[-1]
+            if (record["seq"] != target["journal_seq"]
+                or record["record_hash"] != target["journal_head_hash"]
+                or record["state"] != target["state"]
+                or record["operation_id"] != target["operation_id"]
+                or record["generation"] != target["generation"]
+                or record["boot_id"] != target["boot_id"]
+                or record["prior_hash"] != source["journal_head_hash"]
+                or record["seq"] != source["journal_seq"] + 1
+                or (source["state"], target["state"]) not in TRANSITION_EDGES):
+                raise TransitionHold("pending transition does not match the durable journal edge")
+            details = record.get("details")
+            request_id = details.get("rpc_request_id") if isinstance(details, dict) else None
+            request_digest = details.get("rpc_request_digest") if isinstance(details, dict) else None
+            if (not isinstance(request_id, str)
+                or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", request_id, re.I)
+                or not isinstance(request_digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", request_digest)):
+                raise TransitionHold("journal has no valid durable Laravel request identity")
+            receipt = self.database.read_transition_receipt(request_id, request_digest)
+            if (not isinstance(receipt, dict)
+                or receipt.get("committed") is not True
+                or receipt.get("request_id") != request_id
+                or receipt.get("request_digest") != request_digest
+                or receipt.get("target") != target):
+                raise TransitionHold("Laravel has not positively verified the pending transition commit")
+            db_tuple = self._tuple(self.database.read_tuple())
+            if db_tuple != {key: target[key] for key in TRANSITION_TUPLE_FIELDS}:
+                raise TransitionHold("Laravel current tuple does not match the committed receipt")
+            if target["state"] == "DRAINING" and self.database.read_permit_manifest_hash() != target["permit_manifest_hash"]:
+                raise TransitionHold("Laravel permit manifest does not match the pending transition")
+            self._event("before_recovery_projection_rename")
+            os.replace(self.pending_path, self.status_path)
+            self._event("recovery_projection_rename")
+            try:
+                self._fsync_dir(self.status_path.parent)
+            except Exception as exc:
+                raise TransitionDurabilityUnconfirmed("COMMITTED_DURABILITY_UNCONFIRMED") from exc
+            self._event("recovery_projection_directory_fsync")
+            recovered = self._read_projection()
+            if self._tuple(recovered) != {key: target[key] for key in TRANSITION_TUPLE_FIELDS}:
+                raise TransitionHold("recovered projection failed authoritative verification")
+            return recovered
 
     def _durability_preflight(self):
         """Re-establish projection-directory durability before any new commit.
@@ -1913,6 +2385,21 @@ class RootTransitionAdapter:
         record_details = dict(details)
         if release_record is not None:
             record_details["release"] = release_record
+        request_id = _transition_uuid7()
+        request_target = {key: target[key] for key in TRANSITION_TUPLE_FIELDS if key != "journal_head_hash"}
+        if permit_manifest_hash is not None:
+            request_target["permit_manifest_hash"] = permit_manifest_hash
+        request_digest = hashlib.sha256(_transition_canonical({
+            "version": TRANSITION_RPC_VERSION,
+            "request_id": request_id,
+            "event": event,
+            "source": self._tuple(source),
+            "target": request_target,
+            "details": record_details,
+            "release": release,
+        })).hexdigest()
+        record_details["rpc_request_id"] = request_id
+        record_details["rpc_request_digest"] = request_digest
         record = {
             "event": event,
             "state": target["state"],
@@ -1966,7 +2453,7 @@ class RootTransitionAdapter:
         self._event("before_journal_append")
         self.journal.append_prepared(prepared, fault=self._event)
         self._event("before_database_commit")
-        self.database.compare_and_set(source, target, release=release, details=details)
+        self.database.compare_and_set(source, target, release=release, details=record_details)
         self._event("database_commit")
         if self._tuple(self.database.read_tuple()) != self._tuple(target):
             raise TransitionHold("database did not persist exact target tuple")

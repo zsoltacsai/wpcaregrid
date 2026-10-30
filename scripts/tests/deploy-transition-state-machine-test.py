@@ -42,6 +42,13 @@ class FakeLock:
         self.replace_on_exit = False
         self.fail_next = False
 
+    def is_held(self, mode=None):
+        if mode == "exclusive":
+            return self.writer
+        if mode == "shared":
+            return self.readers > 0
+        return self.writer or self.readers > 0
+
     @contextmanager
     def hold(self, mode):
         if self.fail_next:
@@ -88,6 +95,7 @@ class FakeDatabase:
         self.drain_outcomes = {}
         self.drain_claims = {}
         self.drain_reconciliations = {}
+        self.transition_receipts = {}
         self.remote_effect_count = 0
         self.drain_events = []
         self.drain_preclaim_barrier = None
@@ -109,6 +117,28 @@ class FakeDatabase:
                 self.nonces[nonce_digest] = dict(release)
             self.tuple = dict(target)
             self.manifest = target.get("permit_manifest_hash")
+            details = dict(details or {})
+            request_id = details.get("rpc_request_id")
+            request_digest = details.get("rpc_request_digest")
+            if request_id and request_digest:
+                self.transition_receipts[request_id] = {
+                    "committed": True,
+                    "request_id": request_id,
+                    "request_digest": request_digest,
+                    "target": dict(target),
+                }
+
+    def read_transition_receipt(self, request_id, request_digest):
+        with self.lock:
+            receipt = self.transition_receipts.get(request_id)
+            if (not receipt or receipt.get("committed") is not True
+                or receipt.get("request_digest") != request_digest
+                or receipt.get("target") != self.tuple):
+                return {
+                    "committed": False, "request_id": request_id,
+                    "request_digest": request_digest, "target": None,
+                }
+            return dict(receipt)
 
     def validate_permit_manifest(self, source, permits, digest):
         if len({item.get("id") for item in permits}) != len(permits):
@@ -274,6 +304,7 @@ class PersistentFakeDatabase(FakeDatabase):
         self.drain_outcomes = data.get("drain_outcomes", {})
         self.drain_claims = data.get("drain_claims", {})
         self.drain_reconciliations = data.get("drain_reconciliations", {})
+        self.transition_receipts = data.get("transition_receipts", {})
         self.remote_effect_count = data.get("remote_effect_count", 0)
 
     @contextmanager
@@ -297,6 +328,7 @@ class PersistentFakeDatabase(FakeDatabase):
             "nonces": self.nonces, "drain_intents": self.drain_intents,
             "drain_outcomes": self.drain_outcomes, "drain_claims": self.drain_claims,
             "drain_reconciliations": self.drain_reconciliations,
+            "transition_receipts": self.transition_receipts,
             "remote_effect_count": self.remote_effect_count,
         }
         temp = self.path.with_name(self.path.name + "." + str(os.getpid()) + ".next")
@@ -319,8 +351,12 @@ class PersistentFakeDatabase(FakeDatabase):
         self._save()
 
     def compare_and_set(self, source, target, *, release=None, details=None):
-        super().compare_and_set(source, target, release=release, details=details)
-        self._save()
+        with self._transaction():
+            super().compare_and_set(source, target, release=release, details=details)
+
+    def read_transition_receipt(self, request_id, request_digest):
+        with self._transaction():
+            return FakeDatabase.read_transition_receipt(self, request_id, request_digest)
 
     def record_drain_intent(self, current, binding, intent_id):
         raise AssertionError("obsolete non-atomic drain intent API must not be called")
@@ -372,6 +408,146 @@ def _prepare_persistent_draining(root, permits=None):
     (Path(root) / "drain-permits.json").write_text(
         json.dumps(permits, sort_keys=True), encoding="ascii"
     )
+
+
+def _rpc_worker(database_path, scenario, socket_path):
+    return _rpc_worker_impl(database_path, scenario, socket_path)
+
+
+def _rpc_worker_impl(database_path, scenario, socket_path):
+    """Unprivileged fake Laravel CLI child used only by isolated Linux RPC tests."""
+    import fcntl
+    import socket
+
+    path = Path(database_path)
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connection.settimeout(10)
+    connection.connect(socket_path)
+    request_data = bytearray()
+    while b"\n" not in request_data:
+        chunk = connection.recv(4096)
+        if not chunk:
+            raise RuntimeError("root closed before dispatching the typed RPC")
+        request_data.extend(chunk)
+        if len(request_data) > HELPER.TRANSITION_RPC_MAX_BYTES:
+            raise RuntimeError("typed RPC exceeded its bound")
+    request_line, trailing = bytes(request_data).split(b"\n", 1)
+    if trailing:
+        raise RuntimeError("unexpected bytes after typed RPC")
+    request = json.loads(request_line.decode("ascii"))
+    if (not isinstance(request, dict)
+        or set(request) != {"version", "request_id", "request_digest", "operation", "payload"}
+        or request["version"] != HELPER.TRANSITION_RPC_VERSION):
+        raise RuntimeError("invalid typed RPC envelope")
+
+    def read_state():
+        return json.loads(path.read_text(encoding="ascii"))
+
+    def write_state(value):
+        temp = path.with_name(path.name + "." + str(os.getpid()) + ".next")
+        fd = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+            os.write(fd, encoded)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(temp, path)
+        parent_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+
+    lock_fd = os.open(path.with_suffix(".lock"), os.O_CREAT | os.O_RDWR, 0o660)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        state = read_state()
+        state.setdefault("operations", {})
+        state.setdefault("receipts", {})
+        operation = request["operation"]
+        state["operations"][operation] = state["operations"].get(operation, 0) + 1
+        identity = {
+            "pid": os.getpid(),
+            "uids": list(os.getresuid()),
+            "gids": list(os.getresgid()),
+            "supplementary_groups": os.getgroups(),
+            "cap_eff": next((line.split()[1] for line in Path("/proc/self/status").read_text().splitlines()
+                             if line.startswith("CapEff:")), None),
+        }
+        if operation == "compare_and_set":
+            payload = request["payload"]
+            request_id = payload["request_id"]
+            request_digest = payload["request_digest"]
+            prior = state["receipts"].get(request_id)
+            if prior is not None:
+                if prior["request_digest"] != request_digest:
+                    response = {"status": "REFUSED", "result": {"reason": "request ID digest conflict"}}
+                elif (prior.get("committed") is True and state["tuple"] == prior.get("target")):
+                    response = {"status": "COMMITTED", "result": dict(prior)}
+                else:
+                    response = {"status": "REFUSED", "result": {"reason": "receipt not positively verified"}}
+            else:
+                state.setdefault("cas_attempts", 0)
+                state["cas_attempts"] += 1
+                if scenario == "crash_before_commit":
+                    write_state(state)
+                    os._exit(97)
+                if state["tuple"] != payload["source"]:
+                    response = {"status": "REFUSED", "result": {"reason": "source tuple mismatch"}}
+                else:
+                    state["tuple"] = payload["target"]
+                    receipt = {
+                        "committed": True,
+                        "request_id": request_id,
+                        "request_digest": request_digest,
+                        "target": payload["target"],
+                    }
+                    state["receipts"][request_id] = receipt
+                    state["identity"] = identity
+                    write_state(state)
+                    if scenario == "crash_after_commit":
+                        os._exit(97)
+                    response = {"status": "COMMITTED", "result": receipt}
+        elif operation == "read_transition_receipt":
+            payload = request["payload"]
+            receipt = state["receipts"].get(payload["request_id"])
+            verified = bool(
+                receipt
+                and receipt.get("committed") is True
+                and receipt.get("request_digest") == payload["request_digest"]
+                and state["tuple"] == receipt.get("target")
+            )
+            result = dict(receipt) if verified else {
+                "committed": False,
+                "request_id": payload["request_id"],
+                "request_digest": payload["request_digest"],
+                "target": None,
+            }
+            response = {"status": "OK", "result": result}
+            state["identity"] = identity
+            write_state(state)
+        elif operation == "read_tuple":
+            response = {"status": "OK", "result": state["tuple"]}
+            state["identity"] = identity
+            write_state(state)
+        else:
+            response = {"status": "REFUSED", "result": {"reason": "unsupported fake RPC"}}
+            state["identity"] = identity
+            write_state(state)
+        response_envelope = {
+            "version": HELPER.TRANSITION_RPC_VERSION,
+            "request_id": request["request_id"],
+            "request_digest": request["request_digest"],
+            "status": response["status"],
+            "result": response["result"],
+        }
+        connection.sendall(HELPER._transition_canonical(response_envelope))
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+        connection.close()
+    return 0
 
 
 class TransitionAdapterTests(unittest.TestCase):
@@ -1176,6 +1352,38 @@ class TransitionAdapterTests(unittest.TestCase):
             else:
                 self.assertIn("pending marker", replay.stdout)
 
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux fresh-process receipt recovery")
+    def test_root_process_death_after_db_commit_recovers_only_by_receipt_readback(self):
+        if os.geteuid() != 0:
+            self.fail("Linux receipt recovery test must run as root")
+        for crash_point, expected in (("database_commit", "RECOVERED"),
+                                      ("before_database_commit", "HOLD")):
+            with self.subTest(crash_point=crash_point):
+                root = Path(self.temp.name) / ("rpc-recovery-" + crash_point)
+                _persisted_layout(root)
+                crashed = subprocess.run(
+                    [sys.executable, str(Path(__file__).resolve()), "--crash-worker",
+                     str(root), crash_point, BOOT],
+                    cwd=ROOT, capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertEqual(crashed.returncode, 97, crashed.stderr)
+                recovered = subprocess.run(
+                    [sys.executable, str(Path(__file__).resolve()), "--recover-rpc-transition",
+                     str(root), "unused", BOOT],
+                    cwd=ROOT, capture_output=True, text=True, timeout=15, check=False,
+                )
+                state = json.loads((root / "database.json").read_text(encoding="ascii"))
+                if expected == "RECOVERED":
+                    self.assertEqual(recovered.returncode, 0, recovered.stderr + recovered.stdout)
+                    self.assertEqual(state["tuple"]["state"], "HOLD_REQUESTED")
+                    self.assertFalse((root / "run/wpcaregrid/.transition-status.next").exists())
+                    self.assertTrue(state["transition_receipts"])
+                else:
+                    self.assertEqual(recovered.returncode, 20, recovered.stderr + recovered.stdout)
+                    self.assertEqual(state["tuple"]["state"], "OPEN")
+                    self.assertTrue((root / "run/wpcaregrid/.transition-status.next").exists())
+                    self.assertEqual(state["transition_receipts"], {})
+
     @unittest.skipUnless(sys.platform == "linux", "requires Linux persistent process workers")
     def test_drain_claim_survives_process_death_restart_and_competing_claimants(self):
         if os.geteuid() != 0:
@@ -1412,6 +1620,164 @@ class TransitionAdapterTests(unittest.TestCase):
                                     )
                     finally:
                         self.tearDown()
+
+    def _make_rpc_fixture(self, scenario):
+        import grp
+
+        os.chmod(self.temp.name, 0o755)
+        root = Path(tempfile.mkdtemp(prefix="rpc-fixture-", dir=self.temp.name))
+        os.chmod(root, 0o755)
+        app_gid = grp.getgrnam("www-data").gr_gid
+        socket_temp = tempfile.TemporaryDirectory(prefix="wpcg-rpc-")
+        self.addCleanup(socket_temp.cleanup)
+        socket_dir = Path(socket_temp.name)
+        runtime_root = socket_dir / "runtime"
+        runtime_tests = runtime_root / "scripts" / "tests"
+        runtime_tests.mkdir(parents=True, mode=0o755)
+        runtime_helper = runtime_root / "scripts" / "wpcaregrid-deploy-priv.py"
+        worker_script = runtime_tests / "deploy-transition-state-machine-test.py"
+        runtime_helper.write_bytes((ROOT / "scripts" / "wpcaregrid-deploy-priv.py").read_bytes())
+        worker_script.write_bytes(Path(__file__).resolve().read_bytes())
+        os.chmod(runtime_root, 0o755)
+        os.chmod(runtime_root / "scripts", 0o755)
+        os.chmod(runtime_tests, 0o755)
+        os.chmod(runtime_helper, 0o644)
+        os.chmod(worker_script, 0o644)
+        os.chown(socket_dir, 0, app_gid)
+        os.chmod(socket_dir, 0o711)
+        state_dir = root / "rpc-state"
+        state_dir.mkdir(mode=0o770)
+        os.chown(state_dir, 0, app_gid)
+        os.chmod(state_dir, 0o2770)
+        database_path = state_dir / "database.json"
+        state = {
+            "tuple": dict(self.initial), "receipts": {}, "operations": {},
+            "cas_attempts": 0, "scenario": scenario,
+        }
+        database_path.write_text(json.dumps(state, sort_keys=True), encoding="ascii")
+        os.chown(database_path, 0, app_gid)
+        os.chmod(database_path, 0o660)
+        command = (
+            sys.executable, str(worker_script), "--rpc-worker",
+            str(database_path), scenario,
+        )
+        adapter = HELPER.LaravelTransitionDatabaseAdapter(
+            socket_dir=socket_dir, timeout_seconds=5,
+        )
+        adapter.bind_lock(self.lock)
+        return root, database_path, adapter, command
+
+    @staticmethod
+    def _rpc_transition_request(source, target, *, request_id="00000000-0000-7000-8000-000000000123",
+                                request_digest="a" * 64):
+        return source, target, {
+            "rpc_request_id": request_id,
+            "rpc_request_digest": request_digest,
+        }
+
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux AF_UNIX and SO_PEERCRED")
+    def test_linux_rpc_authenticates_privilege_dropped_child_and_committed_transition(self):
+        if os.geteuid() != 0:
+            self.fail("Linux transition RPC test must run as root")
+        import grp
+        import pwd
+
+        app = pwd.getpwnam("www-data")
+        self.assertEqual(app.pw_gid, grp.getgrnam("www-data").gr_gid)
+        root, database_path, adapter, command = self._make_rpc_fixture("normal")
+        target = dict(self.initial, state="HOLD_REQUESTED", operation_id="00000000-0000-7000-8000-000000000123",
+                      generation=1, journal_seq=1, journal_head_hash="b" * 64)
+        source, target, details = self._rpc_transition_request(self.initial, target)
+        with mock.patch.object(HELPER, "TRANSITION_RPC_COMMAND", command), \
+             mock.patch.object(HELPER, "APP", root), \
+             mock.patch.object(HELPER, "open_root_trusted_directory", HELPER.open_directory):
+            with self.lock.hold("exclusive"):
+                self.assertTrue(adapter.compare_and_set(source, target, details=details))
+            with self.lock.hold("shared"):
+                self.assertEqual(adapter.read_tuple(), target)
+
+        state = json.loads(database_path.read_text(encoding="ascii"))
+        self.assertEqual(state["cas_attempts"], 1)
+        self.assertEqual(state["tuple"], target)
+        identity = state["identity"]
+        self.assertEqual(identity["uids"], [app.pw_uid, app.pw_uid, app.pw_uid])
+        self.assertEqual(identity["gids"], [app.pw_gid, app.pw_gid, app.pw_gid])
+        self.assertEqual(identity["supplementary_groups"], [])
+        self.assertEqual(int(identity["cap_eff"], 16), 0)
+        self.assertNotEqual(identity["pid"], os.getpid())
+
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux persistent child processes")
+    def test_rpc_lost_response_uses_fresh_receipt_readback_without_replay(self):
+        if os.geteuid() != 0:
+            self.fail("Linux transition RPC test must run as root")
+        root, database_path, adapter, command = self._make_rpc_fixture("crash_after_commit")
+        target = dict(self.initial, state="HOLD_REQUESTED", operation_id="00000000-0000-7000-8000-000000000123",
+                      generation=1, journal_seq=1, journal_head_hash="b" * 64)
+        source, target, details = self._rpc_transition_request(self.initial, target)
+        with mock.patch.object(HELPER, "TRANSITION_RPC_COMMAND", command), \
+             mock.patch.object(HELPER, "APP", root), \
+             mock.patch.object(HELPER, "open_root_trusted_directory", HELPER.open_directory):
+            with self.lock.hold("exclusive"):
+                self.assertTrue(adapter.compare_and_set(source, target, details=details))
+
+        state = json.loads(database_path.read_text(encoding="ascii"))
+        self.assertEqual(state["cas_attempts"], 1)
+        self.assertEqual(state["operations"].get("compare_and_set"), 1)
+        self.assertEqual(state["operations"].get("read_transition_receipt"), 1)
+        self.assertEqual(state["receipts"][details["rpc_request_id"]]["request_digest"],
+                         details["rpc_request_digest"])
+        self.assertEqual(state["receipts"][details["rpc_request_id"]]["target"], target)
+
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux persistent child processes")
+    def test_rpc_precommit_death_and_digest_replay_fail_closed(self):
+        if os.geteuid() != 0:
+            self.fail("Linux transition RPC test must run as root")
+        root, database_path, adapter, command = self._make_rpc_fixture("crash_before_commit")
+        target = dict(self.initial, state="HOLD_REQUESTED", operation_id="00000000-0000-7000-8000-000000000123",
+                      generation=1, journal_seq=1, journal_head_hash="b" * 64)
+        source, target, details = self._rpc_transition_request(self.initial, target)
+        with mock.patch.object(HELPER, "TRANSITION_RPC_COMMAND", command), \
+             mock.patch.object(HELPER, "APP", root), \
+             mock.patch.object(HELPER, "open_root_trusted_directory", HELPER.open_directory):
+            with self.lock.hold("exclusive"):
+                with self.assertRaises(HELPER.TransitionHold):
+                    adapter.compare_and_set(source, target, details=details)
+
+        state = json.loads(database_path.read_text(encoding="ascii"))
+        self.assertEqual(state["cas_attempts"], 1)
+        self.assertEqual(state["operations"].get("read_transition_receipt"), 1)
+        self.assertEqual(state["receipts"], {})
+        self.assertEqual(state["tuple"], self.initial)
+
+        root, database_path, adapter, command = self._make_rpc_fixture("normal")
+        source, target, details = self._rpc_transition_request(self.initial, target)
+        with mock.patch.object(HELPER, "TRANSITION_RPC_COMMAND", command), \
+             mock.patch.object(HELPER, "APP", root), \
+             mock.patch.object(HELPER, "open_root_trusted_directory", HELPER.open_directory):
+            with self.lock.hold("exclusive"):
+                self.assertTrue(adapter.compare_and_set(source, target, details=details))
+                self.assertTrue(adapter.compare_and_set(source, target, details=details))
+                conflicting = dict(details, rpc_request_digest="c" * 64)
+                with self.assertRaises(HELPER.TransitionHold):
+                    adapter.compare_and_set(source, target, details=conflicting)
+        state = json.loads(database_path.read_text(encoding="ascii"))
+        self.assertEqual(state["cas_attempts"], 1)
+        self.assertEqual(state["tuple"], target)
+
+    def test_production_adapter_has_no_effect_catalog_or_drain_claim_surface(self):
+        self.assertEqual(HELPER.TRANSITION_PRODUCTION_EFFECT_CATALOG, ())
+        database = HELPER.LaravelTransitionDatabaseAdapter(socket_dir=Path(self.temp.name))
+        with self.assertRaises(HELPER.TransitionHold):
+            database.claim_drain_step({}, {}, "intent")
+        invoked = []
+        adapter = HELPER.RootTransitionAdapter(
+            journal_path=self.journal, status_path=self.status, pending_path=self.pending,
+            lock=self.lock, database=database, boot_id=BOOT, host_id="test",
+            require_root_owned=True,
+        )
+        with self.assertRaisesRegex(HELPER.TransitionHold, "no enabled DRAIN effect catalog"):
+            adapter.execute_drain_permit({}, lambda _deadline: invoked.append("effect"))
+        self.assertEqual(invoked, [])
 
     @unittest.skipUnless(sys.platform == "linux", "requires Linux flock and www-data")
     def test_www_data_can_take_shared_flock_read_only_without_write_permission(self):
@@ -1683,13 +2049,54 @@ def _process_worker(argv):
             return 20
         sys.stdout.write("RECOVERED\n")
         return 0
+    if mode == "--recover-rpc-transition":
+        adapter = _persistent_adapter(root, boot)
+        try:
+            adapter.recover_uncertain_transition()
+        except HELPER.TransitionHold as exc:
+            sys.stdout.write("HOLD: " + str(exc) + "\n")
+            return 20
+        sys.stdout.write("RECOVERED\n")
+        return 0
     raise ValueError("unknown process worker mode")
 
 
+def _validate_required_linux_prerequisites():
+    required = sys.platform == "linux" or os.environ.get("WPCG_REQUIRE_LINUX_TESTS") == "1"
+    if not required:
+        return
+    if sys.platform != "linux":
+        raise SystemExit("required Gate 1 Linux tests cannot run outside Linux")
+    if os.geteuid() != 0:
+        raise SystemExit("required Gate 1 Linux tests must run as root")
+    import grp
+    import pwd
+    import socket
+    import shutil
+
+    try:
+        app = pwd.getpwnam("www-data")
+        group = grp.getgrnam("www-data")
+    except KeyError:
+        raise SystemExit("required Gate 1 Linux tests need www-data user and group") from None
+    if app.pw_gid != group.gr_gid:
+        raise SystemExit("required Gate 1 Linux tests need matching www-data UID/GID mapping")
+    if shutil.which("runuser") is None:
+        raise SystemExit("required Gate 1 Linux tests need runuser")
+    if not hasattr(socket, "SO_PEERCRED") or not all(hasattr(os, name) for name in ("setgroups", "setresgid", "setresuid")):
+        raise SystemExit("required Gate 1 Linux tests need SO_PEERCRED and full privilege-drop APIs")
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        _validate_required_linux_prerequisites()
+    if len(sys.argv) > 1 and sys.argv[1] == "--rpc-worker":
+        if len(sys.argv) != 6 or sys.argv[4] != "--connect-socket":
+            raise SystemExit("unexpected arguments for fake RPC worker")
+        raise SystemExit(_rpc_worker(sys.argv[2], sys.argv[3], sys.argv[5]))
     worker_modes = {
         "--crash-worker", "--recover-worker", "--crash-release", "--replay-release",
-        "--drain-worker",
+        "--drain-worker", "--recover-rpc-transition",
     }
     if len(sys.argv) > 1:
         if len(sys.argv) != 5 or sys.argv[1] not in worker_modes:
