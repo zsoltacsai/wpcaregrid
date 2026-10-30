@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
@@ -62,6 +63,12 @@ return new class extends Migration
 
     public function down(): void
     {
+        foreach (['transition_executions', 'transition_admissions', 'deployment_transition_fences'] as $table) {
+            if (Schema::hasTable($table) && DB::table($table)->exists()) {
+                throw new RuntimeException('Cannot roll back deployment transition fencing while durable evidence exists.');
+            }
+        }
+
         Schema::dropIfExists('transition_executions');
         Schema::dropIfExists('transition_admissions');
         Schema::dropIfExists('deployment_transition_fences');

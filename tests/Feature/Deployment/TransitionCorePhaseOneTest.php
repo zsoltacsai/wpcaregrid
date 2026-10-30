@@ -7,7 +7,10 @@ use App\Deployment\TransitionStatusProjection;
 use App\Models\DeploymentTransitionFence;
 use App\Models\TransitionAdmission;
 use App\Models\TransitionExecution;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use InvalidArgumentException;
 use RuntimeException;
 use Tests\TestCase;
@@ -39,6 +42,70 @@ class TransitionCorePhaseOneTest extends TestCase
             rmdir($this->directory);
         }
         parent::tearDown();
+    }
+
+    public function test_migration_rollback_refuses_to_drop_durable_fencing_evidence(): void
+    {
+        $now = CarbonImmutable::now();
+        $operationId = '018f0f8e-7b1c-7abc-8abc-123456789012';
+        $bootId = 'c5e6f6c3-2c66-49cb-a2ad-c76dd3af7f93';
+        $fenceId = DB::table('deployment_transition_fences')->insertGetId([
+            'fence_key' => 'global',
+            'state' => 'DRAINING',
+            'operation_id' => $operationId,
+            'generation' => 1,
+            'boot_id' => $bootId,
+            'journal_seq' => 1,
+            'journal_head_hash' => str_repeat('a', 64),
+            'evidence_digest' => str_repeat('b', 64),
+            'permit_manifest_hash' => str_repeat('c', 64),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $admissionId = DB::table('transition_admissions')->insertGetId([
+            'operation_id' => $operationId,
+            'generation' => 1,
+            'execution_id' => 'execution-rollback-guard',
+            'work_id' => 'work-rollback-guard',
+            'payload_hash' => str_repeat('d', 64),
+            'tenant_id' => 'tenant-1',
+            'site_id' => 'site-1',
+            'worker_identity' => 'worker-1',
+            'effect_steps' => json_encode(['effect-1'], JSON_THROW_ON_ERROR),
+            'effect_step_plan_hash' => str_repeat('e', 64),
+            'status' => 'ISSUED',
+            'issued_at' => $now,
+            'expires_at' => $now->addHour(),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('transition_executions')->insert([
+            'transition_admission_id' => $admissionId,
+            'effect_step_index' => 0,
+            'step_id' => 'effect-1',
+            'idempotency_key' => 'rollback-guard-idempotency-key',
+            'payload_hash' => str_repeat('f', 64),
+            'status' => 'INTENT',
+            'intent_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $migration = require database_path('migrations/2026_10_30_000001_create_deployment_transition_fences.php');
+
+        try {
+            $migration->down();
+            self::fail('Rolling back populated fencing tables must fail closed.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Cannot roll back deployment transition fencing while durable evidence exists.', $exception->getMessage());
+        }
+
+        self::assertTrue(Schema::hasTable('deployment_transition_fences'));
+        self::assertTrue(Schema::hasTable('transition_admissions'));
+        self::assertTrue(Schema::hasTable('transition_executions'));
+        self::assertDatabaseHas('deployment_transition_fences', ['id' => $fenceId, 'operation_id' => $operationId]);
+        self::assertDatabaseHas('transition_admissions', ['id' => $admissionId, 'execution_id' => 'execution-rollback-guard']);
+        self::assertDatabaseHas('transition_executions', ['transition_admission_id' => $admissionId, 'status' => 'INTENT']);
     }
 
     public function test_projection_accepts_a_complete_canonical_tuple_and_operation_uuid_v7(): void
