@@ -86,6 +86,9 @@ class FakeDatabase:
         self.active_or_unknown_effects = 0
         self.drain_intents = {}
         self.drain_outcomes = {}
+        self.drain_claims = {}
+        self.drain_reconciliations = {}
+        self.remote_effect_count = 0
         self.drain_events = []
 
     def read_tuple(self):
@@ -121,18 +124,90 @@ class FakeDatabase:
         match = [item for item in self.permits if item == binding]
         if not match or current.get("permit_manifest_hash") != self.manifest:
             raise HELPER.TransitionHold("permit is absent or mismatched")
+        key = self.drain_claim_key(current, binding)
+        if key in self.drain_claims:
+            raise HELPER.TransitionHold("drain permit step was already claimed and cannot be replayed")
 
-    def record_drain_intent(self, current, binding, intent_id):
-        self.drain_events.append(("intent", intent_id))
-        self.drain_intents[intent_id] = {"tuple": dict(current), "binding": dict(binding)}
-        return True
+    @staticmethod
+    def drain_claim_key(current, binding):
+        exact = {
+            "operation_id": current["operation_id"],
+            "generation": current["generation"],
+            "permit_id": binding.get("id"),
+            "execution_id": binding.get("execution_id"),
+            "work_id": binding.get("work_id"),
+            "step_index": binding.get("step_index", 0),
+            "step_id": binding.get("step_id", "step-0"),
+            "idempotency_key": binding.get("idempotency_key", binding.get("id")),
+            "binding": binding,
+        }
+        return hashlib.sha256(HELPER._transition_canonical(exact)).hexdigest()
 
-    def record_drain_outcome(self, intent_id, outcome):
-        if intent_id not in self.drain_intents:
+    def claim_drain_step(self, current, binding, intent_id):
+        key = self.drain_claim_key(current, binding)
+        with self.lock:
+            if key in self.drain_claims:
+                raise HELPER.TransitionHold("drain permit step already has a durable claim")
+            self.assert_exact_permit(current, binding)
+            self.drain_claims[key] = intent_id
+            self.drain_events.append(("intent", intent_id))
+            self.drain_intents[intent_id] = {
+                "tuple": dict(current), "binding": dict(binding), "claim_key": key,
+                "status": "INTENT",
+            }
+        return intent_id
+
+    def record_drain_outcome(self, claim, intent_id, outcome):
+        record = self.drain_intents.get(intent_id)
+        if claim != intent_id or not record or record["status"] != "INTENT":
             raise HELPER.TransitionHold("outcome has no durable intent")
+        if outcome.get("status") not in {"SUCCEEDED", "FAILED", "UNKNOWN"}:
+            raise HELPER.TransitionHold("outcome status is invalid")
+        if not isinstance(outcome.get("evidence_digest"), str) or len(outcome["evidence_digest"]) != 64:
+            raise HELPER.TransitionHold("outcome evidence is invalid")
+        record["status"] = outcome["status"]
         self.drain_events.append(("outcome", intent_id, outcome["status"]))
         self.drain_outcomes[intent_id] = dict(outcome)
         return True
+
+    def verify_drain_effect_absent(self, claim, intent_id, evidence_digest, authority_reference):
+        return bool(
+            claim == intent_id
+            and intent_id in self.drain_intents
+            and self.drain_intents[intent_id]["status"] == "INTENT"
+            and evidence_digest == EVIDENCE
+            and authority_reference == "fake-no-effect-proof"
+        )
+
+    def assert_no_unresolved_drain_effects(self, operation_id, generation):
+        for intent_id, intent in self.drain_intents.items():
+            claim_tuple = intent["tuple"]
+            if (claim_tuple["operation_id"] == operation_id
+                and claim_tuple["generation"] == generation
+                and intent["status"] in {"INTENT", "UNKNOWN"}
+                and intent_id not in self.drain_reconciliations):
+                return False
+        return self.active_or_unknown_effects == 0
+
+    def record_drain_reconciliation(self, claim, resolution, evidence_digest, authority_reference):
+        if resolution not in {"SUCCEEDED", "FAILED"} or not authority_reference:
+            raise HELPER.TransitionHold("authoritative reconciliation is incomplete")
+        record = self.drain_intents.get(claim)
+        if not record or record["status"] not in {"INTENT", "UNKNOWN"}:
+            raise HELPER.TransitionHold("claim is not unresolved")
+        if authority_reference != "fake-authoritative-reconciliation":
+            raise HELPER.TransitionHold("fake authority rejected reconciliation reference")
+        if claim in self.drain_reconciliations:
+            raise HELPER.TransitionHold("reconciliation record is immutable")
+        self.drain_reconciliations[claim] = {
+            "resolution": resolution, "evidence_digest": evidence_digest,
+            "authority_reference": authority_reference,
+        }
+        return True
+
+    def record_fake_remote_effect(self):
+        self.remote_effect_count += 1
+        return self.remote_effect_count
 
     def nonce_consumed(self, nonce):
         return nonce in self.nonces
@@ -170,23 +245,60 @@ class PersistentFakeDatabase(FakeDatabase):
 
     def __init__(self, path):
         self.path = Path(path)
+        self._load()
+
+    def _load(self):
         data = json.loads(self.path.read_text(encoding="ascii"))
-        super().__init__(data["tuple"])
+        if not hasattr(self, "lock"):
+            super().__init__(data["tuple"])
+        else:
+            self.tuple = dict(data["tuple"])
         self.manifest = data["manifest"]
         self.permits = data["permits"]
         self.nonces = data["nonces"]
-        self.drain_intents = data["drain_intents"]
-        self.drain_outcomes = data["drain_outcomes"]
+        self.drain_intents = data.get("drain_intents", {})
+        self.drain_outcomes = data.get("drain_outcomes", {})
+        self.drain_claims = data.get("drain_claims", {})
+        self.drain_reconciliations = data.get("drain_reconciliations", {})
+        self.remote_effect_count = data.get("remote_effect_count", 0)
+
+    @contextmanager
+    def _transaction(self):
+        import fcntl
+
+        lock_path = self.path.with_suffix(".lock")
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self._load()
+            yield
+            self._save()
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     def _save(self):
         data = {
             "tuple": self.tuple, "manifest": self.manifest, "permits": self.permits,
             "nonces": self.nonces, "drain_intents": self.drain_intents,
-            "drain_outcomes": self.drain_outcomes,
+            "drain_outcomes": self.drain_outcomes, "drain_claims": self.drain_claims,
+            "drain_reconciliations": self.drain_reconciliations,
+            "remote_effect_count": self.remote_effect_count,
         }
-        temp = self.path.with_suffix(".next")
-        temp.write_text(json.dumps(data, sort_keys=True), encoding="ascii")
+        temp = self.path.with_name(self.path.name + "." + str(os.getpid()) + ".next")
+        encoded = json.dumps(data, sort_keys=True).encode("ascii")
+        fd = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            os.write(fd, encoded)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.replace(temp, self.path)
+        parent_fd = os.open(self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
 
     def validate_permit_manifest(self, source, permits, digest):
         super().validate_permit_manifest(source, permits, digest)
@@ -197,14 +309,52 @@ class PersistentFakeDatabase(FakeDatabase):
         self._save()
 
     def record_drain_intent(self, current, binding, intent_id):
-        result = super().record_drain_intent(current, binding, intent_id)
-        self._save()
-        return result
+        raise AssertionError("obsolete non-atomic drain intent API must not be called")
 
-    def record_drain_outcome(self, intent_id, outcome):
-        result = super().record_drain_outcome(intent_id, outcome)
-        self._save()
-        return result
+    def claim_drain_step(self, current, binding, intent_id):
+        with self._transaction():
+            return FakeDatabase.claim_drain_step(self, current, binding, intent_id)
+
+    def record_drain_outcome(self, claim, intent_id, outcome):
+        with self._transaction():
+            return FakeDatabase.record_drain_outcome(self, claim, intent_id, outcome)
+
+    def verify_drain_effect_absent(self, claim, intent_id, evidence_digest, authority_reference):
+        with self._transaction():
+            return FakeDatabase.verify_drain_effect_absent(
+                self, claim, intent_id, evidence_digest, authority_reference
+            )
+
+    def assert_no_unresolved_drain_effects(self, operation_id, generation):
+        with self._transaction():
+            return FakeDatabase.assert_no_unresolved_drain_effects(self, operation_id, generation)
+
+    def record_drain_reconciliation(self, claim, resolution, evidence_digest, authority_reference):
+        with self._transaction():
+            return FakeDatabase.record_drain_reconciliation(
+                self, claim, resolution, evidence_digest, authority_reference
+            )
+
+    def record_fake_remote_effect(self):
+        with self._transaction():
+            return FakeDatabase.record_fake_remote_effect(self)
+
+
+def _prepare_persistent_draining(root):
+    adapter = _persistent_adapter(root)
+    for state in ("HOLD_REQUESTED", "CLOSING", "CLOSED"):
+        adapter.transition(state, source_sha=SHA, target_sha="3" * 40,
+                           evidence_digest=EVIDENCE)
+    permit = {
+        "id": "drain-crash-permit", "work_id": "work-1", "execution_id": "execution-1",
+        "step_index": 0, "step_id": "step-0", "idempotency_key": "idem-1",
+        "payload_hash": "4" * 64,
+    }
+    adapter.transition("DRAINING", source_sha=SHA, target_sha="3" * 40,
+                       evidence_digest=EVIDENCE, permits=[permit])
+    (Path(root) / "drain-permit.json").write_text(
+        json.dumps(permit, sort_keys=True), encoding="ascii"
+    )
 
 
 class TransitionAdapterTests(unittest.TestCase):
@@ -622,33 +772,86 @@ class TransitionAdapterTests(unittest.TestCase):
         permit = {"id": "p1", "work_id": "w1", "payload_hash": "4" * 64}
         self.move("DRAINING", permits=[permit])
         trace = []
+        effects = []
 
         def effect(deadline):
             self.assertGreater(deadline, time.monotonic())
             trace.append(("effect", list(self.db.drain_events)))
-            return {"status": "completed", "evidence_digest": EVIDENCE}
+            effects.append("called")
+            return {"status": "SUCCEEDED", "evidence_digest": EVIDENCE}
 
         result = self.adapter.execute_drain_permit(permit, effect)
-        self.assertEqual(result["status"], "completed")
-        self.assertEqual([item[0] for item in trace[0][1]], ["intent"])
+        self.assertEqual(result["status"], "SUCCEEDED")
+        self.assertEqual(trace[0][1], [("intent", next(iter(self.db.drain_intents)))])
         self.assertEqual([item[0] for item in self.db.drain_events], ["intent", "outcome"])
+        with self.assertRaisesRegex(HELPER.TransitionHold, "already claimed|replay"):
+            self.adapter.execute_drain_permit(permit, effect)
+        self.assertEqual(effects, ["called"])
         with self.assertRaisesRegex(HELPER.TransitionHold, "not authorization"):
             self.adapter.assert_drain_permit(permit)
 
-    def test_drain_effect_failure_records_outcome_before_releasing_shared_lock(self):
+    def test_timeout_after_remote_effect_is_unknown_and_fresh_intent_replay_is_rejected(self):
+        for state in ("HOLD_REQUESTED", "CLOSING", "CLOSED"):
+            self.move(state)
+        permit = {"id": "p1", "work_id": "w1", "payload_hash": "4" * 64}
+        self.move("DRAINING", permits=[permit])
+        calls = []
+
+        def timed_out_after_remote_success(_deadline):
+            calls.append("remote-effect")
+            self.db.record_fake_remote_effect()
+            raise TimeoutError("response lost after remote success")
+
+        with self.assertRaisesRegex(HELPER.TransitionHold, "UNKNOWN"):
+            self.adapter.execute_drain_permit(permit, timed_out_after_remote_success)
+        self.assertEqual([item[0] for item in self.db.drain_events], ["intent", "outcome"])
+        claim = next(iter(self.db.drain_intents))
+        self.assertEqual(self.db.drain_outcomes[claim]["status"], "UNKNOWN")
+        self.assertEqual(self.db.remote_effect_count, 1)
+        with self.assertRaises(HELPER.TransitionHold):
+            self.adapter.execute_drain_permit(permit, timed_out_after_remote_success)
+        self.assertEqual(calls, ["remote-effect"])
+        with self.assertRaisesRegex(HELPER.TransitionHold, "unresolved DRAIN"):
+            self.move("QUIESCED", details={
+                "settlement_digest": "6" * 64, "pending_digest": "7" * 64,
+            })
+        self.assertEqual(self.lock.readers, 0)
+
+    def test_failed_is_recorded_only_with_explicit_proof_no_effect_occurred(self):
         for state in ("HOLD_REQUESTED", "CLOSING", "CLOSED"):
             self.move(state)
         permit = {"id": "p1", "work_id": "w1", "payload_hash": "4" * 64}
         self.move("DRAINING", permits=[permit])
 
-        def fail(_deadline):
-            raise OSError("fake effect failure")
+        def not_sent(_deadline):
+            raise HELPER.DrainEffectNotPerformed(EVIDENCE, "fake-no-effect-proof")
 
-        with self.assertRaises(OSError):
-            self.adapter.execute_drain_permit(permit, fail)
-        self.assertEqual([item[0] for item in self.db.drain_events], ["intent", "outcome"])
-        self.assertEqual(self.db.drain_events[-1][2], "failed")
-        self.assertEqual(self.lock.readers, 0)
+        with self.assertRaisesRegex(HELPER.TransitionHold, "did not occur"):
+            self.adapter.execute_drain_permit(permit, not_sent)
+        claim = next(iter(self.db.drain_intents))
+        self.assertEqual(self.db.drain_outcomes[claim]["status"], "FAILED")
+        self.assertEqual(self.db.remote_effect_count, 0)
+        with self.assertRaisesRegex(HELPER.TransitionHold, "already claimed|replay"):
+            self.adapter.execute_drain_permit(permit, not_sent)
+
+    def test_unverified_no_effect_claim_remains_unresolved_not_failed(self):
+        for state in ("HOLD_REQUESTED", "CLOSING", "CLOSED"):
+            self.move(state)
+        permit = {"id": "p1", "work_id": "w1", "payload_hash": "4" * 64}
+        self.move("DRAINING", permits=[permit])
+
+        def unverified(_deadline):
+            raise HELPER.DrainEffectNotPerformed(EVIDENCE, "untrusted-reference")
+
+        with self.assertRaisesRegex(HELPER.TransitionHold, "absence of external effect is unverified"):
+            self.adapter.execute_drain_permit(permit, unverified)
+        claim = next(iter(self.db.drain_intents))
+        self.assertEqual(self.db.drain_intents[claim]["status"], "INTENT")
+        self.assertNotIn(claim, self.db.drain_outcomes)
+        with self.assertRaisesRegex(HELPER.TransitionHold, "unresolved DRAIN"):
+            self.move("QUIESCED", details={
+                "settlement_digest": "6" * 64, "pending_digest": "7" * 64,
+            })
 
     def test_drain_effect_deadline_and_authoritative_revalidation_fail_closed(self):
         for state in ("HOLD_REQUESTED", "CLOSING", "CLOSED"):
@@ -658,22 +861,32 @@ class TransitionAdapterTests(unittest.TestCase):
 
         def late(_deadline):
             time.sleep(0.01)
-            return {"status": "completed", "evidence_digest": EVIDENCE}
+            self.db.record_fake_remote_effect()
+            return {"status": "SUCCEEDED", "evidence_digest": EVIDENCE}
 
         with self.assertRaisesRegex(HELPER.TransitionHold, "deadline"):
             self.adapter.execute_drain_permit(permit, late, max_duration_seconds=0.001)
-        self.assertEqual(self.db.drain_events[-1][2], "failed")
+        late_claim = next(iter(self.db.drain_intents))
+        self.assertEqual(self.db.drain_outcomes[late_claim]["status"], "UNKNOWN")
 
-        self.db.drain_events.clear()
+        self.tearDown()
+        self.setUp()
+        for state in ("HOLD_REQUESTED", "CLOSING", "CLOSED"):
+            self.move(state)
+        permit = {"id": "p2", "work_id": "w2", "payload_hash": "5" * 64}
+        self.move("DRAINING", permits=[permit])
 
         def mutate_authority(_deadline):
             self.db.tuple["generation"] += 1
-            return {"status": "completed", "evidence_digest": EVIDENCE}
+            self.db.record_fake_remote_effect()
+            return {"status": "SUCCEEDED", "evidence_digest": EVIDENCE}
 
         with self.assertRaises(HELPER.TransitionHold):
             self.adapter.execute_drain_permit(permit, mutate_authority)
+        revalidation_claim = next(iter(self.db.drain_intents))
+        self.assertEqual(self.db.drain_outcomes[revalidation_claim]["status"], "UNKNOWN")
         self.assertEqual([event[0] for event in self.db.drain_events], ["intent", "outcome"])
-        self.assertEqual(self.db.drain_events[-1][2], "failed")
+        self.assertEqual(self.db.drain_events[-1][2], "UNKNOWN")
         self.assertEqual(self.lock.readers, 0)
 
     def test_durability_preflight_retry_and_stale_boot_hold(self):
@@ -760,6 +973,76 @@ class TransitionAdapterTests(unittest.TestCase):
             else:
                 self.assertIn("pending marker", replay.stdout)
 
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux persistent process workers")
+    def test_drain_claim_survives_process_death_restart_and_competing_claimants(self):
+        if os.geteuid() != 0:
+            self.fail("Linux drain process tests must run as root")
+
+        def run(root, mode):
+            return subprocess.run(
+                [sys.executable, str(Path(__file__).resolve()), "--drain-worker",
+                 str(root), mode, BOOT],
+                cwd=ROOT, capture_output=True, text=True, timeout=20, check=False,
+            )
+
+        for crash_mode, expected_effects in (
+            ("after_intent", 0), ("during_effect", 1), ("after_effect", 1),
+        ):
+            root = Path(self.temp.name) / ("drain-" + crash_mode)
+            root.mkdir()
+            _persisted_layout(root)
+            _prepare_persistent_draining(root)
+            crashed = run(root, crash_mode)
+            self.assertEqual(crashed.returncode, 97, crashed.stdout + crashed.stderr)
+            replay = run(root, "replay")
+            self.assertEqual(replay.returncode, 20, replay.stdout + replay.stderr)
+            data = json.loads((root / "database.json").read_text(encoding="ascii"))
+            self.assertEqual(data["remote_effect_count"], expected_effects)
+            self.assertEqual(len(data["drain_claims"]), 1)
+            self.assertEqual(len(data["drain_intents"]), 1)
+            intent = next(iter(data["drain_intents"].values()))
+            self.assertIn(intent["status"], {"INTENT", "UNKNOWN"})
+            adapter = _persistent_adapter(root)
+            with self.assertRaisesRegex(HELPER.TransitionHold, "unresolved DRAIN"):
+                adapter.transition("QUIESCED", source_sha=SHA, target_sha="3" * 40,
+                                   evidence_digest=EVIDENCE, details={
+                                       "settlement_digest": "6" * 64,
+                                       "pending_digest": "7" * 64,
+                                   })
+
+        root = Path(self.temp.name) / "drain-timeout"
+        root.mkdir()
+        _persisted_layout(root)
+        _prepare_persistent_draining(root)
+        timed_out = run(root, "timeout")
+        self.assertEqual(timed_out.returncode, 20, timed_out.stdout + timed_out.stderr)
+        replay = run(root, "replay")
+        self.assertEqual(replay.returncode, 20, replay.stdout + replay.stderr)
+        data = json.loads((root / "database.json").read_text(encoding="ascii"))
+        self.assertEqual(data["remote_effect_count"], 1)
+        self.assertEqual(next(iter(data["drain_outcomes"].values()))["status"], "UNKNOWN")
+
+        root = Path(self.temp.name) / "drain-contenders"
+        root.mkdir()
+        _persisted_layout(root)
+        _prepare_persistent_draining(root)
+        first = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "--drain-worker",
+             str(root), "success", BOOT], cwd=ROOT, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True,
+        )
+        second = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "--drain-worker",
+             str(root), "success", BOOT], cwd=ROOT, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True,
+        )
+        results = [first.communicate(timeout=20), second.communicate(timeout=20)]
+        codes = [first.returncode, second.returncode]
+        self.assertEqual(sorted(codes), [0, 20], results)
+        data = json.loads((root / "database.json").read_text(encoding="ascii"))
+        self.assertEqual(data["remote_effect_count"], 1)
+        self.assertEqual(len(data["drain_claims"]), 1)
+
     def test_each_commit_boundary_for_hold_draining_and_release(self):
         index = {point: position for position, point in enumerate(FAULT_POINTS)}
 
@@ -839,6 +1122,55 @@ class TransitionAdapterTests(unittest.TestCase):
                         if target == "RELEASE_COMMIT":
                             self.assertEqual(nonce_digest in self.db.nonces,
                                              pos >= index["database_commit"])
+
+                        # Authorization is checked at the same persistence boundary as
+                        # the state assertion above: pending/partial tuples never grant
+                        # the target state's permission, while the renamed complete
+                        # tuple does. HOLD, DRAINING, and RELEASE share the marker ->
+                        # journal -> DB CAS -> atomic projection publication primitive.
+                        if pos >= index["projection_rename"]:
+                            if target == "HOLD_REQUESTED":
+                                with self.assertRaises(HELPER.TransitionHold):
+                                    self.adapter.assert_open()
+                            elif target == "DRAINING":
+                                permit = {"id": "p1", "work_id": "w1"}
+                                self.assertEqual(self.adapter.check_drain_permit(permit)["state"],
+                                                 "DRAINING")
+                                calls = []
+                                result = self.adapter.execute_drain_permit(
+                                    permit, lambda _deadline: calls.append("effect") or {
+                                        "status": "SUCCEEDED", "evidence_digest": EVIDENCE
+                                    }
+                                )
+                                self.assertEqual(result["status"], "SUCCEEDED")
+                                with self.assertRaisesRegex(HELPER.TransitionHold,
+                                                            "already claimed|replay"):
+                                    self.adapter.execute_drain_permit(
+                                        permit, lambda _deadline: {
+                                            "status": "SUCCEEDED", "evidence_digest": EVIDENCE
+                                        }
+                                    )
+                                self.assertEqual(calls, ["effect"])
+                            else:
+                                self.assertEqual(self.adapter.assert_open()["state"], "OPEN")
+                                with self.assertRaises(HELPER.TransitionHold):
+                                    self.adapter.release(
+                                        authorization, source_sha=SHA, target_sha="3" * 40,
+                                        evidence_digest=EVIDENCE,
+                                    )
+                        else:
+                            if target == "HOLD_REQUESTED" and pos == index["before_marker_create"]:
+                                # Until the HOLD logical commit, OPEN source authority
+                                # remains the only active admission state.
+                                self.assertEqual(self.adapter.assert_open()["state"], "OPEN")
+                            else:
+                                with self.assertRaises(HELPER.TransitionHold):
+                                    self.adapter.assert_open()
+                            if target == "DRAINING":
+                                with self.assertRaises(HELPER.TransitionHold):
+                                    self.adapter.check_drain_permit(
+                                        {"id": "p1", "work_id": "w1"}
+                                    )
                     finally:
                         self.tearDown()
 
@@ -970,7 +1302,8 @@ def _persisted_layout(root):
     status.write_bytes(HELPER._transition_canonical(initial))
     data = {
         "tuple": initial, "manifest": None, "permits": [], "nonces": {},
-        "drain_intents": {}, "drain_outcomes": {},
+        "drain_intents": {}, "drain_outcomes": {}, "drain_claims": {},
+        "drain_reconciliations": {}, "remote_effect_count": 0,
     }
     (root / "database.json").write_text(json.dumps(data, sort_keys=True), encoding="ascii")
 
@@ -1019,6 +1352,50 @@ def _prepare_persistent_release(root):
 
 def _process_worker(argv):
     mode, root, value, boot = argv
+    if mode == "--drain-worker":
+        root = Path(root)
+        database = PersistentFakeDatabase(root / "database.json")
+        lock_path = root / "transition.lock"
+        if not lock_path.exists():
+            import grp
+            try:
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+            except FileExistsError:
+                pass
+            else:
+                try:
+                    os.fchown(fd, 0, grp.getgrnam("www-data").gr_gid)
+                    os.fchmod(fd, 0o640)
+                finally:
+                    os.close(fd)
+
+        def crash(point):
+            if value == "after_intent" and point == "drain_intent_durable":
+                os._exit(97)
+            if value == "after_effect" and point == "drain_effect_returned":
+                os._exit(97)
+
+        with mock.patch.object(HELPER, "open_root_trusted_directory", HELPER.open_directory):
+            adapter = _persistent_adapter(root, boot, crash)
+            adapter.lock = HELPER.PosixTransitionLock(lock_path)
+            permit = json.loads((root / "drain-permit.json").read_text(encoding="ascii"))
+
+            def effect(_deadline):
+                database.record_fake_remote_effect()
+                if value == "during_effect":
+                    os._exit(97)
+                if value == "timeout":
+                    raise TimeoutError("simulated ambiguous remote result")
+                if value == "success":
+                    time.sleep(0.2)
+                return {"status": "SUCCEEDED", "evidence_digest": EVIDENCE}
+
+            try:
+                adapter.execute_drain_permit(permit, effect)
+            except HELPER.TransitionHold as exc:
+                sys.stdout.write("DRAIN_BLOCKED " + str(exc) + "\n")
+                return 20
+        return 0
     if mode == "--crash-worker":
         def crash(point):
             if point == value:
@@ -1065,7 +1442,10 @@ def _process_worker(argv):
 
 
 if __name__ == "__main__":
-    worker_modes = {"--crash-worker", "--recover-worker", "--crash-release", "--replay-release"}
+    worker_modes = {
+        "--crash-worker", "--recover-worker", "--crash-release", "--replay-release",
+        "--drain-worker",
+    }
     if len(sys.argv) > 1:
         if len(sys.argv) != 5 or sys.argv[1] not in worker_modes:
             raise SystemExit("unexpected arguments; worker modes require exactly four arguments")

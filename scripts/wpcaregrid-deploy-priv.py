@@ -1381,6 +1381,19 @@ class TransitionDurabilityUnconfirmed(TransitionHold):
     """The projection rename committed, but its directory fsync failed."""
 
 
+class DrainEffectNotPerformed(TransitionHold):
+    """An executor presents a proof reference that the adapter must verify."""
+
+    def __init__(self, evidence_digest, authority_reference):
+        if not isinstance(evidence_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_digest):
+            raise ValueError("not-performed evidence digest is invalid")
+        if not isinstance(authority_reference, str) or not authority_reference:
+            raise ValueError("authoritative no-effect reference is required")
+        super().__init__("drain effect was authoritatively not performed")
+        self.evidence_digest = evidence_digest
+        self.authority_reference = authority_reference
+
+
 def _transition_canonical(value):
     return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False) + "\n").encode("ascii")
 
@@ -1604,9 +1617,14 @@ class RootTransitionAdapter:
     The DB boundary is an injected transaction adapter (the Phase 1 M16 interface):
     read_tuple, read_permit_manifest_hash, verify_transition_preconditions,
     validate_permit_manifest, compare_and_set, nonce_consumed, validate_release,
-    assert_exact_permit, record_drain_intent, and record_drain_outcome. The last
-    two methods must durably commit their writes and return True. It performs no
-    SQL or direct Laravel-model access here.
+    assert_exact_permit, claim_drain_step, verify_drain_effect_absent, record_drain_outcome,
+    assert_no_unresolved_drain_effects, and record_drain_reconciliation. Claims
+    atomically insert one immutable INTENT keyed by the exact operation/generation,
+    permit, work, and step binding; the returned claim reference identifies that
+    durable row. The proposed UUID is correlation only and must never be the unique
+    replay key. Outcomes are immutable INTENT -> SUCCEEDED/FAILED/UNKNOWN writes.
+    Reconciliation is a separate immutable authoritative record; it must not
+    rewrite an outcome. This boundary performs no SQL or Laravel-model calls.
     Tests must use a fake. The constructor intentionally requires every path and
     adapter, so importing this module cannot touch /run, /var/lib, or a database.
     """
@@ -1733,12 +1751,14 @@ class RootTransitionAdapter:
         )
 
     def execute_drain_permit(self, binding, effect, *, max_duration_seconds=30.0):
-        """Run one bounded effect while SHARED fencing spans intent through outcome.
+        """Atomically consume one exact permit step before a bounded external effect.
 
-        The injected DB methods must durably commit their writes and return True.
-        The effect receives a monotonic deadline and must bound all external work
-        by it. A late result is recorded as failed. If an effect ignores its
-        deadline, the SHARED lock remains held, preventing an unsafe transition.
+        The injected claim method must durably enforce uniqueness by exact permit
+        and step binding, independent of the caller-supplied intent UUID. Generic
+        exceptions, timeouts, late results, and lost post-effect verification are
+        UNKNOWN. FAILED requires adapter verification of authoritative no-effect
+        evidence. INTENT remains durable if the process dies before outcome write.
+        SHARED remains held throughout.
         """
         if not callable(effect):
             raise TypeError("drain effect must be callable")
@@ -1751,58 +1771,111 @@ class RootTransitionAdapter:
                 raise TransitionHold("drain is closed")
             self.database.assert_exact_permit(current, binding)
             intent_id = _transition_uuid7()
-            if self.database.record_drain_intent(current, binding, intent_id) is not True:
-                raise TransitionHold("durable drain intent was not recorded")
+            claim = self.database.claim_drain_step(current, binding, intent_id)
+            if not claim:
+                raise TransitionHold("atomic one-time drain permit claim was not recorded")
+            self._event("drain_intent_durable")
             revalidated = self._read_projection()
             if self._tuple(revalidated) != self._tuple(current):
                 raise TransitionHold("drain tuple changed after durable intent")
-            self.database.assert_exact_permit(revalidated, binding)
+            # claim_drain_step atomically validated the exact binding and consumed
+            # it. Rechecking the unclaimed-permit predicate here would correctly
+            # reject our own claim; the retained SHARED lock and authoritative tuple
+            # revalidation protect this boundary instead.
             deadline = time.monotonic() + max_duration_seconds
             try:
+                self._event("before_drain_effect")
                 result = effect(deadline)
+                self._event("drain_effect_returned")
+            except DrainEffectNotPerformed as exc:
+                if self.database.verify_drain_effect_absent(
+                    claim, intent_id, exc.evidence_digest, exc.authority_reference
+                ) is not True:
+                    raise TransitionHold(
+                        "absence of external effect is unverified; durable INTENT remains unresolved"
+                    ) from exc
+                outcome = {"status": "FAILED", "evidence_digest": exc.evidence_digest}
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("no-effect outcome was not durably recorded") from exc
+                raise TransitionHold("drain effect did not occur; consumed permit cannot be reused") from exc
             except BaseException as exc:
                 outcome = {
-                    "status": "failed",
+                    "status": "UNKNOWN",
                     "evidence_digest": hashlib.sha256(
-                        type(exc).__name__.encode("ascii", "replace")
+                        ("ambiguous:" + type(exc).__name__).encode("ascii", "replace")
                     ).hexdigest(),
                 }
-                if self.database.record_drain_outcome(intent_id, outcome) is not True:
-                    raise TransitionHold("failed drain outcome was not durably recorded") from exc
-                raise
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("ambiguous outcome remains unresolved in durable INTENT") from exc
+                raise TransitionHold("drain effect outcome is UNKNOWN; authoritative reconciliation required") from exc
             late = time.monotonic() > deadline
             try:
                 revalidated = self._read_projection()
                 if self._tuple(revalidated) != self._tuple(current):
                     raise TransitionHold("drain tuple changed during authorized effect")
-                self.database.assert_exact_permit(revalidated, binding)
             except TransitionHold as exc:
                 outcome = {
-                    "status": "failed",
+                    "status": "UNKNOWN",
                     "evidence_digest": hashlib.sha256(
-                        type(exc).__name__.encode("ascii", "replace")
+                        ("post-effect-revalidation:" + type(exc).__name__).encode("ascii", "replace")
                     ).hexdigest(),
                 }
-                if self.database.record_drain_outcome(intent_id, outcome) is not True:
-                    raise TransitionHold("failed drain outcome was not durably recorded") from exc
-                raise
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("post-effect outcome remains unresolved in durable INTENT") from exc
+                raise TransitionHold("post-effect state is uncertain; authoritative reconciliation required") from exc
             if late:
                 outcome = {
-                    "status": "failed",
+                    "status": "UNKNOWN",
                     "evidence_digest": hashlib.sha256(b"drain-effect-deadline-exceeded").hexdigest(),
                 }
-                if self.database.record_drain_outcome(intent_id, outcome) is not True:
-                    raise TransitionHold("late drain outcome was not durably recorded")
-                raise TransitionHold("drain effect exceeded its bounded deadline")
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("late outcome remains unresolved in durable INTENT")
+                raise TransitionHold("drain effect exceeded its deadline; outcome UNKNOWN")
             if not isinstance(result, dict) or set(result) != {"status", "evidence_digest"}:
-                raise TransitionHold("drain effect must return a bounded outcome record")
-            if (result["status"] not in {"completed", "failed"}
+                outcome = {
+                    "status": "UNKNOWN",
+                    "evidence_digest": hashlib.sha256(b"invalid-effect-outcome").hexdigest(),
+                }
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("invalid effect outcome remains unresolved in durable INTENT")
+                raise TransitionHold("effect outcome is invalid and remains UNKNOWN")
+            if (result["status"] != "SUCCEEDED"
                 or not isinstance(result["evidence_digest"], str)
                 or not re.fullmatch(r"[0-9a-f]{64}", result["evidence_digest"])):
-                raise TransitionHold("drain effect outcome is invalid")
-            if self.database.record_drain_outcome(intent_id, result) is not True:
-                raise TransitionHold("drain outcome was not durably recorded")
+                outcome = {
+                    "status": "UNKNOWN",
+                    "evidence_digest": hashlib.sha256(b"unproven-effect-outcome").hexdigest(),
+                }
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("unproven outcome remains unresolved in durable INTENT")
+                raise TransitionHold("effect outcome is not proven; outcome UNKNOWN")
+            if self.database.record_drain_outcome(claim, intent_id, result) is not True:
+                raise TransitionHold("successful effect outcome remains unresolved in durable INTENT")
             return result
+
+    def reconcile_drain_effect(self, claim, *, resolution, evidence_digest, authority_reference):
+        """Record immutable external reconciliation without rewriting the intent/outcome.
+
+        The injected adapter must validate the authority reference against its
+        authoritative source and durably append a separate reconciliation record.
+        The current M16 TransitionExecution model has no reconciliation table, so
+        a live DB adapter must provide that reviewed persistence extension first.
+        """
+        if resolution not in {"SUCCEEDED", "FAILED"}:
+            raise ValueError("reconciliation resolution must be SUCCEEDED or FAILED")
+        if not isinstance(evidence_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_digest):
+            raise ValueError("reconciliation evidence digest is invalid")
+        if not isinstance(authority_reference, str) or not authority_reference:
+            raise ValueError("authoritative reconciliation reference is required")
+        with self.lock.hold("exclusive"):
+            source = self._durability_preflight()
+            if source["state"] != "DRAINING":
+                raise TransitionHold("drain reconciliation is only valid while DRAINING")
+            if self.database.record_drain_reconciliation(
+                claim, resolution, evidence_digest, authority_reference
+            ) is not True:
+                raise TransitionHold("authoritative reconciliation was not durably recorded")
+            return {"status": resolution, "evidence_digest": evidence_digest}
 
     def _durability_preflight(self):
         """Re-establish projection-directory durability before any new commit.
@@ -1926,6 +1999,10 @@ class RootTransitionAdapter:
             raise ValueError("secret-like journal fields are forbidden")
         with self.lock.hold("exclusive"):
             source = self._durability_preflight()
+            if source["state"] == "DRAINING" and self.database.assert_no_unresolved_drain_effects(
+                source["operation_id"], source["generation"]
+            ) is not True:
+                raise TransitionHold("unresolved DRAIN intent/UNKNOWN outcome blocks transition progression")
             if (source["state"], target_state) not in TRANSITION_EDGES:
                 raise TransitionHold("transition is not allowed")
             new_operation = source["state"] == "OPEN" and target_state == "HOLD_REQUESTED"
@@ -1984,6 +2061,10 @@ class RootTransitionAdapter:
         nonce_digest = hashlib.sha256(nonce.encode("ascii")).hexdigest()
         with self.lock.hold("exclusive"):
             source = self._durability_preflight()
+            if self.database.assert_no_unresolved_drain_effects(
+                source["operation_id"], source["generation"]
+            ) is not True:
+                raise TransitionHold("unresolved DRAIN intent/UNKNOWN outcome blocks RELEASE")
             if self.database.nonce_consumed(nonce_digest) or any(
                 record.get("event") == "RELEASE_COMMIT"
                 and record.get("details", {}).get("nonce_digest") == nonce_digest
