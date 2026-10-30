@@ -1019,6 +1019,107 @@ class TransitionCorePhaseOneTest extends TestCase
         }
     }
 
+    public function test_mysql_claim_uses_a_current_read_after_an_outer_repeatable_read_snapshot(): void
+    {
+        $connectionB = DB::connection();
+        if ($connectionB->getDriverName() !== 'mysql') {
+            self::markTestSkipped('This stale-snapshot regression requires MySQL locking reads.');
+        }
+
+        $tuple = $this->tuple(['state' => 'DRAINING']);
+        $permitA = $this->permit($tuple);
+        $secondSteps = [
+            ['idempotency_key' => 'fixture-snapshot-step-alpha', 'step_id' => 'snapshot-notice', 'step_index' => 0],
+            ['idempotency_key' => 'fixture-snapshot-step-beta', 'step_id' => 'snapshot-result', 'step_index' => 1],
+        ];
+        $canonicalSecondSteps = array_map(static fn (array $step): array => [
+            'step_index' => $step['step_index'],
+            'step_id' => $step['step_id'],
+            'idempotency_key' => $step['idempotency_key'],
+        ], $secondSteps);
+        $secondStepPlan = json_encode($canonicalSecondSteps, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        $permitB = $this->permit($tuple, [
+            'execution_id' => 'execution-snapshot-b',
+            'work_id' => 'work-snapshot-b',
+            'payload_hash' => str_repeat('b', 64),
+            'effect_steps' => $secondSteps,
+            'effect_step_plan_hash' => hash('sha256', $secondStepPlan),
+        ]);
+        $bindingB = array_replace($this->binding(), [
+            'execution_id' => 'execution-snapshot-b',
+            'work_id' => 'work-snapshot-b',
+            'payload_hash' => str_repeat('b', 64),
+            'step_id' => 'snapshot-notice',
+            'idempotency_key' => 'fixture-snapshot-step-alpha',
+        ]);
+        $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
+        $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
+        $fence = $this->fence($tuple, $manifestHash);
+
+        $defaultConnectionName = DB::getDefaultConnection();
+        $writerConnectionName = 'transition_snapshot_writer_'.bin2hex(random_bytes(6));
+        $connectionA = null;
+        $originalIsolation = (string) $connectionB->selectOne('SELECT @@SESSION.transaction_isolation AS isolation_level')->isolation_level;
+        $originalIsolationSql = str_replace('-', ' ', strtoupper($originalIsolation));
+        self::assertContains($originalIsolationSql, ['READ UNCOMMITTED', 'READ COMMITTED', 'REPEATABLE READ', 'SERIALIZABLE']);
+
+        $connectionB->commit();
+        $connectionB->statement('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        $connectionB->beginTransaction();
+
+        try {
+            $writerConfig = config('database.connections.'.$defaultConnectionName);
+            self::assertIsArray($writerConfig);
+            config(['database.connections.'.$writerConnectionName => $writerConfig]);
+            DB::purge($writerConnectionName);
+            $connectionA = DB::connection($writerConnectionName);
+
+            $snapshotIsClear = TransitionExecution::query()
+                ->join('transition_admissions', 'transition_executions.transition_admission_id', '=', 'transition_admissions.id')
+                ->where('transition_admissions.operation_id', $tuple['operation_id'])
+                ->where('transition_admissions.generation', $tuple['generation'])
+                ->whereIn('transition_executions.status', ['INTENT', 'UNKNOWN'])
+                ->exists();
+            self::assertFalse($snapshotIsClear, 'Connection B must establish its REPEATABLE READ snapshot while the scope is clear.');
+
+            DB::setDefaultConnection($writerConnectionName);
+            try {
+                $this->policy()->claimDrainStepIntent($fence, $permitA, $this->binding());
+            } finally {
+                DB::setDefaultConnection($defaultConnectionName);
+            }
+
+            try {
+                $this->policy()->claimDrainStepIntent($fence, $permitB, $bindingB);
+                self::fail('The stale outer snapshot must not permit a claim after another connection commits an unresolved INTENT.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('An unresolved drain execution permanently blocks new claims for this operation generation.', $exception->getMessage());
+            }
+
+            $permitIds = [$permitA->getKey(), $permitB->getKey()];
+            self::assertSame(1, $connectionA->table('transition_executions')->whereIn('transition_admission_id', $permitIds)->count());
+            self::assertSame(0, $connectionA->table('transition_executions')->where('transition_admission_id', $permitB->getKey())->count());
+            self::assertSame('INTENT', $connectionA->table('transition_executions')->where('transition_admission_id', $permitA->getKey())->value('status'));
+        } finally {
+            DB::setDefaultConnection($defaultConnectionName);
+            while ($connectionB->transactionLevel() > 0) {
+                $connectionB->rollBack();
+            }
+
+            if ($connectionA !== null) {
+                $permitIds = [$permitA->getKey(), $permitB->getKey()];
+                $connectionA->table('transition_executions')->whereIn('transition_admission_id', $permitIds)->delete();
+                $connectionA->table('transition_admissions')->whereIn('id', $permitIds)->delete();
+                $connectionA->table('deployment_transition_fences')->where('id', $fence->getKey())->delete();
+            }
+
+            DB::purge($writerConnectionName);
+            config(['database.connections.'.$writerConnectionName => null]);
+            $connectionB->statement('SET SESSION TRANSACTION ISOLATION LEVEL '.$originalIsolationSql);
+            $connectionB->beginTransaction();
+        }
+    }
+
     public function test_drain_manifest_must_match_the_projection_database_and_persisted_permit_set(): void
     {
         $tuple = $this->tuple(['state' => 'DRAINING']);
