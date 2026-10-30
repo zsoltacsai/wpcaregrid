@@ -1872,6 +1872,14 @@ class TransitionAdapterTests(unittest.TestCase):
         os.chown(runtime, 0, 0)
         os.chmod(runtime, 0o711)
         self.addCleanup(shutil.rmtree, runtime)
+        # GitHub's checkout is not guaranteed to be traversable by www-data.
+        # Run the real Laravel CLI from a temporary readable copy so the
+        # privilege-dropped child can open artisan and the Composer tree.
+        app_root = runtime / "app"
+        shutil.copytree(
+            ROOT, app_root, symlinks=True,
+            ignore=shutil.ignore_patterns(".git", "node_modules", "wordpress"),
+        )
         socket_dir = runtime / "socket"
         socket_dir.mkdir(mode=0o711)
         os.chown(socket_dir, 0, 0)
@@ -1896,7 +1904,7 @@ class TransitionAdapterTests(unittest.TestCase):
             "LOG_CHANNEL": "stderr",
         })
         migrated = subprocess.run(
-            [php, str(ROOT / "artisan"), "migrate", "--force"], cwd=ROOT, env=env,
+            [php, str(app_root / "artisan"), "migrate", "--force"], cwd=app_root, env=env,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, timeout=120, check=False,
         )
@@ -1927,7 +1935,7 @@ class TransitionAdapterTests(unittest.TestCase):
         os.chown(launcher, 0, 0)
         os.chmod(launcher, 0o644)
         command = (
-            sys.executable, str(launcher), php, str(ROOT / "artisan"),
+            sys.executable, str(launcher), php, str(app_root / "artisan"),
             "deployment:transition-bridge",
         )
         self.assertEqual(command[4], "deployment:transition-bridge")
@@ -1948,7 +1956,7 @@ class TransitionAdapterTests(unittest.TestCase):
         }
         try:
             with mock.patch.object(HELPER, "TRANSITION_RPC_COMMAND", command), \
-                 mock.patch.object(HELPER, "APP", ROOT), \
+                 mock.patch.object(HELPER, "APP", app_root), \
                  mock.patch.object(HELPER, "SAFE_ENV", env):
                 with self.lock.hold("exclusive"):
                     self.assertEqual(database.read_tuple(), source)
