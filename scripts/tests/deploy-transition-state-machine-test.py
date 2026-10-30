@@ -6,6 +6,7 @@ import importlib.util
 import errno
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -30,6 +31,43 @@ BOOT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 OTHER_BOOT = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 SHA = "1" * 40
 EVIDENCE = "2" * 64
+
+
+def _sanitize_child_stderr_excerpt(stderr):
+    """Return a bounded, single-line diagnostic with paths and secrets redacted."""
+    if isinstance(stderr, bytes):
+        text = stderr.decode("utf-8", "replace")
+    else:
+        text = str(stderr)
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", " ", text)
+    text = text.splitlines()[0] if text.splitlines() else ""
+    text = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer <redacted>", text)
+    text = re.sub(
+        r"(?i)\b(app[_-]?key|(?:api[_-]?)?secret|password|passwd|token|nonce|authorization)\b"
+        r"\s*([=:])\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+        r"\1\2<redacted>", text,
+    )
+    text = re.sub(
+        r"(?i)(?:\"(?:[A-Z]:[\\/]|/)[^\"]*\"|'(?:[A-Z]:[\\/]|/)[^']*')",
+        "<path>", text,
+    )
+    text = re.sub(
+        r"(?i)\b[A-Z]:[\\/](?:[^\s<>|\"']+[\\/])*[^\s<>|\"']*",
+        "<path>", text,
+    )
+    text = re.sub(
+        r"(?<![\w.-])/(?:[^\s/:]+/)*[^\s,:;\"']*",
+        "<path>", text,
+    )
+    text = re.sub(
+        r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+        "<redacted-uuid>", text, flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\b[0-9a-f]{16,}\b", "<redacted-hex>", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b[A-Za-z0-9_+/=-]{24,}\b", "<redacted-token>", text)
+    text = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", text)
+    text = " ".join(text.split())
+    return text if len(text) <= 160 else text[:159] + "…"
 
 
 class FakeLock:
@@ -1789,6 +1827,35 @@ class TransitionAdapterTests(unittest.TestCase):
                          details["rpc_request_digest"])
         self.assertEqual(state["receipts"][details["rpc_request_id"]]["target"], target)
 
+    def test_child_stderr_excerpt_redacts_sensitive_values_and_bounds_output(self):
+        excerpt = _sanitize_child_stderr_excerpt(
+            "PHP Fatal error in /srv/private/app.php APP_KEY=base64:"
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= "
+            "token=secret-token-value nonce=12345678-1234-1234-1234-123456789abc "
+            "digest=0123456789abcdef0123456789abcdef\x1b[31m\x00\nsecond line"
+        )
+        self.assertTrue(excerpt.startswith("PHP Fatal error in <path>"), excerpt)
+        self.assertNotIn("/srv/private", excerpt)
+        self.assertNotIn("AAAAAAAA", excerpt)
+        self.assertNotIn("secret-token-value", excerpt)
+        self.assertNotIn("12345678-1234", excerpt)
+        self.assertNotIn("0123456789abcdef", excerpt)
+        self.assertNotIn("second line", excerpt)
+        self.assertFalse(any(ord(character) < 32 or ord(character) == 127 for character in excerpt))
+        self.assertLessEqual(len(excerpt), 160)
+        quoted_path = _sanitize_child_stderr_excerpt(
+            'failed to load "C:\\Private Folder\\application.php"'
+        )
+        self.assertNotIn("Private Folder", quoted_path)
+        bearer = _sanitize_child_stderr_excerpt("authorization: Bearer exceptionally-sensitive-value")
+        self.assertNotIn("exceptionally-sensitive-value", bearer)
+        short_bearer = _sanitize_child_stderr_excerpt("authorization=Bearer s3cr3t")
+        self.assertNotIn("s3cr3t", short_bearer)
+
+        long_excerpt = _sanitize_child_stderr_excerpt("cause: " + ("diagnostic " * 35))
+        self.assertLessEqual(len(long_excerpt), 160)
+        self.assertTrue(long_excerpt.endswith("…"))
+
     @unittest.skipUnless(sys.platform == "linux", "requires Linux and the real Laravel CLI bridge")
     def test_linux_real_laravel_command_uses_dynamic_socket_and_newline_envelopes(self):
         if os.geteuid() != 0:
@@ -1906,11 +1973,12 @@ class TransitionAdapterTests(unittest.TestCase):
                     category = "php_boot_or_runtime"
                 else:
                     category = "unclassified"
+                excerpt = _sanitize_child_stderr_excerpt(diagnostic)
                 raise AssertionError(
                     "real Laravel CLI child failed before RPC connection; "
                     f"bounded stderr: {len(diagnostic)} bytes, "
                     f"sha256={hashlib.sha256(diagnostic).hexdigest()}, "
-                    f"category={category}"
+                    f"category={category}, excerpt={excerpt!r}"
                 ) from None
             raise
         self.assertIsInstance(receipt, dict)
