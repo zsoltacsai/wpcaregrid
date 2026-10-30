@@ -172,8 +172,10 @@ class TransitionAdmission extends Model
         $normalized = [];
         $keys = [];
         foreach ($steps as $index => $step) {
+            $stepKeys = is_array($step) ? array_keys($step) : [];
+            sort($stepKeys);
             if (! is_array($step)
-                || array_keys($step) !== ['step_index', 'step_id', 'idempotency_key']
+                || $stepKeys !== ['idempotency_key', 'step_id', 'step_index']
                 || ($step['step_index'] ?? null) !== $index
                 || ! self::isOpaqueIdentifier($step['step_id'] ?? null, 128)
                 || ! self::isOpaqueIdentifier($step['idempotency_key'] ?? null, 191)

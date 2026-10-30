@@ -538,8 +538,8 @@ class TransitionCorePhaseOneTest extends TestCase
             }
 
             DB::table('transition_executions')->where('transition_admission_id', $permit->getKey())->delete();
-            DB::table('transition_admissions')->whereKey($permit->getKey())->delete();
-            DB::table('deployment_transition_fences')->whereKey($fence->getKey())->delete();
+            DB::table('transition_admissions')->where('id', $permit->getKey())->delete();
+            DB::table('deployment_transition_fences')->where('id', $fence->getKey())->delete();
             if (DB::connection()->transactionLevel() === 0) {
                 DB::beginTransaction();
             }
@@ -643,10 +643,15 @@ class TransitionCorePhaseOneTest extends TestCase
     private function permit(array $tuple, array $overrides = []): TransitionAdmission
     {
         $steps = [
-            ['step_index' => 0, 'step_id' => 'send-notice', 'idempotency_key' => 'step-0-key'],
-            ['step_index' => 1, 'step_id' => 'record-result', 'idempotency_key' => 'step-1-key'],
+            ['idempotency_key' => 'step-0-key', 'step_id' => 'send-notice', 'step_index' => 0],
+            ['idempotency_key' => 'step-1-key', 'step_id' => 'record-result', 'step_index' => 1],
         ];
-        $plan = json_encode($steps, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        $canonicalSteps = array_map(static fn (array $step): array => [
+            'step_index' => $step['step_index'],
+            'step_id' => $step['step_id'],
+            'idempotency_key' => $step['idempotency_key'],
+        ], $steps);
+        $plan = json_encode($canonicalSteps, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
 
         return TransitionAdmission::create(array_replace([
             'operation_id' => $tuple['operation_id'],
