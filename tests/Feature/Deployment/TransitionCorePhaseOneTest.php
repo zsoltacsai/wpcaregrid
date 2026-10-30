@@ -39,6 +39,9 @@ class TransitionCorePhaseOneTest extends TestCase
             'claim-start',
             'claim-result-1',
             'claim-result-2',
+            'terminal-start',
+            'terminal-result-1',
+            'terminal-result-2',
         ] as $name) {
             $path = $this->directory.DIRECTORY_SEPARATOR.$name;
             if (is_file($path) || is_link($path)) {
