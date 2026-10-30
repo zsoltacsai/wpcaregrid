@@ -866,14 +866,21 @@ class TransitionAdapterTests(unittest.TestCase):
             os.fchmod(fd, 0o640)
         finally:
             os.close(fd)
-        child = (
-            "import fcntl,os,sys; p=sys.argv[1]; "
-            "try_write=False; "
-            "exec('try:\n fd=os.open(p,os.O_RDWR)\n os.close(fd)\n try_write=True\n"
-            "except PermissionError:\n pass'); "
-            "assert not try_write; fd=os.open(p,os.O_RDONLY); "
-            "fcntl.flock(fd,fcntl.LOCK_SH|fcntl.LOCK_NB); print('SHARED_READ_ONLY_OK')"
-        )
+        child = """import fcntl, os, sys
+p = sys.argv[1]
+try_write = False
+try:
+    fd = os.open(p, os.O_RDWR)
+except PermissionError:
+    pass
+else:
+    os.close(fd)
+    try_write = True
+assert not try_write
+fd = os.open(p, os.O_RDONLY)
+fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+print('SHARED_READ_ONLY_OK')
+"""
         result = subprocess.run(
             ["runuser", "-u", app.pw_name, "--", sys.executable, "-c", child, str(lock_path)],
             capture_output=True, text=True, timeout=10, check=False,
@@ -929,7 +936,10 @@ class TransitionAdapterTests(unittest.TestCase):
                 result = self.adapter.execute_drain_permit(permit, effect)
                 self.assertEqual(result["status"], "completed")
                 self.assertEqual(self.db.drain_events[-1][0], "outcome")
-                self.assertEqual(process.wait(timeout=5), 0, process.stderr.read().decode())
+                return_code = process.wait(timeout=5)
+                stderr = process.stderr.read().decode()
+                process.stderr.close()
+                self.assertEqual(return_code, 0, stderr)
                 self.assertTrue(acquired.exists())
             finally:
                 if process.poll() is None:
