@@ -845,18 +845,18 @@ class TransitionAdapterTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "linux", "requires Linux flock and www-data")
     def test_www_data_can_take_shared_flock_read_only_without_write_permission(self):
         if os.geteuid() != 0:
-            self.skipTest("requires root to create the specified root:www-data 0640 inode")
+            self.fail("Linux lock permission test must run as root")
         import grp
         import pwd
         import shutil
 
         if shutil.which("runuser") is None:
-            self.skipTest("runuser is unavailable")
+            self.fail("Linux lock permission test requires runuser")
         try:
             app = pwd.getpwnam("www-data")
             group = grp.getgrnam("www-data")
         except KeyError:
-            self.skipTest("www-data identity is unavailable")
+            self.fail("Linux lock permission test requires the www-data user and group")
         root = Path(self.temp.name)
         os.chmod(root, 0o755)
         lock_path = root / "transition.lock"
@@ -887,13 +887,13 @@ class TransitionAdapterTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "linux", "requires Linux process flock")
     def test_competing_process_cannot_cross_drain_effect_outcome_boundary(self):
         if os.geteuid() != 0:
-            self.skipTest("requires root:www-data test lock")
+            self.fail("Linux competing-process test must run as root")
         import grp
 
         try:
             group = grp.getgrnam("www-data")
         except KeyError:
-            self.skipTest("www-data group is unavailable")
+            self.fail("Linux competing-process test requires the www-data group")
         root = Path(self.temp.name)
         os.chmod(root, 0o755)
         lock_path = root / "transition.lock"
@@ -1055,6 +1055,9 @@ def _process_worker(argv):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 5 and sys.argv[1] in {"--crash-worker", "--recover-worker"}:
+    worker_modes = {"--crash-worker", "--recover-worker", "--crash-release", "--replay-release"}
+    if len(sys.argv) > 1:
+        if len(sys.argv) != 5 or sys.argv[1] not in worker_modes:
+            raise SystemExit("unexpected arguments; worker modes require exactly four arguments")
         raise SystemExit(_process_worker(sys.argv[1:]))
     unittest.main(verbosity=2)

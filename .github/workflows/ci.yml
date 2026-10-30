@@ -111,6 +111,9 @@ jobs:
       - name: Staging deploy privilege allowlist policy
         run: python3 scripts/tests/deploy-privilege-policy-test.py
 
+      - name: Gate 1 fake-only transition and Linux lock regression
+        run: sudo -n python3 scripts/tests/deploy-transition-state-machine-test.py
+
       - name: Exact-SHA release CI authorization policy
         run: python3 scripts/tests/verify-release-ci-test.py
 
