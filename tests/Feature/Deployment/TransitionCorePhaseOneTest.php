@@ -380,6 +380,146 @@ class TransitionCorePhaseOneTest extends TestCase
         self::assertSame('SUCCEEDED', $execution->fresh()->status);
     }
 
+    public function test_stale_execution_instances_cannot_overwrite_a_terminal_outcome(): void
+    {
+        $tuple = $this->tuple(['state' => 'DRAINING']);
+        $permit = $this->permit($tuple);
+        $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
+        $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
+        $claimed = $this->policy()->claimDrainStepIntent($this->fence($tuple, $manifestHash), $permit, $this->binding());
+
+        $winner = TransitionExecution::query()->findOrFail($claimed->getKey());
+        $stale = TransitionExecution::query()->findOrFail($claimed->getKey());
+
+        $winner->status = 'SUCCEEDED';
+        $winner->outcome_at = now();
+        $winner->outcome_digest = str_repeat('a', 64);
+        $winner->save();
+
+        $stale->status = 'FAILED';
+        $stale->outcome_at = now();
+        $stale->outcome_digest = str_repeat('b', 64);
+        try {
+            $stale->save();
+            self::fail('A stale INTENT instance must not overwrite an already persisted terminal outcome.');
+        } catch (RuntimeException) {
+            $persisted = $claimed->fresh();
+            self::assertSame('SUCCEEDED', $persisted->status);
+            self::assertSame(str_repeat('a', 64), $persisted->outcome_digest);
+        }
+    }
+
+    public function test_concurrent_terminal_outcomes_compare_and_set_the_intent_row(): void
+    {
+        $tuple = $this->tuple(['state' => 'DRAINING']);
+        $permit = $this->permit($tuple);
+        $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
+        $this->writeProjection(array_replace($tuple, ['permit_manifest_hash' => $manifestHash]));
+        $claimed = $this->policy()->claimDrainStepIntent($this->fence($tuple, $manifestHash), $permit, $this->binding());
+
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $winner = TransitionExecution::query()->findOrFail($claimed->getKey());
+            $stale = TransitionExecution::query()->findOrFail($claimed->getKey());
+            $winner->status = 'SUCCEEDED';
+            $winner->outcome_at = now();
+            $winner->outcome_digest = str_repeat('a', 64);
+            $winner->save();
+            $stale->status = 'FAILED';
+            $stale->outcome_at = now();
+            $stale->outcome_digest = str_repeat('b', 64);
+
+            try {
+                $stale->save();
+                self::fail('A stale INTENT instance must not overwrite an already persisted terminal outcome.');
+            } catch (RuntimeException) {
+                self::assertSame('SUCCEEDED', $claimed->fresh()->status);
+                self::assertSame(str_repeat('a', 64), $claimed->fresh()->outcome_digest);
+            }
+
+            return;
+        }
+
+        self::assertTrue(function_exists('pcntl_fork'), 'MySQL terminal-outcome concurrency coverage requires pcntl.');
+
+        $connection = DB::connection();
+        $connection->commit();
+        $startPath = $this->directory.DIRECTORY_SEPARATOR.'terminal-start';
+        $resultPaths = [
+            $this->directory.DIRECTORY_SEPARATOR.'terminal-result-1',
+            $this->directory.DIRECTORY_SEPARATOR.'terminal-result-2',
+        ];
+        $children = [];
+        $waited = [];
+
+        try {
+            foreach ([['SUCCEEDED', 'a'], ['FAILED', 'b']] as $index => [$status, $digest]) {
+                $resultPath = $resultPaths[$index];
+                $pid = pcntl_fork();
+                if ($pid === -1) {
+                    throw new RuntimeException('Could not start a terminal outcome test process.');
+                }
+                if ($pid === 0) {
+                    try {
+                        DB::purge();
+                        $execution = TransitionExecution::query()->findOrFail($claimed->getKey());
+                        $deadline = microtime(true) + 30;
+                        while (! is_file($startPath) && microtime(true) < $deadline) {
+                            usleep(10_000);
+                        }
+                        if (! is_file($startPath)) {
+                            throw new RuntimeException('The concurrent terminal outcome start barrier timed out.');
+                        }
+
+                        $execution->status = $status;
+                        $execution->outcome_at = now();
+                        $execution->outcome_digest = str_repeat($digest, 64);
+                        $execution->save();
+                        file_put_contents($resultPath, 'SAVED:'.$status, LOCK_EX);
+                        exit(0);
+                    } catch (RuntimeException) {
+                        file_put_contents($resultPath, 'DENIED', LOCK_EX);
+                        exit(0);
+                    } catch (Throwable $exception) {
+                        file_put_contents($resultPath, 'ERROR:'.get_class($exception), LOCK_EX);
+                        exit(1);
+                    }
+                }
+
+                $children[] = $pid;
+            }
+
+            file_put_contents($startPath, 'go', LOCK_EX);
+            foreach ($children as $pid) {
+                $status = 0;
+                if (pcntl_waitpid($pid, $status) !== $pid || ! pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0) {
+                    throw new RuntimeException('A concurrent terminal outcome process did not exit cleanly.');
+                }
+                $waited[] = $pid;
+            }
+
+            $results = array_map(static fn (string $path): string => (string) file_get_contents($path), $resultPaths);
+            sort($results);
+            self::assertCount(1, array_filter($results, static fn (string $result): bool => str_starts_with($result, 'SAVED:')));
+            self::assertSame(1, count(array_filter($results, static fn (string $result): bool => $result === 'DENIED')));
+
+            $persisted = TransitionExecution::query()->findOrFail($claimed->getKey());
+            self::assertContains($persisted->status, ['SUCCEEDED', 'FAILED']);
+            self::assertSame(str_repeat($persisted->status === 'SUCCEEDED' ? 'a' : 'b', 64), $persisted->outcome_digest);
+        } finally {
+            foreach (array_diff($children, $waited) as $pid) {
+                posix_kill($pid, SIGTERM);
+                pcntl_waitpid($pid, $status);
+            }
+
+            DB::table('transition_executions')->where('id', $claimed->getKey())->delete();
+            DB::table('transition_admissions')->where('id', $permit->getKey())->delete();
+            DB::table('deployment_transition_fences')->where('id', $this->fence($tuple, $manifestHash)->getKey())->delete();
+            if (DB::connection()->transactionLevel() === 0) {
+                DB::beginTransaction();
+            }
+        }
+    }
+
     public function test_execution_model_rejects_terminal_inserts_misbound_steps_and_inactive_permits(): void
     {
         $tuple = $this->tuple(['state' => 'DRAINING']);

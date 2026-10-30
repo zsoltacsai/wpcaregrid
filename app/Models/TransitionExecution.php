@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Deployment\TransitionAdmission as TransitionAdmissionPolicy;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\QueryException;
@@ -161,6 +162,41 @@ class TransitionExecution extends Model
     public function admission(): BelongsTo
     {
         return $this->belongsTo(TransitionAdmission::class, 'transition_admission_id');
+    }
+
+    /**
+     * Compare and set terminal outcomes while holding the execution row lock.
+     * A stale INTENT instance must not overwrite an outcome saved by another process.
+     */
+    protected function performUpdate(Builder $query): bool
+    {
+        if ($this->getOriginal('status') !== 'INTENT'
+            || ! in_array($this->status, ['SUCCEEDED', 'FAILED', 'UNKNOWN'], true)) {
+            return parent::performUpdate($query);
+        }
+
+        return DB::transaction(function () use ($query): bool {
+            $locked = static::query()
+                ->whereKey($this->getKey())
+                ->lockForUpdate()
+                ->first();
+
+            if (! $locked || $locked->status !== 'INTENT') {
+                throw new RuntimeException('A transition effect outcome can only be recorded once from the current INTENT row.');
+            }
+
+            foreach (['transition_admission_id', 'effect_step_index', 'step_id', 'idempotency_key', 'payload_hash'] as $attribute) {
+                if ($locked->getAttribute($attribute) !== $this->getAttribute($attribute)) {
+                    throw new RuntimeException('The locked transition effect binding does not match the pending outcome.');
+                }
+            }
+
+            if (! parent::performUpdate($query)) {
+                throw new RuntimeException('The transition effect outcome compare-and-set did not update the INTENT row.');
+            }
+
+            return true;
+        });
     }
 
     protected function casts(): array
