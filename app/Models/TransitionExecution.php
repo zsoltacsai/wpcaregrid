@@ -14,6 +14,8 @@ use RuntimeException;
 /** Durable per-step intent and outcome; an existing row permanently prevents replay. */
 class TransitionExecution extends Model
 {
+    public const OUTCOME_ALREADY_RECORDED = 'A transition effect outcome can only be recorded once from the current INTENT row.';
+
     protected $guarded = ['id'];
 
     private static bool $claimInProgress = false;
@@ -182,7 +184,7 @@ class TransitionExecution extends Model
                 ->first();
 
             if (! $locked || $locked->status !== 'INTENT') {
-                throw new RuntimeException('A transition effect outcome can only be recorded once from the current INTENT row.');
+                throw new RuntimeException(self::OUTCOME_ALREADY_RECORDED);
             }
 
             foreach (['transition_admission_id', 'effect_step_index', 'step_id', 'idempotency_key', 'payload_hash'] as $attribute) {

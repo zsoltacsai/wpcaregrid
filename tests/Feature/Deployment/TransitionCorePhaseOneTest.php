@@ -405,7 +405,8 @@ class TransitionCorePhaseOneTest extends TestCase
         try {
             $stale->save();
             self::fail('A stale INTENT instance must not overwrite an already persisted terminal outcome.');
-        } catch (RuntimeException) {
+        } catch (RuntimeException $exception) {
+            self::assertSame(TransitionExecution::OUTCOME_ALREADY_RECORDED, $exception->getMessage());
             $persisted = $claimed->fresh();
             self::assertSame('SUCCEEDED', $persisted->status);
             self::assertSame(str_repeat('a', 64), $persisted->outcome_digest);
@@ -434,7 +435,8 @@ class TransitionCorePhaseOneTest extends TestCase
             try {
                 $stale->save();
                 self::fail('A stale INTENT instance must not overwrite an already persisted terminal outcome.');
-            } catch (RuntimeException) {
+            } catch (RuntimeException $exception) {
+                self::assertSame(TransitionExecution::OUTCOME_ALREADY_RECORDED, $exception->getMessage());
                 self::assertSame('SUCCEEDED', $claimed->fresh()->status);
                 self::assertSame(str_repeat('a', 64), $claimed->fresh()->outcome_digest);
             }
@@ -453,6 +455,7 @@ class TransitionCorePhaseOneTest extends TestCase
         ];
         $children = [];
         $waited = [];
+        $processErrors = [];
 
         try {
             foreach ([['SUCCEEDED', 'a'], ['FAILED', 'b']] as $index => [$status, $digest]) {
@@ -479,11 +482,15 @@ class TransitionCorePhaseOneTest extends TestCase
                         $execution->save();
                         file_put_contents($resultPath, 'SAVED:'.$status, LOCK_EX);
                         exit(0);
-                    } catch (RuntimeException) {
-                        file_put_contents($resultPath, 'DENIED', LOCK_EX);
-                        exit(0);
+                    } catch (RuntimeException $exception) {
+                        if ($exception->getMessage() === TransitionExecution::OUTCOME_ALREADY_RECORDED) {
+                            file_put_contents($resultPath, 'DENIED', LOCK_EX);
+                            exit(0);
+                        }
+                        file_put_contents($resultPath, 'ERROR:RuntimeException:'.str_replace(["\r", "\n"], ' ', $exception->getMessage()), LOCK_EX);
+                        exit(1);
                     } catch (Throwable $exception) {
-                        file_put_contents($resultPath, 'ERROR:'.get_class($exception), LOCK_EX);
+                        file_put_contents($resultPath, 'ERROR:'.get_class($exception).':'.str_replace(["\r", "\n"], ' ', $exception->getMessage()), LOCK_EX);
                         exit(1);
                     }
                 }
@@ -495,12 +502,15 @@ class TransitionCorePhaseOneTest extends TestCase
             foreach ($children as $pid) {
                 $status = 0;
                 if (pcntl_waitpid($pid, $status) !== $pid || ! pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0) {
-                    throw new RuntimeException('A concurrent terminal outcome process did not exit cleanly.');
+                    $processErrors[] = 'pid '.$pid.' exit status '.(pcntl_wifexited($status) ? pcntl_wexitstatus($status) : 'abnormal');
                 }
                 $waited[] = $pid;
             }
 
-            $results = array_map(static fn (string $path): string => (string) file_get_contents($path), $resultPaths);
+            $results = array_map(static fn (string $path): string => is_file($path) ? (string) file_get_contents($path) : 'MISSING_RESULT', $resultPaths);
+            if ($processErrors !== []) {
+                throw new RuntimeException('A concurrent terminal outcome process did not exit cleanly: '.implode('; ', $processErrors).'; results: '.implode(' | ', $results));
+            }
             sort($results);
             self::assertCount(1, array_filter($results, static fn (string $result): bool => str_starts_with($result, 'SAVED:')));
             self::assertSame(1, count(array_filter($results, static fn (string $result): bool => $result === 'DENIED')));
