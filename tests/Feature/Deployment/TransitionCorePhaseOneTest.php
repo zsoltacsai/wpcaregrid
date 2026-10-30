@@ -440,9 +440,23 @@ class TransitionCorePhaseOneTest extends TestCase
             ['generation' => $tuple['generation'] + 1],
         ] as $index => $scopeChange) {
             $isolatedTuple = array_replace($tuple, $scopeChange);
+            $stepId = 'isolated-step-'.$index;
+            $idempotencyKey = 'isolated-step-key-'.$index;
+            $steps = [
+                ['idempotency_key' => $idempotencyKey, 'step_id' => $stepId, 'step_index' => 0],
+                ['idempotency_key' => 'isolated-tail-key-'.$index, 'step_id' => 'isolated-tail-'.$index, 'step_index' => 1],
+            ];
+            $canonicalSteps = array_map(static fn (array $step): array => [
+                'step_index' => $step['step_index'],
+                'step_id' => $step['step_id'],
+                'idempotency_key' => $step['idempotency_key'],
+            ], $steps);
+            $plan = json_encode($canonicalSteps, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
             $isolatedPermit = $this->permit($isolatedTuple, [
                 'execution_id' => 'isolated-execution-'.$index,
                 'work_id' => 'isolated-work-'.$index,
+                'effect_steps' => $steps,
+                'effect_step_plan_hash' => hash('sha256', $plan),
             ]);
             $isolatedManifestHash = TransitionAdmission::manifestHashForScope(
                 $isolatedTuple['operation_id'],
@@ -456,6 +470,8 @@ class TransitionCorePhaseOneTest extends TestCase
                 array_replace($this->binding(), [
                     'execution_id' => $isolatedPermit->execution_id,
                     'work_id' => $isolatedPermit->work_id,
+                    'step_id' => $stepId,
+                    'idempotency_key' => $idempotencyKey,
                 ]),
             );
 
