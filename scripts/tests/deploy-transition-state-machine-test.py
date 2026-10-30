@@ -1849,8 +1849,21 @@ class TransitionAdapterTests(unittest.TestCase):
         os.chown(database_path, 0, app_gid)
         os.chmod(database_path, 0o660)
 
-        command = (php, str(ROOT / "artisan"), "deployment:transition-bridge")
-        self.assertEqual(command[2], "deployment:transition-bridge")
+        # The adapter captures stderr only when its executable is Python. This
+        # tiny launcher replaces itself with PHP, preserving the dropped child
+        # PID/UID/GID while making pre-connect Laravel failures diagnosable.
+        launcher = runtime / "exec-php.py"
+        launcher.write_text(
+            "import os, sys\nos.execv(sys.argv[1], sys.argv[1:])\n",
+            encoding="ascii",
+        )
+        os.chown(launcher, 0, 0)
+        os.chmod(launcher, 0o644)
+        command = (
+            sys.executable, str(launcher), php, str(ROOT / "artisan"),
+            "deployment:transition-bridge",
+        )
+        self.assertEqual(command[4], "deployment:transition-bridge")
         database = HELPER.LaravelTransitionDatabaseAdapter(
             socket_dir=socket_dir, timeout_seconds=15,
         )
@@ -1866,16 +1879,40 @@ class TransitionAdapterTests(unittest.TestCase):
                 request_id, "compare_and_set", payload,
             ),
         }
-        with mock.patch.object(HELPER, "TRANSITION_RPC_COMMAND", command), \
-             mock.patch.object(HELPER, "APP", ROOT), \
-             mock.patch.object(HELPER, "SAFE_ENV", env):
-            with self.lock.hold("exclusive"):
-                self.assertEqual(database.read_tuple(), source)
-                self.assertTrue(database.compare_and_set(source, target, details=details))
-                self.assertEqual(database.read_tuple(), target)
-                receipt = database.read_transition_receipt(
-                    request_id, details["rpc_request_digest"],
-                )
+        try:
+            with mock.patch.object(HELPER, "TRANSITION_RPC_COMMAND", command), \
+                 mock.patch.object(HELPER, "APP", ROOT), \
+                 mock.patch.object(HELPER, "SAFE_ENV", env):
+                with self.lock.hold("exclusive"):
+                    self.assertEqual(database.read_tuple(), source)
+                    self.assertTrue(database.compare_and_set(source, target, details=details))
+                    self.assertEqual(database.read_tuple(), target)
+                    receipt = database.read_transition_receipt(
+                        request_id, details["rpc_request_digest"],
+                    )
+        except HELPER.TransitionHold as exc:
+            prefix = "fake Laravel CLI failed: "
+            message = str(exc)
+            if prefix in message:
+                diagnostic = message.split(prefix, 1)[1].encode("utf-8", "replace")
+                if len(diagnostic) > 1000:
+                    raise AssertionError("child stderr exceeded its bound") from None
+                text = diagnostic.decode("utf-8", "replace").lower()
+                if "unknown command" in text or "no commands defined" in text:
+                    category = "command_registration"
+                elif "option does not exist" in text or "is not defined" in text:
+                    category = "command_option"
+                elif "php fatal error" in text or "parse error" in text:
+                    category = "php_boot_or_runtime"
+                else:
+                    category = "unclassified"
+                raise AssertionError(
+                    "real Laravel CLI child failed before RPC connection; "
+                    f"bounded stderr: {len(diagnostic)} bytes, "
+                    f"sha256={hashlib.sha256(diagnostic).hexdigest()}, "
+                    f"category={category}"
+                ) from None
+            raise
         self.assertIsInstance(receipt, dict)
         self.assertEqual(receipt.get("committed"), True)
         self.assertEqual(receipt.get("request_id"), request_id)
