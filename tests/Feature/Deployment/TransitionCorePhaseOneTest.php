@@ -20,6 +20,8 @@ class TransitionCorePhaseOneTest extends TestCase
 {
     use RefreshDatabase;
 
+    private const TERMINAL_OUTCOME_IMMUTABLE = 'A terminal transition effect outcome cannot be changed.';
+
     private string $directory;
 
     private string $bootId = 'c5e6f6c3-2c66-49cb-a2ad-c76dd3af7f93';
@@ -407,10 +409,26 @@ class TransitionCorePhaseOneTest extends TestCase
             self::fail('A stale INTENT instance must not overwrite an already persisted terminal outcome.');
         } catch (RuntimeException $exception) {
             self::assertSame(TransitionExecution::OUTCOME_ALREADY_RECORDED, $exception->getMessage());
-            $persisted = $claimed->fresh();
-            self::assertSame('SUCCEEDED', $persisted->status);
-            self::assertSame(str_repeat('a', 64), $persisted->outcome_digest);
         }
+
+        $persisted = $claimed->fresh();
+        self::assertSame('SUCCEEDED', $persisted->status);
+        self::assertSame(str_repeat('a', 64), $persisted->outcome_digest);
+
+        $alreadyTerminal = $claimed->fresh();
+        $alreadyTerminal->status = 'UNKNOWN';
+        $alreadyTerminal->outcome_at = now();
+        $alreadyTerminal->outcome_digest = str_repeat('c', 64);
+        try {
+            $alreadyTerminal->save();
+            self::fail('A terminal outcome cannot transition to another terminal outcome.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertSame(self::TERMINAL_OUTCOME_IMMUTABLE, $exception->getMessage());
+        }
+
+        $persisted = $claimed->fresh();
+        self::assertSame('SUCCEEDED', $persisted->status);
+        self::assertSame(str_repeat('a', 64), $persisted->outcome_digest);
     }
 
     public function test_concurrent_terminal_outcomes_compare_and_set_the_intent_row(): void
@@ -484,10 +502,17 @@ class TransitionCorePhaseOneTest extends TestCase
                         exit(0);
                     } catch (RuntimeException $exception) {
                         if ($exception->getMessage() === TransitionExecution::OUTCOME_ALREADY_RECORDED) {
-                            file_put_contents($resultPath, 'DENIED', LOCK_EX);
+                            file_put_contents($resultPath, 'DENIED:OUTCOME_ALREADY_RECORDED', LOCK_EX);
                             exit(0);
                         }
                         file_put_contents($resultPath, 'ERROR:RuntimeException:'.str_replace(["\r", "\n"], ' ', $exception->getMessage()), LOCK_EX);
+                        exit(1);
+                    } catch (InvalidArgumentException $exception) {
+                        if ($exception->getMessage() === self::TERMINAL_OUTCOME_IMMUTABLE) {
+                            file_put_contents($resultPath, 'DENIED:TERMINAL_OUTCOME_IMMUTABLE', LOCK_EX);
+                            exit(0);
+                        }
+                        file_put_contents($resultPath, 'ERROR:InvalidArgumentException:'.str_replace(["\r", "\n"], ' ', $exception->getMessage()), LOCK_EX);
                         exit(1);
                     } catch (Throwable $exception) {
                         file_put_contents($resultPath, 'ERROR:'.get_class($exception).':'.str_replace(["\r", "\n"], ' ', $exception->getMessage()), LOCK_EX);
@@ -513,10 +538,15 @@ class TransitionCorePhaseOneTest extends TestCase
             }
             sort($results);
             self::assertCount(1, array_filter($results, static fn (string $result): bool => str_starts_with($result, 'SAVED:')));
-            self::assertSame(1, count(array_filter($results, static fn (string $result): bool => $result === 'DENIED')));
+            self::assertSame(1, count(array_filter($results, static fn (string $result): bool => in_array($result, [
+                'DENIED:OUTCOME_ALREADY_RECORDED',
+                'DENIED:TERMINAL_OUTCOME_IMMUTABLE',
+            ], true))));
 
             $persisted = TransitionExecution::query()->findOrFail($claimed->getKey());
+            $savedResult = current(array_filter($results, static fn (string $result): bool => str_starts_with($result, 'SAVED:')));
             self::assertContains($persisted->status, ['SUCCEEDED', 'FAILED']);
+            self::assertSame('SAVED:'.$persisted->status, $savedResult);
             self::assertSame(str_repeat($persisted->status === 'SUCCEEDED' ? 'a' : 'b', 64), $persisted->outcome_digest);
         } finally {
             foreach (array_diff($children, $waited) as $pid) {
