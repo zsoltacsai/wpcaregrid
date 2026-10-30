@@ -21,7 +21,7 @@ class TransitionBridgeRequest extends Model
 
             if (! self::isUuidV7($request->request_id)
                 || ! self::isSha256($request->request_digest)
-                || $request->action !== 'transition'
+                || $request->action !== 'compare_and_set'
                 || ! is_string($request->receipt_payload)
                 || strlen($request->receipt_payload) > 65536
                 || ! self::isSha256($request->receipt_digest)
@@ -76,10 +76,7 @@ class TransitionBridgeRequest extends Model
             }
             $keys = is_array($receipt) ? array_keys($receipt) : [];
             sort($keys);
-            $expectedKeys = [
-                'action', 'committed_at', 'protocol_version', 'release_binding',
-                'request_digest', 'request_id', 'source_tuple', 'status', 'target_tuple',
-            ];
+            $expectedKeys = ['committed', 'release_binding', 'request_digest', 'request_id', 'source', 'target'];
             sort($expectedKeys);
             $canonical = self::canonicalJson($receipt);
         } catch (JsonException|InvalidArgumentException) {
@@ -89,15 +86,11 @@ class TransitionBridgeRequest extends Model
         return is_array($receipt)
             && $keys === $expectedKeys
             && hash_equals($payload, $canonical)
-            && ($receipt['protocol_version'] ?? null) === 1
-            && ($receipt['status'] ?? null) === 'COMMITTED'
-            && ($receipt['action'] ?? null) === 'transition'
+            && ($receipt['committed'] ?? null) === true
             && ($receipt['request_id'] ?? null) === $requestId
             && ($receipt['request_digest'] ?? null) === $requestDigest
-            && is_string($receipt['committed_at'] ?? null)
-            && preg_match('/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z\z/D', $receipt['committed_at']) === 1
-            && is_array($receipt['source_tuple'] ?? null)
-            && is_array($receipt['target_tuple'] ?? null)
+            && self::validTuple($receipt['source'] ?? null)
+            && self::validTuple($receipt['target'] ?? null)
             && (($receipt['release_binding'] ?? null) === null || is_array($receipt['release_binding']))
             && (($releaseNonceDigest === null && ($receipt['release_binding'] ?? null) === null)
                 || (is_string($releaseNonceDigest)
@@ -107,16 +100,66 @@ class TransitionBridgeRequest extends Model
                     && ! array_key_exists('nonce', $receipt['release_binding'])));
     }
 
+    private static function validTuple(mixed $tuple): bool
+    {
+        if (! is_array($tuple)) {
+            return false;
+        }
+
+        $states = ['OPEN', 'HOLD_REQUESTED', 'CLOSING', 'CLOSED', 'DRAINING', 'QUIESCED', 'READY_PENDING_OWNER', 'RECOVERY_REQUIRED'];
+        $expected = ['state', 'operation_id', 'generation', 'boot_id', 'journal_seq', 'journal_head_hash', 'evidence_digest'];
+        if (($tuple['state'] ?? null) === 'DRAINING') {
+            $expected[] = 'permit_manifest_hash';
+        }
+        $keys = array_keys($tuple);
+        sort($keys);
+        sort($expected);
+
+        return $keys === $expected
+            && is_string($tuple['state'] ?? null)
+            && in_array($tuple['state'], $states, true)
+            && is_string($tuple['operation_id'] ?? null)
+            && preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/iD', $tuple['operation_id']) === 1
+            && is_int($tuple['generation'] ?? null)
+            && $tuple['generation'] >= 0
+            && is_string($tuple['boot_id'] ?? null)
+            && preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/iD', $tuple['boot_id']) === 1
+            && is_int($tuple['journal_seq'] ?? null)
+            && $tuple['journal_seq'] >= 0
+            && self::isSha256($tuple['journal_head_hash'] ?? null)
+            && self::isSha256($tuple['evidence_digest'] ?? null)
+            && (($tuple['state'] !== 'DRAINING') || self::isSha256($tuple['permit_manifest_hash'] ?? null));
+    }
+
     /** @param array<string, mixed> $value */
     public static function canonicalJson(array $value): string
+    {
+        return self::canonicalJsonValue($value);
+    }
+
+    public static function canonicalJsonValue(mixed $value): string
     {
         $normalized = self::sortRecursively($value);
 
         return json_encode($normalized, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n";
     }
 
+    public static function canonicalRpcJson(mixed $value): string
+    {
+        return self::canonicalJsonValue($value);
+    }
+
     private static function sortRecursively(mixed $value): mixed
     {
+        if ($value instanceof \stdClass) {
+            $properties = get_object_vars($value);
+            ksort($properties, SORT_STRING);
+            foreach ($properties as $key => $nested) {
+                $properties[$key] = self::sortRecursively($nested);
+            }
+
+            return (object) $properties;
+        }
         if (! is_array($value)) {
             return $value;
         }

@@ -104,7 +104,7 @@ TRANSITION_RPC_VERSION = 1
 TRANSITION_RPC_MAX_BYTES = 65536
 TRANSITION_RPC_SOCKET_DIR = Path("/run/wpcaregrid")
 TRANSITION_RPC_COMMAND = (
-    str(PHP_RUNTIME_LAUNCHER_DEST), str(APP / "artisan"), "deployment:transition-rpc",
+    str(PHP_RUNTIME_LAUNCHER_DEST), str(APP / "artisan"), "deployment:transition-bridge",
 )
 TRANSITION_RPC_OPERATIONS = frozenset({
     "read_tuple",
@@ -1506,7 +1506,7 @@ class LaravelTransitionDatabaseAdapter:
         "read_permit_manifest_hash": set(),
         "verify_transition_preconditions": {"source", "target", "details", "permits"},
         "validate_permit_manifest": {"source", "permits", "digest"},
-        "compare_and_set": {"request_id", "request_digest", "source", "target", "release", "details"},
+        "compare_and_set": {"source", "target", "release", "details"},
         "nonce_consumed": {"nonce_digest"},
         "validate_release": {"authorization", "source", "nonce_digest"},
         "assert_no_unresolved_drain_effects": {"operation_id", "generation"},
@@ -1527,11 +1527,20 @@ class LaravelTransitionDatabaseAdapter:
 
     @staticmethod
     def _request_digest(request_id, operation, payload):
+        digest_payload = json.loads(_transition_canonical(payload).decode("ascii"))
+        if operation == "compare_and_set":
+            target = digest_payload.get("target")
+            details = digest_payload.get("details")
+            if isinstance(target, dict):
+                target.pop("journal_head_hash", None)
+            if isinstance(details, dict):
+                details.pop("rpc_request_id", None)
+                details.pop("rpc_request_digest", None)
         return hashlib.sha256(_transition_canonical({
             "version": TRANSITION_RPC_VERSION,
             "request_id": request_id,
             "operation": operation,
-            "payload": payload,
+            "payload": digest_payload,
         })).hexdigest()
 
     @staticmethod
@@ -1657,7 +1666,7 @@ class LaravelTransitionDatabaseAdapter:
                 or response.get("request_id") != request_id
                 or response.get("request_digest") != request_digest
                 or not isinstance(response.get("status"), str)
-                or not isinstance(response.get("result"), dict)
+                or not self._valid_result(operation, response.get("result"))
                 or _transition_canonical(response) != response_bytes):
                 raise TransitionHold("Laravel RPC response binding is invalid")
             connection.close()
@@ -1727,6 +1736,14 @@ class LaravelTransitionDatabaseAdapter:
             raise TransitionHold("Laravel transition DB operation was refused")
         return response["result"]
 
+    @staticmethod
+    def _valid_result(operation, result):
+        if operation == "read_permit_manifest_hash":
+            return result is None or (
+                isinstance(result, str) and re.fullmatch(r"[0-9a-f]{64}", result) is not None
+            )
+        return isinstance(result, dict)
+
     def read_tuple(self):
         return self._call("read_tuple", {})
 
@@ -1748,13 +1765,15 @@ class LaravelTransitionDatabaseAdapter:
         request_id = details.get("rpc_request_id")
         request_digest = details.get("rpc_request_digest")
         payload = {
-            "request_id": request_id,
-            "request_digest": request_digest,
             "source": source,
             "target": target,
             "release": release,
             "details": details,
         }
+        if (not isinstance(request_id, str)
+            or not isinstance(request_digest, str)
+            or request_digest != self._request_digest(request_id, "compare_and_set", payload)):
+            raise TransitionHold("durable transition RPC digest does not match the exact request envelope")
         try:
             response = self._exchange(
                 "compare_and_set", payload, request_id=request_id, request_digest=request_digest,
@@ -2386,19 +2405,23 @@ class RootTransitionAdapter:
         if release_record is not None:
             record_details["release"] = release_record
         request_id = _transition_uuid7()
-        request_target = {key: target[key] for key in TRANSITION_TUPLE_FIELDS if key != "journal_head_hash"}
+        record_details["rpc_request_id"] = request_id
+        request_source = dict(self._tuple(source))
+        if source["state"] == "DRAINING":
+            request_source["permit_manifest_hash"] = source["permit_manifest_hash"]
+        request_target = dict(self._tuple(target))
+        request_target["journal_seq"] = self.journal.head()[0] + 1
         if permit_manifest_hash is not None:
             request_target["permit_manifest_hash"] = permit_manifest_hash
-        request_digest = hashlib.sha256(_transition_canonical({
-            "version": TRANSITION_RPC_VERSION,
-            "request_id": request_id,
-            "event": event,
-            "source": self._tuple(source),
+        request_payload = {
+            "source": request_source,
             "target": request_target,
-            "details": record_details,
             "release": release,
-        })).hexdigest()
-        record_details["rpc_request_id"] = request_id
+            "details": record_details,
+        }
+        request_digest = LaravelTransitionDatabaseAdapter._request_digest(
+            request_id, "compare_and_set", request_payload,
+        )
         record_details["rpc_request_digest"] = request_digest
         record = {
             "event": event,
@@ -2413,6 +2436,8 @@ class RootTransitionAdapter:
         }
         prepared = self.journal.prepare(record)
         seq, head, _line, _base_seq, _prior = prepared
+        if seq != request_target["journal_seq"]:
+            raise TransitionHold("journal sequence changed while binding the transition RPC")
         target["journal_seq"] = seq
         target["journal_head_hash"] = head
         target["evidence_digest"] = evidence_digest

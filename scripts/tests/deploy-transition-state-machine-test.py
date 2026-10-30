@@ -121,6 +121,16 @@ class FakeDatabase:
             request_id = details.get("rpc_request_id")
             request_digest = details.get("rpc_request_digest")
             if request_id and request_digest:
+                payload = {
+                    "source": dict(source),
+                    "target": dict(target),
+                    "release": release,
+                    "details": details,
+                }
+                if request_digest != HELPER.LaravelTransitionDatabaseAdapter._request_digest(
+                    request_id, "compare_and_set", payload,
+                ):
+                    raise HELPER.TransitionHold("fake CAS request digest does not match the exact transition")
                 self.transition_receipts[request_id] = {
                     "committed": True,
                     "request_id": request_id,
@@ -439,6 +449,10 @@ def _rpc_worker_impl(database_path, scenario, socket_path):
         or set(request) != {"version", "request_id", "request_digest", "operation", "payload"}
         or request["version"] != HELPER.TRANSITION_RPC_VERSION):
         raise RuntimeError("invalid typed RPC envelope")
+    if request["request_digest"] != HELPER.LaravelTransitionDatabaseAdapter._request_digest(
+        request["request_id"], request["operation"], request["payload"],
+    ):
+        raise RuntimeError("typed RPC digest does not match the canonical digest projection")
 
     def read_state():
         return json.loads(path.read_text(encoding="ascii"))
@@ -477,8 +491,8 @@ def _rpc_worker_impl(database_path, scenario, socket_path):
         }
         if operation == "compare_and_set":
             payload = request["payload"]
-            request_id = payload["request_id"]
-            request_digest = payload["request_digest"]
+            request_id = request["request_id"]
+            request_digest = request["request_digest"]
             prior = state["receipts"].get(request_id)
             if prior is not None:
                 if prior["request_digest"] != request_digest:
@@ -529,6 +543,10 @@ def _rpc_worker_impl(database_path, scenario, socket_path):
             write_state(state)
         elif operation == "read_tuple":
             response = {"status": "OK", "result": state["tuple"]}
+            state["identity"] = identity
+            write_state(state)
+        elif operation == "read_permit_manifest_hash":
+            response = {"status": "OK", "result": state.get("manifest_hash")}
             state["identity"] = identity
             write_state(state)
         else:
@@ -614,6 +632,20 @@ class TransitionAdapterTests(unittest.TestCase):
         self.assertEqual(first["journal_seq"], 1)
         self.assertRegex(first["operation_id"], r"^[0-9a-f-]{36}$")
         self.assertEqual(self.read_state(), "HOLD_REQUESTED")
+        first_record = self.adapter.journal.records()[0]
+        rpc_details = first_record["details"]
+        rpc_payload = {
+            "source": self.initial,
+            "target": first,
+            "release": None,
+            "details": rpc_details,
+        }
+        self.assertEqual(
+            rpc_details["rpc_request_digest"],
+            HELPER.LaravelTransitionDatabaseAdapter._request_digest(
+                rpc_details["rpc_request_id"], "compare_and_set", rpc_payload,
+            ),
+        )
         self.move("CLOSING")
         self.move("CLOSED")
         records = self.adapter.journal.records()
@@ -1669,7 +1701,11 @@ class TransitionAdapterTests(unittest.TestCase):
 
     @staticmethod
     def _rpc_transition_request(source, target, *, request_id="00000000-0000-7000-8000-000000000123",
-                                request_digest="a" * 64):
+                                request_digest=None):
+        request_payload = {"source": source, "target": target, "release": None, "details": {}}
+        request_digest = request_digest or HELPER.LaravelTransitionDatabaseAdapter._request_digest(
+            request_id, "compare_and_set", request_payload,
+        )
         return source, target, {
             "rpc_request_id": request_id,
             "rpc_request_digest": request_digest,
@@ -1706,6 +1742,31 @@ class TransitionAdapterTests(unittest.TestCase):
         self.assertEqual(int(identity["cap_eff"], 16), 0)
         self.assertNotEqual(identity["pid"], os.getpid())
 
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux AF_UNIX and SO_PEERCRED")
+    def test_linux_rpc_accepts_direct_manifest_hash_scalar_and_null(self):
+        if os.geteuid() != 0:
+            self.fail("Linux transition RPC test must run as root")
+        root, database_path, adapter, command = self._make_rpc_fixture("normal")
+        state = json.loads(database_path.read_text(encoding="ascii"))
+        state["manifest_hash"] = "e" * 64
+        database_path.write_text(json.dumps(state, sort_keys=True), encoding="ascii")
+        with mock.patch.object(HELPER, "TRANSITION_RPC_COMMAND", command), \
+             mock.patch.object(HELPER, "APP", root), \
+             mock.patch.object(HELPER, "open_root_trusted_directory", HELPER.open_directory):
+            with self.lock.hold("shared"):
+                self.assertEqual(adapter.read_permit_manifest_hash(), "e" * 64)
+
+            state["manifest_hash"] = None
+            database_path.write_text(json.dumps(state, sort_keys=True), encoding="ascii")
+            with self.lock.hold("shared"):
+                self.assertIsNone(adapter.read_permit_manifest_hash())
+
+            state["manifest_hash"] = "invalid"
+            database_path.write_text(json.dumps(state, sort_keys=True), encoding="ascii")
+            with self.lock.hold("shared"):
+                with self.assertRaises(HELPER.TransitionHold):
+                    adapter.read_permit_manifest_hash()
+
     @unittest.skipUnless(sys.platform == "linux", "requires Linux persistent child processes")
     def test_rpc_lost_response_uses_fresh_receipt_readback_without_replay(self):
         if os.geteuid() != 0:
@@ -1727,6 +1788,99 @@ class TransitionAdapterTests(unittest.TestCase):
         self.assertEqual(state["receipts"][details["rpc_request_id"]]["request_digest"],
                          details["rpc_request_digest"])
         self.assertEqual(state["receipts"][details["rpc_request_id"]]["target"], target)
+
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux and the real Laravel CLI bridge")
+    def test_linux_real_laravel_command_uses_dynamic_socket_and_newline_envelopes(self):
+        if os.geteuid() != 0:
+            self.fail("real Laravel bridge integration must run as root")
+        import grp
+        import shutil
+        import sqlite3
+
+        php = shutil.which("php")
+        if php is None or not (ROOT / "vendor" / "autoload.php").is_file():
+            self.fail("real Laravel bridge integration requires PHP and installed Composer dependencies")
+        app_gid = grp.getgrnam("www-data").gr_gid
+        runtime = Path(tempfile.mkdtemp(prefix="wpcg-real-rpc-", dir="/run"))
+        os.chown(runtime, 0, 0)
+        os.chmod(runtime, 0o711)
+        self.addCleanup(shutil.rmtree, runtime)
+        socket_dir = runtime / "socket"
+        socket_dir.mkdir(mode=0o711)
+        os.chown(socket_dir, 0, 0)
+        os.chmod(socket_dir, 0o711)
+        database_dir = runtime / "database"
+        database_dir.mkdir(mode=0o770)
+        os.chown(database_dir, 0, app_gid)
+        os.chmod(database_dir, 0o2770)
+        database_path = database_dir / "bridge.sqlite"
+        env = dict(HELPER.SAFE_ENV)
+        env.update({
+            "APP_ENV": "testing",
+            "APP_KEY": "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "CAREGRID_DEPLOYMENT_ENV": "testing",
+            "DB_CONNECTION": "sqlite",
+            "DB_DATABASE": str(database_path),
+            "DB_URL": "",
+            "CACHE_STORE": "array",
+            "SESSION_DRIVER": "array",
+            "QUEUE_CONNECTION": "sync",
+            "MAIL_MAILER": "array",
+            "LOG_CHANNEL": "stderr",
+        })
+        migrated = subprocess.run(
+            [php, str(ROOT / "artisan"), "migrate", "--force"], cwd=ROOT, env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=120, check=False,
+        )
+        self.assertEqual(migrated.returncode, 0, migrated.stdout[-4000:])
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+        source = dict(self.initial, boot_id=boot_id)
+        with sqlite3.connect(database_path) as connection:
+            connection.execute(
+                "INSERT INTO deployment_transition_fences "
+                "(fence_key,state,operation_id,generation,boot_id,journal_seq,journal_head_hash,"
+                "evidence_digest,permit_manifest_hash,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                ("global", source["state"], source["operation_id"], source["generation"],
+                 source["boot_id"], source["journal_seq"], source["journal_head_hash"],
+                 source["evidence_digest"], None, "2026-10-30 00:00:00", "2026-10-30 00:00:00"),
+            )
+        os.chown(database_path, 0, app_gid)
+        os.chmod(database_path, 0o660)
+
+        command = (php, str(ROOT / "artisan"), "deployment:transition-bridge")
+        self.assertEqual(command[2], "deployment:transition-bridge")
+        database = HELPER.LaravelTransitionDatabaseAdapter(
+            socket_dir=socket_dir, timeout_seconds=15,
+        )
+        database.bind_lock(self.lock)
+        target = dict(source, state="HOLD_REQUESTED", operation_id="00000000-0000-7000-8000-000000000123",
+                      generation=1, journal_seq=1, journal_head_hash="c" * 64,
+                      evidence_digest="d" * 64)
+        request_id = "00000000-0000-7000-8000-000000000234"
+        payload = {"source": source, "target": target, "release": None, "details": {}}
+        details = {
+            "rpc_request_id": request_id,
+            "rpc_request_digest": HELPER.LaravelTransitionDatabaseAdapter._request_digest(
+                request_id, "compare_and_set", payload,
+            ),
+        }
+        with mock.patch.object(HELPER, "TRANSITION_RPC_COMMAND", command), \
+             mock.patch.object(HELPER, "APP", ROOT), \
+             mock.patch.object(HELPER, "SAFE_ENV", env):
+            with self.lock.hold("exclusive"):
+                self.assertEqual(database.read_tuple(), source)
+                self.assertTrue(database.compare_and_set(source, target, details=details))
+                self.assertEqual(database.read_tuple(), target)
+                receipt = database.read_transition_receipt(
+                    request_id, details["rpc_request_digest"],
+                )
+        self.assertIsInstance(receipt, dict)
+        self.assertEqual(receipt.get("committed"), True)
+        self.assertEqual(receipt.get("request_id"), request_id)
+        self.assertEqual(receipt.get("request_digest"), details["rpc_request_digest"])
+        self.assertEqual(receipt.get("target"), target)
 
     @unittest.skipUnless(sys.platform == "linux", "requires Linux persistent child processes")
     def test_rpc_precommit_death_and_digest_replay_fail_closed(self):
@@ -1763,6 +1917,58 @@ class TransitionAdapterTests(unittest.TestCase):
         state = json.loads(database_path.read_text(encoding="ascii"))
         self.assertEqual(state["cas_attempts"], 1)
         self.assertEqual(state["tuple"], target)
+
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux persistent RPC worker")
+    def test_rpc_same_identity_and_digest_cannot_change_journal_head_hash(self):
+        if os.geteuid() != 0:
+            self.fail("Linux transition RPC test must run as root")
+        root, database_path, adapter, command = self._make_rpc_fixture("normal")
+        target = dict(self.initial, state="HOLD_REQUESTED", operation_id="00000000-0000-7000-8000-000000000123",
+                      generation=1, journal_seq=1, journal_head_hash="b" * 64)
+        source, target, details = self._rpc_transition_request(self.initial, target)
+        with mock.patch.object(HELPER, "TRANSITION_RPC_COMMAND", command), \
+             mock.patch.object(HELPER, "APP", root), \
+             mock.patch.object(HELPER, "open_root_trusted_directory", HELPER.open_directory):
+            with self.lock.hold("exclusive"):
+                self.assertTrue(adapter.compare_and_set(source, target, details=details))
+                changed_target = dict(target, journal_head_hash="c" * 64)
+                with self.assertRaises(HELPER.TransitionHold):
+                    adapter.compare_and_set(source, changed_target, details=details)
+
+        state = json.loads(database_path.read_text(encoding="ascii"))
+        self.assertEqual(state["cas_attempts"], 1)
+        self.assertEqual(state["tuple"], target)
+        self.assertEqual(state["operations"].get("compare_and_set"), 1)
+
+    def test_rpc_digest_projection_excludes_only_circular_fields(self):
+        request_id = "00000000-0000-7000-8000-000000000123"
+        target = dict(self.initial, state="HOLD_REQUESTED", operation_id=request_id,
+                      generation=1, journal_seq=1, journal_head_hash="b" * 64)
+        payload = {
+            "source": dict(self.initial), "target": target, "release": None,
+            "details": {"reason": "test", "rpc_request_id": request_id,
+                        "rpc_request_digest": "a" * 64},
+        }
+        digest = HELPER.LaravelTransitionDatabaseAdapter._request_digest(
+            request_id, "compare_and_set", payload,
+        )
+        changed_circular_fields = json.loads(json.dumps(payload))
+        changed_circular_fields["target"]["journal_head_hash"] = "c" * 64
+        changed_circular_fields["details"]["rpc_request_digest"] = "d" * 64
+        self.assertEqual(
+            digest,
+            HELPER.LaravelTransitionDatabaseAdapter._request_digest(
+                request_id, "compare_and_set", changed_circular_fields,
+            ),
+        )
+        changed_authority = json.loads(json.dumps(payload))
+        changed_authority["target"]["evidence_digest"] = "e" * 64
+        self.assertNotEqual(
+            digest,
+            HELPER.LaravelTransitionDatabaseAdapter._request_digest(
+                request_id, "compare_and_set", changed_authority,
+            ),
+        )
 
     def test_production_adapter_has_no_effect_catalog_or_drain_claim_surface(self):
         self.assertEqual(HELPER.TRANSITION_PRODUCTION_EFFECT_CATALOG, ())
@@ -2085,6 +2291,8 @@ def _validate_required_linux_prerequisites():
         raise SystemExit("required Gate 1 Linux tests need runuser")
     if not hasattr(socket, "SO_PEERCRED") or not all(hasattr(os, name) for name in ("setgroups", "setresgid", "setresuid")):
         raise SystemExit("required Gate 1 Linux tests need SO_PEERCRED and full privilege-drop APIs")
+    if shutil.which("php") is None or not (ROOT / "vendor" / "autoload.php").is_file():
+        raise SystemExit("required Laravel RPC integration needs PHP and installed Composer dependencies")
 
 
 if __name__ == "__main__":
