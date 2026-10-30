@@ -20,6 +20,12 @@ final class TransitionAdmission
     /** @var callable(): bool */
     private $sharedLockHeld;
 
+    /** Tracks the preflight and post-lock validation pair in claimDrainStepIntent(). */
+    private bool $drainClaimInProgress = false;
+
+    /** Set after the preliminary assertDrainPermit() succeeds. */
+    private bool $drainClaimPreflightComplete = false;
+
     public function __construct(
         private readonly TransitionStatusProjection $projection,
         callable $sharedLockHeld,
@@ -83,6 +89,27 @@ final class TransitionAdmission
             ->exists()) {
             throw new RuntimeException('The drain effect step has already been attempted and cannot be replayed.');
         }
+
+        $unresolvedExecutions = TransitionExecution::query()
+            ->join('transition_admissions', 'transition_executions.transition_admission_id', '=', 'transition_admissions.id')
+            ->where('transition_admissions.operation_id', $tuple['operation_id'])
+            ->where('transition_admissions.generation', $tuple['generation'])
+            ->whereIn('transition_executions.status', ['INTENT', 'UNKNOWN']);
+
+        // A caller that already holds the fence and permit locks must read the current scope state,
+        // even when it joined an outer MySQL REPEATABLE READ transaction with an older snapshot.
+        $useCurrentRead = $this->drainClaimInProgress && $this->drainClaimPreflightComplete;
+        $hasUnresolvedExecution = $useCurrentRead
+            ? $unresolvedExecutions->select('transition_executions.id')->limit(1)->lockForUpdate()->first() !== null
+            : $unresolvedExecutions->exists();
+
+        if ($hasUnresolvedExecution) {
+            throw new RuntimeException('An unresolved drain execution permanently blocks new claims for this operation generation.');
+        }
+
+        if ($this->drainClaimInProgress) {
+            $this->drainClaimPreflightComplete = true;
+        }
     }
 
     /**
@@ -96,7 +123,18 @@ final class TransitionAdmission
         DrainPermit $permit,
         array $binding,
     ): TransitionExecution {
-        return TransitionExecution::claimFromDrain($this, $fence, $permit, $binding);
+        // claimFromDrain() validates once before its transaction and again after both row locks.
+        $previousClaimInProgress = $this->drainClaimInProgress;
+        $previousPreflightComplete = $this->drainClaimPreflightComplete;
+        $this->drainClaimInProgress = true;
+        $this->drainClaimPreflightComplete = false;
+
+        try {
+            return TransitionExecution::claimFromDrain($this, $fence, $permit, $binding);
+        } finally {
+            $this->drainClaimInProgress = $previousClaimInProgress;
+            $this->drainClaimPreflightComplete = $previousPreflightComplete;
+        }
     }
 
     private function requireSharedLock(): void
