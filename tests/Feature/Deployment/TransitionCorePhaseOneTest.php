@@ -44,6 +44,9 @@ class TransitionCorePhaseOneTest extends TestCase
             'scope-claim-start',
             'scope-claim-result-1',
             'scope-claim-result-2',
+            'scope-claim-precheck-ready-1',
+            'scope-claim-precheck-ready-2',
+            'scope-claim-precheck-release',
             'terminal-start',
             'terminal-result-1',
             'terminal-result-2',
@@ -856,12 +859,24 @@ class TransitionCorePhaseOneTest extends TestCase
     public function test_concurrent_distinct_permit_claims_serialize_on_the_operation_generation_fence(): void
     {
         $tuple = $this->tuple(['state' => 'DRAINING']);
+        $secondSteps = [
+            ['idempotency_key' => 'scope-claim-key-2', 'step_id' => 'send-notice-2', 'step_index' => 0],
+            ['idempotency_key' => 'scope-claim-tail-key-2', 'step_id' => 'record-result-2', 'step_index' => 1],
+        ];
+        $canonicalSecondSteps = array_map(static fn (array $step): array => [
+            'step_index' => $step['step_index'],
+            'step_id' => $step['step_id'],
+            'idempotency_key' => $step['idempotency_key'],
+        ], $secondSteps);
+        $secondStepPlan = json_encode($canonicalSecondSteps, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $permits = [
             $this->permit($tuple),
             $this->permit($tuple, [
                 'execution_id' => 'execution-2',
                 'work_id' => 'work-2',
                 'payload_hash' => str_repeat('a', 64),
+                'effect_steps' => $secondSteps,
+                'effect_step_plan_hash' => hash('sha256', $secondStepPlan),
             ]),
         ];
         $bindings = [
@@ -870,6 +885,8 @@ class TransitionCorePhaseOneTest extends TestCase
                 'execution_id' => 'execution-2',
                 'work_id' => 'work-2',
                 'payload_hash' => str_repeat('a', 64),
+                'step_id' => 'send-notice-2',
+                'idempotency_key' => 'scope-claim-key-2',
             ]),
         ];
         $manifestHash = TransitionAdmission::manifestHashForScope($tuple['operation_id'], $tuple['generation']);
@@ -881,7 +898,8 @@ class TransitionCorePhaseOneTest extends TestCase
             try {
                 $this->policy()->claimDrainStepIntent($fence, $permits[1], $bindings[1]);
                 self::fail('A distinct-permit claim must observe the earlier unresolved INTENT.');
-            } catch (RuntimeException) {
+            } catch (RuntimeException $exception) {
+                self::assertSame('An unresolved drain execution permanently blocks new claims for this operation generation.', $exception->getMessage());
                 self::assertDatabaseCount('transition_executions', 1);
             }
 
@@ -892,6 +910,11 @@ class TransitionCorePhaseOneTest extends TestCase
 
         DB::connection()->commit();
         $startPath = $this->directory.DIRECTORY_SEPARATOR.'scope-claim-start';
+        $precheckReleasePath = $this->directory.DIRECTORY_SEPARATOR.'scope-claim-precheck-release';
+        $precheckReadyPaths = [
+            $this->directory.DIRECTORY_SEPARATOR.'scope-claim-precheck-ready-1',
+            $this->directory.DIRECTORY_SEPARATOR.'scope-claim-precheck-ready-2',
+        ];
         $resultPaths = [
             $this->directory.DIRECTORY_SEPARATOR.'scope-claim-result-1',
             $this->directory.DIRECTORY_SEPARATOR.'scope-claim-result-2',
@@ -918,12 +941,36 @@ class TransitionCorePhaseOneTest extends TestCase
 
                         $childFence = DeploymentTransitionFence::query()->whereKey($fence->getKey())->firstOrFail();
                         $childPermit = TransitionAdmission::query()->whereKey($permits[$index]->getKey())->firstOrFail();
+                        $readyPath = $precheckReadyPaths[$index];
+                        DB::listen(static function ($query) use ($readyPath, $precheckReleasePath): void {
+                            $sql = strtolower($query->sql);
+                            if (! str_contains($sql, 'join')
+                                || ! str_contains($sql, 'transition_executions')
+                                || ! str_contains($sql, 'transition_admissions')) {
+                                return;
+                            }
+
+                            file_put_contents($readyPath, 'guard-query-complete', LOCK_EX);
+                            $deadline = microtime(true) + 30;
+                            while (! is_file($precheckReleasePath) && microtime(true) < $deadline) {
+                                usleep(10_000);
+                            }
+                            if (! is_file($precheckReleasePath)) {
+                                throw new RuntimeException('The concurrent precheck release barrier timed out.');
+                            }
+                        });
+
                         $this->policy()->claimDrainStepIntent($childFence, $childPermit, $bindings[$index]);
                         file_put_contents($resultPath, 'CLAIMED', LOCK_EX);
                         exit(0);
-                    } catch (RuntimeException) {
-                        file_put_contents($resultPath, 'DENIED', LOCK_EX);
-                        exit(0);
+                    } catch (RuntimeException $exception) {
+                        if ($exception->getMessage() === 'An unresolved drain execution permanently blocks new claims for this operation generation.') {
+                            file_put_contents($resultPath, 'DENIED:UNRESOLVED_SCOPE', LOCK_EX);
+                            exit(0);
+                        }
+
+                        file_put_contents($resultPath, 'ERROR:RuntimeException:'.str_replace(["\r", "\n"], ' ', $exception->getMessage()), LOCK_EX);
+                        exit(1);
                     } catch (Throwable $exception) {
                         file_put_contents($resultPath, 'ERROR:'.get_class($exception), LOCK_EX);
                         exit(1);
@@ -934,6 +981,15 @@ class TransitionCorePhaseOneTest extends TestCase
             }
 
             file_put_contents($startPath, 'go', LOCK_EX);
+            $precheckDeadline = microtime(true) + 30;
+            while ((! is_file($precheckReadyPaths[0]) || ! is_file($precheckReadyPaths[1])) && microtime(true) < $precheckDeadline) {
+                usleep(10_000);
+            }
+            if (! is_file($precheckReadyPaths[0]) || ! is_file($precheckReadyPaths[1])) {
+                throw new RuntimeException('Both distinct-permit processes did not complete the precheck guard query.');
+            }
+            file_put_contents($precheckReleasePath, 'go', LOCK_EX);
+
             foreach ($children as $pid) {
                 $status = 0;
                 if (pcntl_waitpid($pid, $status) !== $pid || ! pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0) {
@@ -944,7 +1000,7 @@ class TransitionCorePhaseOneTest extends TestCase
 
             $results = array_map(static fn (string $path): string => (string) file_get_contents($path), $resultPaths);
             sort($results);
-            self::assertSame(['CLAIMED', 'DENIED'], $results);
+            self::assertSame(['CLAIMED', 'DENIED:UNRESOLVED_SCOPE'], $results);
             self::assertDatabaseCount('transition_executions', 1);
         } finally {
             foreach (array_diff($children, $waited) as $pid) {
