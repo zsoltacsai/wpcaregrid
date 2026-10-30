@@ -97,8 +97,7 @@ class TransitionAdmission extends Model
             return null;
         }
 
-        usort($entries, static fn (array $left, array $right): int =>
-            [$left['execution_id'], $left['work_id']] <=> [$right['execution_id'], $right['work_id']]
+        usort($entries, static fn (array $left, array $right): int => [$left['execution_id'], $left['work_id']] <=> [$right['execution_id'], $right['work_id']]
         );
 
         return hash('sha256', json_encode($entries, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));

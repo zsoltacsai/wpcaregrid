@@ -45,7 +45,7 @@ final class TransitionAdmission
      * The caller must persist an INTENT before performing the external effect while retaining
      * the SHARED lock. Existing intent/outcome rows are never treated as permission to replay.
      *
-     * @param array{execution_id:string,work_id:string,payload_hash:string,tenant_id:string,site_id:string,worker_identity:string,step_index:int,idempotency_key:string} $binding
+     * @param  array{execution_id:string,work_id:string,payload_hash:string,tenant_id:string,site_id:string,worker_identity:string,step_index:int,idempotency_key:string}  $binding
      */
     public function assertDrainPermit(
         DeploymentTransitionFence $fence,
