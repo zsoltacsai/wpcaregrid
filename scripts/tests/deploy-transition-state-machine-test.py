@@ -784,6 +784,11 @@ class TransitionAdapterTests(unittest.TestCase):
         self.assertEqual(result["status"], "SUCCEEDED")
         self.assertEqual(trace[0][1], [("intent", next(iter(self.db.drain_intents)))])
         self.assertEqual([item[0] for item in self.db.drain_events], ["intent", "outcome"])
+        claim = next(iter(self.db.drain_intents))
+        with self.assertRaisesRegex(HELPER.TransitionHold, "no durable intent"):
+            self.db.record_drain_outcome(
+                claim, claim, {"status": "UNKNOWN", "evidence_digest": EVIDENCE}
+            )
         with self.assertRaisesRegex(HELPER.TransitionHold, "already claimed|replay"):
             self.adapter.execute_drain_permit(permit, effect)
         self.assertEqual(effects, ["called"])
@@ -1263,10 +1268,10 @@ print('SHARED_READ_ONLY_OK')
                     time.sleep(0.2)
                     if acquired.exists() or process.poll() is not None:
                         raise AssertionError("exclusive process crossed the effect boundary")
-                    return {"status": "completed", "evidence_digest": EVIDENCE}
+                    return {"status": "SUCCEEDED", "evidence_digest": EVIDENCE}
 
                 result = self.adapter.execute_drain_permit(permit, effect)
-                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["status"], "SUCCEEDED")
                 self.assertEqual(self.db.drain_events[-1][0], "outcome")
                 return_code = process.wait(timeout=5)
                 stderr = process.stderr.read().decode()
