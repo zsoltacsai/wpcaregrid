@@ -9,11 +9,15 @@ import os
 import hashlib
 import glob
 import fnmatch
+import json
 import posixpath
 import re
 import stat
 import subprocess
 import sys
+import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 
@@ -61,6 +65,38 @@ WORKER_COMMANDS = {
 }
 WORKERS = {"wpcaregrid-default", "wpcaregrid-backups"}
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+
+# Gate 1 transition paths are declarations only. The transition adapter below is
+# deliberately not wired into dispatch(), deploy-staging.sh, or any consumer.
+TRANSITION_JOURNAL = Path("/var/lib/wpcaregrid/transitions/journal.jsonl")
+TRANSITION_LOCK = Path("/run/lock/wpcaregrid-transition.lock")
+TRANSITION_STATUS = Path("/run/wpcaregrid/transition-status.json")
+TRANSITION_PENDING = Path("/run/wpcaregrid/.transition-status.next")
+TRANSITION_GENESIS_HASH = "0" * 64
+TRANSITION_STATES = {
+    "OPEN", "HOLD_REQUESTED", "CLOSING", "CLOSED", "DRAINING",
+    "QUIESCED", "READY_PENDING_OWNER", "RECOVERY_REQUIRED",
+}
+TRANSITION_EDGES = {
+    ("OPEN", "HOLD_REQUESTED"),
+    ("HOLD_REQUESTED", "CLOSING"),
+    ("CLOSING", "CLOSED"),
+    ("CLOSED", "DRAINING"),
+    ("DRAINING", "QUIESCED"),
+    ("QUIESCED", "READY_PENDING_OWNER"),
+    ("READY_PENDING_OWNER", "OPEN"),
+    ("OPEN", "RECOVERY_REQUIRED"),
+    ("HOLD_REQUESTED", "RECOVERY_REQUIRED"),
+    ("CLOSING", "RECOVERY_REQUIRED"),
+    ("CLOSED", "RECOVERY_REQUIRED"),
+    ("DRAINING", "RECOVERY_REQUIRED"),
+    ("QUIESCED", "RECOVERY_REQUIRED"),
+    ("READY_PENDING_OWNER", "RECOVERY_REQUIRED"),
+}
+TRANSITION_TUPLE_FIELDS = (
+    "state", "operation_id", "generation", "boot_id", "journal_seq",
+    "journal_head_hash", "evidence_digest",
+)
 
 
 def run(argv, *, check=True, stdout=None, input_text=None, pass_fds=()):
@@ -1335,6 +1371,548 @@ def read_approved_rollback(path=APPROVED_ROLLBACK, expected_owner=0, expected_mo
     if not re.fullmatch(r"[0-9a-f]{40}\n", value):
         raise ValueError("invalid rollback authorization")
     return value[:-1]
+
+
+class TransitionHold(RuntimeError):
+    """A transition failed closed; callers must not infer a usable state."""
+
+
+class TransitionDurabilityUnconfirmed(TransitionHold):
+    """The projection rename committed, but its directory fsync failed."""
+
+
+def _transition_canonical(value):
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False) + "\n").encode("ascii")
+
+
+def _transition_uuid7():
+    # UUIDv7 layout, kept compatible with the Python versions on supported hosts.
+    millis = int(time.time_ns() // 1_000_000) & ((1 << 48) - 1)
+    rand = int.from_bytes(os.urandom(10), "big") & ((1 << 74) - 1)
+    value = (millis << 80) | (0x7 << 76) | (((rand >> 62) & 0xFFF) << 64) | (0b10 << 62) | (rand & ((1 << 62) - 1))
+    return str(uuid.UUID(int=value))
+
+
+class PosixTransitionLock:
+    """Stable flock adapter. It never unlinks or replaces the lock inode."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    @contextmanager
+    def hold(self, mode):
+        import fcntl
+        import grp
+
+        if mode not in {"shared", "exclusive"}:
+            raise ValueError("invalid transition lock mode")
+        parent_fd = open_root_trusted_directory(self.path.parent)
+        try:
+            fd = os.open(self.path.name, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+        finally:
+            os.close(parent_fd)
+        try:
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0
+                or before.st_gid != grp.getgrnam("www-data").gr_gid
+                or stat.S_IMODE(before.st_mode) != 0o640 or before.st_nlink != 1):
+                raise TransitionHold("transition lock ownership or mode is invalid")
+            fcntl.flock(fd, fcntl.LOCK_SH if mode == "shared" else fcntl.LOCK_EX)
+            current = os.stat(self.path, follow_symlinks=False)
+            held = os.fstat(fd)
+            if ((current.st_dev, current.st_ino) != (held.st_dev, held.st_ino)
+                or held.st_nlink != 1):
+                raise TransitionHold("transition lock inode changed")
+            yield fd
+            current = os.stat(self.path, follow_symlinks=False)
+            held = os.fstat(fd)
+            if ((current.st_dev, current.st_ino) != (held.st_dev, held.st_ino)
+                or held.st_nlink != 1):
+                raise TransitionHold("transition lock inode changed")
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+
+class TransitionJournal:
+    """Canonical append-only, hash-chained journal for the inert root adapter."""
+
+    def __init__(self, path, *, require_root_owned=True, fsync_dir=None):
+        self.path = Path(path)
+        self.require_root_owned = require_root_owned
+        self.fsync_dir = fsync_dir
+
+    @staticmethod
+    def _digest(record):
+        return hashlib.sha256(_transition_canonical(record)).hexdigest()
+
+    def records(self):
+        try:
+            info = self.path.lstat()
+        except FileNotFoundError:
+            return []
+        if not stat.S_ISREG(info.st_mode) or self.path.is_symlink():
+            raise TransitionHold("journal is not a regular file")
+        if self.require_root_owned:
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+                raise TransitionHold("journal ownership or mode is invalid")
+        fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            opened = os.fstat(fd)
+            if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                raise TransitionHold("journal changed while opening")
+            chunks = []
+            total = 0
+            while True:
+                chunk = os.read(fd, min(65536, 64 * 1024 * 1024 + 1 - total))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > 64 * 1024 * 1024:
+                    raise TransitionHold("journal exceeds the supported read bound")
+                chunks.append(chunk)
+            raw = b"".join(chunks)
+        finally:
+            os.close(fd)
+        if raw and not raw.endswith(b"\n"):
+            raise TransitionHold("journal has a truncated final record")
+        result = []
+        previous = TRANSITION_GENESIS_HASH
+        for expected_seq, line in enumerate(raw.splitlines(), 1):
+            try:
+                value = json.loads(line.decode("ascii"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise TransitionHold("journal record is malformed") from None
+            if not isinstance(value, dict) or set(value) != {
+                "schema_version", "seq", "event", "state", "operation_id", "generation",
+                "boot_id", "source_sha", "target_sha", "evidence_digest", "prior_hash",
+                "details", "record_hash",
+            }:
+                raise TransitionHold("journal record has an invalid schema")
+            claimed = value.pop("record_hash")
+            if (type(value["schema_version"]) is not int or value["schema_version"] != 1
+                or type(value["seq"]) is not int or value["seq"] != expected_seq
+                or value["prior_hash"] != previous):
+                raise TransitionHold("journal sequence or chain is invalid")
+            if (not isinstance(value["state"], str) or value["state"] not in TRANSITION_STATES
+                or not isinstance(value["event"], str)
+                or value["event"] not in TRANSITION_STATES | {"RELEASE_COMMIT"}
+                or (value["event"] == "RELEASE_COMMIT" and value["state"] != "OPEN")
+                or not isinstance(value["operation_id"], str)
+                or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", value["operation_id"], re.I)
+                or type(value["generation"]) is not int or value["generation"] < 0
+                or not isinstance(value["boot_id"], str) or not re.fullmatch(r"[0-9a-f-]{36}", value["boot_id"], re.I)
+                or not isinstance(value["source_sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", value["source_sha"])
+                or not isinstance(value["target_sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", value["target_sha"])
+                or not isinstance(value["evidence_digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["evidence_digest"])):
+                raise TransitionHold("journal record values are invalid")
+            if (not isinstance(value["details"], dict)
+                or _transition_canonical(dict(value, record_hash=claimed)) != line + b"\n"
+                or self._digest(value) != claimed):
+                raise TransitionHold("journal hash is invalid")
+            previous = claimed
+            value["record_hash"] = claimed
+            result.append(value)
+        return result
+
+    def head(self):
+        records = self.records()
+        return (len(records), records[-1]["record_hash"] if records else TRANSITION_GENESIS_HASH)
+
+    def prepare(self, record):
+        records = self.records()
+        base_seq = len(records)
+        seq = base_seq + 1
+        prior = records[-1]["record_hash"] if records else TRANSITION_GENESIS_HASH
+        canonical = dict(record, schema_version=1, seq=seq, prior_hash=prior)
+        digest = self._digest(canonical)
+        line = _transition_canonical(dict(canonical, record_hash=digest))
+        return seq, digest, line, base_seq, prior
+
+    def append_prepared(self, prepared, *, fault=None):
+        seq, digest, line, base_seq, prior = prepared
+        if self.require_root_owned:
+            parent_fd = open_root_trusted_directory(self.path.parent)
+            try:
+                parent_info = os.fstat(parent_fd)
+                if stat.S_IMODE(parent_info.st_mode) != 0o700:
+                    raise TransitionHold("journal directory mode is invalid")
+            finally:
+                os.close(parent_fd)
+        else:
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if self.require_root_owned:
+            parent_info = self.path.parent.lstat()
+            if not stat.S_ISDIR(parent_info.st_mode) or parent_info.st_uid != 0 or stat.S_IMODE(parent_info.st_mode) != 0o700:
+                raise TransitionHold("journal directory ownership or mode is invalid")
+        current_seq, current_head = self.head()
+        if (current_seq, current_head) != (base_seq, prior):
+            raise TransitionHold("journal head changed after record preparation")
+        created = False
+        try:
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            created = True
+        except FileExistsError:
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise TransitionHold("journal is not a regular file")
+            if self.require_root_owned and (info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600):
+                raise TransitionHold("journal ownership or mode is invalid")
+            view = memoryview(line)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("short journal append")
+                view = view[written:]
+            if fault is not None:
+                fault("journal_appended")
+                fault("before_journal_fsync")
+            os.fsync(fd)
+            if fault is not None:
+                fault("journal_fsync")
+        finally:
+            os.close(fd)
+        if created:
+            if fault is not None:
+                fault("before_journal_directory_fsync")
+            if self.fsync_dir is not None:
+                self.fsync_dir(self.path.parent)
+            else:
+                parent_fd = os.open(self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+                try:
+                    os.fsync(parent_fd)
+                finally:
+                    os.close(parent_fd)
+            if fault is not None:
+                fault("journal_directory_fsync")
+        return seq, digest
+
+    def append(self, record, *, fault=None):
+        return self.append_prepared(self.prepare(record), fault=fault)
+
+
+class RootTransitionAdapter:
+    """Inert Gate 1 v1.0.3 persistence adapter; no command dispatch calls it.
+
+    The DB boundary is an injected transaction adapter (the Phase 1 M16 interface):
+    read_tuple, read_permit_manifest_hash, verify_transition_preconditions,
+    validate_permit_manifest, compare_and_set, nonce_consumed, validate_release,
+    and assert_exact_permit. It performs no SQL or direct Laravel-model access here.
+    Tests must use a fake. The constructor intentionally requires every path and
+    adapter, so importing this module cannot touch /run, /var/lib, or a database.
+    """
+
+    def __init__(self, *, journal_path, status_path, pending_path, lock, database,
+                 boot_id, host_id, require_root_owned=True, fault=None):
+        if not isinstance(boot_id, str) or not re.fullmatch(r"[0-9a-f-]{36}", boot_id, re.I):
+            raise ValueError("invalid boot ID")
+        self.journal = TransitionJournal(journal_path, require_root_owned=require_root_owned,
+                                        fsync_dir=self._fsync_dir)
+        self.status_path = Path(status_path)
+        self.pending_path = Path(pending_path)
+        self.lock = lock
+        self.database = database
+        self.boot_id = boot_id.lower()
+        self.host_id = host_id
+        self.require_root_owned = require_root_owned
+        self.fault = fault or (lambda _point: None)
+
+    @staticmethod
+    def _tuple(value):
+        if not isinstance(value, dict) or not set(TRANSITION_TUPLE_FIELDS).issubset(value):
+            raise TransitionHold("transition tuple is incomplete")
+        result = {key: value[key] for key in TRANSITION_TUPLE_FIELDS}
+        if not isinstance(result["state"], str) or result["state"] not in TRANSITION_STATES:
+            raise TransitionHold("transition state is unknown")
+        if not isinstance(result["operation_id"], str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", result["operation_id"], re.I):
+            raise TransitionHold("operation ID must be UUIDv7")
+        if type(result["generation"]) is not int or result["generation"] < 0:
+            raise TransitionHold("generation is invalid")
+        if type(result["journal_seq"]) is not int or result["journal_seq"] < 0:
+            raise TransitionHold("journal sequence is invalid")
+        for key in ("journal_head_hash", "evidence_digest"):
+            if not isinstance(result[key], str) or not re.fullmatch(r"[0-9a-f]{64}", result[key]):
+                raise TransitionHold("transition digest is invalid")
+        if not isinstance(result["boot_id"], str) or not re.fullmatch(r"[0-9a-f-]{36}", result["boot_id"], re.I):
+            raise TransitionHold("boot ID is invalid")
+        return result
+
+    def _event(self, point):
+        self.fault(point)
+
+    def _fsync_dir(self, path):
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def _read_projection(self):
+        if self.pending_path.exists() or self.pending_path.is_symlink():
+            raise TransitionHold("pending marker blocks transition admission")
+        try:
+            info = self.status_path.lstat()
+            if not stat.S_ISREG(info.st_mode) or self.status_path.is_symlink():
+                raise TransitionHold("projection is not a regular file")
+            if self.require_root_owned and (info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o644):
+                raise TransitionHold("projection ownership or mode is invalid")
+            fd = os.open(self.status_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                opened = os.fstat(fd)
+                if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                    raise TransitionHold("projection changed while opening")
+                content = os.read(fd, 1024 * 1024 + 1)
+            finally:
+                os.close(fd)
+            if len(content) > 1024 * 1024:
+                raise TransitionHold("projection exceeds supported size")
+            value = json.loads(content.decode("ascii"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raise TransitionHold("projection is missing or corrupt") from None
+        if not isinstance(value, dict):
+            raise TransitionHold("projection is invalid")
+        if _transition_canonical(value) != content:
+            raise TransitionHold("projection is not canonical")
+        expected_shape = set(TRANSITION_TUPLE_FIELDS)
+        if value.get("state") == "DRAINING":
+            expected_shape.add("permit_manifest_hash")
+        if set(value) != expected_shape:
+            raise TransitionHold("projection shape is invalid")
+        if self.require_root_owned:
+            parent_fd = open_root_trusted_directory(self.status_path.parent)
+            os.close(parent_fd)
+        tuple_value = self._tuple(value)
+        if tuple_value["boot_id"] != self.boot_id:
+            raise TransitionHold("projection boot ID is stale")
+        if tuple_value["journal_seq"] == 0:
+            if tuple_value["journal_head_hash"] != TRANSITION_GENESIS_HASH:
+                raise TransitionHold("genesis journal hash is invalid")
+        seq, digest = self.journal.head()
+        if (seq, digest) != (tuple_value["journal_seq"], tuple_value["journal_head_hash"]):
+            raise TransitionHold("projection does not match journal head")
+        db_tuple = self._tuple(self.database.read_tuple())
+        if db_tuple != {key: tuple_value[key] for key in TRANSITION_TUPLE_FIELDS}:
+            raise TransitionHold("projection and database tuple differ")
+        if tuple_value["state"] == "DRAINING":
+            manifest = value.get("permit_manifest_hash")
+            if not isinstance(manifest, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest):
+                raise TransitionHold("drain manifest is invalid")
+            if self.database.read_permit_manifest_hash() != manifest:
+                raise TransitionHold("projection and database drain manifest differ")
+            tuple_value["permit_manifest_hash"] = manifest
+        return tuple_value
+
+    def assert_open(self):
+        with self.lock.hold("shared"):
+            current = self._read_projection()
+            if current["state"] != "OPEN":
+                raise TransitionHold("admission is closed")
+            return current
+
+    def assert_drain_permit(self, binding):
+        with self.lock.hold("shared"):
+            current = self._read_projection()
+            if current["state"] != "DRAINING":
+                raise TransitionHold("drain is closed")
+            self.database.assert_exact_permit(current, binding)
+            return current
+
+    def _publish(self, source, target, event, *, details, source_sha, target_sha,
+                 evidence_digest, permit_manifest_hash=None, release=None,
+                 release_record=None):
+        if self.pending_path.exists() or self.pending_path.is_symlink():
+            raise TransitionHold("pending marker already exists")
+        record_details = dict(details)
+        if release_record is not None:
+            record_details["release"] = release_record
+        record = {
+            "event": event,
+            "state": target["state"],
+            "operation_id": target["operation_id"],
+            "generation": target["generation"],
+            "boot_id": target["boot_id"],
+            "source_sha": source_sha,
+            "target_sha": target_sha,
+            "evidence_digest": evidence_digest,
+            "details": record_details,
+        }
+        prepared = self.journal.prepare(record)
+        seq, head, _line, _base_seq, _prior = prepared
+        target["journal_seq"] = seq
+        target["journal_head_hash"] = head
+        target["evidence_digest"] = evidence_digest
+        if permit_manifest_hash is not None:
+            target["permit_manifest_hash"] = permit_manifest_hash
+        encoded = _transition_canonical(target)
+        self._event("before_marker_create")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        if self.require_root_owned:
+            parent_fd = open_root_trusted_directory(self.pending_path.parent)
+            os.close(parent_fd)
+        fd = os.open(self.pending_path, flags, 0o644)
+        try:
+            if self.require_root_owned:
+                os.fchown(fd, 0, 0)
+            os.fchmod(fd, 0o644)
+            self._event("marker_created")
+            view = memoryview(encoded)
+            partial = False
+            while view:
+                chunk = max(1, len(view) // 2) if not partial else len(view)
+                written = os.write(fd, view[:chunk])
+                if written <= 0:
+                    raise OSError("short marker write")
+                view = view[written:]
+                if not partial and view:
+                    partial = True
+                    self._event("marker_partial_write")
+            self._event("marker_written")
+            self._event("before_marker_file_fsync")
+            os.fsync(fd)
+            self._event("marker_file_fsync")
+        finally:
+            os.close(fd)
+        self._event("before_marker_directory_fsync")
+        self._fsync_dir(self.pending_path.parent)
+        self._event("marker_directory_fsync")
+        self._event("before_journal_append")
+        self.journal.append_prepared(prepared, fault=self._event)
+        self._event("before_database_commit")
+        self.database.compare_and_set(source, target, release=release, details=details)
+        self._event("database_commit")
+        if self._tuple(self.database.read_tuple()) != self._tuple(target):
+            raise TransitionHold("database did not persist exact target tuple")
+        jseq, jhead = self.journal.head()
+        if (jseq, jhead) != (seq, head):
+            raise TransitionHold("journal changed before projection commit")
+        self._event("before_projection_rename")
+        os.replace(self.pending_path, self.status_path)
+        self._event("projection_rename")
+        try:
+            self._event("before_projection_directory_fsync")
+            self._fsync_dir(self.status_path.parent)
+        except Exception as exc:
+            raise TransitionDurabilityUnconfirmed("COMMITTED_DURABILITY_UNCONFIRMED") from exc
+        self._event("projection_directory_fsync")
+        published = self._read_projection()
+        if self._tuple(published) != self._tuple(target) or self._tuple(self.database.read_tuple()) != self._tuple(target):
+            raise TransitionHold("final projection/database verification failed")
+        return target
+
+    def transition(self, target_state, *, source_sha, target_sha, evidence_digest,
+                   details=None, preconditions=None, permits=None):
+        if target_state not in TRANSITION_STATES:
+            raise ValueError("unknown target state")
+        for name, value in (("source SHA", source_sha), ("target SHA", target_sha)):
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+                raise ValueError("invalid " + name)
+        if not isinstance(evidence_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_digest):
+            raise ValueError("invalid evidence digest")
+        details = dict(details or {})
+        def has_sensitive_key(value):
+            if isinstance(value, dict):
+                return any(re.search(r"secret|token|password|credential|api[_-]?key", str(key), re.I)
+                           or has_sensitive_key(nested) for key, nested in value.items())
+            if isinstance(value, (list, tuple)):
+                return any(has_sensitive_key(item) for item in value)
+            return False
+        if has_sensitive_key(details):
+            raise ValueError("secret-like journal fields are forbidden")
+        with self.lock.hold("exclusive"):
+            source = self._read_projection()
+            if (source["state"], target_state) not in TRANSITION_EDGES:
+                raise TransitionHold("transition is not allowed")
+            new_operation = source["state"] == "OPEN" and target_state == "HOLD_REQUESTED"
+            target = {
+                "state": target_state,
+                "operation_id": _transition_uuid7() if new_operation else source["operation_id"],
+                "generation": source["generation"] + (1 if new_operation else 0),
+                "boot_id": self.boot_id,
+                "journal_seq": source["journal_seq"] + 1,
+                "journal_head_hash": source["journal_head_hash"],
+                "evidence_digest": evidence_digest,
+            }
+            manifest = None
+            if target_state == "DRAINING":
+                if permits is None or not isinstance(permits, list):
+                    raise TransitionHold("DRAINING requires a finite permit manifest")
+                forbidden = {"CONNECTOR", "BACKUP", "RESTORE", "UPDATE", "UPLOAD", "TRANSFER", "RETENTION"}
+                for permit in permits:
+                    if not isinstance(permit, dict):
+                        raise TransitionHold("drain permit is invalid")
+                    domain = str(permit.get("domain", permit.get("work_type", ""))).upper()
+                    if domain in forbidden:
+                        raise TransitionHold("Connector and backup work have no drain exception")
+                manifest_payload = {
+                    "operation_id": target["operation_id"],
+                    "generation": target["generation"],
+                    "cutoff_seq": source["journal_seq"],
+                    "permits": permits,
+                }
+                manifest = hashlib.sha256(_transition_canonical(manifest_payload)).hexdigest()
+                details["cutoff_seq"] = source["journal_seq"]
+                details["permit_manifest_hash"] = manifest
+                self.database.validate_permit_manifest(source, permits, manifest)
+            self.database.verify_transition_preconditions(source, target, details, permits)
+            if preconditions is not None:
+                preconditions(source, target_state)
+            event = target_state
+            return self._publish(source, target, event, details=details,
+                                 source_sha=source_sha, target_sha=target_sha,
+                                 evidence_digest=evidence_digest,
+                                 permit_manifest_hash=manifest)
+
+    def release(self, authorization, *, source_sha, target_sha, evidence_digest):
+        for name, value in (("source SHA", source_sha), ("target SHA", target_sha)):
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+                raise ValueError("invalid " + name)
+        if not isinstance(evidence_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_digest):
+            raise ValueError("invalid evidence digest")
+        required = {"host_id", "operation_id", "generation", "source_sha", "target_sha",
+                    "approval_ref", "php_profile", "rollback_evidence", "expected_journal_seq", "nonce"}
+        if not isinstance(authorization, dict) or set(authorization) != required:
+            raise TransitionHold("release authorization shape is invalid")
+        with self.lock.hold("exclusive"):
+            source = self._read_projection()
+            if source["state"] != "READY_PENDING_OWNER":
+                raise TransitionHold("release source state is not ready")
+            if authorization["php_profile"] != "8.4" or authorization["host_id"] != self.host_id:
+                raise TransitionHold("release host or PHP profile is invalid")
+            if authorization["operation_id"] != source["operation_id"] or authorization["generation"] != source["generation"]:
+                raise TransitionHold("release operation scope is invalid")
+            if authorization["source_sha"] != source_sha or authorization["target_sha"] != target_sha:
+                raise TransitionHold("release SHA scope is invalid")
+            if authorization["expected_journal_seq"] != source["journal_seq"] + 1:
+                raise TransitionHold("release journal sequence is invalid")
+            if (not isinstance(authorization["approval_ref"], str) or not authorization["approval_ref"]
+                or not isinstance(authorization["rollback_evidence"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", authorization["rollback_evidence"])):
+                raise TransitionHold("release evidence is incomplete")
+            nonce = authorization["nonce"]
+            if not isinstance(nonce, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", nonce):
+                raise TransitionHold("release nonce is invalid")
+            nonce_digest = hashlib.sha256(nonce.encode("ascii")).hexdigest()
+            if self.database.nonce_consumed(nonce_digest) or any(
+                record.get("event") == "RELEASE_COMMIT" and record.get("details", {}).get("nonce_digest") == hashlib.sha256(nonce.encode()).hexdigest()
+                for record in self.journal.records()
+            ):
+                raise TransitionHold("release nonce was already used")
+            target = dict(source, state="OPEN", boot_id=self.boot_id,
+                          journal_seq=source["journal_seq"] + 1,
+                          evidence_digest=evidence_digest)
+            details = {"approval_ref": authorization["approval_ref"], "nonce_digest": nonce_digest}
+            release_binding = {key: value for key, value in authorization.items() if key != "nonce"}
+            release_binding["nonce_digest"] = nonce_digest
+            self.database.validate_release(release_binding, source, nonce_digest)
+            return self._publish(source, target, "RELEASE_COMMIT", details=details,
+                                 source_sha=source_sha, target_sha=target_sha,
+                                 evidence_digest=evidence_digest,
+                                 release=release_binding,
+                                 release_record=release_binding)
 
 
 def dispatch(args):
