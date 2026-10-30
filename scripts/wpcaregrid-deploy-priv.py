@@ -1620,11 +1620,15 @@ class RootTransitionAdapter:
     assert_exact_permit, claim_drain_step, verify_drain_effect_absent, record_drain_outcome,
     assert_no_unresolved_drain_effects, and record_drain_reconciliation. Claims
     atomically insert one immutable INTENT keyed by the exact operation/generation,
-    permit, work, and step binding; the returned claim reference identifies that
-    durable row. The proposed UUID is correlation only and must never be the unique
-    replay key. Outcomes are immutable INTENT -> SUCCEEDED/FAILED/UNKNOWN writes.
-    Reconciliation is a separate immutable authoritative record; it must not
-    rewrite an outcome. This boundary performs no SQL or Laravel-model calls.
+    permit, work, and step binding; within that same transaction the claim must
+    reject unresolved INTENT/UNKNOWN work for another permit in the operation and
+    generation. The returned claim reference identifies that durable row. The
+    proposed UUID is correlation only and never the replay key. Outcomes are
+    immutable INTENT -> SUCCEEDED/FAILED/UNKNOWN writes. Reconciliation is a
+    separate immutable authoritative record; it must not rewrite an outcome.
+    The current M16 claimFromDrain serializes on the fence but only enforces per-step
+    uniqueness; a live adapter needs a reviewed operation-wide unresolved-work guard.
+    This boundary performs no SQL or Laravel-model calls.
     Tests must use a fake. The constructor intentionally requires every path and
     adapter, so importing this module cannot touch /run, /var/lib, or a database.
     """
@@ -1731,7 +1735,7 @@ class RootTransitionAdapter:
 
     def assert_open(self):
         with self.lock.hold("shared"):
-            current = self._read_projection()
+            current = self._durability_preflight()
             if current["state"] != "OPEN":
                 raise TransitionHold("admission is closed")
             return current
@@ -1739,7 +1743,7 @@ class RootTransitionAdapter:
     def check_drain_permit(self, binding):
         """Check a permit for diagnostics only; it does not authorize an effect."""
         with self.lock.hold("shared"):
-            current = self._read_projection()
+            current = self._durability_preflight()
             if current["state"] != "DRAINING":
                 raise TransitionHold("drain is closed")
             self.database.assert_exact_permit(current, binding)
@@ -1754,11 +1758,12 @@ class RootTransitionAdapter:
         """Atomically consume one exact permit step before a bounded external effect.
 
         The injected claim method must durably enforce uniqueness by exact permit
-        and step binding, independent of the caller-supplied intent UUID. Generic
-        exceptions, timeouts, late results, and lost post-effect verification are
-        UNKNOWN. FAILED requires adapter verification of authoritative no-effect
-        evidence. INTENT remains durable if the process dies before outcome write.
-        SHARED remains held throughout.
+        and step binding, independent of the caller-supplied intent UUID, and reject
+        unresolved work for another permit in the same operation/generation within
+        the atomic claim transaction. Generic exceptions, timeouts, late results,
+        and lost post-effect verification are UNKNOWN. FAILED requires adapter
+        verification of authoritative no-effect evidence. INTENT remains durable
+        if the process dies before outcome write. SHARED remains held throughout.
         """
         if not callable(effect):
             raise TypeError("drain effect must be callable")
@@ -1766,9 +1771,13 @@ class RootTransitionAdapter:
             or not 0 < max_duration_seconds <= 300):
             raise ValueError("drain effect bound must be between 0 and 300 seconds")
         with self.lock.hold("shared"):
-            current = self._read_projection()
+            current = self._durability_preflight()
             if current["state"] != "DRAINING":
                 raise TransitionHold("drain is closed")
+            if self.database.assert_no_unresolved_drain_effects(
+                current["operation_id"], current["generation"]
+            ) is not True:
+                raise TransitionHold("unresolved DRAIN intent/UNKNOWN blocks another effect")
             self.database.assert_exact_permit(current, binding)
             intent_id = _transition_uuid7()
             claim = self.database.claim_drain_step(current, binding, intent_id)
