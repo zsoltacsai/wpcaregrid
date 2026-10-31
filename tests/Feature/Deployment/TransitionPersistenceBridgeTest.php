@@ -514,6 +514,16 @@ class TransitionPersistenceBridgeTest extends TestCase
             'phase=response; state=canonical_invalid',
             'phase=response; state=identity_mismatch',
             'phase=response; state=tuple_mismatch',
+            'EMPTY_DIAGNOSTIC',
+            'APP_PROVIDER_BOOT',
+            'SQLITE_OR_PDO_BOOT',
+            'SYMFONY_CONSOLE_BOOT_OR_REGISTRATION',
+            'PHP_PARSE_OR_RUNTIME_FATAL',
+            'PHP_INPUT_FILE',
+            'PHP_STARTUP',
+            'APP_KEY_CONFIG',
+            'PHP_WARNING',
+            'OTHER_NONEMPTY_OUTPUT',
         ] as $diagnosticToken) {
             self::assertStringContainsString($diagnosticToken, $helper);
         }
@@ -891,6 +901,17 @@ def run_preflight_probe(probe, command, capture_stdout=False):
             diagnostic = stream.read(8192).lower()
         except Exception:
             return 'UNCLASSIFIED'
+        if not diagnostic.strip():
+            return 'EMPTY_DIAGNOSTIC'
+        if any(token in diagnostic for token in (
+                b'could not open input file', b'no input file specified')):
+            return 'PHP_INPUT_FILE'
+        if any(token in diagnostic for token in (
+                b'php startup:', b'unable to load dynamic library', b'failed loading')):
+            return 'PHP_STARTUP'
+        if any(token in diagnostic for token in (
+                b'no application encryption key', b'app_key is invalid', b'application key is invalid')):
+            return 'APP_KEY_CONFIG'
         cache_names = (b'packages.php', b'services.php')
         cache_name_present = any(name in diagnostic for name in cache_names)
         file_open_failure = any(token in diagnostic for token in (
@@ -916,16 +937,29 @@ def run_preflight_probe(probe, command, capture_stdout=False):
         if any(name in diagnostic for name in (b'autoload.php', b'bootstrap/app.php')) and file_open_failure:
             return 'PHP_AUTOLOAD_OR_BOOTSTRAP'
         if any(token in diagnostic for token in (
-                b'sqlstate[', b'could not find driver', b'connection refused',
-                b'database is locked', b'database connection', b'unable to open database file')):
+                b'pdoexception', b'pdo sqlite', b'sqlite error', b'sqliteexception',
+                b'sqlite driver', b'could not find driver')):
+            return 'SQLITE_OR_PDO_BOOT'
+        if any(token in diagnostic for token in (
+                b'sqlstate[', b'connection refused', b'database is locked',
+                b'database connection', b'unable to open database file')):
             return 'DB_OR_PROVIDER_BOOT'
+        if any(token in diagnostic for token in (
+                b'appserviceprovider', b'serviceprovider', b'service provider', b'provider boot')):
+            return 'APP_PROVIDER_BOOT'
         if any(token in diagnostic for token in (
                 b'console kernel', b'console application', b'bootstrapwith',
                 b'application bootstrap', b'command application')):
-            return 'CONSOLE_BOOTSTRAP'
+            return 'SYMFONY_CONSOLE_BOOT_OR_REGISTRATION'
+        if any(token in diagnostic for token in (
+                b'parse error', b'fatal error', b'uncaught error', b'uncaught typeerror')):
+            return 'PHP_PARSE_OR_RUNTIME_FATAL'
+        if any(token in diagnostic for token in (
+                b'php warning:', b'php notice:', b'php deprecated:')):
+            return 'PHP_WARNING'
         if b'fatal error' in diagnostic or b'uncaught ' in diagnostic or b'exception:' in diagnostic:
             return 'OTHER_EXCEPTION'
-        return 'UNCLASSIFIED'
+        return 'OTHER_NONEMPTY_OUTPUT'
 
     try:
         try:
@@ -1309,7 +1343,7 @@ PY;
             $diagnostic = 'phase=root_helper; state=failed';
             $signalDiagnostic = null;
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|OTHER_EXCEPTION|UNCLASSIFIED))?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=cleanup; cleanup_state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
+            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|PHP_INPUT_FILE|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=cleanup; cleanup_state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
                 $signalDiagnostic = null;
                 foreach ($matches as $match) {
                     if (str_starts_with($match[0], 'phase=wrapper_signal;')) {
