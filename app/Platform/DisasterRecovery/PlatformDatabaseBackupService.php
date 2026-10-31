@@ -515,6 +515,7 @@ final class PlatformDatabaseBackupService
 
             $diagnosticBodyState = 'return_true_pending_cleanup';
             $this->emitVerificationDiagnostic($diagnosticStage, 'body_result', 'none', 'none', $diagnosticBodyState);
+
             return true;
         } catch (\Throwable $error) {
             if (! $diagnosticExceptionReported) {
@@ -527,6 +528,7 @@ final class PlatformDatabaseBackupService
             $this->markVerificationFailure($backup, 'VERIFICATION_ERROR');
 
             $this->emitVerificationDiagnostic($diagnosticStage, 'body_result', 'none', 'VERIFICATION_ERROR', $diagnosticBodyState);
+
             return false;
         } finally {
             $diagnosticStage = 'service_cleanup_temp_artifacts';
@@ -551,7 +553,7 @@ final class PlatformDatabaseBackupService
     }
 
     /**
-     * @param list<string> $temporaryPaths
+     * @param  list<string>  $temporaryPaths
      * @return list<array{event: string, category: string, code: string, body_state: string}>
      */
     private function cleanupTemporaryArtifacts(array $temporaryPaths, string $diagnosticBodyState): array
