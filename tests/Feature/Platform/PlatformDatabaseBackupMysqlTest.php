@@ -85,6 +85,92 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
         }
     }
 
+    public function test_cleanup_objects_never_emits_complete_after_an_unlink_or_rmdir_failure(): void
+    {
+        $successfulRoot = sys_get_temp_dir().'/wpcg-cleanup-success-'.bin2hex(random_bytes(6));
+        mkdir($successfulRoot, 0700);
+        file_put_contents($successfulRoot.'/artifact', 'synthetic');
+        $successfulEvents = [];
+
+        try {
+            $succeeded = $this->cleanupDiagnosticObjects(
+                $successfulRoot,
+                static function (string $event, string $category, string $code) use (&$successfulEvents): void {
+                    $successfulEvents[] = compact('event', 'category', 'code');
+                },
+            );
+
+            $this->assertTrue($succeeded);
+            $this->assertSame(['complete'], array_column($successfulEvents, 'event'));
+        } finally {
+            @unlink($successfulRoot.'/artifact');
+            @rmdir($successfulRoot);
+        }
+
+        $failingRoot = sys_get_temp_dir().'/wpcg-cleanup-failure-'.bin2hex(random_bytes(6));
+        $nestedDirectory = $failingRoot.'/nested';
+        mkdir($nestedDirectory, 0700, true);
+        $failedArtifact = $nestedDirectory.'/blocked-artifact';
+        file_put_contents($failedArtifact, 'synthetic');
+        file_put_contents($failingRoot.'/successful-artifact', 'synthetic');
+        $failureEvents = [];
+
+        try {
+            $succeeded = $this->cleanupDiagnosticObjects(
+                $failingRoot,
+                static function (string $event, string $category, string $code) use (&$failureEvents): void {
+                    $failureEvents[] = compact('event', 'category', 'code');
+                },
+                static fn (string $path): bool => $path === $failedArtifact ? false : @unlink($path),
+            );
+
+            $this->assertFalse($succeeded);
+            $this->assertSame(
+                ['cleanup_observation', 'cleanup_observation', 'cleanup_observation'],
+                array_column($failureEvents, 'event'),
+            );
+            $this->assertNotContains('complete', array_column($failureEvents, 'event'));
+            $this->assertFileExists($failedArtifact);
+            $this->assertFileDoesNotExist($failingRoot.'/successful-artifact');
+        } finally {
+            @unlink($failedArtifact);
+            @rmdir($nestedDirectory);
+            @rmdir($failingRoot);
+        }
+    }
+
+    private function cleanupDiagnosticObjects(string $root, callable $emit, ?callable $unlink = null, ?callable $rmdir = null): bool
+    {
+        $unlink ??= static fn (string $path): bool => @unlink($path);
+        $rmdir ??= static fn (string $path): bool => @rmdir($path);
+        $cleanupFailed = false;
+
+        if (is_dir($root)) {
+            $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::CHILD_FIRST);
+            foreach ($files as $file) {
+                $removed = $file->isDir()
+                    ? $rmdir($file->getPathname())
+                    : $unlink($file->getPathname());
+
+                if (! $removed) {
+                    $cleanupFailed = true;
+                    $emit('cleanup_observation', 'cleanup_error', 'other');
+                }
+            }
+        }
+
+        if (! $rmdir($root)) {
+            $cleanupFailed = true;
+            $emit('cleanup_observation', 'cleanup_error', 'other');
+        }
+
+        if (! $cleanupFailed) {
+            $emit('complete', 'none', 'none');
+        }
+
+        return ! $cleanupFailed;
+    }
+
     #[Group('wpcg_isolated_mysql_backup_verification')]
     public function test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked(): void
     {
@@ -247,23 +333,15 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
                 $activeStage = 'cleanup_objects';
                 $this->emitDiagnosticV2($activeStage, 'begin');
                 if (is_string($root)) {
-                    if (is_dir($root)) {
-                        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::CHILD_FIRST);
-                        foreach ($files as $file) {
-                            if ($file->isDir()) {
-                                if (! @rmdir($file->getPathname())) {
-                                    $this->emitDiagnosticV2($activeStage, 'cleanup_observation', 'cleanup_error', 'other');
-                                }
-                            } elseif (! @unlink($file->getPathname())) {
-                                $this->emitDiagnosticV2($activeStage, 'cleanup_observation', 'cleanup_error', 'other');
-                            }
-                        }
-                    }
-                    if (! @rmdir($root)) {
-                        $this->emitDiagnosticV2($activeStage, 'cleanup_observation', 'cleanup_error', 'other');
-                    }
+                    $this->cleanupDiagnosticObjects(
+                        $root,
+                        function (string $event, string $category, string $code) use (&$activeStage): void {
+                            $this->emitDiagnosticV2($activeStage, $event, $category, $code);
+                        },
+                    );
+                } else {
+                    $this->emitDiagnosticV2($activeStage, 'complete');
                 }
-                $this->emitDiagnosticV2($activeStage, 'complete');
             } catch (\Throwable $cleanupException) {
                 $this->emitDiagnosticV2($activeStage, 'cleanup_failure', 'cleanup_error', 'other');
                 if ($primaryFailure === null) {
