@@ -474,7 +474,7 @@ class TransitionPersistenceBridgeTest extends TestCase
             $wireRequest = $request;
             $wireRequest['payload'] = (object) [];
             $scriptText = <<<'PY'
-import json, os, socket, struct, subprocess, sys, time
+import json, os, signal, socket, struct, subprocess, sys, time
 php, artisan, root, socket_path, uid, gid, database, request_json = sys.argv[1:]
 uid, gid = int(uid), int(gid)
 parent = os.path.dirname(socket_path)
@@ -482,6 +482,9 @@ server = None
 conn = None
 child = None
 response = bytearray()
+def handle_shutdown(signum, frame):
+    raise SystemExit('phase=wrapper_signal; child_state=running')
+signal.signal(signal.SIGTERM, handle_shutdown)
 try:
     os.mkdir(parent, 0o710)
     os.chown(parent, 0, gid)
@@ -558,16 +561,17 @@ finally:
                             child.terminate()
                         except ProcessLookupError:
                             pass
+                    try:
+                        child.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
                         try:
-                            child.wait(timeout=2)
-                        except subprocess.TimeoutExpired:
                             try:
                                 child.kill()
                             except ProcessLookupError:
                                 pass
-                            child.wait()
-                    else:
-                        child.wait()
+                            child.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            raise SystemExit('phase=cleanup; cleanup_state=unconfirmed')
             finally:
                 try:
                     os.unlink(socket_path)
@@ -587,11 +591,111 @@ PY;
             ];
             $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
             self::assertIsResource($process);
-            $stdout = stream_get_contents($pipes[1]);
-            $stderr = stream_get_contents($pipes[2]);
-            fclose($pipes[1]);
-            fclose($pipes[2]);
-            self::assertSame(0, proc_close($process), trim($stderr.' '.$stdout));
+            $openPipes = $pipes;
+            $captured = [1 => '', 2 => ''];
+            foreach ($openPipes as $pipe) {
+                stream_set_blocking($pipe, false);
+            }
+            $drainPipes = static function (?array $ready = null) use (&$openPipes, &$captured): void {
+                foreach ($openPipes as $index => $pipe) {
+                    if ($ready !== null && ! in_array($pipe, $ready, true)) {
+                        continue;
+                    }
+                    $drained = 0;
+                    while ($drained < 65536) {
+                        $chunk = fread($pipe, min(8192, 65536 - $drained));
+                        if ($chunk === false || $chunk === '') {
+                            break;
+                        }
+                        $drained += strlen($chunk);
+                        $captured[$index] = substr($captured[$index].$chunk, -4096);
+                    }
+                    if (feof($pipe)) {
+                        fclose($pipe);
+                        unset($openPipes[$index]);
+                    }
+                }
+            };
+            $deadline = microtime(true) + 45.0;
+            $observedExitCode = null;
+            $timedOut = false;
+            while ($openPipes !== [] || $observedExitCode === null) {
+                $remaining = $deadline - microtime(true);
+                if ($remaining <= 0) {
+                    $timedOut = true;
+                    break;
+                }
+                if ($openPipes !== []) {
+                    $read = array_values($openPipes);
+                    $write = [];
+                    $except = [];
+                    $waitMicros = (int) min(100000, ceil($remaining * 1000000));
+                    $ready = @stream_select($read, $write, $except, 0, $waitMicros);
+                    if ($ready !== false && $ready > 0) {
+                        $drainPipes($read);
+                    } elseif ($ready === false) {
+                        $drainPipes();
+                    }
+                } else {
+                    usleep(20000);
+                }
+                $drainPipes();
+                $status = proc_get_status($process);
+                if (! $status['running'] && $observedExitCode === null) {
+                    $observedExitCode = $status['exitcode'];
+                }
+            }
+
+            $cleanupConfirmed = $observedExitCode !== null;
+            if ($timedOut) {
+                proc_terminate($process);
+                $terminateDeadline = microtime(true) + 5.0;
+                while (microtime(true) < $terminateDeadline) {
+                    $drainPipes();
+                    $status = proc_get_status($process);
+                    if (! $status['running']) {
+                        $observedExitCode = $status['exitcode'];
+                        $cleanupConfirmed = true;
+                        break;
+                    }
+                    usleep(20000);
+                }
+                if (! $cleanupConfirmed) {
+                    proc_terminate($process, 9);
+                    $killDeadline = microtime(true) + 2.0;
+                    while (microtime(true) < $killDeadline) {
+                        $drainPipes();
+                        $status = proc_get_status($process);
+                        if (! $status['running']) {
+                            $observedExitCode = $status['exitcode'];
+                            $cleanupConfirmed = true;
+                            break;
+                        }
+                        usleep(20000);
+                    }
+                }
+            }
+
+            $drainPipes();
+            foreach ($openPipes as $index => $pipe) {
+                fclose($pipe);
+                unset($openPipes[$index]);
+            }
+            $processExitCode = $cleanupConfirmed ? proc_close($process) : -1;
+            if ($processExitCode < 0 && $observedExitCode !== null) {
+                $processExitCode = $observedExitCode;
+            }
+            $diagnostic = 'Root peer helper failed.';
+            $helperOutput = $captured[1]."\n".$captured[2];
+            if (preg_match('/phase=(accept_timeout|accept|response_timeout|response|child_wait_timeout|child|wrapper_signal); child_state=(running|exited)(?:; exit_code=(-?\\d+))?|phase=cleanup; cleanup_state=unconfirmed/', $helperOutput, $matches) === 1) {
+                $diagnostic = trim($matches[0]);
+            }
+            if ($timedOut) {
+                $diagnostic = $cleanupConfirmed
+                    ? 'phase=wrapper_timeout; cleanup_state=confirmed'
+                    : 'phase=wrapper_timeout; cleanup_state=unconfirmed';
+            }
+            self::assertSame(0, $processExitCode, $diagnostic);
         } finally {
             foreach ([$script, $database] as $path) {
                 if (is_file($path)) {

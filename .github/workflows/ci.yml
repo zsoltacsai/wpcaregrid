@@ -529,6 +529,26 @@ jobs:
           def safe_test_name(value):
               return "".join(char if char.isalnum() or char in "_.$:\\" else "?" for char in value)[:240]
 
+          safe_rpc_diagnostic = re.compile(
+              r"(?:phase=(?:accept_timeout|response_timeout|child_wait_timeout|wrapper_signal); child_state=running|"
+              r"phase=(?:accept|response|child|wrapper_signal); child_state=exited; exit_code=-?\d+|"
+              r"phase=cleanup; cleanup_state=unconfirmed|"
+              r"phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed))"
+          )
+          ansi_control = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+          def emit_safe_rpc_diagnostic():
+              try:
+                  with open(log_path, "r", encoding="utf-8", errors="replace") as recorded_output:
+                      for line in recorded_output:
+                          candidate = ansi_control.sub("", line).strip()
+                          match = safe_rpc_diagnostic.search(candidate)
+                          if match:
+                              print(match.group(0), flush=True)
+                              return
+              except OSError:
+                  return
+
           def capture_mysql_state(label):
               base = [
                   "mysql", "--protocol=TCP", "--connect-timeout=3",
@@ -723,6 +743,8 @@ jobs:
                       continue
                   event, raw_name = match.groups()
                   name = safe_test_name(raw_name)
+                  if event in ("Test Failed", "Test Errored"):
+                      print(f"PHPUnit {event} ({name})", flush=True)
                   if event == "Test Passed":
                       last_passed = name
                   if event == "Test Preparation Started":
@@ -751,7 +773,7 @@ jobs:
                               transaction_already_seen = active_transaction_seen
                           if not transaction_already_seen and second_snapshot_timer is not None:
                               second_snapshot_timer.cancel()
-                  elif name == target_name and event in ("Test Passed", "Test Failed", "Test Errored", "Test Skipped"):
+                  elif name == target_name and event in ("Test Passed", "Test Skipped"):
                       print(f"Target outcome {event} ({name})", flush=True)
 
           command = [
@@ -791,6 +813,8 @@ jobs:
                   if watchdog_thread.is_alive():
                       watchdog_thread.join()
 
+          if status != 0:
+              emit_safe_rpc_diagnostic()
           try:
               os.unlink(log_path)
           except FileNotFoundError:
