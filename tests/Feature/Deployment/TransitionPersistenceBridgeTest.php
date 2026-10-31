@@ -481,8 +481,10 @@ parent = os.path.dirname(socket_path)
 server = None
 conn = None
 child = None
+preflight = None
 child_stderr = None
 child_cleanup_unconfirmed = False
+preflight_cleanup_unconfirmed = False
 response = bytearray()
 child_diagnostic_markers = {
     'phase=handler_entry',
@@ -513,7 +515,50 @@ def emit_child_marker():
     sys.stderr.write('phase=child_marker; marker='+marker+'\n')
     sys.stderr.flush()
 
+def stop_preflight_bounded(process):
+    if process is None:
+        return True
+    if process.poll() is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            return False
+    return process.poll() is not None
+
 try:
+    env = os.environ.copy()
+    for credential_name in ('MYSQL_PWD', 'M9_MYSQL_VERIFY_PASSWORD', 'DB_PASSWORD', 'DB_USERNAME', 'DATABASE_URL', 'MYSQL_ROOT_PASSWORD'):
+        env.pop(credential_name, None)
+    env.update({'APP_ENV':'testing','APP_KEY':'base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','CAREGRID_DEPLOYMENT_ENV':'testing','CAREGRID_TRANSITION_RPC_TEST_DIAGNOSTICS':'1','DB_CONNECTION':'sqlite','DB_DATABASE':database,'DB_URL':'','CACHE_STORE':'array','SESSION_DRIVER':'array','QUEUE_CONNECTION':'sync','MAIL_MAILER':'array','LOG_CHANNEL':'stderr'})
+    preflight_env = env.copy()
+    preflight_env['DB_DATABASE'] = ':memory:'
+    preflight_env['APP_CONFIG_CACHE'] = os.path.join(parent, 'config-cache.php')
+    try:
+        preflight = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path,'--help'], cwd=root, env=preflight_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        raise SystemExit('phase=preflight; state=failed')
+    try:
+        preflight.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        preflight_cleanup_unconfirmed = not stop_preflight_bounded(preflight)
+        status = 'phase=preflight; state=timeout'
+        if preflight.returncode is not None:
+            status += '; exit_code='+str(preflight.returncode)
+        raise SystemExit(status)
+    if preflight.returncode != 0:
+        raise SystemExit('phase=preflight; state=failed; exit_code='+str(preflight.returncode))
+
     os.mkdir(parent, 0o710)
     os.chown(parent, 0, gid)
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -522,10 +567,6 @@ try:
     os.chmod(socket_path, 0o620)
     server.listen(1)
     server.settimeout(0.1)
-    env = os.environ.copy()
-    for credential_name in ('MYSQL_PWD', 'M9_MYSQL_VERIFY_PASSWORD', 'DB_PASSWORD', 'DB_USERNAME', 'DATABASE_URL', 'MYSQL_ROOT_PASSWORD'):
-        env.pop(credential_name, None)
-    env.update({'APP_ENV':'testing','APP_KEY':'base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','CAREGRID_DEPLOYMENT_ENV':'testing','CAREGRID_TRANSITION_RPC_TEST_DIAGNOSTICS':'1','DB_CONNECTION':'sqlite','DB_DATABASE':database,'DB_URL':'','CACHE_STORE':'array','SESSION_DRIVER':'array','QUEUE_CONNECTION':'sync','MAIL_MAILER':'array','LOG_CHANNEL':'stderr'})
     child_stderr = tempfile.TemporaryFile(mode='w+b')
     child = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=child_stderr)
     deadline = time.monotonic() + 20
@@ -578,49 +619,55 @@ try:
     if decoded['result']['state'] != 'OPEN': raise SystemExit('Unexpected fence tuple')
 finally:
     try:
-        if conn is not None:
-            conn.close()
+        if preflight is not None and not stop_preflight_bounded(preflight):
+            preflight_cleanup_unconfirmed = True
     finally:
         try:
-            if server is not None:
-                server.close()
+            if conn is not None:
+                conn.close()
         finally:
             try:
-                if child is not None:
-                    if child.poll() is None:
-                        try:
-                            child.terminate()
-                        except ProcessLookupError:
-                            pass
-                    try:
-                        child.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            try:
-                                child.kill()
-                            except ProcessLookupError:
-                                pass
-                            child.wait(timeout=2)
-                        except subprocess.TimeoutExpired:
-                            child_cleanup_unconfirmed = True
+                if server is not None:
+                    server.close()
             finally:
                 try:
-                    emit_child_marker()
+                    if child is not None:
+                        if child.poll() is None:
+                            try:
+                                child.terminate()
+                            except ProcessLookupError:
+                                pass
+                        try:
+                            child.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                try:
+                                    child.kill()
+                                except ProcessLookupError:
+                                    pass
+                                child.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                child_cleanup_unconfirmed = True
                 finally:
                     try:
-                        if child_stderr is not None:
-                            child_stderr.close()
+                        emit_child_marker()
                     finally:
                         try:
-                            os.unlink(socket_path)
-                        except FileNotFoundError:
-                            pass
-                        try:
-                            os.rmdir(parent)
-                        except FileNotFoundError:
-                            pass
-            if child_cleanup_unconfirmed:
-                raise SystemExit('phase=cleanup; cleanup_state=unconfirmed')
+                            if child_stderr is not None:
+                                child_stderr.close()
+                        finally:
+                            try:
+                                os.unlink(socket_path)
+                            except FileNotFoundError:
+                                pass
+                            try:
+                                os.rmdir(parent)
+                            except FileNotFoundError:
+                                pass
+                if child_cleanup_unconfirmed:
+                    raise SystemExit('phase=cleanup; cleanup_state=unconfirmed')
+                if preflight_cleanup_unconfirmed:
+                    raise SystemExit('phase=cleanup; cleanup_state=unconfirmed')
 PY;
             file_put_contents($script, $scriptText);
             chmod($script, 0644);
@@ -727,7 +774,7 @@ PY;
             }
             $diagnostic = 'Root peer helper failed.';
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match('/phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(accept_timeout|accept|response_timeout|response|child_wait_timeout|child|wrapper_signal); child_state=(running|exited)(?:; exit_code=(-?\\d+))?|phase=cleanup; cleanup_state=unconfirmed/', $helperOutput, $matches) === 1) {
+            if (preg_match('/phase=preflight; state=(?:timeout|failed)(?:; exit_code=-?\\d+)?|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(accept_timeout|accept|response_timeout|response|child_wait_timeout|child|wrapper_signal); child_state=(running|exited)(?:; exit_code=(-?\\d+))?|phase=cleanup; cleanup_state=unconfirmed/', $helperOutput, $matches) === 1) {
                 $diagnostic = trim($matches[0]);
             }
             if ($timedOut) {
