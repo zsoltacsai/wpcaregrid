@@ -7,6 +7,7 @@ import errno
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -31,6 +32,63 @@ BOOT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 OTHER_BOOT = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 SHA = "1" * 40
 EVIDENCE = "2" * 64
+
+
+_LARAVEL_TEST_COPY_DIRS = ("app", "bootstrap", "config", "database", "lang", "routes", "vendor")
+_LARAVEL_TEST_EXCLUDED_DIRS = {
+    ".cache", ".git", ".phpunit.cache", ".pytest_cache", "__pycache__", "cache", "logs",
+    "node_modules", "runtime", "sessions", "storage", "temp", "tmp",
+}
+_LARAVEL_TEST_EXCLUDED_SUFFIXES = {
+    ".crt", ".db", ".key", ".log", ".pem", ".p12", ".pfx", ".sqlite", ".sqlite3",
+}
+
+
+def _laravel_test_copy_exclusions(directory, names, source):
+    relative_directory = Path(directory).relative_to(source)
+    excluded = []
+    for name in names:
+        candidate = Path(name)
+        if (name == ".env" or name.startswith(".env.")
+            or name in _LARAVEL_TEST_EXCLUDED_DIRS
+            or candidate.suffix.lower() in _LARAVEL_TEST_EXCLUDED_SUFFIXES
+            or (relative_directory == Path("bootstrap") and name == "cache")):
+            excluded.append(name)
+    return excluded
+
+
+def _copy_laravel_test_application(source, destination):
+    """Copy only the Laravel CLI runtime, excluding local state and secrets."""
+    source = Path(source).resolve(strict=True)
+    destination = Path(destination)
+    resolved_destination = destination.resolve(strict=False)
+    if resolved_destination == source or source in resolved_destination.parents:
+        raise ValueError("Laravel test copy destination must be outside the source checkout")
+    artisan = source / "artisan"
+    if not artisan.is_file() or artisan.is_symlink():
+        raise ValueError("Laravel test copy requires a regular artisan entry point")
+
+    for name in _LARAVEL_TEST_COPY_DIRS:
+        path = source / name
+        if not path.is_dir() or path.is_symlink():
+            raise ValueError("Laravel test copy is missing a required application directory")
+
+    destination.mkdir(mode=0o755)
+    try:
+        shutil.copy2(artisan, destination / "artisan", follow_symlinks=False)
+        for name in _LARAVEL_TEST_COPY_DIRS:
+            shutil.copytree(
+                source / name, destination / name,
+                ignore=lambda directory, names: _laravel_test_copy_exclusions(directory, names, source),
+                symlinks=True,
+            )
+        for current, directory_names, file_names in os.walk(destination, topdown=True, followlinks=False):
+            if any((Path(current) / name).is_symlink() for name in directory_names + file_names):
+                raise ValueError("Laravel test copy refuses symlinks in application inputs")
+        (destination / "bootstrap" / "cache").mkdir(mode=0o755)
+    except BaseException:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
 
 
 def _sanitize_child_stderr_excerpt(stderr):
@@ -1856,6 +1914,54 @@ class TransitionAdapterTests(unittest.TestCase):
         self.assertLessEqual(len(long_excerpt), 160)
         self.assertTrue(long_excerpt.endswith("…"))
 
+    @unittest.skipUnless(sys.platform == "linux", "requires POSIX symlink behavior")
+    def test_laravel_test_copy_excludes_local_state_and_refuses_symlinks(self):
+        with tempfile.TemporaryDirectory(prefix="wpcg-copy-policy-") as temporary:
+            root = Path(temporary) / "source"
+            app_root = Path(temporary) / "copy"
+            (root / "artisan").parent.mkdir(parents=True)
+            (root / "artisan").write_text("<?php // test artisan\n", encoding="ascii")
+            for directory in _LARAVEL_TEST_COPY_DIRS:
+                (root / directory).mkdir(parents=True)
+            (root / ".env").write_text("APP_KEY=local-secret\n", encoding="ascii")
+            (root / ".env.local").write_text("DB_PASSWORD=local-secret\n", encoding="ascii")
+            (root / "app" / "Command.php").write_text("<?php\n", encoding="ascii")
+            (root / "app" / ".env.testing").write_text("APP_KEY=local-secret\n", encoding="ascii")
+            (root / "app" / "storage").mkdir()
+            (root / "app" / "storage" / "runtime.json").write_text("private\n", encoding="ascii")
+            (root / "bootstrap" / "app.php").write_text("<?php\n", encoding="ascii")
+            (root / "bootstrap" / "cache").mkdir()
+            (root / "bootstrap" / "cache" / "config.php").write_text("secret\n", encoding="ascii")
+            (root / "config" / "app.php").write_text("<?php\n", encoding="ascii")
+            (root / "database" / "migration.php").write_text("<?php\n", encoding="ascii")
+            (root / "database" / "local.sqlite").write_bytes(b"private db")
+            (root / "lang" / "en.json").write_text("{}\n", encoding="ascii")
+            (root / "routes" / "console.php").write_text("<?php\n", encoding="ascii")
+            (root / "vendor" / "composer").mkdir()
+            (root / "vendor" / "composer" / "autoload.php").write_text("<?php\n", encoding="ascii")
+            (root / "vendor" / "package").mkdir()
+            (root / "vendor" / "package" / "bridge.php").write_text("<?php\n", encoding="ascii")
+            (root / "vendor" / "package" / ".env").write_text("TOKEN=private\n", encoding="ascii")
+            (root / "vendor" / "package" / "private.pem").write_text("private key\n", encoding="ascii")
+
+            _copy_laravel_test_application(root, app_root)
+            for relative in (
+                "artisan", "app/Command.php", "bootstrap/app.php", "config/app.php",
+                "database/migration.php", "lang/en.json", "routes/console.php",
+                "vendor/composer/autoload.php", "vendor/package/bridge.php",
+            ):
+                self.assertTrue((app_root / relative).is_file(), relative)
+            for relative in (
+                ".env", ".env.local", "app/.env.testing", "app/storage/runtime.json",
+                "bootstrap/cache/config.php", "database/local.sqlite", "vendor/package/.env",
+                "vendor/package/private.pem",
+            ):
+                self.assertFalse((app_root / relative).exists(), relative)
+
+            (root / "app" / "outside-link").symlink_to(root.parent / "external-secret")
+            with self.assertRaisesRegex(ValueError, "refuses symlinks"):
+                _copy_laravel_test_application(root, Path(temporary) / "unsafe-copy")
+
     @unittest.skipUnless(sys.platform == "linux", "requires Linux and the real Laravel CLI bridge")
     def test_linux_real_laravel_command_uses_dynamic_socket_and_newline_envelopes(self):
         if os.geteuid() != 0:
@@ -1876,10 +1982,7 @@ class TransitionAdapterTests(unittest.TestCase):
         # Run the real Laravel CLI from a temporary readable copy so the
         # privilege-dropped child can open artisan and the Composer tree.
         app_root = runtime / "app"
-        shutil.copytree(
-            ROOT, app_root, symlinks=True,
-            ignore=shutil.ignore_patterns(".git", "node_modules", "wordpress"),
-        )
+        _copy_laravel_test_application(ROOT, app_root)
         socket_dir = runtime / "socket"
         socket_dir.mkdir(mode=0o711)
         os.chown(socket_dir, 0, 0)
