@@ -487,7 +487,22 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('deadline = min(helper_deadline, time.monotonic() + 20)', $helper);
         self::assertStringContainsString('child.wait(timeout=min(20, child_remaining))', $helper);
         self::assertStringContainsString('str_starts_with($match[0], \'phase=wrapper_signal;\')', $source);
+        self::assertStringContainsString('def copy_application_source():', $helper);
+        self::assertStringContainsString('def open_source_directory(parent_fd, name):', $helper);
+        self::assertStringContainsString('os.open(name, flags, dir_fd=parent_fd)', $helper);
+        self::assertStringContainsString('opened.st_ino) != (before.st_dev, before.st_ino)', $helper);
+        self::assertStringContainsString('allowed_entries = (', $helper);
+        self::assertStringContainsString("'git', '-c', 'safe.directory='+source_root, '-C', source_root, 'ls-files', '-z'", $helper);
+        self::assertStringContainsString("tracked_result.stdout.split(b'\\0')", $helper);
+        self::assertStringContainsString('def copy_vendor_directory(', $helper);
+        self::assertStringContainsString('os.listdir(source_directory_fd)', $helper);
+        self::assertStringContainsString("child_relative_path == 'vendor/bin'", $helper);
+        self::assertStringContainsString('application_source_name', $helper);
+        self::assertStringContainsString('def remove_application_source():', $helper);
+        self::assertStringContainsString('VIEW_COMPILED_PATH', $helper);
         foreach ([
+            'source_copy_begin',
+            'source_copy_end',
             'preflight_php_version_begin',
             'preflight_artisan_version_begin',
             'preflight_cache_lock_begin',
@@ -596,6 +611,7 @@ class TransitionPersistenceBridgeTest extends TestCase
             $scriptText = <<<'PY'
 import json, os, signal, socket, stat, struct, subprocess, sys, tempfile, threading, time
 php, artisan, root, socket_path, uid, gid, database, request_json = sys.argv[1:]
+original_source_root = os.path.realpath(root)
 uid, gid = int(uid), int(gid)
 parent = os.path.dirname(socket_path)
 server = None
@@ -612,12 +628,18 @@ preflight_cache_fd = None
 preflight_cache_identity = None
 preflight_cache_created = False
 preflight_cache_dir = None
+application_source_name = 'application-source'
+application_source_created = False
+application_source_identity = None
+application_source_path = None
+application_source_directories = []
 child_stderr = None
 child_cleanup_unconfirmed = False
 preflight_cleanup_unconfirmed = False
 response = bytearray()
 progress_marker_values = {
     'helper_begin',
+    'source_copy_begin', 'source_copy_end',
     'preflight_php_version_begin', 'preflight_php_version_end',
     'preflight_artisan_version_begin', 'preflight_artisan_version_end',
     'preflight_cache_lock_begin', 'preflight_cache_lock_end',
@@ -758,6 +780,274 @@ def create_preflight_cache():
     os.fchmod(preflight_cache_fd, 0o700)
     preflight_cache_dir = os.path.join('/tmp', preflight_tmp_name, 'preflight-cache')
 
+def copy_application_source():
+    global root, artisan, application_source_created, application_source_identity
+    global application_source_path, application_source_directories, env, preflight_env
+    source_root = original_source_root
+    os.mkdir(application_source_name, 0o700, dir_fd=preflight_root_fd)
+    application_source_created = True
+    source_info = os.stat(application_source_name, dir_fd=preflight_root_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(source_info.st_mode) or source_info.st_uid != 0:
+        raise OSError
+    application_source_identity = (source_info.st_dev, source_info.st_ino)
+    source_fd = os.open(application_source_name, flags, dir_fd=preflight_root_fd)
+    opened_info = os.fstat(source_fd)
+    if (not stat.S_ISDIR(opened_info.st_mode) or opened_info.st_uid != 0
+            or (opened_info.st_dev, opened_info.st_ino) != application_source_identity):
+        os.close(source_fd)
+        raise OSError
+    os.close(source_fd)
+    application_source_path = os.path.join('/tmp', preflight_tmp_name, application_source_name)
+    application_source_directories = [application_source_path]
+
+    def open_source_directory(parent_fd, name):
+        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
+            raise OSError
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISDIR(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)):
+            os.close(descriptor)
+            raise OSError
+        return descriptor
+
+    def copy_source_file(parent_fd, source_name, destination_path):
+        if time.monotonic() >= helper_deadline:
+            raise TimeoutError
+        source_info = os.stat(source_name, dir_fd=parent_fd, follow_symlinks=False)
+        if stat.S_ISLNK(source_info.st_mode):
+            raise OSError
+        if not stat.S_ISREG(source_info.st_mode):
+            raise OSError
+        source_fd = os.open(source_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        destination_fd = None
+        try:
+            opened_source = os.fstat(source_fd)
+            if (not stat.S_ISREG(opened_source.st_mode)
+                    or (opened_source.st_dev, opened_source.st_ino) != (
+                        source_info.st_dev, source_info.st_ino)):
+                raise OSError
+            destination_fd = os.open(
+                destination_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+            )
+            while True:
+                if time.monotonic() >= helper_deadline:
+                    raise TimeoutError
+                chunk = os.read(source_fd, 1024 * 1024)
+                if not chunk:
+                    break
+                offset = 0
+                while offset < len(chunk):
+                    offset += os.write(destination_fd, chunk[offset:])
+            os.fchmod(destination_fd, 0o444)
+        finally:
+            if destination_fd is not None:
+                os.close(destination_fd)
+            os.close(source_fd)
+
+    allowed_entries = (
+        'artisan', 'composer.json', 'composer.lock', 'app', 'bootstrap', 'config',
+        'database', 'lang', 'resources', 'routes',
+    )
+    required_entries = {'artisan', 'composer.json', 'composer.lock', 'app', 'bootstrap', 'config', 'routes'}
+    try:
+        tracked_result = subprocess.run(
+            ['git', '-c', 'safe.directory='+source_root, '-C', source_root, 'ls-files', '-z'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=preflight_env,
+            timeout=max(0.1, helper_deadline - time.monotonic()),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise TimeoutError
+    if tracked_result.returncode != 0:
+        raise OSError
+    source_root_fd = os.open(source_root, flags)
+    source_root_info = os.fstat(source_root_fd)
+    if not stat.S_ISDIR(source_root_info.st_mode):
+        os.close(source_root_fd)
+        raise OSError
+    allowed_top_level = set(allowed_entries)
+    copied_entries = set()
+    for raw_path in tracked_result.stdout.split(b'\0'):
+        if not raw_path:
+            continue
+        relative_path = os.fsdecode(raw_path)
+        parts = relative_path.split('/')
+        if (parts[0] not in allowed_top_level or any(
+                part in ('.', '..', '.git', 'node_modules', 'storage')
+                or part.startswith('.env') for part in parts)):
+            continue
+        if len(parts) > 1 and parts[0] == 'bootstrap' and parts[1] == 'cache':
+            continue
+        extension = os.path.splitext(parts[-1])[1].lower()
+        if extension in ('.db', '.sqlite', '.sqlite3', '.sql', '.dump', '.bak'):
+            continue
+        if time.monotonic() >= helper_deadline:
+            raise TimeoutError
+        destination_path = os.path.join(application_source_path, *parts)
+        source_parent_fd = os.dup(source_root_fd)
+        destination_parent = application_source_path
+        try:
+            for part in parts[:-1]:
+                child_fd = open_source_directory(source_parent_fd, part)
+                os.close(source_parent_fd)
+                source_parent_fd = child_fd
+                destination_parent = os.path.join(destination_parent, part)
+                try:
+                    os.mkdir(destination_parent, 0o700)
+                    application_source_directories.append(destination_parent)
+                except FileExistsError:
+                    destination_info = os.lstat(destination_parent)
+                    if (stat.S_ISLNK(destination_info.st_mode)
+                            or not stat.S_ISDIR(destination_info.st_mode)):
+                        raise OSError
+            copy_source_file(source_parent_fd, parts[-1], destination_path)
+        finally:
+            os.close(source_parent_fd)
+        copied_entries.add(parts[0] if len(parts) == 1 else parts[0] + '/' + parts[1])
+    copied_top_level = {entry.split('/')[0] for entry in copied_entries}
+    if not required_entries.issubset(copied_top_level):
+        raise OSError
+
+    vendor_destination = os.path.join(application_source_path, 'vendor')
+    vendor_source_fd = open_source_directory(source_root_fd, 'vendor')
+
+    def copy_vendor_directory(source_directory_fd, destination_directory, relative_path):
+        if time.monotonic() >= helper_deadline:
+            raise TimeoutError
+        os.mkdir(destination_directory, 0o700)
+        application_source_directories.append(destination_directory)
+        for name in os.listdir(source_directory_fd):
+            if (name in ('.git', 'node_modules', 'storage')
+                    or name.startswith('.env')):
+                continue
+            extension = os.path.splitext(name)[1].lower()
+            if extension in ('.db', '.sqlite', '.sqlite3', '.sql', '.dump', '.bak'):
+                continue
+            child_relative_path = os.path.join(relative_path, name)
+            if child_relative_path == 'vendor/bin':
+                continue
+            child_info = os.stat(name, dir_fd=source_directory_fd, follow_symlinks=False)
+            if stat.S_ISLNK(child_info.st_mode):
+                raise OSError
+            child_destination = os.path.join(destination_directory, name)
+            if stat.S_ISDIR(child_info.st_mode):
+                child_fd = open_source_directory(source_directory_fd, name)
+                try:
+                    copy_vendor_directory(child_fd, child_destination, child_relative_path)
+                finally:
+                    os.close(child_fd)
+            elif stat.S_ISREG(child_info.st_mode):
+                copy_source_file(source_directory_fd, name, child_destination)
+            else:
+                raise OSError
+
+    try:
+        copy_vendor_directory(vendor_source_fd, vendor_destination, 'vendor')
+    finally:
+        os.close(vendor_source_fd)
+        os.close(source_root_fd)
+    if not os.path.isfile(os.path.join(vendor_destination, 'autoload.php')):
+        raise OSError
+
+    storage_root = os.path.join(application_source_path, 'storage')
+    storage_directories = (
+        storage_root,
+        os.path.join(storage_root, 'framework'),
+        os.path.join(storage_root, 'framework', 'views'),
+        os.path.join(storage_root, 'framework', 'cache'),
+        os.path.join(storage_root, 'framework', 'cache', 'data'),
+        os.path.join(storage_root, 'framework', 'sessions'),
+        os.path.join(storage_root, 'logs'),
+    )
+    for directory in storage_directories:
+        os.mkdir(directory, 0o700)
+        os.chown(directory, uid, gid)
+        os.chmod(directory, 0o700)
+    for directory in reversed(application_source_directories):
+        os.chown(directory, 0, 0)
+        os.chmod(directory, 0o555)
+
+    root = application_source_path
+    artisan = os.path.join(root, 'artisan')
+    preflight_env['VIEW_COMPILED_PATH'] = os.path.join(storage_root, 'framework', 'views')
+    env['VIEW_COMPILED_PATH'] = preflight_env['VIEW_COMPILED_PATH']
+
+def remove_application_source():
+    global application_source_created
+    if not application_source_created:
+        return
+    if preflight_root_fd is None or application_source_identity is None:
+        raise OSError
+    entry = os.stat(application_source_name, dir_fd=preflight_root_fd, follow_symlinks=False)
+    if (not stat.S_ISDIR(entry.st_mode) or entry.st_uid != 0
+            or (entry.st_dev, entry.st_ino) != application_source_identity):
+        raise OSError
+    source_fd = os.open(application_source_name, flags, dir_fd=preflight_root_fd)
+    opened = os.fstat(source_fd)
+    if ((opened.st_dev, opened.st_ino) != application_source_identity
+            or not stat.S_ISDIR(opened.st_mode) or opened.st_uid != 0):
+        os.close(source_fd)
+        raise OSError
+
+    def remove_contents(directory_fd):
+        for name in os.listdir(directory_fd):
+            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                if info.st_uid not in (0, uid):
+                    raise OSError
+                child_fd = os.open(name, flags, dir_fd=directory_fd)
+                child = os.fstat(child_fd)
+                if ((child.st_dev, child.st_ino) != (info.st_dev, info.st_ino)
+                        or not stat.S_ISDIR(child.st_mode) or child.st_uid not in (0, uid)):
+                    os.close(child_fd)
+                    raise OSError
+                remove_contents(child_fd)
+                os.close(child_fd)
+                os.rmdir(name, dir_fd=directory_fd)
+            elif stat.S_ISREG(info.st_mode):
+                if info.st_uid not in (0, uid) or info.st_nlink != 1:
+                    raise OSError
+                os.unlink(name, dir_fd=directory_fd)
+            else:
+                raise OSError
+
+    try:
+        remove_contents(source_fd)
+    finally:
+        os.close(source_fd)
+    os.rmdir(application_source_name, dir_fd=preflight_root_fd)
+    application_source_created = False
+
+def verify_original_checkout_is_not_writable():
+    probe_code = '\n'.join((
+        'import os, sys',
+        "if os.access(sys.argv[1], os.W_OK):",
+        "    print('CHECKOUT_WRITE_ALLOWED')",
+        '    raise SystemExit(1)',
+        "print('CHECKOUT_WRITE_DENIED')",
+    ))
+    remaining = helper_deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError
+    try:
+        result = subprocess.run(
+            ['setpriv', '--reuid='+str(uid), '--regid='+str(gid), '--init-groups',
+             sys.executable, '-c', probe_code, original_source_root],
+            cwd='/', env=preflight_env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=min(1.0, remaining), check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise TimeoutError
+    if result.returncode != 0 or result.stdout != b'CHECKOUT_WRITE_DENIED\n':
+        raise OSError
+
 def lock_preflight_cache():
     cache_info = os.fstat(preflight_cache_fd)
     if (not stat.S_ISDIR(cache_info.st_mode) or cache_info.st_uid != uid
@@ -845,6 +1135,7 @@ def cleanup_preflight_cache():
                         raise OSError
                     os.unlink(name, dir_fd=preflight_cache_fd)
             os.rmdir('preflight-cache', dir_fd=preflight_root_fd)
+        remove_application_source()
         os.rmdir(preflight_tmp_name, dir_fd=preflight_tmp_fd)
     except Exception:
         preflight_cleanup_unconfirmed = True
@@ -992,7 +1283,7 @@ def run_preflight_probe(probe, command, capture_stdout=False):
             result = subprocess.run(
                 ['setpriv', '--reuid='+str(uid), '--regid='+str(gid), '--init-groups',
                  sys.executable, '-c', probe_code, artisan],
-                cwd='/', env=env, stdin=subprocess.DEVNULL,
+                cwd='/', env=preflight_env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 timeout=min(1.0, remaining), check=False,
             )
@@ -1084,6 +1375,20 @@ try:
     preflight_env['APP_SERVICES_CACHE'] = os.path.join(preflight_cache_dir, 'services.php')
     # Laravel can generate missing manifests during this first bounded Artisan bootstrap, outside the checkout.
     run_preflight_probe('php_version', [php, '--version'])
+    mark_progress('source_copy_begin')
+    try:
+        copy_application_source()
+    except TimeoutError:
+        raise SystemExit('phase=source_copy; state=timeout')
+    except Exception:
+        raise SystemExit('phase=source_copy; state=failed')
+    mark_progress('source_copy_end')
+    try:
+        verify_original_checkout_is_not_writable()
+    except TimeoutError:
+        raise SystemExit('phase=source_copy; state=timeout')
+    except Exception:
+        raise SystemExit('phase=source_copy; state=failed')
     run_preflight_probe('artisan_version', [php, artisan, '--version'])
     mark_progress('preflight_cache_lock_begin')
     try:
@@ -1389,7 +1694,7 @@ PY;
             $diagnostic = 'phase=root_helper; state=failed';
             $signalDiagnostic = null;
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=cleanup; cleanup_state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
+            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|phase=source_copy; state=(?:failed|timeout)|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=cleanup; cleanup_state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
                 $signalDiagnostic = null;
                 foreach ($matches as $match) {
                     if (str_starts_with($match[0], 'phase=wrapper_signal;')) {
