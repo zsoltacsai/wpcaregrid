@@ -3,11 +3,15 @@
 namespace Tests\Feature\Platform;
 
 use App\Platform\DisasterRecovery\PlatformDatabaseBackupService;
+use Illuminate\Contracts\Filesystem\FileNotFoundException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use PHPUnit\Framework\AssertionFailedError;
+use Symfony\Component\Process\Exception\ProcessException;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Tests\TestCase;
 
 class PlatformDatabaseBackupMysqlTest extends TestCase
@@ -190,7 +194,7 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
 
     private function diagnosticCategoryV2(\Throwable $exception): string
     {
-        if (is_a($exception, \PHPUnit\Framework\AssertionFailedError::class)) {
+        if (is_a($exception, AssertionFailedError::class)) {
             return 'assertion_failure';
         }
 
@@ -198,15 +202,15 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
             return 'pdo_error';
         }
 
-        if (is_a($exception, \Symfony\Component\Process\Exception\ProcessTimedOutException::class)) {
+        if (is_a($exception, ProcessTimedOutException::class)) {
             return 'timeout';
         }
 
-        if (is_a($exception, \Symfony\Component\Process\Exception\ProcessException::class)) {
+        if (is_a($exception, ProcessException::class)) {
             return 'process_error';
         }
 
-        if (is_a($exception, \Illuminate\Contracts\Filesystem\FileNotFoundException::class)) {
+        if (is_a($exception, FileNotFoundException::class)) {
             return 'filesystem_error';
         }
 
