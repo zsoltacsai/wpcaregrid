@@ -467,7 +467,7 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertIsInt($terminalPrintPosition);
         self::assertTrue($progressPrintPosition < $cleanupPrintPosition && $cleanupPrintPosition < $terminalPrintPosition);
         self::assertStringContainsString('has_terminal_diagnostic = any(', $workflow);
-        $peerRpcMethodStart = strpos($source, 'public function test_artisan_rpc_runs_as_unprivileged_peer_and_checks_so_peercred(): void');
+        $peerRpcMethodStart = strpos($source, "\n    public function test_artisan_rpc_runs_as_unprivileged_peer_and_checks_so_peercred(): void");
         self::assertIsInt($peerRpcMethodStart);
         $peerRpcMethodEnd = strpos($source, "\n    }\n}", $peerRpcMethodStart);
         self::assertIsInt($peerRpcMethodEnd);
