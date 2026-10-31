@@ -479,6 +479,18 @@ class TransitionPersistenceBridgeTest extends TestCase
         $additionalProgressStages = ['assertion_catch_entered', 'throwable_catch_entered', 'terminal_outcome_suppressed'];
         $workflowStagePattern = 'stage=(?:'.implode('|', [...$progressStages, ...$additionalProgressStages]).')';
         self::assertSame(2, substr_count($workflow, $workflowStagePattern));
+        $boundedPatternStart = strpos($workflow, 'safe_diagnostic = re.compile(');
+        $boundedPatternEnd = strpos($workflow, "\n          )", $boundedPatternStart);
+        $fullPatternStart = strpos($workflow, 'safe_rpc_diagnostic = re.compile(');
+        $fullPatternEnd = strpos($workflow, "\n          )", $fullPatternStart);
+        self::assertIsInt($boundedPatternStart);
+        self::assertIsInt($boundedPatternEnd);
+        self::assertIsInt($fullPatternStart);
+        self::assertIsInt($fullPatternEnd);
+        $boundedPattern = substr($workflow, $boundedPatternStart, $boundedPatternEnd - $boundedPatternStart + strlen("\n          )"));
+        $fullPattern = substr($workflow, $fullPatternStart, $fullPatternEnd - $fullPatternStart + strlen("\n          )"));
+        $boundedPattern = str_replace('safe_diagnostic = re.compile(', 'safe_rpc_diagnostic = re.compile(', $boundedPattern);
+        self::assertSame($fullPattern, $boundedPattern);
         $progressPositions = [];
         foreach ($progressStages as $progressStage) {
             $progressPosition = strpos($peerRpcMethod, 'state=progress; producer=php_wrapper; stage='.$progressStage);
