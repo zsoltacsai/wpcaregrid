@@ -487,6 +487,7 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('deadline = min(helper_deadline, time.monotonic() + 20)', $helper);
         self::assertStringContainsString('child.wait(timeout=min(20, child_remaining))', $helper);
         self::assertStringContainsString('str_starts_with($match[0], \'phase=wrapper_signal;\')', $source);
+        self::assertStringContainsString('phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|application_source|temporary_root|socket_cleanup); state=unconfirmed', $source);
         self::assertStringContainsString('def copy_application_source():', $helper);
         self::assertStringContainsString('def open_source_directory(parent_fd, name):', $helper);
         self::assertStringContainsString('os.open(name, flags, dir_fd=parent_fd)', $helper);
@@ -634,8 +635,9 @@ application_source_identity = None
 application_source_path = None
 application_source_directories = []
 child_stderr = None
-child_cleanup_unconfirmed = False
-preflight_cleanup_unconfirmed = False
+cleanup_unconfirmed_components = set()
+cleanup_in_progress = False
+deferred_shutdown_signal = False
 response = bytearray()
 progress_marker_values = {
     'helper_begin',
@@ -662,6 +664,8 @@ def mark_progress(marker):
     global last_progress_marker
     if marker not in progress_marker_values:
         return
+    if deferred_shutdown_signal and not cleanup_in_progress:
+        raise SystemExit('phase=wrapper_signal; state=deferred')
     last_progress_marker = marker
     try:
         sys.stderr.write('phase=progress; marker='+marker+'\n')
@@ -677,18 +681,8 @@ child_diagnostic_markers = {
     'phase=connect_success',
 }
 def handle_shutdown(signum, frame):
-    if child is None:
-        child_state = 'not_started'
-        child_exit = ''
-    else:
-        child_status = child.poll()
-        if child_status is None:
-            child_state = 'running'
-            child_exit = ''
-        else:
-            child_state = 'exited'
-            child_exit = '; exit_code='+str(child_status)
-    raise SystemExit('phase=wrapper_signal; child_state='+child_state+child_exit+'; last_marker='+last_progress_marker)
+    global deferred_shutdown_signal
+    deferred_shutdown_signal = True
 signal.signal(signal.SIGTERM, handle_shutdown)
 
 def emit_child_marker():
@@ -841,6 +835,8 @@ def copy_application_source():
                     break
                 offset = 0
                 while offset < len(chunk):
+                    if deferred_shutdown_signal:
+                        raise SystemExit('phase=wrapper_signal; state=deferred')
                     offset += os.write(destination_fd, chunk[offset:])
             os.fchmod(destination_fd, 0o444)
         finally:
@@ -874,6 +870,8 @@ def copy_application_source():
     allowed_top_level = set(allowed_entries)
     copied_entries = set()
     for raw_path in tracked_result.stdout.split(b'\0'):
+        if deferred_shutdown_signal:
+            raise SystemExit('phase=wrapper_signal; state=deferred')
         if not raw_path:
             continue
         relative_path = os.fsdecode(raw_path)
@@ -918,11 +916,15 @@ def copy_application_source():
     vendor_source_fd = open_source_directory(source_root_fd, 'vendor')
 
     def copy_vendor_directory(source_directory_fd, destination_directory, relative_path):
+        if deferred_shutdown_signal:
+            raise SystemExit('phase=wrapper_signal; state=deferred')
         if time.monotonic() >= helper_deadline:
             raise TimeoutError
         os.mkdir(destination_directory, 0o700)
         application_source_directories.append(destination_directory)
         for name in os.listdir(source_directory_fd):
+            if deferred_shutdown_signal:
+                raise SystemExit('phase=wrapper_signal; state=deferred')
             if (name in ('.git', 'node_modules', 'storage')
                     or name.startswith('.env')):
                 continue
@@ -1091,9 +1093,10 @@ def lock_preflight_cache():
             os.close(descriptor)
 
 def cleanup_preflight_cache():
-    global preflight_cleanup_unconfirmed
+    global cleanup_unconfirmed_components
     if preflight_tmp_fd is None:
         return
+    cleanup_component = 'temporary_root'
     try:
         if not preflight_tmp_created or preflight_tmp_name is None:
             return
@@ -1110,6 +1113,7 @@ def cleanup_preflight_cache():
                 root_entry.st_dev, root_entry.st_ino) != preflight_root_identity:
             raise OSError
         if preflight_cache_created:
+            cleanup_component = 'preflight_cache'
             if preflight_root_fd is None:
                 raise OSError
             cache_entry = os.stat('preflight-cache', dir_fd=preflight_root_fd, follow_symlinks=False)
@@ -1135,10 +1139,17 @@ def cleanup_preflight_cache():
                         raise OSError
                     os.unlink(name, dir_fd=preflight_cache_fd)
             os.rmdir('preflight-cache', dir_fd=preflight_root_fd)
-        remove_application_source()
+        cleanup_component = 'application_source'
+        try:
+            remove_application_source()
+        except Exception:
+            raise
+        cleanup_component = 'temporary_root'
         os.rmdir(preflight_tmp_name, dir_fd=preflight_tmp_fd)
     except Exception:
-        preflight_cleanup_unconfirmed = True
+        cleanup_unconfirmed_components.add(cleanup_component)
+        if cleanup_component != 'temporary_root':
+            cleanup_unconfirmed_components.add('temporary_root')
     finally:
         for descriptor_name in ('preflight_cache_fd', 'preflight_root_fd', 'preflight_tmp_fd'):
             descriptor = globals()[descriptor_name]
@@ -1146,11 +1157,11 @@ def cleanup_preflight_cache():
                 try:
                     os.close(descriptor)
                 except OSError:
-                    preflight_cleanup_unconfirmed = True
+                    cleanup_unconfirmed_components.add('temporary_root')
                 globals()[descriptor_name] = None
 
 def run_preflight_probe(probe, command, capture_stdout=False):
-    global preflight, preflight_cleanup_unconfirmed
+    global preflight, cleanup_unconfirmed_components
     probe_progress = {
         'php_version': ('preflight_php_version_begin', 'preflight_php_version_end'),
         'artisan_version': ('preflight_artisan_version_begin', 'preflight_artisan_version_end'),
@@ -1322,7 +1333,8 @@ def run_preflight_probe(probe, command, capture_stdout=False):
                 raise subprocess.TimeoutExpired(command, 0)
             preflight.wait(timeout=min(8, probe_remaining))
         except subprocess.TimeoutExpired:
-            preflight_cleanup_unconfirmed = not stop_preflight_bounded(preflight)
+            if not stop_preflight_bounded(preflight):
+                cleanup_unconfirmed_components.add('preflight_reap')
             if stderr_reader is not None:
                 stderr_reader.join(timeout=2)
             status = 'phase=preflight; probe='+probe+'; state=timeout'
@@ -1422,7 +1434,7 @@ try:
     spawn_signal_mask = None
     try:
         spawn_signal_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
-        child = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=child_stderr)
+        child = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',sys.executable,'-c','import os,signal,sys; signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM}); os.execv(sys.argv[1], sys.argv[1:])',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=child_stderr)
     except Exception:
         if spawn_signal_mask is not None:
             signal.pthread_sigmask(signal.SIG_SETMASK, spawn_signal_mask)
@@ -1432,6 +1444,8 @@ try:
     deadline = min(helper_deadline, time.monotonic() + 20)
     mark_progress('socket_accept_begin')
     while conn is None:
+        if deferred_shutdown_signal:
+            raise SystemExit('phase=wrapper_signal; state=deferred')
         if time.monotonic() >= deadline:
             child_status = child.poll()
             if child_status is None:
@@ -1463,6 +1477,8 @@ try:
     mark_progress('request_send_end')
     mark_progress('response_read_begin')
     while b'\n' not in response:
+        if deferred_shutdown_signal:
+            raise SystemExit('phase=wrapper_signal; state=deferred')
         if time.monotonic() >= deadline:
             child_status = child.poll()
             if child_status is None:
@@ -1522,66 +1538,97 @@ try:
         raise SystemExit('phase=response; state=identity_mismatch')
     if not isinstance(decoded.get('result'), dict) or decoded['result'].get('state') != 'OPEN':
         raise SystemExit('phase=response; state=tuple_mismatch')
+except Exception:
+    raise SystemExit('phase=root_helper; state=failed') from None
 finally:
+    cleanup_in_progress = True
+    primary_failure_pending = sys.exc_info()[0] is not None
     mark_progress('cleanup_begin')
+    mark_progress('preflight_reap_begin')
     try:
-        mark_progress('preflight_reap_begin')
         if preflight is not None and not stop_preflight_bounded(preflight):
-            preflight_cleanup_unconfirmed = True
-        mark_progress('preflight_reap_end')
-    finally:
-        try:
-            if conn is not None:
-                conn.close()
-        finally:
+            cleanup_unconfirmed_components.add('preflight_reap')
+    except BaseException:
+        cleanup_unconfirmed_components.add('preflight_reap')
+    mark_progress('preflight_reap_end')
+    for resource, component in ((conn, 'socket_cleanup'), (server, 'socket_cleanup')):
+        if resource is not None:
             try:
-                if server is not None:
-                    server.close()
-            finally:
+                resource.close()
+            except BaseException:
+                cleanup_unconfirmed_components.add(component)
+    mark_progress('child_reap_begin')
+    if child is not None:
+        try:
+            if child.poll() is None:
                 try:
-                    mark_progress('child_reap_begin')
-                    if child is not None:
-                        if child.poll() is None:
-                            try:
-                                child.terminate()
-                            except ProcessLookupError:
-                                pass
-                        try:
-                            child.wait(timeout=2)
-                        except subprocess.TimeoutExpired:
-                            try:
-                                try:
-                                    child.kill()
-                                except ProcessLookupError:
-                                    pass
-                                child.wait(timeout=2)
-                            except subprocess.TimeoutExpired:
-                                child_cleanup_unconfirmed = True
-                    mark_progress('child_reap_end')
-                finally:
+                    child.terminate()
+                except ProcessLookupError:
+                    pass
+            try:
+                child.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
                     try:
-                        emit_child_marker()
-                    finally:
-                        try:
-                            if child_stderr is not None:
-                                child_stderr.close()
-                        finally:
-                            try:
-                                os.unlink(socket_path)
-                            except FileNotFoundError:
-                                pass
-                            try:
-                                os.rmdir(parent)
-                            except FileNotFoundError:
-                                pass
-                            mark_progress('cache_cleanup_begin')
-                            cleanup_preflight_cache()
-                            mark_progress('cache_cleanup_end')
-                if child_cleanup_unconfirmed:
-                    raise SystemExit('phase=cleanup; cleanup_state=unconfirmed')
-                if preflight_cleanup_unconfirmed:
-                    raise SystemExit('phase=cleanup; cleanup_state=unconfirmed')
-                mark_progress('cleanup_end')
+                        child.kill()
+                    except ProcessLookupError:
+                        pass
+                    child.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    cleanup_unconfirmed_components.add('child_reap')
+        except BaseException:
+            cleanup_unconfirmed_components.add('child_reap')
+    mark_progress('child_reap_end')
+    try:
+        emit_child_marker()
+    except BaseException:
+        cleanup_unconfirmed_components.add('child_reap')
+    if child_stderr is not None:
+        try:
+            child_stderr.close()
+        except BaseException:
+            cleanup_unconfirmed_components.add('child_reap')
+    for operation in (
+            lambda: os.unlink(socket_path), lambda: os.rmdir(parent)):
+        try:
+            operation()
+        except FileNotFoundError:
+            pass
+        except BaseException:
+            cleanup_unconfirmed_components.add('socket_cleanup')
+    mark_progress('cache_cleanup_begin')
+    try:
+        cleanup_preflight_cache()
+    except BaseException:
+        cleanup_unconfirmed_components.add('temporary_root')
+    mark_progress('cache_cleanup_end')
+    cleanup_order = (
+        'child_reap', 'preflight_reap', 'preflight_cache', 'application_source',
+        'temporary_root', 'socket_cleanup',
+    )
+    cleanup_components = [
+        component for component in cleanup_order
+        if component in cleanup_unconfirmed_components
+    ]
+    for component in cleanup_components:
+        try:
+            sys.stderr.write(
+                'phase=cleanup; component='+component+'; state=unconfirmed\n')
+            sys.stderr.flush()
+        except BaseException:
+            pass
+    if deferred_shutdown_signal:
+        try:
+            sys.stderr.write('phase=wrapper_signal; state=deferred\n')
+            sys.stderr.flush()
+        except BaseException:
+            pass
+    if cleanup_components and not primary_failure_pending:
+        raise SystemExit(
+            'phase=cleanup; component='+cleanup_components[0]+'; state=unconfirmed')
+    if deferred_shutdown_signal and not primary_failure_pending:
+        raise SystemExit('phase=wrapper_signal; state=deferred')
+    mark_progress('cleanup_end')
 PY;
             self::assertSame(strlen($scriptText), @file_put_contents($script, $scriptText), 'phase=root_helper; state=script_write_failed');
             self::assertTrue(@chmod($script, 0644), 'phase=root_helper; state=script_mode_failed');
@@ -1693,20 +1740,45 @@ PY;
             }
             $diagnostic = 'phase=root_helper; state=failed';
             $signalDiagnostic = null;
+            $primaryDiagnostic = null;
+            $wrapperTimeoutDiagnostic = null;
+            $cleanupDiagnostics = [];
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|phase=source_copy; state=(?:failed|timeout)|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=cleanup; cleanup_state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
+            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|phase=source_copy; state=(?:failed|timeout)|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; state=deferred|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|application_source|temporary_root|socket_cleanup); state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
                 $signalDiagnostic = null;
                 foreach ($matches as $match) {
-                    if (str_starts_with($match[0], 'phase=wrapper_signal;')) {
+                    if (str_starts_with($match[0], 'phase=cleanup; component=')) {
+                        $cleanupDiagnostics[] = $match[0];
+                    } elseif (str_starts_with($match[0], 'phase=progress;')) {
+                        continue;
+                    } elseif (str_starts_with($match[0], 'phase=wrapper_signal;')) {
                         $signalDiagnostic = $match[0];
+                    } elseif (str_starts_with($match[0], 'phase=child_marker;')) {
+                        continue;
+                    } elseif (str_starts_with($match[0], 'phase=wrapper_timeout;')) {
+                        $wrapperTimeoutDiagnostic = $match[0];
+                    } else {
+                        $primaryDiagnostic = $match[0];
                     }
                 }
-                $diagnostic = trim($signalDiagnostic ?? $matches[count($matches) - 1][0]);
             }
-            if ($timedOut && $signalDiagnostic === null) {
-                $diagnostic = $cleanupConfirmed
+            $diagnosticParts = [];
+            if ($primaryDiagnostic !== null) {
+                $diagnosticParts[] = $primaryDiagnostic;
+            }
+            if ($signalDiagnostic !== null) {
+                $diagnosticParts[] = $signalDiagnostic;
+            }
+            if ($timedOut) {
+                $diagnosticParts[] = $cleanupConfirmed
                     ? 'phase=wrapper_timeout; cleanup_state=confirmed'
                     : 'phase=wrapper_timeout; cleanup_state=unconfirmed';
+            } elseif ($wrapperTimeoutDiagnostic !== null) {
+                $diagnosticParts[] = $wrapperTimeoutDiagnostic;
+            }
+            $diagnosticParts = array_merge($diagnosticParts, $cleanupDiagnostics);
+            if ($diagnosticParts !== []) {
+                $diagnostic = implode("\n", array_unique($diagnosticParts));
             }
             self::assertSame(0, $processExitCode, $diagnostic);
         } catch (AssertionFailedError $failure) {
