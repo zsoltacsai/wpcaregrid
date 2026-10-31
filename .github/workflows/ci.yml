@@ -317,39 +317,22 @@ jobs:
           set -euo pipefail
           set +x
           diagnostic_log="$RUNNER_TEMP/typed-rpc-cas-phpunit.log"
-          set +e
           timeout --signal=TERM --kill-after=5s 90s \
             vendor/bin/phpunit -c phpunit.xml --debug --fail-on-skipped \
               --display-skipped --display-warnings \
               tests/Feature/Deployment/TransitionPersistenceBridgeTest.php \
               --filter 'test_typed_rpc_cas_is_atomic_and_exact_replay_returns_its_receipt' \
-              >"$diagnostic_log" 2>&1
-          test_status=$?
-          set -e
+              >"$diagnostic_log" 2>&1 &
+          test_pid=$!
+          test_started=$SECONDS
+          snapshot_captured=0
 
-          # PHPUnit debug output is captured, then only test lifecycle labels are
-          # emitted. Assertion text and SQL are not copied into the Actions log.
-          if [ -f "$diagnostic_log" ]; then
-            grep -E '^Test (Preparation|Started|Passed|Failed|Errored|Skipped|Finished|Suite)' \
-              "$diagnostic_log" | tail -n 40 || true
-          fi
-
-          if [ "$test_status" -eq 0 ]; then
-            echo 'Typed RPC CAS diagnostic passed; continuing to the full suite.'
-            rm -f "$diagnostic_log"
-            exit 0
-          fi
-
-          if [ "$test_status" -eq 124 ] || [ "$test_status" -eq 137 ]; then
-            echo "Typed RPC CAS diagnostic timed out (status $test_status); capturing bounded MySQL state." >&2
-          else
-            echo "Typed RPC CAS diagnostic failed (status $test_status); capturing bounded MySQL state." >&2
-          fi
-
-          python3 - <<'PY'
+          capture_mysql_state() {
+            timeout --signal=TERM --kill-after=2s 7s python3 -u - <<'PY'
           import os
           import re
           import subprocess
+          from concurrent.futures import ThreadPoolExecutor
 
           env = os.environ.copy()
           required = ("DB_HOST", "DB_PORT", "DB_DATABASE", "DB_USERNAME", "DB_PASSWORD")
@@ -363,7 +346,7 @@ jobs:
               "mysql", "--protocol=TCP", "--connect-timeout=3",
               "--host=" + env["DB_HOST"], "--port=" + env["DB_PORT"],
               "--user=" + env["DB_USERNAME"], "--database=" + env["DB_DATABASE"],
-              "--batch", "--skip-column-names",
+              "--batch", "--skip-column-names", "--quick",
           ]
 
           def redact_sql(value):
@@ -379,69 +362,123 @@ jobs:
                   result = subprocess.run(
                       [*base, "--execute", sql], env=env, text=True,
                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                      timeout=8, check=False,
+                      timeout=5, check=False,
                   )
               except subprocess.TimeoutExpired:
-                  print(f"{label}: unavailable (query timed out).")
-                  return
+                  return label, ["unavailable (query timed out)."]
               except OSError:
-                  print(f"{label}: unavailable (mysql client could not run).")
-                  return
+                  return label, ["unavailable (mysql client could not run)."]
               if result.returncode != 0:
-                  print(f"{label}: unavailable (query failed; details suppressed).")
-                  return
+                  return label, ["unavailable (query failed; details suppressed)."]
               rows = result.stdout.splitlines()[:100]
-              print(f"{label}: {len(rows)} row(s).")
+              safe_rows = []
               for row in rows:
                   try:
-                      print(render(row.split("\t")))
+                      safe_rows.append(render(row.split("\t")))
                   except Exception:
-                      print("<malformed row suppressed>")
+                      safe_rows.append("<malformed row suppressed>")
+              return label, [f"{len(rows)} row(s).", *safe_rows]
 
-          query(
-              "SHOW FULL PROCESSLIST (thread, command, age, state, redacted SQL)",
-              "SHOW FULL PROCESSLIST",
-              lambda c: "thread={0} command={1} age_s={2} state={3} sql={4}".format(
-                  c[0], c[4], c[5], c[6][:120], redact_sql(c[7]),
-              ) if len(c) >= 8 else "<malformed row suppressed>",
+          queries = (
+              (
+                  "SHOW FULL PROCESSLIST (thread, command, age, state, redacted SQL)",
+                  "SHOW FULL PROCESSLIST",
+                  lambda c: "thread={0} command={1} age_s={2} state={3} sql={4}".format(
+                      c[0], c[4], c[5], c[6][:120], redact_sql(c[7]),
+                  ) if len(c) >= 8 else "<malformed row suppressed>",
+              ),
+              (
+                  "InnoDB data_locks (transaction/thread/event, object, mode/status, redacted record)",
+                  "SELECT ENGINE_TRANSACTION_ID, THREAD_ID, EVENT_ID, OBJECT_SCHEMA, OBJECT_NAME, "
+                  "INDEX_NAME, LOCK_TYPE, LOCK_MODE, LOCK_STATUS, "
+                  "IF(LOCK_DATA IS NULL, 'NULL', '<present:redacted>') "
+                  "FROM performance_schema.data_locks WHERE ENGINE = 'INNODB' LIMIT 100",
+                  lambda c: "trx={0} thread={1} event={2} object={3}.{4} index={5} "
+                            "type={6} mode={7} status={8} record={9}".format(*c),
+              ),
+              (
+                  "InnoDB data_lock_waits (waiting/blocking links and lock objects)",
+                  "SELECT w.REQUESTING_ENGINE_TRANSACTION_ID, r.THREAD_ID, r.EVENT_ID, "
+                  "r.OBJECT_SCHEMA, r.OBJECT_NAME, r.INDEX_NAME, r.LOCK_TYPE, r.LOCK_MODE, r.LOCK_STATUS, "
+                  "w.BLOCKING_ENGINE_TRANSACTION_ID, b.THREAD_ID, b.EVENT_ID, "
+                  "b.OBJECT_SCHEMA, b.OBJECT_NAME, b.INDEX_NAME, b.LOCK_TYPE, b.LOCK_MODE, b.LOCK_STATUS "
+                  "FROM performance_schema.data_lock_waits AS w "
+                  "LEFT JOIN performance_schema.data_locks AS r "
+                  "ON r.ENGINE = w.ENGINE AND r.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID "
+                  "LEFT JOIN performance_schema.data_locks AS b "
+                  "ON b.ENGINE = w.ENGINE AND b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID "
+                  "WHERE w.ENGINE = 'INNODB' LIMIT 100",
+                  lambda c: "waiting_trx={0} thread={1} event={2} object={3}.{4} index={5} "
+                            "type={6} mode={7} status={8}; blocking_trx={9} thread={10} event={11} "
+                            "object={12}.{13} index={14} type={15} mode={16} status={17}".format(*c),
+              ),
+              (
+                  "Active InnoDB transactions (IDs, age, wait and row counts; SQL suppressed)",
+                  "SELECT TRX_ID, TRX_STATE, TIMESTAMPDIFF(SECOND, TRX_STARTED, NOW()), "
+                  "TRX_WAIT_STARTED IS NOT NULL, TRX_MYSQL_THREAD_ID, TRX_ROWS_LOCKED, "
+                  "TRX_ROWS_MODIFIED, TRX_QUERY IS NOT NULL "
+                  "FROM information_schema.innodb_trx LIMIT 100",
+                  lambda c: "trx={0} state={1} age_s={2} waiting={3} thread={4} "
+                            "rows_locked={5} rows_modified={6} active_sql={7}".format(*c),
+              ),
           )
-          query(
-              "InnoDB data_locks (transaction/thread/event, object, mode/status, redacted record)",
-              "SELECT ENGINE_TRANSACTION_ID, THREAD_ID, EVENT_ID, OBJECT_SCHEMA, OBJECT_NAME, "
-              "INDEX_NAME, LOCK_TYPE, LOCK_MODE, LOCK_STATUS, "
-              "IF(LOCK_DATA IS NULL, 'NULL', '<present:redacted>') "
-              "FROM performance_schema.data_locks WHERE ENGINE = 'INNODB' LIMIT 100",
-              lambda c: "trx={0} thread={1} event={2} object={3}.{4} index={5} "
-                        "type={6} mode={7} status={8} record={9}".format(*c),
-          )
-          query(
-              "InnoDB data_lock_waits (waiting/blocking links and lock objects)",
-              "SELECT w.REQUESTING_ENGINE_TRANSACTION_ID, r.THREAD_ID, r.EVENT_ID, "
-              "r.OBJECT_SCHEMA, r.OBJECT_NAME, r.INDEX_NAME, r.LOCK_TYPE, r.LOCK_MODE, r.LOCK_STATUS, "
-              "w.BLOCKING_ENGINE_TRANSACTION_ID, b.THREAD_ID, b.EVENT_ID, "
-              "b.OBJECT_SCHEMA, b.OBJECT_NAME, b.INDEX_NAME, b.LOCK_TYPE, b.LOCK_MODE, b.LOCK_STATUS "
-              "FROM performance_schema.data_lock_waits AS w "
-              "LEFT JOIN performance_schema.data_locks AS r "
-              "ON r.ENGINE = w.ENGINE AND r.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID "
-              "LEFT JOIN performance_schema.data_locks AS b "
-              "ON b.ENGINE = w.ENGINE AND b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID "
-              "WHERE w.ENGINE = 'INNODB' LIMIT 100",
-              lambda c: "waiting_trx={0} thread={1} event={2} object={3}.{4} index={5} "
-                        "type={6} mode={7} status={8}; blocking_trx={9} thread={10} event={11} "
-                        "object={12}.{13} index={14} type={15} mode={16} status={17}".format(*c),
-          )
-          query(
-              "Active InnoDB transactions (IDs, age, wait and row counts; SQL suppressed)",
-              "SELECT TRX_ID, TRX_STATE, TIMESTAMPDIFF(SECOND, TRX_STARTED, NOW()), "
-              "TRX_WAIT_STARTED IS NOT NULL, TRX_MYSQL_THREAD_ID, TRX_ROWS_LOCKED, "
-              "TRX_ROWS_MODIFIED, TRX_QUERY IS NOT NULL "
-              "FROM information_schema.innodb_trx LIMIT 100",
-              lambda c: "trx={0} state={1} age_s={2} waiting={3} thread={4} "
-                        "rows_locked={5} rows_modified={6} active_sql={7}".format(*c),
-          )
+          with ThreadPoolExecutor(max_workers=4) as executor:
+              for label, rows in executor.map(lambda item: query(*item), queries):
+                  print(f"{label}: {rows[0]}")
+                  for row in rows[1:]:
+                      print(row)
           PY
+          }
+
+          process_running() {
+            local state
+            state="$(ps -o stat= -p "$test_pid" 2>/dev/null | tr -d '[:space:]')"
+            [ -n "$state" ] && [ "${state:0:1}" != "Z" ]
+          }
+
+          while process_running; do
+            elapsed=$((SECONDS - test_started))
+            if [ "$elapsed" -ge 80 ]; then
+              snapshot_captured=1
+              echo 'Typed RPC CAS still running at 80s; collecting MySQL state before the 90s test timeout.' >&2
+              if ! capture_mysql_state; then
+                echo 'Bounded MySQL snapshot collection did not finish successfully.' >&2
+              fi
+              break
+            fi
+            sleep 0.25
+          done
+
+          set +e
+          wait "$test_pid"
+          test_status=$?
+          set -e
+
+          # If PHPUnit failed before the pre-deadline observer fired, collect
+          # the same redacted snapshot after failure for diagnostic context.
+          if [ "$test_status" -ne 0 ] && [ "$snapshot_captured" -eq 0 ]; then
+            echo "Typed RPC CAS diagnostic failed (status $test_status); collecting MySQL state." >&2
+            if ! capture_mysql_state; then
+              echo 'Bounded MySQL snapshot collection did not finish successfully.' >&2
+            fi
+          fi
+
+          # Emit only PHPUnit lifecycle labels, never assertion/SQL output.
+          if [ -f "$diagnostic_log" ]; then
+            grep -E '^Test (Preparation|Started|Passed|Failed|Errored|Skipped|Finished|Suite)' \
+              "$diagnostic_log" | tail -n 40 || true
+          fi
           rm -f "$diagnostic_log"
-          echo "Typed RPC CAS diagnostic did not pass (status $test_status); failing before the full suite." >&2
+
+          if [ "$test_status" -eq 0 ]; then
+            echo 'Typed RPC CAS diagnostic passed; continuing to the full suite.'
+            exit 0
+          fi
+          if [ "$test_status" -eq 124 ] || [ "$test_status" -eq 137 ]; then
+            echo 'Typed RPC CAS diagnostic exceeded its 90s deadline; failing explicitly after evidence capture.' >&2
+          else
+            echo "Typed RPC CAS diagnostic failed (status $test_status); failing before the full suite." >&2
+          fi
           exit 1
 
       - name: Test suite
