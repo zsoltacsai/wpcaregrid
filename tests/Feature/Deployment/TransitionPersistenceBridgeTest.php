@@ -474,40 +474,109 @@ class TransitionPersistenceBridgeTest extends TestCase
             $wireRequest = $request;
             $wireRequest['payload'] = (object) [];
             $scriptText = <<<'PY'
-import json, os, socket, struct, subprocess, sys
+import json, os, socket, struct, subprocess, sys, time
 php, artisan, root, socket_path, uid, gid, database, request_json = sys.argv[1:]
 uid, gid = int(uid), int(gid)
 parent = os.path.dirname(socket_path)
-os.mkdir(parent, 0o710)
-os.chown(parent, 0, gid)
-server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(socket_path)
-os.chown(socket_path, 0, gid)
-os.chmod(socket_path, 0o620)
-server.listen(1)
-env = os.environ.copy()
-env.update({'APP_ENV':'testing','APP_KEY':'base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','CAREGRID_DEPLOYMENT_ENV':'testing','DB_CONNECTION':'sqlite','DB_DATABASE':database,'DB_URL':'','CACHE_STORE':'array','SESSION_DRIVER':'array','QUEUE_CONNECTION':'sync','MAIL_MAILER':'array','LOG_CHANNEL':'stderr'})
-child = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path], cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-conn, _ = server.accept()
-pid, peer_uid, peer_gid = struct.unpack('3i', conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))
-if (pid, peer_uid, peer_gid) != (child.pid, uid, gid):
-    raise SystemExit('SO_PEERCRED mismatch')
-conn.sendall((json.dumps(json.loads(request_json), sort_keys=True, separators=(',',':'))+'\n').encode())
+server = None
+conn = None
+child = None
 response = bytearray()
-while len(response) <= 65536 and b'\n' not in response:
-    chunk = conn.recv(4096)
-    if not chunk: break
-    response.extend(chunk)
-conn.close(); server.close()
-out, err = child.communicate(timeout=20)
-if child.returncode != 0: raise SystemExit('Artisan child failed: '+err.decode(errors='replace')[-1000:])
-if len(response) > 65536 or not response.endswith(b'\n') or response.count(b'\n') != 1: raise SystemExit('Invalid RPC response framing')
-decoded = json.loads(response)
-if set(decoded) != {'version','request_id','request_digest','status','result'} or decoded['status'] != 'OK': raise SystemExit('Invalid RPC response envelope')
-if (json.dumps(decoded, sort_keys=True, separators=(',',':'))+'\n').encode() != bytes(response): raise SystemExit('RPC response is not canonical compact ASCII JSON')
-if decoded['request_id'] != json.loads(request_json)['request_id'] or decoded['request_digest'] != json.loads(request_json)['request_digest']: raise SystemExit('RPC identity mismatch')
-if decoded['result']['state'] != 'OPEN': raise SystemExit('Unexpected fence tuple')
-os.unlink(socket_path); os.rmdir(parent)
+try:
+    os.mkdir(parent, 0o710)
+    os.chown(parent, 0, gid)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(socket_path)
+    os.chown(socket_path, 0, gid)
+    os.chmod(socket_path, 0o620)
+    server.listen(1)
+    server.settimeout(0.1)
+    env = os.environ.copy()
+    env.update({'APP_ENV':'testing','APP_KEY':'base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','CAREGRID_DEPLOYMENT_ENV':'testing','DB_CONNECTION':'sqlite','DB_DATABASE':database,'DB_URL':'','CACHE_STORE':'array','SESSION_DRIVER':'array','QUEUE_CONNECTION':'sync','MAIL_MAILER':'array','LOG_CHANNEL':'stderr'})
+    child = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.monotonic() + 20
+    while conn is None:
+        if time.monotonic() >= deadline:
+            child_status = child.poll()
+            if child_status is None:
+                raise SystemExit('phase=accept_timeout; child_state=running')
+            raise SystemExit('phase=accept; child_state=exited; exit_code='+str(child_status))
+        try:
+            conn, _ = server.accept()
+        except socket.timeout:
+            child_status = child.poll()
+            if child_status is not None:
+                raise SystemExit('phase=accept; child_state=exited; exit_code='+str(child_status))
+    pid, peer_uid, peer_gid = struct.unpack('3i', conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))
+    if (pid, peer_uid, peer_gid) != (child.pid, uid, gid):
+        raise SystemExit('SO_PEERCRED mismatch')
+    conn.settimeout(0.1)
+    conn.sendall((json.dumps(json.loads(request_json), sort_keys=True, separators=(',',':'))+'\n').encode())
+    while b'\n' not in response:
+        if time.monotonic() >= deadline:
+            child_status = child.poll()
+            if child_status is None:
+                raise SystemExit('phase=response_timeout; child_state=running')
+            raise SystemExit('phase=response; child_state=exited; exit_code='+str(child_status))
+        try:
+            chunk = conn.recv(4096)
+        except socket.timeout:
+            child_status = child.poll()
+            if child_status is not None:
+                raise SystemExit('phase=response; child_state=exited; exit_code='+str(child_status))
+            continue
+        if not chunk:
+            break
+        if len(response) + len(chunk) > 65536:
+            raise SystemExit('Invalid RPC response framing')
+        response.extend(chunk)
+    try:
+        child.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        raise SystemExit('phase=child_wait_timeout; child_state=running')
+    if child.returncode != 0:
+        raise SystemExit('phase=child; child_state=exited; exit_code='+str(child.returncode))
+    if len(response) > 65536 or not response.endswith(b'\n') or response.count(b'\n') != 1: raise SystemExit('Invalid RPC response framing')
+    decoded = json.loads(response)
+    if set(decoded) != {'version','request_id','request_digest','status','result'} or decoded['status'] != 'OK': raise SystemExit('Invalid RPC response envelope')
+    if (json.dumps(decoded, sort_keys=True, separators=(',',':'))+'\n').encode() != bytes(response): raise SystemExit('RPC response is not canonical compact ASCII JSON')
+    if decoded['request_id'] != json.loads(request_json)['request_id'] or decoded['request_digest'] != json.loads(request_json)['request_digest']: raise SystemExit('RPC identity mismatch')
+    if decoded['result']['state'] != 'OPEN': raise SystemExit('Unexpected fence tuple')
+finally:
+    try:
+        if conn is not None:
+            conn.close()
+    finally:
+        try:
+            if server is not None:
+                server.close()
+        finally:
+            try:
+                if child is not None:
+                    if child.poll() is None:
+                        try:
+                            child.terminate()
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            child.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                child.kill()
+                            except ProcessLookupError:
+                                pass
+                            child.wait()
+                    else:
+                        child.wait()
+            finally:
+                try:
+                    os.unlink(socket_path)
+                except FileNotFoundError:
+                    pass
+                try:
+                    os.rmdir(parent)
+                except FileNotFoundError:
+                    pass
 PY;
             file_put_contents($script, $scriptText);
             chmod($script, 0644);
