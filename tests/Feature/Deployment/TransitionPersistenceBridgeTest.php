@@ -437,6 +437,9 @@ class TransitionPersistenceBridgeTest extends TestCase
     {
         $source = file_get_contents(__FILE__);
         self::assertIsString($source);
+        $workflow = file_get_contents(base_path('.github/workflows/ci.yml'));
+        self::assertIsString($workflow);
+        self::assertStringContainsString('r"phase=root_helper; state=failed|"', $workflow);
 
         $marker = "\$scriptText = <<<'PY'\n";
         $helperStart = strpos($source, $marker);
