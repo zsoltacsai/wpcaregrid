@@ -443,17 +443,27 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper;', $workflow);
         self::assertStringContainsString("'GATE1_SAFE_RUNTIME_DIAGNOSTIC:'", $source);
         self::assertStringContainsString('stage=assertion_failure', $workflow);
+        self::assertStringContainsString('state=started; producer=php_wrapper; stage=peer_rpc_test_entry', $workflow);
+        self::assertStringContainsString('reason=(?:platform_or_privilege_prerequisite_missing|www_data_account_missing)', $workflow);
         $peerRpcMethodStart = strpos($source, 'public function test_artisan_rpc_runs_as_unprivileged_peer_and_checks_so_peercred(): void');
         self::assertIsInt($peerRpcMethodStart);
         $peerRpcMethodEnd = strpos($source, "\n    }\n}", $peerRpcMethodStart);
         self::assertIsInt($peerRpcMethodEnd);
         $peerRpcMethod = substr($source, $peerRpcMethodStart, $peerRpcMethodEnd - $peerRpcMethodStart);
         $emitterPosition = strpos($peerRpcMethod, '$emitSafeDiagnostic = static function');
+        self::assertStringContainsString('$safeLifecycleEmitted, &$safeOutcomeEmitted', $peerRpcMethod);
+        self::assertStringContainsString('$safeOutcomeEmitted = true;', $peerRpcMethod);
+        $entryMarker = "\$emitSafeDiagnostic('phase=root_helper; state=started; producer=php_wrapper; stage=peer_rpc_test_entry')";
+        $entryMarkerPosition = strpos($peerRpcMethod, $entryMarker);
+        $prerequisitePosition = strpos($peerRpcMethod, "if (PHP_OS_FAMILY !== 'Linux'");
         $outerTryPosition = strpos($peerRpcMethod, "\n        try {\n            \$pdo = new");
         $catchCallPosition = strpos($peerRpcMethod, '$emitSafeDiagnostic(', $outerTryPosition === false ? 0 : $outerTryPosition);
         self::assertIsInt($emitterPosition);
+        self::assertIsInt($entryMarkerPosition);
+        self::assertIsInt($prerequisitePosition);
         self::assertIsInt($outerTryPosition);
         self::assertIsInt($catchCallPosition);
+        self::assertTrue($emitterPosition < $entryMarkerPosition && $entryMarkerPosition < $prerequisitePosition);
         self::assertTrue($emitterPosition < $outerTryPosition && $outerTryPosition < $catchCallPosition);
 
         $marker = "\$scriptText = <<<'PY'\n";
@@ -615,26 +625,45 @@ class TransitionPersistenceBridgeTest extends TestCase
 
     public function test_artisan_rpc_runs_as_unprivileged_peer_and_checks_so_peercred(): void
     {
-        $safeDiagnosticEmitted = false;
-        $emitSafeDiagnostic = static function (string $line) use (&$safeDiagnosticEmitted): void {
-            if ($safeDiagnosticEmitted || !str_starts_with($line, 'phase=')) {
+        $safeLifecycleEmitted = false;
+        $safeOutcomeEmitted = false;
+        $emitSafeDiagnostic = static function (string $line) use (&$safeLifecycleEmitted, &$safeOutcomeEmitted): void {
+            if (!str_starts_with($line, 'phase=')) {
                 return;
             }
 
-            $safeDiagnosticEmitted = true;
+            if ($line === 'phase=root_helper; state=started; producer=php_wrapper; stage=peer_rpc_test_entry') {
+                if ($safeLifecycleEmitted) {
+                    return;
+                }
+
+                $safeLifecycleEmitted = true;
+            } else {
+                if ($safeOutcomeEmitted) {
+                    return;
+                }
+
+                $safeOutcomeEmitted = true;
+            }
+
             fwrite(STDERR, 'GATE1_SAFE_RUNTIME_DIAGNOSTIC:'.$line.PHP_EOL);
             fflush(STDERR);
         };
+        $emitSafeDiagnostic('phase=root_helper; state=started; producer=php_wrapper; stage=peer_rpc_test_entry');
 
         if (PHP_OS_FAMILY !== 'Linux'
             || ! function_exists('posix_geteuid')
             || trim((string) shell_exec('sudo -n true >/dev/null 2>&1; printf "%s" $?')) !== '0'
             || trim((string) shell_exec('command -v setpriv')) === '') {
+            $emitSafeDiagnostic(
+                'phase=root_helper; state=skipped; producer=php_wrapper; reason=platform_or_privilege_prerequisite_missing');
             self::markTestSkipped('Requires Linux, passwordless sudo, and setpriv for the isolated root-peer integration fixture.');
         }
 
         $wwwData = trim((string) shell_exec('getent passwd www-data'));
         if ($wwwData === '') {
+            $emitSafeDiagnostic(
+                'phase=root_helper; state=skipped; producer=php_wrapper; reason=www_data_account_missing');
             self::markTestSkipped('The isolated root-peer fixture requires the www-data account.');
         }
         $parts = explode(':', $wwwData);
