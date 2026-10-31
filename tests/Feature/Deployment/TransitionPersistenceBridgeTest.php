@@ -636,7 +636,9 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('application_source_cleanup_failure = cleanup_operation', $helper);
         self::assertStringContainsString('application_source_cleanup_exception = (', $helper);
         self::assertStringContainsString('application_source_cleanup_exceptions = {', $helper);
-        self::assertStringContainsString("cleanup_detail = '; operation='+application_source_cleanup_failure+'; context='+cleanup_context", $helper);
+        self::assertStringContainsString('cleanup_detail = (', $helper);
+        self::assertStringContainsString("'; operation='+application_source_cleanup_failure+'; context='+cleanup_context", $helper);
+        self::assertStringContainsString("+'; exception='+application_source_cleanup_exception", $helper);
         self::assertStringContainsString("cleanup_context = 'secondary' if primary_failure_pending else 'cleanup_only'", $helper);
         self::assertStringContainsString("sys.stderr.write('phase=cleanup; component='+component+'; state=unconfirmed'+cleanup_detail+'\\n')", $helper);
         foreach ([
