@@ -440,16 +440,21 @@ class TransitionPersistenceBridgeTest extends TestCase
         $workflow = file_get_contents(base_path('.github/workflows/ci.yml'));
         self::assertIsString($workflow);
         self::assertStringContainsString('r"phase=root_helper; state=failed|"', $workflow);
-        self::assertStringContainsString('GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper;', $workflow);
+        self::assertStringContainsString('safe_prefix = "GATE1_SAFE_RUNTIME_DIAGNOSTIC:"', $workflow);
         self::assertStringContainsString("'GATE1_SAFE_RUNTIME_DIAGNOSTIC:'", $source);
         self::assertStringContainsString('stage=assertion_failure', $workflow);
         self::assertStringContainsString('state=started; producer=php_wrapper; stage=peer_rpc_test_entry', $workflow);
         self::assertStringContainsString('reason=(?:platform_or_privilege_prerequisite_missing|www_data_account_missing)', $workflow);
-        self::assertStringContainsString('state=progress; producer=php_wrapper; stage=(?:prerequisites_passed|identity_parsed|temp_name_created|mkdir_begin|mkdir_complete|fixture_database_opened|fixture_schema_created|fixture_row_inserted|fixture_permissions_set|helper_script_built|helper_script_written|helper_script_permissions_set|request_json_ready|helper_spawn_begin|helper_spawn_complete|helper_wait_begin|helper_wait_complete|helper_reap_begin|helper_reap_complete|cleanup_begin|cleanup_complete|method_body_complete)', $workflow);
-        self::assertStringContainsString('diagnostic.startswith("GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=progress;") or diagnostic.startswith("phase=progress;")', $workflow);
+        self::assertStringContainsString('diagnostic_payload.startswith("phase=root_helper; state=progress;") or diagnostic_payload.startswith("phase=progress;")', $workflow);
         self::assertStringContainsString('if latest_progress_diagnostic is not None:', $workflow);
         self::assertStringContainsString('if not has_terminal_diagnostic and latest_lifecycle_diagnostic is not None:', $workflow);
         self::assertStringContainsString('latest_lifecycle_diagnostic = diagnostic', $workflow);
+        self::assertSame(1, substr_count($workflow, 'payload_match = safe_diagnostic.fullmatch(candidate[marker_position + len(safe_prefix):])'));
+        self::assertSame(1, substr_count($workflow, 'payload_match = safe_rpc_diagnostic.fullmatch(candidate[marker_position + len(safe_prefix):])'));
+        self::assertSame(2, substr_count($workflow, 'if candidate.count(safe_prefix) == 1:'));
+        self::assertSame(2, substr_count($workflow, 'diagnostic = safe_prefix + payload_match.group(0)'));
+        self::assertStringNotContainsString('safe_diagnostic.fullmatch(candidate[marker_position:])', $workflow);
+        self::assertStringNotContainsString('safe_rpc_diagnostic.fullmatch(candidate[marker_position:])', $workflow);
         $progressPrintPosition = strpos($workflow, 'if latest_progress_diagnostic is not None:');
         $cleanupPrintPosition = strpos($workflow, 'for diagnostic in sorted(cleanup_diagnostics):', $progressPrintPosition);
         $terminalPrintPosition = strpos($workflow, 'for diagnostic in (latest_safe_diagnostic, wrapper_signal_diagnostic, wrapper_timeout_diagnostic):', $cleanupPrintPosition);
@@ -471,7 +476,8 @@ class TransitionPersistenceBridgeTest extends TestCase
         $entryMarkerPosition = strpos($peerRpcMethod, $entryMarker);
         $prerequisitePosition = strpos($peerRpcMethod, "if (PHP_OS_FAMILY !== 'Linux'");
         $progressStages = ['prerequisites_passed', 'identity_parsed', 'temp_name_created', 'mkdir_begin', 'mkdir_complete', 'fixture_database_opened', 'fixture_schema_created', 'fixture_row_inserted', 'fixture_permissions_set', 'helper_script_built', 'helper_script_written', 'helper_script_permissions_set', 'request_json_ready', 'helper_spawn_begin', 'helper_spawn_complete', 'helper_wait_begin', 'helper_wait_complete', 'helper_reap_begin', 'helper_reap_complete', 'cleanup_begin', 'cleanup_complete', 'method_body_complete'];
-        $workflowStagePattern = 'stage=(?:'.implode('|', $progressStages).')';
+        $additionalProgressStages = ['assertion_catch_entered', 'throwable_catch_entered', 'terminal_outcome_suppressed'];
+        $workflowStagePattern = 'stage=(?:'.implode('|', [...$progressStages, ...$additionalProgressStages]).')';
         self::assertSame(2, substr_count($workflow, $workflowStagePattern));
         $progressPositions = [];
         foreach ($progressStages as $progressStage) {
@@ -483,6 +489,11 @@ class TransitionPersistenceBridgeTest extends TestCase
         $cleanupBeginPosition = strpos($peerRpcMethod, 'state=progress; producer=php_wrapper; stage=cleanup_begin');
         $cleanupCompletePosition = strpos($peerRpcMethod, 'state=progress; producer=php_wrapper; stage=cleanup_complete');
         $methodBodyCompletePosition = strpos($peerRpcMethod, 'state=progress; producer=php_wrapper; stage=method_body_complete');
+        $assertionCatchPosition = strpos($peerRpcMethod, '} catch (AssertionFailedError $failure) {');
+        $assertionCatchStagePosition = strpos($peerRpcMethod, 'state=progress; producer=php_wrapper; stage=assertion_catch_entered');
+        $throwableCatchPosition = strpos($peerRpcMethod, '} catch (\\Throwable $failure) {');
+        $throwableCatchStagePosition = strpos($peerRpcMethod, 'state=progress; producer=php_wrapper; stage=throwable_catch_entered');
+        $suppressedOutcomeStagePosition = strpos($peerRpcMethod, 'state=progress; producer=php_wrapper; stage=terminal_outcome_suppressed');
         $outerTryPosition = strpos($peerRpcMethod, "\n        try {\n            \$pdo = new");
         $catchCallPosition = strpos($peerRpcMethod, '$emitSafeDiagnostic(', $outerTryPosition === false ? 0 : $outerTryPosition);
         self::assertIsInt($emitterPosition);
@@ -494,6 +505,11 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertIsInt($cleanupBeginPosition);
         self::assertIsInt($cleanupCompletePosition);
         self::assertIsInt($methodBodyCompletePosition);
+        self::assertIsInt($assertionCatchPosition);
+        self::assertIsInt($assertionCatchStagePosition);
+        self::assertIsInt($throwableCatchPosition);
+        self::assertIsInt($throwableCatchStagePosition);
+        self::assertIsInt($suppressedOutcomeStagePosition);
         self::assertTrue($emitterPosition < $entryMarkerPosition && $entryMarkerPosition < $prerequisitePosition);
         self::assertTrue($prerequisitePosition < $progressPositions[0]);
         for ($index = 1, $stageCount = count($progressPositions); $index < $stageCount; $index++) {
@@ -503,6 +519,10 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertTrue($finallyPosition < $cleanupBeginPosition
             && $cleanupBeginPosition < $cleanupCompletePosition
             && $cleanupCompletePosition < $methodBodyCompletePosition);
+        self::assertTrue($assertionCatchPosition < $assertionCatchStagePosition
+            && $assertionCatchStagePosition < $throwableCatchPosition
+            && $throwableCatchPosition < $throwableCatchStagePosition
+            && $throwableCatchStagePosition < $finallyPosition);
         self::assertTrue($emitterPosition < $outerTryPosition && $outerTryPosition < $catchCallPosition);
 
         $marker = "\$scriptText = <<<'PY'\n";
@@ -667,7 +687,7 @@ class TransitionPersistenceBridgeTest extends TestCase
         $safeLifecycleEmitted = false;
         $safeProgressEmitted = [];
         $safeOutcomeEmitted = false;
-        $safeProgressStages = ['prerequisites_passed', 'identity_parsed', 'temp_name_created', 'mkdir_begin', 'mkdir_complete', 'fixture_database_opened', 'fixture_schema_created', 'fixture_row_inserted', 'fixture_permissions_set', 'helper_script_built', 'helper_script_written', 'helper_script_permissions_set', 'request_json_ready', 'helper_spawn_begin', 'helper_spawn_complete', 'helper_wait_begin', 'helper_wait_complete', 'helper_reap_begin', 'helper_reap_complete', 'cleanup_begin', 'cleanup_complete', 'method_body_complete'];
+        $safeProgressStages = ['prerequisites_passed', 'identity_parsed', 'temp_name_created', 'mkdir_begin', 'mkdir_complete', 'fixture_database_opened', 'fixture_schema_created', 'fixture_row_inserted', 'fixture_permissions_set', 'helper_script_built', 'helper_script_written', 'helper_script_permissions_set', 'request_json_ready', 'helper_spawn_begin', 'helper_spawn_complete', 'helper_wait_begin', 'helper_wait_complete', 'helper_reap_begin', 'helper_reap_complete', 'assertion_catch_entered', 'throwable_catch_entered', 'terminal_outcome_suppressed', 'cleanup_begin', 'cleanup_complete', 'method_body_complete'];
         $emitSafeDiagnostic = static function (string $line) use (&$safeLifecycleEmitted, &$safeProgressEmitted, &$safeOutcomeEmitted, $safeProgressStages): void {
             if (! str_starts_with($line, 'phase=')) {
                 return;
@@ -688,6 +708,12 @@ class TransitionPersistenceBridgeTest extends TestCase
                 $safeProgressEmitted[$stage] = true;
             } else {
                 if ($safeOutcomeEmitted) {
+                    if (! isset($safeProgressEmitted['terminal_outcome_suppressed'])) {
+                        $safeProgressEmitted['terminal_outcome_suppressed'] = true;
+                        fwrite(STDERR, 'GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=progress; producer=php_wrapper; stage=terminal_outcome_suppressed'.PHP_EOL);
+                        fflush(STDERR);
+                    }
+
                     return;
                 }
 
@@ -2024,9 +2050,11 @@ PY;
             }
             self::assertSame(0, $processExitCode, $diagnostic);
         } catch (AssertionFailedError $failure) {
+            $emitSafeDiagnostic('phase=root_helper; state=progress; producer=php_wrapper; stage=assertion_catch_entered');
             $emitSafeDiagnostic('phase=root_helper; state=failed; producer=php_wrapper; stage=assertion_failure');
             throw $failure;
         } catch (\Throwable $failure) {
+            $emitSafeDiagnostic('phase=root_helper; state=progress; producer=php_wrapper; stage=throwable_catch_entered');
             $throwableClass = match (true) {
                 $failure instanceof \TypeError => 'TypeError',
                 $failure instanceof \ValueError => 'ValueError',

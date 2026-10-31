@@ -514,8 +514,8 @@ jobs:
               raise SystemExit(1)
 
           safe_diagnostic = re.compile(
-              r"(?:GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=started; producer=php_wrapper; stage=peer_rpc_test_entry|GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=skipped; producer=php_wrapper; reason=(?:platform_or_privilege_prerequisite_missing|www_data_account_missing)|GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=progress; producer=php_wrapper; stage=(?:prerequisites_passed|identity_parsed|temp_name_created|mkdir_begin|mkdir_complete|fixture_database_opened|fixture_schema_created|fixture_row_inserted|fixture_permissions_set|helper_script_built|helper_script_written|helper_script_permissions_set|request_json_ready|helper_spawn_begin|helper_spawn_complete|helper_wait_begin|helper_wait_complete|helper_reap_begin|helper_reap_complete|cleanup_begin|cleanup_complete|method_body_complete)|"
-              r"GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\d+)?|GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified|GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=failed; producer=php_wrapper; stage=throwable_catch; exception=(?:TypeError|ValueError|ErrorException|JsonException|PDOException|RuntimeException|LogicException|Error|Exception|OtherThrowable)(?:; exception_code=-?\d+)?|GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=failed; producer=php_wrapper; stage=assertion_failure|"
+              r"(?:phase=root_helper; state=started; producer=php_wrapper; stage=peer_rpc_test_entry|phase=root_helper; state=skipped; producer=php_wrapper; reason=(?:platform_or_privilege_prerequisite_missing|www_data_account_missing)|phase=root_helper; state=progress; producer=php_wrapper; stage=(?:prerequisites_passed|identity_parsed|temp_name_created|mkdir_begin|mkdir_complete|fixture_database_opened|fixture_schema_created|fixture_row_inserted|fixture_permissions_set|helper_script_built|helper_script_written|helper_script_permissions_set|request_json_ready|helper_spawn_begin|helper_spawn_complete|helper_wait_begin|helper_wait_complete|helper_reap_begin|helper_reap_complete|cleanup_begin|cleanup_complete|method_body_complete|assertion_catch_entered|throwable_catch_entered|terminal_outcome_suppressed)|"
+              r"phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified|phase=root_helper; state=failed; producer=php_wrapper; stage=throwable_catch; exception=(?:TypeError|ValueError|ErrorException|JsonException|PDOException|RuntimeException|LogicException|Error|Exception|OtherThrowable)(?:; exception_code=-?\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=assertion_failure|"
               r"phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\d+)?(?:; errno=-?\d+)?|"
               r"phase=preflight; probe=artisan_version; state=timeout; timeout_source=(?:helper_budget_exhausted|child_wait_timeout); elapsed_ms=\d+; remaining_ms=\d+; child_state=(?:not_started|running|exited)(?:; exit_code=-?\d+)?; last_marker=preflight_artisan_version_begin|"
               r"phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\d+)?(?:; errno=-?\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|"
@@ -524,18 +524,25 @@ jobs:
               r"phase=(?:accept|response|child); child_state=exited; exit_code=-?\d+)"
           )
           diagnostics = set()
+          safe_prefix = "GATE1_SAFE_RUNTIME_DIAGNOSTIC:"
           diagnostic_scan_error = None
           try:
               with open(log_path, "r", encoding="utf-8", errors="replace") as recorded:
                   for line in recorded:
                       candidate = ansi_control.sub("", line).rstrip()
-                      match = safe_diagnostic.fullmatch(candidate)
-                      if match is None:
-                          marker_position = candidate.find("GATE1_SAFE_RUNTIME_DIAGNOSTIC:")
-                          if marker_position >= 0:
-                              match = safe_diagnostic.fullmatch(candidate[marker_position:])
-                      if match is not None:
-                          diagnostics.add(match.group(0))
+                      diagnostic = None
+                      marker_position = candidate.find(safe_prefix)
+                      if marker_position >= 0:
+                          if candidate.count(safe_prefix) == 1:
+                              payload_match = safe_diagnostic.fullmatch(candidate[marker_position + len(safe_prefix):])
+                              if payload_match is not None:
+                                  diagnostic = safe_prefix + payload_match.group(0)
+                      else:
+                          payload_match = safe_diagnostic.fullmatch(candidate)
+                          if payload_match is not None:
+                              diagnostic = payload_match.group(0)
+                      if diagnostic is not None:
+                          diagnostics.add(diagnostic)
           except OSError:
               diagnostic_scan_error = "log_unavailable"
           except Exception:
@@ -607,8 +614,8 @@ jobs:
               return "".join(char if char.isalnum() or char in "_.$:\\" else "?" for char in value)[:240]
 
           safe_rpc_diagnostic = re.compile(
-              r"(?:GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=started; producer=php_wrapper; stage=peer_rpc_test_entry|GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=skipped; producer=php_wrapper; reason=(?:platform_or_privilege_prerequisite_missing|www_data_account_missing)|GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=progress; producer=php_wrapper; stage=(?:prerequisites_passed|identity_parsed|temp_name_created|mkdir_begin|mkdir_complete|fixture_database_opened|fixture_schema_created|fixture_row_inserted|fixture_permissions_set|helper_script_built|helper_script_written|helper_script_permissions_set|request_json_ready|helper_spawn_begin|helper_spawn_complete|helper_wait_begin|helper_wait_complete|helper_reap_begin|helper_reap_complete|cleanup_begin|cleanup_complete|method_body_complete)|"
-              r"GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\d+)?|GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified|GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=failed; producer=php_wrapper; stage=throwable_catch; exception=(?:TypeError|ValueError|ErrorException|JsonException|PDOException|RuntimeException|LogicException|Error|Exception|OtherThrowable)(?:; exception_code=-?\d+)?|GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=failed; producer=php_wrapper; stage=assertion_failure|"
+              r"(?:phase=root_helper; state=started; producer=php_wrapper; stage=peer_rpc_test_entry|phase=root_helper; state=skipped; producer=php_wrapper; reason=(?:platform_or_privilege_prerequisite_missing|www_data_account_missing)|phase=root_helper; state=progress; producer=php_wrapper; stage=(?:prerequisites_passed|identity_parsed|temp_name_created|mkdir_begin|mkdir_complete|fixture_database_opened|fixture_schema_created|fixture_row_inserted|fixture_permissions_set|helper_script_built|helper_script_written|helper_script_permissions_set|request_json_ready|helper_spawn_begin|helper_spawn_complete|helper_wait_begin|helper_wait_complete|helper_reap_begin|helper_reap_complete|cleanup_begin|cleanup_complete|method_body_complete|assertion_catch_entered|throwable_catch_entered|terminal_outcome_suppressed)|"
+              r"phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified|phase=root_helper; state=failed; producer=php_wrapper; stage=throwable_catch; exception=(?:TypeError|ValueError|ErrorException|JsonException|PDOException|RuntimeException|LogicException|Error|Exception|OtherThrowable)(?:; exception_code=-?\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=assertion_failure|"
               r"phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\d+)?(?:; errno=-?\d+)?|"
               r"phase=preflight; probe=artisan_version; state=timeout; timeout_source=(?:helper_budget_exhausted|child_wait_timeout); elapsed_ms=\d+; remaining_ms=\d+; child_state=(?:not_started|running|exited)(?:; exit_code=-?\d+)?; last_marker=preflight_artisan_version_begin|"
               r"phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\d+)?(?:; errno=-?\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|"
@@ -621,6 +628,7 @@ jobs:
           ansi_control = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
           def emit_safe_rpc_diagnostic():
+              safe_prefix = "GATE1_SAFE_RUNTIME_DIAGNOSTIC:"
               latest_safe_diagnostic = None
               latest_lifecycle_diagnostic = None
               wrapper_signal_diagnostic = None
@@ -631,24 +639,30 @@ jobs:
                   with open(log_path, "r", encoding="utf-8", errors="replace") as recorded_output:
                       for line in recorded_output:
                           candidate = ansi_control.sub("", line).rstrip()
-                          match = safe_rpc_diagnostic.fullmatch(candidate)
-                          if match is None:
-                              marker_position = candidate.find("GATE1_SAFE_RUNTIME_DIAGNOSTIC:")
-                              if marker_position >= 0:
-                                  match = safe_rpc_diagnostic.fullmatch(candidate[marker_position:])
-                          if match is not None:
-                              diagnostic = match.group(0)
-                              if diagnostic.startswith("phase=cleanup; component="):
+                          diagnostic = None
+                          marker_position = candidate.find(safe_prefix)
+                          if marker_position >= 0:
+                              if candidate.count(safe_prefix) == 1:
+                                  payload_match = safe_rpc_diagnostic.fullmatch(candidate[marker_position + len(safe_prefix):])
+                                  if payload_match is not None:
+                                      diagnostic = safe_prefix + payload_match.group(0)
+                          else:
+                              payload_match = safe_rpc_diagnostic.fullmatch(candidate)
+                              if payload_match is not None:
+                                  diagnostic = payload_match.group(0)
+                          if diagnostic is not None:
+                              diagnostic_payload = diagnostic[len(safe_prefix):] if diagnostic.startswith(safe_prefix) else diagnostic
+                              if diagnostic_payload.startswith("phase=cleanup; component="):
                                   cleanup_diagnostics.add(diagnostic)
-                              elif diagnostic.startswith("GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=started;"):
+                              elif diagnostic_payload.startswith("phase=root_helper; state=started;"):
                                   latest_lifecycle_diagnostic = diagnostic
-                              elif diagnostic.startswith("GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper; state=progress;") or diagnostic.startswith("phase=progress;"):
+                              elif diagnostic_payload.startswith("phase=root_helper; state=progress;") or diagnostic_payload.startswith("phase=progress;"):
                                   latest_progress_diagnostic = diagnostic
-                              elif diagnostic.startswith("phase=child_marker;"):
+                              elif diagnostic_payload.startswith("phase=child_marker;"):
                                   continue
-                              elif diagnostic.startswith("phase=wrapper_signal;"):
+                              elif diagnostic_payload.startswith("phase=wrapper_signal;"):
                                   wrapper_signal_diagnostic = diagnostic
-                              elif diagnostic.startswith("phase=wrapper_timeout;"):
+                              elif diagnostic_payload.startswith("phase=wrapper_timeout;"):
                                   wrapper_timeout_diagnostic = diagnostic
                               else:
                                   latest_safe_diagnostic = diagnostic
