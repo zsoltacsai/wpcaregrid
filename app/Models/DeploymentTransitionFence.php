@@ -44,6 +44,18 @@ class DeploymentTransitionFence extends Model
         ];
     }
 
+    /** @return array<string, int|string> The complete projection tuple, including DRAINING's manifest. */
+    public function completeTuple(): array
+    {
+        $tuple = $this->tuple();
+
+        if ($tuple['state'] === 'DRAINING') {
+            $tuple['permit_manifest_hash'] = (string) $this->permit_manifest_hash;
+        }
+
+        return $tuple;
+    }
+
     public function hasValidTuple(): bool
     {
         $tuple = $this->tuple();

@@ -3,11 +3,15 @@
 namespace Tests\Feature\Platform;
 
 use App\Platform\DisasterRecovery\PlatformDatabaseBackupService;
+use Illuminate\Contracts\Filesystem\FileNotFoundException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use PHPUnit\Framework\AssertionFailedError;
+use Symfony\Component\Process\Exception\ProcessException;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Tests\TestCase;
 
 class PlatformDatabaseBackupMysqlTest extends TestCase
@@ -23,57 +27,214 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
             $this->markTestSkipped('Requires the CI-only MySQL root credential for disposable import verification.');
         }
 
-        $mysql = config('database.connections.mysql');
-        config([
-            'database.connections.m9_platform_source' => $mysql,
-            'database.connections.m9_platform_verify' => array_merge($mysql, ['username' => 'root', 'password' => getenv('M9_MYSQL_VERIFY_PASSWORD')]),
-            'platform_backup.enabled' => true,
-            'platform_backup.source_connection' => 'm9_platform_source',
-            'platform_backup.verification_connection' => 'm9_platform_verify',
-            'platform_backup.verification_database_prefix' => 'wpcg_m9_dr_ci_',
-            'platform_backup.verification_isolated' => true,
-            'platform_backup.critical_tables' => array_merge(config('platform_backup.critical_tables'), ['m9_recovery_probe']),
-            'platform_backup.encryption.current_key_id' => 'test-v1',
-            'platform_backup.encryption.keys' => ['test-v1' => base64_encode(str_repeat('k', 32))],
-            'platform_backup.disk' => 'platform_backups',
-            'filesystems.disks.platform_backups.driver' => 'local',
-            'filesystems.disks.platform_backups.root' => sys_get_temp_dir().'/wpcg-m9-mysql-objects-'.bin2hex(random_bytes(6)),
-        ]);
-        DB::purge('m9_platform_source');
-        DB::purge('m9_platform_verify');
-        Storage::forgetDisk('platform_backups');
-
         $probe = 'm9_recovery_probe';
-        Schema::connection('m9_platform_source')->dropIfExists($probe);
-        Schema::connection('m9_platform_source')->create($probe, function (Blueprint $table): void {
-            $table->unsignedInteger('id')->primary();
-            $table->string('record_key')->unique();
-        });
-        DB::connection('m9_platform_source')->table($probe)->insert([
-            ['id' => 1, 'record_key' => 'site-snapshot'],
-            ['id' => 2, 'record_key' => 'audit-snapshot'],
-        ]);
+        $root = null;
+        $activeStage = 'fixture_setup';
+        $diagnosticCode = 'none';
+        $primaryFailure = null;
 
+        $this->emitDiagnosticV2($activeStage, 'begin');
         try {
-            $service = app(PlatformDatabaseBackupService::class);
-            $backup = $service->create('daily');
-            $this->assertTrue($service->verify($backup), 'Verification failed: '.($backup->fresh()?->failure_code ?? 'unknown'));
-            $this->assertSame('verified', $backup->fresh()->status);
-            $this->assertSame('stored-object-sha256-gzip-and-disposable-mysql-import', $backup->fresh()->verification_method);
-            $this->assertContains($probe, $backup->manifest['table_manifest']['tables']);
-            $this->assertSame(2, $backup->manifest['table_manifest']['critical_counts'][$probe]);
-        } finally {
-            Schema::connection('m9_platform_source')->dropIfExists($probe);
+            $mysql = config('database.connections.mysql');
+            config([
+                'database.connections.m9_platform_source' => $mysql,
+                'database.connections.m9_platform_verify' => array_merge($mysql, ['username' => 'root', 'password' => getenv('M9_MYSQL_VERIFY_PASSWORD')]),
+                'platform_backup.enabled' => true,
+                'platform_backup.source_connection' => 'm9_platform_source',
+                'platform_backup.verification_connection' => 'm9_platform_verify',
+                'platform_backup.verification_database_prefix' => 'wpcg_m9_dr_ci_',
+                'platform_backup.verification_isolated' => true,
+                'platform_backup.critical_tables' => array_merge(config('platform_backup.critical_tables'), [$probe]),
+                'platform_backup.encryption.current_key_id' => 'test-v1',
+                'platform_backup.encryption.keys' => ['test-v1' => base64_encode(str_repeat('k', 32))],
+                'platform_backup.disk' => 'platform_backups',
+                'filesystems.disks.platform_backups.driver' => 'local',
+                'filesystems.disks.platform_backups.root' => sys_get_temp_dir().'/wpcg-m9-mysql-objects-'.bin2hex(random_bytes(6)),
+            ]);
+            $root = config('filesystems.disks.platform_backups.root');
             DB::purge('m9_platform_source');
             DB::purge('m9_platform_verify');
-            $root = config('filesystems.disks.platform_backups.root');
-            if (is_dir($root)) {
-                $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::CHILD_FIRST);
-                foreach ($files as $file) {
-                    $file->isDir() ? @rmdir($file->getPathname()) : @unlink($file->getPathname());
+            Storage::forgetDisk('platform_backups');
+        } catch (\Throwable $exception) {
+            $this->emitDiagnosticV2($activeStage, 'primary_failure', $this->diagnosticCategoryV2($exception));
+            throw $exception;
+        }
+
+        $activeStage = 'probe_setup';
+        $this->emitDiagnosticV2($activeStage, 'begin');
+        try {
+            Schema::connection('m9_platform_source')->dropIfExists($probe);
+            Schema::connection('m9_platform_source')->create($probe, function (Blueprint $table): void {
+                $table->unsignedInteger('id')->primary();
+                $table->string('record_key')->unique();
+            });
+            DB::connection('m9_platform_source')->table($probe)->insert([
+                ['id' => 1, 'record_key' => 'site-snapshot'],
+                ['id' => 2, 'record_key' => 'audit-snapshot'],
+            ]);
+        } catch (\Throwable $exception) {
+            $this->emitDiagnosticV2($activeStage, 'primary_failure', $this->diagnosticCategoryV2($exception));
+            throw $exception;
+        }
+
+        try {
+            $activeStage = 'backup_create';
+            $this->emitDiagnosticV2($activeStage, 'begin');
+            $service = app(PlatformDatabaseBackupService::class);
+            $backup = $service->create('daily');
+
+            $activeStage = 'verify';
+            $this->emitDiagnosticV2($activeStage, 'begin');
+            $verified = $service->verify($backup);
+
+            $activeStage = 'assert_verified';
+            $this->emitDiagnosticV2($activeStage, 'begin');
+            $failureCode = $backup->fresh()?->failure_code ?? 'unknown';
+            if (! $verified) {
+                $diagnosticCode = $this->diagnosticCodeV2($failureCode);
+            }
+            $this->assertTrue($verified, 'Verification failed: '.$failureCode);
+
+            $activeStage = 'assert_status';
+            $this->emitDiagnosticV2($activeStage, 'begin');
+            $this->assertSame('verified', $backup->fresh()->status);
+
+            $activeStage = 'assert_method';
+            $this->emitDiagnosticV2($activeStage, 'begin');
+            $this->assertSame('stored-object-sha256-gzip-and-disposable-mysql-import', $backup->fresh()->verification_method);
+
+            $activeStage = 'assert_manifest';
+            $this->emitDiagnosticV2($activeStage, 'begin');
+            $tables = $backup->manifest['table_manifest']['tables'];
+
+            $activeStage = 'assert_probe';
+            $this->emitDiagnosticV2($activeStage, 'begin');
+            $this->assertContains($probe, $tables);
+
+            $activeStage = 'assert_critical_count';
+            $this->emitDiagnosticV2($activeStage, 'begin');
+            $this->assertSame(2, $backup->manifest['table_manifest']['critical_counts'][$probe]);
+        } catch (\Throwable $exception) {
+            $primaryFailure = $exception;
+            $this->emitDiagnosticV2($activeStage, 'primary_failure', $this->diagnosticCategoryV2($exception), $diagnosticCode);
+            throw $exception;
+        } finally {
+            try {
+                $activeStage = 'cleanup_probe';
+                $this->emitDiagnosticV2($activeStage, 'begin');
+                Schema::connection('m9_platform_source')->dropIfExists($probe);
+
+                $activeStage = 'cleanup_connections';
+                $this->emitDiagnosticV2($activeStage, 'begin');
+                DB::purge('m9_platform_source');
+                DB::purge('m9_platform_verify');
+
+                $activeStage = 'cleanup_objects';
+                $this->emitDiagnosticV2($activeStage, 'begin');
+                if (is_string($root)) {
+                    if (is_dir($root)) {
+                        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::CHILD_FIRST);
+                        foreach ($files as $file) {
+                            if ($file->isDir()) {
+                                if (! @rmdir($file->getPathname())) {
+                                    $this->emitDiagnosticV2($activeStage, 'cleanup_observation', 'cleanup_error', 'other');
+                                }
+                            } elseif (! @unlink($file->getPathname())) {
+                                $this->emitDiagnosticV2($activeStage, 'cleanup_observation', 'cleanup_error', 'other');
+                            }
+                        }
+                    }
+                    if (! @rmdir($root)) {
+                        $this->emitDiagnosticV2($activeStage, 'cleanup_observation', 'cleanup_error', 'other');
+                    }
+                }
+                $this->emitDiagnosticV2($activeStage, 'complete');
+            } catch (\Throwable $cleanupException) {
+                $this->emitDiagnosticV2($activeStage, 'cleanup_failure', 'cleanup_error', 'other');
+                if ($primaryFailure === null) {
+                    throw $cleanupException;
                 }
             }
-            @rmdir($root);
         }
+    }
+
+    private function emitDiagnosticV2(string $stage, string $event, string $category = 'none', string $code = 'none'): void
+    {
+        static $stages = [
+            'fixture_setup', 'probe_setup', 'backup_create', 'verify', 'assert_verified', 'assert_status',
+            'assert_method', 'assert_manifest', 'assert_probe', 'assert_critical_count', 'cleanup_probe',
+            'cleanup_connections', 'cleanup_objects',
+        ];
+        static $events = ['begin', 'primary_failure', 'cleanup_observation', 'cleanup_failure', 'complete'];
+        static $categories = [
+            'none', 'assertion_failure', 'pdo_error', 'process_error', 'filesystem_error', 'permission_error',
+            'timeout', 'cleanup_error', 'backup_failure', 'other',
+        ];
+
+        if (! in_array($stage, $stages, true) || ! in_array($event, $events, true) || ! in_array($category, $categories, true)) {
+            $stage = 'fixture_setup';
+            $event = 'primary_failure';
+            $category = 'other';
+            $code = 'other';
+        }
+
+        if ($code !== 'none' && $code !== 'other' && ! $this->isAllowedDiagnosticCodeV2($code)) {
+            $code = 'other';
+        }
+
+        try {
+            if (defined('STDERR')) {
+                @fwrite(STDERR, 'WPCG_DIAG_V2|test=backup_import|stage='.$stage.'|event='.$event.'|category='.$category.'|code='.$code.PHP_EOL);
+                @fflush(STDERR);
+            }
+        } catch (\Throwable) {
+            // Diagnostics must never affect the test result.
+        }
+    }
+
+    private function diagnosticCategoryV2(\Throwable $exception): string
+    {
+        if (is_a($exception, AssertionFailedError::class)) {
+            return 'assertion_failure';
+        }
+
+        if ($exception instanceof \PDOException) {
+            return 'pdo_error';
+        }
+
+        if (is_a($exception, ProcessTimedOutException::class)) {
+            return 'timeout';
+        }
+
+        if (is_a($exception, ProcessException::class)) {
+            return 'process_error';
+        }
+
+        if (is_a($exception, FileNotFoundException::class)) {
+            return 'filesystem_error';
+        }
+
+        return 'other';
+    }
+
+    private function diagnosticCodeV2(?string $code): string
+    {
+        return is_string($code) && $this->isAllowedDiagnosticCodeV2($code) ? $code : 'other';
+    }
+
+    private function isAllowedDiagnosticCodeV2(string $code): bool
+    {
+        static $codes = [
+            'WORKDIR_CREATE_FAILED', 'PLATFORM_BACKUP_FAILED', 'DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED',
+            'DISPOSABLE_MYSQL_IMPORT_FAILED', 'MYSQL_IMPORT_TABLE_SET_MISMATCH',
+            'MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH', 'OBJECT_MISSING', 'MANIFEST_OBJECT_MISSING',
+            'MANIFEST_OBJECT_INVALID', 'MANIFEST_METADATA_MISMATCH', 'MANIFEST_AUTHENTICATION_FAILED',
+            'OBJECT_UNREADABLE', 'VERIFY_TEMP_FAILED', 'OBJECT_READ_FAILED', 'VERIFY_TEMP_WRITE_FAILED',
+            'SIZE_OR_HASH_MISMATCH', 'CIPHERTEXT_AUTHENTICATION_FAILED', 'INVALID_GZIP',
+            'EMPTY_DECOMPRESSED_ARTIFACT', 'DATABASE_IMPORT_OR_SANITY_FAILED', 'VERIFICATION_ERROR',
+        ];
+
+        return in_array($code, $codes, true)
+            || preg_match('/^MYSQL_IMPORT_PROCESS_FAILED_EXIT_(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/D', $code) === 1;
     }
 }
