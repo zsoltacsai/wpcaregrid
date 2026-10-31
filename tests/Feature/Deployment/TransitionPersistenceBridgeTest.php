@@ -686,7 +686,9 @@ def handle_shutdown(signum, frame):
 signal.signal(signal.SIGTERM, handle_shutdown)
 
 def emit_child_marker():
-    if child_stderr is None or child is None or child.returncode in (None, 0):
+    if child is None:
+        return
+    if child_stderr is None or child.returncode in (None, 0):
         return
     marker = 'no_marker'
     try:
