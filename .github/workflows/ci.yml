@@ -111,6 +111,9 @@ jobs:
       - name: Staging deploy privilege allowlist policy
         run: python3 scripts/tests/deploy-privilege-policy-test.py
 
+      - name: Gate 1 fake-only transition and Linux lock regression
+        run: sudo -n python3 scripts/tests/deploy-transition-state-machine-test.py
+
       - name: Exact-SHA release CI authorization policy
         run: python3 scripts/tests/verify-release-ci-test.py
 
@@ -195,6 +198,16 @@ jobs:
         options: >-
           --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
           --health-interval=5s --health-timeout=5s --health-retries=30
+      mysql-verification:
+        image: 'mysql:8.4'
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: wpcg_verifier_seed
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
+          --health-interval=5s --health-timeout=5s --health-retries=30
     env:
       # A missing S3 or SFTP test service fails the run (tests/Support/StorageServers.php).
       CAREGRID_TEST_REQUIRE_SERVICES: '1'
@@ -210,25 +223,24 @@ jobs:
 
       - name: Database for this job
         env:
-          # Disposable test-service credential, scoped to database provisioning.
+          # Root is used only to provision the disposable application test service.
           MYSQL_ROOT_PASSWORD: ci-root-password
         run: |
           set -euo pipefail
           db_password="$(openssl rand -hex 32)"
           echo "::add-mask::$db_password"
           MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=127.0.0.1 --port=3306 --user=root --execute="CREATE DATABASE IF NOT EXISTS caregrid_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER 'caregrid_ci'@'%' IDENTIFIED BY '$db_password'; GRANT ALL PRIVILEGES ON caregrid_test.* TO 'caregrid_ci'@'%';"
-          {
-            echo "DB_CONNECTION=mysql"
-            echo "DB_HOST=127.0.0.1"
-            echo "DB_PORT=3306"
-            echo "DB_DATABASE=caregrid_test"
-            echo "DB_USERNAME=caregrid_ci"
-            echo "DB_PASSWORD=$db_password"
-            echo "DB_URL="
-            echo "CAREGRID_EXPECTED_DATABASE_DRIVER=mysql"
-            echo "CAREGRID_EXPECTED_DATABASE_VERSION=8.4"
-            echo "M9_MYSQL_VERIFY_PASSWORD=$MYSQL_ROOT_PASSWORD"
-          } >> "$GITHUB_ENV"
+          printf '%s\n' \
+            "DB_CONNECTION=mysql" \
+            "DB_HOST=127.0.0.1" \
+            "DB_PORT=3306" \
+            "DB_DATABASE=caregrid_test" \
+            "DB_USERNAME=caregrid_ci" \
+            "DB_PASSWORD=$db_password" \
+            "DB_URL=" \
+            "CAREGRID_EXPECTED_DATABASE_DRIVER=mysql" \
+            "CAREGRID_EXPECTED_DATABASE_VERSION=8.4" \
+            >> "$GITHUB_ENV"
 
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
@@ -308,9 +320,1000 @@ jobs:
           php artisan event:cache
           php artisan optimize:clear
 
+      - name: Verify exact PHPUnit full-suite and isolated-test selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          all_list="$RUNNER_TEMP/phpunit-all-tests.txt"
+          suite_list="$RUNNER_TEMP/phpunit-general-tests.txt"
+          isolated_list="$RUNNER_TEMP/phpunit-isolated-backup-tests.txt"
+          trap 'rm -f "$all_list" "$suite_list" "$isolated_list"' EXIT
+          vendor/bin/phpunit -c phpunit.xml --list-tests > "$all_list"
+          vendor/bin/phpunit -c phpunit.xml --list-tests --exclude-group=wpcg_isolated_mysql_backup_verification > "$suite_list"
+          vendor/bin/phpunit -c phpunit.xml --list-tests --group=wpcg_isolated_mysql_backup_verification > "$isolated_list"
+          python3 - "$all_list" "$suite_list" "$isolated_list" <<'PY'
+          import collections
+          import re
+          import sys
+
+          def tests(path):
+              with open(path, encoding="utf-8") as stream:
+                  return [
+                      match.group(1).strip()
+                      for line in stream
+                      if (match := re.match(r"^\s*-\s+(.+)$", line))
+                  ]
+
+          all_tests, suite_tests, isolated_tests = map(tests, sys.argv[1:])
+          if not all_tests or not suite_tests or not isolated_tests:
+              raise SystemExit("PHPUnit test selection contract produced an empty selection.")
+          if collections.Counter(all_tests) != collections.Counter(suite_tests + isolated_tests):
+              raise SystemExit("PHPUnit general and isolated selections do not exactly cover the original suite.")
+          if len(isolated_tests) != 1 or not isolated_tests[0].endswith("PlatformDatabaseBackupMysqlTest::test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked"):
+              raise SystemExit("The isolated PHPUnit group must contain exactly the mandatory backup-import test.")
+          if any(name.endswith("PlatformDatabaseBackupMysqlTest::test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked") for name in suite_tests):
+              raise SystemExit("The mandatory backup-import test was not excluded from the sanitized general suite.")
+          print("PHPUnit selection contract: PASS (all tests covered exactly once; mandatory isolated test=1).")
+          PY
+
+      - name: Provision isolated disposable backup-verification MySQL service
+        env:
+          # Root is confined to this disposable service provisioning step.
+          MYSQL_ROOT_PASSWORD: ci-root-password
+        run: |
+          set -euo pipefail
+          set +x
+          credential_file="$RUNNER_TEMP/wpcg-mysql-verifier-password"
+          trap 'if [ "$?" -ne 0 ]; then rm -f -- "$credential_file"; fi' EXIT
+          verifier_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$verifier_password"
+          umask 077
+          printf '%s' "$verifier_password" > "$credential_file"
+          chmod 600 "$credential_file"
+          if printf "CREATE USER 'caregrid_verify'@'%%' IDENTIFIED BY '%s'; GRANT CREATE, DROP, SELECT, INSERT, UPDATE, DELETE, ALTER, INDEX, REFERENCES, CREATE TEMPORARY TABLES, CREATE VIEW, SHOW VIEW, TRIGGER, EVENT, CREATE ROUTINE, ALTER ROUTINE, EXECUTE, LOCK TABLES ON *.* TO 'caregrid_verify'@'%%';\n" "$verifier_password" | MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=127.0.0.1 --port=3307 --user=root >/dev/null 2>&1; then
+            echo 'Restricted verifier account provisioned on isolated disposable service.'
+          else
+            echo 'Failed to provision the restricted account on the isolated disposable verification service.' >&2
+            exit 1
+          fi
+
+      - name: Mandatory isolated MySQL backup-import verification
+        shell: bash
+        env:
+          WPCG_MYSQL_VERIFY_HOST: 127.0.0.1
+          WPCG_MYSQL_VERIFY_PORT: '3307'
+          WPCG_MYSQL_VERIFY_DATABASE: wpcg_verifier_seed
+          WPCG_MYSQL_VERIFY_USERNAME: caregrid_verify
+        run: |
+          set -euo pipefail
+          set +x
+          credential_file="$RUNNER_TEMP/wpcg-mysql-verifier-password"
+          diagnostic_log="$RUNNER_TEMP/isolated-backup-phpunit.log"
+          junit_file="$RUNNER_TEMP/isolated-backup-phpunit.xml"
+          trap 'rm -f -- "$diagnostic_log" "$junit_file" "$credential_file"' EXIT
+          verifier_password="$(cat "$credential_file")"
+          if [ -z "$verifier_password" ]; then
+            echo 'Mandatory isolated verifier credential is empty.' >&2
+            exit 1
+          fi
+          echo "::add-mask::$verifier_password"
+          export WPCG_MYSQL_VERIFY_PASSWORD="$verifier_password"
+          export WPCG_BACKUP_VERIFY_REQUIRED=1
+          set +e
+          vendor/bin/phpunit -c phpunit.xml --debug --fail-on-skipped \
+            --group=wpcg_isolated_mysql_backup_verification \
+            --filter='test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked' \
+            --log-junit "$junit_file" \
+            >"$diagnostic_log" 2>&1
+          phpunit_status=$?
+          set -e
+          unset WPCG_MYSQL_VERIFY_PASSWORD WPCG_MYSQL_VERIFY_HOST WPCG_MYSQL_VERIFY_PORT
+          unset WPCG_MYSQL_VERIFY_DATABASE WPCG_MYSQL_VERIFY_USERNAME WPCG_BACKUP_VERIFY_REQUIRED verifier_password
+          python3 - "$junit_file" "$phpunit_status" "${{ matrix.php }}" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          path, raw_status, php_version = sys.argv[1:]
+          try:
+              status = int(raw_status)
+              root = ET.parse(path).getroot()
+              cases = list(root.iter("testcase"))
+          except (ValueError, OSError, ET.ParseError):
+              print("MANDATORY_BACKUP_MYSQL_VERIFICATION: FAIL (receipt missing or invalid)")
+              raise SystemExit(1)
+          valid_name = "test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked"
+          valid_class = r"Tests\Feature\Platform\PlatformDatabaseBackupMysqlTest"
+          if (
+              status != 0
+              or len(cases) != 1
+              or cases[0].get("class") != valid_class
+              or cases[0].get("classname") != valid_class.replace("\\", ".")
+              or cases[0].get("name") != valid_name
+          ):
+              print("MANDATORY_BACKUP_MYSQL_VERIFICATION: FAIL (test did not complete successfully)")
+              raise SystemExit(1)
+          if any(cases[0].find(tag) is not None for tag in ("failure", "error", "skipped")):
+              print("MANDATORY_BACKUP_MYSQL_VERIFICATION: FAIL (failed, errored, or skipped)")
+              raise SystemExit(1)
+          print(f"MANDATORY_BACKUP_MYSQL_VERIFICATION: PASS (executed=1 skipped=0 php={php_version})")
+          PY
+
+      - name: Bounded typed RPC CAS diagnosis
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          diagnostic_log="$RUNNER_TEMP/typed-rpc-cas-phpunit.log"
+          timeout --signal=TERM --kill-after=5s 90s \
+            vendor/bin/phpunit -c phpunit.xml --debug --fail-on-skipped \
+              --display-skipped --display-warnings \
+              tests/Feature/Deployment/TransitionPersistenceBridgeTest.php \
+              --filter 'test_typed_rpc_cas_is_atomic_and_exact_replay_returns_its_receipt' \
+              >"$diagnostic_log" 2>&1 &
+          test_pid=$!
+          test_started=$SECONDS
+          snapshot_captured=0
+
+          capture_mysql_state() {
+            timeout --signal=TERM --kill-after=2s 7s python3 -u - <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+          from concurrent.futures import ThreadPoolExecutor
+
+          env = os.environ.copy()
+          forbidden_credentials = ("MYSQL_ROOT_PASSWORD", "M9_MYSQL_VERIFY_PASSWORD", "WPCG_MYSQL_VERIFY_PASSWORD")
+          leaked_credentials = [name for name in forbidden_credentials if env.get(name)]
+          if leaked_credentials:
+              print("Administrative or isolated-verifier credentials reached the general PHPUnit wrapper.", file=sys.stderr)
+              raise SystemExit(1)
+          required = ("DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD")
+          missing = [name for name in required if not env.get(name)]
+          if missing:
+              print("Required application MySQL diagnostic configuration is absent: " + ", ".join(missing), file=sys.stderr)
+              raise SystemExit(1)
+          env["MYSQL_PWD"] = env["DB_PASSWORD"]
+
+          base = [
+              "mysql", "--protocol=TCP", "--connect-timeout=3",
+              "--host=" + env["DB_HOST"], "--port=" + env["DB_PORT"],
+              "--user=" + env["DB_USERNAME"],
+              "--batch", "--skip-column-names", "--quick",
+          ]
+
+          def redact_sql(value):
+              value = re.sub(r"(?is)'(?:''|\\\\.|[^'\\\\])*'|\"(?:\"\"|\\\\.|[^\"\\\\])*\"", "<literal>", value)
+              value = re.sub(r"(?i)\b(password|token|secret|authorization|api[_-]?key)\b\s*(?:=|:)\s*[^\s,;]+", r"\1=<redacted>", value)
+              value = re.sub(r"(?i)\bhttps?://[^\s]+", "<url>", value)
+              value = re.sub(r"\b(?:0x)?[a-f0-9]{32,}\b", "<hex>", value, flags=re.I)
+              value = re.sub(r"(?<![A-Za-z_])\d+(?![A-Za-z_])", "<n>", value)
+              return value[:240]
+
+          def query(label, sql, render):
+              try:
+                  result = subprocess.run(
+                      [*base, "--execute", sql], env=env, text=True,
+                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                      timeout=5, check=False,
+                  )
+              except subprocess.TimeoutExpired:
+                  return label, ["unavailable (query timed out)."]
+              except OSError:
+                  return label, ["unavailable (mysql client could not run)."]
+              if result.returncode != 0:
+                  return label, ["unavailable (query failed; details suppressed)."]
+              rows = result.stdout.splitlines()[:100]
+              safe_rows = []
+              for row in rows:
+                  try:
+                      safe_rows.append(render(row.split("\t")))
+                  except Exception:
+                      safe_rows.append("<malformed row suppressed>")
+              return label, [f"{len(rows)} row(s).", *safe_rows]
+
+          queries = (
+              (
+                  "SHOW FULL PROCESSLIST (thread, command, age, state, redacted SQL)",
+                  "SHOW FULL PROCESSLIST",
+                  lambda c: "thread={0} command={1} age_s={2} state={3} sql={4}".format(
+                      c[0], c[4], c[5], c[6][:120], redact_sql(c[7]),
+                  ) if len(c) >= 8 else "<malformed row suppressed>",
+              ),
+              (
+                  "InnoDB data_locks (transaction/thread/event, object, mode/status, redacted record)",
+                  "SELECT ENGINE_TRANSACTION_ID, THREAD_ID, EVENT_ID, OBJECT_SCHEMA, OBJECT_NAME, "
+                  "INDEX_NAME, LOCK_TYPE, LOCK_MODE, LOCK_STATUS, "
+                  "IF(LOCK_DATA IS NULL, 'NULL', '<present:redacted>') "
+                  "FROM performance_schema.data_locks WHERE ENGINE = 'INNODB' LIMIT 100",
+                  lambda c: "trx={0} thread={1} event={2} object={3}.{4} index={5} "
+                            "type={6} mode={7} status={8} record={9}".format(*c),
+              ),
+              (
+                  "InnoDB data_lock_waits (waiting/blocking links and lock objects)",
+                  "SELECT w.REQUESTING_ENGINE_TRANSACTION_ID, r.THREAD_ID, r.EVENT_ID, "
+                  "r.OBJECT_SCHEMA, r.OBJECT_NAME, r.INDEX_NAME, r.LOCK_TYPE, r.LOCK_MODE, r.LOCK_STATUS, "
+                  "w.BLOCKING_ENGINE_TRANSACTION_ID, b.THREAD_ID, b.EVENT_ID, "
+                  "b.OBJECT_SCHEMA, b.OBJECT_NAME, b.INDEX_NAME, b.LOCK_TYPE, b.LOCK_MODE, b.LOCK_STATUS "
+                  "FROM performance_schema.data_lock_waits AS w "
+                  "LEFT JOIN performance_schema.data_locks AS r "
+                  "ON r.ENGINE = w.ENGINE AND r.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID "
+                  "LEFT JOIN performance_schema.data_locks AS b "
+                  "ON b.ENGINE = w.ENGINE AND b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID "
+                  "WHERE w.ENGINE = 'INNODB' LIMIT 100",
+                  lambda c: "waiting_trx={0} thread={1} event={2} object={3}.{4} index={5} "
+                            "type={6} mode={7} status={8}; blocking_trx={9} thread={10} event={11} "
+                            "object={12}.{13} index={14} type={15} mode={16} status={17}".format(*c),
+              ),
+              (
+                  "Active InnoDB transactions (IDs, age, wait and row counts; SQL suppressed)",
+                  "SELECT TRX_ID, TRX_STATE, TIMESTAMPDIFF(SECOND, TRX_STARTED, NOW()), "
+                  "TRX_WAIT_STARTED IS NOT NULL, TRX_MYSQL_THREAD_ID, TRX_ROWS_LOCKED, "
+                  "TRX_ROWS_MODIFIED, TRX_QUERY IS NOT NULL "
+                  "FROM information_schema.innodb_trx LIMIT 100",
+                  lambda c: "trx={0} state={1} age_s={2} waiting={3} thread={4} "
+                            "rows_locked={5} rows_modified={6} active_sql={7}".format(*c),
+              ),
+          )
+          with ThreadPoolExecutor(max_workers=4) as executor:
+              for label, rows in executor.map(lambda item: query(*item), queries):
+                  print(f"{label}: {rows[0]}")
+                  for row in rows[1:]:
+                      print(row)
+          PY
+          }
+
+          process_running() {
+            local state
+            state="$(ps -o stat= -p "$test_pid" 2>/dev/null | tr -d '[:space:]')"
+            [ -n "$state" ] && [ "${state:0:1}" != "Z" ]
+          }
+
+          while process_running; do
+            elapsed=$((SECONDS - test_started))
+            if [ "$elapsed" -ge 80 ]; then
+              snapshot_captured=1
+              echo 'Typed RPC CAS still running at 80s; collecting MySQL state before the 90s test timeout.' >&2
+              if ! capture_mysql_state; then
+                echo 'Bounded MySQL snapshot collection did not finish successfully.' >&2
+              fi
+              break
+            fi
+            sleep 0.25
+          done
+
+          set +e
+          wait "$test_pid"
+          test_status=$?
+          set -e
+
+          # If PHPUnit failed before the pre-deadline observer fired, collect
+          # the same redacted snapshot after failure for diagnostic context.
+          if [ "$test_status" -ne 0 ] && [ "$snapshot_captured" -eq 0 ]; then
+            echo "Typed RPC CAS diagnostic failed (status $test_status); collecting MySQL state." >&2
+            if ! capture_mysql_state; then
+              echo 'Bounded MySQL snapshot collection did not finish successfully.' >&2
+            fi
+          fi
+
+          # Emit only PHPUnit lifecycle labels, never assertion/SQL output.
+          if [ -f "$diagnostic_log" ]; then
+            grep -E '^Test (Preparation|Started|Passed|Failed|Errored|Skipped|Finished|Suite)' \
+              "$diagnostic_log" | tail -n 40 || true
+          fi
+          rm -f "$diagnostic_log"
+
+          if [ "$test_status" -eq 0 ]; then
+            echo 'Typed RPC CAS diagnostic passed; continuing to the full suite.'
+            exit 0
+          fi
+          if [ "$test_status" -eq 124 ] || [ "$test_status" -eq 137 ]; then
+            echo 'Typed RPC CAS diagnostic exceeded its 90s deadline; failing explicitly after evidence capture.' >&2
+          else
+            echo "Typed RPC CAS diagnostic failed (status $test_status); failing before the full suite." >&2
+          fi
+          exit 1
+
+      - name: Bounded isolated unprivileged peer RPC test
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          diagnostic_log="$RUNNER_TEMP/peer-rpc-isolated-phpunit.log"
+          trap 'rm -f "$diagnostic_log"' EXIT
+
+          set +e
+          timeout --signal=TERM --kill-after=5s 90s \
+            vendor/bin/phpunit -c phpunit.xml --debug --fail-on-skipped \
+              --display-skipped --display-warnings \
+              tests/Feature/Deployment/TransitionPersistenceBridgeTest.php \
+              --filter 'test_artisan_rpc_runs_as_unprivileged_peer_and_checks_so_peercred' \
+              >"$diagnostic_log" 2>&1
+          test_status=$?
+          set -e
+
+          python3 - "$diagnostic_log" "$test_status" <<'PY'
+          import re
+          import sys
+
+          ansi_control = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+          log_path, raw_status = sys.argv[1:]
+          try:
+              test_status = int(raw_status)
+          except ValueError:
+              print("Isolated peer RPC test failed (status unavailable).")
+              raise SystemExit(1)
+
+          safe_diagnostic = re.compile(
+              r"(?:phase=root_helper; state=started; producer=php_wrapper; stage=peer_rpc_test_entry|phase=root_helper; state=skipped; producer=php_wrapper; reason=(?:platform_or_privilege_prerequisite_missing|www_data_account_missing)|phase=root_helper; state=progress; producer=php_wrapper; stage=(?:prerequisites_passed|identity_parsed|temp_name_created|mkdir_begin|mkdir_complete|fixture_database_opened|fixture_schema_created|fixture_row_inserted|fixture_permissions_set|helper_script_built|helper_script_written|helper_script_permissions_set|request_json_ready|helper_spawn_begin|helper_spawn_complete|helper_wait_begin|helper_wait_complete|helper_reap_begin|helper_reap_complete|cleanup_begin|cleanup_complete|method_body_complete|assertion_catch_entered|throwable_catch_entered|terminal_outcome_suppressed)|"
+              r"phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified|phase=root_helper; state=failed; producer=php_wrapper; stage=throwable_catch; exception=(?:TypeError|ValueError|ErrorException|JsonException|PDOException|RuntimeException|LogicException|Error|Exception|OtherThrowable)(?:; exception_code=-?\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=assertion_failure|"
+              r"phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\d+)?(?:; errno=-?\d+)?|"
+              r"phase=preflight; probe=artisan_version; state=timeout; timeout_source=(?:helper_budget_exhausted|child_wait_timeout); elapsed_ms=\d+; remaining_ms=\d+; child_state=(?:not_started|running|exited)(?:; exit_code=-?\d+)?; last_marker=preflight_artisan_version_begin|"
+              r"phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\d+)?(?:; errno=-?\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|"
+              r"phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check)(?:; operation=(?:mkdir_application_source|stat_application_source|open_application_source|fstat_application_source|validate_application_source))?; exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\d+)?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified|phase=root_helper; state=failed; producer=php_wrapper; stage=throwable_catch; exception=(?:TypeError|ValueError|ErrorException|JsonException|PDOException|RuntimeException|LogicException|Error|Exception|OtherThrowable)(?:; exception_code=-?\d+)?|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|"
+              r"phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; state=deferred|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\d+)?; last_marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|"
+              r"phase=(?:accept|response|child); child_state=exited; exit_code=-?\d+|"
+              r"phase=cleanup; component=application_source; state=unconfirmed; operation=(?:application_source_cleanup_begin|root_entry_stat|root_entry_validate|root_open|root_fstat|root_identity_validate|directory_list|entry_stat|entry_type_validate|child_directory_open|child_directory_validate|child_contents_remove|child_directory_close|child_directory_remove|file_owner_validate|file_remove|root_directory_close|root_directory_remove); context=(?:cleanup_only|secondary); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|temporary_root|socket_cleanup); state=unconfirmed|"
+              r"phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed))"
+          )
+          diagnostics = set()
+          safe_prefix = "GATE1_SAFE_RUNTIME_DIAGNOSTIC:"
+          diagnostic_scan_error = None
+          try:
+              with open(log_path, "r", encoding="utf-8", errors="replace") as recorded:
+                  for line in recorded:
+                      candidate = ansi_control.sub("", line).rstrip()
+                      diagnostic = None
+                      marker_position = candidate.find(safe_prefix)
+                      if marker_position >= 0:
+                          if candidate.count(safe_prefix) == 1:
+                              payload_match = safe_diagnostic.fullmatch(candidate[marker_position + len(safe_prefix):])
+                              if payload_match is not None:
+                                  diagnostic = safe_prefix + payload_match.group(0)
+                      else:
+                          payload_match = safe_diagnostic.fullmatch(candidate)
+                          if payload_match is not None:
+                              diagnostic = payload_match.group(0)
+                      if diagnostic is not None:
+                          diagnostics.add(diagnostic)
+          except OSError:
+              diagnostic_scan_error = "log_unavailable"
+          except Exception:
+              diagnostic_scan_error = "parser_failure"
+
+          for diagnostic in sorted(diagnostics):
+              print(diagnostic)
+          if diagnostic_scan_error is not None:
+              scan_status = "log unavailable" if diagnostic_scan_error == "log_unavailable" else "scanner failed"
+              print("Isolated peer RPC diagnostic scan {}; PHPUnit exit status {}.".format(scan_status, test_status))
+              raise SystemExit(1)
+          if test_status == 0:
+              print("Isolated peer RPC test passed; continuing to the full suite.")
+              raise SystemExit(0)
+          if not diagnostics:
+              print("Isolated peer RPC test failed; no allowlisted diagnostic was captured.")
+          elif test_status in (124, 137):
+              print("Isolated peer RPC test exceeded its 90s deadline.")
+          else:
+              print("Isolated peer RPC test failed (status {}).".format(test_status))
+          raise SystemExit(1)
+          PY
+
       - name: Test suite
         # Full server tests always run on MySQL and fail on skipped tests.
-        run: vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          suite_log="$RUNNER_TEMP/full-phpunit-debug.log"
+          python3 -u - "$suite_log" <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+          import threading
+          import time
+          from concurrent.futures import ThreadPoolExecutor
+
+          log_path = sys.argv[1]
+          env = os.environ.copy()
+          forbidden_credentials = ("MYSQL_ROOT_PASSWORD", "M9_MYSQL_VERIFY_PASSWORD", "WPCG_MYSQL_VERIFY_PASSWORD")
+          leaked_credentials = [name for name in forbidden_credentials if env.get(name)]
+          if leaked_credentials:
+              print("Administrative or isolated-verifier credentials reached the general PHPUnit wrapper.", file=sys.stderr)
+              raise SystemExit(1)
+          required = ("DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD")
+          missing = [name for name in required if not env.get(name)]
+          if missing:
+              print("Required application MySQL diagnostic configuration is absent: " + ", ".join(missing), file=sys.stderr)
+              raise SystemExit(1)
+          env["MYSQL_PWD"] = env["DB_PASSWORD"]
+
+          target_method = "TransitionPersistenceBridgeTest::test_typed_rpc_cas_is_atomic_and_exact_replay_returns_its_receipt"
+          source_contract_test_method = "TransitionPersistenceBridgeTest::test_rpc_preflight_cache_source_contract_guards_are_explicit"
+          source_contract_test_failed = False
+          backup_import_test_method = "PlatformDatabaseBackupMysqlTest::test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked"
+          backup_import_test_failed = False
+          backup_import_diagnostic_stages = {
+              "fixture_setup", "probe_setup", "backup_create", "verify", "assert_verified", "assert_status",
+              "assert_method", "assert_manifest", "assert_probe", "assert_critical_count", "cleanup_probe",
+              "cleanup_connections", "cleanup_objects",
+              "artifact_integrity", "artifact_decrypt", "artifact_gzip", "sqlite_sanity", "mysql_preflight",
+              "mysql_create_database", "mysql_client_import", "mysql_schema_check", "mysql_critical_count",
+              "mysql_process_cleanup", "service_cleanup_connection_purge", "service_cleanup_drop_database",
+              "service_cleanup_temp_artifacts",
+          }
+          backup_import_diagnostic_events = {
+              "begin", "primary_failure", "primary_exception", "body_result", "cleanup_observation",
+              "cleanup_failure", "complete",
+          }
+          backup_import_diagnostic_categories = {
+              "none", "assertion_failure", "pdo_error", "process_error", "filesystem_error", "permission_error",
+              "timeout", "cleanup_error", "backup_failure", "runtime_error", "other",
+          }
+          backup_import_diagnostic_codes = {
+              "none", "OBJECT_MISSING", "MANIFEST_OBJECT_MISSING", "MANIFEST_OBJECT_INVALID",
+              "MANIFEST_METADATA_MISMATCH", "MANIFEST_AUTHENTICATION_FAILED", "OBJECT_UNREADABLE",
+              "VERIFY_TEMP_FAILED", "OBJECT_READ_FAILED", "VERIFY_TEMP_WRITE_FAILED", "SIZE_OR_HASH_MISMATCH",
+              "CIPHERTEXT_AUTHENTICATION_FAILED", "INVALID_GZIP", "EMPTY_DECOMPRESSED_ARTIFACT",
+              "DATABASE_IMPORT_OR_SANITY_FAILED", "DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED",
+              "DISPOSABLE_MYSQL_IMPORT_FAILED", "WORKDIR_CREATE_FAILED", "PLATFORM_BACKUP_FAILED",
+              "MYSQL_IMPORT_TABLE_SET_MISMATCH", "MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH",
+              "MYSQL_DUMP_INPUT_OPEN_FAILED", "MYSQL_IMPORT_PROCESS_FAILED", "MYSQL_DATABASE_CREATE_FAILED",
+              "MYSQL_SCHEMA_CHECK_FAILED", "MYSQL_PROCESS_CLEANUP_FAILED", "SERVICE_CONNECTION_PURGE_FAILED",
+              "SERVICE_DATABASE_DROP_FAILED", "SERVICE_TEMP_ARTIFACT_CLEANUP_FAILED", "SERVICE_TEMP_ARTIFACT_UNLINK_FAILED",
+              "VERIFICATION_ERROR", "other",
+          }
+          backup_import_diagnostic_body_states = {
+              "pending", "return_true_pending_cleanup", "return_false_pending_cleanup", "return_false_before_outer_cleanup", "exception_pending_cleanup", "handled_exception_return_false_pending_cleanup",
+          }
+          backup_import_diagnostic_marker_prefix = "WPCG_DIAG_V2|"
+          target_name = None
+          last_passed = None
+          target_active = False
+          target_start_offset = None
+          active_transaction_seen = False
+          observer_lock = threading.Lock()
+          first_snapshot_done = threading.Event()
+          second_snapshot_claimed = False
+          second_snapshot_timer = None
+          second_snapshot_delay_seconds = 20
+          active_tests = {}
+          test_start_sequence = 0
+          last_finished_test_name = None
+          no_progress_snapshot_claimed = False
+          watchdog_shutdown = False
+          test_stall_timeout_seconds = 90
+          watchdog_condition = threading.Condition(observer_lock)
+
+          def safe_test_name(value):
+              return "".join(char if char.isalnum() or char in "_.$:\\" else "?" for char in value)[:240]
+
+          safe_rpc_diagnostic = re.compile(
+              r"(?:phase=root_helper; state=started; producer=php_wrapper; stage=peer_rpc_test_entry|phase=root_helper; state=skipped; producer=php_wrapper; reason=(?:platform_or_privilege_prerequisite_missing|www_data_account_missing)|phase=root_helper; state=progress; producer=php_wrapper; stage=(?:prerequisites_passed|identity_parsed|temp_name_created|mkdir_begin|mkdir_complete|fixture_database_opened|fixture_schema_created|fixture_row_inserted|fixture_permissions_set|helper_script_built|helper_script_written|helper_script_permissions_set|request_json_ready|helper_spawn_begin|helper_spawn_complete|helper_wait_begin|helper_wait_complete|helper_reap_begin|helper_reap_complete|cleanup_begin|cleanup_complete|method_body_complete|assertion_catch_entered|throwable_catch_entered|terminal_outcome_suppressed)|"
+              r"phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified|phase=root_helper; state=failed; producer=php_wrapper; stage=throwable_catch; exception=(?:TypeError|ValueError|ErrorException|JsonException|PDOException|RuntimeException|LogicException|Error|Exception|OtherThrowable)(?:; exception_code=-?\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=assertion_failure|"
+              r"phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\d+)?(?:; errno=-?\d+)?|"
+              r"phase=preflight; probe=artisan_version; state=timeout; timeout_source=(?:helper_budget_exhausted|child_wait_timeout); elapsed_ms=\d+; remaining_ms=\d+; child_state=(?:not_started|running|exited)(?:; exit_code=-?\d+)?; last_marker=preflight_artisan_version_begin|"
+              r"phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\d+)?(?:; errno=-?\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|"
+              r"phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check)(?:; operation=(?:mkdir_application_source|stat_application_source|open_application_source|fstat_application_source|validate_application_source))?; exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\d+)?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified|phase=root_helper; state=failed; producer=php_wrapper; stage=throwable_catch; exception=(?:TypeError|ValueError|ErrorException|JsonException|PDOException|RuntimeException|LogicException|Error|Exception|OtherThrowable)(?:; exception_code=-?\d+)?|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|"
+              r"phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; state=deferred|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\d+)?; last_marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|"
+              r"phase=(?:accept|response|child); child_state=exited; exit_code=-?\d+|"
+              r"phase=cleanup; component=application_source; state=unconfirmed; operation=(?:application_source_cleanup_begin|root_entry_stat|root_entry_validate|root_open|root_fstat|root_identity_validate|directory_list|entry_stat|entry_type_validate|child_directory_open|child_directory_validate|child_contents_remove|child_directory_close|child_directory_remove|file_owner_validate|file_remove|root_directory_close|root_directory_remove); context=(?:cleanup_only|secondary); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|temporary_root|socket_cleanup); state=unconfirmed|"
+              r"phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed))"
+          )
+          ansi_control = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+          def emit_safe_rpc_diagnostic():
+              safe_prefix = "GATE1_SAFE_RUNTIME_DIAGNOSTIC:"
+              latest_safe_diagnostic = None
+              latest_lifecycle_diagnostic = None
+              wrapper_signal_diagnostic = None
+              wrapper_timeout_diagnostic = None
+              latest_progress_diagnostic = None
+              cleanup_diagnostics = set()
+              try:
+                  with open(log_path, "r", encoding="utf-8", errors="replace") as recorded_output:
+                      for line in recorded_output:
+                          candidate = ansi_control.sub("", line).rstrip()
+                          diagnostic = None
+                          marker_position = candidate.find(safe_prefix)
+                          if marker_position >= 0:
+                              if candidate.count(safe_prefix) == 1:
+                                  payload_match = safe_rpc_diagnostic.fullmatch(candidate[marker_position + len(safe_prefix):])
+                                  if payload_match is not None:
+                                      diagnostic = safe_prefix + payload_match.group(0)
+                          else:
+                              payload_match = safe_rpc_diagnostic.fullmatch(candidate)
+                              if payload_match is not None:
+                                  diagnostic = payload_match.group(0)
+                          if diagnostic is not None:
+                              diagnostic_payload = diagnostic[len(safe_prefix):] if diagnostic.startswith(safe_prefix) else diagnostic
+                              if diagnostic_payload.startswith("phase=cleanup; component="):
+                                  cleanup_diagnostics.add(diagnostic)
+                              elif diagnostic_payload.startswith("phase=root_helper; state=started;"):
+                                  latest_lifecycle_diagnostic = diagnostic
+                              elif diagnostic_payload.startswith("phase=root_helper; state=progress;") or diagnostic_payload.startswith("phase=progress;"):
+                                  latest_progress_diagnostic = diagnostic
+                              elif diagnostic_payload.startswith("phase=child_marker;"):
+                                  continue
+                              elif diagnostic_payload.startswith("phase=wrapper_signal;"):
+                                  wrapper_signal_diagnostic = diagnostic
+                              elif diagnostic_payload.startswith("phase=wrapper_timeout;"):
+                                  wrapper_timeout_diagnostic = diagnostic
+                              else:
+                                  latest_safe_diagnostic = diagnostic
+              except OSError:
+                  return
+              has_terminal_diagnostic = any(
+                  diagnostic is not None
+                  for diagnostic in (latest_safe_diagnostic, wrapper_signal_diagnostic, wrapper_timeout_diagnostic)
+              ) or bool(cleanup_diagnostics)
+              if not has_terminal_diagnostic and latest_lifecycle_diagnostic is not None:
+                  print(latest_lifecycle_diagnostic, flush=True)
+              if latest_progress_diagnostic is not None:
+                  print(latest_progress_diagnostic, flush=True)
+              for diagnostic in sorted(cleanup_diagnostics):
+                  print(diagnostic, flush=True)
+              for diagnostic in (latest_safe_diagnostic, wrapper_signal_diagnostic, wrapper_timeout_diagnostic):
+                  if diagnostic is not None:
+                      print(diagnostic, flush=True)
+
+          def emit_safe_backup_import_failure_code():
+              if not backup_import_test_failed:
+                  return
+              try:
+                  with open(log_path, "rb") as recorded_output:
+                      recorded_output.seek(max(0, os.fstat(recorded_output.fileno()).st_size - 262144))
+                      tail = recorded_output.read(262144).decode("utf-8", errors="replace")
+              except OSError:
+                  print("PHPUnit backup-import failure_code=unavailable", flush=True)
+                  return
+
+              failure_block_start = re.escape(
+                  r"Tests\Feature\Platform\PlatformDatabaseBackupMysqlTest::" + backup_import_test_method.split("::", 1)[1]
+              )
+              test_headers = list(re.finditer(failure_block_start, tail))
+              failure_code_pattern = re.compile(
+                  r"Verification failed: ((?:OBJECT_MISSING|MANIFEST_OBJECT_MISSING|MANIFEST_OBJECT_INVALID|MANIFEST_METADATA_MISMATCH|MANIFEST_AUTHENTICATION_FAILED|OBJECT_UNREADABLE|VERIFY_TEMP_FAILED|OBJECT_READ_FAILED|VERIFY_TEMP_WRITE_FAILED|SIZE_OR_HASH_MISMATCH|CIPHERTEXT_AUTHENTICATION_FAILED|INVALID_GZIP|EMPTY_DECOMPRESSED_ARTIFACT|DATABASE_IMPORT_OR_SANITY_FAILED|DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED|DISPOSABLE_MYSQL_IMPORT_FAILED|MYSQL_IMPORT_PROCESS_FAILED_EXIT_[0-9]{1,3}|MYSQL_IMPORT_TABLE_SET_MISMATCH|MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH|VERIFICATION_ERROR|unknown))\b"
+              )
+              safe_codes = set()
+              for header in reversed(test_headers):
+                  block = tail[header.end():header.end() + 16384]
+                  next_failure = re.search(r"(?m)^\s*\d+\)\s+Tests\\", block)
+                  if next_failure is not None:
+                      block = block[:next_failure.start()]
+                  safe_codes.update(failure_code_pattern.findall(block))
+                  if safe_codes:
+                      break
+
+              if len(safe_codes) != 1:
+                  print("PHPUnit backup-import failure_code=unavailable", flush=True)
+                  return
+              failure_code = next(iter(safe_codes))
+              if failure_code.startswith("MYSQL_IMPORT_PROCESS_FAILED_EXIT_"):
+                  try:
+                      process_exit = int(failure_code.rsplit("_", 1)[1])
+                  except ValueError:
+                      process_exit = 256
+                  if not 0 <= process_exit <= 255:
+                      print("PHPUnit backup-import failure_code=unavailable", flush=True)
+                      return
+              print("PHPUnit backup-import failure_code=" + failure_code, flush=True)
+
+          def parse_backup_import_diagnostic_marker(line):
+              if line.endswith("\r\n"):
+                  marker = line[:-2]
+              elif line.endswith("\n"):
+                  marker = line[:-1]
+              else:
+                  marker = line
+              if len(marker) > 512 or "\r" in marker or "\n" in marker:
+                  return None
+              fields = marker.split("|")
+              if len(fields) not in (6, 7) or fields[0] != "WPCG_DIAG_V2":
+                  return None
+              expected_keys = ("test", "stage", "event", "category", "code")
+              has_body_state = len(fields) == 7
+              if has_body_state:
+                  expected_keys += ("body_state",)
+              values = {}
+              for field, key in zip(fields[1:], expected_keys):
+                  prefix = key + "="
+                  if not field.startswith(prefix):
+                      return None
+                  values[key] = field[len(prefix):]
+              if values["test"] != "backup_import":
+                  return None
+              if values["stage"] not in backup_import_diagnostic_stages:
+                  return None
+              if values["event"] not in backup_import_diagnostic_events:
+                  return None
+              if values["category"] not in backup_import_diagnostic_categories:
+                  return None
+              if has_body_state and values["body_state"] not in backup_import_diagnostic_body_states:
+                  return None
+              code = values["code"]
+              if code not in backup_import_diagnostic_codes:
+                  process_match = re.fullmatch(r"MYSQL_IMPORT_PROCESS_FAILED_EXIT_(0|[1-9][0-9]{0,2})", code)
+                  if process_match is None or int(process_match.group(1)) > 255:
+                      return None
+              sanitized = "PHPUnit backup-import diagnostic: stage={0}; event={1}; category={2}; code={3}".format(
+                  values["stage"], values["event"], values["category"], code,
+              )
+              if has_body_state:
+                  sanitized += "; body_state=" + values["body_state"]
+              return sanitized
+
+          def emit_safe_backup_import_diagnostics():
+              if not backup_import_test_failed:
+                  return
+              safe_markers = []
+              malformed_marker = False
+              try:
+                  with open(log_path, "rb") as recorded_output:
+                      if os.fstat(recorded_output.fileno()).st_size > 67108864:
+                          raise OSError("PHPUnit log exceeds diagnostic scan bound")
+                      while True:
+                          raw_line = recorded_output.readline(513)
+                          if not raw_line:
+                              break
+                          if len(raw_line) == 513 and not raw_line.endswith(b"\n"):
+                              if raw_line.startswith(b"WPCG_DIAG_"):
+                                  malformed_marker = True
+                              while raw_line and not raw_line.endswith(b"\n"):
+                                  raw_line = recorded_output.readline(513)
+                              continue
+                          if not raw_line.lstrip().startswith(b"WPCG_DIAG_"):
+                              continue
+                          if len(raw_line) > 512 or not raw_line.startswith(b"WPCG_DIAG_V2|"):
+                              malformed_marker = True
+                              continue
+                          try:
+                              line = raw_line.decode("ascii")
+                          except UnicodeDecodeError:
+                              malformed_marker = True
+                              continue
+                          safe_marker = parse_backup_import_diagnostic_marker(line)
+                          if safe_marker is None:
+                              malformed_marker = True
+                          elif len(safe_markers) < 64:
+                              safe_markers.append(safe_marker)
+                          else:
+                              malformed_marker = True
+              except OSError:
+                  malformed_marker = True
+              if malformed_marker or not safe_markers:
+                  print("PHPUnit backup-import diagnostic: unavailable", flush=True)
+                  return
+              for safe_marker in safe_markers:
+                  print(safe_marker, flush=True)
+
+          def emit_safe_test_failure_source_line(test_header, safe_label, safe_source_path, failed):
+              if not failed:
+                  return
+              try:
+                  with open(log_path, "rb") as recorded_output:
+                      recorded_output.seek(max(0, os.fstat(recorded_output.fileno()).st_size - 262144))
+                      tail = recorded_output.read(262144).decode("utf-8", errors="replace")
+              except OSError:
+                  print("PHPUnit " + safe_label + " failure_line=unavailable", flush=True)
+                  return
+
+              header = re.escape(test_header)
+              headers = list(re.finditer(header, tail))
+              line_pattern = re.compile(
+                  r"(?m)^[^\r\n]*[/\\]" + re.escape(safe_source_path) + r":([1-9][0-9]{0,5})[ \t]*$"
+              )
+              for test_header in reversed(headers):
+                  block = tail[test_header.end():test_header.end() + 16384]
+                  next_failure = re.search(r"(?m)^\s*\d+\)\s+Tests\\", block)
+                  if next_failure is not None:
+                      block = block[:next_failure.start()]
+                  matches = line_pattern.findall(block)
+                  if len(matches) == 1:
+                      print("PHPUnit " + safe_label + " failure_line=" + matches[0], flush=True)
+                      return
+                  if matches:
+                      break
+              print("PHPUnit " + safe_label + " failure_line=unavailable", flush=True)
+
+          def capture_mysql_state(label):
+              base = [
+                  "mysql", "--protocol=TCP", "--connect-timeout=3",
+                  "--host=" + env["DB_HOST"], "--port=" + env["DB_PORT"],
+                  "--user=" + env["DB_USERNAME"], "--batch", "--skip-column-names", "--quick",
+              ]
+
+              def redact_sql(value):
+                  value = re.sub(r"(?is)'(?:''|\\.|[^'\\])*'|\"(?:\"\"|\\.|[^\"\\])*\"", "<literal>", value)
+                  value = re.sub(r"(?i)\b(password|token|secret|authorization|api[_-]?key)\b\s*(?:=|:)\s*[^\s,;]+", r"\1=<redacted>", value)
+                  value = re.sub(r"(?i)\bhttps?://[^\s]+", "<url>", value)
+                  value = re.sub(r"\b(?:0x)?[a-f0-9]{32,}\b", "<hex>", value, flags=re.I)
+                  value = re.sub(r"(?<![A-Za-z_])\d+(?![A-Za-z_])", "<n>", value)
+                  return value[:240]
+
+              def query(label, sql, render):
+                  try:
+                      result = subprocess.run(
+                          [*base, "--execute", sql], env=env, text=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          timeout=5, check=False,
+                      )
+                  except (subprocess.TimeoutExpired, OSError):
+                      return label, ["unavailable (bounded query failed)."]
+                  if result.returncode != 0:
+                      return label, ["unavailable (query failed; details suppressed)."]
+                  rows = result.stdout.splitlines()[:100]
+                  safe_rows = []
+                  for row in rows:
+                      try:
+                          safe_rows.append(render(row.split("\t")))
+                      except Exception:
+                          safe_rows.append("<malformed row suppressed>")
+                  return label, [f"{len(rows)} row(s).", *safe_rows]
+
+              queries = (
+                  ("processlist", "SHOW FULL PROCESSLIST", lambda c: "thread={0} command={1} age_s={2} state={3} sql={4}".format(c[0], c[4], c[5], c[6][:120], redact_sql(c[7])) if len(c) >= 8 else "<malformed row suppressed>"),
+                  ("data_locks", "SELECT ENGINE_TRANSACTION_ID, THREAD_ID, EVENT_ID, OBJECT_SCHEMA, OBJECT_NAME, INDEX_NAME, LOCK_TYPE, LOCK_MODE, LOCK_STATUS, IF(LOCK_DATA IS NULL, 'NULL', '<present:redacted>') FROM performance_schema.data_locks WHERE ENGINE = 'INNODB' LIMIT 100", lambda c: "trx={0} thread={1} event={2} object={3}.{4} index={5} type={6} mode={7} status={8} record={9}".format(*c)),
+                  ("data_lock_waits", "SELECT w.REQUESTING_ENGINE_TRANSACTION_ID, r.THREAD_ID, r.EVENT_ID, r.OBJECT_SCHEMA, r.OBJECT_NAME, r.INDEX_NAME, r.LOCK_TYPE, r.LOCK_MODE, r.LOCK_STATUS, w.BLOCKING_ENGINE_TRANSACTION_ID, b.THREAD_ID, b.EVENT_ID, b.OBJECT_SCHEMA, b.OBJECT_NAME, b.INDEX_NAME, b.LOCK_TYPE, b.LOCK_MODE, b.LOCK_STATUS FROM performance_schema.data_lock_waits AS w LEFT JOIN performance_schema.data_locks AS r ON r.ENGINE = w.ENGINE AND r.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID LEFT JOIN performance_schema.data_locks AS b ON b.ENGINE = w.ENGINE AND b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID WHERE w.ENGINE = 'INNODB' LIMIT 100", lambda c: "waiting_trx={0} thread={1} event={2} object={3}.{4} index={5} type={6} mode={7} status={8}; blocking_trx={9} thread={10} event={11} object={12}.{13} index={14} type={15} mode={16} status={17}".format(*c)),
+                  ("innodb_trx", "SELECT TRX_ID, TRX_STATE, TIMESTAMPDIFF(SECOND, TRX_STARTED, NOW()), TRX_WAIT_STARTED IS NOT NULL, TRX_MYSQL_THREAD_ID, TRX_ROWS_LOCKED, TRX_ROWS_MODIFIED, TRX_QUERY IS NOT NULL FROM information_schema.innodb_trx LIMIT 100", lambda c: "trx={0} state={1} age_s={2} waiting={3} thread={4} rows_locked={5} rows_modified={6} active_sql={7}".format(*c)),
+              )
+              print(f"MySQL {label} snapshot (application-account read-only diagnostic):", flush=True)
+              active_transaction_count = None
+              with ThreadPoolExecutor(max_workers=4) as executor:
+                  for title, rows in executor.map(lambda item: query(*item), queries):
+                      print(f"{title}: {rows[0]}", flush=True)
+                      for row in rows[1:]:
+                          print(row, flush=True)
+                      if title == "innodb_trx":
+                          try:
+                              active_transaction_count = int(rows[0].split()[0])
+                          except (IndexError, ValueError):
+                              active_transaction_count = None
+              return active_transaction_count is not None and active_transaction_count > 0
+
+          def test_has_finished_event(raw_name, start_offset):
+              try:
+                  with open(log_path, "r", encoding="utf-8", errors="replace") as recorded_events:
+                      recorded_events.seek(start_offset)
+                      for line in recorded_events:
+                          match = re.match(r"^(Test [A-Za-z ]+) \(([^)]*)\)$", line.rstrip("\r\n"))
+                          if match and match.group(1) == "Test Finished" and match.group(2) == raw_name:
+                              return True
+              except OSError:
+                  return False
+              return False
+
+          def no_progress_watchdog():
+              global last_finished_test_name, no_progress_snapshot_claimed
+              while True:
+                  with watchdog_condition:
+                      if watchdog_shutdown:
+                          return
+                      if no_progress_snapshot_claimed or not active_tests:
+                          watchdog_condition.wait()
+                          continue
+                      now = time.monotonic()
+                      token, record = min(active_tests.items(), key=lambda item: item[1]["deadline"])
+                      remaining = record["deadline"] - now
+                      if remaining > 0:
+                          watchdog_condition.wait(timeout=remaining)
+                          continue
+
+                  if test_has_finished_event(record["raw_name"], record["start_offset"]):
+                      with watchdog_condition:
+                          current = active_tests.get(token)
+                          if current is record:
+                              active_tests.pop(token, None)
+                              last_finished_test_name = record["name"]
+                              watchdog_condition.notify_all()
+                      continue
+
+                  with watchdog_condition:
+                      current = active_tests.get(token)
+                      if watchdog_shutdown:
+                          return
+                      if current is not record or no_progress_snapshot_claimed:
+                          continue
+                      no_progress_snapshot_claimed = True
+                      elapsed_seconds = max(0.0, time.monotonic() - record["started_at"])
+                      last_finished = last_finished_test_name
+                      active_name = record["name"]
+
+                  print(
+                      "PHPUnit no-progress watchdog: active_test={0}; last_test_finished={1}; elapsed_s={2:.1f}; capturing one bounded snapshot.".format(
+                          active_name, last_finished or "none observed", elapsed_seconds,
+                      ),
+                      flush=True,
+                  )
+                  capture_mysql_state("PHPUnit no-progress after {0}s".format(int(elapsed_seconds)))
+
+          def arm_test_watchdog(raw_name, safe_name, start_offset):
+              global test_start_sequence
+              started_at = time.monotonic()
+              with watchdog_condition:
+                  test_start_sequence += 1
+                  token = test_start_sequence
+                  active_tests[token] = {
+                      "raw_name": raw_name,
+                      "name": safe_name,
+                      "started_at": started_at,
+                      "deadline": started_at + test_stall_timeout_seconds,
+                      "start_offset": start_offset,
+                  }
+                  watchdog_condition.notify_all()
+              return token
+
+          def finish_test_watchdog(raw_name, safe_name):
+              global last_finished_test_name
+              with watchdog_condition:
+                  for token, record in list(active_tests.items()):
+                      if record["raw_name"] == raw_name:
+                          active_tests.pop(token, None)
+                  last_finished_test_name = safe_name
+                  watchdog_condition.notify_all()
+
+          def target_has_finished_event():
+              if target_start_offset is None or target_name is None:
+                  return False
+              try:
+                  with open(log_path, "r", encoding="utf-8", errors="replace") as recorded_events:
+                      recorded_events.seek(target_start_offset)
+                      for line in recorded_events:
+                          match = re.match(r"^(Test [A-Za-z ]+) \(([^)]*)\)$", line.rstrip("\r\n"))
+                          if match and safe_test_name(match.group(2)) == target_name and match.group(1) == "Test Finished":
+                              return True
+              except OSError:
+                  return False
+              return False
+
+          def take_second_snapshot_after_bounded_interval():
+              global second_snapshot_claimed, target_active
+              if not first_snapshot_done.wait(timeout=10):
+                  print("Second MySQL snapshot not taken: initial bounded snapshot did not finish.", file=sys.stderr, flush=True)
+                  return
+              with observer_lock:
+                  should_snapshot = target_active or active_transaction_seen
+                  transaction_trigger = active_transaction_seen
+                  current_target_name = target_name
+                  suite_process = suite
+              if not should_snapshot:
+                  print("No second MySQL snapshot: target test completed and initial snapshot saw no active transaction.", flush=True)
+                  return
+              if not transaction_trigger and (suite_process.poll() is not None or target_has_finished_event()):
+                  with observer_lock:
+                      target_active = False
+                  print("No second MySQL snapshot: target test completed before the bounded checkpoint.", flush=True)
+                  return
+              with observer_lock:
+                  if second_snapshot_claimed:
+                      return
+                  second_snapshot_claimed = True
+              reason = "active InnoDB transaction was present initially" if transaction_trigger else "target test remained active"
+              print(f"Taking second MySQL snapshot after {second_snapshot_delay_seconds}s; reason: {reason}; test: {current_target_name}.", flush=True)
+              capture_mysql_state(f"after {second_snapshot_delay_seconds}s bounded interval")
+
+          def start_second_snapshot_timer():
+              global second_snapshot_timer
+              second_snapshot_timer = threading.Timer(second_snapshot_delay_seconds, take_second_snapshot_after_bounded_interval)
+              second_snapshot_timer.daemon = False
+              second_snapshot_timer.start()
+
+          def process_events(stream):
+              global last_passed, target_name, target_active, target_start_offset
+              global active_transaction_seen, backup_import_test_failed, source_contract_test_failed
+              while True:
+                  line = stream.readline()
+                  if not line:
+                      return
+                  match = re.match(r"^(Test [A-Za-z ]+) \(([^)]*)\)$", line.rstrip("\r\n"))
+                  if not match:
+                      continue
+                  event, raw_name = match.groups()
+                  name = safe_test_name(raw_name)
+                  if event in ("Test Failed", "Test Errored"):
+                      print(f"PHPUnit {event} ({name})", flush=True)
+                      if raw_name.endswith(backup_import_test_method):
+                          backup_import_test_failed = True
+                      if raw_name.endswith(source_contract_test_method):
+                          source_contract_test_failed = True
+                  if event == "Test Passed":
+                      last_passed = name
+                  if event == "Test Preparation Started":
+                      arm_test_watchdog(raw_name, name, stream.tell())
+                  if event == "Test Preparation Started" and raw_name.endswith(target_method):
+                      with observer_lock:
+                          target_name = name
+                          target_active = True
+                          target_start_offset = stream.tell()
+                      print(f"Test Passed ({last_passed or 'none observed'})", flush=True)
+                      print(f"Test Started ({target_name}) [PHPUnit Test Preparation Started]", flush=True)
+                      first_snapshot_done.clear()
+                      start_second_snapshot_timer()
+                      try:
+                          saw_active_transaction = capture_mysql_state("at target start")
+                          with observer_lock:
+                              active_transaction_seen = saw_active_transaction
+                      finally:
+                          first_snapshot_done.set()
+                  elif event == "Test Finished":
+                      finish_test_watchdog(raw_name, name)
+                      if name == target_name:
+                          print(f"Test Finished ({name})", flush=True)
+                          with observer_lock:
+                              target_active = False
+                              transaction_already_seen = active_transaction_seen
+                          if not transaction_already_seen and second_snapshot_timer is not None:
+                              second_snapshot_timer.cancel()
+                  elif name == target_name and event in ("Test Passed", "Test Skipped"):
+                      print(f"Target outcome {event} ({name})", flush=True)
+
+          command = [
+              "vendor/bin/phpunit", "-c", "phpunit.xml", "--debug",
+              "--fail-on-skipped", "--display-skipped", "--display-warnings",
+              "--exclude-group=wpcg_isolated_mysql_backup_verification",
+          ]
+          with open(log_path, "w", encoding="utf-8", errors="replace") as log:
+              suite_env = env.copy()
+              suite_env.pop("MYSQL_PWD", None)
+              if any(key.startswith("WPCG_MYSQL_VERIFY_") for key in suite_env):
+                  print("Verifier credentials must not be present in the general PHPUnit wrapper environment.", file=sys.stderr)
+                  raise SystemExit(1)
+              suite = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=suite_env)
+              watchdog_thread = threading.Thread(
+                  target=no_progress_watchdog,
+                  name="phpunit-no-progress-watchdog",
+                  daemon=True,
+              )
+              watchdog_thread.start()
+              try:
+                  with open(log_path, "r", encoding="utf-8", errors="replace") as events:
+                      while suite.poll() is None:
+                          process_events(events)
+                          time.sleep(0.2)
+                      process_events(events)
+                  status = suite.wait()
+              finally:
+                  if suite.poll() is None:
+                      suite.terminate()
+                      try:
+                          suite.wait(timeout=5)
+                      except subprocess.TimeoutExpired:
+                          suite.kill()
+                          suite.wait()
+                  with watchdog_condition:
+                      watchdog_shutdown = True
+                      active_tests.clear()
+                      watchdog_condition.notify_all()
+                  if watchdog_thread.is_alive():
+                      watchdog_thread.join()
+
+          if status != 0:
+              emit_safe_rpc_diagnostic()
+              emit_safe_test_failure_source_line(
+                  r"Tests\Feature\Deployment\TransitionPersistenceBridgeTest::test_rpc_preflight_cache_source_contract_guards_are_explicit",
+                  "source-contract",
+                  "tests/Feature/Deployment/TransitionPersistenceBridgeTest.php",
+                  source_contract_test_failed,
+              )
+              emit_safe_test_failure_source_line(
+                  r"Tests\Feature\Platform\PlatformDatabaseBackupMysqlTest::test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked",
+                  "backup-import",
+                  "tests/Feature/Platform/PlatformDatabaseBackupMysqlTest.php",
+                  backup_import_test_failed,
+              )
+              emit_safe_backup_import_failure_code()
+              emit_safe_backup_import_diagnostics()
+          try:
+              os.unlink(log_path)
+          except FileNotFoundError:
+              pass
+          if target_name is None:
+              print("Required target CAS test lifecycle event was not observed in the full suite.", file=sys.stderr)
+              raise SystemExit(1)
+          raise SystemExit(status)
+          PY
 
       - name: Required MySQL process-concurrency gate
         run: |
@@ -477,6 +1480,13 @@ jobs:
           fi
 
           php tests/smoke/http-smoke.php http://127.0.0.1:8001 --expect=application
+
+      - name: Remove isolated verifier credential file
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f -- "$RUNNER_TEMP/wpcg-mysql-verifier-password"
 
   php85_fpm_compat:
     name: Isolated PHP 8.5 FPM compatibility
