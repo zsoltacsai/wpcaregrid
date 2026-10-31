@@ -476,17 +476,17 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('remaining = 8192 - destination.tell()', $helper);
         self::assertStringContainsString('if remaining > 0:', $helper);
         self::assertStringContainsString('os.fchmod(captured_stderr.fileno(), 0o600)', $helper);
-        self::assertStringContainsString("if child is None:", $helper);
-        self::assertStringContainsString("child_status = child.poll()", $helper);
-        self::assertStringContainsString("child_state='+child_state+child_exit+'; last_marker='+last_progress_marker", $helper);
-        self::assertStringContainsString("signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})", $helper);
+        self::assertStringContainsString('if child is None:', $helper);
+        self::assertStringContainsString('child_status = child.poll()', $helper);
+        self::assertStringContainsString('child_state=\'+child_state+child_exit+\'; last_marker=\'+last_progress_marker', $helper);
+        self::assertStringContainsString('signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})', $helper);
         self::assertStringContainsString('child = subprocess.Popen([\'setpriv\'', $helper);
         self::assertStringContainsString('signal.pthread_sigmask(signal.SIG_SETMASK, spawn_signal_mask)', $helper);
         self::assertStringContainsString('helper_deadline = time.monotonic() + 30', $helper);
         self::assertStringContainsString('preflight.wait(timeout=min(8, probe_remaining))', $helper);
         self::assertStringContainsString('deadline = min(helper_deadline, time.monotonic() + 20)', $helper);
         self::assertStringContainsString('child.wait(timeout=min(20, child_remaining))', $helper);
-        self::assertStringContainsString("str_starts_with(\$match[0], 'phase=wrapper_signal;')", $source);
+        self::assertStringContainsString('str_starts_with($match[0], \'phase=wrapper_signal;\')', $source);
         foreach ([
             'preflight_php_version_begin',
             'preflight_artisan_version_begin',
