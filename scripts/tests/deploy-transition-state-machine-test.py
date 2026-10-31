@@ -35,6 +35,7 @@ EVIDENCE = "2" * 64
 
 
 _LARAVEL_TEST_COPY_DIRS = ("app", "bootstrap", "config", "database", "lang", "routes", "vendor")
+_LARAVEL_TEST_COPY_FILES = ("composer.json",)
 _LARAVEL_TEST_RUNTIME_DIRS = ("storage", "storage/framework", "storage/framework/views")
 _LARAVEL_TEST_EXCLUDED_DIRS = {
     ".cache", ".git", ".phpunit.cache", ".pytest_cache", "__pycache__", "cache", "logs",
@@ -68,6 +69,12 @@ def _copy_laravel_test_application(source, destination, *, app_gid):
     artisan = source / "artisan"
     if not artisan.is_file() or artisan.is_symlink():
         raise ValueError("Laravel test copy requires a regular artisan entry point")
+    root_files = []
+    for name in _LARAVEL_TEST_COPY_FILES:
+        path = source / name
+        if not path.is_file() or path.is_symlink():
+            raise ValueError("Laravel test copy is missing a required root manifest")
+        root_files.append(path)
 
     for name in _LARAVEL_TEST_COPY_DIRS:
         path = source / name
@@ -77,6 +84,8 @@ def _copy_laravel_test_application(source, destination, *, app_gid):
     destination.mkdir(mode=0o755)
     try:
         shutil.copy2(artisan, destination / "artisan", follow_symlinks=False)
+        for path in root_files:
+            shutil.copy2(path, destination / path.name, follow_symlinks=False)
         for name in _LARAVEL_TEST_COPY_DIRS:
             shutil.copytree(
                 source / name, destination / name,
@@ -1928,6 +1937,8 @@ class TransitionAdapterTests(unittest.TestCase):
             app_root = Path(temporary) / "copy"
             (root / "artisan").parent.mkdir(parents=True)
             (root / "artisan").write_text("<?php // test artisan\n", encoding="ascii")
+            (root / "composer.json").write_text("{}\n", encoding="ascii")
+            (root / "composer.lock").write_text("local lock data\n", encoding="ascii")
             for directory in _LARAVEL_TEST_COPY_DIRS:
                 (root / directory).mkdir(parents=True)
             (root / ".env").write_text("APP_KEY=local-secret\n", encoding="ascii")
@@ -1953,13 +1964,13 @@ class TransitionAdapterTests(unittest.TestCase):
 
             _copy_laravel_test_application(root, app_root, app_gid=os.getegid())
             for relative in (
-                "artisan", "app/Command.php", "bootstrap/app.php", "config/app.php",
+                "artisan", "composer.json", "app/Command.php", "bootstrap/app.php", "config/app.php",
                 "database/migration.php", "lang/en.json", "routes/console.php",
                 "vendor/composer/autoload.php", "vendor/package/bridge.php",
             ):
                 self.assertTrue((app_root / relative).is_file(), relative)
             for relative in (
-                ".env", ".env.local", "app/.env.testing", "app/storage/runtime.json",
+                ".env", ".env.local", "composer.lock", "app/.env.testing", "app/storage/runtime.json",
                 "bootstrap/cache/config.php", "database/local.sqlite", "vendor/package/.env",
                 "vendor/package/private.pem",
             ):
