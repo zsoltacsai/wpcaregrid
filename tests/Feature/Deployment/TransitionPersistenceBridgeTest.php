@@ -432,6 +432,58 @@ class TransitionPersistenceBridgeTest extends TestCase
         $receipt->save();
     }
 
+    public function test_rpc_preflight_cache_source_contract_guards_are_explicit(): void
+    {
+        $source = file_get_contents(__FILE__);
+        self::assertIsString($source);
+
+        $marker = "\$scriptText = <<<'PY'\n";
+        $helperStart = strpos($source, $marker);
+        self::assertIsInt($helperStart);
+        $helperStart += strlen($marker);
+        $helperEnd = strpos($source, "\nPY;", $helperStart);
+        self::assertIsInt($helperEnd);
+        $helper = substr($source, $helperStart, $helperEnd - $helperStart);
+
+        // Source-contract fixtures only: these assert isolation and no-follow cleanup structure, not filesystem behavior.
+        self::assertStringNotContainsString("os.path.join(root, 'bootstrap', 'cache'", $helper);
+        self::assertStringContainsString("preflight_env['APP_CONFIG_CACHE'] = os.path.join(preflight_cache_dir, 'config-cache.php')", $helper);
+        self::assertStringContainsString("preflight_env['APP_PACKAGES_CACHE'] = os.path.join(preflight_cache_dir, 'packages.php')", $helper);
+        self::assertStringContainsString("preflight_env['APP_SERVICES_CACHE'] = os.path.join(preflight_cache_dir, 'services.php')", $helper);
+        self::assertStringContainsString("os.mkdir(candidate, 0o700, dir_fd=preflight_tmp_fd)", $helper);
+        self::assertStringContainsString('except FileExistsError:', $helper);
+        self::assertStringContainsString('stat.S_ISVTX', $helper);
+        self::assertStringContainsString('os.fchmod(preflight_root_fd, 0o711)', $helper);
+        self::assertStringContainsString('info.st_nlink != 1', $helper);
+        self::assertStringContainsString('opened_info.st_nlink != 1', $helper);
+        self::assertStringContainsString('current.st_nlink != 1', $helper);
+        self::assertStringContainsString('expected.st_nlink != 1', $helper);
+        self::assertStringContainsString('preflight_cache_created = True', $helper);
+        self::assertStringContainsString('if preflight_cache_fd is not None:', $helper);
+        self::assertStringContainsString("os.rmdir('preflight-cache', dir_fd=preflight_root_fd)", $helper);
+        self::assertStringContainsString('preflight_root_identity = (root_entry.st_dev, root_entry.st_ino)', $helper);
+        self::assertStringContainsString("os.stat(preflight_tmp_name, dir_fd=preflight_tmp_fd, follow_symlinks=False)", $helper);
+        self::assertStringContainsString("os.stat('preflight-cache', dir_fd=preflight_root_fd, follow_symlinks=False)", $helper);
+        self::assertStringContainsString('os.rmdir(preflight_tmp_name, dir_fd=preflight_tmp_fd)', $helper);
+        self::assertStringNotContainsString('os.rmdir(preflight_cache_dir)', $helper);
+
+        $bootstrapPosition = strpos($helper, "run_preflight_probe('artisan_version'");
+        $lockPosition = strpos($helper, 'lock_preflight_cache()', $bootstrapPosition);
+        $listPosition = strpos($helper, "run_preflight_probe('artisan_list'", $bootstrapPosition);
+        self::assertIsInt($bootstrapPosition);
+        self::assertIsInt($lockPosition);
+        self::assertIsInt($listPosition);
+        self::assertTrue($bootstrapPosition < $lockPosition && $lockPosition < $listPosition);
+
+        $lockDefinition = strpos($helper, 'def lock_preflight_cache():');
+        $dropDirectoryWrite = strpos($helper, 'os.fchown(preflight_cache_fd, 0, 0)', $lockDefinition);
+        $inspectEntries = strpos($helper, 'names = os.listdir(preflight_cache_fd)', $lockDefinition);
+        self::assertIsInt($lockDefinition);
+        self::assertIsInt($dropDirectoryWrite);
+        self::assertIsInt($inspectEntries);
+        self::assertTrue($lockDefinition < $dropDirectoryWrite && $dropDirectoryWrite < $inspectEntries);
+    }
+
     public function test_artisan_rpc_runs_as_unprivileged_peer_and_checks_so_peercred(): void
     {
         if (PHP_OS_FAMILY !== 'Linux'
@@ -474,7 +526,7 @@ class TransitionPersistenceBridgeTest extends TestCase
             $wireRequest = $request;
             $wireRequest['payload'] = (object) [];
             $scriptText = <<<'PY'
-import json, os, signal, socket, struct, subprocess, sys, tempfile, time
+import json, os, signal, socket, stat, struct, subprocess, sys, tempfile, time
 php, artisan, root, socket_path, uid, gid, database, request_json = sys.argv[1:]
 uid, gid = int(uid), int(gid)
 parent = os.path.dirname(socket_path)
@@ -482,6 +534,16 @@ server = None
 conn = None
 child = None
 preflight = None
+preflight_tmp_fd = None
+preflight_tmp_name = None
+preflight_tmp_identity = None
+preflight_tmp_created = False
+preflight_root_fd = None
+preflight_root_identity = None
+preflight_cache_fd = None
+preflight_cache_identity = None
+preflight_cache_created = False
+preflight_cache_dir = None
 child_stderr = None
 child_cleanup_unconfirmed = False
 preflight_cleanup_unconfirmed = False
@@ -536,6 +598,202 @@ def stop_preflight_bounded(process):
             return False
     return process.poll() is not None
 
+def create_preflight_cache():
+    global preflight_tmp_fd, preflight_tmp_name, preflight_tmp_identity
+    global preflight_tmp_created, preflight_root_fd, preflight_root_identity
+    global preflight_cache_fd, preflight_cache_identity
+    global preflight_cache_created, preflight_cache_dir
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    preflight_tmp_fd = os.open('/tmp', flags)
+    tmp_info = os.fstat(preflight_tmp_fd)
+    tmp_path_info = os.stat('/tmp', follow_symlinks=False)
+    if (not stat.S_ISDIR(tmp_info.st_mode) or tmp_info.st_uid != 0
+            or not (tmp_info.st_mode & stat.S_ISVTX) or not (tmp_info.st_mode & 0o002)
+            or (tmp_info.st_dev, tmp_info.st_ino) != (tmp_path_info.st_dev, tmp_path_info.st_ino)):
+        raise OSError
+    preflight_tmp_identity = (tmp_info.st_dev, tmp_info.st_ino)
+    for _ in range(8):
+        candidate = 'wpcaregrid-rpc-preflight-'+os.urandom(16).hex()
+        try:
+            os.mkdir(candidate, 0o700, dir_fd=preflight_tmp_fd)
+            preflight_tmp_name = candidate
+            preflight_tmp_created = True
+            break
+        except FileExistsError:
+            continue
+    if preflight_tmp_name is None:
+        raise OSError
+    root_entry = os.stat(preflight_tmp_name, dir_fd=preflight_tmp_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(root_entry.st_mode) or root_entry.st_uid != 0:
+        raise OSError
+    preflight_root_identity = (root_entry.st_dev, root_entry.st_ino)
+    preflight_root_fd = os.open(preflight_tmp_name, flags, dir_fd=preflight_tmp_fd)
+    root_info = os.fstat(preflight_root_fd)
+    if (not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != 0
+            or (root_info.st_dev, root_info.st_ino) != preflight_root_identity):
+        raise OSError
+    os.fchmod(preflight_root_fd, 0o711)
+    os.mkdir('preflight-cache', 0o700, dir_fd=preflight_root_fd)
+    preflight_cache_created = True
+    cache_entry = os.stat('preflight-cache', dir_fd=preflight_root_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(cache_entry.st_mode) or cache_entry.st_uid != 0:
+        raise OSError
+    preflight_cache_identity = (cache_entry.st_dev, cache_entry.st_ino)
+    preflight_cache_fd = os.open('preflight-cache', flags, dir_fd=preflight_root_fd)
+    cache_info = os.fstat(preflight_cache_fd)
+    if (not stat.S_ISDIR(cache_info.st_mode) or cache_info.st_uid != 0
+            or (cache_info.st_dev, cache_info.st_ino) != preflight_cache_identity):
+        raise OSError
+    os.fchown(preflight_cache_fd, uid, gid)
+    os.fchmod(preflight_cache_fd, 0o700)
+    preflight_cache_dir = os.path.join('/tmp', preflight_tmp_name, 'preflight-cache')
+
+def lock_preflight_cache():
+    cache_info = os.fstat(preflight_cache_fd)
+    if (not stat.S_ISDIR(cache_info.st_mode) or cache_info.st_uid != uid
+            or (cache_info.st_dev, cache_info.st_ino) != preflight_cache_identity):
+        raise OSError
+    # Remove directory mutation rights from the app identity before inspecting or locking entries.
+    os.fchown(preflight_cache_fd, 0, 0)
+    os.fchmod(preflight_cache_fd, 0o700)
+    names = os.listdir(preflight_cache_fd)
+    if set(names) != {'packages.php', 'services.php'}:
+        raise OSError
+    opened = {}
+    try:
+        for name in ('packages.php', 'services.php'):
+            info = os.stat(name, dir_fd=preflight_cache_fd, follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_nlink != 1:
+                raise OSError
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=preflight_cache_fd)
+            opened[name] = descriptor
+            opened_info = os.fstat(descriptor)
+            if ((opened_info.st_dev, opened_info.st_ino) != (info.st_dev, info.st_ino)
+                    or not stat.S_ISREG(opened_info.st_mode) or opened_info.st_nlink != 1):
+                raise OSError
+            os.fchown(descriptor, 0, 0)
+            os.fchmod(descriptor, 0o444)
+        for name, descriptor in opened.items():
+            expected = os.fstat(descriptor)
+            current = os.stat(name, dir_fd=preflight_cache_fd, follow_symlinks=False)
+            if (not stat.S_ISREG(current.st_mode) or current.st_nlink != 1
+                    or (current.st_dev, current.st_ino, current.st_uid, current.st_mode & 0o777) != (
+                        expected.st_dev, expected.st_ino, 0, 0o444)
+                    or expected.st_nlink != 1):
+                raise OSError
+        os.fchmod(preflight_cache_fd, 0o555)
+        cache_info = os.fstat(preflight_cache_fd)
+        if (cache_info.st_dev, cache_info.st_ino, cache_info.st_uid, cache_info.st_mode & 0o777) != (
+                preflight_cache_identity[0], preflight_cache_identity[1], 0, 0o555):
+            raise OSError
+    finally:
+        for descriptor in opened.values():
+            os.close(descriptor)
+
+def cleanup_preflight_cache():
+    global preflight_cleanup_unconfirmed
+    if preflight_tmp_fd is None:
+        return
+    try:
+        if not preflight_tmp_created or preflight_tmp_name is None:
+            return
+        tmp_info = os.fstat(preflight_tmp_fd)
+        tmp_path_info = os.stat('/tmp', follow_symlinks=False)
+        if (tmp_info.st_uid != 0 or not (tmp_info.st_mode & stat.S_ISVTX)
+                or (tmp_info.st_dev, tmp_info.st_ino) != preflight_tmp_identity
+                or (tmp_path_info.st_dev, tmp_path_info.st_ino) != preflight_tmp_identity):
+            raise OSError
+        root_entry = os.stat(preflight_tmp_name, dir_fd=preflight_tmp_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(root_entry.st_mode) or root_entry.st_uid != 0:
+            raise OSError
+        if preflight_root_identity is not None and (
+                root_entry.st_dev, root_entry.st_ino) != preflight_root_identity:
+            raise OSError
+        if preflight_cache_created:
+            if preflight_root_fd is None:
+                raise OSError
+            cache_entry = os.stat('preflight-cache', dir_fd=preflight_root_fd, follow_symlinks=False)
+            if not stat.S_ISDIR(cache_entry.st_mode) or cache_entry.st_uid not in (0, uid):
+                raise OSError
+            if preflight_cache_identity is not None and (
+                    cache_entry.st_dev, cache_entry.st_ino) != preflight_cache_identity:
+                raise OSError
+            if preflight_cache_fd is not None:
+                cache_info = os.fstat(preflight_cache_fd)
+                if (not stat.S_ISDIR(cache_info.st_mode)
+                        or (preflight_cache_identity is not None
+                            and (cache_info.st_dev, cache_info.st_ino) != preflight_cache_identity)):
+                    raise OSError
+                os.fchown(preflight_cache_fd, 0, 0)
+                os.fchmod(preflight_cache_fd, 0o700)
+                for name in ('config-cache.php', 'packages.php', 'services.php'):
+                    try:
+                        info = os.stat(name, dir_fd=preflight_cache_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        continue
+                    if not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)):
+                        raise OSError
+                    os.unlink(name, dir_fd=preflight_cache_fd)
+            os.rmdir('preflight-cache', dir_fd=preflight_root_fd)
+        os.rmdir(preflight_tmp_name, dir_fd=preflight_tmp_fd)
+    except Exception:
+        preflight_cleanup_unconfirmed = True
+    finally:
+        for descriptor_name in ('preflight_cache_fd', 'preflight_root_fd', 'preflight_tmp_fd'):
+            descriptor = globals()[descriptor_name]
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    preflight_cleanup_unconfirmed = True
+                globals()[descriptor_name] = None
+
+def run_preflight_probe(probe, command, capture_stdout=False):
+    global preflight, preflight_cleanup_unconfirmed
+    captured_stdout = None
+    try:
+        if capture_stdout:
+            captured_stdout = tempfile.TemporaryFile(mode='w+b')
+    except Exception:
+        raise SystemExit('phase=preflight; probe='+probe+'; state=failed')
+    try:
+        try:
+            preflight = subprocess.Popen(
+                ['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',*command],
+                cwd=root,
+                env=preflight_env,
+                stdout=captured_stdout if captured_stdout is not None else subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            raise SystemExit('phase=preflight; probe='+probe+'; state=failed')
+        try:
+            preflight.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            preflight_cleanup_unconfirmed = not stop_preflight_bounded(preflight)
+            status = 'phase=preflight; probe='+probe+'; state=timeout'
+            if preflight.returncode is not None:
+                status += '; exit_code='+str(preflight.returncode)
+            raise SystemExit(status)
+        except Exception:
+            raise SystemExit('phase=preflight; probe='+probe+'; state=failed')
+        if preflight.returncode != 0:
+            raise SystemExit('phase=preflight; probe='+probe+'; state=failed; exit_code='+str(preflight.returncode))
+        if captured_stdout is not None:
+            try:
+                captured_stdout.seek(0)
+                command_registered = any(
+                    fields and fields[0] == b'deployment:transition-bridge'
+                    for fields in (line.strip().split(None, 1) for line in captured_stdout)
+                )
+            except Exception:
+                raise SystemExit('phase=preflight; probe=artisan_list; state=failed')
+            if not command_registered:
+                raise SystemExit('phase=preflight; probe=artisan_list; state=command_missing; exit_code=0')
+    finally:
+        if captured_stdout is not None:
+            captured_stdout.close()
+
 try:
     env = os.environ.copy()
     for credential_name in ('MYSQL_PWD', 'M9_MYSQL_VERIFY_PASSWORD', 'DB_PASSWORD', 'DB_USERNAME', 'DATABASE_URL', 'MYSQL_ROOT_PASSWORD'):
@@ -543,21 +801,27 @@ try:
     env.update({'APP_ENV':'testing','APP_KEY':'base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','CAREGRID_DEPLOYMENT_ENV':'testing','CAREGRID_TRANSITION_RPC_TEST_DIAGNOSTICS':'1','DB_CONNECTION':'sqlite','DB_DATABASE':database,'DB_URL':'','CACHE_STORE':'array','SESSION_DRIVER':'array','QUEUE_CONNECTION':'sync','MAIL_MAILER':'array','LOG_CHANNEL':'stderr'})
     preflight_env = env.copy()
     preflight_env['DB_DATABASE'] = ':memory:'
-    preflight_env['APP_CONFIG_CACHE'] = os.path.join(parent, 'config-cache.php')
     try:
-        preflight = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path,'--help'], cwd=root, env=preflight_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError:
-        raise SystemExit('phase=preflight; state=failed')
+        create_preflight_cache()
+    except Exception:
+        raise SystemExit('phase=preflight; probe=cache_setup; state=failed')
+    preflight_env['APP_CONFIG_CACHE'] = os.path.join(preflight_cache_dir, 'config-cache.php')
+    preflight_env['APP_PACKAGES_CACHE'] = os.path.join(preflight_cache_dir, 'packages.php')
+    preflight_env['APP_SERVICES_CACHE'] = os.path.join(preflight_cache_dir, 'services.php')
+    # Laravel can generate missing manifests during this first bounded Artisan bootstrap, outside the checkout.
+    run_preflight_probe('php_version', [php, '--version'])
+    run_preflight_probe('artisan_version', [php, artisan, '--version'])
     try:
-        preflight.wait(timeout=8)
-    except subprocess.TimeoutExpired:
-        preflight_cleanup_unconfirmed = not stop_preflight_bounded(preflight)
-        status = 'phase=preflight; state=timeout'
-        if preflight.returncode is not None:
-            status += '; exit_code='+str(preflight.returncode)
-        raise SystemExit(status)
-    if preflight.returncode != 0:
-        raise SystemExit('phase=preflight; state=failed; exit_code='+str(preflight.returncode))
+        lock_preflight_cache()
+    except Exception:
+        raise SystemExit('phase=preflight; probe=cache_setup; state=failed')
+    env.update({
+        'APP_CONFIG_CACHE': preflight_env['APP_CONFIG_CACHE'],
+        'APP_PACKAGES_CACHE': preflight_env['APP_PACKAGES_CACHE'],
+        'APP_SERVICES_CACHE': preflight_env['APP_SERVICES_CACHE'],
+    })
+    run_preflight_probe('artisan_list', [php, artisan, 'list', '--raw'], capture_stdout=True)
+    run_preflight_probe('command_help', [php, artisan, 'deployment:transition-bridge', '--connect-socket', socket_path, '--help'])
 
     os.mkdir(parent, 0o710)
     os.chown(parent, 0, gid)
@@ -664,6 +928,7 @@ finally:
                                 os.rmdir(parent)
                             except FileNotFoundError:
                                 pass
+                            cleanup_preflight_cache()
                 if child_cleanup_unconfirmed:
                     raise SystemExit('phase=cleanup; cleanup_state=unconfirmed')
                 if preflight_cleanup_unconfirmed:
@@ -774,7 +1039,7 @@ PY;
             }
             $diagnostic = 'Root peer helper failed.';
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match('/phase=preflight; state=(?:timeout|failed)(?:; exit_code=-?\\d+)?|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(accept_timeout|accept|response_timeout|response|child_wait_timeout|child|wrapper_signal); child_state=(running|exited)(?:; exit_code=(-?\\d+))?|phase=cleanup; cleanup_state=unconfirmed/', $helperOutput, $matches) === 1) {
+            if (preg_match('/phase=preflight; probe=(?:php_version|cache_setup|artisan_version|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(accept_timeout|response_timeout|child_wait_timeout|wrapper_signal); child_state=(running|exited)(?:; exit_code=(-?\\d+))?|phase=cleanup; cleanup_state=unconfirmed/', $helperOutput, $matches) === 1) {
                 $diagnostic = trim($matches[0]);
             }
             if ($timedOut) {
