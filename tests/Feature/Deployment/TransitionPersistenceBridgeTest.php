@@ -443,6 +443,18 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper;', $workflow);
         self::assertStringContainsString("'GATE1_SAFE_RUNTIME_DIAGNOSTIC:'", $source);
         self::assertStringContainsString('stage=assertion_failure', $workflow);
+        $peerRpcMethodStart = strpos($source, 'public function test_artisan_rpc_runs_as_unprivileged_peer_and_checks_so_peercred(): void');
+        self::assertIsInt($peerRpcMethodStart);
+        $peerRpcMethodEnd = strpos($source, "\n    }\n}", $peerRpcMethodStart);
+        self::assertIsInt($peerRpcMethodEnd);
+        $peerRpcMethod = substr($source, $peerRpcMethodStart, $peerRpcMethodEnd - $peerRpcMethodStart);
+        $emitterPosition = strpos($peerRpcMethod, '$emitSafeDiagnostic = static function');
+        $outerTryPosition = strpos($peerRpcMethod, "\n        try {\n            \$pdo = new");
+        $catchCallPosition = strpos($peerRpcMethod, '$emitSafeDiagnostic(', $outerTryPosition === false ? 0 : $outerTryPosition);
+        self::assertIsInt($emitterPosition);
+        self::assertIsInt($outerTryPosition);
+        self::assertIsInt($catchCallPosition);
+        self::assertTrue($emitterPosition < $outerTryPosition && $outerTryPosition < $catchCallPosition);
 
         $marker = "\$scriptText = <<<'PY'\n";
         $helperStart = strpos($source, $marker);
@@ -603,6 +615,17 @@ class TransitionPersistenceBridgeTest extends TestCase
 
     public function test_artisan_rpc_runs_as_unprivileged_peer_and_checks_so_peercred(): void
     {
+        $safeDiagnosticEmitted = false;
+        $emitSafeDiagnostic = static function (string $line) use (&$safeDiagnosticEmitted): void {
+            if ($safeDiagnosticEmitted || !str_starts_with($line, 'phase=')) {
+                return;
+            }
+
+            $safeDiagnosticEmitted = true;
+            fwrite(STDERR, 'GATE1_SAFE_RUNTIME_DIAGNOSTIC:'.$line.PHP_EOL);
+            fflush(STDERR);
+        };
+
         if (PHP_OS_FAMILY !== 'Linux'
             || ! function_exists('posix_geteuid')
             || trim((string) shell_exec('sudo -n true >/dev/null 2>&1; printf "%s" $?')) !== '0'
@@ -1752,16 +1775,6 @@ finally:
 PY;
             self::assertSame(strlen($scriptText), @file_put_contents($script, $scriptText), 'phase=root_helper; state=script_write_failed');
             self::assertTrue(@chmod($script, 0644), 'phase=root_helper; state=script_mode_failed');
-            $safeDiagnosticEmitted = false;
-            $emitSafeDiagnostic = static function (string $line) use (&$safeDiagnosticEmitted): void {
-                if ($safeDiagnosticEmitted || !str_starts_with($line, 'phase=')) {
-                    return;
-                }
-
-                $safeDiagnosticEmitted = true;
-                fwrite(STDERR, 'GATE1_SAFE_RUNTIME_DIAGNOSTIC:'.$line.PHP_EOL);
-                fflush(STDERR);
-            };
             try {
                 $requestJson = json_encode($wireRequest, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
             } catch (\JsonException) {
