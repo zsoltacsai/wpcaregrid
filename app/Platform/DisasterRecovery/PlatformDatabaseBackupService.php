@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
+use Symfony\Component\Process\Exception\ProcessException;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Process;
 
 final class PlatformDatabaseBackupService
@@ -548,8 +550,9 @@ final class PlatformDatabaseBackupService
         }
     }
 
-    /** @param list<string> $temporaryPaths
-     *  @return list<array{event: string, category: string, code: string, body_state: string}>
+    /**
+     * @param list<string> $temporaryPaths
+     * @return list<array{event: string, category: string, code: string, body_state: string}>
      */
     private function cleanupTemporaryArtifacts(array $temporaryPaths, string $diagnosticBodyState): array
     {
@@ -1010,10 +1013,10 @@ final class PlatformDatabaseBackupService
         if ($error instanceof \PDOException) {
             return 'pdo_error';
         }
-        if ($error instanceof \Symfony\Component\Process\Exception\ProcessTimedOutException) {
+        if ($error instanceof ProcessTimedOutException) {
             return 'timeout';
         }
-        if ($error instanceof \Symfony\Component\Process\Exception\ProcessException) {
+        if ($error instanceof ProcessException) {
             return 'process_error';
         }
         if ($error instanceof \ErrorException || $error instanceof RuntimeException) {

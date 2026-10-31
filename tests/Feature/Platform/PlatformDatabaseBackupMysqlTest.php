@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\AssertionFailedError;
+use PHPUnit\Framework\Attributes\Group;
 use Symfony\Component\Process\Exception\ProcessException;
 use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Tests\TestCase;
@@ -17,6 +18,15 @@ use Tests\TestCase;
 class PlatformDatabaseBackupMysqlTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_isolated_verifier_credential_presence_is_strict(): void
+    {
+        $this->assertFalse($this->hasIsolatedVerifierCredential(false));
+        $this->assertFalse($this->hasIsolatedVerifierCredential(null));
+        $this->assertFalse($this->hasIsolatedVerifierCredential(''));
+        $this->assertFalse($this->hasIsolatedVerifierCredential('   '));
+        $this->assertTrue($this->hasIsolatedVerifierCredential('synthetic-verifier-credential'));
+    }
 
     public function test_service_temp_cleanup_emits_complete_only_after_every_applicable_unlink_succeeds(): void
     {
@@ -72,13 +82,38 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
         }
     }
 
+    #[Group('wpcg_isolated_mysql_backup_verification')]
     public function test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked(): void
     {
+        $verificationRequired = getenv('WPCG_BACKUP_VERIFY_REQUIRED') === '1';
         if (DB::connection()->getDriverName() !== 'mysql') {
+            if ($verificationRequired) {
+                $this->fail('Mandatory isolated MySQL verification requires the MySQL test connection.');
+            }
             $this->markTestSkipped('Requires the isolated MySQL 8.4 CI service.');
         }
-        if (! filled(getenv('M9_MYSQL_VERIFY_PASSWORD'))) {
-            $this->markTestSkipped('Requires the CI-only MySQL root credential for disposable import verification.');
+
+        $verificationPassword = getenv('WPCG_MYSQL_VERIFY_PASSWORD');
+        $verificationHost = getenv('WPCG_MYSQL_VERIFY_HOST');
+        $verificationPort = getenv('WPCG_MYSQL_VERIFY_PORT');
+        $verificationDatabase = getenv('WPCG_MYSQL_VERIFY_DATABASE');
+        $verificationUsername = getenv('WPCG_MYSQL_VERIFY_USERNAME');
+        $verificationConfigIsValid = is_string($verificationHost)
+            && trim($verificationHost) !== ''
+            && is_string($verificationPort)
+            && ctype_digit($verificationPort)
+            && (int) $verificationPort > 0
+            && (int) $verificationPort <= 65535
+            && is_string($verificationDatabase)
+            && trim($verificationDatabase) !== ''
+            && is_string($verificationUsername)
+            && trim($verificationUsername) !== '';
+
+        if (! $this->hasIsolatedVerifierCredential($verificationPassword) || ! $verificationConfigIsValid) {
+            if ($verificationRequired) {
+                $this->fail('Mandatory isolated MySQL verifier configuration is missing or invalid.');
+            }
+            $this->markTestSkipped('Requires the isolated CI MySQL verification service and restricted verifier credential.');
         }
 
         $probe = 'm9_recovery_probe';
@@ -92,7 +127,13 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
             $mysql = config('database.connections.mysql');
             config([
                 'database.connections.m9_platform_source' => $mysql,
-                'database.connections.m9_platform_verify' => array_merge($mysql, ['username' => 'root', 'password' => getenv('M9_MYSQL_VERIFY_PASSWORD')]),
+                'database.connections.m9_platform_verify' => array_merge($mysql, [
+                    'host' => $verificationHost,
+                    'port' => (int) $verificationPort,
+                    'database' => $verificationDatabase,
+                    'username' => $verificationUsername,
+                    'password' => $verificationPassword,
+                ]),
                 'platform_backup.enabled' => true,
                 'platform_backup.source_connection' => 'm9_platform_source',
                 'platform_backup.verification_connection' => 'm9_platform_verify',
@@ -111,6 +152,21 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
             DB::purge('m9_platform_source');
             DB::purge('m9_platform_verify');
             Storage::forgetDisk('platform_backups');
+
+            $primaryProbe = 'm9_verify_primary_scope_probe';
+            config(["database.connections.{$primaryProbe}" => array_merge($mysql, [
+                'username' => $verificationUsername,
+                'password' => $verificationPassword,
+            ])]);
+            try {
+                DB::connection($primaryProbe)->getPdo();
+                $this->fail('The isolated verifier unexpectedly authenticated to the application MySQL instance.');
+            } catch (\PDOException $exception) {
+                // The restricted verifier identity exists only on the isolated verification instance.
+                $this->assertSame(1045, (int) ($exception->errorInfo[1] ?? 0), 'The verifier must be denied by MySQL authentication, not by a connection/configuration failure.');
+            } finally {
+                DB::purge($primaryProbe);
+            }
         } catch (\Throwable $exception) {
             $this->emitDiagnosticV2($activeStage, 'primary_failure', $this->diagnosticCategoryV2($exception));
             throw $exception;
@@ -271,6 +327,11 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
         }
 
         return 'other';
+    }
+
+    private function hasIsolatedVerifierCredential(mixed $credential): bool
+    {
+        return is_string($credential) && trim($credential) !== '';
     }
 
     private function diagnosticCodeV2(?string $code): string

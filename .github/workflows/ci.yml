@@ -198,6 +198,16 @@ jobs:
         options: >-
           --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
           --health-interval=5s --health-timeout=5s --health-retries=30
+      mysql-verification:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: wpcg_verifier_seed
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
+          --health-interval=5s --health-timeout=5s --health-retries=30
     env:
       # A missing S3 or SFTP test service fails the run (tests/Support/StorageServers.php).
       CAREGRID_TEST_REQUIRE_SERVICES: '1'
@@ -213,25 +223,24 @@ jobs:
 
       - name: Database for this job
         env:
-          # Disposable test-service credential, scoped to database provisioning.
+          # Root is used only to provision the disposable application test service.
           MYSQL_ROOT_PASSWORD: ci-root-password
         run: |
           set -euo pipefail
           db_password="$(openssl rand -hex 32)"
           echo "::add-mask::$db_password"
           MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=127.0.0.1 --port=3306 --user=root --execute="CREATE DATABASE IF NOT EXISTS caregrid_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER 'caregrid_ci'@'%' IDENTIFIED BY '$db_password'; GRANT ALL PRIVILEGES ON caregrid_test.* TO 'caregrid_ci'@'%';"
-          {
-            echo "DB_CONNECTION=mysql"
-            echo "DB_HOST=127.0.0.1"
-            echo "DB_PORT=3306"
-            echo "DB_DATABASE=caregrid_test"
-            echo "DB_USERNAME=caregrid_ci"
-            echo "DB_PASSWORD=$db_password"
-            echo "DB_URL="
-            echo "CAREGRID_EXPECTED_DATABASE_DRIVER=mysql"
-            echo "CAREGRID_EXPECTED_DATABASE_VERSION=8.4"
-            echo "M9_MYSQL_VERIFY_PASSWORD=$MYSQL_ROOT_PASSWORD"
-          } >> "$GITHUB_ENV"
+          printf '%s\n' \
+            "DB_CONNECTION=mysql" \
+            "DB_HOST=127.0.0.1" \
+            "DB_PORT=3306" \
+            "DB_DATABASE=caregrid_test" \
+            "DB_USERNAME=caregrid_ci" \
+            "DB_PASSWORD=$db_password" \
+            "DB_URL=" \
+            "CAREGRID_EXPECTED_DATABASE_DRIVER=mysql" \
+            "CAREGRID_EXPECTED_DATABASE_VERSION=8.4" \
+            >> "$GITHUB_ENV"
 
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
@@ -311,13 +320,131 @@ jobs:
           php artisan event:cache
           php artisan optimize:clear
 
+      - name: Verify exact PHPUnit full-suite and isolated-test selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          all_list="$RUNNER_TEMP/phpunit-all-tests.txt"
+          suite_list="$RUNNER_TEMP/phpunit-general-tests.txt"
+          isolated_list="$RUNNER_TEMP/phpunit-isolated-backup-tests.txt"
+          trap 'rm -f "$all_list" "$suite_list" "$isolated_list"' EXIT
+          vendor/bin/phpunit -c phpunit.xml --list-tests > "$all_list"
+          vendor/bin/phpunit -c phpunit.xml --list-tests --exclude-group=wpcg_isolated_mysql_backup_verification > "$suite_list"
+          vendor/bin/phpunit -c phpunit.xml --list-tests --group=wpcg_isolated_mysql_backup_verification > "$isolated_list"
+          python3 - "$all_list" "$suite_list" "$isolated_list" <<'PY'
+          import collections
+          import re
+          import sys
+
+          def tests(path):
+              with open(path, encoding="utf-8") as stream:
+                  return [
+                      match.group(1).strip()
+                      for line in stream
+                      if (match := re.match(r"^\s*-\s+(.+)$", line))
+                  ]
+
+          all_tests, suite_tests, isolated_tests = map(tests, sys.argv[1:])
+          if not all_tests or not suite_tests or not isolated_tests:
+              raise SystemExit("PHPUnit test selection contract produced an empty selection.")
+          if collections.Counter(all_tests) != collections.Counter(suite_tests + isolated_tests):
+              raise SystemExit("PHPUnit general and isolated selections do not exactly cover the original suite.")
+          if len(isolated_tests) != 1 or not isolated_tests[0].endswith("PlatformDatabaseBackupMysqlTest::test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked"):
+              raise SystemExit("The isolated PHPUnit group must contain exactly the mandatory backup-import test.")
+          if any(name.endswith("PlatformDatabaseBackupMysqlTest::test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked") for name in suite_tests):
+              raise SystemExit("The mandatory backup-import test was not excluded from the sanitized general suite.")
+          print("PHPUnit selection contract: PASS (all tests covered exactly once; mandatory isolated test=1).")
+          PY
+
+      - name: Provision isolated disposable backup-verification MySQL service
+        env:
+          # Root is confined to this disposable service provisioning step.
+          MYSQL_ROOT_PASSWORD: ci-root-password
+        run: |
+          set -euo pipefail
+          set +x
+          credential_file="$RUNNER_TEMP/wpcg-mysql-verifier-password"
+          trap 'if [ "$?" -ne 0 ]; then rm -f -- "$credential_file"; fi' EXIT
+          verifier_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$verifier_password"
+          umask 077
+          printf '%s' "$verifier_password" > "$credential_file"
+          chmod 600 "$credential_file"
+          if printf "CREATE USER 'caregrid_verify'@'%%' IDENTIFIED BY '%s'; GRANT CREATE, DROP, SELECT, INSERT, UPDATE, DELETE, ALTER, INDEX, REFERENCES, CREATE TEMPORARY TABLES, CREATE VIEW, SHOW VIEW, TRIGGER, EVENT, CREATE ROUTINE, ALTER ROUTINE, EXECUTE, LOCK TABLES ON *.* TO 'caregrid_verify'@'%%';\n" "$verifier_password" | MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=127.0.0.1 --port=3307 --user=root >/dev/null 2>&1; then
+            echo 'Restricted verifier account provisioned on isolated disposable service.'
+          else
+            echo 'Failed to provision the restricted account on the isolated disposable verification service.' >&2
+            exit 1
+          fi
+
+      - name: Mandatory isolated MySQL backup-import verification
+        shell: bash
+        env:
+          WPCG_MYSQL_VERIFY_HOST: 127.0.0.1
+          WPCG_MYSQL_VERIFY_PORT: '3307'
+          WPCG_MYSQL_VERIFY_DATABASE: wpcg_verifier_seed
+          WPCG_MYSQL_VERIFY_USERNAME: caregrid_verify
+        run: |
+          set -euo pipefail
+          set +x
+          credential_file="$RUNNER_TEMP/wpcg-mysql-verifier-password"
+          diagnostic_log="$RUNNER_TEMP/isolated-backup-phpunit.log"
+          junit_file="$RUNNER_TEMP/isolated-backup-phpunit.xml"
+          trap 'rm -f -- "$diagnostic_log" "$junit_file" "$credential_file"' EXIT
+          verifier_password="$(cat "$credential_file")"
+          if [ -z "$verifier_password" ]; then
+            echo 'Mandatory isolated verifier credential is empty.' >&2
+            exit 1
+          fi
+          echo "::add-mask::$verifier_password"
+          export WPCG_MYSQL_VERIFY_PASSWORD="$verifier_password"
+          export WPCG_BACKUP_VERIFY_REQUIRED=1
+          set +e
+          vendor/bin/phpunit -c phpunit.xml --debug --fail-on-skipped \
+            --group=wpcg_isolated_mysql_backup_verification \
+            --filter='test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked' \
+            --log-junit "$junit_file" \
+            >"$diagnostic_log" 2>&1
+          phpunit_status=$?
+          set -e
+          unset WPCG_MYSQL_VERIFY_PASSWORD WPCG_MYSQL_VERIFY_HOST WPCG_MYSQL_VERIFY_PORT
+          unset WPCG_MYSQL_VERIFY_DATABASE WPCG_MYSQL_VERIFY_USERNAME WPCG_BACKUP_VERIFY_REQUIRED verifier_password
+          python3 - "$junit_file" "$phpunit_status" "${{ matrix.php }}" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          path, raw_status, php_version = sys.argv[1:]
+          try:
+              status = int(raw_status)
+              root = ET.parse(path).getroot()
+              cases = list(root.iter("testcase"))
+          except (ValueError, OSError, ET.ParseError):
+              print("MANDATORY_BACKUP_MYSQL_VERIFICATION: FAIL (receipt missing or invalid)")
+              raise SystemExit(1)
+          valid_name = "test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked"
+          valid_class = r"Tests\Feature\Platform\PlatformDatabaseBackupMysqlTest"
+          if (
+              status != 0
+              or len(cases) != 1
+              or cases[0].get("class") != valid_class
+              or cases[0].get("classname") != valid_class.replace("\\", ".")
+              or cases[0].get("name") != valid_name
+          ):
+              print("MANDATORY_BACKUP_MYSQL_VERIFICATION: FAIL (test did not complete successfully)")
+              raise SystemExit(1)
+          if any(cases[0].find(tag) is not None for tag in ("failure", "error", "skipped")):
+              print("MANDATORY_BACKUP_MYSQL_VERIFICATION: FAIL (failed, errored, or skipped)")
+              raise SystemExit(1)
+          print(f"MANDATORY_BACKUP_MYSQL_VERIFICATION: PASS (executed=1 skipped=0 php={php_version})")
+          PY
+
       - name: Bounded typed RPC CAS diagnosis
         shell: bash
         run: |
           set -euo pipefail
           set +x
           diagnostic_log="$RUNNER_TEMP/typed-rpc-cas-phpunit.log"
-          env -u M9_MYSQL_VERIFY_PASSWORD timeout --signal=TERM --kill-after=5s 90s \
+          timeout --signal=TERM --kill-after=5s 90s \
             vendor/bin/phpunit -c phpunit.xml --debug --fail-on-skipped \
               --display-skipped --display-warnings \
               tests/Feature/Deployment/TransitionPersistenceBridgeTest.php \
@@ -336,17 +463,22 @@ jobs:
           from concurrent.futures import ThreadPoolExecutor
 
           env = os.environ.copy()
-          required = ("DB_HOST", "DB_PORT", "M9_MYSQL_VERIFY_PASSWORD")
+          forbidden_credentials = ("MYSQL_ROOT_PASSWORD", "M9_MYSQL_VERIFY_PASSWORD", "WPCG_MYSQL_VERIFY_PASSWORD")
+          leaked_credentials = [name for name in forbidden_credentials if env.get(name)]
+          if leaked_credentials:
+              print("Administrative or isolated-verifier credentials reached the general PHPUnit wrapper.", file=sys.stderr)
+              raise SystemExit(1)
+          required = ("DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD")
           missing = [name for name in required if not env.get(name)]
           if missing:
-              print("Required root MySQL diagnostic configuration is absent: " + ", ".join(missing), file=sys.stderr)
+              print("Required application MySQL diagnostic configuration is absent: " + ", ".join(missing), file=sys.stderr)
               raise SystemExit(1)
-          env["MYSQL_PWD"] = env["M9_MYSQL_VERIFY_PASSWORD"]
+          env["MYSQL_PWD"] = env["DB_PASSWORD"]
 
           base = [
               "mysql", "--protocol=TCP", "--connect-timeout=3",
               "--host=" + env["DB_HOST"], "--port=" + env["DB_PORT"],
-              "--user=root",
+              "--user=" + env["DB_USERNAME"],
               "--batch", "--skip-column-names", "--quick",
           ]
 
@@ -491,7 +623,7 @@ jobs:
           trap 'rm -f "$diagnostic_log"' EXIT
 
           set +e
-          env -u M9_MYSQL_VERIFY_PASSWORD timeout --signal=TERM --kill-after=5s 90s \
+          timeout --signal=TERM --kill-after=5s 90s \
             vendor/bin/phpunit -c phpunit.xml --debug --fail-on-skipped \
               --display-skipped --display-warnings \
               tests/Feature/Deployment/TransitionPersistenceBridgeTest.php \
@@ -586,12 +718,17 @@ jobs:
 
           log_path = sys.argv[1]
           env = os.environ.copy()
-          required = ("DB_HOST", "DB_PORT", "M9_MYSQL_VERIFY_PASSWORD")
+          forbidden_credentials = ("MYSQL_ROOT_PASSWORD", "M9_MYSQL_VERIFY_PASSWORD", "WPCG_MYSQL_VERIFY_PASSWORD")
+          leaked_credentials = [name for name in forbidden_credentials if env.get(name)]
+          if leaked_credentials:
+              print("Administrative or isolated-verifier credentials reached the general PHPUnit wrapper.", file=sys.stderr)
+              raise SystemExit(1)
+          required = ("DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD")
           missing = [name for name in required if not env.get(name)]
           if missing:
-              print("Required root MySQL diagnostic configuration is absent: " + ", ".join(missing), file=sys.stderr)
+              print("Required application MySQL diagnostic configuration is absent: " + ", ".join(missing), file=sys.stderr)
               raise SystemExit(1)
-          env["MYSQL_PWD"] = env["M9_MYSQL_VERIFY_PASSWORD"]
+          env["MYSQL_PWD"] = env["DB_PASSWORD"]
 
           target_method = "TransitionPersistenceBridgeTest::test_typed_rpc_cas_is_atomic_and_exact_replay_returns_its_receipt"
           source_contract_test_method = "TransitionPersistenceBridgeTest::test_rpc_preflight_cache_source_contract_guards_are_explicit"
@@ -885,7 +1022,7 @@ jobs:
               base = [
                   "mysql", "--protocol=TCP", "--connect-timeout=3",
                   "--host=" + env["DB_HOST"], "--port=" + env["DB_PORT"],
-                  "--user=root", "--batch", "--skip-column-names", "--quick",
+                  "--user=" + env["DB_USERNAME"], "--batch", "--skip-column-names", "--quick",
               ]
 
               def redact_sql(value):
@@ -922,7 +1059,7 @@ jobs:
                   ("data_lock_waits", "SELECT w.REQUESTING_ENGINE_TRANSACTION_ID, r.THREAD_ID, r.EVENT_ID, r.OBJECT_SCHEMA, r.OBJECT_NAME, r.INDEX_NAME, r.LOCK_TYPE, r.LOCK_MODE, r.LOCK_STATUS, w.BLOCKING_ENGINE_TRANSACTION_ID, b.THREAD_ID, b.EVENT_ID, b.OBJECT_SCHEMA, b.OBJECT_NAME, b.INDEX_NAME, b.LOCK_TYPE, b.LOCK_MODE, b.LOCK_STATUS FROM performance_schema.data_lock_waits AS w LEFT JOIN performance_schema.data_locks AS r ON r.ENGINE = w.ENGINE AND r.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID LEFT JOIN performance_schema.data_locks AS b ON b.ENGINE = w.ENGINE AND b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID WHERE w.ENGINE = 'INNODB' LIMIT 100", lambda c: "waiting_trx={0} thread={1} event={2} object={3}.{4} index={5} type={6} mode={7} status={8}; blocking_trx={9} thread={10} event={11} object={12}.{13} index={14} type={15} mode={16} status={17}".format(*c)),
                   ("innodb_trx", "SELECT TRX_ID, TRX_STATE, TIMESTAMPDIFF(SECOND, TRX_STARTED, NOW()), TRX_WAIT_STARTED IS NOT NULL, TRX_MYSQL_THREAD_ID, TRX_ROWS_LOCKED, TRX_ROWS_MODIFIED, TRX_QUERY IS NOT NULL FROM information_schema.innodb_trx LIMIT 100", lambda c: "trx={0} state={1} age_s={2} waiting={3} thread={4} rows_locked={5} rows_modified={6} active_sql={7}".format(*c)),
               )
-              print(f"MySQL {label} snapshot (root read-only diagnostic):", flush=True)
+              print(f"MySQL {label} snapshot (application-account read-only diagnostic):", flush=True)
               active_transaction_count = None
               with ThreadPoolExecutor(max_workers=4) as executor:
                   for title, rows in executor.map(lambda item: query(*item), queries):
@@ -1115,11 +1252,14 @@ jobs:
           command = [
               "vendor/bin/phpunit", "-c", "phpunit.xml", "--debug",
               "--fail-on-skipped", "--display-skipped", "--display-warnings",
+              "--exclude-group=wpcg_isolated_mysql_backup_verification",
           ]
           with open(log_path, "w", encoding="utf-8", errors="replace") as log:
               suite_env = env.copy()
               suite_env.pop("MYSQL_PWD", None)
-              suite_env.pop("M9_MYSQL_VERIFY_PASSWORD", None)
+              if any(key.startswith("WPCG_MYSQL_VERIFY_") for key in suite_env):
+                  print("Verifier credentials must not be present in the general PHPUnit wrapper environment.", file=sys.stderr)
+                  raise SystemExit(1)
               suite = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=suite_env)
               watchdog_thread = threading.Thread(
                   target=no_progress_watchdog,
@@ -1340,6 +1480,13 @@ jobs:
           fi
 
           php tests/smoke/http-smoke.php http://127.0.0.1:8001 --expect=application
+
+      - name: Remove isolated verifier credential file
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f -- "$RUNNER_TEMP/wpcg-mysql-verifier-password"
 
   php85_fpm_compat:
     name: Isolated PHP 8.5 FPM compatibility
