@@ -504,6 +504,8 @@ jobs:
           import re
           import sys
 
+          ansi_control = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
           log_path, raw_status = sys.argv[1:]
           try:
               test_status = int(raw_status)
@@ -522,6 +524,7 @@ jobs:
               r"phase=(?:accept|response|child); child_state=exited; exit_code=-?\d+)"
           )
           diagnostics = set()
+          diagnostic_scan_error = None
           try:
               with open(log_path, "r", encoding="utf-8", errors="replace") as recorded:
                   for line in recorded:
@@ -534,11 +537,16 @@ jobs:
                       if match is not None:
                           diagnostics.add(match.group(0))
           except OSError:
-              print("Isolated peer RPC test failed; safe diagnostic log unavailable.")
-              raise SystemExit(1)
+              diagnostic_scan_error = "log_unavailable"
+          except Exception:
+              diagnostic_scan_error = "parser_failure"
 
           for diagnostic in sorted(diagnostics):
               print(diagnostic)
+          if diagnostic_scan_error is not None:
+              scan_status = "log unavailable" if diagnostic_scan_error == "log_unavailable" else "scanner failed"
+              print("Isolated peer RPC diagnostic scan {}; PHPUnit exit status {}.".format(scan_status, test_status))
+              raise SystemExit(1)
           if test_status == 0:
               print("Isolated peer RPC test passed; continuing to the full suite.")
               raise SystemExit(0)

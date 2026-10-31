@@ -628,7 +628,7 @@ class TransitionPersistenceBridgeTest extends TestCase
         $safeLifecycleEmitted = false;
         $safeOutcomeEmitted = false;
         $emitSafeDiagnostic = static function (string $line) use (&$safeLifecycleEmitted, &$safeOutcomeEmitted): void {
-            if (!str_starts_with($line, 'phase=')) {
+            if (! str_starts_with($line, 'phase=')) {
                 return;
             }
 
@@ -1966,8 +1966,8 @@ PY;
                 $failure instanceof \ErrorException => 'ErrorException',
                 $failure instanceof \JsonException => 'JsonException',
                 $failure instanceof \PDOException => 'PDOException',
-                $failure instanceof \RuntimeException => 'RuntimeException',
-                $failure instanceof \LogicException => 'LogicException',
+                $failure instanceof RuntimeException => 'RuntimeException',
+                $failure instanceof LogicException => 'LogicException',
                 $failure instanceof \Error => 'Error',
                 $failure instanceof \Exception => 'Exception',
                 default => 'OtherThrowable',
