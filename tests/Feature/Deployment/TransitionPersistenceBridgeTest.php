@@ -501,10 +501,13 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('timeout_source=(?:helper_budget_exhausted|child_wait_timeout); elapsed_ms=', $source);
         self::assertStringContainsString('; elapsed_ms=\\\\d+; remaining_ms=\\\\d+; child_state=(?:not_started|running|exited)', $source);
         self::assertStringContainsString('last_marker=preflight_artisan_version_begin', $source);
-        self::assertStringContainsString('phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check); exception=(?:TimeoutError|PermissionError|FileNotFoundError|OSError|OtherException)(?:; errno=-?\\\\d+)?', $source);
+        self::assertStringContainsString('phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check)(?:; operation=(?:mkdir_application_source|stat_application_source|open_application_source|fstat_application_source|validate_application_source))?; exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\\d+)?', $source);
         self::assertStringContainsString('phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|application_source|temporary_root|socket_cleanup); state=unconfirmed', $source);
         self::assertStringContainsString('def copy_application_source():', $helper);
-        self::assertStringContainsString("return 'phase=source_copy; state='+state+'; stage='+stage+'; exception='+exception_class+errno_text", $helper);
+        self::assertStringContainsString("return 'phase=source_copy; state='+state+'; stage='+stage+operation_text+'; exception='+exception_class+errno_text", $helper);
+        self::assertStringContainsString("source_copy_operation = 'mkdir_application_source'", $helper);
+        self::assertStringContainsString("allowed_exception_classes = {'TimeoutError', 'PermissionError', 'FileNotFoundError', 'FileExistsError', 'NotADirectoryError', 'IsADirectoryError', 'OSError', 'NameError', 'AttributeError', 'TypeError', 'ValueError', 'RuntimeError'}", $helper);
+        self::assertStringContainsString("'; operation='+source_copy_operation", $helper);
         self::assertStringContainsString("errno_text = '; errno='+str(error_number)", $helper);
         self::assertStringContainsString('def open_source_directory(parent_fd, name):', $helper);
         self::assertStringContainsString('os.open(name, flags, dir_fd=parent_fd)', $helper);
@@ -652,6 +655,7 @@ application_source_identity = None
 application_source_path = None
 application_source_directories = []
 source_copy_stage = 'root_setup'
+source_copy_operation = 'mkdir_application_source'
 source_copy_stages = {
     'root_setup', 'tracked_manifest', 'checkout_root', 'tracked_files',
     'required_entries', 'vendor_root', 'vendor_files', 'storage_setup',
@@ -802,17 +806,23 @@ def create_preflight_cache():
 def copy_application_source():
     global root, artisan, application_source_created, application_source_identity
     global application_source_path, application_source_directories, env, preflight_env
-    global source_copy_stage
+    global source_copy_stage, source_copy_operation
     source_root = original_source_root
     source_copy_stage = 'root_setup'
+    source_copy_operation = 'mkdir_application_source'
     os.mkdir(application_source_name, 0o700, dir_fd=preflight_root_fd)
     application_source_created = True
+    source_copy_operation = 'stat_application_source'
     source_info = os.stat(application_source_name, dir_fd=preflight_root_fd, follow_symlinks=False)
+    source_copy_operation = 'validate_application_source'
     if not stat.S_ISDIR(source_info.st_mode) or source_info.st_uid != 0:
         raise OSError
     application_source_identity = (source_info.st_dev, source_info.st_ino)
+    source_copy_operation = 'open_application_source'
     source_fd = os.open(application_source_name, flags, dir_fd=preflight_root_fd)
+    source_copy_operation = 'fstat_application_source'
     opened_info = os.fstat(source_fd)
+    source_copy_operation = 'validate_application_source'
     if (not stat.S_ISDIR(opened_info.st_mode) or opened_info.st_uid != 0
             or (opened_info.st_dev, opened_info.st_ino) != application_source_identity):
         os.close(source_fd)
@@ -1017,21 +1027,14 @@ def copy_application_source():
 
 def source_copy_failure_diagnostic(state, error):
     stage = source_copy_stage if source_copy_stage in source_copy_stages else 'root_setup'
-    if isinstance(error, TimeoutError):
-        exception_class = 'TimeoutError'
-    elif isinstance(error, PermissionError):
-        exception_class = 'PermissionError'
-    elif isinstance(error, FileNotFoundError):
-        exception_class = 'FileNotFoundError'
-    elif isinstance(error, OSError):
-        exception_class = 'OSError'
-    else:
-        exception_class = 'OtherException'
+    allowed_exception_classes = {'TimeoutError', 'PermissionError', 'FileNotFoundError', 'FileExistsError', 'NotADirectoryError', 'IsADirectoryError', 'OSError', 'NameError', 'AttributeError', 'TypeError', 'ValueError', 'RuntimeError'}
+    exception_class = type(error).__name__ if type(error).__name__ in allowed_exception_classes else 'OtherException'
     error_number = getattr(error, 'errno', None)
     errno_text = '; errno='+str(error_number) if type(error_number) is int else ''
     if state not in ('failed', 'timeout'):
         state = 'failed'
-    return 'phase=source_copy; state='+state+'; stage='+stage+'; exception='+exception_class+errno_text
+    operation_text = '; operation='+source_copy_operation if stage == 'root_setup' else ''
+    return 'phase=source_copy; state='+state+'; stage='+stage+operation_text+'; exception='+exception_class+errno_text
 
 def remove_application_source():
     global application_source_created
