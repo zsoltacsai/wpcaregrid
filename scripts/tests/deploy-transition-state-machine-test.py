@@ -35,6 +35,7 @@ EVIDENCE = "2" * 64
 
 
 _LARAVEL_TEST_COPY_DIRS = ("app", "bootstrap", "config", "database", "lang", "routes", "vendor")
+_LARAVEL_TEST_RUNTIME_DIRS = ("storage", "storage/framework", "storage/framework/views")
 _LARAVEL_TEST_EXCLUDED_DIRS = {
     ".cache", ".git", ".phpunit.cache", ".pytest_cache", "__pycache__", "cache", "logs",
     "node_modules", "runtime", "sessions", "storage", "temp", "tmp",
@@ -57,7 +58,7 @@ def _laravel_test_copy_exclusions(directory, names, source):
     return excluded
 
 
-def _copy_laravel_test_application(source, destination):
+def _copy_laravel_test_application(source, destination, *, app_gid):
     """Copy only the Laravel CLI runtime, excluding local state and secrets."""
     source = Path(source).resolve(strict=True)
     destination = Path(destination)
@@ -85,7 +86,13 @@ def _copy_laravel_test_application(source, destination):
         for current, directory_names, file_names in os.walk(destination, topdown=True, followlinks=False):
             if any((Path(current) / name).is_symlink() for name in directory_names + file_names):
                 raise ValueError("Laravel test copy refuses symlinks in application inputs")
-        (destination / "bootstrap" / "cache").mkdir(mode=0o755)
+        empty_dirs = (destination / "bootstrap" / "cache",) + tuple(
+            destination / relative for relative in _LARAVEL_TEST_RUNTIME_DIRS
+        )
+        for path in empty_dirs:
+            path.mkdir(parents=True, exist_ok=True, mode=0o750)
+            os.chown(path, 0, app_gid)
+            os.chmod(path, 0o750)
     except BaseException:
         shutil.rmtree(destination, ignore_errors=True)
         raise
@@ -1944,7 +1951,7 @@ class TransitionAdapterTests(unittest.TestCase):
             (root / "vendor" / "package" / ".env").write_text("TOKEN=private\n", encoding="ascii")
             (root / "vendor" / "package" / "private.pem").write_text("private key\n", encoding="ascii")
 
-            _copy_laravel_test_application(root, app_root)
+            _copy_laravel_test_application(root, app_root, app_gid=os.getegid())
             for relative in (
                 "artisan", "app/Command.php", "bootstrap/app.php", "config/app.php",
                 "database/migration.php", "lang/en.json", "routes/console.php",
@@ -1957,10 +1964,18 @@ class TransitionAdapterTests(unittest.TestCase):
                 "vendor/package/private.pem",
             ):
                 self.assertFalse((app_root / relative).exists(), relative)
+            for relative in _LARAVEL_TEST_RUNTIME_DIRS:
+                self.assertTrue((app_root / relative).is_dir(), relative)
+            views = app_root / "storage/framework/views"
+            self.assertEqual(list(views.iterdir()), [])
+            self.assertEqual(stat.S_IMODE(views.stat().st_mode), 0o750)
+            self.assertEqual(views.stat().st_gid, os.getegid())
 
             (root / "app" / "outside-link").symlink_to(root.parent / "external-secret")
             with self.assertRaisesRegex(ValueError, "refuses symlinks"):
-                _copy_laravel_test_application(root, Path(temporary) / "unsafe-copy")
+                _copy_laravel_test_application(
+                    root, Path(temporary) / "unsafe-copy", app_gid=os.getegid(),
+                )
 
     @unittest.skipUnless(sys.platform == "linux", "requires Linux and the real Laravel CLI bridge")
     def test_linux_real_laravel_command_uses_dynamic_socket_and_newline_envelopes(self):
@@ -1982,7 +1997,7 @@ class TransitionAdapterTests(unittest.TestCase):
         # Run the real Laravel CLI from a temporary readable copy so the
         # privilege-dropped child can open artisan and the Composer tree.
         app_root = runtime / "app"
-        _copy_laravel_test_application(ROOT, app_root)
+        _copy_laravel_test_application(ROOT, app_root, app_gid=app_gid)
         socket_dir = runtime / "socket"
         socket_dir.mkdir(mode=0o711)
         os.chown(socket_dir, 0, 0)
@@ -2005,6 +2020,7 @@ class TransitionAdapterTests(unittest.TestCase):
             "QUEUE_CONNECTION": "sync",
             "MAIL_MAILER": "array",
             "LOG_CHANNEL": "stderr",
+            "VIEW_COMPILED_PATH": str(app_root / "storage" / "framework" / "views"),
         })
         migrated = subprocess.run(
             [php, str(app_root / "artisan"), "migrate", "--force"], cwd=app_root, env=env,
