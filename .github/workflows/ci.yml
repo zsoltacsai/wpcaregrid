@@ -518,6 +518,13 @@ jobs:
           second_snapshot_claimed = False
           second_snapshot_timer = None
           second_snapshot_delay_seconds = 20
+          active_tests = {}
+          test_start_sequence = 0
+          last_finished_test_name = None
+          no_progress_snapshot_claimed = False
+          watchdog_shutdown = False
+          test_stall_timeout_seconds = 90
+          watchdog_condition = threading.Condition(observer_lock)
 
           def safe_test_name(value):
               return "".join(char if char.isalnum() or char in "_.$:\\" else "?" for char in value)[:240]
@@ -576,6 +583,87 @@ jobs:
                           except (IndexError, ValueError):
                               active_transaction_count = None
               return active_transaction_count is not None and active_transaction_count > 0
+
+          def test_has_finished_event(raw_name, start_offset):
+              try:
+                  with open(log_path, "r", encoding="utf-8", errors="replace") as recorded_events:
+                      recorded_events.seek(start_offset)
+                      for line in recorded_events:
+                          match = re.match(r"^(Test [A-Za-z ]+) \(([^)]*)\)$", line.rstrip("\r\n"))
+                          if match and match.group(1) == "Test Finished" and match.group(2) == raw_name:
+                              return True
+              except OSError:
+                  return False
+              return False
+
+          def no_progress_watchdog():
+              global last_finished_test_name, no_progress_snapshot_claimed
+              while True:
+                  with watchdog_condition:
+                      if watchdog_shutdown:
+                          return
+                      if no_progress_snapshot_claimed or not active_tests:
+                          watchdog_condition.wait()
+                          continue
+                      now = time.monotonic()
+                      token, record = min(active_tests.items(), key=lambda item: item[1]["deadline"])
+                      remaining = record["deadline"] - now
+                      if remaining > 0:
+                          watchdog_condition.wait(timeout=remaining)
+                          continue
+
+                  if test_has_finished_event(record["raw_name"], record["start_offset"]):
+                      with watchdog_condition:
+                          current = active_tests.get(token)
+                          if current is record:
+                              active_tests.pop(token, None)
+                              last_finished_test_name = record["name"]
+                              watchdog_condition.notify_all()
+                      continue
+
+                  with watchdog_condition:
+                      current = active_tests.get(token)
+                      if watchdog_shutdown:
+                          return
+                      if current is not record or no_progress_snapshot_claimed:
+                          continue
+                      no_progress_snapshot_claimed = True
+                      elapsed_seconds = max(0.0, time.monotonic() - record["started_at"])
+                      last_finished = last_finished_test_name
+                      active_name = record["name"]
+
+                  print(
+                      "PHPUnit no-progress watchdog: active_test={0}; last_test_finished={1}; elapsed_s={2:.1f}; capturing one bounded snapshot.".format(
+                          active_name, last_finished or "none observed", elapsed_seconds,
+                      ),
+                      flush=True,
+                  )
+                  capture_mysql_state("PHPUnit no-progress after {0}s".format(int(elapsed_seconds)))
+
+          def arm_test_watchdog(raw_name, safe_name, start_offset):
+              global test_start_sequence
+              started_at = time.monotonic()
+              with watchdog_condition:
+                  test_start_sequence += 1
+                  token = test_start_sequence
+                  active_tests[token] = {
+                      "raw_name": raw_name,
+                      "name": safe_name,
+                      "started_at": started_at,
+                      "deadline": started_at + test_stall_timeout_seconds,
+                      "start_offset": start_offset,
+                  }
+                  watchdog_condition.notify_all()
+              return token
+
+          def finish_test_watchdog(raw_name, safe_name):
+              global last_finished_test_name
+              with watchdog_condition:
+                  for token, record in list(active_tests.items()):
+                      if record["raw_name"] == raw_name:
+                          active_tests.pop(token, None)
+                  last_finished_test_name = safe_name
+                  watchdog_condition.notify_all()
 
           def target_has_finished_event():
               if target_start_offset is None or target_name is None:
@@ -637,6 +725,8 @@ jobs:
                   name = safe_test_name(raw_name)
                   if event == "Test Passed":
                       last_passed = name
+                  if event == "Test Preparation Started":
+                      arm_test_watchdog(raw_name, name, stream.tell())
                   if event == "Test Preparation Started" and raw_name.endswith(target_method):
                       with observer_lock:
                           target_name = name
@@ -652,15 +742,17 @@ jobs:
                               active_transaction_seen = saw_active_transaction
                       finally:
                           first_snapshot_done.set()
+                  elif event == "Test Finished":
+                      finish_test_watchdog(raw_name, name)
+                      if name == target_name:
+                          print(f"Test Finished ({name})", flush=True)
+                          with observer_lock:
+                              target_active = False
+                              transaction_already_seen = active_transaction_seen
+                          if not transaction_already_seen and second_snapshot_timer is not None:
+                              second_snapshot_timer.cancel()
                   elif name == target_name and event in ("Test Passed", "Test Failed", "Test Errored", "Test Skipped"):
                       print(f"Target outcome {event} ({name})", flush=True)
-                  elif name == target_name and event == "Test Finished":
-                      print(f"Test Finished ({name})", flush=True)
-                      with observer_lock:
-                          target_active = False
-                          transaction_already_seen = active_transaction_seen
-                      if not transaction_already_seen and second_snapshot_timer is not None:
-                          second_snapshot_timer.cancel()
 
           command = [
               "vendor/bin/phpunit", "-c", "phpunit.xml", "--debug",
@@ -671,6 +763,12 @@ jobs:
               suite_env.pop("MYSQL_PWD", None)
               suite_env.pop("M9_MYSQL_VERIFY_PASSWORD", None)
               suite = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=suite_env)
+              watchdog_thread = threading.Thread(
+                  target=no_progress_watchdog,
+                  name="phpunit-no-progress-watchdog",
+                  daemon=True,
+              )
+              watchdog_thread.start()
               try:
                   with open(log_path, "r", encoding="utf-8", errors="replace") as events:
                       while suite.poll() is None:
@@ -686,6 +784,10 @@ jobs:
                       except subprocess.TimeoutExpired:
                           suite.kill()
                           suite.wait()
+                  with watchdog_condition:
+                      watchdog_shutdown = True
+                      active_tests.clear()
+                      watchdog_condition.notify_all()
 
           try:
               os.unlink(log_path)
