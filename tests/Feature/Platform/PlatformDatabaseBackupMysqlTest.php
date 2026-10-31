@@ -72,9 +72,12 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
             rmdir($failedPath);
 
             $source = file_get_contents((new \ReflectionClass(PlatformDatabaseBackupService::class))->getFileName());
+            $verifyMethodStart = strpos($source, 'public function verify(');
             $outerCleanupScope = strpos($source, '$target = fopen($path, \'wb\');');
+            $this->assertNotFalse($verifyMethodStart);
             $this->assertNotFalse($outerCleanupScope);
-            $earlyVerifySource = substr($source, strpos($source, 'public function verify('), $outerCleanupScope);
+            $this->assertGreaterThan($verifyMethodStart, $outerCleanupScope);
+            $earlyVerifySource = substr($source, $verifyMethodStart, $outerCleanupScope - $verifyMethodStart);
             $this->assertStringContainsString('return_false_before_outer_cleanup', $earlyVerifySource);
             $this->assertStringNotContainsString("'return_false_pending_cleanup'", $earlyVerifySource);
         } finally {
