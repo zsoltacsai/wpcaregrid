@@ -602,11 +602,18 @@ jobs:
               "fixture_setup", "probe_setup", "backup_create", "verify", "assert_verified", "assert_status",
               "assert_method", "assert_manifest", "assert_probe", "assert_critical_count", "cleanup_probe",
               "cleanup_connections", "cleanup_objects",
+              "artifact_integrity", "artifact_decrypt", "artifact_gzip", "sqlite_sanity", "mysql_preflight",
+              "mysql_create_database", "mysql_client_import", "mysql_schema_check", "mysql_critical_count",
+              "mysql_process_cleanup", "service_cleanup_connection_purge", "service_cleanup_drop_database",
+              "service_cleanup_temp_artifacts",
           }
-          backup_import_diagnostic_events = {"begin", "primary_failure", "cleanup_observation", "cleanup_failure", "complete"}
+          backup_import_diagnostic_events = {
+              "begin", "primary_failure", "primary_exception", "body_result", "cleanup_observation",
+              "cleanup_failure", "complete",
+          }
           backup_import_diagnostic_categories = {
               "none", "assertion_failure", "pdo_error", "process_error", "filesystem_error", "permission_error",
-              "timeout", "cleanup_error", "backup_failure", "other",
+              "timeout", "cleanup_error", "backup_failure", "runtime_error", "other",
           }
           backup_import_diagnostic_codes = {
               "none", "OBJECT_MISSING", "MANIFEST_OBJECT_MISSING", "MANIFEST_OBJECT_INVALID",
@@ -616,7 +623,13 @@ jobs:
               "DATABASE_IMPORT_OR_SANITY_FAILED", "DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED",
               "DISPOSABLE_MYSQL_IMPORT_FAILED", "WORKDIR_CREATE_FAILED", "PLATFORM_BACKUP_FAILED",
               "MYSQL_IMPORT_TABLE_SET_MISMATCH", "MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH",
+              "MYSQL_DUMP_INPUT_OPEN_FAILED", "MYSQL_IMPORT_PROCESS_FAILED", "MYSQL_DATABASE_CREATE_FAILED",
+              "MYSQL_SCHEMA_CHECK_FAILED", "MYSQL_PROCESS_CLEANUP_FAILED", "SERVICE_CONNECTION_PURGE_FAILED",
+              "SERVICE_DATABASE_DROP_FAILED", "SERVICE_TEMP_ARTIFACT_CLEANUP_FAILED", "SERVICE_TEMP_ARTIFACT_UNLINK_FAILED",
               "VERIFICATION_ERROR", "other",
+          }
+          backup_import_diagnostic_body_states = {
+              "pending", "return_true_pending_cleanup", "return_false_pending_cleanup", "return_false_before_outer_cleanup", "exception_pending_cleanup", "handled_exception_return_false_pending_cleanup",
           }
           backup_import_diagnostic_marker_prefix = "WPCG_DIAG_V2|"
           target_name = None
@@ -761,9 +774,12 @@ jobs:
               if len(marker) > 512 or "\r" in marker or "\n" in marker:
                   return None
               fields = marker.split("|")
-              if len(fields) != 6 or fields[0] != "WPCG_DIAG_V2":
+              if len(fields) not in (6, 7) or fields[0] != "WPCG_DIAG_V2":
                   return None
               expected_keys = ("test", "stage", "event", "category", "code")
+              has_body_state = len(fields) == 7
+              if has_body_state:
+                  expected_keys += ("body_state",)
               values = {}
               for field, key in zip(fields[1:], expected_keys):
                   prefix = key + "="
@@ -778,14 +794,19 @@ jobs:
                   return None
               if values["category"] not in backup_import_diagnostic_categories:
                   return None
+              if has_body_state and values["body_state"] not in backup_import_diagnostic_body_states:
+                  return None
               code = values["code"]
               if code not in backup_import_diagnostic_codes:
                   process_match = re.fullmatch(r"MYSQL_IMPORT_PROCESS_FAILED_EXIT_(0|[1-9][0-9]{0,2})", code)
                   if process_match is None or int(process_match.group(1)) > 255:
                       return None
-              return "PHPUnit backup-import diagnostic: stage={0}; event={1}; category={2}; code={3}".format(
+              sanitized = "PHPUnit backup-import diagnostic: stage={0}; event={1}; category={2}; code={3}".format(
                   values["stage"], values["event"], values["category"], code,
               )
+              if has_body_state:
+                  sanitized += "; body_state=" + values["body_state"]
+              return sanitized
 
           def emit_safe_backup_import_diagnostics():
               if not backup_import_test_failed:

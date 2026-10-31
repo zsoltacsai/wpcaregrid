@@ -18,6 +18,60 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_service_temp_cleanup_emits_complete_only_after_every_applicable_unlink_succeeds(): void
+    {
+        $service = (new \ReflectionClass(PlatformDatabaseBackupService::class))->newInstanceWithoutConstructor();
+        $cleanup = new \ReflectionMethod(PlatformDatabaseBackupService::class, 'cleanupTemporaryArtifacts');
+        $root = sys_get_temp_dir().'/wpcg-diag-c-cleanup-'.bin2hex(random_bytes(6));
+        mkdir($root, 0700);
+
+        try {
+            $successfulPath = $root.'/successful-artifact';
+            file_put_contents($successfulPath, 'synthetic');
+            $diagnostics = $cleanup->invoke($service, [$successfulPath], 'return_true_pending_cleanup');
+            $this->assertSame(['complete'], array_column($diagnostics, 'event'));
+            $this->assertFileDoesNotExist($successfulPath);
+
+            $absentPath = $root.'/not-created';
+            $diagnostics = $cleanup->invoke($service, [$absentPath], 'return_true_pending_cleanup');
+            $this->assertSame(['complete'], array_column($diagnostics, 'event'));
+
+            foreach (['first-failure', 'second-failure'] as $name) {
+                $failedPath = $root.'/'.$name;
+                mkdir($failedPath, 0700);
+                file_put_contents($failedPath.'/child', 'synthetic');
+
+                $diagnostics = $cleanup->invoke($service, [$failedPath], 'return_false_pending_cleanup');
+
+                $this->assertSame(['cleanup_observation'], array_column($diagnostics, 'event'));
+                $this->assertSame('SERVICE_TEMP_ARTIFACT_UNLINK_FAILED', $diagnostics[0]['code']);
+                $this->assertSame('return_false_pending_cleanup', $diagnostics[0]['body_state']);
+                unlink($failedPath.'/child');
+                rmdir($failedPath);
+            }
+
+            $successfulPath = $root.'/success-with-failure';
+            file_put_contents($successfulPath, 'synthetic');
+            $failedPath = $root.'/multiple-failure';
+            mkdir($failedPath, 0700);
+            file_put_contents($failedPath.'/child', 'synthetic');
+            $diagnostics = $cleanup->invoke($service, [$successfulPath, $failedPath], 'return_false_pending_cleanup');
+            $this->assertSame(['cleanup_observation'], array_column($diagnostics, 'event'));
+            $this->assertFileDoesNotExist($successfulPath);
+            unlink($failedPath.'/child');
+            rmdir($failedPath);
+
+            $source = file_get_contents((new \ReflectionClass(PlatformDatabaseBackupService::class))->getFileName());
+            $outerCleanupScope = strpos($source, '$target = fopen($path, \'wb\');');
+            $this->assertNotFalse($outerCleanupScope);
+            $earlyVerifySource = substr($source, strpos($source, 'public function verify('), $outerCleanupScope);
+            $this->assertStringContainsString('return_false_before_outer_cleanup', $earlyVerifySource);
+            $this->assertStringNotContainsString("'return_false_pending_cleanup'", $earlyVerifySource);
+        } finally {
+            @rmdir($root);
+        }
+    }
+
     public function test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked(): void
     {
         if (DB::connection()->getDriverName() !== 'mysql') {
@@ -44,6 +98,8 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
                 'platform_backup.verification_connection' => 'm9_platform_verify',
                 'platform_backup.verification_database_prefix' => 'wpcg_m9_dr_ci_',
                 'platform_backup.verification_isolated' => true,
+                // Test-level markers locate the assertion only; opt in here for service-stage diagnostics.
+                'platform_backup.diagnostic_c_enabled' => true,
                 'platform_backup.critical_tables' => array_merge(config('platform_backup.critical_tables'), [$probe]),
                 'platform_backup.encryption.current_key_id' => 'test-v1',
                 'platform_backup.encryption.keys' => ['test-v1' => base64_encode(str_repeat('k', 32))],
