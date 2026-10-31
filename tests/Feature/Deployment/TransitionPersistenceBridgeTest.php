@@ -484,11 +484,23 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})', $helper);
         self::assertStringContainsString('child = subprocess.Popen([\'setpriv\'', $helper);
         self::assertStringContainsString('signal.pthread_sigmask(signal.SIG_SETMASK, spawn_signal_mask)', $helper);
-        self::assertStringContainsString('helper_deadline = time.monotonic() + 30', $helper);
+        self::assertStringContainsString('helper_started_at = time.monotonic()', $helper);
+        self::assertStringContainsString('helper_deadline = helper_started_at + 30', $helper);
         self::assertStringContainsString('preflight.wait(timeout=min(8, probe_remaining))', $helper);
+        self::assertStringContainsString('def preflight_timeout_diagnostic(probe, timeout_source, child_state, observed_exit_code):', $helper);
+        self::assertStringContainsString("allowed_timeout_sources = {'helper_budget_exhausted', 'child_wait_timeout'}", $helper);
+        self::assertStringContainsString("allowed_child_states = {'not_started', 'running', 'exited'}", $helper);
+        self::assertStringContainsString("'phase=preflight; probe='+probe+'; state=timeout; timeout_source='+timeout_source", $helper);
+        self::assertStringContainsString("'; elapsed_ms='+str(elapsed_ms)", $helper);
+        self::assertStringContainsString("'; remaining_ms='+str(remaining_ms)", $helper);
+        self::assertStringContainsString("'; child_state='+child_state+exit_code_text+'; last_marker='+last_marker", $helper);
+        self::assertStringContainsString("status += '; errno='+str(preflight_start_error.errno)", $helper);
         self::assertStringContainsString('deadline = min(helper_deadline, time.monotonic() + 20)', $helper);
         self::assertStringContainsString('child.wait(timeout=min(20, child_remaining))', $helper);
         self::assertStringContainsString('str_starts_with($match[0], \'phase=wrapper_signal;\')', $source);
+        self::assertStringContainsString('timeout_source=(?:helper_budget_exhausted|child_wait_timeout); elapsed_ms=', $source);
+        self::assertStringContainsString('; elapsed_ms=\\\\d+; remaining_ms=\\\\d+; child_state=(?:not_started|running|exited)', $source);
+        self::assertStringContainsString('last_marker=preflight_artisan_version_begin', $source);
         self::assertStringContainsString('phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check); exception=(?:TimeoutError|PermissionError|FileNotFoundError|OSError|OtherException)(?:; errno=-?\\\\d+)?', $source);
         self::assertStringContainsString('phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|application_source|temporary_root|socket_cleanup); state=unconfirmed', $source);
         self::assertStringContainsString('def copy_application_source():', $helper);
@@ -1201,6 +1213,26 @@ def cleanup_preflight_cache():
                     cleanup_unconfirmed_components.add('temporary_root')
                 globals()[descriptor_name] = None
 
+def preflight_timeout_diagnostic(probe, timeout_source, child_state, observed_exit_code):
+    allowed_probes = {'php_version', 'artisan_version', 'artisan_list', 'command_help'}
+    allowed_timeout_sources = {'helper_budget_exhausted', 'child_wait_timeout'}
+    allowed_child_states = {'not_started', 'running', 'exited'}
+    if probe not in allowed_probes:
+        probe = 'artisan_version'
+    if timeout_source not in allowed_timeout_sources:
+        timeout_source = 'helper_budget_exhausted'
+    if child_state not in allowed_child_states:
+        child_state = 'not_started'
+    last_marker = last_progress_marker if last_progress_marker in progress_marker_values else 'helper_begin'
+    elapsed_ms = max(0, int((time.monotonic() - helper_started_at) * 1000))
+    remaining_ms = max(0, int((helper_deadline - time.monotonic()) * 1000))
+    exit_code_text = '; exit_code='+str(observed_exit_code) if type(observed_exit_code) is int else ''
+    return (
+        'phase=preflight; probe='+probe+'; state=timeout; timeout_source='+timeout_source
+        + '; elapsed_ms='+str(elapsed_ms)+'; remaining_ms='+str(remaining_ms)
+        + '; child_state='+child_state+exit_code_text+'; last_marker='+last_marker
+    )
+
 def run_preflight_probe(probe, command, capture_stdout=False):
     global preflight, cleanup_unconfirmed_components
     probe_progress = {
@@ -1211,6 +1243,12 @@ def run_preflight_probe(probe, command, capture_stdout=False):
     }.get(probe)
     if probe_progress is not None:
         mark_progress(probe_progress[0])
+    probe_remaining = helper_deadline - time.monotonic()
+    if probe_remaining <= 0:
+        if probe == 'artisan_version':
+            raise SystemExit(preflight_timeout_diagnostic(
+                probe, 'helper_budget_exhausted', 'not_started', None))
+        raise SystemExit('phase=preflight; probe='+probe+'; state=timeout')
     captured_stdout = None
     captured_stderr = None
     stderr_reader = None
@@ -1359,6 +1397,11 @@ def run_preflight_probe(probe, command, capture_stdout=False):
                 stdout=subprocess.PIPE if capture_diagnostic_output else captured_stdout if captured_stdout is not None else subprocess.DEVNULL,
                 stderr=subprocess.STDOUT if capture_diagnostic_output else subprocess.DEVNULL,
             )
+        except OSError as preflight_start_error:
+            status = 'phase=preflight; probe='+probe+'; state=failed'
+            if type(preflight_start_error.errno) is int:
+                status += '; errno='+str(preflight_start_error.errno)
+            raise SystemExit(status) from None
         except Exception:
             raise SystemExit('phase=preflight; probe='+probe+'; state=failed')
         if capture_diagnostic_output:
@@ -1374,14 +1417,25 @@ def run_preflight_probe(probe, command, capture_stdout=False):
                 raise subprocess.TimeoutExpired(command, 0)
             preflight.wait(timeout=min(8, probe_remaining))
         except subprocess.TimeoutExpired:
+            timeout_source = 'helper_budget_exhausted' if probe_remaining <= 8 else 'child_wait_timeout'
+            observed_exit_code = preflight.poll() if preflight is not None else None
+            child_state = 'not_started' if preflight is None else 'exited' if observed_exit_code is not None else 'running'
+            status = None
+            if probe == 'artisan_version':
+                status = preflight_timeout_diagnostic(
+                    probe, timeout_source, child_state, observed_exit_code)
+            else:
+                status = 'phase=preflight; probe='+probe+'; state=timeout'
             if not stop_preflight_bounded(preflight):
                 cleanup_unconfirmed_components.add('preflight_reap')
             if stderr_reader is not None:
                 stderr_reader.join(timeout=2)
-            status = 'phase=preflight; probe='+probe+'; state=timeout'
-            if preflight.returncode is not None:
-                status += '; exit_code='+str(preflight.returncode)
             raise SystemExit(status)
+        except OSError as preflight_wait_error:
+            status = 'phase=preflight; probe='+probe+'; state=failed'
+            if type(preflight_wait_error.errno) is int:
+                status += '; errno='+str(preflight_wait_error.errno)
+            raise SystemExit(status) from None
         except Exception:
             raise SystemExit('phase=preflight; probe='+probe+'; state=failed')
         if stderr_reader is not None:
@@ -1411,7 +1465,8 @@ def run_preflight_probe(probe, command, capture_stdout=False):
             captured_stderr.close()
 
 try:
-    helper_deadline = time.monotonic() + 30
+    helper_started_at = time.monotonic()
+    helper_deadline = helper_started_at + 30
     mark_progress('helper_begin')
     env = os.environ.copy()
     for credential_name in ('MYSQL_PWD', 'M9_MYSQL_VERIFY_PASSWORD', 'DB_PASSWORD', 'DB_USERNAME', 'DATABASE_URL', 'MYSQL_ROOT_PASSWORD'):
@@ -1784,7 +1839,7 @@ PY;
             $wrapperTimeoutDiagnostic = null;
             $cleanupDiagnostics = [];
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check); exception=(?:TimeoutError|PermissionError|FileNotFoundError|OSError|OtherException)(?:; errno=-?\\d+)?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; state=deferred|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|application_source|temporary_root|socket_cleanup); state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
+            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?(?:; errno=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout; timeout_source=(?:helper_budget_exhausted|child_wait_timeout); elapsed_ms=\\d+; remaining_ms=\\d+; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=preflight_artisan_version_begin|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; errno=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check); exception=(?:TimeoutError|PermissionError|FileNotFoundError|OSError|OtherException)(?:; errno=-?\\d+)?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; state=deferred|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|application_source|temporary_root|socket_cleanup); state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
                 $signalDiagnostic = null;
                 foreach ($matches as $match) {
                     if (str_starts_with($match[0], 'phase=cleanup; component=')) {
