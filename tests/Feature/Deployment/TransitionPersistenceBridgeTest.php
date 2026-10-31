@@ -439,7 +439,7 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertIsString($source);
         $workflow = file_get_contents(base_path('.github/workflows/ci.yml'));
         self::assertIsString($workflow);
-        self::assertStringContainsString('r"phase=root_helper; state=failed|"', $workflow);
+        self::assertStringContainsString('r"phase=root_helper; state=failed; producer=python_helper; stage=(', $workflow);
         self::assertStringContainsString('safe_prefix = "GATE1_SAFE_RUNTIME_DIAGNOSTIC:"', $workflow);
         self::assertStringContainsString('operation=(?:application_source_cleanup_begin|root_entry_stat|root_entry_validate|root_open|root_fstat|root_identity_validate|directory_list|entry_stat|entry_type_validate|child_directory_open|child_directory_validate|child_contents_remove|child_directory_close|child_directory_remove|file_owner_validate|file_remove|root_directory_close|root_directory_remove); context=(?:cleanup_only|secondary); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)', $workflow);
         self::assertStringContainsString('operation=(?:mkdir_application_source|stat_application_source|open_application_source|fstat_application_source|validate_application_source)', $workflow);
