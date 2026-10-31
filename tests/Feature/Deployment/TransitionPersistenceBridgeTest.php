@@ -440,6 +440,9 @@ class TransitionPersistenceBridgeTest extends TestCase
         $workflow = file_get_contents(base_path('.github/workflows/ci.yml'));
         self::assertIsString($workflow);
         self::assertStringContainsString('r"phase=root_helper; state=failed|"', $workflow);
+        self::assertStringContainsString('GATE1_SAFE_RUNTIME_DIAGNOSTIC:phase=root_helper;', $workflow);
+        self::assertStringContainsString("'GATE1_SAFE_RUNTIME_DIAGNOSTIC:'", $source);
+        self::assertStringContainsString('stage=assertion_failure', $workflow);
 
         $marker = "\$scriptText = <<<'PY'\n";
         $helperStart = strpos($source, $marker);
@@ -1749,6 +1752,16 @@ finally:
 PY;
             self::assertSame(strlen($scriptText), @file_put_contents($script, $scriptText), 'phase=root_helper; state=script_write_failed');
             self::assertTrue(@chmod($script, 0644), 'phase=root_helper; state=script_mode_failed');
+            $safeDiagnosticEmitted = false;
+            $emitSafeDiagnostic = static function (string $line) use (&$safeDiagnosticEmitted): void {
+                if ($safeDiagnosticEmitted || !str_starts_with($line, 'phase=')) {
+                    return;
+                }
+
+                $safeDiagnosticEmitted = true;
+                fwrite(STDERR, 'GATE1_SAFE_RUNTIME_DIAGNOSTIC:'.$line.PHP_EOL);
+                fflush(STDERR);
+            };
             try {
                 $requestJson = json_encode($wireRequest, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
             } catch (\JsonException) {
@@ -1897,8 +1910,12 @@ PY;
             if ($diagnosticParts !== []) {
                 $diagnostic = implode("\n", array_unique($diagnosticParts));
             }
+            if ($processExitCode !== 0) {
+                $emitSafeDiagnostic(explode("\n", $diagnostic, 2)[0]);
+            }
             self::assertSame(0, $processExitCode, $diagnostic);
         } catch (AssertionFailedError $failure) {
+            $emitSafeDiagnostic('phase=root_helper; state=failed; producer=php_wrapper; stage=assertion_failure');
             throw $failure;
         } catch (\Throwable $failure) {
             $throwableClass = match (true) {
@@ -1915,7 +1932,9 @@ PY;
             };
             $throwableCode = $failure->getCode();
             $throwableCodeText = is_int($throwableCode) ? '; exception_code='.$throwableCode : '';
-            self::fail('phase=root_helper; state='.'failed; producer='.'php_wrapper; stage=throwable_catch; exception='.$throwableClass.$throwableCodeText);
+            $safeDiagnostic = 'phase=root_helper; state='.'failed; producer='.'php_wrapper; stage=throwable_catch; exception='.$throwableClass.$throwableCodeText;
+            $emitSafeDiagnostic($safeDiagnostic);
+            self::fail($safeDiagnostic);
         } finally {
             foreach ([$script, $database] as $path) {
                 if (is_file($path)) {
