@@ -475,7 +475,17 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('remaining = 8192 - destination.tell()', $helper);
         self::assertStringContainsString('if remaining > 0:', $helper);
         self::assertStringContainsString('os.fchmod(captured_stderr.fileno(), 0o600)', $helper);
-        self::assertStringContainsString("phase=wrapper_signal; child_state=running; last_marker='+last_progress_marker", $helper);
+        self::assertStringContainsString("if child is None:", $helper);
+        self::assertStringContainsString("child_status = child.poll()", $helper);
+        self::assertStringContainsString("child_state='+child_state+child_exit+'; last_marker='+last_progress_marker", $helper);
+        self::assertStringContainsString("signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})", $helper);
+        self::assertStringContainsString('child = subprocess.Popen([\'setpriv\'', $helper);
+        self::assertStringContainsString('signal.pthread_sigmask(signal.SIG_SETMASK, spawn_signal_mask)', $helper);
+        self::assertStringContainsString('helper_deadline = time.monotonic() + 30', $helper);
+        self::assertStringContainsString('preflight.wait(timeout=min(8, probe_remaining))', $helper);
+        self::assertStringContainsString('deadline = min(helper_deadline, time.monotonic() + 20)', $helper);
+        self::assertStringContainsString('child.wait(timeout=min(20, child_remaining))', $helper);
+        self::assertStringContainsString("str_starts_with(\$match[0], 'phase=wrapper_signal;')", $source);
         foreach ([
             'preflight_php_version_begin',
             'preflight_artisan_version_begin',
@@ -629,7 +639,18 @@ child_diagnostic_markers = {
     'phase=connect_success',
 }
 def handle_shutdown(signum, frame):
-    raise SystemExit('phase=wrapper_signal; child_state=running; last_marker='+last_progress_marker)
+    if child is None:
+        child_state = 'not_started'
+        child_exit = ''
+    else:
+        child_status = child.poll()
+        if child_status is None:
+            child_state = 'running'
+            child_exit = ''
+        else:
+            child_state = 'exited'
+            child_exit = '; exit_code='+str(child_status)
+    raise SystemExit('phase=wrapper_signal; child_state='+child_state+child_exit+'; last_marker='+last_progress_marker)
 signal.signal(signal.SIGTERM, handle_shutdown)
 
 def emit_child_marker():
@@ -659,14 +680,14 @@ def stop_preflight_bounded(process):
         except ProcessLookupError:
             pass
     try:
-        process.wait(timeout=2)
+        process.wait(timeout=min(2, max(0.01, helper_deadline - time.monotonic())))
     except subprocess.TimeoutExpired:
         try:
             process.kill()
         except ProcessLookupError:
             pass
         try:
-            process.wait(timeout=2)
+            process.wait(timeout=min(2, max(0.01, helper_deadline - time.monotonic())))
         except subprocess.TimeoutExpired:
             return False
     return process.poll() is not None
@@ -924,7 +945,10 @@ def run_preflight_probe(probe, command, capture_stdout=False):
             )
             stderr_reader.start()
         try:
-            preflight.wait(timeout=8)
+            probe_remaining = helper_deadline - time.monotonic()
+            if probe_remaining <= 0:
+                raise subprocess.TimeoutExpired(command, 0)
+            preflight.wait(timeout=min(8, probe_remaining))
         except subprocess.TimeoutExpired:
             preflight_cleanup_unconfirmed = not stop_preflight_bounded(preflight)
             if stderr_reader is not None:
@@ -962,6 +986,7 @@ def run_preflight_probe(probe, command, capture_stdout=False):
             captured_stderr.close()
 
 try:
+    helper_deadline = time.monotonic() + 30
     mark_progress('helper_begin')
     env = os.environ.copy()
     for credential_name in ('MYSQL_PWD', 'M9_MYSQL_VERIFY_PASSWORD', 'DB_PASSWORD', 'DB_USERNAME', 'DATABASE_URL', 'MYSQL_ROOT_PASSWORD'):
@@ -1008,12 +1033,17 @@ try:
     mark_progress('socket_setup_end')
     child_stderr = tempfile.TemporaryFile(mode='w+b')
     mark_progress('child_spawn_begin')
+    spawn_signal_mask = None
     try:
+        spawn_signal_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
         child = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=child_stderr)
     except Exception:
+        if spawn_signal_mask is not None:
+            signal.pthread_sigmask(signal.SIG_SETMASK, spawn_signal_mask)
         raise SystemExit('phase=child_start; state=failed')
+    signal.pthread_sigmask(signal.SIG_SETMASK, spawn_signal_mask)
     mark_progress('child_spawn_end')
-    deadline = time.monotonic() + 20
+    deadline = min(helper_deadline, time.monotonic() + 20)
     mark_progress('socket_accept_begin')
     while conn is None:
         if time.monotonic() >= deadline:
@@ -1069,7 +1099,10 @@ try:
     mark_progress('response_read_end')
     mark_progress('child_wait_begin')
     try:
-        child.wait(timeout=20)
+        child_remaining = helper_deadline - time.monotonic()
+        if child_remaining <= 0:
+            raise subprocess.TimeoutExpired('child', 0)
+        child.wait(timeout=min(20, child_remaining))
     except subprocess.TimeoutExpired:
         raise SystemExit('phase=child_wait_timeout; child_state=running')
     except Exception:
@@ -1273,11 +1306,18 @@ PY;
                 $processExitCode = $observedExitCode;
             }
             $diagnostic = 'phase=root_helper; state=failed';
+            $signalDiagnostic = null;
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|OTHER_EXCEPTION|UNCLASSIFIED))?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; child_state=running(?:; last_marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end))?|phase=(?:accept|response|child|wrapper_signal); child_state=exited; exit_code=-?\\d+|phase=cleanup; cleanup_state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
-                $diagnostic = trim($matches[count($matches) - 1][0]);
+            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|OTHER_EXCEPTION|UNCLASSIFIED))?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=cleanup; cleanup_state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
+                $signalDiagnostic = null;
+                foreach ($matches as $match) {
+                    if (str_starts_with($match[0], 'phase=wrapper_signal;')) {
+                        $signalDiagnostic = $match[0];
+                    }
+                }
+                $diagnostic = trim($signalDiagnostic ?? $matches[count($matches) - 1][0]);
             }
-            if ($timedOut) {
+            if ($timedOut && $signalDiagnostic === null) {
                 $diagnostic = $cleanupConfirmed
                     ? 'phase=wrapper_timeout; cleanup_state=confirmed'
                     : 'phase=wrapper_timeout; cleanup_state=unconfirmed';
