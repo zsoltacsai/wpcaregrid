@@ -439,7 +439,35 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertIsString($source);
         $workflow = file_get_contents(base_path('.github/workflows/ci.yml'));
         self::assertIsString($workflow);
-        self::assertStringContainsString('r"phase=root_helper; state=failed; producer=python_helper; stage=(', $workflow);
+        $workflowMatcherStart = strpos($workflow, 'safe_diagnostic = re.compile(');
+        self::assertIsInt($workflowMatcherStart);
+        $workflowMatcherEnd = strpos($workflow, '          )', $workflowMatcherStart);
+        self::assertIsInt($workflowMatcherEnd);
+        $workflowFailureMatcher = substr($workflow, $workflowMatcherStart, $workflowMatcherEnd - $workflowMatcherStart);
+        $pythonHelperFailureStart = strpos(
+            $workflowFailureMatcher,
+            'r"phase=root_helper; state=failed; producer=python_helper; stage=',
+        );
+        $phpWrapperFailureStart = strpos(
+            $workflowFailureMatcher,
+            '|phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified',
+            $pythonHelperFailureStart,
+        );
+        self::assertIsInt($pythonHelperFailureStart);
+        self::assertIsInt($phpWrapperFailureStart);
+        $actualPythonHelperFailureAlternative = substr(
+            $workflowFailureMatcher,
+            $pythonHelperFailureStart,
+            $phpWrapperFailureStart - $pythonHelperFailureStart + 1,
+        );
+        $expectedPythonHelperFailureAlternative =
+            'r"phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\d+)?|';
+        self::assertSame($expectedPythonHelperFailureAlternative, $actualPythonHelperFailureAlternative);
+        self::assertSame(2, substr_count($workflow, $expectedPythonHelperFailureAlternative));
+        self::assertSame(
+            4,
+            substr_count($workflow, 'phase=root_helper; state=failed; producer=python_helper; stage='),
+        );
         self::assertStringContainsString('safe_prefix = "GATE1_SAFE_RUNTIME_DIAGNOSTIC:"', $workflow);
         self::assertStringContainsString('operation=(?:application_source_cleanup_begin|root_entry_stat|root_entry_validate|root_open|root_fstat|root_identity_validate|directory_list|entry_stat|entry_type_validate|child_directory_open|child_directory_validate|child_contents_remove|child_directory_close|child_directory_remove|file_owner_validate|file_remove|root_directory_close|root_directory_remove); context=(?:cleanup_only|secondary); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)', $workflow);
         self::assertStringContainsString('operation=(?:mkdir_application_source|stat_application_source|open_application_source|fstat_application_source|validate_application_source)', $workflow);
@@ -453,6 +481,24 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('if latest_progress_diagnostic is not None:', $workflow);
         self::assertStringContainsString('if not has_terminal_diagnostic and latest_lifecycle_diagnostic is not None:', $workflow);
         self::assertStringContainsString('latest_lifecycle_diagnostic = diagnostic', $workflow);
+        self::assertStringContainsString('failure_block_start = re.escape(', $workflow);
+        self::assertStringContainsString('r"Tests\Feature\Platform\PlatformDatabaseBackupMysqlTest::" + backup_import_test_method.split("::", 1)[1]', $workflow);
+        self::assertStringContainsString('test_headers = list(re.finditer(failure_block_start, tail))', $workflow);
+        self::assertStringContainsString('r"Verification failed: ((?:OBJECT_MISSING|MANIFEST_OBJECT_MISSING|MANIFEST_OBJECT_INVALID|MANIFEST_METADATA_MISMATCH|MANIFEST_AUTHENTICATION_FAILED|OBJECT_UNREADABLE|VERIFY_TEMP_FAILED|OBJECT_READ_FAILED|VERIFY_TEMP_WRITE_FAILED|SIZE_OR_HASH_MISMATCH|CIPHERTEXT_AUTHENTICATION_FAILED|INVALID_GZIP|EMPTY_DECOMPRESSED_ARTIFACT|DATABASE_IMPORT_OR_SANITY_FAILED|DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED|DISPOSABLE_MYSQL_IMPORT_FAILED|MYSQL_IMPORT_PROCESS_FAILED_EXIT_[0-9]{1,3}|MYSQL_IMPORT_TABLE_SET_MISMATCH|MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH|VERIFICATION_ERROR|unknown))\b"', $workflow);
+        self::assertStringContainsString('safe_codes.update(failure_code_pattern.findall(block))', $workflow);
+        self::assertStringContainsString('if not 0 <= process_exit <= 255:', $workflow);
+        self::assertStringContainsString('print("PHPUnit backup-import failure_code=" + failure_code, flush=True)', $workflow);
+        self::assertStringContainsString('header = re.escape(test_header)', $workflow);
+        self::assertStringContainsString('r"Tests\Feature\Deployment\TransitionPersistenceBridgeTest::test_rpc_preflight_cache_source_contract_guards_are_explicit"', $workflow);
+        self::assertStringContainsString('r"Tests\Feature\Platform\PlatformDatabaseBackupMysqlTest::test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked"', $workflow);
+        self::assertStringContainsString('r"(?m)^[^\r\n]*[/\\\\]" + re.escape(safe_source_path) + r":([1-9][0-9]{0,5})[ \t]*$"', $workflow);
+        self::assertStringContainsString('matches = line_pattern.findall(block)', $workflow);
+        self::assertStringContainsString('if len(matches) == 1:', $workflow);
+        self::assertStringContainsString('print("PHPUnit " + safe_label + " failure_line=" + matches[0], flush=True)', $workflow);
+        self::assertStringNotContainsString('print(tail', $workflow);
+        self::assertStringNotContainsString('print(block', $workflow);
+        self::assertStringNotContainsString('Verification failed: .*', $workflow);
+        self::assertStringNotContainsString('line_pattern = re.compile(r".*")', $workflow);
         self::assertSame(1, substr_count($workflow, 'payload_match = safe_diagnostic.fullmatch(candidate[marker_position + len(safe_prefix):])'));
         self::assertSame(1, substr_count($workflow, 'payload_match = safe_rpc_diagnostic.fullmatch(candidate[marker_position + len(safe_prefix):])'));
         self::assertSame(2, substr_count($workflow, 'if candidate.count(safe_prefix) == 1:'));
@@ -607,16 +653,17 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('timeout_source=(?:helper_budget_exhausted|child_wait_timeout); elapsed_ms=', $source);
         self::assertStringContainsString('; elapsed_ms=\\\\d+; remaining_ms=\\\\d+; child_state=(?:not_started|running|exited)', $source);
         self::assertStringContainsString('last_marker=preflight_artisan_version_begin', $source);
-        self::assertStringContainsString('phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup(?:; operation=(?:mkdir_application_source|stat_application_source|open_application_source|fstat_application_source|validate_application_source))?|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\\d+)?', $source);
+        self::assertStringContainsString('phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup(?:; operation=(?:mkdir_application_source|stat_application_source|open_application_source|fstat_application_source|validate_application_source))?|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\\\\d+)?', $source);
         self::assertStringContainsString('phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=application_source; state=unconfirmed; operation=(?:application_source_cleanup_begin|root_entry_stat|root_entry_validate|root_open|root_fstat|root_identity_validate|directory_list|entry_stat|entry_type_validate|child_directory_open|child_directory_validate|child_contents_remove|child_directory_close|child_directory_remove|file_owner_validate|file_remove|root_directory_close|root_directory_remove); context=(?:cleanup_only|secondary); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|temporary_root|socket_cleanup); state=unconfirmed', $source);
         self::assertStringContainsString('def copy_application_source():', $helper);
-        self::assertStringContainsString(chr(10).'flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW'.chr(10).'def create_preflight_cache():', $helper);
+        self::assertStringContainsString(chr(10).'flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW'.chr(10).chr(10).'def create_preflight_cache():', $helper);
         self::assertStringContainsString("return 'phase=source_copy; state='+state+'; stage='+stage+operation_text+'; exception='+exception_class+errno_text", $helper);
         self::assertStringContainsString("source_copy_operation = 'mkdir_application_source'", $helper);
         self::assertStringContainsString("allowed_exception_classes = {'TimeoutError', 'PermissionError', 'FileNotFoundError', 'FileExistsError', 'NotADirectoryError', 'IsADirectoryError', 'OSError', 'NameError', 'AttributeError', 'TypeError', 'ValueError', 'RuntimeError'}", $helper);
         self::assertStringContainsString("'; operation='+source_copy_operation", $helper);
         self::assertStringContainsString('def root_helper_failure_diagnostic(error):', $helper);
-        self::assertStringContainsString("allowed_root_exception_classes = {'TimeoutError', 'PermissionError', 'FileNotFoundError', 'FileExistsError', 'NotADirectoryError', 'IsADirectoryError', 'OSError', 'NameError', 'AttributeError', 'TypeError', 'ValueError', 'RuntimeError'}", $helper);
+        self::assertStringContainsString("allowed_exception_classes = {'TimeoutError', 'PermissionError', 'FileNotFoundError', 'FileExistsError', 'NotADirectoryError', 'IsADirectoryError', 'OSError', 'NameError', 'AttributeError', 'TypeError', 'ValueError', 'RuntimeError'}", $helper);
+        self::assertStringContainsString("exception_class = type(error).__name__ if type(error).__name__ in allowed_exception_classes else 'OtherException'", $helper);
         self::assertStringContainsString("'phase=root_helper; state='+'failed; producer='+'python_helper; stage='+stage+'; exception='+exception_class+errno_text", $helper);
         self::assertStringContainsString('raise SystemExit(root_helper_failure_diagnostic(root_helper_error)) from None', $helper);
         self::assertStringContainsString('phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\\d+)?', $source);
@@ -706,7 +753,7 @@ class TransitionPersistenceBridgeTest extends TestCase
         }
         self::assertStringContainsString("'phase=root_helper; state=failed'", $source);
         self::assertStringContainsString('phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)', $source);
-        self::assertStringContainsString("'phase=root_helper; state='.'failed; producer='.'php_wrapper; stage=output_unclassified'", $source);
+        self::assertStringContainsString("'phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified'", $source);
         self::assertStringContainsString('producer=php_wrapper; stage=throwable_catch; exception=', $source);
 
         $bootstrapPosition = strpos($helper, "run_preflight_probe('artisan_version'");

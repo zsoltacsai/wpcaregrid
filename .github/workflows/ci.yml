@@ -594,6 +594,10 @@ jobs:
           env["MYSQL_PWD"] = env["M9_MYSQL_VERIFY_PASSWORD"]
 
           target_method = "TransitionPersistenceBridgeTest::test_typed_rpc_cas_is_atomic_and_exact_replay_returns_its_receipt"
+          source_contract_test_method = "TransitionPersistenceBridgeTest::test_rpc_preflight_cache_source_contract_guards_are_explicit"
+          source_contract_test_failed = False
+          backup_import_test_method = "PlatformDatabaseBackupMysqlTest::test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked"
+          backup_import_test_failed = False
           target_name = None
           last_passed = None
           target_active = False
@@ -683,6 +687,77 @@ jobs:
               for diagnostic in (latest_safe_diagnostic, wrapper_signal_diagnostic, wrapper_timeout_diagnostic):
                   if diagnostic is not None:
                       print(diagnostic, flush=True)
+
+          def emit_safe_backup_import_failure_code():
+              if not backup_import_test_failed:
+                  return
+              try:
+                  with open(log_path, "rb") as recorded_output:
+                      recorded_output.seek(max(0, os.fstat(recorded_output.fileno()).st_size - 262144))
+                      tail = recorded_output.read(262144).decode("utf-8", errors="replace")
+              except OSError:
+                  print("PHPUnit backup-import failure_code=unavailable", flush=True)
+                  return
+
+              failure_block_start = re.escape(
+                  r"Tests\Feature\Platform\PlatformDatabaseBackupMysqlTest::" + backup_import_test_method.split("::", 1)[1]
+              )
+              test_headers = list(re.finditer(failure_block_start, tail))
+              failure_code_pattern = re.compile(
+                  r"Verification failed: ((?:OBJECT_MISSING|MANIFEST_OBJECT_MISSING|MANIFEST_OBJECT_INVALID|MANIFEST_METADATA_MISMATCH|MANIFEST_AUTHENTICATION_FAILED|OBJECT_UNREADABLE|VERIFY_TEMP_FAILED|OBJECT_READ_FAILED|VERIFY_TEMP_WRITE_FAILED|SIZE_OR_HASH_MISMATCH|CIPHERTEXT_AUTHENTICATION_FAILED|INVALID_GZIP|EMPTY_DECOMPRESSED_ARTIFACT|DATABASE_IMPORT_OR_SANITY_FAILED|DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED|DISPOSABLE_MYSQL_IMPORT_FAILED|MYSQL_IMPORT_PROCESS_FAILED_EXIT_[0-9]{1,3}|MYSQL_IMPORT_TABLE_SET_MISMATCH|MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH|VERIFICATION_ERROR|unknown))\b"
+              )
+              safe_codes = set()
+              for header in reversed(test_headers):
+                  block = tail[header.end():header.end() + 16384]
+                  next_failure = re.search(r"(?m)^\s*\d+\)\s+Tests\\", block)
+                  if next_failure is not None:
+                      block = block[:next_failure.start()]
+                  safe_codes.update(failure_code_pattern.findall(block))
+                  if safe_codes:
+                      break
+
+              if len(safe_codes) != 1:
+                  print("PHPUnit backup-import failure_code=unavailable", flush=True)
+                  return
+              failure_code = next(iter(safe_codes))
+              if failure_code.startswith("MYSQL_IMPORT_PROCESS_FAILED_EXIT_"):
+                  try:
+                      process_exit = int(failure_code.rsplit("_", 1)[1])
+                  except ValueError:
+                      process_exit = 256
+                  if not 0 <= process_exit <= 255:
+                      print("PHPUnit backup-import failure_code=unavailable", flush=True)
+                      return
+              print("PHPUnit backup-import failure_code=" + failure_code, flush=True)
+
+          def emit_safe_test_failure_source_line(test_header, safe_label, safe_source_path, failed):
+              if not failed:
+                  return
+              try:
+                  with open(log_path, "rb") as recorded_output:
+                      recorded_output.seek(max(0, os.fstat(recorded_output.fileno()).st_size - 262144))
+                      tail = recorded_output.read(262144).decode("utf-8", errors="replace")
+              except OSError:
+                  print("PHPUnit " + safe_label + " failure_line=unavailable", flush=True)
+                  return
+
+              header = re.escape(test_header)
+              headers = list(re.finditer(header, tail))
+              line_pattern = re.compile(
+                  r"(?m)^[^\r\n]*[/\\]" + re.escape(safe_source_path) + r":([1-9][0-9]{0,5})[ \t]*$"
+              )
+              for test_header in reversed(headers):
+                  block = tail[test_header.end():test_header.end() + 16384]
+                  next_failure = re.search(r"(?m)^\s*\d+\)\s+Tests\\", block)
+                  if next_failure is not None:
+                      block = block[:next_failure.start()]
+                  matches = line_pattern.findall(block)
+                  if len(matches) == 1:
+                      print("PHPUnit " + safe_label + " failure_line=" + matches[0], flush=True)
+                      return
+                  if matches:
+                      break
+              print("PHPUnit " + safe_label + " failure_line=unavailable", flush=True)
 
           def capture_mysql_state(label):
               base = [
@@ -868,7 +943,7 @@ jobs:
 
           def process_events(stream):
               global last_passed, target_name, target_active, target_start_offset
-              global active_transaction_seen
+              global active_transaction_seen, backup_import_test_failed, source_contract_test_failed
               while True:
                   line = stream.readline()
                   if not line:
@@ -880,6 +955,10 @@ jobs:
                   name = safe_test_name(raw_name)
                   if event in ("Test Failed", "Test Errored"):
                       print(f"PHPUnit {event} ({name})", flush=True)
+                      if raw_name.endswith(backup_import_test_method):
+                          backup_import_test_failed = True
+                      if raw_name.endswith(source_contract_test_method):
+                          source_contract_test_failed = True
                   if event == "Test Passed":
                       last_passed = name
                   if event == "Test Preparation Started":
@@ -950,6 +1029,19 @@ jobs:
 
           if status != 0:
               emit_safe_rpc_diagnostic()
+              emit_safe_test_failure_source_line(
+                  r"Tests\Feature\Deployment\TransitionPersistenceBridgeTest::test_rpc_preflight_cache_source_contract_guards_are_explicit",
+                  "source-contract",
+                  "tests/Feature/Deployment/TransitionPersistenceBridgeTest.php",
+                  source_contract_test_failed,
+              )
+              emit_safe_test_failure_source_line(
+                  r"Tests\Feature\Platform\PlatformDatabaseBackupMysqlTest::test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked",
+                  "backup-import",
+                  "tests/Feature/Platform/PlatformDatabaseBackupMysqlTest.php",
+                  backup_import_test_failed,
+              )
+              emit_safe_backup_import_failure_code()
           try:
               os.unlink(log_path)
           except FileNotFoundError:
