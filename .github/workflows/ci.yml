@@ -598,6 +598,27 @@ jobs:
           source_contract_test_failed = False
           backup_import_test_method = "PlatformDatabaseBackupMysqlTest::test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked"
           backup_import_test_failed = False
+          backup_import_diagnostic_stages = {
+              "fixture_setup", "probe_setup", "backup_create", "verify", "assert_verified", "assert_status",
+              "assert_method", "assert_manifest", "assert_probe", "assert_critical_count", "cleanup_probe",
+              "cleanup_connections", "cleanup_objects",
+          }
+          backup_import_diagnostic_events = {"begin", "primary_failure", "cleanup_observation", "cleanup_failure", "complete"}
+          backup_import_diagnostic_categories = {
+              "none", "assertion_failure", "pdo_error", "process_error", "filesystem_error", "permission_error",
+              "timeout", "cleanup_error", "backup_failure", "other",
+          }
+          backup_import_diagnostic_codes = {
+              "none", "OBJECT_MISSING", "MANIFEST_OBJECT_MISSING", "MANIFEST_OBJECT_INVALID",
+              "MANIFEST_METADATA_MISMATCH", "MANIFEST_AUTHENTICATION_FAILED", "OBJECT_UNREADABLE",
+              "VERIFY_TEMP_FAILED", "OBJECT_READ_FAILED", "VERIFY_TEMP_WRITE_FAILED", "SIZE_OR_HASH_MISMATCH",
+              "CIPHERTEXT_AUTHENTICATION_FAILED", "INVALID_GZIP", "EMPTY_DECOMPRESSED_ARTIFACT",
+              "DATABASE_IMPORT_OR_SANITY_FAILED", "DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED",
+              "DISPOSABLE_MYSQL_IMPORT_FAILED", "WORKDIR_CREATE_FAILED", "PLATFORM_BACKUP_FAILED",
+              "MYSQL_IMPORT_TABLE_SET_MISMATCH", "MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH",
+              "VERIFICATION_ERROR", "other",
+          }
+          backup_import_diagnostic_marker_prefix = "WPCG_DIAG_V2|"
           target_name = None
           last_passed = None
           target_active = False
@@ -729,6 +750,86 @@ jobs:
                       print("PHPUnit backup-import failure_code=unavailable", flush=True)
                       return
               print("PHPUnit backup-import failure_code=" + failure_code, flush=True)
+
+          def parse_backup_import_diagnostic_marker(line):
+              if line.endswith("\r\n"):
+                  marker = line[:-2]
+              elif line.endswith("\n"):
+                  marker = line[:-1]
+              else:
+                  marker = line
+              if len(marker) > 512 or "\r" in marker or "\n" in marker:
+                  return None
+              fields = marker.split("|")
+              if len(fields) != 6 or fields[0] != "WPCG_DIAG_V2":
+                  return None
+              expected_keys = ("test", "stage", "event", "category", "code")
+              values = {}
+              for field, key in zip(fields[1:], expected_keys):
+                  prefix = key + "="
+                  if not field.startswith(prefix):
+                      return None
+                  values[key] = field[len(prefix):]
+              if values["test"] != "backup_import":
+                  return None
+              if values["stage"] not in backup_import_diagnostic_stages:
+                  return None
+              if values["event"] not in backup_import_diagnostic_events:
+                  return None
+              if values["category"] not in backup_import_diagnostic_categories:
+                  return None
+              code = values["code"]
+              if code not in backup_import_diagnostic_codes:
+                  process_match = re.fullmatch(r"MYSQL_IMPORT_PROCESS_FAILED_EXIT_(0|[1-9][0-9]{0,2})", code)
+                  if process_match is None or int(process_match.group(1)) > 255:
+                      return None
+              return "PHPUnit backup-import diagnostic: stage={0}; event={1}; category={2}; code={3}".format(
+                  values["stage"], values["event"], values["category"], code,
+              )
+
+          def emit_safe_backup_import_diagnostics():
+              if not backup_import_test_failed:
+                  return
+              safe_markers = []
+              malformed_marker = False
+              try:
+                  with open(log_path, "rb") as recorded_output:
+                      if os.fstat(recorded_output.fileno()).st_size > 67108864:
+                          raise OSError("PHPUnit log exceeds diagnostic scan bound")
+                      while True:
+                          raw_line = recorded_output.readline(513)
+                          if not raw_line:
+                              break
+                          if len(raw_line) == 513 and not raw_line.endswith(b"\n"):
+                              if raw_line.startswith(b"WPCG_DIAG_"):
+                                  malformed_marker = True
+                              while raw_line and not raw_line.endswith(b"\n"):
+                                  raw_line = recorded_output.readline(513)
+                              continue
+                          if not raw_line.lstrip().startswith(b"WPCG_DIAG_"):
+                              continue
+                          if len(raw_line) > 512 or not raw_line.startswith(b"WPCG_DIAG_V2|"):
+                              malformed_marker = True
+                              continue
+                          try:
+                              line = raw_line.decode("ascii")
+                          except UnicodeDecodeError:
+                              malformed_marker = True
+                              continue
+                          safe_marker = parse_backup_import_diagnostic_marker(line)
+                          if safe_marker is None:
+                              malformed_marker = True
+                          elif len(safe_markers) < 64:
+                              safe_markers.append(safe_marker)
+                          else:
+                              malformed_marker = True
+              except OSError:
+                  malformed_marker = True
+              if malformed_marker or not safe_markers:
+                  print("PHPUnit backup-import diagnostic: unavailable", flush=True)
+                  return
+              for safe_marker in safe_markers:
+                  print(safe_marker, flush=True)
 
           def emit_safe_test_failure_source_line(test_header, safe_label, safe_source_path, failed):
               if not failed:
@@ -1042,6 +1143,7 @@ jobs:
                   backup_import_test_failed,
               )
               emit_safe_backup_import_failure_code()
+              emit_safe_backup_import_diagnostics()
           try:
               os.unlink(log_path)
           except FileNotFoundError:
