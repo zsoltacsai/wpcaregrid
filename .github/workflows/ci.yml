@@ -527,6 +527,10 @@ jobs:
                   for line in recorded:
                       candidate = ansi_control.sub("", line).rstrip()
                       match = safe_diagnostic.fullmatch(candidate)
+                      if match is None:
+                          marker_position = candidate.find("GATE1_SAFE_RUNTIME_DIAGNOSTIC:")
+                          if marker_position >= 0:
+                              match = safe_diagnostic.fullmatch(candidate[marker_position:])
                       if match is not None:
                           diagnostics.add(match.group(0))
           except OSError:
@@ -619,6 +623,10 @@ jobs:
                       for line in recorded_output:
                           candidate = ansi_control.sub("", line).rstrip()
                           match = safe_rpc_diagnostic.fullmatch(candidate)
+                          if match is None:
+                              marker_position = candidate.find("GATE1_SAFE_RUNTIME_DIAGNOSTIC:")
+                              if marker_position >= 0:
+                                  match = safe_rpc_diagnostic.fullmatch(candidate[marker_position:])
                           if match is not None:
                               diagnostic = match.group(0)
                               if diagnostic.startswith("phase=cleanup; component="):
