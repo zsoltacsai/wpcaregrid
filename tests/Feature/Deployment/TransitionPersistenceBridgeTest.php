@@ -441,6 +441,7 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertIsString($workflow);
         self::assertStringContainsString('r"phase=root_helper; state=failed|"', $workflow);
         self::assertStringContainsString('safe_prefix = "GATE1_SAFE_RUNTIME_DIAGNOSTIC:"', $workflow);
+        self::assertStringContainsString('operation=(?:application_source_cleanup_begin|root_entry_stat|root_entry_validate|root_open|root_fstat|root_identity_validate|directory_list|entry_stat|entry_type_validate|child_directory_open|child_directory_validate|child_contents_remove|child_directory_close|child_directory_remove|file_owner_validate|file_remove|root_directory_close|root_directory_remove); context=(?:cleanup_only|secondary)', $workflow);
         self::assertStringContainsString("'GATE1_SAFE_RUNTIME_DIAGNOSTIC:'", $source);
         self::assertStringContainsString('stage=assertion_failure', $workflow);
         self::assertStringContainsString('state=started; producer=php_wrapper; stage=peer_rpc_test_entry', $workflow);
@@ -470,6 +471,9 @@ class TransitionPersistenceBridgeTest extends TestCase
         $peerRpcMethod = substr($source, $peerRpcMethodStart, $peerRpcMethodEnd - $peerRpcMethodStart);
         $emitterPosition = strpos($peerRpcMethod, '$emitSafeDiagnostic = static function');
         self::assertStringContainsString('$safeLifecycleEmitted, &$safeProgressEmitted, &$safeOutcomeEmitted', $peerRpcMethod);
+        self::assertStringContainsString('$safeCleanupEmitted = false;', $peerRpcMethod);
+        self::assertStringContainsString('in_array($cleanupMatch[1], $safeCleanupOperations, true)', $peerRpcMethod);
+        self::assertStringContainsString('context=(cleanup_only|secondary)', $peerRpcMethod);
         self::assertStringContainsString('$safeOutcomeEmitted = true;', $peerRpcMethod);
         self::assertStringContainsString('$safeProgressStages = [', $peerRpcMethod);
         $entryMarker = "\$emitSafeDiagnostic('phase=root_helper; state=started; producer=php_wrapper; stage=peer_rpc_test_entry')";
@@ -601,7 +605,7 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('; elapsed_ms=\\\\d+; remaining_ms=\\\\d+; child_state=(?:not_started|running|exited)', $source);
         self::assertStringContainsString('last_marker=preflight_artisan_version_begin', $source);
         self::assertStringContainsString('phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check)(?:; operation=(?:mkdir_application_source|stat_application_source|open_application_source|fstat_application_source|validate_application_source))?; exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\\d+)?', $source);
-        self::assertStringContainsString('phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|application_source|temporary_root|socket_cleanup); state=unconfirmed', $source);
+        self::assertStringContainsString('phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=application_source; state=unconfirmed; operation=(?:application_source_cleanup_begin|root_entry_stat|root_entry_validate|root_open|root_fstat|root_identity_validate|directory_list|entry_stat|entry_type_validate|child_directory_open|child_directory_validate|child_contents_remove|child_directory_close|child_directory_remove|file_owner_validate|file_remove|root_directory_close|root_directory_remove); context=(?:cleanup_only|secondary)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|temporary_root|socket_cleanup); state=unconfirmed', $source);
         self::assertStringContainsString('def copy_application_source():', $helper);
         self::assertStringContainsString("return 'phase=source_copy; state='+state+'; stage='+stage+operation_text+'; exception='+exception_class+errno_text", $helper);
         self::assertStringContainsString("source_copy_operation = 'mkdir_application_source'", $helper);
@@ -624,6 +628,26 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString("child_relative_path == 'vendor/bin'", $helper);
         self::assertStringContainsString('application_source_name', $helper);
         self::assertStringContainsString('def remove_application_source():', $helper);
+        self::assertStringContainsString('application_source_cleanup_operations = {', $helper);
+        self::assertStringContainsString('application_source_cleanup_failure = cleanup_operation', $helper);
+        self::assertStringContainsString("cleanup_detail = '; operation='+application_source_cleanup_failure+'; context='+cleanup_context", $helper);
+        self::assertStringContainsString("cleanup_context = 'secondary' if primary_failure_pending else 'cleanup_only'", $helper);
+        self::assertStringContainsString("sys.stderr.write('phase=cleanup; component='+component+'; state=unconfirmed'+cleanup_detail+'\\n')", $helper);
+        foreach ([
+            'application_source_cleanup_begin', 'root_entry_stat', 'root_entry_validate',
+            'root_open', 'root_fstat', 'root_identity_validate', 'directory_list',
+            'entry_stat', 'entry_type_validate', 'child_directory_open',
+            'child_directory_validate', 'child_contents_remove', 'child_directory_close',
+            'child_directory_remove', 'file_owner_validate', 'file_remove',
+            'root_directory_close', 'root_directory_remove',
+        ] as $cleanupOperation) {
+            self::assertStringContainsString(
+                "application_source_cleanup_operation = '{$cleanupOperation}'",
+                $helper,
+            );
+            self::assertStringContainsString("'{$cleanupOperation}'", $peerRpcMethod);
+        }
+        self::assertStringNotContainsString('str(cleanup_error)', $helper);
         self::assertStringContainsString('VIEW_COMPILED_PATH', $helper);
         foreach ([
             'source_copy_begin',
@@ -699,9 +723,30 @@ class TransitionPersistenceBridgeTest extends TestCase
         $safeLifecycleEmitted = false;
         $safeProgressEmitted = [];
         $safeOutcomeEmitted = false;
+        $safeCleanupEmitted = false;
         $safeProgressStages = ['prerequisites_passed', 'identity_parsed', 'temp_name_created', 'mkdir_begin', 'mkdir_complete', 'fixture_database_opened', 'fixture_schema_created', 'fixture_row_inserted', 'fixture_permissions_set', 'helper_script_built', 'helper_script_written', 'helper_script_permissions_set', 'request_json_ready', 'helper_spawn_begin', 'helper_spawn_complete', 'helper_wait_begin', 'helper_wait_complete', 'helper_reap_begin', 'helper_reap_complete', 'assertion_catch_entered', 'throwable_catch_entered', 'terminal_outcome_suppressed', 'cleanup_begin', 'cleanup_complete', 'method_body_complete'];
-        $emitSafeDiagnostic = static function (string $line) use (&$safeLifecycleEmitted, &$safeProgressEmitted, &$safeOutcomeEmitted, $safeProgressStages): void {
+        $safeCleanupOperations = [
+            'application_source_cleanup_begin', 'root_entry_stat', 'root_entry_validate',
+            'root_open', 'root_fstat', 'root_identity_validate', 'directory_list',
+            'entry_stat', 'entry_type_validate', 'child_directory_open',
+            'child_directory_validate', 'child_contents_remove', 'child_directory_close',
+            'child_directory_remove', 'file_owner_validate', 'file_remove',
+            'root_directory_close', 'root_directory_remove',
+        ];
+        $emitSafeDiagnostic = static function (string $line) use (&$safeLifecycleEmitted, &$safeProgressEmitted, &$safeOutcomeEmitted, &$safeCleanupEmitted, $safeProgressStages, $safeCleanupOperations): void {
             if (! str_starts_with($line, 'phase=')) {
+                return;
+            }
+
+            $cleanupMatch = [];
+            if (preg_match('/^phase=cleanup; component=application_source; state=unconfirmed; operation=([a-z_]+); context=(cleanup_only|secondary)$/D', $line, $cleanupMatch) === 1
+                && in_array($cleanupMatch[1], $safeCleanupOperations, true)) {
+                if (! $safeCleanupEmitted) {
+                    $safeCleanupEmitted = true;
+                    fwrite(STDERR, 'GATE1_SAFE_RUNTIME_DIAGNOSTIC:'.$line.PHP_EOL);
+                    fflush(STDERR);
+                }
+
                 return;
             }
 
@@ -814,6 +859,16 @@ application_source_created = False
 application_source_identity = None
 application_source_path = None
 application_source_directories = []
+application_source_cleanup_operations = {
+    'application_source_cleanup_begin', 'root_entry_stat', 'root_entry_validate',
+    'root_open', 'root_fstat', 'root_identity_validate', 'directory_list',
+    'entry_stat', 'entry_type_validate', 'child_directory_open',
+    'child_directory_validate', 'child_contents_remove', 'child_directory_close',
+    'child_directory_remove', 'file_owner_validate', 'file_remove',
+    'root_directory_close', 'root_directory_remove',
+}
+application_source_cleanup_operation = 'application_source_cleanup_begin'
+application_source_cleanup_failure = None
 source_copy_stage = 'root_setup'
 source_copy_operation = 'mkdir_application_source'
 source_copy_stages = {
@@ -824,6 +879,7 @@ source_copy_stages = {
 child_stderr = None
 cleanup_unconfirmed_components = set()
 cleanup_in_progress = False
+primary_failure_pending = False
 deferred_shutdown_signal = False
 response = bytearray()
 progress_marker_values = {
@@ -1206,48 +1262,75 @@ def source_copy_failure_diagnostic(state, error):
     return 'phase=source_copy; state='+state+'; stage='+stage+operation_text+'; exception='+exception_class+errno_text
 
 def remove_application_source():
-    global application_source_created
+    global application_source_created, application_source_cleanup_operation
+    global application_source_cleanup_failure
+    application_source_cleanup_operation = 'application_source_cleanup_begin'
     if not application_source_created:
         return
     if preflight_root_fd is None or application_source_identity is None:
         raise OSError
+    application_source_cleanup_operation = 'root_entry_stat'
     entry = os.stat(application_source_name, dir_fd=preflight_root_fd, follow_symlinks=False)
+    application_source_cleanup_operation = 'root_entry_validate'
     if (not stat.S_ISDIR(entry.st_mode) or entry.st_uid != 0
             or (entry.st_dev, entry.st_ino) != application_source_identity):
         raise OSError
+    application_source_cleanup_operation = 'root_open'
     source_fd = os.open(application_source_name, flags, dir_fd=preflight_root_fd)
+    application_source_cleanup_operation = 'root_fstat'
     opened = os.fstat(source_fd)
+    application_source_cleanup_operation = 'root_identity_validate'
     if ((opened.st_dev, opened.st_ino) != application_source_identity
             or not stat.S_ISDIR(opened.st_mode) or opened.st_uid != 0):
+        application_source_cleanup_operation = 'root_directory_close'
         os.close(source_fd)
+        application_source_cleanup_operation = 'root_identity_validate'
         raise OSError
 
     def remove_contents(directory_fd):
+        global application_source_cleanup_operation
+        application_source_cleanup_operation = 'directory_list'
         for name in os.listdir(directory_fd):
+            application_source_cleanup_operation = 'entry_stat'
             info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            application_source_cleanup_operation = 'entry_type_validate'
             if stat.S_ISDIR(info.st_mode):
                 if info.st_uid not in (0, uid):
                     raise OSError
+                application_source_cleanup_operation = 'child_directory_open'
                 child_fd = os.open(name, flags, dir_fd=directory_fd)
+                application_source_cleanup_operation = 'child_directory_validate'
                 child = os.fstat(child_fd)
                 if ((child.st_dev, child.st_ino) != (info.st_dev, info.st_ino)
                         or not stat.S_ISDIR(child.st_mode) or child.st_uid not in (0, uid)):
+                    application_source_cleanup_operation = 'child_directory_close'
                     os.close(child_fd)
+                    application_source_cleanup_operation = 'child_directory_validate'
                     raise OSError
+                application_source_cleanup_operation = 'child_contents_remove'
                 remove_contents(child_fd)
+                application_source_cleanup_operation = 'child_directory_close'
                 os.close(child_fd)
+                application_source_cleanup_operation = 'child_directory_remove'
                 os.rmdir(name, dir_fd=directory_fd)
             elif stat.S_ISREG(info.st_mode):
+                application_source_cleanup_operation = 'file_owner_validate'
                 if info.st_uid not in (0, uid) or info.st_nlink != 1:
                     raise OSError
+                application_source_cleanup_operation = 'file_remove'
                 os.unlink(name, dir_fd=directory_fd)
             else:
                 raise OSError
 
     try:
         remove_contents(source_fd)
+    except Exception:
+        application_source_cleanup_failure = application_source_cleanup_operation
+        raise
     finally:
+        application_source_cleanup_operation = 'root_directory_close'
         os.close(source_fd)
+    application_source_cleanup_operation = 'root_directory_remove'
     os.rmdir(application_source_name, dir_fd=preflight_root_fd)
     application_source_created = False
 
@@ -1318,7 +1401,7 @@ def lock_preflight_cache():
             os.close(descriptor)
 
 def cleanup_preflight_cache():
-    global cleanup_unconfirmed_components
+    global cleanup_unconfirmed_components, application_source_cleanup_failure
     if preflight_tmp_fd is None:
         return
     cleanup_component = 'temporary_root'
@@ -1368,6 +1451,13 @@ def cleanup_preflight_cache():
         try:
             remove_application_source()
         except Exception:
+            if application_source_cleanup_failure is None:
+                cleanup_operation = (
+                    application_source_cleanup_operation
+                    if application_source_cleanup_operation in application_source_cleanup_operations
+                    else 'application_source_cleanup_begin'
+                )
+                application_source_cleanup_failure = cleanup_operation
             raise
         cleanup_component = 'temporary_root'
         os.rmdir(preflight_tmp_name, dir_fd=preflight_tmp_fd)
@@ -1879,8 +1969,11 @@ finally:
     ]
     for component in cleanup_components:
         try:
-            sys.stderr.write(
-                'phase=cleanup; component='+component+'; state=unconfirmed\n')
+            cleanup_detail = ''
+            if component == 'application_source' and application_source_cleanup_failure is not None:
+                cleanup_context = 'secondary' if primary_failure_pending else 'cleanup_only'
+                cleanup_detail = '; operation='+application_source_cleanup_failure+'; context='+cleanup_context
+            sys.stderr.write('phase=cleanup; component='+component+'; state=unconfirmed'+cleanup_detail+'\n')
             sys.stderr.flush()
         except BaseException:
             pass
@@ -2021,7 +2114,7 @@ PY;
             $wrapperTimeoutDiagnostic = null;
             $cleanupDiagnostics = [];
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?(?:; errno=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout; timeout_source=(?:helper_budget_exhausted|child_wait_timeout); elapsed_ms=\\d+; remaining_ms=\\d+; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=preflight_artisan_version_begin|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; errno=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check); exception=(?:TimeoutError|PermissionError|FileNotFoundError|OSError|OtherException)(?:; errno=-?\\d+)?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified|phase=root_helper; state=failed; producer=php_wrapper; stage=throwable_catch; exception=(?:TypeError|ValueError|ErrorException|JsonException|PDOException|RuntimeException|LogicException|Error|Exception|OtherThrowable)(?:; exception_code=-?\\d+)?|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; state=deferred|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|application_source|temporary_root|socket_cleanup); state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
+            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?(?:; errno=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout; timeout_source=(?:helper_budget_exhausted|child_wait_timeout); elapsed_ms=\\d+; remaining_ms=\\d+; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=preflight_artisan_version_begin|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; errno=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check); exception=(?:TimeoutError|PermissionError|FileNotFoundError|OSError|OtherException)(?:; errno=-?\\d+)?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=failed; producer=python_helper; stage=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end); exception=(?:TimeoutError|PermissionError|FileNotFoundError|FileExistsError|NotADirectoryError|IsADirectoryError|OSError|NameError|AttributeError|TypeError|ValueError|RuntimeError|OtherException)(?:; errno=-?\\d+)?|phase=root_helper; state=failed; producer=php_wrapper; stage=output_unclassified|phase=root_helper; state=failed; producer=php_wrapper; stage=throwable_catch; exception=(?:TypeError|ValueError|ErrorException|JsonException|PDOException|RuntimeException|LogicException|Error|Exception|OtherThrowable)(?:; exception_code=-?\\d+)?|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; state=deferred|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=application_source; state=unconfirmed; operation=(?:application_source_cleanup_begin|root_entry_stat|root_entry_validate|root_open|root_fstat|root_identity_validate|directory_list|entry_stat|entry_type_validate|child_directory_open|child_directory_validate|child_contents_remove|child_directory_close|child_directory_remove|file_owner_validate|file_remove|root_directory_close|root_directory_remove); context=(?:cleanup_only|secondary)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|temporary_root|socket_cleanup); state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
                 $signalDiagnostic = null;
                 foreach ($matches as $match) {
                     if (str_starts_with($match[0], 'phase=cleanup; component=')) {
@@ -2058,6 +2151,14 @@ PY;
                 $diagnostic = implode("\n", array_unique($diagnosticParts));
             }
             if ($processExitCode !== 0) {
+                foreach ($cleanupDiagnostics as $cleanupDiagnostic) {
+                    if (str_starts_with(
+                        $cleanupDiagnostic,
+                        'phase=cleanup; component=application_source; state=unconfirmed; operation=',
+                    )) {
+                        $emitSafeDiagnostic($cleanupDiagnostic);
+                    }
+                }
                 $emitSafeDiagnostic(explode("\n", $diagnostic, 2)[0]);
             }
             self::assertSame(0, $processExitCode, $diagnostic);
