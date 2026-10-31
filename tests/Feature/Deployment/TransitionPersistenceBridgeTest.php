@@ -474,17 +474,45 @@ class TransitionPersistenceBridgeTest extends TestCase
             $wireRequest = $request;
             $wireRequest['payload'] = (object) [];
             $scriptText = <<<'PY'
-import json, os, signal, socket, struct, subprocess, sys, time
+import json, os, signal, socket, struct, subprocess, sys, tempfile, time
 php, artisan, root, socket_path, uid, gid, database, request_json = sys.argv[1:]
 uid, gid = int(uid), int(gid)
 parent = os.path.dirname(socket_path)
 server = None
 conn = None
 child = None
+child_stderr = None
+child_cleanup_unconfirmed = False
 response = bytearray()
+child_diagnostic_markers = {
+    'phase=handler_entry',
+    'phase=unprivileged_identity_pass',
+    'phase=socket_option_pass',
+    'phase=connect_attempt',
+    'phase=connect_success',
+}
 def handle_shutdown(signum, frame):
     raise SystemExit('phase=wrapper_signal; child_state=running')
 signal.signal(signal.SIGTERM, handle_shutdown)
+
+def emit_child_marker():
+    if child_stderr is None or child is None or child.returncode in (None, 0):
+        return
+    marker = 'no_marker'
+    try:
+        child_stderr.flush()
+        child_stderr.seek(0, os.SEEK_END)
+        size = child_stderr.tell()
+        child_stderr.seek(max(0, size - 8192), os.SEEK_SET)
+        for line in child_stderr.read(8192).splitlines():
+            candidate = line.decode('ascii', errors='ignore').strip()
+            if candidate in child_diagnostic_markers:
+                marker = candidate.removeprefix('phase=')
+    except OSError:
+        marker = 'no_marker'
+    sys.stderr.write('phase=child_marker; marker='+marker+'\n')
+    sys.stderr.flush()
+
 try:
     os.mkdir(parent, 0o710)
     os.chown(parent, 0, gid)
@@ -495,8 +523,11 @@ try:
     server.listen(1)
     server.settimeout(0.1)
     env = os.environ.copy()
-    env.update({'APP_ENV':'testing','APP_KEY':'base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','CAREGRID_DEPLOYMENT_ENV':'testing','DB_CONNECTION':'sqlite','DB_DATABASE':database,'DB_URL':'','CACHE_STORE':'array','SESSION_DRIVER':'array','QUEUE_CONNECTION':'sync','MAIL_MAILER':'array','LOG_CHANNEL':'stderr'})
-    child = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for credential_name in ('MYSQL_PWD', 'M9_MYSQL_VERIFY_PASSWORD', 'DB_PASSWORD', 'DB_USERNAME', 'DATABASE_URL', 'MYSQL_ROOT_PASSWORD'):
+        env.pop(credential_name, None)
+    env.update({'APP_ENV':'testing','APP_KEY':'base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','CAREGRID_DEPLOYMENT_ENV':'testing','CAREGRID_TRANSITION_RPC_TEST_DIAGNOSTICS':'1','DB_CONNECTION':'sqlite','DB_DATABASE':database,'DB_URL':'','CACHE_STORE':'array','SESSION_DRIVER':'array','QUEUE_CONNECTION':'sync','MAIL_MAILER':'array','LOG_CHANNEL':'stderr'})
+    child_stderr = tempfile.TemporaryFile(mode='w+b')
+    child = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=child_stderr)
     deadline = time.monotonic() + 20
     while conn is None:
         if time.monotonic() >= deadline:
@@ -571,16 +602,25 @@ finally:
                                 pass
                             child.wait(timeout=2)
                         except subprocess.TimeoutExpired:
-                            raise SystemExit('phase=cleanup; cleanup_state=unconfirmed')
+                            child_cleanup_unconfirmed = True
             finally:
                 try:
-                    os.unlink(socket_path)
-                except FileNotFoundError:
-                    pass
-                try:
-                    os.rmdir(parent)
-                except FileNotFoundError:
-                    pass
+                    emit_child_marker()
+                finally:
+                    try:
+                        if child_stderr is not None:
+                            child_stderr.close()
+                    finally:
+                        try:
+                            os.unlink(socket_path)
+                        except FileNotFoundError:
+                            pass
+                        try:
+                            os.rmdir(parent)
+                        except FileNotFoundError:
+                            pass
+            if child_cleanup_unconfirmed:
+                raise SystemExit('phase=cleanup; cleanup_state=unconfirmed')
 PY;
             file_put_contents($script, $scriptText);
             chmod($script, 0644);
@@ -687,7 +727,7 @@ PY;
             }
             $diagnostic = 'Root peer helper failed.';
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match('/phase=(accept_timeout|accept|response_timeout|response|child_wait_timeout|child|wrapper_signal); child_state=(running|exited)(?:; exit_code=(-?\\d+))?|phase=cleanup; cleanup_state=unconfirmed/', $helperOutput, $matches) === 1) {
+            if (preg_match('/phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(accept_timeout|accept|response_timeout|response|child_wait_timeout|child|wrapper_signal); child_state=(running|exited)(?:; exit_code=(-?\\d+))?|phase=cleanup; cleanup_state=unconfirmed/', $helperOutput, $matches) === 1) {
                 $diagnostic = trim($matches[0]);
             }
             if ($timedOut) {

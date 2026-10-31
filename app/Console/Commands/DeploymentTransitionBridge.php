@@ -18,15 +18,28 @@ final class DeploymentTransitionBridge extends Command
 
     private const MAX_LINE_BYTES = 65536;
 
+    private const TEST_DIAGNOSTIC_PHASES = [
+        'handler_entry',
+        'unprivileged_identity_pass',
+        'socket_option_pass',
+        'connect_attempt',
+        'connect_success',
+    ];
+
     public function handle(TransitionPersistenceBridge $bridge): int
     {
         $connection = null;
         $request = null;
 
         try {
+            $this->emitTestDiagnosticPhase('handler_entry');
             $this->requireUnprivilegedCli();
+            $this->emitTestDiagnosticPhase('unprivileged_identity_pass');
             $socketPath = $this->validatedSocketOption();
+            $this->emitTestDiagnosticPhase('socket_option_pass');
+            $this->emitTestDiagnosticPhase('connect_attempt');
             $connection = $this->connectToRootListener($socketPath);
+            $this->emitTestDiagnosticPhase('connect_success');
             stream_set_timeout($connection, 10);
 
             $requestBytes = $this->readLine($connection);
@@ -79,6 +92,18 @@ final class DeploymentTransitionBridge extends Command
             || posix_geteuid() === 0) {
             throw new RuntimeException('The transition RPC requires its unprivileged CLI identity.');
         }
+    }
+
+    private function emitTestDiagnosticPhase(string $phase): void
+    {
+        if (getenv('APP_ENV') !== 'testing'
+            || getenv('CAREGRID_TRANSITION_RPC_TEST_DIAGNOSTICS') !== '1'
+            || ! in_array($phase, self::TEST_DIAGNOSTIC_PHASES, true)) {
+            return;
+        }
+
+        fwrite(STDERR, 'phase='.$phase."\n");
+        fflush(STDERR);
     }
 
     private function validatedSocketOption(): string
