@@ -8,6 +8,7 @@ use App\Models\TransitionBridgeRequest;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use LogicException;
+use PHPUnit\Framework\AssertionFailedError;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -1323,7 +1324,7 @@ PY;
                     : 'phase=wrapper_timeout; cleanup_state=unconfirmed';
             }
             self::assertSame(0, $processExitCode, $diagnostic);
-        } catch (\PHPUnit\Framework\AssertionFailedError $failure) {
+        } catch (AssertionFailedError $failure) {
             throw $failure;
         } catch (\Throwable) {
             self::fail('phase=root_helper; state=failed');
