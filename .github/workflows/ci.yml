@@ -482,6 +482,65 @@ jobs:
           fi
           exit 1
 
+      - name: Bounded isolated unprivileged peer RPC test
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          diagnostic_log="$RUNNER_TEMP/peer-rpc-isolated-phpunit.log"
+          trap 'rm -f "$diagnostic_log"' EXIT
+
+          set +e
+          env -u M9_MYSQL_VERIFY_PASSWORD timeout --signal=TERM --kill-after=5s 90s \
+            vendor/bin/phpunit -c phpunit.xml --debug --fail-on-skipped \
+              --display-skipped --display-warnings \
+              tests/Feature/Deployment/TransitionPersistenceBridgeTest.php \
+              --filter 'test_artisan_rpc_runs_as_unprivileged_peer_and_checks_so_peercred' \
+              >"$diagnostic_log" 2>&1
+          test_status=$?
+          set -e
+
+          python3 - "$diagnostic_log" "$test_status" <<'PY'
+          import re
+          import sys
+
+          log_path, raw_status = sys.argv[1:]
+          try:
+              test_status = int(raw_status)
+          except ValueError:
+              print("Isolated peer RPC test failed (status unavailable).")
+              raise SystemExit(1)
+
+          safe_diagnostic = re.compile(
+              r"(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\d+)?(?:; errno=-?\d+)?|"
+              r"phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\d+)?(?:; errno=-?\d+)?|"
+              r"phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\d+)?(?:; errno=-?\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|"
+              r"phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|"
+              r"phase=(?:accept|response|child); child_state=exited; exit_code=-?\d+)"
+          )
+          diagnostics = set()
+          try:
+              with open(log_path, "r", encoding="utf-8", errors="replace") as recorded:
+                  for line in recorded:
+                      diagnostics.update(match.group(0) for match in safe_diagnostic.finditer(line))
+          except OSError:
+              print("Isolated peer RPC test failed; safe diagnostic log unavailable.")
+              raise SystemExit(1)
+
+          for diagnostic in sorted(diagnostics):
+              print(diagnostic)
+          if test_status == 0:
+              print("Isolated peer RPC test passed; continuing to the full suite.")
+              raise SystemExit(0)
+          if not diagnostics:
+              print("Isolated peer RPC test failed; no allowlisted diagnostic was captured.")
+          elif test_status in (124, 137):
+              print("Isolated peer RPC test exceeded its 90s deadline.")
+          else:
+              print("Isolated peer RPC test failed (status {}).".format(test_status))
+          raise SystemExit(1)
+          PY
+
       - name: Test suite
         # Full server tests always run on MySQL and fail on skipped tests.
         shell: bash
