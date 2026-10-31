@@ -445,17 +445,27 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('stage=assertion_failure', $workflow);
         self::assertStringContainsString('state=started; producer=php_wrapper; stage=peer_rpc_test_entry', $workflow);
         self::assertStringContainsString('reason=(?:platform_or_privilege_prerequisite_missing|www_data_account_missing)', $workflow);
+        self::assertStringContainsString('state=progress; producer=php_wrapper; stage=(?:prerequisites_passed|identity_parsed|temp_name_created|mkdir_begin|mkdir_complete)', $workflow);
         $peerRpcMethodStart = strpos($source, 'public function test_artisan_rpc_runs_as_unprivileged_peer_and_checks_so_peercred(): void');
         self::assertIsInt($peerRpcMethodStart);
         $peerRpcMethodEnd = strpos($source, "\n    }\n}", $peerRpcMethodStart);
         self::assertIsInt($peerRpcMethodEnd);
         $peerRpcMethod = substr($source, $peerRpcMethodStart, $peerRpcMethodEnd - $peerRpcMethodStart);
         $emitterPosition = strpos($peerRpcMethod, '$emitSafeDiagnostic = static function');
-        self::assertStringContainsString('$safeLifecycleEmitted, &$safeOutcomeEmitted', $peerRpcMethod);
+        self::assertStringContainsString('$safeLifecycleEmitted, &$safeProgressEmitted, &$safeOutcomeEmitted', $peerRpcMethod);
         self::assertStringContainsString('$safeOutcomeEmitted = true;', $peerRpcMethod);
+        self::assertStringContainsString('$safeProgressStages = [', $peerRpcMethod);
         $entryMarker = "\$emitSafeDiagnostic('phase=root_helper; state=started; producer=php_wrapper; stage=peer_rpc_test_entry')";
         $entryMarkerPosition = strpos($peerRpcMethod, $entryMarker);
         $prerequisitePosition = strpos($peerRpcMethod, "if (PHP_OS_FAMILY !== 'Linux'");
+        $progressStages = ['prerequisites_passed', 'identity_parsed', 'temp_name_created', 'mkdir_begin', 'mkdir_complete'];
+        $progressPositions = [];
+        foreach ($progressStages as $progressStage) {
+            self::assertStringContainsString($progressStage, $workflow);
+            $progressPosition = strpos($peerRpcMethod, 'state=progress; producer=php_wrapper; stage='.$progressStage);
+            self::assertIsInt($progressPosition);
+            $progressPositions[] = $progressPosition;
+        }
         $outerTryPosition = strpos($peerRpcMethod, "\n        try {\n            \$pdo = new");
         $catchCallPosition = strpos($peerRpcMethod, '$emitSafeDiagnostic(', $outerTryPosition === false ? 0 : $outerTryPosition);
         self::assertIsInt($emitterPosition);
@@ -464,6 +474,12 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertIsInt($outerTryPosition);
         self::assertIsInt($catchCallPosition);
         self::assertTrue($emitterPosition < $entryMarkerPosition && $entryMarkerPosition < $prerequisitePosition);
+        self::assertTrue($prerequisitePosition < $progressPositions[0]);
+        self::assertTrue($progressPositions[0] < $progressPositions[1]
+            && $progressPositions[1] < $progressPositions[2]
+            && $progressPositions[2] < $progressPositions[3]
+            && $progressPositions[3] < $progressPositions[4]);
+        self::assertTrue($progressPositions[4] < $outerTryPosition);
         self::assertTrue($emitterPosition < $outerTryPosition && $outerTryPosition < $catchCallPosition);
 
         $marker = "\$scriptText = <<<'PY'\n";
@@ -626,8 +642,10 @@ class TransitionPersistenceBridgeTest extends TestCase
     public function test_artisan_rpc_runs_as_unprivileged_peer_and_checks_so_peercred(): void
     {
         $safeLifecycleEmitted = false;
+        $safeProgressEmitted = [];
         $safeOutcomeEmitted = false;
-        $emitSafeDiagnostic = static function (string $line) use (&$safeLifecycleEmitted, &$safeOutcomeEmitted): void {
+        $safeProgressStages = ['prerequisites_passed', 'identity_parsed', 'temp_name_created', 'mkdir_begin', 'mkdir_complete'];
+        $emitSafeDiagnostic = static function (string $line) use (&$safeLifecycleEmitted, &$safeProgressEmitted, &$safeOutcomeEmitted, $safeProgressStages): void {
             if (! str_starts_with($line, 'phase=')) {
                 return;
             }
@@ -638,6 +656,13 @@ class TransitionPersistenceBridgeTest extends TestCase
                 }
 
                 $safeLifecycleEmitted = true;
+            } elseif (str_starts_with($line, 'phase=root_helper; state=progress; producer=php_wrapper; stage=')) {
+                $stage = substr($line, strlen('phase=root_helper; state=progress; producer=php_wrapper; stage='));
+                if (! in_array($stage, $safeProgressStages, true) || isset($safeProgressEmitted[$stage])) {
+                    return;
+                }
+
+                $safeProgressEmitted[$stage] = true;
             } else {
                 if ($safeOutcomeEmitted) {
                     return;
@@ -659,6 +684,7 @@ class TransitionPersistenceBridgeTest extends TestCase
                 'phase=root_helper; state=skipped; producer=php_wrapper; reason=platform_or_privilege_prerequisite_missing');
             self::markTestSkipped('Requires Linux, passwordless sudo, and setpriv for the isolated root-peer integration fixture.');
         }
+        $emitSafeDiagnostic('phase=root_helper; state=progress; producer=php_wrapper; stage=prerequisites_passed');
 
         $wwwData = trim((string) shell_exec('getent passwd www-data'));
         if ($wwwData === '') {
@@ -669,8 +695,12 @@ class TransitionPersistenceBridgeTest extends TestCase
         $parts = explode(':', $wwwData);
         $uid = (int) $parts[2];
         $gid = (int) $parts[3];
+        $emitSafeDiagnostic('phase=root_helper; state=progress; producer=php_wrapper; stage=identity_parsed');
         $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'wpcaregrid-rpc-peer-'.bin2hex(random_bytes(8));
+        $emitSafeDiagnostic('phase=root_helper; state=progress; producer=php_wrapper; stage=temp_name_created');
+        $emitSafeDiagnostic('phase=root_helper; state=progress; producer=php_wrapper; stage=mkdir_begin');
         self::assertTrue(@mkdir($directory, 0711, true), 'phase=root_helper; state=temp_setup_failed');
+        $emitSafeDiagnostic('phase=root_helper; state=progress; producer=php_wrapper; stage=mkdir_complete');
         $database = $directory.DIRECTORY_SEPARATOR.'rpc.sqlite';
         $script = $directory.DIRECTORY_SEPARATOR.'root-peer.py';
         $socket = $directory.DIRECTORY_SEPARATOR.'root'.DIRECTORY_SEPARATOR.'rpc.sock';
