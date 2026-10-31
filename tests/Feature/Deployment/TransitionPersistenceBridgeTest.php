@@ -478,7 +478,9 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('os.fchmod(captured_stderr.fileno(), 0o600)', $helper);
         self::assertStringContainsString('if child is None:', $helper);
         self::assertStringContainsString('child_status = child.poll()', $helper);
-        self::assertStringContainsString('child_state=\'+child_state+child_exit+\'; last_marker=\'+last_progress_marker', $helper);
+        self::assertStringContainsString("raise SystemExit('phase=child_wait_timeout; child_state=running')", $helper);
+        self::assertStringContainsString("raise SystemExit('phase=child; child_state=exited; exit_code='+str(child.returncode))", $helper);
+        self::assertStringContainsString("raise SystemExit('phase=response; child_state=exited; exit_code='+str(child_status))", $helper);
         self::assertStringContainsString('signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})', $helper);
         self::assertStringContainsString('child = subprocess.Popen([\'setpriv\'', $helper);
         self::assertStringContainsString('signal.pthread_sigmask(signal.SIG_SETMASK, spawn_signal_mask)', $helper);
@@ -487,8 +489,11 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('deadline = min(helper_deadline, time.monotonic() + 20)', $helper);
         self::assertStringContainsString('child.wait(timeout=min(20, child_remaining))', $helper);
         self::assertStringContainsString('str_starts_with($match[0], \'phase=wrapper_signal;\')', $source);
+        self::assertStringContainsString('phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check); exception=(?:TimeoutError|PermissionError|FileNotFoundError|OSError|OtherException)(?:; errno=-?\\\\d+)?', $source);
         self::assertStringContainsString('phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|application_source|temporary_root|socket_cleanup); state=unconfirmed', $source);
         self::assertStringContainsString('def copy_application_source():', $helper);
+        self::assertStringContainsString("return 'phase=source_copy; state='+state+'; stage='+stage+'; exception='+exception_class+errno_text", $helper);
+        self::assertStringContainsString("errno_text = '; errno='+str(error_number)", $helper);
         self::assertStringContainsString('def open_source_directory(parent_fd, name):', $helper);
         self::assertStringContainsString('os.open(name, flags, dir_fd=parent_fd)', $helper);
         self::assertStringContainsString('opened.st_ino) != (before.st_dev, before.st_ino)', $helper);
@@ -634,6 +639,12 @@ application_source_created = False
 application_source_identity = None
 application_source_path = None
 application_source_directories = []
+source_copy_stage = 'root_setup'
+source_copy_stages = {
+    'root_setup', 'tracked_manifest', 'checkout_root', 'tracked_files',
+    'required_entries', 'vendor_root', 'vendor_files', 'storage_setup',
+    'finalize', 'checkout_write_check',
+}
 child_stderr = None
 cleanup_unconfirmed_components = set()
 cleanup_in_progress = False
@@ -779,7 +790,9 @@ def create_preflight_cache():
 def copy_application_source():
     global root, artisan, application_source_created, application_source_identity
     global application_source_path, application_source_directories, env, preflight_env
+    global source_copy_stage
     source_root = original_source_root
+    source_copy_stage = 'root_setup'
     os.mkdir(application_source_name, 0o700, dir_fd=preflight_root_fd)
     application_source_created = True
     source_info = os.stat(application_source_name, dir_fd=preflight_root_fd, follow_symlinks=False)
@@ -851,6 +864,7 @@ def copy_application_source():
         'database', 'lang', 'resources', 'routes',
     )
     required_entries = {'artisan', 'composer.json', 'composer.lock', 'app', 'bootstrap', 'config', 'routes'}
+    source_copy_stage = 'tracked_manifest'
     try:
         tracked_result = subprocess.run(
             ['git', '-c', 'safe.directory='+source_root, '-C', source_root, 'ls-files', '-z'],
@@ -864,6 +878,7 @@ def copy_application_source():
         raise TimeoutError
     if tracked_result.returncode != 0:
         raise OSError
+    source_copy_stage = 'checkout_root'
     source_root_fd = os.open(source_root, flags)
     source_root_info = os.fstat(source_root_fd)
     if not stat.S_ISDIR(source_root_info.st_mode):
@@ -871,6 +886,7 @@ def copy_application_source():
         raise OSError
     allowed_top_level = set(allowed_entries)
     copied_entries = set()
+    source_copy_stage = 'tracked_files'
     for raw_path in tracked_result.stdout.split(b'\0'):
         if deferred_shutdown_signal:
             raise SystemExit('phase=wrapper_signal; state=deferred')
@@ -910,11 +926,13 @@ def copy_application_source():
         finally:
             os.close(source_parent_fd)
         copied_entries.add(parts[0] if len(parts) == 1 else parts[0] + '/' + parts[1])
+    source_copy_stage = 'required_entries'
     copied_top_level = {entry.split('/')[0] for entry in copied_entries}
     if not required_entries.issubset(copied_top_level):
         raise OSError
 
     vendor_destination = os.path.join(application_source_path, 'vendor')
+    source_copy_stage = 'vendor_root'
     vendor_source_fd = open_source_directory(source_root_fd, 'vendor')
 
     def copy_vendor_directory(source_directory_fd, destination_directory, relative_path):
@@ -952,6 +970,7 @@ def copy_application_source():
                 raise OSError
 
     try:
+        source_copy_stage = 'vendor_files'
         copy_vendor_directory(vendor_source_fd, vendor_destination, 'vendor')
     finally:
         os.close(vendor_source_fd)
@@ -969,10 +988,12 @@ def copy_application_source():
         os.path.join(storage_root, 'framework', 'sessions'),
         os.path.join(storage_root, 'logs'),
     )
+    source_copy_stage = 'storage_setup'
     for directory in storage_directories:
         os.mkdir(directory, 0o700)
         os.chown(directory, uid, gid)
         os.chmod(directory, 0o700)
+    source_copy_stage = 'finalize'
     for directory in reversed(application_source_directories):
         os.chown(directory, 0, 0)
         os.chmod(directory, 0o555)
@@ -981,6 +1002,24 @@ def copy_application_source():
     artisan = os.path.join(root, 'artisan')
     preflight_env['VIEW_COMPILED_PATH'] = os.path.join(storage_root, 'framework', 'views')
     env['VIEW_COMPILED_PATH'] = preflight_env['VIEW_COMPILED_PATH']
+
+def source_copy_failure_diagnostic(state, error):
+    stage = source_copy_stage if source_copy_stage in source_copy_stages else 'root_setup'
+    if isinstance(error, TimeoutError):
+        exception_class = 'TimeoutError'
+    elif isinstance(error, PermissionError):
+        exception_class = 'PermissionError'
+    elif isinstance(error, FileNotFoundError):
+        exception_class = 'FileNotFoundError'
+    elif isinstance(error, OSError):
+        exception_class = 'OSError'
+    else:
+        exception_class = 'OtherException'
+    error_number = getattr(error, 'errno', None)
+    errno_text = '; errno='+str(error_number) if type(error_number) is int else ''
+    if state not in ('failed', 'timeout'):
+        state = 'failed'
+    return 'phase=source_copy; state='+state+'; stage='+stage+'; exception='+exception_class+errno_text
 
 def remove_application_source():
     global application_source_created
@@ -1392,17 +1431,16 @@ try:
     mark_progress('source_copy_begin')
     try:
         copy_application_source()
-    except TimeoutError:
-        raise SystemExit('phase=source_copy; state=timeout')
-    except Exception:
-        raise SystemExit('phase=source_copy; state=failed')
+    except Exception as source_copy_error:
+        source_copy_state = 'timeout' if isinstance(source_copy_error, TimeoutError) else 'failed'
+        raise SystemExit(source_copy_failure_diagnostic(source_copy_state, source_copy_error)) from None
     mark_progress('source_copy_end')
+    source_copy_stage = 'checkout_write_check'
     try:
         verify_original_checkout_is_not_writable()
-    except TimeoutError:
-        raise SystemExit('phase=source_copy; state=timeout')
-    except Exception:
-        raise SystemExit('phase=source_copy; state=failed')
+    except Exception as source_copy_error:
+        source_copy_state = 'timeout' if isinstance(source_copy_error, TimeoutError) else 'failed'
+        raise SystemExit(source_copy_failure_diagnostic(source_copy_state, source_copy_error)) from None
     run_preflight_probe('artisan_version', [php, artisan, '--version'])
     mark_progress('preflight_cache_lock_begin')
     try:
@@ -1746,7 +1784,7 @@ PY;
             $wrapperTimeoutDiagnostic = null;
             $cleanupDiagnostics = [];
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|phase=source_copy; state=(?:failed|timeout)|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; state=deferred|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|application_source|temporary_root|socket_cleanup); state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
+            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|APP_PROVIDER_BOOT|SQLITE_OR_PDO_BOOT|SYMFONY_CONSOLE_BOOT_OR_REGISTRATION|PHP_PARSE_OR_RUNTIME_FATAL|EMPTY_DIAGNOSTIC|INPUT_PARENT_TRAVERSE_DENIED|INPUT_SCRIPT_MISSING|INPUT_SCRIPT_NOT_REGULAR|INPUT_SCRIPT_UNREADABLE|INPUT_SCRIPT_READABLE|INPUT_ACCESS_CHECK_FAILED|PHP_STARTUP|APP_KEY_CONFIG|PHP_WARNING|OTHER_EXCEPTION|OTHER_NONEMPTY_OUTPUT|UNCLASSIFIED))?|phase=source_copy; state=(?:failed|timeout); stage=(?:root_setup|tracked_manifest|checkout_root|tracked_files|required_entries|vendor_root|vendor_files|storage_setup|finalize|checkout_write_check); exception=(?:TimeoutError|PermissionError|FileNotFoundError|OSError|OtherException)(?:; errno=-?\\d+)?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; state=deferred|phase=wrapper_signal; child_state=(?:not_started|running|exited)(?:; exit_code=-?\\d+)?; last_marker=(?:helper_begin|source_copy_begin|source_copy_end|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=(?:accept|response|child); child_state=exited; exit_code=-?\\d+|phase=wrapper_timeout; cleanup_state=(?:confirmed|unconfirmed)|phase=cleanup; component=(?:child_reap|preflight_reap|preflight_cache|application_source|temporary_root|socket_cleanup); state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
                 $signalDiagnostic = null;
                 foreach ($matches as $match) {
                     if (str_starts_with($match[0], 'phase=cleanup; component=')) {
