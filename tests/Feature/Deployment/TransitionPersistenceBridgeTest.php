@@ -472,8 +472,42 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('stderr=subprocess.STDOUT if capture_diagnostic_output else subprocess.DEVNULL', $helper);
         self::assertStringContainsString('diagnostic = stream.read(8192)', $helper);
         self::assertStringContainsString("'; cause='+classify_artisan_failure(captured_stderr)", $helper);
-        self::assertStringContainsString('destination.tell() < 8192', $helper);
+        self::assertStringContainsString('remaining = 8192 - destination.tell()', $helper);
+        self::assertStringContainsString('if remaining > 0:', $helper);
         self::assertStringContainsString('os.fchmod(captured_stderr.fileno(), 0o600)', $helper);
+        self::assertStringContainsString("phase=wrapper_signal; child_state=running; last_marker='+last_progress_marker", $helper);
+        foreach ([
+            'preflight_php_version_begin',
+            'preflight_artisan_version_begin',
+            'preflight_cache_lock_begin',
+            'preflight_artisan_list_begin',
+            'preflight_command_help_begin',
+            'socket_setup_begin',
+            'child_spawn_begin',
+            'socket_accept_begin',
+            'request_send_begin',
+            'response_read_begin',
+            'child_wait_begin',
+            'cleanup_begin',
+            'preflight_reap_begin',
+            'child_reap_begin',
+            'cache_cleanup_begin',
+            'phase=socket_setup; state=failed',
+            'phase=child_start; state=failed',
+            'phase=peer_credentials; state=invalid',
+            'phase=peer_credentials; state=mismatch',
+            'phase=request; state=send_failed',
+            'phase=response; state=framing_invalid',
+            'phase=response; state=decode_failed',
+            'phase=response; state=envelope_invalid',
+            'phase=response; state=canonical_invalid',
+            'phase=response; state=identity_mismatch',
+            'phase=response; state=tuple_mismatch',
+        ] as $diagnosticToken) {
+            self::assertStringContainsString($diagnosticToken, $helper);
+        }
+        self::assertStringContainsString("'phase=root_helper; state=failed'", $source);
+        self::assertStringContainsString('phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)', $source);
 
         $bootstrapPosition = strpos($helper, "run_preflight_probe('artisan_version'");
         $lockPosition = strpos($helper, 'lock_preflight_cache()', $bootstrapPosition);
@@ -509,7 +543,7 @@ class TransitionPersistenceBridgeTest extends TestCase
         $uid = (int) $parts[2];
         $gid = (int) $parts[3];
         $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'wpcaregrid-rpc-peer-'.bin2hex(random_bytes(8));
-        mkdir($directory, 0711, true);
+        self::assertTrue(@mkdir($directory, 0711, true), 'phase=root_helper; state=temp_setup_failed');
         $database = $directory.DIRECTORY_SEPARATOR.'rpc.sqlite';
         $script = $directory.DIRECTORY_SEPARATOR.'root-peer.py';
         $socket = $directory.DIRECTORY_SEPARATOR.'root'.DIRECTORY_SEPARATOR.'rpc.sock';
@@ -520,7 +554,7 @@ class TransitionPersistenceBridgeTest extends TestCase
             $tuple = $this->openTuple();
             $statement = $pdo->prepare('INSERT INTO deployment_transition_fences (fence_key,state,operation_id,generation,boot_id,journal_seq,journal_head_hash,evidence_digest,permit_manifest_hash,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
             $statement->execute(['global', ...array_values($tuple), null, date('Y-m-d H:i:s'), date('Y-m-d H:i:s')]);
-            chmod($database, 0644);
+            self::assertTrue(@chmod($database, 0644), 'phase=root_helper; state=fixture_permissions_failed');
 
             $requestId = '018f0f8e-7b1c-7abc-8abc-123456789077';
             $payload = [];
@@ -556,6 +590,37 @@ child_stderr = None
 child_cleanup_unconfirmed = False
 preflight_cleanup_unconfirmed = False
 response = bytearray()
+progress_marker_values = {
+    'helper_begin',
+    'preflight_php_version_begin', 'preflight_php_version_end',
+    'preflight_artisan_version_begin', 'preflight_artisan_version_end',
+    'preflight_cache_lock_begin', 'preflight_cache_lock_end',
+    'preflight_artisan_list_begin', 'preflight_artisan_list_end',
+    'preflight_command_help_begin', 'preflight_command_help_end',
+    'socket_setup_begin', 'socket_setup_end',
+    'child_spawn_begin', 'child_spawn_end',
+    'socket_accept_begin', 'socket_accept_end',
+    'peer_credentials_begin', 'peer_credentials_end',
+    'request_send_begin', 'request_send_end',
+    'response_read_begin', 'response_read_end',
+    'child_wait_begin', 'child_wait_end',
+    'cleanup_begin', 'preflight_reap_begin', 'preflight_reap_end',
+    'child_reap_begin', 'child_reap_end',
+    'cache_cleanup_begin', 'cache_cleanup_end', 'cleanup_end',
+}
+last_progress_marker = 'helper_begin'
+
+def mark_progress(marker):
+    global last_progress_marker
+    if marker not in progress_marker_values:
+        return
+    last_progress_marker = marker
+    try:
+        sys.stderr.write('phase=progress; marker='+marker+'\n')
+        sys.stderr.flush()
+    except OSError:
+        pass
+
 child_diagnostic_markers = {
     'phase=handler_entry',
     'phase=unprivileged_identity_pass',
@@ -564,7 +629,7 @@ child_diagnostic_markers = {
     'phase=connect_success',
 }
 def handle_shutdown(signum, frame):
-    raise SystemExit('phase=wrapper_signal; child_state=running')
+    raise SystemExit('phase=wrapper_signal; child_state=running; last_marker='+last_progress_marker)
 signal.signal(signal.SIGTERM, handle_shutdown)
 
 def emit_child_marker():
@@ -758,6 +823,14 @@ def cleanup_preflight_cache():
 
 def run_preflight_probe(probe, command, capture_stdout=False):
     global preflight, preflight_cleanup_unconfirmed
+    probe_progress = {
+        'php_version': ('preflight_php_version_begin', 'preflight_php_version_end'),
+        'artisan_version': ('preflight_artisan_version_begin', 'preflight_artisan_version_end'),
+        'artisan_list': ('preflight_artisan_list_begin', 'preflight_artisan_list_end'),
+        'command_help': ('preflight_command_help_begin', 'preflight_command_help_end'),
+    }.get(probe)
+    if probe_progress is not None:
+        mark_progress(probe_progress[0])
     captured_stdout = None
     captured_stderr = None
     stderr_reader = None
@@ -880,6 +953,8 @@ def run_preflight_probe(probe, command, capture_stdout=False):
                 raise SystemExit('phase=preflight; probe=artisan_list; state=failed')
             if not command_registered:
                 raise SystemExit('phase=preflight; probe=artisan_list; state=command_missing; exit_code=0')
+        if probe_progress is not None:
+            mark_progress(probe_progress[1])
     finally:
         if captured_stdout is not None:
             captured_stdout.close()
@@ -887,6 +962,7 @@ def run_preflight_probe(probe, command, capture_stdout=False):
             captured_stderr.close()
 
 try:
+    mark_progress('helper_begin')
     env = os.environ.copy()
     for credential_name in ('MYSQL_PWD', 'M9_MYSQL_VERIFY_PASSWORD', 'DB_PASSWORD', 'DB_USERNAME', 'DATABASE_URL', 'MYSQL_ROOT_PASSWORD'):
         env.pop(credential_name, None)
@@ -903,10 +979,12 @@ try:
     # Laravel can generate missing manifests during this first bounded Artisan bootstrap, outside the checkout.
     run_preflight_probe('php_version', [php, '--version'])
     run_preflight_probe('artisan_version', [php, artisan, '--version'])
+    mark_progress('preflight_cache_lock_begin')
     try:
         lock_preflight_cache()
     except Exception:
         raise SystemExit('phase=preflight; probe=cache_setup; state=failed')
+    mark_progress('preflight_cache_lock_end')
     env.update({
         'APP_CONFIG_CACHE': preflight_env['APP_CONFIG_CACHE'],
         'APP_PACKAGES_CACHE': preflight_env['APP_PACKAGES_CACHE'],
@@ -915,17 +993,28 @@ try:
     run_preflight_probe('artisan_list', [php, artisan, 'list', '--raw'], capture_stdout=True)
     run_preflight_probe('command_help', [php, artisan, 'deployment:transition-bridge', '--connect-socket', socket_path, '--help'])
 
-    os.mkdir(parent, 0o710)
-    os.chown(parent, 0, gid)
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(socket_path)
-    os.chown(socket_path, 0, gid)
-    os.chmod(socket_path, 0o620)
-    server.listen(1)
-    server.settimeout(0.1)
+    mark_progress('socket_setup_begin')
+    try:
+        os.mkdir(parent, 0o710)
+        os.chown(parent, 0, gid)
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(socket_path)
+        os.chown(socket_path, 0, gid)
+        os.chmod(socket_path, 0o620)
+        server.listen(1)
+        server.settimeout(0.1)
+    except Exception:
+        raise SystemExit('phase=socket_setup; state=failed')
+    mark_progress('socket_setup_end')
     child_stderr = tempfile.TemporaryFile(mode='w+b')
-    child = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=child_stderr)
+    mark_progress('child_spawn_begin')
+    try:
+        child = subprocess.Popen(['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',php,artisan,'deployment:transition-bridge','--connect-socket',socket_path], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=child_stderr)
+    except Exception:
+        raise SystemExit('phase=child_start; state=failed')
+    mark_progress('child_spawn_end')
     deadline = time.monotonic() + 20
+    mark_progress('socket_accept_begin')
     while conn is None:
         if time.monotonic() >= deadline:
             child_status = child.poll()
@@ -938,11 +1027,25 @@ try:
             child_status = child.poll()
             if child_status is not None:
                 raise SystemExit('phase=accept; child_state=exited; exit_code='+str(child_status))
-    pid, peer_uid, peer_gid = struct.unpack('3i', conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))
+        except OSError:
+            raise SystemExit('phase=accept; state=failed')
+    mark_progress('socket_accept_end')
+    mark_progress('peer_credentials_begin')
+    try:
+        pid, peer_uid, peer_gid = struct.unpack('3i', conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))
+    except Exception:
+        raise SystemExit('phase=peer_credentials; state=invalid')
     if (pid, peer_uid, peer_gid) != (child.pid, uid, gid):
-        raise SystemExit('SO_PEERCRED mismatch')
-    conn.settimeout(0.1)
-    conn.sendall((json.dumps(json.loads(request_json), sort_keys=True, separators=(',',':'))+'\n').encode())
+        raise SystemExit('phase=peer_credentials; state=mismatch')
+    mark_progress('peer_credentials_end')
+    mark_progress('request_send_begin')
+    try:
+        conn.settimeout(0.1)
+        conn.sendall((json.dumps(json.loads(request_json), sort_keys=True, separators=(',',':'))+'\n').encode())
+    except Exception:
+        raise SystemExit('phase=request; state=send_failed')
+    mark_progress('request_send_end')
+    mark_progress('response_read_begin')
     while b'\n' not in response:
         if time.monotonic() >= deadline:
             child_status = child.poll()
@@ -956,27 +1059,57 @@ try:
             if child_status is not None:
                 raise SystemExit('phase=response; child_state=exited; exit_code='+str(child_status))
             continue
+        except Exception:
+            raise SystemExit('phase=response; state=receive_failed')
         if not chunk:
             break
         if len(response) + len(chunk) > 65536:
-            raise SystemExit('Invalid RPC response framing')
+            raise SystemExit('phase=response; state=framing_invalid')
         response.extend(chunk)
+    mark_progress('response_read_end')
+    mark_progress('child_wait_begin')
     try:
         child.wait(timeout=20)
     except subprocess.TimeoutExpired:
         raise SystemExit('phase=child_wait_timeout; child_state=running')
+    except Exception:
+        raise SystemExit('phase=child; state=wait_failed')
+    mark_progress('child_wait_end')
     if child.returncode != 0:
         raise SystemExit('phase=child; child_state=exited; exit_code='+str(child.returncode))
-    if len(response) > 65536 or not response.endswith(b'\n') or response.count(b'\n') != 1: raise SystemExit('Invalid RPC response framing')
-    decoded = json.loads(response)
-    if set(decoded) != {'version','request_id','request_digest','status','result'} or decoded['status'] != 'OK': raise SystemExit('Invalid RPC response envelope')
-    if (json.dumps(decoded, sort_keys=True, separators=(',',':'))+'\n').encode() != bytes(response): raise SystemExit('RPC response is not canonical compact ASCII JSON')
-    if decoded['request_id'] != json.loads(request_json)['request_id'] or decoded['request_digest'] != json.loads(request_json)['request_digest']: raise SystemExit('RPC identity mismatch')
-    if decoded['result']['state'] != 'OPEN': raise SystemExit('Unexpected fence tuple')
-finally:
+    if len(response) > 65536 or not response.endswith(b'\n') or response.count(b'\n') != 1:
+        raise SystemExit('phase=response; state=framing_invalid')
     try:
+        decoded = json.loads(response)
+    except Exception:
+        raise SystemExit('phase=response; state=decode_failed')
+    if not isinstance(decoded, dict) or set(decoded) != {'version','request_id','request_digest','status','result'} or decoded['status'] != 'OK':
+        raise SystemExit('phase=response; state=envelope_invalid')
+    try:
+        canonical_response = (json.dumps(decoded, sort_keys=True, separators=(',',':'))+'\n').encode()
+    except Exception:
+        raise SystemExit('phase=response; state=canonical_invalid')
+    if canonical_response != bytes(response):
+        raise SystemExit('phase=response; state=canonical_invalid')
+    try:
+        request_envelope = json.loads(request_json)
+        identity_matches = (
+            decoded['request_id'] == request_envelope['request_id']
+            and decoded['request_digest'] == request_envelope['request_digest']
+        )
+    except Exception:
+        identity_matches = False
+    if not identity_matches:
+        raise SystemExit('phase=response; state=identity_mismatch')
+    if not isinstance(decoded.get('result'), dict) or decoded['result'].get('state') != 'OPEN':
+        raise SystemExit('phase=response; state=tuple_mismatch')
+finally:
+    mark_progress('cleanup_begin')
+    try:
+        mark_progress('preflight_reap_begin')
         if preflight is not None and not stop_preflight_bounded(preflight):
             preflight_cleanup_unconfirmed = True
+        mark_progress('preflight_reap_end')
     finally:
         try:
             if conn is not None:
@@ -987,6 +1120,7 @@ finally:
                     server.close()
             finally:
                 try:
+                    mark_progress('child_reap_begin')
                     if child is not None:
                         if child.poll() is None:
                             try:
@@ -1004,6 +1138,7 @@ finally:
                                 child.wait(timeout=2)
                             except subprocess.TimeoutExpired:
                                 child_cleanup_unconfirmed = True
+                    mark_progress('child_reap_end')
                 finally:
                     try:
                         emit_child_marker()
@@ -1020,21 +1155,29 @@ finally:
                                 os.rmdir(parent)
                             except FileNotFoundError:
                                 pass
+                            mark_progress('cache_cleanup_begin')
                             cleanup_preflight_cache()
+                            mark_progress('cache_cleanup_end')
                 if child_cleanup_unconfirmed:
                     raise SystemExit('phase=cleanup; cleanup_state=unconfirmed')
                 if preflight_cleanup_unconfirmed:
                     raise SystemExit('phase=cleanup; cleanup_state=unconfirmed')
+                mark_progress('cleanup_end')
 PY;
-            file_put_contents($script, $scriptText);
-            chmod($script, 0644);
+            self::assertSame(strlen($scriptText), @file_put_contents($script, $scriptText), 'phase=root_helper; state=script_write_failed');
+            self::assertTrue(@chmod($script, 0644), 'phase=root_helper; state=script_mode_failed');
+            try {
+                $requestJson = json_encode($wireRequest, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+            } catch (\JsonException) {
+                self::fail('phase=root_helper; state=request_encode_failed');
+            }
             $command = [
                 'sudo', '-n', 'python3', $script, PHP_BINARY, base_path('artisan'), base_path(),
                 $socket, (string) $uid, (string) $gid, $database,
-                json_encode($wireRequest, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
+                $requestJson,
             ];
-            $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-            self::assertIsResource($process);
+            $process = @proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+            self::assertIsResource($process, 'phase=root_helper; state=spawn_failed');
             $openPipes = $pipes;
             $captured = [1 => '', 2 => ''];
             foreach ($openPipes as $pipe) {
@@ -1129,10 +1272,10 @@ PY;
             if ($processExitCode < 0 && $observedExitCode !== null) {
                 $processExitCode = $observedExitCode;
             }
-            $diagnostic = 'Root peer helper failed.';
+            $diagnostic = 'phase=root_helper; state=failed';
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|OTHER_EXCEPTION|UNCLASSIFIED))?|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(accept_timeout|response_timeout|child_wait_timeout|wrapper_signal); child_state=(running|exited)(?:; exit_code=(-?\\d+))?|phase=cleanup; cleanup_state=unconfirmed)/', $helperOutput, $matches) === 1) {
-                $diagnostic = trim($matches[0]);
+            if (preg_match_all('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|OTHER_EXCEPTION|UNCLASSIFIED))?|phase=socket_setup; state=failed|phase=child_start; state=failed|phase=peer_credentials; state=(?:invalid|mismatch)|phase=request; state=send_failed|phase=response; state=(?:framing_invalid|receive_failed|decode_failed|envelope_invalid|canonical_invalid|identity_mismatch|tuple_mismatch)|phase=root_helper; state=(?:failed|spawn_failed|script_write_failed|script_mode_failed|request_encode_failed|temp_setup_failed|fixture_permissions_failed)|phase=accept; state=failed|phase=child; state=wait_failed|phase=progress; marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end)|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(?:accept_timeout|response_timeout|child_wait_timeout); child_state=running|phase=wrapper_signal; child_state=running(?:; last_marker=(?:helper_begin|preflight_php_version_begin|preflight_php_version_end|preflight_artisan_version_begin|preflight_artisan_version_end|preflight_cache_lock_begin|preflight_cache_lock_end|preflight_artisan_list_begin|preflight_artisan_list_end|preflight_command_help_begin|preflight_command_help_end|socket_setup_begin|socket_setup_end|child_spawn_begin|child_spawn_end|socket_accept_begin|socket_accept_end|peer_credentials_begin|peer_credentials_end|request_send_begin|request_send_end|response_read_begin|response_read_end|child_wait_begin|child_wait_end|cleanup_begin|preflight_reap_begin|preflight_reap_end|child_reap_begin|child_reap_end|cache_cleanup_begin|cache_cleanup_end|cleanup_end))?|phase=(?:accept|response|child|wrapper_signal); child_state=exited; exit_code=-?\\d+|phase=cleanup; cleanup_state=unconfirmed)/', $helperOutput, $matches, PREG_SET_ORDER) > 0) {
+                $diagnostic = trim($matches[count($matches) - 1][0]);
             }
             if ($timedOut) {
                 $diagnostic = $cleanupConfirmed
@@ -1140,6 +1283,10 @@ PY;
                     : 'phase=wrapper_timeout; cleanup_state=unconfirmed';
             }
             self::assertSame(0, $processExitCode, $diagnostic);
+        } catch (\PHPUnit\Framework\AssertionFailedError $failure) {
+            throw $failure;
+        } catch (\Throwable) {
+            self::fail('phase=root_helper; state=failed');
         } finally {
             foreach ([$script, $database] as $path) {
                 if (is_file($path)) {
