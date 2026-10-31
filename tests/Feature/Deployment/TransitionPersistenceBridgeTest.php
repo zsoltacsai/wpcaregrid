@@ -450,7 +450,7 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString("preflight_env['APP_CONFIG_CACHE'] = os.path.join(preflight_cache_dir, 'config-cache.php')", $helper);
         self::assertStringContainsString("preflight_env['APP_PACKAGES_CACHE'] = os.path.join(preflight_cache_dir, 'packages.php')", $helper);
         self::assertStringContainsString("preflight_env['APP_SERVICES_CACHE'] = os.path.join(preflight_cache_dir, 'services.php')", $helper);
-        self::assertStringContainsString("os.mkdir(candidate, 0o700, dir_fd=preflight_tmp_fd)", $helper);
+        self::assertStringContainsString('os.mkdir(candidate, 0o700, dir_fd=preflight_tmp_fd)', $helper);
         self::assertStringContainsString('except FileExistsError:', $helper);
         self::assertStringContainsString('stat.S_ISVTX', $helper);
         self::assertStringContainsString('os.fchmod(preflight_root_fd, 0o711)', $helper);
@@ -462,10 +462,18 @@ class TransitionPersistenceBridgeTest extends TestCase
         self::assertStringContainsString('if preflight_cache_fd is not None:', $helper);
         self::assertStringContainsString("os.rmdir('preflight-cache', dir_fd=preflight_root_fd)", $helper);
         self::assertStringContainsString('preflight_root_identity = (root_entry.st_dev, root_entry.st_ino)', $helper);
-        self::assertStringContainsString("os.stat(preflight_tmp_name, dir_fd=preflight_tmp_fd, follow_symlinks=False)", $helper);
+        self::assertStringContainsString('os.stat(preflight_tmp_name, dir_fd=preflight_tmp_fd, follow_symlinks=False)', $helper);
         self::assertStringContainsString("os.stat('preflight-cache', dir_fd=preflight_root_fd, follow_symlinks=False)", $helper);
         self::assertStringContainsString('os.rmdir(preflight_tmp_name, dir_fd=preflight_tmp_fd)', $helper);
         self::assertStringNotContainsString('os.rmdir(preflight_cache_dir)', $helper);
+        self::assertStringContainsString("capture_diagnostic_output = probe == 'artisan_version'", $helper);
+        self::assertStringContainsString("captured_stderr = tempfile.TemporaryFile(mode='w+b')", $helper);
+        self::assertStringContainsString('stdout=subprocess.PIPE if capture_diagnostic_output else captured_stdout if captured_stdout is not None else subprocess.DEVNULL', $helper);
+        self::assertStringContainsString('stderr=subprocess.STDOUT if capture_diagnostic_output else subprocess.DEVNULL', $helper);
+        self::assertStringContainsString('diagnostic = stream.read(8192)', $helper);
+        self::assertStringContainsString("'; cause='+classify_artisan_failure(captured_stderr)", $helper);
+        self::assertStringContainsString('destination.tell() < 8192', $helper);
+        self::assertStringContainsString('os.fchmod(captured_stderr.fileno(), 0o600)', $helper);
 
         $bootstrapPosition = strpos($helper, "run_preflight_probe('artisan_version'");
         $lockPosition = strpos($helper, 'lock_preflight_cache()', $bootstrapPosition);
@@ -526,7 +534,7 @@ class TransitionPersistenceBridgeTest extends TestCase
             $wireRequest = $request;
             $wireRequest['payload'] = (object) [];
             $scriptText = <<<'PY'
-import json, os, signal, socket, stat, struct, subprocess, sys, tempfile, time
+import json, os, signal, socket, stat, struct, subprocess, sys, tempfile, threading, time
 php, artisan, root, socket_path, uid, gid, database, request_json = sys.argv[1:]
 uid, gid = int(uid), int(gid)
 parent = os.path.dirname(socket_path)
@@ -751,34 +759,116 @@ def cleanup_preflight_cache():
 def run_preflight_probe(probe, command, capture_stdout=False):
     global preflight, preflight_cleanup_unconfirmed
     captured_stdout = None
+    captured_stderr = None
+    stderr_reader = None
+
+    def drain_bounded_diagnostic_output(pipe, destination):
+        try:
+            while True:
+                chunk = pipe.read(4096)
+                if not chunk:
+                    return
+                remaining = 8192 - destination.tell()
+                if remaining > 0:
+                    destination.write(chunk[:remaining])
+        except OSError:
+            return
+        finally:
+            try:
+                pipe.close()
+            except OSError:
+                pass
+
     try:
         if capture_stdout:
             captured_stdout = tempfile.TemporaryFile(mode='w+b')
+        capture_diagnostic_output = probe == 'artisan_version'
+        if capture_diagnostic_output:
+            captured_stderr = tempfile.TemporaryFile(mode='w+b')
+            os.fchmod(captured_stderr.fileno(), 0o600)
     except Exception:
         raise SystemExit('phase=preflight; probe='+probe+'; state=failed')
+
+    def classify_artisan_failure(stream):
+        try:
+            stream.flush()
+            stream.seek(0)
+            diagnostic = stream.read(8192).lower()
+        except Exception:
+            return 'UNCLASSIFIED'
+        cache_names = (b'packages.php', b'services.php')
+        cache_name_present = any(name in diagnostic for name in cache_names)
+        file_open_failure = any(token in diagnostic for token in (
+            b'failed to open stream', b'failed opening required', b'file does not exist at path',
+            b'no such file or directory', b'permission denied',
+            b'operation not permitted', b'read-only file system',
+        ))
+        if b'config-cache.php' in diagnostic and (
+                file_open_failure or b'require(' in diagnostic or b'include(' in diagnostic
+                or b'syntax error' in diagnostic or b'unexpected token' in diagnostic):
+            return 'CONFIG_CACHE_LOAD'
+        manifest_write_family = b'directory must be present and writable' in diagnostic or (
+            cache_name_present and file_open_failure and any(token in diagnostic for token in (
+                b'file_put_contents(', b'tempnam(', b'rename(',
+            ))
+        )
+        if manifest_write_family:
+            return 'CACHE_MANIFEST_WRITE'
+        if cache_name_present and file_open_failure and (
+                b'require(' in diagnostic or b'include(' in diagnostic
+                or b'file does not exist at path' in diagnostic):
+            return 'CACHE_MANIFEST_READ'
+        if any(name in diagnostic for name in (b'autoload.php', b'bootstrap/app.php')) and file_open_failure:
+            return 'PHP_AUTOLOAD_OR_BOOTSTRAP'
+        if any(token in diagnostic for token in (
+                b'sqlstate[', b'could not find driver', b'connection refused',
+                b'database is locked', b'database connection', b'unable to open database file')):
+            return 'DB_OR_PROVIDER_BOOT'
+        if any(token in diagnostic for token in (
+                b'console kernel', b'console application', b'bootstrapwith',
+                b'application bootstrap', b'command application')):
+            return 'CONSOLE_BOOTSTRAP'
+        if b'fatal error' in diagnostic or b'uncaught ' in diagnostic or b'exception:' in diagnostic:
+            return 'OTHER_EXCEPTION'
+        return 'UNCLASSIFIED'
+
     try:
         try:
             preflight = subprocess.Popen(
                 ['setpriv','--reuid='+str(uid),'--regid='+str(gid),'--init-groups',*command],
                 cwd=root,
                 env=preflight_env,
-                stdout=captured_stdout if captured_stdout is not None else subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if capture_diagnostic_output else captured_stdout if captured_stdout is not None else subprocess.DEVNULL,
+                stderr=subprocess.STDOUT if capture_diagnostic_output else subprocess.DEVNULL,
             )
         except Exception:
             raise SystemExit('phase=preflight; probe='+probe+'; state=failed')
+        if capture_diagnostic_output:
+            stderr_reader = threading.Thread(
+                target=drain_bounded_diagnostic_output,
+                args=(preflight.stdout, captured_stderr),
+                daemon=True,
+            )
+            stderr_reader.start()
         try:
             preflight.wait(timeout=8)
         except subprocess.TimeoutExpired:
             preflight_cleanup_unconfirmed = not stop_preflight_bounded(preflight)
+            if stderr_reader is not None:
+                stderr_reader.join(timeout=2)
             status = 'phase=preflight; probe='+probe+'; state=timeout'
             if preflight.returncode is not None:
                 status += '; exit_code='+str(preflight.returncode)
             raise SystemExit(status)
         except Exception:
             raise SystemExit('phase=preflight; probe='+probe+'; state=failed')
+        if stderr_reader is not None:
+            stderr_reader.join(timeout=2)
         if preflight.returncode != 0:
-            raise SystemExit('phase=preflight; probe='+probe+'; state=failed; exit_code='+str(preflight.returncode))
+            status = 'phase=preflight; probe='+probe+'; state=failed; exit_code='+str(preflight.returncode)
+            if capture_diagnostic_output:
+                status += '; cause='+classify_artisan_failure(captured_stderr)
+            raise SystemExit(status)
         if captured_stdout is not None:
             try:
                 captured_stdout.seek(0)
@@ -793,6 +883,8 @@ def run_preflight_probe(probe, command, capture_stdout=False):
     finally:
         if captured_stdout is not None:
             captured_stdout.close()
+        if captured_stderr is not None:
+            captured_stderr.close()
 
 try:
     env = os.environ.copy()
@@ -1039,7 +1131,7 @@ PY;
             }
             $diagnostic = 'Root peer helper failed.';
             $helperOutput = $captured[1]."\n".$captured[2];
-            if (preg_match('/phase=preflight; probe=(?:php_version|cache_setup|artisan_version|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(accept_timeout|response_timeout|child_wait_timeout|wrapper_signal); child_state=(running|exited)(?:; exit_code=(-?\\d+))?|phase=cleanup; cleanup_state=unconfirmed/', $helperOutput, $matches) === 1) {
+            if (preg_match('/(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\\d+)?|phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|OTHER_EXCEPTION|UNCLASSIFIED))?|phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|phase=(accept_timeout|response_timeout|child_wait_timeout|wrapper_signal); child_state=(running|exited)(?:; exit_code=(-?\\d+))?|phase=cleanup; cleanup_state=unconfirmed)/', $helperOutput, $matches) === 1) {
                 $diagnostic = trim($matches[0]);
             }
             if ($timedOut) {

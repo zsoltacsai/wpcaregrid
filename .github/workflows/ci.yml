@@ -530,7 +530,9 @@ jobs:
               return "".join(char if char.isalnum() or char in "_.$:\\" else "?" for char in value)[:240]
 
           safe_rpc_diagnostic = re.compile(
-              r"(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_version|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\d+)?|"
+              r"(?:phase=preflight; probe=(?:php_version|cache_setup|artisan_list|command_help); state=(?:timeout|failed|command_missing)(?:; exit_code=-?\d+)?|"
+              r"phase=preflight; probe=artisan_version; state=timeout(?:; exit_code=-?\d+)?|"
+              r"phase=preflight; probe=artisan_version; state=failed(?:; exit_code=-?\d+)?(?:; cause=(?:CACHE_MANIFEST_WRITE|CACHE_MANIFEST_READ|CONFIG_CACHE_LOAD|PHP_AUTOLOAD_OR_BOOTSTRAP|DB_OR_PROVIDER_BOOT|CONSOLE_BOOTSTRAP|OTHER_EXCEPTION|UNCLASSIFIED))?|"
               r"phase=child_marker; marker=(?:handler_entry|unprivileged_identity_pass|socket_option_pass|connect_attempt|connect_success|no_marker)|"
               r"phase=(?:accept_timeout|response_timeout|child_wait_timeout|wrapper_signal); child_state=running|"
               r"phase=(?:accept|response|child|wrapper_signal); child_state=exited; exit_code=-?\d+|"
