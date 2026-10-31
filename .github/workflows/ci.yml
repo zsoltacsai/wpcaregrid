@@ -788,6 +788,8 @@ jobs:
                       watchdog_shutdown = True
                       active_tests.clear()
                       watchdog_condition.notify_all()
+                  if watchdog_thread.is_alive():
+                      watchdog_thread.join()
 
           try:
               os.unlink(log_path)
