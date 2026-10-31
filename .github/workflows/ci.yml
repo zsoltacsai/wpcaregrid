@@ -494,6 +494,7 @@ jobs:
           import re
           import subprocess
           import sys
+          import threading
           import time
           from concurrent.futures import ThreadPoolExecutor
 
@@ -509,9 +510,14 @@ jobs:
           target_method = "TransitionPersistenceBridgeTest::test_typed_rpc_cas_is_atomic_and_exact_replay_returns_its_receipt"
           target_name = None
           last_passed = None
-          target_started_at = None
           target_active = False
-          second_snapshot = False
+          target_start_offset = None
+          active_transaction_seen = False
+          observer_lock = threading.Lock()
+          first_snapshot_done = threading.Event()
+          second_snapshot_claimed = False
+          second_snapshot_timer = None
+          second_snapshot_delay_seconds = 20
 
           def safe_test_name(value):
               return "".join(char if char.isalnum() or char in "_.$:\\" else "?" for char in value)[:240]
@@ -558,15 +564,68 @@ jobs:
                   ("innodb_trx", "SELECT TRX_ID, TRX_STATE, TIMESTAMPDIFF(SECOND, TRX_STARTED, NOW()), TRX_WAIT_STARTED IS NOT NULL, TRX_MYSQL_THREAD_ID, TRX_ROWS_LOCKED, TRX_ROWS_MODIFIED, TRX_QUERY IS NOT NULL FROM information_schema.innodb_trx LIMIT 100", lambda c: "trx={0} state={1} age_s={2} waiting={3} thread={4} rows_locked={5} rows_modified={6} active_sql={7}".format(*c)),
               )
               print(f"MySQL {label} snapshot (root read-only diagnostic):", flush=True)
+              active_transaction_count = None
               with ThreadPoolExecutor(max_workers=4) as executor:
                   for title, rows in executor.map(lambda item: query(*item), queries):
                       print(f"{title}: {rows[0]}", flush=True)
                       for row in rows[1:]:
                           print(row, flush=True)
+                      if title == "innodb_trx":
+                          try:
+                              active_transaction_count = int(rows[0].split()[0])
+                          except (IndexError, ValueError):
+                              active_transaction_count = None
+              return active_transaction_count is not None and active_transaction_count > 0
+
+          def target_has_finished_event():
+              if target_start_offset is None or target_name is None:
+                  return False
+              try:
+                  with open(log_path, "r", encoding="utf-8", errors="replace") as recorded_events:
+                      recorded_events.seek(target_start_offset)
+                      for line in recorded_events:
+                          match = re.match(r"^(Test [A-Za-z ]+) \(([^)]*)\)$", line.rstrip("\r\n"))
+                          if match and safe_test_name(match.group(2)) == target_name and match.group(1) == "Test Finished":
+                              return True
+              except OSError:
+                  return False
+              return False
+
+          def take_second_snapshot_after_bounded_interval():
+              global second_snapshot_claimed, target_active
+              if not first_snapshot_done.wait(timeout=10):
+                  print("Second MySQL snapshot not taken: initial bounded snapshot did not finish.", file=sys.stderr, flush=True)
+                  return
+              with observer_lock:
+                  should_snapshot = target_active or active_transaction_seen
+                  transaction_trigger = active_transaction_seen
+                  current_target_name = target_name
+                  suite_process = suite
+              if not should_snapshot:
+                  print("No second MySQL snapshot: target test completed and initial snapshot saw no active transaction.", flush=True)
+                  return
+              if not transaction_trigger and (suite_process.poll() is not None or target_has_finished_event()):
+                  with observer_lock:
+                      target_active = False
+                  print("No second MySQL snapshot: target test completed before the bounded checkpoint.", flush=True)
+                  return
+              with observer_lock:
+                  if second_snapshot_claimed:
+                      return
+                  second_snapshot_claimed = True
+              reason = "active InnoDB transaction was present initially" if transaction_trigger else "target test remained active"
+              print(f"Taking second MySQL snapshot after {second_snapshot_delay_seconds}s; reason: {reason}; test: {current_target_name}.", flush=True)
+              capture_mysql_state(f"after {second_snapshot_delay_seconds}s bounded interval")
+
+          def start_second_snapshot_timer():
+              global second_snapshot_timer
+              second_snapshot_timer = threading.Timer(second_snapshot_delay_seconds, take_second_snapshot_after_bounded_interval)
+              second_snapshot_timer.daemon = False
+              second_snapshot_timer.start()
 
           def process_events(stream):
-              global last_passed, target_name, target_started_at, target_active
-              global second_snapshot
+              global last_passed, target_name, target_active, target_start_offset
+              global active_transaction_seen
               while True:
                   line = stream.readline()
                   if not line:
@@ -579,14 +638,29 @@ jobs:
                   if event == "Test Passed":
                       last_passed = name
                   if event == "Test Preparation Started" and raw_name.endswith(target_method):
-                      target_name = name
-                      target_started_at = time.monotonic()
-                      target_active = True
+                      with observer_lock:
+                          target_name = name
+                          target_active = True
+                          target_start_offset = stream.tell()
                       print(f"Test Passed ({last_passed or 'none observed'})", flush=True)
                       print(f"Test Started ({target_name}) [PHPUnit Test Preparation Started]", flush=True)
-                      capture_mysql_state("at target start")
-                  elif target_active and name == target_name and event in ("Test Finished", "Test Passed", "Test Failed", "Test Errored", "Test Skipped"):
-                      target_active = False
+                      first_snapshot_done.clear()
+                      start_second_snapshot_timer()
+                      try:
+                          saw_active_transaction = capture_mysql_state("at target start")
+                          with observer_lock:
+                              active_transaction_seen = saw_active_transaction
+                      finally:
+                          first_snapshot_done.set()
+                  elif name == target_name and event in ("Test Passed", "Test Failed", "Test Errored", "Test Skipped"):
+                      print(f"Target outcome {event} ({name})", flush=True)
+                  elif name == target_name and event == "Test Finished":
+                      print(f"Test Finished ({name})", flush=True)
+                      with observer_lock:
+                          target_active = False
+                          transaction_already_seen = active_transaction_seen
+                      if not transaction_already_seen and second_snapshot_timer is not None:
+                          second_snapshot_timer.cancel()
 
           command = [
               "vendor/bin/phpunit", "-c", "phpunit.xml", "--debug",
@@ -601,10 +675,6 @@ jobs:
                   with open(log_path, "r", encoding="utf-8", errors="replace") as events:
                       while suite.poll() is None:
                           process_events(events)
-                          if target_active and not second_snapshot and time.monotonic() - target_started_at >= 20:
-                              second_snapshot = True
-                              print("Target test remains active after 20 seconds; taking second bounded snapshot.", flush=True)
-                              capture_mysql_state("after 20s active")
                           time.sleep(0.2)
                       process_events(events)
                   status = suite.wait()
