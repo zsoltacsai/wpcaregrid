@@ -377,7 +377,7 @@ jobs:
           umask 077
           printf '%s' "$verifier_password" > "$credential_file"
           chmod 600 "$credential_file"
-          if printf "CREATE USER 'caregrid_verify'@'%%' IDENTIFIED BY '%s'; GRANT CREATE, DROP, SELECT, INSERT, UPDATE, DELETE, ALTER, INDEX, REFERENCES, CREATE TEMPORARY TABLES, CREATE VIEW, SHOW VIEW, TRIGGER, EVENT, CREATE ROUTINE, ALTER ROUTINE, EXECUTE, LOCK TABLES ON *.* TO 'caregrid_verify'@'%%';\n" "$verifier_password" | MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=127.0.0.1 --port=3307 --user=root >/dev/null 2>&1; then
+          if printf "SET GLOBAL log_bin_trust_function_creators=1; CREATE USER 'caregrid_ci'@'%%' IDENTIFIED BY '%s'; GRANT CREATE, DROP, SELECT, INSERT, UPDATE, DELETE, ALTER, INDEX, REFERENCES, CREATE TEMPORARY TABLES, CREATE VIEW, SHOW VIEW, TRIGGER, EVENT, CREATE ROUTINE, ALTER ROUTINE, EXECUTE, LOCK TABLES ON *.* TO 'caregrid_ci'@'%%';\n" "$verifier_password" | MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=127.0.0.1 --port=3307 --user=root >/dev/null 2>&1; then
             echo 'Restricted verifier account provisioned on isolated disposable service.'
           else
             echo 'Failed to provision the restricted account on the isolated disposable verification service.' >&2
@@ -403,6 +403,10 @@ jobs:
           fi
           unset verifier_settings raw_log_bin raw_trust_function_creators extra_setting
           echo "Disposable verifier readback: log_bin=$verifier_log_bin; log_bin_trust_function_creators=$verifier_trust_function_creators"
+          if [[ "$verifier_log_bin" != "ON" || "$verifier_trust_function_creators" != "1" ]]; then
+            echo 'Disposable verifier MySQL did not confirm required binary logging and function-creator settings.' >&2
+            exit 1
+          fi
 
       - name: Mandatory isolated MySQL backup-import verification
         shell: bash
@@ -410,14 +414,15 @@ jobs:
           WPCG_MYSQL_VERIFY_HOST: 127.0.0.1
           WPCG_MYSQL_VERIFY_PORT: '3307'
           WPCG_MYSQL_VERIFY_DATABASE: wpcg_verifier_seed
-          WPCG_MYSQL_VERIFY_USERNAME: caregrid_verify
+          WPCG_MYSQL_VERIFY_USERNAME: caregrid_ci
         run: |
           set -euo pipefail
           set +x
           credential_file="$RUNNER_TEMP/wpcg-mysql-verifier-password"
           diagnostic_log="$RUNNER_TEMP/isolated-backup-phpunit.log"
           junit_file="$RUNNER_TEMP/isolated-backup-phpunit.xml"
-          trap 'rm -f -- "$diagnostic_log" "$junit_file" "$credential_file"' EXIT
+          normalized_file="$RUNNER_TEMP/isolated-backup-normalized-records.txt"
+          trap 'rm -f -- "$diagnostic_log" "$junit_file" "$credential_file" "$normalized_file"' EXIT
           verifier_password="$(cat "$credential_file")"
           if [ -z "$verifier_password" ]; then
             echo 'Mandatory isolated verifier credential is empty.' >&2
@@ -457,7 +462,8 @@ jobs:
             echo 'Ordinary diagnostic unavailability must remain nonfatal.' >&2
             exit 1
           fi
-          if python3 - "$diagnostic_log" 2>/dev/null <<'PY'
+          parser_status=0
+          if python3 - "$diagnostic_log" 2>/dev/null >"$normalized_file" <<'PY'
           import os
           import re
           import sys
@@ -654,10 +660,588 @@ jobs:
             :
           else
             diagnostic_status=$?
+            parser_status="$diagnostic_status"
             if ! handle_diagnostic_failure "$diagnostic_status"; then
               exit 1
             fi
           fi
+          python3 - "$normalized_file" "$parser_status" <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import tempfile
+          from collections import Counter
+
+          PREFIX = "WPCG_DIAG_V2"
+          UNAVAILABLE = "WPCG_DIAG_V2_UNAVAILABLE"
+          PROJECTION_PREFIX = "WPCG_DIAG_V2_PROJECTION_V1|"
+          MAX_RECORDS = 64
+          MAX_LINE_BYTES = 512
+          MAX_OUTPUT_BYTES = MAX_RECORDS * (MAX_LINE_BYTES + 1)
+          TEST_STAGES = {
+              "fixture_setup", "probe_setup", "backup_create", "verify", "assert_verified",
+              "assert_status", "assert_method", "assert_manifest", "assert_probe",
+              "assert_critical_count", "cleanup_probe", "cleanup_connections", "cleanup_objects",
+          }
+          TEST_EVENTS = {"begin", "primary_failure", "cleanup_observation", "cleanup_failure", "complete"}
+          TEST_CATEGORIES = {
+              "none", "assertion_failure", "pdo_error", "process_error", "filesystem_error",
+              "permission_error", "timeout", "cleanup_error", "backup_failure", "other",
+          }
+          TEST_CODES = {
+              "none", "other", "WORKDIR_CREATE_FAILED", "PLATFORM_BACKUP_FAILED",
+              "DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED", "DISPOSABLE_MYSQL_IMPORT_FAILED",
+              "MYSQL_IMPORT_TABLE_SET_MISMATCH", "MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH", "OBJECT_MISSING",
+              "MANIFEST_OBJECT_MISSING", "MANIFEST_OBJECT_INVALID", "MANIFEST_METADATA_MISMATCH",
+              "MANIFEST_AUTHENTICATION_FAILED", "OBJECT_UNREADABLE", "VERIFY_TEMP_FAILED",
+              "OBJECT_READ_FAILED", "VERIFY_TEMP_WRITE_FAILED", "SIZE_OR_HASH_MISMATCH",
+              "CIPHERTEXT_AUTHENTICATION_FAILED", "INVALID_GZIP", "EMPTY_DECOMPRESSED_ARTIFACT",
+              "DATABASE_IMPORT_OR_SANITY_FAILED", "VERIFICATION_ERROR",
+          }
+          SERVICE_STAGES = {
+              "artifact_integrity", "artifact_decrypt", "artifact_gzip", "sqlite_sanity", "mysql_preflight",
+              "mysql_create_database", "mysql_client_import", "mysql_schema_check", "mysql_critical_count",
+              "mysql_process_cleanup", "service_cleanup_connection_purge", "service_cleanup_drop_database",
+              "service_cleanup_temp_artifacts",
+          }
+          SERVICE_EVENTS = {
+              "begin", "complete", "primary_failure", "primary_exception", "body_result",
+              "cleanup_observation", "cleanup_failure",
+          }
+          SERVICE_CATEGORIES = {
+              "none", "backup_failure", "filesystem_error", "process_error", "timeout", "pdo_error",
+              "runtime_error", "cleanup_error", "other",
+          }
+          SERVICE_CODES = {
+              "none", "other", "OBJECT_MISSING", "MANIFEST_OBJECT_MISSING", "MANIFEST_OBJECT_INVALID",
+              "MANIFEST_METADATA_MISMATCH", "MANIFEST_AUTHENTICATION_FAILED", "OBJECT_UNREADABLE",
+              "VERIFY_TEMP_FAILED", "OBJECT_READ_FAILED", "VERIFY_TEMP_WRITE_FAILED", "SIZE_OR_HASH_MISMATCH",
+              "CIPHERTEXT_AUTHENTICATION_FAILED", "INVALID_GZIP", "EMPTY_DECOMPRESSED_ARTIFACT",
+              "DATABASE_IMPORT_OR_SANITY_FAILED", "DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED", "VERIFICATION_ERROR",
+              "MYSQL_DUMP_INPUT_OPEN_FAILED", "MYSQL_IMPORT_PROCESS_FAILED", "MYSQL_IMPORT_TABLE_SET_MISMATCH",
+              "MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH", "MYSQL_DATABASE_CREATE_FAILED", "MYSQL_SCHEMA_CHECK_FAILED",
+              "MYSQL_PROCESS_CLEANUP_FAILED", "SERVICE_CONNECTION_PURGE_FAILED", "SERVICE_DATABASE_DROP_FAILED",
+              "SERVICE_TEMP_ARTIFACT_CLEANUP_FAILED", "SERVICE_TEMP_ARTIFACT_UNLINK_FAILED", "UNCLASSIFIED",
+              "MYSQL_IMPORT_ERRNO_1419", "MYSQL_IMPORT_ERRNO_1227", "MYSQL_IMPORT_ERRNO_1449",
+              "MYSQL_IMPORT_ERRNO_1044", "MYSQL_IMPORT_ERRNO_1045", "MYSQL_IMPORT_ERRNO_1142",
+          }
+          BODY_STATES = {
+              "pending", "return_true_pending_cleanup", "return_false_pending_cleanup",
+              "return_false_before_outer_cleanup", "exception_pending_cleanup",
+              "handled_exception_return_false_pending_cleanup",
+          }
+          PROCESS_EXIT = re.compile(
+              r"MYSQL_IMPORT_PROCESS_FAILED_EXIT_(?:0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])\Z"
+          )
+          MYSQL_CLASSES = {
+              "MYSQL_IMPORT_ERRNO_1419", "MYSQL_IMPORT_ERRNO_1227", "MYSQL_IMPORT_ERRNO_1449",
+              "MYSQL_IMPORT_ERRNO_1044", "MYSQL_IMPORT_ERRNO_1045", "MYSQL_IMPORT_ERRNO_1142",
+          }
+          CLEANUP_STAGES = {
+              "cleanup_probe", "cleanup_connections", "cleanup_objects", "mysql_process_cleanup",
+              "service_cleanup_connection_purge", "service_cleanup_drop_database", "service_cleanup_temp_artifacts",
+          }
+          TEST_REQUIRED_CLEANUP = {"cleanup_probe", "cleanup_connections", "cleanup_objects"}
+
+          class InvalidProjection(Exception):
+              pass
+
+          def unavailable(parser_status):
+              return {
+                  "service_diagnostics_status": "UNAVAILABLE",
+                  "service_failure": None,
+                  "service_failures": [],
+                  "test_failures": [],
+                  "earliest_failure": None,
+                  "mysql_error_classification": {"status": "UNAVAILABLE", "code": None, "observed": []},
+                  "test_assertion": {"status": "UNKNOWN", "records": []},
+                  "cleanup_status": "UNKNOWN",
+                  "records_processed": None,
+                  "records_duplicate": None,
+                  "records_rejected": None,
+              }
+
+          def parse_normalized_record(raw):
+              if not isinstance(raw, bytes) or len(raw) > MAX_LINE_BYTES:
+                  raise InvalidProjection
+              try:
+                  line = raw.decode("ascii")
+              except UnicodeDecodeError as error:
+                  raise InvalidProjection from error
+              fields = line.split("|")
+              if len(fields) not in (6, 7) or fields[0] != PREFIX:
+                  raise InvalidProjection
+              keys = ("test", "stage", "event", "category", "code")
+              if len(fields) == 7:
+                  keys += ("body_state",)
+              values = {}
+              for expected_key, field in zip(keys, fields[1:]):
+                  key, separator, value = field.partition("=")
+                  if separator != "=" or key != expected_key or not value or "=" in value:
+                      raise InvalidProjection
+                  values[key] = value
+              if values["test"] != "backup_import":
+                  raise InvalidProjection
+              if len(fields) == 6:
+                  if (
+                      values["stage"] not in TEST_STAGES
+                      or values["event"] not in TEST_EVENTS
+                      or values["category"] not in TEST_CATEGORIES
+                      or (values["code"] not in TEST_CODES and PROCESS_EXIT.fullmatch(values["code"]) is None)
+                  ):
+                      raise InvalidProjection
+                  values["kind"] = "test"
+              else:
+                  if (
+                      values["stage"] not in SERVICE_STAGES
+                      or values["event"] not in SERVICE_EVENTS
+                      or values["category"] not in SERVICE_CATEGORIES
+                      or values["code"] not in SERVICE_CODES
+                      or values["body_state"] not in BODY_STATES
+                  ):
+                      raise InvalidProjection
+                  values["kind"] = "service"
+              return values
+
+          def safe_record(record):
+              keys = ("stage", "event", "category", "code")
+              result = {key: record[key] for key in keys}
+              if record["kind"] == "service":
+                  result["body_state"] = record["body_state"]
+              return result
+
+          def project(parser_status, payload):
+              if parser_status != "0" or payload.strip() == UNAVAILABLE.encode("ascii"):
+                  return unavailable(parser_status)
+              if len(payload) > MAX_OUTPUT_BYTES:
+                  return unavailable(parser_status)
+              if not payload:
+                  return {
+                      "service_diagnostics_status": "MISSING",
+                      "service_failure": None,
+                      "service_failures": [],
+                      "test_failures": [],
+                      "earliest_failure": None,
+                      "mysql_error_classification": {"status": "NOT_REPORTED", "code": None, "observed": []},
+                      "test_assertion": {"status": "UNKNOWN", "records": []},
+                      "cleanup_status": "UNKNOWN",
+                      "records_processed": 0,
+                      "records_duplicate": 0,
+                      "records_rejected": None,
+                  }
+              raw_lines = payload.splitlines(keepends=True)
+              if not raw_lines or len(raw_lines) > MAX_RECORDS:
+                  return unavailable(parser_status)
+              records = []
+              rejected = 0
+              seen = set()
+              duplicates = 0
+              for raw_line in raw_lines:
+                  if not raw_line.endswith(b"\n") or b"\r" in raw_line:
+                      rejected += 1
+                      continue
+                  normalized = raw_line[:-1]
+                  try:
+                      record = parse_normalized_record(normalized)
+                  except InvalidProjection:
+                      rejected += 1
+                      continue
+                  if normalized in seen:
+                      duplicates += 1
+                  seen.add(normalized)
+                  records.append(record)
+              incomplete = rejected > 0
+              if incomplete and not records:
+                  result = unavailable(parser_status)
+                  result["records_processed"] = 0
+                  result["records_duplicate"] = duplicates
+                  result["records_rejected"] = rejected
+                  return result
+
+              service_records = [record for record in records if record["kind"] == "service"]
+              service_failures = [
+                  {"record_index": index, **safe_record(record)}
+                  for index, record in enumerate(records)
+                  if record["kind"] == "service" and record["event"] in {"primary_failure", "primary_exception"}
+              ]
+              test_failures = [
+                  {"record_index": index, **safe_record(record)}
+                  for index, record in enumerate(records)
+                  if record["kind"] == "test" and record["event"] in {"primary_failure", "primary_exception"}
+              ]
+              failure_events = [
+                  {"record_index": index, "kind": record["kind"], **safe_record(record)}
+                  for index, record in enumerate(records)
+                  if record["event"] in {"primary_failure", "primary_exception"}
+              ]
+              test_assertions = [
+                  {"record_index": index, **safe_record(record)} for index, record in enumerate(records)
+                  if record["kind"] == "test" and record["stage"] == "assert_verified"
+                  and record["event"] == "primary_failure"
+              ]
+              test_assertion_began = any(
+                  record["kind"] == "test" and record["stage"] == "assert_verified"
+                  and record["event"] == "begin" for record in records
+              )
+              failed_import_assertion = any(
+                  record["kind"] == "test" and record["stage"] == "assert_verified"
+                  and record["event"] == "primary_failure"
+                  and (record["code"].startswith("MYSQL_IMPORT_PROCESS_FAILED_EXIT_")
+                       or record["code"] == "DISPOSABLE_MYSQL_IMPORT_FAILED")
+                  for record in records
+              )
+              body_success = any(
+                  record["kind"] == "service" and record["event"] == "body_result"
+                  and record["body_state"] == "return_true_pending_cleanup" and record["code"] == "none"
+                  for record in records
+              )
+              import_service_failure = any(
+                  record["kind"] == "service" and record["stage"] == "mysql_client_import"
+                  and record["event"] in {"primary_failure", "primary_exception"}
+                  for record in records
+              )
+              service_status = "PRESENT" if service_records else "MISSING"
+              service_outcome_conflict = body_success and bool(service_failures)
+              if service_outcome_conflict:
+                  service_status = "CONFLICT"
+              elif failed_import_assertion and not import_service_failure:
+                  service_status = "INCOMPLETE" if service_records else "MISSING"
+              elif service_failures or body_success:
+                  service_status = "COMPLETE"
+              elif service_records:
+                  service_status = "INCOMPLETE"
+
+              classifications = []
+              for record in service_records:
+                  if (record["stage"] == "mysql_client_import" and record["event"] == "primary_failure"
+                      and (record["code"] in MYSQL_CLASSES or record["code"] == "UNCLASSIFIED")
+                      and record["code"] not in classifications):
+                      classifications.append(record["code"])
+              if len(classifications) > 1:
+                  mysql_classification = {"status": "CONFLICT", "code": None, "observed": classifications}
+              elif classifications == ["UNCLASSIFIED"]:
+                  mysql_classification = {"status": "UNCLASSIFIED", "code": "UNCLASSIFIED", "observed": classifications}
+              elif classifications:
+                  mysql_classification = {"status": "CLASSIFIED", "code": classifications[0], "observed": classifications}
+              elif body_success:
+                  mysql_classification = {"status": "NOT_APPLICABLE", "code": None, "observed": []}
+              else:
+                  mysql_classification = {"status": "NOT_REPORTED", "code": None, "observed": []}
+
+              cleanup_records = [record for record in records if record["stage"] in CLEANUP_STAGES]
+              if any(record["event"] in {"cleanup_failure", "cleanup_observation"} for record in cleanup_records):
+                  cleanup_status = "FAILED"
+              else:
+                  begin_counts = Counter(record["stage"] for record in cleanup_records if record["event"] == "begin")
+                  complete_counts = Counter(record["stage"] for record in cleanup_records if record["event"] == "complete")
+                  began = set(begin_counts)
+                  completed = set(complete_counts)
+                  test_path_started = any(
+                      record["kind"] == "test" and record["stage"] in {"backup_create", "verify", "assert_verified"}
+                      for record in records
+                  )
+                  mysql_inner_cleanup_applicable = any(
+                      record["kind"] == "service" and record["stage"] in {
+                          "mysql_create_database", "mysql_client_import", "mysql_schema_check",
+                          "mysql_critical_count", "mysql_process_cleanup",
+                      }
+                      for record in records
+                  )
+                  import_started = any(
+                      record["kind"] == "service" and record["stage"] == "mysql_client_import"
+                      and record["event"] == "begin" for record in records
+                  )
+                  database_created = any(
+                      record["kind"] == "service" and record["stage"] == "mysql_create_database"
+                      and record["event"] == "complete" for record in records
+                  )
+                  required = set()
+                  if test_path_started:
+                      required |= TEST_REQUIRED_CLEANUP
+                  if service_records or test_assertion_began:
+                      required.add("service_cleanup_temp_artifacts")
+                  if mysql_inner_cleanup_applicable:
+                      required.add("service_cleanup_connection_purge")
+                  if import_started:
+                      required.add("mysql_process_cleanup")
+                  if database_created:
+                      required.add("service_cleanup_drop_database")
+                  cleanup_status = (
+                      "COMPLETE" if cleanup_records and required.issubset(completed)
+                      and began.issubset(completed) and completed.issubset(began)
+                      and all(begin_counts[stage] == complete_counts[stage] for stage in began | completed)
+                      else "UNKNOWN"
+                  )
+
+              if failed_import_assertion and not import_service_failure:
+                  cleanup_status = "UNKNOWN"
+              if service_outcome_conflict:
+                  cleanup_status = "UNKNOWN"
+              if test_assertions:
+                  assertion_status = "FAILED"
+              elif test_assertion_began:
+                  assertion_status = "NO_FAILURE_RECORDED"
+              else:
+                  assertion_status = "UNKNOWN"
+
+              if incomplete:
+                  service_status = "INCOMPLETE"
+                  if assertion_status != "FAILED":
+                      assertion_status = "UNKNOWN"
+                  cleanup_status = "UNKNOWN"
+
+              return {
+                  "service_diagnostics_status": service_status,
+                  "service_failure": service_failures[0] if service_failures else None,
+                  "service_failures": service_failures,
+                  "test_failures": test_failures,
+                  "earliest_failure": failure_events[0] if failure_events else None,
+                  "mysql_error_classification": mysql_classification,
+                  "test_assertion": {"status": assertion_status, "records": test_assertions},
+                  "cleanup_status": cleanup_status,
+                  "records_processed": len(records),
+                  "records_duplicate": duplicates,
+                  "records_rejected": rejected if incomplete else None,
+              }
+
+          def test_record(stage, event, category="none", code="none"):
+              return f"{PREFIX}|test=backup_import|stage={stage}|event={event}|category={category}|code={code}"
+
+          def service_record(stage, event, category="none", code="none", body="pending"):
+              return f"{PREFIX}|test=backup_import|stage={stage}|event={event}|category={category}|code={code}|body_state={body}"
+
+          def synthetic_cleanup():
+              rows = [
+                  service_record("mysql_process_cleanup", "begin"), service_record("mysql_process_cleanup", "complete"),
+                  service_record("service_cleanup_connection_purge", "begin"), service_record("service_cleanup_connection_purge", "complete"),
+                  service_record("service_cleanup_drop_database", "begin"), service_record("service_cleanup_drop_database", "complete"),
+                  service_record("service_cleanup_temp_artifacts", "begin"), service_record("service_cleanup_temp_artifacts", "complete"),
+                  test_record("cleanup_probe", "begin"), test_record("cleanup_probe", "complete"),
+                  test_record("cleanup_connections", "begin"), test_record("cleanup_connections", "complete"),
+                  test_record("cleanup_objects", "begin"), test_record("cleanup_objects", "complete"),
+              ]
+              return rows
+
+          def assert_projection_contract():
+              generic = service_record("mysql_client_import", "primary_failure", "process_error", "MYSQL_IMPORT_PROCESS_FAILED", "return_false_pending_cleanup")
+              errno = service_record("mysql_client_import", "primary_failure", "process_error", "MYSQL_IMPORT_ERRNO_1419", "return_false_pending_cleanup")
+              unknown = service_record("mysql_client_import", "primary_failure", "process_error", "UNCLASSIFIED", "return_false_pending_cleanup")
+              outer = test_record("assert_verified", "primary_failure", "assertion_failure", "MYSQL_IMPORT_PROCESS_FAILED_EXIT_1")
+              success = [service_record("mysql_client_import", "begin"), service_record("mysql_client_import", "complete"),
+                         service_record("mysql_critical_count", "body_result", "none", "none", "return_true_pending_cleanup"),
+                         test_record("assert_verified", "begin")]
+              success += synthetic_cleanup()
+              cases = [
+                  ("errno_assertion", [service_record("mysql_client_import", "begin"), generic, errno, outer] + synthetic_cleanup(), "CLASSIFIED", "MYSQL_IMPORT_ERRNO_1419", "MYSQL_IMPORT_PROCESS_FAILED"),
+                  ("assertion_only", [outer] + [test_record("cleanup_probe", "begin"), test_record("cleanup_probe", "complete"), test_record("cleanup_connections", "begin"), test_record("cleanup_connections", "complete"), test_record("cleanup_objects", "begin"), test_record("cleanup_objects", "complete")], "NOT_REPORTED", None, None),
+                  ("generic_import", [service_record("mysql_client_import", "begin"), generic, outer] + synthetic_cleanup(), "NOT_REPORTED", None, "MYSQL_IMPORT_PROCESS_FAILED"),
+                  ("unclassified", [service_record("mysql_client_import", "begin"), generic, unknown, outer] + synthetic_cleanup(), "UNCLASSIFIED", "UNCLASSIFIED", "MYSQL_IMPORT_PROCESS_FAILED"),
+                  ("errno_unclassified_conflict", [service_record("mysql_client_import", "begin"), generic, errno, unknown, outer] + synthetic_cleanup(), "CONFLICT", None, "MYSQL_IMPORT_PROCESS_FAILED"),
+                  ("errno_conflict", [service_record("mysql_client_import", "begin"), generic, errno, service_record("mysql_client_import", "primary_failure", "process_error", "MYSQL_IMPORT_ERRNO_1227", "return_false_pending_cleanup"), outer] + synthetic_cleanup(), "CONFLICT", None, "MYSQL_IMPORT_PROCESS_FAILED"),
+                  ("cleanup_failure", [service_record("mysql_client_import", "begin"), generic, outer, service_record("mysql_process_cleanup", "cleanup_failure", "cleanup_error", "MYSQL_PROCESS_CLEANUP_FAILED", "return_false_pending_cleanup")], "NOT_REPORTED", None, "MYSQL_IMPORT_PROCESS_FAILED"),
+                  ("duplicate", [service_record("mysql_client_import", "begin"), generic, generic, errno, outer] + synthetic_cleanup(), "CLASSIFIED", "MYSQL_IMPORT_ERRNO_1419", "MYSQL_IMPORT_PROCESS_FAILED"),
+                  ("missing_import_failure", [service_record("mysql_client_import", "begin"), outer] + synthetic_cleanup(), "NOT_REPORTED", None, None),
+                  ("empty_complete", [], "NOT_REPORTED", None, None),
+              ]
+              for name, rows, expected_status, expected_code, expected_failure in cases:
+                  payload = ("\n".join(rows) + ("\n" if rows else "")).encode("ascii")
+                  result = project("0", payload)
+                  if name in {"assertion_only", "missing_import_failure"}:
+                      assert result["service_diagnostics_status"] in {"MISSING", "INCOMPLETE"}
+                  assert result["mysql_error_classification"]["status"] == expected_status
+                  assert result["mysql_error_classification"]["code"] == expected_code
+                  if expected_failure is not None:
+                      assert result["service_failure"]["code"] == expected_failure
+                  else:
+                      assert result["service_failure"] is None
+                  if name == "errno_assertion":
+                      assert result["test_assertion"]["status"] == "FAILED"
+                      assert result["service_failure"]["code"] != result["test_assertion"]["records"][0]["code"]
+                      assert len(result["service_failures"]) == 2
+                  if name == "unclassified":
+                      assert result["test_assertion"]["records"][0]["code"] != result["mysql_error_classification"]["code"]
+                  if name == "cleanup_failure":
+                      assert result["cleanup_status"] == "FAILED"
+                  if name in {"assertion_only", "missing_import_failure", "empty_complete"}:
+                      assert result["cleanup_status"] == "UNKNOWN"
+                  if name == "duplicate":
+                      assert result["records_duplicate"] == 1 and result["records_processed"] == len(rows)
+                  if result["service_diagnostics_status"] != "UNAVAILABLE":
+                      assert result["records_rejected"] is None
+              success_payload = ("\n".join(success) + "\n").encode("ascii")
+              success_result = project("0", success_payload)
+              assert success_result["service_diagnostics_status"] == "COMPLETE"
+              assert success_result["service_failure"] is None
+              assert success_result["mysql_error_classification"]["status"] == "NOT_APPLICABLE"
+              assert success_result["cleanup_status"] == "COMPLETE"
+              assert success_result["test_assertion"]["status"] == "NO_FAILURE_RECORDED"
+              contradictory = [generic, service_record("mysql_critical_count", "body_result", "none", "none", "return_true_pending_cleanup")] + synthetic_cleanup()
+              contradictory_result = project("0", ("\n".join(contradictory) + "\n").encode("ascii"))
+              assert contradictory_result["service_diagnostics_status"] == "CONFLICT"
+              assert contradictory_result["cleanup_status"] == "UNKNOWN"
+              assert project("1", success_payload)["service_diagnostics_status"] == "UNAVAILABLE"
+              failed_parser_result = project("1", success_payload)
+              assert failed_parser_result["test_assertion"]["status"] == "UNKNOWN"
+              assert failed_parser_result["cleanup_status"] == "UNKNOWN"
+              assert failed_parser_result["records_processed"] is None
+              assert failed_parser_result["records_duplicate"] is None
+              unavailable_result = project("0", (UNAVAILABLE + "\n").encode("ascii"))
+              assert unavailable_result["records_rejected"] is None
+              assert unavailable_result["records_processed"] is None
+              assert unavailable_result["records_duplicate"] is None
+              assert unavailable_result["service_diagnostics_status"] == "UNAVAILABLE"
+              oversized_result = project("0", b"X" * (MAX_OUTPUT_BYTES + 1))
+              assert oversized_result["service_diagnostics_status"] == "UNAVAILABLE"
+              assert oversized_result["records_processed"] is None
+              assert oversized_result["records_duplicate"] is None
+              assert oversized_result["records_rejected"] is None
+              assert project("0", b"")["records_rejected"] is None
+              assert project("0", b"")["service_diagnostics_status"] == "MISSING"
+              assertion_without_service = [
+                  test_record("assert_verified", "begin"),
+                  test_record("cleanup_probe", "begin"), test_record("cleanup_probe", "complete"),
+                  test_record("cleanup_connections", "begin"), test_record("cleanup_connections", "complete"),
+                  test_record("cleanup_objects", "begin"), test_record("cleanup_objects", "complete"),
+              ]
+              assertion_without_service_result = project(
+                  "0", ("\n".join(assertion_without_service) + "\n").encode("ascii")
+              )
+              assert assertion_without_service_result["service_diagnostics_status"] == "MISSING"
+              assert assertion_without_service_result["cleanup_status"] == "UNKNOWN"
+              malformed = project("0", b"WPCG_DIAG_V2|partial\n")
+              assert malformed["service_diagnostics_status"] == "UNAVAILABLE"
+              assert malformed["records_rejected"] == 1
+              truncated = project(
+                  "0", b"WPCG_DIAG_V2|test=backup_import|stage=assert_verified|event=primary_failure"
+              )
+              assert truncated["service_diagnostics_status"] == "UNAVAILABLE"
+              assert truncated["records_rejected"] == 1
+              incomplete_cleanup = [service_record("mysql_critical_count", "body_result", "none", "none", "return_true_pending_cleanup")]
+              incomplete = project("0", ("\n".join(incomplete_cleanup) + "\n").encode("ascii"))
+              assert incomplete["cleanup_status"] == "UNKNOWN"
+              preflight_failure = [
+                  service_record("mysql_preflight", "primary_exception", "runtime_error", "VERIFICATION_ERROR", "exception_pending_cleanup"),
+                  test_record("assert_verified", "begin"),
+                  test_record("assert_verified", "primary_failure", "assertion_failure", "VERIFICATION_ERROR"),
+                  service_record("service_cleanup_temp_artifacts", "begin"),
+                  service_record("service_cleanup_temp_artifacts", "complete"),
+                  test_record("cleanup_probe", "begin"), test_record("cleanup_probe", "complete"),
+                  test_record("cleanup_connections", "begin"), test_record("cleanup_connections", "complete"),
+                  test_record("cleanup_objects", "begin"), test_record("cleanup_objects", "complete"),
+              ]
+              preflight_result = project("0", ("\n".join(preflight_failure) + "\n").encode("ascii"))
+              assert preflight_result["service_diagnostics_status"] == "COMPLETE"
+              assert preflight_result["cleanup_status"] == "COMPLETE"
+              assert preflight_result["service_failures"][0]["event"] == "primary_exception"
+              assert preflight_result["test_failures"][0]["event"] == "primary_failure"
+              assert preflight_result["earliest_failure"]["kind"] == "service"
+              assert preflight_result["earliest_failure"]["stage"] == "mysql_preflight"
+
+              # Test failures before assert_verified remain visible and ordered.
+              early_test_failures = [
+                  test_record("backup_create", "primary_failure", "other", "PLATFORM_BACKUP_FAILED"),
+                  test_record("verify", "primary_failure", "other", "VERIFICATION_ERROR"),
+              ]
+              early_result = project("0", ("\n".join(early_test_failures) + "\n").encode("ascii"))
+              assert early_result["service_diagnostics_status"] == "MISSING"
+              assert early_result["test_assertion"]["status"] == "UNKNOWN"
+              assert [row["stage"] for row in early_result["test_failures"]] == ["backup_create", "verify"]
+              assert [row["record_index"] for row in early_result["test_failures"]] == [0, 1]
+              assert early_result["earliest_failure"]["stage"] == "backup_create"
+              assert early_result["earliest_failure"]["category"] == "other"
+              assert early_result["earliest_failure"]["code"] == "PLATFORM_BACKUP_FAILED"
+
+              mixed_valid_and_rejected = project(
+                  "0",
+                  (
+                      test_record("backup_create", "primary_failure", "other", "PLATFORM_BACKUP_FAILED")
+                      + "\nWPCG_DIAG_V2|rejected_record\n"
+                  ).encode("ascii"),
+              )
+              assert mixed_valid_and_rejected["service_diagnostics_status"] == "INCOMPLETE"
+              assert mixed_valid_and_rejected["records_processed"] == 1
+              assert mixed_valid_and_rejected["records_rejected"] == 1
+              assert mixed_valid_and_rejected["test_failures"][0]["code"] == "PLATFORM_BACKUP_FAILED"
+              assert mixed_valid_and_rejected["earliest_failure"]["code"] == "PLATFORM_BACKUP_FAILED"
+              assert mixed_valid_and_rejected["test_assertion"]["status"] == "UNKNOWN"
+              assert mixed_valid_and_rejected["cleanup_status"] == "UNKNOWN"
+
+              service_then_assertion = [generic, outer]
+              service_then_assertion_result = project(
+                  "0", ("\n".join(service_then_assertion) + "\n").encode("ascii")
+              )
+              assert len(service_then_assertion_result["service_failures"]) == 1
+              assert len(service_then_assertion_result["test_failures"]) == 1
+              assert service_then_assertion_result["earliest_failure"]["kind"] == "service"
+              assert service_then_assertion_result["earliest_failure"]["record_index"] == 0
+              assert service_then_assertion_result["test_assertion"]["status"] == "FAILED"
+
+              cleanup_after_failure = [
+                  test_record("backup_create", "primary_failure", "other", "PLATFORM_BACKUP_FAILED"),
+                  service_record("mysql_process_cleanup", "cleanup_failure", "cleanup_error", "MYSQL_PROCESS_CLEANUP_FAILED"),
+              ]
+              cleanup_result = project("0", ("\n".join(cleanup_after_failure) + "\n").encode("ascii"))
+              assert cleanup_result["earliest_failure"]["stage"] == "backup_create"
+              assert cleanup_result["cleanup_status"] == "FAILED"
+
+              duplicate_failures = [
+                  test_record("backup_create", "primary_failure", "other", "PLATFORM_BACKUP_FAILED"),
+                  test_record("backup_create", "primary_failure", "other", "PLATFORM_BACKUP_FAILED"),
+                  test_record("verify", "primary_failure", "other", "PLATFORM_BACKUP_FAILED"),
+              ]
+              duplicate_result = project("0", ("\n".join(duplicate_failures) + "\n").encode("ascii"))
+              assert duplicate_result["records_duplicate"] == 1
+              assert [row["record_index"] for row in duplicate_result["test_failures"]] == [0, 1, 2]
+              assert [row["stage"] for row in duplicate_result["test_failures"]] == [
+                  "backup_create", "backup_create", "verify"
+              ]
+
+              unknown_assertion = project(
+                  "0", (test_record("verify", "primary_failure", "other", "PLATFORM_BACKUP_FAILED") + "\n").encode("ascii")
+              )
+              assert unknown_assertion["test_assertion"]["status"] == "UNKNOWN"
+              assert unknown_assertion["mysql_error_classification"]["status"] == "NOT_REPORTED"
+              assert unknown_assertion["mysql_error_classification"]["code"] is None
+
+              no_failures = project("0", success_payload)
+              assert no_failures["earliest_failure"] is None
+              assert no_failures["service_failures"] == []
+              assert no_failures["test_failures"] == []
+
+              # A producer that exits before receipt completion cannot imply success.
+              with tempfile.TemporaryDirectory() as directory:
+                  receipt_path = os.path.join(directory, "receipt.txt")
+                  producer_code = "raise SystemExit(0)"
+                  completed = subprocess.run(
+                      [sys.executable, "-c", producer_code, receipt_path],
+                      input=success_payload,
+                      check=False,
+                      stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL,
+                  )
+                  assert completed.returncode == 0
+                  assert not os.path.exists(receipt_path)
+                  assert project("0", b"")["service_diagnostics_status"] == "MISSING"
+                  partial_receipt = b"WPCG_DIAG_V2|test=backup_import|stage=verify|event=primary_failure"
+                  assert project("0", partial_receipt)["service_diagnostics_status"] == "UNAVAILABLE"
+
+          try:
+              assert_projection_contract()
+          except BaseException:
+              print("WPCG_DIAG_V2_PROJECTION_SELF_TEST_FAILED", file=sys.stderr)
+              raise SystemExit(70)
+          print("WPCG_DIAG_V2_PROJECTION_SELF_TEST_PASS|scenarios=11+synthetic-boundaries")
+
+          try:
+              with open(sys.argv[1], "rb") as stream:
+                  payload = stream.read(MAX_OUTPUT_BYTES + 1)
+              result = project(sys.argv[2], payload)
+          except BaseException:
+              result = unavailable("read_error")
+          print(PROJECTION_PREFIX + json.dumps(result, sort_keys=True, separators=(",", ":")))
+          PY
           python3 - "$junit_file" "$phpunit_status" "${{ matrix.php }}" <<'PY'
           import sys
           import xml.etree.ElementTree as ET
