@@ -12,7 +12,11 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
+use Symfony\Component\Process\Exception\ProcessException;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Process;
+
+final class PlatformDatabaseBackupCredentialCleanupException extends RuntimeException {}
 
 final class PlatformDatabaseBackupService
 {
@@ -234,14 +238,22 @@ final class PlatformDatabaseBackupService
     /** Verifies the stored bytes and gzip stream; SQL import is performed by the isolated recovery drill. */
     public function verify(PlatformDatabaseBackup $backup): bool
     {
+        $diagnosticStage = 'artifact_integrity';
+        $diagnosticExceptionReported = false;
+        $diagnosticBodyState = 'pending';
+        $this->emitVerificationDiagnostic($diagnosticStage, 'begin');
         $disk = $this->storage->disk($backup->storage_disk);
         if (! $disk->exists($backup->object_key)) {
+            $diagnosticBodyState = 'return_false_before_outer_cleanup';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'OBJECT_MISSING', $diagnosticBodyState);
             $this->markVerificationFailure($backup, 'OBJECT_MISSING');
 
             return false;
         }
 
         if (! $disk->exists($backup->manifest_object_key)) {
+            $diagnosticBodyState = 'return_false_before_outer_cleanup';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'MANIFEST_OBJECT_MISSING', $diagnosticBodyState);
             $this->markVerificationFailure($backup, 'MANIFEST_OBJECT_MISSING');
 
             return false;
@@ -249,6 +261,8 @@ final class PlatformDatabaseBackupService
         try {
             $manifest = json_decode($disk->get($backup->manifest_object_key), true, flags: JSON_THROW_ON_ERROR);
         } catch (\Throwable) {
+            $diagnosticBodyState = 'return_false_before_outer_cleanup';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'MANIFEST_OBJECT_INVALID', $diagnosticBodyState);
             $this->markVerificationFailure($backup, 'MANIFEST_OBJECT_INVALID');
 
             return false;
@@ -267,6 +281,8 @@ final class PlatformDatabaseBackupService
             )
             || ! is_string($manifest['sha256'] ?? null)
             || ! hash_equals((string) $backup->sha256, $manifest['sha256'])) {
+            $diagnosticBodyState = 'return_false_before_outer_cleanup';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'MANIFEST_METADATA_MISMATCH', $diagnosticBodyState);
             $this->markVerificationFailure($backup, 'MANIFEST_METADATA_MISMATCH');
 
             return false;
@@ -277,6 +293,8 @@ final class PlatformDatabaseBackupService
         if ($encryptedArtifact
             && (! $this->cryptography->verifyManifest($manifest)
                 || ! hash_equals((string) data_get($backup->manifest, 'manifest_hmac'), (string) ($manifest['manifest_hmac'] ?? '')))) {
+            $diagnosticBodyState = 'return_false_before_outer_cleanup';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'MANIFEST_AUTHENTICATION_FAILED', $diagnosticBodyState);
             $this->markVerificationFailure($backup, 'MANIFEST_AUTHENTICATION_FAILED');
 
             return false;
@@ -284,6 +302,8 @@ final class PlatformDatabaseBackupService
 
         $stream = $disk->readStream($backup->object_key);
         if (! is_resource($stream)) {
+            $diagnosticBodyState = 'return_false_before_outer_cleanup';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'OBJECT_UNREADABLE', $diagnosticBodyState);
             $this->markVerificationFailure($backup, 'OBJECT_UNREADABLE');
 
             return false;
@@ -292,6 +312,8 @@ final class PlatformDatabaseBackupService
         $path = tempnam(sys_get_temp_dir(), 'wpcg-verify-');
         if ($path === false) {
             fclose($stream);
+            $diagnosticBodyState = 'return_false_before_outer_cleanup';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'filesystem_error', 'VERIFY_TEMP_FAILED', $diagnosticBodyState);
             $this->markVerificationFailure($backup, 'VERIFY_TEMP_FAILED');
 
             return false;
@@ -301,6 +323,8 @@ final class PlatformDatabaseBackupService
         if ($decompressedPath === false) {
             fclose($stream);
             @unlink($path);
+            $diagnosticBodyState = 'return_false_before_outer_cleanup';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'filesystem_error', 'VERIFY_TEMP_FAILED', $diagnosticBodyState);
             $this->markVerificationFailure($backup, 'VERIFY_TEMP_FAILED');
 
             return false;
@@ -313,6 +337,8 @@ final class PlatformDatabaseBackupService
                 fclose($stream);
                 @unlink($path);
                 @unlink($decompressedPath);
+                $diagnosticBodyState = 'return_false_before_outer_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'filesystem_error', 'VERIFY_TEMP_FAILED', $diagnosticBodyState);
                 $this->markVerificationFailure($backup, 'VERIFY_TEMP_FAILED');
 
                 return false;
@@ -323,6 +349,8 @@ final class PlatformDatabaseBackupService
         try {
             $target = fopen($path, 'wb');
             if ($target === false) {
+                $diagnosticBodyState = 'return_false_pending_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'filesystem_error', 'VERIFY_TEMP_FAILED', 'return_false_pending_cleanup');
                 $this->markVerificationFailure($backup, 'VERIFY_TEMP_FAILED');
 
                 return false;
@@ -333,6 +361,8 @@ final class PlatformDatabaseBackupService
                 $chunk = fread($stream, 1024 * 1024);
                 if ($chunk === false) {
                     fclose($target);
+                    $diagnosticBodyState = 'return_false_pending_cleanup';
+                    $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'filesystem_error', 'OBJECT_READ_FAILED', 'return_false_pending_cleanup');
                     $this->markVerificationFailure($backup, 'OBJECT_READ_FAILED');
 
                     return false;
@@ -344,6 +374,8 @@ final class PlatformDatabaseBackupService
                 $bytes += strlen($chunk);
                 if (fwrite($target, $chunk) !== strlen($chunk)) {
                     fclose($target);
+                    $diagnosticBodyState = 'return_false_pending_cleanup';
+                    $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'filesystem_error', 'VERIFY_TEMP_WRITE_FAILED', 'return_false_pending_cleanup');
                     $this->markVerificationFailure($backup, 'VERIFY_TEMP_WRITE_FAILED');
 
                     return false;
@@ -353,23 +385,36 @@ final class PlatformDatabaseBackupService
             $actualHash = hash_final($hash);
 
             if ($bytes < 1 || $bytes !== (int) $backup->size_bytes || ! hash_equals((string) $backup->sha256, $actualHash)) {
+                $diagnosticBodyState = 'return_false_pending_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'SIZE_OR_HASH_MISMATCH', 'return_false_pending_cleanup');
                 $this->markVerificationFailure($backup, 'SIZE_OR_HASH_MISMATCH');
 
                 return false;
             }
 
+            $this->emitVerificationDiagnostic($diagnosticStage, 'complete');
+
             if ($encryptedArtifact) {
+                $diagnosticStage = 'artifact_decrypt';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'begin');
                 try {
                     $this->cryptography->decryptFile($path, $compressedPath, $encryption);
                 } catch (\Throwable) {
+                    $diagnosticBodyState = 'return_false_pending_cleanup';
+                    $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'CIPHERTEXT_AUTHENTICATION_FAILED', 'return_false_pending_cleanup');
                     $this->markVerificationFailure($backup, 'CIPHERTEXT_AUTHENTICATION_FAILED');
 
                     return false;
                 }
+                $this->emitVerificationDiagnostic($diagnosticStage, 'complete');
             }
 
+            $diagnosticStage = 'artifact_gzip';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'begin');
             $gzip = gzopen($compressedPath, 'rb');
             if ($gzip === false) {
+                $diagnosticBodyState = 'return_false_pending_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'INVALID_GZIP', 'return_false_pending_cleanup');
                 $this->markVerificationFailure($backup, 'INVALID_GZIP');
 
                 return false;
@@ -377,6 +422,8 @@ final class PlatformDatabaseBackupService
             $decompressed = fopen($decompressedPath, 'wb');
             if ($decompressed === false) {
                 gzclose($gzip);
+                $diagnosticBodyState = 'return_false_pending_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'filesystem_error', 'VERIFY_TEMP_FAILED', 'return_false_pending_cleanup');
                 $this->markVerificationFailure($backup, 'VERIFY_TEMP_FAILED');
 
                 return false;
@@ -387,6 +434,8 @@ final class PlatformDatabaseBackupService
                 if ($chunk === false) {
                     gzclose($gzip);
                     fclose($decompressed);
+                    $diagnosticBodyState = 'return_false_pending_cleanup';
+                    $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'INVALID_GZIP', 'return_false_pending_cleanup');
                     $this->markVerificationFailure($backup, 'INVALID_GZIP');
 
                     return false;
@@ -394,6 +443,8 @@ final class PlatformDatabaseBackupService
                 if ($chunk !== '' && fwrite($decompressed, $chunk) !== strlen($chunk)) {
                     gzclose($gzip);
                     fclose($decompressed);
+                    $diagnosticBodyState = 'return_false_pending_cleanup';
+                    $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'filesystem_error', 'VERIFY_TEMP_WRITE_FAILED', 'return_false_pending_cleanup');
                     $this->markVerificationFailure($backup, 'VERIFY_TEMP_WRITE_FAILED');
 
                     return false;
@@ -403,18 +454,31 @@ final class PlatformDatabaseBackupService
             gzclose($gzip);
             fclose($decompressed);
             if ($decompressedBytes < 1) {
+                $diagnosticBodyState = 'return_false_pending_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'EMPTY_DECOMPRESSED_ARTIFACT', 'return_false_pending_cleanup');
                 $this->markVerificationFailure($backup, 'EMPTY_DECOMPRESSED_ARTIFACT');
 
                 return false;
             }
 
-            if ($backup->database_driver === 'sqlite' && ! $this->verifySqliteImage($decompressedPath, $backup)) {
-                $this->markVerificationFailure($backup, 'DATABASE_IMPORT_OR_SANITY_FAILED');
+            $this->emitVerificationDiagnostic($diagnosticStage, 'complete');
 
-                return false;
+            if ($backup->database_driver === 'sqlite') {
+                $diagnosticStage = 'sqlite_sanity';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'begin');
+                if (! $this->verifySqliteImage($decompressedPath, $backup)) {
+                    $diagnosticBodyState = 'return_false_pending_cleanup';
+                    $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'DATABASE_IMPORT_OR_SANITY_FAILED', 'return_false_pending_cleanup');
+                    $this->markVerificationFailure($backup, 'DATABASE_IMPORT_OR_SANITY_FAILED');
+
+                    return false;
+                }
+                $this->emitVerificationDiagnostic($diagnosticStage, 'complete');
             }
 
             if ($backup->database_driver === 'mysql' && ! filled(config('platform_backup.verification_connection'))) {
+                $diagnosticStage = 'mysql_preflight';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'begin');
                 $backup->forceFill([
                     'status' => 'integrity_verified',
                     'verification_status' => 'import_verification_required',
@@ -422,13 +486,16 @@ final class PlatformDatabaseBackupService
                     'failure_code' => 'DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED',
                 ])->save();
                 event(new PlatformRecoverySignal('platform_db_backup_verification_failed', ['backup_uuid' => $backup->uuid, 'reason' => 'disposable_mysql_import_not_configured']));
+                $diagnosticBodyState = 'return_false_pending_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED', 'return_false_pending_cleanup');
 
                 return false;
             }
 
             if ($backup->database_driver === 'mysql') {
                 $importFailureCode = 'DISPOSABLE_MYSQL_IMPORT_FAILED';
-                if (! $this->verifyMysqlDump($decompressedPath, $backup, $importFailureCode)) {
+                if (! $this->verifyMysqlDump($decompressedPath, $backup, $importFailureCode, $diagnosticStage, $diagnosticExceptionReported, $diagnosticBodyState)) {
+                    $diagnosticBodyState = 'return_false_pending_cleanup';
                     $this->markVerificationFailure($backup, $importFailureCode);
 
                     return false;
@@ -448,20 +515,75 @@ final class PlatformDatabaseBackupService
             ]);
             event(new PlatformRecoverySignal('platform_db_backup_verified', ['backup_uuid' => $backup->uuid, 'retention_class' => $backup->retention_class]));
 
+            $diagnosticBodyState = 'return_true_pending_cleanup';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'body_result', 'none', 'none', $diagnosticBodyState);
+
             return true;
         } catch (\Throwable $error) {
+            if (! $diagnosticExceptionReported) {
+                $diagnosticBodyState = 'handled_exception_return_false_pending_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'primary_exception', $this->verificationDiagnosticCategory($error), 'VERIFICATION_ERROR', 'exception_pending_cleanup');
+            } else {
+                $diagnosticBodyState = 'handled_exception_return_false_pending_cleanup';
+            }
             report($error);
             $this->markVerificationFailure($backup, 'VERIFICATION_ERROR');
 
+            $this->emitVerificationDiagnostic($diagnosticStage, 'body_result', 'none', 'VERIFICATION_ERROR', $diagnosticBodyState);
+
             return false;
         } finally {
-            fclose($stream);
-            @unlink($path);
-            if ($compressedPath !== $path) {
-                @unlink($compressedPath);
+            $diagnosticStage = 'service_cleanup_temp_artifacts';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'begin', 'none', 'none', $diagnosticBodyState);
+            try {
+                fclose($stream);
+                $temporaryPaths = array_unique([$path, $compressedPath, $decompressedPath]);
+                foreach ($this->cleanupTemporaryArtifacts($temporaryPaths, $diagnosticBodyState) as $diagnostic) {
+                    $this->emitVerificationDiagnostic(
+                        $diagnosticStage,
+                        $diagnostic['event'],
+                        $diagnostic['category'],
+                        $diagnostic['code'],
+                        $diagnostic['body_state'],
+                    );
+                }
+            } catch (\Throwable $error) {
+                $this->emitVerificationDiagnostic($diagnosticStage, 'cleanup_failure', 'cleanup_error', 'SERVICE_TEMP_ARTIFACT_CLEANUP_FAILED', $diagnosticBodyState);
+                throw $error;
             }
-            @unlink($decompressedPath);
         }
+    }
+
+    /**
+     * @param  list<string>  $temporaryPaths
+     * @return list<array{event: string, category: string, code: string, body_state: string}>
+     */
+    private function cleanupTemporaryArtifacts(array $temporaryPaths, string $diagnosticBodyState): array
+    {
+        $cleanupFailed = false;
+        $diagnostics = [];
+        foreach (array_unique($temporaryPaths) as $temporaryPath) {
+            if (file_exists($temporaryPath) && ! @unlink($temporaryPath)) {
+                $cleanupFailed = true;
+                $diagnostics[] = [
+                    'event' => 'cleanup_observation',
+                    'category' => 'cleanup_error',
+                    'code' => 'SERVICE_TEMP_ARTIFACT_UNLINK_FAILED',
+                    'body_state' => $diagnosticBodyState,
+                ];
+            }
+        }
+
+        if (! $cleanupFailed) {
+            $diagnostics[] = [
+                'event' => 'complete',
+                'category' => 'none',
+                'code' => 'none',
+                'body_state' => $diagnosticBodyState,
+            ];
+        }
+
+        return $diagnostics;
     }
 
     /** Return only the watermark from the authenticated manifest bound to this backup object. */
@@ -531,40 +653,48 @@ final class PlatformDatabaseBackupService
         $connection->unprepared("VACUUM INTO '{$literal}'");
     }
 
-    private function snapshotMysql(string $connectionName, array $config, string $database, string $destination): void
-    {
-        $defaults = tempnam(sys_get_temp_dir(), 'wpcg-mysql-');
-        if ($defaults === false) {
-            throw new RuntimeException('Could not allocate private MySQL client configuration.');
-        }
-        chmod($defaults, 0600);
+    private function snapshotMysql(
+        string $connectionName,
+        array $config,
+        string $database,
+        string $destination,
+        ?callable $unlink = null,
+    ): void {
+        $defaults = $this->mysqlDefaultsFile($config, 'wpcg-mysql-');
+        $loginPathDirectory = null;
+        $process = null;
+        $primaryError = null;
+
         try {
-            $lines = ['[client]', 'user='.$this->mysqlOption((string) ($config['username'] ?? ''))];
-            if ((string) ($config['password'] ?? '') !== '') {
-                $lines[] = 'password='.$this->mysqlOption((string) $config['password']);
-            }
-            if (! empty($config['unix_socket'])) {
-                $lines[] = 'socket='.$this->mysqlOption((string) $config['unix_socket']);
-            } else {
-                $lines[] = 'host='.$this->mysqlOption((string) ($config['host'] ?? '127.0.0.1'));
-                $lines[] = 'port='.(int) ($config['port'] ?? 3306);
-            }
-            if (file_put_contents($defaults, implode("\n", $lines)."\n", LOCK_EX) === false) {
-                throw new RuntimeException('Could not write private MySQL client configuration.');
-            }
+            $loginPathDirectory = $this->createMysqlImportLoginPathDirectory();
             $process = new Process([
                 (string) config('platform_backup.mysql_dump_binary'),
                 '--defaults-extra-file='.$defaults,
                 '--single-transaction', '--routines', '--triggers', '--events', '--hex-blob', '--skip-lock-tables', '--no-tablespaces',
                 '--result-file='.$destination,
                 $database,
-            ], null, ['MYSQL_PWD' => null], null, (int) config('platform_backup.timeout'));
+            ], null, $this->mysqlClientProcessEnvironment($loginPathDirectory), null, (int) config('platform_backup.timeout'));
             $process->run();
             if (! $process->isSuccessful() || ! is_file($destination) || filesize($destination) < 1) {
                 throw new RuntimeException('mysqldump failed for connection '.$connectionName.' with exit code '.$process->getExitCode().'.');
             }
-        } finally {
-            @unlink($defaults);
+        } catch (\Throwable $error) {
+            $primaryError = $error;
+        }
+
+        $cleanup = $this->cleanupMysqlClientResources($defaults, $loginPathDirectory, null, $process, null, $unlink);
+        if (! $cleanup['success']) {
+            if ($primaryError instanceof \Throwable) {
+                Log::error('MySQL backup credential cleanup failed.', ['code' => 'MYSQL_PROCESS_CLEANUP_FAILED']);
+            } else {
+                throw new PlatformDatabaseBackupCredentialCleanupException(
+                    'Could not securely clean up private MySQL client credentials after backup creation.',
+                );
+            }
+        }
+
+        if ($primaryError instanceof \Throwable) {
+            throw $primaryError;
         }
     }
 
@@ -667,8 +797,17 @@ final class PlatformDatabaseBackupService
         }
     }
 
-    private function verifyMysqlDump(string $dumpPath, PlatformDatabaseBackup $backup, ?string &$failureCode = null): bool
-    {
+    private function verifyMysqlDump(
+        string $dumpPath,
+        PlatformDatabaseBackup $backup,
+        ?string &$failureCode,
+        string &$diagnosticStage,
+        bool &$diagnosticExceptionReported,
+        string &$diagnosticBodyState,
+    ): bool {
+        $diagnosticStage = 'mysql_preflight';
+        $diagnosticBodyState = 'pending';
+        $this->emitVerificationDiagnostic($diagnosticStage, 'begin', 'none', 'none', $diagnosticBodyState);
         $connectionName = (string) config('platform_backup.verification_connection');
         $target = config("database.connections.{$connectionName}");
         if (! is_array($target) || ($target['driver'] ?? null) !== 'mysql') {
@@ -686,34 +825,125 @@ final class PlatformDatabaseBackupService
         $admin = DB::connection($connectionName);
         $created = false;
         $dynamicConnection = 'm9_dr_verify_'.substr(hash('sha256', $scratch), 0, 12);
+        $primaryExceptionReported = false;
         try {
+            $diagnosticStage = 'mysql_create_database';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'begin', 'none', 'none', $diagnosticBodyState);
             $admin->unprepared("CREATE DATABASE {$quoted} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
             $created = true;
-            $defaults = $this->mysqlDefaultsFile($target);
+            $this->emitVerificationDiagnostic($diagnosticStage, 'complete', 'none', 'none', $diagnosticBodyState);
+
+            $diagnosticStage = 'mysql_client_import';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'begin', 'none', 'none', $diagnosticBodyState);
+            try {
+                $defaults = $this->mysqlDefaultsFile($target);
+            } catch (PlatformDatabaseBackupCredentialCleanupException $error) {
+                $diagnosticBodyState = 'exception_pending_cleanup';
+                $primaryExceptionReported = true;
+                $diagnosticExceptionReported = true;
+                $this->emitVerificationDiagnostic($diagnosticStage, 'primary_exception', 'filesystem_error', 'VERIFICATION_ERROR', $diagnosticBodyState);
+                $diagnosticStage = 'mysql_process_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'begin', 'none', 'none', $diagnosticBodyState);
+                $this->emitVerificationDiagnostic($diagnosticStage, 'cleanup_failure', 'cleanup_error', 'MYSQL_PROCESS_CLEANUP_FAILED', $diagnosticBodyState);
+                throw $error;
+            }
+
             $input = fopen($dumpPath, 'rb');
             if ($input === false) {
-                @unlink($defaults);
+                $diagnosticBodyState = 'return_false_pending_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'filesystem_error', 'MYSQL_DUMP_INPUT_OPEN_FAILED', $diagnosticBodyState);
+                $failureCode = 'MYSQL_DUMP_INPUT_OPEN_FAILED';
+                $diagnosticStage = 'mysql_process_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'begin', 'none', 'none', $diagnosticBodyState);
+                $cleanup = $this->cleanupMysqlClientResources($defaults, null, null, null, 'MYSQL_DUMP_INPUT_OPEN_FAILED');
+                $this->emitVerificationDiagnostic(
+                    $diagnosticStage,
+                    $cleanup['event'],
+                    $cleanup['success'] ? 'none' : 'cleanup_error',
+                    $cleanup['success'] ? 'none' : 'MYSQL_PROCESS_CLEANUP_FAILED',
+                    $diagnosticBodyState,
+                );
 
                 return false;
             }
+            $loginPathDirectory = null;
+            $process = null;
+            $processSucceeded = false;
+            $processFailed = false;
+            $primaryError = null;
             try {
-                $process = new Process([
-                    (string) config('platform_backup.mysql_binary'),
-                    '--defaults-extra-file='.$defaults,
-                    '--database='.$scratch,
-                    '--binary-mode',
-                ], null, null, $input, (int) config('platform_backup.timeout'));
+                $loginPathDirectory = $this->createMysqlImportLoginPathDirectory();
+                $process = new Process(
+                    $this->mysqlImportCommand($defaults, $scratch),
+                    null,
+                    $this->mysqlClientProcessEnvironment($loginPathDirectory),
+                    $input,
+                    (int) config('platform_backup.timeout'),
+                );
                 $process->run();
                 if (! $process->isSuccessful()) {
+                    $processFailed = true;
                     $failureCode = 'MYSQL_IMPORT_PROCESS_FAILED_EXIT_'.(string) $process->getExitCode();
-
-                    return false;
+                    $diagnosticBodyState = 'return_false_pending_cleanup';
+                    $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'process_error', 'MYSQL_IMPORT_PROCESS_FAILED', $diagnosticBodyState);
+                    if (app()->environment('testing') && config('platform_backup.diagnostic_c_enabled') === true) {
+                        $classification = 'UNCLASSIFIED';
+                        try {
+                            $classification = $this->classifyMysqlClientStderrForDiagnostics($process->getErrorOutput());
+                        } catch (\Throwable) {
+                            $classification = 'UNCLASSIFIED';
+                        } finally {
+                            try {
+                                $process->clearErrorOutput();
+                            } catch (\Throwable) {
+                                // Diagnostic cleanup must not alter the import failure result.
+                            }
+                        }
+                        $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'process_error', $classification, $diagnosticBodyState);
+                    }
+                } else {
+                    $processSucceeded = true;
+                    $this->emitVerificationDiagnostic($diagnosticStage, 'complete', 'none', 'none', $diagnosticBodyState);
                 }
-            } finally {
-                fclose($input);
-                @unlink($defaults);
+            } catch (\Throwable $error) {
+                $diagnosticBodyState = 'exception_pending_cleanup';
+                $primaryExceptionReported = true;
+                $diagnosticExceptionReported = true;
+                $primaryError = $error;
+                $this->emitVerificationDiagnostic(
+                    $diagnosticStage,
+                    'primary_exception',
+                    $this->verificationDiagnosticCategory($error),
+                    'MYSQL_IMPORT_PROCESS_FAILED',
+                    $diagnosticBodyState,
+                );
             }
 
+            $diagnosticStage = 'mysql_process_cleanup';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'begin', 'none', 'none', $diagnosticBodyState);
+            $cleanup = $this->cleanupMysqlClientResources(
+                $defaults,
+                $loginPathDirectory,
+                $input,
+                $process,
+                $processFailed ? $failureCode : null,
+            );
+            $this->emitVerificationDiagnostic(
+                $diagnosticStage,
+                $cleanup['event'],
+                $cleanup['success'] ? 'none' : 'cleanup_error',
+                $cleanup['success'] ? 'none' : 'MYSQL_PROCESS_CLEANUP_FAILED',
+                $diagnosticBodyState,
+            );
+
+            $outcome = $this->mysqlImportOutcome($processSucceeded, $processFailed, $primaryError, $cleanup, $failureCode);
+            $failureCode = $outcome['failure_code'];
+            if (! $outcome['success']) {
+                return false;
+            }
+
+            $diagnosticStage = 'mysql_schema_check';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'begin', 'none', 'none', $diagnosticBodyState);
             config(["database.connections.{$dynamicConnection}" => array_merge($target, ['database' => $scratch])]);
             DB::purge($dynamicConnection);
             $restored = DB::connection($dynamicConnection);
@@ -728,34 +958,206 @@ final class PlatformDatabaseBackupService
                     'unexpected_tables' => array_values(array_diff($tables, $expectedTables)),
                 ]);
                 $failureCode = 'MYSQL_IMPORT_TABLE_SET_MISMATCH';
+                $diagnosticBodyState = 'return_false_pending_cleanup';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'MYSQL_IMPORT_TABLE_SET_MISMATCH', $diagnosticBodyState);
 
                 return false;
             }
+            $this->emitVerificationDiagnostic($diagnosticStage, 'complete', 'none', 'none', $diagnosticBodyState);
+
+            $diagnosticStage = 'mysql_critical_count';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'begin', 'none', 'none', $diagnosticBodyState);
             foreach ((array) data_get($backup->manifest, 'table_manifest.critical_counts', []) as $table => $count) {
                 if (! in_array($table, $tables, true) || (int) $restored->table($table)->count() !== (int) $count) {
                     $failureCode = 'MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH';
+                    $diagnosticBodyState = 'return_false_pending_cleanup';
+                    $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'backup_failure', 'MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH', $diagnosticBodyState);
 
                     return false;
                 }
             }
 
+            $this->emitVerificationDiagnostic($diagnosticStage, 'complete', 'none', 'none', $diagnosticBodyState);
+            $diagnosticBodyState = 'return_true_pending_cleanup';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'body_result', 'none', 'none', $diagnosticBodyState);
+
             return true;
+        } catch (\Throwable $error) {
+            if (! $primaryExceptionReported) {
+                $diagnosticBodyState = 'exception_pending_cleanup';
+                $diagnosticExceptionReported = true;
+                $this->emitVerificationDiagnostic(
+                    $diagnosticStage,
+                    'primary_exception',
+                    $this->verificationDiagnosticCategory($error),
+                    $this->verificationDiagnosticCodeForStage($diagnosticStage),
+                    $diagnosticBodyState,
+                );
+            }
+            throw $error;
         } finally {
-            DB::purge($dynamicConnection);
+            $diagnosticStage = 'service_cleanup_connection_purge';
+            $this->emitVerificationDiagnostic($diagnosticStage, 'begin', 'none', 'none', $diagnosticBodyState);
+            try {
+                DB::purge($dynamicConnection);
+            } catch (\Throwable $error) {
+                $diagnosticExceptionReported = true;
+                $this->emitVerificationDiagnostic($diagnosticStage, 'cleanup_failure', 'cleanup_error', 'SERVICE_CONNECTION_PURGE_FAILED', $diagnosticBodyState);
+                throw $error;
+            }
+            $this->emitVerificationDiagnostic($diagnosticStage, 'complete', 'none', 'none', $diagnosticBodyState);
             if ($created) {
-                $admin->unprepared("DROP DATABASE IF EXISTS {$quoted}");
+                $diagnosticStage = 'service_cleanup_drop_database';
+                $this->emitVerificationDiagnostic($diagnosticStage, 'begin', 'none', 'none', $diagnosticBodyState);
+                try {
+                    $admin->unprepared("DROP DATABASE IF EXISTS {$quoted}");
+                } catch (\Throwable $error) {
+                    $diagnosticExceptionReported = true;
+                    $this->emitVerificationDiagnostic($diagnosticStage, 'cleanup_failure', 'cleanup_error', 'SERVICE_DATABASE_DROP_FAILED', $diagnosticBodyState);
+                    throw $error;
+                }
+                $this->emitVerificationDiagnostic($diagnosticStage, 'complete', 'none', 'none', $diagnosticBodyState);
             }
         }
     }
 
-    /** @param array<string, mixed> $config */
-    private function mysqlDefaultsFile(array $config): string
+    private function emitVerificationDiagnostic(string $stage, string $event, string $category = 'none', string $code = 'none', string $bodyState = 'pending'): void
     {
-        $path = tempnam(sys_get_temp_dir(), 'wpcg-mysql-verify-');
+        static $stages = [
+            'artifact_integrity', 'artifact_decrypt', 'artifact_gzip', 'sqlite_sanity', 'mysql_preflight',
+            'mysql_create_database', 'mysql_client_import', 'mysql_schema_check', 'mysql_critical_count',
+            'mysql_process_cleanup', 'service_cleanup_connection_purge', 'service_cleanup_drop_database',
+            'service_cleanup_temp_artifacts',
+        ];
+        static $events = [
+            'begin', 'complete', 'primary_failure', 'primary_exception', 'body_result', 'cleanup_observation', 'cleanup_failure',
+        ];
+        static $categories = [
+            'none', 'backup_failure', 'filesystem_error', 'process_error', 'timeout', 'pdo_error',
+            'runtime_error', 'cleanup_error', 'other',
+        ];
+        static $codes = [
+            'none', 'other', 'OBJECT_MISSING', 'MANIFEST_OBJECT_MISSING', 'MANIFEST_OBJECT_INVALID',
+            'MANIFEST_METADATA_MISMATCH', 'MANIFEST_AUTHENTICATION_FAILED', 'OBJECT_UNREADABLE',
+            'VERIFY_TEMP_FAILED', 'OBJECT_READ_FAILED', 'VERIFY_TEMP_WRITE_FAILED', 'SIZE_OR_HASH_MISMATCH',
+            'CIPHERTEXT_AUTHENTICATION_FAILED', 'INVALID_GZIP', 'EMPTY_DECOMPRESSED_ARTIFACT',
+            'DATABASE_IMPORT_OR_SANITY_FAILED', 'DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED', 'VERIFICATION_ERROR',
+            'MYSQL_DUMP_INPUT_OPEN_FAILED', 'MYSQL_IMPORT_PROCESS_FAILED', 'MYSQL_IMPORT_TABLE_SET_MISMATCH',
+            'MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH', 'MYSQL_DATABASE_CREATE_FAILED', 'MYSQL_SCHEMA_CHECK_FAILED',
+            'MYSQL_PROCESS_CLEANUP_FAILED', 'SERVICE_CONNECTION_PURGE_FAILED', 'SERVICE_DATABASE_DROP_FAILED',
+            'SERVICE_TEMP_ARTIFACT_CLEANUP_FAILED', 'SERVICE_TEMP_ARTIFACT_UNLINK_FAILED',
+            'UNCLASSIFIED', 'MYSQL_IMPORT_ERRNO_1419', 'MYSQL_IMPORT_ERRNO_1227', 'MYSQL_IMPORT_ERRNO_1449',
+            'MYSQL_IMPORT_ERRNO_1044', 'MYSQL_IMPORT_ERRNO_1045', 'MYSQL_IMPORT_ERRNO_1142',
+        ];
+        static $bodyStates = [
+            'pending', 'return_true_pending_cleanup', 'return_false_pending_cleanup',
+            'return_false_before_outer_cleanup', 'exception_pending_cleanup', 'handled_exception_return_false_pending_cleanup',
+        ];
+
+        try {
+            if (! app()->environment('testing') || config('platform_backup.diagnostic_c_enabled') !== true || ! defined('STDERR')) {
+                return;
+            }
+            if (! in_array($stage, $stages, true)
+                || ! in_array($event, $events, true)
+                || ! in_array($bodyState, $bodyStates, true)) {
+                return;
+            }
+            if (! in_array($category, $categories, true)) {
+                $category = 'other';
+            }
+            if (! in_array($code, $codes, true)) {
+                $code = 'other';
+            }
+
+            @fwrite(STDERR, 'WPCG_DIAG_V2|test=backup_import|stage='.$stage.'|event='.$event.'|category='.$category.'|code='.$code.'|body_state='.$bodyState.PHP_EOL);
+            @fflush(STDERR);
+        } catch (\Throwable) {
+            // Diagnostics are opt-in, best-effort, and must not alter verification behavior.
+        }
+    }
+
+    private function classifyMysqlClientStderrForDiagnostics(string $stderr): string
+    {
+        if (! app()->environment('testing')
+            || config('platform_backup.diagnostic_c_enabled') !== true
+            || $stderr === ''
+            || strlen($stderr) > 512) {
+            return 'UNCLASSIFIED';
+        }
+
+        // Require a complete single error record. Missing line termination can mean truncation.
+        if (str_ends_with($stderr, "\r\n")) {
+            $line = substr($stderr, 0, -2);
+        } elseif (str_ends_with($stderr, "\n")) {
+            $line = substr($stderr, 0, -1);
+        } else {
+            return 'UNCLASSIFIED';
+        }
+
+        if ($line === ''
+            || str_contains($line, "\r")
+            || str_contains($line, "\n")
+            || preg_match('/[^\x20-\x7E]/', $line) === 1
+            || preg_match_all('/(?:^|\s)ERROR [0-9]{1,5} \([A-Z0-9]{5}\)/', $line) !== 1
+            || preg_match('/\AERROR ([0-9]{1,5}) \(([A-Z0-9]{5})\)(?: at line [0-9]{1,6})?: [\x20-\x7E]{1,440}\z/D', $line, $matches) !== 1) {
+            return 'UNCLASSIFIED';
+        }
+
+        return match ($matches[1].':'.$matches[2]) {
+            '1419:HY000' => 'MYSQL_IMPORT_ERRNO_1419',
+            '1227:42000' => 'MYSQL_IMPORT_ERRNO_1227',
+            '1449:HY000' => 'MYSQL_IMPORT_ERRNO_1449',
+            '1044:42000' => 'MYSQL_IMPORT_ERRNO_1044',
+            '1045:28000' => 'MYSQL_IMPORT_ERRNO_1045',
+            '1142:42000' => 'MYSQL_IMPORT_ERRNO_1142',
+            default => 'UNCLASSIFIED',
+        };
+    }
+
+    private function verificationDiagnosticCategory(\Throwable $error): string
+    {
+        if ($error instanceof \PDOException) {
+            return 'pdo_error';
+        }
+        if ($error instanceof ProcessTimedOutException) {
+            return 'timeout';
+        }
+        if ($error instanceof ProcessException) {
+            return 'process_error';
+        }
+        if ($error instanceof \ErrorException || $error instanceof RuntimeException) {
+            return 'runtime_error';
+        }
+
+        return 'other';
+    }
+
+    private function verificationDiagnosticCodeForStage(string $stage): string
+    {
+        return match ($stage) {
+            'mysql_create_database' => 'MYSQL_DATABASE_CREATE_FAILED',
+            'mysql_client_import' => 'MYSQL_IMPORT_PROCESS_FAILED',
+            'mysql_schema_check', 'mysql_critical_count' => 'MYSQL_SCHEMA_CHECK_FAILED',
+            default => 'VERIFICATION_ERROR',
+        };
+    }
+
+    /** @param array<string, mixed> $config */
+    private function mysqlDefaultsFile(
+        array $config,
+        string $prefix = 'wpcg-mysql-verify-',
+        ?callable $writer = null,
+        ?callable $unlink = null,
+    ): string {
+        if (! in_array($prefix, ['wpcg-mysql-', 'wpcg-mysql-verify-'], true)) {
+            throw new RuntimeException('Unsupported private MySQL credential-file prefix.');
+        }
+
+        $path = tempnam(sys_get_temp_dir(), $prefix);
         if ($path === false) {
             throw new RuntimeException('Could not allocate private MySQL verification configuration.');
         }
-        chmod($path, 0600);
         $lines = ['[client]', 'user='.$this->mysqlOption((string) ($config['username'] ?? ''))];
         if ((string) ($config['password'] ?? '') !== '') {
             $lines[] = 'password='.$this->mysqlOption((string) $config['password']);
@@ -766,12 +1168,244 @@ final class PlatformDatabaseBackupService
             $lines[] = 'host='.$this->mysqlOption((string) ($config['host'] ?? '127.0.0.1'));
             $lines[] = 'port='.(int) ($config['port'] ?? 3306);
         }
-        if (file_put_contents($path, implode("\n", $lines)."\n", LOCK_EX) === false) {
-            @unlink($path);
-            throw new RuntimeException('Could not write private MySQL verification configuration.');
+
+        $contents = implode("\n", $lines)."\n";
+        $writer ??= static fn (string $target, string $data): int|false => file_put_contents($target, $data, LOCK_EX);
+        $unlink ??= static fn (string $target): bool => @unlink($target);
+
+        try {
+            if (! @chmod($path, 0600) || (DIRECTORY_SEPARATOR !== '\\' && (fileperms($path) & 0777) !== 0600)) {
+                throw new RuntimeException('Could not restrict private MySQL verification configuration permissions.');
+            }
+
+            if ($writer($path, $contents) !== strlen($contents)) {
+                throw new RuntimeException('Could not write private MySQL verification configuration.');
+            }
+        } catch (\Throwable $error) {
+            if (file_exists($path) || is_link($path)) {
+                $removed = $unlink($path);
+                if (! $removed || file_exists($path) || is_link($path)) {
+                    throw new PlatformDatabaseBackupCredentialCleanupException(
+                        'Could not securely remove private MySQL verification configuration.',
+                        0,
+                        $error,
+                    );
+                }
+            }
+
+            throw $error;
         }
 
         return $path;
+    }
+
+    private function createMysqlImportLoginPathDirectory(): string
+    {
+        $temporaryDirectory = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR);
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $directory = $temporaryDirectory.DIRECTORY_SEPARATOR.'wpcg-mysql-login-'.bin2hex(random_bytes(16));
+            if (! @mkdir($directory, 0700)) {
+                continue;
+            }
+
+            if (DIRECTORY_SEPARATOR !== '\\') {
+                if (! @chmod($directory, 0700) || (fileperms($directory) & 0777) !== 0700) {
+                    @rmdir($directory);
+
+                    throw new RuntimeException('Could not restrict private MySQL login-path directory permissions.');
+                }
+            }
+
+            return $directory;
+        }
+
+        throw new RuntimeException('Could not allocate a private MySQL login-path directory.');
+    }
+
+    /** @return array<string, string|false> */
+    private function mysqlClientProcessEnvironment(string $loginPathDirectory): array
+    {
+        $environment = getenv();
+        $sources = [is_array($environment) ? $environment : [], $_SERVER, $_ENV];
+        $environmentNames = [];
+        foreach ($sources as $source) {
+            $environmentNames = array_merge($environmentNames, array_keys($source));
+        }
+
+        $childEnvironment = array_fill_keys(array_unique(array_filter($environmentNames, 'is_string')), false);
+        $allowedNames = [
+            'COMSPEC', 'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'PATHEXT', 'PATH', 'SSL_CERT_DIR',
+            'SSL_CERT_FILE', 'SYSTEMROOT', 'TEMP', 'TMP', 'TMPDIR', 'TZ', 'WINDIR',
+        ];
+
+        foreach ($allowedNames as $allowedName) {
+            foreach ($sources as $source) {
+                foreach ($source as $name => $value) {
+                    if (is_string($name) && strcasecmp($name, $allowedName) === 0 && is_string($value)) {
+                        $childEnvironment[$allowedName] = $value;
+                    }
+                }
+            }
+        }
+
+        $childEnvironment['HOME'] = $loginPathDirectory;
+        $childEnvironment['APPDATA'] = $loginPathDirectory;
+        $childEnvironment['USERPROFILE'] = $loginPathDirectory;
+        $childEnvironment['MYSQL_TEST_LOGIN_FILE'] = $loginPathDirectory.DIRECTORY_SEPARATOR.'.mylogin.cnf';
+
+        return $childEnvironment;
+    }
+
+    /**
+     * @return array{success: bool, failure_code: ?string, event: 'complete'|'cleanup_failure'}
+     */
+    private function cleanupMysqlClientResources(
+        string $defaults,
+        ?string $loginPathDirectory,
+        mixed $input,
+        ?Process $process,
+        ?string $primaryFailureCode = null,
+        ?callable $unlink = null,
+        ?callable $rmdir = null,
+    ): array {
+        $cleanupFailed = false;
+        $executionClosed = true;
+        $unlink ??= static fn (string $path): bool => @unlink($path);
+        $rmdir ??= static fn (string $path): bool => @rmdir($path);
+
+        if ($process instanceof Process) {
+            try {
+                if ($process->isRunning()) {
+                    $process->stop(0);
+                }
+                if ($process->isRunning()) {
+                    $cleanupFailed = true;
+                    $executionClosed = false;
+                }
+                $process->clearOutput();
+                $process->clearErrorOutput();
+            } catch (\Throwable) {
+                $cleanupFailed = true;
+                $executionClosed = false;
+            }
+        }
+
+        if (is_resource($input)) {
+            if (! @fclose($input) || is_resource($input)) {
+                $cleanupFailed = true;
+                $executionClosed = false;
+            }
+        }
+
+        if (! $executionClosed) {
+            $cleanupFailed = true;
+        } elseif (! $this->isOwnedMysqlDefaultsFile($defaults)) {
+            $cleanupFailed = true;
+        } elseif (file_exists($defaults) || is_link($defaults)) {
+            $removed = $unlink($defaults);
+            if (! $removed || file_exists($defaults) || is_link($defaults)) {
+                $cleanupFailed = true;
+            }
+        }
+
+        if (! $executionClosed && is_string($loginPathDirectory)) {
+            $cleanupFailed = true;
+        } elseif (is_string($loginPathDirectory)) {
+            if (! $this->isOwnedMysqlLoginPathDirectory($loginPathDirectory)) {
+                $cleanupFailed = true;
+            } else {
+                $loginPathFile = $loginPathDirectory.DIRECTORY_SEPARATOR.'.mylogin.cnf';
+                if (file_exists($loginPathFile) || is_link($loginPathFile)) {
+                    $removed = $this->isOwnedMysqlLoginPathDirectory($loginPathDirectory)
+                        && $unlink($loginPathFile);
+                    if (! $removed || file_exists($loginPathFile) || is_link($loginPathFile)) {
+                        $cleanupFailed = true;
+                    }
+                }
+
+                if (is_dir($loginPathDirectory)) {
+                    $removed = $this->isOwnedMysqlLoginPathDirectory($loginPathDirectory)
+                        && $rmdir($loginPathDirectory);
+                    if (! $removed || is_dir($loginPathDirectory)) {
+                        $cleanupFailed = true;
+                    }
+                }
+            }
+        }
+
+        return [
+            'success' => ! $cleanupFailed,
+            'failure_code' => $primaryFailureCode ?? ($cleanupFailed ? 'MYSQL_PROCESS_CLEANUP_FAILED' : null),
+            'event' => $cleanupFailed ? 'cleanup_failure' : 'complete',
+        ];
+    }
+
+    private function isOwnedMysqlDefaultsFile(string $path): bool
+    {
+        $temporaryRoot = realpath(sys_get_temp_dir());
+        $parent = realpath(dirname($path));
+
+        return is_string($temporaryRoot)
+            && is_string($parent)
+            && strcasecmp($temporaryRoot, $parent) === 0
+            && str_starts_with(basename($path), 'wpcg-mysql-');
+    }
+
+    private function isOwnedMysqlLoginPathDirectory(string $path): bool
+    {
+        $temporaryRoot = realpath(sys_get_temp_dir());
+        $parent = realpath(dirname($path));
+        $canonicalDirectory = realpath($path);
+        $expectedDirectory = is_string($temporaryRoot)
+            ? $temporaryRoot.DIRECTORY_SEPARATOR.basename($path)
+            : false;
+
+        return is_string($temporaryRoot)
+            && is_string($parent)
+            && is_string($canonicalDirectory)
+            && ! is_link($path)
+            && is_dir($path)
+            && strcasecmp($temporaryRoot, $parent) === 0
+            && is_string($expectedDirectory)
+            && strcasecmp($expectedDirectory, $canonicalDirectory) === 0
+            && str_starts_with(basename($path), 'wpcg-mysql-login-');
+    }
+
+    /**
+     * @param  array{success: bool, failure_code: ?string, event: 'complete'|'cleanup_failure'}  $cleanup
+     * @return array{success: bool, failure_code: string}
+     */
+    private function mysqlImportOutcome(
+        bool $processSucceeded,
+        bool $processFailed,
+        ?\Throwable $primaryError,
+        array $cleanup,
+        string $existingFailureCode,
+    ): array {
+        if ($primaryError instanceof \Throwable) {
+            throw $primaryError;
+        }
+
+        $failureCode = $existingFailureCode;
+        if (! $cleanup['success'] && ! $processFailed) {
+            $failureCode = $cleanup['failure_code'] ?? 'MYSQL_PROCESS_CLEANUP_FAILED';
+        }
+
+        return [
+            'success' => $processSucceeded && $cleanup['success'],
+            'failure_code' => $failureCode,
+        ];
+    }
+
+    /** @return array<int, string> */
+    private function mysqlImportCommand(string $defaults, string $database): array
+    {
+        return [
+            (string) config('platform_backup.mysql_binary'),
+            '--defaults-extra-file='.$defaults,
+            '--database='.$database,
+            '--binary-mode',
+        ];
     }
 
     private function canonicalJson(array $value): string
