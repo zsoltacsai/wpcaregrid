@@ -15,7 +15,7 @@ return new class extends Migration
             return;
         }
 
-        if (! Schema::hasTable('transition_v2_requests')) {
+        if (!Schema::hasTable('transition_v2_requests')) {
             throw new RuntimeException('The Phase 2B request receipt table is required before transition history.');
         }
 
@@ -164,5 +164,4 @@ return new class extends Migration
         DB::unprepared("DROP TRIGGER IF EXISTS {$stem}_update");
         DB::unprepared("DROP TRIGGER IF EXISTS {$stem}_delete");
     }
-
 };

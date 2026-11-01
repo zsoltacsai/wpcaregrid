@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Deployment\Phase2B;
 
+use App\Deployment\Phase2B\TransitionHistoryStore;
 use App\Deployment\Phase2B\TransitionV2RequestStore;
 use App\Models\TransitionHistoryEvent;
 use App\Models\TransitionV2Request;
@@ -509,7 +510,7 @@ class TransitionAuthorityPersistenceTest extends TestCase
         self::assertSame(TransitionV2Request::digestForTuple($first), $events[0]->target_tuple_digest);
         self::assertSame(TransitionV2Request::digestForTuple($first), $events[1]->source_tuple_digest);
         self::assertSame(TransitionV2Request::digestForTuple($second), $events[1]->target_tuple_digest);
-        self::assertCount(2, app(\App\Deployment\Phase2B\TransitionHistoryStore::class)->orderedForScope(self::OPERATION_ID, 3));
+        self::assertCount(2, app(TransitionHistoryStore::class)->orderedForScope(self::OPERATION_ID, 3));
 
         $request = TransitionV2Request::query()->where('request_id', $secondId)->firstOrFail();
         $request->operation = 'other';
@@ -685,7 +686,7 @@ class TransitionAuthorityPersistenceTest extends TestCase
         ]);
 
         try {
-            app(\App\Deployment\Phase2B\TransitionHistoryStore::class)->orderedForScope(self::OPERATION_ID, 3);
+            app(TransitionHistoryStore::class)->orderedForScope(self::OPERATION_ID, 3);
             self::fail('History readback must reject a source digest disconnected from the previous target.');
         } catch (RuntimeException $exception) {
             self::assertSame('Phase 2B history readback has a disconnected sequence or source digest.', $exception->getMessage());
@@ -745,7 +746,7 @@ class TransitionAuthorityPersistenceTest extends TestCase
         ]);
 
         try {
-            app(\App\Deployment\Phase2B\TransitionHistoryStore::class)->orderedForScope(self::OPERATION_ID, 3);
+            app(TransitionHistoryStore::class)->orderedForScope(self::OPERATION_ID, 3);
             self::fail('History readback must reject a gap in the event sequence.');
         } catch (RuntimeException $exception) {
             self::assertSame('Phase 2B history readback has a disconnected sequence or source digest.', $exception->getMessage());
@@ -883,7 +884,7 @@ class TransitionAuthorityPersistenceTest extends TestCase
 
     public function test_receipts_and_history_reject_database_level_update_and_delete(): void
     {
-        self::assertFalse(method_exists(\App\Deployment\Phase2B\TransitionHistoryStore::class, 'appendCommittedTuple'));
+        self::assertFalse(method_exists(TransitionHistoryStore::class, 'appendCommittedTuple'));
         self::assertTrue((new \ReflectionMethod(TransitionV2RequestStore::class, 'appendHistoryEvent'))->isPrivate());
 
         $target = $this->tuple();

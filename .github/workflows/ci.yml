@@ -229,7 +229,13 @@ jobs:
           set -euo pipefail
           db_password="$(openssl rand -hex 32)"
           echo "::add-mask::$db_password"
-          MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=127.0.0.1 --port=3306 --user=root --execute="CREATE DATABASE IF NOT EXISTS caregrid_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER 'caregrid_ci'@'%' IDENTIFIED BY '$db_password'; GRANT ALL PRIVILEGES ON caregrid_test.* TO 'caregrid_ci'@'%';"
+          MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=127.0.0.1 --port=3306 --user=root --execute="SET GLOBAL log_bin_trust_function_creators=1; CREATE DATABASE IF NOT EXISTS caregrid_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER 'caregrid_ci'@'%' IDENTIFIED BY '$db_password'; GRANT ALL PRIVILEGES ON caregrid_test.* TO 'caregrid_ci'@'%';"
+          trust_function_creators="$(MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=TCP --host=127.0.0.1 --port=3306 --user=root --batch --skip-column-names --execute="SELECT @@GLOBAL.log_bin_trust_function_creators;")"
+          if [[ "$trust_function_creators" != "1" ]]; then
+            echo 'MySQL did not confirm log_bin_trust_function_creators=1 on the disposable application test service.' >&2
+            exit 1
+          fi
+          echo 'Disposable application test service confirmed log_bin_trust_function_creators=1.'
           printf '%s\n' \
             "DB_CONNECTION=mysql" \
             "DB_HOST=127.0.0.1" \

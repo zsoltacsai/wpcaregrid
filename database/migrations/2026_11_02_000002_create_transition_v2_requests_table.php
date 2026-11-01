@@ -159,5 +159,4 @@ return new class extends Migration
         DB::unprepared("DROP TRIGGER IF EXISTS {$stem}_update");
         DB::unprepared("DROP TRIGGER IF EXISTS {$stem}_delete");
     }
-
 };
