@@ -408,14 +408,13 @@ jobs:
             exit 1
           fi
 
-      - name: Mandatory isolated MySQL backup-import verification
+      - name: Assemble isolated backup verifier script (1/4)
         shell: bash
-        env:
-          WPCG_MYSQL_VERIFY_HOST: 127.0.0.1
-          WPCG_MYSQL_VERIFY_PORT: '3307'
-          WPCG_MYSQL_VERIFY_DATABASE: wpcg_verifier_seed
-          WPCG_MYSQL_VERIFY_USERNAME: caregrid_ci
         run: |
+          set -euo pipefail
+          script_file="$RUNNER_TEMP/wpcg-isolated-backup-verification.sh"
+          : > "$script_file"
+          cat >> "$script_file" <<'WPCG_SCRIPT_CHUNK_1'
           set -euo pipefail
           set +x
           credential_file="$RUNNER_TEMP/wpcg-mysql-verifier-password"
@@ -711,6 +710,13 @@ jobs:
               "cleanup_observation", "cleanup_failure",
           }
           SERVICE_CATEGORIES = {
+          WPCG_SCRIPT_CHUNK_1
+      - name: Assemble isolated backup verifier script (2/4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          script_file="$RUNNER_TEMP/wpcg-isolated-backup-verification.sh"
+          cat >> "$script_file" <<'WPCG_SCRIPT_CHUNK_2'
               "none", "backup_failure", "filesystem_error", "process_error", "timeout", "pdo_error",
               "runtime_error", "cleanup_error", "other",
           }
@@ -978,6 +984,13 @@ jobs:
               if failed_import_assertion and not import_service_failure:
                   cleanup_status = "UNKNOWN"
               if service_outcome_conflict:
+          WPCG_SCRIPT_CHUNK_2
+      - name: Assemble isolated backup verifier script (3/4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          script_file="$RUNNER_TEMP/wpcg-isolated-backup-verification.sh"
+          cat >> "$script_file" <<'WPCG_SCRIPT_CHUNK_3'
                   cleanup_status = "UNKNOWN"
               if test_assertions:
                   assertion_status = "FAILED"
@@ -1147,6 +1160,13 @@ jobs:
               early_result = project("0", ("\n".join(early_test_failures) + "\n").encode("ascii"))
               assert early_result["service_diagnostics_status"] == "MISSING"
               assert early_result["test_assertion"]["status"] == "UNKNOWN"
+          WPCG_SCRIPT_CHUNK_3
+      - name: Assemble isolated backup verifier script (4/4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          script_file="$RUNNER_TEMP/wpcg-isolated-backup-verification.sh"
+          cat >> "$script_file" <<'WPCG_SCRIPT_CHUNK_4'
               assert [row["stage"] for row in early_result["test_failures"]] == ["backup_create", "verify"]
               assert [row["record_index"] for row in early_result["test_failures"]] == [0, 1]
               assert early_result["earliest_failure"]["stage"] == "backup_create"
@@ -1270,7 +1290,21 @@ jobs:
               raise SystemExit(1)
           print(f"MANDATORY_BACKUP_MYSQL_VERIFICATION: PASS (executed=1 skipped=0 php={php_version})")
           PY
-
+          WPCG_SCRIPT_CHUNK_4
+      - name: Mandatory isolated MySQL backup-import verification
+        shell: bash
+        env:
+          WPCG_MYSQL_VERIFY_HOST: 127.0.0.1
+          WPCG_MYSQL_VERIFY_PORT: '3307'
+          WPCG_MYSQL_VERIFY_DATABASE: wpcg_verifier_seed
+          WPCG_MYSQL_VERIFY_USERNAME: caregrid_ci
+        run: |
+          set +e
+          script_file="$RUNNER_TEMP/wpcg-isolated-backup-verification.sh"
+          bash "$script_file"
+          status=$?
+          rm -f -- "$script_file"
+          exit "$status"
       - name: Bounded typed RPC CAS diagnosis
         shell: bash
         run: |
