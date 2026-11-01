@@ -413,8 +413,164 @@ jobs:
             >"$diagnostic_log" 2>&1
           phpunit_status=$?
           set -e
+          unset DB_PASSWORD MYSQL_PWD MYSQL_ROOT_PASSWORD
           unset WPCG_MYSQL_VERIFY_PASSWORD WPCG_MYSQL_VERIFY_HOST WPCG_MYSQL_VERIFY_PORT
           unset WPCG_MYSQL_VERIFY_DATABASE WPCG_MYSQL_VERIFY_USERNAME WPCG_BACKUP_VERIFY_REQUIRED verifier_password
+          if ! python3 - "$diagnostic_log" 2>/dev/null <<'PY'
+          import os
+          import re
+          import sys
+
+          MAX_LOG_BYTES = 64 * 1024 * 1024
+          MAX_LINE_BYTES = 512
+          MAX_RECORDS = 64
+          UNAVAILABLE = "WPCG_DIAG_V2_UNAVAILABLE"
+          PREFIX = b"WPCG_DIAG_V2"
+
+          TEST_STAGES = {
+              "fixture_setup", "probe_setup", "backup_create", "verify", "assert_verified",
+              "assert_status", "assert_method", "assert_manifest", "assert_probe",
+              "assert_critical_count", "cleanup_probe", "cleanup_connections", "cleanup_objects",
+          }
+          TEST_EVENTS = {"begin", "primary_failure", "cleanup_observation", "cleanup_failure", "complete"}
+          TEST_CATEGORIES = {
+              "none", "assertion_failure", "pdo_error", "process_error", "filesystem_error",
+              "permission_error", "timeout", "cleanup_error", "backup_failure", "other",
+          }
+          TEST_CODES = {
+              "none", "other", "WORKDIR_CREATE_FAILED", "PLATFORM_BACKUP_FAILED", "DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED",
+              "DISPOSABLE_MYSQL_IMPORT_FAILED", "MYSQL_IMPORT_TABLE_SET_MISMATCH",
+              "MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH", "OBJECT_MISSING", "MANIFEST_OBJECT_MISSING",
+              "MANIFEST_OBJECT_INVALID", "MANIFEST_METADATA_MISMATCH", "MANIFEST_AUTHENTICATION_FAILED",
+              "OBJECT_UNREADABLE", "VERIFY_TEMP_FAILED", "OBJECT_READ_FAILED", "VERIFY_TEMP_WRITE_FAILED",
+              "SIZE_OR_HASH_MISMATCH", "CIPHERTEXT_AUTHENTICATION_FAILED", "INVALID_GZIP",
+              "EMPTY_DECOMPRESSED_ARTIFACT", "DATABASE_IMPORT_OR_SANITY_FAILED", "VERIFICATION_ERROR",
+          }
+          SERVICE_STAGES = {
+              "artifact_integrity", "artifact_decrypt", "artifact_gzip", "sqlite_sanity", "mysql_preflight",
+              "mysql_create_database", "mysql_client_import", "mysql_schema_check", "mysql_critical_count",
+              "mysql_process_cleanup", "service_cleanup_connection_purge", "service_cleanup_drop_database",
+              "service_cleanup_temp_artifacts",
+          }
+          SERVICE_EVENTS = {
+              "begin", "complete", "primary_failure", "primary_exception", "body_result",
+              "cleanup_observation", "cleanup_failure",
+          }
+          SERVICE_CATEGORIES = {
+              "none", "backup_failure", "filesystem_error", "process_error", "timeout", "pdo_error",
+              "runtime_error", "cleanup_error", "other",
+          }
+          SERVICE_CODES = {
+              "none", "other", "OBJECT_MISSING", "MANIFEST_OBJECT_MISSING", "MANIFEST_OBJECT_INVALID",
+              "MANIFEST_METADATA_MISMATCH", "MANIFEST_AUTHENTICATION_FAILED", "OBJECT_UNREADABLE",
+              "VERIFY_TEMP_FAILED", "OBJECT_READ_FAILED", "VERIFY_TEMP_WRITE_FAILED", "SIZE_OR_HASH_MISMATCH",
+              "CIPHERTEXT_AUTHENTICATION_FAILED", "INVALID_GZIP", "EMPTY_DECOMPRESSED_ARTIFACT",
+              "DATABASE_IMPORT_OR_SANITY_FAILED", "DISPOSABLE_MYSQL_IMPORT_NOT_CONFIGURED", "VERIFICATION_ERROR",
+              "MYSQL_DUMP_INPUT_OPEN_FAILED", "MYSQL_IMPORT_PROCESS_FAILED", "MYSQL_IMPORT_TABLE_SET_MISMATCH",
+              "MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH", "MYSQL_DATABASE_CREATE_FAILED", "MYSQL_SCHEMA_CHECK_FAILED",
+              "MYSQL_PROCESS_CLEANUP_FAILED", "SERVICE_CONNECTION_PURGE_FAILED", "SERVICE_DATABASE_DROP_FAILED",
+              "SERVICE_TEMP_ARTIFACT_CLEANUP_FAILED", "SERVICE_TEMP_ARTIFACT_UNLINK_FAILED",
+          }
+          SERVICE_BODY_STATES = {
+              "pending", "return_true_pending_cleanup", "return_false_pending_cleanup",
+              "return_false_before_outer_cleanup", "exception_pending_cleanup",
+              "handled_exception_return_false_pending_cleanup",
+          }
+          TEST_PROCESS_CODE = re.compile(
+              r"MYSQL_IMPORT_PROCESS_FAILED_EXIT_(?:0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])\Z"
+          )
+
+          class InvalidDiagnostic(Exception):
+              pass
+
+          def parse_record(raw):
+              try:
+                  record = raw.decode("ascii")
+              except UnicodeDecodeError as error:
+                  raise InvalidDiagnostic from error
+              fields = record.split("|")
+              if not fields or fields[0] != "WPCG_DIAG_V2":
+                  raise InvalidDiagnostic
+              if len(fields) not in (6, 7):
+                  raise InvalidDiagnostic
+
+              keys = ("test", "stage", "event", "category", "code")
+              if len(fields) == 7:
+                  keys += ("body_state",)
+              values = {}
+              for expected_key, field in zip(keys, fields[1:]):
+                  key, separator, value = field.partition("=")
+                  if separator != "=" or key != expected_key or not value or "=" in value:
+                      raise InvalidDiagnostic
+                  values[key] = value
+              if values["test"] != "backup_import":
+                  raise InvalidDiagnostic
+
+              if len(fields) == 6:
+                  if (
+                      values["stage"] not in TEST_STAGES
+                      or values["event"] not in TEST_EVENTS
+                      or values["category"] not in TEST_CATEGORIES
+                      or (
+                          values["code"] not in TEST_CODES
+                          and TEST_PROCESS_CODE.fullmatch(values["code"]) is None
+                      )
+                  ):
+                      raise InvalidDiagnostic
+              elif (
+                  values["stage"] not in SERVICE_STAGES
+                  or values["event"] not in SERVICE_EVENTS
+                  or values["category"] not in SERVICE_CATEGORIES
+                  or values["code"] not in SERVICE_CODES
+                  or values["body_state"] not in SERVICE_BODY_STATES
+              ):
+                  raise InvalidDiagnostic
+
+              return "|".join(("WPCG_DIAG_V2", *(f"{key}={values[key]}" for key in keys)))
+
+          def scan(path):
+              with open(path, "rb") as stream:
+                  before = os.fstat(stream.fileno())
+                  if before.st_size > MAX_LOG_BYTES:
+                      raise InvalidDiagnostic
+                  records = []
+                  total_bytes = 0
+                  while total_bytes < before.st_size:
+                      remaining_bytes = before.st_size - total_bytes
+                      line = stream.readline(min(MAX_LINE_BYTES + 1, remaining_bytes))
+                      if not line:
+                          raise InvalidDiagnostic
+                      total_bytes += len(line)
+                      if len(line) > MAX_LINE_BYTES:
+                          raise InvalidDiagnostic
+                      has_newline = line.endswith(b"\n")
+                      raw_line = line[:-1] if has_newline else line
+                      marker_like = raw_line.lstrip().startswith(b"WPCG_DIAG")
+                      if not marker_like:
+                          continue
+                      if not raw_line.startswith(PREFIX + b"|") or b"\r" in raw_line:
+                          raise InvalidDiagnostic
+                      records.append(parse_record(raw_line))
+                      if len(records) > MAX_RECORDS:
+                          raise InvalidDiagnostic
+                  after = os.fstat(stream.fileno())
+              if total_bytes != before.st_size or after.st_size != before.st_size or after.st_mtime_ns != before.st_mtime_ns:
+                  raise InvalidDiagnostic
+              if not records:
+                  raise InvalidDiagnostic
+              return records
+
+          try:
+              normalized_records = scan(sys.argv[1])
+          except BaseException:
+              print(UNAVAILABLE)
+          else:
+              for normalized_record in normalized_records:
+                  print(normalized_record)
+          PY
+          then
+            printf '%s\n' 'WPCG_DIAG_V2_UNAVAILABLE'
+          fi
           python3 - "$junit_file" "$phpunit_status" "${{ matrix.php }}" <<'PY'
           import sys
           import xml.etree.ElementTree as ET
