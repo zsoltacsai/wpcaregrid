@@ -846,6 +846,21 @@ final class PlatformDatabaseBackupService
                     $failureCode = 'MYSQL_IMPORT_PROCESS_FAILED_EXIT_'.(string) $process->getExitCode();
                     $diagnosticBodyState = 'return_false_pending_cleanup';
                     $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'process_error', 'MYSQL_IMPORT_PROCESS_FAILED', $diagnosticBodyState);
+                    if (app()->environment('testing') && config('platform_backup.diagnostic_c_enabled') === true) {
+                        $classification = 'UNCLASSIFIED';
+                        try {
+                            $classification = $this->classifyMysqlClientStderrForDiagnostics($process->getErrorOutput());
+                        } catch (\Throwable) {
+                            $classification = 'UNCLASSIFIED';
+                        } finally {
+                            try {
+                                $process->clearErrorOutput();
+                            } catch (\Throwable) {
+                                // Diagnostic cleanup must not alter the import failure result.
+                            }
+                        }
+                        $this->emitVerificationDiagnostic($diagnosticStage, 'primary_failure', 'process_error', $classification, $diagnosticBodyState);
+                    }
 
                     return false;
                 }
@@ -981,6 +996,8 @@ final class PlatformDatabaseBackupService
             'MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH', 'MYSQL_DATABASE_CREATE_FAILED', 'MYSQL_SCHEMA_CHECK_FAILED',
             'MYSQL_PROCESS_CLEANUP_FAILED', 'SERVICE_CONNECTION_PURGE_FAILED', 'SERVICE_DATABASE_DROP_FAILED',
             'SERVICE_TEMP_ARTIFACT_CLEANUP_FAILED', 'SERVICE_TEMP_ARTIFACT_UNLINK_FAILED',
+            'UNCLASSIFIED', 'MYSQL_IMPORT_ERRNO_1419', 'MYSQL_IMPORT_ERRNO_1227', 'MYSQL_IMPORT_ERRNO_1449',
+            'MYSQL_IMPORT_ERRNO_1044', 'MYSQL_IMPORT_ERRNO_1045', 'MYSQL_IMPORT_ERRNO_1142',
         ];
         static $bodyStates = [
             'pending', 'return_true_pending_cleanup', 'return_false_pending_cleanup',
@@ -1008,6 +1025,44 @@ final class PlatformDatabaseBackupService
         } catch (\Throwable) {
             // Diagnostics are opt-in, best-effort, and must not alter verification behavior.
         }
+    }
+
+    private function classifyMysqlClientStderrForDiagnostics(string $stderr): string
+    {
+        if (! app()->environment('testing')
+            || config('platform_backup.diagnostic_c_enabled') !== true
+            || $stderr === ''
+            || strlen($stderr) > 512) {
+            return 'UNCLASSIFIED';
+        }
+
+        // Require a complete single error record. Missing line termination can mean truncation.
+        if (str_ends_with($stderr, "\r\n")) {
+            $line = substr($stderr, 0, -2);
+        } elseif (str_ends_with($stderr, "\n")) {
+            $line = substr($stderr, 0, -1);
+        } else {
+            return 'UNCLASSIFIED';
+        }
+
+        if ($line === ''
+            || str_contains($line, "\r")
+            || str_contains($line, "\n")
+            || preg_match('/[^\x20-\x7E]/', $line) === 1
+            || preg_match_all('/(?:^|\s)ERROR [0-9]{1,5} \([A-Z0-9]{5}\)/', $line) !== 1
+            || preg_match('/\AERROR ([0-9]{1,5}) \(([A-Z0-9]{5})\)(?: at line [0-9]{1,6})?: [\x20-\x7E]{1,440}\z/D', $line, $matches) !== 1) {
+            return 'UNCLASSIFIED';
+        }
+
+        return match ($matches[1].':'.$matches[2]) {
+            '1419:HY000' => 'MYSQL_IMPORT_ERRNO_1419',
+            '1227:42000' => 'MYSQL_IMPORT_ERRNO_1227',
+            '1449:HY000' => 'MYSQL_IMPORT_ERRNO_1449',
+            '1044:42000' => 'MYSQL_IMPORT_ERRNO_1044',
+            '1045:28000' => 'MYSQL_IMPORT_ERRNO_1045',
+            '1142:42000' => 'MYSQL_IMPORT_ERRNO_1142',
+            default => 'UNCLASSIFIED',
+        };
     }
 
     private function verificationDiagnosticCategory(\Throwable $error): string

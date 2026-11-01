@@ -369,6 +369,7 @@ jobs:
         run: |
           set -euo pipefail
           set +x
+          echo "::add-mask::$MYSQL_ROOT_PASSWORD"
           credential_file="$RUNNER_TEMP/wpcg-mysql-verifier-password"
           trap 'if [ "$?" -ne 0 ]; then rm -f -- "$credential_file"; fi' EXIT
           verifier_password="$(openssl rand -hex 32)"
@@ -382,6 +383,26 @@ jobs:
             echo 'Failed to provision the restricted account on the isolated disposable verification service.' >&2
             exit 1
           fi
+
+          verifier_settings="$(MYSQL_PWD="$MYSQL_ROOT_PASSWORD" timeout 5s mysql --connect-timeout=3 --protocol=TCP --host=127.0.0.1 --port=3307 --user=root --batch --skip-column-names --execute="SELECT CASE UPPER(CAST(@@GLOBAL.log_bin AS CHAR)) WHEN '1' THEN 'ON' WHEN 'ON' THEN 'ON' WHEN '0' THEN 'OFF' WHEN 'OFF' THEN 'OFF' ELSE 'UNKNOWN' END, CASE UPPER(CAST(@@GLOBAL.log_bin_trust_function_creators AS CHAR)) WHEN '1' THEN '1' WHEN 'ON' THEN '1' WHEN '0' THEN '0' WHEN 'OFF' THEN '0' ELSE 'UNKNOWN' END;" 2>/dev/null)" || verifier_settings=''
+          verifier_log_bin=UNKNOWN
+          verifier_trust_function_creators=UNKNOWN
+          raw_log_bin=''
+          raw_trust_function_creators=''
+          extra_setting=''
+          if [[ "$verifier_settings" == *$'\t'* && "$verifier_settings" != *$'\n'* && "$verifier_settings" != *$'\r'* ]]; then
+            IFS=$'\t' read -r raw_log_bin raw_trust_function_creators extra_setting <<< "$verifier_settings"
+            if [[ "$verifier_settings" == "$raw_log_bin"$'\t'"$raw_trust_function_creators" && -z "$extra_setting" ]]; then
+              case "$raw_log_bin" in
+                ON|OFF) verifier_log_bin="$raw_log_bin" ;;
+              esac
+              case "$raw_trust_function_creators" in
+                0|1) verifier_trust_function_creators="$raw_trust_function_creators" ;;
+              esac
+            fi
+          fi
+          unset verifier_settings raw_log_bin raw_trust_function_creators extra_setting
+          echo "Disposable verifier readback: log_bin=$verifier_log_bin; log_bin_trust_function_creators=$verifier_trust_function_creators"
 
       - name: Mandatory isolated MySQL backup-import verification
         shell: bash
@@ -925,7 +946,9 @@ jobs:
               "MYSQL_DUMP_INPUT_OPEN_FAILED", "MYSQL_IMPORT_PROCESS_FAILED", "MYSQL_DATABASE_CREATE_FAILED",
               "MYSQL_SCHEMA_CHECK_FAILED", "MYSQL_PROCESS_CLEANUP_FAILED", "SERVICE_CONNECTION_PURGE_FAILED",
               "SERVICE_DATABASE_DROP_FAILED", "SERVICE_TEMP_ARTIFACT_CLEANUP_FAILED", "SERVICE_TEMP_ARTIFACT_UNLINK_FAILED",
-              "VERIFICATION_ERROR", "other",
+              "VERIFICATION_ERROR", "other", "UNCLASSIFIED",
+              "MYSQL_IMPORT_ERRNO_1419", "MYSQL_IMPORT_ERRNO_1227", "MYSQL_IMPORT_ERRNO_1449",
+              "MYSQL_IMPORT_ERRNO_1044", "MYSQL_IMPORT_ERRNO_1045", "MYSQL_IMPORT_ERRNO_1142",
           }
           backup_import_diagnostic_body_states = {
               "pending", "return_true_pending_cleanup", "return_false_pending_cleanup", "return_false_before_outer_cleanup", "exception_pending_cleanup", "handled_exception_return_false_pending_cleanup",

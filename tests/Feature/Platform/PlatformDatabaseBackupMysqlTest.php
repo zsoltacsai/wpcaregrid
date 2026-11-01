@@ -19,6 +19,49 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_mysql_client_stderr_diagnostic_classification_is_closed_and_never_returns_raw_content(): void
+    {
+        $service = (new \ReflectionClass(PlatformDatabaseBackupService::class))->newInstanceWithoutConstructor();
+        $classifier = new \ReflectionMethod(PlatformDatabaseBackupService::class, 'classifyMysqlClientStderrForDiagnostics');
+        $this->app['config']->set('platform_backup.diagnostic_c_enabled', true);
+
+        $cases = [
+            ["ERROR 1419 (HY000) at line 12: Binary logging restriction\n", 'MYSQL_IMPORT_ERRNO_1419'],
+            ["ERROR 1227 (42000) at line 2: Definer authorization denied\n", 'MYSQL_IMPORT_ERRNO_1227'],
+            ["ERROR 1449 (HY000): Specified definer is unavailable\n", 'MYSQL_IMPORT_ERRNO_1449'],
+            ["ERROR 1044 (42000): Database access denied\n", 'MYSQL_IMPORT_ERRNO_1044'],
+            ["ERROR 1045 (28000): Authentication rejected\n", 'MYSQL_IMPORT_ERRNO_1045'],
+            ["ERROR 1142 (42000): Table access denied\n", 'MYSQL_IMPORT_ERRNO_1142'],
+            ["ERROR 9999 (HY000): Unknown error\n", 'UNCLASSIFIED'],
+            ["ERROR 1419 (42000): Wrong SQLSTATE\n", 'UNCLASSIFIED'],
+            ["ERROR 1419 HY000: Malformed record\n", 'UNCLASSIFIED'],
+            ["ERROR 1419 (HY000) at line 12: Truncated without line terminator", 'UNCLASSIFIED'],
+            ["ERROR 1419 (HY000): First\nERROR 1227 (42000): Second\n", 'UNCLASSIFIED'],
+            ["ERROR 1419 (HY000): First ERROR 1227 (42000): Second\n", 'UNCLASSIFIED'],
+            [str_repeat('X', 513)."\n", 'UNCLASSIFIED'],
+            ["mysql: [Warning] message\nERROR 1419 (HY000): mixed output\n", 'UNCLASSIFIED'],
+        ];
+
+        foreach ($cases as [$stderr, $expected]) {
+            $this->assertSame($expected, $classifier->invoke($service, $stderr));
+        }
+
+        $sensitive = 'SENSITIVE_SENTINEL_value-do-not-disclose';
+        $result = $classifier->invoke($service, "ERROR 1227 (42000): Access denied for definer {$sensitive}\n");
+        $this->assertSame('MYSQL_IMPORT_ERRNO_1227', $result);
+        $this->assertFalse(str_contains($result, $sensitive));
+        $this->assertMatchesRegularExpression(
+            '/\A(?:UNCLASSIFIED|MYSQL_IMPORT_ERRNO_(?:1419|1227|1449|1044|1045|1142))\z/D',
+            $result,
+        );
+
+        $this->app['config']->set('platform_backup.diagnostic_c_enabled', false);
+        $this->assertSame(
+            'UNCLASSIFIED',
+            $classifier->invoke($service, "ERROR 1419 (HY000): Binary logging restriction\n"),
+        );
+    }
+
     public function test_isolated_verifier_credential_presence_is_strict(): void
     {
         $this->assertFalse($this->hasIsolatedVerifierCredential(false));
