@@ -35,7 +35,7 @@ class PlatformDatabaseBackupMysqlTest extends TestCase
             ["ERROR 9999 (HY000): Unknown error\n", 'UNCLASSIFIED'],
             ["ERROR 1419 (42000): Wrong SQLSTATE\n", 'UNCLASSIFIED'],
             ["ERROR 1419 HY000: Malformed record\n", 'UNCLASSIFIED'],
-            ["ERROR 1419 (HY000) at line 12: Truncated without line terminator", 'UNCLASSIFIED'],
+            ['ERROR 1419 (HY000) at line 12: Truncated without line terminator', 'UNCLASSIFIED'],
             ["ERROR 1419 (HY000): First\nERROR 1227 (42000): Second\n", 'UNCLASSIFIED'],
             ["ERROR 1419 (HY000): First ERROR 1227 (42000): Second\n", 'UNCLASSIFIED'],
             [str_repeat('X', 513)."\n", 'UNCLASSIFIED'],

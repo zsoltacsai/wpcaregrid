@@ -437,7 +437,27 @@ jobs:
           unset DB_PASSWORD MYSQL_PWD MYSQL_ROOT_PASSWORD
           unset WPCG_MYSQL_VERIFY_PASSWORD WPCG_MYSQL_VERIFY_HOST WPCG_MYSQL_VERIFY_PORT
           unset WPCG_MYSQL_VERIFY_DATABASE WPCG_MYSQL_VERIFY_USERNAME WPCG_BACKUP_VERIFY_REQUIRED verifier_password
-          if ! python3 - "$diagnostic_log" 2>/dev/null <<'PY'
+          handle_diagnostic_failure() {
+            case "$1" in
+              70)
+                printf '%s\n' 'WPCG_DIAG_V2_PARSER_SELF_TEST_FAILED'
+                return 1
+                ;;
+              *)
+                printf '%s\n' 'WPCG_DIAG_V2_UNAVAILABLE'
+                return 0
+                ;;
+            esac
+          }
+          if handle_diagnostic_failure 70 >/dev/null 2>&1; then
+            echo 'Parser self-test failure must fail the CI step.' >&2
+            exit 1
+          fi
+          if ! handle_diagnostic_failure 1 >/dev/null 2>&1; then
+            echo 'Ordinary diagnostic unavailability must remain nonfatal.' >&2
+            exit 1
+          fi
+          if python3 - "$diagnostic_log" 2>/dev/null <<'PY'
           import os
           import re
           import sys
@@ -491,6 +511,8 @@ jobs:
               "MYSQL_IMPORT_CRITICAL_COUNT_MISMATCH", "MYSQL_DATABASE_CREATE_FAILED", "MYSQL_SCHEMA_CHECK_FAILED",
               "MYSQL_PROCESS_CLEANUP_FAILED", "SERVICE_CONNECTION_PURGE_FAILED", "SERVICE_DATABASE_DROP_FAILED",
               "SERVICE_TEMP_ARTIFACT_CLEANUP_FAILED", "SERVICE_TEMP_ARTIFACT_UNLINK_FAILED",
+              "UNCLASSIFIED", "MYSQL_IMPORT_ERRNO_1419", "MYSQL_IMPORT_ERRNO_1227", "MYSQL_IMPORT_ERRNO_1449",
+              "MYSQL_IMPORT_ERRNO_1044", "MYSQL_IMPORT_ERRNO_1045", "MYSQL_IMPORT_ERRNO_1142",
           }
           SERVICE_BODY_STATES = {
               "pending", "return_true_pending_cleanup", "return_false_pending_cleanup",
@@ -505,6 +527,8 @@ jobs:
               pass
 
           def parse_record(raw):
+              if not isinstance(raw, bytes) or len(raw) > MAX_LINE_BYTES:
+                  raise InvalidDiagnostic
               try:
                   record = raw.decode("ascii")
               except UnicodeDecodeError as error:
@@ -549,6 +573,43 @@ jobs:
 
               return "|".join(("WPCG_DIAG_V2", *(f"{key}={values[key]}" for key in keys)))
 
+          def assert_parser_contract():
+              def synthetic_record(code):
+                  return (
+                      "WPCG_DIAG_V2|test=backup_import|stage=mysql_client_import|event=primary_failure|"
+                      + "category=process_error|code=" + code + "|body_state=pending"
+                  ).encode("ascii")
+
+              approved_codes = (
+                  "UNCLASSIFIED", "MYSQL_IMPORT_ERRNO_1419", "MYSQL_IMPORT_ERRNO_1227",
+                  "MYSQL_IMPORT_ERRNO_1449", "MYSQL_IMPORT_ERRNO_1044", "MYSQL_IMPORT_ERRNO_1045",
+                  "MYSQL_IMPORT_ERRNO_1142",
+              )
+              for code in approved_codes:
+                  record = synthetic_record(code)
+                  if parse_record(record) != record.decode("ascii"):
+                      raise InvalidDiagnostic
+
+              rejected_records = (
+                  synthetic_record("MYSQL_IMPORT_ERRNO_9999"),
+                  b"WPCG_DIAG_V2|test=backup_import|stage=mysql_client_import",
+                  b"ERROR 1419 (HY000): synthetic private diagnostic text",
+                  synthetic_record("UNCLASSIFIED") + b"\n" + synthetic_record("UNCLASSIFIED"),
+                  b"X" * (MAX_LINE_BYTES + 1),
+                  b"\xff",
+              )
+              for record in rejected_records:
+                  try:
+                      parse_record(record)
+                  except InvalidDiagnostic:
+                      continue
+                  raise InvalidDiagnostic
+
+          try:
+              assert_parser_contract()
+          except BaseException:
+              raise SystemExit(70)
+
           def scan(path):
               with open(path, "rb") as stream:
                   before = os.fstat(stream.fileno())
@@ -590,7 +651,12 @@ jobs:
                   print(normalized_record)
           PY
           then
-            printf '%s\n' 'WPCG_DIAG_V2_UNAVAILABLE'
+            :
+          else
+            diagnostic_status=$?
+            if ! handle_diagnostic_failure "$diagnostic_status"; then
+              exit 1
+            fi
           fi
           python3 - "$junit_file" "$phpunit_status" "${{ matrix.php }}" <<'PY'
           import sys
