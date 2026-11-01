@@ -116,6 +116,7 @@ return new class extends Migration
     {
         foreach ($definitions as $name => $definition) {
             $existing = DB::table('information_schema.triggers')
+                ->selectRaw('EVENT_OBJECT_TABLE AS event_object_table, EVENT_MANIPULATION AS event_manipulation, ACTION_TIMING AS action_timing, ACTION_STATEMENT AS action_statement')
                 ->where('trigger_schema', DB::raw('DATABASE()'))
                 ->where('trigger_name', $name)
                 ->first();

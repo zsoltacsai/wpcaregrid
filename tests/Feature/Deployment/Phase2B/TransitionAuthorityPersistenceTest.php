@@ -115,6 +115,7 @@ class TransitionAuthorityPersistenceTest extends TestCase
             if (in_array($driver, ['mysql', 'mariadb'], true)) {
                 foreach (['insert' => 'INSERT', 'update' => 'UPDATE', 'delete' => 'DELETE'] as $suffix => $event) {
                     $trigger = DB::table('information_schema.triggers')
+                        ->selectRaw('EVENT_OBJECT_TABLE AS event_object_table, EVENT_MANIPULATION AS event_manipulation, ACTION_TIMING AS action_timing')
                         ->where('trigger_schema', DB::raw('DATABASE()'))
                         ->where('trigger_name', 'transition_history_events_immutable_'.$suffix)
                         ->first();
@@ -397,6 +398,7 @@ class TransitionAuthorityPersistenceTest extends TestCase
                 'phase2b_tuple_digest' => null,
                 'phase2b_event_sequence' => 0,
             ]);
+            DB::table('deployment_transition_fences')->where('fence_key', 'global')->delete();
         } finally {
             (require database_path('migrations/2026_11_02_000002_create_transition_v2_requests_table.php'))->up();
             (require database_path('migrations/2026_11_02_000003_create_transition_history_events_table.php'))->up();

@@ -121,8 +121,8 @@ final class TransitionV2RequestStore
 
             if ($source === null) {
                 $query->whereNull('phase2b_tuple_digest');
-                foreach (self::TUPLE_TO_COLUMN as $column) {
-                    if ($column !== 'state') {
+                foreach (self::TUPLE_TO_COLUMN as $field => $column) {
+                    if ($field !== 'state') {
                         $query->whereNull($column);
                     }
                 }
