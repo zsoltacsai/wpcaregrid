@@ -666,11 +666,19 @@ def main():
 
     controller = CONTROLLER.read_text(encoding="utf-8")
     controller_lines = controller.splitlines()
-    gate_line = next(i for i, line in enumerate(controller_lines) if "privileged gate-on" in line and i > 700)
+    main_line = controller_lines.index("main() {")
+    scheduler_lock_line = next(i for i, line in enumerate(controller_lines) if line.strip() == "acquire_scheduler_guard" and i > main_line)
+    scheduler_install_line = next(i for i, line in enumerate(controller_lines) if line.strip() == "install_scheduler_guard" and i > main_line)
+    scheduler_drain_line = next(i for i, line in enumerate(controller_lines) if line.strip() == "drain_legacy_scheduler" and i > main_line)
+    backup_temp_line = next(i for i, line in enumerate(controller_lines) if 'TEMP_BACKUP="$(mktemp' in line and i > main_line)
+    gate_line = next(i for i, line in enumerate(controller_lines) if "privileged gate-on" in line and i > main_line)
     switch_line = next(i for i, line in enumerate(controller_lines) if "privileged php-runtime-switch \"$PHP_TARGET_PROFILE\"" in line)
     workers_stop_line = next(i for i, line in enumerate(controller_lines) if "privileged worker stop-all" in line)
     disabled_line = next(i for i, line in enumerate(controller_lines) if "privileged worker-runtime-disable" in line and i > gate_line)
     assert gate_line < disabled_line < workers_stop_line < switch_line, "runtime switch must follow the active gate, persistent worker disable, and drained workers"
+    assert scheduler_lock_line < backup_temp_line < scheduler_install_line < scheduler_drain_line < gate_line, "exclusive scheduler lock must precede backup-file, cron/wrapper, and gate mutations"
+    assert "privileged scheduler-lock-init" not in controller, "the controller must not create its serialization lock during a transition"
+    assert "pre-provisioned scheduler lock is missing or unsafe" in controller, "a missing bootstrap lock must fail before scheduler state mutation"
     assert 'workers_running || return 1\n    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || return 1\n    release_gate || return 1' in controller, "recovery must revalidate the active runtime listener before releasing traffic"
     assert 'privileged worker-runtime-check "$PHP_TARGET_PROFILE" || fail \'A queue worker changed runtime before traffic was reopened.\'\n    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || fail \'The selected PHP-FPM pool or live listener changed before traffic was reopened.\'\n    release_gate' in controller, "deployment must revalidate the active runtime listener immediately before releasing traffic"
     recovery_switch_line = next(i for i, line in enumerate(controller_lines) if "privileged php-runtime-switch \"$PHP_BASELINE_PROFILE\"" in line)
@@ -708,6 +716,93 @@ def main():
     assert "sudo -n /usr/bin/id" in fixture
     assert "sudo -n /bin/sh" not in fixture and "rm -" not in fixture and "chmod " not in fixture
     assert "install.*DEPLOY_PRIV_HELPER" not in controller
+
+    if os.name != "nt":
+        with tempfile.TemporaryDirectory() as temporary:
+            gate_dir = Path(temporary) / "wpcaregrid"
+            gate_dir.mkdir(mode=0o700)
+            gate = gate_dir / "deploy-maintenance"
+            pause = gate_dir / "scheduler-paused"
+            disabled = gate_dir / "workers-disabled"
+            saved = {
+                name: getattr(module, name)
+                for name in ("GATE_DIR", "GATE", "SCHEDULER_PAUSE", "WORKERS_DISABLED", "ensure_gate_dir", "open_root_trusted_directory")
+            }
+            original_fchown = module.os.fchown
+            original_fstat = module.os.fstat
+            original_fsync = module.os.fsync
+            try:
+                module.GATE_DIR = gate_dir
+                module.GATE = gate
+                module.SCHEDULER_PAUSE = pause
+                module.WORKERS_DISABLED = disabled
+                module.ensure_gate_dir = lambda: None
+                module.open_root_trusted_directory = lambda path: os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+                module.os.fchown = lambda fd, uid, gid: None
+                module.os.fstat = lambda fd: type("RootOwnedStat", (), {"st_uid": 0, "st_mode": original_fstat(fd).st_mode})()
+
+                sync_kinds = []
+
+                def record_sync(fd):
+                    sync_kinds.append("directory" if stat.S_ISDIR(original_fstat(fd).st_mode) else "file")
+
+                module.os.fsync = record_sync
+                module.marker(gate, True)
+                assert gate.is_file(), "durable marker creation did not publish the marker"
+                assert gate.read_bytes() == b"active\n", "marker payload must remain the fixed active sentinel"
+                assert sync_kinds == ["file", "directory"], "marker creation must fsync file data before the containing directory"
+
+                sync_kinds.clear()
+                module.marker(gate, False)
+                assert not gate.exists(), "marker clear did not remove the marker"
+                assert sync_kinds == ["directory"], "marker clear must fsync the containing directory"
+
+                def fail_directory_sync(fd):
+                    if stat.S_ISDIR(original_fstat(fd).st_mode):
+                        raise OSError("synthetic directory fsync failure")
+                    original_fsync(fd)
+
+                module.os.fsync = fail_directory_sync
+                try:
+                    module.marker(gate, True)
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("directory fsync failure was reported as a successful marker transition")
+                assert gate.is_file(), "failed marker durability must leave the fail-closed marker present"
+
+                module.os.fsync = fail_directory_sync
+                try:
+                    module.marker(gate, False)
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("marker deletion directory-fsync failure was reported as success")
+                assert not gate.exists(), "failed deletion must not leave the marker visible in the running filesystem"
+
+                module.os.fsync = original_fsync
+                module.marker(gate, True)
+
+                def fail_file_sync(fd):
+                    if not stat.S_ISDIR(original_fstat(fd).st_mode):
+                        raise OSError("synthetic marker file fsync failure")
+                    original_fsync(fd)
+
+                module.os.fsync = fail_file_sync
+                module.marker(gate, False)
+                try:
+                    module.marker(gate, True)
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("marker file fsync failure was reported as success")
+                assert not gate.exists(), "incomplete temporary marker must not be published"
+            finally:
+                module.os.fchown = original_fchown
+                module.os.fstat = original_fstat
+                module.os.fsync = original_fsync
+                for name, value in saved.items():
+                    setattr(module, name, value)
 
     print("deploy privilege policy passed: fixed operation allowlist, path validation, no generic sudo calls")
 

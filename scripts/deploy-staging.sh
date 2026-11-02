@@ -158,10 +158,6 @@ install_scheduler_guard() {
     command -v flock >/dev/null || fail 'The flock utility is required for scheduler/deployment coordination.'
     command -v pgrep >/dev/null || fail 'The pgrep utility is required to drain a legacy scheduler process safely.'
 
-    privileged gate-dir-init
-    if [[ ! -e "$SCHEDULER_LOCK_FILE" ]]; then
-        privileged scheduler-lock-init
-    fi
     [[ -f "$SCHEDULER_LOCK_FILE" && ! -L "$SCHEDULER_LOCK_FILE" ]] || fail 'The scheduler lock path must be a regular file, not a symlink.'
     [[ "$(stat -c '%U:%G:%a' "$SCHEDULER_LOCK_FILE")" == 'deploy:www-data:660' ]] || fail 'The scheduler lock must be deploy:www-data mode 0660.'
     privileged scheduler-lock-check || fail 'The scheduler lock ownership or mode is invalid.'
@@ -187,13 +183,15 @@ install_scheduler_guard() {
 }
 
 acquire_scheduler_guard() {
-    local attempt
-
     (( SCHEDULER_LOCK_HELD )) && return 0
     exec 8<>"$SCHEDULER_LOCK_FILE" || fail 'Could not open the scheduler/deployment lock.'
     flock -x -w 90 8 || fail 'Could not acquire the scheduler/deployment lock within 90 seconds.'
     SCHEDULER_LOCK_HELD=1
+    log 'Exclusive scheduler lock acquired before scheduler state changes.'
+}
 
+drain_legacy_scheduler() {
+    local attempt
     # The first wrapper installation can overlap one invocation from cron's
     # previously cached crontab. Drain that unguarded process before the gate.
     for attempt in {1..90}; do
@@ -926,6 +924,10 @@ main() {
     db_name="$(php -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); echo config("database.connections.mysql.database");' 2>/dev/null)"
     [[ "$db_name" == 'wpcaregrid' ]] || fail 'The application database does not match the staging-only privileged backup allowlist.'
     privileged db-ping || fail 'Local MySQL administrative access is unavailable for the pre-deploy backup.'
+    [[ -f "$SCHEDULER_LOCK_FILE" && ! -L "$SCHEDULER_LOCK_FILE" ]] || fail 'The pre-provisioned scheduler lock is missing or unsafe; no scheduler state was changed.'
+    [[ "$(stat -c '%U:%G:%a' "$SCHEDULER_LOCK_FILE")" == 'deploy:www-data:660' ]] || fail 'The pre-provisioned scheduler lock must be deploy:www-data mode 0660.'
+    privileged scheduler-lock-check || fail 'The pre-provisioned scheduler lock ownership or mode is invalid.'
+    acquire_scheduler_guard
     timestamp="$(date -u +'%Y%m%dT%H%M%SZ')"
     backup_path="${BACKUP_DIR}/wpcaregrid-pre-deploy-${timestamp}.sql.gz"
     [[ ! -e "$backup_path" ]] || fail 'A pre-deploy backup already exists with this timestamp.'
@@ -940,8 +942,7 @@ main() {
 
     assert_baseline_unchanged || fail 'The live checkout changed before the deployment gate was installed.'
     install_scheduler_guard
-    privileged gate-dir-init
-    acquire_scheduler_guard
+    drain_legacy_scheduler
     GATE_ACTIVE=1
     pause_scheduler
     privileged gate-on
