@@ -2122,6 +2122,7 @@ jobs:
               "vendor/bin/phpunit", "-c", "phpunit.xml", "--debug",
               "--fail-on-skipped", "--display-skipped", "--display-warnings",
               "--exclude-group=wpcg_isolated_mysql_backup_verification",
+              "--log-junit", log_path + ".junit.xml",
           ]
           with open(log_path, "w", encoding="utf-8", errors="replace") as log:
               suite_env = env.copy()
@@ -2174,10 +2175,47 @@ jobs:
               )
               emit_safe_backup_import_failure_code()
               emit_safe_backup_import_diagnostics()
+          junit_path = log_path + ".junit.xml"
+          diagnostic_status_unknown = False
+          diagnostic_command = [
+              "python3", "scripts/ci/package-b-diagnostic-report.py",
+              "--junit", junit_path, "--driver", "mysql", "--exit-code", str(status),
+          ]
+          try:
+              reporter = subprocess.run(
+                  diagnostic_command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                  env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8"},
+                  text=True, encoding="utf-8", errors="strict", timeout=5, check=False,
+              )
+              safe_record = re.compile(
+                  r"WPCG_PB_DIAG_V1\|status=(?:FAIL\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|method=test_[A-Za-z0-9_]{1,120}\|exception=(?:QueryException|PDOException|ExpectationFailedException|AssertionFailedError|PHPUnitError|RuntimeException|InvalidArgumentException|LogicException|ErrorException|TypeError|ValueError|Error|Exception|UNKNOWN)\|sqlstate=(?:[A-Z0-9]{5}|UNKNOWN)\|vendor_code=(?:[0-9]{1,5}|UNKNOWN)\|category=(?:ASSERTION_FAILURE|DB_EXCEPTION|TEST_EXCEPTION|UNKNOWN)\|phase=(?:SETUP|TEARDOWN|TEST_CASE|UNKNOWN)\|driver=mysql\|assertion=(?:ASSERTION_FAILURE|NOT_ASSERTION|UNKNOWN)|PASS\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|driver=mysql)|"
+                  r"WPCG_PB_DIAG_V1\|status=UNKNOWN\|reason=(?:DRIVER_NOT_ALLOWLISTED|JUNIT_UNAVAILABLE|JUNIT_SIZE_LIMIT|XML_DECLARATION_REJECTED|JUNIT_INVALID|TARGET_RECORD_UNCLASSIFIED|RECORD_LIMIT|TARGET_FAILURE_NOT_IN_REPORT|FAILURE_RECORD_MISSING|TARGET_NOT_REPORTED|EXIT_STATUS_CONFLICT|ARGUMENTS_INVALID|PROJECTION_FAILED)"
+              )
+              report_lines = reporter.stdout.splitlines()
+              if reporter.returncode != 0 or not report_lines or len(report_lines) > 32 or any(not safe_record.fullmatch(line) for line in report_lines):
+                  print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=REPORTER_FAILED", flush=True)
+                  diagnostic_status_unknown = True
+              else:
+                  for line in report_lines:
+                      print(line, flush=True)
+                      if "|status=UNKNOWN|" in line:
+                          diagnostic_status_unknown = True
+          except (OSError, subprocess.SubprocessError, UnicodeError):
+              print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=REPORTER_FAILED", flush=True)
+              diagnostic_status_unknown = True
           try:
               os.unlink(log_path)
           except FileNotFoundError:
               pass
+          try:
+              os.unlink(junit_path)
+          except FileNotFoundError:
+              pass
+          except OSError:
+              print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=JUNIT_CLEANUP_FAILED", flush=True)
+              raise SystemExit(1)
+          if diagnostic_status_unknown and status == 0:
+              raise SystemExit(1)
           if target_name is None:
               print("Required target CAS test lifecycle event was not observed in the full suite.", file=sys.stderr)
               raise SystemExit(1)

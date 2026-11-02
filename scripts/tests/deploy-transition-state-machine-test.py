@@ -3066,11 +3066,170 @@ class TransitionLeaseRpcV2ClientTests(unittest.TestCase):
             self.skipTest("requires the isolated Linux CI root process lane")
         import grp
         import pwd
+        import socket
+        import struct
 
         app_user = pwd.getpwnam("www-data")
         app_group = grp.getgrnam("www-data")
         self.assertEqual(app_user.pw_gid, app_group.gr_gid)
         socket_dir = Path(tempfile.mkdtemp(prefix="wpcg-lease-rpc-v2-"))
+        diagnostic = {
+            "spawn": "NOT_ATTEMPTED", "child_state": "UNKNOWN", "exit_code": "UNKNOWN",
+            "uid": "UNKNOWN", "gid": "UNKNOWN", "identity_source": "UNKNOWN", "socket": "NOT_CREATED",
+            "socket_access": "UNKNOWN", "connection_attempt": "NOT_REACHED", "accept": "NOT_ATTEMPTED",
+            "peer": "NOT_REACHED", "cleanup": "UNKNOWN", "worker_exit": "UNKNOWN",
+            "worker_error": "UNKNOWN", "worker_errno": "UNKNOWN",
+        }
+        cleanup_attempted = False
+        process_box = {"process": None, "monitor": None, "stderr_thread": None}
+        socket_path_box = {"path": None}
+        real_popen = subprocess.Popen
+        real_socket = socket.socket
+
+        def sample_child_identity(process):
+            status_path = Path("/proc") / str(process.pid) / "status"
+            while process.poll() is None:
+                try:
+                    lines = status_path.read_text(encoding="ascii", errors="ignore").splitlines()
+                    uid_line = next(line for line in lines if line.startswith("Uid:"))
+                    gid_line = next(line for line in lines if line.startswith("Gid:"))
+                    effective_uid = uid_line.split()[2]
+                    effective_gid = gid_line.split()[2]
+                    if effective_uid.isdecimal() and effective_gid.isdecimal():
+                        diagnostic["uid"] = effective_uid
+                        diagnostic["gid"] = effective_gid
+                        diagnostic["identity_source"] = "PROC_SAMPLED"
+                except (OSError, StopIteration, IndexError):
+                    pass
+                time.sleep(0.002)
+            diagnostic["exit_code"] = str(process.returncode) if process.returncode is not None else "UNKNOWN"
+            diagnostic["child_state"] = "EXITED"
+
+        def drain_worker_stderr(stream):
+            retained = bytearray()
+            total = 0
+            while True:
+                chunk = stream.read(1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if len(retained) < 8192:
+                    retained.extend(chunk[:8192 - len(retained)])
+            if total > len(retained):
+                diagnostic["worker_error"] = "TRUNCATED"
+                diagnostic["worker_errno"] = "UNKNOWN"
+                return
+            text = retained.decode("utf-8", errors="ignore")
+            exception_match = re.search(r"(?m)^([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception))(?::|$)", text)
+            if exception_match:
+                allowed = {
+                    "PermissionError", "FileNotFoundError", "FileExistsError", "NotADirectoryError",
+                    "IsADirectoryError", "TimeoutError", "ConnectionRefusedError", "ConnectionResetError",
+                    "BrokenPipeError", "OSError", "RuntimeError", "TypeError", "ValueError",
+                }
+                diagnostic["worker_error"] = exception_match.group(1).rsplit(".", 1)[-1] if exception_match.group(1).rsplit(".", 1)[-1] in allowed else "OTHER_EXCEPTION"
+            errno_match = re.search(r"\[Errno ([0-9]{1,3})\]", text)
+            if errno_match:
+                diagnostic["worker_errno"] = errno_match.group(1)
+
+        def diagnostic_popen(*args, **kwargs):
+            kwargs["stderr"] = subprocess.PIPE
+            try:
+                process = real_popen(*args, **kwargs)
+            except OSError:
+                diagnostic["spawn"] = "FAILED"
+                raise
+            diagnostic["spawn"] = "STARTED"
+            diagnostic["child_state"] = "ALIVE"
+            process_box["process"] = process
+            monitor = threading.Thread(target=sample_child_identity, args=(process,), daemon=True)
+            stderr_thread = threading.Thread(target=drain_worker_stderr, args=(process.stderr,), daemon=True)
+            process_box["monitor"] = monitor
+            process_box["stderr_thread"] = stderr_thread
+            monitor.start()
+            stderr_thread.start()
+            return process
+
+        class DiagnosticSocket:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def bind(self, address):
+                result = self.wrapped.bind(address)
+                socket_path_box["path"] = Path(address)
+                try:
+                    info = socket_path_box["path"].lstat()
+                    diagnostic["socket"] = "CREATED" if stat.S_ISSOCK(info.st_mode) else "INVALID"
+                except OSError:
+                    diagnostic["socket"] = "STAT_FAILED"
+                return result
+
+            def _record_access(self):
+                try:
+                    path = socket_path_box["path"]
+                    if path is None:
+                        return
+                    info = path.lstat()
+                    directory_info = socket_dir.stat()
+                    directory_exec = (
+                        (directory_info.st_uid == app_user.pw_uid and bool(directory_info.st_mode & stat.S_IXUSR))
+                        or (directory_info.st_gid == app_group.gr_gid and bool(directory_info.st_mode & stat.S_IXGRP))
+                        or bool(directory_info.st_mode & stat.S_IXOTH)
+                    )
+                    socket_write = (
+                        (info.st_uid == app_user.pw_uid and bool(info.st_mode & stat.S_IWUSR))
+                        or (info.st_gid == app_group.gr_gid and bool(info.st_mode & stat.S_IWGRP))
+                        or bool(info.st_mode & stat.S_IWOTH)
+                    )
+                    diagnostic["socket_access"] = "ALLOW" if directory_exec and socket_write else "DENY"
+                except OSError:
+                    diagnostic["socket_access"] = "UNKNOWN"
+
+            def listen(self, *args, **kwargs):
+                return self.wrapped.listen(*args, **kwargs)
+
+            def accept(self):
+                self._record_access()
+                diagnostic["accept"] = "WAITING"
+                process = process_box["process"]
+                if process is not None:
+                    code = process.poll()
+                    diagnostic["child_state"] = "ALIVE" if code is None else "EXITED"
+                    if code is not None:
+                        diagnostic["exit_code"] = str(code)
+                try:
+                    connection, address = self.wrapped.accept()
+                except socket.timeout:
+                    diagnostic["accept"] = "TIMEOUT"
+                    raise
+                diagnostic["accept"] = "ACCEPTED"
+                diagnostic["connection_attempt"] = "ESTABLISHED"
+                return DiagnosticSocket(connection), address
+
+            def getsockopt(self, level, option, length=0):
+                result = self.wrapped.getsockopt(level, option, length)
+                if level == socket.SOL_SOCKET and option == socket.SO_PEERCRED:
+                    peer_pid, peer_uid, peer_gid = struct.unpack("3i", result)
+                    diagnostic["peer"] = "MATCH" if (
+                        process_box["process"] is not None
+                        and peer_pid == process_box["process"].pid
+                        and peer_uid == app_user.pw_uid
+                        and peer_gid == app_group.gr_gid
+                    ) else "MISMATCH"
+                    diagnostic["uid"] = str(peer_uid)
+                    diagnostic["gid"] = str(peer_gid)
+                    diagnostic["identity_source"] = "SO_PEERCRED"
+                return result
+
+            def __getattr__(self, name):
+                return getattr(self.wrapped, name)
+
+        def diagnostic_socket(*args, **kwargs):
+            created = real_socket(*args, **kwargs)
+            if args and args[0] == socket.AF_UNIX and len(args) > 1 and args[1] == socket.SOCK_STREAM:
+                return DiagnosticSocket(created)
+            return created
+
         try:
             os.chown(socket_dir, 0, app_group.gr_gid)
             os.chmod(socket_dir, 0o710)
@@ -3081,13 +3240,63 @@ class TransitionLeaseRpcV2ClientTests(unittest.TestCase):
                 command=(sys.executable, str(Path(LEASE_RPC.__file__).resolve()), "--lease-rpc-v2-worker"),
                 timeout_seconds=5.0,
             )
-            self.assertIsNone(adapter.read_lease_receipt(
-                self.REQUEST_ID, self.REQUEST_DIGEST, self.payload()["fence_tuple"],
-            ))
-            self.assertEqual([], list(socket_dir.iterdir()))
+            try:
+                with mock.patch.object(LEASE_RPC.subprocess, "Popen", side_effect=diagnostic_popen):
+                    with mock.patch.object(LEASE_RPC.socket, "socket", side_effect=diagnostic_socket):
+                        self.assertIsNone(adapter.read_lease_receipt(
+                            self.REQUEST_ID, self.REQUEST_DIGEST, self.payload()["fence_tuple"],
+                        ))
+                self.assertEqual([], list(socket_dir.iterdir()))
+            finally:
+                process = process_box["process"]
+                if process is not None:
+                    if process.poll() is None:
+                        diagnostic["child_state"] = "ALIVE"
+                    else:
+                        diagnostic["child_state"] = "EXITED"
+                        diagnostic["exit_code"] = str(process.returncode)
+                    if process_box["monitor"] is not None:
+                        process_box["monitor"].join()
+                    if process_box["stderr_thread"] is not None:
+                        process_box["stderr_thread"].join()
+                    if process.returncode in {0, 41, 42, 43, 44, 45}:
+                        diagnostic["worker_exit"] = str(process.returncode)
+                    elif process.returncode is not None:
+                        diagnostic["worker_exit"] = "OTHER"
+                    if diagnostic["accept"] == "TIMEOUT":
+                        if process.returncode == 41:
+                            diagnostic["connection_attempt"] = "NOT_REACHED"
+                        elif process.returncode == 44:
+                            diagnostic["connection_attempt"] = "ATTEMPTED"
+                        elif process.returncode in {0, 42, 43}:
+                            diagnostic["connection_attempt"] = "ACCEPTED"
+                        else:
+                            diagnostic["connection_attempt"] = "UNKNOWN"
+                try:
+                    empty = not list(socket_dir.iterdir())
+                    cleanup_attempted = True
+                    os.chmod(socket_dir, 0o700)
+                    os.rmdir(socket_dir)
+                    diagnostic["cleanup"] = "COMPLETE" if empty and not socket_dir.exists() else "INCOMPLETE"
+                except OSError as cleanup_error:
+                    diagnostic["cleanup"] = "FAILED"
+                fields = (
+                    "target=TransitionLeasePersistenceTest.test_linux_af_unix_peer_credentials_and_child_privilege_drop",
+                    *(
+                        f"{key}={diagnostic[key]}"
+                        for key in (
+                            "spawn", "child_state", "exit_code", "uid", "gid", "identity_source", "socket", "socket_access",
+                            "connection_attempt", "accept", "peer", "cleanup", "worker_exit", "worker_error", "worker_errno",
+                        )
+                    ),
+                )
+                print("WPCG_PB_LINUX_DIAG_V1|" + "|".join(fields), flush=True)
+                if diagnostic["cleanup"] == "FAILED":
+                    raise cleanup_error
         finally:
-            os.chmod(socket_dir, 0o700)
-            os.rmdir(socket_dir)
+            if not cleanup_attempted and socket_dir.exists():
+                os.chmod(socket_dir, 0o700)
+                os.rmdir(socket_dir)
 
 
 def _validate_required_linux_prerequisites():
