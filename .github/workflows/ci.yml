@@ -668,6 +668,7 @@ jobs:
           import json
           import os
           import re
+          import runpy
           import subprocess
           import sys
           import tempfile
@@ -2188,8 +2189,9 @@ jobs:
                   text=True, encoding="utf-8", errors="strict", timeout=5, check=False,
               )
               safe_record = re.compile(
-                  r"WPCG_PB_DIAG_V1\|status=(?:FAIL\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|method=test_[A-Za-z0-9_]{1,120}\|exception=(?:QueryException|PDOException|ExpectationFailedException|AssertionFailedError|PHPUnitError|RuntimeException|InvalidArgumentException|LogicException|ErrorException|TypeError|ValueError|Error|Exception|UNKNOWN)\|sqlstate=(?:[A-Z0-9]{5}|UNKNOWN)\|vendor_code=(?:[0-9]{1,5}|UNKNOWN)\|category=(?:ASSERTION_FAILURE|DB_EXCEPTION|TEST_EXCEPTION|UNKNOWN)\|phase=(?:SETUP|TEARDOWN|TEST_CASE|UNKNOWN)\|driver=mysql\|assertion=(?:ASSERTION_FAILURE|NOT_ASSERTION|UNKNOWN)|PASS\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|driver=mysql)|"
-                  r"WPCG_PB_DIAG_V1\|status=UNKNOWN\|reason=(?:DRIVER_NOT_ALLOWLISTED|JUNIT_MISSING|JUNIT_EMPTY|JUNIT_INCOMPLETE|JUNIT_MALFORMED|JUNIT_ENCODING_INVALID|JUNIT_SCHEMA_INCOMPATIBLE|JUNIT_UNAVAILABLE|JUNIT_SIZE_LIMIT|XML_DECLARATION_REJECTED|TARGET_RECORD_UNCLASSIFIED|RECORD_LIMIT|TARGET_FAILURE_NOT_IN_REPORT|FAILURE_RECORD_MISSING|TARGET_NOT_REPORTED|EXIT_STATUS_CONFLICT|ARGUMENTS_INVALID|PROJECTION_FAILED)"
+                  r"(?:WPCG_PB_DIAG_V1\|status=(?:FAIL\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|method=test_[A-Za-z0-9_]{1,120}\|exception=(?:QueryException|PDOException|ExpectationFailedException|AssertionFailedError|PHPUnitError|RuntimeException|InvalidArgumentException|LogicException|ErrorException|TypeError|ValueError|Error|Exception|UNKNOWN)\|sqlstate=(?:[A-Z0-9]{5}|UNKNOWN)\|vendor_code=(?:[0-9]{1,5}|UNKNOWN)\|category=(?:ASSERTION_FAILURE|DB_EXCEPTION|TEST_EXCEPTION|UNKNOWN)\|phase=(?:SETUP|TEARDOWN|TEST_CASE|UNKNOWN)\|driver=mysql\|assertion=(?:ASSERTION_FAILURE|NOT_ASSERTION|UNKNOWN)|PASS\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|driver=mysql)|"
+                  r"WPCG_PB_DIAG_V1\|status=UNKNOWN\|reason=(?:DRIVER_NOT_ALLOWLISTED|JUNIT_MISSING|JUNIT_EMPTY|JUNIT_INCOMPLETE|JUNIT_MALFORMED|JUNIT_ENCODING_INVALID|JUNIT_SCHEMA_INCOMPATIBLE|JUNIT_UNAVAILABLE|JUNIT_SIZE_LIMIT|XML_DECLARATION_REJECTED|TARGET_RECORD_UNCLASSIFIED|RECORD_LIMIT|TARGET_FAILURE_NOT_IN_REPORT|FAILURE_RECORD_MISSING|TARGET_NOT_REPORTED|EXIT_STATUS_CONFLICT|ARGUMENTS_INVALID|PROJECTION_FAILED|REPORTER_FAILED))|"
+                  r"WPCG_PB_DIAG_V1\|status=CLEANUP\|workflow_log=(?:REMOVED|ALREADY_ABSENT|FAILED)\|junit=(?:REMOVED|ALREADY_ABSENT|FAILED)"
               )
               report_lines = reporter.stdout.splitlines()
               if reporter.returncode != 0 or not report_lines or len(report_lines) > 32 or any(not safe_record.fullmatch(line) for line in report_lines):
@@ -2203,18 +2205,39 @@ jobs:
           except (OSError, subprocess.SubprocessError, UnicodeError):
               print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=REPORTER_FAILED", flush=True)
               diagnostic_status_unknown = True
+          cleanup_entries = (("workflow_log", log_path), ("junit", junit_path))
           try:
-              os.unlink(log_path)
-          except FileNotFoundError:
-              pass
-          try:
-              os.unlink(junit_path)
-          except FileNotFoundError:
-              pass
-          except OSError:
-              print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=JUNIT_CLEANUP_FAILED", flush=True)
-              raise SystemExit(1)
+              cleanup_files = runpy.run_path("scripts/ci/package-b-diagnostic-report.py").get("cleanup_files")
+              if not callable(cleanup_files):
+                  raise RuntimeError("cleanup helper unavailable")
+              cleanup_outcomes = cleanup_files(cleanup_entries)
+              if set(cleanup_outcomes) != {"workflow_log", "junit"} or any(
+                  cleanup_outcomes[label] not in {"REMOVED", "ALREADY_ABSENT", "FAILED"}
+                  for label in ("workflow_log", "junit")
+              ):
+                  raise RuntimeError("cleanup result invalid")
+          except Exception:
+              cleanup_outcomes = {}
+              for label, path in cleanup_entries:
+                  try:
+                      os.unlink(path)
+                      cleanup_outcomes[label] = "REMOVED"
+                  except FileNotFoundError:
+                      cleanup_outcomes[label] = "ALREADY_ABSENT"
+                  except Exception:
+                      cleanup_outcomes[label] = "FAILED"
+          cleanup_line = "WPCG_PB_DIAG_V1|status=CLEANUP|workflow_log={}|junit={}".format(
+              cleanup_outcomes["workflow_log"], cleanup_outcomes["junit"],
+          )
+          if not safe_record.fullmatch(cleanup_line):
+              print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=PROJECTION_FAILED", flush=True)
+              cleanup_failed = True
+          else:
+              print(cleanup_line, flush=True)
+              cleanup_failed = "FAILED" in cleanup_outcomes.values()
           if diagnostic_status_unknown and status == 0:
+              raise SystemExit(1)
+          if cleanup_failed and status == 0:
               raise SystemExit(1)
           if target_name is None:
               print("Required target CAS test lifecycle event was not observed in the full suite.", file=sys.stderr)

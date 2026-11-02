@@ -16,6 +16,7 @@ TARGET_CLASS = "Tests\\Feature\\Deployment\\Phase2B\\TransitionLeasePersistenceT
 TARGET_CLASS_DOTTED = TARGET_CLASS.replace("\\", ".")
 MAX_XML_BYTES = 2 * 1024 * 1024
 MAX_FAILURES = 32
+CLEANUP_STATES = {"REMOVED", "ALREADY_ABSENT", "FAILED"}
 XML_ENCODING_RE = re.compile(rb"<\?xml\b[^>]*\bencoding\s*=\s*['\"]([^'\"]+)['\"]", re.I)
 INCOMPLETE_XML_REASONS = (
     "no element found",
@@ -45,6 +46,61 @@ SQLSTATE_RE = re.compile(r"SQLSTATE\[([A-Z0-9]{5})\]", re.I)
 VENDOR_CODE_RE = re.compile(r"\]\s*:\s*[^:\r\n]{1,80}:\s*(\d{1,5})(?=\s|$)")
 PHASE_SETUP_RE = re.compile(r"(?:TransitionLeasePersistenceTest(?:->|::)setUp|RefreshDatabase|migrate:fresh)")
 PHASE_TEARDOWN_RE = re.compile(r"TransitionLeasePersistenceTest(?:->|::)tearDown")
+
+
+def cleanup_files(entries: tuple[tuple[str, str | Path], ...], unlinker=None) -> dict[str, str]:
+    """Attempt each diagnostic-file deletion independently and return fixed states only."""
+    if unlinker is None:
+        unlinker = lambda path: Path(path).unlink()
+    outcomes: dict[str, str] = {}
+    for label, path in entries:
+        if label not in {"workflow_log", "junit"} or label in outcomes:
+            raise ValueError("Invalid cleanup entry.")
+        try:
+            unlinker(path)
+            outcomes[label] = "REMOVED"
+        except FileNotFoundError:
+            outcomes[label] = "ALREADY_ABSENT"
+        except Exception:
+            outcomes[label] = "FAILED"
+    if set(outcomes) != {"workflow_log", "junit"}:
+        raise ValueError("Incomplete cleanup entry set.")
+    return outcomes
+
+
+def exit_code_after_cleanup(test_exit_code: int, outcomes: dict[str, str]) -> int:
+    """Preserve a failing PHPUnit status; fail a successful run if cleanup is unresolved."""
+    if test_exit_code != 0:
+        return test_exit_code
+    return 1 if any(outcomes.get(label) == "FAILED" for label in ("workflow_log", "junit")) else 0
+
+
+def self_test_cleanup() -> int:
+    """Deterministic synthetic regression checks for independent cleanup attempts."""
+    scenarios = (
+        ({}, {"workflow_log": "REMOVED", "junit": "REMOVED"}, 0, 0),
+        ({"workflow_log": OSError()}, {"workflow_log": "FAILED", "junit": "REMOVED"}, 0, 1),
+        ({"junit": OSError()}, {"workflow_log": "REMOVED", "junit": "FAILED"}, 0, 1),
+        ({"workflow_log": OSError(), "junit": OSError()}, {"workflow_log": "FAILED", "junit": "FAILED"}, 0, 1),
+        ({"workflow_log": FileNotFoundError()}, {"workflow_log": "ALREADY_ABSENT", "junit": "REMOVED"}, 0, 0),
+        ({"junit": FileNotFoundError()}, {"workflow_log": "REMOVED", "junit": "ALREADY_ABSENT"}, 0, 0),
+        ({"junit": OSError()}, {"workflow_log": "REMOVED", "junit": "FAILED"}, 2, 2),
+    )
+    for failures, expected, test_exit_code, expected_exit_code in scenarios:
+        attempted: list[str] = []
+
+        def synthetic_unlink(path) -> None:
+            attempted.append(str(path))
+            error = failures.get(str(path))
+            if error is not None:
+                raise error
+
+        actual = cleanup_files((("workflow_log", "workflow_log"), ("junit", "junit")), synthetic_unlink)
+        if attempted != ["workflow_log", "junit"] or actual != expected:
+            return 1
+        if exit_code_after_cleanup(test_exit_code, actual) != expected_exit_code:
+            return 1
+    return len(scenarios)
 
 
 def _safe_class(raw: str | None) -> str:
@@ -195,11 +251,25 @@ def project(path: Path, driver: str, exit_code: int) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--junit", required=True)
-    parser.add_argument("--driver", required=True)
-    parser.add_argument("--exit-code", required=True, type=int)
+    parser.add_argument("--junit")
+    parser.add_argument("--driver")
+    parser.add_argument("--exit-code", type=int)
+    parser.add_argument("--self-test-cleanup", action="store_true")
     try:
         args = parser.parse_args()
+        if args.self_test_cleanup:
+            if args.junit is not None or args.driver is not None or args.exit_code is not None:
+                print(f"{PREFIX}|status=UNKNOWN|reason=ARGUMENTS_INVALID")
+                return 1
+            result = self_test_cleanup()
+            if result != 7:
+                print(f"{PREFIX}|status=UNKNOWN|reason=CLEANUP_SELF_TEST_FAILED")
+                return 1
+            print(f"{PREFIX}|status=SELFTEST|cleanup_cases={result}")
+            return 0
+        if args.junit is None or args.driver is None or args.exit_code is None:
+            print(f"{PREFIX}|status=UNKNOWN|reason=ARGUMENTS_INVALID")
+            return 1
         lines = project(Path(args.junit), args.driver, args.exit_code)
     except SystemExit:
         print(f"{PREFIX}|status=UNKNOWN|reason=ARGUMENTS_INVALID")
