@@ -24,6 +24,8 @@ MAX_REPORTED_XML_BYTES = MAX_XML_BYTES + 1
 JUNIT_CLASSIFICATIONS = {
     "JUNIT_VALID", "JUNIT_MISSING", "JUNIT_EMPTY", "JUNIT_INCOMPLETE",
     "JUNIT_INVALID_XML_SYNTAX", "JUNIT_INVALID_ENCODING", "JUNIT_UNEXPECTED_CONTENT",
+    "JUNIT_DOCTYPE_DECLARATION", "JUNIT_ENTITY_DECLARATION", "JUNIT_TRAILING_CONTENT",
+    "JUNIT_UNEXPECTED_OTHER",
     "JUNIT_UNSUPPORTED_STRUCTURE", "JUNIT_PARSER_OTHER", "JUNIT_UNAVAILABLE", "JUNIT_SIZE_LIMIT",
     "JUNIT_NOT_EVALUATED",
 }
@@ -37,6 +39,10 @@ INCOMPLETE_XML_CODES = {
 INCOMPLETE_XML_CODES.discard(None)
 UNEXPECTED_CONTENT_CODES = {expat.errors.codes.get("junk after document element")}
 UNEXPECTED_CONTENT_CODES.discard(None)
+
+
+class _EntityDeclarationDetected(Exception):
+    """Internal sentinel raised before an entity can be expanded."""
 
 EXCEPTION_CLASSES = {
     "Illuminate\\Database\\QueryException": "QueryException",
@@ -144,15 +150,56 @@ def _metadata_line(exit_code: int, file_state: str, size_bytes: int | None, clas
     )
 
 
-def _classify_parse_error(error: ET.ParseError) -> str:
-    code = getattr(error, "code", None)
+def _classify_parse_error_code(code: int | None, root_closed: bool = False) -> str:
     if code is not None and code in INCOMPLETE_XML_CODES:
         return "JUNIT_INCOMPLETE"
     if code is not None and code in UNEXPECTED_CONTENT_CODES:
-        return "JUNIT_UNEXPECTED_CONTENT"
+        return "JUNIT_TRAILING_CONTENT"
+    if root_closed:
+        return "JUNIT_UNEXPECTED_OTHER"
     if isinstance(code, int):
         return "JUNIT_INVALID_XML_SYNTAX"
     return "JUNIT_PARSER_OTHER"
+
+
+def _probe_xml_structure(raw: bytes) -> str | None:
+    """Classify unsafe declarations and parser-confirmed trailing content only."""
+    state = {"doctype": False, "depth": 0, "root_closed": False}
+    parser = expat.ParserCreate()
+
+    def start_doctype(_name, _system_id, _public_id, _has_internal_subset) -> None:
+        state["doctype"] = True
+
+    def entity_decl(*_args) -> None:
+        # Stop at the declaration callback, before parsing document references.
+        raise _EntityDeclarationDetected
+
+    def start_element(_name, _attrs) -> None:
+        state["depth"] += 1
+
+    def end_element(_name) -> None:
+        state["depth"] -= 1
+        if state["depth"] == 0:
+            state["root_closed"] = True
+
+    parser.StartDoctypeDeclHandler = start_doctype
+    parser.EntityDeclHandler = entity_decl
+    parser.StartElementHandler = start_element
+    parser.EndElementHandler = end_element
+    # Never resolve external entities or external subsets.
+    parser.ExternalEntityRefHandler = lambda *_args: 0
+    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+    try:
+        parser.Parse(raw, True)
+    except _EntityDeclarationDetected:
+        return "JUNIT_ENTITY_DECLARATION"
+    except expat.ExpatError as error:
+        if state["doctype"]:
+            return "JUNIT_DOCTYPE_DECLARATION"
+        return _classify_parse_error_code(getattr(error, "code", None), state["root_closed"])
+    if state["doctype"]:
+        return "JUNIT_DOCTYPE_DECLARATION"
+    return None
 
 
 def _load_junit(path: Path) -> tuple[str, int | None, ET.Element | None]:
@@ -189,12 +236,13 @@ def _load_junit(path: Path) -> tuple[str, int | None, ET.Element | None]:
         raw.decode("utf-8-sig", errors="strict")
     except UnicodeDecodeError:
         return "JUNIT_INVALID_ENCODING", len(raw), None
-    if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
-        return "JUNIT_UNEXPECTED_CONTENT", len(raw), None
+    structural_classification = _probe_xml_structure(raw)
+    if structural_classification is not None:
+        return structural_classification, len(raw), None
     try:
         root = ET.fromstring(raw)
     except ET.ParseError as error:
-        return _classify_parse_error(error), len(raw), None
+        return _classify_parse_error_code(getattr(error, "code", None)), len(raw), None
     except (ValueError, LookupError):
         return "JUNIT_INVALID_ENCODING", len(raw), None
     except Exception:
@@ -346,16 +394,28 @@ def self_test_diagnostics() -> int:
         'message="SQLSTATE[40001]: Serialization failure: 1213 private synthetic detail"/>'
         '</testcase></testsuite></testsuites>'
     ).encode("utf-8")
+    valid_marker_text = (
+        f'<!-- <!DOCTYPE testsuites> <!ENTITY x "marker text"> -->'
+        f'<testsuites><testsuite><testcase classname="{TARGET_CLASS_DOTTED}" '
+        'name="test_safe_marker_text"><error type="RuntimeException">'
+        '&lt;!DOCTYPE testsuites&gt; &lt;!ENTITY x \'marker text\' '
+        '<![CDATA[<!DOCTYPE testsuites> <!ENTITY x "cdata marker">]]>'
+        '</error></testcase></testsuite></testsuites>'
+    ).encode("utf-8")
     fixtures = (
         ("JUNIT_EMPTY", b""),
         ("JUNIT_INVALID_XML_SYNTAX", b"<testsuites><broken></testsuites>"),
         ("JUNIT_INCOMPLETE", b"<testsuites><testsuite>"),
         ("JUNIT_INVALID_ENCODING", b"<?xml version='1.0' encoding='utf-16'?><testsuites/>"),
         ("JUNIT_INVALID_ENCODING", b"<testsuites>\xff</testsuites>"),
-        ("JUNIT_UNEXPECTED_CONTENT", b"<testsuites/><extra/>"),
+        ("JUNIT_TRAILING_CONTENT", b"<testsuites/><extra/>"),
+        ("JUNIT_DOCTYPE_DECLARATION", b"<!DOCTYPE testsuites><testsuites/>"),
+        ("JUNIT_ENTITY_DECLARATION", b'<!DOCTYPE testsuites [<!ENTITY x "value">]><testsuites/>'),
+        ("JUNIT_UNEXPECTED_OTHER", b"<testsuites/>\x00"),
         ("JUNIT_UNSUPPORTED_STRUCTURE", b"<not-a-junit/>"),
         ("JUNIT_VALID", valid),
         ("JUNIT_VALID", valid_db),
+        ("JUNIT_VALID", valid_marker_text),
     )
     cases = 0
     with tempfile.TemporaryDirectory() as directory:
@@ -385,6 +445,10 @@ def self_test_diagnostics() -> int:
                 records = [line for line in lines if "|status=FAIL|" in line]
                 if not any("|exception=PDOException|sqlstate=40001|vendor_code=1213|" in line for line in records):
                     return 1
+            if b"safe_marker_text" in payload:
+                records = [line for line in lines if "|status=FAIL|" in line]
+                if not any("|method=test_safe_marker_text|exception=RuntimeException|" in line for line in records):
+                    return 1
             cases += 1
         missing = project(Path(directory) / "absent.xml", "mysql", 1)
         if "|file_state=MISSING|size_bytes=UNKNOWN|classification=JUNIT_MISSING" not in missing[0]:
@@ -408,7 +472,7 @@ def self_test_diagnostics() -> int:
         original_fromstring = ET.fromstring
         try:
             ET.fromstring = lambda _raw: (_ for _ in ()).throw(RuntimeError("private synthetic parser failure"))
-            parser_other, parser_other_size, parser_other_root = _load_junit(Path(directory) / "fixture-7.xml")
+            parser_other, parser_other_size, parser_other_root = _load_junit(Path(directory) / "fixture-10.xml")
             if (parser_other, parser_other_root) != ("JUNIT_PARSER_OTHER", None) or parser_other_size is None:
                 return 1
         finally:
@@ -457,7 +521,7 @@ def self_test_diagnostics() -> int:
             globals()["_load_junit"] = original_loader
         cases += 1
 
-        readable, _ = safe_project(Path(directory) / "fixture-7.xml", "mysql", 1)
+        readable, _ = safe_project(Path(directory) / "fixture-10.xml", "mysql", 1)
         reporter_failure = reporter_execution_record(7)
         if (
             "|classification=JUNIT_VALID" not in readable[0]
@@ -469,7 +533,7 @@ def self_test_diagnostics() -> int:
 
         try:
             globals()["_project_classified"] = lambda *_args: (_ for _ in ()).throw(RuntimeError("private synthetic projection failure"))
-            projection_failure, _ = safe_project(Path(directory) / "fixture-7.xml", "mysql", 1)
+            projection_failure, _ = safe_project(Path(directory) / "fixture-10.xml", "mysql", 1)
         finally:
             globals()["_project_classified"] = original_projector
         cleanup_failure = cleanup_record({"workflow_log": "FAILED", "junit": "REMOVED"})
@@ -529,7 +593,7 @@ def main() -> int:
                 print(f"{PREFIX}|status=UNKNOWN|reason=ARGUMENTS_INVALID")
                 return 1
             result = self_test_diagnostics()
-            if result != 24:
+            if result != 28:
                 print(f"{PREFIX}|status=UNKNOWN|reason=DIAGNOSTIC_SELF_TEST_FAILED")
                 return 1
             print(f"{PREFIX}|status=SELFTEST|diagnostic_cases={result}")
