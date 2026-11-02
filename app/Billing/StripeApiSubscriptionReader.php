@@ -3,7 +3,6 @@
 namespace App\Billing;
 
 use RuntimeException;
-use Stripe\StripeClient;
 
 final class StripeApiSubscriptionReader implements StripeSubscriptionReader
 {
@@ -24,7 +23,7 @@ final class StripeApiSubscriptionReader implements StripeSubscriptionReader
             throw new RuntimeException('Stripe subscription identity is invalid.');
         }
 
-        return (new StripeClient($this->secret))->subscriptions->retrieve($stripeSubscriptionId, [
+        return StripeClientFactory::make($this->secret)->subscriptions->retrieve($stripeSubscriptionId, [
             'expand' => ['latest_invoice', 'latest_invoice.lines.data.price', 'schedule'],
         ]);
     }

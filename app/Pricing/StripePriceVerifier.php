@@ -2,6 +2,7 @@
 
 namespace App\Pricing;
 
+use App\Billing\StripeClientFactory;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
 
@@ -93,6 +94,6 @@ class StripePriceVerifier
 
     protected function client(): StripeClient
     {
-        return new StripeClient((string) config('services.stripe.secret'));
+        return StripeClientFactory::make((string) config('services.stripe.secret'));
     }
 }

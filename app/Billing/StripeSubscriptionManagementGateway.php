@@ -26,7 +26,7 @@ final class StripeSubscriptionManagementGateway implements SubscriptionManagemen
             throw new RuntimeException('Stripe key mode is not recognised.');
         }
 
-        $updated = (new StripeClient($this->secret))->subscriptions->update(
+        $updated = StripeClientFactory::make($this->secret)->subscriptions->update(
             (string) $subscription->stripe_subscription_id,
             ['cancel_at_period_end' => $cancel],
             ['idempotency_key' => $idempotencyKey],
@@ -70,7 +70,7 @@ final class StripeSubscriptionManagementGateway implements SubscriptionManagemen
                 'quantity' => (int) ($items[0]->quantity ?? 1),
             ]],
             'metadata' => $metadata,
-            'billing_cycle_anchor' => 'unchanged',
+            'billing_cycle_anchor' => ['type' => 'unchanged'],
             'proration_behavior' => $immediate ? 'always_invoice' : 'none',
             'payment_behavior' => $immediate ? 'pending_if_incomplete' : 'error_if_incomplete',
         ], ['idempotency_key' => $idempotencyKey]);
@@ -276,6 +276,6 @@ final class StripeSubscriptionManagementGateway implements SubscriptionManagemen
 
     private function client(): StripeClient
     {
-        return $this->client ??= new StripeClient((string) $this->secret);
+        return $this->client ??= StripeClientFactory::make((string) $this->secret);
     }
 }

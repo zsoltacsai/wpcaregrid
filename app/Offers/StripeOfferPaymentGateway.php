@@ -2,6 +2,7 @@
 
 namespace App\Offers;
 
+use App\Billing\StripeClientFactory;
 use App\Checkout\CheckoutSession;
 use App\Checkout\CheckoutUnavailable;
 use App\Localization\Locales;
@@ -106,6 +107,6 @@ final class StripeOfferPaymentGateway implements OfferPaymentGateway
             throw CheckoutUnavailable::liveKeyRefused();
         }
 
-        return $this->client ??= new StripeClient($this->secret);
+        return $this->client ??= StripeClientFactory::make($this->secret);
     }
 }

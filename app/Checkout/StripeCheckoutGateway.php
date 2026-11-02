@@ -2,6 +2,7 @@
 
 namespace App\Checkout;
 
+use App\Billing\StripeClientFactory;
 use App\Localization\Locales;
 use App\Models\CheckoutIntent;
 use App\Models\Promotion;
@@ -130,6 +131,6 @@ final class StripeCheckoutGateway implements CheckoutGateway
             throw CheckoutUnavailable::liveKeyRefused();
         }
 
-        return $this->client ??= new StripeClient($this->secret);
+        return $this->client ??= StripeClientFactory::make($this->secret);
     }
 }

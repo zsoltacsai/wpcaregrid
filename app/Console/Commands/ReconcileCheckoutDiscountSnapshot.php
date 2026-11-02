@@ -3,9 +3,9 @@
 namespace App\Console\Commands;
 
 use App\Billing\CheckoutDiscountSnapshotSync;
+use App\Billing\StripeClientFactory;
 use App\Models\CheckoutIntent;
 use Illuminate\Console\Command;
-use Stripe\StripeClient;
 use Throwable;
 
 /** Reconcile a missing checkout discount snapshot from Stripe's current read-only session state. */
@@ -33,7 +33,7 @@ class ReconcileCheckoutDiscountSnapshot extends Command
         }
 
         try {
-            $session = (new StripeClient($secret))->checkout->sessions->retrieve($intent->stripe_checkout_session_id);
+            $session = StripeClientFactory::make($secret)->checkout->sessions->retrieve($intent->stripe_checkout_session_id);
         } catch (Throwable) {
             $this->error('Stripe could not confirm the checkout session; no billing data changed.');
 
