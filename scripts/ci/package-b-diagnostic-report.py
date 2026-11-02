@@ -16,6 +16,14 @@ TARGET_CLASS = "Tests\\Feature\\Deployment\\Phase2B\\TransitionLeasePersistenceT
 TARGET_CLASS_DOTTED = TARGET_CLASS.replace("\\", ".")
 MAX_XML_BYTES = 2 * 1024 * 1024
 MAX_FAILURES = 32
+XML_ENCODING_RE = re.compile(rb"<\?xml\b[^>]*\bencoding\s*=\s*['\"]([^'\"]+)['\"]", re.I)
+INCOMPLETE_XML_REASONS = (
+    "no element found",
+    "unclosed token",
+    "unclosed cdata section",
+    "unexpected end",
+    "premature end",
+)
 
 EXCEPTION_CLASSES = {
     "Illuminate\\Database\\QueryException": "QueryException",
@@ -119,17 +127,41 @@ def project(path: Path, driver: str, exit_code: int) -> list[str]:
             return [f"{PREFIX}|status=UNKNOWN|reason=JUNIT_SIZE_LIMIT"]
         with path.open("rb") as junit_file:
             raw = junit_file.read(MAX_XML_BYTES + 1)
+    except FileNotFoundError:
+        return [f"{PREFIX}|status=UNKNOWN|reason=JUNIT_MISSING"]
     except OSError:
         return [f"{PREFIX}|status=UNKNOWN|reason=JUNIT_UNAVAILABLE"]
     if len(raw) > MAX_XML_BYTES:
         return [f"{PREFIX}|status=UNKNOWN|reason=JUNIT_SIZE_LIMIT"]
+    if not raw.strip():
+        return [f"{PREFIX}|status=UNKNOWN|reason=JUNIT_EMPTY"]
+    xml_prefix = raw[3:] if raw.startswith(b"\xef\xbb\xbf") else raw
+    encoding_match = XML_ENCODING_RE.search(xml_prefix[:512])
+    if encoding_match is not None:
+        try:
+            declared_encoding = encoding_match.group(1).decode("ascii").lower().replace("_", "-")
+        except UnicodeDecodeError:
+            return [f"{PREFIX}|status=UNKNOWN|reason=JUNIT_ENCODING_INVALID"]
+        if declared_encoding not in {"utf-8", "utf8"}:
+            return [f"{PREFIX}|status=UNKNOWN|reason=JUNIT_ENCODING_INVALID"]
+    try:
+        raw.decode("utf-8-sig", errors="strict")
+    except UnicodeDecodeError:
+        return [f"{PREFIX}|status=UNKNOWN|reason=JUNIT_ENCODING_INVALID"]
     upper = raw.upper()
     if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
         return [f"{PREFIX}|status=UNKNOWN|reason=XML_DECLARATION_REJECTED"]
     try:
         root = ET.fromstring(raw)
-    except (ET.ParseError, ValueError):
-        return [f"{PREFIX}|status=UNKNOWN|reason=JUNIT_INVALID"]
+    except ET.ParseError as exc:
+        parse_reason = str(exc).lower()
+        code = "JUNIT_INCOMPLETE" if any(reason in parse_reason for reason in INCOMPLETE_XML_REASONS) else "JUNIT_MALFORMED"
+        return [f"{PREFIX}|status=UNKNOWN|reason={code}"]
+    except ValueError:
+        return [f"{PREFIX}|status=UNKNOWN|reason=JUNIT_MALFORMED"]
+
+    if root.tag not in {"testsuites", "testsuite"}:
+        return [f"{PREFIX}|status=UNKNOWN|reason=JUNIT_SCHEMA_INCOMPATIBLE"]
 
     records: list[str] = []
     matching_cases = 0
