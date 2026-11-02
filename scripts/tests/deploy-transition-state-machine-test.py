@@ -2020,13 +2020,18 @@ class TransitionAdapterTests(unittest.TestCase):
         runtime_tests = runtime_root / "scripts" / "tests"
         runtime_tests.mkdir(parents=True, mode=0o755)
         runtime_helper = runtime_root / "scripts" / "wpcaregrid-deploy-priv.py"
+        runtime_lease_rpc = runtime_root / "scripts" / "wpcaregrid-transition-rpc-v2.py"
         worker_script = runtime_tests / "deploy-transition-state-machine-test.py"
         runtime_helper.write_bytes((ROOT / "scripts" / "wpcaregrid-deploy-priv.py").read_bytes())
+        runtime_lease_rpc.write_bytes(
+            (ROOT / "scripts" / "wpcaregrid-transition-rpc-v2.py").read_bytes()
+        )
         worker_script.write_bytes(Path(__file__).resolve().read_bytes())
         os.chmod(runtime_root, 0o755)
         os.chmod(runtime_root / "scripts", 0o755)
         os.chmod(runtime_tests, 0o755)
         os.chmod(runtime_helper, 0o644)
+        os.chmod(runtime_lease_rpc, 0o644)
         os.chmod(worker_script, 0o644)
         os.chown(socket_dir, 0, app_gid)
         os.chmod(socket_dir, 0o711)
