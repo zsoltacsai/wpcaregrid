@@ -157,6 +157,90 @@ class TransitionLeasePersistenceTest extends TestCase
         self::assertSame($claimed, $this->bridge()->handleRpc($this->readRequest($claim['request_id'], $claim['request_digest']))['result']['receipt']);
     }
 
+    public function test_append_only_state_guard_accepts_create_and_claim_projections(): void
+    {
+        $create = new TransitionLeaseState($this->appendOnlyStateAttributes());
+        self::assertNull($create->appendOnlyGuardFailureCode());
+
+        $claim = new TransitionLeaseState($this->appendOnlyStateAttributes([
+            'state_version' => 2,
+            'state' => 'CLAIMED',
+            'event_type' => 'CLAIMED',
+            'source_state_digest' => str_repeat('4', 64),
+        ]));
+        self::assertNull($claim->appendOnlyGuardFailureCode());
+    }
+
+    public function test_append_only_state_guard_reports_each_fixed_predicate_code(): void
+    {
+        $cases = [
+            'MODEL_ALREADY_EXISTS' => ['exists' => true],
+            'LEASE_ID_NOT_UUID_V7' => ['lease_id' => 'synthetic-invalid-lease-id'],
+            'OPERATION_ID_NOT_UUID_V7' => ['operation_id' => 'synthetic-invalid-operation-id'],
+            'GENERATION_NOT_INTEGER' => ['generation' => null],
+            'GENERATION_NOT_NONNEGATIVE' => ['generation' => -1],
+            'EXECUTION_ID_NOT_UUID_V7' => ['execution_id' => 'synthetic-invalid-execution-id'],
+            'FENCE_TUPLE_DIGEST_INVALID' => ['fence_tuple_digest' => 'synthetic-invalid-fence-digest'],
+            'FENCE_STATE_UNSUPPORTED' => ['fence_state' => 'SYNTHETIC_INVALID_FENCE_STATE'],
+            'FENCE_BOOT_ID_INVALID' => ['fence_boot_id' => 'synthetic-invalid-boot-id'],
+            'FENCE_JOURNAL_SEQ_NOT_INTEGER' => ['fence_journal_seq' => null],
+            'FENCE_JOURNAL_SEQ_NOT_NONNEGATIVE' => ['fence_journal_seq' => -1],
+            'FENCE_JOURNAL_HEAD_HASH_INVALID' => ['fence_journal_head_hash' => 'synthetic-invalid-head-hash'],
+            'FENCE_EVIDENCE_DIGEST_INVALID' => ['fence_evidence_digest' => 'synthetic-invalid-evidence-digest'],
+            'FENCE_MANIFEST_MISMATCH' => ['fence_permit_manifest_hash' => str_repeat('5', 64)],
+            'STATE_VERSION_NOT_INTEGER' => ['state_version' => null],
+            'STATE_VERSION_UNSUPPORTED' => ['state_version' => 3],
+            'STATE_UNSUPPORTED' => ['state' => 'SYNTHETIC_INVALID_STATE'],
+            'EVENT_TYPE_UNSUPPORTED' => ['event_type' => 'SYNTHETIC_INVALID_EVENT'],
+            'HOLDER_DIGEST_INVALID' => ['holder_digest' => 'synthetic-invalid-holder-digest'],
+            'STATE_DIGEST_INVALID' => ['state_digest' => 'synthetic-invalid-state-digest'],
+            'REQUEST_DIGEST_INVALID' => ['request_digest' => 'synthetic-invalid-request-digest'],
+            'SOURCE_STATE_DIGEST_INVALID' => ['source_state_digest' => 'synthetic-invalid-source-digest'],
+            'REQUEST_ID_NOT_UUID_V7' => ['request_id' => 'synthetic-invalid-request-id'],
+            'EXPIRY_MISSING' => ['expires_at' => null],
+            'OCCURRED_AT_MISSING' => ['occurred_at' => null],
+            'VERSION_STATE_PAIR_INVALID' => ['event_type' => 'CLAIMED'],
+            'FENCE_BINDING_INVALID' => ['fence_tuple_digest' => str_repeat('6', 64)],
+            'STATE_DIGEST_MISMATCH' => ['holder_digest' => str_repeat('7', 64)],
+        ];
+
+        foreach ($cases as $expectedCode => $overrides) {
+            $attributes = $this->appendOnlyStateAttributes();
+            if ($expectedCode === 'MODEL_ALREADY_EXISTS') {
+                $overrides = [];
+            }
+            $model = new TransitionLeaseState(array_replace($attributes, $overrides));
+            if ($expectedCode === 'MODEL_ALREADY_EXISTS') {
+                $model->exists = true;
+            }
+
+            self::assertSame($expectedCode, $model->appendOnlyGuardFailureCode(), "Unexpected guard result for {$expectedCode}.");
+        }
+    }
+
+    public function test_append_only_state_save_diagnostic_contains_only_fixed_stage_and_predicate_codes(): void
+    {
+        foreach ([
+            'CREATE_STATE_SAVE' => ['create_lease', 'CREATE_STATE_SAVE'],
+            'CLAIM_STATE_SAVE' => ['claim_lease', 'CLAIM_STATE_SAVE'],
+        ] as $expected => [$operation, $stage]) {
+            $attributes = $this->appendOnlyStateAttributes(['lease_id' => 'synthetic-sensitive-lease-value']);
+            $model = new TransitionLeaseState($attributes);
+            $model->setAppendOnlyDiagnosticStage($stage);
+
+            try {
+                $model->save();
+                self::fail("The {$operation} diagnostic fixture must be rejected.");
+            } catch (InvalidArgumentException $exception) {
+                self::assertSame(
+                    "Invalid append-only lease state. [{$expected}:LEASE_ID_NOT_UUID_V7]",
+                    $exception->getMessage(),
+                );
+                self::assertStringNotContainsString('synthetic-sensitive-lease-value', $exception->getMessage());
+            }
+        }
+    }
+
     public function test_mysql_receipt_trigger_accepts_committed_and_refused_json_boolean_flags(): void
     {
         if (DB::connection()->getDriverName() !== 'mysql') {
@@ -718,6 +802,40 @@ class TransitionLeasePersistenceTest extends TestCase
     private function bridge(): TransitionLeasePersistenceBridge
     {
         return new TransitionLeasePersistenceBridge(new TransitionLeaseStore());
+    }
+
+    /** @param array<string, mixed> $overrides @return array<string, mixed> */
+    private function appendOnlyStateAttributes(array $overrides = []): array
+    {
+        $payload = $this->payload();
+        $tuple = $payload['fence_tuple'];
+        $projection = array_replace([
+            'lease_id' => $payload['lease_id'],
+            'operation_id' => $payload['operation_id'],
+            'generation' => $payload['generation'],
+            'execution_id' => $payload['execution_id'],
+            'fence_tuple_digest' => TransitionLeasePersistenceBridge::digestForFenceTuple($tuple),
+            'fence_state' => $tuple['state'],
+            'fence_boot_id' => $tuple['boot_id'],
+            'fence_journal_seq' => $tuple['journal_seq'],
+            'fence_journal_head_hash' => $tuple['journal_head_hash'],
+            'fence_evidence_digest' => $tuple['evidence_digest'],
+            'fence_permit_manifest_hash' => $tuple['permit_manifest_hash'] ?? null,
+            'state_version' => 1,
+            'state' => 'ISSUED',
+            'event_type' => 'CREATED',
+            'holder_digest' => $payload['holder_digest'],
+            'expires_at' => CarbonImmutable::parse($payload['expires_at'])->utc()->format('Y-m-d\TH:i:s.u\Z'),
+            'source_state_digest' => null,
+        ], $overrides);
+        $projection['state_digest'] = TransitionLeaseState::digestForState($projection);
+
+        return [
+            ...$projection,
+            'request_id' => $this->uuid7(),
+            'request_digest' => hash('sha256', 'synthetic-request-digest'),
+            'occurred_at' => now()->utc(),
+        ];
     }
 
     /** @param array<string, mixed> $tuple @return array<string, mixed> */

@@ -318,12 +318,19 @@ final class TransitionLeaseStore
 
     private function appendState(array $request, array $state): void
     {
-        TransitionLeaseState::query()->create([
+        $model = new TransitionLeaseState([
             ...$state,
             'request_id' => $request['request_id'],
             'request_digest' => $request['request_digest'],
             'occurred_at' => now()->utc(),
         ]);
+        $model->setAppendOnlyDiagnosticStage(match ($request['operation']) {
+            'create_lease' => 'CREATE_STATE_SAVE',
+            'claim_lease' => 'CLAIM_STATE_SAVE',
+            'reject_lease' => 'REJECT_STATE_SAVE',
+            default => 'DIRECT_STATE_SAVE',
+        });
+        $model->save();
     }
 
     private function stateProjection(array $payload, int $version, string $state, string $event, ?string $sourceDigest, ?string $existingExpiry = null): array
