@@ -132,7 +132,9 @@ class TransitionLeasePersistenceTest extends TestCase
 
     public function test_create_claim_exact_replay_and_receipt_readback_are_durable_and_bound(): void
     {
-        $create = $this->request('create_lease', $this->payload());
+        $create = $this->request('create_lease', $this->payload([
+            'expires_at' => CarbonImmutable::now('UTC')->addMinutes(30)->setMicrosecond(123456)->format('Y-m-d\\TH:i:s.u\\Z'),
+        ]));
         $created = $this->bridge()->handleRpc($create);
 
         self::assertSame('COMMITTED', $created['status']);
@@ -143,6 +145,11 @@ class TransitionLeasePersistenceTest extends TestCase
         self::assertDatabaseHas('transition_lease_receipts', [
             'request_id' => $create['request_id'], 'nonce_digest' => $create['payload']['nonce_digest'],
         ]);
+        $createdState = TransitionLeaseState::query()->where('request_id', $create['request_id'])->firstOrFail();
+        self::assertSame(
+            $create['payload']['expires_at'],
+            $createdState->expires_at->utc()->format('Y-m-d\\TH:i:s.u\\Z'),
+        );
         self::assertSame($created, $this->bridge()->handleRpc($create));
 
         $claimPayload = array_intersect_key($create['payload'], array_flip([
@@ -154,7 +161,25 @@ class TransitionLeasePersistenceTest extends TestCase
         self::assertSame('COMMITTED', $claimed['status']);
         self::assertSame('CLAIMED', $claimed['result']['state']);
         self::assertSame(2, $claimed['result']['state_version']);
+        $claimedState = TransitionLeaseState::query()->where('request_id', $claim['request_id'])->firstOrFail();
+        self::assertSame(
+            $create['payload']['expires_at'],
+            $claimedState->expires_at->utc()->format('Y-m-d\\TH:i:s.u\\Z'),
+        );
         self::assertSame($claimed, $this->bridge()->handleRpc($this->readRequest($claim['request_id'], $claim['request_digest']))['result']['receipt']);
+
+        $invalidState = $createdState->getAttributes();
+        unset($invalidState['id']);
+        $invalidState['state_digest'] = str_repeat('0', 64);
+        $invalidState['request_id'] = $this->uuid7();
+        $invalidState['request_digest'] = hash('sha256', 'synthetic-invalid-state-request');
+        $invalidState['occurred_at'] = CarbonImmutable::now('UTC');
+        try {
+            TransitionLeaseState::query()->create($invalidState);
+            self::fail('A state digest mismatch must be rejected by the Eloquent guard.');
+        } catch (InvalidArgumentException) {
+            self::assertDatabaseMissing('transition_lease_states', ['request_id' => $invalidState['request_id']]);
+        }
     }
 
     public function test_append_only_state_guard_accepts_create_and_claim_projections(): void

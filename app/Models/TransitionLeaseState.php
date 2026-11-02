@@ -11,6 +11,9 @@ class TransitionLeaseState extends Model
 {
     protected $guarded = ['id'];
 
+    /** Preserve the lease-state schema's microsecond timestamp precision. */
+    protected $dateFormat = 'Y-m-d H:i:s.u';
+
     private const DIAGNOSTIC_STAGES = [
         'CREATE_STATE_SAVE', 'CLAIM_STATE_SAVE', 'REJECT_STATE_SAVE', 'DIRECT_STATE_SAVE',
     ];
