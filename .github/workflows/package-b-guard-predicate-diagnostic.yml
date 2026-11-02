@@ -76,7 +76,7 @@ jobs:
           test -f "$age_bin" && test ! -L "$age_bin"
           chmod 700 "$age_bin"
           version="$("$age_bin" --version 2>/dev/null)"
-          if [[ "$version" != 'age v1.3.2' ]]; then
+          if [[ "$version" != 'v1.3.2' ]]; then
             echo 'AGE_BINARY_VERSION=REJECTED'
             exit 1
           fi
