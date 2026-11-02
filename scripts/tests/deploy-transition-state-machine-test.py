@@ -27,6 +27,11 @@ SPEC = importlib.util.spec_from_file_location(
 sys.dont_write_bytecode = True
 HELPER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HELPER)
+LEASE_SPEC = importlib.util.spec_from_file_location(
+    "wpcaregrid_transition_rpc_v2", ROOT / "scripts" / "wpcaregrid-transition-rpc-v2.py"
+)
+LEASE_RPC = importlib.util.module_from_spec(LEASE_SPEC)
+LEASE_SPEC.loader.exec_module(LEASE_RPC)
 
 BOOT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 OTHER_BOOT = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -2745,6 +2750,332 @@ def _process_worker(argv):
         sys.stdout.write("RECOVERED\n")
         return 0
     raise ValueError("unknown process worker mode")
+
+
+class TransitionLeaseRpcV2ClientTests(unittest.TestCase):
+    REQUEST_ID = "018f0f8e-7b1c-7abc-8abc-123456789099"
+    REQUEST_DIGEST = "a" * 64
+
+    class Lock:
+        def is_held(self, mode):
+            return mode == "exclusive"
+
+    @staticmethod
+    def receipt(request_id=None, digest=None):
+        fence_tuple = {
+            "state": "OPEN", "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+            "generation": 3, "boot_id": "c5e6f6c3-2c66-49cb-a2ad-c76dd3af7f93",
+            "journal_seq": 41, "journal_head_hash": "1" * 64, "evidence_digest": "2" * 64,
+        }
+        return {
+            "action": "claim_lease",
+            "committed": True,
+            "execution_id": "018f0f8e-7b1c-7abc-8abc-123456789012",
+            "fence_tuple_digest": hashlib.sha256(LEASE_RPC.canonical_json(fence_tuple)).hexdigest(),
+            "fence_state": fence_tuple["state"], "fence_boot_id": fence_tuple["boot_id"],
+            "fence_journal_seq": fence_tuple["journal_seq"],
+            "fence_journal_head_hash": fence_tuple["journal_head_hash"],
+            "fence_evidence_digest": fence_tuple["evidence_digest"],
+            "fence_permit_manifest_hash": None,
+            "generation": 3,
+            "lease_id": "018f0f8e-7b1c-7abc-8abc-123456789013",
+            "nonce_digest": "b" * 64,
+            "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+            "outcome": "COMMITTED",
+            "request_digest": digest or TransitionLeaseRpcV2ClientTests.REQUEST_DIGEST,
+            "request_id": request_id or TransitionLeaseRpcV2ClientTests.REQUEST_ID,
+            "result_code": "CLAIMED",
+            "source_state_digest": "c" * 64,
+            "state": "CLAIMED",
+            "state_digest": "d" * 64,
+            "state_version": 2,
+        }
+
+    def adapter(self):
+        return LEASE_RPC.LaravelLeaseDatabaseAdapter(self.Lock())
+
+    @staticmethod
+    def payload():
+        fence_tuple = {
+            "state": "OPEN", "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+            "generation": 3, "boot_id": "c5e6f6c3-2c66-49cb-a2ad-c76dd3af7f93",
+            "journal_seq": 41, "journal_head_hash": "1" * 64, "evidence_digest": "2" * 64,
+        }
+        return {
+            "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+            "generation": 3,
+            "execution_id": "018f0f8e-7b1c-7abc-8abc-123456789012",
+            "lease_id": "018f0f8e-7b1c-7abc-8abc-123456789013",
+            "expected_fence_state": "OPEN",
+            "fence_tuple": fence_tuple,
+            "holder_digest": "e" * 64,
+            "nonce_digest": "b" * 64,
+        }
+
+    def test_package_a_v1_and_package_b_v2_are_separate_versioned_allowlists(self):
+        self.assertEqual(1, HELPER.TRANSITION_RPC_VERSION)
+        self.assertEqual({
+            "read_tuple", "read_permit_manifest_hash", "verify_transition_preconditions",
+            "validate_permit_manifest", "compare_and_set", "nonce_consumed", "validate_release",
+            "assert_no_unresolved_drain_effects", "read_transition_receipt",
+        }, set(HELPER.TRANSITION_RPC_OPERATIONS))
+        self.assertEqual((), HELPER.TRANSITION_PRODUCTION_EFFECT_CATALOG)
+        self.assertEqual({"transition", "release"}, set(HELPER.TRANSITION_COORDINATOR_OPERATIONS))
+        self.assertNotIn("wpcaregrid-transition-rpc-v2", Path(HELPER.__file__).read_text())
+        self.assertEqual(2, LEASE_RPC.PROTOCOL_VERSION)
+        self.assertEqual({"create_lease", "claim_lease", "reject_lease", "read_lease_receipt"},
+                         set(LEASE_RPC.PAYLOAD_KEYS))
+        self.assertNotIn("release", LEASE_RPC.PAYLOAD_KEYS)
+        self.assertNotIn("transition", LEASE_RPC.PAYLOAD_KEYS)
+
+    def test_lost_mutation_response_uses_one_exact_read_and_never_replays_mutation(self):
+        adapter = self.adapter()
+        calls = []
+        payload = self.payload()
+        expected_digest = LEASE_RPC.request_digest(self.REQUEST_ID, "claim_lease", payload)
+        receipt = self.receipt(digest=expected_digest)
+
+        def exchange(operation, payload, *, request_id=None, digest=None):
+            calls.append((operation, request_id, digest))
+            raise LEASE_RPC.LeaseRpcAmbiguous(request_id, digest)
+
+        with mock.patch.object(LEASE_RPC, "uuid7", return_value=self.REQUEST_ID), \
+             mock.patch.object(adapter, "_exchange_once", side_effect=exchange), \
+             mock.patch.object(adapter, "read_lease_receipt", return_value=receipt) as readback:
+            result = adapter._mutate("claim_lease", payload)
+
+        self.assertEqual(receipt, result)
+        self.assertEqual([("claim_lease", self.REQUEST_ID, LEASE_RPC.request_digest(
+            self.REQUEST_ID, "claim_lease", payload))], calls)
+        readback.assert_called_once_with(self.REQUEST_ID, calls[0][2], payload["fence_tuple"])
+
+    def test_bad_mutation_receipt_triggers_read_only_reconciliation(self):
+        adapter = self.adapter()
+        calls = []
+        payload = self.payload()
+        expected_digest = LEASE_RPC.request_digest(self.REQUEST_ID, "claim_lease", payload)
+        wrong = self.receipt(digest="f" * 64)
+        response = {"status": "COMMITTED", "result": wrong}
+
+        with mock.patch.object(LEASE_RPC, "uuid7", return_value=self.REQUEST_ID), \
+             mock.patch.object(adapter, "_exchange_once", return_value=response) as exchange, \
+             mock.patch.object(adapter, "read_lease_receipt", side_effect=lambda request_id, digest, fence_tuple: (
+                 calls.append((request_id, digest)), self.receipt(request_id, digest)
+             )[1]):
+            result = adapter._mutate("claim_lease", payload)
+
+        self.assertEqual(self.receipt(digest=expected_digest), result)
+        exchange.assert_called_once()
+        self.assertEqual([(self.REQUEST_ID, expected_digest)], calls)
+
+    def test_absent_receipt_after_ambiguous_mutation_remains_hold_without_retry(self):
+        adapter = self.adapter()
+        calls = []
+
+        def exchange(operation, payload, *, request_id=None, digest=None):
+            calls.append((operation, request_id, digest))
+            raise LEASE_RPC.LeaseRpcAmbiguous(request_id, digest)
+
+        with mock.patch.object(LEASE_RPC, "uuid7", return_value=self.REQUEST_ID), \
+             mock.patch.object(adapter, "_exchange_once", side_effect=exchange) as exchange_mock, \
+             mock.patch.object(adapter, "read_lease_receipt", return_value=None) as readback:
+            with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+                adapter._mutate("claim_lease", self.payload())
+        exchange_mock.assert_called_once()
+        expected_digest = LEASE_RPC.request_digest(self.REQUEST_ID, "claim_lease", self.payload())
+        self.assertEqual([("claim_lease", self.REQUEST_ID, expected_digest)], calls)
+        readback.assert_called_once_with(self.REQUEST_ID, expected_digest, self.payload()["fence_tuple"])
+
+    def test_unknown_or_malformed_receipt_fields_fail_closed(self):
+        receipt = self.receipt()
+        receipt["untrusted"] = "must-not-be-accepted"
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._verify_receipt(
+                receipt, self.REQUEST_ID, self.REQUEST_DIGEST
+            )
+
+    def test_receipt_must_echo_originating_operation_generation_and_nonce_scope(self):
+        payload = self.payload()
+        receipt = self.receipt(self.REQUEST_ID, self.REQUEST_DIGEST)
+        receipt["generation"] = payload["generation"] + 1
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._verify_receipt(
+                receipt, self.REQUEST_ID, self.REQUEST_DIGEST,
+                expected_action="claim_lease", expected_payload=payload,
+            )
+        receipt = self.receipt(self.REQUEST_ID, self.REQUEST_DIGEST)
+        receipt["nonce_digest"] = "9" * 64
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._verify_receipt(
+                receipt, self.REQUEST_ID, self.REQUEST_DIGEST,
+                expected_action="claim_lease", expected_payload=payload,
+            )
+
+    def test_receipt_readback_must_match_current_full_fence_epoch(self):
+        receipt = self.receipt(self.REQUEST_ID, self.REQUEST_DIGEST)
+        stale_tuple = dict(self.payload()["fence_tuple"], journal_seq=42)
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._verify_receipt(
+                receipt, self.REQUEST_ID, self.REQUEST_DIGEST,
+                expected_payload={"fence_tuple": stale_tuple},
+            )
+
+    def test_draining_tuple_requires_the_exact_permit_manifest_hash(self):
+        tuple_value = self.payload()["fence_tuple"]
+        tuple_value["state"] = "DRAINING"
+        tuple_value["permit_manifest_hash"] = "9" * 64
+        LEASE_RPC.LaravelLeaseDatabaseAdapter._validate_fence_tuple(
+            tuple_value, tuple_value["operation_id"], tuple_value["generation"], "DRAINING",
+        )
+        missing_manifest = dict(tuple_value)
+        del missing_manifest["permit_manifest_hash"]
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._validate_fence_tuple(
+                missing_manifest, tuple_value["operation_id"], tuple_value["generation"], "DRAINING",
+            )
+
+    def test_post_send_cleanup_failure_is_ambiguous_and_only_reconciles_read_only(self):
+        adapter = self.adapter()
+        payload = self.payload()
+        expected_digest = LEASE_RPC.request_digest(self.REQUEST_ID, "claim_lease", payload)
+        receipt = self.receipt(self.REQUEST_ID, expected_digest)
+        mutation_calls = []
+
+        def fail_cleanup(operation, request_payload, *, request_id=None, digest=None):
+            mutation_calls.append((operation, request_id, digest))
+            adapter._raise_cleanup_failure(operation, True, request_id, digest)
+
+        with mock.patch.object(LEASE_RPC, "uuid7", return_value=self.REQUEST_ID), \
+             mock.patch.object(adapter, "_exchange_once", side_effect=fail_cleanup), \
+             mock.patch.object(adapter, "read_lease_receipt", return_value=receipt) as readback:
+            result = adapter._mutate("claim_lease", payload)
+
+        self.assertEqual(receipt, result)
+        self.assertEqual([("claim_lease", self.REQUEST_ID, expected_digest)], mutation_calls)
+        readback.assert_called_once_with(self.REQUEST_ID, expected_digest, payload["fence_tuple"])
+
+    def test_read_only_cleanup_failure_remains_hold(self):
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._raise_cleanup_failure(
+                "read_lease_receipt", True, self.REQUEST_ID, self.REQUEST_DIGEST,
+            )
+
+    def test_raw_nonce_is_replaced_by_digest_before_rpc_payload_construction(self):
+        adapter = self.adapter()
+        nonce = "synthetic-one-time-nonce-value-00000001"
+        captured = []
+        expected_digest = LEASE_RPC.request_digest(
+            self.REQUEST_ID, "create_lease", {
+                "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+                "generation": 3,
+                "execution_id": "018f0f8e-7b1c-7abc-8abc-123456789012",
+                "lease_id": "018f0f8e-7b1c-7abc-8abc-123456789013",
+                "expected_fence_state": "OPEN",
+                "fence_tuple": self.payload()["fence_tuple"],
+                "holder_digest": "e" * 64,
+                "expires_at": "2026-11-02T12:00:00.000000Z",
+                "nonce_digest": hashlib.sha256(nonce.encode("ascii")).hexdigest(),
+            }
+        )
+        refusal = {
+            "action": "create_lease", "committed": False,
+            "execution_id": "018f0f8e-7b1c-7abc-8abc-123456789012", "generation": 3,
+            "fence_tuple_digest": hashlib.sha256(LEASE_RPC.canonical_json(self.payload()["fence_tuple"])).hexdigest(),
+            "fence_state": "OPEN", "fence_boot_id": self.payload()["fence_tuple"]["boot_id"],
+            "fence_journal_seq": 41, "fence_journal_head_hash": "1" * 64,
+            "fence_evidence_digest": "2" * 64,
+            "fence_permit_manifest_hash": None,
+            "lease_id": "018f0f8e-7b1c-7abc-8abc-123456789013", "nonce_digest": None,
+            "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014", "outcome": "REFUSED",
+            "request_digest": expected_digest, "request_id": self.REQUEST_ID,
+            "result_code": "NONCE_REPLAY", "source_state_digest": None, "state": None,
+            "state_digest": None, "state_version": None,
+        }
+
+        def exchange(operation, payload, *, request_id=None, digest=None):
+            captured.append(dict(payload))
+            raise LEASE_RPC.LeaseRpcAmbiguous(request_id, digest)
+
+        with mock.patch.object(LEASE_RPC, "uuid7", return_value=self.REQUEST_ID), \
+             mock.patch.object(adapter, "_exchange_once", side_effect=exchange), \
+             mock.patch.object(adapter, "read_lease_receipt", return_value=refusal):
+            result = adapter.create_lease(
+                operation_id="018f0f8e-7b1c-7abc-8abc-123456789014", generation=3,
+                execution_id="018f0f8e-7b1c-7abc-8abc-123456789012",
+                lease_id="018f0f8e-7b1c-7abc-8abc-123456789013", fence_state="OPEN",
+                holder_digest="e" * 64, expires_at="2026-11-02T12:00:00.000000Z", nonce=nonce,
+                fence_tuple=self.payload()["fence_tuple"],
+            )
+
+        self.assertEqual("NONCE_REPLAY", result["result_code"])
+        self.assertEqual(1, len(captured))
+        self.assertNotIn(nonce, repr(captured[0]))
+        self.assertEqual(hashlib.sha256(nonce.encode("ascii")).hexdigest(), captured[0]["nonce_digest"])
+
+    def test_root_client_requires_exclusive_lock_before_transport(self):
+        adapter = self.adapter()
+        with mock.patch.object(LEASE_RPC.os, "geteuid", return_value=1000, create=True), \
+             mock.patch.object(adapter, "_open_root_directory", create=True) as open_directory:
+            with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+                adapter._exchange_once("read_lease_receipt", {
+                    "request_id": self.REQUEST_ID, "request_digest": self.REQUEST_DIGEST,
+                    "fence_tuple": self.payload()["fence_tuple"],
+                })
+        open_directory.assert_not_called()
+
+    def test_root_client_validates_typed_arguments_before_transport(self):
+        adapter = self.adapter()
+        payload = {
+            "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+            "generation": True,
+            "execution_id": "018f0f8e-7b1c-7abc-8abc-123456789012",
+            "lease_id": "018f0f8e-7b1c-7abc-8abc-123456789013",
+            "expected_fence_state": "OPEN",
+            "holder_digest": "e" * 64,
+            "expires_at": "2026-11-02T12:00:00.000000Z",
+            "nonce_digest": "f" * 64,
+        }
+        with mock.patch.object(adapter, "_open_root_directory", create=True) as open_directory:
+            with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+                adapter._exchange_once("create_lease", payload)
+        open_directory.assert_not_called()
+
+    def test_root_client_rejects_incomplete_or_cross_operation_fence_tuple(self):
+        adapter = self.adapter()
+        payload = self.payload()
+        payload["fence_tuple"] = dict(payload["fence_tuple"], journal_seq=42)
+        with mock.patch.object(adapter, "_open_root_directory", create=True) as open_directory:
+            with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+                adapter._exchange_once("claim_lease", payload)
+        open_directory.assert_not_called()
+
+    def test_linux_af_unix_peer_credentials_and_child_privilege_drop(self):
+        if sys.platform != "linux" or not hasattr(os, "geteuid") or os.geteuid() != 0:
+            self.skipTest("requires the isolated Linux CI root process lane")
+        import grp
+        import pwd
+
+        app_user = pwd.getpwnam("www-data")
+        app_group = grp.getgrnam("www-data")
+        self.assertEqual(app_user.pw_gid, app_group.gr_gid)
+        socket_dir = Path(tempfile.mkdtemp(prefix="wpcg-lease-rpc-v2-"))
+        try:
+            os.chown(socket_dir, 0, app_group.gr_gid)
+            os.chmod(socket_dir, 0o710)
+            adapter = LEASE_RPC.LaravelLeaseDatabaseAdapter(
+                self.Lock(),
+                socket_dir=socket_dir,
+                app=ROOT,
+                command=(sys.executable, str(Path(LEASE_RPC.__file__).resolve()), "--lease-rpc-v2-worker"),
+                timeout_seconds=5.0,
+            )
+            self.assertIsNone(adapter.read_lease_receipt(
+                self.REQUEST_ID, self.REQUEST_DIGEST, self.payload()["fence_tuple"],
+            ))
+            self.assertEqual([], list(socket_dir.iterdir()))
+        finally:
+            os.chmod(socket_dir, 0o700)
+            os.rmdir(socket_dir)
 
 
 def _validate_required_linux_prerequisites():
