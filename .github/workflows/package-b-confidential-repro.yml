@@ -44,6 +44,17 @@ jobs:
       - name: Install locked dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      - name: Verify Composer and PHPUnit bootstrap inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          if [[ ! -f vendor/autoload.php || ! -f vendor/bin/phpunit || ! -f phpunit.xml ]]; then
+            echo 'COMPOSER_BOOTSTRAP=FAIL'
+            exit 1
+          fi
+          echo 'COMPOSER_BOOTSTRAP=PASS'
+
       - name: Provision fresh disposable application database
         shell: bash
         env:

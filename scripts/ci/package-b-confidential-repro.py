@@ -17,6 +17,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Callable
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -111,6 +112,58 @@ def artifact_receipt_is_valid(upload_outcome: str, artifact_id: str, digest: str
         and re.fullmatch(r"[0-9]{1,20}", artifact_id or "") is not None
         and re.fullmatch(r"[0-9a-fA-F]{64}", digest or "") is not None
     )
+
+
+def resolve_confined_regular_file(candidate: Path, root: Path) -> tuple[str, Path | None]:
+    """Resolve a required file and reject missing, non-file, or root-escaping paths."""
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return "MISSING", None
+    if not resolved.is_relative_to(root):
+        return "OUTSIDE_ROOT", None
+    if not resolved.is_file():
+        return "INVALID", None
+    return "READY", resolved
+
+
+def bootstrap_preflight(root: Path, working_directory: Path) -> tuple[str, dict[str, Path]]:
+    """Validate Composer/PHPUnit paths before selection or test execution."""
+    try:
+        resolved_root = root.resolve(strict=True)
+        resolved_cwd = working_directory.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return "ROOT_UNAVAILABLE", {}
+    if not resolved_root.is_dir() or resolved_cwd != resolved_root:
+        return "WORKDIR_MISMATCH", {}
+
+    candidates = {
+        "autoload": resolved_root / "vendor" / "autoload.php",
+        "phpunit": resolved_root / "vendor" / "bin" / "phpunit",
+        "config": resolved_root / "phpunit.xml",
+        "test": resolved_root / TEST_FILE,
+    }
+    paths: dict[str, Path] = {}
+    for name, candidate in candidates.items():
+        state, resolved = resolve_confined_regular_file(candidate, resolved_root)
+        if state != "READY" or resolved is None:
+            status = {
+                ("autoload", "MISSING"): "AUTOLOAD_MISSING",
+                ("autoload", "INVALID"): "AUTOLOAD_INVALID",
+                ("autoload", "OUTSIDE_ROOT"): "AUTOLOAD_OUTSIDE_ROOT",
+                ("phpunit", "MISSING"): "PHPUNIT_MISSING",
+                ("phpunit", "INVALID"): "PHPUNIT_INVALID",
+                ("phpunit", "OUTSIDE_ROOT"): "PHPUNIT_OUTSIDE_ROOT",
+                ("config", "MISSING"): "CONFIG_MISSING",
+                ("config", "INVALID"): "CONFIG_INVALID",
+                ("config", "OUTSIDE_ROOT"): "CONFIG_OUTSIDE_ROOT",
+                ("test", "MISSING"): "TEST_FILE_MISSING",
+                ("test", "INVALID"): "TEST_FILE_INVALID",
+                ("test", "OUTSIDE_ROOT"): "TEST_FILE_OUTSIDE_ROOT",
+            }[(name, state)]
+            return status, {}
+        paths[name] = resolved
+    return "READY", paths
 
 
 def run_bounded_capture(
@@ -314,6 +367,47 @@ def self_test() -> tuple[bool, int]:
     check(not artifact_receipt_is_valid("skipped", "123456789", "a" * 64))
     check(not artifact_receipt_is_valid("success", "", "a" * 64))
     check(not artifact_receipt_is_valid("success", "123456789", "invalid"))
+
+    with tempfile.TemporaryDirectory(prefix="wpcg-bootstrap-selftest-") as temporary:
+        root = Path(temporary).resolve()
+        for relative in ("vendor/autoload.php", "vendor/bin/phpunit", "phpunit.xml", TEST_FILE):
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic", encoding="ascii")
+        state, resolved = bootstrap_preflight(root, root)
+        check(state == "READY" and resolved["autoload"] == root / "vendor/autoload.php")
+        check(bootstrap_preflight(root, root / "vendor")[0] == "WORKDIR_MISMATCH")
+        outside = root.parent / "synthetic-outside-autoload.php"
+        outside.write_text("synthetic", encoding="ascii")
+        check(resolve_confined_regular_file(outside, root)[0] == "OUTSIDE_ROOT")
+        actual_resolve = Path.resolve
+
+        def synthetic_symlink_resolution(path: Path, strict: bool = False) -> Path:
+            if path == root / "vendor" / "bin" / "phpunit":
+                return outside
+            return actual_resolve(path, strict=strict)
+
+        with patch.object(Path, "resolve", synthetic_symlink_resolution):
+            check(bootstrap_preflight(root, root)[0] == "PHPUNIT_OUTSIDE_ROOT")
+        outside.unlink()
+        (root / "vendor" / "autoload.php").unlink()
+        check(bootstrap_preflight(root, root)[0] == "AUTOLOAD_MISSING")
+        (root / "vendor" / "autoload.php").write_text("synthetic", encoding="ascii")
+        (root / "phpunit.xml").unlink()
+        check(bootstrap_preflight(root, root)[0] == "CONFIG_MISSING")
+        (root / "phpunit.xml").write_text("synthetic", encoding="ascii")
+        (root / TEST_FILE).unlink()
+        outside.write_text("synthetic", encoding="ascii")
+        target_path = root / TEST_FILE
+
+        def synthetic_test_symlink_resolution(path: Path, strict: bool = False) -> Path:
+            if path == target_path:
+                return outside
+            return actual_resolve(path, strict=strict)
+
+        with patch.object(Path, "resolve", synthetic_test_symlink_resolution):
+            check(bootstrap_preflight(root, root)[0] == "TEST_FILE_OUTSIDE_ROOT")
+
     check(diagnostic_outcome(0, True, True, True) == (0, True))
     check(diagnostic_outcome(0, False, True, True) == (1, False))
     check(diagnostic_outcome(0, True, False, True) == (1, False))
@@ -404,8 +498,13 @@ def run_once(php_version: str, age_bin: Path) -> int:
         "sqlstate": "NONE", "vendor_errno": "NONE", "assertion": "UNKNOWN",
     }
     status = 1
+    bootstrap_state = "NOT_CHECKED"
 
     try:
+        bootstrap_state, resolved_paths = bootstrap_preflight(ROOT, Path.cwd())
+        if bootstrap_state != "READY":
+            selected_state = "NOT_RUN"
+            raise RuntimeError("PHPUNIT_BOOTSTRAP_PRECONDITION_FAILED")
         if not recipient_matches_approval(AGE_RECIPIENT, AGE_RECIPIENT_FINGERPRINT):
             raise RuntimeError("AGE_RECIPIENT_FINGERPRINT_MISMATCH")
         recipient_fingerprint_state = "VERIFIED"
@@ -430,7 +529,10 @@ def run_once(php_version: str, age_bin: Path) -> int:
             raise RuntimeError("AGE_PROBE_CLEANUP_FAILED")
         probe_plain = probe_cipher = None
 
-        selection_command = ["vendor/bin/phpunit", "-c", "phpunit.xml", "--list-tests", "--filter", TEST_METHOD, TEST_FILE]
+        selection_command = [
+            str(resolved_paths["phpunit"]), "-c", str(resolved_paths["config"]),
+            "--list-tests", "--filter", TEST_METHOD, str(resolved_paths["test"]),
+        ]
         selection_exit, selection_truncated, selection_timeout = run_bounded_capture(
             selection_command, selection_path, SELECTION_TIMEOUT_SECONDS, MAX_SELECTION_BYTES,
             child_environment(include_database=False),
@@ -447,8 +549,8 @@ def run_once(php_version: str, age_bin: Path) -> int:
             raise RuntimeError("TEST_SELECTION_FAILED")
 
         test_command = [
-            "vendor/bin/phpunit", "-c", "phpunit.xml", "--debug", "--fail-on-skipped",
-            "--filter", TEST_METHOD, TEST_FILE,
+            str(resolved_paths["phpunit"]), "-c", str(resolved_paths["config"]),
+            "--debug", "--fail-on-skipped", "--filter", TEST_METHOD, str(resolved_paths["test"]),
         ]
         process_exit, was_truncated, test_timeout = run_bounded_capture(
             test_command, raw_path, PHPUNIT_TIMEOUT_SECONDS, MAX_PHPUNIT_BYTES,
@@ -502,6 +604,7 @@ def run_once(php_version: str, age_bin: Path) -> int:
         "selection": selected_state,
         "selection_count": str(selected_count) if selected_state == "EXACTLY_ONE" else "UNKNOWN",
         "recipient_fingerprint": recipient_fingerprint_state,
+        "bootstrap": bootstrap_state,
         "phpunit_exit": report["phpunit_exit"],
         "result": report["result"],
         "exception": report["exception"],
@@ -557,7 +660,7 @@ def main() -> int:
             return 0
         print(f"{OUTPUT_PREFIX}|age_temp_dir=INVALID", flush=True)
         return 1
-    if args.php_version is None or args.age_bin is None or not Path("vendor/bin/phpunit").is_file():
+    if args.php_version is None or args.age_bin is None:
         print(f"{OUTPUT_PREFIX}|status=PRECONDITION_FAILED", flush=True)
         return 1
     return run_once(args.php_version, Path(args.age_bin))
