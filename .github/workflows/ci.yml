@@ -668,7 +668,6 @@ jobs:
           import json
           import os
           import re
-          import runpy
           import subprocess
           import sys
           import tempfile
@@ -2178,9 +2177,12 @@ jobs:
               emit_safe_backup_import_diagnostics()
           junit_path = log_path + ".junit.xml"
           diagnostic_status_unknown = False
+          diagnostic_cleanup_failed = False
+          reporter_cleanup_seen = False
           diagnostic_command = [
               "python3", "scripts/ci/package-b-diagnostic-report.py",
               "--junit", junit_path, "--driver", "mysql", "--exit-code", str(status),
+              "--cleanup-log", log_path,
           ]
           try:
               reporter = subprocess.run(
@@ -2202,21 +2204,15 @@ jobs:
                       print(line, flush=True)
                       if "|status=UNKNOWN|" in line:
                           diagnostic_status_unknown = True
+                      if "|status=CLEANUP|" in line:
+                          reporter_cleanup_seen = True
+                          if "|FAILED" in line:
+                              diagnostic_cleanup_failed = True
           except (OSError, subprocess.SubprocessError, UnicodeError):
               print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=REPORTER_FAILED", flush=True)
               diagnostic_status_unknown = True
-          cleanup_entries = (("workflow_log", log_path), ("junit", junit_path))
-          try:
-              cleanup_files = runpy.run_path("scripts/ci/package-b-diagnostic-report.py").get("cleanup_files")
-              if not callable(cleanup_files):
-                  raise RuntimeError("cleanup helper unavailable")
-              cleanup_outcomes = cleanup_files(cleanup_entries)
-              if set(cleanup_outcomes) != {"workflow_log", "junit"} or any(
-                  cleanup_outcomes[label] not in {"REMOVED", "ALREADY_ABSENT", "FAILED"}
-                  for label in ("workflow_log", "junit")
-              ):
-                  raise RuntimeError("cleanup result invalid")
-          except Exception:
+          if not reporter_cleanup_seen or diagnostic_cleanup_failed:
+              cleanup_entries = (("workflow_log", log_path), ("junit", junit_path))
               cleanup_outcomes = {}
               for label, path in cleanup_entries:
                   try:
@@ -2226,18 +2222,18 @@ jobs:
                       cleanup_outcomes[label] = "ALREADY_ABSENT"
                   except Exception:
                       cleanup_outcomes[label] = "FAILED"
-          cleanup_line = "WPCG_PB_DIAG_V1|status=CLEANUP|workflow_log={}|junit={}".format(
-              cleanup_outcomes["workflow_log"], cleanup_outcomes["junit"],
-          )
-          if not safe_record.fullmatch(cleanup_line):
-              print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=PROJECTION_FAILED", flush=True)
-              cleanup_failed = True
-          else:
-              print(cleanup_line, flush=True)
-              cleanup_failed = "FAILED" in cleanup_outcomes.values()
+              cleanup_line = "WPCG_PB_DIAG_V1|status=CLEANUP|workflow_log={}|junit={}".format(
+                  cleanup_outcomes["workflow_log"], cleanup_outcomes["junit"],
+              )
+              if safe_record.fullmatch(cleanup_line):
+                  print(cleanup_line, flush=True)
+              else:
+                  print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=PROJECTION_FAILED", flush=True)
+                  diagnostic_status_unknown = True
+              diagnostic_cleanup_failed = diagnostic_cleanup_failed or "FAILED" in cleanup_outcomes.values()
           if diagnostic_status_unknown and status == 0:
               raise SystemExit(1)
-          if cleanup_failed and status == 0:
+          if diagnostic_cleanup_failed and status == 0:
               raise SystemExit(1)
           if target_name is None:
               print("Required target CAS test lifecycle event was not observed in the full suite.", file=sys.stderr)

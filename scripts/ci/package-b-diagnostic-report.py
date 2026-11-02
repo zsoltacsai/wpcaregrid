@@ -75,6 +75,15 @@ def exit_code_after_cleanup(test_exit_code: int, outcomes: dict[str, str]) -> in
     return 1 if any(outcomes.get(label) == "FAILED" for label in ("workflow_log", "junit")) else 0
 
 
+def cleanup_record(outcomes: dict[str, str]) -> str:
+    if set(outcomes) != {"workflow_log", "junit"} or any(value not in CLEANUP_STATES for value in outcomes.values()):
+        raise ValueError("Invalid cleanup outcome.")
+    return (
+        f"{PREFIX}|status=CLEANUP|workflow_log={outcomes['workflow_log']}"
+        f"|junit={outcomes['junit']}"
+    )
+
+
 def self_test_cleanup() -> int:
     """Deterministic synthetic regression checks for independent cleanup attempts."""
     scenarios = (
@@ -97,6 +106,10 @@ def self_test_cleanup() -> int:
 
         actual = cleanup_files((("workflow_log", "workflow_log"), ("junit", "junit")), synthetic_unlink)
         if attempted != ["workflow_log", "junit"] or actual != expected:
+            return 1
+        if cleanup_record(actual) != (
+            f"{PREFIX}|status=CLEANUP|workflow_log={expected['workflow_log']}|junit={expected['junit']}"
+        ):
             return 1
         if exit_code_after_cleanup(test_exit_code, actual) != expected_exit_code:
             return 1
@@ -254,11 +267,12 @@ def main() -> int:
     parser.add_argument("--junit")
     parser.add_argument("--driver")
     parser.add_argument("--exit-code", type=int)
+    parser.add_argument("--cleanup-log")
     parser.add_argument("--self-test-cleanup", action="store_true")
     try:
         args = parser.parse_args()
         if args.self_test_cleanup:
-            if args.junit is not None or args.driver is not None or args.exit_code is not None:
+            if any(value is not None for value in (args.junit, args.driver, args.exit_code, args.cleanup_log)):
                 print(f"{PREFIX}|status=UNKNOWN|reason=ARGUMENTS_INVALID")
                 return 1
             result = self_test_cleanup()
@@ -270,7 +284,16 @@ def main() -> int:
         if args.junit is None or args.driver is None or args.exit_code is None:
             print(f"{PREFIX}|status=UNKNOWN|reason=ARGUMENTS_INVALID")
             return 1
-        lines = project(Path(args.junit), args.driver, args.exit_code)
+        try:
+            lines = project(Path(args.junit), args.driver, args.exit_code)
+        except Exception:
+            lines = [f"{PREFIX}|status=UNKNOWN|reason=PROJECTION_FAILED"]
+        if args.cleanup_log is not None:
+            outcomes = cleanup_files((
+                ("workflow_log", args.cleanup_log),
+                ("junit", args.junit),
+            ))
+            lines.append(cleanup_record(outcomes))
     except SystemExit:
         print(f"{PREFIX}|status=UNKNOWN|reason=ARGUMENTS_INVALID")
         return 1
