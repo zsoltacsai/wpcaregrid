@@ -78,8 +78,9 @@ def exit_code_after_cleanup(test_exit_code: int, outcomes: dict[str, str]) -> in
 def cleanup_record(outcomes: dict[str, str]) -> str:
     if set(outcomes) != {"workflow_log", "junit"} or any(value not in CLEANUP_STATES for value in outcomes.values()):
         raise ValueError("Invalid cleanup outcome.")
+    status = "CLEANUP_FAILED" if "FAILED" in outcomes.values() else "CLEANUP_COMPLETE"
     return (
-        f"{PREFIX}|status=CLEANUP|workflow_log={outcomes['workflow_log']}"
+        f"{PREFIX}|status={status}|workflow_log={outcomes['workflow_log']}"
         f"|junit={outcomes['junit']}"
     )
 
@@ -107,9 +108,9 @@ def self_test_cleanup() -> int:
         actual = cleanup_files((("workflow_log", "workflow_log"), ("junit", "junit")), synthetic_unlink)
         if attempted != ["workflow_log", "junit"] or actual != expected:
             return 1
-        if cleanup_record(actual) != (
-            f"{PREFIX}|status=CLEANUP|workflow_log={expected['workflow_log']}|junit={expected['junit']}"
-        ):
+        record = cleanup_record(actual)
+        expected_status = "CLEANUP_FAILED" if "FAILED" in expected.values() else "CLEANUP_COMPLETE"
+        if record != f"{PREFIX}|status={expected_status}|workflow_log={expected['workflow_log']}|junit={expected['junit']}":
             return 1
         if exit_code_after_cleanup(test_exit_code, actual) != expected_exit_code:
             return 1

@@ -2193,10 +2193,11 @@ jobs:
               safe_record = re.compile(
                   r"(?:WPCG_PB_DIAG_V1\|status=(?:FAIL\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|method=test_[A-Za-z0-9_]{1,120}\|exception=(?:QueryException|PDOException|ExpectationFailedException|AssertionFailedError|PHPUnitError|RuntimeException|InvalidArgumentException|LogicException|ErrorException|TypeError|ValueError|Error|Exception|UNKNOWN)\|sqlstate=(?:[A-Z0-9]{5}|UNKNOWN)\|vendor_code=(?:[0-9]{1,5}|UNKNOWN)\|category=(?:ASSERTION_FAILURE|DB_EXCEPTION|TEST_EXCEPTION|UNKNOWN)\|phase=(?:SETUP|TEARDOWN|TEST_CASE|UNKNOWN)\|driver=mysql\|assertion=(?:ASSERTION_FAILURE|NOT_ASSERTION|UNKNOWN)|PASS\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|driver=mysql)|"
                   r"WPCG_PB_DIAG_V1\|status=UNKNOWN\|reason=(?:DRIVER_NOT_ALLOWLISTED|JUNIT_MISSING|JUNIT_EMPTY|JUNIT_INCOMPLETE|JUNIT_MALFORMED|JUNIT_ENCODING_INVALID|JUNIT_SCHEMA_INCOMPATIBLE|JUNIT_UNAVAILABLE|JUNIT_SIZE_LIMIT|XML_DECLARATION_REJECTED|TARGET_RECORD_UNCLASSIFIED|RECORD_LIMIT|TARGET_FAILURE_NOT_IN_REPORT|FAILURE_RECORD_MISSING|TARGET_NOT_REPORTED|EXIT_STATUS_CONFLICT|ARGUMENTS_INVALID|PROJECTION_FAILED|REPORTER_FAILED))|"
-                  r"WPCG_PB_DIAG_V1\|status=CLEANUP\|workflow_log=(?:REMOVED|ALREADY_ABSENT|FAILED)\|junit=(?:REMOVED|ALREADY_ABSENT|FAILED)"
+                  r"WPCG_PB_DIAG_V1\|status=CLEANUP_COMPLETE\|workflow_log=(?:REMOVED|ALREADY_ABSENT)\|junit=(?:REMOVED|ALREADY_ABSENT)|"
+                  r"WPCG_PB_DIAG_V1\|status=CLEANUP_FAILED\|(?:workflow_log=FAILED\|junit=(?:REMOVED|ALREADY_ABSENT|FAILED)|workflow_log=(?:REMOVED|ALREADY_ABSENT)\|junit=FAILED)"
               )
               report_lines = reporter.stdout.splitlines()
-              if reporter.returncode != 0 or not report_lines or len(report_lines) > 32 or any(not safe_record.fullmatch(line) for line in report_lines):
+              if reporter.returncode != 0 or not report_lines or len(report_lines) > 33 or any(not safe_record.fullmatch(line) for line in report_lines):
                   print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=REPORTER_FAILED", flush=True)
                   diagnostic_status_unknown = True
               else:
@@ -2204,10 +2205,11 @@ jobs:
                       print(line, flush=True)
                       if "|status=UNKNOWN|" in line:
                           diagnostic_status_unknown = True
-                      if "|status=CLEANUP|" in line:
+                      if line.startswith("WPCG_PB_DIAG_V1|status=CLEANUP_COMPLETE|"):
                           reporter_cleanup_seen = True
-                          if "|FAILED" in line:
-                              diagnostic_cleanup_failed = True
+                      if line.startswith("WPCG_PB_DIAG_V1|status=CLEANUP_FAILED|"):
+                          reporter_cleanup_seen = True
+                          diagnostic_cleanup_failed = True
           except (OSError, subprocess.SubprocessError, UnicodeError):
               print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=REPORTER_FAILED", flush=True)
               diagnostic_status_unknown = True
@@ -2222,7 +2224,9 @@ jobs:
                       cleanup_outcomes[label] = "ALREADY_ABSENT"
                   except Exception:
                       cleanup_outcomes[label] = "FAILED"
-              cleanup_line = "WPCG_PB_DIAG_V1|status=CLEANUP|workflow_log={}|junit={}".format(
+              cleanup_status = "CLEANUP_FAILED" if "FAILED" in cleanup_outcomes.values() else "CLEANUP_COMPLETE"
+              cleanup_line = "WPCG_PB_DIAG_V1|status={}|workflow_log={}|junit={}".format(
+                  cleanup_status,
                   cleanup_outcomes["workflow_log"], cleanup_outcomes["junit"],
               )
               if safe_record.fullmatch(cleanup_line):
@@ -2230,7 +2234,7 @@ jobs:
               else:
                   print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=PROJECTION_FAILED", flush=True)
                   diagnostic_status_unknown = True
-              diagnostic_cleanup_failed = diagnostic_cleanup_failed or "FAILED" in cleanup_outcomes.values()
+              diagnostic_cleanup_failed = diagnostic_cleanup_failed or cleanup_status == "CLEANUP_FAILED"
           if diagnostic_status_unknown and status == 0:
               raise SystemExit(1)
           if diagnostic_cleanup_failed and status == 0:
