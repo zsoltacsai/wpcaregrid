@@ -1567,6 +1567,12 @@ jobs:
           raise SystemExit(1)
           PY
 
+      - name: Package B sanitized reporter synthetic contract
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/package-b-diagnostic-report.py --self-test-diagnostics
+          python3 scripts/ci/package-b-diagnostic-report.py --self-test-cleanup
+
       - name: Test suite
         # Full server tests always run on MySQL and fail on skipped tests.
         shell: bash
@@ -2175,6 +2181,12 @@ jobs:
               )
               emit_safe_backup_import_failure_code()
               emit_safe_backup_import_diagnostics()
+          if 0 <= status <= 255:
+              print("WPCG_PB_DIAG_V1|status=PHPUNIT|termination=EXITED|exit_code={}".format(status), flush=True)
+          elif -64 <= status < 0:
+              print("WPCG_PB_DIAG_V1|status=PHPUNIT|termination=SIGNALED|signal_code={}".format(-status), flush=True)
+          else:
+              print("WPCG_PB_DIAG_V1|status=PHPUNIT|termination=UNKNOWN|exit_code=UNKNOWN", flush=True)
           junit_path = log_path + ".junit.xml"
           diagnostic_status_unknown = False
           diagnostic_cleanup_failed = False
@@ -2191,16 +2203,33 @@ jobs:
                   text=True, encoding="utf-8", errors="strict", timeout=5, check=False,
               )
               safe_record = re.compile(
-                  r"(?:WPCG_PB_DIAG_V1\|status=(?:FAIL\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|method=test_[A-Za-z0-9_]{1,120}\|exception=(?:QueryException|PDOException|ExpectationFailedException|AssertionFailedError|PHPUnitError|RuntimeException|InvalidArgumentException|LogicException|ErrorException|TypeError|ValueError|Error|Exception|UNKNOWN)\|sqlstate=(?:[A-Z0-9]{5}|UNKNOWN)\|vendor_code=(?:[0-9]{1,5}|UNKNOWN)\|category=(?:ASSERTION_FAILURE|DB_EXCEPTION|TEST_EXCEPTION|UNKNOWN)\|phase=(?:SETUP|TEARDOWN|TEST_CASE|UNKNOWN)\|driver=mysql\|assertion=(?:ASSERTION_FAILURE|NOT_ASSERTION|UNKNOWN)|PASS\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|driver=mysql)|"
-                  r"WPCG_PB_DIAG_V1\|status=UNKNOWN\|reason=(?:DRIVER_NOT_ALLOWLISTED|JUNIT_MISSING|JUNIT_EMPTY|JUNIT_INCOMPLETE|JUNIT_MALFORMED|JUNIT_ENCODING_INVALID|JUNIT_SCHEMA_INCOMPATIBLE|JUNIT_UNAVAILABLE|JUNIT_SIZE_LIMIT|XML_DECLARATION_REJECTED|TARGET_RECORD_UNCLASSIFIED|RECORD_LIMIT|TARGET_FAILURE_NOT_IN_REPORT|FAILURE_RECORD_MISSING|TARGET_NOT_REPORTED|EXIT_STATUS_CONFLICT|ARGUMENTS_INVALID|PROJECTION_FAILED|REPORTER_FAILED))|"
+                  r"(?:WPCG_PB_DIAG_V1\|status=JUNIT\|phpunit_exit=(?:-?[0-9]{1,3})\|file_state=(?:PRESENT|MISSING|UNAVAILABLE|UNEVALUATED)\|size_bytes=(?:UNKNOWN|0|[1-9][0-9]{0,6})\|classification=(?:JUNIT_VALID|JUNIT_MISSING|JUNIT_EMPTY|JUNIT_INCOMPLETE|JUNIT_INVALID_XML_SYNTAX|JUNIT_INVALID_ENCODING|JUNIT_UNEXPECTED_CONTENT|JUNIT_UNSUPPORTED_STRUCTURE|JUNIT_PARSER_OTHER|JUNIT_UNAVAILABLE|JUNIT_SIZE_LIMIT|JUNIT_NOT_EVALUATED)|"
+                  r"WPCG_PB_DIAG_V1\|status=(?:FAIL\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|method=test_[A-Za-z0-9_]{1,120}\|exception=(?:QueryException|PDOException|ExpectationFailedException|AssertionFailedError|PHPUnitError|RuntimeException|InvalidArgumentException|LogicException|ErrorException|TypeError|ValueError|Error|Exception|UNKNOWN)\|sqlstate=(?:[A-Z0-9]{5}|UNKNOWN)\|vendor_code=(?:[0-9]{1,5}|UNKNOWN)\|category=(?:ASSERTION_FAILURE|DB_EXCEPTION|TEST_EXCEPTION|UNKNOWN)\|phase=(?:SETUP|TEARDOWN|TEST_CASE|UNKNOWN)\|driver=mysql\|assertion=(?:ASSERTION_FAILURE|NOT_ASSERTION|UNKNOWN)|PASS\|class=Tests\.Feature\.Deployment\.Phase2B\.TransitionLeasePersistenceTest\|driver=mysql)|"
+                  r"WPCG_PB_DIAG_V1\|status=UNKNOWN\|reason=(?:DRIVER_NOT_ALLOWLISTED|JUNIT_NOT_EVALUATED|JUNIT_MISSING|JUNIT_EMPTY|JUNIT_INCOMPLETE|JUNIT_INVALID_XML_SYNTAX|JUNIT_INVALID_ENCODING|JUNIT_UNEXPECTED_CONTENT|JUNIT_UNSUPPORTED_STRUCTURE|JUNIT_PARSER_OTHER|JUNIT_MALFORMED|JUNIT_ENCODING_INVALID|JUNIT_SCHEMA_INCOMPATIBLE|JUNIT_UNAVAILABLE|JUNIT_SIZE_LIMIT|XML_DECLARATION_REJECTED|TARGET_RECORD_UNCLASSIFIED|RECORD_LIMIT|TARGET_FAILURE_NOT_IN_REPORT|FAILURE_RECORD_MISSING|TARGET_NOT_REPORTED|EXIT_STATUS_CONFLICT|ARGUMENTS_INVALID|PROJECTION_FAILED))|"
                   r"WPCG_PB_DIAG_V1\|status=CLEANUP_COMPLETE\|workflow_log=(?:REMOVED|ALREADY_ABSENT)\|junit=(?:REMOVED|ALREADY_ABSENT)|"
                   r"WPCG_PB_DIAG_V1\|status=CLEANUP_FAILED\|(?:workflow_log=FAILED\|junit=(?:REMOVED|ALREADY_ABSENT|FAILED)|workflow_log=(?:REMOVED|ALREADY_ABSENT)\|junit=FAILED)"
               )
               report_lines = reporter.stdout.splitlines()
-              if reporter.returncode != 0 or not report_lines or len(report_lines) > 33 or any(not safe_record.fullmatch(line) for line in report_lines):
+              if reporter.returncode < 0:
+                  safe_signal = -reporter.returncode if -reporter.returncode <= 64 else "UNKNOWN"
+                  if safe_signal == "UNKNOWN":
+                      print("WPCG_PB_DIAG_V1|status=REPORTER|execution=UNAVAILABLE|exit_code=UNKNOWN|projection=UNAVAILABLE", flush=True)
+                  else:
+                      print("WPCG_PB_DIAG_V1|status=REPORTER|execution=SIGNALED|signal_code={}|projection=UNAVAILABLE".format(safe_signal), flush=True)
                   print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=REPORTER_FAILED", flush=True)
                   diagnostic_status_unknown = True
+              elif reporter.returncode > 0:
+                  safe_exit = reporter.returncode if reporter.returncode <= 255 else "UNKNOWN"
+                  print("WPCG_PB_DIAG_V1|status=REPORTER|execution=COMPLETED|exit_code={}|projection=UNAVAILABLE".format(safe_exit), flush=True)
+                  print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=REPORTER_FAILED", flush=True)
+                  diagnostic_status_unknown = True
+              elif not report_lines or len(report_lines) > 35 or any(not safe_record.fullmatch(line) for line in report_lines):
+                  print("WPCG_PB_DIAG_V1|status=REPORTER|execution=COMPLETED|exit_code=0|projection=REJECTED", flush=True)
+                  print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=PROJECTION_FAILED", flush=True)
+                  diagnostic_status_unknown = True
               else:
+                  projection_state = "INTERNAL_ERROR" if any("|reason=PROJECTION_FAILED" in line for line in report_lines) else "STRUCTURED"
+                  print("WPCG_PB_DIAG_V1|status=REPORTER|execution=COMPLETED|exit_code=0|projection={}".format(projection_state), flush=True)
                   for line in report_lines:
                       print(line, flush=True)
                       if "|status=UNKNOWN|" in line:
@@ -2211,6 +2240,7 @@ jobs:
                           reporter_cleanup_seen = True
                           diagnostic_cleanup_failed = True
           except (OSError, subprocess.SubprocessError, UnicodeError):
+              print("WPCG_PB_DIAG_V1|status=REPORTER|execution=UNAVAILABLE|exit_code=UNKNOWN|projection=UNAVAILABLE", flush=True)
               print("WPCG_PB_DIAG_V1|status=UNKNOWN|reason=REPORTER_FAILED", flush=True)
               diagnostic_status_unknown = True
           if not reporter_cleanup_seen or diagnostic_cleanup_failed:
