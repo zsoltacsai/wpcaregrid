@@ -32,6 +32,63 @@ BOOT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 OTHER_BOOT = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 SHA = "1" * 40
 EVIDENCE = "2" * 64
+SYNTHETIC_OWNER_CAPABILITY = "synthetic-owner-capability-v1"
+
+
+class SyntheticOwnerCapabilityVerifier:
+    """Test-only verifier; no production signing key or authorization is used."""
+
+    def __init__(self):
+        self.transitions = []
+        self.releases = []
+
+    def verify_transition(self, capability, binding):
+        self.transitions.append(dict(binding))
+        return (capability == SYNTHETIC_OWNER_CAPABILITY
+                and set(binding) == {
+                    "source_tuple", "source_permit_manifest_hash", "target_tuple",
+                    "journal_prior_hash", "target_permit_manifest_hash", "source_sha", "target_sha",
+                    "evidence_digest", "details_digest",
+                })
+
+    def verify_release(self, capability, binding):
+        self.releases.append(dict(binding))
+        return (capability == SYNTHETIC_OWNER_CAPABILITY
+                and set(binding) == {
+                    "source_tuple", "operation_id", "generation", "source_state",
+                    "source_journal_seq", "target_state", "target_operation_id",
+                    "target_generation", "target_boot_id", "target_journal_seq",
+                    "journal_prior_hash", "source_sha", "target_sha", "evidence_digest",
+                    "authorization_digest", "nonce_digest",
+                })
+
+
+class DigestBoundSyntheticOwnerCapabilityVerifier:
+    """Non-cryptographic test double that rejects any changed capability binding."""
+
+    @staticmethod
+    def issue_for_test(binding):
+        return hashlib.sha256(HELPER._transition_canonical(binding)).hexdigest()
+
+    def verify_transition(self, capability, binding):
+        return capability == self.issue_for_test(binding)
+
+    def verify_release(self, capability, binding):
+        return capability == self.issue_for_test(binding)
+
+
+class SyntheticAuthorizedTransitionAdapter(HELPER.RootTransitionAdapter):
+    """Supplies a test fixture capability to otherwise unchanged fake-only tests."""
+
+    def transition(self, target_state, **kwargs):
+        kwargs.setdefault("owner_capability", SYNTHETIC_OWNER_CAPABILITY)
+        if target_state == "HOLD_REQUESTED":
+            kwargs.setdefault("target_operation_id", HELPER._transition_uuid7())
+        return super().transition(target_state, **kwargs)
+
+    def release(self, authorization, **kwargs):
+        kwargs.setdefault("owner_capability", SYNTHETIC_OWNER_CAPABILITY)
+        return super().release(authorization, **kwargs)
 
 
 _LARAVEL_TEST_COPY_DIRS = ("app", "bootstrap", "config", "database", "lang", "routes", "vendor")
@@ -707,7 +764,7 @@ class TransitionAdapterTests(unittest.TestCase):
         self.temp.cleanup()
 
     def make_adapter(self, *, boot=BOOT):
-        adapter = HELPER.RootTransitionAdapter(
+        adapter = SyntheticAuthorizedTransitionAdapter(
             journal_path=self.journal,
             status_path=self.status,
             pending_path=self.pending,
@@ -717,6 +774,7 @@ class TransitionAdapterTests(unittest.TestCase):
             host_id="staging-test-host",
             require_root_owned=False,
             fault=self.inject,
+            owner_capability_verifier=SyntheticOwnerCapabilityVerifier(),
         )
         adapter._fsync_dir = self.fake_directory_fsync
         adapter.journal.fsync_dir = adapter._fsync_dir
@@ -740,6 +798,28 @@ class TransitionAdapterTests(unittest.TestCase):
 
     def test_transition_and_hash_chain_are_canonical_and_monotonic(self):
         first = self.move("HOLD_REQUESTED", details={"reason": "planned"})
+        first_binding = self.adapter.owner_capability_verifier.transitions[0]
+        self.assertEqual(first_binding["source_tuple"]["state"], "OPEN")
+        self.assertEqual(first_binding["target_tuple"]["state"], "HOLD_REQUESTED")
+        self.assertEqual(first_binding["target_tuple"]["operation_id"], first["operation_id"])
+        self.assertEqual(first_binding["target_tuple"]["generation"], 1)
+        self.assertEqual(first_binding["target_tuple"]["journal_seq"], 1)
+        self.assertNotIn("journal_head_hash", first_binding["target_tuple"])
+        self.assertEqual(first_binding["journal_prior_hash"], HELPER.TRANSITION_GENESIS_HASH)
+        binding_verifier = DigestBoundSyntheticOwnerCapabilityVerifier()
+        synthetic_capability = binding_verifier.issue_for_test(first_binding)
+        self.assertTrue(binding_verifier.verify_transition(synthetic_capability, first_binding))
+        for field in first_binding:
+            changed = json.loads(HELPER._transition_canonical(first_binding))
+            changed[field] = {"tampered": True} if isinstance(changed[field], dict) else "tampered"
+            with self.subTest(capability_field=field):
+                self.assertFalse(binding_verifier.verify_transition(synthetic_capability, changed))
+        for tuple_name in ("source_tuple", "target_tuple"):
+            for field in first_binding[tuple_name]:
+                changed = json.loads(HELPER._transition_canonical(first_binding))
+                changed[tuple_name][field] = "tampered"
+                with self.subTest(capability_tuple=tuple_name, tuple_field=field):
+                    self.assertFalse(binding_verifier.verify_transition(synthetic_capability, changed))
         self.assertEqual(first["generation"], 1)
         self.assertEqual(first["journal_seq"], 1)
         self.assertRegex(first["operation_id"], r"^[0-9a-f-]{36}$")
@@ -766,6 +846,7 @@ class TransitionAdapterTests(unittest.TestCase):
         self.assertEqual(records[2]["prior_hash"], records[1]["record_hash"])
         raw = self.journal.read_bytes()
         self.assertTrue(all(line.endswith(b"\n") for line in raw.splitlines(keepends=True)))
+        self.assertNotIn(SYNTHETIC_OWNER_CAPABILITY.encode("ascii"), raw)
 
     def test_illegal_transition_and_secret_like_detail_fail_before_marker(self):
         with self.assertRaises(HELPER.TransitionHold):
@@ -773,6 +854,117 @@ class TransitionAdapterTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.move("HOLD_REQUESTED", details={"api_token": "not-persisted"})
         self.assertFalse(self.pending.exists())
+        self.assertFalse(self.journal.exists())
+
+    def test_owner_capability_defaults_fail_closed_before_transition_or_release(self):
+        adapter = HELPER.RootTransitionAdapter(
+            journal_path=self.journal, status_path=self.status, pending_path=self.pending,
+            lock=self.lock, database=self.db, boot_id=BOOT,
+            host_id="staging-test-host", require_root_owned=False,
+        )
+        adapter._fsync_dir = self.fake_directory_fsync
+        with self.assertRaisesRegex(HELPER.TransitionHold, "Owner capability"):
+            adapter.transition("HOLD_REQUESTED", source_sha=SHA, target_sha="3" * 40,
+                               evidence_digest=EVIDENCE,
+                               target_operation_id="00000000-0000-7000-8000-000000000123")
+        with self.assertRaisesRegex(HELPER.TransitionHold, "Owner capability"):
+            adapter.transition("HOLD_REQUESTED", source_sha=SHA, target_sha="3" * 40,
+                               evidence_digest=EVIDENCE,
+                               owner_capability=SYNTHETIC_OWNER_CAPABILITY,
+                               target_operation_id="00000000-0000-7000-8000-000000000123")
+        self.assertFalse(self.pending.exists())
+        self.assertFalse(self.journal.exists())
+        self.assertEqual(self.db.read_tuple(), self.initial)
+
+        authorization = {
+            "host_id": "staging-test-host", "operation_id": self.initial["operation_id"],
+            "generation": 0, "source_sha": SHA, "target_sha": "3" * 40,
+            "approval_ref": "synthetic-approval", "php_profile": "8.4",
+            "rollback_evidence": EVIDENCE, "expected_journal_seq": 1,
+            "nonce": "N" * 48,
+        }
+        with self.assertRaisesRegex(HELPER.TransitionHold, "Owner capability"):
+            adapter.release(authorization, source_sha=SHA, target_sha="3" * 40,
+                            evidence_digest=EVIDENCE)
+        self.assertFalse(self.pending.exists())
+        self.assertFalse(self.journal.exists())
+        self.assertEqual(self.db.read_tuple(), self.initial)
+
+    def test_production_adapter_cannot_inject_owner_verifier_and_operations_are_typed(self):
+        with self.assertRaisesRegex(HELPER.TransitionHold, "not provisioned"):
+            HELPER.RootTransitionAdapter(
+                journal_path=self.journal, status_path=self.status, pending_path=self.pending,
+                lock=self.lock, database=self.db, boot_id=BOOT,
+                host_id="staging-test-host", require_root_owned=True,
+                owner_capability_verifier=SyntheticOwnerCapabilityVerifier(),
+            )
+        adapter = HELPER.RootTransitionAdapter(
+            journal_path=self.journal, status_path=self.status, pending_path=self.pending,
+            lock=self.lock, database=self.db, boot_id=BOOT,
+            host_id="staging-test-host", require_root_owned=False,
+        )
+        with self.assertRaisesRegex(HELPER.TransitionHold, "not allowlisted"):
+            adapter._require_owner_capability("shell", None, {})
+
+    def test_journal_record_and_segment_capacity_are_bounded(self):
+        journal = HELPER.TransitionJournal(self.journal, require_root_owned=False)
+        record = {
+            "event": "HOLD_REQUESTED", "state": "HOLD_REQUESTED",
+            "operation_id": "00000000-0000-7000-8000-000000000001",
+            "generation": 1, "boot_id": BOOT, "source_sha": SHA,
+            "target_sha": "3" * 40, "evidence_digest": EVIDENCE, "details": {},
+        }
+        invalid = dict(record, event="UNLISTED_OPERATION")
+        with self.assertRaisesRegex(HELPER.TransitionHold, "values are invalid"):
+            journal.prepare(invalid)
+        invalid_edge = dict(record, event="CLOSED", state="CLOSED")
+        with self.assertRaisesRegex(HELPER.TransitionHold, "state edge"):
+            journal.prepare(invalid_edge)
+        with mock.patch.object(HELPER, "TRANSITION_JOURNAL_MAX_RECORD_BYTES", 16):
+            with self.assertRaisesRegex(HELPER.TransitionHold, "record exceeds"):
+                journal.prepare(record)
+        prepared = journal.prepare(record)
+        line = prepared[2]
+        malformed = (prepared[0], prepared[1], line[:-1] + b"x", prepared[3], prepared[4])
+        with self.assertRaisesRegex(HELPER.TransitionHold, "journal record"):
+            journal.append_prepared(malformed)
+        invalid_canonical = dict(record, schema_version=1, seq=1,
+                                 prior_hash=HELPER.TRANSITION_GENESIS_HASH)
+        invalid_line_record = dict(invalid_canonical, event="UNLISTED_OPERATION")
+        invalid_hash = journal._digest(invalid_line_record)
+        invalid_line = HELPER._transition_canonical(
+            dict(invalid_line_record, record_hash=invalid_hash)
+        )
+        invalid_prepared = (1, invalid_hash, invalid_line, 0, HELPER.TRANSITION_GENESIS_HASH)
+        with self.assertRaisesRegex(HELPER.TransitionHold, "values are invalid"):
+            journal.append_prepared(invalid_prepared)
+        mismatched_pair = dict(record, event="CLOSED", state="CLOSED",
+                               schema_version=1, seq=1,
+                               prior_hash=HELPER.TRANSITION_GENESIS_HASH)
+        mismatched_hash = journal._digest(mismatched_pair)
+        mismatched_line = HELPER._transition_canonical(
+            dict(mismatched_pair, record_hash=mismatched_hash)
+        )
+        mismatched_prepared = (1, mismatched_hash, mismatched_line, 0,
+                               HELPER.TRANSITION_GENESIS_HASH)
+        with self.assertRaisesRegex(HELPER.TransitionHold, "state edge"):
+            journal.append_prepared(mismatched_prepared)
+        invalid_history_path = self.journal.with_name("invalid-history.jsonl")
+        invalid_history_path.parent.mkdir(parents=True, exist_ok=True)
+        invalid_history_path.write_bytes(mismatched_line)
+        with self.assertRaisesRegex(HELPER.TransitionHold, "state edge"):
+            HELPER.TransitionJournal(invalid_history_path, require_root_owned=False).records()
+        oversized_journal = HELPER.TransitionJournal(
+            self.journal.with_name("oversized.jsonl"), require_root_owned=False,
+        )
+        oversized_journal.path.parent.mkdir(parents=True, exist_ok=True)
+        oversized_journal.path.write_bytes(line)
+        with mock.patch.object(HELPER, "TRANSITION_JOURNAL_MAX_RECORD_BYTES", 16):
+            with self.assertRaisesRegex(HELPER.TransitionHold, "record exceeds"):
+                oversized_journal.records()
+        with mock.patch.object(HELPER, "TRANSITION_JOURNAL_MAX_BYTES", len(line) - 1):
+            with self.assertRaisesRegex(HELPER.TransitionHold, "insufficient capacity"):
+                journal.append_prepared(prepared)
         self.assertFalse(self.journal.exists())
 
     def test_open_and_draining_requires_exact_state_and_permit(self):
@@ -788,6 +980,13 @@ class TransitionAdapterTests(unittest.TestCase):
         with self.assertRaises(HELPER.TransitionHold):
             self.adapter.assert_drain_permit(permit[0])
         self.move("DRAINING", permits=permit)
+        drain_binding = self.adapter.owner_capability_verifier.transitions[-1]
+        self.assertEqual(
+            drain_binding["target_permit_manifest_hash"],
+            self.db.read_permit_manifest_hash(),
+        )
+        self.assertEqual(drain_binding["target_tuple"]["generation"],
+                         self.db.read_tuple()["generation"])
         self.assertEqual(self.adapter.check_drain_permit(permit[0])["state"], "DRAINING")
         with self.assertRaises(HELPER.TransitionHold):
             self.adapter.check_drain_permit({"id": "p2", "work_id": "w2", "payload_hash": "5" * 64})
@@ -986,6 +1185,7 @@ class TransitionAdapterTests(unittest.TestCase):
             self.adapter.assert_open()
 
     def test_release_burns_one_time_nonce_and_publishes_open_last(self):
+        binding_verifier = DigestBoundSyntheticOwnerCapabilityVerifier()
         for state in ("HOLD_REQUESTED", "CLOSING", "CLOSED", "DRAINING", "QUIESCED", "READY_PENDING_OWNER"):
             kwargs = {"permits": []} if state == "DRAINING" else {}
             if state == "QUIESCED":
@@ -1010,7 +1210,25 @@ class TransitionAdapterTests(unittest.TestCase):
             "expected_journal_seq": self.db.read_tuple()["journal_seq"] + 1,
             "nonce": nonce,
         }
+        ready_tuple = self.db.read_tuple()
+        ready_records = self.adapter.journal.records()
+        with self.assertRaisesRegex(HELPER.TransitionHold, "separate Owner release capability"):
+            self.move("OPEN")
+        self.assertEqual(self.db.read_tuple(), ready_tuple)
+        self.assertEqual(self.adapter.journal.records(), ready_records)
         self.adapter.release(auth, source_sha=SHA, target_sha="3" * 40, evidence_digest=EVIDENCE)
+        release_binding = self.adapter.owner_capability_verifier.releases[-1]
+        self.assertEqual(release_binding["source_state"], "READY_PENDING_OWNER")
+        self.assertEqual(release_binding["operation_id"], auth["operation_id"])
+        self.assertEqual(release_binding["nonce_digest"], hashlib.sha256(nonce.encode("ascii")).hexdigest())
+        self.assertEqual(release_binding["evidence_digest"], EVIDENCE)
+        self.assertEqual(release_binding["target_state"], "OPEN")
+        self.assertEqual(release_binding["target_journal_seq"], auth["expected_journal_seq"])
+        self.assertNotIn("nonce", release_binding)
+        release_capability = binding_verifier.issue_for_test(release_binding)
+        changed_release = dict(release_binding, evidence_digest="9" * 64)
+        self.assertTrue(binding_verifier.verify_release(release_capability, release_binding))
+        self.assertFalse(binding_verifier.verify_release(release_capability, changed_release))
         self.assertEqual(self.read_state(), "OPEN")
         nonce_digest = hashlib.sha256(nonce.encode("ascii")).hexdigest()
         self.assertIn(nonce_digest, self.db.nonces)
@@ -1019,6 +1237,24 @@ class TransitionAdapterTests(unittest.TestCase):
         self.assertNotIn(nonce, self.journal.read_text(encoding="ascii"))
         with self.assertRaises(HELPER.TransitionHold):
             self.adapter.release(auth, source_sha=SHA, target_sha="3" * 40, evidence_digest=EVIDENCE)
+
+    def test_journal_rejects_non_release_event_on_owner_open_edge(self):
+        journal = HELPER.TransitionJournal(self.journal, require_root_owned=False)
+        record = {
+            "event": "OPEN", "state": "OPEN",
+            "operation_id": "00000000-0000-7000-8000-000000000001",
+            "generation": 1, "boot_id": BOOT, "source_sha": SHA,
+            "target_sha": "3" * 40, "evidence_digest": EVIDENCE, "details": {},
+        }
+        canonical = dict(record, schema_version=1, seq=1,
+                         prior_hash=HELPER.TRANSITION_GENESIS_HASH)
+        digest = journal._digest(canonical)
+        line = HELPER._transition_canonical(dict(canonical, record_hash=digest))
+        with self.assertRaisesRegex(HELPER.TransitionHold, "state edge"):
+            journal._validated_record_line(
+                line, 1, HELPER.TRANSITION_GENESIS_HASH,
+                "READY_PENDING_OWNER",
+            )
 
     def test_release_scope_and_invalid_nonce_fail_closed(self):
         for state in ("HOLD_REQUESTED", "CLOSING", "CLOSED", "DRAINING", "QUIESCED", "READY_PENDING_OWNER"):
@@ -2365,12 +2601,13 @@ def _persisted_layout(root):
 def _persistent_adapter(root, boot=BOOT, fault=None):
     root = Path(root)
     database = PersistentFakeDatabase(root / "database.json")
-    adapter = HELPER.RootTransitionAdapter(
+    adapter = SyntheticAuthorizedTransitionAdapter(
         journal_path=root / "var/lib/transitions/journal.jsonl",
         status_path=root / "run/wpcaregrid/transition-status.json",
         pending_path=root / "run/wpcaregrid/.transition-status.next",
         lock=FakeLock(), database=database, boot_id=boot, host_id="process-test",
         require_root_owned=False, fault=fault,
+        owner_capability_verifier=SyntheticOwnerCapabilityVerifier(),
     )
     return adapter
 

@@ -118,6 +118,9 @@ TRANSITION_RPC_OPERATIONS = frozenset({
     "read_transition_receipt",
 })
 TRANSITION_PRODUCTION_EFFECT_CATALOG = ()
+TRANSITION_COORDINATOR_OPERATIONS = frozenset({"transition", "release"})
+TRANSITION_JOURNAL_MAX_RECORD_BYTES = 64 * 1024
+TRANSITION_JOURNAL_MAX_BYTES = 64 * 1024 * 1024
 
 
 def run(argv, *, check=True, stdout=None, input_text=None, pass_fds=()):
@@ -1849,6 +1852,52 @@ class TransitionJournal:
     def _digest(record):
         return hashlib.sha256(_transition_canonical(record)).hexdigest()
 
+    @staticmethod
+    def _validated_record_line(line, expected_seq, previous_hash, source_state):
+        if (not line.endswith(b"\n") or line.count(b"\n") != 1
+            or len(line) > TRANSITION_JOURNAL_MAX_RECORD_BYTES):
+            raise TransitionHold("journal record exceeds the supported read bound")
+        try:
+            value = json.loads(line[:-1].decode("ascii"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise TransitionHold("journal record is malformed") from None
+        if not isinstance(value, dict) or set(value) != {
+            "schema_version", "seq", "event", "state", "operation_id", "generation",
+            "boot_id", "source_sha", "target_sha", "evidence_digest", "prior_hash",
+            "details", "record_hash",
+        }:
+            raise TransitionHold("journal record has an invalid schema")
+        claimed = value.pop("record_hash")
+        if (type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or type(value["seq"]) is not int or value["seq"] != expected_seq
+            or value["prior_hash"] != previous_hash):
+            raise TransitionHold("journal sequence or chain is invalid")
+        if (not isinstance(value["state"], str) or value["state"] not in TRANSITION_STATES
+            or not isinstance(value["event"], str)
+            or value["event"] not in TRANSITION_STATES | {"RELEASE_COMMIT"}
+            or (value["event"] == "RELEASE_COMMIT" and value["state"] != "OPEN")
+            or (value["event"] != "RELEASE_COMMIT" and value["event"] != value["state"])
+            or not isinstance(value["operation_id"], str)
+            or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", value["operation_id"], re.I)
+            or type(value["generation"]) is not int or value["generation"] < 0
+            or not isinstance(value["boot_id"], str) or not re.fullmatch(r"[0-9a-f-]{36}", value["boot_id"], re.I)
+            or not isinstance(value["source_sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", value["source_sha"])
+            or not isinstance(value["target_sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", value["target_sha"])
+            or not isinstance(value["evidence_digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["evidence_digest"])):
+            raise TransitionHold("journal record values are invalid")
+        if ((source_state, value["state"]) not in TRANSITION_EDGES
+            or (value["event"] == "RELEASE_COMMIT" and source_state != "READY_PENDING_OWNER")
+            or (source_state == "READY_PENDING_OWNER" and value["state"] == "OPEN"
+                and value["event"] != "RELEASE_COMMIT")):
+            raise TransitionHold("journal record state edge is invalid")
+        if (not isinstance(value["details"], dict)
+            or not isinstance(claimed, str)
+            or _transition_canonical(dict(value, record_hash=claimed)) != line
+            or TransitionJournal._digest(value) != claimed):
+            raise TransitionHold("journal record hash is invalid")
+        value["record_hash"] = claimed
+        return value
+
     def records(self):
         try:
             info = self.path.lstat()
@@ -1867,11 +1916,11 @@ class TransitionJournal:
             chunks = []
             total = 0
             while True:
-                chunk = os.read(fd, min(65536, 64 * 1024 * 1024 + 1 - total))
+                chunk = os.read(fd, min(65536, TRANSITION_JOURNAL_MAX_BYTES + 1 - total))
                 if not chunk:
                     break
                 total += len(chunk)
-                if total > 64 * 1024 * 1024:
+                if total > TRANSITION_JOURNAL_MAX_BYTES:
                     raise TransitionHold("journal exceeds the supported read bound")
                 chunks.append(chunk)
             raw = b"".join(chunks)
@@ -1881,40 +1930,13 @@ class TransitionJournal:
             raise TransitionHold("journal has a truncated final record")
         result = []
         previous = TRANSITION_GENESIS_HASH
+        previous_state = "OPEN"
         for expected_seq, line in enumerate(raw.splitlines(), 1):
-            try:
-                value = json.loads(line.decode("ascii"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                raise TransitionHold("journal record is malformed") from None
-            if not isinstance(value, dict) or set(value) != {
-                "schema_version", "seq", "event", "state", "operation_id", "generation",
-                "boot_id", "source_sha", "target_sha", "evidence_digest", "prior_hash",
-                "details", "record_hash",
-            }:
-                raise TransitionHold("journal record has an invalid schema")
-            claimed = value.pop("record_hash")
-            if (type(value["schema_version"]) is not int or value["schema_version"] != 1
-                or type(value["seq"]) is not int or value["seq"] != expected_seq
-                or value["prior_hash"] != previous):
-                raise TransitionHold("journal sequence or chain is invalid")
-            if (not isinstance(value["state"], str) or value["state"] not in TRANSITION_STATES
-                or not isinstance(value["event"], str)
-                or value["event"] not in TRANSITION_STATES | {"RELEASE_COMMIT"}
-                or (value["event"] == "RELEASE_COMMIT" and value["state"] != "OPEN")
-                or not isinstance(value["operation_id"], str)
-                or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", value["operation_id"], re.I)
-                or type(value["generation"]) is not int or value["generation"] < 0
-                or not isinstance(value["boot_id"], str) or not re.fullmatch(r"[0-9a-f-]{36}", value["boot_id"], re.I)
-                or not isinstance(value["source_sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", value["source_sha"])
-                or not isinstance(value["target_sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", value["target_sha"])
-                or not isinstance(value["evidence_digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["evidence_digest"])):
-                raise TransitionHold("journal record values are invalid")
-            if (not isinstance(value["details"], dict)
-                or _transition_canonical(dict(value, record_hash=claimed)) != line + b"\n"
-                or self._digest(value) != claimed):
-                raise TransitionHold("journal hash is invalid")
-            previous = claimed
-            value["record_hash"] = claimed
+            value = self._validated_record_line(
+                line + b"\n", expected_seq, previous, previous_state,
+            )
+            previous = value["record_hash"]
+            previous_state = value["state"]
             result.append(value)
         return result
 
@@ -1927,13 +1949,32 @@ class TransitionJournal:
         base_seq = len(records)
         seq = base_seq + 1
         prior = records[-1]["record_hash"] if records else TRANSITION_GENESIS_HASH
+        source_state = records[-1]["state"] if records else "OPEN"
         canonical = dict(record, schema_version=1, seq=seq, prior_hash=prior)
         digest = self._digest(canonical)
         line = _transition_canonical(dict(canonical, record_hash=digest))
+        validated = self._validated_record_line(line, seq, prior, source_state)
+        if validated["record_hash"] != digest:
+            raise TransitionHold("prepared journal record integrity check failed")
+        try:
+            current_bytes = self.path.lstat().st_size
+        except FileNotFoundError:
+            current_bytes = 0
+        if current_bytes + len(line) > TRANSITION_JOURNAL_MAX_BYTES:
+            raise TransitionHold("journal segment has insufficient capacity")
         return seq, digest, line, base_seq, prior
 
     def append_prepared(self, prepared, *, fault=None):
         seq, digest, line, base_seq, prior = prepared
+        if not isinstance(line, bytes):
+            raise TransitionHold("prepared journal record is invalid or exceeds its bound")
+        if type(seq) is not int or type(base_seq) is not int or seq != base_seq + 1:
+            raise TransitionHold("prepared journal record integrity check failed")
+        existing_records = self.records()
+        source_state = existing_records[-1]["state"] if existing_records else "OPEN"
+        value = self._validated_record_line(line, seq, prior, source_state)
+        if value["record_hash"] != digest:
+            raise TransitionHold("prepared journal record integrity check failed")
         if self.require_root_owned:
             parent_fd = open_root_trusted_directory(self.path.parent)
             try:
@@ -1951,6 +1992,12 @@ class TransitionJournal:
         current_seq, current_head = self.head()
         if (current_seq, current_head) != (base_seq, prior):
             raise TransitionHold("journal head changed after record preparation")
+        try:
+            current_bytes = self.path.lstat().st_size
+        except FileNotFoundError:
+            current_bytes = 0
+        if current_bytes + len(line) > TRANSITION_JOURNAL_MAX_BYTES:
+            raise TransitionHold("journal segment has insufficient capacity")
         created = False
         try:
             fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
@@ -1963,6 +2010,8 @@ class TransitionJournal:
                 raise TransitionHold("journal is not a regular file")
             if self.require_root_owned and (info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600):
                 raise TransitionHold("journal ownership or mode is invalid")
+            if info.st_size + len(line) > TRANSITION_JOURNAL_MAX_BYTES:
+                raise TransitionHold("journal segment has insufficient capacity")
             view = memoryview(line)
             while view:
                 written = os.write(fd, view)
@@ -1996,6 +2045,20 @@ class TransitionJournal:
         return self.append_prepared(self.prepare(record), fault=fault)
 
 
+class OwnerCapabilityVerifier:
+    """Fail-closed Package A interface; no production key or signer is installed.
+
+    A future separately authorized package may provide signature verification.
+    Until then neither ordinary privileged transitions nor Owner release can pass.
+    """
+
+    def verify_transition(self, _capability, _binding):
+        return False
+
+    def verify_release(self, _capability, _binding):
+        return False
+
+
 class RootTransitionAdapter:
     """Inert Gate 1 v1.0.3 persistence adapter; no command dispatch calls it.
 
@@ -2019,9 +2082,18 @@ class RootTransitionAdapter:
     """
 
     def __init__(self, *, journal_path, status_path, pending_path, lock, database,
-                 boot_id, host_id, require_root_owned=True, fault=None):
+                 boot_id, host_id, require_root_owned=True, fault=None,
+                 owner_capability_verifier=None):
         if not isinstance(boot_id, str) or not re.fullmatch(r"[0-9a-f-]{36}", boot_id, re.I):
             raise ValueError("invalid boot ID")
+        if require_root_owned and owner_capability_verifier is not None:
+            raise TransitionHold("production Owner capability verifier is not provisioned")
+        if owner_capability_verifier is not None and not all(
+            callable(getattr(owner_capability_verifier, method, None))
+            for method in ("verify_transition", "verify_release")
+        ):
+            raise TypeError("Owner capability verifier interface is incomplete")
+        self.owner_capability_verifier = owner_capability_verifier or OwnerCapabilityVerifier()
         self.journal = TransitionJournal(journal_path, require_root_owned=require_root_owned,
                                         fsync_dir=self._fsync_dir)
         self.status_path = Path(status_path)
@@ -2057,6 +2129,18 @@ class RootTransitionAdapter:
 
     def _event(self, point):
         self.fault(point)
+
+    def _require_owner_capability(self, operation, capability, binding):
+        if operation not in TRANSITION_COORDINATOR_OPERATIONS:
+            raise TransitionHold("root coordinator operation is not allowlisted")
+        verifier = self.owner_capability_verifier
+        method = verifier.verify_transition if operation == "transition" else verifier.verify_release
+        try:
+            verified = method(capability, binding)
+        except Exception:
+            verified = False
+        if verified is not True:
+            raise TransitionHold("Owner capability is unavailable or invalid")
 
     def _fsync_dir(self, path):
         fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
@@ -2500,9 +2584,12 @@ class RootTransitionAdapter:
         return target
 
     def transition(self, target_state, *, source_sha, target_sha, evidence_digest,
-                   details=None, preconditions=None, permits=None):
+                   details=None, preconditions=None, permits=None,
+                   owner_capability=None, target_operation_id=None):
         if target_state not in TRANSITION_STATES:
             raise ValueError("unknown target state")
+        if target_state == "OPEN":
+            raise TransitionHold("OPEN requires the separate Owner release capability")
         for name, value in (("source SHA", source_sha), ("target SHA", target_sha)):
             if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
                 raise ValueError("invalid " + name)
@@ -2527,9 +2614,15 @@ class RootTransitionAdapter:
             if (source["state"], target_state) not in TRANSITION_EDGES:
                 raise TransitionHold("transition is not allowed")
             new_operation = source["state"] == "OPEN" and target_state == "HOLD_REQUESTED"
+            if new_operation:
+                if (not isinstance(target_operation_id, str)
+                    or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", target_operation_id, re.I)):
+                    raise TransitionHold("new operation ID must be authorized before transition")
+            elif target_operation_id is not None:
+                raise TransitionHold("target operation ID is only valid when opening a new operation")
             target = {
                 "state": target_state,
-                "operation_id": _transition_uuid7() if new_operation else source["operation_id"],
+                "operation_id": target_operation_id if new_operation else source["operation_id"],
                 "generation": source["generation"] + (1 if new_operation else 0),
                 "boot_id": self.boot_id,
                 "journal_seq": source["journal_seq"] + 1,
@@ -2557,6 +2650,23 @@ class RootTransitionAdapter:
                 details["cutoff_seq"] = source["journal_seq"]
                 details["permit_manifest_hash"] = manifest
                 self.database.validate_permit_manifest(source, permits, manifest)
+            self._require_owner_capability("transition", owner_capability, {
+                "source_tuple": self._tuple(source),
+                "source_permit_manifest_hash": source.get("permit_manifest_hash"),
+                # The next journal head is coordinator-derived after this
+                # authorization; bind the expected predecessor and sequence,
+                # not the provisional projection value currently copied from source.
+                "target_tuple": {
+                    key: value for key, value in self._tuple(target).items()
+                    if key != "journal_head_hash"
+                },
+                "journal_prior_hash": source["journal_head_hash"],
+                "target_permit_manifest_hash": manifest,
+                "source_sha": source_sha,
+                "target_sha": target_sha,
+                "evidence_digest": evidence_digest,
+                "details_digest": hashlib.sha256(_transition_canonical(details)).hexdigest(),
+            })
             self.database.verify_transition_preconditions(source, target, details, permits)
             if preconditions is not None:
                 preconditions(source, target_state)
@@ -2566,7 +2676,8 @@ class RootTransitionAdapter:
                                  evidence_digest=evidence_digest,
                                  permit_manifest_hash=manifest)
 
-    def release(self, authorization, *, source_sha, target_sha, evidence_digest):
+    def release(self, authorization, *, source_sha, target_sha, evidence_digest,
+                owner_capability=None):
         for name, value in (("source SHA", source_sha), ("target SHA", target_sha)):
             if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
                 raise ValueError("invalid " + name)
@@ -2582,6 +2693,27 @@ class RootTransitionAdapter:
         nonce_digest = hashlib.sha256(nonce.encode("ascii")).hexdigest()
         with self.lock.hold("exclusive"):
             source = self._durability_preflight()
+            self._require_owner_capability("release", owner_capability, {
+                "source_tuple": self._tuple(source),
+                "operation_id": source["operation_id"],
+                "generation": source["generation"],
+                "source_state": source["state"],
+                "source_journal_seq": source["journal_seq"],
+                "target_state": "OPEN",
+                "target_operation_id": source["operation_id"],
+                "target_generation": source["generation"],
+                "target_boot_id": self.boot_id,
+                "target_journal_seq": source["journal_seq"] + 1,
+                "journal_prior_hash": source["journal_head_hash"],
+                "source_sha": source_sha,
+                "target_sha": target_sha,
+                "evidence_digest": evidence_digest,
+                "authorization_digest": hashlib.sha256(
+                    _transition_canonical({key: value for key, value in authorization.items()
+                                           if key != "nonce"})
+                ).hexdigest(),
+                "nonce_digest": nonce_digest,
+            })
             if self.database.assert_no_unresolved_drain_effects(
                 source["operation_id"], source["generation"]
             ) is not True:
