@@ -9,11 +9,18 @@ import os
 import hashlib
 import glob
 import fnmatch
+import json
 import posixpath
 import re
+import socket
 import stat
+import struct
 import subprocess
 import sys
+import threading
+import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 
@@ -61,6 +68,56 @@ WORKER_COMMANDS = {
 }
 WORKERS = {"wpcaregrid-default", "wpcaregrid-backups"}
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+
+# Gate 1 transition paths are declarations only. The transition adapter below is
+# deliberately not wired into dispatch(), deploy-staging.sh, or any consumer.
+TRANSITION_JOURNAL = Path("/var/lib/wpcaregrid/transitions/journal.jsonl")
+TRANSITION_LOCK = Path("/run/lock/wpcaregrid-transition.lock")
+TRANSITION_STATUS = Path("/run/wpcaregrid/transition-status.json")
+TRANSITION_PENDING = Path("/run/wpcaregrid/.transition-status.next")
+TRANSITION_GENESIS_HASH = "0" * 64
+TRANSITION_STATES = {
+    "OPEN", "HOLD_REQUESTED", "CLOSING", "CLOSED", "DRAINING",
+    "QUIESCED", "READY_PENDING_OWNER", "RECOVERY_REQUIRED",
+}
+TRANSITION_EDGES = {
+    ("OPEN", "HOLD_REQUESTED"),
+    ("HOLD_REQUESTED", "CLOSING"),
+    ("CLOSING", "CLOSED"),
+    ("CLOSED", "DRAINING"),
+    ("DRAINING", "QUIESCED"),
+    ("QUIESCED", "READY_PENDING_OWNER"),
+    ("READY_PENDING_OWNER", "OPEN"),
+    ("OPEN", "RECOVERY_REQUIRED"),
+    ("HOLD_REQUESTED", "RECOVERY_REQUIRED"),
+    ("CLOSING", "RECOVERY_REQUIRED"),
+    ("CLOSED", "RECOVERY_REQUIRED"),
+    ("DRAINING", "RECOVERY_REQUIRED"),
+    ("QUIESCED", "RECOVERY_REQUIRED"),
+    ("READY_PENDING_OWNER", "RECOVERY_REQUIRED"),
+}
+TRANSITION_TUPLE_FIELDS = (
+    "state", "operation_id", "generation", "boot_id", "journal_seq",
+    "journal_head_hash", "evidence_digest",
+)
+TRANSITION_RPC_VERSION = 1
+TRANSITION_RPC_MAX_BYTES = 65536
+TRANSITION_RPC_SOCKET_DIR = Path("/run/wpcaregrid")
+TRANSITION_RPC_COMMAND = (
+    str(PHP_RUNTIME_LAUNCHER_DEST), str(APP / "artisan"), "deployment:transition-bridge",
+)
+TRANSITION_RPC_OPERATIONS = frozenset({
+    "read_tuple",
+    "read_permit_manifest_hash",
+    "verify_transition_preconditions",
+    "validate_permit_manifest",
+    "compare_and_set",
+    "nonce_consumed",
+    "validate_release",
+    "assert_no_unresolved_drain_effects",
+    "read_transition_receipt",
+})
+TRANSITION_PRODUCTION_EFFECT_CATALOG = ()
 
 
 def run(argv, *, check=True, stdout=None, input_text=None, pass_fds=()):
@@ -1335,6 +1392,1232 @@ def read_approved_rollback(path=APPROVED_ROLLBACK, expected_owner=0, expected_mo
     if not re.fullmatch(r"[0-9a-f]{40}\n", value):
         raise ValueError("invalid rollback authorization")
     return value[:-1]
+
+
+class TransitionHold(RuntimeError):
+    """A transition failed closed; callers must not infer a usable state."""
+
+
+class TransitionDurabilityUnconfirmed(TransitionHold):
+    """The projection rename committed, but its directory fsync failed."""
+
+
+class TransitionRpcAmbiguous(TransitionHold):
+    """A Laravel RPC may have committed; callers may only perform receipt readback."""
+
+    def __init__(self, request_id, request_digest):
+        super().__init__("Laravel transition RPC response is ambiguous; authoritative receipt readback is required")
+        self.request_id = request_id
+        self.request_digest = request_digest
+
+
+class DrainEffectNotPerformed(TransitionHold):
+    """An executor presents a proof reference that the adapter must verify."""
+
+    def __init__(self, evidence_digest, authority_reference):
+        if not isinstance(evidence_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_digest):
+            raise ValueError("not-performed evidence digest is invalid")
+        if not isinstance(authority_reference, str) or not authority_reference:
+            raise ValueError("authoritative no-effect reference is required")
+        super().__init__("drain effect was authoritatively not performed")
+        self.evidence_digest = evidence_digest
+        self.authority_reference = authority_reference
+
+
+def _transition_canonical(value):
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False) + "\n").encode("ascii")
+
+
+def _transition_uuid7():
+    # UUIDv7 layout, kept compatible with the Python versions on supported hosts.
+    millis = int(time.time_ns() // 1_000_000) & ((1 << 48) - 1)
+    rand = int.from_bytes(os.urandom(10), "big") & ((1 << 74) - 1)
+    value = (millis << 80) | (0x7 << 76) | (((rand >> 62) & 0xFFF) << 64) | (0b10 << 62) | (rand & ((1 << 62) - 1))
+    return str(uuid.UUID(int=value))
+
+
+class PosixTransitionLock:
+    """Stable flock adapter. It never unlinks or replaces the lock inode."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self._local = threading.local()
+
+    def is_held(self, mode=None):
+        held = getattr(self._local, "mode", None)
+        return held is not None and (mode is None or held == mode)
+
+    @contextmanager
+    def hold(self, mode):
+        import fcntl
+        import grp
+
+        if mode not in {"shared", "exclusive"}:
+            raise ValueError("invalid transition lock mode")
+        if self.is_held():
+            raise TransitionHold("nested transition locks are not supported")
+        parent_fd = open_root_trusted_directory(self.path.parent)
+        try:
+            # flock(LOCK_SH) is valid on a read-only descriptor. The application
+            # group has read-only access to this root:www-data 0640 inode.
+            access = os.O_RDONLY if mode == "shared" else os.O_RDWR
+            fd = os.open(self.path.name, access | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+        finally:
+            os.close(parent_fd)
+        try:
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0
+                or before.st_gid != grp.getgrnam("www-data").gr_gid
+                or stat.S_IMODE(before.st_mode) != 0o640 or before.st_nlink != 1):
+                raise TransitionHold("transition lock ownership or mode is invalid")
+            fcntl.flock(fd, fcntl.LOCK_SH if mode == "shared" else fcntl.LOCK_EX)
+            current = os.stat(self.path, follow_symlinks=False)
+            held = os.fstat(fd)
+            if ((current.st_dev, current.st_ino) != (held.st_dev, held.st_ino)
+                or held.st_nlink != 1):
+                raise TransitionHold("transition lock inode changed")
+            self._local.mode = mode
+            yield fd
+            current = os.stat(self.path, follow_symlinks=False)
+            held = os.fstat(fd)
+            if ((current.st_dev, current.st_ino) != (held.st_dev, held.st_ino)
+                or held.st_nlink != 1):
+                raise TransitionHold("transition lock inode changed")
+        finally:
+            if hasattr(self._local, "mode"):
+                del self._local.mode
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+
+class LaravelTransitionDatabaseAdapter:
+    """Fixed, typed root-to-Laravel DB bridge; never exposes generic SQL or DRAIN claims.
+
+    This client is inert unless an explicitly constructed RootTransitionAdapter receives
+    it. Laravel owns every SQL transaction and its durable receipt table. The child command
+    name and runtime launcher are constants, not caller configuration. A lost mutating reply
+    triggers only a read_transition_receipt RPC, never a second compare_and_set request.
+    """
+
+    _PAYLOAD_KEYS = {
+        "read_tuple": set(),
+        "read_permit_manifest_hash": set(),
+        "verify_transition_preconditions": {"source", "target", "details", "permits"},
+        "validate_permit_manifest": {"source", "permits", "digest"},
+        "compare_and_set": {"source", "target", "release", "details"},
+        "nonce_consumed": {"nonce_digest"},
+        "validate_release": {"authorization", "source", "nonce_digest"},
+        "assert_no_unresolved_drain_effects": {"operation_id", "generation"},
+        "read_transition_receipt": {"request_id", "request_digest"},
+    }
+
+    def __init__(self, *, socket_dir=TRANSITION_RPC_SOCKET_DIR, timeout_seconds=10.0):
+        if type(timeout_seconds) not in {int, float} or not 0 < timeout_seconds <= 30:
+            raise ValueError("transition RPC timeout must be between 0 and 30 seconds")
+        self.socket_dir = Path(socket_dir)
+        self.timeout_seconds = float(timeout_seconds)
+        self.lock = None
+
+    def bind_lock(self, lock):
+        if not callable(getattr(lock, "is_held", None)):
+            raise TypeError("Laravel transition RPC requires the stable transition lock")
+        self.lock = lock
+
+    @staticmethod
+    def _request_digest(request_id, operation, payload):
+        digest_payload = json.loads(_transition_canonical(payload).decode("ascii"))
+        if operation == "compare_and_set":
+            target = digest_payload.get("target")
+            details = digest_payload.get("details")
+            if isinstance(target, dict):
+                target.pop("journal_head_hash", None)
+            if isinstance(details, dict):
+                details.pop("rpc_request_id", None)
+                details.pop("rpc_request_digest", None)
+        return hashlib.sha256(_transition_canonical({
+            "version": TRANSITION_RPC_VERSION,
+            "request_id": request_id,
+            "operation": operation,
+            "payload": digest_payload,
+        })).hexdigest()
+
+    @staticmethod
+    def _line(sock):
+        data = bytearray()
+        while len(data) <= TRANSITION_RPC_MAX_BYTES:
+            chunk = sock.recv(min(4096, TRANSITION_RPC_MAX_BYTES + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if b"\n" in chunk:
+                if data.count(b"\n") != 1 or not data.endswith(b"\n"):
+                    raise TransitionHold("Laravel RPC returned multiple or trailing messages")
+                if len(data) > TRANSITION_RPC_MAX_BYTES:
+                    raise TransitionHold("Laravel RPC response exceeds its bound")
+                return bytes(data)
+        raise TransitionHold("Laravel RPC response is incomplete or exceeds its bound")
+
+    @staticmethod
+    def _drop_to_application_identity(uid, gid):
+        os.setgroups([])
+        os.setresgid(gid, gid, gid)
+        os.setresuid(uid, uid, uid)
+
+    def _exchange(self, operation, payload, *, request_id=None, request_digest=None):
+        import grp
+        import pwd
+
+        if operation not in TRANSITION_RPC_OPERATIONS:
+            raise TransitionHold("Laravel RPC operation is not allowlisted")
+        if not isinstance(payload, dict) or set(payload) != self._PAYLOAD_KEYS[operation]:
+            raise TransitionHold("Laravel RPC payload shape is invalid")
+        if os.geteuid() != 0:
+            raise TransitionHold("Laravel transition RPC requires the root lock owner")
+        required_mode = "exclusive" if operation in {
+            "verify_transition_preconditions", "validate_permit_manifest", "compare_and_set",
+            "validate_release", "read_transition_receipt",
+        } else None
+        if self.lock is None or not self.lock.is_held(required_mode):
+            raise TransitionHold("Laravel transition RPC requires the coordinated stable lock")
+        try:
+            app = pwd.getpwnam("www-data")
+            app_group = grp.getgrnam("www-data")
+        except KeyError as exc:
+            raise TransitionHold("Laravel application identity is unavailable") from exc
+        if app.pw_gid != app_group.gr_gid:
+            raise TransitionHold("Laravel application UID/GID mapping is inconsistent")
+
+        request_id = request_id or _transition_uuid7()
+        request_digest = request_digest or self._request_digest(request_id, operation, payload)
+        if (not isinstance(request_id, str)
+            or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", request_id, re.I)
+            or not isinstance(request_digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", request_digest)):
+            raise TransitionHold("Laravel RPC request identity is invalid")
+        envelope = {
+            "version": TRANSITION_RPC_VERSION,
+            "request_id": request_id,
+            "request_digest": request_digest,
+            "operation": operation,
+            "payload": payload,
+        }
+        encoded = _transition_canonical(envelope)
+        if len(encoded) > TRANSITION_RPC_MAX_BYTES:
+            raise TransitionHold("Laravel RPC request exceeds its bound")
+
+        directory_fd = open_root_trusted_directory(self.socket_dir)
+        try:
+            directory = os.fstat(directory_fd)
+            if not stat.S_ISDIR(directory.st_mode):
+                raise TransitionHold("Laravel RPC socket parent is not a directory")
+        finally:
+            os.close(directory_fd)
+
+        socket_path = self.socket_dir / (".transition-rpc-" + uuid.uuid4().hex + ".sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        process = None
+        socket_identity = None
+        connection = None
+        request_sent = False
+        try:
+            if len(os.fsencode(socket_path)) >= 108:
+                raise TransitionHold("Laravel RPC socket path exceeds the Linux AF_UNIX bound")
+            listener.settimeout(self.timeout_seconds)
+            listener.bind(str(socket_path))
+            info = socket_path.lstat()
+            socket_identity = (info.st_dev, info.st_ino)
+            os.chown(socket_path, 0, app_group.gr_gid, follow_symlinks=False)
+            os.chmod(socket_path, 0o620, follow_symlinks=False)
+            info = socket_path.lstat()
+            if (not stat.S_ISSOCK(info.st_mode) or info.st_uid != 0
+                or info.st_gid != app_group.gr_gid or stat.S_IMODE(info.st_mode) != 0o620
+                or info.st_nlink != 1 or (info.st_dev, info.st_ino) != socket_identity):
+                raise TransitionHold("Laravel RPC socket ownership or mode is invalid")
+            listener.listen(1)
+            argv = [*TRANSITION_RPC_COMMAND, "--connect-socket", str(socket_path)]
+            process = subprocess.Popen(
+                argv,
+                cwd=str(APP),
+                env=dict(SAFE_ENV),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE if TRANSITION_RPC_COMMAND[0] == sys.executable else subprocess.DEVNULL,
+                close_fds=True,
+                preexec_fn=lambda: self._drop_to_application_identity(app.pw_uid, app.pw_gid),
+            )
+            connection, _ = listener.accept()
+            connection.settimeout(self.timeout_seconds)
+            peer = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+            peer_pid, peer_uid, peer_gid = struct.unpack("3i", peer)
+            if (peer_pid != process.pid or peer_uid != app.pw_uid or peer_gid != app.pw_gid):
+                raise TransitionHold("Laravel RPC peer identity does not match the dropped CLI child")
+            connection.sendall(encoded)
+            request_sent = True
+            response_bytes = self._line(connection)
+            try:
+                response = json.loads(response_bytes.decode("ascii"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise TransitionHold("Laravel RPC response is malformed") from None
+            if (not isinstance(response, dict)
+                or set(response) != {"version", "request_id", "request_digest", "status", "result"}
+                or response.get("version") != TRANSITION_RPC_VERSION
+                or response.get("request_id") != request_id
+                or response.get("request_digest") != request_digest
+                or not isinstance(response.get("status"), str)
+                or not self._valid_result(operation, response.get("result"))
+                or _transition_canonical(response) != response_bytes):
+                raise TransitionHold("Laravel RPC response binding is invalid")
+            connection.close()
+            connection = None
+            try:
+                return_code = process.wait(timeout=self.timeout_seconds)
+            except subprocess.TimeoutExpired as exc:
+                process.kill()
+                process.wait()
+                if operation == "compare_and_set":
+                    raise TransitionRpcAmbiguous(request_id, request_digest) from exc
+                raise TransitionHold("Laravel read RPC child did not exit within its bound") from exc
+            if return_code != 0:
+                if operation == "compare_and_set":
+                    raise TransitionRpcAmbiguous(request_id, request_digest)
+                raise TransitionHold("Laravel read RPC child exited unsuccessfully")
+            return response
+        except TransitionRpcAmbiguous:
+            raise
+        except TransitionHold as exc:
+            if operation == "compare_and_set" and request_sent:
+                if process is not None and process.stderr is not None and process.poll() is None:
+                    try:
+                        process.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                if process is not None and process.poll() is not None and process.stderr is not None:
+                    diagnostic = process.stderr.read(16000).decode("utf-8", "replace")
+                    if diagnostic:
+                        raise TransitionHold("fake Laravel CLI failed: " + diagnostic[:1000]) from exc
+                raise TransitionRpcAmbiguous(request_id, request_digest) from exc
+            raise
+        except (OSError, socket.timeout, subprocess.SubprocessError) as exc:
+            if process is not None and process.stderr is not None and process.poll() is None:
+                try:
+                    process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
+            if process is not None and process.poll() is not None and process.stderr is not None:
+                diagnostic = process.stderr.read(16000).decode("utf-8", "replace")
+                if diagnostic:
+                    raise TransitionHold("fake Laravel CLI failed: " + diagnostic[:1000]) from exc
+            if operation == "compare_and_set":
+                raise TransitionRpcAmbiguous(request_id, request_digest) from exc
+            raise TransitionHold("Laravel transition RPC could not be completed") from exc
+        finally:
+            if connection is not None:
+                connection.close()
+            listener.close()
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            if process is not None and process.stderr is not None:
+                process.stderr.close()
+            try:
+                current = socket_path.lstat()
+            except FileNotFoundError:
+                current = None
+            if (current is not None and socket_identity is not None
+                and (current.st_dev, current.st_ino) == socket_identity
+                and stat.S_ISSOCK(current.st_mode)):
+                socket_path.unlink()
+
+    def _call(self, operation, payload):
+        response = self._exchange(operation, payload)
+        if response["status"] != "OK":
+            raise TransitionHold("Laravel transition DB operation was refused")
+        return response["result"]
+
+    @staticmethod
+    def _valid_result(operation, result):
+        if operation == "read_permit_manifest_hash":
+            return result is None or (
+                isinstance(result, str) and re.fullmatch(r"[0-9a-f]{64}", result) is not None
+            )
+        return isinstance(result, dict)
+
+    def read_tuple(self):
+        return self._call("read_tuple", {})
+
+    def read_permit_manifest_hash(self):
+        return self._call("read_permit_manifest_hash", {})
+
+    def verify_transition_preconditions(self, source, target, details, permits):
+        return self._call("verify_transition_preconditions", {
+            "source": source, "target": target, "details": details, "permits": permits,
+        })
+
+    def validate_permit_manifest(self, source, permits, digest):
+        return self._call("validate_permit_manifest", {
+            "source": source, "permits": permits, "digest": digest,
+        })
+
+    def compare_and_set(self, source, target, *, release=None, details=None):
+        details = dict(details or {})
+        request_id = details.get("rpc_request_id")
+        request_digest = details.get("rpc_request_digest")
+        payload = {
+            "source": source,
+            "target": target,
+            "release": release,
+            "details": details,
+        }
+        if (not isinstance(request_id, str)
+            or not isinstance(request_digest, str)
+            or request_digest != self._request_digest(request_id, "compare_and_set", payload)):
+            raise TransitionHold("durable transition RPC digest does not match the exact request envelope")
+        try:
+            response = self._exchange(
+                "compare_and_set", payload, request_id=request_id, request_digest=request_digest,
+            )
+        except TransitionRpcAmbiguous as ambiguous:
+            return self._verify_transition_receipt(
+                ambiguous.request_id, ambiguous.request_digest, target, cause=ambiguous,
+            )
+        result = response["result"]
+        if (response["status"] == "COMMITTED"
+            and result.get("committed") is True
+            and result.get("request_id") == request_id
+            and result.get("request_digest") == request_digest
+            and result.get("target") == target):
+            return True
+        return self._verify_transition_receipt(request_id, request_digest, target)
+
+    def _verify_transition_receipt(self, request_id, request_digest, target, *, cause=None):
+        receipt = self._call("read_transition_receipt", {
+            "request_id": request_id, "request_digest": request_digest,
+        })
+        if (receipt.get("committed") is not True
+            or receipt.get("request_id") != request_id
+            or receipt.get("request_digest") != request_digest
+            or receipt.get("target") != target):
+            raise TransitionHold("ambiguous Laravel transition lacks a positively verified committed receipt") from cause
+        return True
+
+    def nonce_consumed(self, nonce_digest):
+        return self._call("nonce_consumed", {"nonce_digest": nonce_digest}).get("consumed") is True
+
+    def validate_release(self, authorization, source, nonce_digest):
+        return self._call("validate_release", {
+            "authorization": authorization, "source": source, "nonce_digest": nonce_digest,
+        })
+
+    def assert_no_unresolved_drain_effects(self, operation_id, generation):
+        return self._call("assert_no_unresolved_drain_effects", {
+            "operation_id": operation_id, "generation": generation,
+        }).get("clear") is True
+
+    def read_transition_receipt(self, request_id, request_digest):
+        result = self._call("read_transition_receipt", {
+            "request_id": request_id, "request_digest": request_digest,
+        })
+        return result
+
+    def assert_exact_permit(self, _current, _binding):
+        raise TransitionHold("root transition RPC cannot authorize application DRAIN work")
+
+    def claim_drain_step(self, _current, _binding, _intent_id):
+        raise TransitionHold("root transition RPC cannot create application DRAIN INTENTs")
+
+    def verify_drain_effect_absent(self, *_args):
+        raise TransitionHold("root transition RPC cannot resolve application DRAIN effects")
+
+    def record_drain_outcome(self, *_args):
+        raise TransitionHold("root transition RPC cannot record application DRAIN outcomes")
+
+    def record_drain_reconciliation(self, *_args):
+        raise TransitionHold("root transition RPC cannot reconcile application DRAIN effects")
+
+
+class TransitionJournal:
+    """Canonical append-only, hash-chained journal for the inert root adapter."""
+
+    def __init__(self, path, *, require_root_owned=True, fsync_dir=None):
+        self.path = Path(path)
+        self.require_root_owned = require_root_owned
+        self.fsync_dir = fsync_dir
+
+    @staticmethod
+    def _digest(record):
+        return hashlib.sha256(_transition_canonical(record)).hexdigest()
+
+    def records(self):
+        try:
+            info = self.path.lstat()
+        except FileNotFoundError:
+            return []
+        if not stat.S_ISREG(info.st_mode) or self.path.is_symlink():
+            raise TransitionHold("journal is not a regular file")
+        if self.require_root_owned:
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+                raise TransitionHold("journal ownership or mode is invalid")
+        fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            opened = os.fstat(fd)
+            if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                raise TransitionHold("journal changed while opening")
+            chunks = []
+            total = 0
+            while True:
+                chunk = os.read(fd, min(65536, 64 * 1024 * 1024 + 1 - total))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > 64 * 1024 * 1024:
+                    raise TransitionHold("journal exceeds the supported read bound")
+                chunks.append(chunk)
+            raw = b"".join(chunks)
+        finally:
+            os.close(fd)
+        if raw and not raw.endswith(b"\n"):
+            raise TransitionHold("journal has a truncated final record")
+        result = []
+        previous = TRANSITION_GENESIS_HASH
+        for expected_seq, line in enumerate(raw.splitlines(), 1):
+            try:
+                value = json.loads(line.decode("ascii"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise TransitionHold("journal record is malformed") from None
+            if not isinstance(value, dict) or set(value) != {
+                "schema_version", "seq", "event", "state", "operation_id", "generation",
+                "boot_id", "source_sha", "target_sha", "evidence_digest", "prior_hash",
+                "details", "record_hash",
+            }:
+                raise TransitionHold("journal record has an invalid schema")
+            claimed = value.pop("record_hash")
+            if (type(value["schema_version"]) is not int or value["schema_version"] != 1
+                or type(value["seq"]) is not int or value["seq"] != expected_seq
+                or value["prior_hash"] != previous):
+                raise TransitionHold("journal sequence or chain is invalid")
+            if (not isinstance(value["state"], str) or value["state"] not in TRANSITION_STATES
+                or not isinstance(value["event"], str)
+                or value["event"] not in TRANSITION_STATES | {"RELEASE_COMMIT"}
+                or (value["event"] == "RELEASE_COMMIT" and value["state"] != "OPEN")
+                or not isinstance(value["operation_id"], str)
+                or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", value["operation_id"], re.I)
+                or type(value["generation"]) is not int or value["generation"] < 0
+                or not isinstance(value["boot_id"], str) or not re.fullmatch(r"[0-9a-f-]{36}", value["boot_id"], re.I)
+                or not isinstance(value["source_sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", value["source_sha"])
+                or not isinstance(value["target_sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", value["target_sha"])
+                or not isinstance(value["evidence_digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["evidence_digest"])):
+                raise TransitionHold("journal record values are invalid")
+            if (not isinstance(value["details"], dict)
+                or _transition_canonical(dict(value, record_hash=claimed)) != line + b"\n"
+                or self._digest(value) != claimed):
+                raise TransitionHold("journal hash is invalid")
+            previous = claimed
+            value["record_hash"] = claimed
+            result.append(value)
+        return result
+
+    def head(self):
+        records = self.records()
+        return (len(records), records[-1]["record_hash"] if records else TRANSITION_GENESIS_HASH)
+
+    def prepare(self, record):
+        records = self.records()
+        base_seq = len(records)
+        seq = base_seq + 1
+        prior = records[-1]["record_hash"] if records else TRANSITION_GENESIS_HASH
+        canonical = dict(record, schema_version=1, seq=seq, prior_hash=prior)
+        digest = self._digest(canonical)
+        line = _transition_canonical(dict(canonical, record_hash=digest))
+        return seq, digest, line, base_seq, prior
+
+    def append_prepared(self, prepared, *, fault=None):
+        seq, digest, line, base_seq, prior = prepared
+        if self.require_root_owned:
+            parent_fd = open_root_trusted_directory(self.path.parent)
+            try:
+                parent_info = os.fstat(parent_fd)
+                if stat.S_IMODE(parent_info.st_mode) != 0o700:
+                    raise TransitionHold("journal directory mode is invalid")
+            finally:
+                os.close(parent_fd)
+        else:
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if self.require_root_owned:
+            parent_info = self.path.parent.lstat()
+            if not stat.S_ISDIR(parent_info.st_mode) or parent_info.st_uid != 0 or stat.S_IMODE(parent_info.st_mode) != 0o700:
+                raise TransitionHold("journal directory ownership or mode is invalid")
+        current_seq, current_head = self.head()
+        if (current_seq, current_head) != (base_seq, prior):
+            raise TransitionHold("journal head changed after record preparation")
+        created = False
+        try:
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            created = True
+        except FileExistsError:
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise TransitionHold("journal is not a regular file")
+            if self.require_root_owned and (info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600):
+                raise TransitionHold("journal ownership or mode is invalid")
+            view = memoryview(line)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("short journal append")
+                view = view[written:]
+            if fault is not None:
+                fault("journal_appended")
+                fault("before_journal_fsync")
+            os.fsync(fd)
+            if fault is not None:
+                fault("journal_fsync")
+        finally:
+            os.close(fd)
+        if created:
+            if fault is not None:
+                fault("before_journal_directory_fsync")
+            if self.fsync_dir is not None:
+                self.fsync_dir(self.path.parent)
+            else:
+                parent_fd = os.open(self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+                try:
+                    os.fsync(parent_fd)
+                finally:
+                    os.close(parent_fd)
+            if fault is not None:
+                fault("journal_directory_fsync")
+        return seq, digest
+
+    def append(self, record, *, fault=None):
+        return self.append_prepared(self.prepare(record), fault=fault)
+
+
+class RootTransitionAdapter:
+    """Inert Gate 1 v1.0.3 persistence adapter; no command dispatch calls it.
+
+    The DB boundary is an injected transaction adapter (the Phase 1 M16 interface):
+    read_tuple, read_permit_manifest_hash, verify_transition_preconditions,
+    validate_permit_manifest, compare_and_set, nonce_consumed, validate_release,
+    assert_exact_permit, claim_drain_step, verify_drain_effect_absent, record_drain_outcome,
+    assert_no_unresolved_drain_effects, and record_drain_reconciliation. Claims
+    atomically insert one immutable INTENT keyed by the exact operation/generation,
+    permit, work, and step binding; within that same transaction the claim must
+    reject unresolved INTENT/UNKNOWN work for another permit in the operation and
+    generation. The returned claim reference identifies that durable row. The
+    proposed UUID is correlation only and never the replay key. Outcomes are
+    immutable INTENT -> SUCCEEDED/FAILED/UNKNOWN writes. Reconciliation is a
+    separate immutable authoritative record; it must not rewrite an outcome.
+    The current M16 claimFromDrain serializes on the fence but only enforces per-step
+    uniqueness; a live adapter needs a reviewed operation-wide unresolved-work guard.
+    This boundary performs no SQL or Laravel-model calls.
+    Tests must use a fake. The constructor intentionally requires every path and
+    adapter, so importing this module cannot touch /run, /var/lib, or a database.
+    """
+
+    def __init__(self, *, journal_path, status_path, pending_path, lock, database,
+                 boot_id, host_id, require_root_owned=True, fault=None):
+        if not isinstance(boot_id, str) or not re.fullmatch(r"[0-9a-f-]{36}", boot_id, re.I):
+            raise ValueError("invalid boot ID")
+        self.journal = TransitionJournal(journal_path, require_root_owned=require_root_owned,
+                                        fsync_dir=self._fsync_dir)
+        self.status_path = Path(status_path)
+        self.pending_path = Path(pending_path)
+        self.lock = lock
+        self.database = database
+        if isinstance(database, LaravelTransitionDatabaseAdapter):
+            database.bind_lock(lock)
+        self.boot_id = boot_id.lower()
+        self.host_id = host_id
+        self.require_root_owned = require_root_owned
+        self.fault = fault or (lambda _point: None)
+
+    @staticmethod
+    def _tuple(value):
+        if not isinstance(value, dict) or not set(TRANSITION_TUPLE_FIELDS).issubset(value):
+            raise TransitionHold("transition tuple is incomplete")
+        result = {key: value[key] for key in TRANSITION_TUPLE_FIELDS}
+        if not isinstance(result["state"], str) or result["state"] not in TRANSITION_STATES:
+            raise TransitionHold("transition state is unknown")
+        if not isinstance(result["operation_id"], str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", result["operation_id"], re.I):
+            raise TransitionHold("operation ID must be UUIDv7")
+        if type(result["generation"]) is not int or result["generation"] < 0:
+            raise TransitionHold("generation is invalid")
+        if type(result["journal_seq"]) is not int or result["journal_seq"] < 0:
+            raise TransitionHold("journal sequence is invalid")
+        for key in ("journal_head_hash", "evidence_digest"):
+            if not isinstance(result[key], str) or not re.fullmatch(r"[0-9a-f]{64}", result[key]):
+                raise TransitionHold("transition digest is invalid")
+        if not isinstance(result["boot_id"], str) or not re.fullmatch(r"[0-9a-f-]{36}", result["boot_id"], re.I):
+            raise TransitionHold("boot ID is invalid")
+        return result
+
+    def _event(self, point):
+        self.fault(point)
+
+    def _fsync_dir(self, path):
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def _read_projection(self):
+        if self.pending_path.exists() or self.pending_path.is_symlink():
+            raise TransitionHold("pending marker blocks transition admission")
+        try:
+            info = self.status_path.lstat()
+            if not stat.S_ISREG(info.st_mode) or self.status_path.is_symlink():
+                raise TransitionHold("projection is not a regular file")
+            if self.require_root_owned and (info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o644):
+                raise TransitionHold("projection ownership or mode is invalid")
+            fd = os.open(self.status_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                opened = os.fstat(fd)
+                if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                    raise TransitionHold("projection changed while opening")
+                content = os.read(fd, 1024 * 1024 + 1)
+            finally:
+                os.close(fd)
+            if len(content) > 1024 * 1024:
+                raise TransitionHold("projection exceeds supported size")
+            value = json.loads(content.decode("ascii"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raise TransitionHold("projection is missing or corrupt") from None
+        if not isinstance(value, dict):
+            raise TransitionHold("projection is invalid")
+        if _transition_canonical(value) != content:
+            raise TransitionHold("projection is not canonical")
+        expected_shape = set(TRANSITION_TUPLE_FIELDS)
+        if value.get("state") == "DRAINING":
+            expected_shape.add("permit_manifest_hash")
+        if set(value) != expected_shape:
+            raise TransitionHold("projection shape is invalid")
+        if self.require_root_owned:
+            parent_fd = open_root_trusted_directory(self.status_path.parent)
+            os.close(parent_fd)
+        tuple_value = self._tuple(value)
+        if tuple_value["boot_id"] != self.boot_id:
+            raise TransitionHold("projection boot ID is stale")
+        if tuple_value["journal_seq"] == 0:
+            if tuple_value["journal_head_hash"] != TRANSITION_GENESIS_HASH:
+                raise TransitionHold("genesis journal hash is invalid")
+        seq, digest = self.journal.head()
+        if (seq, digest) != (tuple_value["journal_seq"], tuple_value["journal_head_hash"]):
+            raise TransitionHold("projection does not match journal head")
+        db_tuple = self._tuple(self.database.read_tuple())
+        if db_tuple != {key: tuple_value[key] for key in TRANSITION_TUPLE_FIELDS}:
+            raise TransitionHold("projection and database tuple differ")
+        if tuple_value["state"] == "DRAINING":
+            manifest = value.get("permit_manifest_hash")
+            if not isinstance(manifest, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest):
+                raise TransitionHold("drain manifest is invalid")
+            if self.database.read_permit_manifest_hash() != manifest:
+                raise TransitionHold("projection and database drain manifest differ")
+            tuple_value["permit_manifest_hash"] = manifest
+        return tuple_value
+
+    def assert_open(self):
+        with self.lock.hold("shared"):
+            current = self._durability_preflight()
+            if current["state"] != "OPEN":
+                raise TransitionHold("admission is closed")
+            return current
+
+    def check_drain_permit(self, binding):
+        """Check a permit for diagnostics only; it does not authorize an effect."""
+        with self.lock.hold("shared"):
+            current = self._durability_preflight()
+            if current["state"] != "DRAINING":
+                raise TransitionHold("drain is closed")
+            self.database.assert_exact_permit(current, binding)
+            return current
+
+    def assert_drain_permit(self, binding):
+        raise TransitionHold(
+            "check-only drain validation is not authorization; use execute_drain_permit"
+        )
+
+    def execute_drain_permit(self, binding, effect, *, max_duration_seconds=30.0):
+        """Atomically consume one exact permit step before a bounded external effect.
+
+        The injected claim method must durably enforce uniqueness by exact permit
+        and step binding, independent of the caller-supplied intent UUID, and reject
+        unresolved work for another permit in the same operation/generation within
+        the atomic claim transaction. Generic exceptions, timeouts, late results,
+        and lost post-effect verification are UNKNOWN. FAILED requires adapter
+        verification of authoritative no-effect evidence. INTENT remains durable
+        if the process dies before outcome write. SHARED remains held throughout.
+        """
+        if self.require_root_owned or isinstance(self.database, LaravelTransitionDatabaseAdapter):
+            raise TransitionHold("production root transition adapter has no enabled DRAIN effect catalog")
+        if not callable(effect):
+            raise TypeError("drain effect must be callable")
+        if (type(max_duration_seconds) not in {int, float}
+            or not 0 < max_duration_seconds <= 300):
+            raise ValueError("drain effect bound must be between 0 and 300 seconds")
+        with self.lock.hold("shared"):
+            current = self._durability_preflight()
+            if current["state"] != "DRAINING":
+                raise TransitionHold("drain is closed")
+            if self.database.assert_no_unresolved_drain_effects(
+                current["operation_id"], current["generation"]
+            ) is not True:
+                raise TransitionHold("unresolved DRAIN intent/UNKNOWN blocks another effect")
+            self.database.assert_exact_permit(current, binding)
+            intent_id = _transition_uuid7()
+            claim = self.database.claim_drain_step(current, binding, intent_id)
+            if not claim:
+                raise TransitionHold("atomic one-time drain permit claim was not recorded")
+            self._event("drain_intent_durable")
+            revalidated = self._read_projection()
+            if self._tuple(revalidated) != self._tuple(current):
+                raise TransitionHold("drain tuple changed after durable intent")
+            # claim_drain_step atomically validated the exact binding and consumed
+            # it. Rechecking the unclaimed-permit predicate here would correctly
+            # reject our own claim; the retained SHARED lock and authoritative tuple
+            # revalidation protect this boundary instead.
+            deadline = time.monotonic() + max_duration_seconds
+            try:
+                self._event("before_drain_effect")
+                result = effect(deadline)
+                self._event("drain_effect_returned")
+            except DrainEffectNotPerformed as exc:
+                if self.database.verify_drain_effect_absent(
+                    claim, intent_id, exc.evidence_digest, exc.authority_reference
+                ) is not True:
+                    raise TransitionHold(
+                        "absence of external effect is unverified; durable INTENT remains unresolved"
+                    ) from exc
+                outcome = {"status": "FAILED", "evidence_digest": exc.evidence_digest}
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("no-effect outcome was not durably recorded") from exc
+                raise TransitionHold("drain effect did not occur; consumed permit cannot be reused") from exc
+            except BaseException as exc:
+                outcome = {
+                    "status": "UNKNOWN",
+                    "evidence_digest": hashlib.sha256(
+                        ("ambiguous:" + type(exc).__name__).encode("ascii", "replace")
+                    ).hexdigest(),
+                }
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("ambiguous outcome remains unresolved in durable INTENT") from exc
+                raise TransitionHold("drain effect outcome is UNKNOWN; authoritative reconciliation required") from exc
+            late = time.monotonic() > deadline
+            try:
+                revalidated = self._read_projection()
+                if self._tuple(revalidated) != self._tuple(current):
+                    raise TransitionHold("drain tuple changed during authorized effect")
+            except TransitionHold as exc:
+                outcome = {
+                    "status": "UNKNOWN",
+                    "evidence_digest": hashlib.sha256(
+                        ("post-effect-revalidation:" + type(exc).__name__).encode("ascii", "replace")
+                    ).hexdigest(),
+                }
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("post-effect outcome remains unresolved in durable INTENT") from exc
+                raise TransitionHold("post-effect state is uncertain; authoritative reconciliation required") from exc
+            if late:
+                outcome = {
+                    "status": "UNKNOWN",
+                    "evidence_digest": hashlib.sha256(b"drain-effect-deadline-exceeded").hexdigest(),
+                }
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("late outcome remains unresolved in durable INTENT")
+                raise TransitionHold("drain effect exceeded its deadline; outcome UNKNOWN")
+            if not isinstance(result, dict) or set(result) != {"status", "evidence_digest"}:
+                outcome = {
+                    "status": "UNKNOWN",
+                    "evidence_digest": hashlib.sha256(b"invalid-effect-outcome").hexdigest(),
+                }
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("invalid effect outcome remains unresolved in durable INTENT")
+                raise TransitionHold("effect outcome is invalid and remains UNKNOWN")
+            if (result["status"] != "SUCCEEDED"
+                or not isinstance(result["evidence_digest"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", result["evidence_digest"])):
+                outcome = {
+                    "status": "UNKNOWN",
+                    "evidence_digest": hashlib.sha256(b"unproven-effect-outcome").hexdigest(),
+                }
+                if self.database.record_drain_outcome(claim, intent_id, outcome) is not True:
+                    raise TransitionHold("unproven outcome remains unresolved in durable INTENT")
+                raise TransitionHold("effect outcome is not proven; outcome UNKNOWN")
+            if self.database.record_drain_outcome(claim, intent_id, result) is not True:
+                raise TransitionHold("successful effect outcome remains unresolved in durable INTENT")
+            return result
+
+    def reconcile_drain_effect(self, claim, *, resolution, evidence_digest, authority_reference):
+        """Record immutable external reconciliation without rewriting the intent/outcome.
+
+        The injected adapter must validate the authority reference against its
+        authoritative source and durably append a separate reconciliation record.
+        The current M16 TransitionExecution model has no reconciliation table, so
+        a live DB adapter must provide that reviewed persistence extension first.
+        """
+        if self.require_root_owned or isinstance(self.database, LaravelTransitionDatabaseAdapter):
+            raise TransitionHold("root transition adapter cannot reconcile application DRAIN effects")
+        if resolution not in {"SUCCEEDED", "FAILED"}:
+            raise ValueError("reconciliation resolution must be SUCCEEDED or FAILED")
+        if not isinstance(evidence_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_digest):
+            raise ValueError("reconciliation evidence digest is invalid")
+        if not isinstance(authority_reference, str) or not authority_reference:
+            raise ValueError("authoritative reconciliation reference is required")
+        with self.lock.hold("exclusive"):
+            source = self._durability_preflight()
+            if source["state"] != "DRAINING":
+                raise TransitionHold("drain reconciliation is only valid while DRAINING")
+            if self.database.record_drain_reconciliation(
+                claim, resolution, evidence_digest, authority_reference
+            ) is not True:
+                raise TransitionHold("authoritative reconciliation was not durably recorded")
+            return {"status": resolution, "evidence_digest": evidence_digest}
+
+    def recover_uncertain_transition(self):
+        """Finish projection publication only after a positive Laravel commit receipt.
+
+        This path never replays compare_and_set. An absent, mismatched, or ambiguous
+        receipt leaves the pending marker in place and the transition held.
+        """
+        with self.lock.hold("exclusive"):
+            if not self.pending_path.exists() or self.pending_path.is_symlink():
+                raise TransitionHold("no safe pending transition is available for receipt recovery")
+
+            def read_local_projection(path):
+                try:
+                    info = path.lstat()
+                    if not stat.S_ISREG(info.st_mode) or path.is_symlink():
+                        raise TransitionHold("recovery projection is not a regular file")
+                    if self.require_root_owned and (info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o644):
+                        raise TransitionHold("recovery projection ownership or mode is invalid")
+                    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                    try:
+                        opened = os.fstat(fd)
+                        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                            raise TransitionHold("recovery projection changed while opening")
+                        content = os.read(fd, 1024 * 1024 + 1)
+                    finally:
+                        os.close(fd)
+                    value = json.loads(content.decode("ascii"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    raise TransitionHold("recovery projection is missing or corrupt") from None
+                if len(content) > 1024 * 1024 or not isinstance(value, dict):
+                    raise TransitionHold("recovery projection is invalid or too large")
+                if _transition_canonical(value) != content:
+                    raise TransitionHold("recovery projection is not canonical")
+                expected = set(TRANSITION_TUPLE_FIELDS)
+                if value.get("state") == "DRAINING":
+                    expected.add("permit_manifest_hash")
+                if set(value) != expected:
+                    raise TransitionHold("recovery projection shape is invalid")
+                tuple_value = self._tuple(value)
+                if tuple_value["boot_id"] != self.boot_id:
+                    raise TransitionHold("recovery projection belongs to a stale boot")
+                if value["state"] == "DRAINING":
+                    manifest = value.get("permit_manifest_hash")
+                    if not isinstance(manifest, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest):
+                        raise TransitionHold("recovery drain manifest is invalid")
+                    tuple_value["permit_manifest_hash"] = manifest
+                return tuple_value
+
+            if self.require_root_owned:
+                for parent in (self.pending_path.parent, self.status_path.parent):
+                    parent_fd = open_root_trusted_directory(parent)
+                    os.close(parent_fd)
+            source = read_local_projection(self.status_path)
+            target = read_local_projection(self.pending_path)
+            records = self.journal.records()
+            if not records:
+                raise TransitionHold("pending transition has no durable journal record")
+            record = records[-1]
+            if (record["seq"] != target["journal_seq"]
+                or record["record_hash"] != target["journal_head_hash"]
+                or record["state"] != target["state"]
+                or record["operation_id"] != target["operation_id"]
+                or record["generation"] != target["generation"]
+                or record["boot_id"] != target["boot_id"]
+                or record["prior_hash"] != source["journal_head_hash"]
+                or record["seq"] != source["journal_seq"] + 1
+                or (source["state"], target["state"]) not in TRANSITION_EDGES):
+                raise TransitionHold("pending transition does not match the durable journal edge")
+            details = record.get("details")
+            request_id = details.get("rpc_request_id") if isinstance(details, dict) else None
+            request_digest = details.get("rpc_request_digest") if isinstance(details, dict) else None
+            if (not isinstance(request_id, str)
+                or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", request_id, re.I)
+                or not isinstance(request_digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", request_digest)):
+                raise TransitionHold("journal has no valid durable Laravel request identity")
+            receipt = self.database.read_transition_receipt(request_id, request_digest)
+            if (not isinstance(receipt, dict)
+                or receipt.get("committed") is not True
+                or receipt.get("request_id") != request_id
+                or receipt.get("request_digest") != request_digest
+                or receipt.get("target") != target):
+                raise TransitionHold("Laravel has not positively verified the pending transition commit")
+            db_tuple = self._tuple(self.database.read_tuple())
+            if db_tuple != {key: target[key] for key in TRANSITION_TUPLE_FIELDS}:
+                raise TransitionHold("Laravel current tuple does not match the committed receipt")
+            if target["state"] == "DRAINING" and self.database.read_permit_manifest_hash() != target["permit_manifest_hash"]:
+                raise TransitionHold("Laravel permit manifest does not match the pending transition")
+            self._event("before_recovery_projection_rename")
+            os.replace(self.pending_path, self.status_path)
+            self._event("recovery_projection_rename")
+            try:
+                self._fsync_dir(self.status_path.parent)
+            except Exception as exc:
+                raise TransitionDurabilityUnconfirmed("COMMITTED_DURABILITY_UNCONFIRMED") from exc
+            self._event("recovery_projection_directory_fsync")
+            recovered = self._read_projection()
+            if self._tuple(recovered) != {key: target[key] for key in TRANSITION_TUPLE_FIELDS}:
+                raise TransitionHold("recovered projection failed authoritative verification")
+            return recovered
+
+    def _durability_preflight(self):
+        """Re-establish projection-directory durability before any new commit.
+
+        After a rename plus failed directory fsync, same-boot retry must fsync the
+        parent and verify projection, journal, and authoritative DB equality. A
+        stale boot ID remains a hard hold because post-reboot durability is uncertain.
+        """
+        try:
+            self._fsync_dir(self.status_path.parent)
+            current = self._read_projection()
+            db_tuple = self._tuple(self.database.read_tuple())
+            if db_tuple != {key: current[key] for key in TRANSITION_TUPLE_FIELDS}:
+                raise TransitionHold("durability preflight authoritative tuple mismatch")
+            return current
+        except TransitionHold:
+            raise
+        except OSError as exc:
+            raise TransitionHold("durability preflight could not fsync projection directory") from exc
+
+    def _publish(self, source, target, event, *, details, source_sha, target_sha,
+                 evidence_digest, permit_manifest_hash=None, release=None,
+                 release_record=None):
+        if self.pending_path.exists() or self.pending_path.is_symlink():
+            raise TransitionHold("pending marker already exists")
+        record_details = dict(details)
+        if release_record is not None:
+            record_details["release"] = release_record
+        request_id = _transition_uuid7()
+        record_details["rpc_request_id"] = request_id
+        request_source = dict(self._tuple(source))
+        if source["state"] == "DRAINING":
+            request_source["permit_manifest_hash"] = source["permit_manifest_hash"]
+        request_target = dict(self._tuple(target))
+        request_target["journal_seq"] = self.journal.head()[0] + 1
+        if permit_manifest_hash is not None:
+            request_target["permit_manifest_hash"] = permit_manifest_hash
+        request_payload = {
+            "source": request_source,
+            "target": request_target,
+            "release": release,
+            "details": record_details,
+        }
+        request_digest = LaravelTransitionDatabaseAdapter._request_digest(
+            request_id, "compare_and_set", request_payload,
+        )
+        record_details["rpc_request_digest"] = request_digest
+        record = {
+            "event": event,
+            "state": target["state"],
+            "operation_id": target["operation_id"],
+            "generation": target["generation"],
+            "boot_id": target["boot_id"],
+            "source_sha": source_sha,
+            "target_sha": target_sha,
+            "evidence_digest": evidence_digest,
+            "details": record_details,
+        }
+        prepared = self.journal.prepare(record)
+        seq, head, _line, _base_seq, _prior = prepared
+        if seq != request_target["journal_seq"]:
+            raise TransitionHold("journal sequence changed while binding the transition RPC")
+        target["journal_seq"] = seq
+        target["journal_head_hash"] = head
+        target["evidence_digest"] = evidence_digest
+        if permit_manifest_hash is not None:
+            target["permit_manifest_hash"] = permit_manifest_hash
+        encoded = _transition_canonical(target)
+        self._event("before_marker_create")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        if self.require_root_owned:
+            parent_fd = open_root_trusted_directory(self.pending_path.parent)
+            os.close(parent_fd)
+        fd = os.open(self.pending_path, flags, 0o644)
+        try:
+            if self.require_root_owned:
+                os.fchown(fd, 0, 0)
+            os.fchmod(fd, 0o644)
+            self._event("marker_created")
+            view = memoryview(encoded)
+            partial = False
+            while view:
+                chunk = max(1, len(view) // 2) if not partial else len(view)
+                written = os.write(fd, view[:chunk])
+                if written <= 0:
+                    raise OSError("short marker write")
+                view = view[written:]
+                if not partial and view:
+                    partial = True
+                    self._event("marker_partial_write")
+            self._event("marker_written")
+            self._event("before_marker_file_fsync")
+            os.fsync(fd)
+            self._event("marker_file_fsync")
+        finally:
+            os.close(fd)
+        self._event("before_marker_directory_fsync")
+        self._fsync_dir(self.pending_path.parent)
+        self._event("marker_directory_fsync")
+        self._event("before_journal_append")
+        self.journal.append_prepared(prepared, fault=self._event)
+        self._event("before_database_commit")
+        self.database.compare_and_set(source, target, release=release, details=record_details)
+        self._event("database_commit")
+        if self._tuple(self.database.read_tuple()) != self._tuple(target):
+            raise TransitionHold("database did not persist exact target tuple")
+        jseq, jhead = self.journal.head()
+        if (jseq, jhead) != (seq, head):
+            raise TransitionHold("journal changed before projection commit")
+        self._event("before_projection_rename")
+        os.replace(self.pending_path, self.status_path)
+        self._event("projection_rename")
+        try:
+            self._event("before_projection_directory_fsync")
+            self._fsync_dir(self.status_path.parent)
+        except Exception as exc:
+            raise TransitionDurabilityUnconfirmed("COMMITTED_DURABILITY_UNCONFIRMED") from exc
+        self._event("projection_directory_fsync")
+        published = self._read_projection()
+        if self._tuple(published) != self._tuple(target) or self._tuple(self.database.read_tuple()) != self._tuple(target):
+            raise TransitionHold("final projection/database verification failed")
+        return target
+
+    def transition(self, target_state, *, source_sha, target_sha, evidence_digest,
+                   details=None, preconditions=None, permits=None):
+        if target_state not in TRANSITION_STATES:
+            raise ValueError("unknown target state")
+        for name, value in (("source SHA", source_sha), ("target SHA", target_sha)):
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+                raise ValueError("invalid " + name)
+        if not isinstance(evidence_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_digest):
+            raise ValueError("invalid evidence digest")
+        details = dict(details or {})
+        def has_sensitive_key(value):
+            if isinstance(value, dict):
+                return any(re.search(r"secret|token|password|credential|api[_-]?key", str(key), re.I)
+                           or has_sensitive_key(nested) for key, nested in value.items())
+            if isinstance(value, (list, tuple)):
+                return any(has_sensitive_key(item) for item in value)
+            return False
+        if has_sensitive_key(details):
+            raise ValueError("secret-like journal fields are forbidden")
+        with self.lock.hold("exclusive"):
+            source = self._durability_preflight()
+            if source["state"] == "DRAINING" and self.database.assert_no_unresolved_drain_effects(
+                source["operation_id"], source["generation"]
+            ) is not True:
+                raise TransitionHold("unresolved DRAIN intent/UNKNOWN outcome blocks transition progression")
+            if (source["state"], target_state) not in TRANSITION_EDGES:
+                raise TransitionHold("transition is not allowed")
+            new_operation = source["state"] == "OPEN" and target_state == "HOLD_REQUESTED"
+            target = {
+                "state": target_state,
+                "operation_id": _transition_uuid7() if new_operation else source["operation_id"],
+                "generation": source["generation"] + (1 if new_operation else 0),
+                "boot_id": self.boot_id,
+                "journal_seq": source["journal_seq"] + 1,
+                "journal_head_hash": source["journal_head_hash"],
+                "evidence_digest": evidence_digest,
+            }
+            manifest = None
+            if target_state == "DRAINING":
+                if permits is None or not isinstance(permits, list):
+                    raise TransitionHold("DRAINING requires a finite permit manifest")
+                forbidden = {"CONNECTOR", "BACKUP", "RESTORE", "UPDATE", "UPLOAD", "TRANSFER", "RETENTION"}
+                for permit in permits:
+                    if not isinstance(permit, dict):
+                        raise TransitionHold("drain permit is invalid")
+                    domain = str(permit.get("domain", permit.get("work_type", ""))).upper()
+                    if domain in forbidden:
+                        raise TransitionHold("Connector and backup work have no drain exception")
+                manifest_payload = {
+                    "operation_id": target["operation_id"],
+                    "generation": target["generation"],
+                    "cutoff_seq": source["journal_seq"],
+                    "permits": permits,
+                }
+                manifest = hashlib.sha256(_transition_canonical(manifest_payload)).hexdigest()
+                details["cutoff_seq"] = source["journal_seq"]
+                details["permit_manifest_hash"] = manifest
+                self.database.validate_permit_manifest(source, permits, manifest)
+            self.database.verify_transition_preconditions(source, target, details, permits)
+            if preconditions is not None:
+                preconditions(source, target_state)
+            event = target_state
+            return self._publish(source, target, event, details=details,
+                                 source_sha=source_sha, target_sha=target_sha,
+                                 evidence_digest=evidence_digest,
+                                 permit_manifest_hash=manifest)
+
+    def release(self, authorization, *, source_sha, target_sha, evidence_digest):
+        for name, value in (("source SHA", source_sha), ("target SHA", target_sha)):
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+                raise ValueError("invalid " + name)
+        if not isinstance(evidence_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_digest):
+            raise ValueError("invalid evidence digest")
+        required = {"host_id", "operation_id", "generation", "source_sha", "target_sha",
+                    "approval_ref", "php_profile", "rollback_evidence", "expected_journal_seq", "nonce"}
+        if not isinstance(authorization, dict) or set(authorization) != required:
+            raise TransitionHold("release authorization shape is invalid")
+        nonce = authorization["nonce"]
+        if not isinstance(nonce, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", nonce):
+            raise TransitionHold("release nonce is invalid")
+        nonce_digest = hashlib.sha256(nonce.encode("ascii")).hexdigest()
+        with self.lock.hold("exclusive"):
+            source = self._durability_preflight()
+            if self.database.assert_no_unresolved_drain_effects(
+                source["operation_id"], source["generation"]
+            ) is not True:
+                raise TransitionHold("unresolved DRAIN intent/UNKNOWN outcome blocks RELEASE")
+            if self.database.nonce_consumed(nonce_digest) or any(
+                record.get("event") == "RELEASE_COMMIT"
+                and record.get("details", {}).get("nonce_digest") == nonce_digest
+                for record in self.journal.records()
+            ):
+                raise TransitionHold("release nonce was already used")
+            if source["state"] != "READY_PENDING_OWNER":
+                raise TransitionHold("release source state is not ready")
+            if authorization["php_profile"] != "8.4" or authorization["host_id"] != self.host_id:
+                raise TransitionHold("release host or PHP profile is invalid")
+            if authorization["operation_id"] != source["operation_id"] or authorization["generation"] != source["generation"]:
+                raise TransitionHold("release operation scope is invalid")
+            if authorization["source_sha"] != source_sha or authorization["target_sha"] != target_sha:
+                raise TransitionHold("release SHA scope is invalid")
+            if authorization["expected_journal_seq"] != source["journal_seq"] + 1:
+                raise TransitionHold("release journal sequence is invalid")
+            if (not isinstance(authorization["approval_ref"], str) or not authorization["approval_ref"]
+                or not isinstance(authorization["rollback_evidence"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", authorization["rollback_evidence"])):
+                raise TransitionHold("release evidence is incomplete")
+            target = dict(source, state="OPEN", boot_id=self.boot_id,
+                          journal_seq=source["journal_seq"] + 1,
+                          evidence_digest=evidence_digest)
+            details = {"approval_ref": authorization["approval_ref"], "nonce_digest": nonce_digest}
+            release_binding = {key: value for key, value in authorization.items() if key != "nonce"}
+            release_binding["nonce_digest"] = nonce_digest
+            self.database.validate_release(release_binding, source, nonce_digest)
+            return self._publish(source, target, "RELEASE_COMMIT", details=details,
+                                 source_sha=source_sha, target_sha=target_sha,
+                                 evidence_digest=evidence_digest,
+                                 release=release_binding,
+                                 release_record=release_binding)
 
 
 def dispatch(args):
