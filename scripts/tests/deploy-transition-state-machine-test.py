@@ -3042,12 +3042,19 @@ class TransitionLeaseRpcV2ClientTests(unittest.TestCase):
 
     def test_root_client_rejects_incomplete_or_cross_operation_fence_tuple(self):
         adapter = self.adapter()
-        payload = self.payload()
-        payload["fence_tuple"] = dict(payload["fence_tuple"], journal_seq=42)
-        with mock.patch.object(adapter, "_open_root_directory", create=True) as open_directory:
-            with self.assertRaises(LEASE_RPC.LeaseRpcHold):
-                adapter._exchange_once("claim_lease", payload)
-        open_directory.assert_not_called()
+        incomplete = self.payload()
+        del incomplete["fence_tuple"]["evidence_digest"]
+        cross_operation = self.payload()
+        cross_operation["fence_tuple"] = dict(
+            cross_operation["fence_tuple"], operation_id="018f0f8e-7b1c-7abc-8abc-123456789015",
+        )
+
+        for payload in (incomplete, cross_operation):
+            with self.subTest(payload=payload):
+                with mock.patch.object(adapter, "_open_root_directory", create=True) as open_directory:
+                    with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+                        adapter._exchange_once("claim_lease", payload)
+                open_directory.assert_not_called()
 
     def test_linux_af_unix_peer_credentials_and_child_privilege_drop(self):
         if sys.platform != "linux" or not hasattr(os, "geteuid") or os.geteuid() != 0:
