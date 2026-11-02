@@ -36,6 +36,7 @@ return [
     'stripe' => [
         'key' => env('STRIPE_KEY'),
         'secret' => env('STRIPE_SECRET'),
+        'api_version' => '2026-09-30.endive',
         'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
         'allow_live_mode' => (bool) env('STRIPE_ALLOW_LIVE_MODE', false),
         'mode' => env('STRIPE_MODE', env('STRIPE_ALLOW_LIVE_MODE', false) ? 'live' : 'test'),

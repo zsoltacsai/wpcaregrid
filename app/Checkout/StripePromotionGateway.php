@@ -2,6 +2,7 @@
 
 namespace App\Checkout;
 
+use App\Billing\StripeClientFactory;
 use Illuminate\Support\Facades\Log;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
@@ -109,6 +110,6 @@ final class StripePromotionGateway implements PromotionGateway
             throw new PromotionGatewayException('live_key_refused');
         }
 
-        return $this->client ??= new StripeClient($this->secret);
+        return $this->client ??= StripeClientFactory::make($this->secret);
     }
 }

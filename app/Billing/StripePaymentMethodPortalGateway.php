@@ -3,7 +3,6 @@
 namespace App\Billing;
 
 use RuntimeException;
-use Stripe\StripeClient;
 
 /** Uses only a Stripe portal configuration verified to permit payment method edits. */
 final class StripePaymentMethodPortalGateway implements PaymentMethodPortalGateway
@@ -27,7 +26,7 @@ final class StripePaymentMethodPortalGateway implements PaymentMethodPortalGatew
             throw new RuntimeException('Stripe key mode is not recognised.');
         }
 
-        $stripe = new StripeClient($this->secret);
+        $stripe = StripeClientFactory::make($this->secret);
         $configuration = $stripe->billingPortal->configurations->retrieve($this->configurationId, []);
         $features = $configuration->features ?? null;
         $keyIsLive = str_starts_with($this->secret, 'sk_live_');
