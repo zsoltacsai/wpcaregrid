@@ -791,7 +791,7 @@ stop_workers_for_rollback() {
 }
 
 recover_after_failure() {
-    local smoke_contract
+    local smoke_contract migration_status
 
     log 'Attempting guarded recovery while the Nginx gate is active.'
 
@@ -842,6 +842,8 @@ recover_after_failure() {
         root_marker_present "$WORKERS_DISABLED_FILE" || return 1
         root_marker_present "$SCHEDULER_PAUSE_FILE" || return 1
         workers_stopped || return 1
+        migration_status="$(php artisan migrate:status --no-interaction)" || return 1
+        grep -q 'Pending' <<<"$migration_status" && return 1
         php artisan up || return 1
         check_system_health allow-background-fenced || return 1
         privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || return 1

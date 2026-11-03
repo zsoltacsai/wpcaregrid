@@ -700,6 +700,27 @@ def main():
     assert 'workers_running' not in marketing_success
     assert 'pending jobs are retained' in controller
     assert 'queue:clear' not in controller and 'DELETE FROM jobs' not in controller
+    target_failure_start = controller.index('if (( TARGET_MARKETING_RELEASE )); then')
+    target_failure_end = controller.index('if (( BASELINE_BACKGROUND_RESTRICTED )); then', target_failure_start)
+    target_failure = controller[target_failure_start:target_failure_end]
+    assert 'worker-runtime-disable' in target_failure and 'stop_workers_for_rollback' in target_failure
+    assert 'scheduler-pause' in target_failure and 'workers_stopped' in target_failure
+    assert 'release_scheduler_lock_preserving_pause' in target_failure
+    assert 'return 1' in target_failure
+    forbidden_failure_recovery = ('queue:restart', 'worker-runtime-enable', 'worker start-all', 'resume_scheduler', 'release_gate')
+    assert not any(operation in target_failure for operation in forbidden_failure_recovery), "failed marketing-only transition must stay gated and must not resume SaaS work"
+    baseline_fenced_start = controller.index('if (( BASELINE_BACKGROUND_RESTRICTED )); then', target_failure_end)
+    baseline_fenced_end = controller.index('php artisan migrate:status --no-interaction | grep -q', baseline_fenced_start)
+    baseline_fenced_recovery = controller[baseline_fenced_start:baseline_fenced_end]
+    assert 'worker-runtime-disable' in baseline_fenced_recovery and 'scheduler-pause' in baseline_fenced_recovery
+    assert 'workers_stopped' in baseline_fenced_recovery and 'allow-background-fenced' in baseline_fenced_recovery
+    assert not any(operation in baseline_fenced_recovery for operation in forbidden_failure_recovery[:-1]), "marketing-only baseline recovery must preserve the background fence"
+    migration_recheck = 'migration_status="$(php artisan migrate:status --no-interaction)" || return 1\n        grep -q \'Pending\' <<<"$migration_status" && return 1'
+    assert migration_recheck in baseline_fenced_recovery
+    assert baseline_fenced_recovery.index(migration_recheck) < baseline_fenced_recovery.index('php artisan up') < baseline_fenced_recovery.index('release_gate || return 1'), "pending or unreadable migration status must keep the marketing-only baseline gated"
+    target_switch = controller.index('git checkout --detach "$TARGET_SHA"')
+    target_flag = controller.index('TARGET_MARKETING_RELEASE=1')
+    assert target_flag < target_switch, "failure recovery must know the target is marketing-only before any source switch"
 
     bash = shutil.which("bash")
     if bash and os.name != "nt":
