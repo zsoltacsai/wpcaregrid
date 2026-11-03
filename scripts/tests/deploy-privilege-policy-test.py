@@ -261,20 +261,30 @@ def main():
                 pass
             else:
                 raise AssertionError(f"runtime mismatch accepted: {profile} {key}")
-    fpm_info = """[PHP Modules]\nctype\ncurl\ndom\nfileinfo\nfilter\nhash\niconv\nintl\njson\nlibxml\nmbstring\nopenssl\npcre\nPDO\npdo_mysql\nsession\nSimpleXML\nsodium\ntokenizer\nxml\nzip\n[Zend Modules]\nZend OPcache\nopcache.validate_timestamps => On => On\nopcache.revalidate_freq => 2 => 2\n"""
-    module.validate_fpm_runtime_info(fpm_info)
+    fpm_modules = """[PHP Modules]\nctype\ncurl\ndom\nfileinfo\nfilter\nhash\niconv\nintl\njson\nlibxml\nmbstring\nopenssl\npcre\nPDO\npdo_mysql\nsession\nSimpleXML\nsodium\ntokenizer\nxml\nzip\n[Zend Modules]\nZend OPcache\n"""
+    fpm_info = """PHP Version => 8.4\nopcache.validate_timestamps => On => On\nopcache.revalidate_freq => 2 => 2\n"""
+    module.validate_fpm_runtime_info(fpm_info, fpm_modules)
     for invalid_info in (
-        fpm_info.replace("pdo_mysql\n", ""),
         fpm_info.replace("opcache.validate_timestamps => On => On", "opcache.validate_timestamps => Off => Off"),
         fpm_info.replace("opcache.revalidate_freq => 2 => 2", "opcache.revalidate_freq => 5 => 5"),
         fpm_info.replace("opcache.revalidate_freq => 2 => 2", ""),
     ):
         try:
-            module.validate_fpm_runtime_info(invalid_info)
+            module.validate_fpm_runtime_info(invalid_info, fpm_modules)
         except ValueError:
             pass
         else:
-            raise AssertionError("incompatible PHP-FPM configuration was accepted")
+            raise AssertionError("incompatible PHP-FPM OPcache configuration was accepted")
+    for invalid_modules in (
+        fpm_modules.replace("pdo_mysql\n", ""),
+        fpm_modules.replace("[PHP Modules]\n", ""),
+    ):
+        try:
+            module.validate_fpm_runtime_info(fpm_info, invalid_modules)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("incomplete PHP-FPM module list was accepted")
     for profile in ("8.4", "8.5"):
         socket_path = module.PHP_RUNTIME_SOCKETS[profile].as_posix()
         good_fpm_dump = f"""[26-Oct-2026 12:00:00] NOTICE: [global]

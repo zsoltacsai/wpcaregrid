@@ -999,13 +999,19 @@ def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
     if fpm_config_result.returncode:
         raise ValueError("effective PHP-FPM pool configuration could not be inspected")
     validate_fpm_pool_listen(profile, (fpm_config_result.stdout or "") + "\n" + (fpm_config_result.stderr or ""))
+    fpm_modules_result = subprocess.run(
+        [str(fpm_binary), "-m"], check=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, text=True, env=SAFE_ENV, close_fds=True, timeout=10,
+    ) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="")
+    if fpm_modules_result.returncode:
+        raise ValueError("PHP-FPM modules could not be inspected")
     fpm_info_result = subprocess.run(
         [str(fpm_binary), "-i"], check=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL, text=True, env=SAFE_ENV, close_fds=True, timeout=10,
     ) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="")
     if fpm_info_result.returncode:
         raise ValueError("PHP-FPM configuration could not be inspected")
-    validate_fpm_runtime_info(fpm_info_result.stdout or "")
+    validate_fpm_runtime_info(fpm_info_result.stdout or "", fpm_modules_result.stdout or "")
     socket_parent = open_root_trusted_directory(PHP_RUNTIME_SOCKETS[profile].parent)
     os.close(socket_parent)
     socket_info = PHP_RUNTIME_SOCKETS[profile].lstat()
@@ -1072,20 +1078,26 @@ def validate_runtime_evidence(profile, *, binary_ok, cli_version, fpm_active, fp
         raise ValueError("PHP-FPM socket metadata differs from profile")
 
 
-def validate_fpm_runtime_info(output):
+def validate_fpm_runtime_info(info_output, modules_output):
     modules = set()
     in_modules = False
-    settings = {}
-    for line in output.splitlines():
+    found_php_modules = False
+    for line in modules_output.splitlines():
         stripped = line.strip()
         if stripped == "[PHP Modules]":
             in_modules = True
+            found_php_modules = True
             continue
         if stripped == "[Zend Modules]":
             in_modules = False
             continue
         if in_modules and re.fullmatch(r"[A-Za-z0-9_]+", stripped):
             modules.add(stripped.lower())
+    if not found_php_modules:
+        raise ValueError("PHP-FPM module list is unavailable")
+    settings = {}
+    for line in info_output.splitlines():
+        stripped = line.strip()
         match = re.fullmatch(r"(opcache\.validate_timestamps|opcache\.revalidate_freq)\s*=>\s*(.*?)\s*=>\s*.*", stripped)
         if match:
             settings[match.group(1)] = match.group(2)
