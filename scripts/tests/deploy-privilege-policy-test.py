@@ -11,7 +11,7 @@ import socket
 import stat
 import subprocess
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
 
@@ -31,6 +31,16 @@ def expect_rejected(args):
     except (ValueError, OSError, subprocess.SubprocessError):
         return
     raise AssertionError(f"unsafe helper request accepted: {args!r}")
+
+
+def expect_preflight_code(expected, callback):
+    try:
+        callback()
+    except module.RuntimePreflightFailure as error:
+        assert error.code == expected, f"preflight code mismatch: expected {expected}, got {error.code}"
+        assert str(error) == expected, "preflight diagnostic must contain only its fixed code"
+        return
+    raise AssertionError(f"preflight failure was not reported as {expected}")
 
 
 def nginx_fixture(profile="8.4", *, staging_name="staging.wpcaregrid.com", extra_staging_include=None, handler_override=None, selector_path=None):
@@ -285,6 +295,122 @@ def main():
             pass
         else:
             raise AssertionError("incomplete PHP-FPM module list was accepted")
+
+    assert all(module.re.fullmatch(r"PHP_RUNTIME_[A-Z0-9_]+", code) for code in module.PREFLIGHT_FAILURE_CODES)
+    assert "PHP_RUNTIME_PREFLIGHT_UNCLASSIFIED" in module.PREFLIGHT_FAILURE_CODES
+    expect_preflight_code(
+        "PHP_RUNTIME_FPM_CONFIG_REJECTED",
+        lambda: module.preflight_step(
+            "PHP_RUNTIME_FPM_CONFIG_REJECTED",
+            lambda: (_ for _ in ()).throw(OSError("synthetic-secret-path")),
+        ),
+    )
+
+    for code, callback in (
+        ("PHP_RUNTIME_FPM_MAIN_PID_UNAVAILABLE", lambda: module.validate_fpm_main_process("8.4", pid="0", executable="", cgroup_paths=set(), command_line_uses_config=False)),
+        ("PHP_RUNTIME_FPM_EXECUTABLE_MISMATCH", lambda: module.validate_fpm_main_process("8.4", pid="123", executable="/wrong", cgroup_paths={module.PHP_RUNTIME_FPM_CGROUPS["8.4"]}, command_line_uses_config=True)),
+        ("PHP_RUNTIME_FPM_CGROUP_MISMATCH", lambda: module.validate_fpm_main_process("8.4", pid="123", executable=module.PHP_RUNTIME_FPM_BINARIES["8.4"].as_posix(), cgroup_paths=set(), command_line_uses_config=True)),
+        ("PHP_RUNTIME_FPM_MAIN_PROCESS_INVALID", lambda: module.validate_fpm_main_process("8.4", pid="123", executable=module.PHP_RUNTIME_FPM_BINARIES["8.4"].as_posix(), cgroup_paths={module.PHP_RUNTIME_FPM_CGROUPS["8.4"]}, command_line_uses_config=False)),
+    ):
+        expect_preflight_code(code, callback)
+
+    runtime_code_fields = (
+        ("binary_ok", False, "PHP_RUNTIME_CLI_BINARY_INVALID"),
+        ("cli_version", "8.5", "PHP_RUNTIME_CLI_VERSION_MISMATCH"),
+        ("fpm_binary_ok", False, "PHP_RUNTIME_FPM_METADATA_INVALID"),
+        ("fpm_active", False, "PHP_RUNTIME_FPM_PROCESS_INACTIVE"),
+        ("fpm_executable", "/wrong", "PHP_RUNTIME_FPM_EXECUTABLE_MISMATCH"),
+        ("fpm_version", "7.4.0", "PHP_RUNTIME_FPM_VERSION_MISMATCH"),
+        ("socket_type", False, "PHP_RUNTIME_FPM_SOCKET_TYPE_INVALID"),
+        ("socket_uid", 0, "PHP_RUNTIME_FPM_SOCKET_OWNER_MISMATCH"),
+        ("socket_gid", 0, "PHP_RUNTIME_FPM_SOCKET_GROUP_MISMATCH"),
+        ("socket_mode", 0o666, "PHP_RUNTIME_FPM_SOCKET_MODE_MISMATCH"),
+    )
+    for profile in ("8.4", "8.5"):
+        valid_runtime = {
+            "binary_ok": True,
+            "cli_version": profile,
+            "fpm_active": True,
+            "fpm_binary_ok": True,
+            "fpm_executable": module.PHP_RUNTIME_FPM_BINARIES[profile].as_posix(),
+            "fpm_version": profile + ".27",
+            "socket_type": True,
+            "socket_uid": 33,
+            "socket_gid": 33,
+            "socket_mode": 0o660,
+            "expected_uid": 33,
+            "expected_gid": 33,
+        }
+        for field, bad_value, code in runtime_code_fields:
+            invalid = dict(valid_runtime)
+            invalid[field] = ("8.4" if profile == "8.5" else "8.5") if field == "cli_version" else bad_value
+            expect_preflight_code(code, lambda invalid=invalid, profile=profile: module.validate_runtime_evidence(profile, **invalid))
+
+    for code, info, modules in (
+        ("PHP_RUNTIME_FPM_MODULE_LIST_UNAVAILABLE", fpm_info, fpm_modules.replace("[PHP Modules]\n", "")),
+        ("PHP_RUNTIME_FPM_REQUIRED_MODULES_MISSING", fpm_info, fpm_modules.replace("pdo_mysql\n", "")),
+        ("PHP_RUNTIME_FPM_OPCACHE_TIMESTAMPS_DISABLED", fpm_info.replace("On => On", "Off => Off"), fpm_modules),
+        ("PHP_RUNTIME_FPM_OPCACHE_INTERVAL_UNAVAILABLE", fpm_info.replace("opcache.revalidate_freq => 2 => 2\n", ""), fpm_modules),
+        ("PHP_RUNTIME_FPM_OPCACHE_INTERVAL_UNAVAILABLE", fpm_info.replace("opcache.revalidate_freq => 2 => 2", "invalid"), fpm_modules),
+        ("PHP_RUNTIME_FPM_OPCACHE_INTERVAL_TOO_HIGH", fpm_info.replace("2 => 2", "5 => 5"), fpm_modules),
+    ):
+        expect_preflight_code(code, lambda info=info, modules=modules: module.validate_fpm_runtime_info(info, modules))
+
+    for code, dump in (
+        ("PHP_RUNTIME_FPM_POOL_USER_MISMATCH", "[www]\nuser = nobody\ngroup = www-data\nlisten = /run/php/php8.4-fpm.sock\n"),
+        ("PHP_RUNTIME_FPM_POOL_GROUP_MISMATCH", "[www]\nuser = www-data\ngroup = nobody\nlisten = /run/php/php8.4-fpm.sock\n"),
+        ("PHP_RUNTIME_FPM_POOL_SOCKET_MISMATCH", "[www]\nuser = www-data\ngroup = www-data\nlisten = /run/php/other.sock\n"),
+        ("PHP_RUNTIME_FPM_POOL_DUPLICATE_SOCKET", "[www]\nuser = www-data\ngroup = www-data\nlisten = /run/php/php8.4-fpm.sock\n[other]\nlisten = /run/php/php8.4-fpm.sock\n"),
+    ):
+        expect_preflight_code(code, lambda dump=dump: module.validate_fpm_pool_listen("8.4", dump))
+
+    expect_preflight_code(
+        "PHP_RUNTIME_LISTENER_OWNER_MISSING",
+        lambda: module.validate_fpm_listener_processes("8.4", 1, 1, [], lambda pid, fd: {}),
+    )
+    expect_preflight_code(
+        "PHP_RUNTIME_LISTENER_PROCESS_UNAVAILABLE",
+        lambda: module.validate_fpm_listener_processes("8.4", 1, 1, [(1, 1)], lambda pid, fd: (_ for _ in ()).throw(OSError("synthetic-secret"))),
+    )
+    expect_preflight_code(
+        "PHP_RUNTIME_LISTENER_EXECUTABLE_MISMATCH",
+        lambda: module.validate_fpm_listener_processes("8.4", 1, 1, [(1, 1)], lambda pid, fd: {"executable": "/wrong", "cgroup_paths": set(), "fd_is_socket": False}),
+    )
+    expect_preflight_code(
+        "PHP_RUNTIME_LISTENER_CGROUP_MISMATCH",
+        lambda: module.validate_fpm_listener_processes("8.4", 1, 1, [(1, 1)], lambda pid, fd: {"executable": module.PHP_RUNTIME_FPM_BINARIES["8.4"].as_posix(), "cgroup_paths": set(), "fd_is_socket": True}),
+    )
+    expect_preflight_code(
+        "PHP_RUNTIME_LISTENER_FD_TYPE_MISMATCH",
+        lambda: module.validate_fpm_listener_processes("8.4", 1, 1, [(1, 1)], lambda pid, fd: {"executable": module.PHP_RUNTIME_FPM_BINARIES["8.4"].as_posix(), "cgroup_paths": {module.PHP_RUNTIME_FPM_CGROUPS["8.4"]}, "fd_is_socket": False}),
+    )
+
+    original_impl = module._php_runtime_preflight
+    module._php_runtime_preflight = lambda *args, **kwargs: (_ for _ in ()).throw(OSError("synthetic-secret"))
+    try:
+        expect_preflight_code("PHP_RUNTIME_PREFLIGHT_UNCLASSIFIED", lambda: module.php_runtime_preflight("8.4"))
+    finally:
+        module._php_runtime_preflight = original_impl
+
+    had_geteuid = hasattr(module.os, "geteuid")
+    original_geteuid = getattr(module.os, "geteuid", None)
+    original_dispatch, original_argv = module.dispatch, module.sys.argv
+    error_output = io.StringIO()
+    module.os.geteuid = lambda: 0
+    module.dispatch = lambda args: (_ for _ in ()).throw(module.RuntimePreflightFailure("PHP_RUNTIME_FPM_CONFIG_REJECTED"))
+    module.sys.argv = [str(HELPER), "php-runtime-preflight", "8.4"]
+    try:
+        with redirect_stderr(error_output):
+            assert module.main() == 1
+    finally:
+        if had_geteuid:
+            module.os.geteuid = original_geteuid
+        else:
+            del module.os.geteuid
+        module.dispatch, module.sys.argv = original_dispatch, original_argv
+    assert error_output.getvalue().strip() == "PREFLIGHT_FAILURE=PHP_RUNTIME_FPM_CONFIG_REJECTED"
+    assert "synthetic-secret" not in error_output.getvalue()
+
     for profile in ("8.4", "8.5"):
         socket_path = module.PHP_RUNTIME_SOCKETS[profile].as_posix()
         good_fpm_dump = f"""[26-Oct-2026 12:00:00] NOTICE: [global]

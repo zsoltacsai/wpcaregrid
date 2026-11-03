@@ -69,6 +69,48 @@ WORKER_COMMANDS = {
 WORKERS = {"wpcaregrid-default", "wpcaregrid-backups"}
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
 
+PREFLIGHT_FAILURE_CODES = frozenset({
+    "PHP_RUNTIME_PROFILE_INVALID", "PHP_RUNTIME_SELECTOR_INVALID", "PHP_RUNTIME_CLI_DIRECTORY_INVALID",
+    "PHP_RUNTIME_CLI_METADATA_INVALID", "PHP_RUNTIME_CLI_PROBE_FAILED", "PHP_RUNTIME_FPM_SERVICE_PROBE_FAILED",
+    "PHP_RUNTIME_FPM_MAIN_PID_UNAVAILABLE", "PHP_RUNTIME_FPM_MAIN_PROCESS_INVALID",
+    "PHP_RUNTIME_FPM_CGROUP_MISMATCH", "PHP_RUNTIME_FPM_DIRECTORY_INVALID", "PHP_RUNTIME_FPM_METADATA_INVALID",
+    "PHP_RUNTIME_FPM_VERSION_PROBE_FAILED", "PHP_RUNTIME_FPM_VERSION_MISMATCH", "PHP_RUNTIME_FPM_CONFIG_PROBE_FAILED",
+    "PHP_RUNTIME_FPM_CONFIG_REJECTED", "PHP_RUNTIME_FPM_POOL_LISTEN_MISMATCH", "PHP_RUNTIME_FPM_MODULE_PROBE_FAILED",
+    "PHP_RUNTIME_FPM_INFO_PROBE_FAILED", "PHP_RUNTIME_FPM_MODULE_LIST_UNAVAILABLE", "PHP_RUNTIME_FPM_REQUIRED_MODULES_MISSING",
+    "PHP_RUNTIME_FPM_OPCACHE_TIMESTAMPS_DISABLED", "PHP_RUNTIME_FPM_OPCACHE_INTERVAL_UNAVAILABLE",
+    "PHP_RUNTIME_FPM_OPCACHE_INTERVAL_TOO_HIGH", "PHP_RUNTIME_SOCKET_DIRECTORY_INVALID", "PHP_RUNTIME_SOCKET_METADATA_UNAVAILABLE",
+    "PHP_RUNTIME_ACCOUNT_METADATA_UNAVAILABLE", "PHP_RUNTIME_CLI_BINARY_INVALID", "PHP_RUNTIME_CLI_VERSION_MISMATCH",
+    "PHP_RUNTIME_FPM_PROCESS_INACTIVE", "PHP_RUNTIME_FPM_EXECUTABLE_MISMATCH", "PHP_RUNTIME_FPM_SOCKET_TYPE_INVALID",
+    "PHP_RUNTIME_FPM_SOCKET_OWNER_MISMATCH", "PHP_RUNTIME_FPM_SOCKET_GROUP_MISMATCH", "PHP_RUNTIME_FPM_SOCKET_MODE_MISMATCH",
+    "PHP_RUNTIME_LISTENER_PROBE_FAILED", "PHP_RUNTIME_LISTENER_RECORD_INVALID", "PHP_RUNTIME_LISTENER_PROCESS_UNAVAILABLE",
+    "PHP_RUNTIME_LISTENER_PROCESS_MISMATCH", "PHP_RUNTIME_NGINX_CONTRACT_REJECTED", "PHP_RUNTIME_SUPERVISOR_CONTRACT_REJECTED",
+    "PHP_RUNTIME_FPM_POOL_USER_MISMATCH", "PHP_RUNTIME_FPM_POOL_GROUP_MISMATCH", "PHP_RUNTIME_FPM_POOL_SOCKET_MISMATCH",
+    "PHP_RUNTIME_FPM_POOL_DUPLICATE_SOCKET",
+    "PHP_RUNTIME_LISTENER_INODE_INVALID", "PHP_RUNTIME_LISTENER_OWNER_MISSING", "PHP_RUNTIME_SOCKET_INODE_MISMATCH",
+    "PHP_RUNTIME_LISTENER_EXECUTABLE_MISMATCH", "PHP_RUNTIME_LISTENER_CGROUP_MISMATCH",
+    "PHP_RUNTIME_LISTENER_FD_TYPE_MISMATCH",
+    "PHP_RUNTIME_PREFLIGHT_UNCLASSIFIED",
+})
+
+
+class RuntimePreflightFailure(ValueError):
+    """A runtime-preflight refusal carrying only a fixed, non-sensitive code."""
+
+    def __init__(self, code):
+        if code not in PREFLIGHT_FAILURE_CODES:
+            code = "PHP_RUNTIME_PREFLIGHT_UNCLASSIFIED"
+        self.code = code
+        super().__init__(code)
+
+
+def preflight_step(code, callback, *args, **kwargs):
+    try:
+        return callback(*args, **kwargs)
+    except RuntimePreflightFailure:
+        raise
+    except Exception:
+        raise RuntimePreflightFailure(code) from None
+
 # Gate 1 transition paths are declarations only. The transition adapter below is
 # deliberately not wired into dispatch(), deploy-staging.sh, or any consumer.
 TRANSITION_JOURNAL = Path("/var/lib/wpcaregrid/transitions/journal.jsonl")
@@ -861,13 +903,13 @@ def validate_fpm_pool_listen(profile, output):
 
     www = settings.get("www", {})
     if www.get("user") != ["www-data"]:
-        raise ValueError("effective www FPM worker user differs from www-data")
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_POOL_USER_MISMATCH")
     if www.get("group") != ["www-data"]:
-        raise ValueError("effective www FPM worker group differs from www-data")
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_POOL_GROUP_MISMATCH")
     if www.get("listen") != [expected_socket]:
-        raise ValueError("effective www FPM pool listener differs from the selected socket")
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_POOL_SOCKET_MISMATCH")
     if any(pool != "www" and expected_socket in values.get("listen", []) for pool, values in settings.items()):
-        raise ValueError("another FPM pool also claims the selected socket")
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_POOL_DUPLICATE_SOCKET")
 
 
 def parse_unix_listener_records(output, expected_socket):
@@ -921,11 +963,14 @@ def process_uses_fpm_config(pid, profile):
 
 def validate_fpm_main_process(profile, *, pid, executable, cgroup_paths, command_line_uses_config):
     profile = php_profile(profile)
-    if (not re.fullmatch(r"[1-9][0-9]{0,8}", str(pid))
-            or executable != PHP_RUNTIME_FPM_BINARIES[profile].as_posix()
-            or PHP_RUNTIME_FPM_CGROUPS[profile] not in cgroup_paths
-            or command_line_uses_config is not True):
-        raise ValueError("active FPM master identity or configuration differs from profile")
+    if not re.fullmatch(r"[1-9][0-9]{0,8}", str(pid)):
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_MAIN_PID_UNAVAILABLE")
+    if executable != PHP_RUNTIME_FPM_BINARIES[profile].as_posix():
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_EXECUTABLE_MISMATCH")
+    if PHP_RUNTIME_FPM_CGROUPS[profile] not in cgroup_paths:
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_CGROUP_MISMATCH")
+    if command_line_uses_config is not True:
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_MAIN_PROCESS_INVALID")
 
 
 def validate_fpm_listener_processes(profile, inode, socket_path_inode, owners, process_evidence):
@@ -934,30 +979,47 @@ def validate_fpm_listener_processes(profile, inode, socket_path_inode, owners, p
     # at the socket object and has a distinct sockfs inode. Bind the listener
     # row to the configured path, then verify each `ss`-reported PID/FD still
     # names a socket held by the selected FPM service.
-    if (not isinstance(inode, int) or inode <= 0 or not owners
-            or not isinstance(socket_path_inode, int) or socket_path_inode != inode):
-        raise ValueError("invalid FPM listener evidence")
+    if not isinstance(inode, int) or inode <= 0:
+        raise RuntimePreflightFailure("PHP_RUNTIME_LISTENER_INODE_INVALID")
+    if not owners:
+        raise RuntimePreflightFailure("PHP_RUNTIME_LISTENER_OWNER_MISSING")
+    if not isinstance(socket_path_inode, int) or socket_path_inode != inode:
+        raise RuntimePreflightFailure("PHP_RUNTIME_SOCKET_INODE_MISMATCH")
     for pid, fd in owners:
-        evidence = process_evidence(pid, fd)
-        if (evidence.get("executable") != PHP_RUNTIME_FPM_BINARIES[profile].as_posix()
-                or PHP_RUNTIME_FPM_CGROUPS[profile] not in evidence.get("cgroup_paths", set())
-                or evidence.get("fd_is_socket") is not True):
-            raise ValueError("FPM listener is not owned by the selected FPM service")
+        try:
+            evidence = process_evidence(pid, fd)
+        except Exception:
+            raise RuntimePreflightFailure("PHP_RUNTIME_LISTENER_PROCESS_UNAVAILABLE") from None
+        if evidence.get("executable") != PHP_RUNTIME_FPM_BINARIES[profile].as_posix():
+            raise RuntimePreflightFailure("PHP_RUNTIME_LISTENER_EXECUTABLE_MISMATCH")
+        if PHP_RUNTIME_FPM_CGROUPS[profile] not in evidence.get("cgroup_paths", set()):
+            raise RuntimePreflightFailure("PHP_RUNTIME_LISTENER_CGROUP_MISMATCH")
+        if evidence.get("fd_is_socket") is not True:
+            raise RuntimePreflightFailure("PHP_RUNTIME_LISTENER_FD_TYPE_MISMATCH")
 
 
 def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
-    profile = php_profile(profile)
-    runtime_snippet(profile)
+    try:
+        return _php_runtime_preflight(profile, allow_legacy_supervisor=allow_legacy_supervisor)
+    except RuntimePreflightFailure:
+        raise
+    except Exception:
+        raise RuntimePreflightFailure("PHP_RUNTIME_PREFLIGHT_UNCLASSIFIED") from None
+
+
+def _php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
+    profile = preflight_step("PHP_RUNTIME_PROFILE_INVALID", php_profile, profile)
+    preflight_step("PHP_RUNTIME_SELECTOR_INVALID", runtime_snippet, profile)
     binary = PHP_RUNTIME_BINARIES[profile]
-    binary_parent = open_root_trusted_directory(binary.parent)
+    binary_parent = preflight_step("PHP_RUNTIME_CLI_DIRECTORY_INVALID", open_root_trusted_directory, binary.parent)
     os.close(binary_parent)
-    info = binary.lstat()
+    info = preflight_step("PHP_RUNTIME_CLI_METADATA_INVALID", binary.lstat)
     binary_ok = stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(binary, os.X_OK)
-    result = run([str(binary), "-r", "echo PHP_MAJOR_VERSION, '.', PHP_MINOR_VERSION;"], check=False, stdout=subprocess.PIPE) if binary_ok else subprocess.CompletedProcess([], 1, stdout="")
+    result = preflight_step("PHP_RUNTIME_CLI_PROBE_FAILED", run, [str(binary), "-r", "echo PHP_MAJOR_VERSION, '.', PHP_MINOR_VERSION;"], check=False, stdout=subprocess.PIPE) if binary_ok else subprocess.CompletedProcess([], 1, stdout="")
     cli_version = (result.stdout or "").strip() if result.returncode == 0 else ""
-    service = run(["/usr/bin/systemctl", "is-active", "--quiet", PHP_RUNTIME_SERVICES[profile]], check=False)
-    main_pid = run(["/usr/bin/systemctl", "show", "--property=MainPID", "--value", PHP_RUNTIME_SERVICES[profile]], check=False, stdout=subprocess.PIPE)
-    cgroup = run(["/usr/bin/systemctl", "show", "--property=ControlGroup", "--value", PHP_RUNTIME_SERVICES[profile]], check=False, stdout=subprocess.PIPE)
+    service = preflight_step("PHP_RUNTIME_FPM_SERVICE_PROBE_FAILED", run, ["/usr/bin/systemctl", "is-active", "--quiet", PHP_RUNTIME_SERVICES[profile]], check=False)
+    main_pid = preflight_step("PHP_RUNTIME_FPM_MAIN_PID_UNAVAILABLE", run, ["/usr/bin/systemctl", "show", "--property=MainPID", "--value", PHP_RUNTIME_SERVICES[profile]], check=False, stdout=subprocess.PIPE)
+    cgroup = preflight_step("PHP_RUNTIME_FPM_CGROUP_MISMATCH", run, ["/usr/bin/systemctl", "show", "--property=ControlGroup", "--value", PHP_RUNTIME_SERVICES[profile]], check=False, stdout=subprocess.PIPE)
     pid = (main_pid.stdout or "").strip()
     if main_pid.returncode or not re.fullmatch(r"[1-9][0-9]{0,8}", pid):
         fpm_executable = ""
@@ -972,7 +1034,7 @@ def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
             fpm_executable = ""
             main_cgroups = set()
             uses_expected_config = False
-    validate_fpm_main_process(
+    preflight_step("PHP_RUNTIME_FPM_MAIN_PROCESS_INVALID", validate_fpm_main_process,
         profile,
         pid=pid,
         executable=fpm_executable,
@@ -980,48 +1042,54 @@ def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
         command_line_uses_config=uses_expected_config,
     )
     if cgroup.returncode or (cgroup.stdout or "").strip() != PHP_RUNTIME_FPM_CGROUPS[profile]:
-        raise ValueError("PHP-FPM systemd service cgroup differs from profile")
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_CGROUP_MISMATCH")
     fpm_binary = PHP_RUNTIME_FPM_BINARIES[profile]
     try:
-        fpm_parent = open_root_trusted_directory(fpm_binary.parent)
+        fpm_parent = preflight_step("PHP_RUNTIME_FPM_DIRECTORY_INVALID", open_root_trusted_directory, fpm_binary.parent)
         os.close(fpm_parent)
-        fpm_info = fpm_binary.lstat()
+        fpm_info = preflight_step("PHP_RUNTIME_FPM_METADATA_INVALID", fpm_binary.lstat)
         fpm_binary_ok = stat.S_ISREG(fpm_info.st_mode) and fpm_info.st_uid == 0 and not (fpm_info.st_mode & 0o022) and os.access(fpm_binary, os.X_OK)
-    except OSError:
+    except RuntimePreflightFailure:
+        raise
+    except Exception:
         fpm_binary_ok = False
-    fpm_version_result = run([str(fpm_binary), "-v"], check=False, stdout=subprocess.PIPE) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="")
+    if not fpm_binary_ok:
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_METADATA_INVALID")
+    fpm_version_result = preflight_step("PHP_RUNTIME_FPM_VERSION_PROBE_FAILED", run, [str(fpm_binary), "-v"], check=False, stdout=subprocess.PIPE) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="")
+    if fpm_version_result.returncode:
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_VERSION_PROBE_FAILED")
     fpm_version_match = re.search(r"(?m)^PHP (8\.[0-9]+\.[0-9]+) \(fpm-fcgi\)", fpm_version_result.stdout or "") if fpm_version_result.returncode == 0 else None
-    fpm_config_result = subprocess.run(
+    fpm_config_result = preflight_step("PHP_RUNTIME_FPM_CONFIG_PROBE_FAILED", subprocess.run,
         [str(fpm_binary), "-tt", "--fpm-config", str(PHP_RUNTIME_FPM_CONFIGS[profile])],
         check=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, env=SAFE_ENV, close_fds=True, timeout=10,
     ) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="", stderr="")
     if fpm_config_result.returncode:
-        raise ValueError("effective PHP-FPM pool configuration could not be inspected")
-    validate_fpm_pool_listen(profile, (fpm_config_result.stdout or "") + "\n" + (fpm_config_result.stderr or ""))
-    fpm_modules_result = subprocess.run(
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_CONFIG_REJECTED")
+    preflight_step("PHP_RUNTIME_FPM_POOL_LISTEN_MISMATCH", validate_fpm_pool_listen, profile, (fpm_config_result.stdout or "") + "\n" + (fpm_config_result.stderr or ""))
+    fpm_modules_result = preflight_step("PHP_RUNTIME_FPM_MODULE_PROBE_FAILED", subprocess.run,
         [str(fpm_binary), "-m"], check=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL, text=True, env=SAFE_ENV, close_fds=True, timeout=10,
     ) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="")
     if fpm_modules_result.returncode:
-        raise ValueError("PHP-FPM modules could not be inspected")
-    fpm_info_result = subprocess.run(
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_MODULE_PROBE_FAILED")
+    fpm_info_result = preflight_step("PHP_RUNTIME_FPM_INFO_PROBE_FAILED", subprocess.run,
         [str(fpm_binary), "-i"], check=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL, text=True, env=SAFE_ENV, close_fds=True, timeout=10,
     ) if fpm_binary_ok else subprocess.CompletedProcess([], 1, stdout="")
     if fpm_info_result.returncode:
-        raise ValueError("PHP-FPM configuration could not be inspected")
-    validate_fpm_runtime_info(fpm_info_result.stdout or "", fpm_modules_result.stdout or "")
-    socket_parent = open_root_trusted_directory(PHP_RUNTIME_SOCKETS[profile].parent)
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_INFO_PROBE_FAILED")
+    preflight_step("PHP_RUNTIME_FPM_MODULE_LIST_UNAVAILABLE", validate_fpm_runtime_info, fpm_info_result.stdout or "", fpm_modules_result.stdout or "")
+    socket_parent = preflight_step("PHP_RUNTIME_SOCKET_DIRECTORY_INVALID", open_root_trusted_directory, PHP_RUNTIME_SOCKETS[profile].parent)
     os.close(socket_parent)
-    socket_info = PHP_RUNTIME_SOCKETS[profile].lstat()
+    socket_info = preflight_step("PHP_RUNTIME_SOCKET_METADATA_UNAVAILABLE", PHP_RUNTIME_SOCKETS[profile].lstat)
     import grp
     import pwd
     socket_mode = stat.S_IMODE(socket_info.st_mode)
     socket_type = stat.S_ISSOCK(socket_info.st_mode)
-    expected_uid = pwd.getpwnam("www-data").pw_uid
-    expected_gid = grp.getgrnam("www-data").gr_gid
-    validate_runtime_evidence(
+    expected_uid = preflight_step("PHP_RUNTIME_ACCOUNT_METADATA_UNAVAILABLE", pwd.getpwnam, "www-data").pw_uid
+    expected_gid = preflight_step("PHP_RUNTIME_ACCOUNT_METADATA_UNAVAILABLE", grp.getgrnam, "www-data").gr_gid
+    preflight_step("PHP_RUNTIME_CLI_BINARY_INVALID", validate_runtime_evidence,
         profile,
         binary_ok=binary_ok,
         cli_version=cli_version,
@@ -1036,14 +1104,14 @@ def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
         expected_uid=expected_uid,
         expected_gid=expected_gid,
     )
-    listener_result = subprocess.run(
+    listener_result = preflight_step("PHP_RUNTIME_LISTENER_PROBE_FAILED", subprocess.run,
         ["/usr/bin/ss", "-xlepH"], check=False, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
         env=SAFE_ENV, close_fds=True, timeout=10,
     )
     if listener_result.returncode:
-        raise ValueError("active Unix socket listeners could not be inspected")
-    listener_inode, listener_owners = parse_unix_listener_records(
+        raise RuntimePreflightFailure("PHP_RUNTIME_LISTENER_PROBE_FAILED")
+    listener_inode, listener_owners = preflight_step("PHP_RUNTIME_LISTENER_RECORD_INVALID", parse_unix_listener_records,
         listener_result.stdout or "", PHP_RUNTIME_SOCKETS[profile].as_posix()
     )
 
@@ -1053,29 +1121,43 @@ def php_runtime_preflight(profile, *, allow_legacy_supervisor=False):
             cgroups = process_cgroup_paths(listener_pid)
             fd_info = os.stat(f"/proc/{listener_pid}/fd/{listener_fd}")
         except OSError:
-            raise ValueError("active FPM listener process evidence is unavailable") from None
+            raise RuntimePreflightFailure("PHP_RUNTIME_LISTENER_PROCESS_UNAVAILABLE") from None
         return {"executable": executable, "cgroup_paths": cgroups, "fd_is_socket": stat.S_ISSOCK(fd_info.st_mode)}
 
-    validate_fpm_listener_processes(
+    preflight_step("PHP_RUNTIME_LISTENER_PROCESS_MISMATCH", validate_fpm_listener_processes,
         profile,
         listener_inode,
         socket_info.st_ino,
         listener_owners,
         listener_process_evidence,
     )
-    nginx_runtime_contract(active_php_profile())
-    supervisor_runtime_contract(allow_legacy=allow_legacy_supervisor)
+    preflight_step("PHP_RUNTIME_NGINX_CONTRACT_REJECTED", nginx_runtime_contract, preflight_step("PHP_RUNTIME_SELECTOR_INVALID", active_php_profile))
+    preflight_step("PHP_RUNTIME_SUPERVISOR_CONTRACT_REJECTED", supervisor_runtime_contract, allow_legacy=allow_legacy_supervisor)
 
 
 def validate_runtime_evidence(profile, *, binary_ok, cli_version, fpm_active, fpm_binary_ok, fpm_executable, fpm_version, socket_type, socket_uid, socket_gid, socket_mode, expected_uid, expected_gid):
     profile = php_profile(profile)
     version = "8." + profile.split(".", 1)[1]
-    if not binary_ok or cli_version != version:
-        raise ValueError("PHP CLI binary or version differs from profile")
-    if not fpm_binary_ok or not fpm_active or fpm_executable != PHP_RUNTIME_FPM_BINARIES[profile].as_posix() or not fpm_version.startswith(version + "."):
-        raise ValueError("PHP-FPM process or version differs from profile")
-    if not socket_type or socket_uid != expected_uid or socket_gid != expected_gid or socket_mode != 0o660:
-        raise ValueError("PHP-FPM socket metadata differs from profile")
+    if not binary_ok:
+        raise RuntimePreflightFailure("PHP_RUNTIME_CLI_BINARY_INVALID")
+    if cli_version != version:
+        raise RuntimePreflightFailure("PHP_RUNTIME_CLI_VERSION_MISMATCH")
+    if not fpm_binary_ok:
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_METADATA_INVALID")
+    if not fpm_active:
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_PROCESS_INACTIVE")
+    if fpm_executable != PHP_RUNTIME_FPM_BINARIES[profile].as_posix():
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_EXECUTABLE_MISMATCH")
+    if not fpm_version.startswith(version + "."):
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_VERSION_MISMATCH")
+    if not socket_type:
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_SOCKET_TYPE_INVALID")
+    if socket_uid != expected_uid:
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_SOCKET_OWNER_MISMATCH")
+    if socket_gid != expected_gid:
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_SOCKET_GROUP_MISMATCH")
+    if socket_mode != 0o660:
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_SOCKET_MODE_MISMATCH")
 
 
 def validate_fpm_runtime_info(info_output, modules_output):
@@ -1094,7 +1176,7 @@ def validate_fpm_runtime_info(info_output, modules_output):
         if in_modules and re.fullmatch(r"[A-Za-z0-9_]+", stripped):
             modules.add(stripped.lower())
     if not found_php_modules:
-        raise ValueError("PHP-FPM module list is unavailable")
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_MODULE_LIST_UNAVAILABLE")
     settings = {}
     for line in info_output.splitlines():
         stripped = line.strip()
@@ -1107,15 +1189,15 @@ def validate_fpm_runtime_info(info_output, modules_output):
         "sodium", "tokenizer", "xml", "zip",
     }
     if not required.issubset(modules):
-        raise ValueError("required PHP-FPM modules are absent")
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_REQUIRED_MODULES_MISSING")
     if settings.get("opcache.validate_timestamps", "").lower() != "on":
-        raise ValueError("PHP-FPM OPcache timestamp validation is disabled")
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_OPCACHE_TIMESTAMPS_DISABLED")
     try:
         revalidate_freq = int(settings["opcache.revalidate_freq"])
     except (KeyError, ValueError):
-        raise ValueError("PHP-FPM OPcache revalidation interval is unavailable") from None
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_OPCACHE_INTERVAL_UNAVAILABLE") from None
     if not 0 <= revalidate_freq <= 2:
-        raise ValueError("PHP-FPM OPcache revalidation interval is too high")
+        raise RuntimePreflightFailure("PHP_RUNTIME_FPM_OPCACHE_INTERVAL_TOO_HIGH")
 
 
 def install_runtime_assets():
@@ -2864,6 +2946,12 @@ def main():
         return 77
     try:
         dispatch(sys.argv[1:])
+    except RuntimePreflightFailure as exc:
+        if len(sys.argv) == 3 and sys.argv[1] == "php-runtime-preflight":
+            print(f"PREFLIGHT_FAILURE={exc.code}", file=sys.stderr)
+        else:
+            print("wpcaregrid deploy helper: operation refused or failed", file=sys.stderr)
+        return 1
     except Exception:
         # Never echo arguments, paths, database names, or external command output.
         print("wpcaregrid deploy helper: operation refused or failed", file=sys.stderr)
