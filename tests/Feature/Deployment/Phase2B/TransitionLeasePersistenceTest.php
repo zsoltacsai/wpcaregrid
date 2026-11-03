@@ -188,7 +188,10 @@ class TransitionLeasePersistenceTest extends TestCase
             $createdState->expires_at->utc()->format('Y-m-d\\TH:i:s.u\\Z'),
         );
         $this->diagnosticCheckpoint('EXACT_REPLAY');
-        self::assertSame($created, $this->bridge()->handleRpc($create));
+        self::assertSame(
+            TransitionLeaseReceipt::canonicalJson($created),
+            TransitionLeaseReceipt::canonicalJson($this->bridge()->handleRpc($create)),
+        );
 
         $claimPayload = array_intersect_key($create['payload'], array_flip([
             'operation_id', 'generation', 'execution_id', 'lease_id', 'expected_fence_state', 'fence_tuple', 'holder_digest',
