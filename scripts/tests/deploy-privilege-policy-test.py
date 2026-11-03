@@ -65,7 +65,7 @@ def nginx_fixture(profile="8.4", *, staging_name="staging.wpcaregrid.com", extra
         "/etc/nginx/snippets/wpcaregrid-staging-routes.conf": (
             "location ~ \\.php$ {\n"
             "    include /etc/nginx/snippets/wpcaregrid-staging-handler.conf;\n"
-            "    include /etc/nginx/fastcgi_params;\n"
+            "    include fastcgi_params;\n"
             "}\n"
         ),
         "/etc/nginx/snippets/wpcaregrid-staging-handler.conf": handler_override or f"include {selector_path};\n",
@@ -89,12 +89,13 @@ def validate_nginx_fixture(dump, files, resolver_override=None):
     def include_resolver(pattern, source_paths):
         if resolver_override is not None:
             return resolver_override(pattern, source_paths)
-        if not pattern.startswith("/") or "$" in pattern:
-            raise ValueError("fixture include unsafe")
-        matched = sorted(path for path in source_paths if fnmatch.fnmatchcase(path, pattern))
-        if not matched:
-            raise ValueError("fixture include unresolved")
-        return matched
+        return module._resolve_nginx_include(
+            pattern,
+            source_paths,
+            filesystem_glob=lambda resolved: sorted(
+                path for path in files if fnmatch.fnmatchcase(path, resolved)
+            ),
+        )
 
     NGINX_VALIDATOR(dump, source_reader=source_reader, include_resolver=include_resolver)
 
@@ -702,6 +703,46 @@ def main():
         module.active_php_profile = lambda: "8.4"
         good_dump, good_sources = nginx_fixture("8.4")
         validate_nginx_fixture(good_dump, good_sources)
+        assert module._resolve_nginx_include(
+            "fastcgi_params",
+            good_sources,
+            filesystem_glob=lambda resolved: sorted(
+                path for path in good_sources if fnmatch.fnmatchcase(path, resolved)
+            ),
+        ) == ["/etc/nginx/fastcgi_params"], "relative include did not resolve against the Nginx configuration prefix"
+        assert module._resolve_nginx_include(
+            "fastcgi_*",
+            good_sources,
+            filesystem_glob=lambda resolved: sorted(
+                path for path in good_sources if fnmatch.fnmatchcase(path, resolved)
+            ),
+        ) == ["/etc/nginx/fastcgi_params"], "static relative include mask did not resolve against the Nginx configuration prefix"
+        for rejected_include in ("../fastcgi_params", "./fastcgi_params", "missing_params", "$fastcgi_params"):
+            try:
+                module._resolve_nginx_include(
+                    rejected_include,
+                    good_sources,
+                    filesystem_glob=lambda resolved: sorted(
+                        path for path in good_sources if fnmatch.fnmatchcase(path, resolved)
+                    ),
+                )
+            except (ValueError, OSError):
+                pass
+            else:
+                raise AssertionError("unsafe or unresolved relative Nginx include was accepted")
+        try:
+            module._resolve_nginx_include(
+                "fastcgi_*",
+                good_sources,
+                filesystem_glob=lambda resolved: [
+                    "/etc/nginx/fastcgi_params",
+                    "/etc/nginx/fastcgi-secret.conf",
+                ],
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("relative include mask with an unproven filesystem match was accepted")
         for profile in ("8.4", "8.5"):
             module.active_php_profile = lambda selected=profile: selected
             dump, sources = nginx_fixture(profile)

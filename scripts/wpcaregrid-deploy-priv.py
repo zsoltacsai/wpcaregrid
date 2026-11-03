@@ -622,13 +622,29 @@ def _read_trusted_nginx_source(path):
         os.close(fd)
 
 
-def _resolve_nginx_include(pattern, source_paths):
-    if not isinstance(pattern, str) or not pattern.startswith("/") or "$" in pattern:
-        raise ValueError("Nginx include path is relative or dynamic")
-    if posixpath.normpath(pattern) != pattern or ".." in PurePosixPath(pattern).parts:
+def _resolve_nginx_include(pattern, source_paths, *, filesystem_glob=None):
+    if not isinstance(pattern, str) or not pattern or "$" in pattern or "\\" in pattern or "\0" in pattern:
+        raise ValueError("Nginx include path is invalid or dynamic")
+    if pattern.startswith("/"):
+        resolved_pattern = pattern
+    else:
+        # nginx resolves include arguments against cycle->conf_prefix. With the
+        # fixed `nginx -T` invocation and absolute NGINX_ROOT_CONFIG, that is
+        # the directory containing the root configuration, not the including
+        # vhost's directory and not necessarily the compiled installation prefix.
+        if posixpath.normpath(pattern) != pattern:
+            raise ValueError("Nginx relative include path is non-canonical")
+        config_prefix = posixpath.dirname(NGINX_ROOT_CONFIG)
+        if (not config_prefix.startswith("/")
+                or posixpath.normpath(config_prefix) != config_prefix
+                or ".." in PurePosixPath(config_prefix).parts):
+            raise ValueError("Nginx configuration prefix is not canonical")
+        resolved_pattern = posixpath.join(config_prefix, pattern)
+    if posixpath.normpath(resolved_pattern) != resolved_pattern or ".." in PurePosixPath(resolved_pattern).parts:
         raise ValueError("Nginx include path is non-canonical")
-    matches = sorted(os.path.normpath(item) for item in glob.glob(pattern))
-    dumped = sorted(path for path in source_paths if fnmatch.fnmatchcase(path, pattern))
+    globber = filesystem_glob or glob.glob
+    matches = sorted(posixpath.normpath(item) for item in globber(resolved_pattern))
+    dumped = sorted(path for path in source_paths if fnmatch.fnmatchcase(path, resolved_pattern))
     if not matches or matches != dumped:
         raise ValueError("Nginx include resolution differs from dumped sources")
     return matches
