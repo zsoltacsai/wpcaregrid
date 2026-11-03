@@ -628,7 +628,7 @@ def _read_trusted_nginx_source(path):
         os.close(fd)
 
 
-def _resolve_nginx_include(pattern, source_paths, *, filesystem_glob=None):
+def _resolve_nginx_include(pattern, source_paths, *, filesystem_glob=None, filesystem_listdir=None):
     if not isinstance(pattern, str) or not pattern or "$" in pattern or "\\" in pattern or "\0" in pattern:
         raise ValueError("Nginx include path is invalid or dynamic")
     if pattern.startswith("/"):
@@ -651,7 +651,27 @@ def _resolve_nginx_include(pattern, source_paths, *, filesystem_glob=None):
     globber = filesystem_glob or glob.glob
     matches = sorted(posixpath.normpath(item) for item in globber(resolved_pattern))
     dumped = sorted(path for path in source_paths if fnmatch.fnmatchcase(path, resolved_pattern))
-    if not matches or matches != dumped:
+    if not matches:
+        if glob.has_magic(resolved_pattern) and not dumped:
+            parent, basename = posixpath.split(resolved_pattern)
+            if parent and not glob.has_magic(parent):
+                if filesystem_listdir is None:
+                    directory_fd = open_root_trusted_directory(parent)
+                    try:
+                        entries = os.listdir(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                else:
+                    entries = filesystem_listdir(parent)
+                confirmed = [
+                    name for name in entries
+                    if (not name.startswith(".") or basename.startswith("."))
+                    and fnmatch.fnmatchcase(name, basename)
+                ]
+                if not confirmed:
+                    return []
+        raise ValueError("Nginx include resolution differs from dumped sources")
+    if matches != dumped:
         raise ValueError("Nginx include resolution differs from dumped sources")
     return matches
 
@@ -793,7 +813,13 @@ def validate_nginx_runtime_dump(output, *, source_reader=None, include_resolver=
         total_bytes += len(source.encode("utf-8"))
         if total_bytes > NGINX_CONFIG_MAX_BYTES:
             raise ValueError("combined Nginx configuration exceeds the bound")
-        if source.replace("\r\n", "\n") != contents.replace("\r\n", "\n"):
+        normalized_source = source.replace("\r\n", "\n")
+        normalized_dump = contents.replace("\r\n", "\n")
+        final_section_has_framing_lf = (
+            path == next(reversed(sections))
+            and normalized_dump == normalized_source + "\n"
+        )
+        if normalized_source != normalized_dump and not final_section_has_framing_lf:
             raise ValueError("nginx -T source differs from the trusted file")
 
     parsed = {path: _parse_nginx_nodes(_tokenize_nginx_config(text), path) for path, text in sections.items()}

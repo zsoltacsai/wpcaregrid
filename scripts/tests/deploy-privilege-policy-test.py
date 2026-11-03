@@ -713,6 +713,94 @@ def main():
         validate_nginx_fixture(good_dump, good_sources)
         parsed_sections = module._nginx_dump_sections(good_dump)
         assert parsed_sections == good_sources, "single nginx -T section-separator LF was not removed exactly"
+        last_source_path = next(reversed(good_sources))
+        assert parsed_sections[last_source_path] == good_sources[last_source_path], (
+            "last source section did not preserve its own trailing newline"
+        )
+        validate_nginx_fixture(good_dump + "\n", good_sources)
+        try:
+            validate_nginx_fixture(good_dump + "\n\n", good_sources)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("multiple final-section framing LFs were accepted")
+
+        no_final_newline_sources = dict(good_sources)
+        no_final_newline_sources[last_source_path] = no_final_newline_sources[last_source_path].rstrip("\n")
+        no_final_newline_dump = nginx_dump(no_final_newline_sources)
+        validate_nginx_fixture(no_final_newline_dump, no_final_newline_sources)
+        validate_nginx_fixture(no_final_newline_dump + "\n", no_final_newline_sources)
+        try:
+            validate_nginx_fixture(no_final_newline_dump + "\n\n", no_final_newline_sources)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("final section with two extra LFs was accepted")
+
+        empty_wildcard_sources = dict(good_sources)
+        root_source = empty_wildcard_sources["/etc/nginx/nginx.conf"]
+        empty_wildcard_sources["/etc/nginx/nginx.conf"] = root_source.replace(
+            "    include /etc/nginx/sites-enabled/*;\n",
+            "    include /etc/nginx/modules-enabled/*.conf;\n"
+            "    include /etc/nginx/conf.d/*.conf;\n"
+            "    include /etc/nginx/sites-enabled/*;\n",
+        )
+        def empty_wildcard_resolver(pattern, source_paths):
+            return module._resolve_nginx_include(
+                pattern,
+                source_paths,
+                filesystem_glob=lambda resolved: sorted(
+                    path for path in empty_wildcard_sources if fnmatch.fnmatchcase(path, resolved)
+                ),
+                filesystem_listdir=lambda directory: [],
+            )
+        validate_nginx_fixture(
+            nginx_dump(empty_wildcard_sources),
+            empty_wildcard_sources,
+            empty_wildcard_resolver,
+        )
+        assert module._resolve_nginx_include(
+            "/etc/nginx/modules-enabled/*.conf",
+            good_sources,
+            filesystem_glob=lambda resolved: [],
+            filesystem_listdir=lambda directory: [],
+        ) == [], "proven-empty wildcard include was rejected"
+        for empty_mismatch_sources, empty_mismatch_matches in (
+            (list(good_sources) + ["/etc/nginx/modules-enabled/50-module.conf"], []),
+            (list(good_sources), ["/etc/nginx/modules-enabled/50-module.conf"]),
+        ):
+            try:
+                module._resolve_nginx_include(
+                    "/etc/nginx/modules-enabled/*.conf",
+                    empty_mismatch_sources,
+                    filesystem_glob=lambda resolved, matches=empty_mismatch_matches: matches,
+                    filesystem_listdir=lambda directory: [],
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("empty wildcard include with mismatched sources was accepted")
+        try:
+            module._resolve_nginx_include(
+                "/etc/nginx/modules-enabled/missing.conf",
+                good_sources,
+                filesystem_glob=lambda resolved: [],
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("missing non-wildcard include was accepted as empty")
+        try:
+            module._resolve_nginx_include(
+                "/etc/nginx/modules-enabled/*.conf",
+                good_sources,
+                filesystem_glob=lambda resolved: [],
+                filesystem_listdir=lambda directory: ["50-module.conf"],
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("filesystem match omitted by glob was accepted")
 
         blank_line_sources = dict(good_sources)
         first_source_path = next(iter(blank_line_sources))
