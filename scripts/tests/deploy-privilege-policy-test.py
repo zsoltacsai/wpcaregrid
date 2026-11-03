@@ -43,6 +43,14 @@ def expect_preflight_code(expected, callback):
     raise AssertionError(f"preflight failure was not reported as {expected}")
 
 
+def nginx_dump(files):
+    items = list(files.items())
+    return "".join(
+        f"# configuration file {path}:\n{content}" + ("\n" if index < len(items) - 1 else "")
+        for index, (path, content) in enumerate(items)
+    )
+
+
 def nginx_fixture(profile="8.4", *, staging_name="staging.wpcaregrid.com", extra_staging_include=None, handler_override=None, selector_path=None):
     selector_path = selector_path or module.PHP_RUNTIME_LINK.as_posix()
     files = {
@@ -76,7 +84,7 @@ def nginx_fixture(profile="8.4", *, staging_name="staging.wpcaregrid.com", extra
     if extra_staging_include and extra_staging_include not in files:
         files[extra_staging_include] = "location ~ \\.alternate-php$ {\n    include /etc/nginx/snippets/staging-extra-fastcgi.conf;\n}\n"
         files["/etc/nginx/snippets/staging-extra-fastcgi.conf"] = "fastcgi_pass unix:/run/php/php8.4-fpm.sock;\n"
-    dump = "".join(f"# configuration file {path}:\n{content}" for path, content in files.items())
+    dump = nginx_dump(files)
     return dump, files
 
 
@@ -703,6 +711,42 @@ def main():
         module.active_php_profile = lambda: "8.4"
         good_dump, good_sources = nginx_fixture("8.4")
         validate_nginx_fixture(good_dump, good_sources)
+        parsed_sections = module._nginx_dump_sections(good_dump)
+        assert parsed_sections == good_sources, "single nginx -T section-separator LF was not removed exactly"
+
+        blank_line_sources = dict(good_sources)
+        first_source_path = next(iter(blank_line_sources))
+        blank_line_sources[first_source_path] += "\n"
+        blank_line_sections = module._nginx_dump_sections(nginx_dump(blank_line_sources))
+        assert blank_line_sections[first_source_path] == blank_line_sources[first_source_path], (
+            "source-owned trailing blank line was not preserved"
+        )
+
+        first_source_content = good_sources[first_source_path]
+        first_marker = f"# configuration file {first_source_path}:\n"
+        next_source_path = list(good_sources)[1]
+        one_separator = first_marker + first_source_content + f"\n# configuration file {next_source_path}:\n"
+        assert one_separator in good_dump, "Nginx fixture lacks its single framing LF"
+        extra_separator_dump = good_dump.replace(
+            one_separator,
+            first_marker + first_source_content + f"\n\n# configuration file {next_source_path}:\n",
+            1,
+        )
+        try:
+            validate_nginx_fixture(extra_separator_dump, good_sources)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("multiple section-separator LFs were accepted as source content")
+
+        changed_dump = good_dump.replace("events {}\n", "events { }\n", 1)
+        try:
+            validate_nginx_fixture(changed_dump, good_sources)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("real Nginx source-content difference was accepted")
+
         assert module._resolve_nginx_include(
             "fastcgi_params",
             good_sources,
@@ -762,19 +806,19 @@ def main():
         sibling_selector_sources["/etc/nginx/sites-enabled/sibling"] = sibling_selector_sources["/etc/nginx/sites-enabled/sibling"].replace(
             "include /etc/nginx/snippets/sibling-fastcgi.conf;", f"include {module.PHP_RUNTIME_LINK.as_posix()};"
         )
-        sibling_selector_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in sibling_selector_sources.items())
+        sibling_selector_dump = nginx_dump(sibling_selector_sources)
         bad_fixtures.append((sibling_selector_dump, sibling_selector_sources))
 
         outside_dump, outside_sources = nginx_fixture("8.4")
         outside_sources["/etc/nginx/nginx.conf"] = outside_sources["/etc/nginx/nginx.conf"].replace(
             "include /etc/nginx/sites-enabled/*;", f"include {module.PHP_RUNTIME_LINK.as_posix()};\n    include /etc/nginx/sites-enabled/*;"
         )
-        outside_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in outside_sources.items())
+        outside_dump = nginx_dump(outside_sources)
         bad_fixtures.append((outside_dump, outside_sources))
 
         duplicate_dump, duplicate_sources = nginx_fixture("8.4")
         duplicate_sources["/etc/nginx/snippets/wpcaregrid-staging-handler.conf"] += f"include {module.PHP_RUNTIME_LINK.as_posix()};\n"
-        duplicate_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in duplicate_sources.items())
+        duplicate_dump = nginx_dump(duplicate_sources)
         bad_fixtures.append((duplicate_dump, duplicate_sources))
 
         competing_path = "/etc/nginx/snippets/staging-extra-location.conf"
@@ -783,15 +827,15 @@ def main():
         cycle_dump, cycle_sources = nginx_fixture("8.4", handler_override="include /etc/nginx/snippets/cycle-a.conf;\n")
         cycle_sources["/etc/nginx/snippets/cycle-a.conf"] = "include /etc/nginx/snippets/cycle-b.conf;\n"
         cycle_sources["/etc/nginx/snippets/cycle-b.conf"] = "include /etc/nginx/snippets/cycle-a.conf;\n"
-        cycle_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in cycle_sources.items())
+        cycle_dump = nginx_dump(cycle_sources)
         bad_fixtures.append((cycle_dump, cycle_sources))
 
         missing_dump, missing_sources = nginx_fixture("8.4", handler_override="include /etc/nginx/snippets/missing.conf;\n")
-        missing_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in missing_sources.items())
+        missing_dump = nginx_dump(missing_sources)
         bad_fixtures.append((missing_dump, missing_sources))
 
         variable_dump, variable_sources = nginx_fixture("8.4", handler_override="include $unsafe_path;\n")
-        variable_dump = "".join(f"# configuration file {path}:\n{content}" for path, content in variable_sources.items())
+        variable_dump = nginx_dump(variable_sources)
         bad_fixtures.append((variable_dump, variable_sources))
 
         for bad_dump, bad_sources in bad_fixtures:

@@ -555,7 +555,13 @@ def _nginx_dump_sections(output):
             if current_path is not None:
                 if current_path in sections:
                     raise ValueError("duplicate Nginx configuration source marker")
-                sections[current_path] = "".join(current_content)
+                section = "".join(current_content)
+                # `nginx -T` emits one LF as a separator before the next
+                # source marker. Remove only that framing byte; preserve any
+                # preceding newline that belongs to the source file.
+                if section.endswith("\n"):
+                    section = section[:-1]
+                sections[current_path] = section
             current_path = marker.group(1)
             if posixpath.normpath(current_path) != current_path or ".." in PurePosixPath(current_path).parts:
                 raise ValueError("non-canonical Nginx configuration source path")
