@@ -733,7 +733,11 @@ parse_marketing_release_profile 'profile: marketing_only' >/dev/null
 if parse_marketing_release_profile 'profile: invitation_beta' >/dev/null; then exit 21; fi
 if parse_marketing_release_profile '' >/dev/null; then exit 22; fi
 calls=''
-privileged() { calls+="privileged:$*|"; }
+privileged() {
+    local rendered
+    printf -v rendered '%s ' "$@"
+    calls+="privileged:${rendered% }|"
+}
 workers_stopped() { calls+='workers-stopped|'; }
 release_scheduler_lock_preserving_pause() { calls+='release-lock-preserve-pause|'; }
 root_marker_present() { calls+="marker:$1|"; }
