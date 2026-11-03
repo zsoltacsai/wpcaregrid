@@ -15,6 +15,7 @@ readonly GATE_DIR='/var/lib/wpcaregrid'
 readonly GATE_FILE="${GATE_DIR}/deploy-maintenance"
 readonly SCHEDULER_LOCK_FILE="${GATE_DIR}/scheduler.lock"
 readonly SCHEDULER_PAUSE_FILE="${GATE_DIR}/scheduler-paused"
+readonly WORKERS_DISABLED_FILE="${GATE_DIR}/workers-disabled"
 readonly DEPLOY_PRIV_HELPER='/usr/local/sbin/wpcaregrid-deploy-priv'
 readonly CONTROLLER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # Always install the scheduler wrapper from the application checkout being deployed,
@@ -26,6 +27,8 @@ readonly WORKERS=('wpcaregrid-default' 'wpcaregrid-backups')
 GATE_ACTIVE=0
 WORKERS_MAY_BE_STOPPED=0
 CODE_SWITCHED=0
+BASELINE_BACKGROUND_RESTRICTED=0
+TARGET_MARKETING_RELEASE=0
 MIGRATION_ATTEMPTED=0
 MIGRATIONS_PENDING=0
 SCHEDULER_LOCK_HELD=0
@@ -149,6 +152,58 @@ workers_running() {
     done
 }
 
+workers_stopped() {
+    local worker output
+
+    for worker in "${WORKERS[@]}"; do
+        output="$(worker_status "$worker")" || return 1
+        [[ "$output" =~ ^${worker}[[:space:]]+STOPPED([[:space:]]|$) ]] || return 1
+    done
+}
+
+root_marker_present() {
+    local marker_path="$1"
+
+    [[ -f "$marker_path" && ! -L "$marker_path" ]] || return 1
+    [[ "$(stat -c '%U:%a' -- "$marker_path")" == 'root:644' ]]
+}
+
+parse_marketing_release_profile() {
+    local output="$1" profile
+
+    profile="$(awk 'NF { value = $NF } END { print value }' <<<"$output")"
+    [[ "$profile" == 'marketing_only' ]] || return 1
+    printf '%s\n' 'marketing_only'
+}
+
+read_marketing_release_profile() {
+    local output
+
+    output="$(php artisan config:show marketing_release.profile --no-interaction 2>/dev/null)" || return 1
+    parse_marketing_release_profile "$output"
+}
+
+release_scheduler_lock_preserving_pause() {
+    (( SCHEDULER_LOCK_HELD )) || fail 'Cannot release the scheduler lock without holding it.'
+    flock -u 8 || return 1
+    SCHEDULER_LOCK_HELD=0
+    exec 8>&-
+    log 'Scheduler lock released; persistent scheduler pause remains active.'
+}
+
+fence_marketing_background() {
+    local profile="$1"
+
+    [[ "$profile" == 'marketing_only' ]] || return 1
+    privileged worker-runtime-disable || return 1
+    privileged worker stop-all || return 1
+    privileged scheduler-pause || return 1
+    root_marker_present "$WORKERS_DISABLED_FILE" || return 1
+    root_marker_present "$SCHEDULER_PAUSE_FILE" || return 1
+    workers_stopped || return 1
+    release_scheduler_lock_preserving_pause
+}
+
 install_scheduler_guard() {
     local wrapper_source cron_started_at attempt
 
@@ -264,14 +319,13 @@ start_workers() {
 }
 
 check_system_health() {
-    local allow_scheduler_pending=${1:-false}
+    local health_mode=${1:-strict}
     local quiet=${2:-false}
     local scheduler_arg=''
     local quiet_arg=''
 
-    if [[ "$allow_scheduler_pending" == 'allow-scheduler-pending' ]]; then
-        scheduler_arg='allow-scheduler-pending'
-    fi
+    [[ "$health_mode" == 'strict' || "$health_mode" == 'allow-scheduler-pending' || "$health_mode" == 'allow-background-fenced' ]] || return 1
+    scheduler_arg="$health_mode"
     if [[ "$quiet" == 'quiet' ]]; then
         quiet_arg='quiet'
     fi
@@ -282,14 +336,19 @@ check_system_health() {
     CHECK_REPORT="$(mktemp /tmp/wpcaregrid-system-check.XXXXXX.json)"
     chmod 600 "$CHECK_REPORT"
 
-    # In staging, NOT CONFIGURED integrations are expected. The critical
-    # application/database/queue/scheduler/safety checks must be OK, and no
-    # component may report ERROR.
+    # In staging, integrations may be NOT CONFIGURED. Application, database,
+    # and safety remain critical. In a verified marketing-only release, queue
+    # and scheduler status are intentionally fenced and are validated through
+    # their persistent markers and stopped-worker state instead.
     php artisan system:check --json >"$CHECK_REPORT" || true
     php -r '
 $rows = json_decode(file_get_contents($argv[1]), true, 512, JSON_THROW_ON_ERROR);
-$critical = ["application", "database", "queue", "safety"];
-if (($argv[2] ?? "") !== "allow-scheduler-pending") {
+$mode = $argv[2] ?? "strict";
+$critical = ["application", "database", "safety"];
+if (!in_array($mode, ["allow-scheduler-pending", "allow-background-fenced"], true)) {
+    $critical[] = "queue";
+}
+if ($mode !== "allow-scheduler-pending" && $mode !== "allow-background-fenced") {
     $critical[] = "scheduler";
 }
 $seen = [];
@@ -305,7 +364,8 @@ foreach ($rows as $row) {
     if (($argv[3] ?? "") !== "quiet") {
         printf("system:check %-18s %s\n", $key, $level);
     }
-    $failed = $failed || $level === "ERROR" || (in_array($key, $critical, true) && $level !== "OK");
+$fencedBackgroundCheck = $mode === "allow-background-fenced" && in_array($key, ["queue", "scheduler"], true);
+$failed = $failed || ($level === "ERROR" && !$fencedBackgroundCheck) || (in_array($key, $critical, true) && $level !== "OK");
 }
 foreach ($critical as $key) {
     if (!isset($seen[$key])) {
@@ -731,7 +791,7 @@ stop_workers_for_rollback() {
 }
 
 recover_after_failure() {
-    local smoke_contract
+    local smoke_contract migration_status
 
     log 'Attempting guarded recovery while the Nginx gate is active.'
 
@@ -758,7 +818,49 @@ recover_after_failure() {
         privileged file-check www-data read bootstrap/cache/config.php || return 1
     fi
 
-    php artisan migrate:status --no-interaction | grep -q 'Pending' && return 1
+    if (( TARGET_MARKETING_RELEASE )); then
+        # A failed marketing-only transition must not revive legacy SaaS work.
+        # Keep pending queue rows untouched, preserve both persistent fences,
+        # and leave the public gate closed for operator recovery.
+        privileged worker-runtime-disable || return 1
+        stop_workers_for_rollback || return 1
+        privileged scheduler-pause || return 1
+        root_marker_present "$WORKERS_DISABLED_FILE" || return 1
+        root_marker_present "$SCHEDULER_PAUSE_FILE" || return 1
+        workers_stopped || return 1
+        release_scheduler_lock_preserving_pause || return 1
+        log 'Marketing-only transition failed; workers and scheduler remain fenced, pending jobs are retained, and the Nginx gate stays closed.' >&2
+        return 1
+    fi
+
+    if (( BASELINE_BACKGROUND_RESTRICTED )); then
+        # A previously marketing-only baseline remains web-only during failure
+        # recovery. Never enable workers or resume its scheduler.
+        privileged worker-runtime-disable || return 1
+        stop_workers_for_rollback || return 1
+        privileged scheduler-pause || return 1
+        root_marker_present "$WORKERS_DISABLED_FILE" || return 1
+        root_marker_present "$SCHEDULER_PAUSE_FILE" || return 1
+        workers_stopped || return 1
+        migration_status="$(php artisan migrate:status --no-interaction)" || return 1
+        grep -q 'Pending' <<<"$migration_status" && return 1
+        php artisan up || return 1
+        check_system_health allow-background-fenced || return 1
+        privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || return 1
+        release_scheduler_lock_preserving_pause || return 1
+        release_gate || return 1
+        if ! pre_deploy_smoke || ! runtime_cache_access_ok || ! workers_stopped; then
+            privileged gate-on || return 1
+            php artisan down --retry=60 || true
+            return 1
+        fi
+        mark_gate_released
+        log 'Guarded recovery restored the marketing-only baseline; queue workers and scheduler remain fenced.'
+        return 0
+    fi
+
+    migration_status="$(php artisan migrate:status --no-interaction)" || return 1
+    grep -q 'Pending' <<<"$migration_status" && return 1
 
     php artisan up || return 1
     check_system_health allow-scheduler-pending || return 1
@@ -847,7 +949,7 @@ trap 'exit 143' TERM
 main() {
     local requested_ref fetched_tip env_mode app_url_value db_name timestamp backup_path gate_probe migration_status ci_evidence receipt_name
     local cache_file cache_dir
-    local worker
+    local worker worker_state baseline_gate_state baseline_profile target_profile
 
     local requested_profile=''
     if (( $# >= 1 )) && [[ "$1" == '--rollback' ]]; then
@@ -882,7 +984,6 @@ main() {
         done < <(find "$cache_dir" -maxdepth 1 -type f -name '*.php' -print0)
     done
     [[ ! -e "$GATE_FILE" ]] || fail "A previous deployment gate exists at ${GATE_FILE}; inspect and recover it before retrying."
-    [[ ! -e "$SCHEDULER_PAUSE_FILE" ]] || fail "A previous scheduler pause marker exists at ${SCHEDULER_PAUSE_FILE}; inspect and recover it before retrying."
     [[ "$(git status --porcelain --untracked-files=all)" == '' ]] || fail 'The repository has tracked or untracked changes; deploy only from a clean checkout.'
     privileged preflight || fail 'The narrow deploy privilege helper preflight failed.'
     [[ -d "$BACKUP_DIR" && "$(stat -c '%U:%a' "$BACKUP_DIR")" == 'deploy:700' ]] || fail 'The protected staging database backup directory must be deploy-owned mode 0700.'
@@ -890,6 +991,7 @@ main() {
     command -v flock >/dev/null || fail 'The flock utility is required to prevent concurrent deployments.'
     flock -n 9 || fail 'Another staging deployment is already running.'
     capture_baseline_sha || fail 'Could not pin the current staging release after acquiring the deployment lock.'
+    baseline_gate_state="$(release_gate_state_for_commit "$BASELINE_SHA")" || fail 'The baseline release gate state is ambiguous.'
     PHP_BASELINE_PROFILE="$(privileged php-runtime-status)" || fail 'The active PHP runtime profile is absent or invalid.'
     [[ "$PHP_BASELINE_PROFILE" == '8.4' || "$PHP_BASELINE_PROFILE" == '8.5' ]] || fail 'The active PHP runtime profile is not supported.'
     PHP_TARGET_PROFILE="${requested_profile:-$PHP_BASELINE_PROFILE}"
@@ -902,10 +1004,30 @@ main() {
     composer --version | grep -q 'Composer version 2\.' || fail 'Composer 2 is required.'
     node -e 'process.exit(Number(process.versions.node.split(".")[0]) === 22 ? 0 : 1)' || fail 'Node.js 22 is required.'
     php artisan about --only=environment >/dev/null || fail 'Laravel cannot boot with the current production configuration.'
+    if [[ "$baseline_gate_state" == 'marketing_gated' ]]; then
+        baseline_profile="$(read_marketing_release_profile)" || fail 'The active marketing-gated baseline does not report the exact supported marketing-only profile.'
+        root_marker_present "$SCHEDULER_PAUSE_FILE" || fail 'The marketing-only baseline is missing its persistent scheduler pause marker.'
+        root_marker_present "$WORKERS_DISABLED_FILE" || fail 'The marketing-only baseline is missing its persistent worker disable marker.'
+        BASELINE_BACKGROUND_RESTRICTED=1
+    elif [[ "$baseline_gate_state" == 'legacy_application' ]]; then
+        [[ ! -e "$SCHEDULER_PAUSE_FILE" ]] || fail 'A legacy baseline has an unexpected scheduler pause marker; inspect and recover before retrying.'
+        BASELINE_BACKGROUND_RESTRICTED=0
+    else
+        fail 'The baseline release profile is not supported for a staging deployment.'
+    fi
     for worker in "${WORKERS[@]}"; do
-        OLD_WORKER_PIDS[$worker]="$(worker_pid "$worker")" || fail "${worker} is not RUNNING before deployment."
+        worker_state="$(worker_status "$worker")" || fail "Could not read ${worker} state before deployment."
+        if (( BASELINE_BACKGROUND_RESTRICTED )); then
+            [[ "$worker_state" =~ ^${worker}[[:space:]]+STOPPED([[:space:]]|$) ]] || fail "${worker} must remain stopped in the marketing-only baseline."
+        else
+            OLD_WORKER_PIDS[$worker]="$(worker_pid "$worker")" || fail "${worker} is not RUNNING before deployment."
+        fi
     done
-    check_system_health || fail 'A deployment-critical system check is not healthy before deployment.'
+    if (( BASELINE_BACKGROUND_RESTRICTED )); then
+        check_system_health allow-background-fenced || fail 'The marketing-only baseline application, database, or safety check is unhealthy.'
+    else
+        check_system_health || fail 'A deployment-critical system check is not healthy before deployment.'
+    fi
 
     env_mode="$(php artisan config:show app.env --no-interaction 2>/dev/null | awk 'NF { value = $NF } END { print value }')"
     app_url_value="$(php artisan config:show app.url --no-interaction 2>/dev/null | awk 'NF { value = $NF } END { print value }')"
@@ -956,6 +1078,10 @@ main() {
     privileged gate-on
     php artisan down --retry=60
     log 'Laravel maintenance mode enabled behind the Nginx gate.'
+
+    # The target has already been restricted to the registered marketing gate.
+    # From this point, any failure must leave all SaaS background execution off.
+    TARGET_MARKETING_RELEASE=1
 
     WORKERS_MAY_BE_STOPPED=1
     privileged worker-runtime-disable || fail 'Queue workers could not be persistently blocked before drain.'
@@ -1008,7 +1134,8 @@ main() {
     fi
     MIGRATION_ATTEMPTED=1
     php artisan migrate --force --no-interaction
-    if php artisan migrate:status --no-interaction | grep -q 'Pending'; then
+    migration_status="$(php artisan migrate:status --no-interaction)" || fail 'Could not verify target migration status after running migrations.'
+    if grep -q 'Pending' <<<"$migration_status"; then
         fail 'One or more migrations remain pending.'
     fi
 
@@ -1017,18 +1144,17 @@ main() {
     log 'Building or verifying the immutable Connector package from the deployed source.'
     php artisan connector:package
     php artisan about --only=environment >/dev/null
-    check_system_health allow-scheduler-pending || fail 'Deployment-critical application checks failed.'
+    target_profile="$(read_marketing_release_profile)" || fail 'The target configuration does not report the exact supported marketing-only profile.'
+    [[ "$target_profile" == 'marketing_only' ]] || fail 'The target release profile is not marketing-only.'
+    check_system_health allow-background-fenced || fail 'Marketing application, database, or safety checks failed.'
     php artisan schedule:list >/dev/null
 
     php artisan up
-    log 'Laravel is live behind the Nginx gate; restarting workers onto the deployed code.'
-    php artisan queue:restart
-    privileged worker-runtime-enable || fail 'The fixed runtime worker gate could not be opened under the maintenance gate.'
-    privileged php-runtime-supervisor-update || fail 'Supervisor could not reload the fixed PHP runtime worker commands.'
-    privileged worker start-all
-    wait_for_restarted_workers || fail 'Expected Supervisor workers did not restart with new PIDs.'
-    privileged worker-runtime-check "$PHP_TARGET_PROFILE" || fail 'A queue worker is not using the selected PHP runtime.'
-    WORKERS_MAY_BE_STOPPED=0
+    log 'Laravel is live behind the Nginx gate; keeping SaaS workers and scheduler fenced for the marketing-only release.'
+    fence_marketing_background "$target_profile" || fail 'Marketing-only worker and scheduler fences could not be verified.'
+    root_marker_present "$WORKERS_DISABLED_FILE" || fail 'The persistent worker disable marker is absent before traffic is reopened.'
+    root_marker_present "$SCHEDULER_PAUSE_FILE" || fail 'The persistent scheduler pause marker is absent before traffic is reopened.'
+    WORKERS_MAY_BE_STOPPED=1
 
     [[ "$(stat -c '%U:%G:%a' .env)" == 'deploy:deploy:600' ]] || fail '.env ownership or mode changed unexpectedly.'
     [[ -r bootstrap/cache/config.php ]] && privileged file-check www-data read bootstrap/cache/config.php || fail 'PHP-FPM cannot read the rebuilt production config cache.'
@@ -1037,13 +1163,10 @@ main() {
     [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || fail 'The deployed Git HEAD changed unexpectedly.'
     [[ "$(git status --porcelain --untracked-files=all)" == '' ]] || fail 'The deployed Git working tree is not clean.'
 
-    resume_scheduler
-    wait_for_scheduler || fail 'Scheduler heartbeat did not recover after cache refresh.'
-    workers_running || fail 'One or more required Supervisor workers stopped before traffic was reopened.'
-    privileged worker-runtime-check "$PHP_TARGET_PROFILE" || fail 'A queue worker changed runtime before traffic was reopened.'
+    workers_stopped || fail 'One or more SaaS workers are not stopped before traffic is reopened.'
     privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || fail 'The selected PHP-FPM pool or live listener changed before traffic was reopened.'
     release_gate
-    if ! post_deploy_smoke || ! runtime_cache_access_ok || ! workers_running; then
+    if ! post_deploy_smoke || ! runtime_cache_access_ok || ! workers_stopped; then
         log 'Final staging HTTP/security or runtime-cache permission check failed; closing the Nginx gate again.' >&2
         privileged gate-on
         php artisan down --retry=60 || true

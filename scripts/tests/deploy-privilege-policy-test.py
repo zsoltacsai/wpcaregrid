@@ -668,17 +668,96 @@ def main():
     controller_lines = controller.splitlines()
     gate_line = next(i for i, line in enumerate(controller_lines) if "privileged gate-on" in line and i > 700)
     switch_line = next(i for i, line in enumerate(controller_lines) if "privileged php-runtime-switch \"$PHP_TARGET_PROFILE\"" in line)
-    workers_stop_line = next(i for i, line in enumerate(controller_lines) if "privileged worker stop-all" in line)
     disabled_line = next(i for i, line in enumerate(controller_lines) if "privileged worker-runtime-disable" in line and i > gate_line)
+    workers_stop_line = next(i for i, line in enumerate(controller_lines) if "privileged worker stop-all" in line and i > disabled_line)
     assert gate_line < disabled_line < workers_stop_line < switch_line, "runtime switch must follow the active gate, persistent worker disable, and drained workers"
     assert 'workers_running || return 1\n    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || return 1\n    release_gate || return 1' in controller, "recovery must revalidate the active runtime listener before releasing traffic"
-    assert 'privileged worker-runtime-check "$PHP_TARGET_PROFILE" || fail \'A queue worker changed runtime before traffic was reopened.\'\n    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || fail \'The selected PHP-FPM pool or live listener changed before traffic was reopened.\'\n    release_gate' in controller, "deployment must revalidate the active runtime listener immediately before releasing traffic"
+    assert 'workers_stopped || fail \'One or more SaaS workers are not stopped before traffic is reopened.\'\n    privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || fail \'The selected PHP-FPM pool or live listener changed before traffic was reopened.\'\n    release_gate' in controller, "marketing-only deployment must verify workers remain stopped and PHP-FPM remains healthy before traffic is reopened"
+    assert "readonly GATE_DIR='/var/lib/wpcaregrid'" in controller
+    assert 'readonly WORKERS_DISABLED_FILE="${GATE_DIR}/workers-disabled"' in controller
+    assert "readonly SCHEDULER_PAUSE_FILE=\"${GATE_DIR}/scheduler-paused\"" in controller
+    assert 'root_marker_present "$WORKERS_DISABLED_FILE"' in controller
+    assert 'root_marker_present "$SCHEDULER_PAUSE_FILE"' in controller
+    assert 'target_profile="$(read_marketing_release_profile)"' in controller
+    assert '[[ "$target_profile" == \'marketing_only\' ]]' in controller
+    assert 'check_system_health allow-background-fenced' in controller
+    assert 'if (( TARGET_MARKETING_RELEASE )); then' in controller
+    assert "TARGET_MARKETING_RELEASE=1" in controller
+    marketing_success_start = controller.index('target_profile="$(read_marketing_release_profile)"')
+    marketing_success_end = controller.index('mark_gate_released', marketing_success_start)
+    marketing_success = controller[marketing_success_start:marketing_success_end]
+    forbidden_marketing_operations = (
+        'php artisan queue:restart',
+        'worker-runtime-enable',
+        'php-runtime-supervisor-update',
+        'worker start-all',
+        'resume_scheduler',
+        'wait_for_scheduler',
+    )
+    assert not any(operation in marketing_success for operation in forbidden_marketing_operations), "marketing-only success must keep background execution fenced"
+    assert 'fence_marketing_background "$target_profile"' in marketing_success
+    assert 'workers_stopped' in marketing_success
+    assert 'workers_running' not in marketing_success
+    assert 'pending jobs are retained' in controller
+    assert 'queue:clear' not in controller and 'DELETE FROM jobs' not in controller
+    target_failure_start = controller.index('if (( TARGET_MARKETING_RELEASE )); then')
+    target_failure_end = controller.index('if (( BASELINE_BACKGROUND_RESTRICTED )); then', target_failure_start)
+    target_failure = controller[target_failure_start:target_failure_end]
+    assert 'worker-runtime-disable' in target_failure and 'stop_workers_for_rollback' in target_failure
+    assert 'scheduler-pause' in target_failure and 'workers_stopped' in target_failure
+    assert 'release_scheduler_lock_preserving_pause' in target_failure
+    assert 'return 1' in target_failure
+    forbidden_failure_recovery = ('queue:restart', 'worker-runtime-enable', 'worker start-all', 'resume_scheduler', 'release_gate')
+    assert not any(operation in target_failure for operation in forbidden_failure_recovery), "failed marketing-only transition must stay gated and must not resume SaaS work"
+    baseline_fenced_start = controller.index('if (( BASELINE_BACKGROUND_RESTRICTED )); then', target_failure_end)
+    baseline_fenced_end = controller.index("log 'Guarded recovery restored the marketing-only baseline", baseline_fenced_start)
+    baseline_fenced_recovery = controller[baseline_fenced_start:baseline_fenced_end]
+    assert 'worker-runtime-disable' in baseline_fenced_recovery and 'scheduler-pause' in baseline_fenced_recovery
+    assert 'workers_stopped' in baseline_fenced_recovery and 'allow-background-fenced' in baseline_fenced_recovery
+    assert not any(operation in baseline_fenced_recovery for operation in forbidden_failure_recovery[:-1]), "marketing-only baseline recovery must preserve the background fence"
+    migration_recheck = 'migration_status="$(php artisan migrate:status --no-interaction)" || return 1\n        grep -q \'Pending\' <<<"$migration_status" && return 1'
+    assert migration_recheck in baseline_fenced_recovery
+    assert baseline_fenced_recovery.index(migration_recheck) < baseline_fenced_recovery.index('php artisan up') < baseline_fenced_recovery.index('release_gate || return 1'), "pending or unreadable migration status must keep the marketing-only baseline gated"
+    migration_status_lines = [line.strip() for line in controller.splitlines() if 'php artisan migrate:status --no-interaction' in line]
+    assert len(migration_status_lines) == 4 and all(line.startswith('migration_status="$(php artisan migrate:status --no-interaction)" || ') for line in migration_status_lines), "every migration-status read must fail closed when Artisan exits unsuccessfully"
+    assert "php artisan migrate:status --no-interaction | grep" not in controller, "migration-status command errors must not be conflated with no pending migrations"
+    target_switch = controller.index('git checkout --detach "$TARGET_SHA"')
+    target_flag = controller.index('TARGET_MARKETING_RELEASE=1')
+    assert target_flag < target_switch, "failure recovery must know the target is marketing-only before any source switch"
+
+    bash = shutil.which("bash")
+    if bash and os.name != "nt":
+        script_path = str(CONTROLLER)
+        harness = r'''source "$1"
+parse_marketing_release_profile 'profile: marketing_only' >/dev/null
+if parse_marketing_release_profile 'profile: invitation_beta' >/dev/null; then exit 21; fi
+if parse_marketing_release_profile '' >/dev/null; then exit 22; fi
+calls=''
+privileged() {
+    local rendered
+    printf -v rendered '%s ' "$@"
+    calls+="privileged:${rendered% }|"
+}
+workers_stopped() { calls+='workers-stopped|'; }
+release_scheduler_lock_preserving_pause() { calls+='release-lock-preserve-pause|'; }
+root_marker_present() { calls+="marker:$1|"; }
+fence_marketing_background marketing_only || exit 23
+case "$calls" in
+  *'privileged:worker-runtime-disable|'*'privileged:worker stop-all|'*'privileged:scheduler-pause|'*'marker:/var/lib/wpcaregrid/workers-disabled|'*'marker:/var/lib/wpcaregrid/scheduler-paused|'*'workers-stopped|'*'release-lock-preserve-pause|'*) ;;
+  *) exit 24 ;;
+esac
+case "$calls" in *'queue:restart'*|*'worker-runtime-enable'*|*'worker start-all'*|*'scheduler-resume'*) exit 25 ;; esac
+prior_calls="$calls"
+if fence_marketing_background unknown >/dev/null 2>&1; then exit 26; fi
+[[ "$calls" == "$prior_calls" ]] || exit 27
+'''
+        subprocess.run([bash, "-c", harness, "marketing-fence-policy-test", script_path], check=True)
     recovery_switch_line = next(i for i, line in enumerate(controller_lines) if "privileged php-runtime-switch \"$PHP_BASELINE_PROFILE\"" in line)
     baseline_checkout_line = next(i for i, line in enumerate(controller_lines) if "rollback_code_to_baseline || return 1" in line)
     assert recovery_switch_line < baseline_checkout_line, "runtime must return to baseline before code rollback"
     assert "composer check-platform-reqs --no-dev --lock" in controller
     assert "update-alternatives" not in controller
-    assert 'if ! post_deploy_smoke || ! runtime_cache_access_ok || ! workers_running; then' in controller
+    assert 'if ! post_deploy_smoke || ! runtime_cache_access_ok || ! workers_stopped; then' in controller
     assert "privileged gate-on || log 'Could not confirm the Nginx gate marker" in controller
     launcher = (ROOT / "scripts/run-php-runtime.sh").read_text(encoding="utf-8")
     assert "queue:work) blocked /var/lib/wpcaregrid/workers-disabled" in launcher
