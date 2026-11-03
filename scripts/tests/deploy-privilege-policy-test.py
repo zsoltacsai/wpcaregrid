@@ -710,7 +710,7 @@ def main():
     forbidden_failure_recovery = ('queue:restart', 'worker-runtime-enable', 'worker start-all', 'resume_scheduler', 'release_gate')
     assert not any(operation in target_failure for operation in forbidden_failure_recovery), "failed marketing-only transition must stay gated and must not resume SaaS work"
     baseline_fenced_start = controller.index('if (( BASELINE_BACKGROUND_RESTRICTED )); then', target_failure_end)
-    baseline_fenced_end = controller.index('php artisan migrate:status --no-interaction | grep -q', baseline_fenced_start)
+    baseline_fenced_end = controller.index("log 'Guarded recovery restored the marketing-only baseline", baseline_fenced_start)
     baseline_fenced_recovery = controller[baseline_fenced_start:baseline_fenced_end]
     assert 'worker-runtime-disable' in baseline_fenced_recovery and 'scheduler-pause' in baseline_fenced_recovery
     assert 'workers_stopped' in baseline_fenced_recovery and 'allow-background-fenced' in baseline_fenced_recovery
@@ -718,6 +718,9 @@ def main():
     migration_recheck = 'migration_status="$(php artisan migrate:status --no-interaction)" || return 1\n        grep -q \'Pending\' <<<"$migration_status" && return 1'
     assert migration_recheck in baseline_fenced_recovery
     assert baseline_fenced_recovery.index(migration_recheck) < baseline_fenced_recovery.index('php artisan up') < baseline_fenced_recovery.index('release_gate || return 1'), "pending or unreadable migration status must keep the marketing-only baseline gated"
+    migration_status_lines = [line.strip() for line in controller.splitlines() if 'php artisan migrate:status --no-interaction' in line]
+    assert len(migration_status_lines) == 4 and all(line.startswith('migration_status="$(php artisan migrate:status --no-interaction)" || ') for line in migration_status_lines), "every migration-status read must fail closed when Artisan exits unsuccessfully"
+    assert "php artisan migrate:status --no-interaction | grep" not in controller, "migration-status command errors must not be conflated with no pending migrations"
     target_switch = controller.index('git checkout --detach "$TARGET_SHA"')
     target_flag = controller.index('TARGET_MARKETING_RELEASE=1')
     assert target_flag < target_switch, "failure recovery must know the target is marketing-only before any source switch"

@@ -859,7 +859,8 @@ recover_after_failure() {
         return 0
     fi
 
-    php artisan migrate:status --no-interaction | grep -q 'Pending' && return 1
+    migration_status="$(php artisan migrate:status --no-interaction)" || return 1
+    grep -q 'Pending' <<<"$migration_status" && return 1
 
     php artisan up || return 1
     check_system_health allow-scheduler-pending || return 1
@@ -1133,7 +1134,8 @@ main() {
     fi
     MIGRATION_ATTEMPTED=1
     php artisan migrate --force --no-interaction
-    if php artisan migrate:status --no-interaction | grep -q 'Pending'; then
+    migration_status="$(php artisan migrate:status --no-interaction)" || fail 'Could not verify target migration status after running migrations.'
+    if grep -q 'Pending' <<<"$migration_status"; then
         fail 'One or more migrations remain pending.'
     fi
 
