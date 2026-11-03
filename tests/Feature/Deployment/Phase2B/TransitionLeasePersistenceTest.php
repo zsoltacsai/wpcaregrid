@@ -24,6 +24,35 @@ class TransitionLeasePersistenceTest extends TestCase
 {
     use RefreshDatabase;
 
+    /** @var list<string> */
+    private const TARGET_CHECKPOINTS = [
+        'TEST_STARTED',
+        'CREATE_RPC',
+        'CREATE_STATUS',
+        'CREATE_STATE',
+        'CREATE_STATE_ROW',
+        'CREATE_RECEIPT',
+        'CREATE_READBACK',
+        'CREATE_MICROSECONDS',
+        'EXACT_REPLAY',
+        'CLAIM_RPC',
+        'CLAIM_STATUS',
+        'CLAIM_STATE',
+        'CLAIM_VERSION',
+        'CLAIM_READBACK',
+        'CLAIM_MICROSECONDS',
+        'RECEIPT_READBACK',
+        'INVALID_DIGEST_PREPARE',
+        'INVALID_DIGEST_RPC',
+        'INVALID_DIGEST_CREATE_RETURNED',
+        'INVALID_DIGEST_ACCEPTED',
+        'INVALID_DIGEST_EXCEPTION_CAUGHT',
+        'INVALID_DIGEST_GUARD_ASSERTION',
+        'INVALID_DIGEST_REJECTION',
+        'INVALID_DIGEST_NONPERSISTENCE_CHECK',
+        'INVALID_DIGEST_NOT_PERSISTED',
+    ];
+
     private const OPERATION_ID = '018f0f8e-7b1c-7abc-8abc-123456789012';
 
     private const BOOT_ID = 'c5e6f6c3-2c66-49cb-a2ad-c76dd3af7f93';
@@ -132,42 +161,59 @@ class TransitionLeasePersistenceTest extends TestCase
 
     public function test_create_claim_exact_replay_and_receipt_readback_are_durable_and_bound(): void
     {
+        $this->diagnosticCheckpoint('TEST_STARTED');
         $create = $this->request('create_lease', $this->payload([
             'expires_at' => CarbonImmutable::now('UTC')->addMinutes(30)->setMicrosecond(123456)->format('Y-m-d\\TH:i:s.u\\Z'),
         ]));
+        $this->diagnosticCheckpoint('CREATE_RPC');
         $created = $this->bridge()->handleRpc($create);
 
+        $this->diagnosticCheckpoint('CREATE_STATUS');
         self::assertSame('COMMITTED', $created['status']);
+        $this->diagnosticCheckpoint('CREATE_STATE');
         self::assertSame('ISSUED', $created['result']['state']);
+        $this->diagnosticCheckpoint('CREATE_STATE_ROW');
         self::assertDatabaseHas('transition_lease_states', [
             'lease_id' => $create['payload']['lease_id'], 'state_version' => 1, 'state' => 'ISSUED',
         ]);
+        $this->diagnosticCheckpoint('CREATE_RECEIPT');
         self::assertDatabaseHas('transition_lease_receipts', [
             'request_id' => $create['request_id'], 'nonce_digest' => $create['payload']['nonce_digest'],
         ]);
+        $this->diagnosticCheckpoint('CREATE_READBACK');
         $createdState = TransitionLeaseState::query()->where('request_id', $create['request_id'])->firstOrFail();
+        $this->diagnosticCheckpoint('CREATE_MICROSECONDS');
         self::assertSame(
             $create['payload']['expires_at'],
             $createdState->expires_at->utc()->format('Y-m-d\\TH:i:s.u\\Z'),
         );
+        $this->diagnosticCheckpoint('EXACT_REPLAY');
         self::assertSame($created, $this->bridge()->handleRpc($create));
 
         $claimPayload = array_intersect_key($create['payload'], array_flip([
             'operation_id', 'generation', 'execution_id', 'lease_id', 'expected_fence_state', 'fence_tuple', 'holder_digest',
         ])) + ['nonce_digest' => hash('sha256', 'synthetic-claim-nonce')];
         $claim = $this->request('claim_lease', $claimPayload);
+        $this->diagnosticCheckpoint('CLAIM_RPC');
         $claimed = $this->bridge()->handleRpc($claim);
 
+        $this->diagnosticCheckpoint('CLAIM_STATUS');
         self::assertSame('COMMITTED', $claimed['status']);
+        $this->diagnosticCheckpoint('CLAIM_STATE');
         self::assertSame('CLAIMED', $claimed['result']['state']);
+        $this->diagnosticCheckpoint('CLAIM_VERSION');
         self::assertSame(2, $claimed['result']['state_version']);
+        $this->diagnosticCheckpoint('CLAIM_READBACK');
         $claimedState = TransitionLeaseState::query()->where('request_id', $claim['request_id'])->firstOrFail();
+        $this->diagnosticCheckpoint('CLAIM_MICROSECONDS');
         self::assertSame(
             $create['payload']['expires_at'],
             $claimedState->expires_at->utc()->format('Y-m-d\\TH:i:s.u\\Z'),
         );
+        $this->diagnosticCheckpoint('RECEIPT_READBACK');
         self::assertSame($claimed, $this->bridge()->handleRpc($this->readRequest($claim['request_id'], $claim['request_digest']))['result']['receipt']);
 
+        $this->diagnosticCheckpoint('INVALID_DIGEST_PREPARE');
         $invalidState = $createdState->getAttributes();
         unset($invalidState['id']);
         $invalidState['state_digest'] = str_repeat('0', 64);
@@ -175,10 +221,29 @@ class TransitionLeasePersistenceTest extends TestCase
         $invalidState['request_digest'] = hash('sha256', 'synthetic-invalid-state-request');
         $invalidState['occurred_at'] = CarbonImmutable::now('UTC');
         try {
+            $this->diagnosticCheckpoint('INVALID_DIGEST_RPC');
             TransitionLeaseState::query()->create($invalidState);
+            $this->diagnosticCheckpoint('INVALID_DIGEST_CREATE_RETURNED');
+            $this->diagnosticCheckpoint('INVALID_DIGEST_ACCEPTED');
             self::fail('A state digest mismatch must be rejected by the Eloquent guard.');
-        } catch (InvalidArgumentException) {
+        } catch (InvalidArgumentException $exception) {
+            $this->diagnosticCheckpoint('INVALID_DIGEST_EXCEPTION_CAUGHT');
+            $this->diagnosticCheckpoint('INVALID_DIGEST_GUARD_ASSERTION');
+            self::assertSame(
+                'Invalid append-only lease state. [DIRECT_STATE_SAVE:STATE_DIGEST_MISMATCH]',
+                $exception->getMessage(),
+            );
+            $this->diagnosticCheckpoint('INVALID_DIGEST_REJECTION');
+            $this->diagnosticCheckpoint('INVALID_DIGEST_NONPERSISTENCE_CHECK');
             self::assertDatabaseMissing('transition_lease_states', ['request_id' => $invalidState['request_id']]);
+            $this->diagnosticCheckpoint('INVALID_DIGEST_NOT_PERSISTED');
+        }
+    }
+
+    private function diagnosticCheckpoint(string $checkpoint): void
+    {
+        if (in_array($checkpoint, self::TARGET_CHECKPOINTS, true)) {
+            @fwrite(STDERR, 'WPCG_PACKAGE_B_ASSERTION_CHECKPOINT='.$checkpoint.PHP_EOL);
         }
     }
 

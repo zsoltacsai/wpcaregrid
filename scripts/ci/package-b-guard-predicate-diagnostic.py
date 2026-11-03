@@ -25,6 +25,21 @@ TEST_ID = (
 )
 TEST_METHOD = TEST_ID.rsplit("::", 1)[1]
 TEST_FILE = "tests/Feature/Deployment/Phase2B/TransitionLeasePersistenceTest.php"
+COMMON_ASSERTION_CHECKPOINTS = (
+    "TEST_STARTED", "CREATE_RPC", "CREATE_STATUS", "CREATE_STATE", "CREATE_STATE_ROW",
+    "CREATE_RECEIPT", "CREATE_READBACK", "CREATE_MICROSECONDS", "EXACT_REPLAY", "CLAIM_RPC",
+    "CLAIM_STATUS", "CLAIM_STATE", "CLAIM_VERSION", "CLAIM_READBACK", "CLAIM_MICROSECONDS",
+    "RECEIPT_READBACK", "INVALID_DIGEST_PREPARE", "INVALID_DIGEST_RPC",
+)
+ASSERTION_CHECKPOINT_PATHS = (
+    COMMON_ASSERTION_CHECKPOINTS + ("INVALID_DIGEST_CREATE_RETURNED", "INVALID_DIGEST_ACCEPTED"),
+    COMMON_ASSERTION_CHECKPOINTS + (
+        "INVALID_DIGEST_EXCEPTION_CAUGHT", "INVALID_DIGEST_GUARD_ASSERTION", "INVALID_DIGEST_REJECTION",
+        "INVALID_DIGEST_NONPERSISTENCE_CHECK", "INVALID_DIGEST_NOT_PERSISTED",
+    ),
+)
+ASSERTION_CHECKPOINTS = tuple(dict.fromkeys(code for path in ASSERTION_CHECKPOINT_PATHS for code in path))
+ASSERTION_CHECKPOINT_PREFIX = b"WPCG_PACKAGE_B_ASSERTION_CHECKPOINT="
 AGE_RECIPIENT = "age1n400h5l00wuk249x2nlwxednsmrdk2yk3pn7sakx83us4lquyerq2aza65"
 AGE_RECIPIENT_FINGERPRINT = "sha256:b7d9bf57feee062bc52998eeb4c0e9478400e98db8df8fa78e915b9496272aca"
 AGE_ARCHIVE_SHA256 = "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
@@ -52,6 +67,7 @@ GUARD_RE = re.compile(
     r"REJECT_STATE_SAVE|DIRECT_STATE_SAVE):([A-Z0-9_]+)\]"
 )
 LISTED_TEST_RE = re.compile(r"^\s*-\s+(.+?)\s*$")
+ASSERTION_CHECKPOINT_RE = re.compile(rb"(?m)^WPCG_PACKAGE_B_ASSERTION_CHECKPOINT=([A-Z0-9_]+)\r?$")
 
 
 def child_environment(include_database: bool = True, private_dir: Path | None = None) -> dict[str, str]:
@@ -81,11 +97,27 @@ def parse_selection(data: bytes) -> tuple[int, bool]:
     return sum(name == TEST_ID for name in listed), len(listed) == 1 and listed[0] == TEST_ID
 
 
+def parse_assertion_checkpoint(raw: bytes) -> str:
+    occurrences = raw.count(ASSERTION_CHECKPOINT_PREFIX)
+    matches = ASSERTION_CHECKPOINT_RE.findall(raw)
+    if occurrences != len(matches) or not matches or len(matches) > len(ASSERTION_CHECKPOINTS):
+        return "UNKNOWN"
+    try:
+        observed = tuple(item.decode("ascii", errors="strict") for item in matches)
+    except UnicodeDecodeError:
+        return "UNKNOWN"
+    if not any(observed == path[:len(observed)] for path in ASSERTION_CHECKPOINT_PATHS):
+        return "UNKNOWN"
+    return observed[-1]
+
+
 def project(raw: bytes, exit_code: int | None, selection_valid: bool, truncated: bool) -> dict[str, str]:
     result = "INCONCLUSIVE"
     stage = "UNKNOWN"
     predicate = "UNKNOWN"
+    assertion_checkpoint = "UNKNOWN"
     if selection_valid and not truncated and len(raw) <= MAX_CAPTURE_BYTES:
+        assertion_checkpoint = parse_assertion_checkpoint(raw)
         text = raw.decode("utf-8", errors="replace")
         matches = list(GUARD_RE.finditer(text))
         for match in matches:
@@ -104,6 +136,7 @@ def project(raw: bytes, exit_code: int | None, selection_valid: bool, truncated:
         "result": result,
         "stage": stage,
         "predicate": predicate,
+        "assertion_checkpoint": assertion_checkpoint,
         "phpunit_exit": "UNKNOWN" if exit_code is None else str(exit_code),
     }
 
@@ -286,12 +319,52 @@ def self_test() -> int:
     check(parse_selection(("- " + TEST_ID + "\n- Other::test\n").encode()) == (1, False))
     check(parse_selection(b"\xff") == (0, False))
     check(parse_selection(b"x" * (MAX_SELECTION_BYTES + 1)) == (0, False))
+    common_checkpoints = b"".join(
+        ASSERTION_CHECKPOINT_PREFIX + code.encode("ascii") + b"\n" for code in COMMON_ASSERTION_CHECKPOINTS
+    )
+    rejection_checkpoints = b"".join(
+        ASSERTION_CHECKPOINT_PREFIX + code.encode("ascii") + b"\n" for code in ASSERTION_CHECKPOINT_PATHS[1]
+    )
+    caught_checkpoints = b"".join(
+        ASSERTION_CHECKPOINT_PREFIX + code.encode("ascii") + b"\n"
+        for code in ASSERTION_CHECKPOINT_PATHS[1][:-3]
+    )
+    accepted_checkpoints = b"".join(
+        ASSERTION_CHECKPOINT_PREFIX + code.encode("ascii") + b"\n" for code in ASSERTION_CHECKPOINT_PATHS[0]
+    )
+    check(parse_assertion_checkpoint(rejection_checkpoints) == "INVALID_DIGEST_NOT_PERSISTED")
+    check(parse_assertion_checkpoint(caught_checkpoints) == "INVALID_DIGEST_GUARD_ASSERTION")
+    check(parse_assertion_checkpoint(accepted_checkpoints) == "INVALID_DIGEST_ACCEPTED")
+    partial_checkpoints = b"".join(
+        ASSERTION_CHECKPOINT_PREFIX + code.encode("ascii") + b"\n" for code in COMMON_ASSERTION_CHECKPOINTS[:8]
+    )
+    check(parse_assertion_checkpoint(partial_checkpoints) == "CREATE_MICROSECONDS")
+    check(parse_assertion_checkpoint(b"") == "UNKNOWN")
+    check(parse_assertion_checkpoint(ASSERTION_CHECKPOINT_PREFIX + b"UNAPPROVED\n") == "UNKNOWN")
+    check(parse_assertion_checkpoint(ASSERTION_CHECKPOINT_PREFIX + b"TEST_STARTED\n" + ASSERTION_CHECKPOINT_PREFIX + b"TEST_STARTED\n") == "UNKNOWN")
+    check(parse_assertion_checkpoint(ASSERTION_CHECKPOINT_PREFIX + b"CREATE_RPC\n") == "UNKNOWN")
+    check(parse_assertion_checkpoint(b"prefix " + ASSERTION_CHECKPOINT_PREFIX + b"TEST_STARTED\n") == "UNKNOWN")
     event = b"InvalidArgumentException: Invalid append-only lease state. [CREATE_STATE_SAVE:STATE_DIGEST_MISMATCH]"
     projected = project(event, 2, True, False)
     check(projected["stage"] == "CREATE_STATE_SAVE" and projected["predicate"] == "STATE_DIGEST_MISMATCH")
     check(project(b"Invalid append-only lease state. [CREATE_STATE_SAVE:SECRET_VALUE]", 2, True, False)["predicate"] == "UNKNOWN")
     check(project(event, 2, False, False)["stage"] == "UNKNOWN")
     check(project(event, 2, True, True)["predicate"] == "UNKNOWN")
+    status_index = COMMON_ASSERTION_CHECKPOINTS.index("CREATE_STATUS") + 1
+    status_prefix = b"".join(
+        ASSERTION_CHECKPOINT_PREFIX + code.encode("ascii") + b"\n"
+        for code in COMMON_ASSERTION_CHECKPOINTS[:status_index]
+    )
+    checkpoint_projection = project(status_prefix, 1, True, False)
+    check(checkpoint_projection["assertion_checkpoint"] == "CREATE_STATUS")
+    started_prefix = ASSERTION_CHECKPOINT_PREFIX + b"TEST_STARTED\n"
+    safe_projection = project(
+        b"private-value\n" + started_prefix, 1, True, False,
+    )
+    check(safe_projection["assertion_checkpoint"] == "TEST_STARTED")
+    check("private-value" not in str(safe_projection))
+    check(parse_assertion_checkpoint(common_checkpoints + ASSERTION_CHECKPOINT_PREFIX + b"INVALID_DIGEST_CREATE_RETURNED\n" + ASSERTION_CHECKPOINT_PREFIX + b"INVALID_DIGEST_REJECTION\n") == "UNKNOWN")
+    check(parse_assertion_checkpoint(common_checkpoints + ASSERTION_CHECKPOINT_PREFIX + b"INVALID_DIGEST_REJECTION\n" + ASSERTION_CHECKPOINT_PREFIX + b"INVALID_DIGEST_ACCEPTED\n") == "UNKNOWN")
     check(project(b"OK (1 test, 3 assertions)\n", 0, True, False)["result"] == "PASS")
     check(project(event, 2, True, False)["result"] == "GUARD_REJECTED")
     check(recipient_is_approved())
@@ -377,7 +450,10 @@ def run_once(php_version: str, age_bin: Path) -> int:
     selection_count = "UNKNOWN"
     process_exit: int | None = None
     capture_state = "NOT_RUN"
-    result = {"result": "INCONCLUSIVE", "stage": "UNKNOWN", "predicate": "UNKNOWN", "phpunit_exit": "NOT_RUN"}
+    result = {
+        "result": "INCONCLUSIVE", "stage": "UNKNOWN", "predicate": "UNKNOWN",
+        "assertion_checkpoint": "UNKNOWN", "phpunit_exit": "NOT_RUN",
+    }
     encrypted = False
     artifact_owned = False
     cleanup_ok = False
@@ -448,7 +524,10 @@ def run_once(php_version: str, age_bin: Path) -> int:
             encrypted = False
     except (OSError, RuntimeError, subprocess.SubprocessError, ValueError):
         if process_exit is not None:
-            result = {"result": "INCONCLUSIVE", "stage": "UNKNOWN", "predicate": "UNKNOWN", "phpunit_exit": str(process_exit)}
+            result = {
+                "result": "INCONCLUSIVE", "stage": "UNKNOWN", "predicate": "UNKNOWN",
+                "assertion_checkpoint": "UNKNOWN", "phpunit_exit": str(process_exit),
+            }
     finally:
         owned = tuple((name, path) for name, path in (
             ("selection", selection_path), ("phpunit_raw", raw_path),
@@ -479,7 +558,7 @@ def run_once(php_version: str, age_bin: Path) -> int:
     fixed = (
         f"PACKAGE_B_GUARD_DIAG php={php_version} selection={selection_state} selection_count={selection_count} "
         f"setup={setup_state} result={result['result']} phpunit_exit={result['phpunit_exit']} "
-        f"stage={result['stage']} predicate={result['predicate']} capture={capture_state} "
+        f"stage={result['stage']} predicate={result['predicate']} checkpoint={result['assertion_checkpoint']} capture={capture_state} "
         f"encryption={'PASS' if encrypted else 'FAIL'} artifact_created={'YES' if artifact_created == 'true' else 'NO'} "
         f"cleanup={'PASS' if cleanup_ok else 'FAIL'}"
     )
