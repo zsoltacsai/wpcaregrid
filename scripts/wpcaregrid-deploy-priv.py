@@ -898,7 +898,8 @@ def validate_nginx_runtime_dump(output, *, source_reader=None, include_resolver=
 def supervisor_runtime_contract(*, allow_legacy=False):
     acl = run(["/usr/bin/getfacl", "-cp", str(SUPERVISOR_CONFIG)], check=False, stdout=subprocess.PIPE)
     expected_acl = "user::rw-\ngroup::r--\nother::r--\n"
-    if acl.returncode or (acl.stdout or "") != expected_acl:
+    actual_acl = acl.stdout or ""
+    if acl.returncode or actual_acl not in (expected_acl, expected_acl + "\n"):
         raise ValueError("Supervisor configuration ACL is not the fixed root-only baseline")
     data = trusted_file_bytes(SUPERVISOR_CONFIG, mode=0o644, max_size=32768)
     text = data.decode("utf-8")

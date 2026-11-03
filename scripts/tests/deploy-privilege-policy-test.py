@@ -676,6 +676,28 @@ def main():
         module.trusted_file_bytes = lambda path, **kwargs: supervisor_fixture.encode("utf-8")
         module.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout="user::rw-\ngroup::r--\nother::r--\n")
         module.supervisor_runtime_contract(allow_legacy=True)
+        module.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout="user::rw-\ngroup::r--\nother::r--\n\n")
+        module.supervisor_runtime_contract(allow_legacy=True)
+        module.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout="user::rw-\ngroup::r--\nother::r--\n\n\n")
+        try:
+            module.supervisor_runtime_contract(allow_legacy=True)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Supervisor ACL with multiple extra blank lines was accepted")
+        for invalid_acl in (
+            "user::rw-\ngroup::r--\nother::r-x\n",
+            "user::rw-\ngroup::r--\nother::r--\nuser:deploy:r--\n",
+            "user::rw-\ngroup::r--\nother::r--\ndefault:user::rwx\n",
+        ):
+            module.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout=invalid_acl)
+            try:
+                module.supervisor_runtime_contract(allow_legacy=True)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("Supervisor ACL with non-baseline entries was accepted")
+        module.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout="user::rw-\ngroup::r--\nother::r--\n")
         rewritten_supervisor = module.rewrite_supervisor_runtime_commands(supervisor_fixture)
         assert "command=" + module.WORKER_COMMANDS["wpcaregrid-default"] in rewritten_supervisor
         assert "command=" + module.WORKER_COMMANDS["wpcaregrid-backups"] in rewritten_supervisor
