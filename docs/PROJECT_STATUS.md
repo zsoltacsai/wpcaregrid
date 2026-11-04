@@ -1,6 +1,54 @@
 # WP CareGrid — Project Status
 
-## Authoritative milestone status — 2026-10-24 18:58 UTC
+## Current authoritative status — 2026-11-04 08:55 UTC
+
+This section is the current project-memory and decision-ledger entry. Older milestone sections below are historical snapshots and are not current environment evidence unless explicitly revalidated.
+
+### Active milestone and environment boundary
+
+- **Active milestone:** P0 HU/EN marketing-only MVP. The first release exposes public marketing content only; paid services, customer registration, checkout, payment and SaaS activation are disabled. Staging synchronization and marketing acceptance are the immediate path. Production still needs a separate release decision.
+- **Authoritative primary:** `7355788882e026db7c4a6d37db2b957740b5f385`; read-only `git ls-remote` matched `claude/ecstatic-wozniak-oemyuf` at 2026-11-04. Exact merge CI `41747134447` passed 38/38; Marketing E2E `41748568634` passed on the recorded exact source. Recheck for later source movement before release.
+- **Staging:** Existing approved `caregrid-staging` SSH alias read-only command returned application SHA `761e0e5d37558da808ac961ca2d2a68b4ffab0db` and empty `git status --porcelain=v1` at 2026-11-04 08:55 UTC. The PHP 8.4 bootstrap was previously reported complete; do not infer that this makes the application release ready.
+- **Source relationship:** GitHub compare confirms staging is the base and primary is 545 commits ahead. The range is broad and includes runtime/deployment, billing/checkout, Connector, backups, migrations, localization and marketing. The correct staging synchronization candidate is the full protected primary SHA, not a partial marketing-file copy.
+- **Database/recovery:** memory-only MySQL diagnostic collector is accepted, but no fresh staging database backup has been restored in an isolated environment. Synthetic empty-database migration evidence is not actual backup restore proof. `BACKUP_TRANSFER=BLOCKED_EXTERNAL_AUTHORITY`, `ISOLATED_RESTORE=BLOCKED`, `STAGING_DEPLOY=NO-GO`.
+- **Runtime policy:** Laravel server minimum/current baseline PHP 8.4; PHP 8.5 compatibility is planned and server CI coverage on 8.4/8.5 must remain. PHP 8.5 staging/production cutover is NO-GO. Do not spend server compatibility work on PHP 8.3 or older, and do not reopen the closed PHP 8.2 investigation. The separate WordPress Connector matrix is unchanged.
+- **Workers:** accepted phase classification is closed. No new worker-runtime defect is established. Marketing-only deployment must keep scheduler/workers fenced and preserve pending jobs; strict RUNNING contract applies after recovery restarts workers. No current worker/scheduler change is recorded here.
+- **Payments and customer accounts:** not part of the marketing-only MVP. Registration, Stripe Checkout, webhook provisioning and service activation remain inaccessible. Sandbox/test validation for later paid-service readiness is separate; `STRIPE_ALLOW_LIVE_MODE=false`, and real payment needs explicit Owner authorization.
+
+### MVP capability and commercial decision status
+
+- Exact-source CI/E2E and source tests establish implementation evidence only. They do not establish production readiness.
+- Current `config/pricing.php` uses IDs `wordpress.basic`, `wordpress.business`, `wordpress.secure`, `woocommerce.basic`, `woocommerce.business`, `woocommerce.secure`. The 39,900 HUF/month value is `woocommerce.secure`. “Standard”/“Premium” are not authoritative identifiers unless mapped by the locale source.
+- `wordpress.basic` (8,990 HUF/month) is a possible later paid-service candidate, not part of the marketing MVP and not sale-approved: its source-defined promises include core/plugin/theme updates, remote backup, uptime monitoring, monthly security checks and activity log; its entitlement also says restore-eligible. Service/provider readiness, actual restore and staffed delivery are not evidenced. No current package is verified ready for sale. Do not invent a maintenance-only package or silently change advertised entitlements.
+- Full M15 customer-facing Backup & Restore moves to the first post-production milestone, but corresponding customer capabilities must remain unavailable until accepted. The existing plan catalogue's backup/restore entitlements need to be reconciled to the exact initial scope before any offering is enabled.
+- Hungarian customer email is recorded as NOT READY in the release checklist; staging delivery and onboarding must verify language-specific activation and payment messages or hold the affected offer.
+
+### Current staging and production decisions
+
+- **Staging:** no application synchronization/deployment, migration or Nginx reload has been performed for primary `735578...`. The release controller must target the full exact primary SHA and only run after its exact CI, fresh backup, actual isolated restore, migration rehearsal, PHP 8.4/Nginx checks, worker/scheduler fencing and controller integrity pass. Actual post-deploy HU/EN browser QA must verify marketing routes work while registration, checkout, Stripe provisioning and SaaS/background actions remain blocked.
+- **Restore route:** prefer administrator-provided isolated MySQL 8.4.11 restore target within the staging boundary because it avoids off-host confidential data transfer. This is a candidate request, not an evidenced available service. Authorized encrypted transfer to the existing isolated WSL lab is fallback only after a supported official channel is explicitly provided. Do not route around a denial.
+- **Production:** NO-GO until the marketing-only exact scope passes production-readiness gates and a separate Owner production decision is recorded. Do not enable customer registration, paid activation or live payment as part of the marketing MVP. No production operation occurred in this work.
+- **M15:** the full customer-facing Backup & Restore product is post-production. Minimum infrastructure backup/recovery and safe rollback stay pre-release gates.
+
+### Decision ledger
+
+| Decision ID | Date / owner | Decision and reason | Evidence / affected area | Status / reopening condition |
+|---|---|---|---|---|
+| `DEC-2026-11-04-MVP-001` | 2026-11-04 / Owner | Earlier P0 revenue-service-first interpretation; M15 deferral and minimum recovery gate remain in effect, but customer/payment activation is no longer the first MVP scope. | Superseded by the Owner's marketing-only MVP decision; existing release records. | **SUPERSEDED** by `DEC-2026-11-04-MARKETING-MVP-001`; retain as decision history. |
+| `DEC-2026-11-04-MARKETING-MVP-001` | 2026-11-04 / Owner | First release is HU/EN marketing-only. Paid service activation follows service, financial and operational readiness; customer registration/payment are disabled for the first release. | Latest Owner directive; marketing-only gate, exact-primary CI/E2E evidence, release checklist and roadmap. | **ACTIVE**; reopen only on a new Owner decision after scope-specific service and release gates are evidenced. |
+| `DEC-2026-11-04-RESTORE-001` | 2026-11-04 / Owner | Prefer an administrator-provided isolated MySQL 8.4.11 restore environment in the staging boundary; encrypted WSL transfer is fallback only through an official authorized channel. | Prior platform transfer denial; no actual backup restore; operator handoff. | **ACTIVE / BLOCKED_EXTERNAL_AUTHORITY**; reopen when an official supported path and isolation proof are supplied. |
+| `DEC-2026-11-04-PHP-001` | 2026-11-04 / Owner | Laravel runtime minimum is 8.4; 8.5 is planned validation; no 8.5 cutover. Connector PHP matrix remains separate. | Owner policy; CI matrix and PHP runtime lifecycle docs. | **ACTIVE**; reopen only by explicit Owner policy update. |
+| `DEC-2026-11-04-PAYMENT-001` | 2026-11-04 / Owner | Sandbox until explicit GO for live payments. | Stripe test-mode policy and Owner directive. | **ACTIVE**; live mode requires separate explicit Owner GO. |
+
+### Last completed work / next executable action
+
+Documentation now consolidates the MVP capability audit, staging sync plan, initial-offering assessment, post-launch M15 backlog and release gates in the existing master roadmap/checklist; the operator restore handoff is already present. Next action is a single administrator decision/provisioning step: provide a disposable isolated MySQL 8.4.11 restore target inside the existing staging boundary, with an approved one-use restore path and isolation/cleanup evidence. Once provided, resume the documented actual-backup restore and migration rehearsal. Until then, do only independent source/test preparation; staging deploy remains NO-GO.
+
+**Memory rule:** update this top current-status and decision-ledger section at milestone close; retain dated snapshots below as history. Keep credentials, keys, backup data and raw diagnostics out of Git.
+
+**Canonical references:** milestones/backlog: [Master Roadmap](MASTER_ROADMAP_AND_INTEGRATION_PLAN.md); release gates: [Release Checklist](RELEASE_CHECKLIST.md); deployment/recovery: [Deployment](DEPLOYMENT.md); server PHP policy: [PHP Runtime Lifecycle Policy](PHP_RUNTIME_LIFECYCLE_POLICY.md); backup behavior: [Backup Engine](BACKUP_ENGINE.md) and the linked M15 isolation contracts; payment sandbox: [Stripe Test Mode](STRIPE_TEST_MODE.md); locale/currency behavior: [Localization](LOCALIZATION.md).
+
+## Historical authoritative milestone status — 2026-10-24 18:58 UTC
 
 **M14 CLOSED — VERIFIED** within the Owner-approved bounded engineering and security-audit criteria. This is not a malware-free assertion, full filesystem coverage, independent penetration-test certification, production launch approval, or permission to bypass M15 pilot-entry gates.
 
@@ -38,7 +86,7 @@ claim.
 > Kept up to date at the end of every milestone (see CLAUDE.md §27).
 > A new session should read CLAUDE.md, this file and the relevant docs, then run `git status` and `git log --oneline -12`.
 
-Last updated: 2026-10-24
+**Snapshot last updated:** 2026-10-24. Current status is in the section above.
 
 ## M14.7/M14.8 latest evidence — Owner-approved real-site Integrity acceptance (2026-10-24)
 
