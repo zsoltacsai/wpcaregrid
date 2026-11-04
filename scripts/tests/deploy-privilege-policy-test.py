@@ -11,6 +11,7 @@ import socket
 import stat
 import subprocess
 import tempfile
+import json
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
@@ -23,6 +24,11 @@ spec = importlib.util.spec_from_file_location("deploy_priv", HELPER)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 NGINX_VALIDATOR = module.validate_nginx_runtime_dump
+RECOVERY_SPEC = importlib.util.spec_from_file_location(
+    "staging_recovery", ROOT / "scripts" / "recover-staging-deployment.py"
+)
+RECOVERY = importlib.util.module_from_spec(RECOVERY_SPEC)
+RECOVERY_SPEC.loader.exec_module(RECOVERY)
 
 
 def expect_rejected(args):
@@ -41,6 +47,289 @@ def expect_preflight_code(expected, callback):
         assert str(error) == expected, "preflight diagnostic must contain only its fixed code"
         return
     raise AssertionError(f"preflight failure was not reported as {expected}")
+
+
+def recovery_table(table, *, triggers=(), present=True):
+    columns = [
+        {"name": name, "type": kind, "nullable": nullable, "has_default": default, "extra": extra}
+        for name, kind, nullable, default, extra in RECOVERY.COLS[table]
+    ]
+    return {
+        "present": present,
+        "engine": "InnoDB" if present else None,
+        "collation": "utf8mb4_unicode_ci" if present else None,
+        "rows": 0,
+        "columns": columns if present else [],
+        "indexes": dict(RECOVERY.INDEXES[table]) if present else {},
+        "foreign_keys": {
+            name: (*contract[:4], contract[4][0])
+            for name, contract in RECOVERY.FOREIGN_KEYS[table].items()
+        } if present else {},
+        "triggers": list(triggers),
+    }
+
+
+def recovery_snapshot(*, stage="partial", setting=True):
+    first, second = RECOVERY.MIGRATIONS
+    tables = {
+        RECOVERY.TABLES[0]: recovery_table(RECOVERY.TABLES[0]),
+        RECOVERY.TABLES[1]: recovery_table(RECOVERY.TABLES[1], present=False),
+    }
+    if stage == "first_migration_done":
+        valid = [{"definition_valid": True} for _ in range(3)]
+        tables[RECOVERY.TABLES[0]]["triggers"] = valid
+        tables[RECOVERY.TABLES[1]] = recovery_table(RECOVERY.TABLES[1], triggers=(), present=True)
+        pending, applied = [second], [first]
+    elif stage == "complete":
+        valid = [{"definition_valid": True} for _ in range(3)]
+        tables[RECOVERY.TABLES[0]]["triggers"] = valid
+        tables[RECOVERY.TABLES[1]] = recovery_table(RECOVERY.TABLES[1], triggers=valid)
+        pending, applied = [], [first, second]
+    else:
+        pending, applied = [first, second], []
+    return {
+        "mysql": {"version": "8.4.11", "database": "wpcaregrid", "log_bin": True,
+                  "binlog_format": "ROW", "trust_function_creators": setting,
+                  "server_uuid_sha256": RECOVERY.MYSQL_UUID_SHA},
+        "pending_migrations": pending,
+        "applied_migrations": applied,
+        "tables": tables,
+    }
+
+
+def test_gated_recovery_contract():
+    assert "transition_history_events_request_fk" not in RECOVERY.INDEXES[RECOVERY.TABLES[1]]
+    assert RECOVERY.FOREIGN_KEYS[RECOVERY.TABLES[1]]["transition_history_events_request_fk"] == (
+        "request_id", "transition_v2_requests", "request_id", "RESTRICT", ("RESTRICT", "NO ACTION")
+    )
+    initial = recovery_snapshot()
+    pending, applied = RECOVERY.validate_snapshot(initial, phase="migrate", setting=True)
+    assert pending == set(RECOVERY.MIGRATIONS) and not applied
+
+    progressed = recovery_snapshot(stage="first_migration_done")
+    pending, applied = RECOVERY.validate_snapshot(progressed, phase="migrate", setting=True)
+    assert pending == {RECOVERY.MIGRATIONS[1]} and applied == {RECOVERY.MIGRATIONS[0]}
+
+    finished = recovery_snapshot(stage="complete", setting=False)
+    pending, applied = RECOVERY.validate_snapshot(finished, phase="finalize", setting=False)
+    assert not pending and applied == set(RECOVERY.MIGRATIONS)
+    assert RECOVERY.validate_foreign_keys(
+        {"transition_history_events_request_fk": (
+            "request_id", "transition_v2_requests", "request_id", "RESTRICT", "NO ACTION"
+        )}, RECOVERY.TABLES[1]
+    ), "InnoDB's equivalent no-action update rule should satisfy the pinned FK contract"
+    migration_finished = recovery_snapshot(stage="complete", setting=True)
+    pending, applied = RECOVERY.validate_migration_result(migration_finished)
+    assert not pending and applied == set(RECOVERY.MIGRATIONS)
+    saved_recovery = {
+        name: getattr(RECOVERY, name)
+        for name in ("verify_protected_state", "verify_backup", "verify_provenance",
+                     "verify_application_checkout", "load_attestation", "snapshot", "run")
+    }
+    migration_commands = []
+    try:
+        RECOVERY.verify_protected_state = lambda: None
+        RECOVERY.verify_application_checkout = lambda _sha: None
+        RECOVERY.verify_backup = lambda: {"sha256": "b" * 64}
+        RECOVERY.verify_provenance = lambda app, tool, package: {app: 123, tool: 456}
+        RECOVERY.load_attestation = lambda phase: "c" * 64
+        RECOVERY.snapshot = lambda: migration_finished
+        RECOVERY.run = lambda argv, **kwargs: migration_commands.append(argv)
+        retry_result = RECOVERY.phase_migrate(RECOVERY.APP_SHA, "a" * 40, ROOT)
+        assert retry_result["MIGRATIONS"] == "PASS" and retry_result["TRIGGERS"] == 6
+        assert not migration_commands, "completed migration retry must not re-execute DDL"
+    finally:
+        for name, value in saved_recovery.items():
+            setattr(RECOVERY, name, value)
+
+    saved_main = {
+        name: getattr(RECOVERY, name)
+        for name in ("deployment_lock", "verify_application_checkout", "phase_migrate", "phase_finalize", "enforce_fail_closed")
+    }
+    prelock_calls = []
+    class BusyDeploymentLock:
+        def __enter__(self):
+            raise RECOVERY.RecoveryError("deployment_lock_busy")
+        def __exit__(self, *_args):
+            return False
+    try:
+        RECOVERY.deployment_lock = lambda: BusyDeploymentLock()
+        RECOVERY.verify_application_checkout = lambda _sha: prelock_calls.append("checkout")
+        RECOVERY.phase_migrate = lambda *_args: prelock_calls.append("migrate")
+        RECOVERY.phase_finalize = lambda *_args: prelock_calls.append("finalize")
+        RECOVERY.enforce_fail_closed = lambda: prelock_calls.append("fence")
+        error_output = io.StringIO()
+        with redirect_stderr(error_output):
+            exit_code = RECOVERY.main([
+                "continue-migrations", "--application-sha", RECOVERY.APP_SHA,
+                "--recovery-tool-sha", "a" * 40,
+            ])
+        assert exit_code == 1 and "CODE=deployment_lock_busy" in error_output.getvalue()
+        assert not prelock_calls, "busy-lock refusal must not enter recovery or mutate host fences"
+    finally:
+        for name, value in saved_main.items():
+            setattr(RECOVERY, name, value)
+    lock_calls = []
+    RECOVERY.acquire_nonblocking_lock(7, lambda fd, flag: lock_calls.append((fd, flag)), 9)
+    assert lock_calls == [(7, 9)]
+    def busy_lock(_fd, _flag):
+        raise BlockingIOError
+    try:
+        RECOVERY.acquire_nonblocking_lock(8, busy_lock, 9)
+    except RECOVERY.RecoveryError as error:
+        assert str(error) == "deployment_lock_busy"
+    else:
+        raise AssertionError("a busy deploy lock was accepted")
+
+    for table in RECOVERY.TABLES:
+        finished["tables"][table]["triggers"] = [
+            {"name": f"{table}_immutable_{event.lower()}", "event": event,
+             "timing": "BEFORE", "definition_valid": True,
+             "definition_sha256": hashlib.sha256(f"{table}:{event}".encode()).hexdigest()}
+            for event in ("INSERT", "UPDATE", "DELETE")
+        ]
+
+    invalid_cases = []
+    wrong_setting = recovery_snapshot()
+    wrong_setting["mysql"]["trust_function_creators"] = False
+    invalid_cases.append(("dba_setting_state_mismatch", wrong_setting))
+    extra_pending = recovery_snapshot()
+    extra_pending["pending_migrations"].append("unapproved_migration")
+    invalid_cases.append(("unexpected_pending_migration", extra_pending))
+    wrong_schema = recovery_snapshot()
+    wrong_schema["tables"][RECOVERY.TABLES[0]]["columns"].pop()
+    invalid_cases.append(("partial_schema_mismatch", wrong_schema))
+    wrong_foreign_key = recovery_snapshot(stage="first_migration_done")
+    wrong_foreign_key["tables"][RECOVERY.TABLES[1]]["foreign_keys"]["transition_history_events_request_fk"] = (
+        "request_id", "unexpected_table", "request_id", "RESTRICT", "NO ACTION"
+    )
+    invalid_cases.append(("partial_schema_mismatch", wrong_foreign_key))
+    bad_trigger = recovery_snapshot(stage="first_migration_done")
+    bad_trigger["tables"][RECOVERY.TABLES[0]]["triggers"][0]["definition_valid"] = False
+    invalid_cases.append(("partial_trigger_state_mismatch", bad_trigger))
+    out_of_order = recovery_snapshot()
+    out_of_order["tables"][RECOVERY.TABLES[1]] = recovery_table(RECOVERY.TABLES[1])
+    invalid_cases.append(("partial_table_order_mismatch", out_of_order))
+    bad_final_trigger = recovery_snapshot(stage="complete", setting=False)
+    bad_final_trigger["tables"][RECOVERY.TABLES[1]]["triggers"][1]["definition_valid"] = False
+    invalid_cases.append(("trigger_definition_mismatch", bad_final_trigger))
+    for expected_code, invalid in invalid_cases:
+        try:
+            phase = "finalize" if invalid is bad_final_trigger else "migrate"
+            setting = phase == "migrate"
+            RECOVERY.validate_snapshot(invalid, phase=phase, setting=setting)
+        except RECOVERY.RecoveryError as error:
+            assert str(error) == expected_code, (expected_code, str(error))
+        else:
+            raise AssertionError(f"unsafe recovery snapshot accepted: {expected_code}")
+
+    if os.name != "nt":
+        original_receipts = RECOVERY.RECEIPTS
+        with tempfile.TemporaryDirectory() as receipt_root:
+            receipt_dir = Path(receipt_root)
+            receipt_dir.chmod(0o700)
+            RECOVERY.RECEIPTS = receipt_dir
+            try:
+                receipt_name = RECOVERY.write_receipt(
+                    RECOVERY.APP_SHA, "a" * 40,
+                    {RECOVERY.APP_SHA: 123, "a" * 40: 456},
+                    {"name": "synthetic.sql.gz", "sha256": "b" * 64, "bytes": 12},
+                    "c" * 64, finished,
+                )
+                receipt_path = receipt_dir / receipt_name
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                assert receipt_path.stat().st_mode & 0o777 == 0o600
+                assert receipt["status"] == "VERIFIED_GATE_CLOSED"
+                assert receipt["application_sha"] == RECOVERY.APP_SHA
+                assert receipt["recovery_tool_sha"] == "a" * 40
+                assert receipt["maintenance_gate"] == "CLOSED"
+                assert receipt["public_http_acceptance"] == "PENDING_SEPARATE_OWNER_GATE_RELEASE"
+                assert "APP_KEY" not in receipt and "credentials" not in receipt
+            finally:
+                RECOVERY.RECEIPTS = original_receipts
+    else:
+        source = (ROOT / "scripts/recover-staging-deployment.py").read_text(encoding="utf-8")
+        assert "'VERIFIED_GATE_CLOSED'" in source
+        assert "'recovery_tool_sha'" in source and "'application_sha'" in source
+
+    attestation = {
+        "schema": 1,
+        "application_sha": RECOVERY.APP_SHA,
+        "mysql_server_uuid_sha256": RECOVERY.MYSQL_UUID_SHA,
+        "instance_scope": "DEDICATED_STAGING",
+        "replication": "NONE",
+        "unrelated_application_use": "NONE",
+        "original_log_bin_trust_function_creators": "OFF",
+        "phase": "MIGRATION_WINDOW",
+        "temporary_setting": "ENABLED_FOR_MIGRATION",
+        "observed_log_bin_trust_function_creators": "ON",
+        "operation_authorized_by_dba": True,
+    }
+    assert RECOVERY.validate_attestation(attestation, phase="migrate")
+    restored_attestation = {
+        **{key: value for key, value in attestation.items() if key not in {
+            "phase", "temporary_setting", "observed_log_bin_trust_function_creators",
+            "operation_authorized_by_dba",
+        }},
+        "phase": "RESTORATION_VERIFIED",
+        "temporary_setting": "RESTORED",
+        "restored_log_bin_trust_function_creators": "OFF",
+        "restoration_independently_verified": True,
+    }
+    assert RECOVERY.validate_attestation(restored_attestation, phase="finalize")
+    bad_attestation = dict(restored_attestation, restoration_independently_verified=False)
+    try:
+        RECOVERY.validate_attestation(bad_attestation, phase="finalize")
+    except RECOVERY.RecoveryError as error:
+        assert str(error) == "dba_attestation_mismatch"
+    else:
+        raise AssertionError("unverified DBA setting restoration was accepted")
+
+    calls = []
+    original_run = RECOVERY.run
+    RECOVERY.run = lambda argv, **kwargs: calls.append(argv)
+    try:
+        RECOVERY.invoke_single_migration(RECOVERY.MIGRATION_FILES[0])
+        assert calls == [[RECOVERY.PHP, "artisan", "migrate", "--force", "--no-interaction",
+                          f"--path=database/migrations/{RECOVERY.MIGRATION_FILES[0]}"]]
+        try:
+            RECOVERY.invoke_single_migration("2026_01_01_unapproved.php")
+        except RECOVERY.RecoveryError as error:
+            assert str(error) == "migration_not_allowlisted"
+        else:
+            raise AssertionError("unapproved migration path was accepted")
+        assert len(calls) == 1
+    finally:
+        RECOVERY.run = original_run
+
+    fail_closed_calls = []
+    def fail_first_fence(argv, **kwargs):
+        fail_closed_calls.append(argv)
+        if len(fail_closed_calls) == 1:
+            raise RECOVERY.RecoveryError("synthetic_gate_command_failure")
+        return subprocess.CompletedProcess(argv, 0, stdout="wpcaregrid-default STOPPED\n")
+    RECOVERY.run = fail_first_fence
+    try:
+        try:
+            RECOVERY.enforce_fail_closed()
+        except RECOVERY.RecoveryError as error:
+            assert str(error) == "fail_closed_state_unverified"
+        else:
+            raise AssertionError("failed fence operation was not reported")
+        assert len(fail_closed_calls) == 6, "all fence and worker-state checks must be attempted"
+    finally:
+        RECOVERY.run = original_run
+
+    source = (ROOT / "scripts/recover-staging-deployment.py").read_text(encoding="utf-8")
+    assert "gate-off" not in source
+    assert "worker-runtime-enable" not in source
+    assert "scheduler-resume" not in source
+    assert "SET GLOBAL" not in source
+    assert "'up'" not in source and '"up"' not in source
+    assert "DEPLOY_LOCK = Path('/home/deploy/private-backups/.deploy.lock')" in source
+    assert "with deployment_lock():" in source
+    assert "if not pending:" in source
+    assert "recovery_tool_sha" in source and "application_sha" in source
 
 
 def nginx_dump(files):
@@ -109,6 +398,7 @@ def validate_nginx_fixture(dump, files, resolver_override=None):
 
 
 def main():
+    test_gated_recovery_contract()
     if os.name != "nt":
         bash = shutil.which("bash")
         if not bash:
