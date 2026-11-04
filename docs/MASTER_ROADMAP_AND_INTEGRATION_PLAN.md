@@ -3,14 +3,14 @@
 **Planning baseline:** 2026-11-04
 **Repository:** `zsoltacsai/wpcaregrid`
 **Authoritative branch:** `claude/ecstatic-wozniak-oemyuf`
-**Verified source baseline:** `69acf424f318beedc865090bedda651dc7013dbf`
-**Baseline CI:** PR #258 documentation merge; recheck exact source CI before a release decision
-**Marketing E2E:** run [41748568634](https://github.com/zsoltacsai/wpcaregrid/actions/runs/41748568634), exact SHA, PASS
+**Verified source baseline:** `06d35a28453445ed19bdc11e62592e187e17dbf8`
+**Merge CI:** [run 41817511959](https://github.com/zsoltacsai/wpcaregrid/actions/runs/41817511959), exact merge SHA, 38/38 PASS
+**Marketing E2E:** [run 41748568634](https://github.com/zsoltacsai/wpcaregrid/actions/runs/41748568634), PASS on application SHA `7355788882e026db7c4a6d37db2b957740b5f385`; subsequent primary changes were documentation-only
 **Status:** Owner-approved roadmap reprioritization; this document does not authorize a staging or production operation.
 
 ## 1. Purpose and planning rules
 
-This document records the current release sequence after the Owner's 2026-11-04 decisions. The first release target is a HU/EN marketing-only MVP. Paid service activation, customer registration and live payments remain disabled until service, financial, operational and release conditions pass and the applicable Owner authorization is recorded. Full customer-facing M15 Backup & Restore functionality moves to a later milestone. Minimum infrastructure backup, recoverability and rollback controls remain mandatory for the broad staging release and any applicable production release.
+This document records the current release sequence after the Owner's 2026-11-04 decisions. The first release target is the full Laravel application operating as a HU/EN marketing-only MVP through the existing protected controller. No separate static site, alternate system or application architecture is authorized. Paid service activation, customer registration and live payments remain disabled until service, financial, operational and release conditions pass and applicable Owner authorization is recorded. Full customer-facing M15 Backup & Restore functionality moves to a later milestone. Minimum infrastructure backup, recoverability and rollback controls remain mandatory for a release that changes database state.
 
 Keep the established security boundaries:
 
@@ -24,19 +24,21 @@ Keep the established security boundaries:
 
 ## Owner decision — release simplification and marketing MVP (2026-11-04, latest)
 
-This decision supersedes earlier release-plan text in this document wherever that text requires full M15 completion or assumes that every marketing release must run migrations. It does not authorize a staging or production operation.
+This decision supersedes earlier release-plan text in this document wherever it conflicts with the full-Laravel marketing-only release, the deferred M15 scope, or the required recovery gate. It does not authorize a staging or production operation.
 
 1. **P0 — HU/EN marketing-only MVP:** keep registration, checkout, live payment, provisioning, Connector onboarding and paid SaaS operations disabled. Production activation still requires separate exact-release authorization.
 2. **Post-production product roadmap:** defer daily database backups to the existing S3-compatible store; encrypted backup storage, retention and failure monitoring; secure internal database administration; restore tooling and periodic isolated restore verification; and full customer-facing M15 Backup & Restore. These are separate infrastructure and customer product workstreams. The hosting provider's reported weekly server backups are an Owner-reported existing safeguard, not verified application/database restore evidence.
-3. **Infrastructure release safety:** retain exact-SHA application rollback and a fresh pre-deployment backup appropriate to the operations performed. A release that changes database schema or data requires a recovery plan and demonstrated restore/recovery evidence; do not waive that gate. A genuinely database-unchanged release must prove no migration or runtime write path changes database state and retain application/config rollback evidence.
+3. **Infrastructure release safety:** the authorized release is the full Laravel application through the existing controller. It invokes migrations and can change database state, so retain exact-SHA rollback, a fresh pre-deployment app/config/database backup, and demonstrated restore/recovery evidence. Do not waive that gate.
 4. **PHP policy:** server-side PHP 8.4+ only; preserve PHP 8.4 and 8.5 CI coverage. PHP 8.5 cutover remains unauthorized. The WordPress Connector compatibility matrix is unchanged.
 5. **Database administration:** prefer DBeaver Community over the existing approved SSH tunnel for later operator use; DBeaver documents SSH tunnels for remote database connections ([SSH configuration](https://dbeaver.com/docs/dbeaver/SSH-Configuration/)). Require host-key verification, least-privilege DB credentials, and no public database listener. Do not install it as a server service. A future browser-based phpMyAdmin option must be separately reviewed, remain inaccessible from the public internet, use appropriate authentication and HTTPS, and be maintained against security updates ([phpMyAdmin security guidance](https://docs.phpmyadmin.net/en/latest/setup.html#securing-your-phpmyadmin-installation)); no database admin interface is part of this release.
 
 ### Release-path finding: current controller always migrates
 
-The current `scripts/deploy-staging.sh` deployment path unconditionally checks `php artisan migrate:status`, marks migration work as attempted, and invokes `php artisan migrate --force --no-interaction` before opening the traffic gate. The `marketing_only` profile fences workers and the scheduler; it does not skip migrations. No supported migration-free Laravel deployment mode or static marketing export/deployment path is present in the current source. The public marketing controllers also use `ContentRepository` to read published DB content (with built-in copy fallback when the table cannot be read), so an ad hoc file-only sync is not an established release procedure.
+The current `scripts/deploy-staging.sh` deployment path unconditionally checks `php artisan migrate:status`, marks migration work as attempted, and invokes `php artisan migrate --force --no-interaction` before opening the traffic gate. The `marketing_only` profile fences workers and the scheduler; it does not skip migrations. No supported migration-free Laravel deployment mode exists, and no alternate architecture is authorized. The public marketing controllers also use `ContentRepository` to read published DB content (with built-in copy fallback when the table cannot be read), so an ad hoc file-only sync is not an established release procedure.
 
-The current controller has no supported mode that omits the migration command. The planned target has seven target migrations pending, so this release would change database schema if deployed through that controller. A different target with no pending migration could make the command a no-op, but that does not establish a supported migration-free release path or prove that runtime behavior leaves the database unchanged. For the planned release, keep the migration/recovery gate and obtain verified backup/restore evidence. If a no-DB launch path is preferred, the concrete alternative for Owner decision is to authorize a separately designed static HU/EN marketing artifact generated from built-in, reviewed copy and served as a distinct non-Laravel artifact. That requires code, security, browser and deployment-path reviews and has not been implemented or tested. Do not build or deploy that path under this documentation-only change.
+The current controller has no supported mode that omits the migration command. The target range adds seven migrations relative to the staging baseline, so the release can change database schema. A read-only `migrate:status` against the currently deployed old source lists only migrations present in that checkout; it does not evaluate migration files that exist only in the target. All migrations listed by the old deployed source were marked `Ran`; this is not target migration status. The controller checks the target checkout and runs its migrations. The required fresh backup, demonstrated restore/recovery, and migration rehearsal remain blocking gates. No static marketing site or alternative architecture is authorized.
+
+The controller creates a protected database dump, checks its gzip integrity, sets mode `0600`, and atomically publishes it before pausing the scheduler and fencing workers. Gzip integrity is not restore proof. The controller does not require an isolated-restore attestation and does not itself prove application/configuration recovery; therefore the external recovery gate must be independently satisfied before invoking it. After migrations are attempted, failure handling keeps the public gate closed and does not automatically roll application code back when database state may have changed.
 
 ### Backup/restore disposition
 
@@ -87,11 +89,11 @@ These restore candidates are out of the immediate marketing-only documentation m
 
 #### Current staging synchronization plan
 
-At `2026-11-04 08:55 UTC`, the approved read-only SSH command `ssh caregrid-staging "cd /var/www/wpcaregrid && git rev-parse HEAD"` returned staging SHA `761e0e5d37558da808ac961ca2d2a68b4ffab0db`; `git status --porcelain=v1` was empty. The application source recorded then was `7355788882e026db7c4a6d37db2b957740b5f385`. Current primary is `69acf424f318beedc865090bedda651dc7013dbf` after a documentation-only merge; recheck exact release source and host state before any operation.
+At `2026-11-04 11:27 UTC`, the approved `caregrid-staging` SSH alias read-only check returned staging SHA `761e0e5d37558da808ac961ca2d2a68b4ffab0db`, an empty worktree status, and PHP CLI `8.4.27`. The deploy user could not run the root-only helper runtime checks (`privileged helper requires root`); those checks are therefore not revalidated in this session. The current primary is `06d35a28453445ed19bdc11e62592e187e17dbf8`; its merge CI is run `41817511959`, 38/38 PASS.
 
-This is not an established marketing-only file deployment: the application range contains billing/checkout, Connector, backup, migrations, runtime/deploy tooling, localization, and marketing changes. Do not cherry-pick marketing files out of this dependency chain. The current protected controller targets the full exact primary and runs `php artisan migrate --force --no-interaction` unconditionally; its `marketing_only` profile fences background processes but does not make the deploy database-free. No staging deploy has occurred in this work. Application merge CI `41747134447` (38/38 PASS) and Marketing E2E `41748568634` (PASS) are historical source evidence, not current exact-primary CI or staging acceptance.
+The release is the full Laravel application: the source range includes billing/checkout, Connector, backup, migrations, runtime/deploy tooling, localization and marketing. Do not cherry-pick marketing files. The protected controller runs `php artisan migrate --force --no-interaction` unconditionally; its `marketing_only` profile fences background processes but does not avoid database changes. No staging deploy has occurred. Merge CI `41817511959` passed 38/38 for current primary; Marketing E2E `41748568634` passed on the prior application SHA, whose application files are unchanged by the subsequent documentation-only commits. Neither result is staging acceptance.
 
-No supported static marketing export or migration-skipping Laravel deployment mode was found. The homepage/pricing controllers render Laravel views and use `ContentRepository` for published DB content; built-in copy fallback does not prove an independently deployable artifact. A genuinely DB-unchanged option would require a separately approved static HU/EN artifact path, with its own source, security, browser and deployment-path validation. Do not improvise a file-only sync.
+No static export or migration-skipping Laravel mode is part of the authorized release. The homepage/pricing controllers render Laravel views and use `ContentRepository` for published DB content. The existing full-Laravel controller is the only authorized deployment path and has a database-changing recovery gate.
 
 For the current controller path, deployment prerequisites remain: current exact target/CI and controller verifier; fresh protected app/config/database backup; actual isolated restore and migration rehearsal; PHP 8.4/Nginx preflight; persistent scheduler/worker fencing with pending jobs retained; clean expected staging baseline; and protected post-deploy HTTP/browser acceptance of HU/EN marketing and negative access checks. Restore provisioning and transfer investigation are paused; no external correspondence or alternate transport is authorized. Staging remains NO-GO until the selected compliant path's required gates pass.
 
@@ -121,8 +123,8 @@ Do not present any package as purchasable in the marketing-only MVP. `woocommerc
 
 ### MVP backlog and release sequence — latest Owner decision 2026-11-04
 
-1. **P0:** identify the supported release path for the HU/EN marketing-only MVP; do not use the current controller as a no-DB path because it invokes migrations unconditionally.
-2. **P0:** if using the current controller, complete fresh backup and required recovery proof, validate exact source/CI/runtime/fencing, then stage and test the exact release. Otherwise obtain Owner approval to design and validate the static marketing artifact option before any deployment.
+1. **P0:** complete the minimum fresh app/config/database backup, isolated restore and target-migration rehearsal required by the full-Laravel controller.
+2. **P0:** validate the exact source/CI/runtime/fencing, then stage and test the exact release only after every recovery and deployment gate passes.
 3. **P0:** run actual staging marketing/browser acceptance on the deployed exact SHA, including negative checks for registration, checkout, payment, Stripe provisioning, Connector and SaaS background activity.
 4. **P0:** prepare production readiness for marketing-only scope and obtain a separate exact-release production authorization.
 5. **Post-production M15/infrastructure:** implement daily S3-compatible database backups, encryption, retention and failure monitoring; secure DB administration; restore tooling and periodic isolated restore checks; then complete the customer-facing M15 Backup & Restore feature under its own gates.
@@ -219,12 +221,9 @@ Estimates are engineering effort, excluding review/queue delays. Confidence is t
 graph TD
   P0[P0 initial release scope] --> STG[Staging exact-SHA delivery and acceptance]
   P0 --> PHP85[PHP 8.5 compatibility validation; no cutover]
-  P0 --> PATH{Supported release path?}
-  PATH -->|Current controller: migrations| BACKUP[Fresh backup + isolated restore + migration rehearsal]
-  PATH -->|No-DB artifact: not implemented| STATIC[Separate design, implementation and acceptance approval]
+  P0 --> BACKUP[Fresh backup + isolated restore + migration rehearsal for the full Laravel release]
   P0 --> M1701[M17-01: production gate inventory]
   BACKUP --> STG
-  STATIC --> STG
   STG --> M16[M16 marketing/application QA]
   BACKUP --> M1704[M17-04: DB-change recovery proof]
   M1701 --> M1702[M17-02: secret and response controls]
@@ -244,7 +243,7 @@ graph TD
   M17G --> INT4
 ```
 
-**Critical path:** select an actually supported release path → exact primary/required CI → applicable backup/recovery gate (the current controller always migrates and therefore needs fresh backup, actual restore and migration rehearsal) → exact-SHA staging synchronization → deployed marketing acceptance → production controls for the enabled scope and PHP 8.5 compatibility evidence (without cutover) → separate Owner production decision. A DB-unchanged static artifact path is not implemented; designing it requires a separate Owner decision. Restore provisioning/transfer investigation is paused and no alternate channel is authorized. PHP 8.5 compatibility CI can proceed in parallel; no PHP 8.5 cutover is implied. Full M15 customer Backup & Restore, daily S3 backups, encryption/retention/monitoring, secure DB administration and restore operations are post-production roadmap work.
+**Critical path:** exact primary and required CI → fresh app/config/database backup, verified isolated restore/recovery and target-migration rehearsal for the existing full-Laravel controller → exact-SHA staging synchronization → deployed marketing acceptance → production controls for the enabled scope and PHP 8.5 compatibility evidence (without cutover) → separate Owner production decision. No static site or alternative architecture is authorized. Restore provisioning/transfer investigation is paused and no alternate channel is authorized. PHP 8.5 compatibility CI can proceed in parallel; no PHP 8.5 cutover is implied. Full M15 customer Backup & Restore, daily S3 backups, encryption/retention/monitoring, secure DB administration and restore operations are post-production roadmap work.
 
 ## 7. Worktree, branch and file-collision architecture
 
@@ -300,7 +299,7 @@ Resource strategy: run focused tests early; avoid launching multiple full matric
 | Risk / blocker | Evidence at baseline | Owner | Mitigation / exit condition |
 |---|---|---|---|
 | Connector offline | M15 carry-forward from current status; target requires fresh reconfirmation. | Thread 1 | Identify exact site and consent; one bounded diagnosis; authenticated heartbeat and result ingestion before work. |
-| Backup/recovery gate for selected release path | Owner reports weekly provider backups; no application/database restore proof is evidenced. Current controller runs migrations; restore work is paused. | Thread 1 + 3 | Do not use current controller until its fresh backup/recovery and migration rehearsal gate passes. If avoiding DB changes, first obtain approval to design/test a static artifact path. No provider contact or alternate transfer. |
+| Backup/recovery gate for the full-Laravel release | Owner reports weekly provider backups; no application/database restore proof is evidenced. Current controller runs migrations; restore work is paused. | Thread 1 + 3 | Do not use current controller until its fresh backup/recovery and migration rehearsal gate passes. No alternate architecture, provider contact or alternate transfer is authorized. |
 | Integrity coverage incomplete | M14 scan found 1 missing and 4 unavailable; coverage expressly incomplete. | Thread 1 | Explain unavailable paths, do not relabel as clean; obtain only an authorized follow-up on a safe target. |
 | Operator UI verification incomplete | Active authenticated visual verification not completed after session expiration. | Thread 1 + 2 | Owner-authorized browser review; separate functional correctness from visual/accessibility work. |
 | Compatibility evidence | Actual hosting operation support requires current evidence. | Thread 1 | Use operation-specific matrix; PHP Connector runtime separate from Laravel server runtime; unknown fails closed for high-risk operations. |
