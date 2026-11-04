@@ -301,14 +301,6 @@ def audit_sql(sql, target_schema):
                 forbidden.add("TABLE_DEFINITION_UNEXPECTED")
             else:
                 expected_tables.append(tokens[table_index].value)
-        set_system_scope = (
-            i + 3 < len(tokens)
-            and tokens[i + 1].kind == "SYMBOL" and tokens[i + 1].value == "@"
-            and tokens[i + 2].kind == "SYMBOL" and tokens[i + 2].value == "@"
-            and _word(tokens[i + 3]) in {"GLOBAL", "PERSIST", "PERSIST_ONLY"}
-        )
-        if a == "SET" and (b in {"GLOBAL", "PERSIST", "PERSIST_ONLY"} or set_system_scope):
-            forbidden.add("GLOBAL_SETTING")
         if a == "SET" and b in {"PASSWORD", "ROLE"}:
             forbidden.add("PRIVILEGED_OR_SERVER_OPERATION")
         if a == "SET" and b == "DEFAULT" and c == "ROLE":
@@ -319,6 +311,16 @@ def audit_sql(sql, target_schema):
                 tokens[statement_end].kind == "SYMBOL" and tokens[statement_end].value == ";"
             ):
                 statement_end += 1
+            statement_tokens = tokens[i + 1:statement_end]
+            scoped_system_variable = any(
+                j + 2 < len(statement_tokens)
+                and statement_tokens[j].kind == "SYMBOL" and statement_tokens[j].value == "@"
+                and statement_tokens[j + 1].kind == "SYMBOL" and statement_tokens[j + 1].value == "@"
+                and _word(statement_tokens[j + 2]) in {"GLOBAL", "PERSIST", "PERSIST_ONLY"}
+                for j in range(len(statement_tokens))
+            )
+            if b in {"GLOBAL", "PERSIST", "PERSIST_ONLY"} or scoped_system_variable:
+                forbidden.add("GLOBAL_SETTING")
             if any(_id(item) == "sql_log_bin" for item in tokens[i + 1:statement_end]):
                 forbidden.add("REPLICATION_SESSION_SETTING")
         if a == "RESET" and b in {"MASTER", "REPLICA", "SLAVE", "PERSIST"}:
