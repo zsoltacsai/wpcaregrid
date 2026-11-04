@@ -997,6 +997,97 @@ def main():
 
     controller = CONTROLLER.read_text(encoding="utf-8")
     controller_lines = controller.splitlines()
+    assert "readonly COMPOSER_BIN='/usr/local/bin/composer'" in controller
+    assert "readonly COMPOSER_SHA256='7a2d379d5b8ffdaa028580ef26494c36d2feef4b178d3dd1473a4dbc5e17c8d6'" in controller
+    assert "readonly COMPOSER_VERSION='2.10.3'" in controller
+    assert '"$PHP_BIN" "$COMPOSER_BIN" "$@"' in controller
+    assert 'composer_binary_preflight "$COMPOSER_BIN" "$COMPOSER_SHA256" "$COMPOSER_VERSION" 0 0 "$PHP_BIN"' in controller
+    assert '/usr/bin/composer' not in controller, "Composer must not fall back to the obsolete path"
+
+    bash = shutil.which("bash")
+    if bash and os.name != "nt":
+        with tempfile.TemporaryDirectory(prefix="composer-preflight-") as temporary:
+            fixture_dir = Path(temporary)
+            composer_fixture = fixture_dir / "composer"
+            php_fixture = fixture_dir / "php"
+            composer_fixture.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+            composer_fixture.chmod(0o755)
+            php_fixture.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$FAKE_COMPOSER_VERSION\"\n",
+                encoding="ascii",
+            )
+            php_fixture.chmod(0o755)
+            composer_sha = hashlib.sha256(composer_fixture.read_bytes()).hexdigest()
+            php_failure_fixture = fixture_dir / "php-failure"
+            php_failure_fixture.write_text("#!/bin/sh\nexit 1\n", encoding="ascii")
+            php_failure_fixture.chmod(0o755)
+
+            def run_preflight(
+                php_binary,
+                *,
+                expected_version="Composer version 2.10.3 2026-01-01",
+                digest=composer_sha,
+                uid=os.getuid(),
+                gid=os.getgid(),
+                path=composer_fixture,
+            ):
+                return subprocess.run(
+                    [
+                        bash,
+                        "-c",
+                        'source "$1"; composer_binary_preflight "$2" "$3" 2.10.3 "$4" "$5" "$6"',
+                        "composer-preflight-negative-test",
+                        str(CONTROLLER),
+                        str(path),
+                        digest,
+                        str(uid),
+                        str(gid),
+                        str(php_binary),
+                    ],
+                    check=False,
+                    env={**os.environ, "FAKE_COMPOSER_VERSION": expected_version},
+                )
+
+            preflight_harness = r'''source "$1"
+path="$2"
+digest="$3"
+uid="$4"
+gid="$5"
+php_bin="$6"
+composer_binary_preflight "$path" "$digest" 2.10.3 "$uid" "$gid" "$php_bin" || exit 31
+if composer_binary_preflight "$path" "$(printf '%064d' 0)" 2.10.3 "$uid" "$gid" "$php_bin"; then exit 32; fi
+if composer_binary_preflight "$path" "$digest" 2.10.3 "$((uid + 1))" "$gid" "$php_bin"; then exit 33; fi
+if composer_binary_preflight "$path" "$digest" 2.10.3 "$uid" "$((gid + 1))" "$php_bin"; then exit 34; fi
+'''
+            subprocess.run(
+                [
+                    bash,
+                    "-c",
+                    preflight_harness,
+                    "composer-preflight-test",
+                    str(CONTROLLER),
+                    str(composer_fixture),
+                    composer_sha,
+                    str(os.getuid()),
+                    str(os.getgid()),
+                    str(php_fixture),
+                ],
+                check=True,
+                env={**os.environ, "FAKE_COMPOSER_VERSION": "Composer version 2.10.3 2026-01-01"},
+            )
+            wrong_version = run_preflight(php_fixture, expected_version="Composer version 2.10.30 2026-01-01")
+            assert wrong_version.returncode != 0, "a similarly prefixed Composer version must be rejected"
+            php_failed = run_preflight(php_failure_fixture)
+            assert php_failed.returncode != 0, "a failed PHP invocation must fail the Composer preflight"
+            bad_mode = subprocess.run(["/usr/bin/chmod", "0700", str(composer_fixture)], check=False)
+            assert bad_mode.returncode == 0
+            wrong_mode = run_preflight(php_fixture)
+            assert wrong_mode.returncode != 0, "non-0755 Composer files must be rejected"
+            composer_fixture.chmod(0o755)
+            symlink_fixture = fixture_dir / "composer-link"
+            symlink_fixture.symlink_to(composer_fixture)
+            wrong_type = run_preflight(php_fixture, path=symlink_fixture)
+            assert wrong_type.returncode != 0, "Composer symlinks must be rejected"
     gate_line = next(i for i, line in enumerate(controller_lines) if "privileged gate-on" in line and i > 700)
     switch_line = next(i for i, line in enumerate(controller_lines) if "privileged php-runtime-switch \"$PHP_TARGET_PROFILE\"" in line)
     disabled_line = next(i for i, line in enumerate(controller_lines) if "privileged worker-runtime-disable" in line and i > gate_line)
