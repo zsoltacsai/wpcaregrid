@@ -1,8 +1,10 @@
-# P0 staging backup and restore handoff
+# P0 staging backup and restore handoff — PAUSED / SUPERSEDED
 
-**Status:** `BACKUP_TRANSFER=BLOCKED_EXTERNAL_AUTHORITY`
+**Status:** `RESTORE_WORK=PAUSED_BY_OWNER`
 **Release:** `STAGING_DEPLOY=NO-GO`
 **Prepared:** 2026-11-04
+
+> **Latest Owner decision (2026-11-04): this document is historical, not an active operator request. Isolated-restore provisioning and transfer investigation are stopped. Do not send this document, open a support ticket, contact RackForest, or try another transfer path. The reported weekly provider backup is Owner-reported and is not proof of an application/database restore. Reopen only after a new Owner decision.**
 
 ## Purpose, release boundary, and current blocker
 
@@ -10,14 +12,14 @@ This handoff concerns only the minimum infrastructure backup/recovery gate requi
 
 The toolchain does not expose a verified official staging-to-WSL transfer channel. A previous transfer attempt was denied by platform execution policy; the exact rule identifier and detailed reason are not available in retained evidence. No alternative transfer route has been attempted. Status: `BACKUP_TRANSFER=BLOCKED_EXTERNAL_AUTHORITY`.
 
-## Approved-path candidates and recommendation
+## Historical path candidates (paused)
 
 | Candidate | Assessment | State |
 | --- | --- | --- |
-| A. Authorized encrypted transfer to isolated WSL/MySQL lab | Uses the known rootless Ubuntu 24.04 / MySQL 8.4.11 lab and avoids changes to staging MySQL, but takes confidential database ciphertext outside the staging boundary. Requires an official platform-approved one-time channel. | Fallback only; unavailable until external authority provisions the channel. |
-| B. Administrator-provided isolated restore environment in staging infrastructure | Keeps backup data within the staging infrastructure boundary and avoids off-host transfer. Prefer this if an already supported isolated target can be provided without touching the live DB, changing AppArmor, weakening platform policy, or adding a general privileged path. | **Recommended first:** ask the staging administrator to provide a disposable, isolated MySQL 8.4.11 restore target and approved one-operation restore path. It is not yet evidenced as available. |
+| A. Authorized encrypted transfer to isolated WSL/MySQL lab | Would move confidential data outside the staging boundary and previously required an approved channel. | **Paused. Do not investigate or retry.** |
+| B. Administrator-provided isolated restore environment in staging infrastructure | Availability was not established. | **Paused. Do not provision or request.** |
 
-The external administrator/operator must either provide candidate B under the constraints above, authorize candidate A through an official managed transfer service, or explicitly report that neither supported path exists. Do not substitute SCP, shell streaming, CI artifacts, browser uploads, or another transport.
+Neither candidate is currently being pursued. This report is retained as historical planning evidence only.
 
 ## Integration & QA handoff
 
@@ -28,7 +30,9 @@ The external administrator/operator must either provide candidate B under the co
 - Do not repeat the already accepted worker-runtime phase investigation or reclassify synthetic migration PASS as actual restore evidence.
 - Once the administrator supplies the isolated target or officially approved transfer operation, run the restore acceptance below and update the release checklist with sanitized evidence only.
 
-## Exact operator handoff request
+## Historical operator handoff text — not authorized to send
+
+The following former request is revoked. Do not send it or use it to initiate provider contact.
 
 Please provision one disposable restore operation for the current staging release gate:
 
@@ -39,7 +43,9 @@ Please provision one disposable restore operation for the current staging releas
 - **Retention and deletion:** retain only for the restore window, then verify deletion of the export, temporary copies, disposable database and credentials according to the platform's retention policy. Any longer retention requires separate Owner decision.
 - **Return evidence:** sanitized operation reference, exact source SHA, artifact size/hash, target isolation attestation, restore/migration result codes, and cleanup result. No raw SQL, rows, credentials, `.env`, `APP_KEY`, or unfiltered logs.
 
-## Operator execution after approval
+## Historical operator execution plan — inactive
+
+The following procedure is retained for audit history only. It is not execution authorization.
 
 1. Confirm the administrator's operation reference, source/target, isolation, access, expiry, encryption, and cleanup commitments. Stop if the scope is incomplete or broader than authorized.
 2. Record the current staging app SHA and create a fresh, mutually associated application/configuration/database backup. Preserve `.env` and the original `APP_KEY` without printing either value. Do not alter the live database.
@@ -55,11 +61,11 @@ Accept the recovery gate only if backup consistency and artifact hash are verifi
 
 Stop without staging deployment if approval is absent or mismatched; encryption/hash checks fail; plaintext is exposed; the database is not isolated; the restore or any migration fails; evidence sanitization fails; cleanup cannot be verified; or any live staging state changes unexpectedly. Do not automatically retry a failed restore or migration.
 
-## Automatic continuation point
+## Previous continuation point — paused
 
-Once the administrator provides candidate B or formally enables candidate A and supplies its operation reference and isolation evidence, resume at operator-execution step 2. Continue through restore and migration proof using the existing approved memory-only diagnostic collector. Do not repeat the closed worker-runtime investigation, successful CI/E2E, or synthetic-only migration checks. Re-evaluate remaining staging gates once against the then-current exact primary SHA. No staging deploy occurs unless every release gate passes and the existing conditional deployment authority applies.
+The prior continuation condition is suspended by the latest Owner decision. Do not resume without a new Owner decision.
 
-## Current evidence snapshot
+## Historical evidence snapshot at preparation time
 
 - Primary: `7355788882e026db7c4a6d37db2b957740b5f385`.
 - Read-only `git ls-remote` matched `claude/ecstatic-wozniak-oemyuf`; exact time 2026-11-04 08:55 UTC.
@@ -74,4 +80,4 @@ Once the administrator provides candidate B or formally enables candidate A and 
 - Fresh staging backup and actual isolated restore: not completed; transfer remains blocked by external authority.
 - Full M15 customer Backup & Restore product functionality: deferred to the first post-production milestone; unavailable capabilities must remain disabled.
 
-**Single requested administrator action:** provide a one-use, disposable MySQL 8.4.11 restore target inside the existing staging security boundary, together with the supported internal restore operation, isolation attestation, named operator/Owner access, expiry and cleanup commitment. This is preferred over transferring confidential DB data to WSL. If such a target is not already supportable, the administrator should instead provide the official encrypted-transfer channel and operation reference; do not substitute another transport. Resume only after one approved path is evidenced.
+**Previous requested administrator action — REVOKED:** the former request for a disposable restore target or transfer channel is no longer active. Do not send it or resume the work under this document.
