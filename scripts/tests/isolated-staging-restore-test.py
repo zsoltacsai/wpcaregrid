@@ -261,6 +261,7 @@ def test_mysql_proxy_round_trip_isolation():
         server_thread.start()
         previous_argv = RESTORE.mysql_argv
         previous_verifier = RESTORE.verify_mysql_peer
+        previous_path_validator = RESTORE.validate_socket_path
         RESTORE.mysql_argv = lambda _args, proxy_path: [
             sys.executable, "-c",
             "import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); "
@@ -268,11 +269,15 @@ def test_mysql_proxy_round_trip_isolation():
             proxy_path,
         ]
         RESTORE.verify_mysql_peer = lambda _connection: None
+        # This test exercises proxy relay only; its /tmp socket is intentionally
+        # not a valid production MySQL endpoint path.
+        RESTORE.validate_socket_path = lambda _path: None
         try:
             result = RESTORE._mysql([], peer_path, proxy_root=directory)
         finally:
             RESTORE.mysql_argv = previous_argv
             RESTORE.verify_mysql_peer = previous_verifier
+            RESTORE.validate_socket_path = previous_path_validator
             peer.close()
         server_thread.join(timeout=5)
         assert not server_thread.is_alive()
