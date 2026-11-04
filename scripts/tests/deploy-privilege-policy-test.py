@@ -1475,7 +1475,9 @@ if fence_marketing_background unknown >/dev/null 2>&1; then exit 26; fi
     assert "queue:work) blocked /var/lib/wpcaregrid/workers-disabled" in launcher
     assert "schedule:run) blocked /var/lib/wpcaregrid/scheduler-paused" in launcher
     assert "/var/lib/wpcaregrid" in launcher.split("for directory in ", 1)[1].split("; do", 1)[0]
-    assert 'stat --no-dereference -c \'%u\' "$PROFILE_LINK"' in launcher
+    assert '[[ -L "$PROFILE_LINK" && "$(stat -c \'%u\' "$PROFILE_LINK")" == \'0\' ]] || fail' in launcher
+    assert "stat --no-dereference" not in launcher
+    test_runtime_launcher_stat_symlink_compatibility(launcher)
     assert '[[ -f "$PHP_BIN" && -x "$PHP_BIN" && ! -L "$PHP_BIN" ]]' in launcher
     launcher_hash = hashlib.sha256((ROOT / "scripts/run-php-runtime.sh").read_bytes()).hexdigest()
     assert launcher_hash == module.PHP_RUNTIME_LAUNCHER_SHA256
@@ -1501,6 +1503,37 @@ if fence_marketing_background unknown >/dev/null 2>&1; then exit 26; fi
     assert "install.*DEPLOY_PRIV_HELPER" not in controller
 
     print("deploy privilege policy passed: fixed operation allowlist, path validation, no generic sudo calls")
+
+
+def test_runtime_launcher_stat_symlink_compatibility(launcher):
+    """GNU stat defaults to reporting the symlink inode without unsupported flags."""
+    if os.name == "nt":
+        return
+    stat_bin = shutil.which("stat")
+    if not stat_bin:
+        raise AssertionError("Linux runtime launcher test requires GNU stat")
+    with tempfile.TemporaryDirectory(prefix="wpcg-runtime-stat-") as directory:
+        target = Path(directory) / "profile.conf"
+        link = Path(directory) / "runtime.conf"
+        target.write_text("synthetic profile\n", encoding="ascii")
+        link.symlink_to(target)
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            try:
+                import pwd
+                other_uid = pwd.getpwnam("nobody").pw_uid
+                if other_uid != os.lstat(link).st_uid:
+                    os.chown(target, other_uid, -1)
+            except (ImportError, KeyError, PermissionError):
+                pass
+        result = subprocess.run(
+            [stat_bin, "-c", "%u", str(link)],
+            check=False, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise AssertionError("GNU stat rejected the launcher-compatible symlink-owner query")
+        expected_link_owner = str(os.lstat(link).st_uid)
+        assert result.stdout.strip() == expected_link_owner, "stat must report the symlink inode owner"
+        assert "stat --no-dereference" not in launcher
 
 
 if __name__ == "__main__":
