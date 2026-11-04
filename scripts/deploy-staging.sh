@@ -17,6 +17,9 @@ readonly SCHEDULER_LOCK_FILE="${GATE_DIR}/scheduler.lock"
 readonly SCHEDULER_PAUSE_FILE="${GATE_DIR}/scheduler-paused"
 readonly WORKERS_DISABLED_FILE="${GATE_DIR}/workers-disabled"
 readonly DEPLOY_PRIV_HELPER='/usr/local/sbin/wpcaregrid-deploy-priv'
+readonly COMPOSER_BIN='/usr/local/bin/composer'
+readonly COMPOSER_SHA256='7a2d379d5b8ffdaa028580ef26494c36d2feef4b178d3dd1473a4dbc5e17c8d6'
+readonly COMPOSER_VERSION='2.10.3'
 readonly CONTROLLER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # Always install the scheduler wrapper from the application checkout being deployed,
 # even when the reviewed deploy script is invoked from a protected temporary copy.
@@ -55,7 +58,21 @@ php() {
 }
 
 composer() {
-    "$PHP_BIN" /usr/bin/composer "$@"
+    "$PHP_BIN" "$COMPOSER_BIN" "$@"
+}
+
+composer_binary_preflight() {
+    local composer_path="$1" expected_sha256="$2" expected_version="$3" expected_uid="$4" expected_gid="$5" php_bin="$6"
+    local owner_mode actual_sha256 version_output
+
+    [[ -f "$composer_path" && -x "$composer_path" && ! -L "$composer_path" ]] || return 1
+    owner_mode="$(/usr/bin/stat -c '%u:%g:%a' -- "$composer_path")" || return 1
+    [[ "$owner_mode" == "${expected_uid}:${expected_gid}:755" ]] || return 1
+    actual_sha256="$(/usr/bin/sha256sum -- "$composer_path")" || return 1
+    actual_sha256="${actual_sha256%% *}"
+    [[ "$actual_sha256" == "$expected_sha256" ]] || return 1
+    version_output="$("$php_bin" "$composer_path" --version --no-ansi)" || return 1
+    [[ "$version_output" == "Composer version ${expected_version}" || "$version_output" == "Composer version ${expected_version} "* ]]
 }
 
 set_php_profile() {
@@ -999,9 +1016,9 @@ main() {
     privileged php-runtime-preflight "$PHP_BASELINE_PROFILE" || fail 'The active PHP CLI/FPM/Nginx/Supervisor runtime does not match its profile.'
     privileged php-runtime-preflight "$PHP_TARGET_PROFILE" || fail 'The requested PHP CLI/FPM/Nginx/Supervisor runtime is not ready.'
     pre_deploy_smoke || fail 'The pinned baseline staging release is not healthy before deployment.'
-    command -v git >/dev/null && [[ -f /usr/bin/composer && ! -L /usr/bin/composer ]] && command -v npm >/dev/null && command -v curl >/dev/null && [[ -x /usr/bin/python3 ]] || fail 'A required deployment tool is missing.'
+    command -v git >/dev/null && [[ -f "$COMPOSER_BIN" && ! -L "$COMPOSER_BIN" ]] && command -v npm >/dev/null && command -v curl >/dev/null && [[ -x /usr/bin/python3 && -x /usr/bin/stat && -x /usr/bin/sha256sum ]] || fail 'A required deployment tool is missing.'
     php -r 'exit(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === (int) substr($argv[1], 2) ? 0 : 1);' "$PHP_BASELINE_PROFILE" || fail 'The selected baseline PHP CLI does not match the active runtime profile.'
-    composer --version | grep -q 'Composer version 2\.' || fail 'Composer 2 is required.'
+    composer_binary_preflight "$COMPOSER_BIN" "$COMPOSER_SHA256" "$COMPOSER_VERSION" 0 0 "$PHP_BIN" || fail 'The pinned Composer executable failed its integrity or version preflight.'
     node -e 'process.exit(Number(process.versions.node.split(".")[0]) === 22 ? 0 : 1)' || fail 'Node.js 22 is required.'
     php artisan about --only=environment >/dev/null || fail 'Laravel cannot boot with the current production configuration.'
     if [[ "$baseline_gate_state" == 'marketing_gated' ]]; then
