@@ -240,18 +240,74 @@ def ensure_gate_dir():
 
 
 def marker(path, enabled):
+    if path not in {GATE, SCHEDULER_PAUSE, WORKERS_DISABLED}:
+        raise ValueError("unsupported deployment marker")
     ensure_gate_dir()
-    if enabled:
-        flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags, 0o644)
+    directory_fd = open_root_trusted_directory(path.parent)
+    temporary_name = f".{path.name}.{uuid.uuid4().hex}.new"
+    try:
+        if enabled:
+            try:
+                existing_fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            except FileNotFoundError:
+                existing_fd = None
+            if existing_fd is not None:
+                try:
+                    info = os.fstat(existing_fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0:
+                        raise ValueError("unsafe deployment marker")
+                    os.fchown(existing_fd, 0, 0)
+                    os.fchmod(existing_fd, 0o644)
+                    os.fsync(existing_fd)
+                finally:
+                    os.close(existing_fd)
+                os.fsync(directory_fd)
+                return
+
+            fd = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o644,
+                dir_fd=directory_fd,
+            )
+            try:
+                os.fchown(fd, 0, 0)
+                os.fchmod(fd, 0o644)
+                marker_bytes = memoryview(b"active\n")
+                while marker_bytes:
+                    written = os.write(fd, marker_bytes)
+                    if written <= 0:
+                        raise OSError("short marker write")
+                    marker_bytes = marker_bytes[written:]
+                os.fsync(fd)
+            except Exception:
+                os.close(fd)
+                try:
+                    os.unlink(temporary_name, dir_fd=directory_fd)
+                    os.fsync(directory_fd)
+                except OSError:
+                    pass
+                raise
+            else:
+                os.close(fd)
+            os.replace(temporary_name, path.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            os.fsync(directory_fd)
+            return
+
         try:
-            os.fchown(fd, 0, 0)
-            os.fchmod(fd, 0o644)
+            existing_fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+        except FileNotFoundError:
+            return
+        try:
+            info = os.fstat(existing_fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0:
+                raise ValueError("unsafe deployment marker")
         finally:
-            os.close(fd)
-    elif path.exists() or path.is_symlink():
-        require_regular(path, owner=0)
-        path.unlink()
+            os.close(existing_fd)
+        os.unlink(path.name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 def worker(action, name):
