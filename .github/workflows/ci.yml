@@ -111,6 +111,11 @@ jobs:
       - name: Staging deploy privilege allowlist policy
         run: python3 scripts/tests/deploy-privilege-policy-test.py
 
+      - name: Isolated staging database restore preflight policy
+        run: |
+          python3 scripts/tests/isolated-staging-restore-test.py
+          python3 -m py_compile scripts/isolated-staging-restore.py scripts/tests/isolated-staging-restore-test.py
+
       - name: Gate 1 fake-only transition and Linux lock regression
         run: sudo -n python3 scripts/tests/deploy-transition-state-machine-test.py
 
