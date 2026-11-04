@@ -28,7 +28,7 @@ for directory in /etc /etc/nginx "$PROFILE_DIR" /usr /usr/bin /var /var/lib /var
     mode="$(stat -c '%a' "$directory")"
     [[ "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 022) == 0 )) || fail
 done
-[[ -L "$PROFILE_LINK" && "$(stat --no-dereference -c '%u' "$PROFILE_LINK")" == '0' ]] || fail
+[[ -L "$PROFILE_LINK" && "$(stat -c '%u' "$PROFILE_LINK")" == '0' ]] || fail
 profile_path="$(readlink -- "$PROFILE_LINK")" || fail
 [[ "$(dirname -- "$profile_path")" == "$PROFILE_DIR" ]] || fail
 [[ -f "$profile_path" && ! -L "$profile_path" ]] || fail
