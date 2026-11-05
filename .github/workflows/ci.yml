@@ -109,7 +109,9 @@ jobs:
         run: php scripts/e2e/test-fingerprint-v2.php
 
       - name: Staging deploy privilege allowlist policy
-        run: python3 scripts/tests/deploy-privilege-policy-test.py
+        run: |
+          python3 scripts/tests/deploy-privilege-policy-test.py
+          python3 scripts/tests/release-artifact-consistency-test.py
 
       - name: Isolated staging database restore preflight policy
         run: |
