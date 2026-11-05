@@ -48,11 +48,21 @@ scheduler_path = ROOT / "scripts/run-scheduler.sh"
 verifier_path = ROOT / "scripts/verify-release-ci.py"
 deploy_path = ROOT / "scripts/deploy-staging.sh"
 docs_path = ROOT / "docs/DEPLOYMENT.md"
+operator_path = ROOT / "scripts/staging-recovery-operator.py"
+dispatcher_path = ROOT / "scripts/staging-recovery-operator-dispatch.sh"
+rehearsal_path = ROOT / "scripts/tests/staging-recovery-mysql-rehearsal.py"
+operator_docs_path = ROOT / "docs/STAGING_RECOVERY_OPERATOR.md"
+workflow_path = ROOT / ".github/workflows/ci.yml"
 
 helper = assignments(helper_path)
 recovery = assignments(recovery_path)
 deploy_text = deploy_path.read_text(encoding="utf-8")
 docs_text = docs_path.read_text(encoding="utf-8")
+operator = assignments(operator_path)
+operator_text = operator_path.read_text(encoding="utf-8")
+dispatcher_text = dispatcher_path.read_text(encoding="utf-8")
+operator_docs_text = operator_docs_path.read_text(encoding="utf-8")
+workflow_text = workflow_path.read_text(encoding="utf-8")
 
 helper_sha = sha256(helper_path)
 recovery_sha = sha256(recovery_path)
@@ -60,6 +70,9 @@ launcher_sha = sha256(launcher_path)
 scheduler_sha = sha256(scheduler_path)
 verifier_sha = sha256(verifier_path)
 deploy_sha = sha256(deploy_path)
+operator_sha = sha256(operator_path)
+dispatcher_sha = sha256(dispatcher_path)
+rehearsal_sha = sha256(rehearsal_path)
 
 require(recovery.get("HELPER_SHA") == helper_sha, "recovery_helper_pin")
 require(recovery.get("APP_SHA") == STAGING_APPLICATION_SHA, "staging_application_baseline")
@@ -95,6 +108,22 @@ require(helper.get("PHP_RUNTIME_LAUNCHER_PREVIOUS_SHA256") == previous_launcher_
 composer_match = re.search(r"readonly COMPOSER_SHA256='([0-9a-f]{64})'", deploy_text)
 require(composer_match is not None, "deploy_composer_pin_present")
 require(recovery.get("COMPOSER_SHA") == composer_match.group(1), "recovery_deploy_composer_pin")
+require(operator.get("APP_SHA") == recovery.get("APP_SHA"), "recovery_operator_application_pin")
+require({"pre_recovery_backup_sha256", "restore_receipt_sha256", "helper_sha256",
+         "controller_sha256", "verifier_sha256"}.issubset(operator.get("CONFIG_KEYS", set())),
+        "recovery_operator_artifact_manifest")
+require("RESTORE_RECEIPT_SHA256" in operator_text and "restore_receipt_sha256" in operator_text,
+        "recovery_operator_restore_receipt_pin")
+require("/usr/local/sbin/wpcaregrid-staging-recovery-runner" in dispatcher_text,
+        "recovery_operator_dispatcher_target")
+require(all(token in dispatcher_text for token in ("preflight)", "continue-migrations)", "finalize)")),
+        "recovery_operator_dispatcher_allowlist")
+require("restore_receipt_sha256" in operator_docs_text and "sudoers" in operator_docs_text,
+        "recovery_operator_documented_manifest_and_boundary")
+require("scripts/tests/staging-recovery-operator-test.py" in workflow_text
+        and "scripts/tests/staging-recovery-mysql-rehearsal.py" in workflow_text
+        and "mysql:8.4.11" in workflow_text,
+        "recovery_operator_and_mysql_rehearsal_ci")
 
 doc_hashes = re.findall(
     r"scripts/verify-release-ci\.py`: `([0-9a-f]{64})`", docs_text
@@ -119,3 +148,6 @@ for name, value in (
 ):
     print(f"ARTIFACT_{name.upper()}_SHA256={value}")
 print(f"PINNED_EXTERNAL_COMPOSER_SHA256={recovery['COMPOSER_SHA']}")
+print(f"ARTIFACT_STAGING_RECOVERY_OPERATOR_SHA256={operator_sha}")
+print(f"ARTIFACT_STAGING_RECOVERY_DISPATCHER_SHA256={dispatcher_sha}")
+print(f"ARTIFACT_STAGING_RECOVERY_MYSQL_REHEARSAL_SHA256={rehearsal_sha}")

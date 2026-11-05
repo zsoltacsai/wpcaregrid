@@ -111,6 +111,9 @@ jobs:
       - name: Staging deploy privilege allowlist policy
         run: |
           python3 scripts/tests/deploy-privilege-policy-test.py
+          python3 scripts/tests/staging-recovery-operator-test.py
+          bash -n scripts/staging-recovery-operator-dispatch.sh
+          python3 -m py_compile scripts/recover-staging-deployment.py scripts/wpcaregrid-deploy-priv.py scripts/staging-recovery-operator.py scripts/tests/staging-recovery-operator-test.py scripts/tests/staging-recovery-mysql-rehearsal.py
           python3 scripts/tests/release-artifact-consistency-test.py
 
       - name: Isolated staging database restore preflight policy
@@ -215,6 +218,16 @@ jobs:
         options: >-
           --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
           --health-interval=5s --health-timeout=5s --health-retries=30
+      mysql-recovery:
+        image: mysql:8.4.11@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+        ports:
+          - '127.0.0.1:3308:3306'
+        command: --server-id=274 --log-bin=mysql-bin --binlog-format=ROW --log-bin-trust-function-creators=OFF
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
+          --health-interval=5s --health-timeout=5s --health-retries=30
     env:
       # A missing S3 or SFTP test service fails the run (tests/Support/StorageServers.php).
       CAREGRID_TEST_REQUIRE_SERVICES: '1'
@@ -257,6 +270,13 @@ jobs:
 
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Gated interrupted staging migration recovery rehearsal (isolated MySQL 8.4.11)
+        env:
+          WPCG_RECOVERY_MYSQL_HOST: 127.0.0.1
+          WPCG_RECOVERY_MYSQL_PORT: '3308'
+          WPCG_RECOVERY_MYSQL_ROOT_PASSWORD: ci-root-password
+        run: python3 scripts/tests/staging-recovery-mysql-rehearsal.py
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

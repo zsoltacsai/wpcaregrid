@@ -59,7 +59,11 @@ def validate_workflow_controls(workflow):
     assert "php: ['8.4', '8.5']" in workflow, "server PHP matrix must retain 8.4 and 8.5"
     server = workflow.split("  server:" + chr(10), 1)[1].split("  sqlite_regressions:" + chr(10), 1)[0]
     assert "database:" not in server and "matrix.database" not in server, "obsolete Laravel matrix remains"
-    assert "image: mysql:8.4" in server
+    mysql_service = re.search(
+        r"(?ms)^      mysql:\n(.*?)(?=^      [A-Za-z0-9_-]+:\n|^    env:)", server
+    )
+    assert mysql_service and re.search(r"(?m)^        image: mysql:8\.4\s*$", mysql_service.group(1)), \
+        "Laravel integration service must remain on the pinned MySQL 8.4 line"
     assert "CAREGRID_EXPECTED_DATABASE_DRIVER=mysql" in server and "CAREGRID_EXPECTED_DATABASE_VERSION=8.4" in server
     assert "scripts/tests/assert-ci-mysql-driver.php" in server
     assert "vendor/bin/phpunit -c phpunit.xml --fail-on-skipped" in server
@@ -148,7 +152,7 @@ def main():
         (workflow.replace("contents: read", "contents: write", 1), "write token permission"),
         (workflow.replace("name: Quality (lint, style, dependencies, build, secrets)", "name: quality removed", 1), "missing mandatory job"),
         (workflow.replace("Required MySQL process-concurrency gate", "optional MySQL process gate", 1), "missing MySQL process gate"),
-        (workflow.replace("image: mysql:8.4", "image: mariadb:10.11", 1), "wrong Laravel engine"),
+        (workflow.replace("      mysql:\n        image: mysql:8.4", "      mysql:\n        image: mariadb:10.11", 1), "wrong Laravel engine"),
         (workflow.replace("CAREGRID_EXPECTED_DATABASE_VERSION=8.4", "CAREGRID_EXPECTED_DATABASE_VERSION=8.0", 1), "wrong MySQL version"),
         (workflow.replace("php: ['8.4', '8.5']", "php: ['8.5']", 1), "missing PHP 8.4 server lane"),
         (workflow.replace("  sqlite_regressions:", "  quick_sqlite_missing:", 1), "missing dedicated SQLite regression gate"),
