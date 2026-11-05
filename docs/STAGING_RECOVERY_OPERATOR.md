@@ -137,12 +137,13 @@ tables, run `migrate:rollback`, start workers, resume the scheduler, or remove a
 ## CI rehearsal boundary
 
 The isolated MySQL CI rehearsal uses a separate, digest-pinned MySQL 8.4.11 service.
-It reproduces the two-migration partial state and errno 1419, runs the reviewed
-continuation against that database, checks the target schemas, migration ledger and
-six trigger bodies, and verifies the simulated global setting is OFF before gated
-finalization. Its prior migration ledger is a synthetic fixture; it does not execute
-the complete historical migration baseline. Host identity, backup and restore
-receipts, DBA attestations, helper/runtime/worker/Nginx gates, and final host commands
-are stubbed in that database test and covered by separate deterministic controller
-and operator policy tests. It is not evidence of a staging backup restore, live-host
-recovery, or deployment readiness.
+From an empty disposable schema it executes every migration preceding the two pinned
+recovery migrations, verifies the resulting migration ledger, reproduces the first
+target migration's partial state and errno 1419, then runs the reviewed continuation
+against that database. It checks both target schemas, both ledger entries, all six
+trigger bodies, and the simulated global setting is OFF before gated finalization.
+Host identity, backup and restore receipts, DBA attestations, helper/runtime/worker/
+Nginx gates, and final host commands remain stubbed in this database test and are
+covered by separate deterministic controller and operator policy tests. This is a
+full source-history migration rehearsal through the interrupted point; it is not
+evidence of a staging backup restore, live-host recovery, or deployment readiness.

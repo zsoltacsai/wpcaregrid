@@ -30,26 +30,26 @@ def require(condition, code):
 
 
 def baseline_failure_code(returncode, stdout):
-    output = stdout.strip() if isinstance(stdout, str) else ''
-    match = re.fullmatch(
-        r'BASELINE_DIAGNOSTIC=SQLSTATE:([0-9A-Z]{5}|UNKNOWN);ERRNO:([0-9]{1,6}|UNKNOWN)',
-        output,
-    )
-    sqlstate, errno = match.groups() if match else ('UNKNOWN', 'UNKNOWN')
-    marker = 'YES' if output == 'BASELINE_OK' else 'NO'
+    output = '\n'.join(value for value in (stdout,)
+                       if isinstance(value, str))
+    state_match = re.search(r'SQLSTATE\[([0-9A-Z]{5})\]', output)
+    errno_match = re.search(r'(?:General error|errno)\s*[:=]?\s*([0-9]{1,6})', output, re.IGNORECASE)
+    sqlstate = state_match.group(1) if state_match else 'UNKNOWN'
+    errno = errno_match.group(1) if errno_match else 'UNKNOWN'
+    kind = 'MYSQL_ERROR' if state_match or errno_match else 'UNKNOWN'
     rc = returncode if type(returncode) is int and -255 <= returncode <= 255 else 'UNKNOWN'
-    return f'partial_baseline_setup_failed_rc{rc}_marker{marker}_sqlstate{sqlstate}_errno{errno}'
+    return f'historical_baseline_failed_rc{rc}_kind{kind}_sqlstate{sqlstate}_errno{errno}'
 
 
 def test_baseline_failure_diagnostic_classifier():
-    assert baseline_failure_code(2, 'BASELINE_DIAGNOSTIC=SQLSTATE:HY000;ERRNO:1419') == (
-        'partial_baseline_setup_failed_rc2_markerNO_sqlstateHY000_errno1419')
-    assert baseline_failure_code(2, 'BASELINE_DIAGNOSTIC=SQLSTATE:UNKNOWN;ERRNO:UNKNOWN') == (
-        'partial_baseline_setup_failed_rc2_markerNO_sqlstateUNKNOWN_errnoUNKNOWN')
-    assert baseline_failure_code(1, 'raw diagnostic must not be projected') == (
-        'partial_baseline_setup_failed_rc1_markerNO_sqlstateUNKNOWN_errnoUNKNOWN')
-    assert baseline_failure_code(0, 'BASELINE_OK') == (
-        'partial_baseline_setup_failed_rc0_markerYES_sqlstateUNKNOWN_errnoUNKNOWN')
+    assert baseline_failure_code(2, 'SQLSTATE[HY000]: General error: 1419 trigger rejected') == (
+        'historical_baseline_failed_rc2_kindMYSQL_ERROR_sqlstateHY000_errno1419')
+    assert baseline_failure_code(1, 'SQLSTATE[42000]: errno=1142 denied') == (
+        'historical_baseline_failed_rc1_kindMYSQL_ERROR_sqlstate42000_errno1142')
+    assert baseline_failure_code(2, 'raw diagnostic must not be projected') == (
+        'historical_baseline_failed_rc2_kindUNKNOWN_sqlstateUNKNOWN_errnoUNKNOWN')
+    assert baseline_failure_code('2', 'SQLSTATE[HY000]: General error: 1419') == (
+        'historical_baseline_failed_rcUNKNOWN_kindMYSQL_ERROR_sqlstateHY000_errno1419')
 
 
 def main():
@@ -146,32 +146,29 @@ def main():
         )
         require(install.returncode == 0, 'migration_repository_setup_failed')
 
-        base_file = '2026_10_30_000001_create_deployment_transition_fences.php'
-        base = php_run(
-            'try{$app=require "bootstrap/app.php";'
-            '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();'
-            '$migration=require "database/migrations/' + base_file + '";'
-            '$migration->up(); echo "BASELINE_OK";'
-            '}catch(Throwable $e){$x=$e;while($x && !($x instanceof PDOException)){$x=$x->getPrevious();}'
-            '$i=$x instanceof PDOException ? $x->errorInfo : null;'
-            '$s=is_array($i)&&isset($i[0])&&is_string($i[0])&&preg_match("/^[0-9A-Z]{5}$/",$i[0])?$i[0]:"UNKNOWN";'
-            '$n=is_array($i)&&isset($i[1])&&(is_int($i[1])||(is_string($i[1])&&preg_match("/^[0-9]{1,6}$/",$i[1])))?(string)(int)$i[1]:"UNKNOWN";'
-            'fwrite(STDOUT,"BASELINE_DIAGNOSTIC=SQLSTATE:".$s.";ERRNO:".$n."\\n");exit(2);}'
+        migration_paths = sorted((ROOT / 'database' / 'migrations').glob('*.php'))
+        target_names = {Path(name).stem for name in TARGET_FILES}
+        migration_names = [path.stem for path in migration_paths]
+        require(target_names == TARGETS and migration_names[-len(target_names):] == sorted(target_names),
+                'migration_history_tail_contract_invalid')
+        baseline_paths = migration_paths[:-len(target_names)]
+        baseline_names = [path.stem for path in baseline_paths]
+        baseline_dir = pre_recovery_dir / 'historical-baseline'
+        baseline_dir.mkdir(mode=0o700)
+        for source in baseline_paths:
+            shutil.copyfile(source, baseline_dir / source.name)
+        baseline = subprocess.run(
+            [php, 'artisan', 'migrate', '--force', '--no-interaction', '--realpath',
+             '--path=' + str(baseline_dir)], cwd=ROOT, env=db_env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, timeout=600,
         )
-        if base.returncode != 0 or base.stdout.strip() != 'BASELINE_OK':
-            require(False, baseline_failure_code(base.returncode, base.stdout))
-
-        seed = php_run(
-            '$app=require "bootstrap/app.php";'
-            '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();'
-            '$files=glob(base_path("database/migrations/*.php")); $batch=1;'
-            'foreach($files as $file){$name=basename($file,".php");'
-            'if(!in_array($name,' + json.dumps(sorted(TARGETS)) + ',true))'
-            '{Illuminate\\Support\\Facades\\DB::table("migrations")->insert(["migration"=>$name,"batch"=>$batch]);}}'
-            'echo "LEDGER_OK";'
-        )
-        require(seed.returncode == 0 and seed.stdout.strip() == 'LEDGER_OK',
-                'migration_ledger_fixture_failed')
+        if baseline.returncode != 0:
+            require(False, baseline_failure_code(baseline.returncode,
+                                                   baseline.stdout + '\n' + baseline.stderr))
+        applied = mysql_admin(f"SELECT migration FROM `{database}`.`migrations` ORDER BY migration")
+        require(applied.splitlines() == baseline_names,
+                'historical_baseline_migration_ledger_mismatch')
 
         mysql_admin('SET GLOBAL log_bin_trust_function_creators=OFF')
         migration_file = TARGET_FILES[0]
