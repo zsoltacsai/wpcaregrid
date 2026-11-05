@@ -743,7 +743,11 @@ def test_fatal_inert_launcher_recovery():
     assert "def phase_runtime_launcher_recovery(" in recovery_source
     assert "runtime-launcher-recover-fatal-inert" in recovery_source
     assert "'recover-runtime-launcher'" in recovery_source
-    assert "HELPER_SHA = 'ea427c28ff2fe754646c558883e821fe98950b15af96a656967b6e8472013833'" in recovery_source
+    approved_helper_sha = "59dc8359d81410741d65d9980a11cc7841d488e5c657b6201eb843cae7ef99e9"
+    actual_helper_sha = hashlib.sha256(HELPER.read_bytes()).hexdigest()
+    assert actual_helper_sha == approved_helper_sha
+    assert RECOVERY.HELPER_SHA == approved_helper_sha
+    assert f"HELPER_SHA = '{approved_helper_sha}'" in recovery_source
     assert "runtime-launcher-recover-fatal-inert" in module.dispatch.__code__.co_consts
     assert "atomic_root_file(SUPERVISOR_CONFIG" not in module.recover_runtime_launcher_fatal_inert.__code__.co_names
     assert "worker-runtime-enable" not in module.recover_runtime_launcher_fatal_inert.__code__.co_consts
