@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 import json
+import types
+from unittest.mock import patch
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
@@ -864,6 +866,130 @@ def test_fatal_inert_launcher_recovery():
         RECOVERY.enforce_fail_closed = saved_main["fence"]
 
 
+def test_fatal_inert_recovery_without_laravel_config_cache():
+    """Launcher-only recovery accepts the interrupted missing-cache state, while Laravel phases do not."""
+    if os.name == "nt":
+        # Win32 cannot model Unix ownership and mode bits; the required regression runs on Linux CI.
+        return
+    with tempfile.TemporaryDirectory(prefix="fatal-inert-no-config-cache-") as temp_dir:
+        app = Path(temp_dir) / "app"
+        app.mkdir()
+        (app / "bootstrap/cache").mkdir(parents=True)
+        env = app / ".env"
+        env.write_bytes(b"synthetic-env-placeholder\n")
+        env.chmod(0o600)
+        helper_path = Path(temp_dir) / "helper"
+        helper_path.write_bytes(b"synthetic-helper-placeholder\n")
+        marker_paths = {
+            "gate": Path(temp_dir) / "deploy-maintenance",
+            "workers": Path(temp_dir) / "workers-disabled",
+            "scheduler": Path(temp_dir) / "scheduler-paused",
+        }
+        for marker in marker_paths.values():
+            marker.touch()
+
+        saved = {
+            name: getattr(RECOVERY, name)
+            for name in (
+                "APP", "HELPER", "HELPER_SHA", "GATE", "WORKER_MARKER",
+                "SCHEDULER_MARKER", "marker_ok", "run", "verify_http_gate",
+                "WORKERS",
+            )
+        }
+        original_lstat = Path.lstat
+        actual_helper_sha = hashlib.sha256(helper_path.read_bytes()).hexdigest()
+        worker_state = "FATAL"
+        commands = []
+        current_uid = env.stat().st_uid
+
+        def synthetic_lstat(path):
+            if path == helper_path:
+                return types.SimpleNamespace(
+                    st_mode=stat.S_IFREG | 0o755, st_uid=0, st_gid=0
+                )
+            if path == env:
+                return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=current_uid)
+            return original_lstat(path)
+
+        def read_only_run(argv, **_kwargs):
+            commands.append(list(argv))
+            if argv[0] == "/usr/bin/curl":
+                return subprocess.CompletedProcess(argv, 0, stdout="503", stderr="")
+            worker = argv[-1]
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=f"{worker} {worker_state}\n", stderr=""
+            )
+
+        def existing_marker(path):
+            return path in marker_paths.values() and path.is_file() and not path.is_symlink()
+
+        try:
+            RECOVERY.APP = app.resolve()
+            RECOVERY.HELPER = str(helper_path)
+            RECOVERY.HELPER_SHA = actual_helper_sha
+            RECOVERY.GATE = marker_paths["gate"]
+            RECOVERY.WORKER_MARKER = marker_paths["workers"]
+            RECOVERY.SCHEDULER_MARKER = marker_paths["scheduler"]
+            RECOVERY.marker_ok = existing_marker
+            RECOVERY.run = read_only_run
+            RECOVERY.WORKERS = ("wpcaregrid-default", "wpcaregrid-backups")
+            with (
+                patch.object(Path, "cwd", return_value=app.resolve()),
+                patch.object(Path, "lstat", synthetic_lstat),
+                patch.object(RECOVERY.os, "geteuid", return_value=current_uid, create=True),
+                patch.dict(sys.modules, {"pwd": types.SimpleNamespace(
+                    getpwnam=lambda _name: types.SimpleNamespace(pw_uid=current_uid)
+                )}),
+            ):
+                assert not (app / "bootstrap/cache/config.php").exists()
+                RECOVERY.verify_fatal_inert_protected_state()
+                assert commands.count(["/usr/bin/curl", "--silent", "--show-error", "--output", "/dev/null",
+                                       "--write-out", "%{http_code}", "--connect-timeout", "5", "--max-time", "15",
+                                       f"{RECOVERY.URL}/up"]) == 1
+                assert {command[-1] for command in commands if command[:3] == [
+                    "/usr/bin/sudo", "-n", RECOVERY.HELPER
+                ]} == set(RECOVERY.WORKERS)
+
+                worker_state = "STOPPED"
+                try:
+                    RECOVERY.verify_protected_state()
+                except RECOVERY.RecoveryError as error:
+                    assert str(error) == "config_cache_unavailable"
+                else:
+                    raise AssertionError("Laravel-dependent protected state accepted a missing config cache")
+        finally:
+            for name, value in saved.items():
+                setattr(RECOVERY, name, value)
+
+    recovery_source = (ROOT / "scripts/recover-staging-deployment.py").read_text(encoding="utf-8")
+    fatal_preconditions = recovery_source.split(
+        "def verify_fatal_inert_protected_state():", 1
+    )[1].split("\ndef ", 1)[0]
+    protected_preconditions = recovery_source.split(
+        "def verify_protected_state():", 1
+    )[1].split("\ndef ", 1)[0]
+    launcher_phase = recovery_source.split(
+        "def phase_runtime_launcher_recovery(", 1
+    )[1].split("\ndef ", 1)[0]
+    assert "config_cache_unavailable" not in fatal_preconditions
+    assert "config_cache_unavailable" in protected_preconditions
+    assert "verify_fatal_inert_protected_state()" in launcher_phase
+    assert "verify_protected_state()" not in launcher_phase
+    assert "artisan" not in launcher_phase and "COMPOSER" not in launcher_phase
+    assert "verify_protected_state();" in recovery_source.split(
+        "def phase_migrate(", 1
+    )[1].split("\ndef ", 1)[0]
+    assert "verify_protected_state();" in recovery_source.split(
+        "def phase_finalize(", 1
+    )[1].split("\ndef ", 1)[0]
+    helper_source = (ROOT / "scripts/wpcaregrid-deploy-priv.py").read_text(encoding="utf-8")
+    privileged_recovery = helper_source.split(
+        "def recover_runtime_launcher_fatal_inert():", 1
+    )[1].split("\ndef ", 1)[0]
+    assert "bootstrap/cache/config.php" not in privileged_recovery
+    assert "artisan" not in privileged_recovery
+
+
 def nginx_dump(files):
     items = list(files.items())
     return "".join(
@@ -932,6 +1058,7 @@ def validate_nginx_fixture(dump, files, resolver_override=None):
 def main():
     test_gated_recovery_contract()
     test_fatal_inert_launcher_recovery()
+    test_fatal_inert_recovery_without_laravel_config_cache()
     if os.name != "nt":
         bash = shutil.which("bash")
         if not bash:
