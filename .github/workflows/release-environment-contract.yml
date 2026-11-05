@@ -1,0 +1,36 @@
+name: Release environment contract (synthetic)
+
+on:
+  push:
+    branches:
+      - claude/ecstatic-wozniak-oemyuf
+    paths:
+      - docs/RELEASE_ENVIRONMENT_CONTRACT.md
+      - scripts/release_environment_contract.py
+      - scripts/tests/release_environment_contract_test.py
+      - .github/workflows/release-environment-contract.yml
+      - .github/workflows/actions.lock
+  pull_request:
+    paths:
+      - docs/RELEASE_ENVIRONMENT_CONTRACT.md
+      - scripts/release_environment_contract.py
+      - scripts/tests/release_environment_contract_test.py
+      - .github/workflows/release-environment-contract.yml
+      - .github/workflows/actions.lock
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Environment contract synthetic validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run synthetic contract and compatibility regressions
+        run: |
+          python3 scripts/tests/release_environment_contract_test.py
+          python3 -m py_compile scripts/release_environment_contract.py scripts/tests/release_environment_contract_test.py
