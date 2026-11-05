@@ -475,7 +475,7 @@ def test_fatal_inert_launcher_recovery():
         if argv[1:3] == ["status", argv[2]]:
             return subprocess.CompletedProcess(argv, 3, stdout=f"{argv[2]} FATAL\n")
         if argv[1:3] == ["pid", argv[2]]:
-            return subprocess.CompletedProcess(argv, 3, stdout="0\n")
+            return subprocess.CompletedProcess(argv, 7, stdout="0\n")
         raise AssertionError(f"unexpected operation in recovery preflight: {argv!r}")
 
     module.require_regular = lambda *_args, **_kwargs: type(
@@ -492,29 +492,35 @@ def test_fatal_inert_launcher_recovery():
         assert len([call for call in calls if call[1] == "pid"]) == 2
         assert not any(any(token in {"start", "stop", "restart", "reload", "reread", "update"} for token in call) for call in calls)
 
-        def diagnostic_run(*, states=None, pids=None, http="503"):
+        def diagnostic_run(*, states=None, pids=None, pid_codes=None, status_codes=None, http="503"):
             states = states or {name: "FATAL" for name in worker_names}
-            pids = pids or {name: "0" for name in worker_names}
+            pids = pids or {name: "0\n" for name in worker_names}
+            pid_codes = pid_codes or {name: 7 for name in worker_names}
+            status_codes = status_codes or {}
             def run(argv, **_kwargs):
                 if argv[0] == "/usr/bin/curl":
                     return subprocess.CompletedProcess(argv, 0, stdout=http)
                 name = argv[-1]
                 if argv[1] == "status":
                     state = states.get(name, "FATAL")
-                    code = 3 if state == "FATAL" else 0
+                    code = status_codes.get(name, 3 if state == "FATAL" else 0)
                     return subprocess.CompletedProcess(argv, code, stdout=f"{name} {state}\n")
-                return subprocess.CompletedProcess(argv, 3, stdout=f"{pids.get(name, '0')}\n")
+                return subprocess.CompletedProcess(
+                    argv, pid_codes.get(name, 7), stdout=pids.get(name, "0\n")
+                )
             return run
 
-        for states, pids, http, census_error, marker_error, expected_code in (
-            ({worker_names[0]: "FATAL", worker_names[1]: "STOPPED"}, None, "503", False, False, "FATAL_INERT_WORKER_STATE_INVALID"),
-            ({worker_names[0]: "FATAL", worker_names[1]: "RUNNING pid 44"}, None, "503", False, False, "FATAL_INERT_WORKER_STATE_INVALID"),
-            (None, {worker_names[0]: "44", worker_names[1]: "0"}, "503", False, False, "FATAL_INERT_WORKER_PID_PRESENT"),
-            (None, None, "200", False, False, "FATAL_INERT_HTTP_GATE_OPEN"),
-            (None, None, "503", True, False, "FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE"),
-            (None, None, "503", False, True, "FATAL_INERT_MARKERS_INVALID"),
+        for states, pids, pid_codes, http, census_error, marker_error, expected_code in (
+            ({worker_names[0]: "FATAL", worker_names[1]: "STOPPED"}, None, None, "503", False, False, "FATAL_INERT_WORKER_STATE_INVALID"),
+            ({worker_names[0]: "FATAL", worker_names[1]: "RUNNING pid 44"}, None, None, "503", False, False, "FATAL_INERT_WORKER_STATE_INVALID"),
+            (None, {worker_names[0]: "44\n", worker_names[1]: "0\n"}, {worker_names[0]: 0, worker_names[1]: 7}, "503", False, False, "FATAL_INERT_WORKER_PID_PRESENT"),
+            (None, None, {worker_names[0]: 8, worker_names[1]: 7}, "503", False, False, "FATAL_INERT_WORKER_PID_PRESENT"),
+            (None, {worker_names[0]: "0\n\n", worker_names[1]: "0\n"}, None, "503", False, False, "FATAL_INERT_WORKER_PID_PRESENT"),
+            (None, None, None, "200", False, False, "FATAL_INERT_HTTP_GATE_OPEN"),
+            (None, None, None, "503", True, False, "FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE"),
+            (None, None, None, "503", False, True, "FATAL_INERT_MARKERS_INVALID"),
         ):
-            module.run = diagnostic_run(states=states, pids=pids, http=http)
+            module.run = diagnostic_run(states=states, pids=pids, pid_codes=pid_codes, http=http)
             if census_error:
                 module._no_live_runtime_consumers = lambda: module._recovery_refuse(
                     "FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE"
@@ -536,6 +542,41 @@ def test_fatal_inert_launcher_recovery():
                     assert str(error) == expected_code, (expected_code, str(error))
                 else:
                     raise AssertionError(f"unsafe FATAL_INERT state accepted: {expected_code}")
+
+        for pid_code, pid_output in ((0, "0"), (3, "0\n")):
+            module.run = diagnostic_run(
+                pids={name: pid_output for name in worker_names},
+                pid_codes={name: pid_code for name in worker_names},
+            )
+            module._no_live_runtime_consumers = lambda: True
+            module.require_regular = lambda *_args, **_kwargs: type(
+                "MarkerStat", (), {"st_gid": 0, "st_mode": stat.S_IFREG | 0o644, "st_size": 0}
+            )()
+            module._verify_fatal_inert_preconditions()
+
+        module.run = diagnostic_run(status_codes={worker_names[0]: 0})
+        with redirect_stderr(io.StringIO()):
+            try:
+                module._verify_fatal_inert_preconditions()
+            except ValueError as error:
+                assert str(error) == "FATAL_INERT_WORKER_STATE_INVALID"
+            else:
+                raise AssertionError("FATAL status text with a non-FATAL exit code was accepted")
+
+        module.run = diagnostic_run()
+        module.require_regular = lambda *_args, **_kwargs: type(
+            "MarkerStat", (), {"st_gid": 0, "st_mode": stat.S_IFREG | 0o644, "st_size": 0}
+        )()
+        module._no_live_runtime_consumers = lambda: module._recovery_refuse(
+            "FATAL_INERT_CONSUMER_PRESENT"
+        )
+        with redirect_stderr(io.StringIO()):
+            try:
+                module._verify_fatal_inert_preconditions()
+            except ValueError as error:
+                assert str(error) == "FATAL_INERT_CONSUMER_PRESENT"
+            else:
+                raise AssertionError("active queue consumer was accepted")
     finally:
         for name, value in original.items():
             if name == "census":
@@ -745,7 +786,7 @@ def test_fatal_inert_launcher_recovery():
     assert "def phase_runtime_launcher_recovery(" in recovery_source
     assert "runtime-launcher-recover-fatal-inert" in recovery_source
     assert "'recover-runtime-launcher'" in recovery_source
-    approved_helper_sha = "59dc8359d81410741d65d9980a11cc7841d488e5c657b6201eb843cae7ef99e9"
+    approved_helper_sha = "e9cf6645d052bf465677b5175dca0a190296cae25ac932ff5b0f43c5f3c4ab6a"
     actual_helper_sha = hashlib.sha256(HELPER.read_bytes()).hexdigest()
     assert actual_helper_sha == approved_helper_sha
     assert RECOVERY.HELPER_SHA == approved_helper_sha

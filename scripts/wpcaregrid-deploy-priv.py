@@ -647,7 +647,8 @@ def _verify_fatal_inert_preconditions():
                              stdout=subprocess.PIPE)
         except Exception:
             _recovery_refuse("FATAL_INERT_WORKER_PID_PRESENT")
-        if pid_result.returncode not in (0, 3) or (pid_result.stdout or "").strip() != "0":
+        pid_output = pid_result.stdout
+        if pid_result.returncode not in (0, 3, 7) or pid_output not in ("0", "0\n"):
             _recovery_refuse("FATAL_INERT_WORKER_PID_PRESENT")
     try:
         _no_live_runtime_consumers()
