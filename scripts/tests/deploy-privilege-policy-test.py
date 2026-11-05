@@ -1503,7 +1503,7 @@ def test_restore_receipt_is_validated_from_root_opened_descriptor():
         "schema": 1, "application_sha": RECOVERY.APP_SHA,
         "backup_sha256": RECOVERY.BACKUP_SHA,
         "mysql_server_uuid_sha256": RECOVERY.MYSQL_UUID_SHA,
-        "mysql_version": "8.4.11", "restore_database": "wpcg_recovery_restore_012345abcdef",
+        "mysql_version": "8.4.11", "restore_database": "wpcg_recovery_restore_20261105_a1b2c3d4",
         "import_verified": True, "schema_verified": True,
         "ledger_verified": True, "triggers_verified": True,
         "recorded_at_utc": "2026-11-05T12:00:00Z",
@@ -1526,6 +1526,38 @@ def test_restore_receipt_is_validated_from_root_opened_descriptor():
                 assert str(error) == "restore_receipt_identity_mismatch"
             else:
                 raise AssertionError("restore receipt hash mismatch was accepted")
+
+    # The isolated restore tool requires YYYYMMDD + underscore + eight lowercase
+    # hexadecimal digits. A legacy 12-hex receipt must not pass this boundary.
+    invalid_restore_databases = (
+        "wpcg_recovery_restore_012345abcdef",
+        "wpcg_recovery_restore_20261105_ABCDEF12",
+        "wpcg_recovery_restore_20261105_bad!",
+        "wpcg_recovery_restore_2026115_a1b2c3d4",
+        "wpcg_recovery_restore_20261105_a1b2c3d4_extra",
+        "wpcaregrid",
+    )
+    for invalid_name in invalid_restore_databases:
+        invalid_payload = dict(payload, restore_database=invalid_name)
+        invalid_encoded = json.dumps(invalid_payload, sort_keys=True, separators=(",", ":")).encode()
+        invalid_hash = hashlib.sha256(invalid_encoded).hexdigest()
+        with tempfile.TemporaryFile() as invalid_receipt:
+            invalid_receipt.write(invalid_encoded)
+            invalid_receipt.flush()
+            def root_invalid_fstat(fd):
+                actual = original_fstat(fd)
+                return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0,
+                                             st_gid=0, st_nlink=1, st_size=len(invalid_encoded))
+            with patch.object(RECOVERY.os, "fstat", root_invalid_fstat):
+                try:
+                    RECOVERY.verify_restore_receipt(
+                        RECOVERY.APP_SHA, invalid_receipt.fileno(), invalid_hash
+                    )
+                except RECOVERY.RecoveryError as error:
+                    assert str(error) == "restore_receipt_invalid", (invalid_name, error)
+                else:
+                    raise AssertionError(f"invalid isolated restore schema accepted: {invalid_name}")
+
 
 
 def nginx_dump(files):
