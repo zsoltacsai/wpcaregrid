@@ -166,7 +166,7 @@ def evidence_sha256(fact: str, value: Any) -> str:
     return hashlib.sha256(fact.encode("ascii") + b"\0" + _canonical(value)).hexdigest()
 
 
-def _valid_value(kind: str, value: Any) -> bool:
+def _valid_value(kind: str, value: Any, *, allow_missing_extensions: bool = False) -> bool:
     if kind == "hash40":
         return isinstance(value, str) and HASH40.fullmatch(value) is not None
     if kind == "hash64":
@@ -190,7 +190,7 @@ def _valid_value(kind: str, value: Any) -> bool:
             isinstance(value, list)
             and all(isinstance(item, str) and item in REQUIRED_EXTENSIONS for item in value)
             and value == sorted(set(value))
-            and REQUIRED_EXTENSIONS.issubset(set(value))
+            and (allow_missing_extensions or REQUIRED_EXTENSIONS.issubset(set(value)))
         )
     if kind == "selector_state":
         return isinstance(value, str) and value in {"php84", "php85", "missing", "invalid"}
@@ -296,7 +296,9 @@ def _validate_fact(key: str, item: Any) -> dict[str, Any]:
     if status in {"VERIFIED", "MISMATCH"}:
         value = item["value"]
         digest = item["evidence_sha256"]
-        if not _valid_value(FACT_TYPES[key], value):
+        if not _valid_value(
+            FACT_TYPES[key], value, allow_missing_extensions=status == "MISMATCH"
+        ):
             _fail("FACT_VALUE_INVALID")
         if not isinstance(digest, str) or not HASH64.fullmatch(digest) or digest != evidence_sha256(key, value):
             _fail("FACT_EVIDENCE_INVALID")

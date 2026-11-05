@@ -410,6 +410,40 @@ class ReleaseEnvironmentContractTest(unittest.TestCase):
         }
         self.assert_contract_code("RUNTIME_PROFILE_INCONSISTENT", encoded(snapshot))
 
+    def test_missing_required_extension_is_reported_as_mismatch_only(self) -> None:
+        name = "runtime.required_extensions"
+        missing = sorted(contract.REQUIRED_EXTENSIONS - {"curl"})
+
+        snapshot = valid_snapshot()
+        expected = expected_contract(snapshot)
+        snapshot["facts"][name] = {
+            "status": "VERIFIED",
+            "value": missing,
+            "evidence_sha256": contract.evidence_sha256(name, missing),
+        }
+        self.assert_contract_code("FACT_VALUE_INVALID", encoded(snapshot))
+
+        snapshot = valid_snapshot()
+        snapshot["facts"][name] = {
+            "status": "MISMATCH",
+            "value": missing,
+            "evidence_sha256": contract.evidence_sha256(name, missing),
+        }
+        snapshot["overall"] = "BLOCKED"
+        normalized = contract.validate_snapshot(snapshot)
+        comparison = contract.compare_expected(
+            normalized, expected, expected_identity(normalized)
+        )
+        self.assertEqual(normalized["facts"][name]["status"], "MISMATCH")
+        self.assertEqual(comparison["overall"], "BLOCKED")
+        self.assertIn({"fact": name, "status": "MISMATCH"}, comparison["facts"])
+
+        snapshot["facts"][name]["value"] = sorted(missing + ["unsupported-extension"])
+        snapshot["facts"][name]["evidence_sha256"] = contract.evidence_sha256(
+            name, snapshot["facts"][name]["value"]
+        )
+        self.assert_contract_code("FACT_VALUE_INVALID", encoded(snapshot))
+
     def test_malformed_unhashable_status_is_rejected_with_fixed_code(self) -> None:
         snapshot = valid_snapshot()
         snapshot["facts"]["worker.default_state"]["status"] = []
