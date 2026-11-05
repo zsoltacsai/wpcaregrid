@@ -8,7 +8,7 @@
     "require": {
         "ext-curl": "*",
         "php": "^8.4.1",
-        "laravel/framework": "^13.17",
+        "laravel/framework": "^13.40",
         "laravel/tinker": "^3.0",
         "league/flysystem-aws-s3-v3": "^3.0",
         "league/flysystem-sftp-v3": "^3.0",
