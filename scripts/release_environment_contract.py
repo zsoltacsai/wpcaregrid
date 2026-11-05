@@ -19,6 +19,7 @@ SCHEMA_VERSION = 1
 HASH40 = re.compile(r"^[0-9a-f]{40}$")
 HASH64 = re.compile(r"^[0-9a-f]{64}$")
 VERSION = re.compile(r"^\d+\.\d+(?:\.\d+)?$")
+OS_VERSION = re.compile(r"^\d+\.\d+(?:\.\d+)?$")
 PHP_VERSION = re.compile(r"^8\.(?:4|5)\.\d+$")
 OS_ID = re.compile(r"^[a-z][a-z0-9._-]{1,63}$")
 SOCKET_METADATA = re.compile(r"^[a-z_][a-z0-9_-]{0,31}:[a-z_][a-z0-9_-]{0,31}:0[0-7]{3}$")
@@ -45,6 +46,7 @@ OPTIONAL_REASONS = frozenset({"systemd_not_used"})
 FACT_TYPES: dict[str, str] = {
     "host.identity_fingerprint_sha256": "hash64",
     "platform.os_id": "os_id",
+    "platform.os_version": "os_version",
     "platform.architecture": "architecture",
     "platform.kernel_family": "kernel",
     "platform.systemd_version": "version",
@@ -63,7 +65,9 @@ FACT_TYPES: dict[str, str] = {
     "database.privilege_profile": "db_privilege_profile",
     "web.nginx_version": "version",
     "web.nginx_config_test": "boolean",
+    "web.vhost_classification": "vhost_classification",
     "web.php_handler": "php_handler",
+    "web.selector_contract": "selector_contract",
     "worker.supervisor_version": "version",
     "worker.default_state": "worker_state",
     "worker.default_status_rc": "exit_code",
@@ -105,6 +109,7 @@ FACT_TYPES: dict[str, str] = {
 
 OPTIONAL_FACTS = frozenset({"platform.systemd_version"})
 COMPATIBILITY_FACTS = frozenset(FACT_TYPES)
+REQUIRED_COMPATIBILITY_FACTS = COMPATIBILITY_FACTS - OPTIONAL_FACTS
 TOP_LEVEL_KEYS = frozenset(
     {
         "schema_version",
@@ -172,6 +177,8 @@ def _valid_value(kind: str, value: Any) -> bool:
         return isinstance(value, str) and PHP_VERSION.fullmatch(value) is not None
     if kind == "os_id":
         return isinstance(value, str) and OS_ID.fullmatch(value) is not None
+    if kind == "os_version":
+        return isinstance(value, str) and OS_VERSION.fullmatch(value) is not None
     if kind == "architecture":
         return isinstance(value, str) and value in {"x86_64", "aarch64"}
     if kind == "kernel":
@@ -203,6 +210,14 @@ def _valid_value(kind: str, value: Any) -> bool:
         return isinstance(value, str) and value in {"ROW", "MIXED", "STATEMENT"}
     if kind == "php_handler":
         return isinstance(value, str) and value in {"direct_php84", "selector_php84", "direct_php85", "selector_php85", "missing", "invalid"}
+    if kind == "vhost_classification":
+        return isinstance(value, str) and value in {
+            "staging_wpcaregrid", "production_wpcaregrid", "missing", "ambiguous", "invalid"
+        }
+    if kind == "selector_contract":
+        return isinstance(value, str) and value in {
+            "php84_selector", "php85_selector", "direct_php84", "direct_php85", "missing", "invalid"
+        }
     if kind == "worker_state":
         return isinstance(value, str) and value in {"RUNNING", "STOPPED", "FATAL", "STARTING", "BACKOFF"}
     if kind == "exit_code":
@@ -359,13 +374,19 @@ def validate_snapshot(source: bytes | str | dict[str, Any]) -> dict[str, Any]:
 
 def compare_expected(
     snapshot_source: bytes | str | dict[str, Any], expected_values: dict[str, Any]
-) -> list[dict[str, str]]:
-    """Compare expected release values with a validated snapshot in stable order."""
+) -> dict[str, Any]:
+    """Return per-fact comparisons plus a fail-closed overall readiness status.
+
+    Promotion comparison requires the complete non-optional compatibility contract;
+    a partial diagnostic subset cannot be mistaken for release readiness.
+    """
     snapshot = validate_snapshot(snapshot_source)
-    if not isinstance(expected_values, dict) or not expected_values:
+    if not isinstance(expected_values, dict):
         _fail("EXPECTED_CONTRACT_INVALID")
     if any(key not in COMPATIBILITY_FACTS for key in expected_values):
         _fail("EXPECTED_FACT_INVALID")
+    if set(expected_values) != REQUIRED_COMPATIBILITY_FACTS:
+        _fail("EXPECTED_FACT_SET_INVALID")
     for key, value in expected_values.items():
         if not _valid_value(FACT_TYPES[key], value):
             _fail("EXPECTED_VALUE_INVALID")
@@ -381,4 +402,7 @@ def compare_expected(
         else:
             state = "PASS"
         results.append({"fact": key, "status": state})
-    return results
+    overall = "PASS" if snapshot["overall"] == "VERIFIED" and all(
+        result["status"] == "PASS" for result in results
+    ) else "BLOCKED"
+    return {"overall": overall, "facts": results}

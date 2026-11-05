@@ -16,7 +16,8 @@ import release_environment_contract as contract
 VALUES = {
     "hash40": "1" * 40,
     "hash64": "2" * 64,
-    "os_id": "ubuntu-24.04",
+    "os_id": "ubuntu",
+    "os_version": "24.04",
     "architecture": "x86_64",
     "kernel": "linux",
     "version": "8.4.11",
@@ -35,6 +36,8 @@ VALUES = {
     "boolean": True,
     "binlog_format": "ROW",
     "php_handler": "selector_php84",
+    "vhost_classification": "staging_wpcaregrid",
+    "selector_contract": "php84_selector",
     "worker_state": "RUNNING",
     "exit_code": 0,
     "pid": 321,
@@ -72,6 +75,13 @@ def encoded(value: dict) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
+def expected_contract(snapshot: dict) -> dict:
+    return {
+        name: copy.deepcopy(snapshot["facts"][name].get("value", VALUES[contract.FACT_TYPES[name]]))
+        for name in contract.REQUIRED_COMPATIBILITY_FACTS
+    }
+
+
 class ReleaseEnvironmentContractTest(unittest.TestCase):
     def assert_contract_code(self, code: str, source) -> None:
         with self.assertRaises(contract.ContractError) as raised:
@@ -98,9 +108,12 @@ class ReleaseEnvironmentContractTest(unittest.TestCase):
         self.assertEqual(normalized["overall"], "UNKNOWN")
         result = contract.compare_expected(
             normalized,
-            {"worker.default_state": "RUNNING"},
+            expected_contract(normalized),
         )
-        self.assertEqual(result, [{"fact": "worker.default_state", "status": "UNKNOWN"}])
+        self.assertEqual(result["overall"], "BLOCKED")
+        self.assertIn(
+            {"fact": "worker.default_state", "status": "UNKNOWN"}, result["facts"]
+        )
 
     def test_unknown_reason_and_unexpected_fact_are_rejected(self) -> None:
         snapshot = valid_snapshot()
@@ -161,32 +174,77 @@ class ReleaseEnvironmentContractTest(unittest.TestCase):
         snapshot["overall"] = "BLOCKED"
         result = contract.validate_snapshot(encoded(snapshot))
         self.assertEqual(result["overall"], "BLOCKED")
-        self.assertEqual(
-            contract.compare_expected(result, {name: "8.4"}),
-            [{"fact": name, "status": "MISMATCH"}],
-        )
+        comparison = contract.compare_expected(result, expected_contract(result) | {name: "8.4"})
+        self.assertEqual(comparison["overall"], "BLOCKED")
+        self.assertIn({"fact": name, "status": "MISMATCH"}, comparison["facts"])
 
     def test_comparison_is_deterministic_and_does_not_mutate_input(self) -> None:
         snapshot = valid_snapshot()
         before = copy.deepcopy(snapshot)
-        expected = {"runtime.profile": "8.4", "database.binlog_format": "ROW"}
+        expected = expected_contract(snapshot)
         first = contract.compare_expected(snapshot, expected)
         second = contract.compare_expected(snapshot, dict(reversed(list(expected.items()))))
         self.assertEqual(first, second)
-        self.assertEqual(first, [
-            {"fact": "database.binlog_format", "status": "PASS"},
-            {"fact": "runtime.profile", "status": "PASS"},
-        ])
+        self.assertEqual(first["overall"], "PASS")
+        self.assertTrue(all(item["status"] == "PASS" for item in first["facts"]))
         self.assertEqual(snapshot, before)
 
     def test_release_comparison_rejects_unknown_or_malformed_expectations(self) -> None:
         snapshot = valid_snapshot()
         with self.assertRaises(contract.ContractError) as raised:
-            contract.compare_expected(snapshot, {"database.password": "secret"})
+            contract.compare_expected(snapshot, expected_contract(snapshot) | {"database.password": "secret"})
         self.assertEqual(raised.exception.code, "EXPECTED_FACT_INVALID")
         with self.assertRaises(contract.ContractError) as raised:
             contract.compare_expected(snapshot, {"runtime.profile": "8.3"})
+        self.assertEqual(raised.exception.code, "EXPECTED_FACT_SET_INVALID")
+        with self.assertRaises(contract.ContractError) as raised:
+            contract.compare_expected(snapshot, expected_contract(snapshot) | {"runtime.profile": "8.3"})
         self.assertEqual(raised.exception.code, "EXPECTED_VALUE_INVALID")
+
+    def test_partial_matching_fact_cannot_mask_unrelated_unknown_or_mismatch(self) -> None:
+        for status, overall in (("UNKNOWN", "UNKNOWN"), ("MISMATCH", "BLOCKED")):
+            with self.subTest(status=status):
+                snapshot = valid_snapshot()
+                if status == "UNKNOWN":
+                    snapshot["facts"]["database.trust_function_creators"] = {
+                        "status": "UNKNOWN", "reason_code": "permission_denied"
+                    }
+                else:
+                    name = "database.trust_function_creators"
+                    value = False
+                    snapshot["facts"][name] = {
+                        "status": "MISMATCH", "value": value,
+                        "evidence_sha256": contract.evidence_sha256(name, value),
+                    }
+                snapshot["overall"] = overall
+                result = contract.validate_snapshot(snapshot)
+                with self.assertRaises(contract.ContractError) as raised:
+                    contract.compare_expected(result, {"runtime.profile": "8.4"})
+                self.assertEqual(raised.exception.code, "EXPECTED_FACT_SET_INVALID")
+
+    def test_complete_comparison_blocks_matching_runtime_when_other_required_fact_is_unknown_or_mismatch(self) -> None:
+        for fact_status, expected_overall in (("UNKNOWN", "BLOCKED"), ("MISMATCH", "BLOCKED")):
+            with self.subTest(fact_status=fact_status):
+                snapshot = valid_snapshot()
+                fact = "database.trust_function_creators"
+                if fact_status == "UNKNOWN":
+                    snapshot["facts"][fact] = {"status": "UNKNOWN", "reason_code": "permission_denied"}
+                    snapshot["overall"] = "UNKNOWN"
+                else:
+                    value = False
+                    snapshot["facts"][fact] = {
+                        "status": "MISMATCH", "value": value,
+                        "evidence_sha256": contract.evidence_sha256(fact, value),
+                    }
+                    snapshot["overall"] = "BLOCKED"
+                expected = expected_contract(snapshot)
+                expected["runtime.profile"] = "8.4"
+                result = contract.compare_expected(snapshot, expected)
+                self.assertEqual(result["overall"], expected_overall)
+                self.assertIn({"fact": "runtime.profile", "status": "PASS"}, result["facts"])
+                self.assertIn(
+                    {"fact": fact, "status": fact_status}, result["facts"]
+                )
 
     def test_only_declared_optional_fact_may_be_not_applicable(self) -> None:
         snapshot = valid_snapshot()
@@ -201,6 +259,26 @@ class ReleaseEnvironmentContractTest(unittest.TestCase):
             "status": "NOT_APPLICABLE", "reason_code": "systemd_not_used"
         }
         self.assert_contract_code("FACT_NOT_APPLICABLE_INVALID", encoded(snapshot))
+
+    def test_os_version_and_vhost_routing_facts_are_required_and_typed(self) -> None:
+        snapshot = valid_snapshot()
+        del snapshot["facts"]["platform.os_version"]
+        self.assert_contract_code("FACT_SET_INVALID", encoded(snapshot))
+        snapshot = valid_snapshot()
+        snapshot["facts"]["platform.os_version"] = {
+            "status": "VERIFIED", "value": "24.04;secret",
+            "evidence_sha256": contract.evidence_sha256("platform.os_version", "24.04;secret"),
+        }
+        self.assert_contract_code("FACT_VALUE_INVALID", encoded(snapshot))
+        for name, bad in (("web.vhost_classification", "ambiguous"),
+                          ("web.selector_contract", "invalid")):
+            snapshot = valid_snapshot()
+            snapshot["facts"][name] = {
+                "status": "MISMATCH", "value": bad,
+                "evidence_sha256": contract.evidence_sha256(name, bad),
+            }
+            snapshot["overall"] = "BLOCKED"
+            self.assertEqual(contract.validate_snapshot(snapshot)["overall"], "BLOCKED")
 
     def test_duplicate_keys_oversized_and_malformed_json_are_rejected(self) -> None:
         self.assert_contract_code("DUPLICATE_JSON_KEY", b'{"schema_version":1,"schema_version":1}')
