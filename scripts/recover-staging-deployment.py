@@ -71,6 +71,44 @@ class RecoveryError(RuntimeError):
     """Fixed, non-sensitive recovery refusal."""
 
 
+_RECOVERY_HELPER_VERIFIED=False
+_RECOVERY_MUTATION_STARTED=False
+
+
+def reset_recovery_execution_state():
+    global _RECOVERY_HELPER_VERIFIED, _RECOVERY_MUTATION_STARTED
+    _RECOVERY_HELPER_VERIFIED=False
+    _RECOVERY_MUTATION_STARTED=False
+
+
+def verify_helper_identity():
+    """Prove the fixed privileged helper before any recovery invocation."""
+    global _RECOVERY_HELPER_VERIFIED
+    helper=Path(HELPER)
+    try:
+        info=helper.lstat()
+        digest=sha256(helper)
+    except OSError: stop('helper_unavailable')
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid!=0 or info.st_gid!=0 or stat.S_IMODE(info.st_mode)!=0o755
+            or digest!=HELPER_SHA):
+        stop('helper_integrity_failed')
+    _RECOVERY_HELPER_VERIFIED=True
+
+
+def run_verified_helper(args, *, timeout=30, check=True):
+    """Revalidate helper bytes/metadata immediately before privileged use."""
+    verify_helper_identity()
+    return run(['/usr/bin/sudo','-n',HELPER,*args],timeout=timeout,check=check)
+
+
+def mark_recovery_mutation_started():
+    global _RECOVERY_MUTATION_STARTED
+    if not _RECOVERY_HELPER_VERIFIED:
+        stop('helper_identity_not_verified')
+    _RECOVERY_MUTATION_STARTED=True
+
+
 def stop(code):
     raise RecoveryError(code)
 
@@ -320,10 +358,7 @@ def verify_protected_state():
     if os.geteuid()!=pwd.getpwnam('deploy').pw_uid: stop('must_run_as_deploy')
     if Path.cwd().resolve()!=APP: stop('application_directory_mismatch')
     if not all(marker_ok(p) for p in (GATE,WORKER_MARKER,SCHEDULER_MARKER)): stop('safety_marker_missing')
-    helper=Path(HELPER)
-    try: helper_stat=helper.lstat()
-    except OSError: stop('helper_unavailable')
-    if not stat.S_ISREG(helper_stat.st_mode) or stat.S_ISLNK(helper_stat.st_mode) or helper_stat.st_uid!=0 or helper_stat.st_gid!=0 or stat.S_IMODE(helper_stat.st_mode)!=0o755 or sha256(helper)!=HELPER_SHA: stop('helper_integrity_failed')
+    verify_helper_identity()
     verify_http_gate()
     for worker in WORKERS:
         out=run(['/usr/bin/sudo','-n',HELPER,'worker','status',worker]).stdout.strip()
@@ -422,13 +457,7 @@ def verify_fatal_inert_protected_state():
     if os.geteuid()!=pwd.getpwnam('deploy').pw_uid: stop('must_run_as_deploy')
     if Path.cwd().resolve()!=APP: stop('application_directory_mismatch')
     if not all(marker_ok(p) for p in (GATE,WORKER_MARKER,SCHEDULER_MARKER)): stop('safety_marker_missing')
-    helper=Path(HELPER)
-    try: helper_stat=helper.lstat()
-    except OSError: stop('helper_unavailable')
-    if (not stat.S_ISREG(helper_stat.st_mode) or stat.S_ISLNK(helper_stat.st_mode)
-            or helper_stat.st_uid!=0 or helper_stat.st_gid!=0
-            or stat.S_IMODE(helper_stat.st_mode)!=0o755 or sha256(helper)!=HELPER_SHA):
-        stop('helper_integrity_failed')
+    verify_helper_identity()
     verify_http_gate()
     env=APP/'.env'
     try: st=env.lstat()
@@ -642,13 +671,7 @@ def phase_readiness(app_sha,tool_sha,package_dir,restore_receipt_fd=None,restore
         if Path.cwd().resolve()!=APP: stop('application_directory_mismatch')
         if not all(marker_ok(p) for p in (GATE,WORKER_MARKER,SCHEDULER_MARKER)):
             stop('safety_marker_missing')
-        helper=Path(HELPER)
-        try: helper_stat=helper.lstat()
-        except OSError: stop('helper_unavailable')
-        if (not stat.S_ISREG(helper_stat.st_mode) or stat.S_ISLNK(helper_stat.st_mode)
-                or helper_stat.st_uid!=0 or helper_stat.st_gid!=0
-                or stat.S_IMODE(helper_stat.st_mode)!=0o755 or sha256(helper)!=HELPER_SHA):
-            stop('helper_integrity_failed')
+        verify_helper_identity()
         env=APP/'.env'
         try: env_stat=env.lstat()
         except OSError: stop('environment_file_unavailable')
@@ -657,6 +680,20 @@ def phase_readiness(app_sha,tool_sha,package_dir,restore_receipt_fd=None,restore
             stop('environment_file_metadata_invalid')
         return {'application':'PINNED','helper':'PINNED','markers':'PRESENT','environment':'PROTECTED'}
     _readiness_check(checks,blockers,'recovery_inputs',protected_inputs)
+    if checks['recovery_inputs']['status']!='PASS':
+        # Do not continue into helper-backed or runtime-dependent checks after
+        # authorization, protected-input, or privileged-helper identity failure.
+        for name in ('worker_runtime','protected_backup','pre_recovery_backup',
+                     'isolated_restore_receipt','runtime','nginx','composer',
+                     'database_schema','dba_attestation','config_cache'):
+            checks[name]={'status':'NOT_EVALUATED','code':'protected_inputs_unverified'}
+        return {
+            'RECOVERY_READINESS':'BLOCKED','APPLICATION_SHA':app_sha,
+            'RECOVERY_TOOL_SHA':tool_sha,'APPLICATION_CI_RUN_ID':runs[app_sha],
+            'RECOVERY_TOOL_CI_RUN_ID':runs[tool_sha],'CHECKS':checks,
+            'BLOCKERS':sorted(set(blockers)),'STAGING_GATE':'CLOSED',
+            'WORKERS':'UNVERIFIED','SCHEDULER':'UNVERIFIED','MUTATIONS':'NONE',
+        }
     worker_evidence=None
     def worker_check():
         nonlocal worker_evidence
@@ -744,12 +781,12 @@ def load_attestation(phase):
 def enforce_fail_closed():
     failures=[]
     for args in (['gate-on'],['worker-runtime-disable'],['worker','stop-all'],['scheduler-pause']):
-        try: run(['/usr/bin/sudo','-n',HELPER,*args],timeout=30)
+        try: run_verified_helper(args,timeout=30)
         except RecoveryError: failures.append(args[0])
     if not all(marker_ok(p) for p in (GATE,WORKER_MARKER,SCHEDULER_MARKER)): failures.append('marker')
     for worker in WORKERS:
         try:
-            out=run(['/usr/bin/sudo','-n',HELPER,'worker','status',worker]).stdout.strip()
+            out=run_verified_helper(['worker','status',worker]).stdout.strip()
             if not re.fullmatch(re.escape(worker)+r'\s+STOPPED(?:\s|$).*',out): failures.append('worker')
         except RecoveryError: failures.append('worker')
     if failures: stop('fail_closed_state_unverified')
@@ -759,7 +796,7 @@ def enforce_recovery_fail_closed():
     """Reassert only durable fences when the already-proven FATAL state remains inert."""
     failures=[]
     for args in (['gate-on'],['worker-runtime-disable'],['scheduler-pause']):
-        try: run(['/usr/bin/sudo','-n',HELPER,*args],timeout=30)
+        try: run_verified_helper(args,timeout=30)
         except RecoveryError: failures.append(args[0])
     if not all(marker_ok(p) for p in (GATE,WORKER_MARKER,SCHEDULER_MARKER)):
         failures.append('marker')
@@ -847,6 +884,7 @@ def phase_migrate(app_sha,tool_sha,package_dir,restore_receipt_fd=None,restore_r
         attestation=load_attestation('migrate')
         current=snapshot(); current_pending,_=validate_snapshot(current,phase='migrate',setting=True)
         if name not in current_pending: continue
+        mark_recovery_mutation_started()
         invoke_single_migration(filename)
         updated=snapshot(); updated_pending,_=validate_migration_result(updated)
         if name in updated_pending or not validate_schema(updated,table): stop('migration_postcheck_failed')
@@ -873,6 +911,7 @@ def phase_finalize(app_sha,tool_sha,package_dir,restore_receipt_fd=None,restore_
     if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid!=0 or info.st_gid!=0 or stat.S_IMODE(info.st_mode)!=0o755 or sha256(COMPOSER)!=COMPOSER_SHA: stop('composer_integrity_failed')
     run([PHP,str(COMPOSER),'check-platform-reqs','--no-dev','--lock'],timeout=180)
     verify_profile()
+    mark_recovery_mutation_started()
     run([PHP,'artisan','optimize:clear'],timeout=120)
     run(['/usr/bin/sudo','-n',HELPER,'cache-acl'],timeout=60)
     for artisan in ('config:cache','route:cache','view:cache','event:cache'): run([PHP,'artisan',artisan],timeout=120)
@@ -906,6 +945,7 @@ def main(argv=None):
     parser.add_argument('--pre-recovery-backup-sha256')
     args=parser.parse_args(argv)
     if args.application_sha!=APP_SHA: print('RECOVERY=STOP;CODE=release_identity_mismatch',file=sys.stderr); return 1
+    reset_recovery_execution_state()
     try:
         with deployment_lock():
             try:
@@ -931,17 +971,17 @@ def main(argv=None):
                     print(json.dumps(result,sort_keys=True,separators=(',',':')))
                     return 2
             except RecoveryError:
-                if args.phase not in ('recover-runtime-launcher','recovery-readiness'):
+                if (args.phase in ('continue-migrations','finalize')
+                        and _RECOVERY_HELPER_VERIFIED and _RECOVERY_MUTATION_STARTED):
                     try:
-                        (enforce_recovery_fail_closed if args.phase in ('continue-migrations','finalize')
-                         else enforce_fail_closed)()
+                        enforce_recovery_fail_closed()
                     except RecoveryError: stop('fail_closed_state_unverified')
                 raise
             except Exception:
-                if args.phase not in ('recover-runtime-launcher','recovery-readiness'):
+                if (args.phase in ('continue-migrations','finalize')
+                        and _RECOVERY_HELPER_VERIFIED and _RECOVERY_MUTATION_STARTED):
                     try:
-                        (enforce_recovery_fail_closed if args.phase in ('continue-migrations','finalize')
-                         else enforce_fail_closed)()
+                        enforce_recovery_fail_closed()
                     except RecoveryError: stop('fail_closed_state_unverified')
                 stop('unexpected_failure')
         print(json.dumps(result,sort_keys=True,separators=(',',':'))); return 0

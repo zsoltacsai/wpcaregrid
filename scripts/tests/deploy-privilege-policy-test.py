@@ -393,12 +393,14 @@ def test_gated_recovery_contract():
         RECOVERY.run = original_run
 
     fail_closed_calls = []
+    original_helper_check = RECOVERY.verify_helper_identity
     def fail_first_fence(argv, **kwargs):
         fail_closed_calls.append(argv)
         if len(fail_closed_calls) == 1:
             raise RECOVERY.RecoveryError("synthetic_gate_command_failure")
         return subprocess.CompletedProcess(argv, 0, stdout="wpcaregrid-default STOPPED\n")
     RECOVERY.run = fail_first_fence
+    RECOVERY.verify_helper_identity = lambda: None
     try:
         try:
             RECOVERY.enforce_fail_closed()
@@ -409,6 +411,7 @@ def test_gated_recovery_contract():
         assert len(fail_closed_calls) == 6, "all fence and worker-state checks must be attempted"
     finally:
         RECOVERY.run = original_run
+        RECOVERY.verify_helper_identity = original_helper_check
 
     source = (ROOT / "scripts/recover-staging-deployment.py").read_text(encoding="utf-8")
     assert "gate-off" not in source
@@ -435,11 +438,14 @@ def test_migration_failure_reasserts_recovery_fences_without_destructive_rollbac
     }
     calls = []
     try:
+        RECOVERY.reset_recovery_execution_state()
         RECOVERY.deployment_lock = lambda: RecoveryLock()
         RECOVERY.verify_application_checkout = lambda _sha: None
-        RECOVERY.phase_migrate = lambda *_args: (_ for _ in ()).throw(
-            RECOVERY.RecoveryError("synthetic_migration_failure")
-        )
+        def fail_after_mutation(*_args):
+            RECOVERY._RECOVERY_HELPER_VERIFIED = True
+            RECOVERY.mark_recovery_mutation_started()
+            raise RECOVERY.RecoveryError("synthetic_migration_failure")
+        RECOVERY.phase_migrate = fail_after_mutation
         RECOVERY.enforce_recovery_fail_closed = lambda: calls.append("reassert_recovery_fences")
         RECOVERY.enforce_fail_closed = lambda: calls.append("stop_workers_destructively")
         with redirect_stderr(io.StringIO()):
@@ -452,8 +458,86 @@ def test_migration_failure_reasserts_recovery_fences_without_destructive_rollbac
         assert result == 1
         assert calls == ["reassert_recovery_fences"], calls
     finally:
+        RECOVERY.reset_recovery_execution_state()
         for name, value in saved.items():
             setattr(RECOVERY, name, value)
+
+
+def test_pre_mutation_exceptions_never_run_privileged_fence_commands():
+    class RecoveryLock:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+
+    saved = {
+        name: getattr(RECOVERY, name) for name in (
+            "deployment_lock", "verify_application_checkout", "phase_migrate",
+            "enforce_recovery_fail_closed", "enforce_fail_closed",
+        )
+    }
+    fence_calls = []
+    try:
+        RECOVERY.deployment_lock = lambda: RecoveryLock()
+        RECOVERY.verify_application_checkout = lambda _sha: None
+        RECOVERY.enforce_recovery_fail_closed = lambda: fence_calls.append("recovery")
+        RECOVERY.enforce_fail_closed = lambda: fence_calls.append("stop")
+        for helper_verified, exception in (
+            (False, RECOVERY.RecoveryError("helper_integrity_failed")),
+            (True, RuntimeError("synthetic_pre_mutation_exception")),
+        ):
+            RECOVERY.reset_recovery_execution_state()
+            def fail_before_mutation(*_args, verified=helper_verified, error=exception):
+                RECOVERY._RECOVERY_HELPER_VERIFIED = verified
+                raise error
+            RECOVERY.phase_migrate = fail_before_mutation
+            with redirect_stderr(io.StringIO()):
+                result = RECOVERY.main([
+                    "continue-migrations", "--application-sha", RECOVERY.APP_SHA,
+                    "--recovery-tool-sha", "a" * 40, "--restore-receipt-fd", "3",
+                    "--restore-receipt-sha256", "b" * 64,
+                    "--pre-recovery-backup-sha256", "c" * 64,
+                ])
+            assert result == 1
+            assert fence_calls == [], "pre-mutation failure must preserve existing fences without invoking helper"
+    finally:
+        RECOVERY.reset_recovery_execution_state()
+        for name, value in saved.items():
+            setattr(RECOVERY, name, value)
+
+
+def test_unverified_helper_identity_blocks_all_privileged_commands():
+    original_helper, original_sha = RECOVERY.HELPER, RECOVERY.HELPER_SHA
+    original_run = RECOVERY.run
+    calls = []
+    try:
+        with tempfile.TemporaryDirectory(prefix="recovery-helper-identity-") as directory:
+            helper = Path(directory) / "helper"
+            helper.write_bytes(b"synthetic helper bytes\n")
+            actual_sha = hashlib.sha256(helper.read_bytes()).hexdigest()
+            original_lstat = Path.lstat
+            RECOVERY.HELPER = str(helper)
+            RECOVERY.run = lambda argv, **_kwargs: calls.append(argv)
+            for mode, uid, gid, expected_sha in (
+                (stat.S_IFREG | 0o755, 0, 0, "0" * 64),
+                (stat.S_IFREG | 0o755, 1000, 0, actual_sha),
+                (stat.S_IFREG | 0o700, 0, 0, actual_sha),
+            ):
+                RECOVERY.reset_recovery_execution_state()
+                RECOVERY.HELPER_SHA = expected_sha
+                def synthetic_lstat(path, *, _mode=mode, _uid=uid, _gid=gid):
+                    if path == helper:
+                        return types.SimpleNamespace(st_mode=_mode, st_uid=_uid, st_gid=_gid)
+                    return original_lstat(path)
+                with patch.object(Path, "lstat", synthetic_lstat):
+                    try:
+                        RECOVERY.run_verified_helper(["gate-on"])
+                    except RECOVERY.RecoveryError as error:
+                        assert str(error) == "helper_integrity_failed"
+                    else:
+                        raise AssertionError("invalid helper identity was accepted")
+                assert calls == [], "unverified helper must never receive a privileged invocation"
+    finally:
+        RECOVERY.reset_recovery_execution_state()
+        RECOVERY.HELPER, RECOVERY.HELPER_SHA, RECOVERY.run = original_helper, original_sha, original_run
 
 def test_fatal_inert_launcher_recovery():
     """Recovery-only FATAL_INERT classification never weakens the STOPPED installer contract."""
@@ -1134,11 +1218,11 @@ def test_fatal_inert_recovery_without_laravel_config_cache():
         current_uid = env.stat().st_uid
 
         def synthetic_lstat(path):
-            if path == helper_path:
+            if Path(path).resolve() == helper_path.resolve():
                 return types.SimpleNamespace(
                     st_mode=stat.S_IFREG | 0o755, st_uid=0, st_gid=0
                 )
-            if path == env:
+            if Path(path).resolve() == env.resolve():
                 return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=current_uid)
             return original_lstat(path)
 
@@ -1291,10 +1375,10 @@ def test_recovery_readiness_aggregates_without_mutation_or_config_cache():
         markers = [Path(directory) / name for name in ("gate", "workers", "scheduler")]
         original_lstat = Path.lstat
         def synthetic_lstat(path):
-            if path == helper:
+            if Path(path).resolve() == helper.resolve():
                 return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o755, st_uid=0, st_gid=0)
-            if path == env:
-                return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=current_uid, st_gid=0)
+            if Path(path).resolve() == env.resolve():
+                return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=os.geteuid(), st_gid=0)
             return original_lstat(path)
         try:
             RECOVERY.APP = app.resolve()
@@ -1324,9 +1408,15 @@ def test_recovery_readiness_aggregates_without_mutation_or_config_cache():
                     getpwnam=lambda _name: types.SimpleNamespace(pw_uid=current_uid)
                 )}),
             ):
+                fake_env = env.lstat()
+                assert (stat.S_ISREG(fake_env.st_mode), stat.S_ISLNK(fake_env.st_mode),
+                        fake_env.st_uid, os.geteuid(), stat.S_IMODE(fake_env.st_mode)) == (
+                            True, False, current_uid, current_uid, 0o600
+                        ), (fake_env, os.geteuid(), current_uid)
                 result = RECOVERY.phase_readiness(RECOVERY.APP_SHA, "a" * 40, ROOT)
             assert result["RECOVERY_READINESS"] == "BLOCKED"
             assert result["STAGING_GATE"] == "CLOSED" and result["MUTATIONS"] == "NONE"
+            assert result["CHECKS"]["recovery_inputs"]["status"] == "PASS", result["CHECKS"]["recovery_inputs"]
             assert result["CHECKS"]["worker_http_gate"]["code"] == "FATAL_INERT_HTTP_GATE_OPEN"
             assert result["CHECKS"]["worker_process_census"]["code"] == "FATAL_INERT_CONSUMER_PRESENT"
             assert result["CHECKS"]["config_cache"]["status"] == "REBUILD_DURING_FINALIZE"
@@ -1335,6 +1425,75 @@ def test_recovery_readiness_aggregates_without_mutation_or_config_cache():
                         set(result["BLOCKERS"])
                     )
         finally:
+            for name, value in saved.items():
+                setattr(RECOVERY, name, value)
+
+
+def test_recovery_readiness_short_circuits_on_helper_identity_failure():
+    with tempfile.TemporaryDirectory(prefix="recovery-readiness-helper-fail-") as directory:
+        app = Path(directory) / "app"
+        app.mkdir()
+        env = app / ".env"
+        env.write_bytes(b"synthetic-env-placeholder\n")
+        env.chmod(0o600)
+        helper = Path(directory) / "helper"
+        helper.write_bytes(b"synthetic-helper-placeholder\n")
+        current_uid = env.stat().st_uid
+        names = (
+            "APP", "HELPER", "HELPER_SHA", "GATE", "WORKER_MARKER", "SCHEDULER_MARKER",
+            "marker_ok", "verify_provenance", "read_fatal_inert_worker_evidence",
+            "verify_backup", "verify_restore_receipt", "verify_pre_recovery_backup",
+            "_readiness_runtime", "_readiness_nginx", "_readiness_composer",
+            "_readiness_database", "run",
+        )
+        saved = {name: getattr(RECOVERY, name) for name in names}
+        markers = [Path(directory) / name for name in ("gate", "workers", "scheduler")]
+        privileged_calls = []
+        original_lstat = Path.lstat
+        try:
+            RECOVERY.APP = app.resolve()
+            RECOVERY.HELPER = str(helper)
+            RECOVERY.HELPER_SHA = hashlib.sha256(helper.read_bytes()).hexdigest()
+            RECOVERY.GATE, RECOVERY.WORKER_MARKER, RECOVERY.SCHEDULER_MARKER = markers
+            RECOVERY.marker_ok = lambda _path: True
+            RECOVERY.verify_provenance = lambda app_sha, tool_sha, _package: {app_sha: 1, tool_sha: 2}
+            RECOVERY.run = lambda argv, **_kwargs: privileged_calls.append(argv)
+            RECOVERY.read_fatal_inert_worker_evidence = lambda: privileged_calls.append("worker-preflight")
+            RECOVERY.verify_backup = lambda: privileged_calls.append("backup")
+            RECOVERY.verify_restore_receipt = lambda *_args: privileged_calls.append("restore")
+            RECOVERY.verify_pre_recovery_backup = lambda *_args: privileged_calls.append("pre-backup")
+            RECOVERY._readiness_runtime = lambda: privileged_calls.append("runtime")
+            RECOVERY._readiness_nginx = lambda: privileged_calls.append("nginx")
+            RECOVERY._readiness_composer = lambda: privileged_calls.append("composer")
+            RECOVERY._readiness_database = lambda: privileged_calls.append("database")
+            def synthetic_lstat(path):
+                if Path(path).resolve() == helper.resolve():
+                    # Correct file type and mode, wrong owner: stop before hashing or sudo.
+                    return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o755, st_uid=1000, st_gid=0)
+                if Path(path).resolve() == env.resolve():
+                    return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=os.geteuid(), st_gid=0)
+                return original_lstat(path)
+            with (
+                patch.object(Path, "cwd", return_value=app.resolve()),
+                patch.object(Path, "lstat", synthetic_lstat),
+                patch.object(RECOVERY.os, "geteuid", return_value=current_uid, create=True),
+                patch.dict(sys.modules, {"pwd": types.SimpleNamespace(
+                    getpwnam=lambda _name: types.SimpleNamespace(pw_uid=current_uid)
+                )}),
+            ):
+                RECOVERY.reset_recovery_execution_state()
+                result = RECOVERY.phase_readiness(RECOVERY.APP_SHA, "a" * 40, ROOT)
+            assert result["RECOVERY_READINESS"] == "BLOCKED"
+            assert result["CHECKS"]["recovery_inputs"] == {
+                "status": "BLOCKED", "code": "helper_integrity_failed"
+            }
+            assert all(result["CHECKS"][name]["status"] == "NOT_EVALUATED"
+                       for name in ("worker_runtime", "runtime", "nginx", "database_schema"))
+            assert result["BLOCKERS"] == ["helper_integrity_failed"]
+            assert result["STAGING_GATE"] == "CLOSED" and result["MUTATIONS"] == "NONE"
+            assert privileged_calls == []
+        finally:
+            RECOVERY.reset_recovery_execution_state()
             for name, value in saved.items():
                 setattr(RECOVERY, name, value)
 
@@ -1437,9 +1596,12 @@ def validate_nginx_fixture(dump, files, resolver_override=None):
 def main():
     test_gated_recovery_contract()
     test_migration_failure_reasserts_recovery_fences_without_destructive_rollback()
+    test_pre_mutation_exceptions_never_run_privileged_fence_commands()
+    test_unverified_helper_identity_blocks_all_privileged_commands()
     test_fatal_inert_launcher_recovery()
     test_fatal_inert_recovery_without_laravel_config_cache()
     test_recovery_readiness_aggregates_without_mutation_or_config_cache()
+    test_recovery_readiness_short_circuits_on_helper_identity_failure()
     test_restore_receipt_is_validated_from_root_opened_descriptor()
     if os.name != "nt":
         bash = shutil.which("bash")
