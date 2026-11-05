@@ -193,7 +193,9 @@ def main():
             'rehearsal_prerequisite_unavailable')
 
     suffix = secrets.token_hex(6)
-    database = f'wpcg_recovery_ci_{suffix}'
+    # Each job gets a separate throwaway MySQL service; the real controller
+    # contract requires its configured application schema to be named wpcaregrid.
+    database = 'wpcaregrid'
     username = f'wpcg_r_{suffix}'
     password = secrets.token_hex(24)
     created_database = False
@@ -262,7 +264,7 @@ def main():
             + database + "'), '|', (SELECT COUNT(*) FROM mysql.user WHERE user='"
             + username + "'))"
         )
-        require(absent == '0|0', 'generated_database_identity_collision')
+        require(absent == '0|0', 'isolated_database_identity_collision')
         mysql_admin(f"CREATE DATABASE `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
         created_database = True
         mysql_admin(f"CREATE USER '{username}'@'%' IDENTIFIED BY '{password}'")
