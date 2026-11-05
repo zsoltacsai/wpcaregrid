@@ -61,10 +61,10 @@ def off_setting_child_failure_code(returncode, stdout, stderr):
             category = 'php_parse_error'
         elif re.search(r'(?m)^PHP Fatal error:', stderr):
             fatal = re.search(
-                r'(?m)^PHP Fatal error: Uncaught (PDOException|ErrorException|ReflectionException|TypeError|Error)(?::\s*(.*))?$',
+                r'(?m)^PHP Fatal error: (.*)$',
                 stderr,
             )
-            detail = fatal.group(2) if fatal and fatal.group(2) else ''
+            detail = fatal.group(1) if fatal else ''
             if 'Call to undefined function ' in detail:
                 category = 'php_fatal_undefined_function'
             elif 'Call to undefined method ' in detail:
@@ -73,10 +73,17 @@ def off_setting_child_failure_code(returncode, stdout, stderr):
                 category = 'php_fatal_class_not_found'
             elif 'Failed opening required' in detail:
                 category = 'php_fatal_required_file_missing'
-            elif fatal and fatal.group(1) in ('PDOException', 'ErrorException', 'ReflectionException', 'TypeError', 'Error'):
-                category = f'php_fatal_uncaught_{fatal.group(1).lower()}'
+            elif 'Allowed memory size' in detail:
+                category = 'php_fatal_memory_limit'
+            elif 'Maximum execution time' in detail:
+                category = 'php_fatal_time_limit'
             else:
-                category = 'php_fatal_unclassified'
+                uncaught = re.search(r'Uncaught ([A-Za-z_][A-Za-z0-9_\\]{0,127})(?::|$)', detail)
+                if uncaught:
+                    class_code = re.sub(r'[^A-Za-z0-9]+', '_', uncaught.group(1)).strip('_').lower()
+                    category = f'php_fatal_uncaught_{class_code}'
+                else:
+                    category = 'php_fatal_unclassified'
         elif re.search(r'(?m)^PHP Warning:', stderr):
             category = 'php_warning'
         elif not stdout and not stderr:
@@ -111,8 +118,8 @@ def test_off_setting_child_failure_classifier():
         255, '', 'PHP Fatal error: Uncaught Error: Call to undefined function private_path()') == (
             'off_setting_php_child_rc255_php_fatal_undefined_function')
     assert off_setting_child_failure_code(
-        255, '', 'PHP Fatal error: Uncaught TypeError: hidden details') == (
-            'off_setting_php_child_rc255_php_fatal_uncaught_typeerror')
+        255, '', 'PHP Fatal error: Uncaught Illuminate\\Database\\QueryException: hidden details') == (
+            'off_setting_php_child_rc255_php_fatal_uncaught_illuminate_database_queryexception')
     assert off_setting_child_failure_code(1, '', '') == (
         'off_setting_php_child_rc1_empty_process_output')
     assert off_setting_child_failure_code('1', 'raw output', 'raw output') == (
