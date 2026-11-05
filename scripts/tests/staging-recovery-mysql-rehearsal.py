@@ -344,7 +344,12 @@ def main():
         ci_run_ids = {RECOVERY.APP_SHA: 1234, 'f' * 40: 5678}
         RECOVERY.APP = ROOT
         RECOVERY.PHP = php
-        RECOVERY.verify_fatal_inert_protected_state = lambda: None
+        def verified_fatal_inert_protected_state():
+            # The isolated rehearsal substitutes the host-only helper checks,
+            # but it must model their verified identity before migrations.
+            RECOVERY._RECOVERY_HELPER_VERIFIED = True
+
+        RECOVERY.verify_fatal_inert_protected_state = verified_fatal_inert_protected_state
         RECOVERY.verify_backup = lambda: {'sha256': RECOVERY.BACKUP_SHA}
         RECOVERY.verify_restore_receipt = lambda *_args: '9' * 64
         RECOVERY.verify_provenance = lambda app_sha, tool_sha, _package: ci_run_ids
