@@ -55,12 +55,15 @@ NGINX_CONFIG_MAX_FILES = 256
 NGINX_CONFIG_MAX_DEPTH = 32
 NGINX_CONFIG_MAX_EXPANDED_NODES = 20000
 PHP_RUNTIME_LAUNCHER_DEST = Path("/usr/local/bin/wpcaregrid-php")
+PHP_RUNTIME_LAUNCHER_ARTIFACT = Path("/home/deploy/.private/wpcg-runtime-launcher-6d91e5e1.sh")
+PHP_RUNTIME_LAUNCHER_ROLLBACK = Path("/var/lib/wpcaregrid/runtime-launcher-rollback-4e769922.sh")
 SUPERVISOR_CONFIG = Path("/etc/supervisor/conf.d/wpcaregrid.conf")
 OLD_CRON = "* * * * * cd /var/www/wpcaregrid && php artisan schedule:run >> /dev/null 2>&1"
 GUARDED_CRON = "* * * * * /usr/local/bin/wpcaregrid-scheduler >> /dev/null 2>&1"
 STAGING_DB = "wpcaregrid"
 SCHEDULER_SOURCE_SHA256 = "de962446f29dea5bf13e33be6653ec77518ff81f48d5af1c1baec1335253885c"
 PHP_RUNTIME_LAUNCHER_SHA256 = "6d91e5e12ae69a6c96eb669bf06f8688adee4df58a101a5b468d1169c77167cc"
+PHP_RUNTIME_LAUNCHER_PREVIOUS_SHA256 = "4e7699229435e1fe21d1b436c8e10e44901ad5794c1b16cad0df18f7778d264c"
 SCHEDULER_RUNTIME_SOURCE_SHA256 = "94470bbd9f13cc383723c17d4686e77aff0d5d13d5eb3290e5888911c776e5d4"
 WORKER_COMMANDS = {
     "wpcaregrid-default": "/usr/local/bin/wpcaregrid-php /var/www/wpcaregrid/artisan queue:work database --queue=default --sleep=3 --tries=3 --backoff=60 --timeout=120 --max-time=3600 --memory=256",
@@ -308,6 +311,15 @@ def scheduler_lock_init():
         os.close(fd)
 
 
+def scheduler_lock_check():
+    import grp
+    import pwd
+
+    info = require_regular(SCHEDULER_LOCK, owner=pwd.getpwnam("deploy").pw_uid)
+    if info.st_gid != grp.getgrnam("www-data").gr_gid or stat.S_IMODE(info.st_mode) != 0o660:
+        raise ValueError("scheduler lock permissions invalid")
+
+
 def install_scheduler():
     import pwd
 
@@ -479,6 +491,291 @@ def atomic_root_file(path, data, *, mode=0o644):
             raise
     finally:
         os.close(directory_fd)
+
+
+class FatalInertRecoveryRefusal(ValueError):
+    """Known FATAL_INERT refusal whose fixed diagnostic must reach the caller."""
+
+
+def _recovery_refuse(code):
+    """Raise one fixed, non-sensitive FATAL_INERT recovery refusal code."""
+    allowed = {
+        "FATAL_INERT_MARKERS_INVALID", "FATAL_INERT_NGINX_CONFIG_INVALID",
+        "FATAL_INERT_HTTP_GATE_OPEN", "FATAL_INERT_SUPERVISOR_CONTRACT_INVALID",
+        "FATAL_INERT_SCHEDULER_CONTRACT_INVALID",
+        "FATAL_INERT_WORKER_STATE_INVALID", "FATAL_INERT_WORKER_PID_PRESENT",
+        "FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE", "FATAL_INERT_CONSUMER_PRESENT",
+        "FATAL_INERT_ARTIFACT_INVALID", "FATAL_INERT_ARTIFACT_HASH_MISMATCH",
+        "FATAL_INERT_DESTINATION_INVALID", "FATAL_INERT_ROLLBACK_EVIDENCE_INVALID",
+        "FATAL_INERT_PUBLISH_FAILED", "FATAL_INERT_POSTCHECK_FAILED",
+    }
+    if code not in allowed:
+        code = "FATAL_INERT_POSTCHECK_FAILED"
+    raise FatalInertRecoveryRefusal(code)
+
+
+def _read_private_launcher_artifact(*, deploy_uid=None, deploy_gid=None):
+    """Read only the fixed deploy-owned 0600 artifact below its private directory."""
+    import grp
+    import pwd
+
+    if deploy_uid is None or deploy_gid is None:
+        try:
+            deploy = pwd.getpwnam("deploy")
+            deploy_group = grp.getgrnam("deploy")
+            deploy_uid, deploy_gid = deploy.pw_uid, deploy_group.gr_gid
+        except (KeyError, OSError):
+            _recovery_refuse("FATAL_INERT_ARTIFACT_INVALID")
+    try:
+        directory_fd = open_directory(PHP_RUNTIME_LAUNCHER_ARTIFACT.parent)
+    except OSError:
+        _recovery_refuse("FATAL_INERT_ARTIFACT_INVALID")
+    try:
+        directory = os.fstat(directory_fd)
+        if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != deploy_uid
+                or directory.st_gid != deploy_gid or stat.S_IMODE(directory.st_mode) != 0o700):
+            _recovery_refuse("FATAL_INERT_ARTIFACT_INVALID")
+        try:
+            fd = os.open(PHP_RUNTIME_LAUNCHER_ARTIFACT.name,
+                         os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory_fd)
+        except OSError:
+            _recovery_refuse("FATAL_INERT_ARTIFACT_INVALID")
+        try:
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != deploy_uid
+                    or info.st_gid != deploy_gid or stat.S_IMODE(info.st_mode) != 0o600
+                    or info.st_nlink != 1 or info.st_size > 8192):
+                _recovery_refuse("FATAL_INERT_ARTIFACT_INVALID")
+            data = bytearray()
+            while len(data) <= 8192:
+                block = os.read(fd, min(4096, 8193 - len(data)))
+                if not block:
+                    break
+                data.extend(block)
+            if len(data) != info.st_size or len(data) > 8192:
+                _recovery_refuse("FATAL_INERT_ARTIFACT_INVALID")
+            result = bytes(data)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(directory_fd)
+    if hashlib.sha256(result).hexdigest() != PHP_RUNTIME_LAUNCHER_SHA256:
+        _recovery_refuse("FATAL_INERT_ARTIFACT_HASH_MISMATCH")
+    if (not result.startswith(b"#!/usr/bin/env bash\n")
+            or b"/etc/nginx/snippets/wpcaregrid-staging-runtime.conf" not in result
+            or b"workers-disabled" not in result or b"scheduler-paused" not in result):
+        _recovery_refuse("FATAL_INERT_ARTIFACT_INVALID")
+    return result
+
+
+def _launcher_consumer_argv(argv):
+    """Return whether argv could execute this app's queue or scheduler work."""
+    if not argv:
+        return False
+    flattened = "\0".join(argv)
+    if re.search(r"(?:^|[/\\\s\0])artisan(?:$|[\s\0])", flattened):
+        return True
+    return re.search(
+        r"(?<![A-Za-z0-9_:-])(?:queue:(?:work|listen)|horizon(?::[A-Za-z0-9:_-]+)?|schedule:(?:run|work))(?![A-Za-z0-9_:-])",
+        flattened,
+    ) is not None
+
+
+def _no_live_runtime_consumers(proc_root="/proc", *, pid=os.getpid()):
+    """Inspect process command lines without ever returning or logging their contents."""
+    try:
+        entries = list(os.scandir(proc_root))
+    except OSError:
+        _recovery_refuse("FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE")
+    for entry in entries:
+        if not entry.name.isdecimal() or int(entry.name) == pid:
+            continue
+        try:
+            fd = os.open(Path(proc_root, entry.name, "cmdline"), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                raw = os.read(fd, 65537)
+            finally:
+                os.close(fd)
+        except FileNotFoundError:
+            continue  # The process exited during the bounded census.
+        except OSError:
+            _recovery_refuse("FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE")
+        if len(raw) > 65536:
+            _recovery_refuse("FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE")
+        argv = [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
+        if _launcher_consumer_argv(argv):
+            _recovery_refuse("FATAL_INERT_CONSUMER_PRESENT")
+    return True
+
+
+def _verify_fatal_inert_preconditions():
+    for marker_path in (GATE, WORKERS_DISABLED, SCHEDULER_PAUSE):
+        try:
+            info = require_regular(marker_path, owner=0)
+        except (OSError, ValueError):
+            _recovery_refuse("FATAL_INERT_MARKERS_INVALID")
+        if info.st_gid != 0 or stat.S_IMODE(info.st_mode) != 0o644 or info.st_size != 0:
+            _recovery_refuse("FATAL_INERT_MARKERS_INVALID")
+    try:
+        nginx_gate_check()
+    except Exception:
+        _recovery_refuse("FATAL_INERT_NGINX_CONFIG_INVALID")
+    try:
+        http = run(["/usr/bin/curl", "--silent", "--show-error", "--output", "/dev/null",
+                    "--write-out", "%{http_code}", "--connect-timeout", "5", "--max-time", "15",
+                    "https://staging.wpcaregrid.com/up"], check=False, stdout=subprocess.PIPE)
+    except Exception:
+        _recovery_refuse("FATAL_INERT_HTTP_GATE_OPEN")
+    if http.returncode or (http.stdout or "").strip() != "503":
+        _recovery_refuse("FATAL_INERT_HTTP_GATE_OPEN")
+    try:
+        supervisor_runtime_contract()
+    except Exception:
+        _recovery_refuse("FATAL_INERT_SUPERVISOR_CONTRACT_INVALID")
+    _verify_scheduler_paused_contract()
+    for name in sorted(WORKERS):
+        try:
+            status = run(["/usr/bin/supervisorctl", "status", name], check=False,
+                         stdout=subprocess.PIPE)
+            normalized = normalize_worker_status(name, status.stdout or "")
+        except Exception:
+            _recovery_refuse("FATAL_INERT_WORKER_STATE_INVALID")
+        if status.returncode != 3 or normalized != f"{name} FATAL\n":
+            _recovery_refuse("FATAL_INERT_WORKER_STATE_INVALID")
+        try:
+            pid_result = run(["/usr/bin/supervisorctl", "pid", name], check=False,
+                             stdout=subprocess.PIPE)
+        except Exception:
+            _recovery_refuse("FATAL_INERT_WORKER_PID_PRESENT")
+        if pid_result.returncode not in (0, 3) or (pid_result.stdout or "").strip() != "0":
+            _recovery_refuse("FATAL_INERT_WORKER_PID_PRESENT")
+    try:
+        _no_live_runtime_consumers()
+    except ValueError as error:
+        if str(error) in {"FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE", "FATAL_INERT_CONSUMER_PRESENT"}:
+            raise
+        _recovery_refuse("FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE")
+    except Exception:
+        _recovery_refuse("FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE")
+
+
+def _verify_scheduler_paused_contract():
+    """Prove the scheduler is durably paused and cron only invokes its guarded wrapper."""
+    try:
+        scheduler_lock_check()
+        crontab = run(["/usr/bin/crontab", "-u", "www-data", "-l"], check=False,
+                      stdout=subprocess.PIPE)
+        lines = (crontab.stdout or "").splitlines()
+        if (crontab.returncode != 0 or lines.count(GUARDED_CRON) != 1
+                or any("schedule:run" in line or "schedule:work" in line for line in lines)):
+            _recovery_refuse("FATAL_INERT_SCHEDULER_CONTRACT_INVALID")
+        info = SCHEDULER_DEST.lstat()
+        if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                or info.st_uid != 0 or info.st_gid != 0
+                or stat.S_IMODE(info.st_mode) != 0o755 or info.st_nlink != 1):
+            _recovery_refuse("FATAL_INERT_SCHEDULER_CONTRACT_INVALID")
+        scheduler_data = trusted_file_bytes(SCHEDULER_DEST, mode=0o755, max_size=32768)
+        if (hashlib.sha256(scheduler_data).hexdigest() != SCHEDULER_RUNTIME_SOURCE_SHA256
+                or not scheduler_data.startswith(b"#!/usr/bin/env bash\n")
+                or b"scheduler-paused" not in scheduler_data
+                or b"exec /usr/local/bin/wpcaregrid-php /var/www/wpcaregrid/artisan schedule:run" not in scheduler_data):
+            _recovery_refuse("FATAL_INERT_SCHEDULER_CONTRACT_INVALID")
+    except ValueError as error:
+        if str(error) == "FATAL_INERT_SCHEDULER_CONTRACT_INVALID":
+            raise
+        _recovery_refuse("FATAL_INERT_SCHEDULER_CONTRACT_INVALID")
+    except Exception:
+        _recovery_refuse("FATAL_INERT_SCHEDULER_CONTRACT_INVALID")
+
+
+def _create_launcher_rollback_evidence(data):
+    """Create or verify the non-overwriting root-only copy of the known old launcher."""
+    if hashlib.sha256(data).hexdigest() != PHP_RUNTIME_LAUNCHER_PREVIOUS_SHA256:
+        _recovery_refuse("FATAL_INERT_ROLLBACK_EVIDENCE_INVALID")
+    directory_fd = None
+    try:
+        directory_fd = open_root_trusted_directory(PHP_RUNTIME_LAUNCHER_ROLLBACK.parent)
+        parent = os.fstat(directory_fd)
+        if parent.st_uid != 0 or parent.st_mode & 0o022:
+            _recovery_refuse("FATAL_INERT_ROLLBACK_EVIDENCE_INVALID")
+        name = PHP_RUNTIME_LAUNCHER_ROLLBACK.name
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory_fd)
+        except FileNotFoundError:
+            fd = None
+        if fd is not None:
+            try:
+                info = os.fstat(fd)
+                existing = os.read(fd, 8193)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0
+                        or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size != len(existing)
+                        or hashlib.sha256(existing).hexdigest() != PHP_RUNTIME_LAUNCHER_PREVIOUS_SHA256):
+                    _recovery_refuse("FATAL_INERT_ROLLBACK_EVIDENCE_INVALID")
+            finally:
+                os.close(fd)
+        else:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                         dir_fd=directory_fd)
+            try:
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(fd, view):]
+                os.fchown(fd, 0, 0)
+                os.fchmod(fd, 0o600)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.fsync(directory_fd)
+    except Exception:
+        _recovery_refuse("FATAL_INERT_ROLLBACK_EVIDENCE_INVALID")
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def recover_runtime_launcher_fatal_inert():
+    """Install only the pinned launcher while both fenced Supervisor programs are inert."""
+    _verify_fatal_inert_preconditions()
+    launcher_data = _read_private_launcher_artifact()
+    try:
+        current_info = PHP_RUNTIME_LAUNCHER_DEST.lstat()
+        if (not stat.S_ISREG(current_info.st_mode) or stat.S_ISLNK(current_info.st_mode)
+                or current_info.st_uid != 0 or current_info.st_gid != 0
+                or stat.S_IMODE(current_info.st_mode) != 0o755 or current_info.st_nlink != 1):
+            _recovery_refuse("FATAL_INERT_DESTINATION_INVALID")
+        current_data = trusted_file_bytes(PHP_RUNTIME_LAUNCHER_DEST, mode=0o755, max_size=8192)
+    except (OSError, ValueError):
+        _recovery_refuse("FATAL_INERT_DESTINATION_INVALID")
+    current_hash = hashlib.sha256(current_data).hexdigest()
+    if current_hash not in {PHP_RUNTIME_LAUNCHER_PREVIOUS_SHA256, PHP_RUNTIME_LAUNCHER_SHA256}:
+        _recovery_refuse("FATAL_INERT_DESTINATION_INVALID")
+    if current_hash == PHP_RUNTIME_LAUNCHER_PREVIOUS_SHA256:
+        _create_launcher_rollback_evidence(current_data)
+        try:
+            atomic_root_file(PHP_RUNTIME_LAUNCHER_DEST, launcher_data, mode=0o755)
+        except Exception:
+            _recovery_refuse("FATAL_INERT_PUBLISH_FAILED")
+    try:
+        final_info = PHP_RUNTIME_LAUNCHER_DEST.lstat()
+        if (not stat.S_ISREG(final_info.st_mode) or stat.S_ISLNK(final_info.st_mode)
+                or final_info.st_uid != 0 or final_info.st_gid != 0
+                or stat.S_IMODE(final_info.st_mode) != 0o755 or final_info.st_nlink != 1
+                or hashlib.sha256(trusted_file_bytes(
+                    PHP_RUNTIME_LAUNCHER_DEST, mode=0o755, max_size=8192
+                )).hexdigest() != PHP_RUNTIME_LAUNCHER_SHA256):
+            _recovery_refuse("FATAL_INERT_POSTCHECK_FAILED")
+        _verify_fatal_inert_preconditions()
+    except Exception:
+        _recovery_refuse("FATAL_INERT_POSTCHECK_FAILED")
+    return {
+        "operation": "runtime-launcher-recover-fatal-inert",
+        "state": "FATAL_INERT",
+        "launcher_sha256": PHP_RUNTIME_LAUNCHER_SHA256,
+        "workers": {name: "FATAL" for name in sorted(WORKERS)},
+        "live_consumers": 0,
+        "maintenance_http": 503,
+        "supervisor_control": "NOT_INVOKED",
+    }
 
 
 def php_profile(profile):
@@ -2913,6 +3210,9 @@ def dispatch(args):
         php_runtime_preflight(args[1], allow_legacy_supervisor=True)
     elif args == ["php-runtime-install"]:
         install_runtime_assets()
+    elif args == ["runtime-launcher-recover-fatal-inert"]:
+        evidence = recover_runtime_launcher_fatal_inert()
+        sys.stdout.write(json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n")
     elif len(args) == 2 and args[0] == "php-runtime-switch":
         switch_php_runtime(args[1])
     elif args == ["php-runtime-supervisor-update"]:
@@ -2927,12 +3227,7 @@ def dispatch(args):
         if not re.fullmatch(r"[0-9a-f]{40}", args[1]) or read_approved_rollback() != args[1]:
             raise ValueError("rollback target is not administrator-approved")
     elif args == ["scheduler-lock-check"]:
-        import grp
-        import pwd
-
-        info = require_regular(SCHEDULER_LOCK, owner=pwd.getpwnam("deploy").pw_uid)
-        if info.st_gid != grp.getgrnam("www-data").gr_gid or stat.S_IMODE(info.st_mode) != 0o660:
-            raise ValueError("scheduler lock permissions invalid")
+        scheduler_lock_check()
     elif args == ["scheduler-resume"]:
         marker(SCHEDULER_PAUSE, False)
     elif args == ["gate-dir-init"]:
@@ -3000,6 +3295,9 @@ def main():
             print(f"PREFLIGHT_FAILURE={exc.code}", file=sys.stderr)
         else:
             print("wpcaregrid deploy helper: operation refused or failed", file=sys.stderr)
+        return 1
+    except FatalInertRecoveryRefusal as error:
+        print(f"FATAL_INERT_RECOVERY=REFUSED;CODE={error}", file=sys.stderr)
         return 1
     except Exception:
         # Never echo arguments, paths, database names, or external command output.

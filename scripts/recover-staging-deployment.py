@@ -20,7 +20,9 @@ BASELINE_SHA = '761e0e5d37558da808ac961ca2d2a68b4ffab0db'
 BRANCH = 'claude/ecstatic-wozniak-oemyuf'
 URL = 'https://staging.wpcaregrid.com'
 HELPER = '/usr/local/sbin/wpcaregrid-deploy-priv'
-HELPER_SHA = '97249c17461ce8ca6450887c5daa5f30337e374b939d8f79ffc6c0e8b21a58b3'
+HELPER_SHA = 'ea427c28ff2fe754646c558883e821fe98950b15af96a656967b6e8472013833'
+RUNTIME_LAUNCHER = Path('/usr/local/bin/wpcaregrid-php')
+RUNTIME_LAUNCHER_SHA = '6d91e5e12ae69a6c96eb669bf06f8688adee4df58a101a5b468d1169c77167cc'
 PHP = '/usr/bin/php8.4'
 COMPOSER = Path('/usr/local/bin/composer')
 COMPOSER_SHA = '7a2d379d5b8ffdaa028580ef26494c36d2feef4b178d3dd1473a4dbc5e17c8d6'
@@ -40,6 +42,16 @@ MIGRATION_FILES = (
 MIGRATIONS = tuple(item[:-4] for item in MIGRATION_FILES)
 TABLES = ('transition_v2_requests', 'transition_history_events')
 WORKERS = ('wpcaregrid-default', 'wpcaregrid-backups')
+FATAL_INERT_REFUSAL_CODES = frozenset({
+    'FATAL_INERT_MARKERS_INVALID', 'FATAL_INERT_NGINX_CONFIG_INVALID',
+    'FATAL_INERT_HTTP_GATE_OPEN', 'FATAL_INERT_SUPERVISOR_CONTRACT_INVALID',
+    'FATAL_INERT_SCHEDULER_CONTRACT_INVALID', 'FATAL_INERT_WORKER_STATE_INVALID',
+    'FATAL_INERT_WORKER_PID_PRESENT', 'FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE',
+    'FATAL_INERT_CONSUMER_PRESENT', 'FATAL_INERT_ARTIFACT_INVALID',
+    'FATAL_INERT_ARTIFACT_HASH_MISMATCH', 'FATAL_INERT_DESTINATION_INVALID',
+    'FATAL_INERT_ROLLBACK_EVIDENCE_INVALID', 'FATAL_INERT_PUBLISH_FAILED',
+    'FATAL_INERT_POSTCHECK_FAILED',
+})
 COLS = {
     TABLES[0]: [('id','bigint unsigned','NO',False,'auto_increment'),('request_id','char(36)','NO',False,''),('request_digest','char(64)','NO',False,''),('operation','varchar(32)','NO',False,''),('operation_id','char(36)','NO',False,''),('generation','bigint unsigned','NO',False,''),('source_tuple_digest','char(64)','YES',False,''),('target_tuple_digest','char(64)','NO',False,''),('history_sequence','bigint unsigned','NO',False,''),('receipt_payload','longtext','NO',False,''),('receipt_digest','char(64)','NO',False,''),('committed_at','timestamp(6)','NO',False,''),('created_at','timestamp(6)','YES',False,''),('updated_at','timestamp(6)','YES',False,'')],
     TABLES[1]: [('id','bigint unsigned','NO',False,'auto_increment'),('event_sequence','bigint unsigned','NO',False,''),('operation_id','char(36)','NO',False,''),('generation','bigint unsigned','NO',False,''),('request_id','char(36)','NO',False,''),('request_digest','char(64)','NO',False,''),('event_type','varchar(32)','NO',False,''),('source_tuple_digest','char(64)','YES',False,''),('target_tuple_digest','char(64)','NO',False,''),('occurred_at','timestamp(6)','NO',False,''),('created_at','timestamp(6)','YES',False,''),('updated_at','timestamp(6)','YES',False,'')],
@@ -284,9 +296,86 @@ def verify_protected_state():
     if cache.is_symlink() or not cache.is_file(): stop('config_cache_unavailable')
 
 
+def verify_fatal_inert_protected_state():
+    """Recovery-only precondition: distinguish FATAL_INERT from Supervisor STOPPED."""
+    import pwd
+    if os.geteuid()!=pwd.getpwnam('deploy').pw_uid: stop('must_run_as_deploy')
+    if Path.cwd().resolve()!=APP: stop('application_directory_mismatch')
+    if not all(marker_ok(p) for p in (GATE,WORKER_MARKER,SCHEDULER_MARKER)): stop('safety_marker_missing')
+    helper=Path(HELPER)
+    try: helper_stat=helper.lstat()
+    except OSError: stop('helper_unavailable')
+    if (not stat.S_ISREG(helper_stat.st_mode) or stat.S_ISLNK(helper_stat.st_mode)
+            or helper_stat.st_uid!=0 or helper_stat.st_gid!=0
+            or stat.S_IMODE(helper_stat.st_mode)!=0o755 or sha256(helper)!=HELPER_SHA):
+        stop('helper_integrity_failed')
+    verify_http_gate()
+    for worker in WORKERS:
+        out=run(['/usr/bin/sudo','-n',HELPER,'worker','status',worker]).stdout.strip()
+        if not re.fullmatch(re.escape(worker)+r'\s+FATAL',out): stop('worker_not_fatal_inert')
+    env=APP/'.env'
+    try: st=env.lstat()
+    except OSError: stop('environment_file_unavailable')
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode) or st.st_uid!=os.geteuid() or stat.S_IMODE(st.st_mode)!=0o600: stop('environment_file_metadata_invalid')
+    cache=APP/'bootstrap/cache/config.php'
+    if cache.is_symlink() or not cache.is_file(): stop('config_cache_unavailable')
+
+
 def verify_http_gate():
     status=run(['/usr/bin/curl','--silent','--show-error','--output','/dev/null','--write-out','%{http_code}','--connect-timeout','5','--max-time','15',f'{URL}/up'],timeout=20).stdout.strip()
     if status!='503': stop('maintenance_gate_not_effective')
+
+
+def phase_runtime_launcher_recovery(app_sha,tool_sha,package_dir):
+    """Install only the approved launcher without starting or reconfiguring services."""
+    verify_fatal_inert_protected_state()
+    backup=verify_backup()
+    runs=verify_provenance(app_sha,tool_sha,package_dir)
+    result=run(['/usr/bin/sudo','-n',HELPER,'runtime-launcher-recover-fatal-inert'],timeout=60,check=False)
+    if result is None:
+        stop('launcher_recovery_unavailable')
+    if result.returncode:
+        stderr=result.stderr
+        if len(stderr)>2048:
+            stop('launcher_recovery_failed')
+        match=re.fullmatch(r'FATAL_INERT_RECOVERY=REFUSED;CODE=([A-Z_]+)\n?',stderr)
+        if match and match.group(1) in FATAL_INERT_REFUSAL_CODES:
+            stop(match.group(1).lower())
+        stop('launcher_recovery_failed')
+    if result.stderr or len(result.stdout)>4096:
+        stop('launcher_recovery_evidence_invalid')
+    try: evidence=json.loads(result.stdout)
+    except Exception: stop('launcher_recovery_evidence_invalid')
+    expected={
+        'operation':'runtime-launcher-recover-fatal-inert',
+        'state':'FATAL_INERT',
+        'launcher_sha256':RUNTIME_LAUNCHER_SHA,
+        'workers':{name:'FATAL' for name in sorted(WORKERS)},
+        'live_consumers':0,
+        'maintenance_http':503,
+        'supervisor_control':'NOT_INVOKED',
+    }
+    if evidence!=expected: stop('launcher_recovery_evidence_invalid')
+    verify_fatal_inert_protected_state()
+    try: launcher_stat=RUNTIME_LAUNCHER.lstat()
+    except OSError: stop('launcher_installation_unverified')
+    if (not stat.S_ISREG(launcher_stat.st_mode) or stat.S_ISLNK(launcher_stat.st_mode)
+            or launcher_stat.st_uid!=0 or launcher_stat.st_gid!=0
+            or stat.S_IMODE(launcher_stat.st_mode)!=0o755
+            or sha256(RUNTIME_LAUNCHER)!=RUNTIME_LAUNCHER_SHA):
+        stop('launcher_installation_unverified')
+    return {
+        'RECOVERY':'LAUNCHER_INSTALLED_GATE_CLOSED',
+        'APPLICATION_SHA':app_sha,
+        'RECOVERY_TOOL_SHA':tool_sha,
+        'APPLICATION_CI_RUN_ID':runs[app_sha],
+        'RECOVERY_TOOL_CI_RUN_ID':runs[tool_sha],
+        'BACKUP_SHA256':backup['sha256'],
+        'WORKER_STATE':'FATAL_INERT',
+        'SCHEDULER':'PAUSED',
+        'MAINTENANCE_GATE':'CLOSED',
+        'SUPERVISOR_CONTROL':'NOT_INVOKED',
+    }
 
 
 def verify_backup():
@@ -454,7 +543,7 @@ def invoke_single_migration(filename):
 
 def main(argv=None):
     parser=argparse.ArgumentParser(allow_abbrev=False)
-    parser.add_argument('phase',choices=('continue-migrations','finalize'))
+    parser.add_argument('phase',choices=('recover-runtime-launcher','continue-migrations','finalize'))
     parser.add_argument('--application-sha',required=True)
     parser.add_argument('--recovery-tool-sha',required=True)
     args=parser.parse_args(argv)
@@ -464,14 +553,21 @@ def main(argv=None):
             try:
                 verify_application_checkout(args.application_sha)
                 package=Path(__file__).resolve().parent
-                result=(phase_migrate if args.phase=='continue-migrations' else phase_finalize)(args.application_sha,args.recovery_tool_sha,package)
+                phase_map={
+                    'recover-runtime-launcher':phase_runtime_launcher_recovery,
+                    'continue-migrations':phase_migrate,
+                    'finalize':phase_finalize,
+                }
+                result=phase_map[args.phase](args.application_sha,args.recovery_tool_sha,package)
             except RecoveryError:
-                try: enforce_fail_closed()
-                except RecoveryError: stop('fail_closed_state_unverified')
+                if args.phase!='recover-runtime-launcher':
+                    try: enforce_fail_closed()
+                    except RecoveryError: stop('fail_closed_state_unverified')
                 raise
             except Exception:
-                try: enforce_fail_closed()
-                except RecoveryError: stop('fail_closed_state_unverified')
+                if args.phase!='recover-runtime-launcher':
+                    try: enforce_fail_closed()
+                    except RecoveryError: stop('fail_closed_state_unverified')
                 stop('unexpected_failure')
         print(json.dumps(result,sort_keys=True,separators=(',',':'))); return 0
     except RecoveryError as error:

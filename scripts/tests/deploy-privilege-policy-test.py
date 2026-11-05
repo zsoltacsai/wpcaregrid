@@ -10,6 +10,7 @@ import shutil
 import socket
 import stat
 import subprocess
+import sys
 import tempfile
 import json
 from contextlib import redirect_stdout, redirect_stderr
@@ -332,6 +333,533 @@ def test_gated_recovery_contract():
     assert "recovery_tool_sha" in source and "application_sha" in source
 
 
+def test_fatal_inert_launcher_recovery():
+    """Recovery-only FATAL_INERT classification never weakens the STOPPED installer contract."""
+    worker_names = sorted(module.WORKERS)
+    assert module.runtime_switch_preconditions(
+        True, True, {name: "STOPPED" for name in module.WORKERS}
+    )
+    assert not module.runtime_switch_preconditions(
+        True, True, {name: "FATAL" for name in module.WORKERS}
+    )
+    assert not module.runtime_switch_preconditions(
+        True, True, {worker_names[0]: "FATAL", worker_names[1]: "STOPPED"}
+    )
+    assert not module.runtime_switch_preconditions(
+        True, True, {worker_names[0]: "FATAL", worker_names[1]: "RUNNING"}
+    )
+
+    consumer = module._launcher_consumer_argv
+    assert consumer(["/usr/local/bin/wpcaregrid-php", "/var/www/wpcaregrid/artisan", "queue:work"])
+    assert consumer(["php8.4", "artisan", "schedule:run"])
+    assert consumer(["php", "artisan", "horizon"])
+    assert consumer(["php8.4", "artisan", "horizon:work"])
+    assert consumer(["/bin/sh", "-c", "php artisan queue:work"])
+    assert consumer(["php8.4", "./artisan", "some:command"])
+    assert not consumer(["supervisord", "-n"])
+    assert not consumer(["nginx", "-g", "daemon off;"])
+
+    if hasattr(module.os, "geteuid"):
+        saved = (module.os.geteuid, module.dispatch, os.environ.copy(), sys.argv[:])
+        try:
+            module.os.geteuid = lambda: 0
+            module.dispatch = lambda _args: module._recovery_refuse("FATAL_INERT_WORKER_STATE_INVALID")
+            sys.argv = [str(HELPER), "runtime-launcher-recover-fatal-inert"]
+            diagnostic = io.StringIO()
+            with redirect_stderr(diagnostic):
+                assert module.main() == 1
+            assert diagnostic.getvalue() == (
+                "FATAL_INERT_RECOVERY=REFUSED;CODE=FATAL_INERT_WORKER_STATE_INVALID\n"
+            )
+        finally:
+            module.os.geteuid, module.dispatch = saved[0], saved[1]
+            os.environ.clear()
+            os.environ.update(saved[2])
+            sys.argv = saved[3]
+
+    if os.name != "nt":
+        launcher_bytes = (ROOT / "scripts/run-php-runtime.sh").read_bytes()
+        original_artifact = module.PHP_RUNTIME_LAUNCHER_ARTIFACT
+        with tempfile.TemporaryDirectory(prefix="wpcg-fatal-inert-artifact-") as temporary:
+            private = Path(temporary) / ".private"
+            private.mkdir(mode=0o700)
+            private.chmod(0o700)
+            artifact = private / original_artifact.name
+            artifact.write_bytes(launcher_bytes)
+            artifact.chmod(0o600)
+            module.PHP_RUNTIME_LAUNCHER_ARTIFACT = artifact
+            try:
+                data = module._read_private_launcher_artifact(
+                    deploy_uid=os.getuid(), deploy_gid=os.getgid()
+                )
+                assert data == launcher_bytes
+                artifact.write_bytes(b"#!/bin/sh\nexit 0\n")
+                try:
+                    with redirect_stderr(io.StringIO()):
+                        module._read_private_launcher_artifact(
+                            deploy_uid=os.getuid(), deploy_gid=os.getgid()
+                        )
+                except ValueError as error:
+                    assert str(error) == "FATAL_INERT_ARTIFACT_HASH_MISMATCH"
+                else:
+                    raise AssertionError("wrong launcher hash was accepted")
+                artifact.unlink()
+                artifact.write_bytes(launcher_bytes)
+                artifact.chmod(0o644)
+                try:
+                    with redirect_stderr(io.StringIO()):
+                        module._read_private_launcher_artifact(
+                            deploy_uid=os.getuid(), deploy_gid=os.getgid()
+                        )
+                except ValueError as error:
+                    assert str(error) == "FATAL_INERT_ARTIFACT_INVALID"
+                else:
+                    raise AssertionError("group/world-readable launcher artifact was accepted")
+                artifact.unlink()
+                try:
+                    with redirect_stderr(io.StringIO()):
+                        module._read_private_launcher_artifact(
+                            deploy_uid=os.getuid(), deploy_gid=os.getgid()
+                        )
+                except ValueError as error:
+                    assert str(error) == "FATAL_INERT_ARTIFACT_INVALID"
+                else:
+                    raise AssertionError("missing launcher artifact was accepted")
+                artifact.unlink(missing_ok=True)
+                artifact.symlink_to(ROOT / "scripts/run-php-runtime.sh")
+                try:
+                    module._read_private_launcher_artifact(
+                        deploy_uid=os.getuid(), deploy_gid=os.getgid()
+                    )
+                except (ValueError, OSError):
+                    pass
+                else:
+                    raise AssertionError("launcher artifact symlink was accepted")
+            finally:
+                module.PHP_RUNTIME_LAUNCHER_ARTIFACT = original_artifact
+
+        with tempfile.TemporaryDirectory(prefix="wpcg-fatal-inert-proc-") as temporary:
+            proc = Path(temporary)
+            (proc / "123").mkdir()
+            (proc / "123/cmdline").write_bytes(
+                b"php\0/var/www/wpcaregrid/artisan\0queue:work\0--token=synthetic\0"
+            )
+            (proc / "124").mkdir()
+            (proc / "124/cmdline").write_bytes(b"nginx\0-g\0daemon off;\0")
+            try:
+                with redirect_stderr(io.StringIO()):
+                    module._no_live_runtime_consumers(str(proc), pid=999)
+            except ValueError as error:
+                assert str(error) == "FATAL_INERT_CONSUMER_PRESENT"
+            else:
+                raise AssertionError("live queue consumer was not detected")
+            (proc / "123/cmdline").write_bytes(b"php-fpm8.4\0")
+            assert module._no_live_runtime_consumers(str(proc), pid=999)
+
+    original = {
+        "require_regular": module.require_regular,
+        "nginx_gate_check": module.nginx_gate_check,
+        "supervisor_runtime_contract": module.supervisor_runtime_contract,
+        "scheduler_contract": module._verify_scheduler_paused_contract,
+        "run": module.run,
+        "census": module._no_live_runtime_consumers,
+    }
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[0] == "/usr/bin/curl":
+            return subprocess.CompletedProcess(argv, 0, stdout="503")
+        if argv[1:3] == ["status", argv[2]]:
+            return subprocess.CompletedProcess(argv, 3, stdout=f"{argv[2]} FATAL\n")
+        if argv[1:3] == ["pid", argv[2]]:
+            return subprocess.CompletedProcess(argv, 3, stdout="0\n")
+        raise AssertionError(f"unexpected operation in recovery preflight: {argv!r}")
+
+    module.require_regular = lambda *_args, **_kwargs: type(
+        "MarkerStat", (), {"st_gid": 0, "st_mode": stat.S_IFREG | 0o644, "st_size": 0}
+    )()
+    module.nginx_gate_check = lambda: None
+    module.supervisor_runtime_contract = lambda **_kwargs: None
+    module._verify_scheduler_paused_contract = lambda: None
+    module.run = fake_run
+    module._no_live_runtime_consumers = lambda: True
+    try:
+        module._verify_fatal_inert_preconditions()
+        assert len([call for call in calls if call[1] == "status"]) == 2
+        assert len([call for call in calls if call[1] == "pid"]) == 2
+        assert not any(any(token in {"start", "stop", "restart", "reload", "reread", "update"} for token in call) for call in calls)
+
+        def diagnostic_run(*, states=None, pids=None, http="503"):
+            states = states or {name: "FATAL" for name in worker_names}
+            pids = pids or {name: "0" for name in worker_names}
+            def run(argv, **_kwargs):
+                if argv[0] == "/usr/bin/curl":
+                    return subprocess.CompletedProcess(argv, 0, stdout=http)
+                name = argv[-1]
+                if argv[1] == "status":
+                    state = states.get(name, "FATAL")
+                    code = 3 if state == "FATAL" else 0
+                    return subprocess.CompletedProcess(argv, code, stdout=f"{name} {state}\n")
+                return subprocess.CompletedProcess(argv, 3, stdout=f"{pids.get(name, '0')}\n")
+            return run
+
+        for states, pids, http, census_error, marker_error, expected_code in (
+            ({worker_names[0]: "FATAL", worker_names[1]: "STOPPED"}, None, "503", False, False, "FATAL_INERT_WORKER_STATE_INVALID"),
+            ({worker_names[0]: "FATAL", worker_names[1]: "RUNNING pid 44"}, None, "503", False, False, "FATAL_INERT_WORKER_STATE_INVALID"),
+            (None, {worker_names[0]: "44", worker_names[1]: "0"}, "503", False, False, "FATAL_INERT_WORKER_PID_PRESENT"),
+            (None, None, "200", False, False, "FATAL_INERT_HTTP_GATE_OPEN"),
+            (None, None, "503", True, False, "FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE"),
+            (None, None, "503", False, True, "FATAL_INERT_MARKERS_INVALID"),
+        ):
+            module.run = diagnostic_run(states=states, pids=pids, http=http)
+            if census_error:
+                module._no_live_runtime_consumers = lambda: module._recovery_refuse(
+                    "FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE"
+                )
+            else:
+                module._no_live_runtime_consumers = lambda: True
+            if marker_error:
+                module.require_regular = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    OSError("synthetic marker failure")
+                )
+            else:
+                module.require_regular = lambda *_args, **_kwargs: type(
+                    "MarkerStat", (), {"st_gid": 0, "st_mode": stat.S_IFREG | 0o644, "st_size": 0}
+                )()
+            with redirect_stderr(io.StringIO()):
+                try:
+                    module._verify_fatal_inert_preconditions()
+                except ValueError as error:
+                    assert str(error) == expected_code, (expected_code, str(error))
+                else:
+                    raise AssertionError(f"unsafe FATAL_INERT state accepted: {expected_code}")
+    finally:
+        for name, value in original.items():
+            if name == "census":
+                module._no_live_runtime_consumers = value
+            elif name == "scheduler_contract":
+                module._verify_scheduler_paused_contract = value
+            else:
+                setattr(module, name, value)
+
+    scheduler_bytes = (ROOT / "scripts/run-scheduler.sh").read_bytes()
+    scheduler_saved = {
+        "lock_check": module.scheduler_lock_check,
+        "dest": module.SCHEDULER_DEST,
+        "hash": module.SCHEDULER_RUNTIME_SOURCE_SHA256,
+        "trusted": module.trusted_file_bytes,
+        "run": module.run,
+    }
+    class SyntheticSchedulerPath:
+        def lstat(self):
+            return type("SchedulerStat", (), {
+                "st_mode": stat.S_IFREG | 0o755, "st_uid": 0, "st_gid": 0, "st_nlink": 1
+            })()
+    try:
+        module.scheduler_lock_check = lambda: None
+        module.SCHEDULER_DEST = SyntheticSchedulerPath()
+        module.SCHEDULER_RUNTIME_SOURCE_SHA256 = hashlib.sha256(scheduler_bytes).hexdigest()
+        module.trusted_file_bytes = lambda *_args, **_kwargs: scheduler_bytes
+        cron = module.GUARDED_CRON + "\n"
+        scheduler_calls = []
+        module.run = lambda argv, **kwargs: (
+            scheduler_calls.append(argv) or subprocess.CompletedProcess(argv, 0, stdout=cron)
+        )
+        module._verify_scheduler_paused_contract()
+        assert scheduler_calls == [["/usr/bin/crontab", "-u", "www-data", "-l"]]
+        module.run = lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, 0, stdout=module.GUARDED_CRON + "\n" + module.OLD_CRON + "\n"
+        )
+        with redirect_stderr(io.StringIO()):
+            try:
+                module._verify_scheduler_paused_contract()
+            except ValueError as error:
+                assert str(error) == "FATAL_INERT_SCHEDULER_CONTRACT_INVALID"
+            else:
+                raise AssertionError("unguarded cron scheduler command was accepted")
+    finally:
+        module.scheduler_lock_check = scheduler_saved["lock_check"]
+        module.SCHEDULER_DEST = scheduler_saved["dest"]
+        module.SCHEDULER_RUNTIME_SOURCE_SHA256 = scheduler_saved["hash"]
+        module.trusted_file_bytes = scheduler_saved["trusted"]
+        module.run = scheduler_saved["run"]
+
+    installer_saved = {
+        "require": module.require_regular,
+        "run": module.run,
+        "source": module.deploy_source_bytes,
+    }
+    source_reads = []
+    try:
+        module.require_regular = lambda *_args, **_kwargs: type(
+            "MarkerStat", (), {"st_gid": 0, "st_mode": stat.S_IFREG | 0o644, "st_size": 0}
+        )()
+        module.run = lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, 3, stdout=f"{argv[-1]} FATAL\n"
+        )
+        module.deploy_source_bytes = lambda *args, **kwargs: source_reads.append(args) or b""
+        try:
+            module.install_runtime_assets()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("normal runtime installer accepted FATAL workers")
+        assert not source_reads, "normal runtime installer read/published assets before STOPPED precondition"
+    finally:
+        module.require_regular = installer_saved["require"]
+        module.run = installer_saved["run"]
+        module.deploy_source_bytes = installer_saved["source"]
+
+    class SyntheticLauncherPath:
+        def __init__(self, content, *, mode=0o755, owner=0, group=0, links=1):
+            self.content = content
+            self.mode, self.owner, self.group, self.links = mode, owner, group, links
+
+        def lstat(self):
+            return type("LauncherStat", (), {
+                "st_mode": stat.S_IFREG | self.mode, "st_uid": self.owner,
+                "st_gid": self.group, "st_nlink": self.links
+            })()
+
+        def read_bytes(self):
+            return self.content
+
+    launcher_bytes = (ROOT / "scripts/run-php-runtime.sh").read_bytes()
+    old_bytes = b"synthetic prior pinned launcher bytes\n"
+    prior_hashes = {
+        "destination": module.PHP_RUNTIME_LAUNCHER_DEST,
+        "new_hash": module.PHP_RUNTIME_LAUNCHER_SHA256,
+        "old_hash": module.PHP_RUNTIME_LAUNCHER_PREVIOUS_SHA256,
+        "verify": module._verify_fatal_inert_preconditions,
+        "artifact": module._read_private_launcher_artifact,
+        "backup": module._create_launcher_rollback_evidence,
+        "publish": module.atomic_root_file,
+        "trusted_read": module.trusted_file_bytes,
+    }
+    try:
+        synthetic_destination = SyntheticLauncherPath(old_bytes)
+        backup_calls = []
+        publish_calls = []
+        module.PHP_RUNTIME_LAUNCHER_DEST = synthetic_destination
+        module.PHP_RUNTIME_LAUNCHER_SHA256 = hashlib.sha256(launcher_bytes).hexdigest()
+        module.PHP_RUNTIME_LAUNCHER_PREVIOUS_SHA256 = hashlib.sha256(old_bytes).hexdigest()
+        module._verify_fatal_inert_preconditions = lambda: True
+        module._read_private_launcher_artifact = lambda: launcher_bytes
+        module._create_launcher_rollback_evidence = lambda data: backup_calls.append(data)
+        trusted_reads = []
+        def bounded_trusted_read(path, *, mode, max_size):
+            trusted_reads.append((path, mode, max_size))
+            data = path.content
+            if len(data) > max_size:
+                raise ValueError("synthetic oversized launcher")
+            return data
+        module.trusted_file_bytes = bounded_trusted_read
+
+        def publish(path, data, *, mode):
+            publish_calls.append((path, data, mode))
+            synthetic_destination.content = data
+
+        module.atomic_root_file = publish
+        result = module.recover_runtime_launcher_fatal_inert()
+        assert backup_calls == [old_bytes]
+        assert publish_calls == [(synthetic_destination, launcher_bytes, 0o755)]
+        assert synthetic_destination.content == launcher_bytes
+        assert result["state"] == "FATAL_INERT" and result["live_consumers"] == 0
+        assert result["supervisor_control"] == "NOT_INVOKED"
+        assert trusted_reads == [(synthetic_destination, 0o755, 8192)] * 2
+
+        # Unexpected destination metadata or content must stop before backup or publication.
+        for invalid_destination in (
+            SyntheticLauncherPath(old_bytes, mode=0o777),
+            SyntheticLauncherPath(b"unapproved launcher\n"),
+            SyntheticLauncherPath(old_bytes, links=2),
+            SyntheticLauncherPath(b"x" * 8193),
+        ):
+            module.PHP_RUNTIME_LAUNCHER_DEST = invalid_destination
+            backup_calls.clear()
+            publish_calls.clear()
+            with redirect_stderr(io.StringIO()):
+                try:
+                    module.recover_runtime_launcher_fatal_inert()
+                except ValueError as error:
+                    assert str(error) == "FATAL_INERT_DESTINATION_INVALID"
+                else:
+                    raise AssertionError("unsafe launcher destination was accepted")
+            assert not backup_calls and not publish_calls
+        module.PHP_RUNTIME_LAUNCHER_DEST = synthetic_destination
+
+        # A second call is idempotent and does not replace an already pinned launcher.
+        publish_calls.clear()
+        backup_calls.clear()
+        result = module.recover_runtime_launcher_fatal_inert()
+        assert not publish_calls and not backup_calls
+        assert result["launcher_sha256"] == module.PHP_RUNTIME_LAUNCHER_SHA256
+
+        # Publication failure preserves the old destination and returns a fixed refusal.
+        synthetic_destination.content = old_bytes
+        module.atomic_root_file = lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("synthetic"))
+        with redirect_stderr(io.StringIO()):
+            try:
+                module.recover_runtime_launcher_fatal_inert()
+            except ValueError as error:
+                assert str(error) == "FATAL_INERT_PUBLISH_FAILED"
+            else:
+                raise AssertionError("publication failure was not fail-closed")
+        assert synthetic_destination.content == old_bytes
+
+        # Post-publication state drift is reported, while the corrected launcher remains installed.
+        checks = []
+        def drift_after_publish():
+            checks.append(True)
+            if len(checks) > 1:
+                raise ValueError("synthetic state drift")
+        module._verify_fatal_inert_preconditions = drift_after_publish
+        module.atomic_root_file = publish
+        with redirect_stderr(io.StringIO()):
+            try:
+                module.recover_runtime_launcher_fatal_inert()
+            except ValueError as error:
+                assert str(error) == "FATAL_INERT_POSTCHECK_FAILED"
+            else:
+                raise AssertionError("post-publication state drift was accepted")
+        assert synthetic_destination.content == launcher_bytes
+    finally:
+        module.PHP_RUNTIME_LAUNCHER_DEST = prior_hashes["destination"]
+        module.PHP_RUNTIME_LAUNCHER_SHA256 = prior_hashes["new_hash"]
+        module.PHP_RUNTIME_LAUNCHER_PREVIOUS_SHA256 = prior_hashes["old_hash"]
+        module._verify_fatal_inert_preconditions = prior_hashes["verify"]
+        module._read_private_launcher_artifact = prior_hashes["artifact"]
+        module._create_launcher_rollback_evidence = prior_hashes["backup"]
+        module.atomic_root_file = prior_hashes["publish"]
+        module.trusted_file_bytes = prior_hashes["trusted_read"]
+
+    # DB migration recovery retains STOPPED-only semantics and has a distinct FATAL_INERT phase.
+    recovery_source = (ROOT / "scripts/recover-staging-deployment.py").read_text(encoding="utf-8")
+    assert "def verify_protected_state()" in recovery_source
+    protected = recovery_source.split("def verify_protected_state():", 1)[1].split("\ndef ", 1)[0]
+    assert r"STOPPED(?:\s|$)" in protected
+    assert "def verify_fatal_inert_protected_state()" in recovery_source
+    assert "def phase_runtime_launcher_recovery(" in recovery_source
+    assert "runtime-launcher-recover-fatal-inert" in recovery_source
+    assert "'recover-runtime-launcher'" in recovery_source
+    assert "HELPER_SHA = 'ea427c28ff2fe754646c558883e821fe98950b15af96a656967b6e8472013833'" in recovery_source
+    assert "runtime-launcher-recover-fatal-inert" in module.dispatch.__code__.co_consts
+    assert "atomic_root_file(SUPERVISOR_CONFIG" not in module.recover_runtime_launcher_fatal_inert.__code__.co_names
+    assert "worker-runtime-enable" not in module.recover_runtime_launcher_fatal_inert.__code__.co_consts
+    assert "gate-off" not in module.recover_runtime_launcher_fatal_inert.__code__.co_consts
+
+    class RecoveryLauncherPath:
+        def lstat(self):
+            return type("LauncherStat", (), {
+                "st_mode": stat.S_IFREG | 0o755, "st_uid": 0, "st_gid": 0
+            })()
+
+    expected_helper_evidence = {
+        "operation": "runtime-launcher-recover-fatal-inert",
+        "state": "FATAL_INERT",
+        "launcher_sha256": RECOVERY.RUNTIME_LAUNCHER_SHA,
+        "workers": {name: "FATAL" for name in sorted(RECOVERY.WORKERS)},
+        "live_consumers": 0,
+        "maintenance_http": 503,
+        "supervisor_control": "NOT_INVOKED",
+    }
+    saved_phase = {
+        "verify": RECOVERY.verify_fatal_inert_protected_state,
+        "backup": RECOVERY.verify_backup,
+        "provenance": RECOVERY.verify_provenance,
+        "run": RECOVERY.run,
+        "launcher": RECOVERY.RUNTIME_LAUNCHER,
+        "sha": RECOVERY.sha256,
+    }
+    phase_calls = []
+    try:
+        RECOVERY.verify_fatal_inert_protected_state = lambda: None
+        RECOVERY.verify_backup = lambda: {"name": "pinned.sql.gz", "sha256": "b" * 64, "bytes": 42}
+        RECOVERY.verify_provenance = lambda app, tool, package: {app: 123, tool: 456}
+        RECOVERY.run = lambda argv, **kwargs: (
+            phase_calls.append(argv) or subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps(expected_helper_evidence)
+            )
+        )
+        RECOVERY.RUNTIME_LAUNCHER = RecoveryLauncherPath()
+        RECOVERY.sha256 = lambda _path: RECOVERY.RUNTIME_LAUNCHER_SHA
+        phase_result = RECOVERY.phase_runtime_launcher_recovery(
+            RECOVERY.APP_SHA, "a" * 40, ROOT
+        )
+        assert phase_result["RECOVERY"] == "LAUNCHER_INSTALLED_GATE_CLOSED"
+        assert phase_result["WORKER_STATE"] == "FATAL_INERT"
+        assert phase_result["SUPERVISOR_CONTROL"] == "NOT_INVOKED"
+        assert phase_calls == [[
+            "/usr/bin/sudo", "-n", RECOVERY.HELPER,
+            "runtime-launcher-recover-fatal-inert",
+        ]]
+        RECOVERY.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout="{}\n")
+        try:
+            RECOVERY.phase_runtime_launcher_recovery(RECOVERY.APP_SHA, "a" * 40, ROOT)
+        except RECOVERY.RecoveryError as error:
+            assert str(error) == "launcher_recovery_evidence_invalid"
+        else:
+            raise AssertionError("malformed FATAL_INERT evidence was accepted")
+        RECOVERY.run = lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, 1, stdout="", stderr="FATAL_INERT_RECOVERY=REFUSED;CODE=FATAL_INERT_WORKER_STATE_INVALID\n"
+        )
+        try:
+            RECOVERY.phase_runtime_launcher_recovery(RECOVERY.APP_SHA, "a" * 40, ROOT)
+        except RECOVERY.RecoveryError as error:
+            assert str(error) == "fatal_inert_worker_state_invalid"
+        else:
+            raise AssertionError("allowlisted helper refusal code was not propagated")
+        raw_stderr = "FATAL_INERT_RECOVERY=REFUSED;CODE=FATAL_INERT_WORKER_STATE_INVALID\nsecret=do-not-leak\n"
+        RECOVERY.run = lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, 1, stdout="", stderr=raw_stderr
+        )
+        try:
+            RECOVERY.phase_runtime_launcher_recovery(RECOVERY.APP_SHA, "a" * 40, ROOT)
+        except RECOVERY.RecoveryError as error:
+            assert str(error) == "launcher_recovery_failed"
+            assert "secret" not in str(error)
+        else:
+            raise AssertionError("untrusted helper stderr was accepted")
+    finally:
+        RECOVERY.verify_fatal_inert_protected_state = saved_phase["verify"]
+        RECOVERY.verify_backup = saved_phase["backup"]
+        RECOVERY.verify_provenance = saved_phase["provenance"]
+        RECOVERY.run = saved_phase["run"]
+        RECOVERY.RUNTIME_LAUNCHER = saved_phase["launcher"]
+        RECOVERY.sha256 = saved_phase["sha"]
+
+    # Recovery-phase failures must not call the normal stop/restart fail-closed routine.
+    class RecoveryLock:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+    saved_main = {
+        "lock": RECOVERY.deployment_lock,
+        "checkout": RECOVERY.verify_application_checkout,
+        "phase": RECOVERY.phase_runtime_launcher_recovery,
+        "fence": RECOVERY.enforce_fail_closed,
+    }
+    fence_calls = []
+    try:
+        RECOVERY.deployment_lock = lambda: RecoveryLock()
+        RECOVERY.verify_application_checkout = lambda _sha: None
+        RECOVERY.phase_runtime_launcher_recovery = lambda *_args: (_ for _ in ()).throw(
+            RECOVERY.RecoveryError("synthetic_recovery_refusal")
+        )
+        RECOVERY.enforce_fail_closed = lambda: fence_calls.append("called")
+        with redirect_stderr(io.StringIO()):
+            code = RECOVERY.main([
+                "recover-runtime-launcher", "--application-sha", RECOVERY.APP_SHA,
+                "--recovery-tool-sha", "a" * 40,
+            ])
+        assert code == 1 and not fence_calls
+    finally:
+        RECOVERY.deployment_lock = saved_main["lock"]
+        RECOVERY.verify_application_checkout = saved_main["checkout"]
+        RECOVERY.phase_runtime_launcher_recovery = saved_main["phase"]
+        RECOVERY.enforce_fail_closed = saved_main["fence"]
+
+
 def nginx_dump(files):
     items = list(files.items())
     return "".join(
@@ -399,6 +927,7 @@ def validate_nginx_fixture(dump, files, resolver_override=None):
 
 def main():
     test_gated_recovery_contract()
+    test_fatal_inert_launcher_recovery()
     if os.name != "nt":
         bash = shutil.which("bash")
         if not bash:
