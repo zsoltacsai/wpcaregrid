@@ -660,6 +660,78 @@ def _verify_fatal_inert_preconditions():
         _recovery_refuse("FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE")
 
 
+def verify_fatal_inert_recovery_readiness():
+    """Read-only, sanitized component report; never controls Supervisor or the gate."""
+    checks = {}
+    blockers = []
+
+    def check(name, code, callback, allowed_codes=()):
+        try:
+            callback()
+        except ValueError as error:
+            observed = str(error)
+            if observed in allowed_codes:
+                checks[name] = {"status": "BLOCKED", "code": observed}
+                blockers.append(observed)
+            else:
+                checks[name] = {"status": "BLOCKED", "code": code}
+                blockers.append(code)
+        except Exception:
+            checks[name] = {"status": "BLOCKED", "code": code}
+            blockers.append(code)
+        else:
+            checks[name] = {"status": "PASS"}
+
+    def marker_check(path):
+        info = require_regular(path, owner=0)
+        if info.st_gid != 0 or stat.S_IMODE(info.st_mode) != 0o644 or info.st_size != 0:
+            raise ValueError("marker contract mismatch")
+
+    for name, path in (("gate_marker", GATE), ("worker_marker", WORKERS_DISABLED),
+                       ("scheduler_marker", SCHEDULER_PAUSE)):
+        check(name, "FATAL_INERT_MARKERS_INVALID", lambda path=path: marker_check(path))
+    check("nginx_config", "FATAL_INERT_NGINX_CONFIG_INVALID", nginx_gate_check)
+
+    def http_check():
+        result = run(["/usr/bin/curl", "--silent", "--show-error", "--output", "/dev/null",
+                      "--write-out", "%{http_code}", "--connect-timeout", "5", "--max-time", "15",
+                      "https://staging.wpcaregrid.com/up"], check=False, stdout=subprocess.PIPE)
+        if result.returncode or (result.stdout or "").strip() != "503":
+            raise ValueError("maintenance gate is not closed")
+    check("http_gate", "FATAL_INERT_HTTP_GATE_OPEN", http_check)
+    check("supervisor_contract", "FATAL_INERT_SUPERVISOR_CONTRACT_INVALID", supervisor_runtime_contract)
+    check("scheduler_contract", "FATAL_INERT_SCHEDULER_CONTRACT_INVALID", _verify_scheduler_paused_contract)
+
+    for name in sorted(WORKERS):
+        def worker_check(name=name):
+            status = run(["/usr/bin/supervisorctl", "status", name], check=False,
+                         stdout=subprocess.PIPE)
+            normalized = normalize_worker_status(name, status.stdout or "")
+            if status.returncode != 3 or normalized != f"{name} FATAL\n":
+                raise ValueError("worker is not the exact FATAL state")
+            pid_result = run(["/usr/bin/supervisorctl", "pid", name], check=False,
+                             stdout=subprocess.PIPE)
+            if pid_result.returncode not in (0, 3, 7) or pid_result.stdout not in ("0", "0\n"):
+                raise ValueError("worker PID is present or invalid")
+        check("worker_" + name.replace("-", "_"), "FATAL_INERT_WORKER_STATE_INVALID", worker_check)
+
+    check("process_census", "FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE",
+          _no_live_runtime_consumers, ("FATAL_INERT_CONSUMER_PRESENT",))
+    blockers = sorted(set(blockers))
+    status = "BLOCKED" if blockers else "PASS"
+    return {
+        "operation": "recovery-worker-preflight",
+        "status": status,
+        "state": "FATAL_INERT" if status == "PASS" else "UNKNOWN",
+        "checks": checks,
+        "blockers": blockers,
+        "workers": {name: "FATAL" for name in sorted(WORKERS)} if status == "PASS" else {},
+        "live_consumers": 0 if status == "PASS" else None,
+        "maintenance_http": 503 if checks.get("http_gate", {}).get("status") == "PASS" else None,
+        "supervisor_control": "NOT_INVOKED",
+    }
+
+
 def _verify_scheduler_paused_contract():
     """Prove the scheduler is durably paused and cron only invokes its guarded wrapper."""
     try:
@@ -3213,6 +3285,9 @@ def dispatch(args):
         install_runtime_assets()
     elif args == ["runtime-launcher-recover-fatal-inert"]:
         evidence = recover_runtime_launcher_fatal_inert()
+        sys.stdout.write(json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n")
+    elif args == ["recovery-worker-preflight"]:
+        evidence = verify_fatal_inert_recovery_readiness()
         sys.stdout.write(json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n")
     elif len(args) == 2 and args[0] == "php-runtime-switch":
         switch_php_runtime(args[1])

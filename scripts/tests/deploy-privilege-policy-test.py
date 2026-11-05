@@ -14,6 +14,7 @@ import sys
 import tempfile
 import json
 import types
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
@@ -63,11 +64,11 @@ def recovery_table(table, *, triggers=(), present=True):
         "collation": "utf8mb4_unicode_ci" if present else None,
         "rows": 0,
         "columns": columns if present else [],
-        "indexes": dict(RECOVERY.INDEXES[table]) if present else {},
+        "indexes": {name: list(value) for name, value in RECOVERY.INDEXES[table].items()} if present else {},
         "foreign_keys": {
-            name: (*contract[:4], contract[4][0])
+            name: [*contract[:4], contract[4][0]]
             for name, contract in RECOVERY.FOREIGN_KEYS[table].items()
-        } if present else {},
+        } if present and RECOVERY.FOREIGN_KEYS[table] else ([] if present else {}),
         "triggers": list(triggers),
     }
 
@@ -117,33 +118,82 @@ def test_gated_recovery_contract():
     pending, applied = RECOVERY.validate_snapshot(finished, phase="finalize", setting=False)
     assert not pending and applied == set(RECOVERY.MIGRATIONS)
     assert RECOVERY.validate_foreign_keys(
-        {"transition_history_events_request_fk": (
+        {"transition_history_events_request_fk": [
             "request_id", "transition_v2_requests", "request_id", "RESTRICT", "NO ACTION"
-        )}, RECOVERY.TABLES[1]
+        ]}, RECOVERY.TABLES[1]
     ), "InnoDB's equivalent no-action update rule should satisfy the pinned FK contract"
+    assert RECOVERY.validate_foreign_keys([], RECOVERY.TABLES[0])
+    assert not RECOVERY.validate_foreign_keys([], RECOVERY.TABLES[1])
+    assert RECOVERY.validate_foreign_keys(
+        {"transition_history_events_request_fk": [
+            "request_id", "transition_v2_requests", "request_id", "RESTRICT", "NO ACTION"
+        ]}, RECOVERY.TABLES[1]
+    )
+    assert not RECOVERY.validate_foreign_keys(
+        {"unexpected_fk": ["request_id", "transition_v2_requests", "request_id", "RESTRICT", "NO ACTION"]},
+        RECOVERY.TABLES[1],
+    )
+    assert not RECOVERY.validate_foreign_keys(
+        {"transition_history_events_request_fk": ["request_id", "transition_v2_requests"]},
+        RECOVERY.TABLES[1],
+    )
+    assert not RECOVERY.validate_foreign_keys(
+        {"transition_history_events_request_fk": ["request_id", "other", "request_id", "RESTRICT", "NO ACTION"]},
+        RECOVERY.TABLES[1],
+    )
+    actual_partial = recovery_snapshot()
+    assert RECOVERY.validate_schema(actual_partial, RECOVERY.TABLES[0]), (
+        "PHP JSON index arrays and an empty foreign-key JSON array must match the actual partial table"
+    )
     migration_finished = recovery_snapshot(stage="complete", setting=True)
     pending, applied = RECOVERY.validate_migration_result(migration_finished)
     assert not pending and applied == set(RECOVERY.MIGRATIONS)
     saved_recovery = {
         name: getattr(RECOVERY, name)
-        for name in ("verify_protected_state", "verify_backup", "verify_provenance",
-                     "verify_application_checkout", "load_attestation", "snapshot", "run")
+        for name in ("verify_fatal_inert_protected_state", "verify_backup", "verify_provenance",
+                     "verify_application_checkout", "verify_pre_recovery_backup",
+                     "verify_restore_receipt", "load_attestation", "snapshot", "run",
+                     "_readiness_runtime", "_readiness_composer")
     }
     migration_commands = []
     try:
-        RECOVERY.verify_protected_state = lambda: None
+        RECOVERY.verify_fatal_inert_protected_state = lambda: None
         RECOVERY.verify_application_checkout = lambda _sha: None
         RECOVERY.verify_backup = lambda: {"sha256": "b" * 64}
+        RECOVERY.verify_pre_recovery_backup = lambda *_args: {
+            "name": "synthetic-pre-recovery.sql.gz", "sha256": "d" * 64, "bytes": 15
+        }
+        RECOVERY.verify_restore_receipt = lambda *_args: "f" * 64
         RECOVERY.verify_provenance = lambda app, tool, package: {app: 123, tool: 456}
         RECOVERY.load_attestation = lambda phase: "c" * 64
         RECOVERY.snapshot = lambda: migration_finished
+        RECOVERY._readiness_runtime = lambda: {"php": "8.4"}
+        RECOVERY._readiness_composer = lambda: {"platform_requirements": "PASS"}
         RECOVERY.run = lambda argv, **kwargs: migration_commands.append(argv)
         retry_result = RECOVERY.phase_migrate(RECOVERY.APP_SHA, "a" * 40, ROOT)
         assert retry_result["MIGRATIONS"] == "PASS" and retry_result["TRIGGERS"] == 6
         assert not migration_commands, "completed migration retry must not re-execute DDL"
+        RECOVERY.verify_restore_receipt = lambda *_args: (_ for _ in ()).throw(
+            RECOVERY.RecoveryError("restore_receipt_unavailable")
+        )
+        try:
+            RECOVERY.phase_migrate(RECOVERY.APP_SHA, "a" * 40, ROOT)
+        except RECOVERY.RecoveryError as error:
+            assert str(error) == "restore_receipt_unavailable"
+        else:
+            raise AssertionError("migration continuation bypassed the mandatory isolated restore receipt")
+        assert not migration_commands, "migration command ran without an isolated restore receipt"
+        try:
+            RECOVERY.phase_finalize(RECOVERY.APP_SHA, "a" * 40, ROOT)
+        except RECOVERY.RecoveryError as error:
+            assert str(error) == "restore_receipt_unavailable"
+        else:
+            raise AssertionError("finalization bypassed the mandatory isolated restore receipt")
+        assert not migration_commands, "finalization began without an isolated restore receipt"
     finally:
         for name, value in saved_recovery.items():
             setattr(RECOVERY, name, value)
+
 
     saved_main = {
         name: getattr(RECOVERY, name)
@@ -202,6 +252,20 @@ def test_gated_recovery_contract():
     wrong_schema = recovery_snapshot()
     wrong_schema["tables"][RECOVERY.TABLES[0]]["columns"].pop()
     invalid_cases.append(("partial_schema_mismatch", wrong_schema))
+    for bad_indexes in (
+        {**recovery_snapshot()["tables"][RECOVERY.TABLES[0]]["indexes"], "unexpected": [1, "other"]},
+        {name: value for name, value in recovery_snapshot()["tables"][RECOVERY.TABLES[0]]["indexes"].items()
+         if name != "transition_v2_requests_request_id_unique"},
+        {**recovery_snapshot()["tables"][RECOVERY.TABLES[0]]["indexes"], "PRIMARY": [True, "id"]},
+        {**recovery_snapshot()["tables"][RECOVERY.TABLES[0]]["indexes"], "PRIMARY": [0, "wrong"]},
+        {**recovery_snapshot()["tables"][RECOVERY.TABLES[0]]["indexes"], "PRIMARY": [0, "id", "extra"]},
+    ):
+        malformed_index = recovery_snapshot()
+        malformed_index["tables"][RECOVERY.TABLES[0]]["indexes"] = bad_indexes
+        invalid_cases.append(("partial_schema_mismatch", malformed_index))
+    malformed_empty_fk = recovery_snapshot()
+    malformed_empty_fk["tables"][RECOVERY.TABLES[0]]["foreign_keys"] = {"unexpected": []}
+    invalid_cases.append(("partial_schema_mismatch", malformed_empty_fk))
     wrong_foreign_key = recovery_snapshot(stage="first_migration_done")
     wrong_foreign_key["tables"][RECOVERY.TABLES[1]]["foreign_keys"]["transition_history_events_request_fk"] = (
         "request_id", "unexpected_table", "request_id", "RESTRICT", "NO ACTION"
@@ -237,7 +301,9 @@ def test_gated_recovery_contract():
                     RECOVERY.APP_SHA, "a" * 40,
                     {RECOVERY.APP_SHA: 123, "a" * 40: 456},
                     {"name": "synthetic.sql.gz", "sha256": "b" * 64, "bytes": 12},
+                    {"name": "synthetic-pre-recovery.sql.gz", "sha256": "d" * 64, "bytes": 15},
                     "c" * 64, finished,
+                    "f" * 64,
                 )
                 receipt_path = receipt_dir / receipt_name
                 receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -246,6 +312,8 @@ def test_gated_recovery_contract():
                 assert receipt["application_sha"] == RECOVERY.APP_SHA
                 assert receipt["recovery_tool_sha"] == "a" * 40
                 assert receipt["maintenance_gate"] == "CLOSED"
+                assert receipt["isolated_restore_receipt_sha256"] == "f" * 64
+                assert receipt["pre_recovery_backup"]["sha256"] == "d" * 64
                 assert receipt["public_http_acceptance"] == "PENDING_SEPARATE_OWNER_GATE_RELEASE"
                 assert "APP_KEY" not in receipt and "credentials" not in receipt
             finally:
@@ -267,12 +335,21 @@ def test_gated_recovery_contract():
         "temporary_setting": "ENABLED_FOR_MIGRATION",
         "observed_log_bin_trust_function_creators": "ON",
         "operation_authorized_by_dba": True,
+        "restoration_watchdog_active": True,
+        "restoration_watchdog_independent": True,
+        "restoration_watchdog_action": "RESTORE_LOG_BIN_TRUST_FUNCTION_CREATORS_OFF",
+        "restoration_watchdog_id": "wpcg-db-recovery-off-012345abcdef.timer",
+        "restoration_watchdog_sha256": "a" * 64,
+        "restoration_watchdog_expires_at_utc": (datetime.now(timezone.utc) + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     assert RECOVERY.validate_attestation(attestation, phase="migrate")
     restored_attestation = {
         **{key: value for key, value in attestation.items() if key not in {
             "phase", "temporary_setting", "observed_log_bin_trust_function_creators",
             "operation_authorized_by_dba",
+            "restoration_watchdog_active", "restoration_watchdog_independent",
+            "restoration_watchdog_action", "restoration_watchdog_id",
+            "restoration_watchdog_sha256", "restoration_watchdog_expires_at_utc",
         }},
         "phase": "RESTORATION_VERIFIED",
         "temporary_setting": "RESTORED",
@@ -280,6 +357,16 @@ def test_gated_recovery_contract():
         "restoration_independently_verified": True,
     }
     assert RECOVERY.validate_attestation(restored_attestation, phase="finalize")
+    for key, value in (("restoration_watchdog_active", False),
+                       ("restoration_watchdog_sha256", "bad"),
+                       ("restoration_watchdog_expires_at_utc", "2020-01-01T00:00:00Z")):
+        bad_window = dict(attestation, **{key: value})
+        try:
+            RECOVERY.validate_attestation(bad_window, phase="migrate")
+        except RECOVERY.RecoveryError:
+            pass
+        else:
+            raise AssertionError(f"invalid DBA restoration watchdog accepted: {key}")
     bad_attestation = dict(restored_attestation, restoration_independently_verified=False)
     try:
         RECOVERY.validate_attestation(bad_attestation, phase="finalize")
@@ -335,6 +422,39 @@ def test_gated_recovery_contract():
     assert "recovery_tool_sha" in source and "application_sha" in source
 
 
+def test_migration_failure_reasserts_recovery_fences_without_destructive_rollback():
+    class RecoveryLock:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+
+    saved = {
+        name: getattr(RECOVERY, name) for name in (
+            "deployment_lock", "verify_application_checkout", "phase_migrate",
+            "enforce_recovery_fail_closed", "enforce_fail_closed",
+        )
+    }
+    calls = []
+    try:
+        RECOVERY.deployment_lock = lambda: RecoveryLock()
+        RECOVERY.verify_application_checkout = lambda _sha: None
+        RECOVERY.phase_migrate = lambda *_args: (_ for _ in ()).throw(
+            RECOVERY.RecoveryError("synthetic_migration_failure")
+        )
+        RECOVERY.enforce_recovery_fail_closed = lambda: calls.append("reassert_recovery_fences")
+        RECOVERY.enforce_fail_closed = lambda: calls.append("stop_workers_destructively")
+        with redirect_stderr(io.StringIO()):
+            result = RECOVERY.main([
+                "continue-migrations", "--application-sha", RECOVERY.APP_SHA,
+                "--recovery-tool-sha", "a" * 40, "--restore-receipt-fd", "3",
+                "--restore-receipt-sha256", "b" * 64,
+                "--pre-recovery-backup-sha256", "c" * 64,
+            ])
+        assert result == 1
+        assert calls == ["reassert_recovery_fences"], calls
+    finally:
+        for name, value in saved.items():
+            setattr(RECOVERY, name, value)
+
 def test_fatal_inert_launcher_recovery():
     """Recovery-only FATAL_INERT classification never weakens the STOPPED installer contract."""
     worker_names = sorted(module.WORKERS)
@@ -360,6 +480,75 @@ def test_fatal_inert_launcher_recovery():
     assert consumer(["php8.4", "./artisan", "some:command"])
     assert not consumer(["supervisord", "-n"])
     assert not consumer(["nginx", "-g", "daemon off;"])
+
+    saved = {
+        name: getattr(module, name) for name in (
+            "require_regular", "nginx_gate_check", "run", "supervisor_runtime_contract",
+            "_verify_scheduler_paused_contract", "_no_live_runtime_consumers",
+        )
+    }
+
+    def valid_report(statuses=None, pids=None, pid_codes=None, consumer=False):
+        statuses = statuses or {name: (f"{name} FATAL\n", 3) for name in worker_names}
+        pids = pids or {name: "0\n" for name in worker_names}
+        pid_codes = pid_codes or {name: 7 for name in worker_names}
+        calls = []
+        module.require_regular = lambda *_args, **_kwargs: types.SimpleNamespace(
+            st_gid=0, st_mode=stat.S_IFREG | 0o644, st_size=0
+        )
+        module.nginx_gate_check = lambda: None
+        module.supervisor_runtime_contract = lambda: None
+        module._verify_scheduler_paused_contract = lambda: None
+
+        def read_only_run(argv, **_kwargs):
+            calls.append(list(argv))
+            if argv[0] == "/usr/bin/curl":
+                return subprocess.CompletedProcess(argv, 0, stdout="503", stderr="")
+            if argv[:2] != ["/usr/bin/supervisorctl", "status"] and argv[:2] != ["/usr/bin/supervisorctl", "pid"]:
+                raise AssertionError("preflight invoked an unexpected or mutating command")
+            name = argv[-1]
+            if argv[1] == "status":
+                output, code = statuses[name]
+            else:
+                output, code = pids[name], pid_codes[name]
+            return subprocess.CompletedProcess(argv, code, stdout=output, stderr="")
+        module.run = read_only_run
+        if consumer:
+            module._no_live_runtime_consumers = lambda: (_ for _ in ()).throw(
+                ValueError("FATAL_INERT_CONSUMER_PRESENT")
+            )
+        else:
+            module._no_live_runtime_consumers = lambda: True
+        evidence = module.verify_fatal_inert_recovery_readiness()
+        return evidence, calls
+
+    try:
+        evidence, calls = valid_report()
+        assert evidence["status"] == "PASS" and evidence["state"] == "FATAL_INERT"
+        assert evidence["workers"] == {name: "FATAL" for name in worker_names}
+        assert evidence["live_consumers"] == 0 and evidence["supervisor_control"] == "NOT_INVOKED"
+        assert len(calls) == 5 and all("stop" not in call and "start" not in call for call in calls)
+
+        name = worker_names[0]
+        for bad_output, bad_code in (("37\n", 0), ("0\n", 9)):
+            pids = {worker: "0\n" for worker in worker_names}
+            pid_codes = {worker: 7 for worker in worker_names}
+            pids[name], pid_codes[name] = bad_output, bad_code
+            rejected, _ = valid_report(pids=pids, pid_codes=pid_codes)
+            assert rejected["status"] == "BLOCKED" and rejected["state"] == "UNKNOWN"
+            assert "FATAL_INERT_WORKER_STATE_INVALID" in rejected["blockers"]
+
+        statuses = {worker: (f"{worker} FATAL\n", 3) for worker in worker_names}
+        statuses[name] = (f"{name} RUNNING pid 45, uptime 0:01:00\n", 0)
+        rejected, _ = valid_report(statuses=statuses)
+        assert rejected["status"] == "BLOCKED"
+
+        rejected, _ = valid_report(consumer=True)
+        assert "FATAL_INERT_CONSUMER_PRESENT" in rejected["blockers"]
+        assert rejected["status"] == "BLOCKED"
+    finally:
+        for name, value in saved.items():
+            setattr(module, name, value)
 
     if hasattr(module.os, "geteuid"):
         saved = (module.os.geteuid, module.dispatch, os.environ.copy(), sys.argv[:])
@@ -777,16 +966,17 @@ def test_fatal_inert_launcher_recovery():
         module.atomic_root_file = prior_hashes["publish"]
         module.trusted_file_bytes = prior_hashes["trusted_read"]
 
-    # DB migration recovery retains STOPPED-only semantics and has a distinct FATAL_INERT phase.
+    # Normal installer checks remain STOPPED-only; DB recovery requires independent FATAL_INERT proof.
     recovery_source = (ROOT / "scripts/recover-staging-deployment.py").read_text(encoding="utf-8")
     assert "def verify_protected_state()" in recovery_source
     protected = recovery_source.split("def verify_protected_state():", 1)[1].split("\ndef ", 1)[0]
     assert r"STOPPED(?:\s|$)" in protected
     assert "def verify_fatal_inert_protected_state()" in recovery_source
+    assert "recovery-worker-preflight" in recovery_source
     assert "def phase_runtime_launcher_recovery(" in recovery_source
     assert "runtime-launcher-recover-fatal-inert" in recovery_source
     assert "'recover-runtime-launcher'" in recovery_source
-    approved_helper_sha = "e9cf6645d052bf465677b5175dca0a190296cae25ac932ff5b0f43c5f3c4ab6a"
+    approved_helper_sha = "c61cebec06152fdbf54599fa4296c68d5d5db7c2220dacce38c7104da7b6aba2"
     actual_helper_sha = hashlib.sha256(HELPER.read_bytes()).hexdigest()
     assert actual_helper_sha == approved_helper_sha
     assert RECOVERY.HELPER_SHA == approved_helper_sha
@@ -956,6 +1146,29 @@ def test_fatal_inert_recovery_without_laravel_config_cache():
             commands.append(list(argv))
             if argv[0] == "/usr/bin/curl":
                 return subprocess.CompletedProcess(argv, 0, stdout="503", stderr="")
+            if argv[-1] == "recovery-worker-preflight":
+                codes = {
+                    "gate_marker": "FATAL_INERT_MARKERS_INVALID",
+                    "worker_marker": "FATAL_INERT_MARKERS_INVALID",
+                    "scheduler_marker": "FATAL_INERT_MARKERS_INVALID",
+                    "nginx_config": "FATAL_INERT_NGINX_CONFIG_INVALID",
+                    "http_gate": "FATAL_INERT_HTTP_GATE_OPEN",
+                    "supervisor_contract": "FATAL_INERT_SUPERVISOR_CONTRACT_INVALID",
+                    "scheduler_contract": "FATAL_INERT_SCHEDULER_CONTRACT_INVALID",
+                    "worker_wpcaregrid_backups": "FATAL_INERT_WORKER_STATE_INVALID",
+                    "worker_wpcaregrid_default": "FATAL_INERT_WORKER_STATE_INVALID",
+                    "process_census": "FATAL_INERT_PROCESS_CENSUS_UNAVAILABLE",
+                }
+                evidence = {
+                    "operation": "recovery-worker-preflight", "status": "PASS",
+                    "state": "FATAL_INERT",
+                    "checks": {name: {"status": "PASS"} for name in codes},
+                    "blockers": [],
+                    "workers": {name: "FATAL" for name in sorted(RECOVERY.WORKERS)},
+                    "live_consumers": 0, "maintenance_http": 503,
+                    "supervisor_control": "NOT_INVOKED",
+                }
+                return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(evidence), stderr="")
             worker = argv[-1]
             return subprocess.CompletedProcess(
                 argv, 0, stdout=f"{worker} {worker_state}\n", stderr=""
@@ -989,7 +1202,7 @@ def test_fatal_inert_recovery_without_laravel_config_cache():
                                        f"{RECOVERY.URL}/up"]) == 1
                 assert {command[-1] for command in commands if command[:3] == [
                     "/usr/bin/sudo", "-n", RECOVERY.HELPER
-                ]} == set(RECOVERY.WORKERS)
+                ]} == {"recovery-worker-preflight"}
 
                 worker_state = "STOPPED"
                 try:
@@ -1017,10 +1230,13 @@ def test_fatal_inert_recovery_without_laravel_config_cache():
     assert "verify_fatal_inert_protected_state()" in launcher_phase
     assert "verify_protected_state()" not in launcher_phase
     assert "artisan" not in launcher_phase and "COMPOSER" not in launcher_phase
-    assert "verify_protected_state();" in recovery_source.split(
+    assert "verify_fatal_inert_protected_state();" in recovery_source.split(
         "def phase_migrate(", 1
     )[1].split("\ndef ", 1)[0]
-    assert "verify_protected_state();" in recovery_source.split(
+    assert "verify_fatal_inert_protected_state();" in recovery_source.split(
+        "def phase_finalize(", 1
+    )[1].split("\ndef ", 1)[0]
+    assert "verify_laravel_config_cache()" in recovery_source.split(
         "def phase_finalize(", 1
     )[1].split("\ndef ", 1)[0]
     helper_source = (ROOT / "scripts/wpcaregrid-deploy-priv.py").read_text(encoding="utf-8")
@@ -1029,6 +1245,128 @@ def test_fatal_inert_recovery_without_laravel_config_cache():
     )[1].split("\ndef ", 1)[0]
     assert "bootstrap/cache/config.php" not in privileged_recovery
     assert "artisan" not in privileged_recovery
+
+
+def test_recovery_readiness_aggregates_without_mutation_or_config_cache():
+    with tempfile.TemporaryDirectory(prefix="recovery-readiness-") as directory:
+        app = Path(directory) / "app"
+        app.mkdir()
+        (app / "bootstrap/cache").mkdir(parents=True)
+        env = app / ".env"
+        env.write_bytes(b"synthetic-env-placeholder\n")
+        env.chmod(0o600)
+        helper = Path(directory) / "helper"
+        helper.write_bytes(b"synthetic-helper\n")
+        current_uid = env.stat().st_uid
+        helper_hash = hashlib.sha256(helper.read_bytes()).hexdigest()
+        codes = {
+            "gate_marker": "FATAL_INERT_MARKERS_INVALID",
+            "worker_marker": "FATAL_INERT_MARKERS_INVALID",
+            "scheduler_marker": "FATAL_INERT_MARKERS_INVALID",
+            "nginx_config": "FATAL_INERT_NGINX_CONFIG_INVALID",
+            "http_gate": "FATAL_INERT_HTTP_GATE_OPEN",
+            "supervisor_contract": "FATAL_INERT_SUPERVISOR_CONTRACT_INVALID",
+            "scheduler_contract": "FATAL_INERT_SCHEDULER_CONTRACT_INVALID",
+            "worker_wpcaregrid_backups": "FATAL_INERT_WORKER_STATE_INVALID",
+            "worker_wpcaregrid_default": "FATAL_INERT_WORKER_STATE_INVALID",
+            "process_census": "FATAL_INERT_CONSUMER_PRESENT",
+        }
+        worker_evidence = {
+            "operation": "recovery-worker-preflight", "status": "BLOCKED", "state": "UNKNOWN",
+            "checks": {name: ({"status": "BLOCKED", "code": codes[name]}
+                              if name in {"http_gate", "process_census"} else {"status": "PASS"})
+                       for name in codes},
+            "blockers": sorted({codes["http_gate"], codes["process_census"]}),
+            "workers": {}, "live_consumers": None, "maintenance_http": None,
+            "supervisor_control": "NOT_INVOKED",
+        }
+        saved = {
+            name: getattr(RECOVERY, name) for name in (
+                "APP", "HELPER", "HELPER_SHA", "GATE", "WORKER_MARKER", "SCHEDULER_MARKER",
+                "marker_ok", "verify_provenance", "read_fatal_inert_worker_evidence",
+                "verify_backup", "verify_restore_receipt", "_readiness_runtime",
+                "_readiness_nginx", "_readiness_composer", "_readiness_database",
+            )
+        }
+        markers = [Path(directory) / name for name in ("gate", "workers", "scheduler")]
+        original_lstat = Path.lstat
+        def synthetic_lstat(path):
+            if path == helper:
+                return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o755, st_uid=0, st_gid=0)
+            if path == env:
+                return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=current_uid, st_gid=0)
+            return original_lstat(path)
+        try:
+            RECOVERY.APP = app.resolve()
+            RECOVERY.HELPER = str(helper)
+            RECOVERY.HELPER_SHA = helper_hash
+            RECOVERY.GATE, RECOVERY.WORKER_MARKER, RECOVERY.SCHEDULER_MARKER = markers
+            RECOVERY.marker_ok = lambda _path: True
+            RECOVERY.verify_provenance = lambda app_sha, tool_sha, _package: {app_sha: 1, tool_sha: 2}
+            RECOVERY.read_fatal_inert_worker_evidence = lambda: worker_evidence
+            RECOVERY.verify_backup = lambda: {"sha256": "b" * 64}
+            RECOVERY.verify_restore_receipt = lambda *_args: (_ for _ in ()).throw(
+                RECOVERY.RecoveryError("restore_receipt_unavailable")
+            )
+            RECOVERY._readiness_runtime = lambda: (_ for _ in ()).throw(
+                RECOVERY.RecoveryError("php84_preflight_failed")
+            )
+            RECOVERY._readiness_nginx = lambda: {"nginx": "PASS"}
+            RECOVERY._readiness_composer = lambda: {"platform_requirements": "PASS"}
+            RECOVERY._readiness_database = lambda: (_ for _ in ()).throw(
+                RECOVERY.RecoveryError("database_snapshot_unavailable")
+            )
+            with (
+                patch.object(Path, "cwd", return_value=app.resolve()),
+                patch.object(Path, "lstat", synthetic_lstat),
+                patch.object(RECOVERY.os, "geteuid", return_value=current_uid, create=True),
+                patch.dict(sys.modules, {"pwd": types.SimpleNamespace(
+                    getpwnam=lambda _name: types.SimpleNamespace(pw_uid=current_uid)
+                )}),
+            ):
+                result = RECOVERY.phase_readiness(RECOVERY.APP_SHA, "a" * 40, ROOT)
+            assert result["RECOVERY_READINESS"] == "BLOCKED"
+            assert result["STAGING_GATE"] == "CLOSED" and result["MUTATIONS"] == "NONE"
+            assert result["CHECKS"]["worker_http_gate"]["code"] == "FATAL_INERT_HTTP_GATE_OPEN"
+            assert result["CHECKS"]["worker_process_census"]["code"] == "FATAL_INERT_CONSUMER_PRESENT"
+            assert result["CHECKS"]["config_cache"]["status"] == "REBUILD_DURING_FINALIZE"
+            assert {"restore_receipt_unavailable", "php84_preflight_failed",
+                    "FATAL_INERT_HTTP_GATE_OPEN", "FATAL_INERT_CONSUMER_PRESENT"}.issubset(
+                        set(result["BLOCKERS"])
+                    )
+        finally:
+            for name, value in saved.items():
+                setattr(RECOVERY, name, value)
+
+
+def test_restore_receipt_is_validated_from_root_opened_descriptor():
+    payload = {
+        "schema": 1, "application_sha": RECOVERY.APP_SHA,
+        "backup_sha256": RECOVERY.BACKUP_SHA,
+        "mysql_server_uuid_sha256": RECOVERY.MYSQL_UUID_SHA,
+        "mysql_version": "8.4.11", "restore_database": "wpcg_recovery_restore_012345abcdef",
+        "import_verified": True, "schema_verified": True,
+        "ledger_verified": True, "triggers_verified": True,
+        "recorded_at_utc": "2026-11-05T12:00:00Z",
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    expected = hashlib.sha256(encoded).hexdigest()
+    with tempfile.TemporaryFile() as receipt:
+        receipt.write(encoded)
+        receipt.flush()
+        original_fstat = os.fstat
+        def root_receipt_fstat(fd):
+            actual = original_fstat(fd)
+            return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0,
+                                         st_gid=0, st_nlink=1, st_size=len(encoded))
+        with patch.object(RECOVERY.os, "fstat", root_receipt_fstat):
+            assert RECOVERY.verify_restore_receipt(RECOVERY.APP_SHA, receipt.fileno(), expected) == expected
+            try:
+                RECOVERY.verify_restore_receipt(RECOVERY.APP_SHA, receipt.fileno(), "0" * 64)
+            except RECOVERY.RecoveryError as error:
+                assert str(error) == "restore_receipt_identity_mismatch"
+            else:
+                raise AssertionError("restore receipt hash mismatch was accepted")
 
 
 def nginx_dump(files):
@@ -1098,8 +1436,11 @@ def validate_nginx_fixture(dump, files, resolver_override=None):
 
 def main():
     test_gated_recovery_contract()
+    test_migration_failure_reasserts_recovery_fences_without_destructive_rollback()
     test_fatal_inert_launcher_recovery()
     test_fatal_inert_recovery_without_laravel_config_cache()
+    test_recovery_readiness_aggregates_without_mutation_or_config_cache()
+    test_restore_receipt_is_validated_from_root_opened_descriptor()
     if os.name != "nt":
         bash = shutil.which("bash")
         if not bash:
