@@ -21,8 +21,11 @@ root-owned runner through `sudo`. The runner validates a root-owned one-time
 authorization manifest, exact artifact bytes, expiry, lock, and replay markers, then
 uses `runuser` to invoke the recovery controller as `deploy` from the exact application
 checkout. Execution is bounded to 20 minutes and output to 64 KiB stdout / 4 KiB
-stderr. Only schema-checked JSON or fixed refusal codes are returned. No raw SQL,
-environment values, row data, or command output is emitted.
+stderr. The Linux runner is a child subreaper: it kills and reaps adopted descendants
+on timeout or failure, rejects a nominally successful controller that leaves children,
+and fails closed if process cleanup cannot be verified. Only schema-checked JSON or
+fixed refusal codes are returned. No raw SQL, environment values, row data, or command
+output is emitted.
 
 The runner never connects to MySQL as an administrator and never changes global MySQL
 settings. The dedicated SSH identity is not a member of `deploy`, `www-data`, or MySQL

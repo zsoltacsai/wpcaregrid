@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import subprocess
@@ -28,7 +29,31 @@ def require(condition, code):
         raise RuntimeError(code)
 
 
+def baseline_failure_code(returncode, stdout):
+    output = stdout.strip() if isinstance(stdout, str) else ''
+    match = re.fullmatch(
+        r'BASELINE_DIAGNOSTIC=SQLSTATE:([0-9A-Z]{5}|UNKNOWN);ERRNO:([0-9]{1,6}|UNKNOWN)',
+        output,
+    )
+    sqlstate, errno = match.groups() if match else ('UNKNOWN', 'UNKNOWN')
+    marker = 'YES' if output == 'BASELINE_OK' else 'NO'
+    rc = returncode if type(returncode) is int and -255 <= returncode <= 255 else 'UNKNOWN'
+    return f'partial_baseline_setup_failed_rc{rc}_marker{marker}_sqlstate{sqlstate}_errno{errno}'
+
+
+def test_baseline_failure_diagnostic_classifier():
+    assert baseline_failure_code(2, 'BASELINE_DIAGNOSTIC=SQLSTATE:HY000;ERRNO:1419') == (
+        'partial_baseline_setup_failed_rc2_markerNO_sqlstateHY000_errno1419')
+    assert baseline_failure_code(2, 'BASELINE_DIAGNOSTIC=SQLSTATE:UNKNOWN;ERRNO:UNKNOWN') == (
+        'partial_baseline_setup_failed_rc2_markerNO_sqlstateUNKNOWN_errnoUNKNOWN')
+    assert baseline_failure_code(1, 'raw diagnostic must not be projected') == (
+        'partial_baseline_setup_failed_rc1_markerNO_sqlstateUNKNOWN_errnoUNKNOWN')
+    assert baseline_failure_code(0, 'BASELINE_OK') == (
+        'partial_baseline_setup_failed_rc0_markerYES_sqlstateUNKNOWN_errnoUNKNOWN')
+
+
 def main():
+    test_baseline_failure_diagnostic_classifier()
     host = os.environ.get('WPCG_RECOVERY_MYSQL_HOST', '127.0.0.1')
     port = os.environ.get('WPCG_RECOVERY_MYSQL_PORT', '3308')
     root_password = os.environ.get('WPCG_RECOVERY_MYSQL_ROOT_PASSWORD')
@@ -123,13 +148,18 @@ def main():
 
         base_file = '2026_10_30_000001_create_deployment_transition_fences.php'
         base = php_run(
-            '$app=require "bootstrap/app.php";'
+            'try{$app=require "bootstrap/app.php";'
             '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();'
             '$migration=require "database/migrations/' + base_file + '";'
             '$migration->up(); echo "BASELINE_OK";'
+            '}catch(Throwable $e){$x=$e;while($x && !($x instanceof PDOException)){$x=$x->getPrevious();}'
+            '$i=$x instanceof PDOException ? $x->errorInfo : null;'
+            '$s=is_array($i)&&isset($i[0])&&is_string($i[0])&&preg_match("/^[0-9A-Z]{5}$/",$i[0])?$i[0]:"UNKNOWN";'
+            '$n=is_array($i)&&isset($i[1])&&(is_int($i[1])||(is_string($i[1])&&preg_match("/^[0-9]{1,6}$/",$i[1])))?(string)(int)$i[1]:"UNKNOWN";'
+            'fwrite(STDOUT,"BASELINE_DIAGNOSTIC=SQLSTATE:".$s.";ERRNO:".$n."\\n");exit(2);}'
         )
-        require(base.returncode == 0 and base.stdout.strip() == 'BASELINE_OK',
-                'partial_baseline_setup_failed')
+        if base.returncode != 0 or base.stdout.strip() != 'BASELINE_OK':
+            require(False, baseline_failure_code(base.returncode, base.stdout))
 
         seed = php_run(
             '$app=require "bootstrap/app.php";'

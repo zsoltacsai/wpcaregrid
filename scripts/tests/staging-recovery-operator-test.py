@@ -212,6 +212,7 @@ def test_timeout_kills_forked_descendant_group():
     if os.name == 'nt':
         return
     import time
+    OP.enable_child_subreaper()
     program = ('import subprocess,sys; '
                'subprocess.Popen([sys.executable,"-c","import time; time.sleep(30)"]); '
                'print("parent-exited",flush=True)')
@@ -234,14 +235,38 @@ def test_timeout_kills_forked_descendant_group():
         OP.kill_and_reap(child)
 
 
+def test_timeout_kills_detached_descendant():
+    if os.name == 'nt':
+        return
+    import time
+    OP.enable_child_subreaper()
+    program = ('import subprocess,sys; '
+               'subprocess.Popen([sys.executable,"-c",'
+               '"import os,time; os.setsid(); time.sleep(30)"]); '
+               'print("detached-child-started",flush=True)')
+    child = subprocess.Popen([sys.executable, '-c', program], stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        try:
+            OP.read_bounded(child, time.monotonic() + 0.3)
+        except TimeoutError:
+            OP.kill_and_reap(child)
+        else:
+            raise AssertionError('detached grandchild did not hold the bounded pipe open')
+        assert OP.adopted_children() == []
+    finally:
+        OP.kill_and_reap(child)
+
+
 def main():
     for test in (test_fixed_phase_allowlist, test_operator_identity_fail_closed,
                  test_readiness_projection_is_sanitized_and_pinned,
                  test_migration_and_finalize_receipt_projection,
                  test_single_use_phase_state, test_bounded_pipe_capture,
-                 test_timeout_kills_forked_descendant_group):
+                 test_timeout_kills_forked_descendant_group,
+                 test_timeout_kills_detached_descendant):
         test()
-    print('STAGING_RECOVERY_OPERATOR_TESTS=PASS;COUNT=7')
+    print('STAGING_RECOVERY_OPERATOR_TESTS=PASS;COUNT=8')
 
 
 if __name__ == '__main__':

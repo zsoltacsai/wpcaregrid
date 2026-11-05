@@ -6,6 +6,8 @@ try:
 except ImportError:  # Allows non-Linux source tests; execution itself is Linux-only.
     fcntl = None
 import hashlib
+import ctypes
+import errno
 import json
 import os
 from pathlib import Path
@@ -317,6 +319,55 @@ def kill_process_group(process):
                 pass
 
 
+def enable_child_subreaper():
+    if not sys.platform.startswith('linux'):
+        refuse('operator_process_containment_unavailable')
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+            refuse('operator_process_containment_unavailable')
+    except (AttributeError, OSError):
+        refuse('operator_process_containment_unavailable')
+
+
+def adopted_children():
+    path = Path(f'/proc/{os.getpid()}/task/{os.getpid()}/children')
+    try:
+        value = path.read_text(encoding='ascii').strip()
+        children = [int(item) for item in value.split()] if value else []
+    except (OSError, ValueError):
+        refuse('operator_child_process_cleanup_unverified')
+    if any(pid <= 1 for pid in children):
+        refuse('operator_child_process_cleanup_unverified')
+    return children
+
+
+def reap_adopted_children():
+    deadline = time.monotonic() + 5
+    while True:
+        children = adopted_children()
+        if not children:
+            return
+        for pid in children:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                refuse('operator_child_process_cleanup_unverified')
+        for pid in children:
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+            except OSError as error:
+                if error.errno != errno.EINTR:
+                    refuse('operator_child_process_cleanup_unverified')
+        if time.monotonic() >= deadline:
+            refuse('operator_child_process_cleanup_unverified')
+        time.sleep(0.05)
+
+
 def kill_and_reap(process):
     if process is None:
         return
@@ -326,16 +377,7 @@ def kill_and_reap(process):
     except subprocess.TimeoutExpired:
         kill_process_group(process)
         process.wait()
-    deadline = time.monotonic() + 2
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            return
-        except OSError:
-            return
-        time.sleep(0.05)
-    refuse('operator_child_process_cleanup_unverified')
+    reap_adopted_children()
 
 
 def controller_result(controller, auth, phase, restore_receipt_fd):
@@ -358,14 +400,22 @@ def controller_result(controller, auth, phase, restore_receipt_fd):
     process = None
     deadline = time.monotonic() + TIMEOUT
     try:
+        enable_child_subreaper()
         process = subprocess.Popen(argv, cwd=APP, env=env, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True,
                                    pass_fds=(restore_receipt_fd,), start_new_session=True)
         stdout, stderr = read_bounded(process, deadline)
         code = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+        children = adopted_children()
+        if children:
+            reap_adopted_children()
+            refuse('operator_child_process_leaked')
     except (TimeoutError, subprocess.TimeoutExpired):
         kill_and_reap(process)
         refuse('operator_execution_timeout')
+    except Refusal:
+        kill_and_reap(process)
+        raise
     except Exception:
         kill_and_reap(process)
         refuse('operator_execution_failed')
