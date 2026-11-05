@@ -317,8 +317,6 @@ def verify_fatal_inert_protected_state():
     try: st=env.lstat()
     except OSError: stop('environment_file_unavailable')
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode) or st.st_uid!=os.geteuid() or stat.S_IMODE(st.st_mode)!=0o600: stop('environment_file_metadata_invalid')
-    cache=APP/'bootstrap/cache/config.php'
-    if cache.is_symlink() or not cache.is_file(): stop('config_cache_unavailable')
 
 
 def verify_http_gate():
