@@ -69,8 +69,10 @@ def off_setting_child_failure_code(returncode, stdout, stderr):
                 category = 'php_fatal_undefined_function'
             elif 'Call to undefined method ' in detail:
                 category = 'php_fatal_undefined_method'
-            elif re.search(r'Class ["\'].*["\'] not found', detail):
-                category = 'php_fatal_class_not_found'
+            elif class_missing := re.search(
+                    r'Class ["\']([A-Za-z_][A-Za-z0-9_\\]{0,127})["\'] not found', detail):
+                class_code = re.sub(r'[^A-Za-z0-9]+', '_', class_missing.group(1)).strip('_').lower()
+                category = f'php_fatal_class_not_found_{class_code}'
             elif 'Failed opening required' in detail:
                 category = 'php_fatal_required_file_missing'
             elif 'Allowed memory size' in detail:
@@ -117,6 +119,9 @@ def test_off_setting_child_failure_classifier():
     assert off_setting_child_failure_code(
         255, '', 'PHP Fatal error: Uncaught Error: Call to undefined function private_path()') == (
             'off_setting_php_child_rc255_php_fatal_undefined_function')
+    assert off_setting_child_failure_code(
+        255, '', 'PHP Fatal error: Class "Illuminate\\Contracts\\Console\\Kernel" not found') == (
+            'off_setting_php_child_rc255_php_fatal_class_not_found_illuminate_contracts_console_kernel')
     assert off_setting_child_failure_code(
         255, '', 'PHP Fatal error: Uncaught Illuminate\\Database\\QueryException: hidden details') == (
             'off_setting_php_child_rc255_php_fatal_uncaught_illuminate_database_queryexception')
