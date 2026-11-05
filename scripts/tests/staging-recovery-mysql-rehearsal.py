@@ -41,6 +41,35 @@ def baseline_failure_code(returncode, stdout):
     return f'historical_baseline_failed_rc{rc}_kind{kind}_sqlstate{sqlstate}_errno{errno}'
 
 
+def off_setting_child_failure_code(returncode, stdout, stderr):
+    """Classify a failed PHP child without exposing raw process output."""
+    if type(returncode) is not int or not -255 <= returncode <= 255:
+        return 'off_setting_php_exit_code_invalid'
+    if stdout == 'UNEXPECTED_SUCCESS' and not stderr:
+        category = 'trigger_rejection_not_observed'
+    else:
+        combined = '\n'.join(value for value in (stdout, stderr) if isinstance(value, str))
+        mysql_match = re.search(
+            r'SQLSTATE\[([0-9A-Z]{5})\](?:\s*:\s*General error:\s*([0-9]{1,6}))?',
+            combined,
+            re.IGNORECASE,
+        )
+        if mysql_match:
+            errno = mysql_match.group(2) or 'UNKNOWN'
+            category = f'mysql_sqlstate{mysql_match.group(1)}_errno{errno}'
+        elif re.search(r'(?m)^PHP Parse error:', stderr):
+            category = 'php_parse_error'
+        elif re.search(r'(?m)^PHP Fatal error:', stderr):
+            category = 'php_fatal_error'
+        elif re.search(r'(?m)^PHP Warning:', stderr):
+            category = 'php_warning'
+        elif not stdout and not stderr:
+            category = 'empty_process_output'
+        else:
+            category = 'unexpected_process_output'
+    return f'off_setting_php_child_rc{returncode}_{category}'
+
+
 def test_baseline_failure_diagnostic_classifier():
     assert baseline_failure_code(2, 'SQLSTATE[HY000]: General error: 1419 trigger rejected') == (
         'historical_baseline_failed_rc2_kindMYSQL_ERROR_sqlstateHY000_errno1419')
@@ -52,8 +81,27 @@ def test_baseline_failure_diagnostic_classifier():
         'historical_baseline_failed_rcUNKNOWN_kindMYSQL_ERROR_sqlstateHY000_errno1419')
 
 
+def test_off_setting_child_failure_classifier():
+    assert off_setting_child_failure_code(3, 'UNEXPECTED_SUCCESS', '') == (
+        'off_setting_php_child_rc3_trigger_rejection_not_observed')
+    assert off_setting_child_failure_code(
+        255, '', 'PHP Fatal error: hidden path SQLSTATE[HY000]: General error: 1419') == (
+            'off_setting_php_child_rc255_mysql_sqlstateHY000_errno1419')
+    assert off_setting_child_failure_code(255, '', 'SQLSTATE[HY000] hidden diagnostic') == (
+        'off_setting_php_child_rc255_mysql_sqlstateHY000_errnoUNKNOWN')
+    assert off_setting_child_failure_code(255, '', 'PHP Parse error: hidden source') == (
+        'off_setting_php_child_rc255_php_parse_error')
+    assert off_setting_child_failure_code(1, '', '') == (
+        'off_setting_php_child_rc1_empty_process_output')
+    assert off_setting_child_failure_code('1', 'raw output', 'raw output') == (
+        'off_setting_php_exit_code_invalid')
+    assert off_setting_child_failure_code(1, 'raw output', 'raw diagnostic') == (
+        'off_setting_php_child_rc1_unexpected_process_output')
+
+
 def main():
     test_baseline_failure_diagnostic_classifier()
+    test_off_setting_child_failure_classifier()
     host = os.environ.get('WPCG_RECOVERY_MYSQL_HOST', '127.0.0.1')
     port = os.environ.get('WPCG_RECOVERY_MYSQL_PORT', '3308')
     root_password = os.environ.get('WPCG_RECOVERY_MYSQL_ROOT_PASSWORD')
@@ -181,8 +229,13 @@ def main():
             '$i=$x instanceof PDOException ? $x->errorInfo : null;'
             'echo json_encode(["sqlstate"=>$i[0]??$e->getCode(),"errno"=>isset($i[1])?(int)$i[1]:null]);}'
         )
-        require(failed.returncode == 0, 'off_setting_trigger_rejection_not_captured')
-        failure = json.loads(failed.stdout)
+        if failed.returncode != 0:
+            require(False, off_setting_child_failure_code(
+                failed.returncode, failed.stdout, failed.stderr))
+        try:
+            failure = json.loads(failed.stdout)
+        except (TypeError, ValueError):
+            require(False, 'off_setting_trigger_diagnostic_invalid')
         require(failure == {'sqlstate': 'HY000', 'errno': 1419},
                 'off_setting_trigger_error_contract_mismatch')
         partial = mysql_admin(
