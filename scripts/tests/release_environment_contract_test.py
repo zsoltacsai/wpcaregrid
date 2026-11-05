@@ -63,7 +63,7 @@ def valid_snapshot() -> dict:
     return {
         "schema_version": 1,
         "environment": "staging",
-        "release_sha": "3" * 40,
+        "release_sha": VALUES["hash40"],
         "collector_sha": "4" * 40,
         "collected_at_utc": "2026-11-05T12:00:00Z",
         "overall": "VERIFIED",
@@ -79,6 +79,14 @@ def expected_contract(snapshot: dict) -> dict:
     return {
         name: copy.deepcopy(snapshot["facts"][name].get("value", VALUES[contract.FACT_TYPES[name]]))
         for name in contract.REQUIRED_COMPATIBILITY_FACTS
+    }
+
+
+def expected_identity(snapshot: dict) -> dict:
+    return {
+        "environment": snapshot["environment"],
+        "release_sha": snapshot["release_sha"],
+        "collector_sha": snapshot["collector_sha"],
     }
 
 
@@ -109,6 +117,7 @@ class ReleaseEnvironmentContractTest(unittest.TestCase):
         result = contract.compare_expected(
             normalized,
             expected_contract(normalized),
+            expected_identity(normalized),
         )
         self.assertEqual(result["overall"], "BLOCKED")
         self.assertIn(
@@ -174,7 +183,9 @@ class ReleaseEnvironmentContractTest(unittest.TestCase):
         snapshot["overall"] = "BLOCKED"
         result = contract.validate_snapshot(encoded(snapshot))
         self.assertEqual(result["overall"], "BLOCKED")
-        comparison = contract.compare_expected(result, expected_contract(result) | {name: "8.4"})
+        comparison = contract.compare_expected(
+            result, expected_contract(result) | {name: "8.4"}, expected_identity(result)
+        )
         self.assertEqual(comparison["overall"], "BLOCKED")
         self.assertIn({"fact": name, "status": "MISMATCH"}, comparison["facts"])
 
@@ -182,23 +193,84 @@ class ReleaseEnvironmentContractTest(unittest.TestCase):
         snapshot = valid_snapshot()
         before = copy.deepcopy(snapshot)
         expected = expected_contract(snapshot)
-        first = contract.compare_expected(snapshot, expected)
-        second = contract.compare_expected(snapshot, dict(reversed(list(expected.items()))))
+        identity = expected_identity(snapshot)
+        first = contract.compare_expected(snapshot, expected, identity)
+        second = contract.compare_expected(snapshot, dict(reversed(list(expected.items()))), identity)
         self.assertEqual(first, second)
         self.assertEqual(first["overall"], "PASS")
         self.assertTrue(all(item["status"] == "PASS" for item in first["facts"]))
         self.assertEqual(snapshot, before)
 
+    def test_verified_application_sha_must_match_snapshot_release_identity(self) -> None:
+        snapshot = valid_snapshot()
+        snapshot["release_sha"] = "3" * 40
+        self.assert_contract_code("RELEASE_SHA_INCONSISTENT", encoded(snapshot))
+
+    def test_release_comparison_binds_environment_release_and_collector(self) -> None:
+        snapshot = valid_snapshot()
+        expected = expected_contract(snapshot)
+        identity = expected_identity(snapshot)
+        self.assertEqual(
+            contract.compare_expected(snapshot, expected, identity)["overall"], "PASS"
+        )
+
+        mismatches = (
+            ("environment", "production"),
+            ("release_sha", "3" * 40),
+            ("collector_sha", "5" * 40),
+        )
+        for name, value in mismatches:
+            with self.subTest(identity=name):
+                target = dict(identity)
+                target[name] = value
+                target_values = dict(expected)
+                if name == "release_sha":
+                    target_values["deployment.application_sha"] = value
+                result = contract.compare_expected(snapshot, target_values, target)
+                self.assertEqual(result["overall"], "BLOCKED")
+                self.assertIn(
+                    {"identity": name, "status": "MISMATCH"}, result["identity"]
+                )
+                if name == "release_sha":
+                    self.assertIn(
+                        {"fact": "deployment.application_sha", "status": "MISMATCH"},
+                        result["facts"],
+                    )
+                else:
+                    self.assertTrue(all(item["status"] == "PASS" for item in result["facts"]))
+
+    def test_release_comparison_rejects_missing_or_inconsistent_target_identity(self) -> None:
+        snapshot = valid_snapshot()
+        expected = expected_contract(snapshot)
+        identity = expected_identity(snapshot)
+
+        with self.assertRaises(contract.ContractError) as raised:
+            contract.compare_expected(snapshot, expected, {"environment": "staging"})
+        self.assertEqual(raised.exception.code, "EXPECTED_IDENTITY_SET_INVALID")
+
+        identity["release_sha"] = "3" * 40
+        with self.assertRaises(contract.ContractError) as raised:
+            contract.compare_expected(snapshot, expected, identity)
+        self.assertEqual(raised.exception.code, "EXPECTED_RELEASE_SHA_INCONSISTENT")
+
     def test_release_comparison_rejects_unknown_or_malformed_expectations(self) -> None:
         snapshot = valid_snapshot()
         with self.assertRaises(contract.ContractError) as raised:
-            contract.compare_expected(snapshot, expected_contract(snapshot) | {"database.password": "secret"})
+            contract.compare_expected(
+                snapshot,
+                expected_contract(snapshot) | {"database.password": "secret"},
+                expected_identity(snapshot),
+            )
         self.assertEqual(raised.exception.code, "EXPECTED_FACT_INVALID")
         with self.assertRaises(contract.ContractError) as raised:
-            contract.compare_expected(snapshot, {"runtime.profile": "8.3"})
+            contract.compare_expected(snapshot, {"runtime.profile": "8.3"}, expected_identity(snapshot))
         self.assertEqual(raised.exception.code, "EXPECTED_FACT_SET_INVALID")
         with self.assertRaises(contract.ContractError) as raised:
-            contract.compare_expected(snapshot, expected_contract(snapshot) | {"runtime.profile": "8.3"})
+            contract.compare_expected(
+                snapshot,
+                expected_contract(snapshot) | {"runtime.profile": "8.3"},
+                expected_identity(snapshot),
+            )
         self.assertEqual(raised.exception.code, "EXPECTED_VALUE_INVALID")
 
     def test_partial_matching_fact_cannot_mask_unrelated_unknown_or_mismatch(self) -> None:
@@ -219,7 +291,9 @@ class ReleaseEnvironmentContractTest(unittest.TestCase):
                 snapshot["overall"] = overall
                 result = contract.validate_snapshot(snapshot)
                 with self.assertRaises(contract.ContractError) as raised:
-                    contract.compare_expected(result, {"runtime.profile": "8.4"})
+                    contract.compare_expected(
+                        result, {"runtime.profile": "8.4"}, expected_identity(result)
+                    )
                 self.assertEqual(raised.exception.code, "EXPECTED_FACT_SET_INVALID")
 
     def test_complete_comparison_blocks_matching_runtime_when_other_required_fact_is_unknown_or_mismatch(self) -> None:
@@ -239,7 +313,7 @@ class ReleaseEnvironmentContractTest(unittest.TestCase):
                     snapshot["overall"] = "BLOCKED"
                 expected = expected_contract(snapshot)
                 expected["runtime.profile"] = "8.4"
-                result = contract.compare_expected(snapshot, expected)
+                result = contract.compare_expected(snapshot, expected, expected_identity(snapshot))
                 self.assertEqual(result["overall"], expected_overall)
                 self.assertIn({"fact": "runtime.profile", "status": "PASS"}, result["facts"])
                 self.assertIn(

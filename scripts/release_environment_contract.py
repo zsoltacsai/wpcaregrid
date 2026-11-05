@@ -357,6 +357,12 @@ def validate_snapshot(source: bytes | str | dict[str, Any]) -> dict[str, Any]:
     _validate_worker_pair(normalized_facts, "default")
     _validate_worker_pair(normalized_facts, "backups")
     _validate_runtime_profile(normalized_facts)
+    application_sha = normalized_facts["deployment.application_sha"]
+    if (
+        application_sha["status"] == "VERIFIED"
+        and application_sha["value"] != snapshot["release_sha"]
+    ):
+        _fail("RELEASE_SHA_INCONSISTENT")
     statuses = {item["status"] for item in normalized_facts.values()}
     derived = "BLOCKED" if "MISMATCH" in statuses else "UNKNOWN" if "UNKNOWN" in statuses else "VERIFIED"
     if snapshot["overall"] != derived:
@@ -373,14 +379,29 @@ def validate_snapshot(source: bytes | str | dict[str, Any]) -> dict[str, Any]:
 
 
 def compare_expected(
-    snapshot_source: bytes | str | dict[str, Any], expected_values: dict[str, Any]
+    snapshot_source: bytes | str | dict[str, Any],
+    expected_values: dict[str, Any],
+    expected_identity: dict[str, Any],
 ) -> dict[str, Any]:
     """Return per-fact comparisons plus a fail-closed overall readiness status.
 
-    Promotion comparison requires the complete non-optional compatibility contract;
-    a partial diagnostic subset cannot be mistaken for release readiness.
+    Promotion comparison requires explicit target identities and the complete
+    non-optional compatibility contract; diagnostics cannot imply readiness.
     """
     snapshot = validate_snapshot(snapshot_source)
+    if not isinstance(expected_identity, dict):
+        _fail("EXPECTED_IDENTITY_INVALID")
+    identity_keys = {"environment", "release_sha", "collector_sha"}
+    if set(expected_identity) != identity_keys:
+        _fail("EXPECTED_IDENTITY_SET_INVALID")
+    if (
+        not isinstance(expected_identity["environment"], str)
+        or expected_identity["environment"] not in {"staging", "production"}
+    ):
+        _fail("EXPECTED_ENVIRONMENT_INVALID")
+    for name in ("release_sha", "collector_sha"):
+        if not isinstance(expected_identity[name], str) or HASH40.fullmatch(expected_identity[name]) is None:
+            _fail("EXPECTED_IDENTITY_SHA_INVALID")
     if not isinstance(expected_values, dict):
         _fail("EXPECTED_CONTRACT_INVALID")
     if any(key not in COMPATIBILITY_FACTS for key in expected_values):
@@ -390,6 +411,8 @@ def compare_expected(
     for key, value in expected_values.items():
         if not _valid_value(FACT_TYPES[key], value):
             _fail("EXPECTED_VALUE_INVALID")
+    if expected_values["deployment.application_sha"] != expected_identity["release_sha"]:
+        _fail("EXPECTED_RELEASE_SHA_INCONSISTENT")
     results = []
     for key in sorted(expected_values):
         observed = snapshot["facts"][key]
@@ -402,7 +425,18 @@ def compare_expected(
         else:
             state = "PASS"
         results.append({"fact": key, "status": state})
-    overall = "PASS" if snapshot["overall"] == "VERIFIED" and all(
-        result["status"] == "PASS" for result in results
-    ) else "BLOCKED"
-    return {"overall": overall, "facts": results}
+    identity_results = [
+        {
+            "identity": name,
+            "status": "PASS" if snapshot[name] == expected_identity[name] else "MISMATCH",
+        }
+        for name in ("environment", "release_sha", "collector_sha")
+    ]
+    overall = (
+        "PASS"
+        if snapshot["overall"] == "VERIFIED"
+        and all(result["status"] == "PASS" for result in results)
+        and all(result["status"] == "PASS" for result in identity_results)
+        else "BLOCKED"
+    )
+    return {"overall": overall, "identity": identity_results, "facts": results}
