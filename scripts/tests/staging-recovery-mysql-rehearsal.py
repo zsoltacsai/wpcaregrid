@@ -60,7 +60,23 @@ def off_setting_child_failure_code(returncode, stdout, stderr):
         elif re.search(r'(?m)^PHP Parse error:', stderr):
             category = 'php_parse_error'
         elif re.search(r'(?m)^PHP Fatal error:', stderr):
-            category = 'php_fatal_error'
+            fatal = re.search(
+                r'(?m)^PHP Fatal error: Uncaught (PDOException|ErrorException|ReflectionException|TypeError|Error)(?::\s*(.*))?$',
+                stderr,
+            )
+            detail = fatal.group(2) if fatal and fatal.group(2) else ''
+            if 'Call to undefined function ' in detail:
+                category = 'php_fatal_undefined_function'
+            elif 'Call to undefined method ' in detail:
+                category = 'php_fatal_undefined_method'
+            elif re.search(r'Class ["\'].*["\'] not found', detail):
+                category = 'php_fatal_class_not_found'
+            elif 'Failed opening required' in detail:
+                category = 'php_fatal_required_file_missing'
+            elif fatal and fatal.group(1) in ('PDOException', 'ErrorException', 'ReflectionException', 'TypeError', 'Error'):
+                category = f'php_fatal_uncaught_{fatal.group(1).lower()}'
+            else:
+                category = 'php_fatal_unclassified'
         elif re.search(r'(?m)^PHP Warning:', stderr):
             category = 'php_warning'
         elif not stdout and not stderr:
@@ -91,6 +107,12 @@ def test_off_setting_child_failure_classifier():
         'off_setting_php_child_rc255_mysql_sqlstateHY000_errnoUNKNOWN')
     assert off_setting_child_failure_code(255, '', 'PHP Parse error: hidden source') == (
         'off_setting_php_child_rc255_php_parse_error')
+    assert off_setting_child_failure_code(
+        255, '', 'PHP Fatal error: Uncaught Error: Call to undefined function private_path()') == (
+            'off_setting_php_child_rc255_php_fatal_undefined_function')
+    assert off_setting_child_failure_code(
+        255, '', 'PHP Fatal error: Uncaught TypeError: hidden details') == (
+            'off_setting_php_child_rc255_php_fatal_uncaught_typeerror')
     assert off_setting_child_failure_code(1, '', '') == (
         'off_setting_php_child_rc1_empty_process_output')
     assert off_setting_child_failure_code('1', 'raw output', 'raw output') == (
