@@ -586,7 +586,7 @@ def verify_restore_receipt(app_sha=APP_SHA, receipt_fd=None, expected_sha256=Non
             or value.get('mysql_server_uuid_sha256')!=MYSQL_UUID_SHA
             or value.get('mysql_version')!='8.4.11'
             or not isinstance(value.get('restore_database'),str)
-            or not re.fullmatch(r'wpcg_recovery_restore_[a-f0-9]{12}',value['restore_database'])
+            or not re.fullmatch(r'wpcg_recovery_restore_[0-9]{8}_[0-9a-f]{8}',value['restore_database'])
             or any(value.get(key) is not True for key in
                    ('import_verified','schema_verified','ledger_verified','triggers_verified'))
             or not isinstance(value.get('recorded_at_utc'),str)
