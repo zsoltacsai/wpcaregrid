@@ -95,6 +95,21 @@ def off_setting_child_failure_code(returncode, stdout, stderr):
     return f'off_setting_php_child_rc{returncode}_{category}'
 
 
+def trigger_rejection_probe_php(migration_file):
+    if migration_file not in TARGET_FILES:
+        raise ValueError('unapproved_rehearsal_migration')
+    return (
+        'require "vendor/autoload.php";'
+        '$app=require "bootstrap/app.php";'
+        '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();'
+        '$migration=require "database/migrations/' + migration_file + '";'
+        'try{$migration->up(); echo "UNEXPECTED_SUCCESS"; exit(3);}catch(Throwable $e){'
+        '$x=$e; while($x && !($x instanceof PDOException)){$x=$x->getPrevious();}'
+        '$i=$x instanceof PDOException ? $x->errorInfo : null;'
+        'echo json_encode(["sqlstate"=>$i[0]??$e->getCode(),"errno"=>isset($i[1])?(int)$i[1]:null]);}'
+    )
+
+
 def test_baseline_failure_diagnostic_classifier():
     assert baseline_failure_code(2, 'SQLSTATE[HY000]: General error: 1419 trigger rejected') == (
         'historical_baseline_failed_rc2_kindMYSQL_ERROR_sqlstateHY000_errno1419')
@@ -122,6 +137,18 @@ def test_off_setting_child_failure_classifier():
     assert off_setting_child_failure_code(
         255, '', 'PHP Fatal error: Class "Illuminate\\Contracts\\Console\\Kernel" not found') == (
             'off_setting_php_child_rc255_php_fatal_class_not_found_illuminate_contracts_console_kernel')
+
+
+def test_trigger_rejection_probe_loads_composer_autoloader():
+    code = trigger_rejection_probe_php(TARGET_FILES[0])
+    assert code.index('require "vendor/autoload.php";') < code.index('require "bootstrap/app.php";')
+    assert 'exit(3)' in code and '"errno"=>isset($i[1])?(int)$i[1]:null' in code
+    try:
+        trigger_rejection_probe_php('unapproved-migration.php')
+    except ValueError as error:
+        assert str(error) == 'unapproved_rehearsal_migration'
+    else:
+        raise AssertionError('unapproved migration probe was accepted')
     assert off_setting_child_failure_code(
         255, '', 'PHP Fatal error: Uncaught Illuminate\\Database\\QueryException: hidden details') == (
             'off_setting_php_child_rc255_php_fatal_uncaught_illuminate_database_queryexception')
@@ -136,6 +163,7 @@ def test_off_setting_child_failure_classifier():
 def main():
     test_baseline_failure_diagnostic_classifier()
     test_off_setting_child_failure_classifier()
+    test_trigger_rejection_probe_loads_composer_autoloader()
     host = os.environ.get('WPCG_RECOVERY_MYSQL_HOST', '127.0.0.1')
     port = os.environ.get('WPCG_RECOVERY_MYSQL_PORT', '3308')
     root_password = os.environ.get('WPCG_RECOVERY_MYSQL_ROOT_PASSWORD')
@@ -254,15 +282,7 @@ def main():
 
         mysql_admin('SET GLOBAL log_bin_trust_function_creators=OFF')
         migration_file = TARGET_FILES[0]
-        failed = php_run(
-            '$app=require "bootstrap/app.php";'
-            '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();'
-            '$migration=require "database/migrations/' + migration_file + '";'
-            'try{$migration->up(); echo "UNEXPECTED_SUCCESS"; exit(3);}catch(Throwable $e){'
-            '$x=$e; while($x && !($x instanceof PDOException)){$x=$x->getPrevious();}'
-            '$i=$x instanceof PDOException ? $x->errorInfo : null;'
-            'echo json_encode(["sqlstate"=>$i[0]??$e->getCode(),"errno"=>isset($i[1])?(int)$i[1]:null]);}'
-        )
+        failed = php_run(trigger_rejection_probe_php(migration_file))
         if failed.returncode != 0:
             require(False, off_setting_child_failure_code(
                 failed.returncode, failed.stdout, failed.stderr))
