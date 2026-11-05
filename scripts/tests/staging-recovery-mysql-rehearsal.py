@@ -110,6 +110,13 @@ def trigger_rejection_probe_php(migration_file):
     )
 
 
+def isolated_mysql_uuid_sha(value):
+    if not isinstance(value, str) or not re.fullmatch(
+            r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}', value):
+        raise ValueError('mysql_rehearsal_server_uuid_invalid')
+    return hashlib.sha256(value.encode('ascii')).hexdigest()
+
+
 def test_baseline_failure_diagnostic_classifier():
     assert baseline_failure_code(2, 'SQLSTATE[HY000]: General error: 1419 trigger rejected') == (
         'historical_baseline_failed_rc2_kindMYSQL_ERROR_sqlstateHY000_errno1419')
@@ -137,6 +144,15 @@ def test_off_setting_child_failure_classifier():
     assert off_setting_child_failure_code(
         255, '', 'PHP Fatal error: Class "Illuminate\\Contracts\\Console\\Kernel" not found') == (
             'off_setting_php_child_rc255_php_fatal_class_not_found_illuminate_contracts_console_kernel')
+    assert off_setting_child_failure_code(
+        255, '', 'PHP Fatal error: Uncaught Illuminate\\Database\\QueryException: hidden details') == (
+            'off_setting_php_child_rc255_php_fatal_uncaught_illuminate_database_queryexception')
+    assert off_setting_child_failure_code(1, '', '') == (
+        'off_setting_php_child_rc1_empty_process_output')
+    assert off_setting_child_failure_code('1', 'raw output', 'raw output') == (
+        'off_setting_php_exit_code_invalid')
+    assert off_setting_child_failure_code(1, 'raw output', 'raw diagnostic') == (
+        'off_setting_php_child_rc1_unexpected_process_output')
 
 
 def test_trigger_rejection_probe_loads_composer_autoloader():
@@ -149,21 +165,25 @@ def test_trigger_rejection_probe_loads_composer_autoloader():
         assert str(error) == 'unapproved_rehearsal_migration'
     else:
         raise AssertionError('unapproved migration probe was accepted')
-    assert off_setting_child_failure_code(
-        255, '', 'PHP Fatal error: Uncaught Illuminate\\Database\\QueryException: hidden details') == (
-            'off_setting_php_child_rc255_php_fatal_uncaught_illuminate_database_queryexception')
-    assert off_setting_child_failure_code(1, '', '') == (
-        'off_setting_php_child_rc1_empty_process_output')
-    assert off_setting_child_failure_code('1', 'raw output', 'raw output') == (
-        'off_setting_php_exit_code_invalid')
-    assert off_setting_child_failure_code(1, 'raw output', 'raw diagnostic') == (
-        'off_setting_php_child_rc1_unexpected_process_output')
+
+
+def test_isolated_mysql_uuid_pin_is_derived_from_service_identity():
+    uuid = '12345678-1234-4234-8234-123456789abc'
+    assert isolated_mysql_uuid_sha(uuid) == hashlib.sha256(uuid.encode('ascii')).hexdigest()
+    for invalid in ('', 'not-a-uuid', None, '12345678-1234-4234-8234-123456789abz'):
+        try:
+            isolated_mysql_uuid_sha(invalid)
+        except ValueError as error:
+            assert str(error) == 'mysql_rehearsal_server_uuid_invalid'
+        else:
+            raise AssertionError('invalid isolated MySQL identity was accepted')
 
 
 def main():
     test_baseline_failure_diagnostic_classifier()
     test_off_setting_child_failure_classifier()
     test_trigger_rejection_probe_loads_composer_autoloader()
+    test_isolated_mysql_uuid_pin_is_derived_from_service_identity()
     host = os.environ.get('WPCG_RECOVERY_MYSQL_HOST', '127.0.0.1')
     port = os.environ.get('WPCG_RECOVERY_MYSQL_PORT', '3308')
     root_password = os.environ.get('WPCG_RECOVERY_MYSQL_ROOT_PASSWORD')
@@ -186,6 +206,7 @@ def main():
         'APP', 'PHP', 'verify_fatal_inert_protected_state', 'verify_backup',
         'verify_restore_receipt', 'verify_provenance', 'verify_application_checkout', 'load_attestation',
         'verify_pre_recovery_backup', 'PRE_RECOVERY_BACKUP_DIR',
+        'MYSQL_UUID_SHA',
         '_readiness_runtime', '_readiness_composer', 'verify_profile', 'verify_health',
         'verify_laravel_config_cache', 'write_receipt', 'COMPOSER', 'COMPOSER_SHA',
     )}
@@ -230,11 +251,12 @@ def main():
 
         settings = mysql_admin(
             "SELECT VERSION(),@@GLOBAL.log_bin,@@GLOBAL.binlog_format,"
-            "@@GLOBAL.log_bin_trust_function_creators"
+            "@@GLOBAL.log_bin_trust_function_creators,@@GLOBAL.server_uuid"
         ).split('\t')
-        require(len(settings) == 4 and settings[0] == '8.4.11'
+        require(len(settings) == 5 and settings[0] == '8.4.11'
                 and settings[1] in ('1', 'ON') and settings[2].upper() == 'ROW'
                 and settings[3] in ('0', 'OFF'), 'mysql_rehearsal_service_contract_invalid')
+        RECOVERY.MYSQL_UUID_SHA = isolated_mysql_uuid_sha(settings[4])
         absent = mysql_admin(
             "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='"
             + database + "'), '|', (SELECT COUNT(*) FROM mysql.user WHERE user='"
