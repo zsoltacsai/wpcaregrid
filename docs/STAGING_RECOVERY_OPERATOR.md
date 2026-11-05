@@ -35,6 +35,12 @@ their own exact artifact, backup, application, runtime, migration, and safety ch
 
 ## Required DBA interlock
 
+The root-owned isolated-restore receipt's `restore_database` must match
+`wpcg_recovery_restore_[0-9]{8}_[0-9a-f]{8}` exactly, consistent with the
+reviewed `scripts/isolated-staging-restore.py` disposable-schema contract.
+The earlier 12-hex-only receipt name is not valid. Do not rename an existing
+schema or relax the restore tool's schema-name validation to work around a mismatch.
+
 The recovery readiness phase requires both the pinned original backup and a separate
 fresh backup of the current partial database, the isolated-restore receipt, exact
 partial-schema state, PHP 8.4 and Nginx checks, closed maintenance gate, active worker
