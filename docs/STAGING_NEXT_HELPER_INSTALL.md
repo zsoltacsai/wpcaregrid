@@ -13,7 +13,7 @@ The only enabled profile in this release is `staging-next`, bound in source to:
 
 | Identity | Pinned value |
 | --- | --- |
-| Entrypoint | `/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.0/wpcaregrid-deploy-staging-next-priv` |
+| Entrypoint | `/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.1/wpcaregrid-deploy-staging-next-priv` |
 | Application | `/var/www/wpcaregrid-staging-new` |
 | Database | `wpcg_staging_next` |
 | Host | `staging-next.wpcaregrid.com` |
@@ -24,9 +24,9 @@ Source artifacts at this change's current candidate bytes (reconfirm from the
 final merged SHA before installation):
 
 - `scripts/wpcaregrid_deploy_profiles.py` —
-  `06dad0e118fbb0796a78eea52a1e6ec6a9cfe876db7e83516a92c5e102c671bc`
+  `27c122e11de038c2bf28f9bc462e4b78c695777a8d592a23428f17b5dc819bf7`
 - `scripts/wpcaregrid-deploy-env-priv.py` —
-  `116d1c1b579ae0d2f4e5a8653a54e1a52adf5a7f4fe50e7fac8ab94b23fa4c91`
+  `0bc491358c8cbda56e88eef0d6e0fff0b944bd533eca5583555e02048afd7533`
 
 Production is represented by a disabled profile with no path, database, host,
 policy file, caller UID, or operation. No production helper, sudoers entry,
@@ -52,7 +52,7 @@ must be the separately approved staging-next deploy identity.
    no service-control operation, so service names are recorded for the future
    deploy contract but are not allowlisted here.
 3. Confirm the versioned destination does not exist. Create the exact
-   `/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.0` directory
+   `/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.1` directory
    root:root `0755`; transfer only the two verified files into a private
    administrator-owned staging directory; install the entrypoint as root:root
    `0755` and the module as root:root `0644`. Refuse every pre-existing file.
@@ -68,7 +68,7 @@ must be the separately approved staging-next deploy identity.
    Set schema `1`, profile
    `staging-next`, enabled `true`, the verified numeric nonzero deploy UID,
    the four compiled target values above, and operations `['preflight']`.
-   Pin `helper_version=1.0.0`, `compatibility_contract=wpcaregrid-deploy-profile-v1`,
+   Pin `helper_version=1.0.1`, `compatibility_contract=wpcaregrid-deploy-profile-v1`,
    and the exact two installed file hashes from the merged source manifest.
    Verify root ownership, mode `0644`, strict JSON with no duplicate or unknown
    keys, exact schema and matching helper bytes. Do not place credentials in

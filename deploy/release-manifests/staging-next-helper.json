@@ -1,10 +1,10 @@
 {
   "schema": 1,
-  "helper_version": "1.0.0",
+  "helper_version": "1.0.1",
   "compatibility_contract": "wpcaregrid-deploy-profile-v1",
   "profile": "staging-next",
   "enabled": true,
-  "entrypoint": "/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.0/wpcaregrid-deploy-staging-next-priv",
+  "entrypoint": "/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.1/wpcaregrid-deploy-staging-next-priv",
   "target": {
     "app_dir": "/var/www/wpcaregrid-staging-new",
     "database": "wpcg_staging_next",
@@ -14,11 +14,11 @@
   "artifacts": [
     {
       "path": "scripts/wpcaregrid_deploy_profiles.py",
-      "sha256": "06dad0e118fbb0796a78eea52a1e6ec6a9cfe876db7e83516a92c5e102c671bc"
+      "sha256": "27c122e11de038c2bf28f9bc462e4b78c695777a8d592a23428f17b5dc819bf7"
     },
     {
       "path": "scripts/wpcaregrid-deploy-env-priv.py",
-      "sha256": "116d1c1b579ae0d2f4e5a8653a54e1a52adf5a7f4fe50e7fac8ab94b23fa4c91"
+      "sha256": "0bc491358c8cbda56e88eef0d6e0fff0b944bd533eca5583555e02048afd7533"
     }
   ]
 }

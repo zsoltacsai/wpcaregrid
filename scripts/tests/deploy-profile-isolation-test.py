@@ -16,6 +16,12 @@ PROFILES = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = PROFILES
 SPEC.loader.exec_module(PROFILES)
 
+HELPER_SPEC = importlib.util.spec_from_file_location(
+    "deploy_profile_entrypoint", ROOT / "scripts" / "wpcaregrid-deploy-env-priv.py"
+)
+HELPER = importlib.util.module_from_spec(HELPER_SPEC)
+HELPER_SPEC.loader.exec_module(HELPER)
+
 
 def policy(**changes):
     helper_bytes = b"synthetic staging helper bytes"
@@ -29,7 +35,7 @@ def policy(**changes):
         "database": "wpcg_staging_next",
         "host": "staging-next.wpcaregrid.com",
         "operations": ["preflight"],
-        "helper_version": "1.0.0",
+        "helper_version": "1.0.1",
         "compatibility_contract": "wpcaregrid-deploy-profile-v1",
         "entrypoint_sha256": hashlib.sha256(helper_bytes).hexdigest(),
         "profiles_module_sha256": hashlib.sha256(module_bytes).hexdigest(),
@@ -208,8 +214,49 @@ class DeployProfileIsolationTest(unittest.TestCase):
             PROFILES.STAGING_NEXT_ENTRYPOINT,
             lstat_fn=lambda path: good if str(path).endswith("wpcaregrid-deploy-staging-next-priv")
             else type("Info", (), {"st_mode": stat.S_IFDIR | 0o777, "st_uid": 0})()
-            if str(path).endswith("1.0.0") else parent,
+            if str(path).endswith("1.0.1") else parent,
         ))
+
+    def test_entrypoint_verifies_shared_module_hash_before_execution(self):
+        module_path = str(PROFILES.STAGING_NEXT_ENTRYPOINT.parent / "wpcaregrid_deploy_profiles.py")
+        source = b"raise RuntimeError('must not execute before hash validation')"
+        expected = hashlib.sha256(b"approved different bytes").hexdigest()
+
+        def lstat(path):
+            if path == HELPER.EXPECTED_ENTRYPOINT:
+                return type("Info", (), {"st_mode": stat.S_IFREG | 0o755, "st_uid": 0})()
+            if path == module_path:
+                return type("Info", (), {"st_mode": stat.S_IFREG | 0o644, "st_uid": 0, "st_size": len(source)})()
+            return type("Info", (), {"st_mode": stat.S_IFDIR | 0o755, "st_uid": 0})()
+
+        with self.assertRaises(HELPER.BootstrapRefused) as caught:
+            HELPER._load_verified_profiles_module(
+                HELPER.EXPECTED_ENTRYPOINT,
+                lstat_fn=lstat,
+                read_module_fn=lambda _path: source,
+                expected_module_sha256=expected,
+            )
+        self.assertEqual(str(caught.exception), "helper_identity_mismatch")
+
+    def test_entrypoint_executes_only_the_exactly_pinned_shared_module_bytes(self):
+        module_path = str(PROFILES.STAGING_NEXT_ENTRYPOINT.parent / "wpcaregrid_deploy_profiles.py")
+        source = b"VERIFIED_MODULE = True"
+        expected = hashlib.sha256(source).hexdigest()
+
+        def lstat(path):
+            if path == HELPER.EXPECTED_ENTRYPOINT:
+                return type("Info", (), {"st_mode": stat.S_IFREG | 0o755, "st_uid": 0})()
+            if path == module_path:
+                return type("Info", (), {"st_mode": stat.S_IFREG | 0o644, "st_uid": 0, "st_size": len(source)})()
+            return type("Info", (), {"st_mode": stat.S_IFDIR | 0o755, "st_uid": 0})()
+
+        loaded = HELPER._load_verified_profiles_module(
+            HELPER.EXPECTED_ENTRYPOINT,
+            lstat_fn=lstat,
+            read_module_fn=lambda _path: source,
+            expected_module_sha256=expected,
+        )
+        self.assertTrue(loaded.VERIFIED_MODULE)
 
     def test_target_path_is_fixed_and_symlink_free(self):
         directory = type("Info", (), {"st_mode": stat.S_IFDIR | 0o755})()
@@ -234,7 +281,7 @@ class DeployProfileIsolationTest(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest["profile"], "staging-next")
         self.assertTrue(manifest["enabled"])
-        self.assertEqual(manifest["helper_version"], "1.0.0")
+        self.assertEqual(manifest["helper_version"], "1.0.1")
         self.assertEqual(manifest["compatibility_contract"], "wpcaregrid-deploy-profile-v1")
         self.assertNotIn("application_sha", manifest)
         self.assertEqual(manifest["entrypoint"], str(PROFILES.STAGING_NEXT_ENTRYPOINT))
@@ -251,6 +298,9 @@ class DeployProfileIsolationTest(unittest.TestCase):
             actual = hashlib.sha256((ROOT / artifact["path"]).read_bytes()).hexdigest()
             self.assertRegex(artifact["sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(actual, artifact["sha256"], artifact["path"])
+            if artifact["path"] == "scripts/wpcaregrid_deploy_profiles.py":
+                self.assertEqual(actual, HELPER.EXPECTED_PROFILES_MODULE_SHA256)
+        self.assertIn("#!/usr/bin/python3 -I", (ROOT / "scripts" / "wpcaregrid-deploy-env-priv.py").read_text())
 
     def test_production_manifest_is_explicitly_inert_without_target_or_allowlist(self):
         manifest = json.loads((ROOT / "deploy" / "release-manifests" / "production-helper.json").read_text(encoding="utf-8"))
