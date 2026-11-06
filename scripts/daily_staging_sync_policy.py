@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pure fail-closed decision policy for the staging-next daily sync dry-run."""
+"""Pure fail-closed decision policy for staging-next release synchronization."""
 
 from __future__ import annotations
 
@@ -81,33 +81,40 @@ def evaluate_sync(manifest: object, deployed: object) -> SyncDecision:
     evidence = manifest["required_evidence"]
     if not isinstance(evidence, Mapping) or set(evidence) != REQUIRED_EVIDENCE:
         return SyncDecision("HOLD", ("release_acceptance_incomplete",))
+
+    # Validate independent evidence blocks together. This gives an operator a
+    # complete, deterministic blocker list without treating any partial PASS as
+    # overall readiness.
+    blockers: list[str] = []
     environment = evidence["environment_identity"]
     if not _bound_pass(
         environment, {"status", "profile", "app_dir", "database", "host"},
         profile="staging-next", app_dir=APP_DIR, database=DATABASE, host=HOST,
     ):
-        return SyncDecision("HOLD", ("environment_identity_unverified",))
+        blockers.append("environment_identity_unverified")
     if not _bound_pass(
         evidence["artifact_integrity"], {"status", "application_sha", "artifact_sha256"},
         application_sha=manifest["application_sha"], artifact_sha256=manifest["artifact_sha256"],
     ):
-        return SyncDecision("HOLD", ("artifact_integrity_unverified",))
+        blockers.append("artifact_integrity_unverified")
     exact_head_ci = evidence["exact_head_ci"]
     if (not _bound_pass(exact_head_ci, {"status", "commit_sha", "run_id"},
                         commit_sha=manifest["exact_head_sha"])
             or type(exact_head_ci.get("run_id")) is not int or exact_head_ci["run_id"] <= 0):
-        return SyncDecision("HOLD", ("exact_head_ci_unverified",))
+        blockers.append("exact_head_ci_unverified")
     merge_ci = evidence["merge_sha_ci"]
     if (not _bound_pass(merge_ci, {"status", "commit_sha", "run_id"},
                         commit_sha=manifest["merge_sha"])
             or type(merge_ci.get("run_id")) is not int or merge_ci["run_id"] <= 0):
-        return SyncDecision("HOLD", ("merge_sha_ci_unverified",))
+        blockers.append("merge_sha_ci_unverified")
     if not _bound_pass(evidence["integration_qa"], {"status", "commit_sha"},
                        commit_sha=manifest["exact_head_sha"]):
-        return SyncDecision("HOLD", ("integration_qa_unverified",))
+        blockers.append("integration_qa_unverified")
     if not _bound_pass(evidence["m17_appsec"], {"status", "commit_sha"},
                        commit_sha=manifest["exact_head_sha"]):
-        return SyncDecision("HOLD", ("m17_appsec_unverified",))
+        blockers.append("m17_appsec_unverified")
+    if blockers:
+        return SyncDecision("HOLD", tuple(blockers))
 
     if not isinstance(manifest["database_changes"], bool):
         return SyncDecision("HOLD", ("database_change_scope_unknown",))
@@ -116,13 +123,14 @@ def evaluate_sync(manifest: object, deployed: object) -> SyncDecision:
             and manifest["artifact_sha256"] == deployed["artifact_sha256"]):
         return SyncDecision("NO_OP", ())
 
-    if manifest["database_changes"]:
-        db_evidence = manifest["database_evidence"]
-        if (not isinstance(db_evidence, Mapping) or set(db_evidence) != DATABASE_EVIDENCE
-                or any(value != "PASS" for value in db_evidence.values())):
-            return SyncDecision("HOLD", ("database_safety_evidence_incomplete",))
-    elif manifest["database_evidence"] != {}:
-        return SyncDecision("HOLD", ("unexpected_database_evidence",))
+    # `database_changes` is a caller-declared manifest field, not independently
+    # authenticated migration-scope evidence. Until the release artifact has a
+    # trusted migration-scope attestation, require the recovery evidence for
+    # every changed release. A false declaration must not bypass these gates.
+    db_evidence = manifest["database_evidence"]
+    if (not isinstance(db_evidence, Mapping) or set(db_evidence) != DATABASE_EVIDENCE
+            or any(value != "PASS" for value in db_evidence.values())):
+        return SyncDecision("HOLD", ("database_safety_evidence_incomplete",))
 
     # This policy package intentionally has no deployment operation. Even a
     # fully eligible new release remains held until a separately reviewed,

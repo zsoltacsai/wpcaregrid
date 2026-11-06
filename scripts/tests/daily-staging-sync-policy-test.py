@@ -164,11 +164,25 @@ class DailyStagingSyncPolicyTest(unittest.TestCase):
                 self.assertEqual(self.decide(manifest(database_evidence=proof)).reasons,
                                  ("database_safety_evidence_incomplete",))
 
-    def test_no_database_change_requires_empty_database_evidence(self):
+    def test_database_scope_declaration_cannot_bypass_recovery_evidence(self):
         result = self.decide(manifest(database_changes=False, database_evidence={}))
-        self.assertEqual(result.reasons, ("deployment_operation_not_in_approved_helper_contract",))
-        self.assertEqual(self.decide(manifest(database_changes=False)).reasons,
-                         ("unexpected_database_evidence",))
+        self.assertEqual(result.reasons, ("database_safety_evidence_incomplete",))
+        self.assertEqual(
+            self.decide(manifest(database_changes=False,
+                                 database_evidence={name: "PASS" for name in POLICY.DATABASE_EVIDENCE})).reasons,
+            ("deployment_operation_not_in_approved_helper_contract",),
+        )
+
+    def test_independent_acceptance_blockers_are_reported_together_in_stable_order(self):
+        proof = evidence()
+        proof["environment_identity"] = {"status": "UNKNOWN"}
+        proof["exact_head_ci"] = {"status": "PASS", "commit_sha": "e" * 40, "run_id": 0}
+        proof["integration_qa"] = {"status": "FAIL", "commit_sha": "e" * 40}
+        proof["m17_appsec"] = {"status": "UNKNOWN", "commit_sha": "e" * 40}
+        self.assertEqual(self.decide(manifest(required_evidence=proof)).reasons, (
+            "environment_identity_unverified", "exact_head_ci_unverified",
+            "integration_qa_unverified", "m17_appsec_unverified",
+        ))
 
     def test_unknown_or_extra_manifest_fields_fail_closed(self):
         value = manifest()
