@@ -34,8 +34,8 @@ class LocalizedMarketingRoutesTest extends TestCase
     public function test_all_supported_marketing_routes_render_their_url_locale_and_seo_metadata(): void
     {
         $cases = [
-            ['/en/', 'en', 'WordPress maintenance, without the hassle.', 'https://wpcaregrid.com/en/'],
-            ['/hu/', 'hu', 'WordPress-karbantartás, gond nélkül.', 'https://wpcaregrid.com/hu/'],
+            ['/en/', 'en', 'We work in the background. You see it all clearly.', 'https://wpcaregrid.com/en/'],
+            ['/hu/', 'hu', 'A háttérben dolgozunk. Ön tisztán lát.', 'https://wpcaregrid.com/hu/'],
             ['/en/pricing', 'en', 'Plans and pricing', 'https://wpcaregrid.com/en/pricing'],
             ['/hu/pricing', 'hu', 'Csomagok és árak', 'https://wpcaregrid.com/hu/pricing'],
         ];

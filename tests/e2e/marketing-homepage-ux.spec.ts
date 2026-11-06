@@ -12,8 +12,11 @@ test.skip(
 
 for (const locale of ['en', 'hu'] as const) {
     for (const viewport of [
-        { name: 'desktop', width: 1440, height: 900 },
-        { name: 'mobile', width: 390, height: 844 },
+        { name: 'mobile-320', width: 320, height: 780 },
+        { name: 'mobile-375', width: 375, height: 812 },
+        { name: 'mobile-390', width: 390, height: 844 },
+        { name: 'tablet-768', width: 768, height: 1024 },
+        { name: 'desktop-1440', width: 1440, height: 900 },
     ]) {
         test(`${locale} homepage ${viewport.name}: focused layout, CTA and anchor regressions`, async ({ page }, testInfo) => {
             const pageErrors: string[] = [];
@@ -72,7 +75,7 @@ for (const locale of ['en', 'hu'] as const) {
 
             await expect(page.locator('html')).toHaveAttribute('lang', locale);
             await expect(page.locator('h1')).toHaveText(
-                locale === 'en' ? 'WordPress maintenance, without the hassle.' : 'WordPress-karbantartás, gond nélkül.',
+                locale === 'en' ? 'We work in the background. You see it all clearly.' : 'A háttérben dolgozunk. Ön tisztán lát.',
             );
 
             const hero = page.locator('section[aria-labelledby="hero-title"]');
@@ -83,6 +86,10 @@ for (const locale of ['en', 'hu'] as const) {
             await expect(heroLinks.nth(1)).toContainText(locale === 'en' ? 'How it works' : 'Hogyan működik');
             await expect(heroLinks.nth(1)).toHaveAttribute('href', /#how-it-works$/);
             await expect(hero.locator('figure')).toHaveCount(0);
+            await expect(hero.locator('[data-graphite-wave]')).toHaveAttribute('aria-hidden', 'true');
+            await expect(page.locator('body')).toHaveClass(/marketing-home/);
+            await expect(page.locator('header a[aria-label]').first().locator('svg').first()).toBeVisible();
+            await expect(page.locator('body')).toHaveCSS('font-family', /IBM Plex Sans/);
 
             const dashboard = page.locator('section[aria-labelledby="dashboard-title"]');
             await expect(dashboard.locator('figure')).toHaveCount(1);
@@ -100,11 +107,23 @@ for (const locale of ['en', 'hu'] as const) {
                 viewport: document.documentElement.clientWidth,
                 document: document.documentElement.scrollWidth,
                 body: document.body.scrollWidth,
+                hero: (() => {
+                    const rect = document.querySelector('#hero-title').getBoundingClientRect();
+                    return { left: rect.left, right: rect.right, width: rect.width };
+                })(),
+                cards: [...document.querySelectorAll('#pricing li > article')].map((element) => {
+                    const rect = element.getBoundingClientRect();
+                    return { left: rect.left, right: rect.right };
+                }),
             }));
             expect(dimensions.document).toBeLessThanOrEqual(dimensions.viewport);
             expect(dimensions.body).toBeLessThanOrEqual(dimensions.viewport);
+            expect(dimensions.hero.left).toBeGreaterThanOrEqual(0);
+            expect(dimensions.hero.right).toBeLessThanOrEqual(dimensions.viewport);
+            expect(dimensions.cards.every((card) => card.left >= 0 && card.right <= dimensions.viewport)).toBe(true);
 
             await page.screenshot({ path: testInfo.outputPath(`${locale}-${viewport.name}-after.png`), fullPage: true });
+            await hero.screenshot({ path: testInfo.outputPath(`${locale}-${viewport.name}-hero.png`) });
 
             await page.keyboard.press('Tab');
             const activeElement = page.locator(':focus');
@@ -130,6 +149,23 @@ for (const locale of ['en', 'hu'] as const) {
             await page.keyboard.press('Enter');
             await expect(page).toHaveURL(new RegExp(`/${locale}/#how-it-works$`));
             await expect(page.locator('#how-it-works')).toBeVisible();
+
+            if (viewport.width === 1440) {
+                const pricing = page.locator('#pricing');
+                const productTabs = pricing.locator('[role="tablist"] [role="tab"]');
+                await expect(productTabs).toHaveCount(2);
+                await productTabs.nth(1).click();
+                await expect(productTabs.nth(1)).toHaveAttribute('aria-selected', 'true');
+
+                const billingOptions = pricing.locator('[role="group"] button[aria-pressed]');
+                await expect(billingOptions).toHaveCount(2);
+                await billingOptions.nth(1).click();
+                await expect(billingOptions.nth(1)).toHaveAttribute('aria-pressed', 'true');
+                await expect(pricing).toContainText(locale === 'en' ? '2 months free' : '2 hónap ingyenes');
+                await expect(pricing.locator('[data-price="annual"]').first()).toBeVisible();
+                await expect(pricing.locator('[data-price="monthly"]').first()).toBeHidden();
+                await expect(page).not.toHaveURL(/checkout/);
+            }
 
             expect(pageErrors).toEqual([]);
             expect(consoleErrors).toEqual([]);
