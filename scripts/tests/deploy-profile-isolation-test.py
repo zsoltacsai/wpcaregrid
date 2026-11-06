@@ -331,8 +331,11 @@ class DeployProfileIsolationTest(unittest.TestCase):
         self.assertEqual(manifest["helper_version"], "1.0.1")
         self.assertEqual(manifest["helper_version"], sync_policy.HELPER_VERSION)
         self.assertEqual(manifest["compatibility_contract"], "wpcaregrid-deploy-profile-v1")
+        self.assertEqual(manifest["compatibility_contract"], PROFILES.STAGING_NEXT_COMPATIBILITY_CONTRACT)
+        self.assertEqual(manifest["compatibility_contract"], sync_policy.HELPER_CONTRACT)
         self.assertNotIn("application_sha", manifest)
         self.assertEqual(manifest["entrypoint"], str(PROFILES.STAGING_NEXT_ENTRYPOINT))
+        self.assertEqual(manifest["entrypoint"], HELPER.EXPECTED_ENTRYPOINT)
         self.assertEqual(manifest["target"], {
             "app_dir": "/var/www/wpcaregrid-staging-new",
             "database": "wpcg_staging_next",
