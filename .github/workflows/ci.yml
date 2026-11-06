@@ -113,9 +113,13 @@ jobs:
           python3 scripts/tests/deploy-privilege-policy-test.py
           python3 scripts/tests/deploy-profile-isolation-test.py
           python3 scripts/tests/daily-staging-sync-policy-test.py
+          python3 scripts/tests/staging-next-helper-consistency-test.py
           python3 scripts/tests/staging-recovery-operator-test.py
+          bash scripts/tests/staging-next-deploy-e2e.sh
           bash -n scripts/staging-recovery-operator-dispatch.sh
-          python3 -m py_compile scripts/recover-staging-deployment.py scripts/wpcaregrid-deploy-priv.py scripts/wpcaregrid_deploy_profiles.py scripts/wpcaregrid-deploy-env-priv.py scripts/daily_staging_sync_policy.py scripts/staging-recovery-operator.py scripts/tests/deploy-profile-isolation-test.py scripts/tests/daily-staging-sync-policy-test.py scripts/tests/staging-recovery-operator-test.py scripts/tests/staging-recovery-mysql-rehearsal.py
+          bash -n scripts/tests/staging-next-deploy-e2e.sh
+          php -l scripts/tests/staging-next-php-mysql-router.php
+          python3 -m py_compile scripts/recover-staging-deployment.py scripts/wpcaregrid-deploy-priv.py scripts/wpcaregrid_deploy_profiles.py scripts/wpcaregrid-deploy-env-priv.py scripts/daily_staging_sync_policy.py scripts/staging_next_deploy_backend.py scripts/staging_next_deploy_controller.py scripts/wpcaregrid-staging-next-deploy-priv.py scripts/staging-recovery-operator.py scripts/tests/deploy-profile-isolation-test.py scripts/tests/daily-staging-sync-policy-test.py scripts/tests/staging-next-helper-consistency-test.py scripts/tests/staging-next-deploy-backend-test.py scripts/tests/staging-next-deploy-controller-test.py scripts/tests/staging-next-helper-contract-test.py scripts/tests/staging-recovery-operator-test.py scripts/tests/staging-recovery-mysql-rehearsal.py
           python3 scripts/tests/release-artifact-consistency-test.py
 
       - name: Isolated staging database restore preflight policy
