@@ -22,6 +22,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'app.url' => 'https://wpcaregrid.com',
             'marketing_release.profile' => 'marketing_only',
             'marketing_release.enforcement_mode' => 'enforced',
+            'marketing_release.staging_admin_qa_enabled' => false,
             'app.env' => 'production',
             'app.deployment_environment' => 'production',
         ]);
@@ -169,6 +170,105 @@ class MarketingOnlyReleaseGateTest extends TestCase
             [$response, $dispatched] = $this->runGate($path, $method, profile: 'invitation_beta');
             $this->assertFalse($dispatched, 'Profile selection alone must not open '.$method.' '.$path);
             $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
+        }
+    }
+
+    public function test_staging_admin_qa_exposes_only_https_internal_read_pages_and_authentication(): void
+    {
+        config([
+            'app.url' => 'https://staging-next.wpcaregrid.com',
+            'app.env' => 'staging',
+            'app.deployment_environment' => 'staging_next',
+            'app.debug' => false,
+            'marketing_release.profile' => 'staging_admin_qa',
+            'marketing_release.staging_admin_qa_enabled' => true,
+        ]);
+
+        foreach ([
+            ['GET', '/owner'], ['GET', '/owner/customers'], ['GET', '/operator'],
+            ['GET', '/owner/operators/12/permissions'], ['GET', '/account'],
+            ['GET', '/account/websites'], ['GET', '/en/pricing'],
+            ['POST', '/login'], ['POST', '/owner/login'], ['POST', '/operator/login'],
+            ['POST', '/logout'],
+        ] as [$method, $path]) {
+            [$response, $dispatched] = $this->runGate(
+                $path, $method, host: 'staging-next.wpcaregrid.com', profile: 'staging_admin_qa'
+            );
+            $this->assertTrue($dispatched, $method.' '.$path.' should be available to authenticated staging QA routes');
+            $this->assertSame(Response::HTTP_NO_CONTENT, $response->getStatusCode());
+        }
+    }
+
+    public function test_staging_admin_qa_keeps_payments_external_effects_and_mutations_closed(): void
+    {
+        config([
+            'app.url' => 'https://staging-next.wpcaregrid.com',
+            'app.env' => 'staging',
+            'app.deployment_environment' => 'staging_next',
+            'app.debug' => false,
+            'marketing_release.profile' => 'staging_admin_qa',
+            'marketing_release.staging_admin_qa_enabled' => true,
+        ]);
+
+        foreach ([
+            ['GET', '/register'], ['POST', '/register'], ['GET', '/checkout'], ['POST', '/checkout'],
+            ['POST', '/stripe/webhook'], ['POST', '/owner/pricing/verify-stripe'],
+            ['POST', '/owner/pricing/prices/1/publish'], ['POST', '/operator/websites/1/updates'],
+            ['POST', '/operator/websites/1/backups'], ['POST', '/operator/websites/1/security/scans'],
+            ['POST', '/account/websites/purchase'], ['POST', '/api/v1/connector/pair'],
+            ['GET', '/api/v1/connector/jobs'], ['POST', '/forgot-password'],
+            ['GET', '/owner/integrations'], ['GET', '/operator/websites/1/security'],
+            ['GET', '/account/websites/1/backups'],
+        ] as [$method, $path]) {
+            [$response, $dispatched] = $this->runGate(
+                $path, $method, host: 'staging-next.wpcaregrid.com', profile: 'staging_admin_qa'
+            );
+            $this->assertFalse($dispatched, $method.' '.$path.' must remain unavailable in staging QA mode');
+            $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
+        }
+    }
+
+    public function test_staging_admin_qa_identity_and_https_mismatches_fail_closed(): void
+    {
+        config([
+            'app.url' => 'https://staging-next.wpcaregrid.com',
+            'app.env' => 'staging',
+            'app.deployment_environment' => 'staging_next',
+            'app.debug' => false,
+            'marketing_release.profile' => 'staging_admin_qa',
+            'marketing_release.staging_admin_qa_enabled' => true,
+        ]);
+
+        foreach ([
+            ['staging-next.wpcaregrid.com', ['X-Forwarded-Host' => 'staging-next.wpcaregrid.com'], true],
+            ['staging-next.wpcaregrid.com', [], false],
+            ['wpcaregrid.com', [], true],
+        ] as [$host, $server, $https]) {
+            [$response, $dispatched] = $this->runGate(
+                '/owner', host: $host, profile: 'staging_admin_qa', https: $https, headers: $server
+            );
+            $this->assertFalse($dispatched);
+            $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
+        }
+
+        foreach ([
+            ['app.env' => 'production'],
+            ['app.deployment_environment' => 'production'],
+            ['app.debug' => true],
+            ['marketing_release.staging_admin_qa_enabled' => false],
+        ] as $mismatch) {
+            config($mismatch);
+            [$response, $dispatched] = $this->runGate(
+                '/owner', host: 'staging-next.wpcaregrid.com', profile: 'staging_admin_qa'
+            );
+            $this->assertFalse($dispatched);
+            $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
+            config([
+                'app.env' => 'staging',
+                'app.deployment_environment' => 'staging_next',
+                'app.debug' => false,
+                'marketing_release.staging_admin_qa_enabled' => true,
+            ]);
         }
     }
 
@@ -518,6 +618,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         array $headers = [],
         mixed $profile = 'marketing_only',
         bool $setProfile = true,
+        bool $https = true,
     ): array {
         if ($setProfile) {
             config(['marketing_release.profile' => $profile]);
@@ -526,7 +627,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         $requestUriForFactory = str_contains($uri, '\\') ? '/en/checkout' : $uri;
         $request = Request::create($requestUriForFactory, $method, [], [], [], [
             'HTTP_HOST' => $host,
-            'HTTPS' => 'on',
+            'HTTPS' => $https ? 'on' : 'off',
         ]);
         if ($requestUriForFactory !== $uri) {
             // Symfony rejects malformed backslash URIs at request construction;
