@@ -1,7 +1,7 @@
 # Laravel PHP 8.4 CI retirement — preparation only
 
-**Status:** `CI_PHP84_RETIREMENT=PREPARATION` / `REMOVAL_GATE=HOLD`  
-**Planning baseline:** `c9b1378cce26ab243bce2690749a57ecb15ad8dd`  
+**Status:** `CI_PHP84_RETIREMENT=PREPARATION` / `REMOVAL_GATE=HOLD`
+**Planning baseline:** `c9b1378cce26ab243bce2690749a57ecb15ad8dd`
 **Owner decision:** [Issue #285](https://github.com/zsoltacsai/wpcaregrid/issues/285)
 
 This document prepares a focused change; it does not remove, rename, or weaken any current check. Retirement is blocked until PHP 8.5 staging Laravel/runtime acceptance is formally recorded and the PHP 8.4 rollback window is explicitly closed by the Owner and Integration & QA.
