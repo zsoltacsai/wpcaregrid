@@ -444,11 +444,13 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:8000/en/ > /dev/null
           echo "LOCAL_LARAVEL_SERVER=PASS"
-          ./node_modules/.bin/playwright test \
+          PLAYWRIGHT_OUTPUT_DIR=storage/playwright/marketing-homepage \
+            ./node_modules/.bin/playwright test \
             tests/e2e/marketing-homepage-ux.spec.ts \
             tests/e2e/marketing-launch-ctas.spec.ts \
             --trace=off \
             --reporter=list,html,junit
+          PLAYWRIGHT_OUTPUT_DIR=storage/playwright/subscription-cancellation \
           PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/cancellation-html \
           PLAYWRIGHT_JUNIT_OUTPUT_NAME=playwright-report/cancellation-junit.xml \
             ./node_modules/.bin/playwright test tests/e2e/subscription-cancellation.spec.ts \
