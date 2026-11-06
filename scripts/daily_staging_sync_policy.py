@@ -12,7 +12,7 @@ APP_DIR = "/var/www/wpcaregrid-staging-new"
 DATABASE = "wpcg_staging_next"
 HOST = "staging-next.wpcaregrid.com"
 HELPER_CONTRACT = "wpcaregrid-deploy-profile-v1"
-HELPER_VERSION = "1.0.0"
+HELPER_VERSION = "1.0.1"
 REQUIRED_EVIDENCE = frozenset({
     "environment_identity", "artifact_integrity", "exact_head_ci", "merge_sha_ci",
     "integration_qa", "m17_appsec",

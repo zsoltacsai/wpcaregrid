@@ -322,9 +322,14 @@ class DeployProfileIsolationTest(unittest.TestCase):
     def test_staging_helper_manifest_pins_final_source_bytes_and_not_app_releases(self):
         manifest_path = ROOT / "deploy" / "release-manifests" / "staging-next-helper.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        policy_spec = importlib.util.spec_from_file_location("daily_sync_policy_for_manifest", ROOT / "scripts" / "daily_staging_sync_policy.py")
+        sync_policy = importlib.util.module_from_spec(policy_spec)
+        sys.modules[policy_spec.name] = sync_policy
+        policy_spec.loader.exec_module(sync_policy)
         self.assertEqual(manifest["profile"], "staging-next")
         self.assertTrue(manifest["enabled"])
         self.assertEqual(manifest["helper_version"], "1.0.1")
+        self.assertEqual(manifest["helper_version"], sync_policy.HELPER_VERSION)
         self.assertEqual(manifest["compatibility_contract"], "wpcaregrid-deploy-profile-v1")
         self.assertNotIn("application_sha", manifest)
         self.assertEqual(manifest["entrypoint"], str(PROFILES.STAGING_NEXT_ENTRYPOINT))
