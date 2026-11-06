@@ -18,7 +18,7 @@ try {
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_TIMEOUT => 3],
     );
     $row = $pdo->query('SELECT DATABASE() AS db, VERSION() AS version')->fetch(PDO::FETCH_ASSOC);
-    if (($row['db'] ?? null) !== $database || !str_starts_with((string) ($row['version'] ?? ''), '8.4.')) {
+    if (($row['db'] ?? null) !== $database || ! str_starts_with((string) ($row['version'] ?? ''), '8.4.')) {
         $status = 503;
     }
     $failureFlag = getenv('WPCG_FIXTURE_FAIL_FILE');
