@@ -238,6 +238,49 @@ class DeployProfileIsolationTest(unittest.TestCase):
             )
         self.assertEqual(str(caught.exception), "helper_identity_mismatch")
 
+    def test_entrypoint_preload_rejects_untrusted_paths_and_never_reads_module(self):
+        module_path = str(PROFILES.STAGING_NEXT_ENTRYPOINT.parent / "wpcaregrid_deploy_profiles.py")
+        source = b"VERIFIED_MODULE = True"
+        expected = hashlib.sha256(source).hexdigest()
+        directory = type("Info", (), {"st_mode": stat.S_IFDIR | 0o755, "st_uid": 0})()
+        entry = type("Info", (), {"st_mode": stat.S_IFREG | 0o755, "st_uid": 0})()
+        module = type("Info", (), {"st_mode": stat.S_IFREG | 0o644, "st_uid": 0, "st_size": len(source)})()
+        reads = []
+
+        def read_module(path):
+            reads.append(path)
+            return source
+
+        def ordinary(path):
+            if path == HELPER.EXPECTED_ENTRYPOINT:
+                return entry
+            if path == module_path:
+                return module
+            return directory
+
+        self._expect_bootstrap_refused("unknown_entrypoint", lambda: HELPER._read_profiles_module(
+            "/tmp/staging-helper", lstat_fn=ordinary, read_module_fn=read_module,
+            expected_module_sha256=expected,
+        ))
+        self._expect_bootstrap_refused("helper_parent_metadata_invalid", lambda: HELPER._read_profiles_module(
+            HELPER.EXPECTED_ENTRYPOINT,
+            lstat_fn=lambda path: type("Info", (), {"st_mode": stat.S_IFLNK | 0o777, "st_uid": 0})()
+            if path == "/usr/local/libexec" else ordinary(path),
+            read_module_fn=read_module, expected_module_sha256=expected,
+        ))
+        self._expect_bootstrap_refused("helper_metadata_invalid", lambda: HELPER._read_profiles_module(
+            HELPER.EXPECTED_ENTRYPOINT,
+            lstat_fn=lambda path: type("Info", (), {"st_mode": stat.S_IFLNK | 0o777, "st_uid": 0})()
+            if path == module_path else ordinary(path),
+            read_module_fn=read_module, expected_module_sha256=expected,
+        ))
+        self.assertEqual(reads, [])
+
+    def _expect_bootstrap_refused(self, code, callback):
+        with self.assertRaises(HELPER.BootstrapRefused) as caught:
+            callback()
+        self.assertEqual(str(caught.exception), code)
+
     def test_entrypoint_executes_only_the_exactly_pinned_shared_module_bytes(self):
         module_path = str(PROFILES.STAGING_NEXT_ENTRYPOINT.parent / "wpcaregrid_deploy_profiles.py")
         source = b"VERIFIED_MODULE = True"
