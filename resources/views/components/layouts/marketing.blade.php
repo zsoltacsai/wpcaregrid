@@ -57,7 +57,7 @@
 
         @vite(['resources/css/app.css', 'resources/js/app.js'])
     </head>
-    <body class="min-h-screen">
+    <body @class(['min-h-screen', 'marketing-home' => request()->routeIs('home')])>
         <div
             data-marketing-analytics
             data-enabled="{{ $analyticsAvailability->enabled && $analyticsPageTrackable ? 'true' : 'false' }}"

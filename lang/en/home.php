@@ -43,7 +43,7 @@ return [
     ],
 
     'hero' => [
-        'title' => 'WordPress maintenance, without the hassle.',
+        'title' => 'We work in the background. You see it all clearly.',
         'text' => 'WordPress and WooCommerce maintenance, backups, security checks and updates — with functional checks after important updates.',
         'primary_cta' => 'View plans',
         'secondary_cta' => 'How it works',

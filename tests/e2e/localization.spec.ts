@@ -38,11 +38,11 @@ async function chooseLanguage(page: Page, name: 'Magyar' | 'English'): Promise<v
 test('public pages: switching the language changes everything and persists', async ({ page }) => {
     await page.goto('/');
     expect(await htmlLang(page)).toBe('en');
-    await expect(page.locator('h1')).toContainText('WordPress maintenance, without the hassle.');
+    await expect(page.locator('h1')).toContainText('We work in the background. You see it all clearly.');
 
     await chooseLanguage(page, 'Magyar');
     expect(await htmlLang(page)).toBe('hu');
-    await expect(page.locator('h1')).toContainText('WordPress-karbantartás, gond nélkül.');
+    await expect(page.locator('h1')).toContainText('A háttérben dolgozunk. Ön tisztán lát.');
     await expect(page).toHaveTitle(/WordPress-üzemeltetés és karbantartás/);
     await expect(page.locator('#faq')).toContainText('Gyakran ismételt kérdések');
     await expect(page.locator('footer')).toContainText('Szerződési feltételek');

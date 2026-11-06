@@ -161,7 +161,7 @@ class HungarianContentTest extends TestCase
         $this->assertDoesNotMatchRegularExpression('/<section[^>]*lang="en"/', $home, 'No section is marked as English fallback.');
 
         foreach ([
-            'Karbantartott WordPress. Működő weboldal.', 'WordPress-karbantartás, gond nélkül.', 'Mit tartalmaz a karbantartás',
+            'Karbantartott WordPress. Működő weboldal.', 'A háttérben dolgozunk. Ön tisztán lát.', 'Mit tartalmaz a karbantartás',
             'Nemcsak frissítünk. Ellenőrzünk is.', 'Csomagok és árak', 'Minden weboldala egy helyen.', 'A lejárt licencek nem maradnak észrevétlenek.',
             'Webáruházaknál többet ellenőrzünk.', 'Többre van szüksége a karbantartásnál?', 'Gyakran ismételt kérdések', 'Meg kell adnom a WordPress-jelszavamat?',
             'Tartsa karbantartva a WordPress-oldalát.', 'Szerződési feltételek', 'Belépés', 'Rendben', 'Tevékenységnapló',
@@ -169,7 +169,7 @@ class HungarianContentTest extends TestCase
             $this->assertStringContainsString($text, $home);
         }
         foreach ([
-            'WordPress maintenance, without the hassle.', 'What maintenance includes', 'We don&#039;t just update', 'Frequently asked questions',
+            'We work in the background. You see it all clearly.', 'What maintenance includes', 'We don&#039;t just update', 'Frequently asked questions',
             'All your websites in one place', 'Keep your WordPress maintained', 'Cookie Policy', 'Healthy', 'Activity log',
         ] as $text) {
             $this->assertStringNotContainsString($text, $home, "English text left on the Hungarian homepage: {$text}");
@@ -211,7 +211,7 @@ class HungarianContentTest extends TestCase
         $home = $this->get('/en/')->assertOk()->getContent();
 
         $this->assertStringContainsString('<html lang="en">', $home);
-        foreach (['WordPress maintenance, without the hassle.', 'What maintenance includes', 'Frequently asked questions', 'Keep your WordPress maintained.', 'Cookie Policy'] as $text) {
+        foreach (['We work in the background. You see it all clearly.', 'What maintenance includes', 'Frequently asked questions', 'Keep your WordPress maintained.', 'Cookie Policy'] as $text) {
             $this->assertStringContainsString($text, $home);
         }
         $this->assertStringNotContainsString('Gyakran ismételt kérdések', $home);
@@ -232,7 +232,7 @@ class HungarianContentTest extends TestCase
 
         $this->get('/hu/')->assertOk()
             ->assertDontSee('Piszkozat főcím, nem nyilvános')
-            ->assertSee('WordPress-karbantartás, gond nélkül.');
+            ->assertSee('A háttérben dolgozunk. Ön tisztán lát.');
 
         // Publishing replaces the built-in Hungarian copy for Hungarian pages only.
         $draft['title'] = 'Közzétett főcím';
@@ -243,7 +243,7 @@ class HungarianContentTest extends TestCase
         config(['app.locale' => 'en', 'localization.default' => 'en']);
         app()->setLocale('en');
         app(ContentRepository::class)->flush();
-        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.')->assertDontSee('Közzétett főcím');
+        $this->get('/en/')->assertSee('We work in the background. You see it all clearly.')->assertDontSee('Közzétett főcím');
     }
 
     public function test_the_owner_area_reports_no_missing_hungarian_content(): void

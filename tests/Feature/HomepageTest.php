@@ -20,6 +20,21 @@ class HomepageTest extends TestCase
         $this->assertSame(1, substr_count($response->getContent(), '<h1'));
     }
 
+    public function test_direction_041_layer_is_homepage_scoped_and_its_wave_is_decorative(): void
+    {
+        $this->get('/en/')
+            ->assertOk()
+            ->assertSee('class="min-h-screen marketing-home"', false)
+            ->assertSee('<div class="hero-wave" aria-hidden="true"><canvas data-graphite-wave aria-hidden="true"></canvas></div>', false)
+            ->assertSee('id="pricing"', false)
+            ->assertSee('role="tablist"', false)
+            ->assertSee('name="currency"', false);
+
+        $this->get('/en/pricing')
+            ->assertOk()
+            ->assertDontSee('marketing-home');
+    }
+
     /** config/marketing.php as it is loaded with this environment value. */
     private function marketingConfigWith(string $name, string $value): array
     {
@@ -61,7 +76,7 @@ class HomepageTest extends TestCase
     public function test_sections_appear_in_the_agreed_order(): void
     {
         $this->get('/en/')->assertSeeInOrder([
-            'WordPress maintenance, without the hassle.',
+            'We work in the background. You see it all clearly.',
             'Functional checks',
             'Up and running in four steps.',
             'WordPress doesn&#039;t maintain itself.',
@@ -144,8 +159,8 @@ class HomepageTest extends TestCase
     public function test_localized_homepages_preserve_hero_calls_to_action_and_how_anchor(): void
     {
         foreach ([
-            '/en/' => ['WordPress maintenance, without the hassle.', 'View plans', 'How it works'],
-            '/hu/' => ['WordPress-karbantartás, gond nélkül.', 'Csomagok megtekintése', 'Hogyan működik'],
+            '/en/' => ['We work in the background. You see it all clearly.', 'View plans', 'How it works'],
+            '/hu/' => ['A háttérben dolgozunk. Ön tisztán lát.', 'Csomagok megtekintése', 'Hogyan működik'],
         ] as $path => [$heading, $primary, $secondary]) {
             $html = $this->get($path)->assertOk()->assertSee($heading)->getContent();
             preg_match('#<section aria-labelledby="hero-title".*?</section>#s', $html, $hero);

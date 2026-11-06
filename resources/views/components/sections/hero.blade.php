@@ -1,6 +1,6 @@
 @props(['content', 'trustIndicators'])
 
-<section aria-labelledby="hero-title" class="pt-8 pb-16 sm:pt-12 sm:pb-20 lg:pt-16 lg:pb-24" @if ($content->fallbackLang()) lang="{{ $content->fallbackLang() }}" @endif>
+<section aria-labelledby="hero-title" class="m16-hero pt-8 pb-16 sm:pt-12 sm:pb-20 lg:pt-16 lg:pb-24" @if ($content->fallbackLang()) lang="{{ $content->fallbackLang() }}" @endif>
     <x-ui.container class="max-w-3xl">
         <div>
             <p class="mb-4 text-xs font-semibold tracking-[0.12em] text-muted uppercase">{{ $content['eyebrow'] }}</p>
@@ -27,4 +27,5 @@
         </div>
 
     </x-ui.container>
+    <div class="hero-wave" aria-hidden="true"><canvas data-graphite-wave aria-hidden="true"></canvas></div>
 </section>
