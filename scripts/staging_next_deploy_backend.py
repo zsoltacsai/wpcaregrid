@@ -33,7 +33,7 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping
 
 
-HELPER_VERSION = "1.3.1"
+HELPER_VERSION = "1.3.2"
 HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v3"
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
@@ -869,6 +869,104 @@ def _successful_receipt_exists(profile: StagingProfile, application_sha: str,
     return False
 
 
+def _verify_release_directory(profile: StagingProfile, release_path: Path, application_sha: str):
+    info = _lstat(release_path, "rollback_release_unavailable")
+    _require(stat.S_ISDIR(info.st_mode) and info.st_uid == profile.expected_owner_uid
+             and stat.S_IMODE(info.st_mode) == 0o755 and release_path.name == application_sha,
+             "rollback_release_identity_invalid")
+    manifest = _release_manifest(profile, release_path, expected_uid=profile.expected_owner_uid)
+    files = _hash_release_tree(release_path, expected_uid=profile.expected_owner_uid,
+                               shared_env_file=profile.shared_env_file,
+                               shared_storage_dir=profile.shared_storage_dir,
+                               shared_vendor_dir=profile.shared_vendor_dir)
+    _require(manifest.get("files_sha256") == _canonical_files_hash(files),
+             "rollback_release_content_invalid")
+    _verify_frontend_build(manifest.get("frontend_build"), release_path, files)
+    return manifest
+
+
+def _reconcile_unreceipted_active_release(profile: StagingProfile, *, application_sha: str,
+                                          active_path: Path, active_manifest: Mapping[str, object],
+                                          artifact_sha256: str) -> DeploymentResult:
+    """Reconcile a pointer switch that occurred before a durable success receipt."""
+    base_sha = active_manifest.get("base_application_sha")
+    _require(_sha(base_sha, APPLICATION_SHA_RE) and base_sha != application_sha,
+             "interrupted_release_base_identity_invalid")
+    base_path = profile.releases_dir / base_sha
+    _verify_release_directory(profile, base_path, base_sha)
+    active_statuses: tuple[int, ...] = ()
+    active_unauthenticated: tuple[int, ...] = ()
+    healthy = False
+    try:
+        _reload_php_fpm(profile)
+        _verify_runtime(profile, active_path)
+        healthy, active_statuses, active_unauthenticated = _bounded_acceptance(profile)
+    except Exception:
+        healthy = False
+    if healthy:
+        receipt = {
+            "schema": 1, "profile": PROFILE, "result": "PASS",
+            "reason": "interrupted_activation_reconciled", "application_sha": application_sha,
+            "previous_sha": base_sha, "artifact_sha256": artifact_sha256,
+            "files_sha256": active_manifest.get("files_sha256"), "helper_version": HELPER_VERSION,
+            "helper_contract": HELPER_CONTRACT, "database_changed": False,
+            "acceptance": [
+                {"url_id": index, "expected_status": expected, "observed_status": observed}
+                for index, ((_, expected), observed) in enumerate(
+                    zip(profile.acceptance_urls, active_statuses), 1)
+            ],
+            "unauthenticated_protected_acceptance": [
+                {"url_id": index, "expected_status": 401, "observed_status": observed}
+                for index, observed in enumerate(active_unauthenticated, 1)
+            ],
+            "active_sha_after_deploy": application_sha,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        path, digest = _write_receipt(profile, receipt)
+        return DeploymentResult("PASS", "interrupted_activation_reconciled", application_sha,
+                                base_sha, artifact_sha256, path, digest)
+
+    # Never leave an unaccepted candidate active after a restart. Restore the
+    # previously verified immutable release, then verify its runtime and gate.
+    _atomic_symlink(base_path, profile.application_link, expected_owner_uid=profile.expected_owner_uid)
+    _reload_php_fpm(profile)
+    recovered_sha, recovered_path, _ = _current_release(profile)
+    _require(recovered_sha == base_sha and recovered_path == base_path,
+             "interrupted_release_rollback_identity_invalid")
+    _verify_runtime(profile, recovered_path)
+    base_healthy, base_statuses, base_unauthenticated = _bounded_acceptance(profile)
+    _require(base_healthy, "interrupted_release_rollback_acceptance_failed")
+    receipt = {
+        "schema": 1, "profile": PROFILE, "result": "FAIL",
+        "reason": "interrupted_activation_acceptance_failed_rolled_back",
+        "application_sha": application_sha, "previous_sha": base_sha,
+        "artifact_sha256": artifact_sha256, "helper_version": HELPER_VERSION,
+        "helper_contract": HELPER_CONTRACT, "database_changed": False,
+        "acceptance": [
+            {"url_id": index, "expected_status": expected, "observed_status": observed}
+            for index, ((_, expected), observed) in enumerate(
+                zip(profile.acceptance_urls, active_statuses), 1)
+        ],
+        "unauthenticated_protected_acceptance": [
+            {"url_id": index, "expected_status": 401, "observed_status": observed}
+            for index, observed in enumerate(active_unauthenticated, 1)
+        ],
+        "recovery_acceptance": [
+            {"url_id": index, "expected_status": expected, "observed_status": observed}
+            for index, ((_, expected), observed) in enumerate(zip(profile.acceptance_urls, base_statuses), 1)
+        ],
+        "recovery_unauthenticated_protected_acceptance": [
+            {"url_id": index, "expected_status": 401, "observed_status": observed}
+            for index, observed in enumerate(base_unauthenticated, 1)
+        ],
+        "active_sha_after_recovery": base_sha,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path, digest = _write_receipt(profile, receipt)
+    return DeploymentResult("FAIL", "interrupted_activation_acceptance_failed_rolled_back",
+                            application_sha, base_sha, artifact_sha256, path, digest)
+
+
 def _bounded_acceptance(profile: StagingProfile, *, timeout: float = 8.0,
                         opener=None) -> tuple[bool, tuple[int, ...], tuple[int, ...]]:
     """Probe only fixed profile URLs with bounded responses; never accepts caller-selected targets."""
@@ -1136,6 +1234,16 @@ def preflight(profile: StagingProfile, *, invoking_uid: int) -> Mapping[str, obj
     active_sha, _active, _tree = _current_release(profile)
     active_manifest = _release_manifest(profile, _active, expected_uid=profile.expected_owner_uid)
     _basic_auth_header(profile)
+    artifact_sha = active_manifest.get("artifact_sha256")
+    if not _successful_receipt_exists(profile, active_sha, artifact_sha):
+        reconciled = _reconcile_unreceipted_active_release(
+            profile, application_sha=active_sha, active_path=_active,
+            active_manifest=active_manifest, artifact_sha256=artifact_sha,
+        )
+        if reconciled.status != "PASS":
+            return {"result": "HOLD", "reason": reconciled.reason,
+                    "application_sha": active_sha, "helper_version": HELPER_VERSION,
+                    "helper_contract": HELPER_CONTRACT}
     runtime = _verify_runtime(profile, _active)
     return {"result": "PASS", "profile": PROFILE, "helper_version": HELPER_VERSION,
             "helper_contract": HELPER_CONTRACT, "helper_artifact_sha256": profile.helper_artifact_sha256,
@@ -1243,17 +1351,18 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
 
         previous_sha, previous_path, previous_files = _current_release(profile)
         _basic_auth_header(profile)
-        _verify_runtime(profile, previous_path)
+        if previous_sha != application_sha:
+            _verify_runtime(profile, previous_path)
         if previous_sha == application_sha:
             existing = _release_manifest(profile, previous_path, expected_uid=profile.expected_owner_uid)
             if existing.get("artifact_sha256") == artifact_sha256:
                 has_prior_acceptance = _successful_receipt_exists(profile, application_sha, artifact_sha256)
                 if not has_prior_acceptance:
-                    # The active pointer may have been switched immediately before
-                    # a process crash. Reinitialize PHP-FPM and repeat all bounded
-                    # probes before issuing the first success receipt.
-                    _reload_php_fpm(profile)
-                    _verify_runtime(profile, previous_path)
+                    return _reconcile_unreceipted_active_release(
+                        profile, application_sha=application_sha, active_path=previous_path,
+                        active_manifest=existing, artifact_sha256=artifact_sha256,
+                    )
+                _verify_runtime(profile, previous_path)
                 healthy, observed_statuses, unauthenticated_statuses = _bounded_acceptance(profile)
                 if not healthy:
                     return DeploymentResult("HOLD", "active_release_acceptance_failed", application_sha,

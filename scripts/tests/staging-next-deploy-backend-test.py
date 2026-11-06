@@ -393,6 +393,51 @@ class StagingDeployBackendTests(unittest.TestCase):
         self.assertEqual([entry["observed_status"] for entry in
                           receipt["unauthenticated_protected_acceptance"]], [401, 401])
 
+    @unittest.skipUnless(hasattr(os, "fork"), "process termination test requires Linux fork")
+    def test_process_death_with_failed_unauthenticated_probe_restores_verified_base(self):
+        entries = self._runtime_files("interrupted-auth-failure")
+        target_sha = self._write_source_tree(entries)
+        archive = self._archive(entries, app_sha=target_sha, base_sha=self.base_sha)
+        digest = hashlib.sha256(archive).hexdigest()
+        incoming = self.incoming / f"{target_sha}.tar"
+        incoming.write_bytes(archive)
+        os.chmod(incoming, 0o600)
+        os.chown(incoming, 1000, 1000)
+        self.assertEqual(stage_artifact(self.profile, invoking_uid=1000, application_sha=target_sha,
+                                        artifact_sha256=digest).status, "PASS")
+        pid = os.fork()
+        if pid == 0:
+            atomic_switch = BACKEND._atomic_symlink
+
+            def switch_then_die(target, link_path, *, expected_owner_uid):
+                atomic_switch(target, link_path, expected_owner_uid=expected_owner_uid)
+                if link_path == self.link and target.name == target_sha:
+                    os._exit(91)
+
+            BACKEND._atomic_symlink = switch_then_die
+            deploy_release(self.profile, invoking_uid=1000, application_sha=target_sha,
+                           artifact_sha256=digest)
+            os._exit(92)
+        _pid, status = os.waitpid(pid, 0)
+        self.assertEqual(os.waitstatus_to_exitcode(status), 91)
+        self.assertEqual(os.readlink(self.link), str(self.releases / target_sha))
+
+        with mock.patch.object(BACKEND, "_bounded_acceptance", side_effect=[
+            (False, (200, 200, 200, 404, 404, 404), (200, 200)),
+            (True, (200, 200, 200, 404, 404, 404), (401, 401)),
+        ]):
+            recovered = deploy_release(self.profile, invoking_uid=1000, application_sha=target_sha,
+                                       artifact_sha256=digest)
+        self.assertEqual((recovered.status, recovered.reason),
+                         ("FAIL", "interrupted_activation_acceptance_failed_rolled_back"))
+        self.assertEqual(os.readlink(self.link), str(self.base_path))
+        receipt = json.loads(Path(recovered.receipt_path).read_text())
+        self.assertEqual(receipt["active_sha_after_recovery"], self.base_sha)
+        self.assertEqual([entry["observed_status"] for entry in
+                          receipt["unauthenticated_protected_acceptance"]], [200, 200])
+        self.assertEqual([entry["observed_status"] for entry in
+                          receipt["recovery_unauthenticated_protected_acceptance"]], [401, 401])
+
     def test_application_bootstrap_uses_final_immutable_release_path(self):
         entries = self._runtime_files("final-path-cache")
         original = BACKEND._prepare_application_bootstrap
