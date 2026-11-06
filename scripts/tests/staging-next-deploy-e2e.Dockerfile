@@ -1,4 +1,7 @@
 FROM node:22.23.3-bookworm-slim@sha256:3ed98443660ff48413b5af19ecefce3b9d50845a901a43420d47cc63a9fddbe9 AS node
+WORKDIR /opt/wpcg-npm-seed
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund --cache /opt/wpcg-npm-cache
 
 FROM composer:2@sha256:8de2184c6de224f4689e8f80ed5f5edaf0030b6b8b7839a22a2bcb6722ac87d0 AS composer
 
@@ -12,8 +15,11 @@ RUN apt-get update \
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node /opt/wpcg-npm-cache /opt/wpcg-npm-cache
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
-    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && chown -R 1000:1000 /opt/wpcg-npm-cache \
+    && chmod -R go-rwx /opt/wpcg-npm-cache
 
 COPY --from=composer /usr/bin/composer /usr/local/bin/composer
 WORKDIR /opt/wpcaregrid-source

@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Versioned, staging-next-only privileged deployment entrypoint (1.3.0)."""
+"""Versioned, staging-next-only privileged deployment entrypoint (1.3.1)."""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 CONTRACT = "wpcaregrid-staging-next-deploy-v3"
-ENTRYPOINT = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.0/wpcaregrid-deploy-staging-next-priv")
+ENTRYPOINT = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.1/wpcaregrid-deploy-staging-next-priv")
 BACKEND = ENTRYPOINT.parent / "staging_next_deploy_backend.py"
-POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-1.3.0.json")
+POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-1.3.1.json")
 POLICY_KEYS = {
     "schema", "profile", "enabled", "allowed_uid", "app_dir", "database", "host",
     "mysql_server_uuid_sha256", "integration_qa_reviewer", "m17_appsec_reviewer",

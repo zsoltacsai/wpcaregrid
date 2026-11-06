@@ -25,8 +25,8 @@ HOST = "staging-next.wpcaregrid.com"
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/staging-next/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/staging-next/incoming")
-HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.0/wpcaregrid-deploy-staging-next-priv")
-HELPER_ARTIFACT_SHA256 = "1a983827398775d74b2b623ba3dd4853f6fc8a987da56db888a498999a2c9917"  # Generated from versioned helper manifest.
+HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.1/wpcaregrid-deploy-staging-next-priv")
+HELPER_ARTIFACT_SHA256 = "fbe59468954266558c45912da8ba80f9710a7469bc70bfbf49993e45c475700a"  # Generated from versioned helper manifest.
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_FILES = 100_000
 MAX_UNPACKED_BYTES = 2 * 1024 * 1024 * 1024
@@ -104,7 +104,7 @@ def _helper(operation, *arguments):
         result = json.loads(raw.decode("utf-8"))
     except (UnicodeError, ValueError):
         raise ControllerHold("helper_response_invalid") from None
-    if not isinstance(result, dict) or result.get("helper_version") != "1.3.0" \
+    if not isinstance(result, dict) or result.get("helper_version") != "1.3.1" \
             or result.get("helper_contract") != "wpcaregrid-staging-next-deploy-v3" \
             or result.get("helper_artifact_sha256") != HELPER_ARTIFACT_SHA256:
         raise ControllerHold("helper_contract_mismatch")
@@ -124,7 +124,7 @@ def _latest_primary_sha():
     return fields[0]
 
 
-def _package_release(application_sha: str, base_sha: str) -> tuple[Path, str]:
+def _package_release(application_sha: str, base_sha: str, *, test_only: bool = False) -> tuple[Path, str]:
     if not SHA_RE.fullmatch(application_sha) or not SHA_RE.fullmatch(base_sha):
         raise ControllerHold("release_identity_invalid")
     nonce = f"{application_sha}-{os.getpid()}-{time.monotonic_ns()}"
@@ -182,7 +182,7 @@ def _package_release(application_sha: str, base_sha: str) -> tuple[Path, str]:
             builder_prefix = []
             if os.geteuid() == 0:
                 runuser = shutil.which("runuser", path="/usr/sbin:/usr/bin")
-                if runuser is None or os.environ.get("WPCG_PHP_MYSQL_E2E") != "1":
+                if runuser is None or not test_only:
                     raise ControllerHold("frontend_build_requires_unprivileged_identity")
                 try:
                     os.chown(build_root, 1000, 1000)
@@ -192,14 +192,17 @@ def _package_release(application_sha: str, base_sha: str) -> tuple[Path, str]:
                     raise ControllerHold("frontend_build_identity_setup_failed") from None
                 builder_prefix = [runuser, "-u", "deploy-staging-next", "--"]
             try:
+                npm_cache = ("/opt/wpcg-npm-cache" if test_only else str(build_root / ".npm-cache"))
                 subprocess.run([*builder_prefix, npm, "ci", "--no-audit", "--no-fund"], cwd=build_root,
                                env={"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(build_root / ".home"),
-                                    "CI": "1", "LANG": "C", "NPM_CONFIG_CACHE": str(build_root / ".npm-cache")},
+                                    "CI": "1", "LANG": "C", "NPM_CONFIG_CACHE": npm_cache,
+                                    **({"npm_config_offline": "true"} if test_only else {})},
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                timeout=300, check=True)
                 subprocess.run([*builder_prefix, npm, "run", "build"], cwd=build_root,
                                env={"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(build_root / ".home"),
-                                    "CI": "1", "LANG": "C", "NPM_CONFIG_CACHE": str(build_root / ".npm-cache")},
+                                    "CI": "1", "LANG": "C", "NPM_CONFIG_CACHE": npm_cache,
+                                    **({"npm_config_offline": "true"} if test_only else {})},
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                timeout=180, check=True)
             except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
@@ -276,7 +279,7 @@ def _package_release(application_sha: str, base_sha: str) -> tuple[Path, str]:
         manifest = {
             "schema": 1, "profile": PROFILE, "application_sha": application_sha,
             "base_application_sha": base_sha, "php_minimum": "8.5", "database_scope": "unchanged",
-            "helper_version": "1.3.0", "helper_sha256": HELPER_ARTIFACT_SHA256,
+            "helper_version": "1.3.1", "helper_sha256": HELPER_ARTIFACT_SHA256,
             "helper_contract": "wpcaregrid-staging-next-deploy-v3",
             "frontend_build": frontend_build,
             "files_sha256": hashlib.sha256(canonical).hexdigest(),
@@ -343,8 +346,10 @@ def sync() -> dict[str, object]:
     if not isinstance(base_sha, str) or not SHA_RE.fullmatch(base_sha):
         raise ControllerHold("active_release_identity_invalid")
     if latest_sha == base_sha:
-        return {"result": "NO_OP", "reason": "exact_release_already_active",
-                "application_sha": latest_sha, "previous_sha": base_sha}
+        active_artifact_sha = readiness.get("artifact_sha256")
+        if not isinstance(active_artifact_sha, str) or not SHA256_RE.fullmatch(active_artifact_sha):
+            raise ControllerHold("active_artifact_identity_invalid")
+        return _helper("deploy", latest_sha, active_artifact_sha)
     _git(["fetch", "--quiet", "--no-tags", "origin", f"{PRIMARY_BRANCH}"])
     local_sha = _git(["rev-parse", f"refs/remotes/origin/{PRIMARY_BRANCH}"]).decode("ascii").strip()
     if local_sha != latest_sha:

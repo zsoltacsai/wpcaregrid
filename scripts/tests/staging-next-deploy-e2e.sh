@@ -72,8 +72,13 @@ fi
 docker build --pull=false --label "com.wpcg.e2e-run=$run_id" -f "$repo_root/scripts/tests/staging-next-deploy-e2e.Dockerfile" \
     -t "$php_image" "$repo_root"
 created_image=1
-docker network create --label "com.wpcg.e2e-run=$run_id" "$network" >/dev/null
+docker network create --internal --label "com.wpcg.e2e-run=$run_id" "$network" >/dev/null
 created_network=1
+network_internal="$(docker network inspect -f '{{.Internal}}' "$network")"
+if [[ "$network_internal" != "true" ]]; then
+    printf 'E2E=FAIL;CODE=NETWORK_NOT_INTERNAL\n' >&2
+    exit 1
+fi
 docker run -d --label "com.wpcg.e2e-run=$run_id" --name "$mysql_name" --network "$network" --network-alias wpcg-mysql \
     -e MYSQL_ROOT_PASSWORD=synthetic-only-password \
     -e MYSQL_DATABASE=wpcg_staging_next \

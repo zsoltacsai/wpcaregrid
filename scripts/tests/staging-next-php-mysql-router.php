@@ -2,6 +2,18 @@
 
 declare(strict_types=1);
 
+$username = getenv('WPCG_TEST_HTTP_AUTH_USER');
+$password = getenv('WPCG_TEST_HTTP_AUTH_PASSWORD');
+$expectedAuthorization = is_string($username) && $username !== '' && is_string($password) && $password !== ''
+    ? 'Basic '.base64_encode($username.':'.$password)
+    : '';
+if ($expectedAuthorization === ''
+    || ! hash_equals($expectedAuthorization, $_SERVER['HTTP_AUTHORIZATION'] ?? '')) {
+    http_response_code(401);
+    header('WWW-Authenticate: Basic realm="staging-next-e2e"');
+    exit;
+}
+
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 $status = match ($path) {
     '/up', '/hu', '/en' => 200,

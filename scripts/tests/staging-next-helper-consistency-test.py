@@ -22,7 +22,7 @@ HELPER = importlib.util.module_from_spec(_HELPER_SPEC)
 _HELPER_SPEC.loader.exec_module(HELPER)
 
 
-MANIFEST = ROOT / "deploy" / "release-manifests" / "staging-next-helper-1.3.0.json"
+MANIFEST = ROOT / "deploy" / "release-manifests" / f"staging-next-helper-{HELPER.VERSION}.json"
 ENTRYPOINT = ROOT / "scripts" / "wpcaregrid-staging-next-deploy-priv.py"
 BACKEND_FILE = ROOT / "scripts" / "staging_next_deploy_backend.py"
 

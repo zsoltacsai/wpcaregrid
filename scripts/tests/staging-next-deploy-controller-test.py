@@ -78,7 +78,7 @@ class StagingNextControllerTests(unittest.TestCase):
         self._git("commit", "--quiet", "--allow-empty", "-m", "synthetic release")
 
     def test_package_manifest_is_visible_and_content_matches_git_tree(self):
-        artifact_path, artifact_sha = CONTROLLER._package_release(self.app_sha, self.base_sha)
+        artifact_path, artifact_sha = CONTROLLER._package_release(self.app_sha, self.base_sha, test_only=True)
         self.assertEqual(hashlib.sha256(artifact_path.read_bytes()).hexdigest(), artifact_sha)
         with tarfile.open(artifact_path, "r:") as archive:
             members = archive.getmembers()
@@ -123,12 +123,19 @@ class StagingNextControllerTests(unittest.TestCase):
     def test_exact_active_primary_is_noop_without_build_or_staging(self):
         digest = "a" * 40
         helper_result = {
-            "result": "PASS", "application_sha": digest, "helper_version": "1.3.0",
+            "result": "PASS", "application_sha": digest, "helper_version": "1.3.1",
             "helper_contract": "wpcaregrid-staging-next-deploy-v3",
             "helper_artifact_sha256": CONTROLLER.HELPER_ARTIFACT_SHA256,
+            "artifact_sha256": "b" * 64,
         }
+        def helper(operation, *args):
+            if operation == "deploy":
+                return {"result": "NO_OP", "reason": "exact_release_already_active",
+                        "application_sha": digest, "previous_sha": digest,
+                        "artifact_sha256": "b" * 64}
+            return helper_result
         with (mock.patch.object(CONTROLLER, "_verify_install_identity"),
-              mock.patch.object(CONTROLLER, "_helper", return_value=helper_result) as helper,
+              mock.patch.object(CONTROLLER, "_helper", side_effect=helper) as helper_mock,
               mock.patch.object(CONTROLLER, "_latest_primary_sha", return_value=digest),
               mock.patch.object(CONTROLLER, "_package_release", side_effect=AssertionError("build on no-op")),
               mock.patch.object(CONTROLLER, "_git", side_effect=AssertionError("fetch on no-op"))):
@@ -136,8 +143,10 @@ class StagingNextControllerTests(unittest.TestCase):
         self.assertEqual(result, {
             "result": "NO_OP", "reason": "exact_release_already_active",
             "application_sha": digest, "previous_sha": digest,
+            "artifact_sha256": "b" * 64,
         })
-        helper.assert_called_once_with("preflight")
+        self.assertEqual(helper_mock.call_args_list, [
+            mock.call("preflight"), mock.call("deploy", digest, "b" * 64)])
 
 
 if __name__ == "__main__":

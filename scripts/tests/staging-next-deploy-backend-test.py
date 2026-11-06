@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import http.server
 import io
 import json
@@ -34,6 +35,13 @@ def file_hashes(entries):
 class FixtureHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         route = self.path.split("?", 1)[0]
+        expected_auth = "Basic " + base64.b64encode(b"e2e-owner:synthetic-only-password").decode("ascii")
+        if self.headers.get("Authorization") != expected_auth:
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="staging-next-test"')
+            self.end_headers()
+            self.wfile.write(b"unauthorized")
+            return
         status = {"/up": 200, "/hu": 200, "/en": 200}.get(route, 404)
         if os.environ.get("WPCG_FIXTURE_FAIL") == "1" and status == 200:
             status = 503
@@ -64,7 +72,9 @@ class StagingDeployBackendTests(unittest.TestCase):
             env["WPCG_FIXTURE_FAIL_FILE"] = str(cls.failure_flag)
             cls.php_process = subprocess.Popen(
                 ["php", "-S", f"127.0.0.1:{port}", "scripts/tests/staging-next-php-mysql-router.php"],
-                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env={**env, "WPCG_TEST_HTTP_AUTH_USER": "e2e-owner",
+                     "WPCG_TEST_HTTP_AUTH_PASSWORD": "synthetic-only-password"},
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             origin = f"http://127.0.0.1:{port}"
             import time
@@ -73,7 +83,10 @@ class StagingDeployBackendTests(unittest.TestCase):
                     raise RuntimeError("PHP acceptance fixture did not start")
                 try:
                     import urllib.request
-                    with urllib.request.urlopen(origin + "/up", timeout=1) as response:
+                    request = urllib.request.Request(origin + "/up", headers={
+                        "Authorization": "Basic " + base64.b64encode(
+                            b"e2e-owner:synthetic-only-password").decode("ascii")})
+                    with urllib.request.urlopen(request, timeout=1) as response:
                         if response.status == 200:
                             break
                 except Exception:
@@ -139,6 +152,10 @@ class StagingDeployBackendTests(unittest.TestCase):
         self.shared_vendor.mkdir(mode=0o755)
         (self.shared_vendor / "autoload.php").write_text("<?php // shared test autoloader\n")
         os.chmod(self.shared_vendor / "autoload.php", 0o644)
+        self.basic_auth_file = root / "basic-auth.json"
+        self.basic_auth_file.write_text(json.dumps({
+            "username": "e2e-owner", "password": "synthetic-only-password"}))
+        os.chmod(self.basic_auth_file, 0o600)
         self.link = self.app_parent / "current"
         self.base_files = self._runtime_files("old")
         self._write_source_tree(self.base_files)
@@ -166,9 +183,10 @@ class StagingDeployBackendTests(unittest.TestCase):
             state_dir=self.state, receipts_dir=self.receipts, allowed_uid=1000,
             expected_owner_uid=0, acceptance_urls=self.acceptance, test_only=True,
             shared_env_file=self.shared_env, shared_storage_dir=self.shared_storage,
-            shared_vendor_dir=self.shared_vendor, basic_auth_file=None, mysql_server_uuid_sha256=None,
+            shared_vendor_dir=self.shared_vendor, basic_auth_file=self.basic_auth_file, mysql_server_uuid_sha256=None,
             integration_qa_reviewer=None, m17_appsec_reviewer=None, test_git_repo=self.git_repo,
             helper_artifact_sha256="e" * 64, php_fpm_uid=0, php_fpm_gid=0,
+            protected_acceptance_urls=(self.acceptance[1][0], self.acceptance[2][0]),
         )
 
     @staticmethod
@@ -298,10 +316,82 @@ class StagingDeployBackendTests(unittest.TestCase):
         self.assertEqual(os.stat(self.shared_env).st_mode & 0o777, 0o640)
         receipt = json.loads(Path(result.receipt_path).read_text())
         self.assertEqual(receipt["acceptance"][0]["observed_status"], 200)
+        self.assertEqual([entry["observed_status"] for entry in
+                          receipt["unauthenticated_protected_acceptance"]], [401, 401])
         self.assertEqual(receipt["active_sha_after_deploy"], target_sha)
         self.assertEqual(hashlib.sha256(Path(result.receipt_path).read_bytes()).hexdigest(), result.receipt_sha256)
         repeat = self._submit(entries)
         self.assertEqual((repeat.status, repeat.reason), ("NO_OP", "exact_release_already_active"))
+        no_op_receipt = json.loads(Path(repeat.receipt_path).read_text())
+        self.assertEqual([entry["observed_status"] for entry in
+                          no_op_receipt["unauthenticated_protected_acceptance"]], [401, 401])
+
+    def test_published_candidate_is_reverified_and_resumed_after_cache_build_interruption(self):
+        entries = self._runtime_files("interrupted-cache-build")
+        target_sha = self._write_source_tree(entries)
+        archive = self._archive(entries, app_sha=target_sha, base_sha=self.base_sha)
+        digest = hashlib.sha256(archive).hexdigest()
+        incoming = self.incoming / f"{target_sha}.tar"
+        incoming.write_bytes(archive)
+        os.chmod(incoming, 0o600)
+        os.chown(incoming, 1000, 1000)
+        self.assertEqual(stage_artifact(self.profile, invoking_uid=1000, application_sha=target_sha,
+                                        artifact_sha256=digest).status, "PASS")
+
+        def interrupted_cache_build(_profile, _path):
+            raise SystemExit(91)
+
+        with mock.patch.object(BACKEND, "_prepare_application_bootstrap", side_effect=interrupted_cache_build):
+            with self.assertRaises(SystemExit):
+                deploy_release(self.profile, invoking_uid=1000, application_sha=target_sha,
+                               artifact_sha256=digest)
+        final = self.releases / target_sha
+        self.assertTrue(final.is_dir())
+        self.assertEqual(os.readlink(self.link), str(self.base_path))
+
+        resumed = deploy_release(self.profile, invoking_uid=1000, application_sha=target_sha,
+                                 artifact_sha256=digest)
+        self.assertEqual((resumed.status, resumed.reason), ("PASS", "release_accepted"))
+        self.assertEqual(os.readlink(self.link), str(final))
+
+    @unittest.skipUnless(hasattr(os, "fork"), "process termination test requires Linux fork")
+    def test_process_death_after_pointer_switch_is_reconciled_before_success_receipt(self):
+        entries = self._runtime_files("interrupted-activation")
+        target_sha = self._write_source_tree(entries)
+        archive = self._archive(entries, app_sha=target_sha, base_sha=self.base_sha)
+        digest = hashlib.sha256(archive).hexdigest()
+        incoming = self.incoming / f"{target_sha}.tar"
+        incoming.write_bytes(archive)
+        os.chmod(incoming, 0o600)
+        os.chown(incoming, 1000, 1000)
+        self.assertEqual(stage_artifact(self.profile, invoking_uid=1000, application_sha=target_sha,
+                                        artifact_sha256=digest).status, "PASS")
+        pid = os.fork()
+        if pid == 0:
+            atomic_switch = BACKEND._atomic_symlink
+
+            def switch_then_die(target, link_path, *, expected_owner_uid):
+                atomic_switch(target, link_path, expected_owner_uid=expected_owner_uid)
+                if link_path == self.link and target.name == target_sha:
+                    os._exit(91)
+
+            BACKEND._atomic_symlink = switch_then_die
+            deploy_release(self.profile, invoking_uid=1000, application_sha=target_sha,
+                           artifact_sha256=digest)
+            os._exit(92)
+        _pid, status = os.waitpid(pid, 0)
+        self.assertEqual(os.waitstatus_to_exitcode(status), 91)
+        self.assertEqual(os.readlink(self.link), str(self.releases / target_sha))
+
+        reconciled = deploy_release(self.profile, invoking_uid=1000, application_sha=target_sha,
+                                    artifact_sha256=digest)
+        self.assertEqual((reconciled.status, reconciled.reason),
+                         ("PASS", "interrupted_activation_reconciled"))
+        receipt = json.loads(Path(reconciled.receipt_path).read_text())
+        self.assertEqual(receipt["result"], "PASS")
+        self.assertEqual(receipt["reason"], "interrupted_activation_reconciled")
+        self.assertEqual([entry["observed_status"] for entry in
+                          receipt["unauthenticated_protected_acceptance"]], [401, 401])
 
     def test_application_bootstrap_uses_final_immutable_release_path(self):
         entries = self._runtime_files("final-path-cache")
@@ -388,6 +478,35 @@ class StagingDeployBackendTests(unittest.TestCase):
         receipt = json.loads(Path(result.receipt_path).read_text())
         self.assertEqual(receipt["result"], "FAIL")
         self.assertEqual(receipt["active_sha_after_recovery"], self.base_sha)
+
+    def test_external_basic_auth_missing_is_rejected(self):
+        class UnprotectedHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"synthetic unprotected response")
+
+            def log_message(self, *_args):
+                pass
+
+        server = IsolatedHTTPServer(("127.0.0.1", 0), UnprotectedHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        origin = f"http://127.0.0.1:{server.server_port}"
+        probe_profile = replace(
+            self.profile,
+            acceptance_urls=((origin + "/up", 200), (origin + "/hu", 200), (origin + "/en", 200)),
+            protected_acceptance_urls=(origin + "/hu", origin + "/en"),
+        )
+        try:
+            passed, authenticated, unauthenticated = BACKEND._bounded_acceptance(probe_profile)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+        self.assertEqual(unauthenticated, (200, 200))
+        self.assertEqual(authenticated[:3], (200, 200, 200))
+        self.assertFalse(passed)
 
     def test_exchange_that_fails_after_pointer_switch_is_rolled_back(self):
         original = BACKEND._atomic_symlink

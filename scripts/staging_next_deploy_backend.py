@@ -33,7 +33,7 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping
 
 
-HELPER_VERSION = "1.3.0"
+HELPER_VERSION = "1.3.1"
 HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v3"
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
@@ -107,6 +107,7 @@ class StagingProfile:
     build_application_bootstrap: bool = False
     verify_test_database: bool = False
     test_only: bool = False
+    protected_acceptance_urls: tuple[str, ...] = ()
 
 
 PRODUCTION_PROFILE = StagingProfile(
@@ -138,6 +139,10 @@ PRODUCTION_PROFILE = StagingProfile(
         ("https://staging-next.wpcaregrid.com/register", 404),
         ("https://staging-next.wpcaregrid.com/checkout", 404),
         ("https://staging-next.wpcaregrid.com/api", 404),
+    ),
+    protected_acceptance_urls=(
+        "https://staging-next.wpcaregrid.com/hu",
+        "https://staging-next.wpcaregrid.com/en",
     ),
 )
 
@@ -495,6 +500,30 @@ def _current_release(profile: StagingProfile) -> tuple[str, Path, Mapping[str, s
     return target.name, target, files
 
 
+def _verify_inactive_release_candidate(profile: StagingProfile, release_dir: Path, *,
+                                       application_sha: str, base_sha: str,
+                                       artifact_sha256: str) -> Mapping[str, object]:
+    """Revalidate an inactive, previously published candidate after process interruption."""
+    info = _lstat(release_dir, "release_destination_invalid")
+    _require(stat.S_ISDIR(info.st_mode) and info.st_uid == profile.expected_owner_uid
+             and stat.S_IMODE(info.st_mode) == 0o755, "release_destination_invalid")
+    manifest = _release_manifest(profile, release_dir, expected_uid=profile.expected_owner_uid)
+    _require(manifest.get("application_sha") == application_sha
+             and manifest.get("base_application_sha") == base_sha
+             and manifest.get("artifact_sha256") == artifact_sha256,
+             "published_candidate_identity_mismatch")
+    files = _hash_release_tree(release_dir, expected_uid=profile.expected_owner_uid,
+                               shared_env_file=profile.shared_env_file,
+                               shared_storage_dir=profile.shared_storage_dir,
+                               shared_vendor_dir=profile.shared_vendor_dir)
+    _require(manifest.get("files_sha256") == _canonical_files_hash(files),
+             "published_candidate_content_mismatch")
+    _verify_frontend_build(manifest.get("frontend_build"), release_dir, files)
+    _verify_artifact_matches_primary(profile, application_sha, release_dir, files, manifest)
+    _verify_shared_inputs(profile)
+    return manifest
+
+
 def _verify_shared_inputs(profile: StagingProfile) -> None:
     env_info = _lstat(profile.shared_env_file, "shared_environment_unavailable")
     _require(stat.S_ISREG(env_info.st_mode) and env_info.st_uid == profile.expected_owner_uid
@@ -521,7 +550,8 @@ def _github_json(path: str, *, timeout: float = 6.0, max_bytes: int = 4_000_000)
 
     request = urllib.request.Request(
         GITHUB_API + path,
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "WP-CareGrid-staging-next-deploy/1.3.0",
+        headers={"Accept": "application/vnd.github+json",
+                 "User-Agent": f"WP-CareGrid-staging-next-deploy/{HELPER_VERSION}",
                  "X-GitHub-Api-Version": "2022-11-28"},
         method="GET",
     )
@@ -785,8 +815,12 @@ def _write_receipt(profile: StagingProfile, receipt: Mapping[str, object]) -> tu
     app_sha = receipt.get("application_sha")
     artifact_sha = receipt.get("artifact_sha256")
     result = receipt.get("result")
+    completed_at = receipt.get("completed_at")
+    _require(isinstance(completed_at, str) and len(completed_at) <= 64,
+             "receipt_timestamp_invalid")
     safe_id = hashlib.sha256(f"{app_sha}:{artifact_sha}:{result}".encode()).hexdigest()[:20]
-    path = profile.receipts_dir / f"deploy-{safe_id}.json"
+    observation_id = hashlib.sha256(completed_at.encode("utf-8")).hexdigest()[:12]
+    path = profile.receipts_dir / f"deploy-{safe_id}-{observation_id}.json"
     temp = profile.receipts_dir / f".receipt-{os.getpid()}-{time.monotonic_ns()}"
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
@@ -812,15 +846,46 @@ def _write_receipt(profile: StagingProfile, receipt: Mapping[str, object]) -> tu
     return str(path), hashlib.sha256(raw).hexdigest()
 
 
-def _bounded_acceptance(profile: StagingProfile, *, timeout: float = 8.0, opener=None) -> tuple[bool, tuple[int, ...]]:
+def _successful_receipt_exists(profile: StagingProfile, application_sha: str,
+                               artifact_sha256: str) -> bool:
+    identity = hashlib.sha256(
+        f"{application_sha}:{artifact_sha256}:PASS".encode("utf-8")
+    ).hexdigest()[:20]
+    prefix = f"deploy-{identity}-"
+    matches = sorted(profile.receipts_dir.glob(prefix + "*.json"))
+    _require(len(matches) <= 32, "release_receipt_count_exceeded")
+    for path in matches:
+        raw = _read_regular_nofollow(path, max_bytes=16_384,
+                                     expected_uid=profile.expected_owner_uid, expected_mode=0o600)
+        receipt = _strict_json(raw)
+        _require(receipt.get("profile") == PROFILE
+                 and receipt.get("application_sha") == application_sha
+                 and receipt.get("artifact_sha256") == artifact_sha256
+                 and receipt.get("result") == "PASS"
+                 and receipt.get("helper_version") == HELPER_VERSION
+                 and receipt.get("helper_contract") == HELPER_CONTRACT,
+                 "release_receipt_identity_invalid")
+        return True
+    return False
+
+
+def _bounded_acceptance(profile: StagingProfile, *, timeout: float = 8.0,
+                        opener=None) -> tuple[bool, tuple[int, ...], tuple[int, ...]]:
     """Probe only fixed profile URLs with bounded responses; never accepts caller-selected targets."""
     if profile.test_only:
         _require(all(url.startswith(("http://127.0.0.1:", "http://localhost:"))
                      for url, _status in profile.acceptance_urls),
                  "health_target_invalid")
+        _require(all(url.startswith(("http://127.0.0.1:", "http://localhost:"))
+                     for url in profile.protected_acceptance_urls),
+                 "auth_probe_target_invalid")
     else:
         _require(all(url.startswith("https://staging-next.wpcaregrid.com/") for url, _status in profile.acceptance_urls),
                  "health_target_invalid")
+        _require(bool(profile.protected_acceptance_urls)
+                 and all(url.startswith("https://staging-next.wpcaregrid.com/")
+                         for url in profile.protected_acceptance_urls),
+                 "auth_probe_target_invalid")
     observed: list[int] = []
     authorization = _basic_auth_header(profile)
 
@@ -830,8 +895,28 @@ def _bounded_acceptance(profile: StagingProfile, *, timeout: float = 8.0, opener
 
     client = opener or urllib.request.build_opener(NoRedirect)
     passed = True
+    unauthenticated_statuses: list[int] = []
+    unauthenticated_client = urllib.request.build_opener(NoRedirect)
+    _require(not profile.protected_acceptance_urls or bool(authorization),
+             "http_probe_credentials_unconfigured")
+    for url in profile.protected_acceptance_urls:
+        request = urllib.request.Request(url, headers={"User-Agent": f"WP-CareGrid-staging-next-deploy/{HELPER_VERSION}"})
+        try:
+            with unauthenticated_client.open(request, timeout=timeout) as response:
+                body = response.read(MAX_HTTP_BODY_BYTES + 1)
+                code = response.status
+                passed = passed and code == 401 and len(body) <= MAX_HTTP_BODY_BYTES
+        except urllib.error.HTTPError as response:
+            code = response.code
+            body = response.read(MAX_HTTP_BODY_BYTES + 1)
+            passed = passed and code == 401 and len(body) <= MAX_HTTP_BODY_BYTES
+        except (urllib.error.URLError, TimeoutError, OSError):
+            code = 0
+            passed = False
+        unauthenticated_statuses.append(code)
+
     for url, expected_status in profile.acceptance_urls:
-        headers = {"User-Agent": "WP-CareGrid-staging-next-deploy/1.3.0"}
+        headers = {"User-Agent": f"WP-CareGrid-staging-next-deploy/{HELPER_VERSION}"}
         if authorization:
             headers["Authorization"] = authorization
         request = urllib.request.Request(url, headers=headers)
@@ -849,7 +934,7 @@ def _bounded_acceptance(profile: StagingProfile, *, timeout: float = 8.0, opener
             code = 0
             passed = False
         observed.append(code)
-    return passed, tuple(observed)
+    return passed, tuple(observed), tuple(unauthenticated_statuses)
 
 
 def _basic_auth_header(profile: StagingProfile) -> str | None:
@@ -1049,11 +1134,13 @@ def preflight(profile: StagingProfile, *, invoking_uid: int) -> Mapping[str, obj
         _verify_directory_chain(directory, owner_uid=profile.expected_owner_uid,
                                 exact_mode=0o700 if directory in {profile.state_dir, profile.receipts_dir} else 0o755)
     active_sha, _active, _tree = _current_release(profile)
+    active_manifest = _release_manifest(profile, _active, expected_uid=profile.expected_owner_uid)
     _basic_auth_header(profile)
     runtime = _verify_runtime(profile, _active)
     return {"result": "PASS", "profile": PROFILE, "helper_version": HELPER_VERSION,
             "helper_contract": HELPER_CONTRACT, "helper_artifact_sha256": profile.helper_artifact_sha256,
             "application_sha": active_sha,
+            "artifact_sha256": active_manifest.get("artifact_sha256"),
             "runtime": runtime}
 
 
@@ -1133,6 +1220,7 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
     activated = False
     lock_fd = None
     observed_statuses: tuple[int, ...] = ()
+    unauthenticated_statuses: tuple[int, ...] = ()
     try:
         _safe_profile(profile)
         _verify_directory_chain(profile.incoming_dir.parent, owner_uid=profile.expected_owner_uid, exact_mode=0o755)
@@ -1156,94 +1244,124 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
         previous_sha, previous_path, previous_files = _current_release(profile)
         _basic_auth_header(profile)
         _verify_runtime(profile, previous_path)
-        inbox_path = profile.inbox_dir / f"{application_sha}.tar"
-        archive_bytes = _read_regular_nofollow(inbox_path, max_bytes=MAX_ARCHIVE_BYTES,
-                                               expected_uid=profile.expected_owner_uid, expected_mode=0o600)
-        _require(hashlib.sha256(archive_bytes).hexdigest() == artifact_sha256, "artifact_hash_mismatch")
         if previous_sha == application_sha:
             existing = _release_manifest(profile, previous_path, expected_uid=profile.expected_owner_uid)
             if existing.get("artifact_sha256") == artifact_sha256:
+                has_prior_acceptance = _successful_receipt_exists(profile, application_sha, artifact_sha256)
+                if not has_prior_acceptance:
+                    # The active pointer may have been switched immediately before
+                    # a process crash. Reinitialize PHP-FPM and repeat all bounded
+                    # probes before issuing the first success receipt.
+                    _reload_php_fpm(profile)
+                    _verify_runtime(profile, previous_path)
+                healthy, observed_statuses, unauthenticated_statuses = _bounded_acceptance(profile)
+                if not healthy:
+                    return DeploymentResult("HOLD", "active_release_acceptance_failed", application_sha,
+                                            previous_sha, artifact_sha256)
+                receipt_result = "NO_OP" if has_prior_acceptance else "PASS"
+                receipt_reason = ("exact_release_already_active" if has_prior_acceptance
+                                  else "interrupted_activation_reconciled")
                 receipt = {
-                    "schema": 1, "profile": PROFILE, "result": "NO_OP", "reason": "exact_release_already_active",
+                    "schema": 1, "profile": PROFILE, "result": receipt_result, "reason": receipt_reason,
                     "application_sha": application_sha, "previous_sha": previous_sha,
                     "artifact_sha256": artifact_sha256, "helper_version": HELPER_VERSION,
                     "helper_contract": HELPER_CONTRACT, "database_changed": False,
+                    "acceptance": [
+                        {"url_id": index, "expected_status": expected, "observed_status": observed}
+                        for index, ((_, expected), observed) in enumerate(
+                            zip(profile.acceptance_urls, observed_statuses), 1)
+                    ],
+                    "unauthenticated_protected_acceptance": [
+                        {"url_id": index, "expected_status": 401, "observed_status": observed}
+                        for index, observed in enumerate(unauthenticated_statuses, 1)
+                    ],
                     "active_sha_after_deploy": previous_sha,
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 }
                 path, digest = _write_receipt(profile, receipt)
-                return DeploymentResult("NO_OP", "exact_release_already_active", application_sha,
+                return DeploymentResult(receipt_result, receipt_reason, application_sha,
                                         previous_sha, artifact_sha256, path, digest)
             return DeploymentResult("HOLD", "active_sha_artifact_mismatch", application_sha,
                                     previous_sha, artifact_sha256)
 
+        inbox_path = profile.inbox_dir / f"{application_sha}.tar"
+        archive_bytes = _read_regular_nofollow(inbox_path, max_bytes=MAX_ARCHIVE_BYTES,
+                                               expected_uid=profile.expected_owner_uid, expected_mode=0o600)
+        _require(hashlib.sha256(archive_bytes).hexdigest() == artifact_sha256, "artifact_hash_mismatch")
+
         final = profile.releases_dir / application_sha
-        _require(not final.exists() and not final.is_symlink(), "release_destination_exists")
-        staging_dir = Path(tempfile.mkdtemp(prefix=f".stage-{application_sha}-", dir=profile.releases_dir))
-        os.chmod(staging_dir, 0o700)
-        try:
-            candidate_files, manifest = _extract_archive(
-                archive_bytes, staging_dir, app_sha=application_sha, base_sha=previous_sha,
-                artifact_sha=artifact_sha256, helper_artifact_sha256=profile.helper_artifact_sha256,
+        if final.exists() or final.is_symlink():
+            # A previous process may have published the immutable candidate and
+            # died while preparing Laravel caches. Resume only after proving that
+            # the existing directory is the exact archive for this base and SHA.
+            manifest = _verify_inactive_release_candidate(
+                profile, final, application_sha=application_sha, base_sha=previous_sha,
+                artifact_sha256=artifact_sha256,
             )
-            _verify_artifact_matches_primary(profile, application_sha, staging_dir, candidate_files, manifest)
-            _require(REQUIRED_RUNTIME_FILES.issubset(candidate_files), "release_runtime_incomplete")
-            if not _phase_a_paths_only(previous_files, candidate_files):
-                return DeploymentResult("HOLD", "database_change_requires_phase_b", application_sha,
-                                        previous_sha, artifact_sha256)
-            _verify_shared_inputs(profile)
-            release_manifest = dict(manifest)
-            release_manifest["artifact_sha256"] = artifact_sha256
-            manifest_path = staging_dir / "release-manifest.json"
-            fd = os.open(manifest_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                         | getattr(os, "O_NOFOLLOW", 0), 0o644)
-            raw_manifest = json.dumps(release_manifest, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+            _prepare_application_bootstrap(profile, final)
+        else:
+            staging_dir = Path(tempfile.mkdtemp(prefix=f".stage-{application_sha}-", dir=profile.releases_dir))
+            os.chmod(staging_dir, 0o700)
             try:
-                with os.fdopen(fd, "wb", closefd=True) as stream:
-                    stream.write(raw_manifest)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-            except OSError:
-                raise DeployRefused("release_manifest_write_failed") from None
-            for path in sorted(staging_dir.rglob("*"), reverse=True):
-                if path.is_dir():
-                    os.chmod(path, 0o755)
-                else:
-                    os.chmod(path, 0o644)
-            # Create only these two fixed shared-data symlinks after chmod so
-            # chmod never follows a link and changes secret/storage metadata.
-            os.symlink(str(profile.shared_env_file), staging_dir / ".env")
-            os.symlink(str(profile.shared_storage_dir), staging_dir / "storage")
-            os.symlink(str(profile.shared_vendor_dir), staging_dir / "vendor")
-            os.chmod(staging_dir, 0o755)
-            os.rename(staging_dir, final)
-            try:
-                parent_fd = os.open(profile.releases_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                candidate_files, manifest = _extract_archive(
+                    archive_bytes, staging_dir, app_sha=application_sha, base_sha=previous_sha,
+                    artifact_sha=artifact_sha256, helper_artifact_sha256=profile.helper_artifact_sha256,
+                )
+                _verify_artifact_matches_primary(profile, application_sha, staging_dir, candidate_files, manifest)
+                _require(REQUIRED_RUNTIME_FILES.issubset(candidate_files), "release_runtime_incomplete")
+                if not _phase_a_paths_only(previous_files, candidate_files):
+                    return DeploymentResult("HOLD", "database_change_requires_phase_b", application_sha,
+                                            previous_sha, artifact_sha256)
+                _verify_shared_inputs(profile)
+                release_manifest = dict(manifest)
+                release_manifest["artifact_sha256"] = artifact_sha256
+                manifest_path = staging_dir / "release-manifest.json"
+                fd = os.open(manifest_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | getattr(os, "O_NOFOLLOW", 0), 0o644)
+                raw_manifest = json.dumps(release_manifest, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
                 try:
-                    os.fsync(parent_fd)
-                finally:
-                    os.close(parent_fd)
-                # Laravel's generated config cache contains absolute resource paths.
-                # Build it only after the release has its immutable final path.
-                _prepare_application_bootstrap(profile, final)
-            except Exception:
-                # This operation created the exact, still-inactive release path.
-                # Remove only that unpublished candidate so a retry cannot confuse it
-                # with a previously accepted immutable release.
-                candidate_info = os.lstat(final)
-                _require(stat.S_ISDIR(candidate_info.st_mode)
-                         and candidate_info.st_uid == profile.expected_owner_uid
-                         and not final.is_symlink(), "failed_candidate_metadata_invalid")
-                shutil.rmtree(final)
-                parent_fd = os.open(profile.releases_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                    with os.fdopen(fd, "wb", closefd=True) as stream:
+                        stream.write(raw_manifest)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                except OSError:
+                    raise DeployRefused("release_manifest_write_failed") from None
+                for path in sorted(staging_dir.rglob("*"), reverse=True):
+                    if path.is_dir():
+                        os.chmod(path, 0o755)
+                    else:
+                        os.chmod(path, 0o644)
+                # Create only these fixed shared-data symlinks after chmod so
+                # chmod never follows a link and changes secret/storage metadata.
+                os.symlink(str(profile.shared_env_file), staging_dir / ".env")
+                os.symlink(str(profile.shared_storage_dir), staging_dir / "storage")
+                os.symlink(str(profile.shared_vendor_dir), staging_dir / "vendor")
+                os.chmod(staging_dir, 0o755)
+                os.rename(staging_dir, final)
                 try:
-                    os.fsync(parent_fd)
-                finally:
-                    os.close(parent_fd)
-                raise
-        finally:
-            if staging_dir.exists():
-                shutil.rmtree(staging_dir, ignore_errors=True)
+                    parent_fd = os.open(profile.releases_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                    try:
+                        os.fsync(parent_fd)
+                    finally:
+                        os.close(parent_fd)
+                    # Laravel caches contain absolute paths. Build them after the
+                    # candidate has its immutable final pathname.
+                    _prepare_application_bootstrap(profile, final)
+                except Exception:
+                    candidate_info = os.lstat(final)
+                    _require(stat.S_ISDIR(candidate_info.st_mode)
+                             and candidate_info.st_uid == profile.expected_owner_uid
+                             and not final.is_symlink(), "failed_candidate_metadata_invalid")
+                    shutil.rmtree(final)
+                    parent_fd = os.open(profile.releases_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                    try:
+                        os.fsync(parent_fd)
+                    finally:
+                        os.close(parent_fd)
+                    raise
+            finally:
+                if staging_dir.exists():
+                    shutil.rmtree(staging_dir, ignore_errors=True)
 
         # The atomic exchange may replace the pointer successfully and then
         # fail while fsyncing its parent directory. Treat the operation as
@@ -1255,7 +1373,7 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
         _require(active == final, "active_release_readback_mismatch")
         _reload_php_fpm(profile)
         _verify_runtime(profile, final)
-        healthy, observed_statuses = _bounded_acceptance(profile)
+        healthy, observed_statuses, unauthenticated_statuses = _bounded_acceptance(profile)
         if not healthy:
             raise DeployRefused("post_deploy_acceptance_failed")
 
@@ -1267,6 +1385,9 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
             "database_changed": False, "acceptance": [
                 {"url_id": index, "expected_status": expected, "observed_status": observed}
                 for index, ((_, expected), observed) in enumerate(zip(profile.acceptance_urls, observed_statuses), 1)
+            ], "unauthenticated_protected_acceptance": [
+                {"url_id": index, "expected_status": 401, "observed_status": observed}
+                for index, observed in enumerate(unauthenticated_statuses, 1)
             ], "active_sha_after_deploy": application_sha,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -1293,6 +1414,10 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                     {"url_id": index, "expected_status": expected, "observed_status": observed}
                     for index, ((_, expected), observed) in enumerate(
                         zip(profile.acceptance_urls, observed_statuses), 1)
+                ],
+                "unauthenticated_protected_acceptance": [
+                    {"url_id": index, "expected_status": 401, "observed_status": observed}
+                    for index, observed in enumerate(unauthenticated_statuses, 1)
                 ],
                 "active_sha_after_recovery": previous_sha,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -1326,6 +1451,10 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                     {"url_id": index, "expected_status": expected, "observed_status": observed}
                     for index, ((_, expected), observed) in enumerate(
                         zip(profile.acceptance_urls, observed_statuses), 1)
+                ],
+                "unauthenticated_protected_acceptance": [
+                    {"url_id": index, "expected_status": 401, "observed_status": observed}
+                    for index, observed in enumerate(unauthenticated_statuses, 1)
                 ],
                 "active_sha_after_recovery": previous_sha,
                 "completed_at": datetime.now(timezone.utc).isoformat(),

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import gzip
 import json
@@ -187,7 +188,7 @@ def prepare_tree(repo: Path):
 def create_active_release(profile, repo, base_sha):
     CONTROLLER.SOURCE_CHECKOUT = repo
     CONTROLLER.INCOMING_DIRECTORY = profile.incoming_dir
-    archive_path, artifact_sha = CONTROLLER._package_release(base_sha, base_sha)
+    archive_path, artifact_sha = CONTROLLER._package_release(base_sha, base_sha, test_only=True)
     raw = archive_path.read_bytes()
     release = profile.releases_dir / base_sha
     release.mkdir(mode=0o700)
@@ -303,6 +304,11 @@ def main():
         env_file.write_text(env, encoding="utf-8")
         os.chown(env_file, 0, 33)
         os.chmod(env_file, 0o640)
+        basic_auth_file = root / "basic-auth.json"
+        basic_auth_file.write_text(json.dumps({
+            "username": "e2e-owner", "password": "synthetic-only-password"}), encoding="utf-8")
+        os.chown(basic_auth_file, 0, 0)
+        os.chmod(basic_auth_file, 0o600)
         storage = shared / "storage"
         storage.mkdir(mode=0o2770)
         os.chmod(storage, 0o2770)
@@ -322,13 +328,14 @@ def main():
             name="staging-next", application_link=app_parent / "current", releases_dir=release_dir,
             incoming_dir=incoming, inbox_dir=inbox, state_dir=state, receipts_dir=receipts,
             shared_env_file=env_file, shared_storage_dir=storage, shared_vendor_dir=vendor,
-            basic_auth_file=None, mysql_server_uuid_sha256=os.environ["WPCG_MYSQL_UUID_SHA256"],
+            basic_auth_file=basic_auth_file, mysql_server_uuid_sha256=os.environ["WPCG_MYSQL_UUID_SHA256"],
             integration_qa_reviewer=None, m17_appsec_reviewer=None,
             helper_artifact_sha256=CONTROLLER.HELPER_ARTIFACT_SHA256, php_fpm_uid=33, php_fpm_gid=33,
             test_git_repo=repo, allowed_uid=1000, expected_owner_uid=0,
             acceptance_urls=tuple((f"http://localhost:{port}{path}", status)
                                   for path, status in (("/up", 200), ("/hu", 200), ("/en", 200),
                                                        ("/register", 404), ("/checkout", 404), ("/api", 404))),
+            protected_acceptance_urls=(f"http://localhost:{port}/hu", f"http://localhost:{port}/en"),
             build_application_bootstrap=True, test_only=True, verify_test_database=True,
         )
         create_active_release(profile, repo, base_sha)
@@ -341,7 +348,9 @@ def main():
         backup_sha, restored_tables, restored_migrations = prove_mysql_backup_restore(profile, root)
         print(f"MIGRATIONS=PASS;COUNT={restored_migrations};ISOLATED_RESTORE=PASS;TABLES={restored_tables};BACKUP_SHA256={backup_sha}")
         php_env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(storage),
-                   "WPCG_CURRENT_APP": str(profile.application_link)}
+                   "WPCG_CURRENT_APP": str(profile.application_link),
+                   "WPCG_TEST_HTTP_AUTH_USER": "e2e-owner",
+                   "WPCG_TEST_HTTP_AUTH_PASSWORD": "synthetic-only-password"}
         stderr_path = root / "php-server.stderr"
         php_stderr = stderr_path.open("xb")
         os.chown(stderr_path, 33, 33)
@@ -361,7 +370,11 @@ def main():
             if php_process.poll() is not None:
                 raise RuntimeError("laravel_http_process_exited")
             try:
-                with urllib.request.urlopen(f"http://localhost:{port}/up", timeout=1) as response:
+                readiness_request = urllib.request.Request(
+                    f"http://localhost:{port}/up", headers={
+                        "Authorization": "Basic " + base64.b64encode(
+                            b"e2e-owner:synthetic-only-password").decode("ascii")})
+                with urllib.request.urlopen(readiness_request, timeout=1) as response:
                     last_probe = f"HTTP_{response.status}"
                     if response.status == 200:
                         break
@@ -375,7 +388,7 @@ def main():
         else:
             raise RuntimeError(f"laravel_http_readiness_timeout:{last_probe}")
 
-        artifact_path, artifact_sha = CONTROLLER._package_release(candidate_sha, base_sha)
+        artifact_path, artifact_sha = CONTROLLER._package_release(candidate_sha, base_sha, test_only=True)
         tree_names = set(BACKEND._local_git_tree(profile, candidate_sha))
         with tarfile.open(artifact_path, mode="r:") as packaged:
             artifact_names = {member.name for member in packaged.getmembers()
@@ -429,7 +442,11 @@ def main():
             if php_process.poll() is not None:
                 raise RuntimeError("reloaded_laravel_http_process_exited")
             try:
-                with urllib.request.urlopen(f"http://localhost:{port}/up", timeout=1) as response:
+                readiness_request = urllib.request.Request(
+                    f"http://localhost:{port}/up", headers={
+                        "Authorization": "Basic " + base64.b64encode(
+                            b"e2e-owner:synthetic-only-password").decode("ascii")})
+                with urllib.request.urlopen(readiness_request, timeout=1) as response:
                     if response.status == 200:
                         break
             except (urllib.error.URLError, TimeoutError):
@@ -437,7 +454,11 @@ def main():
         else:
             raise RuntimeError("reloaded_laravel_http_readiness_timeout")
         try:
-            with urllib.request.urlopen(f"http://localhost:{port}/hu", timeout=3) as response:
+            acceptance_request = urllib.request.Request(
+                f"http://localhost:{port}/hu", headers={
+                    "Authorization": "Basic " + base64.b64encode(
+                        b"e2e-owner:synthetic-only-password").decode("ascii")})
+            with urllib.request.urlopen(acceptance_request, timeout=3) as response:
                 body = response.read(2_000_000).decode("utf-8", "replace")
         except urllib.error.HTTPError as error:
             import re
