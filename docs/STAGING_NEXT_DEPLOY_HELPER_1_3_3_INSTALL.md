@@ -1,4 +1,4 @@
-# Staging-next deployment helper 1.3.2
+# Staging-next deployment helper 1.3.3
 
 **Preparation only.** This procedure does not authorize installation, a Laravel
 deployment, database changes, or schedule activation. Each requires its own
@@ -11,12 +11,12 @@ Recompute all values from the approved merge tree before use. Stop on a mismatch
 
 | Artifact | Source path | SHA-256 | Installed owner/mode |
 | --- | --- | --- | --- |
-| Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv.py` | `8717b948d912c8e9fda3e151fd2d656d4da9d4042fb43390d45d11c36fd38fa7` | `root:root 0755` |
-| Backend | `scripts/staging_next_deploy_backend.py` | `c818578853df42323701ae77635d0a2aefd6becfe294db445dcb63a781b65721` | `root:root 0644` |
-| Combined helper artifact | `deploy/release-manifests/staging-next-helper-1.3.2.json` | `9d3c82a3d6d7e6dfaae17e586a9c7488ca7b68326d92f8044e57d038e39b68a9` | Pinned in policy and receipts |
+| Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv.py` | `2caacfe9776afbb44f593dbf7bab880147e4c7e99a758f3dd0cd3bf359766a93` | `root:root 0755` |
+| Backend | `scripts/staging_next_deploy_backend.py` | `95bdf7091c749814a734bffeb6068033baf788ec38f9f7cb49cd74550e94c7ea` | `root:root 0644` |
+| Combined helper artifact | `deploy/release-manifests/staging-next-helper-1.3.3.json` | `61f703bbb53dc6c37848fa86225e24ff0fa83dc16736ea29b37274ccc36ad9fd` | Pinned in policy and receipts |
 
-Version: `1.3.2`. Compatibility contract remains
-`wpcaregrid-staging-next-deploy-v3`. Version 1.3.2 is a new immutable
+Version: `1.3.3`. Compatibility contract remains
+`wpcaregrid-staging-next-deploy-v3`. Version 1.3.3 is a new immutable
 installation; do not overwrite 1.3.0.
 
 ## Fixed profile
@@ -24,10 +24,10 @@ installation; do not overwrite 1.3.0.
 * Application link: `/var/www/wpcaregrid-staging-new`
 * Database: `wpcg_staging_next`
 * Host: `staging-next.wpcaregrid.com`
-* Entrypoint: `/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.2/wpcaregrid-deploy-staging-next-priv`
-* Backend: `/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.2/staging_next_deploy_backend.py`
-* Policy: `/etc/wpcaregrid-deploy/profiles/staging-next-1.3.2.json`
-* Sudoers: `/etc/sudoers.d/wpcaregrid-staging-next-1.3.2`
+* Entrypoint: `/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.3/wpcaregrid-deploy-staging-next-priv`
+* Backend: `/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.3/staging_next_deploy_backend.py`
+* Policy: `/etc/wpcaregrid-deploy/profiles/staging-next-1.3.3.json`
+* Sudoers: `/etc/sudoers.d/wpcaregrid-staging-next-1.3.3`
 * Operations: `preflight`, `authorize <exact-primary-sha>`,
   `stage <exact-primary-sha> <artifact-sha256>`, and
   `deploy <exact-primary-sha> <artifact-sha256>`.
@@ -70,5 +70,9 @@ identity. Any mismatch remains `HOLD`. Database-changing releases remain
 `HOLD` until Phase B backup, isolated restore, migration and crash-recovery
 gates are implemented and accepted. This source change does not install the
 helper, deploy Laravel, or activate a schedule.
+
+Preflight takes the same exclusive deployment lock as activation because reconciliation can change the active link, reload the fixed PHP-FPM target and write a receipt. If another deployment holds the lock, preflight returns HOLD without reconciliation.
+
+Initial baseline adoption is not performed by this helper. Before installation/preflight, the existing staging-next application must be converted through a separately reviewed and authorized adoption procedure into a SHA-named immutable release with the exact helper-compatible manifest and shared links. Until that precondition is proven, helper preflight must remain HOLD; do not point the deployment link at the current mutable application directory.
 
 On interrupted activation, a release without a durable PASS receipt is rechecked. If it fails runtime or HTTP/BasicAuth acceptance, the helper restores the pinned base release, reloads PHP-FPM, verifies the restored runtime and both authenticated and unauthenticated probes, and records a failure receipt. Any rollback verification failure remains FAIL/HOLD; no gate is opened by the helper.

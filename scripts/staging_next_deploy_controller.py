@@ -25,8 +25,8 @@ HOST = "staging-next.wpcaregrid.com"
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/staging-next/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/staging-next/incoming")
-HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.2/wpcaregrid-deploy-staging-next-priv")
-HELPER_ARTIFACT_SHA256 = "9d3c82a3d6d7e6dfaae17e586a9c7488ca7b68326d92f8044e57d038e39b68a9"  # Generated from versioned helper manifest.
+HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.3/wpcaregrid-deploy-staging-next-priv")
+HELPER_ARTIFACT_SHA256 = "61f703bbb53dc6c37848fa86225e24ff0fa83dc16736ea29b37274ccc36ad9fd"  # Generated from versioned helper manifest.
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_FILES = 100_000
 MAX_UNPACKED_BYTES = 2 * 1024 * 1024 * 1024
@@ -104,7 +104,7 @@ def _helper(operation, *arguments):
         result = json.loads(raw.decode("utf-8"))
     except (UnicodeError, ValueError):
         raise ControllerHold("helper_response_invalid") from None
-    if not isinstance(result, dict) or result.get("helper_version") != "1.3.2" \
+    if not isinstance(result, dict) or result.get("helper_version") != "1.3.3" \
             or result.get("helper_contract") != "wpcaregrid-staging-next-deploy-v3" \
             or result.get("helper_artifact_sha256") != HELPER_ARTIFACT_SHA256:
         raise ControllerHold("helper_contract_mismatch")
@@ -279,7 +279,7 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
         manifest = {
             "schema": 1, "profile": PROFILE, "application_sha": application_sha,
             "base_application_sha": base_sha, "php_minimum": "8.5", "database_scope": "unchanged",
-            "helper_version": "1.3.2", "helper_sha256": HELPER_ARTIFACT_SHA256,
+            "helper_version": "1.3.3", "helper_sha256": HELPER_ARTIFACT_SHA256,
             "helper_contract": "wpcaregrid-staging-next-deploy-v3",
             "frontend_build": frontend_build,
             "files_sha256": hashlib.sha256(canonical).hexdigest(),

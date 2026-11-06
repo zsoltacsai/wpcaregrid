@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Versioned, staging-next-only privileged deployment entrypoint (1.3.2)."""
+"""Versioned, staging-next-only privileged deployment entrypoint (1.3.3)."""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 CONTRACT = "wpcaregrid-staging-next-deploy-v3"
-ENTRYPOINT = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.2/wpcaregrid-deploy-staging-next-priv")
+ENTRYPOINT = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.3/wpcaregrid-deploy-staging-next-priv")
 BACKEND = ENTRYPOINT.parent / "staging_next_deploy_backend.py"
-POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-1.3.2.json")
+POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-1.3.3.json")
 POLICY_KEYS = {
     "schema", "profile", "enabled", "allowed_uid", "app_dir", "database", "host",
     "mysql_server_uuid_sha256", "integration_qa_reviewer", "m17_appsec_reviewer",
@@ -125,7 +125,7 @@ def _load_backend(entrypoint: str, argv: list[str], sudo_uid: str | None):
     if os.geteuid() != 0:
         raise Refused("privileged_identity_required")
 
-    module = types.ModuleType("_wpcaregrid_staging_next_backend_v1_3_2")
+    module = types.ModuleType("_wpcaregrid_staging_next_backend_v1_3_3")
     module.__file__ = str(BACKEND)
     sys.modules[module.__name__] = module
     try:

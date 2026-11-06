@@ -1,0 +1,11 @@
+{
+  "backend_path": "scripts/staging_next_deploy_backend.py",
+  "backend_sha256": "95bdf7091c749814a734bffeb6068033baf788ec38f9f7cb49cd74550e94c7ea",
+  "compatibility_contract": "wpcaregrid-staging-next-deploy-v3",
+  "entrypoint_path": "scripts/wpcaregrid-staging-next-deploy-priv.py",
+  "entrypoint_sha256": "2caacfe9776afbb44f593dbf7bab880147e4c7e99a758f3dd0cd3bf359766a93",
+  "helper_artifact_sha256": "61f703bbb53dc6c37848fa86225e24ff0fa83dc16736ea29b37274ccc36ad9fd",
+  "helper_version": "1.3.3",
+  "profile": "staging-next",
+  "schema": 1
+}

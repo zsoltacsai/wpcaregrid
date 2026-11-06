@@ -600,6 +600,27 @@ class StagingDeployBackendTests(unittest.TestCase):
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
+    def test_preflight_reconciliation_is_serialized_with_deployment_lock(self):
+        import fcntl
+        result = self._submit(self._runtime_files("unreceipted-active"))
+        self.assertEqual(result.status, "PASS")
+        Path(result.receipt_path).unlink()
+        active_target = os.readlink(self.link)
+        lock = self.state / "deploy.lock"
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        os.chown(lock, 0, 0)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with mock.patch.object(BACKEND, "_atomic_symlink", side_effect=AssertionError("preflight mutated")), \
+                    mock.patch.object(BACKEND, "_bounded_acceptance", side_effect=AssertionError("probe raced")):
+                readiness = BACKEND.preflight(self.profile, invoking_uid=1000)
+            self.assertEqual((readiness.get("result"), readiness.get("reason")),
+                             ("HOLD", "deployment_lock_busy"))
+            self.assertEqual(os.readlink(self.link), active_target)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
     def test_exact_primary_authorization_precedes_any_build_or_mutation(self):
         result = BACKEND.authorize_release(self.profile, invoking_uid=1000,
                                            application_sha=self.base_sha)

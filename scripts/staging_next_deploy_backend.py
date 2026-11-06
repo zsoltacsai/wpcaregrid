@@ -33,7 +33,7 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping
 
 
-HELPER_VERSION = "1.3.2"
+HELPER_VERSION = "1.3.3"
 HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v3"
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
@@ -1231,25 +1231,46 @@ def preflight(profile: StagingProfile, *, invoking_uid: int) -> Mapping[str, obj
     for directory in (profile.releases_dir, profile.inbox_dir, profile.state_dir, profile.receipts_dir):
         _verify_directory_chain(directory, owner_uid=profile.expected_owner_uid,
                                 exact_mode=0o700 if directory in {profile.state_dir, profile.receipts_dir} else 0o755)
-    active_sha, _active, _tree = _current_release(profile)
-    active_manifest = _release_manifest(profile, _active, expected_uid=profile.expected_owner_uid)
-    _basic_auth_header(profile)
-    artifact_sha = active_manifest.get("artifact_sha256")
-    if not _successful_receipt_exists(profile, active_sha, artifact_sha):
-        reconciled = _reconcile_unreceipted_active_release(
-            profile, application_sha=active_sha, active_path=_active,
-            active_manifest=active_manifest, artifact_sha256=artifact_sha,
-        )
-        if reconciled.status != "PASS":
-            return {"result": "HOLD", "reason": reconciled.reason,
-                    "application_sha": active_sha, "helper_version": HELPER_VERSION,
-                    "helper_contract": HELPER_CONTRACT}
-    runtime = _verify_runtime(profile, _active)
-    return {"result": "PASS", "profile": PROFILE, "helper_version": HELPER_VERSION,
-            "helper_contract": HELPER_CONTRACT, "helper_artifact_sha256": profile.helper_artifact_sha256,
-            "application_sha": active_sha,
-            "artifact_sha256": active_manifest.get("artifact_sha256"),
-            "runtime": runtime}
+    lock_fd = None
+    try:
+        lock_path = profile.state_dir / "deploy.lock"
+        try:
+            lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except OSError:
+            raise DeployRefused("deployment_lock_unavailable") from None
+        lock_info = os.fstat(lock_fd)
+        _require(stat.S_ISREG(lock_info.st_mode) and lock_info.st_uid == profile.expected_owner_uid
+                 and stat.S_IMODE(lock_info.st_mode) == 0o600, "deployment_lock_metadata_invalid")
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {"result": "HOLD", "reason": "deployment_lock_busy",
+                    "helper_version": HELPER_VERSION, "helper_contract": HELPER_CONTRACT}
+        active_sha, active_path, _tree = _current_release(profile)
+        active_manifest = _release_manifest(profile, active_path, expected_uid=profile.expected_owner_uid)
+        _basic_auth_header(profile)
+        artifact_sha = active_manifest.get("artifact_sha256")
+        if not _successful_receipt_exists(profile, active_sha, artifact_sha):
+            reconciled = _reconcile_unreceipted_active_release(
+                profile, application_sha=active_sha, active_path=active_path,
+                active_manifest=active_manifest, artifact_sha256=artifact_sha,
+            )
+            if reconciled.status != "PASS":
+                return {"result": "HOLD", "reason": reconciled.reason,
+                        "application_sha": active_sha, "helper_version": HELPER_VERSION,
+                        "helper_contract": HELPER_CONTRACT}
+        runtime = _verify_runtime(profile, active_path)
+        return {"result": "PASS", "profile": PROFILE, "helper_version": HELPER_VERSION,
+                "helper_contract": HELPER_CONTRACT, "helper_artifact_sha256": profile.helper_artifact_sha256,
+                "application_sha": active_sha,
+                "artifact_sha256": active_manifest.get("artifact_sha256"),
+                "runtime": runtime}
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
 
 
 def stage_artifact(profile: StagingProfile, *, invoking_uid: int, application_sha: str,
