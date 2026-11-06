@@ -15,7 +15,30 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class MarketingOnlyReleaseGate
 {
-    private const PROFILES = ['marketing_only', 'invitation_beta'];
+    private const PROFILES = ['marketing_only', 'invitation_beta', 'staging_admin_qa'];
+
+    private const STAGING_ADMIN_QA_READ_PATHS = [
+        '/owner', '/owner/customers', '/owner/operators',
+        '/operator', '/operator/websites', '/operator/activity',
+        '/account', '/account/websites',
+    ];
+
+    private const STAGING_ADMIN_QA_READ_PATTERNS = [
+        '~^/owner/customers/[0-9]+$~D',
+        '~^/owner/operators/[0-9]+$~D',
+        '~^/owner/operators/[0-9]+/permissions$~D',
+        '~^/operator/websites/[^/]+$~D',
+        '~^/account/websites/[^/]+$~D',
+    ];
+
+    private const STAGING_ADMIN_QA_AUTH_POSTS = [
+        '/login',
+        '/operator/login',
+        '/owner/login',
+        '/logout',
+        '/operator/logout',
+        '/owner/logout',
+    ];
 
     private const PUBLIC_PATHS = [
         '/',
@@ -44,8 +67,16 @@ final class MarketingOnlyReleaseGate
             return $next($request);
         }
 
+        if ($profile === 'staging_admin_qa') {
+            if (! $this->isAuthorizedStagingAdminQaRequest($request)) {
+                return $this->notFound();
+            }
+
+            return $next($request);
+        }
+
         if (! $this->isAllowedPublicRequest($request)) {
-            return response('', Response::HTTP_NOT_FOUND, ['Cache-Control' => 'no-store']);
+            return $this->notFound();
         }
 
         // A bodyless liveness response preserves the approved health probe without
@@ -69,6 +100,65 @@ final class MarketingOnlyReleaseGate
             && config('marketing_release.test_deployment_environment') === 'testing';
 
         return ! $testingExemption;
+    }
+
+    /**
+     * The QA profile exposes only authenticated read pages and login/logout on
+     * the exact HTTPS staging-next origin. Every mutating product operation,
+     * payment, Connector/API, password-reset and registration path stays shut.
+     */
+    private function isAuthorizedStagingAdminQaRequest(Request $request): bool
+    {
+        if (config('marketing_release.staging_admin_qa_enabled') !== true
+            || config('app.env') !== 'staging'
+            || config('app.deployment_environment') !== 'staging_next'
+            || config('app.debug') !== false
+            || config('app.url') !== 'https://staging-next.wpcaregrid.com'
+            || ! $request->isSecure()) {
+            return false;
+        }
+
+        $host = $request->headers->get('host');
+        if (! is_string($host) || strtolower($host) !== 'staging-next.wpcaregrid.com'
+            || $request->headers->has('x-forwarded-host')
+            || $request->headers->has('forwarded')
+            || ! $this->hasUnambiguousTarget($request)) {
+            return false;
+        }
+
+        $method = strtoupper($request->getRealMethod());
+        if ($request->method() !== $method) {
+            return false;
+        }
+        $path = $request->getPathInfo();
+
+        if (in_array($path, self::STAGING_ADMIN_QA_AUTH_POSTS, true)) {
+            return $method === 'POST';
+        }
+
+        if (! in_array($method, ['GET', 'HEAD'], true)) {
+            return false;
+        }
+
+        if (in_array($path, ['/up', '/login', '/owner/login', '/operator/login'], true)) {
+            return true;
+        }
+
+        if (in_array($path, self::STAGING_ADMIN_QA_READ_PATHS, true)) {
+            return true;
+        }
+        foreach (self::STAGING_ADMIN_QA_READ_PATTERNS as $pattern) {
+            if (preg_match($pattern, $path) === 1) {
+                return true;
+            }
+        }
+
+        return $this->isAllowedPublicRequest($request);
+    }
+
+    private function notFound(): Response
+    {
+        return response('', Response::HTTP_NOT_FOUND, ['Cache-Control' => 'no-store']);
     }
 
     private function isAllowedPublicRequest(Request $request): bool
