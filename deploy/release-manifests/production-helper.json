@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "helper_version": null,
+  "compatibility_contract": "wpcaregrid-deploy-profile-v1",
+  "profile": "production",
+  "enabled": false,
+  "entrypoint": null,
+  "target": null,
+  "operations": [],
+  "artifacts": []
+}
