@@ -162,8 +162,8 @@ for (const locale of ['en', 'hu'] as const) {
                 await billingOptions.nth(1).click();
                 await expect(billingOptions.nth(1)).toHaveAttribute('aria-pressed', 'true');
                 await expect(pricing).toContainText(locale === 'en' ? '2 months free' : '2 hónap ingyenes');
-                await expect(pricing.locator('[data-price="annual"]').first()).toBeVisible();
-                await expect(pricing.locator('[data-price="monthly"]').first()).toBeHidden();
+                await expect(pricing.locator('[data-price="annual"]:visible')).toHaveCount(3);
+                await expect(pricing.locator('[data-price="monthly"]:visible')).toHaveCount(0);
                 await expect(page).not.toHaveURL(/checkout/);
             }
 
