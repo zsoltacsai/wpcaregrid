@@ -13,7 +13,7 @@ The only enabled profile in this release is `staging-next`, bound in source to:
 
 | Identity | Pinned value |
 | --- | --- |
-| Entrypoint | `/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.1/wpcaregrid-deploy-staging-next-priv` |
+| Entrypoint | `/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.2/wpcaregrid-deploy-staging-next-priv` |
 | Application | `/var/www/wpcaregrid-staging-new` |
 | Database | `wpcg_staging_next` |
 | Host | `staging-next.wpcaregrid.com` |
@@ -24,9 +24,9 @@ Source artifacts at this change's current candidate bytes (reconfirm from the
 final merged SHA before installation):
 
 - `scripts/wpcaregrid_deploy_profiles.py` —
-  `27c122e11de038c2bf28f9bc462e4b78c695777a8d592a23428f17b5dc819bf7`
+  `80bbe2cb1ff40a1fc8f3ad6e04e6e7cdc1b5438a490e4720e165839cb5c82947`
 - `scripts/wpcaregrid-deploy-env-priv.py` —
-  `0bc491358c8cbda56e88eef0d6e0fff0b944bd533eca5583555e02048afd7533`
+  `c874dd85b8555fdcac94372f3b488857115bcd08e4f3548e74286bfdea3dbf57`
 
 Production is represented by a disabled profile with no path, database, host,
 policy file, caller UID, or operation. No production helper, sudoers entry,
@@ -80,7 +80,7 @@ must be the separately approved staging-next deploy identity.
    Set schema `1`, profile
    `staging-next`, enabled `true`, the verified numeric nonzero deploy UID,
    the four compiled target values above, and operations `['preflight']`.
-   Pin `helper_version=1.0.1`, `compatibility_contract=wpcaregrid-deploy-profile-v1`,
+   Pin `helper_version=1.0.2`, `compatibility_contract=wpcaregrid-deploy-profile-v1`,
    and the exact two installed file hashes from the merged source manifest.
    Verify root ownership, mode `0644`, strict JSON with no duplicate or unknown
    keys, exact schema and matching helper bytes. Do not place credentials in

@@ -152,7 +152,7 @@ class DailyStagingSyncPolicyTest(unittest.TestCase):
         self.assertEqual(self.decide().reasons, ("deployment_operation_not_in_approved_helper_contract",))
         self.assertEqual(self.decide(active=deployed(helper_sha256="e" * 64)).reasons,
                          ("helper_identity_mismatch",))
-        self.assertEqual(self.decide(manifest(helper_version="2.0.0")).reasons,
+        self.assertEqual(self.decide(manifest(helper_version="1.0.1")).reasons,
                          ("helper_identity_mismatch",))
         self.assertEqual(self.decide(manifest(helper_contract="unknown")).reasons,
                          ("helper_identity_mismatch",))

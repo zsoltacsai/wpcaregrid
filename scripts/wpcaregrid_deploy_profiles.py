@@ -38,13 +38,13 @@ class DeploymentProfile:
 
 
 STAGING_NEXT_ENTRYPOINT = PurePosixPath(
-    "/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.1/wpcaregrid-deploy-staging-next-priv"
+    "/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.2/wpcaregrid-deploy-staging-next-priv"
 )
 PRODUCTION_ENTRYPOINT = PurePosixPath(
     "/usr/local/libexec/wpcaregrid-deploy/production/inactive/wpcaregrid-deploy-production-priv"
 )
 STAGING_NEXT_POLICY = PurePosixPath("/etc/wpcaregrid-deploy/profiles/staging-next.json")
-STAGING_NEXT_HELPER_VERSION = "1.0.1"
+STAGING_NEXT_HELPER_VERSION = "1.0.2"
 STAGING_NEXT_COMPATIBILITY_CONTRACT = "wpcaregrid-deploy-profile-v1"
 
 STAGING_NEXT = DeploymentProfile(

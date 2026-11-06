@@ -35,7 +35,7 @@ def policy(**changes):
         "database": "wpcg_staging_next",
         "host": "staging-next.wpcaregrid.com",
         "operations": ["preflight"],
-        "helper_version": "1.0.1",
+        "helper_version": "1.0.2",
         "compatibility_contract": "wpcaregrid-deploy-profile-v1",
         "entrypoint_sha256": hashlib.sha256(helper_bytes).hexdigest(),
         "profiles_module_sha256": hashlib.sha256(module_bytes).hexdigest(),
@@ -214,7 +214,7 @@ class DeployProfileIsolationTest(unittest.TestCase):
             PROFILES.STAGING_NEXT_ENTRYPOINT,
             lstat_fn=lambda path: good if str(path).endswith("wpcaregrid-deploy-staging-next-priv")
             else type("Info", (), {"st_mode": stat.S_IFDIR | 0o777, "st_uid": 0})()
-            if str(path).endswith("1.0.1") else parent,
+            if str(path).endswith("1.0.2") else parent,
         ))
 
     def test_entrypoint_verifies_shared_module_hash_before_execution(self):
@@ -301,6 +301,34 @@ class DeployProfileIsolationTest(unittest.TestCase):
         )
         self.assertTrue(loaded.VERIFIED_MODULE)
 
+    def test_entrypoint_registers_pinned_profile_module_before_dataclass_execution(self):
+        module_path = str(PROFILES.STAGING_NEXT_ENTRYPOINT.parent / "wpcaregrid_deploy_profiles.py")
+        source = (ROOT / "scripts" / "wpcaregrid_deploy_profiles.py").read_bytes()
+        expected = hashlib.sha256(source).hexdigest()
+        directory = type("Info", (), {"st_mode": stat.S_IFDIR | 0o755, "st_uid": 0})()
+        entry = type("Info", (), {"st_mode": stat.S_IFREG | 0o755, "st_uid": 0})()
+        module_info = type("Info", (), {
+            "st_mode": stat.S_IFREG | 0o644, "st_uid": 0, "st_size": len(source),
+        })()
+
+        def lstat(path):
+            if path == HELPER.EXPECTED_ENTRYPOINT:
+                return entry
+            if path == module_path:
+                return module_info
+            return directory
+
+        loaded = HELPER._load_verified_profiles_module(
+            HELPER.EXPECTED_ENTRYPOINT,
+            lstat_fn=lstat,
+            read_module_fn=lambda _path: source,
+            expected_module_sha256=expected,
+        )
+
+        self.assertIs(sys.modules.get(loaded.__name__), loaded)
+        self.assertEqual(loaded.STAGING_NEXT.name, "staging-next")
+        self.assertEqual(loaded.STAGING_NEXT.operations, frozenset({"preflight"}))
+
     def test_target_path_is_fixed_and_symlink_free(self):
         directory = type("Info", (), {"st_mode": stat.S_IFDIR | 0o755})()
         PROFILES.verify_target_directory(PROFILES.STAGING_NEXT, lstat_fn=lambda _path: directory)
@@ -328,7 +356,7 @@ class DeployProfileIsolationTest(unittest.TestCase):
         policy_spec.loader.exec_module(sync_policy)
         self.assertEqual(manifest["profile"], "staging-next")
         self.assertTrue(manifest["enabled"])
-        self.assertEqual(manifest["helper_version"], "1.0.1")
+        self.assertEqual(manifest["helper_version"], "1.0.2")
         self.assertEqual(manifest["helper_version"], sync_policy.HELPER_VERSION)
         self.assertEqual(manifest["compatibility_contract"], "wpcaregrid-deploy-profile-v1")
         self.assertEqual(manifest["compatibility_contract"], PROFILES.STAGING_NEXT_COMPATIBILITY_CONTRACT)
