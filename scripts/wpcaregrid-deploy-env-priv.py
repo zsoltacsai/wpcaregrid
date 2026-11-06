@@ -11,8 +11,8 @@ from pathlib import PurePosixPath
 
 sys.dont_write_bytecode = True
 
-EXPECTED_ENTRYPOINT = "/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.1/wpcaregrid-deploy-staging-next-priv"
-EXPECTED_PROFILES_MODULE_SHA256 = "27c122e11de038c2bf28f9bc462e4b78c695777a8d592a23428f17b5dc819bf7"
+EXPECTED_ENTRYPOINT = "/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.2/wpcaregrid-deploy-staging-next-priv"
+EXPECTED_PROFILES_MODULE_SHA256 = "80bbe2cb1ff40a1fc8f3ad6e04e6e7cdc1b5438a490e4720e165839cb5c82947"
 MAX_PROFILES_MODULE_BYTES = 1_000_000
 
 
@@ -85,7 +85,15 @@ def _load_verified_profiles_module(executable, **kwargs):
     path, source = _read_profiles_module(executable, **kwargs)
     module = types.ModuleType("_wpcaregrid_deploy_profiles")
     module.__file__ = path
-    exec(compile(source, path, "exec", dont_inherit=True), module.__dict__)
+    # Dataclasses and other standard-library introspection resolve the module
+    # through sys.modules while its classes are being defined. Register only
+    # after the source bytes and path have passed the pinned provenance checks.
+    sys.modules[module.__name__] = module
+    try:
+        exec(compile(source, path, "exec", dont_inherit=True), module.__dict__)
+    except BaseException:
+        sys.modules.pop(module.__name__, None)
+        raise
     return module
 
 
