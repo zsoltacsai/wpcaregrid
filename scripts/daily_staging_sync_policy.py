@@ -30,6 +30,16 @@ def _sha(value: object, length: int) -> bool:
     return isinstance(value, str) and re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is not None
 
 
+def _bound_pass(record: object, required: set[str], **expected: object) -> bool:
+    """Require a PASS record whose identity fields bind to this release."""
+    return (
+        isinstance(record, Mapping)
+        and set(record) == required
+        and record.get("status") == "PASS"
+        and all(record.get(key) == value for key, value in expected.items())
+    )
+
+
 def evaluate_sync(manifest: object, deployed: object) -> SyncDecision:
     """Evaluate a synthetic release manifest; never executes deployment work."""
     if not isinstance(manifest, Mapping) or not isinstance(deployed, Mapping):
@@ -37,10 +47,10 @@ def evaluate_sync(manifest: object, deployed: object) -> SyncDecision:
 
     expected_manifest_keys = {
         "schema", "profile", "app_dir", "database", "host", "application_sha",
-        "artifact_sha256", "helper_version", "helper_sha256", "helper_contract", "required_evidence",
+        "exact_head_sha", "merge_sha", "artifact_sha256", "helper_version", "helper_sha256", "helper_contract", "required_evidence",
         "database_changes", "database_evidence",
     }
-    expected_deployed_keys = {"profile", "app_dir", "database", "host", "application_sha", "helper_version", "helper_sha256", "helper_contract"}
+    expected_deployed_keys = {"profile", "app_dir", "database", "host", "application_sha", "artifact_sha256", "helper_version", "helper_sha256", "helper_contract"}
     if set(manifest) != expected_manifest_keys or set(deployed) != expected_deployed_keys:
         return SyncDecision("HOLD", ("evidence_fields_invalid",))
 
@@ -54,7 +64,12 @@ def evaluate_sync(manifest: object, deployed: object) -> SyncDecision:
 
     if not _sha(manifest["application_sha"], 40) or not _sha(deployed["application_sha"], 40):
         return SyncDecision("HOLD", ("application_identity_invalid",))
-    if not _sha(manifest["artifact_sha256"], 64):
+    if (not _sha(manifest["exact_head_sha"], 40)
+            or not _sha(manifest["merge_sha"], 40)
+            or manifest["merge_sha"] != manifest["application_sha"]):
+        return SyncDecision("HOLD", ("release_commit_identity_invalid",))
+    if (not _sha(manifest["artifact_sha256"], 64)
+            or not _sha(deployed["artifact_sha256"], 64)):
         return SyncDecision("HOLD", ("artifact_identity_invalid",))
     if (manifest["helper_version"] != HELPER_VERSION or deployed["helper_version"] != HELPER_VERSION
             or not _sha(manifest["helper_sha256"], 64) or not _sha(deployed["helper_sha256"], 64)
@@ -64,14 +79,41 @@ def evaluate_sync(manifest: object, deployed: object) -> SyncDecision:
         return SyncDecision("HOLD", ("helper_identity_mismatch",))
 
     evidence = manifest["required_evidence"]
-    if (not isinstance(evidence, Mapping) or set(evidence) != REQUIRED_EVIDENCE
-            or any(value != "PASS" for value in evidence.values())):
+    if not isinstance(evidence, Mapping) or set(evidence) != REQUIRED_EVIDENCE:
         return SyncDecision("HOLD", ("release_acceptance_incomplete",))
+    environment = evidence["environment_identity"]
+    if not _bound_pass(
+        environment, {"status", "profile", "app_dir", "database", "host"},
+        profile="staging-next", app_dir=APP_DIR, database=DATABASE, host=HOST,
+    ):
+        return SyncDecision("HOLD", ("environment_identity_unverified",))
+    if not _bound_pass(
+        evidence["artifact_integrity"], {"status", "application_sha", "artifact_sha256"},
+        application_sha=manifest["application_sha"], artifact_sha256=manifest["artifact_sha256"],
+    ):
+        return SyncDecision("HOLD", ("artifact_integrity_unverified",))
+    exact_head_ci = evidence["exact_head_ci"]
+    if (not _bound_pass(exact_head_ci, {"status", "commit_sha", "run_id"},
+                        commit_sha=manifest["exact_head_sha"])
+            or type(exact_head_ci.get("run_id")) is not int or exact_head_ci["run_id"] <= 0):
+        return SyncDecision("HOLD", ("exact_head_ci_unverified",))
+    merge_ci = evidence["merge_sha_ci"]
+    if (not _bound_pass(merge_ci, {"status", "commit_sha", "run_id"},
+                        commit_sha=manifest["merge_sha"])
+            or type(merge_ci.get("run_id")) is not int or merge_ci["run_id"] <= 0):
+        return SyncDecision("HOLD", ("merge_sha_ci_unverified",))
+    if not _bound_pass(evidence["integration_qa"], {"status", "commit_sha"},
+                       commit_sha=manifest["exact_head_sha"]):
+        return SyncDecision("HOLD", ("integration_qa_unverified",))
+    if not _bound_pass(evidence["m17_appsec"], {"status", "commit_sha"},
+                       commit_sha=manifest["exact_head_sha"]):
+        return SyncDecision("HOLD", ("m17_appsec_unverified",))
 
     if not isinstance(manifest["database_changes"], bool):
         return SyncDecision("HOLD", ("database_change_scope_unknown",))
 
-    if manifest["application_sha"] == deployed["application_sha"]:
+    if (manifest["application_sha"] == deployed["application_sha"]
+            and manifest["artifact_sha256"] == deployed["artifact_sha256"]):
         return SyncDecision("NO_OP", ())
 
     if manifest["database_changes"]:

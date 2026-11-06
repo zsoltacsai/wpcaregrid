@@ -51,17 +51,29 @@ must be the separately approved staging-next deploy identity.
    compiled profile or if any value remains unknown. The current helper has
    no service-control operation, so service names are recorded for the future
    deploy contract but are not allowlisted here.
-3. Confirm the versioned destination does not exist. Create the exact
-   `/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.1` directory
-   root:root `0755`; transfer only the two verified files into a private
-   administrator-owned staging directory; install the entrypoint as root:root
-   `0755` and the module as root:root `0644`. Refuse every pre-existing file.
-   Verify parent directories are root-owned and not group/world writable,
-   both file hashes match, and neither path is a symlink.
-4. Verify or create `/etc/wpcaregrid-deploy` and its `profiles` child as
-   root:root `0755`; refuse symlinks or pre-existing unexpected metadata.
-   Verify the staging-next policy path does not exist. Install one root-owned
-   `0644` JSON policy at the exact path above. It must
+3. Before writing anything, use `lstat`-equivalent checks to verify that the
+   exact version directory, both final artifact paths, the profile policy
+   path, and the sudoers drop-in path are all absent and are not symlinks.
+   If any destination exists, stop without changing it; do not back it up or
+   overwrite it. Verify every already-existing parent directory is
+   root-owned, a directory, and not group/world writable. Create only the
+   version directory with a single `mkdir` (which must fail if it exists),
+   then verify root:root `0755`. Transfer the two verified files to a private
+   administrator-owned staging directory. Publish each artifact from a
+   same-filesystem temporary file using an atomic no-replace operation
+   (for example, hard-link creation at the final name, which fails if that
+   name already exists); never use a check-then-overwrite sequence. Set the
+   entrypoint root:root `0755` and the module root:root `0644` before
+   publication. Verify both final hashes, ownership, modes, regular-file
+   types, and absence of symlinks.
+4. Verify `/etc/wpcaregrid-deploy` and its `profiles` child already exist as
+   root:root `0755` directories, are not symlinks, and have safe parent
+   metadata. If either directory is absent or differs, stop for a separately
+   reviewed provisioning procedure; this installation must not create or
+   alter shared policy directories. Prepare one root-owned `0644` JSON policy
+   in a same-filesystem temporary file, then publish it at the exact path
+   above using an atomic no-replace operation. The path must still be absent
+   at publication time. It must
    have exactly these keys: `schema`, `profile`, `enabled`, `allowed_uid`,
    `app_dir`, `database`, `host`, `operations`, `helper_version`,
    `compatibility_contract`, `entrypoint_sha256`, `profiles_module_sha256`.
@@ -73,21 +85,31 @@ must be the separately approved staging-next deploy identity.
    Verify root ownership, mode `0644`, strict JSON with no duplicate or unknown
    keys, exact schema and matching helper bytes. Do not place credentials in
    the policy.
-5. Install one root:root `0440` drop-in at
-   `/etc/sudoers.d/wpcaregrid-staging-next` with one rule for
+5. Prepare one root:root `0440` sudoers drop-in in a same-filesystem
+   temporary file and validate that temporary file with `visudo -cf`.
+   Publish it to `/etc/sudoers.d/wpcaregrid-staging-next` using an atomic
+   no-replace operation; if the destination appeared or existed at any point,
+   stop and do not overwrite it. The drop-in contains one rule for
    `deploy-staging-next` and only the
    exact versioned entrypoint plus literal `preflight` argument shown above;
    use `NOSETENV`, no wildcards, no shell, and no other command. Validate the
-   drop-in with `visudo -cf` before activation. Do not modify the legacy
+   published drop-in again with `visudo -cf` before considering installation
+   complete. Do not modify the legacy
    sudoers rule or create any production rule.
 6. Verify from the dedicated staging-next deploy identity that the no-argument,
    `--profile`, alternate path, database, service and production-entrypoint
    requests are denied. Verify the exact `preflight` invocation returns
    `RESULT=PASS`, fixed `PROFILE=staging-next`, and no path or secret values.
-7. If any installation check fails, remove only the new version directory,
-   new policy and new sudoers drop-in after verifying their exact identities;
-   restore only staging-next-specific files from the recorded root-only
-   backup. Do not touch legacy staging files or services.
+7. Record each object created by this attempt: absolute path, device/inode,
+   file type, owner/group, mode, and SHA-256 for files. On failure, rollback
+   only those exact objects, and only after rechecking that each still has
+   the recorded identity and remains beneath its approved target directory.
+   Remove files before the version directory; never recursively delete a
+   computed path. If an object is missing, changed, replaced, or cannot be
+   safely identified, stop and leave it for administrator review. No
+   pre-existing destination is backed up or restored because the procedure
+   refuses to proceed when any final destination already exists. Do not touch
+   legacy staging files or services.
 
 ## Current implementation boundary
 

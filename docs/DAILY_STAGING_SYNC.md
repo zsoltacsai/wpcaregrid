@@ -19,7 +19,13 @@ target, helper, allowlist, or operations; no staging parameter can select it.
 The pure decision evaluator requires a fixed schema, exact target identity,
 application and artifact hashes, helper hash/contract equality, exact-head and
 merge-SHA CI, Integration & QA and AppSec PASS, and verified target identity.
-Changed releases that modify the database additionally require a fresh
+Each PASS record is bound to its relevant identity: environment evidence names
+the fixed profile/path/database/host; artifact evidence names the exact release
+SHA and artifact digest; CI records bind to the exact PR head and merge SHA and
+include positive workflow run IDs; QA/AppSec decisions bind to the exact PR
+head. A no-op also requires the candidate release artifact digest to equal the
+deployed artifact digest. Missing, mismatched, unbound, or extra evidence
+produces HOLD. Changed releases that modify the database additionally require a fresh
 protected backup, isolated restore proof and migration rehearsal. Unknown,
 missing, extra or inconsistent evidence produces HOLD. An unchanged approved
 release yields NO-OP. A changed eligible release still yields HOLD in this
