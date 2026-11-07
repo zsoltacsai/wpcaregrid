@@ -45,7 +45,7 @@ return [
     ],
 
     'hero' => [
-        'title' => 'WordPress-karbantartás, gond nélkül.',
+        'title' => 'A háttérben dolgozunk. Ön tisztán lát.',
         'text' => 'WordPress- és WooCommerce-karbantartás, mentések, biztonsági ellenőrzések és frissítések – a fontos frissítések után funkcionális ellenőrzéssel.',
         'primary_cta' => 'Csomagok megtekintése',
         'secondary_cta' => 'Hogyan működik',

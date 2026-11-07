@@ -47,24 +47,24 @@ class ContentManagementTest extends TestCase
 
     public function test_the_homepage_shows_built_in_copy_until_the_owner_publishes(): void
     {
-        $this->get('/en/')->assertOk()->assertSee('WordPress maintenance, without the hassle.');
+        $this->get('/en/')->assertOk()->assertSee('We work in the background. You see it all clearly.');
 
         $this->asOwner();
         $this->get(route('owner.content.index'))->assertOk()->assertSee('Hero')->assertSee('Built-in text')->assertDontSee('Missing');
-        $this->get(route('owner.content.edit', ['home.hero', 'en']))->assertOk()->assertSee('WordPress maintenance, without the hassle.');
+        $this->get(route('owner.content.edit', ['home.hero', 'en']))->assertOk()->assertSee('We work in the background. You see it all clearly.');
     }
 
     public function test_a_draft_never_reaches_the_public_page_and_publishing_shows_it_at_once(): void
     {
         $owner = $this->asOwner();
-        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.'); // warms the published-content cache
+        $this->get('/en/')->assertSee('We work in the background. You see it all clearly.'); // warms the published-content cache
 
         $this->save('home.hero', 'en', $this->fields('home.hero', 'en', ['title' => 'Draft headline for review']))->assertRedirect(route('owner.content.edit', ['home.hero', 'en']));
-        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.')->assertDontSee('Draft headline for review');
+        $this->get('/en/')->assertSee('We work in the background. You see it all clearly.')->assertDontSee('Draft headline for review');
         $this->assertSame(ContentState::DRAFT, ContentState::of(ContentSchema::section('home.hero'), 'en', ContentEntry::sole())->state);
 
         $this->save('home.hero', 'en', $this->fields('home.hero', 'en', ['title' => 'Published headline']), 'publish')->assertSessionHasNoErrors();
-        $this->get('/en/')->assertSee('Published headline')->assertDontSee('WordPress maintenance, without the hassle.');
+        $this->get('/en/')->assertSee('Published headline')->assertDontSee('We work in the background. You see it all clearly.');
 
         // A later draft leaves the published version in place.
         $this->save('home.hero', 'en', $this->fields('home.hero', 'en', ['title' => 'Next idea']));
@@ -73,7 +73,7 @@ class ContentManagementTest extends TestCase
 
         // Unpublishing returns the page to the built-in copy; the text is kept as a draft.
         $this->post(route('owner.content.unpublish', ['home.hero', 'en']))->assertRedirect();
-        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.')->assertDontSee('Published headline');
+        $this->get('/en/')->assertSee('We work in the background. You see it all clearly.')->assertDontSee('Published headline');
         $this->assertSame('Next idea', ContentEntry::sole()->draft['title']);
 
         $events = AdminAuditEvent::where('subject_type', 'content')->orderBy('id')->get();
@@ -92,7 +92,7 @@ class ContentManagementTest extends TestCase
 
         $this->save('home.hero', 'en', $fields)->assertSessionHasNoErrors();
         $this->assertSame('', ContentEntry::sole()->draft['title']);
-        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.');
+        $this->get('/en/')->assertSee('We work in the background. You see it all clearly.');
     }
 
     public function test_translations_are_separate_records_and_missing_ones_are_visible(): void
@@ -106,7 +106,7 @@ class ContentManagementTest extends TestCase
         $this->get(route('owner.content.edit', ['home.hero', 'de']))->assertOk()
             ->assertSee('No Deutsch content yet')
             ->assertSee('<span class="font-mono uppercase">en:</span>', false)
-            ->assertDontSee('value="WordPress maintenance, without the hassle."', false);
+            ->assertDontSee('value="We work in the background. You see it all clearly."', false);
         $this->get(route('owner.content.index'))->assertOk()->assertSee('Missing');
 
         $this->save('home.hero', 'de', $this->fields('home.hero', 'de', [
@@ -124,7 +124,7 @@ class ContentManagementTest extends TestCase
         // English and Hungarian are untouched.
         $this->assertSame(ContentState::BUILT_IN, ContentState::of($hero, 'hu', null)->state);
         // English is untouched.
-        $this->get('/en/')->assertSee('WordPress maintenance, without the hassle.');
+        $this->get('/en/')->assertSee('We work in the background. You see it all clearly.');
     }
 
     public function test_public_fallback_is_whole_sections_in_english_never_mixed_fields(): void
@@ -149,7 +149,7 @@ class ContentManagementTest extends TestCase
 
         config(['app.locale' => 'de', 'localization.default' => 'de']);
         $html = $this->get('/en/')->assertOk()->assertHeader('Content-Language', 'en')->getContent();
-        $this->assertStringContainsString('WordPress maintenance, without the hassle.', $html);
+        $this->assertStringContainsString('We work in the background. You see it all clearly.', $html);
         $this->assertStringNotContainsString('Deutsche Überschrift', $html);
     }
 
