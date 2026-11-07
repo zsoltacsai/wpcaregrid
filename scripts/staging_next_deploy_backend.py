@@ -58,9 +58,9 @@ verify_background_fences = _TRANSACTION_MODULE.verify_background_fences
 _verify_backup_sql = _TRANSACTION_MODULE._verify_backup_sql
 
 
-HELPER_VERSION = "1.4.3"
-HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v7"
-PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.3.json")
+HELPER_VERSION = "1.4.4"
+HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v8"
+PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.4.json")
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
@@ -232,7 +232,7 @@ def _safe_profile(profile: StagingProfile) -> None:
              "helper_artifact_identity_invalid")
     if not profile.test_only:
         _require(profile.phase_b_policy_file == Path(
-            "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.3.json"),
+            "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.4.json"),
             "phase_b_policy_path_invalid")
         _require(profile.phase_b_policy_sha256 is None
                  or _sha(profile.phase_b_policy_sha256, SHA256_RE), "phase_b_policy_pin_invalid")
@@ -653,10 +653,12 @@ def _repair_interrupted_bootstrap_cache(profile: StagingProfile, release_path: P
             continue
         _require(_valid_interrupted_cache_file(generated, profile),
                  "interrupted_bootstrap_cache_file_invalid")
-    # Remove PHP-FPM's directory write permission before deleting generated files.
+    # Seal the directory before touching secret-bearing cache files. In particular,
+    # never make an FPM-owned 02750 cache traversable as 0755 while config.php may
+    # still be world-readable. A failed cleanup leaves the inactive release sealed.
     try:
+        os.chmod(cache, 0o700)
         os.chown(cache, profile.expected_owner_uid, 0)
-        os.chmod(cache, 0o755)
         for name in generated_names:
             path = cache / name
             try:
@@ -682,6 +684,7 @@ def _repair_interrupted_bootstrap_cache(profile: StagingProfile, release_path: P
         )
         _require(manifest.get("files_sha256") == _canonical_files_hash(rebuilt_files),
                  "published_candidate_content_mismatch")
+        os.chmod(cache, 0o755)
     except DeployRefused:
         raise
     except OSError:

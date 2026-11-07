@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Versioned, staging-next-only privileged deployment entrypoint (1.4.3)."""
+"""Versioned, staging-next-only privileged deployment entrypoint (1.4.4)."""
 
 from __future__ import annotations
 
@@ -15,12 +15,12 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-VERSION = "1.4.3"
-CONTRACT = "wpcaregrid-staging-next-deploy-v7"
-ENTRYPOINT = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.3/wpcaregrid-deploy-staging-next-priv")
+VERSION = "1.4.4"
+CONTRACT = "wpcaregrid-staging-next-deploy-v8"
+ENTRYPOINT = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.4/wpcaregrid-deploy-staging-next-priv")
 BACKEND = ENTRYPOINT.parent / "staging_next_deploy_backend.py"
 TRANSACTION = ENTRYPOINT.parent / "staging_next_db_transaction.py"
-POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-1.4.3.json")
+POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-1.4.4.json")
 POLICY_KEYS = {
     "schema", "profile", "enabled", "allowed_uid", "app_dir", "database", "host",
     "mysql_server_uuid_sha256", "integration_qa_reviewer", "m17_appsec_reviewer",
@@ -120,7 +120,7 @@ def _load_backend(entrypoint: str, argv: list[str], sudo_uid: str | None):
         raise Refused("backend_identity_mismatch")
     if hashlib.sha256(transaction_raw).hexdigest() != policy["transaction_module_sha256"]:
         raise Refused("transaction_module_identity_mismatch")
-    expected_phase_b_policy = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.3.json")
+    expected_phase_b_policy = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.4.json")
     if (policy["phase_b_policy_file"] != str(expected_phase_b_policy)
             or (policy["phase_b_policy_sha256"] is not None
                 and (not isinstance(policy["phase_b_policy_sha256"], str)
@@ -137,7 +137,7 @@ def _load_backend(entrypoint: str, argv: list[str], sudo_uid: str | None):
     if os.geteuid() != 0:
         raise Refused("privileged_identity_required")
 
-    module = types.ModuleType("_wpcaregrid_staging_next_backend_v1_4_3")
+    module = types.ModuleType("_wpcaregrid_staging_next_backend_v1_4_4")
     module.__file__ = str(BACKEND)
     sys.modules[module.__name__] = module
     try:

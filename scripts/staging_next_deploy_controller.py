@@ -25,8 +25,8 @@ HOST = "staging-next.wpcaregrid.com"
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/staging-next/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/staging-next/incoming")
-HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.3/wpcaregrid-deploy-staging-next-priv")
-HELPER_ARTIFACT_SHA256 = "2a86976b7bff03cdd801e159eec30aa0e1ccb260d22d3da8d57eb738ee737d1d"
+HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.4/wpcaregrid-deploy-staging-next-priv")
+HELPER_ARTIFACT_SHA256 = "003eeab36f359e71fd101ac85a23b3f39250c14af0411af2e396a23a963a5b10"
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_FILES = 100_000
 MAX_UNPACKED_BYTES = 2 * 1024 * 1024 * 1024
@@ -133,8 +133,8 @@ def _helper(operation, *arguments):
         result = json.loads(raw.decode("utf-8"))
     except (UnicodeError, ValueError):
         raise ControllerHold("helper_response_invalid") from None
-    if not isinstance(result, dict) or result.get("helper_version") != "1.4.3" \
-            or result.get("helper_contract") != "wpcaregrid-staging-next-deploy-v7" \
+    if not isinstance(result, dict) or result.get("helper_version") != "1.4.4" \
+            or result.get("helper_contract") != "wpcaregrid-staging-next-deploy-v8" \
             or result.get("helper_artifact_sha256") != HELPER_ARTIFACT_SHA256:
         raise ControllerHold("helper_contract_mismatch")
     if result.get("result") not in {"PASS", "NO_OP", "HOLD", "FAIL"}:
@@ -311,8 +311,8 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
             "base_application_sha": base_sha, "php_minimum": "8.5",
             "database_scope": "migrations" if database_migrations else "unchanged",
             "database_migrations": database_migrations,
-            "helper_version": "1.4.3", "helper_sha256": HELPER_ARTIFACT_SHA256,
-            "helper_contract": "wpcaregrid-staging-next-deploy-v7",
+            "helper_version": "1.4.4", "helper_sha256": HELPER_ARTIFACT_SHA256,
+            "helper_contract": "wpcaregrid-staging-next-deploy-v8",
             "frontend_build": frontend_build,
             "files_sha256": hashlib.sha256(canonical).hexdigest(),
         }

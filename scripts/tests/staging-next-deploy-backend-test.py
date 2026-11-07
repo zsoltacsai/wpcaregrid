@@ -85,6 +85,60 @@ class StagingDeployBackendTests(unittest.TestCase):
                               gid=info.st_gid, nlink=info.st_nlink, size=info.st_size):
                 self.assertFalse(BACKEND._valid_interrupted_cache_file(info, profile))
 
+    def test_interrupted_secret_cache_is_scrubbed_before_directory_is_reopened(self):
+        release = Path(self.temp.name) / "cache-repair-release"
+        cache = release / "bootstrap/cache"
+        cache.mkdir(parents=True)
+        os.chown(cache, 33, 33)
+        os.chmod(cache, 0o2750)
+        (cache / ".gitignore").write_text("*\n!.gitignore\n")
+        os.chown(cache / ".gitignore", 0, 0)
+        os.chmod(cache / ".gitignore", 0o644)
+        secret = cache / "config.php"
+        secret.write_text("<?php return ['APP_KEY' => 'synthetic'];\n")
+        os.chown(secret, 33, 33)
+        os.chmod(secret, 0o755)
+        profile = replace(self.profile, build_application_bootstrap=True,
+                          php_fpm_uid=33, php_fpm_gid=33)
+        manifest = {"files_sha256": "expected-tree"}
+        events = []
+        real_chmod = os.chmod
+        real_chown = os.chown
+        real_unlink = Path.unlink
+
+        def track_chmod(path, mode, *args, **kwargs):
+            if Path(path) == cache:
+                events.append(("cache_mode", mode))
+            elif Path(path) == secret:
+                events.append(("secret_mode", mode, stat.S_IMODE(cache.stat().st_mode)))
+            return real_chmod(path, mode, *args, **kwargs)
+
+        def track_chown(path, uid, gid, *args, **kwargs):
+            if Path(path) == cache:
+                events.append(("cache_owner", uid, gid, stat.S_IMODE(cache.stat().st_mode)))
+            return real_chown(path, uid, gid, *args, **kwargs)
+
+        def track_unlink(path, *args, **kwargs):
+            if Path(path) == secret:
+                events.append(("secret_unlink", stat.S_IMODE(cache.stat().st_mode)))
+            return real_unlink(path, *args, **kwargs)
+
+        with (mock.patch.object(BACKEND, "_hash_release_tree", return_value={"ok": "hash"}),
+              mock.patch.object(BACKEND, "_canonical_files_hash", return_value="expected-tree"),
+              mock.patch.object(BACKEND.os, "chmod", side_effect=track_chmod),
+              mock.patch.object(BACKEND.os, "chown", side_effect=track_chown),
+              mock.patch.object(Path, "unlink", track_unlink)):
+            BACKEND._repair_interrupted_bootstrap_cache(profile, release, manifest)
+
+        self.assertFalse(secret.exists())
+        self.assertEqual(stat.S_IMODE(cache.stat().st_mode), 0o755)
+        secret_unlink_index = next(i for i, event in enumerate(events) if event[0] == "secret_unlink")
+        reopen_index = next(i for i, event in enumerate(events)
+                            if event == ("cache_mode", 0o755))
+        self.assertLess(events.index(("cache_mode", 0o700)), secret_unlink_index)
+        self.assertLess(secret_unlink_index, reopen_index)
+        self.assertEqual(events[secret_unlink_index][1], 0o700)
+
     def test_package_discovery_cache_is_built_for_fpm_then_restored_root_owned(self):
         root = Path(self.temp.name) / "candidate"
         cache = root / "bootstrap/cache"

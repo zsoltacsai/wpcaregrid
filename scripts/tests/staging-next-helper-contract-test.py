@@ -52,10 +52,10 @@ class StagingNextHelperContractTests(unittest.TestCase):
             "host": "staging-next.wpcaregrid.com", "php_fpm_uid": 33, "php_fpm_gid": 33,
             "mysql_server_uuid_sha256": "a" * 64,
             "integration_qa_reviewer": "qa-reviewer", "m17_appsec_reviewer": "appsec-reviewer",
-            "helper_version": "1.4.3", "compatibility_contract": "wpcaregrid-staging-next-deploy-v7",
+            "helper_version": "1.4.4", "compatibility_contract": "wpcaregrid-staging-next-deploy-v8",
             "entrypoint_sha256": self.entry_hash, "backend_sha256": self.backend_hash,
             "transaction_module_sha256": self.transaction_hash,
-            "phase_b_policy_file": "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.3.json",
+            "phase_b_policy_file": "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.4.json",
             "phase_b_policy_sha256": None,
             "helper_artifact_sha256": self.artifact_hash,
             "operations": ["authorize", "deploy", "preflight", "stage"],
@@ -65,8 +65,8 @@ class StagingNextHelperContractTests(unittest.TestCase):
     @staticmethod
     def _artifact_hash(entry_hash, backend_hash, transaction_hash):
         payload = json.dumps({
-            "schema": 1, "helper_version": "1.4.3",
-            "compatibility_contract": "wpcaregrid-staging-next-deploy-v7",
+            "schema": 1, "helper_version": "1.4.4",
+            "compatibility_contract": "wpcaregrid-staging-next-deploy-v8",
             "entrypoint_sha256": entry_hash, "backend_sha256": backend_hash,
             "transaction_module_sha256": transaction_hash,
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -82,8 +82,8 @@ class StagingNextHelperContractTests(unittest.TestCase):
         self.assertEqual(profile.php_fpm_gid, 33)
         self.assertEqual(profile.php_fpm_uid, 33)
         self.assertEqual((backend.HELPER_VERSION, backend.HELPER_CONTRACT), (
-            "1.4.3", "wpcaregrid-staging-next-deploy-v7"))
-        self.assertEqual(backend.__name__, "_wpcaregrid_staging_next_backend_v1_4_3")
+            "1.4.4", "wpcaregrid-staging-next-deploy-v8"))
+        self.assertEqual(backend.__name__, "_wpcaregrid_staging_next_backend_v1_4_4")
 
     def test_wrong_caller_and_runtime_target_override_are_rejected(self):
         with self.assertRaises(HELPER.Refused) as error:
