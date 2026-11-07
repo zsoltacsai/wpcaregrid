@@ -181,6 +181,15 @@ class NginxRouteTests(unittest.TestCase):
         self.assertEqual(str(error.exception), "nginx_config_source_identity_invalid")
         BACKEND._verify_staging_next_nginx_route(dump)
 
+
+    def test_unlisted_external_source_remains_rejected(self):
+        dump = self.dump(certbot_include=True).replace(
+            b"/etc/letsencrypt/options-ssl-nginx.conf",
+            b"/etc/letsencrypt/other.conf")
+        with self.assertRaises(BACKEND.DeployRefused) as error:
+            BACKEND._verify_staging_next_nginx_route(dump)
+        self.assertEqual(str(error.exception), "nginx_config_source_identity_invalid")
+
     def test_repeated_allowed_source_must_have_identical_bytes(self):
         with self.assertRaises(BACKEND.DeployRefused) as error:
             BACKEND._verify_staging_next_nginx_route(
