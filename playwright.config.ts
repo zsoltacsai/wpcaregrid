@@ -15,7 +15,7 @@ export default defineConfig({
     workers: 1,
     retries: 0,
     reporter: [['list']],
-    outputDir: 'storage/playwright',
+    outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? 'storage/playwright',
     use: {
         baseURL: process.env.E2E_BASE_URL,
         locale: 'en-GB',
