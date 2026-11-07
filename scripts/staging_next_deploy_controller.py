@@ -25,7 +25,7 @@ HOST = "staging-next.wpcaregrid.com"
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/staging-next/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/staging-next/incoming")
-HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.7/wpcaregrid-deploy-staging-next-priv")
+HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.8/wpcaregrid-deploy-staging-next-priv")
 # Refreshed from the versioned helper manifest by the cross-artifact consistency test.
 HELPER_ARTIFACT_SHA256 = "c9d8c9361191433367fcaf5b9516f876609916f8defe742167d3b6812f181232"
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
