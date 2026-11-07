@@ -1,6 +1,6 @@
 @props(['content', 'metrics', 'sites', 'updates', 'licenses'])
 
-<x-ui.section tone="surface" labelledby="dashboard-title" :lang="$content->fallbackLang()">
+<x-ui.section tone="dark" labelledby="dashboard-title" :lang="$content->fallbackLang()" class="m16-dashboard-section">
     <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <x-ui.section-heading
             id="dashboard-title"

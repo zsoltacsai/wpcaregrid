@@ -86,7 +86,7 @@ class CustomerLocalizationTest extends TestCase
         $hu = $this->in('en')->get('/hu/')->assertOk();
         $this->assertStringContainsString('<html lang="hu">', $hu->getContent());
         $hu->assertHeader('Content-Language', 'hu');
-        $this->assertStringContainsString('WordPress-karbantartás, gond nélkül.', $hu->getContent());
+        $this->assertStringContainsString('A háttérben dolgozunk. Ön tisztán lát.', $hu->getContent());
         $this->assertStringContainsString('<title>WordPress-üzemeltetés és karbantartás | WP CareGrid</title>', $hu->getContent());
     }
 
