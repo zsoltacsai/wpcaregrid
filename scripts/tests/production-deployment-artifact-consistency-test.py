@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -18,6 +19,16 @@ SOURCE_PATHS = {
     "environment_contract_sha256": "scripts/deployment_environment_contract.py",
 }
 SUDOERS_PATH = ROOT / "deploy/sudoers/wpcaregrid-production-v2.0.0"
+CONTROLLER_PATH = "scripts/production_deploy_controller.py"
+
+
+def git_tree_bytes(path: str) -> bytes:
+    """Read the committed blob so line-ending conversion cannot falsify pins."""
+    result = subprocess.run(
+        ["git", "cat-file", "blob", f"HEAD:{path}"],
+        cwd=ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return result.stdout
 
 
 class ProductionDeploymentArtifactConsistencyTests(unittest.TestCase):
@@ -27,10 +38,8 @@ class ProductionDeploymentArtifactConsistencyTests(unittest.TestCase):
         self.assertEqual(manifest["profile"], "production")
         self.assertEqual(manifest["helper_version"], "2.0.0")
         self.assertEqual(manifest["compatibility_contract"], "wpcaregrid-deployment-profile-v2")
-        hashes = {
-            key: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
-            for key, path in SOURCE_PATHS.items()
-        }
+        hashes = {key: hashlib.sha256(git_tree_bytes(path)).hexdigest()
+                  for key, path in SOURCE_PATHS.items()}
         for key, value in hashes.items():
             self.assertEqual(manifest[key], value, key)
         material = {
@@ -42,11 +51,13 @@ class ProductionDeploymentArtifactConsistencyTests(unittest.TestCase):
         digest = hashlib.sha256(json.dumps(
             material, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         self.assertEqual(manifest["helper_artifact_sha256"], digest)
-        controller = (ROOT / manifest["controller"]).read_bytes()
+        self.assertEqual(manifest["controller"], CONTROLLER_PATH)
+        self.assertEqual(manifest["sudoers_template"], SUDOERS_PATH.relative_to(ROOT).as_posix())
+        controller = git_tree_bytes(CONTROLLER_PATH)
         controller_hash = hashlib.sha256(controller).hexdigest()
         self.assertEqual(manifest["controller_sha256"], controller_hash)
         self.assertEqual(manifest["sudoers_template_sha256"], hashlib.sha256(
-            (ROOT / manifest["sudoers_template"]).read_bytes()).hexdigest())
+            git_tree_bytes(manifest["sudoers_template"])).hexdigest())
         match = re.search(rb'^HELPER_ARTIFACT_SHA256 = "([0-9a-f]{64})"\r?$', controller, re.M)
         self.assertIsNotNone(match)
         self.assertEqual(match.group(1).decode("ascii"), digest)
