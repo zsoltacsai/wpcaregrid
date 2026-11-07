@@ -103,13 +103,18 @@ class StagingNextHelperConsistencyTests(unittest.TestCase):
                    "transaction_module_sha256": hashes["transaction_module"]}
         artifact_sha = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         self.assertEqual(manifest["helper_artifact_sha256"], artifact_sha)
-        self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256, artifact_sha)
+        active_manifest = json.loads((ROOT / "deploy" / "release-manifests" /
+                                      "staging-next-helper-1.4.8.json").read_text(encoding="utf-8"))
+        self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256,
+                         active_manifest["helper_artifact_sha256"])
+        self.assertEqual(CONTROLLER.HELPER,
+                         Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.8/"
+                              "wpcaregrid-deploy-staging-next-priv"))
         transaction = load_module("staging_next_transaction_1_4_7", files["transaction_module"])
         self.assertEqual(transaction.PHASE_B_POLICY_PATH,
                          Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.7.json"))
         self.assertEqual(transaction.PHASE_B_CREDENTIALS_PATH,
                          Path("/etc/wpcaregrid-deploy/credentials/staging-next-database-1.4.7.json"))
-        self.assertEqual(CONTROLLER.HELPER, HELPER_147.ENTRYPOINT)
         self.assertEqual((installer.VERSION, installer.CONTRACT),
                          (HELPER_147.VERSION, HELPER_147.CONTRACT))
         self.assertEqual((installer.ENTRY_SHA256, installer.BACKEND_SHA256,
@@ -162,6 +167,7 @@ class StagingNextHelperConsistencyTests(unittest.TestCase):
         artifact_sha = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         self.assertEqual(manifest["helper_artifact_sha256"], artifact_sha)
         self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256, artifact_sha)
+        self.assertEqual(CONTROLLER.HELPER, helper.ENTRYPOINT)
         self.assertEqual((installer.VERSION, installer.CONTRACT),
                          (helper.VERSION, helper.CONTRACT))
         self.assertEqual((installer.ENTRY_SHA256, installer.BACKEND_SHA256,
