@@ -85,9 +85,16 @@ class StagingNextHelperContractTests(unittest.TestCase):
             "1.4.5", "wpcaregrid-staging-next-deploy-v9"))
         self.assertEqual(backend.__name__, "_wpcaregrid_staging_next_backend_v1_4_5")
 
+    def test_read_only_installation_probe_is_internal(self):
+        backend, _profile, uid, operation, app_sha, artifact_sha = HELPER._load_backend(
+            str(self.entrypoint), ["verify-install"], "1000")
+        self.assertEqual((uid, operation, app_sha, artifact_sha),
+                         (1000, "verify-install", None, None))
+        self.assertNotIn("verify-install", HELPER.EXPECTED_OPERATIONS)
+
     def test_wrong_caller_and_runtime_target_override_are_rejected(self):
         with self.assertRaises(HELPER.Refused) as error:
-            HELPER._load_backend(str(self.entrypoint), ["preflight"], "1001")
+            HELPER._load_backend(str(self.entrypoint), ["verify-install"], "1001")
         self.assertEqual(str(error.exception), "caller_identity_invalid")
         with self.assertRaises(HELPER.Refused) as error:
             HELPER._load_backend(str(self.entrypoint), ["production", "a" * 40, "b" * 64], "1000")

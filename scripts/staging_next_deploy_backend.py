@@ -871,42 +871,47 @@ def _github_list(path: str, *, maximum_pages: int = 20) -> list[object]:
 
 
 RELEASE_REVIEW_RECORD_RE = re.compile(
-    r"WPCG_RELEASE_REVIEW_V1\n"
+    r"WPCG_RELEASE_REVIEW_V2\n"
     r"role=(integration_qa|m17_appsec)\n"
     r"pr=([1-9][0-9]*)\n"
     r"head_sha=([0-9a-f]{40})\n"
+    r"reviewer=([A-Za-z0-9-]+)\n"
+    r"review_id=([1-9][0-9]*)\n"
     r"decision=(PASS|CHANGES_REQUIRED)\n?\Z")
 
 
 def _release_review_records(comments: list[object], *, pr_number: int,
-                            head_sha: str) -> dict[str, tuple[str, str]]:
-    """Return the latest exact-head record per role as (login, decision)."""
+                            head_sha: str, repository_owner: str) -> dict[str, tuple[str, str, int]]:
+    """Return owner-attested exact-head role records (reviewer, decision, review id)."""
     latest = {}
     for item in comments:
         if not isinstance(item, dict) or not isinstance(item.get("body"), str):
             continue
         body = item["body"]
-        if not body.startswith("WPCG_RELEASE_REVIEW_V1"):
+        if not body.startswith("WPCG_RELEASE_REVIEW_V2"):
             continue
         match = RELEASE_REVIEW_RECORD_RE.fullmatch(body)
         user = item.get("user")
         login = user.get("login") if isinstance(user, dict) else None
+        association = item.get("author_association")
         created = item.get("created_at")
         comment_id = item.get("id")
-        _require(match is not None and isinstance(login, str) and login and isinstance(created, str)
+        _require(match is not None and login == repository_owner and association == "OWNER"
+                 and isinstance(created, str)
                  and type(comment_id) is int and comment_id > 0,
                  "release_review_ledger_record_invalid")
-        role, record_pr, record_sha, decision = match.groups()
+        role, record_pr, record_sha, reviewer, review_id, decision = match.groups()
         if int(record_pr) != pr_number or record_sha != head_sha:
             continue
         if role not in latest or (created, comment_id) > latest[role][0]:
-            latest[role] = ((created, comment_id), login, decision)
-    return {role: (record[1], record[2]) for role, record in latest.items()}
+            latest[role] = ((created, comment_id), reviewer, decision, int(review_id), created)
+    return {role: (record[1], record[2], record[3], record[4]) for role, record in latest.items()}
 
 
 def _verify_independent_release_reviews(review_data: list[object], comments: list[object], *,
                                         pr_number: int, head_sha: str,
-                                        pr_author: str | None) -> None:
+                                        pr_author: str | None,
+                                        repository_owner: str) -> None:
     latest_reviews = {}
     for review in review_data:
         if not isinstance(review, dict) or review.get("commit_id") != head_sha:
@@ -922,13 +927,30 @@ def _verify_independent_release_reviews(review_data: list[object], comments: lis
     approved = {login for login, (_, state) in latest_reviews.items()
                 if state == "APPROVED" and login != pr_author}
     _require(len(approved) >= 2, "independent_review_evidence_missing")
-    ledger = _release_review_records(comments, pr_number=pr_number, head_sha=head_sha)
+    ledger = _release_review_records(comments, pr_number=pr_number, head_sha=head_sha,
+                                     repository_owner=repository_owner)
     qa = ledger.get("integration_qa")
     appsec = ledger.get("m17_appsec")
-    _require(isinstance(qa, tuple) and qa[1] == "PASS" and qa[0] in approved
-             and isinstance(appsec, tuple) and appsec[1] == "PASS" and appsec[0] in approved,
+    _require(isinstance(qa, tuple) and isinstance(appsec, tuple),
              "independent_review_evidence_missing")
     _require(qa[0] != appsec[0], "independent_review_evidence_not_independent")
+    reviews_by_id = {review.get("id"): review for review in review_data
+                     if isinstance(review, dict) and type(review.get("id")) is int}
+
+    def attested(record):
+        if not isinstance(record, tuple) or len(record) != 4 or record[1] != "PASS":
+            return False
+        review = reviews_by_id.get(record[2])
+        reviewer = review.get("user") if isinstance(review, dict) else None
+        submitted = review.get("submitted_at") if isinstance(review, dict) else None
+        return (isinstance(review, dict) and review.get("commit_id") == head_sha
+                and review.get("state") == "APPROVED"
+                and isinstance(reviewer, dict) and reviewer.get("login") == record[0]
+                and record[0] in approved and isinstance(submitted, str)
+                and record[3] >= submitted)
+
+    _require(attested(qa) and attested(appsec),
+             "independent_review_evidence_missing")
 
 
 def _local_git_tree(profile: StagingProfile, application_sha: str) -> Mapping[str, str]:
@@ -1066,9 +1088,15 @@ def _verify_primary_ci_and_reviews(profile: StagingProfile, application_sha: str
     review_data = _github_list(f"/repos/{GITHUB_REPOSITORY}/pulls/{pr_number}/reviews")
     author = pr_detail.get("user")
     author_login = author.get("login") if isinstance(author, dict) else None
+    repository = _github_json(f"/repos/{GITHUB_REPOSITORY}")
+    repository_owner_obj = repository.get("owner") if isinstance(repository, dict) else None
+    repository_owner = repository_owner_obj.get("login") if isinstance(repository_owner_obj, dict) else None
+    _require(isinstance(repository_owner, str) and repository_owner,
+             "release_review_authority_unavailable")
     comments = _github_list(f"/repos/{GITHUB_REPOSITORY}/issues/{RELEASE_REVIEW_LEDGER_ISSUE}/comments")
     _verify_independent_release_reviews(review_data, comments, pr_number=pr_number,
-                                        head_sha=pr_head_sha, pr_author=author_login)
+                                        head_sha=pr_head_sha, pr_author=author_login,
+                                        repository_owner=repository_owner)
 
 
 def authorize_release(profile: StagingProfile, *, invoking_uid: int,
@@ -2575,6 +2603,14 @@ def preflight(profile: StagingProfile, *, invoking_uid: int) -> Mapping[str, obj
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
             finally:
                 os.close(lock_fd)
+
+
+def verify_helper_installation(profile: StagingProfile, *, invoking_uid: int) -> Mapping[str, object]:
+    """Read-only helper identity check; unlike preflight, never reconciles or creates state."""
+    _safe_profile(profile)
+    _require(invoking_uid == profile.allowed_uid, "caller_identity_invalid")
+    return {"result": "PASS", "profile": PROFILE, "helper_version": HELPER_VERSION,
+            "helper_contract": HELPER_CONTRACT, "helper_artifact_sha256": profile.helper_artifact_sha256}
 
 
 def stage_artifact(profile: StagingProfile, *, invoking_uid: int, application_sha: str,

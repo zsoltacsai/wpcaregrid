@@ -135,6 +135,39 @@ class StagingNextHelperInstallerTests(unittest.TestCase):
         self.assertNotIn("production", rules)
         self.assertNotIn("/var/www/wpcaregrid\n", rules)
 
+    def test_sudoers_validation_does_not_publish_activation_file(self):
+        target = self.root / "sudoers"
+        with patch.object(INSTALLER, "SUDOERS", target), \
+                patch.object(INSTALLER, "_run", return_value=SimpleNamespace(returncode=0)):
+            INSTALLER._run_sudoers_validation(INSTALLER._sudoers("deploy-staging-next"))
+        self.assertFalse(target.exists())
+
+    def test_installation_probe_is_read_only_and_does_not_call_preflight(self):
+        captured = []
+
+        def run(argv, **kwargs):
+            captured.append((argv, kwargs))
+            return SimpleNamespace(returncode=0,
+                                   stdout=("{\"result\":\"PASS\",\"profile\":\"staging-next\","
+                                           f"\"helper_version\":\"{INSTALLER.VERSION}\","
+                                           f"\"helper_contract\":\"{INSTALLER.CONTRACT}\","
+                                           f"\"helper_artifact_sha256\":\"{INSTALLER.ARTIFACT_SHA256}\"}}\n"
+                                           .encode("utf-8")),
+                                   stderr=b"")
+
+        with patch.object(INSTALLER, "_run", side_effect=run):
+            INSTALLER._positive_installation_probe()
+        self.assertEqual(captured[0][0][-2:], [str(INSTALLER.ENTRYPOINT), "verify-install"])
+        self.assertNotIn("preflight", captured[0][0])
+        self.assertEqual(captured[0][1]["extra_env"], {"SUDO_UID": str(INSTALLER.EXPECTED_DEPLOY_UID)})
+
+    def test_installation_probe_fails_closed_on_helper_refusal(self):
+        with patch.object(INSTALLER, "_run", return_value=SimpleNamespace(
+                returncode=3, stdout=b"", stderr=b"DEPLOYMENT=HOLD;CODE=identity_invalid\n")):
+            with self.assertRaises(INSTALLER.InstallError) as error:
+                INSTALLER._positive_installation_probe()
+        self.assertEqual(str(error.exception), "positive_installation_probe_failed")
+
     def test_nginx_validation_executes_only_authenticated_byte_buffers(self):
         transaction = b"LOADED_FROM_VERIFIED_BUFFER = True\n"
         backend = (

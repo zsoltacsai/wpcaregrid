@@ -152,7 +152,7 @@ def _load_backend(entrypoint: str, argv: list[str], sudo_uid: str | None):
                       phase_b_policy_file=Path(policy["phase_b_policy_file"]),
                       phase_b_policy_sha256=policy["phase_b_policy_sha256"])
     operation = argv[0] if argv else ""
-    if operation == "preflight" and len(argv) == 1:
+    if operation in {"preflight", "verify-install"} and len(argv) == 1:
         return module, profile, uid, operation, None, None
     if operation == "authorize" and len(argv) == 2 and re.fullmatch(r"[0-9a-f]{40}", argv[1]):
         return module, profile, uid, operation, argv[1], None
@@ -169,6 +169,8 @@ def main(argv=None) -> int:
         backend, profile, uid, operation, app_sha, artifact_sha = _load_backend(sys.argv[0], args, sudo_uid)
         if operation == "preflight":
             result = backend.preflight(profile, invoking_uid=uid)
+        elif operation == "verify-install":
+            result = backend.verify_helper_installation(profile, invoking_uid=uid)
         elif operation == "authorize":
             result = backend.authorize_release(profile, invoking_uid=uid, application_sha=app_sha)
         elif operation == "stage":

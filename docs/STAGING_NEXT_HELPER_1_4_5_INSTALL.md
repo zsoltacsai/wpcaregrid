@@ -11,11 +11,11 @@ manifest `deploy/release-manifests/staging-next-helper-1.4.5.json`.
 
 | Artifact | Source path | SHA-256 |
 | --- | --- | --- |
-| Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv.py` | `1d3e24894938e70906f349cecabe2918876b90064ecb291bcf4040bf3f972bed` |
-| Backend | `scripts/staging_next_deploy_backend.py` | `ee4c1402b358e4028d0ad4609a16a275cb9cc7ae60cc3c8b4bbfc9df357b8c11` |
+| Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv.py` | `535c27bab3d36c4de39f528d1f02767c3a7e874e457d498f19d3a5698cfedb79` |
+| Backend | `scripts/staging_next_deploy_backend.py` | `56b731914127b60e99f50f601930bbae8953490e1427003759225a9571a7135b` |
 | Transaction module | `scripts/staging_next_db_transaction.py` | `4cb84c11bb4aee1778c8cd4166f35c051b2025627bd81d01d4fbd6ad5a6223a0` |
-| Combined helper artifact | Manifest-derived | `996ca70b9c99807fe6b8035dd60a7309ba401ca9b86be0444a724a2967ec6221` |
-| Root installer | `scripts/install_staging_next_helper_1_4_5.py` | `f9bd85bc23399ebfe37bacc66e7a32fda4abf81dba7b862e627ed23c76a8a367` |
+| Combined helper artifact | Manifest-derived | `7c8eeab748381b2b6de4ade68160ce8d4d79c2748fc99366bf9f584358bedebf` |
+| Root installer | `scripts/install_staging_next_helper_1_4_5.py` | `b30e9981f6a1c50badbfb9d4dacab4f4957702d979fdc9fbf82137cd17e3da91` |
 
 The compatibility contract is `wpcaregrid-staging-next-deploy-v9`. Recalculate
 these values from the final merged Git tree before any later installation; a
@@ -51,19 +51,24 @@ From a root console on `stg1.wpcaregrid.com`, run this single command in a
 subshell so failure does not close the console:
 
 ```sh
-( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.5.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = f9bd85bc23399ebfe37bacc66e7a32fda4abf81dba7b862e627ed23c76a8a367; exec /usr/bin/python3 -I "$i" )
+( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.5.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = b30e9981f6a1c50badbfb9d4dacab4f4957702d979fdc9fbf82137cd17e3da91; exec /usr/bin/python3 -I "$i" )
 ```
 
 The script itself checks the exact source hashes and directory contents,
-existing G1 identity, target absence, PHP-FPM socket owner/group, unambiguous
-staging-next HTTPS-to-PHP 8.5 routing, sudoers syntax, negative authorization
-cases, the positive read-only preflight, and that Phase B remains disabled. It
-prints only structured status and fixed reason codes.
+existing G1 identity, target absence, PHP-FPM socket owner/group, staging-next
+HTTPS-to-PHP 8.5 routing, sudoers syntax, negative authorization cases, the
+read-only helper identity probe, and that Phase B remains disabled. It does not
+run `preflight`: that command can reconcile an unreceipted active release,
+reload PHP-FPM, change the active application link, or create a gate/receipt.
+All checks finish before the exact validated sudoers file is published; that
+no-overwrite publication is the privilege-activation commit point. It prints
+only structured status and fixed reason codes.
 
 ## Acceptance
 
 Accept only `INSTALL=PASS`, the exact helper artifact hash above,
-`NEGATIVE_AUTHORIZATION=PASS`, `PREFLIGHT=PASS`, and `PHASE_B_POLICY=DISABLED`.
+`NEGATIVE_AUTHORIZATION=PASS`, `INSTALLATION_PROBE=PASS`, and
+`PHASE_B_POLICY=DISABLED`.
 Also read back owner/mode/hash for all installed files and run `visudo -c`.
 Any mismatch is STOP; do not retry with altered pins or relax a check.
 
@@ -71,3 +76,16 @@ This helper installation alone does not authorize an application deployment.
 Database-changing deployment remains HOLD until fresh protected backup,
 isolated restore and migration-rehearsal evidence are present and the Phase B
 policy receives its separately reviewed, exact identity.
+
+## Exact-release review evidence
+
+The helper does not infer QA/AppSec roles from reviewer-authored labels. It
+requires two distinct, non-author GitHub `APPROVED` reviews on the exact PR
+head, then an exact `WPCG_RELEASE_REVIEW_V2` record for each role in issue #174.
+Each record must be posted by the repository owner account (`author_association`
+`OWNER`), identify the reviewer login and GitHub review ID, match the PR and
+head SHA, and be timestamped no earlier than the referenced approval. The
+helper cross-checks each ID, reviewer, state, timestamp and commit against the
+authenticated GitHub review API response. Missing or inconsistent evidence is
+a HOLD. This preserves two independent reviewer approvals while preventing
+reviewers or other contributors from assigning themselves QA/AppSec roles.

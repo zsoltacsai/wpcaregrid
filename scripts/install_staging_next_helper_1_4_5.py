@@ -23,10 +23,10 @@ INSTALLER_NAME = "install_staging_next_helper_1_4_5.py"
 ENTRY_NAME = "wpcaregrid-staging-next-deploy-priv.py"
 BACKEND_NAME = "staging_next_deploy_backend.py"
 TRANSACTION_NAME = "staging_next_db_transaction.py"
-ENTRY_SHA256 = "1d3e24894938e70906f349cecabe2918876b90064ecb291bcf4040bf3f972bed"
-BACKEND_SHA256 = "ee4c1402b358e4028d0ad4609a16a275cb9cc7ae60cc3c8b4bbfc9df357b8c11"
+ENTRY_SHA256 = "535c27bab3d36c4de39f528d1f02767c3a7e874e457d498f19d3a5698cfedb79"
+BACKEND_SHA256 = "56b731914127b60e99f50f601930bbae8953490e1427003759225a9571a7135b"
 TRANSACTION_SHA256 = "4cb84c11bb4aee1778c8cd4166f35c051b2025627bd81d01d4fbd6ad5a6223a0"
-ARTIFACT_SHA256 = "996ca70b9c99807fe6b8035dd60a7309ba401ca9b86be0444a724a2967ec6221"
+ARTIFACT_SHA256 = "7c8eeab748381b2b6de4ade68160ce8d4d79c2748fc99366bf9f584358bedebf"
 EXPECTED_DEPLOY_UID = 996
 MYSQL_UUID_SHA256 = "bc35682d80f0894c2c2c2879552fb8fe13dc2a530868d79d817a6280e31bde1c"
 PHP_FPM_UID = 33
@@ -249,11 +249,15 @@ def _sudoers(uid_name: str) -> bytes:
     return ("\n".join(rows) + "\n").encode("ascii")
 
 
-def _run(argv: list[str], *, maximum: int = 64_000, timeout: int = 15):
+def _run(argv: list[str], *, maximum: int = 64_000, timeout: int = 15,
+         extra_env: dict[str, str] | None = None):
+    env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"}
+    if extra_env:
+        env.update(extra_env)
     try:
         result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, timeout=timeout, check=False,
-                                env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"})
+                                env=env)
     except (OSError, subprocess.TimeoutExpired):
         _fail("required_command_unavailable")
     if len(result.stdout) > maximum or len(result.stderr) > maximum:
@@ -378,23 +382,34 @@ def install() -> None:
         result = _run(["/usr/sbin/visudo", "-c"], maximum=4096)
         if result.returncode != 0:
             _fail("existing_sudoers_invalid")
-        _run_sudoers_validation(sudoers_raw, created)
+        _run_sudoers_validation(sudoers_raw)
         _negative_authorization_tests()
-        _positive_preflight()
+        _positive_installation_probe()
+        # Sudoers is the activation commit point. All artifact, policy, syntax,
+        # authorization-contract and read-only probe checks have completed.
+        # No service preflight (which can reconcile an interrupted release) is
+        # executed by this installer.
+        _publish(SUDOERS, sudoers_raw, 0o440, created)
         print("INSTALL=PASS")
         print(f"HELPER_VERSION={VERSION}")
         print(f"HELPER_ARTIFACT_SHA256={ARTIFACT_SHA256}")
         print("PHASE_B_POLICY=DISABLED")
         print("NEGATIVE_AUTHORIZATION=PASS")
-        print("PREFLIGHT=PASS")
-    except Exception as error:
+        print("INSTALLATION_PROBE=PASS")
+    except BaseException as error:
         ok = _rollback(created, directory_identity)
-        print(f"INSTALL=FAIL;CODE={error.code if isinstance(error, InstallError) else 'internal_error'}")
+        if isinstance(error, InstallError):
+            code = error.code
+        elif isinstance(error, (KeyboardInterrupt, SystemExit)):
+            code = "interrupted"
+        else:
+            code = "internal_error"
+        print(f"INSTALL=FAIL;CODE={code}")
         print(f"ROLLBACK={'PASS' if ok else 'HOLD'}")
         raise SystemExit(1)
 
 
-def _run_sudoers_validation(raw: bytes, created):
+def _run_sudoers_validation(raw: bytes):
     fd, temporary = tempfile.mkstemp(prefix=".wpcaregrid-staging-next-1.4.5.", dir=SUDOERS.parent)
     path = Path(temporary)
     try:
@@ -407,10 +422,6 @@ def _run_sudoers_validation(raw: bytes, created):
         result = _run(["/usr/sbin/visudo", "-cf", str(path)], maximum=4096)
         if result.returncode != 0:
             _fail("sudoers_syntax_invalid")
-        _publish(SUDOERS, raw, 0o440, created)
-        result = _run(["/usr/sbin/visudo", "-cf", str(SUDOERS)], maximum=4096)
-        if result.returncode != 0:
-            _fail("published_sudoers_invalid")
     finally:
         try:
             os.unlink(path)
@@ -419,33 +430,37 @@ def _run_sudoers_validation(raw: bytes, created):
 
 
 def _negative_authorization_tests():
-    # sudo itself enforces the exact command/argument allowlist; the helper
-    # independently rejects environment/path overrides if invoked directly.
+    # The actual sudoers file is validated before publication. These probes
+    # exercise the installed helper's own fail-closed parser without granting
+    # a command: one wrong caller and one forbidden operation must both fail.
     denied = (
-        ["/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.5/wpcaregrid-deploy-staging-next-priv"],
-        [str(ENTRYPOINT), "production"],
-        [str(ENTRYPOINT), "deploy", "0" * 40, "0" * 64],
-        ["/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.2/wpcaregrid-deploy-staging-next-priv", "preflight"],
+        ((str(ENTRYPOINT), "verify-install"), {"SUDO_UID": str(EXPECTED_DEPLOY_UID + 1)}),
+        ((str(ENTRYPOINT), "production"), {"SUDO_UID": str(EXPECTED_DEPLOY_UID)}),
+        ((str(ENTRYPOINT), "deploy", "invalid", "invalid"),
+         {"SUDO_UID": str(EXPECTED_DEPLOY_UID)}),
     )
-    for args in denied:
-        result = _run(["/usr/bin/sudo", "-n", "-u", "deploy-staging-next", "/usr/bin/sudo", "-n", *args],
-                      maximum=4096)
-        if result.returncode == 0:
+    for args, environment in denied:
+        result = _run(["/usr/bin/python3", "-I", *args], maximum=4096, extra_env=environment)
+        if result.returncode == 0 or b"DEPLOYMENT=HOLD;CODE=" not in result.stderr:
             _fail("negative_authorization_test_failed")
 
 
-def _positive_preflight():
-    result = _run(["/usr/bin/sudo", "-n", "-u", "deploy-staging-next", "/usr/bin/sudo", "-n",
-                   str(ENTRYPOINT), "preflight"], maximum=4096)
-    if result.returncode != 0:
-        _fail("positive_preflight_failed")
+def _positive_installation_probe():
+    # This is deliberately verify-install, not preflight. preflight can reconcile
+    # an unreceipted active release, create a maintenance gate or reload FPM.
+    result = _run(["/usr/bin/python3", "-I", str(ENTRYPOINT), "verify-install"], maximum=4096,
+                  extra_env={"SUDO_UID": str(EXPECTED_DEPLOY_UID)})
+    if result.returncode != 0 or b'"result":"PASS"' not in result.stdout:
+        _fail("positive_installation_probe_failed")
     try:
         payload = json.loads(result.stdout.decode("utf-8"))
     except (UnicodeError, ValueError):
-        _fail("positive_preflight_response_invalid")
+        _fail("positive_installation_probe_response_invalid")
     if not isinstance(payload, dict) or payload.get("result") != "PASS" \
-            or payload.get("profile") != "staging-next" or payload.get("helper_version") != VERSION:
-        _fail("positive_preflight_response_invalid")
+            or payload.get("profile") != "staging-next" or payload.get("helper_version") != VERSION \
+            or payload.get("helper_contract") != CONTRACT \
+            or payload.get("helper_artifact_sha256") != ARTIFACT_SHA256:
+        _fail("positive_installation_probe_response_invalid")
 
 
 if __name__ == "__main__":

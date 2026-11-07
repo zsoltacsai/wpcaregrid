@@ -1141,6 +1141,23 @@ class StagingDeployBackendTests(unittest.TestCase):
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
+    def test_helper_installation_probe_is_strictly_read_only(self):
+        before = sorted(path.name for path in self.state.iterdir())
+        with mock.patch.object(BACKEND, "_reconcile_unreceipted_active_release",
+                               side_effect=AssertionError("installer must not reconcile")), \
+                mock.patch.object(BACKEND, "_current_release",
+                                  side_effect=AssertionError("installer probe must not inspect live release")):
+            result = BACKEND.verify_helper_installation(self.profile, invoking_uid=1000)
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(sorted(path.name for path in self.state.iterdir()), before)
+
+    def test_helper_installation_probe_rejects_wrong_identity_without_state_change(self):
+        before = sorted(path.name for path in self.state.iterdir())
+        with self.assertRaises(BACKEND.DeployRefused) as error:
+            BACKEND.verify_helper_installation(self.profile, invoking_uid=1001)
+        self.assertEqual(str(error.exception), "caller_identity_invalid")
+        self.assertEqual(sorted(path.name for path in self.state.iterdir()), before)
+
     def test_exact_primary_authorization_precedes_any_build_or_mutation(self):
         result = BACKEND.authorize_release(self.profile, invoking_uid=1000,
                                            application_sha=self.base_sha)
