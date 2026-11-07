@@ -9,7 +9,7 @@ Helper, controller and sudoers artifact source: protected primary
 `cf2a944c27a2a24dbdf1097bf0ba766e6edd48fe`. Recompute these artifact digests
 from that exact Git tree immediately before source staging. The installer was
 introduced separately by PR #300 commit
-`481cab044dab61e785f73db9378fa5c4eb1e13aa`; its SHA is computed from that PR
+`7a1dda27ede1b61f657a378d289b9eb48f36f5df`; its SHA is computed from that PR
 tree, because it does not exist in the protected-primary source commit.
 
 | Source file | SHA-256 |

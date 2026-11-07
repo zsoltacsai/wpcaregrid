@@ -10,7 +10,7 @@ database changes.
 Source baseline for this runbook: protected primary `cf2a944c27a2a24dbdf1097bf0ba766e6edd48fe`.
 The helper/controller/sudoers artifacts below are pinned to that primary.
 The root installer was added later in PR #300 at source commit
-`481cab044dab61e785f73db9378fa5c4eb1e13aa`; it is not part of the listed
+`7a1dda27ede1b61f657a378d289b9eb48f36f5df`; it is not part of the listed
 primary commit, and its separate digest is pinned in the manifest.
 Revalidate primary, CI, reviews, artifact manifest, and the application release
 SHA immediately before any later operation. The application release SHA is not
