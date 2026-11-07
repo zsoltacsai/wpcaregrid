@@ -47,8 +47,7 @@ ENTRYPOINT = Path(
 BACKEND = ENTRYPOINT.parent / "deployment_backend_v2.py"
 TRANSACTION = ENTRYPOINT.parent / "deployment_transaction_v2.py"
 ENVIRONMENT = ENTRYPOINT.parent / "deployment_environment_contract.py"
-CONTROLLER = Path(
-    "/var/lib/wpcaregrid-deploy/production/source/scripts/production_deploy_controller.py")
+CONTROLLER = ENTRYPOINT.parent / "production_deploy_controller.py"
 POLICY = Path("/etc/wpcaregrid-deploy/profiles/production-v2.0.0.json")
 SUDOERS = Path("/etc/sudoers.d/wpcaregrid-production-v2.0.0")
 PHASE_B_POLICY = Path("/etc/wpcaregrid-deploy/profiles/production-phase-b-2.0.0.json")
@@ -81,10 +80,6 @@ POLICY_KEYS = frozenset({
 INSTALL_DIRS = (
     Path("/usr/local/libexec/wpcaregrid-deploy/production"),
     ENTRYPOINT.parent,
-    Path("/var/lib/wpcaregrid-deploy"),
-    Path("/var/lib/wpcaregrid-deploy/production"),
-    Path("/var/lib/wpcaregrid-deploy/production/source"),
-    Path("/var/lib/wpcaregrid-deploy/production/source/scripts"),
 )
 REQUIRED_EXISTING_DIRS = (
     Path("/usr/local/libexec/wpcaregrid-deploy"),
@@ -523,7 +518,7 @@ def _preflight(*, runner: Callable[..., subprocess.CompletedProcess] = subproces
                 break
 
     existing = (ENTRYPOINT.parent, ENTRYPOINT, BACKEND, TRANSACTION, ENVIRONMENT,
-                CONTROLLER.parent, CONTROLLER, POLICY, SUDOERS)
+                CONTROLLER, POLICY, SUDOERS)
     for path in existing:
         _check_absent(path)
     if PHASE_B_POLICY.exists() or PHASE_B_POLICY.is_symlink():

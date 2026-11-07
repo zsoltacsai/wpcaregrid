@@ -17,7 +17,7 @@ Recompute every digest from that exact Git tree immediately before source stagin
 | Combined helper artifact (derived) | `0e50791ee708de571dbcaa5420bd06b31698e3b7a8683f7501bee6880ead96fc` |
 | `scripts/production_deploy_controller.py` | `a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283` |
 | `deploy/sudoers/wpcaregrid-production-v2.0.0` | `fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963` |
-| Root installer `scripts/install_production_helper_2_0_0.py` | `3ebb74d8ece4b1f338f138ee6339455524383dc010783303e5a574a87732f001` |
+| Root installer `scripts/install_production_helper_2_0_0.py` | `ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986` |
 
 The six helper/controller/policy-template inputs must be staged under
 `/home/deploy/.private/wpcg-production-helper-2.0.0-cf2a944c/`, owned by
@@ -25,7 +25,8 @@ The six helper/controller/policy-template inputs must be staged under
 a separate file at
 `/home/deploy/.private/wpcg-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py`,
 owned by `deploy:deploy`, mode `0600`. Do not add the installer to the exact
-six-file source directory.
+six-file source directory and never execute it directly from that deploy-owned
+path as root.
 
 ## Installation effect, if separately authorized
 
@@ -38,16 +39,24 @@ It may create only these absent root-owned mode-`0755` directories:
 
 * `/usr/local/libexec/wpcaregrid-deploy/production/`
 * `/usr/local/libexec/wpcaregrid-deploy/production/2.0.0/`
-* `/var/lib/wpcaregrid-deploy/production/source/scripts/` and missing parents
-  below `/var/lib/wpcaregrid-deploy/`
 
-It installs the entrypoint at mode `0755`, the pinned Python modules/controller
-and disabled production profile at mode `0644`, then installs the versioned
-sudoers fragment at mode `0440` as the final publication step. Every file is
+It installs the entrypoint at mode `0755`, the pinned Python modules, controller,
+and disabled production profile at mode `0644` under the versioned helper
+directory, then installs the versioned sudoers fragment at mode `0440` as the
+final publication step. Every file is
 root-owned. The profile has `enabled=false`, all environment-specific values
 unset, and no Phase B policy or credentials. Consequently, the helper refuses
 all production operations until a separately reviewed and authorized
 environment policy is installed.
+
+The controller is installed as
+`/usr/local/libexec/wpcaregrid-deploy/production/2.0.0/production_deploy_controller.py`.
+The installer does not create or own the controller's separate Git source
+checkout at `/var/lib/wpcaregrid-deploy/production/source`; a future production
+operator setup must provision a clean, exact-origin checkout owned by the
+dedicated `deploy-production` identity and verify its primary/CI provenance.
+The controller refuses to run until that checkout and the separate
+deploy-owned incoming directory meet its fixed contract.
 
 Before running it, an administrator must verify the exact primary and CI/review
 evidence, source directory path/ownership/modes/content, the absence of every
@@ -59,10 +68,24 @@ allowlist, and tests denial for the ordinary `deploy` identity and invalid
 production operations. It does not call `preflight`, `verify-install`,
 `authorize`, `stage`, or `deploy`.
 
-Command for a separately authorized administrator session:
+Command sequence for a separately authorized root console. It copies the
+installer into a private root-owned directory and verifies the copied bytes
+before execution, so the deploy-owned source is not executed as root:
 
 ```sh
-sudo /usr/bin/python3 -I /home/deploy/.private/wpcaregrid-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py
+(
+  set -eu
+  src=/home/deploy/.private/wpcaregrid-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py
+  expected=ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986
+  d=$(/usr/bin/mktemp -d /root/wpcg-production-installer.XXXXXX)
+  trap '/usr/bin/rm -f -- "$d/install.py"; /usr/bin/rmdir -- "$d"' EXIT
+  test "$(/usr/bin/stat -c '%U:%G:%a' "$d")" = root:root:700
+  test ! -e "$d/install.py" && test ! -L "$d/install.py"
+  /usr/bin/install -o root -g root -m 700 -- "$src" "$d/install.py"
+  test "$(/usr/bin/stat -c '%U:%G:%a' "$d/install.py")" = root:root:700
+  test "$(/usr/bin/sha256sum "$d/install.py" | /usr/bin/cut -d' ' -f1)" = "$expected"
+  /usr/bin/python3 -I "$d/install.py"
+)
 ```
 
 Expected output is a sanitized `INSTALL=PASS`, `PRODUCTION_PROFILE=DISABLED`,

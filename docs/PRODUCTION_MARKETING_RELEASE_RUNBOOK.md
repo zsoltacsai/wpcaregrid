@@ -23,7 +23,7 @@ Production helper version `2.0.0`, contract `wpcaregrid-deployment-profile-v2`:
 | Combined helper artifact | `0e50791ee708de571dbcaa5420bd06b31698e3b7a8683f7501bee6880ead96fc` |
 | Production controller | `a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283` |
 | Sudoers candidate | `fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963` |
-| Root installer | `3ebb74d8ece4b1f338f138ee6339455524383dc010783303e5a574a87732f001` |
+| Root installer | `ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986` |
 
 The source manifest is `deploy/release-manifests/production-deployment-helper-2.0.0.json`.
 The root entrypoint accepts only `preflight`, `verify-install`, `authorize <40-hex-SHA>`,
@@ -100,19 +100,33 @@ arguments and environment targets, plus positive `verify-install` and
 previous recorded files; do not alter other profiles or directories.
 
 The no-overwrite root installer is `scripts/install_production_helper_2_0_0.py`;
-SHA-256 `3ebb74d8ece4b1f338f138ee6339455524383dc010783303e5a574a87732f001` is pinned in the release manifest.
+SHA-256 `ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986` is pinned in the release manifest.
 It accepts no command-line arguments, requires an already provisioned dedicated
 `deploy-production` account, and installs a schema-complete but disabled
 production profile. It never enables that profile, installs Phase B credentials,
 or invokes any helper operation. Its exact pinned source set must be placed in
 `/home/deploy/.private/wpcg-production-helper-2.0.0-cf2a944c/` with owner
-`deploy:deploy`, directory mode `0700`, and file mode `0600`. The installer
-itself is staged separately at
+`deploy:deploy`, directory mode `0700`, and file mode `0600`. Never execute the
+installer directly from a deploy-owned path as root. The installer is staged separately at
 `/home/deploy/.private/wpcg-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py`,
-also owned by `deploy:deploy`, mode `0600`. An authorized administrator runs:
+also owned by `deploy:deploy`, mode `0600`. An authorized administrator must
+copy it into a root-owned private temporary directory and verify the copied
+bytes before execution. Example for a separately authorized root console:
 
 ```sh
-sudo /usr/bin/python3 -I /home/deploy/.private/wpcg-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py
+(
+  set -eu
+  src=/home/deploy/.private/wpcg-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py
+  expected=ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986
+  d=$(/usr/bin/mktemp -d /root/wpcg-production-installer.XXXXXX)
+  trap '/usr/bin/rm -f -- "$d/install.py"; /usr/bin/rmdir -- "$d"' EXIT
+  test "$(/usr/bin/stat -c '%U:%G:%a' "$d")" = root:root:700
+  test ! -e "$d/install.py" && test ! -L "$d/install.py"
+  /usr/bin/install -o root -g root -m 700 -- "$src" "$d/install.py"
+  test "$(/usr/bin/stat -c '%U:%G:%a' "$d/install.py")" = root:root:700
+  test "$(/usr/bin/sha256sum "$d/install.py" | /usr/bin/cut -d' ' -f1)" = "$expected"
+  /usr/bin/python3 -I "$d/install.py"
+)
 ```
 
 The installer checks every source hash, target absence, parent ownership/mode,
@@ -137,7 +151,7 @@ new authorization.
 
 ```sh
 sudo -u deploy-production -- /usr/bin/python3 \
-  /var/lib/wpcaregrid-deploy/production/source/scripts/production_deploy_controller.py \
+  /usr/local/libexec/wpcaregrid-deploy/production/2.0.0/production_deploy_controller.py \
   sync "$AUTHORIZED_APPLICATION_SHA"
 ```
 

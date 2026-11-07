@@ -17,7 +17,7 @@
   "sudoers_template": "deploy/sudoers/wpcaregrid-production-v2.0.0",
   "sudoers_template_sha256": "fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963",
   "root_installer": "scripts/install_production_helper_2_0_0.py",
-  "root_installer_sha256": "3ebb74d8ece4b1f338f138ee6339455524383dc010783303e5a574a87732f001",
+  "root_installer_sha256": "ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986",
   "phase_b_default": "DISABLED",
   "production_activation": "BLOCKED_UNTIL_APPROVED_ENVIRONMENT_POLICY_AND_RECOVERY_EVIDENCE"
 }

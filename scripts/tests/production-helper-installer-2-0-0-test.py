@@ -45,6 +45,17 @@ class ProductionHelperInstallerTests(unittest.TestCase):
         self.assertNotIn("staging-next", serialized)
         self.assertNotIn("/var/www/wpcaregrid/", serialized)
 
+    def test_controller_is_installed_immutable_and_outside_deploy_owned_git_checkout(self):
+        self.assertEqual(
+            INSTALLER.CONTROLLER,
+            INSTALLER.ENTRYPOINT.parent / "production_deploy_controller.py")
+        self.assertFalse(any(str(path).startswith("/var/lib/wpcaregrid-deploy")
+                             for path in INSTALLER.INSTALL_DIRS))
+        controller = (ROOT / "scripts/production_deploy_controller.py").read_text(encoding="utf-8")
+        self.assertIn('SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/production/source")', controller)
+        doc = (ROOT / "docs/PRODUCTION_HELPER_INSTALL_2_0_0.md").read_text(encoding="utf-8")
+        self.assertIn("does not create or own the controller's separate Git source", doc)
+
     def test_sudoers_template_is_exactly_five_fixed_production_operations(self):
         raw = (ROOT / "deploy/sudoers/wpcaregrid-production-v2.0.0").read_bytes()
         INSTALLER._verify_sudoers_source(raw)
