@@ -106,7 +106,7 @@ class StagingNextHelperConsistencyTests(unittest.TestCase):
                          Path("/etc/wpcaregrid-deploy/credentials/staging-next-database-1.4.7.json"))
         self.assertEqual(CONTROLLER.HELPER, HELPER_147.ENTRYPOINT)
         self.assertEqual((installer.VERSION, installer.CONTRACT),
-                         (HELPER_147.HELPER_VERSION, HELPER_147.HELPER_CONTRACT))
+                         (HELPER_147.VERSION, HELPER_147.CONTRACT))
         self.assertEqual((installer.ENTRY_SHA256, installer.BACKEND_SHA256,
                           installer.TRANSACTION_SHA256, installer.ARTIFACT_SHA256),
                          (hashes["entrypoint"], hashes["backend"], hashes["transaction_module"], artifact_sha))
