@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "profile": "production",
+  "helper_version": "2.0.0",
+  "compatibility_contract": "wpcaregrid-deployment-profile-v2",
+  "entrypoint": "scripts/wpcaregrid-deploy-production-priv.py",
+  "entrypoint_sha256": "4f10cd2acc4d9ab38e91460dc4690c4b78bfe8bec6bdae02b9c3315c57d7ef1d",
+  "backend": "scripts/deployment_backend_v2.py",
+  "backend_sha256": "d1cbde99eef1168e42797268ce170e451b28051d7d980876a6167fb19bf85576",
+  "transaction_module": "scripts/deployment_transaction_v2.py",
+  "transaction_module_sha256": "ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00",
+  "environment_contract": "scripts/deployment_environment_contract.py",
+  "environment_contract_sha256": "10fa8611b4ff806816a494a665193c8613c44dd16413aef5fecdbc82a886c0ca",
+  "helper_artifact_sha256": "9c69baf64a55400f1f59a6115d4fbd8b0d074d5590b1de75712c5053a006e7d9",
+  "controller": "scripts/production_deploy_controller.py",
+  "controller_sha256": "6ac5190a84f2022ff61c119a6aa9a663b8c482057a0e9c62e7dd39a357bac428",
+  "sudoers_template": "deploy/sudoers/wpcaregrid-production-v2.0.0",
+  "sudoers_template_sha256": "fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963",
+  "phase_b_default": "DISABLED",
+  "production_activation": "BLOCKED_UNTIL_APPROVED_ENVIRONMENT_POLICY_AND_RECOVERY_EVIDENCE"
+}

@@ -23,24 +23,33 @@ def production_config(**changes):
         "schema": 1,
         "profile": "production",
         "enabled": True,
-        "app_root": "/var/www/wpcaregrid",
-        "release_root": "/var/www/wpcaregrid/releases",
+        "app_root": "/var/www/wpcaregrid-production",
+        "application_link": "/var/www/wpcaregrid-production/current",
+        "release_root": "/var/www/wpcaregrid-production/releases",
+        "incoming_root": "/var/lib/wpcaregrid-deploy/production/incoming",
+        "inbox_root": "/var/lib/wpcaregrid-deploy/production/inbox",
         "state_root": "/var/lib/wpcaregrid-deploy/production/state",
         "backup_root": "/var/lib/wpcaregrid-deploy/production/database-backups",
-        "database": "wpcaregrid_prod",
+        "shared_env_file": "/var/lib/wpcaregrid-deploy/production/shared/.env",
+        "shared_storage_root": "/var/lib/wpcaregrid-deploy/production/shared/storage",
+        "shared_vendor_root": "/var/lib/wpcaregrid-deploy/production/shared/vendor",
+        "database": "wpcg_prod_main",
         "database_host": "127.0.0.1",
         "database_port": 3306,
         "database_server_uuid_sha256": "a" * 64,
-        "isolated_database": "wpcaregrid_restore_test",
+        "isolated_database": "wpcg_prod_restore_test",
         "isolated_database_host": "127.0.0.1",
         "isolated_database_port": 3307,
         "isolated_database_uuid_sha256": "b" * 64,
-        "host": "www.example.com",
+        "host": "www.wpcaregrid.com",
+        "mysql_version": "8.4",
+        "deploy_user": "deploy-production",
         "deploy_uid": 997,
         "php_version": "8.4",
-        "php_fpm_socket": "/run/php/php8.4-fpm.sock",
-        "php_fpm_uid": 33,
-        "php_fpm_gid": 33,
+        "php_fpm_socket": "/run/php/wpcaregrid-production-php8.4-fpm.sock",
+        "php_fpm_unit": "wpcaregrid-production-php8.4-fpm.service",
+        "php_fpm_uid": 998,
+        "php_fpm_gid": 998,
         "worker_programs": ["wpcaregrid-production-default", "wpcaregrid-production-backups"],
         "scheduler_unit": "wpcaregrid-production-scheduler.timer",
         "maintenance_marker": "/var/lib/wpcaregrid-deploy/production/state/maintenance",
@@ -62,6 +71,8 @@ class DeploymentEnvironmentContractTests(unittest.TestCase):
         self.assertIs(profile, CONTRACT.STAGING_NEXT)
         self.assertEqual(profile.database, "wpcg_staging_next")
         self.assertEqual(profile.app_root, "/var/www/wpcaregrid-staging-new")
+        self.assertEqual(profile.database_server_uuid_sha256,
+                         "bc35682d80f0894c2c2c2879552fb8fe13dc2a530868d79d817a6280e31bde1c")
         with self.assertRaises(FrozenInstanceError):
             profile.database = "wpcaregrid_prod"
 
@@ -79,8 +90,9 @@ class DeploymentEnvironmentContractTests(unittest.TestCase):
     def test_complete_production_profile_isolated_from_staging(self):
         profile = CONTRACT.resolve_environment("production", production_config=production_config())
         self.assertTrue(profile.enabled)
-        self.assertEqual(profile.database, "wpcaregrid_prod")
-        self.assertEqual(profile.host, "www.example.com")
+        self.assertEqual(profile.database, "wpcg_prod_main")
+        self.assertEqual(profile.host, "www.wpcaregrid.com")
+        self.assertEqual(profile.application_link, "/var/www/wpcaregrid-production/current")
         self.assertNotEqual(profile.deploy_uid, CONTRACT.STAGING_NEXT.deploy_uid)
         self.assertFalse(profile.state_root.startswith("/var/lib/wpcaregrid-deploy/staging-next/"))
         self.assertFalse(profile.backup_root.startswith("/var/lib/wpcaregrid-deploy/staging-next/"))
@@ -111,10 +123,20 @@ class DeploymentEnvironmentContractTests(unittest.TestCase):
 
     def test_php_and_unix_identities_are_validated(self):
         self.reject("production_php_version_invalid", php_version="8.3")
-        self.reject("php_fpm_socket_outside_profile_root", php_fpm_socket="/run/wpcaregrid.sock")
+        self.reject("production_mysql_version_invalid", mysql_version="8.0")
+        self.reject("production_php_fpm_socket_invalid", php_fpm_socket="/run/php/php8.4-fpm.sock")
+        self.reject("production_php_fpm_socket_invalid", php_fpm_unit="php8.4-fpm.service")
         self.reject("production_unix_identity_not_isolated", deploy_uid=996)
         self.reject("production_unix_identity_not_isolated", deploy_uid=33)
+        self.reject("production_deploy_identity_invalid", deploy_user="deploy-staging-next")
         self.reject("php_fpm_uid_invalid", php_fpm_uid=True)
+        self.reject("production_unix_identity_not_isolated", php_fpm_uid=33)
+
+    def test_production_application_and_database_names_are_production_scoped(self):
+        self.reject("production_database_identity_invalid", database="wpcaregrid")
+        self.reject("production_database_identity_invalid", database="wpcg_staging_next")
+        self.reject("production_database_identity_invalid", isolated_database="wpcg_staging_next_restore")
+        self.reject("app_root_outside_profile_root", app_root="/var/www/wpcaregrid")
 
     def test_workers_and_scheduler_are_production_scoped(self):
         self.reject("production_worker_scope_invalid", worker_programs=[
