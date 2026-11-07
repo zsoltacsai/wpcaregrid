@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import fcntl
 import base64
+import fnmatch
 import grp
 import hashlib
 import importlib.util
@@ -36,15 +37,17 @@ from typing import Mapping
 
 
 _TRANSACTION_PATH = Path(__file__).with_name("staging_next_db_transaction.py")
-_TRANSACTION_SPEC = importlib.util.spec_from_file_location(
-    "_wpcg_staging_next_db_transaction_v1", _TRANSACTION_PATH)
-_require_transaction_loader = (_TRANSACTION_SPEC is not None and _TRANSACTION_SPEC.loader is not None)
-if not _require_transaction_loader:
-    raise RuntimeError("database_transaction_module_unavailable")
-_TRANSACTION_MODULE = importlib.util.module_from_spec(_TRANSACTION_SPEC)
 import sys as _transaction_sys
-_transaction_sys.modules[_TRANSACTION_SPEC.name] = _TRANSACTION_MODULE
-_TRANSACTION_SPEC.loader.exec_module(_TRANSACTION_MODULE)
+_TRANSACTION_MODULE_NAME = "_wpcg_staging_next_db_transaction_v1"
+_TRANSACTION_MODULE = _transaction_sys.modules.get(_TRANSACTION_MODULE_NAME)
+if _TRANSACTION_MODULE is None:
+    _TRANSACTION_SPEC = importlib.util.spec_from_file_location(
+        _TRANSACTION_MODULE_NAME, _TRANSACTION_PATH)
+    if _TRANSACTION_SPEC is None or _TRANSACTION_SPEC.loader is None:
+        raise RuntimeError("database_transaction_module_unavailable")
+    _TRANSACTION_MODULE = importlib.util.module_from_spec(_TRANSACTION_SPEC)
+    _transaction_sys.modules[_TRANSACTION_MODULE_NAME] = _TRANSACTION_MODULE
+    _TRANSACTION_SPEC.loader.exec_module(_TRANSACTION_MODULE)
 DatabaseReleaseTransaction = _TRANSACTION_MODULE.DatabaseReleaseTransaction
 TransactionIdentity = _TRANSACTION_MODULE.TransactionIdentity
 TransactionRefused = _TRANSACTION_MODULE.TransactionRefused
@@ -58,11 +61,14 @@ verify_background_fences = _TRANSACTION_MODULE.verify_background_fences
 _verify_backup_sql = _TRANSACTION_MODULE._verify_backup_sql
 
 
-HELPER_VERSION = "1.4.4"
-HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v8"
-PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.4.json")
+HELPER_VERSION = "1.4.5"
+HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v9"
+PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.5.json")
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
+APPLICATION_HOST = "staging-next.wpcaregrid.com"
+EXPECTED_FPM_SOCKET = "/run/php/php8.5-fpm.sock"
+RELEASE_REVIEW_LEDGER_ISSUE = 174
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 GITHUB_API = "https://api.github.com"
 GITHUB_REPOSITORY = "zsoltacsai/wpcaregrid"
@@ -121,8 +127,6 @@ class StagingProfile:
     shared_vendor_dir: Path
     basic_auth_file: Path | None
     mysql_server_uuid_sha256: str | None
-    integration_qa_reviewer: str | None
-    m17_appsec_reviewer: str | None
     helper_artifact_sha256: str | None
     php_fpm_uid: int
     php_fpm_gid: int
@@ -152,8 +156,6 @@ PRODUCTION_PROFILE = StagingProfile(
     shared_vendor_dir=Path("/var/lib/wpcaregrid-deploy/staging-next/shared/vendor"),
     basic_auth_file=Path("/etc/wpcaregrid-deploy/staging-next-basic-auth.json"),
     mysql_server_uuid_sha256=None,  # Bound in the root-owned environment policy at installation.
-    integration_qa_reviewer=None,  # Installed from the approved #174 reviewer policy.
-    m17_appsec_reviewer=None,
     helper_artifact_sha256=None,  # Installed from the exact versioned helper artifact manifest.
     php_fpm_uid=-1,  # Bound by the root-owned staging-next profile policy.
     php_fpm_gid=-1,  # Bound by the root-owned staging-next profile policy.
@@ -231,8 +233,7 @@ def _safe_profile(profile: StagingProfile) -> None:
     _require(profile.helper_artifact_sha256 is None or _sha(profile.helper_artifact_sha256, SHA256_RE),
              "helper_artifact_identity_invalid")
     if not profile.test_only:
-        _require(profile.phase_b_policy_file == Path(
-            "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.4.json"),
+        _require(profile.phase_b_policy_file == PHASE_B_POLICY_PATH,
             "phase_b_policy_path_invalid")
         _require(profile.phase_b_policy_sha256 is None
                  or _sha(profile.phase_b_policy_sha256, SHA256_RE), "phase_b_policy_pin_invalid")
@@ -856,6 +857,80 @@ def _github_json(path: str, *, timeout: float = 6.0, max_bytes: int = 4_000_000)
     return value
 
 
+def _github_list(path: str, *, maximum_pages: int = 20) -> list[object]:
+    """Read a complete bounded GitHub list; truncation is never accepted as evidence."""
+    result = []
+    for page in range(1, maximum_pages + 1):
+        separator = "&" if "?" in path else "?"
+        value = _github_json(f"{path}{separator}per_page=100&page={page}")
+        _require(isinstance(value, list) and len(value) <= 100, "github_evidence_invalid")
+        result.extend(value)
+        if len(value) < 100:
+            return result
+    raise DeployRefused("github_evidence_incomplete")
+
+
+RELEASE_REVIEW_RECORD_RE = re.compile(
+    r"WPCG_RELEASE_REVIEW_V1\n"
+    r"role=(integration_qa|m17_appsec)\n"
+    r"pr=([1-9][0-9]*)\n"
+    r"head_sha=([0-9a-f]{40})\n"
+    r"decision=(PASS|CHANGES_REQUIRED)\n?\Z")
+
+
+def _release_review_records(comments: list[object], *, pr_number: int,
+                            head_sha: str) -> dict[str, tuple[str, str]]:
+    """Return the latest exact-head record per role as (login, decision)."""
+    latest = {}
+    for item in comments:
+        if not isinstance(item, dict) or not isinstance(item.get("body"), str):
+            continue
+        body = item["body"]
+        if not body.startswith("WPCG_RELEASE_REVIEW_V1"):
+            continue
+        match = RELEASE_REVIEW_RECORD_RE.fullmatch(body)
+        user = item.get("user")
+        login = user.get("login") if isinstance(user, dict) else None
+        created = item.get("created_at")
+        comment_id = item.get("id")
+        _require(match is not None and isinstance(login, str) and login and isinstance(created, str)
+                 and type(comment_id) is int and comment_id > 0,
+                 "release_review_ledger_record_invalid")
+        role, record_pr, record_sha, decision = match.groups()
+        if int(record_pr) != pr_number or record_sha != head_sha:
+            continue
+        if role not in latest or (created, comment_id) > latest[role][0]:
+            latest[role] = ((created, comment_id), login, decision)
+    return {role: (record[1], record[2]) for role, record in latest.items()}
+
+
+def _verify_independent_release_reviews(review_data: list[object], comments: list[object], *,
+                                        pr_number: int, head_sha: str,
+                                        pr_author: str | None) -> None:
+    latest_reviews = {}
+    for review in review_data:
+        if not isinstance(review, dict) or review.get("commit_id") != head_sha:
+            continue
+        user = review.get("user")
+        login = user.get("login") if isinstance(user, dict) else None
+        submitted = review.get("submitted_at")
+        review_id = review.get("id")
+        if isinstance(login, str) and login and isinstance(submitted, str) \
+                and type(review_id) is int and review_id > 0:
+            if login not in latest_reviews or (submitted, review_id) > latest_reviews[login][0]:
+                latest_reviews[login] = ((submitted, review_id), review.get("state"))
+    approved = {login for login, (_, state) in latest_reviews.items()
+                if state == "APPROVED" and login != pr_author}
+    _require(len(approved) >= 2, "independent_review_evidence_missing")
+    ledger = _release_review_records(comments, pr_number=pr_number, head_sha=head_sha)
+    qa = ledger.get("integration_qa")
+    appsec = ledger.get("m17_appsec")
+    _require(isinstance(qa, tuple) and qa[1] == "PASS" and qa[0] in approved
+             and isinstance(appsec, tuple) and appsec[1] == "PASS" and appsec[0] in approved,
+             "independent_review_evidence_missing")
+    _require(qa[0] != appsec[0], "independent_review_evidence_not_independent")
+
+
 def _local_git_tree(profile: StagingProfile, application_sha: str) -> Mapping[str, str]:
     repo = profile.test_git_repo
     _require(profile.test_only and repo is not None, "local_source_verifier_unavailable")
@@ -923,10 +998,6 @@ def _github_primary_tree(profile: StagingProfile, application_sha: str) -> Mappi
 def _verify_primary_ci_and_reviews(profile: StagingProfile, application_sha: str) -> None:
     if profile.test_only:
         return
-    _require(isinstance(profile.integration_qa_reviewer, str)
-             and isinstance(profile.m17_appsec_reviewer, str)
-             and profile.integration_qa_reviewer != profile.m17_appsec_reviewer,
-             "reviewer_policy_unconfigured")
     def verify_run(commit_sha: str, *, event: str, branch: str | None, pr_number: int | None = None) -> None:
         query_values = {"head_sha": commit_sha, "event": event, "per_page": 100}
         if branch is not None:
@@ -992,17 +1063,12 @@ def _verify_primary_ci_and_reviews(profile: StagingProfile, application_sha: str
              "merged_pr_evidence_invalid")
     verify_run(pr_head_sha, event="pull_request", branch=None, pr_number=pr_number)
     verify_run(application_sha, event="push", branch=PRIMARY_BRANCH)
-    review_data = _github_json(f"/repos/{GITHUB_REPOSITORY}/pulls/{pr_number}/reviews?per_page=100")
-    _require(isinstance(review_data, list), "review_evidence_invalid")
-    latest_reviews = {}
-    for review in review_data:
-        if (isinstance(review, dict) and isinstance(review.get("user"), dict)
-                and review["user"].get("login") in {profile.integration_qa_reviewer, profile.m17_appsec_reviewer}
-                and review.get("commit_id") == pr_head_sha):
-            latest_reviews[review["user"]["login"]] = review.get("state")
-    _require(latest_reviews.get(profile.integration_qa_reviewer) == "APPROVED"
-             and latest_reviews.get(profile.m17_appsec_reviewer) == "APPROVED",
-             "independent_review_evidence_missing")
+    review_data = _github_list(f"/repos/{GITHUB_REPOSITORY}/pulls/{pr_number}/reviews")
+    author = pr_detail.get("user")
+    author_login = author.get("login") if isinstance(author, dict) else None
+    comments = _github_list(f"/repos/{GITHUB_REPOSITORY}/issues/{RELEASE_REVIEW_LEDGER_ISSUE}/comments")
+    _verify_independent_release_reviews(review_data, comments, pr_number=pr_number,
+                                        head_sha=pr_head_sha, pr_author=author_login)
 
 
 def authorize_release(profile: StagingProfile, *, invoking_uid: int,
@@ -1437,6 +1503,163 @@ def _basic_auth_header(profile: StagingProfile) -> str | None:
                      for value in credentials.values()), "http_probe_credentials_invalid")
     token = base64.b64encode(f"{credentials['username']}:{credentials['password']}".encode()).decode("ascii")
     return f"Basic {token}"
+
+
+def _nginx_lex(source: str) -> list[str]:
+    tokens = []
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if char.isspace():
+            index += 1
+            continue
+        if char == "#":
+            newline = source.find("\n", index)
+            index = len(source) if newline < 0 else newline + 1
+            continue
+        if char in "{};":
+            tokens.append(char)
+            index += 1
+            continue
+        if char in "'\"":
+            quote_char = char
+            index += 1
+            value = []
+            while index < len(source) and source[index] != quote_char:
+                if source[index] == "\\" and index + 1 < len(source):
+                    index += 1
+                value.append(source[index])
+                index += 1
+            _require(index < len(source), "nginx_config_parse_failed")
+            index += 1
+            tokens.append("".join(value))
+            continue
+        start = index
+        while index < len(source) and not source[index].isspace() and source[index] != ";":
+            index += 1
+        _require(index > start, "nginx_config_parse_failed")
+        tokens.append(source[start:index])
+    return tokens
+
+
+def _nginx_parse(source: str):
+    tokens = _nginx_lex(source)
+    position = 0
+
+    def parse_block(nested: bool):
+        nonlocal position
+        nodes = []
+        while position < len(tokens):
+            if tokens[position] == "}":
+                _require(nested, "nginx_config_parse_failed")
+                position += 1
+                return nodes
+            head = []
+            while position < len(tokens) and tokens[position] not in {"{", ";", "}"}:
+                head.append(tokens[position])
+                position += 1
+            _require(bool(head) and position < len(tokens), "nginx_config_parse_failed")
+            marker = tokens[position]
+            position += 1
+            if marker == ";":
+                nodes.append((head, None))
+            elif marker == "{":
+                nodes.append((head, parse_block(True)))
+            else:
+                raise DeployRefused("nginx_config_parse_failed")
+        _require(not nested, "nginx_config_parse_failed")
+        return nodes
+
+    result = parse_block(False)
+    _require(position == len(tokens), "nginx_config_parse_failed")
+    return result
+
+
+NGINX_SOURCE_HEADER_RE = re.compile(r"^# configuration file (/[^:\n]+):\r?$", re.MULTILINE)
+
+
+def _nginx_dump_sources(dump: bytes) -> dict[str, str]:
+    try:
+        text = dump.decode("utf-8")
+    except UnicodeError:
+        raise DeployRefused("nginx_config_dump_invalid") from None
+    headers = list(NGINX_SOURCE_HEADER_RE.finditer(text))
+    _require(bool(headers), "nginx_config_dump_invalid")
+    sources = {}
+    for index, header in enumerate(headers):
+        path = header.group(1)
+        _require(path.startswith("/etc/nginx/") and path not in sources,
+                 "nginx_config_source_identity_invalid")
+        start = header.end() + 1
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+        sources[path] = text[start:end]
+    return sources
+
+
+def _nginx_expand(nodes, *, source_path: str, sources: Mapping[str, str], stack=()):
+    expanded = []
+    for head, children in nodes:
+        if children is None and head[0] == "include":
+            _require(len(head) == 2 and "$" not in head[1], "nginx_include_unresolved")
+            pattern = head[1]
+            absolute_pattern = pattern if pattern.startswith("/") else "/etc/nginx/" + pattern
+            matches = sorted(path for path in sources if fnmatch.fnmatchcase(path, absolute_pattern))
+            # Nginx permits an empty wildcard include. The -T source map is the
+            # authority for present files; unmatched non-wildcard includes fail closed.
+            if not matches:
+                if any(char in absolute_pattern for char in "*?["):
+                    continue
+                raise DeployRefused("nginx_include_unresolved")
+            for included in matches:
+                _require(included not in stack and included != source_path and included in sources,
+                         "nginx_include_cycle_or_source_missing")
+                expanded.extend(_nginx_expand(_nginx_parse(sources[included]), source_path=included,
+                                              sources=sources, stack=(*stack, source_path)))
+        elif children is not None:
+            expanded.append((head, _nginx_expand(children, source_path=source_path,
+                                                  sources=sources, stack=stack)))
+        else:
+            expanded.append((head, None))
+    return expanded
+
+
+def _nginx_walk(nodes):
+    for head, children in nodes:
+        yield head, children
+        if children is not None:
+            yield from _nginx_walk(children)
+
+
+def _verify_staging_next_nginx_route(dump: bytes, *, hostname: str = APPLICATION_HOST,
+                                     socket_path: str = EXPECTED_FPM_SOCKET) -> None:
+    sources = _nginx_dump_sources(dump)
+    servers = []
+    for path, source in sources.items():
+        parsed = _nginx_parse(source)
+        expanded = _nginx_expand(parsed, source_path=path, sources=sources, stack=())
+        for head, children in expanded:
+            if head == ["server"] and children is not None:
+                directives = list(_nginx_walk(children))
+                names = [arg for command, _ in directives if command and command[0] == "server_name"
+                         for arg in command[1:]]
+                listens = [command[1:] for command, _ in directives
+                           if command and command[0] == "listen"]
+                if hostname in names and any(any(re.search(r"(?:^|:)443$", item) for item in listen)
+                                             and "ssl" in listen for listen in listens):
+                    servers.append(directives)
+    _require(len(servers) == 1, "nginx_staging_https_vhost_ambiguous")
+    fastcgi = [command[1] for command, _ in servers[0]
+               if command and command[0] == "fastcgi_pass" and len(command) == 2]
+    php_locations = []
+    for command, children in servers[0]:
+        if command and command[0] == "location" and children is not None:
+            location_fastcgi = [nested[1] for nested, _ in _nginx_walk(children)
+                                if nested and nested[0] == "fastcgi_pass" and len(nested) == 2]
+            if location_fastcgi:
+                php_locations.extend(location_fastcgi)
+    _require(bool(php_locations) and all(value == f"unix:{socket_path}" for value in php_locations)
+             and all(value == f"unix:{socket_path}" for value in fastcgi),
+             "nginx_staging_fpm_route_mismatch")
 
 
 def _run_fixed(argv: list[str], *, cwd: Path | None = None, timeout: float = 15.0,
@@ -2268,6 +2491,8 @@ def _verify_runtime(profile: StagingProfile, active_path: Path) -> Mapping[str, 
     _require(php_version.startswith("8.5."), "php_runtime_version_mismatch")
     _run_fixed(["/bin/systemctl", "is-active", "--quiet", "php8.5-fpm"])
     _run_fixed(["/usr/sbin/nginx", "-t"], timeout=15)
+    nginx_dump = _run_fixed(["/usr/sbin/nginx", "-T"], timeout=15, maximum=2_000_000)
+    _verify_staging_next_nginx_route(nginx_dump)
     php_probe = (
         "require 'vendor/autoload.php'; $app=require 'bootstrap/app.php'; "
         "$kernel=$app->make('Illuminate\\\\Contracts\\\\Console\\\\Kernel'); $kernel->bootstrap(); "
