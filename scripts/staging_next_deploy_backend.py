@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Staging-next-only, fail-closed immutable release backend (Phase A).
+"""Staging-next-only, fail-closed immutable release backend (Phase A/B).
 
 The production profile is intentionally absent. The CLI/helper layer supplies
 only the compiled staging-next profile and one exact artifact identity. Tests
 may construct a disposable profile, but no CLI flag can select paths or targets.
-Database-changing releases are HOLD until the separately reviewed Phase B.
+Database-changing releases require the separately pinned Phase B policy and
+durable database transaction protocol.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import fcntl
 import base64
 import grp
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -33,8 +35,30 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping
 
 
-HELPER_VERSION = "1.3.3"
-HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v3"
+_TRANSACTION_PATH = Path(__file__).with_name("staging_next_db_transaction.py")
+_TRANSACTION_SPEC = importlib.util.spec_from_file_location(
+    "_wpcg_staging_next_db_transaction_v1", _TRANSACTION_PATH)
+_require_transaction_loader = (_TRANSACTION_SPEC is not None and _TRANSACTION_SPEC.loader is not None)
+if not _require_transaction_loader:
+    raise RuntimeError("database_transaction_module_unavailable")
+_TRANSACTION_MODULE = importlib.util.module_from_spec(_TRANSACTION_SPEC)
+import sys as _transaction_sys
+_transaction_sys.modules[_TRANSACTION_SPEC.name] = _TRANSACTION_MODULE
+_TRANSACTION_SPEC.loader.exec_module(_TRANSACTION_MODULE)
+DatabaseReleaseTransaction = _TRANSACTION_MODULE.DatabaseReleaseTransaction
+TransactionIdentity = _TRANSACTION_MODULE.TransactionIdentity
+TransactionRefused = _TRANSACTION_MODULE.TransactionRefused
+load_execution_policy = _TRANSACTION_MODULE.load_execution_policy
+database_fingerprint = _TRANSACTION_MODULE.database_fingerprint
+create_database_backup = _TRANSACTION_MODULE.create_database_backup
+restore_backup_to_isolated = _TRANSACTION_MODULE.restore_backup_to_isolated
+cleanup_isolated_databases = _TRANSACTION_MODULE.cleanup_isolated_databases
+verify_background_fences = _TRANSACTION_MODULE.verify_background_fences
+
+
+HELPER_VERSION = "1.4.1"
+HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v5"
+PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.1.json")
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
@@ -108,6 +132,9 @@ class StagingProfile:
     verify_test_database: bool = False
     test_only: bool = False
     protected_acceptance_urls: tuple[str, ...] = ()
+    phase_b_policy_file: Path | None = None
+    phase_b_policy_sha256: str | None = None
+    phase_b_test_only_paths: Mapping[str, object] | None = None
 
 
 PRODUCTION_PROFILE = StagingProfile(
@@ -144,6 +171,8 @@ PRODUCTION_PROFILE = StagingProfile(
         "https://staging-next.wpcaregrid.com/hu",
         "https://staging-next.wpcaregrid.com/en",
     ),
+    phase_b_policy_file=PHASE_B_POLICY_PATH,
+    phase_b_policy_sha256=None,
 )
 
 
@@ -199,6 +228,12 @@ def _safe_profile(profile: StagingProfile) -> None:
         _require(path.is_absolute() and ".." not in path.parts, "profile_path_invalid")
     _require(profile.helper_artifact_sha256 is None or _sha(profile.helper_artifact_sha256, SHA256_RE),
              "helper_artifact_identity_invalid")
+    if not profile.test_only:
+        _require(profile.phase_b_policy_file == Path(
+            "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.1.json"),
+            "phase_b_policy_path_invalid")
+        _require(profile.phase_b_policy_sha256 is None
+                 or _sha(profile.phase_b_policy_sha256, SHA256_RE), "phase_b_policy_pin_invalid")
     _require(type(profile.php_fpm_gid) is int and profile.php_fpm_gid >= 0,
              "php_fpm_group_policy_invalid")
     _require(type(profile.php_fpm_uid) is int and profile.php_fpm_uid >= 0,
@@ -337,18 +372,38 @@ def _extract_archive(archive_bytes: bytes, destination: Path, *, app_sha: str, b
             file_hashes[name] = hashlib.sha256(raw).hexdigest()
         _require(manifest is not None, "release_manifest_missing")
         expected_manifest_keys = {"schema", "profile", "application_sha", "base_application_sha",
-                                  "php_minimum", "database_scope", "files_sha256", "helper_version",
+                                  "php_minimum", "database_scope", "database_migrations",
+                                  "files_sha256", "helper_version",
                                   "helper_sha256", "helper_contract", "frontend_build"}
         _require(set(manifest) == expected_manifest_keys, "release_manifest_schema_invalid")
         _require(type(manifest["schema"]) is int and manifest["schema"] == 1
                  and manifest["profile"] == PROFILE and manifest["application_sha"] == app_sha
                  and manifest["base_application_sha"] == base_sha and manifest["php_minimum"] == "8.5"
-                 and manifest["database_scope"] == "unchanged"
+                 and manifest["database_scope"] in {"unchanged", "migrations"}
                  and manifest["helper_version"] == HELPER_VERSION
                  and manifest["helper_contract"] == HELPER_CONTRACT
                  and _sha(manifest["helper_sha256"], SHA256_RE)
                  and manifest["helper_sha256"] == helper_artifact_sha256,
                  "release_manifest_identity_mismatch")
+        database_migrations = manifest["database_migrations"]
+        _require(isinstance(database_migrations, list) and len(database_migrations) <= 1000
+                 and all(isinstance(item, dict) and set(item) == {"name", "sha256"}
+                         and isinstance(item.get("name"), str)
+                         and re.fullmatch(r"[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}_[a-z0-9_]+",
+                                          item["name"]) is not None
+                         and _sha(item.get("sha256"), SHA256_RE) for item in database_migrations)
+                 and len({item["name"] for item in database_migrations}) == len(database_migrations)
+                 and database_migrations == sorted(database_migrations, key=lambda item: item["name"])
+                 and ((manifest["database_scope"] == "unchanged" and not database_migrations)
+                      or (manifest["database_scope"] == "migrations" and bool(database_migrations))),
+                 "release_migration_manifest_invalid")
+        for migration in database_migrations:
+            rel = "database/migrations/" + migration["name"] + ".php"
+            raw_migration = _read_regular_nofollow(
+                destination / rel, max_bytes=MAX_UNPACKED_BYTES,
+                expected_uid=os.geteuid(), expected_mode=0o644)
+            _require(hashlib.sha256(raw_migration).hexdigest() == migration["sha256"],
+                     "release_migration_identity_mismatch")
         _require(_sha(manifest["files_sha256"], SHA256_RE)
                  and manifest["files_sha256"] == _canonical_files_hash(file_hashes),
                  "release_file_manifest_mismatch")
@@ -364,7 +419,7 @@ def _release_manifest(profile: StagingProfile, release_dir: Path, *, expected_ui
                                  expected_uid=expected_uid, expected_mode=0o644)
     manifest = _strict_json(raw)
     expected = {"schema", "profile", "application_sha", "base_application_sha", "php_minimum",
-                "database_scope", "files_sha256", "artifact_sha256", "helper_version",
+                "database_scope", "database_migrations", "files_sha256", "artifact_sha256", "helper_version",
                 "helper_sha256", "helper_contract", "frontend_build"}
     _require(set(manifest) == expected and type(manifest.get("schema")) is int and manifest["schema"] == 1
              and manifest.get("profile") == PROFILE and manifest.get("helper_version") == HELPER_VERSION
@@ -373,7 +428,9 @@ def _release_manifest(profile: StagingProfile, release_dir: Path, *, expected_ui
              and manifest.get("helper_sha256") == profile.helper_artifact_sha256
              and manifest.get("application_sha") == release_dir.name
              and _sha(manifest.get("base_application_sha"), APPLICATION_SHA_RE)
-             and manifest.get("php_minimum") == "8.5" and manifest.get("database_scope") == "unchanged"
+             and manifest.get("php_minimum") == "8.5"
+             and manifest.get("database_scope") in {"unchanged", "migrations"}
+             and isinstance(manifest.get("database_migrations"), list)
              and _sha(manifest.get("files_sha256"), SHA256_RE)
              and _sha(manifest.get("artifact_sha256"), SHA256_RE),
              "release_manifest_identity_invalid")
@@ -539,6 +596,42 @@ def _verify_shared_inputs(profile: StagingProfile) -> None:
     autoload_info = _lstat(profile.shared_vendor_dir / "autoload.php", "shared_vendor_incomplete")
     _require(stat.S_ISREG(autoload_info.st_mode) and autoload_info.st_uid == profile.expected_owner_uid
              and stat.S_IMODE(autoload_info.st_mode) == 0o644, "shared_vendor_incomplete")
+
+
+def _attach_candidate_shared_links(profile: StagingProfile, candidate: Path) -> tuple[tuple[Path, Path], ...]:
+    """Temporarily attach only pinned shared inputs while rehearsing the candidate."""
+    _verify_shared_inputs(profile)
+    links = ((candidate / ".env", profile.shared_env_file),
+             (candidate / "storage", profile.shared_storage_dir),
+             (candidate / "vendor", profile.shared_vendor_dir))
+    created: list[tuple[Path, Path]] = []
+    try:
+        for link, target in links:
+            if os.path.lexists(link):
+                raise DeployRefused("phase_b_candidate_shared_link_collision")
+            os.symlink(str(target), link)
+            created.append((link, target))
+    except BaseException:
+        for link, target in reversed(created):
+            try:
+                info = os.lstat(link)
+                if stat.S_ISLNK(info.st_mode) and os.readlink(link) == str(target):
+                    os.unlink(link)
+            except OSError:
+                pass
+        raise
+    return links
+
+
+def _remove_candidate_shared_links(links: tuple[tuple[Path, Path], ...]) -> None:
+    for link, target in reversed(links):
+        try:
+            info = os.lstat(link)
+            _require(stat.S_ISLNK(info.st_mode) and os.readlink(link) == str(target),
+                     "phase_b_candidate_shared_link_changed")
+            os.unlink(link)
+        except OSError:
+            raise DeployRefused("phase_b_candidate_shared_link_cleanup_failed") from None
 
 
 def _github_json(path: str, *, timeout: float = 6.0, max_bytes: int = 4_000_000):
@@ -889,6 +982,20 @@ def _reconcile_unreceipted_active_release(profile: StagingProfile, *, applicatio
                                           active_path: Path, active_manifest: Mapping[str, object],
                                           artifact_sha256: str) -> DeploymentResult:
     """Reconcile a pointer switch that occurred before a durable success receipt."""
+    if active_manifest.get("database_scope") == "migrations":
+        try:
+            _create_maintenance_gate(profile)
+        except DeployRefused as error:
+            if str(error) != "phase_b_maintenance_gate_preexisting":
+                return DeploymentResult("HOLD", "phase_b_recovery_gate_unverified", application_sha,
+                                        artifact_sha256=artifact_sha256)
+            try:
+                _verify_maintenance_gate_closed(profile)
+            except DeployRefused:
+                return DeploymentResult("HOLD", "phase_b_recovery_gate_unverified", application_sha,
+                                        artifact_sha256=artifact_sha256)
+        return DeploymentResult("HOLD", "phase_b_unreceipted_activation_requires_recovery",
+                                application_sha, artifact_sha256=artifact_sha256)
     base_sha = active_manifest.get("base_application_sha")
     _require(_sha(base_sha, APPLICATION_SHA_RE) and base_sha != application_sha,
              "interrupted_release_base_identity_invalid")
@@ -1056,13 +1163,15 @@ def _basic_auth_header(profile: StagingProfile) -> str | None:
 
 def _run_fixed(argv: list[str], *, cwd: Path | None = None, timeout: float = 15.0,
                maximum: int = 4096, extra_env: Mapping[str, str] | None = None,
-               home: Path | None = None) -> bytes:
+               home: Path | None = None, classify_failure: bool = False) -> bytes:
     environment = {"PATH": "/usr/bin:/bin", "HOME": "/root", "LANG": "C"}
     if home is not None:
         _require(home.is_absolute() and ".." not in home.parts, "runtime_probe_environment_invalid")
         environment["HOME"] = str(home)
     if extra_env is not None:
-        _require(all(key in {"WPCG_MYSQL_HOST", "WPCG_MYSQL_DATABASE", "WPCG_MYSQL_USER", "WPCG_MYSQL_PASSWORD"}
+        _require(all(key in {"WPCG_MYSQL_HOST", "WPCG_MYSQL_PORT", "WPCG_MYSQL_DATABASE",
+                             "WPCG_MYSQL_USER", "WPCG_MYSQL_PASSWORD", "WPCG_MIGRATION_PATH",
+                             "WPCG_RELEASE_PATH"}
                      and isinstance(value, str) and len(value) <= 1024
                      and "\x00" not in value for key, value in extra_env.items()), "runtime_probe_environment_invalid")
         environment.update(extra_env)
@@ -1075,12 +1184,87 @@ def _run_fixed(argv: list[str], *, cwd: Path | None = None, timeout: float = 15.
     except OSError:
         raise DeployRefused("runtime_probe_unavailable") from None
     _require(len(result.stdout) <= maximum and len(result.stderr) <= maximum, "runtime_probe_output_invalid")
-    _require(result.returncode == 0, f"runtime_probe_failed_{result.returncode}")
+    if result.returncode != 0:
+        reason = (_runtime_failure_code(result.stdout, result.stderr, result.returncode)
+                  if classify_failure else f"runtime_probe_failed_{result.returncode}")
+        raise DeployRefused(reason)
     return result.stdout
 
 
+def _runtime_failure_code(stdout: bytes, stderr: bytes, returncode: int) -> str:
+    """Reduce transient PHP command output to fixed failure classes and DB codes."""
+    raw = stderr[:16_384] + b"\n" + stdout[:16_384]
+    diagnostic = raw.lower()
+    sqlstate = re.search(rb"sqlstate\s*\[([a-z0-9]{3,8})\]", diagnostic)
+    mysql_errno = re.search(rb"(?:error\s+code\s*: ?\s*|errno\s*[=:]?\s*|error\s*:\s*)([0-9]{1,5})\b",
+                            diagnostic)
+    if mysql_errno is not None:
+        number = mysql_errno.group(1).decode("ascii")
+        state = sqlstate.group(1).decode("ascii") if sqlstate is not None else "unknown"
+        return f"runtime_probe_mysql_errno_{number}_sqlstate_{state}"
+    if b"permission denied" in diagnostic or b"failed to open stream" in diagnostic:
+        if b"database/migrations" in diagnostic:
+            return "runtime_probe_migration_file_permission_denied"
+        if b"bootstrap/cache" in diagnostic:
+            return "runtime_probe_bootstrap_cache_permission_denied"
+        if b"storage/framework/cache" in diagnostic or b"storage/framework/sessions" in diagnostic:
+            return "runtime_probe_storage_cache_permission_denied"
+        if b".env" in diagnostic:
+            return "runtime_probe_env_file_permission_denied"
+        if b"vendor/autoload.php" in diagnostic:
+            return "runtime_probe_vendor_permission_denied"
+        return "runtime_probe_permission_denied"
+    if b"could not find driver" in diagnostic:
+        return "runtime_probe_database_driver_missing"
+    if b"allowed memory size" in diagnostic:
+        return "runtime_probe_php_fatal_memory_limit"
+    if b"maximum execution time" in diagnostic:
+        return "runtime_probe_php_fatal_execution_timeout"
+    if b"fatal error" in diagnostic or b"uncaught" in diagnostic:
+        kind = next((code for marker, code in (
+            (b"undefined function", "undefined_function"),
+            (b"class ", "class_error"),
+            (b"undefined method", "undefined_method"),
+            (b"undefined array key", "undefined_array_key"),
+            (b"trying to access array offset", "array_offset_access"),
+            (b"array offset on value", "array_offset_access"),
+            (b"typeerror", "type_error"),
+            (b"parse error", "parse_error"),
+            (b"failed opening required", "required_file_missing"),
+            (b"no such file or directory", "file_missing"),
+            (b"cache", "cache_error"),
+            (b"permission denied", "permission_denied"),
+        ) if marker in diagnostic), "unknown")
+        exception_match = re.search(rb"uncaught\s+([A-Za-z_\\][A-Za-z0-9_\\]*)", raw, re.I)
+        exception_name = "unknown"
+        if exception_match:
+            short_name = exception_match.group(1).rsplit(b"\\", 1)[-1].lower()
+            if re.fullmatch(rb"[a-z][a-z0-9_]{0,63}", short_name):
+                exception_name = short_name.decode("ascii")
+        file_match = re.search(rb"(?:\s+in\s+|\s+at\s+)([^\s:]{1,512}\.php):[0-9]+", raw, re.I)
+        file_name = "unknown"
+        if file_match:
+            basename = re.split(rb"[/\\]", file_match.group(1))[-1][:-4].lower()
+            if re.fullmatch(rb"[a-z][a-z0-9_.-]{0,95}", basename):
+                file_name = re.sub(r"[^a-z0-9]+", "_", basename.decode("ascii")).strip("_") or "unknown"
+        safe_words = {b"trying", b"access", b"array", b"offset", b"value", b"type", b"null",
+                       b"undefined", b"key", b"variable", b"function", b"method", b"class",
+                       b"file", b"open", b"stream", b"permission", b"denied", b"cache",
+                       b"directory", b"missing", b"failed", b"exists", b"headers", b"sent",
+                       b"already", b"string", b"conversion", b"foreach", b"argument", b"must",
+                       b"deprecated", b"memory", b"limit", b"timeout", b"resource", b"invalid"}
+        tokens = sorted(set(re.findall(rb"[a-z]+", diagnostic)) & safe_words)[:8]
+        token_code = "_".join(token.decode("ascii") for token in tokens) or "none"
+        return f"runtime_probe_php_fatal_{kind}_{exception_name}_in_{file_name}_tokens_{token_code}"
+    if b"exception" in diagnostic:
+        return "runtime_probe_php_exception"
+    return f"runtime_probe_failed_{returncode}"
+
+
 def _run_as_php_fpm(profile: StagingProfile, argv: list[str], *, cwd: Path,
-                    timeout: float, maximum: int = 4096) -> bytes:
+                    timeout: float, maximum: int = 4096,
+                    extra_env: Mapping[str, str] | None = None,
+                    classify_failure: bool = False) -> bytes:
     """Run application-controlled PHP only as the fixed, unprivileged FPM identity."""
     _require(type(profile.php_fpm_uid) is int and profile.php_fpm_uid >= 0
              and type(profile.php_fpm_gid) is int and profile.php_fpm_gid >= 0,
@@ -1095,9 +1279,489 @@ def _run_as_php_fpm(profile: StagingProfile, argv: list[str], *, cwd: Path,
         _require(bool(fpm_user) and bool(fpm_group), "php_fpm_identity_unavailable")
         prefix = ["/usr/sbin/runuser", "--user", fpm_user,
                   "--group", fpm_group, "--"]
-        return _run_fixed([*prefix, *argv], cwd=cwd, timeout=timeout, maximum=maximum, home=home)
+        return _run_fixed([*prefix, *argv], cwd=cwd, timeout=timeout, maximum=maximum,
+                          extra_env=extra_env, home=home, classify_failure=classify_failure)
     _require(os.geteuid() == profile.php_fpm_uid, "runtime_probe_identity_mismatch")
-    return _run_fixed(argv, cwd=cwd, timeout=timeout, maximum=maximum, home=home)
+    return _run_fixed(argv, cwd=cwd, timeout=timeout, maximum=maximum,
+                      extra_env=extra_env, home=home, classify_failure=classify_failure)
+
+
+def _execute_exact_migration(profile: StagingProfile, release_path: Path, *,
+                             migration: Mapping[str, str], database: str,
+                             isolated: bool, operation: str, policy) -> str:
+    """Run one hash-pinned Laravel migration against one fixed-profile database."""
+    name = migration.get("name")
+    digest = migration.get("sha256")
+    _require(isinstance(name, str) and _TRANSACTION_MODULE.MIGRATION_RE.fullmatch(name) is not None
+             and _sha(digest, SHA256_RE), "release_migration_identity_invalid")
+    _require(operation in {"rehearsal", "target"}, "phase_b_migration_operation_invalid")
+    _require(re.fullmatch(r"wpcg_staging_next(?:_(?:restore|rehearsal)_[0-9a-f]{32})?", database)
+             is not None, "phase_b_database_name_invalid")
+    migration_path = release_path / "database" / "migrations" / f"{name}.php"
+    raw = _read_regular_nofollow(migration_path, max_bytes=4_000_000,
+                                 expected_uid=profile.expected_owner_uid, expected_mode=0o644)
+    _require(hashlib.sha256(raw).hexdigest() == digest, "release_migration_identity_mismatch")
+    database_policy = policy.credentials["isolated"] if isolated else policy.credentials["target"]
+    host = policy.restore_host if isolated else policy.target_host
+    port = policy.restore_port if isolated else policy.target_port
+    script = r'''$wpcgOutputLevel=ob_get_level(); ob_start();
+try {
+$releasePath=getenv("WPCG_RELEASE_PATH");
+if (!is_string($releasePath) || $releasePath === "") { throw new \RuntimeException("release_path_unavailable"); }
+require $releasePath."/vendor/autoload.php";
+$app=require $releasePath."/bootstrap/app.php";
+$kernel=$app->make(Illuminate\Contracts\Console\Kernel::class);
+$kernel->bootstrap();
+$config=$app["config"];
+$config->set("database.default","mysql");
+foreach (["host"=>"WPCG_MYSQL_HOST","port"=>"WPCG_MYSQL_PORT",
+          "database"=>"WPCG_MYSQL_DATABASE","username"=>"WPCG_MYSQL_USER",
+          "password"=>"WPCG_MYSQL_PASSWORD"] as $key=>$env) {
+  $config->set("database.connections.mysql.".$key,getenv($env));
+}
+$app["db"]->purge("mysql");
+$status=Illuminate\Support\Facades\Artisan::call("migrate",[
+  "--path"=>getenv("WPCG_MIGRATION_PATH"),"--realpath"=>true,"--force"=>true,
+  "--isolated"=>true,"--no-interaction"=>true,"--no-ansi"=>true,
+],new \Symfony\Component\Console\Output\NullOutput());
+  $response=["exit_code"=>$status];
+} catch (\Throwable $error) {
+  $sqlstate=null; $mysqlCode=null;
+  if ($error instanceof \Illuminate\Database\QueryException && is_array($error->errorInfo)) {
+    $sqlstate=is_string($error->errorInfo[0] ?? null) ? $error->errorInfo[0] : null;
+    $mysqlCode=is_numeric($error->errorInfo[1] ?? null) ? (string)$error->errorInfo[1] : null;
+  }
+  $class=get_class($error); $message=strtolower($error->getMessage());
+  $failureClass=match ($class) {
+    "Illuminate\\Database\\QueryException" => "query_exception",
+    "ErrorException" => "php_error_exception",
+    "ParseError" => "php_parse_error",
+    "Error" => "php_engine_error",
+    default => "php_exception",
+  };
+  $phpCode=match (true) {
+    str_contains($message,"failed to open stream") || str_contains($message,"failed opening required") => "file_open_failed",
+    str_contains($message,"permission denied") => "permission_denied",
+    str_contains($message,"could not find driver") => "database_driver_missing",
+    str_contains($message,"undefined function") => "function_missing",
+    str_contains($message,"undefined method") => "method_missing",
+    (str_contains($message,"class ") && str_contains($message," not found")) => "class_missing",
+    str_contains($message,"undefined constant") => "constant_missing",
+    str_contains($message,"undefined variable") => "variable_missing",
+    str_contains($message,"undefined array key") => "undefined_array_key",
+    str_contains($message,"call to a member function") => "invalid_object_state",
+    str_contains($message,"syntax error") => "syntax_error",
+    str_contains($message,"sqlstate") => "database_exception",
+    str_contains($message,"cache") && str_contains($message,"lock") => "cache_lock_failed",
+    str_contains($message,"connection") && str_contains($message,"refused") => "database_connection_refused",
+    str_contains($message,"no application encryption key") => "application_key_missing",
+    str_contains($message,"not configured") => "configuration_missing",
+    str_contains($message,"does not exist") => "resource_missing",
+    str_contains($message,"could not be found") => "dependency_missing",
+    str_contains($message,"could not be resolved") => "dependency_resolution_failed",
+    str_contains($message,"connection") || str_contains($message,"database") => "database_related",
+    str_contains($message,"container") || str_contains($message,"binding") => "container_related",
+    str_contains($message,"cache") => "cache_related",
+    str_contains($message,"filesystem") || str_contains($message,"file ") => "filesystem_related",
+    default => "unclassified",
+  };
+  $shortClass=substr($class,strrpos("\\".$class,"\\")+1);
+  $classCode=match ($shortClass) {
+    "QueryException" => "query_exception",
+    "BindingResolutionException" => "container_resolution_exception",
+    "LockTimeoutException" => "cache_lock_timeout",
+    "PDOException" => "pdo_exception",
+    "InvalidArgumentException" => "invalid_argument_exception",
+    "RuntimeException" => "runtime_exception",
+    "LogicException" => "logic_exception",
+    "UnexpectedValueException" => "unexpected_value_exception",
+    "Exception" => "generic_exception",
+    "TypeError" => "type_error",
+    "FileNotFoundException" => "file_not_found_exception",
+    "ErrorException" => "php_error_exception",
+    "BadMethodCallException" => "bad_method_call_exception",
+    "ReflectionException" => "reflection_exception",
+    "OutOfBoundsException" => "out_of_bounds_exception",
+    "DomainException" => "domain_exception",
+    default => "framework_exception",
+  };
+  if ($error instanceof \PDOException) { $failureClass="pdo_exception"; }
+  elseif ($error instanceof \InvalidArgumentException) { $failureClass="invalid_argument_exception"; }
+  elseif ($error instanceof \RuntimeException) { $failureClass="runtime_exception"; }
+  elseif ($error instanceof \LogicException) { $failureClass="logic_exception"; }
+  $errorFile=$error->getFile();
+  $errorFileBase=basename($errorFile);
+  $phpFileComponent=match ($errorFileBase) {
+    "FileStore.php" => "cache_file_store",
+    "FileLock.php" => "cache_file_lock",
+    "CacheLock.php" => "cache_lock",
+    "LockTimeoutException.php" => "cache_lock_timeout",
+    "CacheManager.php" => "cache_manager",
+    "DatabaseStore.php" => "cache_database_store",
+    "ArrayStore.php" => "cache_array_store",
+    "Repository.php" => "cache_repository",
+    "Migrator.php" => "database_migrator",
+    "Command.php" => "console_command",
+    "HandleExceptions.php" => "foundation_handle_exceptions",
+    "Handler.php" => "foundation_exception_handler",
+    "Kernel.php" => "foundation_console_kernel",
+    "Application.php" => "foundation_application",
+    "LoadConfiguration.php" => "foundation_load_configuration",
+    "RegisterProviders.php" => "foundation_register_providers",
+    "BootProviders.php" => "foundation_boot_providers",
+    default => "other",
+  };
+  $phpFileClass=str_contains($errorFile,"/database/migrations/") ? "migration" :
+    (str_contains($errorFile,"/Illuminate/Database/") ? "database_vendor" :
+    (str_contains($errorFile,"/Illuminate/Console/") ? "console_vendor" :
+    (str_contains($errorFile,"/Illuminate/Cache/") ? "cache_vendor" :
+    (str_contains($errorFile,"/Illuminate/Foundation/") ? "foundation_vendor" :
+    (str_contains($errorFile,"/Symfony/") ? "symfony_vendor" :
+    (str_contains($errorFile,"/vendor/") ? "vendor" :
+    (str_contains($errorFile,"/bootstrap/") ? "bootstrap" : "application")))))));
+  $exceptionType=preg_match('/^[A-Za-z][A-Za-z0-9]{0,63}$/',$shortClass) === 1 ? strtolower(preg_replace('/(?<!^)[A-Z]/','_$0',$shortClass)) : "unknown";
+  $errorFileName=preg_match('/^[A-Za-z][A-Za-z0-9_.-]{0,95}$/',$errorFileBase) === 1 ? strtolower(str_replace('.php','',$errorFileBase)) : "unknown";
+  $response=["exit_code"=>255,"failure_class"=>$failureClass,"exception_class"=>$classCode,
+    "exception_type"=>$exceptionType,"php_file_name"=>$errorFileName,"php_code"=>$phpCode,
+    "php_file_class"=>$phpFileClass,"php_file_component"=>$phpFileComponent,"php_line"=>is_int($error->getLine()) ? $error->getLine() : null,
+    "php_severity"=>$error instanceof \ErrorException ? $error->getSeverity() : null,
+    "sqlstate"=>$sqlstate,"mysql_code"=>$mysqlCode];
+} finally {
+  while (ob_get_level() > $wpcgOutputLevel) { ob_end_clean(); }
+}
+echo json_encode($response,JSON_UNESCAPED_SLASHES);'''
+    env = {
+        "WPCG_MYSQL_HOST": host,
+        "WPCG_MYSQL_PORT": str(port),
+        "WPCG_MYSQL_DATABASE": database,
+        "WPCG_MYSQL_USER": database_policy["username"],
+        "WPCG_MYSQL_PASSWORD": database_policy["password"],
+        "WPCG_MIGRATION_PATH": str(migration_path),
+        "WPCG_RELEASE_PATH": str(release_path),
+    }
+    try:
+        output = _run_as_php_fpm(profile, ["/usr/local/bin/php", "-r", script],
+                                 cwd=release_path, timeout=900, maximum=16_384,
+                                 extra_env=env, classify_failure=True)
+        response = _strict_json(output.strip())
+    except DeployRefused as error:
+        failure = str(error)
+        safe_failure = failure if re.fullmatch(r"[a-z0-9_]{1,96}", failure) else "command_failed"
+        raise DeployRefused(f"phase_b_migration_{operation}_{name}_{safe_failure}") from None
+    except ValueError:
+        raise DeployRefused(f"phase_b_migration_{operation}_{name}_response_invalid") from None
+    if response.get("exit_code") != 0:
+        sqlstate = response.get("sqlstate")
+        mysql_code = response.get("mysql_code")
+        if (isinstance(sqlstate, str) and re.fullmatch(r"[A-Z0-9]{3,8}", sqlstate)
+                and isinstance(mysql_code, str) and re.fullmatch(r"[0-9]{1,5}", mysql_code)):
+            failure = f"mysql_errno_{mysql_code}_sqlstate_{sqlstate.lower()}"
+        else:
+            failure_class = response.get("failure_class")
+            failure = failure_class if failure_class in {
+                "query_exception", "php_error_exception", "php_parse_error", "php_engine_error",
+                "pdo_exception", "invalid_argument_exception", "runtime_exception", "logic_exception",
+                "php_exception"} else "migration_failed"
+            exception_class = response.get("exception_class")
+            if exception_class in {"query_exception", "container_resolution_exception", "cache_lock_timeout",
+                                  "pdo_exception", "invalid_argument_exception", "runtime_exception",
+                                  "logic_exception", "unexpected_value_exception", "generic_exception",
+                                  "type_error", "file_not_found_exception", "php_error_exception",
+                                  "bad_method_call_exception", "reflection_exception",
+                                  "out_of_bounds_exception", "domain_exception", "framework_exception"}:
+                failure = f"{failure}_{exception_class}"
+            php_code = response.get("php_code")
+            if php_code in {"file_open_failed", "permission_denied", "database_driver_missing",
+                            "function_missing", "method_missing", "class_missing", "constant_missing",
+                            "variable_missing", "undefined_array_key", "invalid_object_state",
+                            "syntax_error", "database_exception", "cache_lock_failed",
+                            "database_connection_refused", "application_key_missing",
+                            "configuration_missing", "resource_missing", "dependency_missing",
+                            "dependency_resolution_failed", "database_related", "container_related",
+                            "cache_related", "filesystem_related", "unclassified"}:
+                failure = f"{failure}_{php_code}"
+            severity = response.get("php_severity")
+            if failure_class == "php_error_exception" and type(severity) is int and 1 <= severity <= 8:
+                failure = f"{failure}_severity_{severity}"
+            php_file_class = response.get("php_file_class")
+            if php_file_class in {"migration", "database_vendor", "console_vendor", "cache_vendor",
+                                  "foundation_vendor", "symfony_vendor", "vendor", "bootstrap", "application"}:
+                failure = f"{failure}_at_{php_file_class}"
+            php_file_component = response.get("php_file_component")
+            if php_file_component in {"cache_file_store", "cache_file_lock", "cache_lock",
+                                      "cache_lock_timeout", "cache_manager", "cache_database_store",
+                                      "cache_array_store", "cache_repository", "database_migrator",
+                                      "console_command", "foundation_handle_exceptions",
+                                      "foundation_exception_handler", "foundation_console_kernel",
+                                      "foundation_application", "foundation_load_configuration",
+                                      "foundation_register_providers", "foundation_boot_providers", "other"}:
+                failure = f"{failure}_in_{php_file_component}"
+            exception_type = response.get("exception_type")
+            if isinstance(exception_type, str) and re.fullmatch(r"[a-z0-9_]{1,64}", exception_type):
+                failure = f"{failure}_type_{exception_type}"
+            php_file_name = response.get("php_file_name")
+            if isinstance(php_file_name, str) and re.fullmatch(r"[a-z0-9_.-]{1,96}", php_file_name):
+                failure = f"{failure}_file_{php_file_name}"
+            php_line = response.get("php_line")
+            if type(php_line) is int and 1 <= php_line <= 1_000_000:
+                failure = f"{failure}_line_{php_line}"
+        raise DeployRefused(f"phase_b_migration_{operation}_{name}_{failure}")
+    receipt_material = json.dumps({
+        "migration": name, "migration_sha256": digest, "database": database,
+        "isolated": isolated, "exit_code": 0,
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(receipt_material).hexdigest()
+
+
+def _load_phase_b_policy(profile: StagingProfile):
+    _require(profile.phase_b_policy_file is not None and profile.phase_b_policy_sha256 is not None,
+             "phase_b_policy_unavailable")
+    test_paths = profile.phase_b_test_only_paths if profile.test_only else None
+    try:
+        return load_execution_policy(
+            profile.phase_b_policy_file, profile.phase_b_policy_sha256,
+            expected_target_uuid_sha256=profile.mysql_server_uuid_sha256 or "",
+            maintenance_file=profile.shared_storage_dir / "framework" / "down",
+            test_only_paths=test_paths,
+        )
+    except TransactionRefused as error:
+        raise DeployRefused(str(error)) from None
+
+
+def _verify_phase_b_fences(profile: StagingProfile, policy) -> str:
+    runner = None
+    if profile.test_only and profile.phase_b_test_only_paths is not None:
+        candidate = profile.phase_b_test_only_paths.get("command_runner")
+        if candidate is not None:
+            _require(callable(candidate), "phase_b_test_probe_invalid")
+            runner = candidate
+    try:
+        return verify_background_fences(policy, **({"runner": runner} if runner else {}))
+    except TransactionRefused as error:
+        raise DeployRefused(str(error)) from None
+
+
+def _create_maintenance_gate(profile: StagingProfile) -> tuple[Path, int, str]:
+    path = profile.shared_storage_dir / "framework" / "down"
+    parent = path.parent
+    info = _lstat(parent, "phase_b_maintenance_directory_unavailable")
+    _require(stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode),
+             "phase_b_maintenance_directory_invalid")
+    payload = json.dumps({
+        "except": [], "redirect": None, "retry": None, "refresh": None,
+        "status": 503, "template": None, "secret": None,
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o640)
+    except FileExistsError:
+        raise DeployRefused("phase_b_maintenance_gate_preexisting") from None
+    except OSError:
+        raise DeployRefused("phase_b_maintenance_gate_create_failed") from None
+    try:
+        os.fchown(fd, profile.expected_owner_uid, profile.php_fpm_gid)
+        os.fchmod(fd, 0o640)
+        with os.fdopen(fd, "wb", closefd=False) as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(fd)
+        file_info = os.fstat(fd)
+        _require(stat.S_ISREG(file_info.st_mode) and file_info.st_uid == profile.expected_owner_uid
+                 and file_info.st_gid == profile.php_fpm_gid
+                 and stat.S_IMODE(file_info.st_mode) == 0o640,
+                 "phase_b_maintenance_gate_metadata_invalid")
+    except BaseException:
+        os.close(fd)
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise
+    os.close(fd)
+    parent_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+    return path, file_info.st_ino, hashlib.sha256(payload).hexdigest()
+
+
+def _ensure_maintenance_gate_closed(profile: StagingProfile) -> tuple[Path, int, str]:
+    """Return an identity token for a verified closed gate, creating it if absent."""
+    try:
+        return _create_maintenance_gate(profile)
+    except DeployRefused as error:
+        if str(error) != "phase_b_maintenance_gate_preexisting":
+            raise
+    _verify_maintenance_gate_closed(profile)
+    path = profile.shared_storage_dir / "framework" / "down"
+    info = _lstat(path, "phase_b_maintenance_gate_missing")
+    raw = _read_regular_nofollow(path, max_bytes=4096, expected_uid=profile.expected_owner_uid,
+                                 expected_mode=0o640)
+    return path, info.st_ino, hashlib.sha256(raw).hexdigest()
+
+
+def _remove_maintenance_gate(profile: StagingProfile, token: tuple[Path, int, str]) -> None:
+    path, inode, digest = token
+    _require(path == profile.shared_storage_dir / "framework" / "down",
+             "phase_b_maintenance_gate_identity_invalid")
+    info = _lstat(path, "phase_b_maintenance_gate_missing")
+    _require(stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode)
+             and info.st_uid == profile.expected_owner_uid and info.st_gid == profile.php_fpm_gid
+             and stat.S_IMODE(info.st_mode) == 0o640 and info.st_ino == inode,
+             "phase_b_maintenance_gate_metadata_invalid")
+    raw = _read_regular_nofollow(path, max_bytes=4096, expected_uid=profile.expected_owner_uid,
+                                 expected_mode=0o640)
+    _require(hashlib.sha256(raw).hexdigest() == digest, "phase_b_maintenance_gate_content_mismatch")
+    path.unlink()
+    parent_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _verify_maintenance_gate_closed(profile: StagingProfile) -> None:
+    path = profile.shared_storage_dir / "framework" / "down"
+    info = _lstat(path, "phase_b_maintenance_gate_missing")
+    _require(stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode)
+             and info.st_uid == profile.expected_owner_uid and info.st_gid == profile.php_fpm_gid
+             and stat.S_IMODE(info.st_mode) == 0o640,
+             "phase_b_maintenance_gate_metadata_invalid")
+    raw = _read_regular_nofollow(path, max_bytes=4096, expected_uid=profile.expected_owner_uid,
+                                 expected_mode=0o640)
+    try:
+        value = _strict_json(raw)
+    except ValueError:
+        raise DeployRefused("phase_b_maintenance_gate_invalid") from None
+    expected = json.dumps({
+        "except": [], "redirect": None, "retry": None, "refresh": None,
+        "status": 503, "template": None, "secret": None,
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    _require(raw == expected and value.get("status") == 503 and value.get("except") == [],
+             "phase_b_maintenance_gate_invalid")
+
+
+def _prepare_phase_b_database(profile: StagingProfile, release_path: Path, *,
+                              previous_sha: str, application_sha: str,
+                              artifact_sha256: str, migrations: list[dict[str, str]]):
+    """Back up, restore and rehearse the exact migration list before target mutation."""
+    _require(bool(migrations) and migrations == sorted(migrations, key=lambda item: item["name"]),
+             "release_migration_manifest_invalid")
+    policy = _load_phase_b_policy(profile)
+    _verify_phase_b_fences(profile, policy)
+    transaction = None
+    try:
+        backup_path, backup_sha = create_database_backup(policy, application_sha=application_sha)
+        target_before = database_fingerprint(policy, database=DATABASE, isolated=False)
+        _require(target_before["mysql_uuid_sha256"] == profile.mysql_server_uuid_sha256,
+                 "phase_b_target_identity_mismatch")
+        identity = TransactionIdentity(
+            application_sha=application_sha, previous_sha=previous_sha,
+            artifact_sha256=artifact_sha256, backup_sha256=backup_sha,
+            mysql_uuid_sha256=target_before["mysql_uuid_sha256"],
+            migrations=tuple(item["name"] for item in migrations),
+        )
+        transaction = DatabaseReleaseTransaction(profile.state_dir, identity)
+        transaction.__enter__()
+        restore_name, rehearsal_name = restore_backup_to_isolated(
+            policy, backup_path, transaction.transaction_id)
+        restored = database_fingerprint(policy, database=restore_name, isolated=True)
+        rehearsal_base = database_fingerprint(policy, database=rehearsal_name, isolated=True)
+        if target_before["schema_sha256"] != restored["schema_sha256"]:
+            components = target_before.get("schema_components", {})
+            restored_components = restored.get("schema_components", {})
+            differing = [name for name in ("tables", "columns", "indexes", "foreign_keys", "triggers")
+                         if components.get(name) != restored_components.get(name)]
+            suffix = "_".join(differing) if differing else "unknown_component"
+            raise DeployRefused(f"phase_b_restore_target_schema_mismatch_{suffix}")
+        _require(target_before["ledger_sha256"] == restored["ledger_sha256"],
+                 "phase_b_restore_target_ledger_mismatch")
+        _require(restored["schema_sha256"] == rehearsal_base["schema_sha256"],
+                 "phase_b_restore_rehearsal_schema_mismatch")
+        _require(restored["ledger_sha256"] == rehearsal_base["ledger_sha256"],
+                 "phase_b_restore_rehearsal_ledger_mismatch")
+        transaction.advance("BACKUP_VERIFIED", {"backup_sha256": backup_sha})
+        restore_receipt = hashlib.sha256(json.dumps({
+            "backup_sha256": backup_sha,
+            "target_schema_sha256": target_before["schema_sha256"],
+            "target_ledger_sha256": target_before["ledger_sha256"],
+            "restored_schema_sha256": restored["schema_sha256"],
+            "restored_ledger_sha256": restored["ledger_sha256"],
+            "restore_mysql_uuid_sha256": restored["mysql_uuid_sha256"],
+        }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        transaction.advance("RESTORE_REHEARSAL_VERIFIED", {"restore_receipt_sha256": restore_receipt})
+        expected_after: dict[str, dict[str, str]] = {}
+        rehearsal_parts = []
+        current = rehearsal_base
+        for migration in migrations:
+            name = migration["name"]
+            _require(name not in current["migrations"], "phase_b_migration_already_applied_in_baseline")
+            command_receipt = _execute_exact_migration(
+                profile, release_path, migration=migration, database=rehearsal_name,
+                isolated=True, operation="rehearsal", policy=policy,
+            )
+            after = database_fingerprint(policy, database=rehearsal_name, isolated=True)
+            _require(name in after["migrations"]
+                     and len(after["migrations"]) == len(current["migrations"]) + 1,
+                     "phase_b_migration_rehearsal_postcondition_failed")
+            expected_after[name] = {
+                "schema_sha256": after["schema_sha256"],
+                "ledger_sha256": after["ledger_sha256"],
+            }
+            rehearsal_parts.append({"migration": name, "migration_sha256": migration["sha256"],
+                                    "command_receipt_sha256": command_receipt,
+                                    "schema_sha256": after["schema_sha256"],
+                                    "ledger_sha256": after["ledger_sha256"]})
+            current = after
+        rehearsal_receipt = hashlib.sha256(json.dumps({
+            "transaction_id": transaction.transaction_id,
+            "backup_sha256": backup_sha, "migrations": rehearsal_parts,
+        }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        transaction.advance("MIGRATION_REHEARSAL_VERIFIED", {
+            "migration_rehearsal_receipt_sha256": rehearsal_receipt,
+        })
+        return {
+            "transaction": transaction, "policy": policy, "backup_path": backup_path,
+            "backup_sha256": backup_sha, "restore_name": restore_name,
+            "rehearsal_name": rehearsal_name, "expected_after": expected_after,
+            "restore_receipt_sha256": restore_receipt,
+            "migration_rehearsal_receipt_sha256": rehearsal_receipt,
+            "target_before": target_before,
+        }
+    except DeployRefused:
+        if transaction is not None:
+            transaction.__exit__(None, None, None)
+        raise
+    except TransactionRefused as error:
+        if transaction is not None:
+            transaction.__exit__(None, None, None)
+        raise DeployRefused(str(error)) from None
+    except Exception:
+        if transaction is not None:
+            transaction.__exit__(None, None, None)
+        raise DeployRefused("phase_b_preparation_failed") from None
+
+
+def _stop_after_database_mutation(profile: StagingProfile, *, phase_b,
+                                  application_sha: str, previous_sha: str | None,
+                                  artifact_sha256: str, reason_code: str) -> DeploymentResult:
+    """Keep the release fenced after any uncertain target-database mutation."""
+    try:
+        _ensure_maintenance_gate_closed(profile)
+    except Exception:
+        return DeploymentResult("FAIL", "phase_b_fence_reassertion_failed", application_sha,
+                                previous_sha, artifact_sha256)
+    try:
+        if phase_b is not None:
+            transaction = phase_b["transaction"]
+            state = transaction.state["state"]
+            if state not in {"COMPLETE", "RECOVERY_REQUIRED"}:
+                transaction.mark_recovery_required(reason_code)
+    except Exception:
+        return DeploymentResult("FAIL", "phase_b_journal_recovery_mark_failed", application_sha,
+                                previous_sha, artifact_sha256)
+    return DeploymentResult("HOLD", "phase_b_recovery_required", application_sha,
+                            previous_sha, artifact_sha256)
 
 
 def _verify_generated_bootstrap_caches(profile: StagingProfile, release_path: Path) -> None:
@@ -1116,6 +1780,44 @@ def _verify_generated_bootstrap_caches(profile: StagingProfile, release_path: Pa
     _require(stat.S_ISREG(config_info.st_mode) and config_info.st_uid == profile.expected_owner_uid
              and config_info.st_gid == profile.php_fpm_gid and stat.S_IMODE(config_info.st_mode) == 0o640,
              "bootstrap_config_cache_metadata_invalid")
+
+
+def _prepare_package_discovery_cache(profile: StagingProfile, release_path: Path) -> None:
+    """Build Laravel package manifests before rehearsal, then restore immutable cache metadata."""
+    if not profile.build_application_bootstrap:
+        return
+    php = "/usr/local/bin/php" if profile.test_only else "/usr/bin/php8.5"
+    cache = release_path / "bootstrap/cache"
+    cache_info = _lstat(cache, "bootstrap_cache_unavailable")
+    _require(stat.S_ISDIR(cache_info.st_mode) and cache_info.st_uid == profile.expected_owner_uid
+             and stat.S_IMODE(cache_info.st_mode) == 0o755, "bootstrap_cache_metadata_invalid")
+    try:
+        os.chown(cache, profile.php_fpm_uid, profile.php_fpm_gid)
+        os.chmod(cache, 0o2750)
+        _run_as_php_fpm(profile, [php, "artisan", "package:discover", "--ansi", "--no-interaction"],
+                        cwd=release_path, timeout=60, maximum=8192)
+        for name in ("packages.php", "services.php"):
+            generated = cache / name
+            info = _lstat(generated, "bootstrap_package_cache_missing")
+            _require(stat.S_ISREG(info.st_mode) and info.st_uid == profile.php_fpm_uid
+                     and info.st_size > 0, "bootstrap_package_cache_metadata_invalid")
+            os.chown(generated, profile.expected_owner_uid, 0)
+            os.chmod(generated, 0o644)
+    except DeployRefused:
+        raise
+    except OSError:
+        raise DeployRefused("bootstrap_package_cache_publish_failed") from None
+    finally:
+        try:
+            os.chown(cache, profile.expected_owner_uid, 0)
+            os.chmod(cache, 0o755)
+        except OSError:
+            raise DeployRefused("bootstrap_package_cache_publish_failed") from None
+    for name in ("packages.php", "services.php"):
+        info = _lstat(cache / name, "bootstrap_package_cache_missing")
+        _require(stat.S_ISREG(info.st_mode) and info.st_uid == profile.expected_owner_uid
+                 and info.st_gid == 0 and stat.S_IMODE(info.st_mode) == 0o644,
+                 "bootstrap_package_cache_metadata_invalid")
 
 
 def _prepare_application_bootstrap(profile: StagingProfile, release_path: Path) -> None:
@@ -1138,7 +1840,8 @@ def _prepare_application_bootstrap(profile: StagingProfile, release_path: Path) 
     for name in ("packages.php", "services.php"):
         generated = release_path / "bootstrap/cache" / name
         generated_info = _lstat(generated, "bootstrap_package_cache_missing")
-        _require(stat.S_ISREG(generated_info.st_mode) and generated_info.st_uid == profile.php_fpm_uid
+        _require(stat.S_ISREG(generated_info.st_mode)
+                 and generated_info.st_uid in {profile.php_fpm_uid, profile.expected_owner_uid}
                  and generated_info.st_size > 0, "bootstrap_package_cache_metadata_invalid")
         try:
             os.chown(generated, profile.expected_owner_uid, 0)
@@ -1347,6 +2050,9 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
 
     previous_sha = None
     activated = False
+    phase_b = None
+    maintenance_gate = None
+    database_mutation_started = False
     lock_fd = None
     observed_statuses: tuple[int, ...] = ()
     unauthenticated_statuses: tuple[int, ...] = ()
@@ -1428,6 +2134,9 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                 profile, final, application_sha=application_sha, base_sha=previous_sha,
                 artifact_sha256=artifact_sha256,
             )
+            if manifest.get("database_scope") == "migrations":
+                return DeploymentResult("HOLD", "phase_b_candidate_requires_recovery",
+                                        application_sha, previous_sha, artifact_sha256)
             _prepare_application_bootstrap(profile, final)
         else:
             staging_dir = Path(tempfile.mkdtemp(prefix=f".stage-{application_sha}-", dir=profile.releases_dir))
@@ -1439,9 +2148,33 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                 )
                 _verify_artifact_matches_primary(profile, application_sha, staging_dir, candidate_files, manifest)
                 _require(REQUIRED_RUNTIME_FILES.issubset(candidate_files), "release_runtime_incomplete")
+                # Once the archive and primary tree are verified, make the
+                # root-owned candidate traversable (never writable) by PHP-FPM
+                # so isolated Laravel migration rehearsal can bootstrap it.
+                os.chmod(staging_dir, 0o755)
                 if not _phase_a_paths_only(previous_files, candidate_files):
-                    return DeploymentResult("HOLD", "database_change_requires_phase_b", application_sha,
-                                            previous_sha, artifact_sha256)
+                    migrations = manifest.get("database_migrations")
+                    if not isinstance(migrations, list) or not migrations:
+                        return DeploymentResult("HOLD", "database_scope_not_rehearsed", application_sha,
+                                                previous_sha, artifact_sha256)
+                    if profile.phase_b_policy_file is None or profile.phase_b_policy_sha256 is None:
+                        return DeploymentResult("HOLD", "phase_b_policy_unavailable", application_sha,
+                                                previous_sha, artifact_sha256)
+                    candidate_links = ()
+                    try:
+                        candidate_links = _attach_candidate_shared_links(profile, staging_dir)
+                        _prepare_package_discovery_cache(profile, staging_dir)
+                        phase_b = _prepare_phase_b_database(
+                            profile, staging_dir, previous_sha=previous_sha,
+                            application_sha=application_sha, artifact_sha256=artifact_sha256,
+                            migrations=migrations,
+                        )
+                    except DeployRefused as error:
+                        return DeploymentResult("HOLD", str(error), application_sha,
+                                                previous_sha, artifact_sha256)
+                    finally:
+                        if candidate_links:
+                            _remove_candidate_shared_links(candidate_links)
                 _verify_shared_inputs(profile)
                 release_manifest = dict(manifest)
                 release_manifest["artifact_sha256"] = artifact_sha256
@@ -1493,6 +2226,43 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                 if staging_dir.exists():
                     shutil.rmtree(staging_dir, ignore_errors=True)
 
+        if phase_b is not None:
+            tx = phase_b["transaction"]
+            policy = phase_b["policy"]
+            maintenance_gate = _create_maintenance_gate(profile)
+            fences_sha256 = _verify_phase_b_fences(profile, policy)
+            gate_evidence = hashlib.sha256((fences_sha256 + maintenance_gate[2]).encode("ascii")).hexdigest()
+            tx.advance("FENCES_CLOSED", {"fence_receipt_sha256": gate_evidence})
+
+            def observe_target_database():
+                snapshot = database_fingerprint(policy, database=DATABASE, isolated=False)
+                return {key: snapshot[key] for key in ("schema_sha256", "ledger_sha256", "migrations")}
+
+            def apply_target_migration(name: str) -> bool:
+                nonlocal database_mutation_started
+                migration = next((item for item in manifest["database_migrations"]
+                                  if item["name"] == name), None)
+                _require(migration is not None, "phase_b_migration_not_in_manifest")
+                database_mutation_started = True
+                _execute_exact_migration(profile, final, migration=migration, database=DATABASE,
+                                         isolated=False, operation="target", policy=policy)
+                return True
+
+            try:
+                tx.apply_rehearsed_migrations(
+                    expected_after=phase_b["expected_after"], observe=observe_target_database,
+                    apply_one=apply_target_migration,
+                )
+            except TransactionRefused as error:
+                raise DeployRefused(str(error)) from None
+            database_mutation_started = True
+            final_database_state = observe_target_database()
+            _require(tx.state["state"] == "MIGRATIONS_VERIFIED"
+                     and all(name in final_database_state["migrations"]
+                             for name in tx.identity.migrations),
+                     "phase_b_target_migration_state_invalid")
+            cleanup_isolated_databases(policy, tx.transaction_id)
+
         # The atomic exchange may replace the pointer successfully and then
         # fail while fsyncing its parent directory. Treat the operation as
         # potentially activated before entering it so every such failure
@@ -1503,16 +2273,35 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
         _require(active == final, "active_release_readback_mismatch")
         _reload_php_fpm(profile)
         _verify_runtime(profile, final)
+        if phase_b is not None:
+            tx = phase_b["transaction"]
+            activation_sha = hashlib.sha256(json.dumps({
+                "active_sha": application_sha, "release_path": str(final),
+                "runtime": _verify_runtime(profile, final),
+            }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            tx.advance("RELEASE_ACTIVATED", {"activation_receipt_sha256": activation_sha})
+            _remove_maintenance_gate(profile, maintenance_gate)
+            maintenance_gate = None
         healthy, observed_statuses, unauthenticated_statuses = _bounded_acceptance(profile)
         if not healthy:
             raise DeployRefused("post_deploy_acceptance_failed")
+        if phase_b is not None:
+            fences_sha256 = _verify_phase_b_fences(profile, phase_b["policy"])
+            acceptance_sha = hashlib.sha256(json.dumps({
+                "statuses": observed_statuses,
+                "unauthenticated_statuses": unauthenticated_statuses,
+                "fences_sha256": fences_sha256,
+            }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            phase_b["transaction"].advance("ACCEPTANCE_VERIFIED", {
+                "acceptance_receipt_sha256": acceptance_sha,
+            })
 
         receipt = {
             "schema": 1, "profile": PROFILE, "result": "PASS", "reason": "release_accepted",
             "application_sha": application_sha, "previous_sha": previous_sha,
             "artifact_sha256": artifact_sha256, "files_sha256": manifest["files_sha256"],
             "helper_version": HELPER_VERSION, "helper_contract": HELPER_CONTRACT,
-            "database_changed": False, "acceptance": [
+            "database_changed": phase_b is not None, "acceptance": [
                 {"url_id": index, "expected_status": expected, "observed_status": observed}
                 for index, ((_, expected), observed) in enumerate(zip(profile.acceptance_urls, observed_statuses), 1)
             ], "unauthenticated_protected_acceptance": [
@@ -1521,10 +2310,32 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
             ], "active_sha_after_deploy": application_sha,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
+        if phase_b is not None:
+            receipt.update({
+                "database_backup_sha256": phase_b["backup_sha256"],
+                "database_transaction_id": phase_b["transaction"].transaction_id,
+                "restore_receipt_sha256": phase_b["restore_receipt_sha256"],
+                "migration_rehearsal_receipt_sha256": phase_b["migration_rehearsal_receipt_sha256"],
+                "migration_receipt_sha256": phase_b["transaction"].state["evidence"]["MIGRATIONS_VERIFIED"][
+                    "migration_receipt_sha256"],
+            })
+            raw_receipt = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+            phase_b["transaction"].advance("COMPLETE", {
+                "release_receipt_sha256": hashlib.sha256(raw_receipt).hexdigest(),
+            })
         path, digest = _write_receipt(profile, receipt)
+        if phase_b is not None:
+            _require(digest == hashlib.sha256(raw_receipt).hexdigest(), "phase_b_release_receipt_mismatch")
         return DeploymentResult("PASS", "release_accepted", application_sha,
                                 previous_sha, artifact_sha256, path, digest)
     except DeployRefused as error:
+        if database_mutation_started:
+            reason_code = str(error) if re.fullmatch(r"[a-z][a-z0-9_]{2,95}", str(error)) else "deployment_refused"
+            return _stop_after_database_mutation(
+                profile, phase_b=phase_b, application_sha=application_sha,
+                previous_sha=previous_sha, artifact_sha256=artifact_sha256,
+                reason_code=reason_code,
+            )
         if activated and previous_sha is not None:
             try:
                 _atomic_symlink(profile.releases_dir / previous_sha, profile.application_link,
@@ -1562,6 +2373,12 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
         return DeploymentResult("HOLD", str(error), application_sha, previous_sha,
                                 artifact_sha256)
     except Exception:
+        if database_mutation_started:
+            return _stop_after_database_mutation(
+                profile, phase_b=phase_b, application_sha=application_sha,
+                previous_sha=previous_sha, artifact_sha256=artifact_sha256,
+                reason_code="backend_internal_error",
+            )
         if activated and previous_sha is not None:
             try:
                 _atomic_symlink(profile.releases_dir / previous_sha, profile.application_link,
@@ -1599,6 +2416,11 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
         return DeploymentResult("FAIL", "backend_internal_error", application_sha, previous_sha,
                                 artifact_sha256)
     finally:
+        if phase_b is not None:
+            try:
+                phase_b["transaction"].__exit__(None, None, None)
+            except Exception:
+                pass
         if lock_fd is not None:
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)

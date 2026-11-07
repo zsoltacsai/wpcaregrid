@@ -94,7 +94,6 @@ docker run -d --label "com.wpcg.e2e-run=$run_id" --name "$restore_name" --networ
     --health-interval=2s --health-timeout=2s --health-retries=30 \
     "$mysql_image" --skip-log-bin >/dev/null
 created_restore=1
-
 ready=0
 for service in "$mysql_name" "$restore_name"; do
     ready=0
@@ -122,6 +121,9 @@ docker exec -e MYSQL_PWD=synthetic-only-password "$restore_name" \
 mysql_uuid="$(docker exec -e MYSQL_PWD=synthetic-only-password "$mysql_name" \
     mysql --no-defaults -uroot --batch --skip-column-names -e 'SELECT @@server_uuid')"
 mysql_uuid_sha256="$(printf '%s' "$mysql_uuid" | sha256sum | cut -d' ' -f1)"
+restore_uuid="$(docker exec -e MYSQL_PWD=synthetic-only-password "$restore_name" \
+    mysql --no-defaults -uroot --batch --skip-column-names -e 'SELECT @@server_uuid')"
+restore_uuid_sha256="$(printf '%s' "$restore_uuid" | sha256sum | cut -d' ' -f1)"
 
 docker run --rm --network "$network" \
     -e WPCG_PHP_MYSQL_E2E=1 \
@@ -130,22 +132,24 @@ docker run --rm --network "$network" \
     -e WPCG_MYSQL_USER="$app_user" \
     -e WPCG_MYSQL_PASSWORD="$app_password" \
     -e WPCG_MYSQL_UUID_SHA256="$mysql_uuid_sha256" \
+    -e WPCG_RESTORE_MYSQL_UUID_SHA256="$restore_uuid_sha256" \
     -e WPCG_RESTORE_MYSQL_HOST=wpcg-mysql-restore \
     -e WPCG_RESTORE_MYSQL_USER=root \
     -e WPCG_RESTORE_MYSQL_PASSWORD=synthetic-only-password \
     -e WPCG_BACKUP_MYSQL_PASSWORD="$app_password" \
     -v "$repo_root:/repo:ro" -w /repo "$php_image" \
-    sh -ceu 'php -r '\''if (!str_starts_with(PHP_VERSION, "8.5.")) exit(1); echo "PHP=".PHP_VERSION."\n";'\''; python3 scripts/tests/staging-next-helper-consistency-test.py && python3 scripts/tests/staging-next-deploy-backend-test.py && python3 scripts/tests/staging-next-deploy-controller-test.py && python3 scripts/tests/staging-next-helper-contract-test.py && python3 scripts/tests/staging-next-laravel-deploy-e2e-test.py'
+    sh -ceu 'php -r '\''if (!str_starts_with(PHP_VERSION, "8.5.")) exit(1); echo "PHP=".PHP_VERSION."\n";'\''; python3 scripts/tests/staging-next-helper-consistency-test.py && python3 scripts/tests/staging-next-deploy-backend-test.py && python3 scripts/tests/staging-next-deploy-controller-test.py && python3 scripts/tests/staging-next-helper-contract-test.py && python3 scripts/tests/staging-next-db-transaction-test.py && python3 scripts/tests/staging-next-laravel-deploy-e2e-test.py'
 
 db_state="$(docker exec -e MYSQL_PWD=synthetic-only-password "$mysql_name" \
     mysql --no-defaults -uroot --batch --skip-column-names \
     -e "SELECT VERSION(), COUNT(*), (SELECT COUNT(*) FROM wpcg_staging_next.migrations) FROM information_schema.tables WHERE table_schema='wpcg_staging_next' AND table_type='BASE TABLE'")"
 IFS=$'\t' read -r mysql_version table_count migration_count <<<"$db_state"
 migration_files="$(find "$repo_root/database/migrations" -maxdepth 1 -type f -name '*.php' | wc -l | tr -d '[:space:]')"
+expected_migration_count=$((migration_files + 1)) # One disposable E2E migration is added by the Laravel test.
 if [[ "$mysql_version" != "8.4.11" || ! "$table_count" =~ ^[0-9]+$ || "$table_count" -lt 1 \
-    || ! "$migration_count" =~ ^[0-9]+$ || "$migration_count" != "$migration_files" ]]; then
+    || ! "$migration_count" =~ ^[0-9]+$ || "$migration_count" != "$expected_migration_count" ]]; then
     printf 'E2E=FAIL;CODE=MYSQL_POSTCHECK_MISMATCH\n'
     exit 1
 fi
-printf 'MYSQL_VERSION=8.4.11\nMYSQL_APPLICATION_TABLES=%s\nMYSQL_MIGRATIONS=%s\nE2E=PASS\n' \
-    "$table_count" "$migration_count"
+printf 'MYSQL_VERSION=8.4.11\nMYSQL_APPLICATION_TABLES=%s\nMYSQL_MIGRATIONS=%s;EXPECTED=%s\nE2E=PASS\n' \
+    "$table_count" "$migration_count" "$expected_migration_count"

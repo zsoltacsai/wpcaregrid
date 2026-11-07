@@ -25,8 +25,8 @@ HOST = "staging-next.wpcaregrid.com"
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/staging-next/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/staging-next/incoming")
-HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.3/wpcaregrid-deploy-staging-next-priv")
-HELPER_ARTIFACT_SHA256 = "61f703bbb53dc6c37848fa86225e24ff0fa83dc16736ea29b37274ccc36ad9fd"  # Generated from versioned helper manifest.
+HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.1/wpcaregrid-deploy-staging-next-priv")
+HELPER_ARTIFACT_SHA256 = "b7b07f5d40bb2c5d8c9f89317fc4b8d1dbee26f833242684f7922bff134c222a"
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_FILES = 100_000
 MAX_UNPACKED_BYTES = 2 * 1024 * 1024 * 1024
@@ -61,6 +61,35 @@ def _run(argv, *, timeout, maximum=128_000, cwd=None, path="/usr/bin:/bin"):
 
 def _git(args, *, maximum=128_000):
     return _run(["/usr/bin/git", "-C", str(SOURCE_CHECKOUT), *args], timeout=60, maximum=maximum)
+
+
+def _database_migrations_between(base_sha: str, application_sha: str) -> list[dict[str, str]]:
+    """Pin only newly added Laravel migration files; edits/deletions fail closed."""
+    if not SHA_RE.fullmatch(base_sha) or not SHA_RE.fullmatch(application_sha):
+        raise ControllerHold("migration_release_identity_invalid")
+    try:
+        raw = _git(["diff", "--name-status", "--no-renames", base_sha, application_sha,
+                    "--", "database/migrations"], maximum=256_000)
+        lines = raw.decode("utf-8").splitlines()
+    except (UnicodeError, ControllerHold):
+        raise ControllerHold("migration_diff_unavailable") from None
+    result = []
+    for line in lines:
+        fields = line.split("\t")
+        if len(fields) != 2 or fields[0] != "A":
+            raise ControllerHold("existing_migration_mutation_rejected")
+        name = fields[1]
+        if not re.fullmatch(r"database/migrations/[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}_[a-z0-9_]+\.php", name):
+            raise ControllerHold("migration_path_invalid")
+        try:
+            raw_migration = _git(["show", f"{application_sha}:{name}"], maximum=4_000_000)
+        except ControllerHold:
+            raise ControllerHold("migration_source_unavailable") from None
+        # The deployment manifest and DB journal use Laravel's migration key
+        # (the ledger value), which omits the source filename's `.php` suffix.
+        result.append({"name": name.rsplit("/", 1)[1][:-4],
+                       "sha256": hashlib.sha256(raw_migration).hexdigest()})
+    return sorted(result, key=lambda item: item["name"])
 
 
 def _verify_install_identity():
@@ -104,8 +133,8 @@ def _helper(operation, *arguments):
         result = json.loads(raw.decode("utf-8"))
     except (UnicodeError, ValueError):
         raise ControllerHold("helper_response_invalid") from None
-    if not isinstance(result, dict) or result.get("helper_version") != "1.3.3" \
-            or result.get("helper_contract") != "wpcaregrid-staging-next-deploy-v3" \
+    if not isinstance(result, dict) or result.get("helper_version") != "1.4.1" \
+            or result.get("helper_contract") != "wpcaregrid-staging-next-deploy-v5" \
             or result.get("helper_artifact_sha256") != HELPER_ARTIFACT_SHA256:
         raise ControllerHold("helper_contract_mismatch")
     if result.get("result") not in {"PASS", "NO_OP", "HOLD", "FAIL"}:
@@ -276,11 +305,14 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
                 if name.startswith("public/build/")).encode()).hexdigest(),
         }
         canonical = "".join(f"{name}\0{digest}\n" for name, digest in sorted(hashes.items())).encode()
+        database_migrations = _database_migrations_between(base_sha, application_sha)
         manifest = {
             "schema": 1, "profile": PROFILE, "application_sha": application_sha,
-            "base_application_sha": base_sha, "php_minimum": "8.5", "database_scope": "unchanged",
-            "helper_version": "1.3.3", "helper_sha256": HELPER_ARTIFACT_SHA256,
-            "helper_contract": "wpcaregrid-staging-next-deploy-v3",
+            "base_application_sha": base_sha, "php_minimum": "8.5",
+            "database_scope": "migrations" if database_migrations else "unchanged",
+            "database_migrations": database_migrations,
+            "helper_version": "1.4.1", "helper_sha256": HELPER_ARTIFACT_SHA256,
+            "helper_contract": "wpcaregrid-staging-next-deploy-v5",
             "frontend_build": frontend_build,
             "files_sha256": hashlib.sha256(canonical).hexdigest(),
         }

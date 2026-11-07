@@ -58,6 +58,112 @@ class IsolatedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 class StagingDeployBackendTests(unittest.TestCase):
+    def test_package_discovery_cache_is_built_for_fpm_then_restored_root_owned(self):
+        root = Path(self.temp.name) / "candidate"
+        cache = root / "bootstrap/cache"
+        cache.mkdir(parents=True, mode=0o755)
+        os.chown(root, 0, 0)
+        os.chown(cache.parent, 0, 0)
+        os.chown(cache, 0, 0)
+        profile = replace(self.profile, build_application_bootstrap=True,
+                          php_fpm_uid=33, php_fpm_gid=33)
+        calls = []
+        def discover(_profile, argv, **_kwargs):
+            calls.append(argv)
+            for name in ("packages.php", "services.php"):
+                path = cache / name
+                path.write_text("<?php return [];\n")
+                os.chown(path, 33, 33)
+                os.chmod(path, 0o644)
+            return b""
+        with mock.patch.object(BACKEND, "_run_as_php_fpm", side_effect=discover):
+            BACKEND._prepare_package_discovery_cache(profile, root)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1:3], ["artisan", "package:discover"])
+        self.assertEqual((cache.stat().st_uid, cache.stat().st_gid, cache.stat().st_mode & 0o777),
+                         (0, 0, 0o755))
+        for name in ("packages.php", "services.php"):
+            info = (cache / name).stat()
+            self.assertEqual((info.st_uid, info.st_gid, info.st_mode & 0o777), (0, 0, 0o644))
+
+    def test_package_discovery_failure_restores_candidate_cache_directory(self):
+        root = Path(self.temp.name) / "candidate-failure"
+        cache = root / "bootstrap/cache"
+        cache.mkdir(parents=True, mode=0o755)
+        os.chown(cache, 0, 0)
+        profile = replace(self.profile, build_application_bootstrap=True,
+                          php_fpm_uid=33, php_fpm_gid=33)
+        with mock.patch.object(BACKEND, "_run_as_php_fpm", side_effect=BACKEND.DeployRefused("synthetic_failure")):
+            with self.assertRaises(BACKEND.DeployRefused):
+                BACKEND._prepare_package_discovery_cache(profile, root)
+        info = cache.stat()
+        self.assertEqual((info.st_uid, info.st_gid, info.st_mode & 0o777), (0, 0, 0o755))
+
+    def test_final_bootstrap_reuses_root_owned_package_manifests_safely(self):
+        root = Path(self.temp.name) / "final-candidate"
+        cache = root / "bootstrap/cache"
+        cache.mkdir(parents=True, mode=0o755)
+        os.chown(cache, 0, 0)
+        for name in ("packages.php", "services.php"):
+            path = cache / name
+            path.write_text("<?php return [];\n")
+            os.chown(path, 0, 0)
+            os.chmod(path, 0o644)
+        profile = replace(self.profile, build_application_bootstrap=True,
+                          php_fpm_uid=33, php_fpm_gid=33)
+        calls = []
+        def artisan(_profile, argv, **_kwargs):
+            calls.append(argv)
+            if "config:cache" in argv:
+                path = cache / "config.php"
+                path.write_text("<?php return [];\n")
+                os.chown(path, 33, 33)
+                os.chmod(path, 0o640)
+            return b""
+        with mock.patch.object(BACKEND, "_run_as_php_fpm", side_effect=artisan):
+            BACKEND._prepare_application_bootstrap(profile, root)
+        self.assertEqual([call[2] for call in calls], ["package:discover", "config:cache"])
+        BACKEND._verify_generated_bootstrap_caches(profile, root)
+
+    def test_migration_exception_serializer_derives_filename_before_use(self):
+        source = Path(BACKEND.__file__).read_text(encoding="utf-8")
+        start = source.index("$errorFile=$error->getFile();")
+        assignment = source.index("$errorFileBase=basename($errorFile);", start)
+        use = source.index("$errorFileName=preg_match", assignment)
+        self.assertLess(start, assignment)
+        self.assertLess(assignment, use)
+
+    def test_migration_runtime_failure_is_sanitized_with_database_codes(self):
+        output = BACKEND._run_fixed(["/usr/bin/env"], extra_env={"WPCG_RELEASE_PATH": "/verified/release"})
+        self.assertIn(b"WPCG_RELEASE_PATH=/verified/release", output)
+        with self.assertRaises(BACKEND.DeployRefused):
+            BACKEND._run_fixed(["/usr/bin/env"], extra_env={"UNREVIEWED_PATH": "/tmp/unsafe"})
+        with self.assertRaises(ValueError):
+            BACKEND._strict_json(b"Artisan migration output\n{\"exit_code\":0}")
+        self.assertEqual(BACKEND._runtime_failure_code(
+            b"", b"SQLSTATE[HY000]: General error: 1419 restricted operation", 255),
+            "runtime_probe_mysql_errno_1419_sqlstate_hy000")
+        self.assertEqual(BACKEND._runtime_failure_code(
+            b"", b"Permission denied for /private/path", 255),
+            "runtime_probe_permission_denied")
+        self.assertEqual(BACKEND._runtime_failure_code(
+            b"", b"failed to open stream: Permission denied database/migrations/sample.php", 255),
+            "runtime_probe_migration_file_permission_denied")
+        self.assertEqual(BACKEND._runtime_failure_code(
+            b"", b"PHP Fatal error: details omitted", 255),
+            "runtime_probe_php_fatal_unknown_unknown_in_unknown_tokens_none")
+        self.assertEqual(BACKEND._runtime_failure_code(
+            b"", b"PHP Fatal error: Allowed memory size exhausted", 255),
+            "runtime_probe_php_fatal_memory_limit")
+        self.assertEqual(BACKEND._runtime_failure_code(
+            b"", b"PHP Fatal error: Uncaught TypeError: synthetic in /safe/vendor/Cache/FileStore.php:179", 255),
+            "runtime_probe_php_fatal_type_error_typeerror_in_filestore_tokens_cache")
+        classified = BACKEND._runtime_failure_code(
+            b"", b"PHP Fatal error: Uncaught ErrorException: Trying to access array offset on value of type null in /private/path/HandleExceptions.php:179", 255)
+        self.assertIn("array_offset_access", classified)
+        self.assertIn("errorexception", classified)
+        self.assertNotIn("private", classified)
+
     @classmethod
     def setUpClass(cls):
         cls.php_process = None
@@ -169,7 +275,8 @@ class StagingDeployBackendTests(unittest.TestCase):
         base_manifest = {
             "schema": 1, "profile": PROFILE, "application_sha": self.base_sha,
             "base_application_sha": self.base_sha, "php_minimum": "8.5",
-            "database_scope": "unchanged", "files_sha256": _canonical_files_hash(file_hashes(self.base_files)),
+            "database_scope": "unchanged", "database_migrations": [],
+            "files_sha256": _canonical_files_hash(file_hashes(self.base_files)),
             "artifact_sha256": "c" * 64, "helper_version": BACKEND.HELPER_VERSION,
             "helper_sha256": "e" * 64, "helper_contract": BACKEND.HELPER_CONTRACT,
             "frontend_build": self._frontend_build_metadata(self.base_files),
@@ -228,10 +335,21 @@ class StagingDeployBackendTests(unittest.TestCase):
             archive_entries["public/build/manifest.json"] = b'{"resources/js/app.js":{"file":"assets/app.js"}}\n'
             archive_entries["public/build/assets/app.js"] = b"synthetic"
         frontend_manifest = self._frontend_build_metadata(archive_entries)
+        migrations = []
+        for name, data in sorted(archive_entries.items()):
+            match = __import__("re").fullmatch(
+                r"database/migrations/([0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}_[a-z0-9_]+)\.php",
+                name,
+            )
+            if match:
+                migrations.append({"name": match.group(1),
+                                   "sha256": hashlib.sha256(data).hexdigest()})
         manifest = {
             "schema": 1, "profile": PROFILE, "application_sha": app_sha,
             "base_application_sha": base_sha, "php_minimum": "8.5",
-            "database_scope": "unchanged", "files_sha256": _canonical_files_hash(file_hashes(archive_entries)),
+            "database_scope": "migrations" if migrations else "unchanged",
+            "database_migrations": migrations,
+            "files_sha256": _canonical_files_hash(file_hashes(archive_entries)),
             "helper_version": BACKEND.HELPER_VERSION, "helper_sha256": self.profile.helper_artifact_sha256,
             "helper_contract": BACKEND.HELPER_CONTRACT, "frontend_build": frontend_manifest,
         }
@@ -454,10 +572,86 @@ class StagingDeployBackendTests(unittest.TestCase):
         self.assertTrue((observed[0] / "resources/views/marketing/home.blade.php").is_file())
 
     def test_database_scope_change_is_held_without_activation(self):
-        entries = self._runtime_files("new") | {"database/migrations/2030_01_01_test.php": b"<?php\n"}
+        entries = self._runtime_files("new") | {
+            "database/migrations/2030_01_01_000001_test_migration.php": b"<?php\n"}
         result = self._submit(entries)
-        self.assertEqual((result.status, result.reason), ("HOLD", "database_change_requires_phase_b"))
+        self.assertEqual((result.status, result.reason), ("HOLD", "phase_b_policy_unavailable"))
         self.assertEqual(os.readlink(self.link), str(self.base_path))
+
+    def test_post_migration_activation_failure_keeps_gate_and_never_rolls_back_code(self):
+        migration_name = "2030_01_01_000001_add_probe"
+        migration = b"<?php return new class extends Migration { public function up(): void {} };\n"
+        entries = self._runtime_files("phase-b") | {
+            f"database/migrations/{migration_name}.php": migration,
+        }
+        profile = replace(self.profile,
+                          phase_b_policy_file=BACKEND.PHASE_B_POLICY_PATH,
+                          phase_b_policy_sha256="f" * 64)
+
+        class Transaction:
+            def __init__(self):
+                self.identity = type("Identity", (), {"migrations": (migration_name,)})()
+                self.transaction_id = "a" * 32
+                self.state = {"state": "MIGRATION_REHEARSAL_VERIFIED", "evidence": {}}
+                self.recovery_reason = None
+                self.closed = False
+
+            def advance(self, target, evidence):
+                self.state["state"] = target
+                self.state["evidence"][target] = dict(evidence)
+
+            def apply_rehearsed_migrations(self, *, expected_after, observe, apply_one):
+                apply_one(migration_name)
+                self.state["state"] = "MIGRATIONS_VERIFIED"
+
+            def mark_recovery_required(self, reason):
+                self.recovery_reason = reason
+                self.state["state"] = "RECOVERY_REQUIRED"
+
+            def __exit__(self, *_args):
+                self.closed = True
+
+        transaction = Transaction()
+        phase_b = {
+            "transaction": transaction, "policy": object(),
+            "expected_after": {migration_name: {"schema_sha256": "a" * 64,
+                                                  "ledger_sha256": "b" * 64}},
+            "backup_sha256": "c" * 64, "restore_receipt_sha256": "d" * 64,
+            "migration_rehearsal_receipt_sha256": "e" * 64,
+        }
+        candidate_sha = self._write_source_tree(entries)
+        archive = self._archive(entries, app_sha=candidate_sha, base_sha=self.base_sha)
+        digest = hashlib.sha256(archive).hexdigest()
+        incoming_path = self.incoming / f"{candidate_sha}.tar"
+        incoming_path.write_bytes(archive)
+        os.chmod(incoming_path, 0o600)
+        os.chown(incoming_path, 1000, 1000)
+        (self.shared_storage / "framework").mkdir(mode=0o755)
+        staged = stage_artifact(profile, invoking_uid=1000, application_sha=candidate_sha,
+                                artifact_sha256=digest)
+        self.assertEqual(staged.status, "PASS")
+        reload_failure = mock.Mock(side_effect=BACKEND.DeployRefused("synthetic_reload_failure"))
+        with mock.patch.object(BACKEND, "_prepare_phase_b_database", return_value=phase_b), \
+             mock.patch.object(BACKEND, "_verify_phase_b_fences", return_value="1" * 64), \
+             mock.patch.object(BACKEND, "_execute_exact_migration", return_value="2" * 64), \
+             mock.patch.object(BACKEND, "database_fingerprint", return_value={
+                 "schema_sha256": "a" * 64, "ledger_sha256": "b" * 64,
+                 "migrations": (migration_name,),
+             }), \
+             mock.patch.object(BACKEND, "cleanup_isolated_databases"), \
+             mock.patch.object(BACKEND, "_reload_php_fpm", side_effect=reload_failure):
+            result = deploy_release(profile, invoking_uid=1000, application_sha=candidate_sha,
+                                    artifact_sha256=digest)
+
+        self.assertEqual((result.status, result.reason), ("HOLD", "phase_b_recovery_required"))
+        self.assertEqual(transaction.recovery_reason, "synthetic_reload_failure",
+                         f"recovery stopped before injected reload failure: {result}")
+        self.assertEqual(reload_failure.call_count, 1, f"reload was not reached: {result}")
+        self.assertEqual(os.readlink(self.link), str(self.releases / candidate_sha))
+        self.assertTrue((self.shared_storage / "framework" / "down").is_file())
+        self.assertEqual(transaction.state["state"], "RECOVERY_REQUIRED")
+        self.assertEqual(transaction.recovery_reason, "synthetic_reload_failure")
+        self.assertTrue(transaction.closed)
 
     def test_artifact_hash_mismatch_is_held(self):
         result = self._submit(self._runtime_files("new"), artifact_sha="d" * 64)

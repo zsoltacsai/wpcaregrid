@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Versioned, staging-next-only privileged deployment entrypoint (1.3.3)."""
+"""Versioned, staging-next-only privileged deployment entrypoint (1.4.1)."""
 
 from __future__ import annotations
 
@@ -15,16 +15,18 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-VERSION = "1.3.3"
-CONTRACT = "wpcaregrid-staging-next-deploy-v3"
-ENTRYPOINT = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.3.3/wpcaregrid-deploy-staging-next-priv")
+VERSION = "1.4.1"
+CONTRACT = "wpcaregrid-staging-next-deploy-v5"
+ENTRYPOINT = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.1/wpcaregrid-deploy-staging-next-priv")
 BACKEND = ENTRYPOINT.parent / "staging_next_deploy_backend.py"
-POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-1.3.3.json")
+TRANSACTION = ENTRYPOINT.parent / "staging_next_db_transaction.py"
+POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-1.4.1.json")
 POLICY_KEYS = {
     "schema", "profile", "enabled", "allowed_uid", "app_dir", "database", "host",
     "mysql_server_uuid_sha256", "integration_qa_reviewer", "m17_appsec_reviewer",
     "helper_version", "compatibility_contract", "php_fpm_uid", "php_fpm_gid",
-    "entrypoint_sha256", "backend_sha256", "helper_artifact_sha256", "operations",
+    "entrypoint_sha256", "backend_sha256", "transaction_module_sha256",
+    "phase_b_policy_file", "phase_b_policy_sha256", "helper_artifact_sha256", "operations",
 }
 EXPECTED_TARGET = {
     "profile": "staging-next",
@@ -111,13 +113,23 @@ def _load_backend(entrypoint: str, argv: list[str], sudo_uid: str | None):
         raise Refused("caller_identity_invalid")
     entry_raw = _read_trusted(ENTRYPOINT, mode=0o755, maximum=1_000_000)
     backend_raw = _read_trusted(BACKEND, mode=0o644, maximum=1_000_000)
+    transaction_raw = _read_trusted(TRANSACTION, mode=0o644, maximum=1_000_000)
     if hashlib.sha256(entry_raw).hexdigest() != policy["entrypoint_sha256"]:
         raise Refused("entrypoint_identity_mismatch")
     if hashlib.sha256(backend_raw).hexdigest() != policy["backend_sha256"]:
         raise Refused("backend_identity_mismatch")
+    if hashlib.sha256(transaction_raw).hexdigest() != policy["transaction_module_sha256"]:
+        raise Refused("transaction_module_identity_mismatch")
+    expected_phase_b_policy = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.1.json")
+    if (policy["phase_b_policy_file"] != str(expected_phase_b_policy)
+            or (policy["phase_b_policy_sha256"] is not None
+                and (not isinstance(policy["phase_b_policy_sha256"], str)
+                     or re.fullmatch(r"[0-9a-f]{64}", policy["phase_b_policy_sha256"]) is None))):
+        raise Refused("phase_b_policy_pin_invalid")
     digest_payload = json.dumps({
         "schema": 1, "helper_version": VERSION, "compatibility_contract": CONTRACT,
         "entrypoint_sha256": policy["entrypoint_sha256"], "backend_sha256": policy["backend_sha256"],
+        "transaction_module_sha256": policy["transaction_module_sha256"],
     }, sort_keys=True, separators=(",", ":")).encode("utf-8")
     artifact_sha256 = hashlib.sha256(digest_payload).hexdigest()
     if artifact_sha256 != policy["helper_artifact_sha256"]:
@@ -125,7 +137,7 @@ def _load_backend(entrypoint: str, argv: list[str], sudo_uid: str | None):
     if os.geteuid() != 0:
         raise Refused("privileged_identity_required")
 
-    module = types.ModuleType("_wpcaregrid_staging_next_backend_v1_3_3")
+    module = types.ModuleType("_wpcaregrid_staging_next_backend_v1_4_1")
     module.__file__ = str(BACKEND)
     sys.modules[module.__name__] = module
     try:
@@ -141,7 +153,9 @@ def _load_backend(entrypoint: str, argv: list[str], sudo_uid: str | None):
                       integration_qa_reviewer=policy["integration_qa_reviewer"],
                       m17_appsec_reviewer=policy["m17_appsec_reviewer"],
                       helper_artifact_sha256=artifact_sha256, php_fpm_uid=policy["php_fpm_uid"],
-                      php_fpm_gid=policy["php_fpm_gid"])
+                      php_fpm_gid=policy["php_fpm_gid"],
+                      phase_b_policy_file=Path(policy["phase_b_policy_file"]),
+                      phase_b_policy_sha256=policy["phase_b_policy_sha256"])
     operation = argv[0] if argv else ""
     if operation == "preflight" and len(argv) == 1:
         return module, profile, uid, operation, None, None
