@@ -13,9 +13,9 @@ manifest `deploy/release-manifests/staging-next-helper-1.4.7.json`.
 | --- | --- | --- |
 | Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_7.py` | `7eecc1876c52c187229187db00d410cb9a80d6f1d0df7ad91a5344f71b45fb2b` |
 | Backend | `scripts/staging_next_deploy_backend_1_4_7.py` | `6e5a6559eed5fcc5dbcb079d89afb15edc5c7e4982d46440aa4499c489b0b52c` |
-| Transaction module | `scripts/staging_next_db_transaction_1_4_7.py` | `2e99e674fe0dc61983cf62a294d4d83723a3fe1a227d3c5d6e041e5cba982196` |
-| Combined helper artifact | Manifest-derived | `68b2d6a274a0e8ebfc6861d25f8d6d7d2feeb47113b0ce25636419e89495fa8e` |
-| Root installer | `scripts/install_staging_next_helper_1_4_7.py` | `eb4fd897b6316fa5e23b79954c327986cc857636f2a52dd6ffcd3b226262a5f6` |
+| Transaction module | `scripts/staging_next_db_transaction_1_4_7.py` | `ecf23a7d3e68aebb70b802125ad144e5fd062d5980940b1b9978547d234086fb` |
+| Combined helper artifact | Manifest-derived | `76dea7fa3131d9d74db12bd7ab34a976a3dbb9010988ffb29c181ef1b6d1f318` |
+| Root installer | `scripts/install_staging_next_helper_1_4_7.py` | `d6c7decc427860d671b1bf03c9e74af45391b12a599a304bfc13e1f619edac61` |
 
 The compatibility contract is `wpcaregrid-staging-next-deploy-v11`. Recalculate
 these values from the final merged Git tree before any later installation; a
@@ -51,7 +51,7 @@ From a root console on `stg1.wpcaregrid.com`, run this single command in a
 subshell so failure does not close the console:
 
 ```sh
-( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.7.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = b30e9981f6a1c50badbfb9d4dacab4f4957702d979fdc9fbf82137cd17e3da91; exec /usr/bin/python3 -I "$i" )
+( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.7.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = d6c7decc427860d671b1bf03c9e74af45391b12a599a304bfc13e1f619edac61; exec /usr/bin/python3 -I "$i" )
 ```
 
 The script itself checks the exact source hashes and directory contents,

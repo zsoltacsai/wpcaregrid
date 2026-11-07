@@ -100,6 +100,11 @@ class StagingNextHelperConsistencyTests(unittest.TestCase):
         artifact_sha = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         self.assertEqual(manifest["helper_artifact_sha256"], artifact_sha)
         self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256, artifact_sha)
+        transaction = load_module("staging_next_transaction_1_4_7", files["transaction_module"])
+        self.assertEqual(transaction.PHASE_B_POLICY_PATH,
+                         Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.7.json"))
+        self.assertEqual(transaction.PHASE_B_CREDENTIALS_PATH,
+                         Path("/etc/wpcaregrid-deploy/credentials/staging-next-database-1.4.7.json"))
         self.assertEqual(CONTROLLER.HELPER, HELPER_147.ENTRYPOINT)
         self.assertEqual((installer.VERSION, installer.CONTRACT),
                          (HELPER_147.HELPER_VERSION, HELPER_147.HELPER_CONTRACT))
