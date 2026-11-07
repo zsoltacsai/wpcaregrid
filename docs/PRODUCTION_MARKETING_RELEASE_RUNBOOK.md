@@ -21,13 +21,13 @@ Production helper version `2.0.0`, contract `wpcaregrid-deployment-profile-v2`:
 | Transaction module | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
 | Environment contract | `f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1` |
 | Combined helper artifact | `0e50791ee708de571dbcaa5420bd06b31698e3b7a8683f7501bee6880ead96fc` |
-| Production controller | `fe1f26992210938b1fed4178da49b384f8974b2fba3183fffb47dc8e69f5f28a` |
+| Production controller | `a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283` |
 | Sudoers candidate | `fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963` |
 
 The source manifest is `deploy/release-manifests/production-deployment-helper-2.0.0.json`.
 The root entrypoint accepts only `preflight`, `verify-install`, `authorize <40-hex-SHA>`,
 `stage <40-hex-SHA> <64-hex-digest>`, and `deploy <40-hex-SHA> <64-hex-digest>`.
-The deployment controller itself accepts only `sync`. PASS and NO_OP return 0;
+The deployment controller accepts only `sync <40-hex-application-SHA>`. PASS and NO_OP return 0;
 HOLD returns 3; FAIL returns 4. Never convert HOLD/FAIL to success.
 
 ## Required production profile inputs

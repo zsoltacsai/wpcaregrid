@@ -58,6 +58,11 @@ class ProductionDeploymentArtifactConsistencyTests(unittest.TestCase):
         self.assertEqual(manifest["controller_sha256"], controller_hash)
         self.assertEqual(manifest["sudoers_template_sha256"], hashlib.sha256(
             git_tree_bytes(manifest["sudoers_template"])).hexdigest())
+        runbook = (ROOT / "docs/PRODUCTION_MARKETING_RELEASE_RUNBOOK.md").read_text(encoding="utf-8")
+        for pinned_digest in (*hashes.values(), digest, controller_hash,
+                              manifest["sudoers_template_sha256"]):
+            self.assertIn(f"`{pinned_digest}`", runbook)
+        self.assertIn("sync <40-hex-application-SHA>", runbook)
         match = re.search(rb'^HELPER_ARTIFACT_SHA256 = "([0-9a-f]{64})"\r?$', controller, re.M)
         self.assertIsNotNone(match)
         self.assertEqual(match.group(1).decode("ascii"), digest)
