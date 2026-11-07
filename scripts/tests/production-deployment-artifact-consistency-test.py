@@ -63,6 +63,14 @@ class ProductionDeploymentArtifactConsistencyTests(unittest.TestCase):
         installer = git_tree_bytes(INSTALLER_PATH)
         installer_hash = hashlib.sha256(installer).hexdigest()
         self.assertEqual(manifest["root_installer_sha256"], installer_hash)
+        installer_source_commit = manifest["root_installer_source_commit"]
+        self.assertRegex(installer_source_commit, r"^[0-9a-f]{40}$")
+        source_installer = subprocess.run(
+            ["git", "cat-file", "blob", f"{installer_source_commit}:{INSTALLER_PATH}"],
+            cwd=ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ).stdout
+        self.assertEqual(hashlib.sha256(source_installer).hexdigest(), installer_hash)
+        self.assertEqual(source_installer, installer)
         installer_text = installer.decode("utf-8")
         installer_pins = {
             "ENTRY_SHA256": manifest["entrypoint_sha256"],
@@ -83,6 +91,8 @@ class ProductionDeploymentArtifactConsistencyTests(unittest.TestCase):
             self.assertIn(f"`{pinned_digest}`", runbook)
             self.assertIn(f"`{pinned_digest}`", install_doc)
         self.assertIn("sync <40-hex-application-SHA>", runbook)
+        self.assertIn(f"`{installer_source_commit}`", runbook)
+        self.assertIn(f"`{installer_source_commit}`", install_doc)
         match = re.search(rb'^HELPER_ARTIFACT_SHA256 = "([0-9a-f]{64})"\r?$', controller, re.M)
         self.assertIsNotNone(match)
         self.assertEqual(match.group(1).decode("ascii"), digest)

@@ -5,8 +5,12 @@ production activation, application deployment, database work, or public traffic.
 
 ## Pinned source
 
-Protected-primary source: `cf2a944c27a2a24dbdf1097bf0ba766e6edd48fe`.
-Recompute every digest from that exact Git tree immediately before source staging.
+Helper, controller and sudoers artifact source: protected primary
+`cf2a944c27a2a24dbdf1097bf0ba766e6edd48fe`. Recompute these artifact digests
+from that exact Git tree immediately before source staging. The installer was
+introduced separately by PR #300 commit
+`481cab044dab61e785f73db9378fa5c4eb1e13aa`; its SHA is computed from that PR
+tree, because it does not exist in the protected-primary source commit.
 
 | Source file | SHA-256 |
 | --- | --- |
@@ -17,7 +21,7 @@ Recompute every digest from that exact Git tree immediately before source stagin
 | Combined helper artifact (derived) | `0e50791ee708de571dbcaa5420bd06b31698e3b7a8683f7501bee6880ead96fc` |
 | `scripts/production_deploy_controller.py` | `a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283` |
 | `deploy/sudoers/wpcaregrid-production-v2.0.0` | `fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963` |
-| Root installer `scripts/install_production_helper_2_0_0.py` | `ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986` |
+| Root installer `scripts/install_production_helper_2_0_0.py` (PR #300 commit `481cab044dab61e785f73db9378fa5c4eb1e13aa`) | `ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986` |
 
 The six helper/controller/policy-template inputs must be staged under
 `/home/deploy/.private/wpcg-production-helper-2.0.0-cf2a944c/`, owned by
