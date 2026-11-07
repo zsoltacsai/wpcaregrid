@@ -1,0 +1,6 @@
+# Candidate least-privilege rule; inert in the repository until separately approved and installed.
+deploy-production ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/wpcaregrid-deploy/production/2.0.0/wpcaregrid-deploy-production-priv preflight
+deploy-production ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/wpcaregrid-deploy/production/2.0.0/wpcaregrid-deploy-production-priv verify-install
+deploy-production ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/wpcaregrid-deploy/production/2.0.0/wpcaregrid-deploy-production-priv authorize "^[0-9a-f]{40}$"
+deploy-production ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/wpcaregrid-deploy/production/2.0.0/wpcaregrid-deploy-production-priv stage "^[0-9a-f]{40} [0-9a-f]{64}$"
+deploy-production ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/wpcaregrid-deploy/production/2.0.0/wpcaregrid-deploy-production-priv deploy "^[0-9a-f]{40} [0-9a-f]{64}$"
