@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 from scripts import staging_next_deploy_backend as BACKEND
 from scripts import staging_next_deploy_controller as CONTROLLER
 from scripts.staging_next_db_transaction import (
-    DatabaseReleaseTransaction, TransactionIdentity, _mysql_defaults, _mysql_query,
+    DatabaseReleaseTransaction, TransactionIdentity, TransactionRefused, _mysql_defaults, _mysql_query,
     _mysql_query_failure_code, database_fingerprint, restore_receipt_sha256,
 )
 
@@ -828,6 +828,13 @@ def main():
         verify_database_content_fingerprint(profile)
         run([
             "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", os.environ["WPCG_MYSQL_USER"], "wpcg_staging_next", "-e",
+            "CREATE TABLE `wpcg_e2e_restore_probe` (`id` BIGINT PRIMARY KEY,"
+            "`marker` VARCHAR(32) NOT NULL) ENGINE=InnoDB; "
+            "INSERT INTO `wpcg_e2e_restore_probe` VALUES (1,'synthetic-row')",
+        ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
+        run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
             "-u", "root", "--batch", "--skip-column-names",
             "-e", "SET GLOBAL log_bin_trust_function_creators=OFF",
         ], extra_env={"MYSQL_PWD": "synthetic-only-password"}, timeout=10)
@@ -944,6 +951,72 @@ def main():
         if rehearsal_state.get("state") != "RESTORE_REHEARSAL_VERIFIED":
             raise RuntimeError("phase_b_rehearsal_failure_checkpoint_invalid")
 
+        # Change a synthetic target row only after the isolated migration rehearsal
+        # and persistent fences are complete. The production path must detect that
+        # the tested baseline is stale before invoking any target migration.
+        verify_fences = BACKEND._verify_phase_b_fences
+        injected_target_change = [False]
+        fence_verifications = [0]
+
+        def mutate_after_fencing(active_profile, policy):
+            observed_fences = verify_fences(active_profile, policy)
+            fence_verifications[0] += 1
+            # The first two fence checks occur while the rehearsal is being
+            # prepared. Inject only after its target snapshot and durable fence
+            # checkpoint have both been recorded, immediately before target
+            # migration execution.
+            if fence_verifications[0] == 3 and not injected_target_change[0]:
+                _mysql_query(
+                    policy, isolated=False,
+                    sql="UPDATE `wpcg_e2e_restore_probe` SET `marker`='rehearsal-race' WHERE `id`=1",
+                    database="wpcg_staging_next", timeout=15,
+                )
+                injected_target_change[0] = True
+            return observed_fences
+
+        BACKEND._verify_phase_b_fences = mutate_after_fencing
+        stale_failure_classes = []
+
+        def capture_stale_failure(frame, event, arg):
+            if (event == "exception" and frame.f_code.co_filename.endswith((
+                    "staging_next_deploy_backend.py", "staging_next_db_transaction.py"))):
+                exception_type, exception, _traceback = arg
+                if isinstance(exception, (BACKEND.DeployRefused, TransactionRefused)):
+                    safe_reason = str(exception)
+                    if not re.fullmatch(r"[a-z][a-z0-9_]{2,95}", safe_reason):
+                        safe_reason = "non_allowlisted_reason"
+                    stale_failure_classes.append(f"{exception_type.__name__}:{safe_reason}")
+                else:
+                    stale_failure_classes.append(exception_type.__name__)
+            return capture_stale_failure
+
+        sys.settrace(capture_stale_failure)
+        try:
+            stale_rehearsal = BACKEND.deploy_release(
+                profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+        finally:
+            sys.settrace(None)
+        BACKEND._verify_phase_b_fences = verify_fences
+        if not injected_target_change[0] or (stale_rehearsal.status, stale_rehearsal.reason) != (
+                "HOLD", "target_changed_since_migration_rehearsal"):
+            observed_failure = stale_failure_classes[-1] if stale_failure_classes else "NO_EXCEPTION_CAPTURED"
+            raise RuntimeError(
+                f"phase_b_stale_rehearsal_not_held:{stale_rehearsal.status}:"
+                f"{stale_rehearsal.reason}:{observed_failure}")
+        stale_ledger = run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
+            "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM migrations",
+        ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
+        if stale_ledger != "72":
+            raise RuntimeError("phase_b_stale_rehearsal_ran_target_migration")
+        _mysql_query(
+            BACKEND._load_phase_b_policy(profile), isolated=False,
+            sql="UPDATE `wpcg_e2e_restore_probe` SET `marker`='synthetic-row' WHERE `id`=1",
+            database="wpcg_staging_next", timeout=15,
+        )
+        print("PHASE_B_STALE_REHEARSAL_HOLD=PASS;TARGET_MIGRATIONS=NOT_RUN")
+
         errno_1419 = BACKEND.deploy_release(
             profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
         if (errno_1419.status, errno_1419.reason) != (
@@ -1007,9 +1080,86 @@ def main():
         ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
         if crash_ledger.splitlines() != ["73", "1"]:
             raise RuntimeError("phase_b_crash_committed_ddl_not_observed")
+
+        # Re-enter the interrupted migration with a real PHP-FPM cache build,
+        # then terminate the controller after config:cache has written files.
+        # The inactive immutable release must be safely repairable on restart.
+        cache_crash_child = os.fork()
+        if cache_crash_child == 0:
+            original_runner = BACKEND._run_as_php_fpm
+
+            def run_php_fpm_then_die(*args, **kwargs):
+                result = original_runner(*args, **kwargs)
+                argv = args[1]
+                if len(argv) > 2 and argv[2] == "config:cache":
+                    os._exit(84)
+                return result
+
+            BACKEND._run_as_php_fpm = run_php_fpm_then_die
+            child_result = BACKEND.deploy_release(
+                profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+            os.write(2, (f"PHASE_B_CACHE_CHILD_RETURN={child_result.status}:{child_result.reason}\n").encode("ascii"))
+            os._exit(87)
+        _cache_child, cache_child_status = os.waitpid(cache_crash_child, 0)
+        if not os.WIFEXITED(cache_child_status) or os.WEXITSTATUS(cache_child_status) != 84:
+            observed_exit = os.WEXITSTATUS(cache_child_status) if os.WIFEXITED(cache_child_status) else "SIGNAL"
+            raise RuntimeError(f"phase_b_cache_process_crash_injection_failed:{observed_exit}")
+        candidate_cache = release_dir / candidate_sha / "bootstrap/cache"
+        cache_metadata = []
+        for name in (".gitignore", "config.php", "packages.php", "services.php"):
+            try:
+                item = os.lstat(candidate_cache / name)
+                cache_metadata.append(
+                    f"{name}:{item.st_uid}:{item.st_gid}:{stat.S_IMODE(item.st_mode):04o}:"
+                    f"{item.st_nlink}:{item.st_size}")
+            except FileNotFoundError:
+                cache_metadata.append(f"{name}:ABSENT")
+        print("PHASE_B_INTERRUPTED_CACHE_METADATA=" + ",".join(cache_metadata))
+        cache_config = candidate_cache / "config.php"
+        if ((candidate_cache.stat().st_uid, candidate_cache.stat().st_gid,
+             stat.S_IMODE(candidate_cache.stat().st_mode)) != (33, 33, 0o2750)
+                or cache_config.stat().st_uid != 33
+                or profile.application_link.resolve() != (release_dir / base_sha).resolve()
+                or not (storage / "framework" / "down").is_file()):
+            raise RuntimeError("phase_b_cache_crash_state_not_preserved")
+        print("PHASE_B_REAL_LARAVEL_CACHE_CRASH=PASS;FPM_OWNED_CACHE=OBSERVED")
+
+        receipt_crash_child = os.fork()
+        if receipt_crash_child == 0:
+            original_advance = BACKEND.DatabaseReleaseTransaction.advance
+
+            def die_after_receipt_commit(transaction, target, evidence):
+                if target == "COMPLETE":
+                    os._exit(85)
+                return original_advance(transaction, target, evidence)
+
+            BACKEND.DatabaseReleaseTransaction.advance = die_after_receipt_commit
+            child_result = BACKEND.deploy_release(
+                profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+            os.write(2, (f"PHASE_B_RECEIPT_CHILD_RETURN={child_result.status}:{child_result.reason}\n").encode("ascii"))
+            os._exit(87)
+        _receipt_child, receipt_child_status = os.waitpid(receipt_crash_child, 0)
+        if not os.WIFEXITED(receipt_child_status) or os.WEXITSTATUS(receipt_child_status) != 85:
+            observed_exit = os.WEXITSTATUS(receipt_child_status) if os.WIFEXITED(receipt_child_status) else "SIGNAL"
+            raise RuntimeError(f"phase_b_receipt_crash_injection_failed:{observed_exit}")
+        receipt_journal = state / f"db-release-{crash_state['transaction_id']}.json"
+        accepted_state = json.loads(receipt_journal.read_text(encoding="utf-8"))
+        if accepted_state.get("state") != "ACCEPTANCE_VERIFIED":
+            raise RuntimeError("phase_b_receipt_crash_state_invalid")
+        durable_receipts = []
+        for receipt_file in profile.receipts_dir.glob("deploy-*.json"):
+            item = json.loads(receipt_file.read_text(encoding="utf-8"))
+            if (item.get("application_sha") == candidate_sha and item.get("artifact_sha256") == artifact_sha
+                    and item.get("database_changed") is True and item.get("result") == "PASS"):
+                durable_receipts.append((receipt_file, item, hashlib.sha256(receipt_file.read_bytes()).hexdigest()))
+        if len(durable_receipts) != 1:
+            raise RuntimeError("phase_b_durable_receipt_missing_or_ambiguous")
+        durable_receipt_path, receipt, durable_receipt_sha = durable_receipts[0]
         result = BACKEND.deploy_release(profile, invoking_uid=1000, application_sha=candidate_sha,
                                         artifact_sha256=artifact_sha)
-        if result.status != "PASS":
+        if (result.status, result.reason) != ("NO_OP", "exact_release_already_active"):
+            raise RuntimeError(f"phase_b_receipt_restart_not_reconciled:{result.status}:{result.reason}")
+        if result.status != "PASS" and result.status != "NO_OP":
             observed_codes = []
             laravel_error_class = "UNAVAILABLE"
             log_path = storage / "logs" / "laravel.log"
@@ -1022,7 +1172,6 @@ def main():
                 failure_receipt = json.loads(Path(result.receipt_path).read_text(encoding="utf-8"))
                 observed_codes = [check.get("observed_status") for check in failure_receipt.get("acceptance", [])]
             raise RuntimeError(f"deployment_{result.status.lower()}_{result.reason}:http={observed_codes}:laravel_error_class={laravel_error_class}")
-        receipt = json.loads(Path(result.receipt_path).read_text(encoding="utf-8"))
         if (receipt.get("active_sha_after_deploy") != candidate_sha or receipt.get("result") != "PASS"
                 or receipt.get("database_changed") is not True
                 or not re.fullmatch(r"[0-9a-f]{64}", receipt.get("database_backup_sha256", ""))
@@ -1032,8 +1181,11 @@ def main():
             raise RuntimeError("observed_receipt_mismatch")
         journal = state / f"db-release-{receipt['database_transaction_id']}.json"
         journal_state = json.loads(journal.read_text(encoding="utf-8"))
-        if journal_state.get("state") != "COMPLETE":
+        if (journal_state.get("state") != "COMPLETE"
+                or journal_state.get("evidence", {}).get("COMPLETE", {}).get("release_receipt_sha256")
+                != durable_receipt_sha):
             raise RuntimeError("database_transaction_not_complete")
+        print(f"PHASE_B_RECEIPT_RESTART=PASS;DURABLE_PASS_RECEIPT_SHA256={durable_receipt_sha}")
         # The real backend reloads PHP-FPM after atomically switching current.
         # Restart the disposable PHP server to model that worker generation change.
         php_process.terminate()
@@ -1146,7 +1298,7 @@ def main():
               f"PHASE_B_PROCESS_RESTART_RESUME=PASS\nMYSQL_TRIGGER_MIGRATION=PASS\n"
               f"PHASE_B_MIGRATIONS=PASS;COUNT={len(migration_status.splitlines()) - 1}\n"
               f"LARAVEL_RELEASE={candidate_sha}\nMYSQL=8.4.11\nHTTP=6/6_PASS\nNO_OP=PASS\n"
-              f"RECEIPT_SHA256={result.receipt_sha256}\nBACKUP_SHA256={receipt['database_backup_sha256']}")
+              f"RECEIPT_SHA256={durable_receipt_sha}\nBACKUP_SHA256={receipt['database_backup_sha256']}")
     finally:
         if php_process is not None:
             php_process.terminate()

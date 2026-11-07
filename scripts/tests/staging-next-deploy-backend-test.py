@@ -10,6 +10,7 @@ import io
 import json
 import os
 import socketserver
+import stat
 import subprocess
 import sys
 import tarfile
@@ -18,6 +19,7 @@ import threading
 import unittest
 from unittest import mock
 from dataclasses import replace
+from types import SimpleNamespace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -58,6 +60,31 @@ class IsolatedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 class StagingDeployBackendTests(unittest.TestCase):
+    def test_interrupted_cache_file_metadata_is_bounded_and_fail_closed(self):
+        profile = replace(self.profile, php_fpm_uid=33, php_fpm_gid=33)
+
+        def metadata(mode, *, uid=33, gid=33, nlink=1, size=128):
+            return SimpleNamespace(st_mode=stat.S_IFREG | mode, st_uid=uid,
+                                   st_gid=gid, st_nlink=nlink, st_size=size)
+
+        for mode in (0o600, 0o640, 0o644, 0o755):
+            with self.subTest(mode=oct(mode)):
+                self.assertTrue(BACKEND._valid_interrupted_cache_file(
+                    metadata(mode), profile))
+        self.assertTrue(BACKEND._valid_interrupted_cache_file(
+            metadata(0o640, uid=profile.expected_owner_uid, gid=0), profile))
+        rejected = (
+            metadata(0o666), metadata(0o777), metadata(0o755, uid=1000),
+            metadata(0o755, gid=1000), metadata(0o755, nlink=2),
+            metadata(0o755, size=16 * 1024 * 1024 + 1),
+            SimpleNamespace(st_mode=stat.S_IFLNK | 0o777, st_uid=33, st_gid=33,
+                            st_nlink=1, st_size=32),
+        )
+        for info in rejected:
+            with self.subTest(mode=oct(stat.S_IMODE(info.st_mode)), uid=info.st_uid,
+                              gid=info.st_gid, nlink=info.st_nlink, size=info.st_size):
+                self.assertFalse(BACKEND._valid_interrupted_cache_file(info, profile))
+
     def test_package_discovery_cache_is_built_for_fpm_then_restored_root_owned(self):
         root = Path(self.temp.name) / "candidate"
         cache = root / "bootstrap/cache"
@@ -491,6 +518,100 @@ class StagingDeployBackendTests(unittest.TestCase):
                                  artifact_sha256=digest)
         self.assertEqual((resumed.status, resumed.reason), ("PASS", "release_accepted"))
         self.assertEqual(os.readlink(self.link), str(final))
+
+    @unittest.skipUnless(hasattr(os, "fork"), "process termination test requires Linux fork")
+    def test_real_process_death_with_fpm_owned_laravel_cache_is_repaired_on_resume(self):
+        base_cache = self.base_path / "bootstrap/cache"
+        base_cache.mkdir(parents=True, exist_ok=True)
+        (base_cache / ".gitignore").write_text("*\n!.gitignore\n")
+        for name in ("packages.php", "services.php"):
+            (base_cache / name).write_text("<?php return [];\n")
+            os.chown(base_cache / name, 0, 0)
+            os.chmod(base_cache / name, 0o644)
+        (base_cache / "config.php").write_text("<?php return [];\n")
+        os.chown(base_cache / "config.php", 0, 33)
+        os.chmod(base_cache / "config.php", 0o640)
+        os.chown(base_cache / ".gitignore", 0, 0)
+        os.chmod(base_cache / ".gitignore", 0o644)
+        os.chown(base_cache, 0, 0)
+        os.chmod(base_cache, 0o755)
+        self.profile = replace(self.profile, build_application_bootstrap=True,
+                               php_fpm_uid=33, php_fpm_gid=33)
+        os.chown(self.shared_env, 0, 33)
+        os.chown(self.shared_storage, 33, 33)
+        base_manifest = BACKEND._release_manifest(
+            self.profile, self.base_path, expected_uid=self.profile.expected_owner_uid)
+        base_files = BACKEND._hash_release_tree(
+            self.base_path, expected_uid=self.profile.expected_owner_uid,
+            shared_env_file=self.profile.shared_env_file,
+            shared_storage_dir=self.profile.shared_storage_dir,
+            shared_vendor_dir=self.profile.shared_vendor_dir,
+        )
+        base_manifest["files_sha256"] = _canonical_files_hash(base_files)
+        (self.base_path / "release-manifest.json").write_text(
+            json.dumps(base_manifest, sort_keys=True, separators=(",", ":")) + "\n")
+        os.chown(self.base_path / "release-manifest.json", 0, 0)
+        os.chmod(self.base_path / "release-manifest.json", 0o644)
+        entries = self._runtime_files("interrupted-fpm-cache")
+        entries["bootstrap/cache/.gitignore"] = b"*\n!.gitignore\n"
+        target_sha = self._write_source_tree(entries)
+        archive = self._archive(entries, app_sha=target_sha, base_sha=self.base_sha)
+        digest = hashlib.sha256(archive).hexdigest()
+        incoming = self.incoming / f"{target_sha}.tar"
+        incoming.write_bytes(archive)
+        os.chmod(incoming, 0o600)
+        os.chown(incoming, 1000, 1000)
+        self.assertEqual(stage_artifact(self.profile, invoking_uid=1000, application_sha=target_sha,
+                                        artifact_sha256=digest).status, "PASS")
+        pid = os.fork()
+        if pid == 0:
+            def die_after_php_fpm_cache_write(_profile, _argv, *, cwd, **_kwargs):
+                cache = Path(cwd) / "bootstrap/cache"
+                for name in ("packages.php", "services.php", "config.php"):
+                    path = cache / name
+                    path.write_text("<?php return ['synthetic' => true];\n")
+                    os.chown(path, 33, 33)
+                    # Match PHP's actual generated mode on the interrupted FPM path.
+                    os.chmod(path, 0o755)
+                os.chown(cache, 33, 33)
+                os.chmod(cache, 0o2750)
+                os._exit(91)
+
+            BACKEND._run_as_php_fpm = die_after_php_fpm_cache_write
+            child_result = deploy_release(self.profile, invoking_uid=1000, application_sha=target_sha,
+                                          artifact_sha256=digest)
+            os.write(2, f"CACHE_CRASH_CHILD_RETURN={child_result.status}:{child_result.reason}\n".encode())
+            os._exit(92)
+        _pid, status = os.waitpid(pid, 0)
+        self.assertTrue(os.WIFEXITED(status))
+        self.assertEqual(os.WEXITSTATUS(status), 91)
+        final = self.releases / target_sha
+        cache = final / "bootstrap/cache"
+        self.assertEqual((cache.stat().st_uid, cache.stat().st_gid, cache.stat().st_mode & 0o7777),
+                         (33, 33, 0o2750))
+        self.assertEqual(os.readlink(self.link), str(self.base_path))
+
+        def rebuild(_profile, argv, *, cwd, **_kwargs):
+            cache_dir = Path(cwd) / "bootstrap/cache"
+            command = argv[2]
+            name = {"package:discover": "packages.php", "config:cache": "config.php"}[command]
+            path = cache_dir / name
+            path.write_text("<?php return ['rebuilt' => true];\n")
+            os.chown(path, 33, 33)
+            os.chmod(path, 0o640)
+            if command == "package:discover":
+                services = cache_dir / "services.php"
+                services.write_text("<?php return [];\n")
+                os.chown(services, 33, 33)
+                os.chmod(services, 0o640)
+            return b""
+
+        with mock.patch.object(BACKEND, "_run_as_php_fpm", side_effect=rebuild):
+            resumed = deploy_release(self.profile, invoking_uid=1000, application_sha=target_sha,
+                                     artifact_sha256=digest)
+        self.assertEqual((resumed.status, resumed.reason), ("PASS", "release_accepted"))
+        self.assertEqual(os.readlink(self.link), str(final))
+        self.assertTrue((cache / "config.php").is_file())
 
     @unittest.skipUnless(hasattr(os, "fork"), "process termination test requires Linux fork")
     def test_process_death_after_pointer_switch_is_reconciled_before_success_receipt(self):

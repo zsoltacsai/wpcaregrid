@@ -31,8 +31,8 @@ PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
 SCHEMA = 4
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
-PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.2.json")
-PHASE_B_CREDENTIALS_PATH = Path("/etc/wpcaregrid-deploy/credentials/staging-next-database-1.4.2.json")
+PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.3.json")
+PHASE_B_CREDENTIALS_PATH = Path("/etc/wpcaregrid-deploy/credentials/staging-next-database-1.4.3.json")
 PHASE_B_BACKUP_PATH = Path("/var/lib/wpcaregrid-deploy/staging-next/database-backups")
 PHASE_B_TARGET_HOST = "127.0.0.1"
 PHASE_B_TARGET_PORT = 3306
@@ -1028,6 +1028,61 @@ class DatabaseReleaseTransaction:
                 raise TransactionRefused("unfinished_database_transaction")
 
     @classmethod
+    def load_existing_by_transaction_id(
+        cls, state_dir: Path, transaction_id: str,
+    ) -> tuple[TransactionIdentity, Mapping[str, object]]:
+        """Load one pinned journal by receipt-bound transaction ID, without creating state."""
+        _require(re.fullmatch(r"[0-9a-f]{32}", transaction_id) is not None,
+                 "transaction_id_invalid")
+        try:
+            directory = os.lstat(state_dir)
+            _require(stat.S_ISDIR(directory.st_mode) and not stat.S_ISLNK(directory.st_mode)
+                     and directory.st_uid == 0 and stat.S_IMODE(directory.st_mode) == 0o700,
+                     "transaction_state_directory_metadata_invalid")
+            path = state_dir / f"db-release-{transaction_id}.json"
+            before = os.lstat(path)
+            _require(stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode)
+                     and before.st_uid == 0 and stat.S_IMODE(before.st_mode) == 0o600
+                     and before.st_size <= 256 * 1024, "transaction_journal_metadata_invalid")
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                opened = os.fstat(fd)
+                _require(stat.S_ISREG(opened.st_mode) and opened.st_uid == 0
+                         and stat.S_IMODE(opened.st_mode) == 0o600
+                         and opened.st_ino == before.st_ino and opened.st_dev == before.st_dev
+                         and opened.st_size == before.st_size,
+                         "transaction_journal_changed_during_open")
+                with os.fdopen(fd, "rb", closefd=False) as stream:
+                    raw = stream.read(256 * 1024 + 1)
+            finally:
+                os.close(fd)
+            value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json)
+        except TransactionRefused:
+            raise
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            raise TransactionRefused("transaction_journal_unavailable") from None
+        _require(isinstance(value, dict) and set(value) == JOURNAL_KEYS
+                 and value.get("schema") == SCHEMA and value.get("profile") == PROFILE
+                 and value.get("database") == DATABASE and value.get("transaction_id") == transaction_id
+                 and isinstance(value.get("migrations"), list)
+                 and all(isinstance(item, str) for item in value["migrations"]),
+                 "transaction_journal_schema_invalid")
+        identity = TransactionIdentity(
+            application_sha=value.get("application_sha"),
+            previous_sha=value.get("previous_sha"),
+            artifact_sha256=value.get("artifact_sha256"),
+            backup_sha256=value.get("backup_sha256"),
+            backup_filename=value.get("backup_filename"),
+            mysql_uuid_sha256=value.get("mysql_uuid_sha256"),
+            migrations=tuple(value["migrations"]),
+        )
+        transaction = cls(state_dir, identity)
+        _require(transaction.transaction_id == transaction_id,
+                 "transaction_journal_identity_invalid")
+        transaction._validate_state(value)
+        return identity, value
+
+    @classmethod
     def find_unfinished_for_release(
         cls,
         state_dir: Path,
@@ -1401,6 +1456,22 @@ class DatabaseReleaseTransaction:
                      and _hash(before.get("data_sha256"))
                      and isinstance(before.get("migrations"), (tuple, list)),
                      "migration_observation_invalid")
+            cursor = state["migration_cursor"]
+            if cursor == 0:
+                checkpoint = state["evidence"].get("RESTORE_REHEARSAL_VERIFIED")
+                _require(isinstance(checkpoint, Mapping), "restore_checkpoint_missing")
+                expected_before = {
+                    "schema_sha256": checkpoint.get("target_schema_sha256"),
+                    "ledger_sha256": checkpoint.get("target_ledger_sha256"),
+                    "data_sha256": checkpoint.get("target_data_sha256"),
+                }
+            else:
+                previous_name = self.identity.migrations[cursor - 1]
+                expected_before = state["evidence"].get(f"migration:{previous_name}")
+                _require(isinstance(expected_before, Mapping), "prior_migration_checkpoint_missing")
+            _require(all(before.get(key) == expected_before.get(key)
+                         for key in ("schema_sha256", "ledger_sha256", "data_sha256")),
+                     "target_changed_since_migration_rehearsal")
             _require(name not in before["migrations"], "migration_already_applied_without_checkpoint")
             self.begin_migration(
                 name, observed_schema_sha256=before["schema_sha256"],

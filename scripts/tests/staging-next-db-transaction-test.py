@@ -33,9 +33,9 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
     def restore_checkpoint(self):
         evidence = {
             "backup_sha256": self.identity.backup_sha256,
-            "target_schema_sha256": "1" * 64,
-            "target_ledger_sha256": "2" * 64,
-            "target_data_sha256": "3" * 64,
+            "target_schema_sha256": "4" * 64,
+            "target_ledger_sha256": "5" * 64,
+            "target_data_sha256": "c" * 64,
             "restored_schema_sha256": "4" * 64,
             "restored_ledger_sha256": "5" * 64,
             "restored_data_sha256": "6" * 64,
@@ -315,6 +315,26 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
             self.tx.apply_rehearsed_migrations(expected_after=rehearsed, observe=observe, apply_one=apply_one)
             self.assertEqual(observed_calls, list(self.identity.migrations))
             self.assertEqual(self.tx.state["state"], "MIGRATIONS_VERIFIED")
+
+    def test_target_mutation_after_rehearsal_is_rejected_before_any_migration(self):
+        current = {"schema_sha256": "4" * 64, "ledger_sha256": "5" * 64,
+                   "data_sha256": "d" * 64, "migrations": []}
+        rehearsed = {
+            "2026_11_01_000001_add_widget": {"schema_sha256": "6" * 64, "ledger_sha256": "7" * 64,
+                                               "data_sha256": "d" * 64},
+            "2026_11_02_000002_add_gadget": {"schema_sha256": "9" * 64, "ledger_sha256": "a" * 64,
+                                               "data_sha256": "d" * 64},
+        }
+        attempted = []
+        with self.tx:
+            self.advance_to_migrating()
+            with self.assertRaisesRegex(TransactionRefused, "target_changed_since_migration_rehearsal"):
+                self.tx.apply_rehearsed_migrations(
+                    expected_after=rehearsed, observe=lambda: dict(current),
+                    apply_one=lambda name: attempted.append(name) or True,
+                )
+            self.assertEqual(attempted, [])
+            self.assertEqual(self.tx.state["state"], "FENCES_CLOSED")
 
     def test_failed_migration_does_not_auto_retry_when_database_is_unchanged(self):
         current = {"schema_sha256": "4" * 64, "ledger_sha256": "5" * 64,

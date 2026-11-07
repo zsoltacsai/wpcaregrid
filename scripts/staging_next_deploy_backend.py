@@ -58,9 +58,9 @@ verify_background_fences = _TRANSACTION_MODULE.verify_background_fences
 _verify_backup_sql = _TRANSACTION_MODULE._verify_backup_sql
 
 
-HELPER_VERSION = "1.4.2"
-HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v6"
-PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.2.json")
+HELPER_VERSION = "1.4.3"
+HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v7"
+PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.3.json")
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
@@ -232,7 +232,7 @@ def _safe_profile(profile: StagingProfile) -> None:
              "helper_artifact_identity_invalid")
     if not profile.test_only:
         _require(profile.phase_b_policy_file == Path(
-            "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.2.json"),
+            "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.3.json"),
             "phase_b_policy_path_invalid")
         _require(profile.phase_b_policy_sha256 is None
                  or _sha(profile.phase_b_policy_sha256, SHA256_RE), "phase_b_policy_pin_invalid")
@@ -496,9 +496,20 @@ def _safe_vite_asset(value: str) -> str:
     return path.as_posix()
 
 
+def _valid_interrupted_cache_file(info, profile: StagingProfile) -> bool:
+    ownership = {(profile.expected_owner_uid, 0),
+                 (profile.expected_owner_uid, profile.php_fpm_gid),
+                 (profile.php_fpm_uid, profile.php_fpm_gid)}
+    return (stat.S_ISREG(info.st_mode) and (info.st_uid, info.st_gid) in ownership
+            and stat.S_IMODE(info.st_mode) in {0o600, 0o640, 0o644, 0o755}
+            and info.st_nlink == 1 and info.st_size <= 16 * 1024 * 1024)
+
+
 def _hash_release_tree(release_dir: Path, *, expected_uid: int,
                       shared_env_file: Path, shared_storage_dir: Path,
-                      shared_vendor_dir: Path) -> dict[str, str]:
+                      shared_vendor_dir: Path, allow_interrupted_cache: bool = False,
+                      php_fpm_uid: int | None = None,
+                      php_fpm_gid: int | None = None) -> dict[str, str]:
     result: dict[str, str] = {}
     for path in sorted(release_dir.rglob("*")):
         info = _lstat(path, "release_tree_unavailable")
@@ -512,7 +523,13 @@ def _hash_release_tree(release_dir: Path, *, expected_uid: int,
                      "release_shared_link_invalid")
             continue
         if rel in {"bootstrap/cache/config.php", "bootstrap/cache/packages.php", "bootstrap/cache/services.php"}:
-            _require(stat.S_ISREG(info.st_mode) and info.st_uid == expected_uid,
+            allowed_owners = {expected_uid}
+            if allow_interrupted_cache and php_fpm_uid is not None:
+                allowed_owners.add(php_fpm_uid)
+            _require(stat.S_ISREG(info.st_mode) and info.st_uid in allowed_owners
+                     and (not allow_interrupted_cache or info.st_gid in {0, php_fpm_gid})
+                     and stat.S_IMODE(info.st_mode) in {0o600, 0o640, 0o644}
+                     and info.st_nlink == 1 and info.st_size <= 16 * 1024 * 1024,
                      "release_bootstrap_cache_metadata_invalid")
             continue
         if rel.startswith("bootstrap/cache/") and rel != "bootstrap/cache/.gitignore":
@@ -572,16 +589,103 @@ def _verify_inactive_release_candidate(profile: StagingProfile, release_dir: Pat
              and manifest.get("base_application_sha") == base_sha
              and manifest.get("artifact_sha256") == artifact_sha256,
              "published_candidate_identity_mismatch")
+    # Reclaim only the fixed Laravel-generated cache files before evaluating
+    # their content or accepting their metadata. A PHP-FPM process can die
+    # after writing these files with executable/readable mode bits. They may
+    # contain secrets (config.php), so close and remove them before continuing.
+    if profile.build_application_bootstrap:
+        _repair_interrupted_bootstrap_cache(profile, release_dir, manifest)
     files = _hash_release_tree(release_dir, expected_uid=profile.expected_owner_uid,
                                shared_env_file=profile.shared_env_file,
                                shared_storage_dir=profile.shared_storage_dir,
-                               shared_vendor_dir=profile.shared_vendor_dir)
+                               shared_vendor_dir=profile.shared_vendor_dir,
+                               allow_interrupted_cache=False)
     _require(manifest.get("files_sha256") == _canonical_files_hash(files),
              "published_candidate_content_mismatch")
     _verify_frontend_build(manifest.get("frontend_build"), release_dir, files)
     _verify_artifact_matches_primary(profile, application_sha, release_dir, files, manifest)
     _verify_shared_inputs(profile)
     return manifest
+
+
+def _repair_interrupted_bootstrap_cache(profile: StagingProfile, release_path: Path,
+                                        manifest: Mapping[str, object]) -> None:
+    """Reclaim only validated Laravel-generated cache files in an exact inactive release."""
+    if not profile.build_application_bootstrap:
+        return
+    active_info = _lstat(profile.application_link, "active_release_missing")
+    _require(stat.S_ISLNK(active_info.st_mode), "active_release_not_symlink")
+    try:
+        active_text = os.readlink(profile.application_link)
+    except OSError:
+        raise DeployRefused("active_release_unreadable") from None
+    active_path = Path(active_text)
+    if not active_path.is_absolute():
+        active_path = profile.application_link.parent / active_path
+    _require(active_path != release_path, "cache_repair_candidate_is_active")
+    cache = release_path / "bootstrap/cache"
+    info = _lstat(cache, "bootstrap_cache_unavailable")
+    valid_directory_owner = (
+        (info.st_uid == profile.expected_owner_uid and info.st_gid == 0
+         and stat.S_IMODE(info.st_mode) == 0o755)
+        or (info.st_uid == profile.php_fpm_uid and info.st_gid == profile.php_fpm_gid
+            and stat.S_IMODE(info.st_mode) in {0o755, 0o2750})
+    )
+    _require(stat.S_ISDIR(info.st_mode) and valid_directory_owner,
+             "interrupted_bootstrap_cache_directory_invalid")
+    allowed = {".gitignore", "config.php", "packages.php", "services.php"}
+    try:
+        entries = {entry.name for entry in os.scandir(cache)}
+    except OSError:
+        raise DeployRefused("interrupted_bootstrap_cache_unavailable") from None
+    _require(entries.issubset(allowed) and ".gitignore" in entries,
+             "interrupted_bootstrap_cache_unexpected_entry")
+    gitignore = _lstat(cache / ".gitignore", "release_bootstrap_cache_metadata_invalid")
+    _require(stat.S_ISREG(gitignore.st_mode) and gitignore.st_uid == profile.expected_owner_uid
+             and gitignore.st_gid == 0 and stat.S_IMODE(gitignore.st_mode) == 0o644
+             and gitignore.st_nlink == 1, "release_bootstrap_cache_metadata_invalid")
+    generated_names = ("config.php", "packages.php", "services.php")
+    for name in generated_names:
+        path = cache / name
+        try:
+            generated = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        _require(_valid_interrupted_cache_file(generated, profile),
+                 "interrupted_bootstrap_cache_file_invalid")
+    # Remove PHP-FPM's directory write permission before deleting generated files.
+    try:
+        os.chown(cache, profile.expected_owner_uid, 0)
+        os.chmod(cache, 0o755)
+        for name in generated_names:
+            path = cache / name
+            try:
+                generated = os.lstat(path)
+            except FileNotFoundError:
+                continue
+            _require(_valid_interrupted_cache_file(generated, profile),
+                     "interrupted_bootstrap_cache_file_invalid")
+            try:
+                os.chmod(path, 0o600, follow_symlinks=False)
+            except OSError:
+                raise DeployRefused("interrupted_bootstrap_cache_restrict_failed") from None
+            path.unlink()
+        directory_fd = os.open(cache, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        rebuilt_files = _hash_release_tree(
+            release_path, expected_uid=profile.expected_owner_uid,
+            shared_env_file=profile.shared_env_file, shared_storage_dir=profile.shared_storage_dir,
+            shared_vendor_dir=profile.shared_vendor_dir,
+        )
+        _require(manifest.get("files_sha256") == _canonical_files_hash(rebuilt_files),
+                 "published_candidate_content_mismatch")
+    except DeployRefused:
+        raise
+    except OSError:
+        raise DeployRefused("interrupted_bootstrap_cache_repair_failed") from None
 
 
 def _verify_shared_inputs(profile: StagingProfile) -> None:
@@ -1007,8 +1111,8 @@ def _write_receipt(profile: StagingProfile, receipt: Mapping[str, object]) -> tu
     return str(path), hashlib.sha256(raw).hexdigest()
 
 
-def _successful_receipt_exists(profile: StagingProfile, application_sha: str,
-                               artifact_sha256: str) -> bool:
+def _successful_receipt(profile: StagingProfile, application_sha: str,
+                        artifact_sha256: str) -> tuple[Mapping[str, object], str] | None:
     identity = hashlib.sha256(
         f"{application_sha}:{artifact_sha256}:PASS".encode("utf-8")
     ).hexdigest()[:20]
@@ -1026,8 +1130,96 @@ def _successful_receipt_exists(profile: StagingProfile, application_sha: str,
                  and receipt.get("helper_version") == HELPER_VERSION
                  and receipt.get("helper_contract") == HELPER_CONTRACT,
                  "release_receipt_identity_invalid")
-        return True
-    return False
+        return receipt, hashlib.sha256(raw).hexdigest()
+    return None
+
+
+def _successful_receipt_exists(profile: StagingProfile, application_sha: str,
+                               artifact_sha256: str) -> bool:
+    return _successful_receipt(profile, application_sha, artifact_sha256) is not None
+
+
+def _reconcile_database_success_receipt(profile: StagingProfile, *, receipt: Mapping[str, object],
+                                        receipt_sha256: str, application_sha: str,
+                                        active_path: Path, active_manifest: Mapping[str, object]) -> None:
+    """Finish only a receipt-backed transaction after independently rechecking its live DB state."""
+    migration_scope = active_manifest.get("database_scope") == "migrations"
+    _require(receipt.get("database_changed") is migration_scope,
+             "phase_b_release_receipt_scope_mismatch")
+    if receipt.get("database_changed") is not True:
+        return
+    observed_sha, observed_path, _observed_files = _current_release(profile)
+    _require(observed_sha == application_sha and observed_path == active_path,
+             "phase_b_receipt_active_release_mismatch")
+    _verify_runtime(profile, active_path)
+    healthy, _statuses, _unauthenticated = _bounded_acceptance(profile)
+    _require(healthy, "phase_b_receipt_acceptance_reverification_failed")
+    transaction_id = receipt.get("database_transaction_id")
+    _require(isinstance(transaction_id, str) and re.fullmatch(r"[0-9a-f]{32}", transaction_id),
+             "phase_b_release_receipt_transaction_invalid")
+    migration_items = active_manifest.get("database_migrations")
+    _require(isinstance(migration_items, list) and migration_items
+             and all(isinstance(item, Mapping) and isinstance(item.get("name"), str)
+                     for item in migration_items), "phase_b_release_migration_manifest_invalid")
+    migrations = tuple(item["name"] for item in migration_items)
+    identity, _observed_journal = DatabaseReleaseTransaction.load_existing_by_transaction_id(
+        profile.state_dir, transaction_id)
+    _require(identity.application_sha == application_sha
+             and identity.previous_sha == active_manifest.get("base_application_sha")
+             and identity.artifact_sha256 == active_manifest.get("artifact_sha256")
+             and identity.migrations == migrations
+             and identity.backup_sha256 == receipt.get("database_backup_sha256")
+             and receipt.get("restore_receipt_sha256")
+             and receipt.get("migration_rehearsal_receipt_sha256")
+             and receipt.get("migration_receipt_sha256")
+             and receipt.get("active_sha_after_deploy") == application_sha
+             and receipt.get("files_sha256") == active_manifest.get("files_sha256"),
+             "phase_b_release_receipt_journal_mismatch")
+    policy = _load_phase_b_policy(profile)
+    _require(identity.mysql_uuid_sha256 == profile.mysql_server_uuid_sha256
+             and identity.mysql_uuid_sha256 == policy.target_uuid_sha256,
+             "phase_b_database_identity_mismatch")
+    backup_path = policy.backup_directory / identity.backup_filename
+    backup_sha, _backup_size = _verify_backup_sql(backup_path, expected_uid=0, expected_mode=0o600)
+    _require(backup_sha == identity.backup_sha256, "phase_b_pinned_backup_identity_mismatch")
+    transaction = DatabaseReleaseTransaction(profile.state_dir, identity)
+    try:
+        transaction.__enter__()
+        state = transaction.state
+        _require(state.get("state") in {"ACCEPTANCE_VERIFIED", "COMPLETE"}
+                 and state.get("migration_cursor") == len(migrations),
+                 "phase_b_receipt_transaction_not_accepted")
+        evidence = state["evidence"]
+        restore = evidence.get("RESTORE_REHEARSAL_VERIFIED", {})
+        rehearsal = evidence.get("MIGRATION_REHEARSAL_VERIFIED", {})
+        migrated = evidence.get("MIGRATIONS_VERIFIED", {})
+        final_migration = evidence.get(f"migration:{migrations[-1]}", {})
+        _require(restore.get("backup_sha256") == identity.backup_sha256
+                 and restore.get("restore_receipt_sha256") == receipt.get("restore_receipt_sha256")
+                 and rehearsal.get("migration_rehearsal_receipt_sha256")
+                 == receipt.get("migration_rehearsal_receipt_sha256")
+                 and migrated.get("migration_receipt_sha256") == receipt.get("migration_receipt_sha256")
+                 and all(isinstance(final_migration.get(key), str) for key in (
+                     "schema_sha256", "ledger_sha256", "data_sha256")),
+                 "phase_b_receipt_evidence_mismatch")
+        current = database_fingerprint(policy, database=DATABASE, isolated=False)
+        _require(current.get("mysql_uuid_sha256") == identity.mysql_uuid_sha256
+                 and current.get("schema_sha256") == final_migration.get("schema_sha256")
+                 and current.get("ledger_sha256") == final_migration.get("ledger_sha256")
+                 and current.get("data_sha256") == final_migration.get("data_sha256")
+                 and all(name in current.get("migrations", ()) for name in migrations),
+                 "phase_b_receipt_database_state_mismatch")
+        _verify_phase_b_fences(profile, policy)
+        if state.get("state") == "ACCEPTANCE_VERIFIED":
+            transaction.advance("COMPLETE", {"release_receipt_sha256": receipt_sha256})
+        else:
+            _require(state.get("evidence", {}).get("COMPLETE", {}).get("release_receipt_sha256")
+                     == receipt_sha256, "phase_b_release_receipt_hash_mismatch")
+    except TransactionRefused as error:
+        raise DeployRefused(str(error)) from None
+    finally:
+        if transaction._lock_fd is not None:
+            transaction.__exit__(None, None, None)
 
 
 def _verify_release_directory(profile: StagingProfile, release_path: Path, application_sha: str):
@@ -1908,7 +2100,14 @@ def _stop_after_database_mutation(profile: StagingProfile, *, phase_b,
         if phase_b is not None:
             transaction = phase_b["transaction"]
             state = transaction.state["state"]
-            if state not in {"COMPLETE", "RECOVERY_REQUIRED"}:
+            if state == "ACCEPTANCE_VERIFIED":
+                durable = _successful_receipt(profile, application_sha, artifact_sha256)
+                receipt_backed = (durable is not None
+                                  and durable[0].get("database_changed") is True
+                                  and durable[0].get("database_transaction_id") == transaction.transaction_id)
+            else:
+                receipt_backed = False
+            if state not in {"COMPLETE", "RECOVERY_REQUIRED"} and not receipt_backed:
                 transaction.mark_recovery_required(reason_code)
     except Exception:
         return DeploymentResult("FAIL", "phase_b_journal_recovery_mark_failed", application_sha,
@@ -2106,7 +2305,8 @@ def preflight(profile: StagingProfile, *, invoking_uid: int) -> Mapping[str, obj
         active_manifest = _release_manifest(profile, active_path, expected_uid=profile.expected_owner_uid)
         _basic_auth_header(profile)
         artifact_sha = active_manifest.get("artifact_sha256")
-        if not _successful_receipt_exists(profile, active_sha, artifact_sha):
+        prior_receipt = _successful_receipt(profile, active_sha, artifact_sha)
+        if prior_receipt is None:
             reconciled = _reconcile_unreceipted_active_release(
                 profile, application_sha=active_sha, active_path=active_path,
                 active_manifest=active_manifest, artifact_sha256=artifact_sha,
@@ -2116,6 +2316,11 @@ def preflight(profile: StagingProfile, *, invoking_uid: int) -> Mapping[str, obj
                         "application_sha": active_sha, "helper_version": HELPER_VERSION,
                         "helper_contract": HELPER_CONTRACT}
         runtime = _verify_runtime(profile, active_path)
+        if prior_receipt is not None:
+            _reconcile_database_success_receipt(
+                profile, receipt=prior_receipt[0], receipt_sha256=prior_receipt[1],
+                application_sha=active_sha, active_path=active_path, active_manifest=active_manifest,
+            )
         return {"result": "PASS", "profile": PROFILE, "helper_version": HELPER_VERSION,
                 "helper_contract": HELPER_CONTRACT, "helper_artifact_sha256": profile.helper_artifact_sha256,
                 "application_sha": active_sha,
@@ -2237,8 +2442,8 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
         if previous_sha == application_sha:
             existing = _release_manifest(profile, previous_path, expected_uid=profile.expected_owner_uid)
             if existing.get("artifact_sha256") == artifact_sha256:
-                has_prior_acceptance = _successful_receipt_exists(profile, application_sha, artifact_sha256)
-                if not has_prior_acceptance:
+                prior_receipt = _successful_receipt(profile, application_sha, artifact_sha256)
+                if prior_receipt is None:
                     return _reconcile_unreceipted_active_release(
                         profile, application_sha=application_sha, active_path=previous_path,
                         active_manifest=existing, artifact_sha256=artifact_sha256,
@@ -2248,6 +2453,11 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                 if not healthy:
                     return DeploymentResult("HOLD", "active_release_acceptance_failed", application_sha,
                                             previous_sha, artifact_sha256)
+                _reconcile_database_success_receipt(
+                    profile, receipt=prior_receipt[0], receipt_sha256=prior_receipt[1],
+                    application_sha=application_sha, active_path=previous_path, active_manifest=existing,
+                )
+                has_prior_acceptance = True
                 receipt_result = "NO_OP" if has_prior_acceptance else "PASS"
                 receipt_reason = ("exact_release_already_active" if has_prior_acceptance
                                   else "interrupted_activation_reconciled")
@@ -2542,13 +2752,11 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                 "migration_receipt_sha256": phase_b["transaction"].state["evidence"]["MIGRATIONS_VERIFIED"][
                     "migration_receipt_sha256"],
             })
-            raw_receipt = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
-            phase_b["transaction"].advance("COMPLETE", {
-                "release_receipt_sha256": hashlib.sha256(raw_receipt).hexdigest(),
-            })
         path, digest = _write_receipt(profile, receipt)
         if phase_b is not None:
-            _require(digest == hashlib.sha256(raw_receipt).hexdigest(), "phase_b_release_receipt_mismatch")
+            phase_b["transaction"].advance("COMPLETE", {
+                "release_receipt_sha256": digest,
+            })
         return DeploymentResult("PASS", "release_accepted", application_sha,
                                 previous_sha, artifact_sha256, path, digest)
     except DeployRefused as error:
