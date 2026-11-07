@@ -589,12 +589,14 @@ def _verify_inactive_release_candidate(profile: StagingProfile, release_dir: Pat
              and manifest.get("base_application_sha") == base_sha
              and manifest.get("artifact_sha256") == artifact_sha256,
              "published_candidate_identity_mismatch")
-    # Reclaim only the fixed Laravel-generated cache files before evaluating
-    # their content or accepting their metadata. A PHP-FPM process can die
-    # after writing these files with executable/readable mode bits. They may
-    # contain secrets (config.php), so close and remove them before continuing.
+    # A fully built cache has its own exact metadata contract. Keep it intact;
+    # an interrupted package-discovery cache can be scrubbed only when it has
+    # no config.php and therefore contains no secret-bearing Laravel settings.
     if profile.build_application_bootstrap:
-        _repair_interrupted_bootstrap_cache(profile, release_dir, manifest)
+        try:
+            _verify_generated_bootstrap_caches(profile, release_dir)
+        except DeployRefused:
+            _repair_interrupted_bootstrap_cache(profile, release_dir, manifest)
     files = _hash_release_tree(release_dir, expected_uid=profile.expected_owner_uid,
                                shared_env_file=profile.shared_env_file,
                                shared_storage_dir=profile.shared_storage_dir,
@@ -626,12 +628,9 @@ def _repair_interrupted_bootstrap_cache(profile: StagingProfile, release_path: P
     cache = release_path / "bootstrap/cache"
     info = _lstat(cache, "bootstrap_cache_unavailable")
     cache_mode = stat.S_IMODE(info.st_mode)
-    valid_directory_owner = (
-        (info.st_uid == profile.expected_owner_uid and info.st_gid == 0
-         and cache_mode in {0o700, 0o755})
-        or (info.st_uid == profile.php_fpm_uid and info.st_gid == profile.php_fpm_gid
-            and cache_mode in {0o700, 0o755, 0o2750})
-    )
+    valid_directory_owner = ((info.st_uid, info.st_gid) in {
+        (profile.expected_owner_uid, 0), (profile.php_fpm_uid, profile.php_fpm_gid),
+    })
     _require(stat.S_ISDIR(info.st_mode) and valid_directory_owner,
              "interrupted_bootstrap_cache_directory_invalid")
     allowed = {".gitignore", "config.php", "packages.php", "services.php"}
@@ -641,6 +640,21 @@ def _repair_interrupted_bootstrap_cache(profile: StagingProfile, release_path: P
         raise DeployRefused("interrupted_bootstrap_cache_unavailable") from None
     _require(entries.issubset(allowed) and ".gitignore" in entries,
              "interrupted_bootstrap_cache_unexpected_entry")
+    sealed_directory = (
+        (info.st_uid == profile.expected_owner_uid and info.st_gid == 0 and cache_mode == 0o700)
+        or (info.st_uid == profile.php_fpm_uid and info.st_gid == profile.php_fpm_gid
+            and cache_mode in {0o700, 0o2750})
+    )
+    # Package discovery may finish, restore root ownership/mode, and then be
+    # interrupted before config:cache starts. A root-owned 0755 cache is safe
+    # to reclaim only while config.php is absent; never expose an existing
+    # configuration cache through a publicly traversable directory.
+    package_only_public_directory = (
+        info.st_uid == profile.expected_owner_uid and info.st_gid == 0
+        and cache_mode == 0o755 and "config.php" not in entries
+    )
+    _require(sealed_directory or package_only_public_directory,
+             "interrupted_bootstrap_cache_directory_invalid")
     gitignore = _lstat(cache / ".gitignore", "release_bootstrap_cache_metadata_invalid")
     _require(stat.S_ISREG(gitignore.st_mode) and gitignore.st_uid == profile.expected_owner_uid
              and gitignore.st_gid == 0 and stat.S_IMODE(gitignore.st_mode) == 0o644

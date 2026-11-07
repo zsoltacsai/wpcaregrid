@@ -190,6 +190,65 @@ class StagingDeployBackendTests(unittest.TestCase):
                 self.assertEqual((final.st_uid, final.st_gid, stat.S_IMODE(final.st_mode)),
                                  (0, 0, 0o755))
 
+    @unittest.skipUnless(os.geteuid() == 0, "filesystem ownership integration needs the disposable container root")
+    def test_unsealed_public_cache_with_readable_config_is_rejected_without_mutation(self):
+        profile = replace(self.profile, build_application_bootstrap=True,
+                          php_fpm_uid=33, php_fpm_gid=33)
+        manifest = {"files_sha256": "expected-tree"}
+        for owner, group in ((0, 0), (33, 33)):
+            with self.subTest(owner=owner, group=group):
+                release = Path(self.temp.name) / f"cache-public-{owner}-{group}"
+                cache = release / "bootstrap/cache"
+                cache.mkdir(parents=True)
+                os.chown(cache, owner, group)
+                os.chmod(cache, 0o755)
+                gitignore = cache / ".gitignore"
+                gitignore.write_text("*\n!.gitignore\n")
+                os.chown(gitignore, 0, 0)
+                os.chmod(gitignore, 0o644)
+                secret = cache / "config.php"
+                secret.write_text("<?php return ['APP_KEY' => 'synthetic'];\n")
+                os.chown(secret, 33, 33)
+                os.chmod(secret, 0o755)
+                before = (cache.stat().st_uid, cache.stat().st_gid,
+                          stat.S_IMODE(cache.stat().st_mode), hashlib.sha256(secret.read_bytes()).hexdigest())
+
+                with self.assertRaises(BACKEND.DeployRefused) as raised:
+                    BACKEND._repair_interrupted_bootstrap_cache(profile, release, manifest)
+
+                self.assertEqual(str(raised.exception), "interrupted_bootstrap_cache_directory_invalid")
+                after = (cache.stat().st_uid, cache.stat().st_gid,
+                         stat.S_IMODE(cache.stat().st_mode), hashlib.sha256(secret.read_bytes()).hexdigest())
+                self.assertEqual(after, before)
+
+    @unittest.skipUnless(os.geteuid() == 0, "filesystem ownership integration needs the disposable container root")
+    def test_root_public_cache_without_config_is_reclaimed_after_package_discovery(self):
+        profile = replace(self.profile, build_application_bootstrap=True,
+                          php_fpm_uid=33, php_fpm_gid=33)
+        release = Path(self.temp.name) / "cache-package-discovery-complete"
+        cache = release / "bootstrap/cache"
+        cache.mkdir(parents=True)
+        os.chown(cache, 0, 0)
+        os.chmod(cache, 0o755)
+        gitignore = cache / ".gitignore"
+        gitignore.write_text("*\n!.gitignore\n")
+        os.chown(gitignore, 0, 0)
+        os.chmod(gitignore, 0o644)
+        for name in ("packages.php", "services.php"):
+            generated = cache / name
+            generated.write_text("<?php return ['synthetic' => true];\n")
+            os.chown(generated, 0, 0)
+            os.chmod(generated, 0o644)
+
+        with (mock.patch.object(BACKEND, "_hash_release_tree", return_value={"ok": "hash"}),
+              mock.patch.object(BACKEND, "_canonical_files_hash", return_value="expected-tree")):
+            BACKEND._repair_interrupted_bootstrap_cache(
+                profile, release, {"files_sha256": "expected-tree"})
+
+        self.assertEqual({entry.name for entry in os.scandir(cache)}, {".gitignore"})
+        info = cache.stat()
+        self.assertEqual((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)), (0, 0, 0o755))
+
     def test_package_discovery_cache_is_built_for_fpm_then_restored_root_owned(self):
         root = Path(self.temp.name) / "candidate"
         cache = root / "bootstrap/cache"
