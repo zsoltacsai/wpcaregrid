@@ -164,7 +164,24 @@ for (const locale of ['en', 'hu'] as const) {
                 await expect(pricing).toContainText(locale === 'en' ? '2 months free' : '2 hónap ingyenes');
                 await expect(pricing.locator('[data-price="annual"]:visible')).toHaveCount(3);
                 await expect(pricing.locator('[data-price="monthly"]:visible')).toHaveCount(0);
-                await expect(page).not.toHaveURL(/checkout/);
+
+                const currencySelect = pricing.locator('#display-currency');
+                await expect(currencySelect).toBeVisible();
+                const currencyOptions = await currencySelect.locator('option').evaluateAll((options) =>
+                    options.map((option) => (option as HTMLOptionElement).value),
+                );
+                expect(currencyOptions.length).toBeGreaterThan(1);
+                const selectedCurrency = await currencySelect.inputValue();
+                const alternateCurrency = currencyOptions.find((currency) => currency !== selectedCurrency);
+                expect(alternateCurrency).toBeDefined();
+                const firstAnnualPrice = pricing.locator('[data-price="annual"]:visible').first()
+                    .locator('p.flex > span').first();
+                const priceBeforeCurrencyChange = (await firstAnnualPrice.textContent())?.trim();
+                await currencySelect.selectOption(alternateCurrency as string);
+                await expect(currencySelect).toHaveValue(alternateCurrency as string);
+                await expect(pricing).toContainText(alternateCurrency as string);
+                await expect(firstAnnualPrice).not.toHaveText(priceBeforeCurrencyChange ?? '');
+                await expect(page).not.toHaveURL(/checkout|register/);
             }
 
             expect(pageErrors).toEqual([]);
