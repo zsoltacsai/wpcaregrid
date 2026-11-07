@@ -51,7 +51,7 @@ From a root console on `stg1.wpcaregrid.com`, run this single command in a
 subshell so failure does not close the console:
 
 ```sh
-( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.8.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = 32f271560182de34c896d06bce31b69ef5bd918aa722cabb2edb2691a5913dc4; exec /usr/bin/python3 -I "$i" )
+( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.8.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = 00b40a2cc4d2f3a577aaa06dbfcd0329f21043da55c44e690b3717b1c842be5c; exec /usr/bin/python3 -I "$i" )
 ```
 
 The script itself checks the exact source hashes and directory contents,
