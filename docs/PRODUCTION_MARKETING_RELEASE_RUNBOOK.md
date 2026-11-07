@@ -7,7 +7,11 @@ database changes.
 
 ## Pinned implementation
 
-Source baseline for this runbook: protected primary merge `6184a1b922e44a2b4c6d333c5646e12d3920c686`.
+Source baseline for this runbook: protected primary `cf2a944c27a2a24dbdf1097bf0ba766e6edd48fe`.
+The helper/controller/sudoers artifacts below are pinned to that primary.
+The root installer was added later in PR #300 at source commit
+`7a1dda27ede1b61f657a378d289b9eb48f36f5df`; it is not part of the listed
+primary commit, and its separate digest is pinned in the manifest.
 Revalidate primary, CI, reviews, artifact manifest, and the application release
 SHA immediately before any later operation. The application release SHA is not
 implied by the helper merge SHA.
@@ -23,6 +27,7 @@ Production helper version `2.0.0`, contract `wpcaregrid-deployment-profile-v2`:
 | Combined helper artifact | `0e50791ee708de571dbcaa5420bd06b31698e3b7a8683f7501bee6880ead96fc` |
 | Production controller | `a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283` |
 | Sudoers candidate | `fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963` |
+| Root installer | `c5c19f0655cfae5f4747264c13c988f7360f3322be32a54b5e1961d538c2bf9d` |
 
 The source manifest is `deploy/release-manifests/production-deployment-helper-2.0.0.json`.
 The root entrypoint accepts only `preflight`, `verify-install`, `authorize <40-hex-SHA>`,
@@ -93,15 +98,54 @@ The versioned artifacts install only under
 is `deploy/sudoers/wpcaregrid-production-v2.0.0`. Install with no-overwrite
 publication, verify every installed SHA, owner and mode, and run `visudo -c`.
 The dedicated `deploy-production` identity receives only the five exact
-allowlisted operations in that file. Run negative tests for other users,
-arguments and environment targets, plus positive `verify-install` and
-`preflight`. On any mismatch, use only an identity-checked rollback to the
-previous recorded files; do not alter other profiles or directories.
+allowlisted operations in that file. Run the installer negative authorization
+tests for other users and invalid arguments, then verify the profile remains
+disabled. While `enabled=false`, positive `verify-install` and `preflight` are
+expected to return a fail-closed HOLD; do not enable the profile to make these
+checks pass. Those positive checks are deferred until a complete environment
+policy and its separate authorization are available. On any mismatch, use only
+an identity-checked rollback to the previous recorded files; do not alter other
+profiles or directories.
 
-There is no production root installer in the pinned source manifest. Therefore
-this runbook does not invent a runnable root installation command. A reviewed,
-no-overwrite installer and its exact artifact hash must be prepared and
-approved before P1.
+The no-overwrite root installer is `scripts/install_production_helper_2_0_0.py`;
+SHA-256 `c5c19f0655cfae5f4747264c13c988f7360f3322be32a54b5e1961d538c2bf9d` is pinned in the release manifest.
+It accepts no command-line arguments, requires an already provisioned dedicated
+`deploy-production` account, and installs a schema-complete but disabled
+production profile. It never enables that profile, installs Phase B credentials,
+or invokes any helper operation. Its exact pinned source set must be placed in
+`/home/deploy/.private/wpcg-production-helper-2.0.0-cf2a944c/` with owner
+`deploy:deploy`, directory mode `0700`, and file mode `0600`. Never execute the
+installer directly from a deploy-owned path as root. The installer is staged separately at
+`/home/deploy/.private/wpcg-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py`,
+also owned by `deploy:deploy`, mode `0600`. An authorized administrator must
+copy it into a root-owned private temporary directory and verify the copied
+bytes before execution. Example for a separately authorized root console:
+
+```sh
+(
+  set -eu
+  src=/home/deploy/.private/wpcg-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py
+  expected=c5c19f0655cfae5f4747264c13c988f7360f3322be32a54b5e1961d538c2bf9d
+  d=$(/usr/bin/mktemp -d /root/wpcg-production-installer.XXXXXX)
+  trap '/usr/bin/rm -f -- "$d/install.py"; /usr/bin/rmdir -- "$d"' EXIT
+  test "$(/usr/bin/stat -c '%U:%G:%a' "$d")" = root:root:700
+  test ! -e "$d/install.py" && test ! -L "$d/install.py"
+  /usr/bin/install -o root -g root -m 700 -- "$src" "$d/install.py"
+  test "$(/usr/bin/stat -c '%U:%G:%a' "$d/install.py")" = root:root:700
+  test "$(/usr/bin/sha256sum "$d/install.py" | /usr/bin/cut -d' ' -f1)" = "$expected"
+  /usr/bin/python3 -I "$d/install.py"
+)
+```
+
+The installer checks every source hash, target absence, parent ownership/mode,
+existing sudo policy, and `visudo`; it publishes files atomically without
+replacement and adds the sudoers fragment last. It verifies installed hashes,
+ownership, modes, and the exact five-command allowlist, then tests that the
+ordinary deploy identity and invalid production operations are denied. Failure
+triggers identity-checked rollback of only files/directories created by that
+run. A rollback mismatch is a HOLD requiring administrator inspection. The
+installer does not grant a positive helper operation while the profile is
+disabled. No installer has been executed on a host by this runbook update.
 
 ### Gate P2 — application deployment (separate exact-release authorization)
 
@@ -115,7 +159,7 @@ new authorization.
 
 ```sh
 sudo -u deploy-production -- /usr/bin/python3 \
-  /var/lib/wpcaregrid-deploy/production/source/scripts/production_deploy_controller.py \
+  /usr/local/libexec/wpcaregrid-deploy/production/2.0.0/production_deploy_controller.py \
   sync "$AUTHORIZED_APPLICATION_SHA"
 ```
 
@@ -201,9 +245,10 @@ Public traffic, workers and scheduler are never released by this runbook.
 4. Exact release SHA, canonical artifact digest, CI, QA/AppSec evidence,
    marketing acceptance and separate production execution authorization.
 
-Current limitations: no production host inventory or approved production
-profile values were supplied; no root installer exists in the manifest; no
-production backup/restore evidence was supplied; the prepared ZIP has no
-verified digest or demonstrated compatibility with the controller input
-contract. No server, database, helper, account, payment, or DNS change has been
-performed.
+Current limitations: only deploy-readable host inventory is available; the
+production deploy identity was absent from deploy-visible account lookup and
+root-only service/database/sudo policy remain unverified. The root installer is
+pinned in the manifest but has not been installed. No production
+backup/restore evidence was supplied; the prepared ZIP has no verified digest
+or demonstrated compatibility with the controller input contract. No server,
+database, helper, account, payment, or DNS change has been performed.
