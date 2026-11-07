@@ -127,6 +127,50 @@ class StagingNextHelperConsistencyTests(unittest.TestCase):
         self.assertEqual(legacy["backend_sha256"],
                          "56b731914127b60e99f50f601930bbae8953490e1427003759225a9571a7135b")
 
+    def test_148_manifest_helper_installer_controller_and_sources_share_all_pins(self):
+        manifest_path = ROOT / "deploy" / "release-manifests" / "staging-next-helper-1.4.8.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        files = {
+            "entrypoint": ROOT / "scripts" / "wpcaregrid-staging-next-deploy-priv-1_4_8.py",
+            "backend": ROOT / "scripts" / "staging_next_deploy_backend_1_4_8.py",
+            "transaction_module": ROOT / "scripts" / "staging_next_db_transaction_1_4_8.py",
+        }
+        hashes = {key: hashlib.sha256(path.read_bytes()).hexdigest() for key, path in files.items()}
+        helper = load_module("staging_next_priv_1_4_8", files["entrypoint"])
+        installer = load_module("staging_next_installer_1_4_8",
+                                ROOT / "scripts" / "install_staging_next_helper_1_4_8.py")
+        backend = load_module("staging_next_backend_1_4_8", files["backend"])
+        self.assertEqual((helper.VERSION, helper.CONTRACT),
+                         ("1.4.8", "wpcaregrid-staging-next-deploy-v13"))
+        self.assertEqual((backend.HELPER_VERSION, backend.HELPER_CONTRACT),
+                         (helper.VERSION, helper.CONTRACT))
+        self.assertEqual((manifest["helper_version"], manifest["compatibility_contract"]),
+                         (helper.VERSION, helper.CONTRACT))
+        self.assertEqual(manifest["release_validation"], {
+            "required_independent_agent_passes": ["integration_qa", "m17_appsec"],
+            "github_approved_reviews_required": False,
+            "wpcg_release_review_v2_ledger_required": False,
+        })
+        for key, path in files.items():
+            self.assertEqual(manifest[f"{key}_path"], path.relative_to(ROOT).as_posix())
+            hash_key = "transaction_module_sha256" if key == "transaction_module" else f"{key}_sha256"
+            self.assertEqual(manifest[hash_key], hashes[key])
+        payload = {"schema": 1, "helper_version": helper.VERSION,
+                   "compatibility_contract": helper.CONTRACT,
+                   "entrypoint_sha256": hashes["entrypoint"], "backend_sha256": hashes["backend"],
+                   "transaction_module_sha256": hashes["transaction_module"]}
+        artifact_sha = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        self.assertEqual(manifest["helper_artifact_sha256"], artifact_sha)
+        self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256, artifact_sha)
+        self.assertEqual((installer.VERSION, installer.CONTRACT),
+                         (helper.VERSION, helper.CONTRACT))
+        self.assertEqual((installer.ENTRY_SHA256, installer.BACKEND_SHA256,
+                          installer.TRANSACTION_SHA256, installer.ARTIFACT_SHA256),
+                         (hashes["entrypoint"], hashes["backend"], hashes["transaction_module"], artifact_sha))
+        controller_source = (ROOT / "scripts" / "staging_next_deploy_controller.py").read_text(encoding="utf-8")
+        self.assertIn('result.get("helper_version") != "1.4.8"', controller_source)
+        self.assertIn('result.get("helper_contract") != "wpcaregrid-staging-next-deploy-v13"', controller_source)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
