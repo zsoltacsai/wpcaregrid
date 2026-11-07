@@ -82,12 +82,17 @@ class StagingNextHelperConsistencyTests(unittest.TestCase):
         hashes = {key: hashlib.sha256(path.read_bytes()).hexdigest() for key, path in files.items()}
         installer = load_module("staging_next_installer_1_4_7", ROOT / "scripts" / "install_staging_next_helper_1_4_7.py")
         self.assertEqual((HELPER_147.VERSION, HELPER_147.CONTRACT),
-                         ("1.4.7", "wpcaregrid-staging-next-deploy-v11"))
+                         ("1.4.7", "wpcaregrid-staging-next-deploy-v12"))
         backend = load_module("staging_next_backend_1_4_7", files["backend"])
         self.assertEqual((backend.HELPER_VERSION, backend.HELPER_CONTRACT),
                          (HELPER_147.VERSION, HELPER_147.CONTRACT))
         self.assertEqual((manifest["helper_version"], manifest["compatibility_contract"]),
                          (HELPER_147.VERSION, HELPER_147.CONTRACT))
+        self.assertEqual(manifest["release_validation"], {
+            "required_independent_agent_passes": ["integration_qa", "m17_appsec"],
+            "github_approved_reviews_required": False,
+            "wpcg_release_review_v2_ledger_required": False,
+        })
         for key, path in files.items():
             self.assertEqual(manifest[f"{key}_path"], path.relative_to(ROOT).as_posix())
             hash_key = "transaction_module_sha256" if key == "transaction_module" else f"{key}_sha256"

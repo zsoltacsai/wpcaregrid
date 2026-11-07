@@ -125,7 +125,7 @@ class StagingNextControllerTests(unittest.TestCase):
         digest = "a" * 40
         helper_result = {
             "result": "PASS", "application_sha": digest, "helper_version": "1.4.7",
-            "helper_contract": "wpcaregrid-staging-next-deploy-v11",
+            "helper_contract": "wpcaregrid-staging-next-deploy-v12",
             "helper_artifact_sha256": CONTROLLER.HELPER_ARTIFACT_SHA256,
             "artifact_sha256": "b" * 64,
         }

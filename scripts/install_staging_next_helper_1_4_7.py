@@ -17,16 +17,16 @@ from pathlib import Path
 
 
 VERSION = "1.4.7"
-CONTRACT = "wpcaregrid-staging-next-deploy-v11"
+CONTRACT = "wpcaregrid-staging-next-deploy-v12"
 SOURCE_DIR = Path("/home/deploy/.private/wpcg-staging-next-helper-1.4.7")
 INSTALLER_NAME = "install_staging_next_helper_1_4_7.py"
 ENTRY_NAME = "wpcaregrid-staging-next-deploy-priv-1_4_7.py"
 BACKEND_NAME = "staging_next_deploy_backend_1_4_7.py"
 TRANSACTION_NAME = "staging_next_db_transaction_1_4_7.py"
-ENTRY_SHA256 = "7eecc1876c52c187229187db00d410cb9a80d6f1d0df7ad91a5344f71b45fb2b"
-BACKEND_SHA256 = "6e5a6559eed5fcc5dbcb079d89afb15edc5c7e4982d46440aa4499c489b0b52c"
+ENTRY_SHA256 = "2640869293b730d1d4b214df430f8623fc407afa79622ccdb430e57f034ca22f"
+BACKEND_SHA256 = "6d720fdb888ec94b710df0d05a539e4300dfd83b3f8cfe142f03f2b673cee411"
 TRANSACTION_SHA256 = "89b5505ec7d05c58ed30d87d7e9b07d44fa0286894b346eeeb9948dbfacfa71a"
-ARTIFACT_SHA256 = "d38a3c21c611e84d0741c2ab39401da31f60f17659902aa33e503a4bbae58837"
+ARTIFACT_SHA256 = "1a66e45efaab91abd8d5024c6880b00fc0c87a98b839729958c1646f569ee6c5"
 EXPECTED_DEPLOY_UID = 996
 MYSQL_UUID_SHA256 = "bc35682d80f0894c2c2c2879552fb8fe13dc2a530868d79d817a6280e31bde1c"
 PHP_FPM_UID = 33

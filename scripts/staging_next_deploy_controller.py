@@ -27,7 +27,7 @@ SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/staging-next/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/staging-next/incoming")
 HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.7/wpcaregrid-deploy-staging-next-priv")
 # Refreshed from the versioned helper manifest by the cross-artifact consistency test.
-HELPER_ARTIFACT_SHA256 = "d38a3c21c611e84d0741c2ab39401da31f60f17659902aa33e503a4bbae58837"
+HELPER_ARTIFACT_SHA256 = "1a66e45efaab91abd8d5024c6880b00fc0c87a98b839729958c1646f569ee6c5"
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_FILES = 100_000
 MAX_UNPACKED_BYTES = 2 * 1024 * 1024 * 1024
@@ -135,7 +135,7 @@ def _helper(operation, *arguments):
     except (UnicodeError, ValueError):
         raise ControllerHold("helper_response_invalid") from None
     if not isinstance(result, dict) or result.get("helper_version") != "1.4.7" \
-            or result.get("helper_contract") != "wpcaregrid-staging-next-deploy-v11" \
+            or result.get("helper_contract") != "wpcaregrid-staging-next-deploy-v12" \
             or result.get("helper_artifact_sha256") != HELPER_ARTIFACT_SHA256:
         raise ControllerHold("helper_contract_mismatch")
     if result.get("result") not in {"PASS", "NO_OP", "HOLD", "FAIL"}:
@@ -313,7 +313,7 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
             "database_scope": "migrations" if database_migrations else "unchanged",
             "database_migrations": database_migrations,
             "helper_version": "1.4.7", "helper_sha256": HELPER_ARTIFACT_SHA256,
-            "helper_contract": "wpcaregrid-staging-next-deploy-v11",
+            "helper_contract": "wpcaregrid-staging-next-deploy-v12",
             "frontend_build": frontend_build,
             "files_sha256": hashlib.sha256(canonical).hexdigest(),
         }

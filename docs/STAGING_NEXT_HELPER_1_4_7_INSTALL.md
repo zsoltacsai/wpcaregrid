@@ -11,13 +11,13 @@ manifest `deploy/release-manifests/staging-next-helper-1.4.7.json`.
 
 | Artifact | Source path | SHA-256 |
 | --- | --- | --- |
-| Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_7.py` | `7eecc1876c52c187229187db00d410cb9a80d6f1d0df7ad91a5344f71b45fb2b` |
-| Backend | `scripts/staging_next_deploy_backend_1_4_7.py` | `6e5a6559eed5fcc5dbcb079d89afb15edc5c7e4982d46440aa4499c489b0b52c` |
+| Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_7.py` | `2640869293b730d1d4b214df430f8623fc407afa79622ccdb430e57f034ca22f` |
+| Backend | `scripts/staging_next_deploy_backend_1_4_7.py` | `6d720fdb888ec94b710df0d05a539e4300dfd83b3f8cfe142f03f2b673cee411` |
 | Transaction module | `scripts/staging_next_db_transaction_1_4_7.py` | `89b5505ec7d05c58ed30d87d7e9b07d44fa0286894b346eeeb9948dbfacfa71a` |
-| Combined helper artifact | Manifest-derived | `d38a3c21c611e84d0741c2ab39401da31f60f17659902aa33e503a4bbae58837` |
-| Root installer | `scripts/install_staging_next_helper_1_4_7.py` | `83a982de1eb862f1fe231cad3001f41aa32c68995d9cc8153184c26fd7e2a7cb` |
+| Combined helper artifact | Manifest-derived | `1a66e45efaab91abd8d5024c6880b00fc0c87a98b839729958c1646f569ee6c5` |
+| Root installer | `scripts/install_staging_next_helper_1_4_7.py` | `faeb221b791ee2e5f6e0d2b36fa95358a372885e38bb7848830c265f09edc171` |
 
-The compatibility contract is `wpcaregrid-staging-next-deploy-v11`. Recalculate
+The compatibility contract is `wpcaregrid-staging-next-deploy-v12`. Recalculate
 these values from the final merged Git tree before any later installation; a
 different source revision requires a new manifest and review.
 
@@ -51,7 +51,7 @@ From a root console on `stg1.wpcaregrid.com`, run this single command in a
 subshell so failure does not close the console:
 
 ```sh
-( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.7.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = 83a982de1eb862f1fe231cad3001f41aa32c68995d9cc8153184c26fd7e2a7cb; exec /usr/bin/python3 -I "$i" )
+( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.7.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = faeb221b791ee2e5f6e0d2b36fa95358a372885e38bb7848830c265f09edc171; exec /usr/bin/python3 -I "$i" )
 ```
 
 The script itself checks the exact source hashes and directory contents,
@@ -79,13 +79,14 @@ policy receives its separately reviewed, exact identity.
 
 ## Exact-release review evidence
 
-The helper does not infer QA/AppSec roles from reviewer-authored labels. It
-requires two distinct, non-author GitHub `APPROVED` reviews on the exact PR
-head, then an exact `WPCG_RELEASE_REVIEW_V2` record for each role in issue #174.
-Each record must be posted by the repository owner account (`author_association`
-`OWNER`), identify the reviewer login and GitHub review ID, match the PR and
-head SHA, and be timestamped no earlier than the referenced approval. The
-helper cross-checks each ID, reviewer, state, timestamp and commit against the
-authenticated GitHub review API response. Missing or inconsistent evidence is
-a HOLD. This preserves two independent reviewer approvals while preventing
-reviewers or other contributors from assigning themselves QA/AppSec roles.
+Before the protected merge, independent Integration & QA and M17 AppSec agents
+must each PASS the exact PR head. These reviews remain separate release
+acceptance gates and must be refreshed after any source change.
+
+The helper does not require external GitHub `APPROVED` reviews or
+`WPCG_RELEASE_REVIEW_V2` records in issue #174. Runtime authorization still
+requires the exact merged PR on the protected primary branch, successful
+required CI for the PR head and merge SHA, and matching source and helper
+hashes. Missing or inconsistent merge, CI, source, or artifact evidence is a
+HOLD. Branch protection and the protected merge workflow remain enabled.
+Production deployment requires separate Owner approval.

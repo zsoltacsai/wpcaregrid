@@ -16,7 +16,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 
 VERSION = "1.4.7"
-CONTRACT = "wpcaregrid-staging-next-deploy-v11"
+CONTRACT = "wpcaregrid-staging-next-deploy-v12"
 ENTRYPOINT = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.7/wpcaregrid-deploy-staging-next-priv")
 BACKEND = ENTRYPOINT.parent / "staging_next_deploy_backend_1_4_7.py"
 TRANSACTION = ENTRYPOINT.parent / "staging_next_db_transaction_1_4_7.py"

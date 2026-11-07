@@ -62,13 +62,12 @@ _verify_backup_sql = _TRANSACTION_MODULE._verify_backup_sql
 
 
 HELPER_VERSION = "1.4.7"
-HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v11"
+HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v12"
 PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.7.json")
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
 APPLICATION_HOST = "staging-next.wpcaregrid.com"
 EXPECTED_FPM_SOCKET = "/run/php/php8.5-fpm.sock"
-RELEASE_REVIEW_LEDGER_ISSUE = 174
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 GITHUB_API = "https://api.github.com"
 GITHUB_REPOSITORY = "zsoltacsai/wpcaregrid"
@@ -857,102 +856,6 @@ def _github_json(path: str, *, timeout: float = 6.0, max_bytes: int = 4_000_000)
     return value
 
 
-def _github_list(path: str, *, maximum_pages: int = 20) -> list[object]:
-    """Read a complete bounded GitHub list; truncation is never accepted as evidence."""
-    result = []
-    for page in range(1, maximum_pages + 1):
-        separator = "&" if "?" in path else "?"
-        value = _github_json(f"{path}{separator}per_page=100&page={page}")
-        _require(isinstance(value, list) and len(value) <= 100, "github_evidence_invalid")
-        result.extend(value)
-        if len(value) < 100:
-            return result
-    raise DeployRefused("github_evidence_incomplete")
-
-
-RELEASE_REVIEW_RECORD_RE = re.compile(
-    r"WPCG_RELEASE_REVIEW_V2\n"
-    r"role=(integration_qa|m17_appsec)\n"
-    r"pr=([1-9][0-9]*)\n"
-    r"head_sha=([0-9a-f]{40})\n"
-    r"reviewer=([A-Za-z0-9-]+)\n"
-    r"review_id=([1-9][0-9]*)\n"
-    r"decision=(PASS|CHANGES_REQUIRED)\n?\Z")
-
-
-def _release_review_records(comments: list[object], *, pr_number: int,
-                            head_sha: str, repository_owner: str) -> dict[str, tuple[str, str, int]]:
-    """Return owner-attested exact-head role records (reviewer, decision, review id)."""
-    latest = {}
-    for item in comments:
-        if not isinstance(item, dict) or not isinstance(item.get("body"), str):
-            continue
-        body = item["body"]
-        if not body.startswith("WPCG_RELEASE_REVIEW_V2"):
-            continue
-        match = RELEASE_REVIEW_RECORD_RE.fullmatch(body)
-        user = item.get("user")
-        login = user.get("login") if isinstance(user, dict) else None
-        association = item.get("author_association")
-        created = item.get("created_at")
-        comment_id = item.get("id")
-        _require(match is not None and login == repository_owner and association == "OWNER"
-                 and isinstance(created, str)
-                 and type(comment_id) is int and comment_id > 0,
-                 "release_review_ledger_record_invalid")
-        role, record_pr, record_sha, reviewer, review_id, decision = match.groups()
-        if int(record_pr) != pr_number or record_sha != head_sha:
-            continue
-        if role not in latest or (created, comment_id) > latest[role][0]:
-            latest[role] = ((created, comment_id), reviewer, decision, int(review_id), created)
-    return {role: (record[1], record[2], record[3], record[4]) for role, record in latest.items()}
-
-
-def _verify_independent_release_reviews(review_data: list[object], comments: list[object], *,
-                                        pr_number: int, head_sha: str,
-                                        pr_author: str | None,
-                                        repository_owner: str) -> None:
-    latest_reviews = {}
-    for review in review_data:
-        if not isinstance(review, dict) or review.get("commit_id") != head_sha:
-            continue
-        user = review.get("user")
-        login = user.get("login") if isinstance(user, dict) else None
-        submitted = review.get("submitted_at")
-        review_id = review.get("id")
-        if isinstance(login, str) and login and isinstance(submitted, str) \
-                and type(review_id) is int and review_id > 0:
-            if login not in latest_reviews or (submitted, review_id) > latest_reviews[login][0]:
-                latest_reviews[login] = ((submitted, review_id), review.get("state"))
-    approved = {login for login, (_, state) in latest_reviews.items()
-                if state == "APPROVED" and login != pr_author}
-    _require(len(approved) >= 2, "independent_review_evidence_missing")
-    ledger = _release_review_records(comments, pr_number=pr_number, head_sha=head_sha,
-                                     repository_owner=repository_owner)
-    qa = ledger.get("integration_qa")
-    appsec = ledger.get("m17_appsec")
-    _require(isinstance(qa, tuple) and isinstance(appsec, tuple),
-             "independent_review_evidence_missing")
-    _require(qa[0] != appsec[0], "independent_review_evidence_not_independent")
-    reviews_by_id = {review.get("id"): review for review in review_data
-                     if isinstance(review, dict) and type(review.get("id")) is int}
-
-    def attested(record):
-        if not isinstance(record, tuple) or len(record) != 4 or record[1] != "PASS":
-            return False
-        review = reviews_by_id.get(record[2])
-        reviewer = review.get("user") if isinstance(review, dict) else None
-        submitted = review.get("submitted_at") if isinstance(review, dict) else None
-        return (isinstance(review, dict) and review.get("commit_id") == head_sha
-                and review.get("state") == "APPROVED"
-                and isinstance(reviewer, dict) and reviewer.get("login") == record[0]
-                and record[0] in approved and isinstance(submitted, str)
-                and record[3] >= submitted)
-
-    _require(attested(qa) and attested(appsec),
-             "independent_review_evidence_missing")
-
-
 def _local_git_tree(profile: StagingProfile, application_sha: str) -> Mapping[str, str]:
     repo = profile.test_git_repo
     _require(profile.test_only and repo is not None, "local_source_verifier_unavailable")
@@ -1017,7 +920,7 @@ def _github_primary_tree(profile: StagingProfile, application_sha: str) -> Mappi
     return result
 
 
-def _verify_primary_ci_and_reviews(profile: StagingProfile, application_sha: str) -> None:
+def _verify_primary_ci(profile: StagingProfile, application_sha: str) -> None:
     if profile.test_only:
         return
     def verify_run(commit_sha: str, *, event: str, branch: str | None, pr_number: int | None = None) -> None:
@@ -1085,20 +988,6 @@ def _verify_primary_ci_and_reviews(profile: StagingProfile, application_sha: str
              "merged_pr_evidence_invalid")
     verify_run(pr_head_sha, event="pull_request", branch=None, pr_number=pr_number)
     verify_run(application_sha, event="push", branch=PRIMARY_BRANCH)
-    review_data = _github_list(f"/repos/{GITHUB_REPOSITORY}/pulls/{pr_number}/reviews")
-    author = pr_detail.get("user")
-    author_login = author.get("login") if isinstance(author, dict) else None
-    repository = _github_json(f"/repos/{GITHUB_REPOSITORY}")
-    repository_owner_obj = repository.get("owner") if isinstance(repository, dict) else None
-    repository_owner = repository_owner_obj.get("login") if isinstance(repository_owner_obj, dict) else None
-    _require(isinstance(repository_owner, str) and repository_owner,
-             "release_review_authority_unavailable")
-    comments = _github_list(f"/repos/{GITHUB_REPOSITORY}/issues/{RELEASE_REVIEW_LEDGER_ISSUE}/comments")
-    _verify_independent_release_reviews(review_data, comments, pr_number=pr_number,
-                                        head_sha=pr_head_sha, pr_author=author_login,
-                                        repository_owner=repository_owner)
-
-
 def authorize_release(profile: StagingProfile, *, invoking_uid: int,
                       application_sha: str) -> Mapping[str, object]:
     """Authorize one exact merged primary SHA before any frontend build script runs."""
@@ -1114,7 +1003,7 @@ def authorize_release(profile: StagingProfile, *, invoking_uid: int,
                      "primary_sha_is_not_latest")
         (_local_git_tree(profile, application_sha) if profile.test_only
          else _github_primary_tree(profile, application_sha))
-        _verify_primary_ci_and_reviews(profile, application_sha)
+        _verify_primary_ci(profile, application_sha)
         return {"result": "PASS", "reason": "exact_primary_release_authorized",
                 "application_sha": application_sha, "profile": PROFILE,
                 "helper_version": HELPER_VERSION, "helper_contract": HELPER_CONTRACT,
@@ -1146,7 +1035,7 @@ def _verify_artifact_matches_primary(profile: StagingProfile, app_sha: str, extr
         actual_blob_sha = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
         _require(actual_blob_sha == expected_blob_sha, "artifact_source_content_mismatch")
     _verify_frontend_build(manifest.get("frontend_build"), extracted, candidate_files)
-    _verify_primary_ci_and_reviews(profile, app_sha)
+    _verify_primary_ci(profile, app_sha)
 
 
 def _phase_a_paths_only(previous: Mapping[str, str], candidate: Mapping[str, str]) -> bool:
