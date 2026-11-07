@@ -8,7 +8,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts import staging_next_deploy_backend_1_4_6 as BACKEND
+from scripts import staging_next_deploy_backend_1_4_6 as LEGACY_BACKEND
+from scripts import staging_next_deploy_backend_1_4_7 as BACKEND
 
 
 HEAD = "a" * 40
@@ -132,13 +133,18 @@ class ReleaseEvidenceTests(unittest.TestCase):
 
 class NginxRouteTests(unittest.TestCase):
     @staticmethod
-    def dump(*, app_socket="unix:/run/php/php8.5-fpm.sock", duplicate=False, extra=True):
+    def dump(*, app_socket="unix:/run/php/php8.5-fpm.sock", duplicate=False, extra=True,
+             certbot_include=False, conflicting_certbot_source=False):
         app = """server {
             listen 443 ssl;
             server_name staging-next.wpcaregrid.com;
+            CERTBOT_INCLUDE
             location ~ \\.php$ { include snippets/fastcgi-php.conf; }
         }
         """
+        app = app.replace("CERTBOT_INCLUDE", (
+            "include /etc/letsencrypt/options-ssl-nginx.conf;" if certbot_include else ""
+        ))
         if duplicate:
             app += app
         http = """server {
@@ -151,15 +157,35 @@ class NginxRouteTests(unittest.TestCase):
         other = "server { listen 443 ssl; server_name unrelated.example; }" if extra else ""
         main = "http { include /etc/nginx/sites-enabled/*.conf; }"
         snippet = f"fastcgi_pass {app_socket};\n"
-        return (f"# configuration file /etc/nginx/nginx.conf:\n{main}\n"
-                f"# configuration file /etc/nginx/sites-enabled/staging-next.conf:\n{app}{other}\n"
-                "# configuration file /etc/nginx/snippets/fastcgi-php.conf:\n"
-                f"{snippet}") .encode()
+        dump = (f"# configuration file /etc/nginx/nginx.conf:\n{main}\n"
+                f"# configuration file /etc/nginx/sites-enabled/staging-next.conf:\n{app}{other}\n")
+        if certbot_include:
+            certbot = "ssl_protocols TLSv1.2 TLSv1.3;\n"
+            dump += f"# configuration file /etc/letsencrypt/options-ssl-nginx.conf:\n{certbot}"
+            dump += "# configuration file /etc/letsencrypt/options-ssl-nginx.conf:\n"
+            dump += "ssl_protocols TLSv1.2 TLSv1.3;\n" if not conflicting_certbot_source else "ssl_protocols TLSv1.2;\n"
+        dump += ("# configuration file /etc/nginx/snippets/fastcgi-php.conf:\n"
+                 f"{snippet}")
+        return dump.encode()
 
     def test_included_https_vhost_is_counted_once_with_separate_http_vhost(self):
         # nginx -T contains both the root include expansion and each included
         # file's own source section. The HTTPS vhost must not be counted twice.
         BACKEND._verify_staging_next_nginx_route(self.dump(extra=True))
+
+
+    def test_live_letsencrypt_external_include_and_repeated_nginx_t_source_regression(self):
+        dump = self.dump(certbot_include=True)
+        with self.assertRaises(LEGACY_BACKEND.DeployRefused) as error:
+            LEGACY_BACKEND._verify_staging_next_nginx_route(dump)
+        self.assertEqual(str(error.exception), "nginx_config_source_identity_invalid")
+        BACKEND._verify_staging_next_nginx_route(dump)
+
+    def test_repeated_allowed_source_must_have_identical_bytes(self):
+        with self.assertRaises(BACKEND.DeployRefused) as error:
+            BACKEND._verify_staging_next_nginx_route(
+                self.dump(certbot_include=True, conflicting_certbot_source=True))
+        self.assertEqual(str(error.exception), "nginx_config_source_identity_conflict")
 
     def test_wrong_php_fpm_socket_is_rejected(self):
         with self.assertRaises(BACKEND.DeployRefused) as error:
