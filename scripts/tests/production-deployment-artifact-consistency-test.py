@@ -20,6 +20,7 @@ SOURCE_PATHS = {
 }
 SUDOERS_PATH = ROOT / "deploy/sudoers/wpcaregrid-production-v2.0.0"
 CONTROLLER_PATH = "scripts/production_deploy_controller.py"
+INSTALLER_PATH = "scripts/install_production_helper_2_0_0.py"
 
 
 def git_tree_bytes(path: str) -> bytes:
@@ -58,10 +59,29 @@ class ProductionDeploymentArtifactConsistencyTests(unittest.TestCase):
         self.assertEqual(manifest["controller_sha256"], controller_hash)
         self.assertEqual(manifest["sudoers_template_sha256"], hashlib.sha256(
             git_tree_bytes(manifest["sudoers_template"])).hexdigest())
+        self.assertEqual(manifest["root_installer"], INSTALLER_PATH)
+        installer = git_tree_bytes(INSTALLER_PATH)
+        installer_hash = hashlib.sha256(installer).hexdigest()
+        self.assertEqual(manifest["root_installer_sha256"], installer_hash)
+        installer_text = installer.decode("utf-8")
+        installer_pins = {
+            "ENTRY_SHA256": manifest["entrypoint_sha256"],
+            "BACKEND_SHA256": manifest["backend_sha256"],
+            "TRANSACTION_SHA256": manifest["transaction_module_sha256"],
+            "ENVIRONMENT_SHA256": manifest["environment_contract_sha256"],
+            "HELPER_ARTIFACT_SHA256": manifest["helper_artifact_sha256"],
+            "CONTROLLER_SHA256": manifest["controller_sha256"],
+            "SUDOERS_SHA256": manifest["sudoers_template_sha256"],
+        }
+        for constant, digest in installer_pins.items():
+            self.assertIsNotNone(re.search(
+                rf'^{constant} = "{re.escape(digest)}"$', installer_text, re.M), constant)
         runbook = (ROOT / "docs/PRODUCTION_MARKETING_RELEASE_RUNBOOK.md").read_text(encoding="utf-8")
+        install_doc = (ROOT / "docs/PRODUCTION_HELPER_INSTALL_2_0_0.md").read_text(encoding="utf-8")
         for pinned_digest in (*hashes.values(), digest, controller_hash,
-                              manifest["sudoers_template_sha256"]):
+                              manifest["sudoers_template_sha256"], installer_hash):
             self.assertIn(f"`{pinned_digest}`", runbook)
+            self.assertIn(f"`{pinned_digest}`", install_doc)
         self.assertIn("sync <40-hex-application-SHA>", runbook)
         match = re.search(rb'^HELPER_ARTIFACT_SHA256 = "([0-9a-f]{64})"\r?$', controller, re.M)
         self.assertIsNotNone(match)

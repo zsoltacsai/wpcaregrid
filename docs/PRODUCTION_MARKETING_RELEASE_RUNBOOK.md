@@ -7,7 +7,7 @@ database changes.
 
 ## Pinned implementation
 
-Source baseline for this runbook: protected primary merge `6184a1b922e44a2b4c6d333c5646e12d3920c686`.
+Source baseline for this runbook: protected primary `cf2a944c27a2a24dbdf1097bf0ba766e6edd48fe`.
 Revalidate primary, CI, reviews, artifact manifest, and the application release
 SHA immediately before any later operation. The application release SHA is not
 implied by the helper merge SHA.
@@ -23,6 +23,7 @@ Production helper version `2.0.0`, contract `wpcaregrid-deployment-profile-v2`:
 | Combined helper artifact | `0e50791ee708de571dbcaa5420bd06b31698e3b7a8683f7501bee6880ead96fc` |
 | Production controller | `a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283` |
 | Sudoers candidate | `fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963` |
+| Root installer | `3ebb74d8ece4b1f338f138ee6339455524383dc010783303e5a574a87732f001` |
 
 The source manifest is `deploy/release-manifests/production-deployment-helper-2.0.0.json`.
 The root entrypoint accepts only `preflight`, `verify-install`, `authorize <40-hex-SHA>`,
@@ -98,10 +99,31 @@ arguments and environment targets, plus positive `verify-install` and
 `preflight`. On any mismatch, use only an identity-checked rollback to the
 previous recorded files; do not alter other profiles or directories.
 
-There is no production root installer in the pinned source manifest. Therefore
-this runbook does not invent a runnable root installation command. A reviewed,
-no-overwrite installer and its exact artifact hash must be prepared and
-approved before P1.
+The no-overwrite root installer is `scripts/install_production_helper_2_0_0.py`;
+SHA-256 `3ebb74d8ece4b1f338f138ee6339455524383dc010783303e5a574a87732f001` is pinned in the release manifest.
+It accepts no command-line arguments, requires an already provisioned dedicated
+`deploy-production` account, and installs a schema-complete but disabled
+production profile. It never enables that profile, installs Phase B credentials,
+or invokes any helper operation. Its exact pinned source set must be placed in
+`/home/deploy/.private/wpcg-production-helper-2.0.0-cf2a944c/` with owner
+`deploy:deploy`, directory mode `0700`, and file mode `0600`. The installer
+itself is staged separately at
+`/home/deploy/.private/wpcg-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py`,
+also owned by `deploy:deploy`, mode `0600`. An authorized administrator runs:
+
+```sh
+sudo /usr/bin/python3 -I /home/deploy/.private/wpcg-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py
+```
+
+The installer checks every source hash, target absence, parent ownership/mode,
+existing sudo policy, and `visudo`; it publishes files atomically without
+replacement and adds the sudoers fragment last. It verifies installed hashes,
+ownership, modes, and the exact five-command allowlist, then tests that the
+ordinary deploy identity and invalid production operations are denied. Failure
+triggers identity-checked rollback of only files/directories created by that
+run. A rollback mismatch is a HOLD requiring administrator inspection. The
+installer does not grant a positive helper operation while the profile is
+disabled. No installer has been executed on a host by this runbook update.
 
 ### Gate P2 — application deployment (separate exact-release authorization)
 
