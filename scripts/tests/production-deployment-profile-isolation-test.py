@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import types
 import sys
 import unittest
 from pathlib import Path
@@ -110,6 +111,46 @@ class ProductionProfileIsolationTests(unittest.TestCase):
         ):
             with self.subTest(overrides=overrides), self.assertRaises(CONTRACT.EnvironmentRefused):
                 CONTRACT.resolve_environment("production", production_config=production_config(**overrides))
+
+    def test_production_rejects_colliding_or_nested_data_paths(self):
+        collisions = (
+            {"state_root": "/var/lib/wpcaregrid-deploy/production/database-backups"},
+            {"backup_root": "/var/lib/wpcaregrid-deploy/production/state"},
+            {"inbox_root": "/var/lib/wpcaregrid-deploy/production/incoming/nested"},
+            {"shared_storage_root": "/var/lib/wpcaregrid-deploy/production/shared/vendor"},
+            {"shared_env_file": "/var/lib/wpcaregrid-deploy/production/database-backups"},
+            {"maintenance_marker": "/var/lib/wpcaregrid-deploy/production/database-backups/maintenance"},
+            {"worker_fence_marker": "/var/lib/wpcaregrid-deploy/production/state/maintenance"},
+            {"scheduler_fence_marker": "/var/lib/wpcaregrid-deploy/production/state"},
+        )
+        for changes in collisions:
+            with self.subTest(changes=changes), self.assertRaisesRegex(
+                    CONTRACT.EnvironmentRefused, "production_path_layout_invalid"):
+                CONTRACT.resolve_environment(
+                    "production", production_config=production_config(**changes))
+
+    def test_backend_import_uses_exact_transaction_bytes_verified_by_helper(self):
+        transaction_name = "_wpcg_deployment_transaction_v2"
+        sys.modules[transaction_name] = types.ModuleType(transaction_name)
+        sys.modules[transaction_name].VERIFIED_MARKER = "unverified-disk-module"
+        transaction_raw = (
+            b"def bind_environment_contract(_contract):\n"
+            b"    return None\n"
+            b"VERIFIED_MARKER = 'hash-verified-by-entrypoint'\n"
+        )
+        verified_transaction = HELPER._load_transaction(transaction_raw)
+        backend_raw = (
+            b"import sys\n"
+            b"HELPER_VERSION = '2.0.0'\n"
+            b"HELPER_CONTRACT = 'wpcaregrid-deployment-profile-v2'\n"
+            b"TRANSACTION = sys.modules['_wpcg_deployment_transaction_v2']\n"
+        )
+        backend = HELPER._load_backend(backend_raw)
+        self.assertIs(backend.TRANSACTION, verified_transaction)
+        self.assertEqual(
+            backend.TRANSACTION.VERIFIED_MARKER,
+            "hash-verified-by-entrypoint",
+        )
 
     def test_helper_extracts_contract_fields_from_exact_versioned_policy_schema(self):
         policy = production_config(entrypoint_sha256="a" * 64, backend_sha256="b" * 64,

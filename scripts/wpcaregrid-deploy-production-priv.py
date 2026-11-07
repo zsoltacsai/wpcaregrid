@@ -84,6 +84,23 @@ def _load_environment_module(raw: bytes):
     return module
 
 
+def _load_transaction(raw: bytes):
+    """Load the already hash-verified transaction bytes for backend imports."""
+    module_name = "_wpcg_deployment_transaction_v2"
+    module = types.ModuleType(module_name)
+    module.__file__ = str(TRANSACTION)
+    sys.modules[module_name] = module
+    try:
+        exec(compile(raw, str(TRANSACTION), "exec", dont_inherit=True), module.__dict__)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise Refused("deployment_transaction_load_failed") from None
+    if not callable(getattr(module, "bind_environment_contract", None)):
+        sys.modules.pop(module_name, None)
+        raise Refused("deployment_transaction_contract_invalid")
+    return module
+
+
 def _load_backend(raw: bytes):
     module_name = "_wpcg_deployment_backend_v2"
     module = types.ModuleType(module_name)
@@ -178,6 +195,10 @@ def _load_profile(argv: list[str], sudo_uid: str | None):
         environment = environment_module.resolve_environment("production", production_config=environment_config)
     except environment_module.EnvironmentRefused as error:
         raise Refused(str(error)) from None
+    # deployment_backend_v2 imports this fixed module name. Register the exact
+    # bytes verified above before loading the backend so it cannot reopen a
+    # different on-disk transaction module after provenance verification.
+    _load_transaction(transaction_raw)
     backend = _load_backend(backend_raw)
     profile = backend.profile_for_environment(
         environment, helper_artifact_sha256=artifact_digest,

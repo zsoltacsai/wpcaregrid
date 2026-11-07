@@ -164,9 +164,26 @@ def _production_config(data: object) -> EnvironmentContract:
             or paths["application_link"] != "/var/www/wpcaregrid-production/current"
             or paths["release_root"] != "/var/www/wpcaregrid-production/releases"):
         raise EnvironmentRefused("production_application_paths_mismatch")
-    roots = tuple(value for key, value in paths.items() if key not in {"app_root", "application_link", "release_root"})
-    if any(not value.startswith("/var/lib/wpcaregrid-deploy/production/") for value in roots):
-        raise EnvironmentRefused("production_state_path_mismatch")
+    expected_data_paths = {
+        "incoming_root": "/var/lib/wpcaregrid-deploy/production/incoming",
+        "inbox_root": "/var/lib/wpcaregrid-deploy/production/inbox",
+        "state_root": "/var/lib/wpcaregrid-deploy/production/state",
+        "backup_root": "/var/lib/wpcaregrid-deploy/production/database-backups",
+        "shared_env_file": "/var/lib/wpcaregrid-deploy/production/shared/.env",
+        "shared_storage_root": "/var/lib/wpcaregrid-deploy/production/shared/storage",
+        "shared_vendor_root": "/var/lib/wpcaregrid-deploy/production/shared/vendor",
+        "maintenance_marker": "/var/lib/wpcaregrid-deploy/production/state/maintenance",
+        "worker_fence_marker": "/var/lib/wpcaregrid-deploy/production/state/workers-disabled",
+        "scheduler_fence_marker": "/var/lib/wpcaregrid-deploy/production/state/scheduler-paused",
+    }
+    if any(paths[key] != expected for key, expected in expected_data_paths.items()):
+        raise EnvironmentRefused("production_path_layout_invalid")
+    roots = tuple(expected_data_paths[key] for key in (
+        "incoming_root", "inbox_root", "state_root", "backup_root",
+        "shared_env_file", "shared_storage_root", "shared_vendor_root",
+    ))
+    if any(not _disjoint(left, right) for index, left in enumerate(roots) for right in roots[index + 1:]):
+        raise EnvironmentRefused("production_path_roles_overlap")
     if any(not _disjoint(value, "/var/lib/wpcaregrid-deploy/staging-next") for value in roots):
         raise EnvironmentRefused("production_staging_path_overlap")
 
