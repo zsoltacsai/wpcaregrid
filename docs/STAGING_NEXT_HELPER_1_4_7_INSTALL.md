@@ -13,9 +13,9 @@ manifest `deploy/release-manifests/staging-next-helper-1.4.7.json`.
 | --- | --- | --- |
 | Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_7.py` | `7eecc1876c52c187229187db00d410cb9a80d6f1d0df7ad91a5344f71b45fb2b` |
 | Backend | `scripts/staging_next_deploy_backend_1_4_7.py` | `6e5a6559eed5fcc5dbcb079d89afb15edc5c7e4982d46440aa4499c489b0b52c` |
-| Transaction module | `scripts/staging_next_db_transaction_1_4_7.py` | `ecf23a7d3e68aebb70b802125ad144e5fd062d5980940b1b9978547d234086fb` |
-| Combined helper artifact | Manifest-derived | `76dea7fa3131d9d74db12bd7ab34a976a3dbb9010988ffb29c181ef1b6d1f318` |
-| Root installer | `scripts/install_staging_next_helper_1_4_7.py` | `d6c7decc427860d671b1bf03c9e74af45391b12a599a304bfc13e1f619edac61` |
+| Transaction module | `scripts/staging_next_db_transaction_1_4_7.py` | `89b5505ec7d05c58ed30d87d7e9b07d44fa0286894b346eeeb9948dbfacfa71a` |
+| Combined helper artifact | Manifest-derived | `d38a3c21c611e84d0741c2ab39401da31f60f17659902aa33e503a4bbae58837` |
+| Root installer | `scripts/install_staging_next_helper_1_4_7.py` | `83a982de1eb862f1fe231cad3001f41aa32c68995d9cc8153184c26fd7e2a7cb` |
 
 The compatibility contract is `wpcaregrid-staging-next-deploy-v11`. Recalculate
 these values from the final merged Git tree before any later installation; a

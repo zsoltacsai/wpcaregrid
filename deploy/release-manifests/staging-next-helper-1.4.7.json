@@ -8,6 +8,6 @@
   "backend_path": "scripts/staging_next_deploy_backend_1_4_7.py",
   "backend_sha256": "6e5a6559eed5fcc5dbcb079d89afb15edc5c7e4982d46440aa4499c489b0b52c",
   "transaction_module_path": "scripts/staging_next_db_transaction_1_4_7.py",
-  "transaction_module_sha256": "ecf23a7d3e68aebb70b802125ad144e5fd062d5980940b1b9978547d234086fb",
-  "helper_artifact_sha256": "76dea7fa3131d9d74db12bd7ab34a976a3dbb9010988ffb29c181ef1b6d1f318"
+  "transaction_module_sha256": "89b5505ec7d05c58ed30d87d7e9b07d44fa0286894b346eeeb9948dbfacfa71a",
+  "helper_artifact_sha256": "d38a3c21c611e84d0741c2ab39401da31f60f17659902aa33e503a4bbae58837"
 }
