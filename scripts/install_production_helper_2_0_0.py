@@ -460,6 +460,90 @@ def _readback(files: tuple[tuple[Path, int, str], ...]) -> None:
             _fail("installed_file_hash_mismatch")
 
 
+def _installation_targets() -> tuple[Path, ...]:
+    return (ENTRYPOINT, BACKEND, TRANSACTION, ENVIRONMENT, CONTROLLER, POLICY, SUDOERS)
+
+
+def _existing_installation_state() -> str:
+    present = []
+    for path in _installation_targets():
+        try:
+            os.lstat(path)
+            present.append(True)
+        except FileNotFoundError:
+            present.append(False)
+        except OSError:
+            _fail("destination_state_unknown")
+    if not any(present):
+        return "NONE"
+    if all(present):
+        return "COMPLETE"
+    return "PARTIAL"
+
+
+def _verify_existing_install(*, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+                             deploy_user: str = DEPLOY_USER) -> dict[str, object]:
+    """Idempotently verify a complete installation without changing host state."""
+    if os.geteuid() != 0:
+        _fail("root_required")
+    try:
+        deploy_uid = pwd.getpwnam("deploy").pw_uid
+        target = pwd.getpwnam(deploy_user)
+    except KeyError:
+        _fail("required_identity_missing")
+    if target.pw_uid <= 0 or target.pw_uid == deploy_uid:
+        _fail("production_deploy_identity_invalid")
+    try:
+        staging_uid = pwd.getpwnam("deploy-staging-next").pw_uid
+    except KeyError:
+        staging_uid = None
+    if target.pw_uid == staging_uid:
+        _fail("production_deploy_identity_overlaps_staging")
+
+    for path in REQUIRED_EXISTING_DIRS:
+        _check_existing_parent_chain(path)
+    for directory in INSTALL_DIRS:
+        _check_directory(directory, expected_mode=0o755)
+    try:
+        installed_names = {entry.name for entry in os.scandir(ENTRYPOINT.parent)}
+    except OSError:
+        _fail("installed_helper_directory_unavailable")
+    if installed_names != {ENTRYPOINT.name, BACKEND.name, TRANSACTION.name,
+                           ENVIRONMENT.name, CONTROLLER.name}:
+        _fail("installed_helper_directory_contents_invalid")
+    if PHASE_B_POLICY.exists() or PHASE_B_POLICY.is_symlink():
+        _fail("phase_b_policy_must_remain_unconfigured")
+    if DATABASE_CREDENTIALS.exists() or DATABASE_CREDENTIALS.is_symlink():
+        _fail("database_credentials_must_remain_unconfigured")
+
+    sources = _read_sources(deploy_uid)
+    _verify_sudoers_source(sources[SUDOERS_SOURCE])
+    _verify_existing_sudoers(runner)
+    policy_raw = _disabled_policy()
+    expected_files = (
+        (ENTRYPOINT, 0o755, ENTRY_SHA256), (BACKEND, 0o644, BACKEND_SHA256),
+        (TRANSACTION, 0o644, TRANSACTION_SHA256), (ENVIRONMENT, 0o644, ENVIRONMENT_SHA256),
+        (CONTROLLER, 0o644, CONTROLLER_SHA256), (POLICY, 0o644, _sha(policy_raw)),
+        (SUDOERS, 0o440, SUDOERS_SHA256),
+    )
+    _readback(expected_files)
+    _verify_installed_sudoers(deploy_user, runner)
+    return {
+        "result": "NO_OP",
+        "verification": "PASS",
+        "helper_version": VERSION,
+        "compatibility_contract": CONTRACT,
+        "helper_artifact_sha256": HELPER_ARTIFACT_SHA256,
+        "controller_sha256": CONTROLLER_SHA256,
+        "profile": "production",
+        "profile_enabled": False,
+        "phase_b_policy": "DISABLED",
+        "installed_file_sha256": {str(path): digest for path, _mode_value, digest in expected_files},
+        "sudoers_sha256": SUDOERS_SHA256,
+        "sudoers_operations": list(OPERATIONS),
+    }
+
+
 def _rollback(created_files: list[tuple[Path, int, int, int, int, int, str]],
               created_dirs: list[tuple[Path, int, int, int, int, int]]) -> bool:
     try:
@@ -537,6 +621,16 @@ def install(*, runner: Callable[..., subprocess.CompletedProcess] = subprocess.r
             effective_uid: int | None = None, deploy_user: str = DEPLOY_USER) -> dict[str, object]:
     if (os.geteuid() if effective_uid is None else effective_uid) != 0:
         _fail("root_required")
+    state = _existing_installation_state()
+    if state == "PARTIAL":
+        _fail("partial_installation_detected")
+    if state == "COMPLETE":
+        receipt = _verify_existing_install(runner=runner, deploy_user=deploy_user)
+        print("INSTALL=NO_OP;VERIFY=PASS")
+        print("PRODUCTION_PROFILE=DISABLED")
+        print("PHASE_B_POLICY=DISABLED")
+        print("SUDOERS_ALLOWLIST=PASS")
+        return receipt
     target_uid, sources = _preflight(runner=runner, deploy_user=deploy_user)
     _ = target_uid  # The fixed sudoers user is verified above; no UID is embedded in it.
     _verify_sudoers_source(sources[SUDOERS_SOURCE])

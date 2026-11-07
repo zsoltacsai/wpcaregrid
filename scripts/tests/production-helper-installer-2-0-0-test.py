@@ -56,6 +56,33 @@ class ProductionHelperInstallerTests(unittest.TestCase):
         doc = (ROOT / "docs/PRODUCTION_HELPER_INSTALL_2_0_0.md").read_text(encoding="utf-8")
         self.assertIn("does not create or own the controller's separate Git source", doc)
 
+    def test_existing_install_state_distinguishes_absent_complete_and_partial(self):
+        paths = tuple(self.root / f"target-{index}" for index in range(3))
+        with patch.object(INSTALLER, "_installation_targets", return_value=paths):
+            self.assertEqual(INSTALLER._existing_installation_state(), "NONE")
+            paths[0].write_bytes(b"present")
+            self.assertEqual(INSTALLER._existing_installation_state(), "PARTIAL")
+            for path in paths[1:]:
+                path.write_bytes(b"present")
+            self.assertEqual(INSTALLER._existing_installation_state(), "COMPLETE")
+
+    def test_complete_installation_is_idempotent_read_only_no_op(self):
+        receipt = {"result": "NO_OP", "verification": "PASS", "profile_enabled": False}
+        with patch.object(INSTALLER, "_existing_installation_state", return_value="COMPLETE"), \
+                patch.object(INSTALLER, "_verify_existing_install", return_value=receipt), \
+                patch.object(INSTALLER, "_preflight", side_effect=AssertionError("must not install")), \
+                patch.object(INSTALLER, "_publish", side_effect=AssertionError("must not write")):
+            result = INSTALLER.install(effective_uid=0)
+        self.assertEqual(result, receipt)
+
+    def test_partial_installation_fails_closed_without_retrying_publication(self):
+        with patch.object(INSTALLER, "_existing_installation_state", return_value="PARTIAL"), \
+                patch.object(INSTALLER, "_preflight", side_effect=AssertionError("must not continue")), \
+                patch.object(INSTALLER, "_publish", side_effect=AssertionError("must not write")):
+            with self.assertRaises(INSTALLER.InstallError) as error:
+                INSTALLER.install(effective_uid=0)
+        self.assertEqual(str(error.exception), "partial_installation_detected")
+
     def test_sudoers_template_is_exactly_five_fixed_production_operations(self):
         raw = (ROOT / "deploy/sudoers/wpcaregrid-production-v2.0.0").read_bytes()
         INSTALLER._verify_sudoers_source(raw)

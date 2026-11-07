@@ -21,7 +21,7 @@ tree, because it does not exist in the protected-primary source commit.
 | Combined helper artifact (derived) | `0e50791ee708de571dbcaa5420bd06b31698e3b7a8683f7501bee6880ead96fc` |
 | `scripts/production_deploy_controller.py` | `a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283` |
 | `deploy/sudoers/wpcaregrid-production-v2.0.0` | `fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963` |
-| Root installer `scripts/install_production_helper_2_0_0.py` (PR #300 commit `481cab044dab61e785f73db9378fa5c4eb1e13aa`) | `ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986` |
+| Root installer `scripts/install_production_helper_2_0_0.py` (source commit pinned in manifest) | `c5c19f0655cfae5f4747264c13c988f7360f3322be32a54b5e1961d538c2bf9d` |
 
 The six helper/controller/policy-template inputs must be staged under
 `/home/deploy/.private/wpcg-production-helper-2.0.0-cf2a944c/`, owned by
@@ -37,7 +37,9 @@ path as root.
 The installer requires root and a pre-existing `deploy-production` identity
 whose UID differs from `deploy` and `deploy-staging-next`. It does not create
 accounts, databases, application directories, services, network routes, or
-credentials. It refuses any existing destination rather than replacing it.
+credentials. It never replaces an existing destination: a complete, exact
+installation is read-only verified as `NO_OP`; partial or mismatched state is
+`HOLD` for administrator inspection.
 
 It may create only these absent root-owned mode-`0755` directories:
 
@@ -69,7 +71,8 @@ directories, current sudo policy, and validity of `visudo`. The installer
 performs these checks itself, validates the sudoers candidate, publishes with
 atomic no-overwrite links, reads back hashes/owners/modes, checks the exact
 allowlist, and tests denial for the ordinary `deploy` identity and invalid
-production operations. It does not call `preflight`, `verify-install`,
+production operations. Re-running on a complete exact installation performs
+only read-only verification and returns `INSTALL=NO_OP;VERIFY=PASS`. It does not call `preflight`, `verify-install`,
 `authorize`, `stage`, or `deploy`.
 
 Command sequence for a separately authorized root console. It copies the
@@ -80,7 +83,7 @@ before execution, so the deploy-owned source is not executed as root:
 (
   set -eu
   src=/home/deploy/.private/wpcaregrid-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py
-  expected=ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986
+  expected=c5c19f0655cfae5f4747264c13c988f7360f3322be32a54b5e1961d538c2bf9d
   d=$(/usr/bin/mktemp -d /root/wpcg-production-installer.XXXXXX)
   trap '/usr/bin/rm -f -- "$d/install.py"; /usr/bin/rmdir -- "$d"' EXIT
   test "$(/usr/bin/stat -c '%U:%G:%a' "$d")" = root:root:700

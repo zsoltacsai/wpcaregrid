@@ -27,7 +27,7 @@ Production helper version `2.0.0`, contract `wpcaregrid-deployment-profile-v2`:
 | Combined helper artifact | `0e50791ee708de571dbcaa5420bd06b31698e3b7a8683f7501bee6880ead96fc` |
 | Production controller | `a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283` |
 | Sudoers candidate | `fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963` |
-| Root installer | `ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986` |
+| Root installer | `c5c19f0655cfae5f4747264c13c988f7360f3322be32a54b5e1961d538c2bf9d` |
 
 The source manifest is `deploy/release-manifests/production-deployment-helper-2.0.0.json`.
 The root entrypoint accepts only `preflight`, `verify-install`, `authorize <40-hex-SHA>`,
@@ -98,13 +98,17 @@ The versioned artifacts install only under
 is `deploy/sudoers/wpcaregrid-production-v2.0.0`. Install with no-overwrite
 publication, verify every installed SHA, owner and mode, and run `visudo -c`.
 The dedicated `deploy-production` identity receives only the five exact
-allowlisted operations in that file. Run negative tests for other users,
-arguments and environment targets, plus positive `verify-install` and
-`preflight`. On any mismatch, use only an identity-checked rollback to the
-previous recorded files; do not alter other profiles or directories.
+allowlisted operations in that file. Run the installer negative authorization
+tests for other users and invalid arguments, then verify the profile remains
+disabled. While `enabled=false`, positive `verify-install` and `preflight` are
+expected to return a fail-closed HOLD; do not enable the profile to make these
+checks pass. Those positive checks are deferred until a complete environment
+policy and its separate authorization are available. On any mismatch, use only
+an identity-checked rollback to the previous recorded files; do not alter other
+profiles or directories.
 
 The no-overwrite root installer is `scripts/install_production_helper_2_0_0.py`;
-SHA-256 `ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986` is pinned in the release manifest.
+SHA-256 `c5c19f0655cfae5f4747264c13c988f7360f3322be32a54b5e1961d538c2bf9d` is pinned in the release manifest.
 It accepts no command-line arguments, requires an already provisioned dedicated
 `deploy-production` account, and installs a schema-complete but disabled
 production profile. It never enables that profile, installs Phase B credentials,
@@ -121,7 +125,7 @@ bytes before execution. Example for a separately authorized root console:
 (
   set -eu
   src=/home/deploy/.private/wpcg-production-helper-installer-2.0.0-cf2a944c/install_production_helper_2_0_0.py
-  expected=ec44d404fc994369bba113eac12f0a902cb5a53e2ef73c12e3ab07af73701986
+  expected=c5c19f0655cfae5f4747264c13c988f7360f3322be32a54b5e1961d538c2bf9d
   d=$(/usr/bin/mktemp -d /root/wpcg-production-installer.XXXXXX)
   trap '/usr/bin/rm -f -- "$d/install.py"; /usr/bin/rmdir -- "$d"' EXIT
   test "$(/usr/bin/stat -c '%U:%G:%a' "$d")" = root:root:700
@@ -241,9 +245,10 @@ Public traffic, workers and scheduler are never released by this runbook.
 4. Exact release SHA, canonical artifact digest, CI, QA/AppSec evidence,
    marketing acceptance and separate production execution authorization.
 
-Current limitations: no production host inventory or approved production
-profile values were supplied; no root installer exists in the manifest; no
-production backup/restore evidence was supplied; the prepared ZIP has no
-verified digest or demonstrated compatibility with the controller input
-contract. No server, database, helper, account, payment, or DNS change has been
-performed.
+Current limitations: only deploy-readable host inventory is available; the
+production deploy identity was absent from deploy-visible account lookup and
+root-only service/database/sudo policy remain unverified. The root installer is
+pinned in the manifest but has not been installed. No production
+backup/restore evidence was supplied; the prepared ZIP has no verified digest
+or demonstrated compatibility with the controller input contract. No server,
+database, helper, account, payment, or DNS change has been performed.
