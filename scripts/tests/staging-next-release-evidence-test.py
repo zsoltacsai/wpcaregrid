@@ -61,6 +61,14 @@ class ReleaseAuthorizationEvidenceTests(unittest.TestCase):
         with patch.object(BACKEND, "_github_json", side_effect=github_json):
             BACKEND._verify_primary_ci(SimpleNamespace(test_only=False), MERGED_SHA)
         self.assertEqual(sum("/actions/runs/" in path and "/jobs?" in path for path in calls), 2)
+        run_queries = [parse_qs(urlsplit(path).query) for path in calls
+                       if urlsplit(path).path.endswith("/actions/runs")]
+        self.assertEqual(
+            {(query["event"][0], query["head_sha"][0]) for query in run_queries},
+            {("pull_request", PR_HEAD_SHA), ("push", MERGED_SHA)},
+        )
+        push_query = next(query for query in run_queries if query["event"] == ["push"])
+        self.assertEqual(push_query["branch"], [BACKEND.PRIMARY_BRANCH])
         self.assertFalse(any("/reviews" in path or "issues/174" in path for path in calls))
 
     def test_missing_required_ci_job_still_holds_release(self):
@@ -78,6 +86,19 @@ class ReleaseAuthorizationEvidenceTests(unittest.TestCase):
             with self.assertRaises(BACKEND.DeployRefused) as error:
                 BACKEND._verify_primary_ci(SimpleNamespace(test_only=False), MERGED_SHA)
         self.assertEqual(str(error.exception), "merged_pr_evidence_missing_or_ambiguous")
+
+    def test_unprotected_primary_branch_holds_release_authorization(self):
+        profile = SimpleNamespace(test_only=False, allowed_uid=1000, helper_artifact_sha256="c" * 64)
+        with patch.object(BACKEND, "_safe_profile"), \
+                patch.object(BACKEND, "_github_json",
+                             return_value={"protected": False,
+                                           "commit": {"sha": MERGED_SHA}}), \
+                patch.object(BACKEND, "_github_primary_tree") as primary_tree:
+            result = BACKEND.authorize_release(
+                profile, invoking_uid=1000, application_sha=MERGED_SHA)
+        self.assertEqual((result["result"], result["reason"]),
+                         ("HOLD", "primary_branch_unprotected"))
+        primary_tree.assert_not_called()
 
 
 class NginxRouteTests(unittest.TestCase):

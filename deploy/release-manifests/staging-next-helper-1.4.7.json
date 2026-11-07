@@ -6,10 +6,10 @@
   "entrypoint_path": "scripts/wpcaregrid-staging-next-deploy-priv-1_4_7.py",
   "entrypoint_sha256": "2640869293b730d1d4b214df430f8623fc407afa79622ccdb430e57f034ca22f",
   "backend_path": "scripts/staging_next_deploy_backend_1_4_7.py",
-  "backend_sha256": "6d720fdb888ec94b710df0d05a539e4300dfd83b3f8cfe142f03f2b673cee411",
+  "backend_sha256": "40dced25810ab2cb0ec0cf93d19b64b272a3c06fa229f48e3a58a927cf48577e",
   "transaction_module_path": "scripts/staging_next_db_transaction_1_4_7.py",
   "transaction_module_sha256": "89b5505ec7d05c58ed30d87d7e9b07d44fa0286894b346eeeb9948dbfacfa71a",
-  "helper_artifact_sha256": "1a66e45efaab91abd8d5024c6880b00fc0c87a98b839729958c1646f569ee6c5",
+  "helper_artifact_sha256": "e52421e20e1ba4f9ccf917b42743569fd9d5690b9c5462c9405ed6239c040dc4",
   "release_validation": {
     "required_independent_agent_passes": ["integration_qa", "m17_appsec"],
     "github_approved_reviews_required": false,

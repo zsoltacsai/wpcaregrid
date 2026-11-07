@@ -998,6 +998,8 @@ def authorize_release(profile: StagingProfile, *, invoking_uid: int,
         branch = quote(PRIMARY_BRANCH, safe="")
         ref = _github_json(f"/repos/{GITHUB_REPOSITORY}/branches/{branch}") if not profile.test_only else None
         if not profile.test_only:
+            _require(isinstance(ref, dict) and ref.get("protected") is True,
+                     "primary_branch_unprotected")
             commit = ref.get("commit") if isinstance(ref, dict) else None
             _require(isinstance(commit, dict) and commit.get("sha") == application_sha,
                      "primary_sha_is_not_latest")
