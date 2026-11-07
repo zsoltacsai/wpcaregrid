@@ -1,13 +1,13 @@
 {
-  "schema": 1,
-  "profile": "staging-next",
-  "helper_version": "1.4.2",
+  "backend_path": "scripts/staging_next_deploy_backend.py",
+  "backend_sha256": "0c00ed4da7b9c8c959931bee7a31eae029a516e8bab22d0dfc9ae3daf540a78b",
   "compatibility_contract": "wpcaregrid-staging-next-deploy-v6",
   "entrypoint_path": "scripts/wpcaregrid-staging-next-deploy-priv.py",
   "entrypoint_sha256": "26faef7b8079676ef51a2f41549b8ecb27b774f39f93cbf05de9c460f3e7bd4b",
-  "backend_path": "scripts/staging_next_deploy_backend.py",
-  "backend_sha256": "df776c7c563c84ce0033cab311b921c41f0e86cc9ed46fb5d82b840505ad52f2",
+  "helper_artifact_sha256": "1746c3eecee5ec930db5ca5164c3d032eafe0f1a783d3c783a5b9df30d50bd51",
+  "helper_version": "1.4.2",
+  "profile": "staging-next",
+  "schema": 1,
   "transaction_module_path": "scripts/staging_next_db_transaction.py",
-  "transaction_module_sha256": "b641bb966d2d8e57899e4ad0591685b9a9508d9d715258054a9d11c3bde5a15b",
-  "helper_artifact_sha256": "e38b18844e7d06d0fff390e506b9dfcdbc262f6308511126d11b20b1afb52c48"
+  "transaction_module_sha256": "1128cc32f812dbbf48d28a7ea40e72ac097899fe7a0cef52855d3878a34aee93"
 }

@@ -29,7 +29,7 @@ from typing import Callable, Iterator, Mapping
 
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
-SCHEMA = 2
+SCHEMA = 4
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
 PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.2.json")
 PHASE_B_CREDENTIALS_PATH = Path("/etc/wpcaregrid-deploy/credentials/staging-next-database-1.4.2.json")
@@ -69,6 +69,12 @@ EVIDENCE_KEYS = {
     "RELEASE_ACTIVATED": "activation_receipt_sha256",
     "ACCEPTANCE_VERIFIED": "acceptance_receipt_sha256",
     "COMPLETE": "release_receipt_sha256",
+}
+RESTORE_CHECKPOINT_KEYS = {
+    "backup_sha256", "target_schema_sha256", "target_ledger_sha256",
+    "target_data_sha256", "restored_schema_sha256", "restored_ledger_sha256",
+    "restored_data_sha256", "restore_mysql_uuid_sha256",
+    "restore_receipt_sha256",
 }
 JOURNAL_KEYS = {
     "schema", "profile", "database", "transaction_id", "application_sha",
@@ -279,7 +285,9 @@ def verify_background_fences(policy: DatabaseExecutionPolicy, *,
     _require(census.returncode == 0 and len(census.stdout) <= 1_000_000,
              "phase_b_consumer_census_unavailable")
     consumers = re.compile(
-        rb"(?:^|\s)artisan\s+(?:queue:(?:work|listen)|schedule:(?:run|work)|horizon(?::work)?)(?:\s|$)"
+        rb"(?:^|\s)artisan"
+        rb"(?:(?:\s+--env(?:=[^\s]+|\s+[^\s]+)?|\s+--[a-z][a-z0-9-]*(?:=[^\s]+)?|\s+-[a-zA-Z]+))*"
+        rb"\s+(?:queue:(?:work|listen)|schedule:(?:run|work)|horizon(?::work)?)(?:\s|$)"
     )
     _require(consumers.search(census.stdout) is None, "phase_b_background_consumer_active")
     digest = hashlib.sha256(
@@ -367,6 +375,90 @@ def _mysql_query_failure_code(stderr_sample: bytes) -> str:
     return "phase_b_mysql_query_failed"
 
 
+def _database_data_fingerprint(policy: DatabaseExecutionPolicy, *, database: str,
+                               isolated: bool, table_names: list[str],
+                               maximum_bytes: int = 20 * 1024 * 1024 * 1024,
+                               timeout: float = 300.0) -> tuple[str, int]:
+    """Hash a canonical, ordered SQL data stream in memory without retaining rows."""
+    _require(re.fullmatch(r"wpcg_staging_next(?:_(?:restore|rehearsal)_[0-9a-f]{32})?", database)
+             is not None and 0 <= len(table_names) <= 256
+             and all(re.fullmatch(r"[A-Za-z0-9_$]{1,64}", name) for name in table_names),
+             "phase_b_data_fingerprint_input_invalid")
+    if not table_names:
+        return hashlib.sha256(b"").hexdigest(), 0
+    credentials = policy.credentials["isolated" if isolated else "target"]
+    host = policy.restore_host if isolated else policy.target_host
+    port = policy.restore_port if isolated else policy.target_port
+    option_fd, defaults_path = _mysql_defaults(credentials, host, port)
+    argv = [
+        "/usr/bin/mysqldump", f"--defaults-file={defaults_path}", "--protocol=tcp",
+        f"--host={host}", f"--port={port}", f"--user={credentials['username']}",
+        "--single-transaction", "--skip-lock-tables", "--quick", "--no-tablespaces",
+        "--set-gtid-purged=OFF",
+        "--hex-blob", "--skip-comments", "--default-character-set=utf8mb4", "--tz-utc",
+        "--no-create-info", "--skip-triggers", "--skip-add-locks", "--skip-disable-keys",
+        "--skip-set-charset", "--skip-extended-insert", "--complete-insert", "--order-by-primary",
+        database, *table_names,
+    ]
+    process = None
+    stderr_sample = bytearray()
+    stderr_truncated = False
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, close_fds=True, pass_fds=(option_fd,))
+        os.close(option_fd)
+        option_fd = -1
+        deadline = time.monotonic() + timeout
+        streams = {process.stdout.fileno(): "stdout", process.stderr.fileno(): "stderr"}
+        while streams:
+            remaining = deadline - time.monotonic()
+            _require(remaining > 0, "phase_b_data_fingerprint_timeout")
+            ready, _, _ = select.select(list(streams), [], [], min(0.5, remaining))
+            if not ready:
+                continue
+            for source_fd in ready:
+                kind = streams[source_fd]
+                block = os.read(source_fd, 1024 * 1024 if kind == "stdout" else 4096)
+                if not block:
+                    del streams[source_fd]
+                    continue
+                if kind == "stdout":
+                    total += len(block)
+                    _require(total <= maximum_bytes, "phase_b_data_fingerprint_size_limit")
+                    digest.update(block)
+                elif len(stderr_sample) < 16_384:
+                    remaining_sample = 16_384 - len(stderr_sample)
+                    stderr_sample.extend(block[:remaining_sample])
+                    stderr_truncated = stderr_truncated or len(block) > remaining_sample
+                else:
+                    stderr_truncated = True
+        return_code = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+        _require(return_code == 0 and not stderr_truncated,
+                 _mysql_query_failure_code(bytes(stderr_sample)) if return_code != 0
+                 else "phase_b_data_fingerprint_diagnostic_overflow")
+        return digest.hexdigest(), total
+    except TransactionRefused:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+        raise
+    except subprocess.TimeoutExpired:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+        raise TransactionRefused("phase_b_data_fingerprint_timeout") from None
+    except OSError:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+        raise TransactionRefused("phase_b_data_fingerprint_unavailable") from None
+    finally:
+        if option_fd >= 0:
+            os.close(option_fd)
+
+
 def database_fingerprint(policy: DatabaseExecutionPolicy, *, database: str,
                           isolated: bool) -> dict[str, object]:
     """Return a content-free MySQL identity and canonical schema/ledger digests."""
@@ -427,6 +519,52 @@ def database_fingerprint(policy: DatabaseExecutionPolicy, *, database: str,
     _require(len(migrations) == len(set(migrations))
              and all(MIGRATION_RE.fullmatch(item) for item in migrations),
              "phase_b_migration_ledger_invalid")
+    table_rows = _mysql_query(
+        policy, isolated=isolated,
+        sql="SELECT t.TABLE_NAME,COALESCE(t.ENGINE,''),CASE WHEN EXISTS ("
+            "SELECT 1 FROM information_schema.STATISTICS s WHERE s.TABLE_SCHEMA=t.TABLE_SCHEMA "
+            "AND s.TABLE_NAME=t.TABLE_NAME AND s.INDEX_NAME='PRIMARY') THEN 1 ELSE 0 END "
+            "FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA=DATABASE() "
+            "AND t.TABLE_TYPE='BASE TABLE' ORDER BY t.TABLE_NAME",
+        database=database, timeout=30.0, maximum=1_000_000,
+    ).decode("ascii", "strict").splitlines()
+    _require(0 < len(table_rows) <= 256, "phase_b_table_set_unbounded")
+    table_names = []
+    for row in table_rows:
+        fields = row.split("\t")
+        _require(len(fields) == 3 and re.fullmatch(r"[A-Za-z0-9_$]{1,64}", fields[0]) is not None,
+                 "phase_b_table_metadata_invalid")
+        _require(fields[1].lower() == "innodb", "phase_b_nontransactional_table_unsupported")
+        _require(fields[2] == "1", "phase_b_table_without_primary_key_unsupported")
+        table_names.append(fields[0])
+    count_selects = []
+    for name in table_names:
+        # Restrictive identifier validation above makes this fixed quoting safe.
+        count_selects.append(
+            "SELECT '" + name + "',COUNT(*) FROM `" + name + "`"
+        )
+    counts_raw = _mysql_query(
+        policy, isolated=isolated, sql=" UNION ALL ".join(count_selects) + " ORDER BY 1",
+        database=database, timeout=180.0, maximum=2_000_000,
+    )
+    try:
+        counts = []
+        for row in counts_raw.decode("ascii", "strict").splitlines():
+            fields = row.split("\t")
+            _require(len(fields) == 2 and fields[0] in table_names
+                     and re.fullmatch(r"0|[1-9][0-9]{0,19}", fields[1]) is not None,
+                     "phase_b_table_count_invalid")
+            counts.append((fields[0], int(fields[1])))
+    except UnicodeError:
+        raise TransactionRefused("phase_b_table_count_invalid") from None
+    _require(len(counts) == len(table_names)
+             and len({name for name, _count in counts}) == len(table_names),
+             "phase_b_table_count_incomplete")
+    dump_sha256, dump_bytes = _database_data_fingerprint(
+        policy, database=database, isolated=isolated, table_names=table_names)
+    data_sha256 = hashlib.sha256(json.dumps({
+        "counts": counts, "dump_sha256": dump_sha256, "dump_bytes": dump_bytes,
+    }, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
     return {
         "database": database,
         "mysql_version": identity[0],
@@ -434,6 +572,7 @@ def database_fingerprint(policy: DatabaseExecutionPolicy, *, database: str,
         "schema_sha256": schema_hash.hexdigest(),
         "schema_components": schema_components,
         "ledger_sha256": hashlib.sha256(ledger_raw).hexdigest(),
+        "data_sha256": data_sha256,
         "migrations": migrations,
     }
 
@@ -694,6 +833,23 @@ def _hash(value: object) -> bool:
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+
+
+def restore_receipt_sha256(evidence: Mapping[str, str]) -> str:
+    """Hash immutable pre-migration and isolated-restore observations."""
+    fields = RESTORE_CHECKPOINT_KEYS - {"restore_receipt_sha256"}
+    _require(set(evidence) == fields and all(_hash(evidence.get(key)) for key in fields),
+             "restore_checkpoint_invalid")
+    return hashlib.sha256(json.dumps({
+        "backup_sha256": evidence["backup_sha256"],
+        "target_schema_sha256": evidence["target_schema_sha256"],
+        "target_ledger_sha256": evidence["target_ledger_sha256"],
+        "target_data_sha256": evidence["target_data_sha256"],
+        "restored_schema_sha256": evidence["restored_schema_sha256"],
+        "restored_ledger_sha256": evidence["restored_ledger_sha256"],
+        "restored_data_sha256": evidence["restored_data_sha256"],
+        "restore_mysql_uuid_sha256": evidence["restore_mysql_uuid_sha256"],
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -965,6 +1121,17 @@ class DatabaseReleaseTransaction:
                  and 0 <= value["migration_cursor"] <= len(self.identity.migrations),
                  "transaction_state_invalid")
         _require(isinstance(value.get("evidence"), dict), "transaction_evidence_invalid")
+        restore_evidence = value["evidence"].get("RESTORE_REHEARSAL_VERIFIED")
+        if restore_evidence is not None:
+            _require(isinstance(restore_evidence, dict)
+                     and set(restore_evidence) == RESTORE_CHECKPOINT_KEYS
+                     and all(_hash(restore_evidence.get(key)) for key in RESTORE_CHECKPOINT_KEYS)
+                     and restore_evidence.get("backup_sha256") == self.identity.backup_sha256
+                     and restore_receipt_sha256({key: restore_evidence[key]
+                                                 for key in RESTORE_CHECKPOINT_KEYS
+                                                 if key != "restore_receipt_sha256"})
+                     == restore_evidence.get("restore_receipt_sha256"),
+                     "transaction_restore_checkpoint_invalid")
         _require(type(value.get("updated_at")) is int and value["updated_at"] > 0,
                  "transaction_timestamp_invalid")
         cursor = value["migration_cursor"]
@@ -972,7 +1139,8 @@ class DatabaseReleaseTransaction:
         started = value.get("migration_started_at")
         if value["state"] == "MIGRATING" and cursor < len(self.identity.migrations):
             _require(isinstance(before, dict) and set(before) == {
-                "schema_sha256", "ledger_sha256", "expected_schema_sha256", "expected_ledger_sha256",
+                "schema_sha256", "ledger_sha256", "data_sha256",
+                "expected_schema_sha256", "expected_ledger_sha256", "expected_data_sha256",
             } and all(_hash(before.get(key)) for key in before)
                      and type(started) is int and started > 0, "migration_checkpoint_invalid")
         else:
@@ -1035,8 +1203,19 @@ class DatabaseReleaseTransaction:
         target_index = STATES.index(target)
         _require(target_index == current_index + 1, "transaction_transition_out_of_order")
         required = EVIDENCE_KEYS.get(target)
-        _require(required is not None and set(evidence) == {required} and _hash(evidence.get(required)),
-                 "transaction_evidence_missing_or_invalid")
+        _require(required is not None, "transaction_evidence_missing_or_invalid")
+        if target == "RESTORE_REHEARSAL_VERIFIED":
+            _require(set(evidence) == RESTORE_CHECKPOINT_KEYS
+                     and all(_hash(evidence.get(key)) for key in RESTORE_CHECKPOINT_KEYS),
+                     "transaction_evidence_missing_or_invalid")
+            _require(evidence["backup_sha256"] == self.identity.backup_sha256
+                     and restore_receipt_sha256({key: evidence[key]
+                                                 for key in RESTORE_CHECKPOINT_KEYS
+                                                 if key != "restore_receipt_sha256"}) == evidence[required],
+                     "restore_checkpoint_identity_mismatch")
+        else:
+            _require(set(evidence) == {required} and _hash(evidence.get(required)),
+                     "transaction_evidence_missing_or_invalid")
         if target == "BACKUP_VERIFIED":
             _require(evidence[required] == self.identity.backup_sha256, "backup_identity_mismatch")
         if target == "MIGRATIONS_VERIFIED":
@@ -1062,35 +1241,42 @@ class DatabaseReleaseTransaction:
         self._persist(updated)
 
     def begin_migration(self, name: str, *, observed_schema_sha256: str,
-                        observed_ledger_sha256: str, expected_schema_sha256: str,
-                        expected_ledger_sha256: str) -> None:
+                        observed_ledger_sha256: str, observed_data_sha256: str,
+                        expected_schema_sha256: str, expected_ledger_sha256: str,
+                        expected_data_sha256: str) -> None:
         state = self._ensure_open()
         _require(state["state"] in {"FENCES_CLOSED", "MIGRATING"}, "migration_state_invalid")
         cursor = state["migration_cursor"]
         _require(cursor < len(self.identity.migrations) and name == self.identity.migrations[cursor],
                  "migration_order_mismatch")
         _require(all(_hash(value) for value in (observed_schema_sha256, observed_ledger_sha256,
-                                                 expected_schema_sha256, expected_ledger_sha256)),
+                                                 observed_data_sha256, expected_schema_sha256,
+                                                 expected_ledger_sha256, expected_data_sha256)),
                  "migration_observation_invalid")
         updated = dict(state)
         updated.update({"state": "MIGRATING", "migration_before": {
             "schema_sha256": observed_schema_sha256, "ledger_sha256": observed_ledger_sha256,
+            "data_sha256": observed_data_sha256,
             "expected_schema_sha256": expected_schema_sha256,
             "expected_ledger_sha256": expected_ledger_sha256,
+            "expected_data_sha256": expected_data_sha256,
         }, "migration_started_at": time.time_ns()})
         self._persist(updated)
 
     def complete_migration(self, name: str, *, observed_schema_sha256: str,
-                           observed_ledger_sha256: str, migration_receipt_sha256: str) -> None:
+                           observed_ledger_sha256: str, observed_data_sha256: str,
+                           migration_receipt_sha256: str) -> None:
         state = self._ensure_open()
         cursor = state["migration_cursor"]
         _require(state["state"] == "MIGRATING" and cursor < len(self.identity.migrations)
                  and name == self.identity.migrations[cursor], "migration_completion_order_mismatch")
         _require(_hash(observed_schema_sha256) and _hash(observed_ledger_sha256)
+                 and _hash(observed_data_sha256)
                  and _hash(migration_receipt_sha256), "migration_completion_evidence_invalid")
         expected = state["migration_before"]
         _require(observed_schema_sha256 == expected["expected_schema_sha256"]
-                 and observed_ledger_sha256 == expected["expected_ledger_sha256"],
+                 and observed_ledger_sha256 == expected["expected_ledger_sha256"]
+                 and observed_data_sha256 == expected["expected_data_sha256"],
                  "migration_postcondition_mismatch")
         updated = dict(state)
         updated["migration_cursor"] = cursor + 1
@@ -1099,6 +1285,7 @@ class DatabaseReleaseTransaction:
         updated["evidence"] = {**state["evidence"], f"migration:{name}": {
             "schema_sha256": observed_schema_sha256,
             "ledger_sha256": observed_ledger_sha256,
+            "data_sha256": observed_data_sha256,
             "receipt_sha256": migration_receipt_sha256,
         }}
         updated["migration_before"] = None
@@ -1113,24 +1300,29 @@ class DatabaseReleaseTransaction:
     def reconcile_interrupted_migration(self, *, ledger_contains_started_migration: bool,
                                         observed_schema_sha256: str,
                                         observed_ledger_sha256: str,
+                                        observed_data_sha256: str,
                                         migration_receipt_sha256: str | None = None) -> str:
         state = self._ensure_open()
         _require(state["state"] == "MIGRATING" and state["migration_cursor"] < len(self.identity.migrations),
                  "no_interrupted_migration")
-        _require(_hash(observed_schema_sha256) and _hash(observed_ledger_sha256),
+        _require(_hash(observed_schema_sha256) and _hash(observed_ledger_sha256)
+                 and _hash(observed_data_sha256),
                  "migration_observation_invalid")
         before = state["migration_before"]
         name = self.identity.migrations[state["migration_cursor"]]
         if (ledger_contains_started_migration and _hash(migration_receipt_sha256)
                 and observed_schema_sha256 == before["expected_schema_sha256"]
-                and observed_ledger_sha256 == before["expected_ledger_sha256"]):
+                and observed_ledger_sha256 == before["expected_ledger_sha256"]
+                and observed_data_sha256 == before["expected_data_sha256"]):
             self.complete_migration(name, observed_schema_sha256=observed_schema_sha256,
                                     observed_ledger_sha256=observed_ledger_sha256,
+                                    observed_data_sha256=observed_data_sha256,
                                     migration_receipt_sha256=migration_receipt_sha256)
             return "COMPLETED_FROM_VERIFIED_LEDGER"
         if (not ledger_contains_started_migration
                 and observed_schema_sha256 == before["schema_sha256"]
-                and observed_ledger_sha256 == before["ledger_sha256"]):
+                and observed_ledger_sha256 == before["ledger_sha256"]
+                and observed_data_sha256 == before["data_sha256"]):
             updated = dict(state)
             updated["state"] = "FENCES_CLOSED"
             updated["migration_before"] = None
@@ -1168,8 +1360,8 @@ class DatabaseReleaseTransaction:
         for name in self.identity.migrations:
             expected = expected_after[name]
             _require(isinstance(expected, Mapping)
-                     and set(expected) == {"schema_sha256", "ledger_sha256"}
-                     and _hash(expected.get("schema_sha256")) and _hash(expected.get("ledger_sha256")),
+                     and set(expected) == {"schema_sha256", "ledger_sha256", "data_sha256"}
+                     and all(_hash(expected.get(key)) for key in expected),
                      "migration_rehearsal_evidence_invalid")
         if state["state"] == "MIGRATIONS_VERIFIED":
             _require(state["migration_cursor"] == len(self.identity.migrations),
@@ -1184,12 +1376,14 @@ class DatabaseReleaseTransaction:
                 current = observe()
                 _require(isinstance(current, Mapping) and _hash(current.get("schema_sha256"))
                          and _hash(current.get("ledger_sha256"))
+                         and _hash(current.get("data_sha256"))
                          and isinstance(current.get("migrations"), (tuple, list)),
                          "migration_observation_invalid")
                 recovery = self.reconcile_interrupted_migration(
                     ledger_contains_started_migration=name in current["migrations"],
                     observed_schema_sha256=current["schema_sha256"],
                     observed_ledger_sha256=current["ledger_sha256"],
+                    observed_data_sha256=current["data_sha256"],
                     migration_receipt_sha256=self._migration_receipt_hash(
                         name, state["migration_before"], current) if name in current["migrations"] else None,
                 )
@@ -1204,14 +1398,17 @@ class DatabaseReleaseTransaction:
             before = observe()
             _require(isinstance(before, Mapping) and _hash(before.get("schema_sha256"))
                      and _hash(before.get("ledger_sha256"))
+                     and _hash(before.get("data_sha256"))
                      and isinstance(before.get("migrations"), (tuple, list)),
                      "migration_observation_invalid")
             _require(name not in before["migrations"], "migration_already_applied_without_checkpoint")
             self.begin_migration(
                 name, observed_schema_sha256=before["schema_sha256"],
                 observed_ledger_sha256=before["ledger_sha256"],
+                observed_data_sha256=before["data_sha256"],
                 expected_schema_sha256=after_expected["schema_sha256"],
                 expected_ledger_sha256=after_expected["ledger_sha256"],
+                expected_data_sha256=after_expected["data_sha256"],
             )
             try:
                 command_passed = apply_one(name) is True
@@ -1220,15 +1417,18 @@ class DatabaseReleaseTransaction:
             after = observe()
             _require(isinstance(after, Mapping) and _hash(after.get("schema_sha256"))
                      and _hash(after.get("ledger_sha256"))
+                     and _hash(after.get("data_sha256"))
                      and isinstance(after.get("migrations"), (tuple, list)),
                      "migration_observation_invalid")
             if (not command_passed or name not in after["migrations"]
                     or after["schema_sha256"] != after_expected["schema_sha256"]
-                    or after["ledger_sha256"] != after_expected["ledger_sha256"]):
+                    or after["ledger_sha256"] != after_expected["ledger_sha256"]
+                    or after["data_sha256"] != after_expected["data_sha256"]):
                 recovery = self.reconcile_interrupted_migration(
                     ledger_contains_started_migration=name in after["migrations"],
                     observed_schema_sha256=after["schema_sha256"],
                     observed_ledger_sha256=after["ledger_sha256"],
+                    observed_data_sha256=after["data_sha256"],
                     migration_receipt_sha256=self._migration_receipt_hash(name, before, after)
                     if name in after["migrations"] else None,
                 )
@@ -1241,6 +1441,7 @@ class DatabaseReleaseTransaction:
             self.complete_migration(
                 name, observed_schema_sha256=after["schema_sha256"],
                 observed_ledger_sha256=after["ledger_sha256"],
+                observed_data_sha256=after["data_sha256"],
                 migration_receipt_sha256=self._migration_receipt_hash(name, before, after),
             )
             state = self._ensure_open()
@@ -1259,5 +1460,7 @@ class DatabaseReleaseTransaction:
             "before_ledger_sha256": before.get("ledger_sha256"),
             "after_schema_sha256": after.get("schema_sha256"),
             "after_ledger_sha256": after.get("ledger_sha256"),
+            "before_data_sha256": before.get("data_sha256"),
+            "after_data_sha256": after.get("data_sha256"),
         }
         return hashlib.sha256(_json_bytes(payload)).hexdigest()

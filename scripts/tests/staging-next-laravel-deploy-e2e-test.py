@@ -29,7 +29,8 @@ sys.path.insert(0, str(ROOT))
 from scripts import staging_next_deploy_backend as BACKEND
 from scripts import staging_next_deploy_controller as CONTROLLER
 from scripts.staging_next_db_transaction import (
-    DatabaseReleaseTransaction, TransactionIdentity, _mysql_defaults, _mysql_query_failure_code,
+    DatabaseReleaseTransaction, TransactionIdentity, _mysql_defaults, _mysql_query,
+    _mysql_query_failure_code, database_fingerprint, restore_receipt_sha256,
 )
 
 
@@ -186,7 +187,13 @@ def verify_php_vendor_readability(vendor: Path, application_cwd: Path):
 
 
 def prove_mysql_backup_restore(profile, root: Path):
-    """Create a private compressed DB backup, restore it to a second MySQL instance, compare metadata."""
+    """Restore a private backup twice and compare schema, ledger, and row-count proofs."""
+    run([
+        "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+        "-u", os.environ["WPCG_MYSQL_USER"], "wpcg_staging_next", "-e",
+        "CREATE TABLE wpcg_e2e_restore_probe (id BIGINT PRIMARY KEY, marker VARCHAR(32) NOT NULL) ENGINE=InnoDB; "
+        "INSERT INTO wpcg_e2e_restore_probe VALUES (1,'synthetic-row');",
+    ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
     backup = root / "wpcg-staging-next-e2e.sql.gz"
     backup_env = {"MYSQL_PWD": os.environ["WPCG_BACKUP_MYSQL_PASSWORD"]}
     with backup.open("xb") as stream:
@@ -269,7 +276,10 @@ def prove_mysql_backup_restore(profile, root: Path):
         "getenv('U'),getenv('P'),[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);"
         "$sql=\"SELECT VERSION() version,@@server_uuid uuid,(SELECT COUNT(*) FROM information_schema.tables "
         "WHERE table_schema=DATABASE() AND table_type='BASE TABLE') tables,(SELECT COUNT(*) FROM migrations) migrations\";"
-        "$r=$p->query($sql); echo json_encode($r->fetch(PDO::FETCH_ASSOC));"
+        "$r=$p->query($sql)->fetch(PDO::FETCH_ASSOC);"
+        "$counts=[];$tables=$p->query(\"SELECT TABLE_NAME,ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME\")->fetchAll(PDO::FETCH_NUM);"
+        "foreach($tables as [$n,$e]){if($e!=='InnoDB'||!preg_match('/^[A-Za-z0-9_$]{1,64}$/D',$n))exit(32);$counts[]=[$n,(int)$p->query(\"SELECT COUNT(*) FROM `\".$n.\"`\")->fetchColumn()];}"
+        "$r['data_sha256']=hash('sha256',json_encode($counts,JSON_UNESCAPED_SLASHES));echo json_encode($r);"
     )
     observed = []
     for host, username, password in (
@@ -287,6 +297,26 @@ def prove_mysql_backup_restore(profile, root: Path):
             or len({value.get("migrations") for value in observed}) != 1
             or int(first.get("tables", 0)) <= 0 or int(first.get("migrations", 0)) <= 0):
         raise RuntimeError("isolated_database_restore_verification_failed")
+    if len({value.get("data_sha256") for value in observed}) != 1:
+        raise RuntimeError("isolated_database_restore_data_mismatch")
+    restore_env = {"MYSQL_PWD": os.environ["WPCG_RESTORE_MYSQL_PASSWORD"]}
+    run([
+        "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_RESTORE_MYSQL_HOST"],
+        "-u", os.environ["WPCG_RESTORE_MYSQL_USER"], "wpcg_staging_next", "-e",
+        "DELETE FROM wpcg_e2e_restore_probe WHERE id=1",
+    ], extra_env=restore_env, timeout=15)
+    omitted = json.loads(run(
+        ["/usr/local/bin/php", "-r", probe], cwd=profile.application_link, timeout=20,
+        extra_env={"H": os.environ["WPCG_RESTORE_MYSQL_HOST"],
+                   "U": os.environ["WPCG_RESTORE_MYSQL_USER"],
+                   "P": os.environ["WPCG_RESTORE_MYSQL_PASSWORD"]}))
+    if omitted.get("data_sha256") == first.get("data_sha256"):
+        raise RuntimeError("isolated_restore_row_omission_not_detected")
+    run([
+        "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_RESTORE_MYSQL_HOST"],
+        "-u", os.environ["WPCG_RESTORE_MYSQL_USER"], "wpcg_staging_next", "-e",
+        "INSERT INTO wpcg_e2e_restore_probe VALUES (1,'synthetic-row')",
+    ], extra_env=restore_env, timeout=15)
     return backup_sha, int(first["tables"]), int(first["migrations"])
 
 
@@ -313,10 +343,17 @@ foreach ([
   "SELECT TRIGGER_NAME,EVENT_MANIPULATION,EVENT_OBJECT_TABLE,ACTION_TIMING,ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY TRIGGER_NAME",
 ] as $sql) $schema[]=$pdo->query($sql)->fetchAll(PDO::FETCH_NUM);
 $ledger=$pdo->query("SELECT migration,batch FROM migrations ORDER BY migration")->fetchAll(PDO::FETCH_NUM);
+$tables=$pdo->query("SELECT TABLE_NAME,ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME")->fetchAll(PDO::FETCH_NUM);
+$counts=[];
+foreach ($tables as [$name,$engine]) {
+  if ($engine!=="InnoDB" || !preg_match('/^[A-Za-z0-9_$]{1,64}$/D',$name)) exit(32);
+  $counts[]=[$name,(int)$pdo->query("SELECT COUNT(*) FROM `".$name."`")->fetchColumn()];
+}
 echo json_encode(["database"=>$identity["database_name"],"version"=>$identity["version"],
   "mysql_uuid_sha256"=>hash("sha256",$identity["uuid"]),
   "schema_sha256"=>hash("sha256",json_encode($schema,JSON_UNESCAPED_SLASHES)),
   "ledger_sha256"=>hash("sha256",json_encode($ledger,JSON_UNESCAPED_SLASHES)),
+  "data_sha256"=>hash("sha256",json_encode($counts,JSON_UNESCAPED_SLASHES)),
   "migrations"=>array_column($ledger,0)],JSON_UNESCAPED_SLASHES);'''
     result = subprocess.run(["/usr/local/bin/php", "-r", script], cwd=profile.application_link,
                             env={"PATH": "/usr/local/bin:/usr/bin:/bin",
@@ -335,6 +372,46 @@ echo json_encode(["database"=>$identity["database_name"],"version"=>$identity["v
             or not isinstance(value.get("migrations"), list)):
         raise RuntimeError("migration_database_identity_mismatch")
     return value
+
+
+def verify_database_content_fingerprint(profile):
+    """Prove that same-count row-content changes alter the in-memory dump digest."""
+    policy = BACKEND._load_phase_b_policy(profile)
+    existing = _mysql_query(
+        policy, isolated=False,
+        sql="SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() "
+            "AND TABLE_NAME='wpcg_e2e_content_fingerprint_probe' AND TABLE_TYPE='BASE TABLE'",
+        database="wpcg_staging_next", timeout=15,
+    )
+    if existing != b"0\n":
+        raise RuntimeError("content_fingerprint_probe_table_not_absent")
+    _mysql_query(
+        policy, isolated=False,
+        sql="CREATE TABLE `wpcg_e2e_content_fingerprint_probe` "
+            "(`id` BIGINT PRIMARY KEY,`marker` VARCHAR(32) NOT NULL) ENGINE=InnoDB; "
+            "INSERT INTO `wpcg_e2e_content_fingerprint_probe` VALUES (1,'original-row')",
+        database="wpcg_staging_next", timeout=15,
+    )
+    before = database_fingerprint(policy, database="wpcg_staging_next", isolated=False)
+    _mysql_query(
+        policy, isolated=False,
+        sql="UPDATE `wpcg_e2e_content_fingerprint_probe` SET `marker`='changed-row' WHERE `id`=1",
+        database="wpcg_staging_next", timeout=15,
+    )
+    changed = database_fingerprint(policy, database="wpcg_staging_next", isolated=False)
+    if (before["data_sha256"] == changed["data_sha256"]
+            or before["schema_sha256"] != changed["schema_sha256"]
+            or before["ledger_sha256"] != changed["ledger_sha256"]):
+        raise RuntimeError("same_count_row_content_change_not_detected")
+    _mysql_query(
+        policy, isolated=False,
+        sql="UPDATE `wpcg_e2e_content_fingerprint_probe` SET `marker`='original-row' WHERE `id`=1",
+        database="wpcg_staging_next", timeout=15,
+    )
+    restored = database_fingerprint(policy, database="wpcg_staging_next", isolated=False)
+    if restored["data_sha256"] != before["data_sha256"]:
+        raise RuntimeError("same_count_row_content_fingerprint_not_reproducible")
+    print("MYSQL_DATA_CONTENT_FINGERPRINT=PASS;SAME_COUNT_MUTATION_DETECTED=YES")
 
 
 def execute_laravel_migration(profile, *, host, username, password, path):
@@ -422,7 +499,18 @@ def prove_journaled_real_migration(profile, root: Path, *, application_sha: str,
         "after_ledger_sha256": rehearsal_after["ledger_sha256"],
     }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     rehearsal_receipt = hashlib.sha256((backup_sha256 + receipt).encode()).hexdigest()
-    restore_receipt = hashlib.sha256((backup_sha256 + "|" + str(rehearsal_before["migrations"])).encode()).hexdigest()
+    restore_checkpoint = {
+        "backup_sha256": backup_sha256,
+        "target_schema_sha256": execution_before["schema_sha256"],
+        "target_ledger_sha256": execution_before["ledger_sha256"],
+        "target_data_sha256": execution_before["data_sha256"],
+        "restored_schema_sha256": rehearsal_before["schema_sha256"],
+        "restored_ledger_sha256": rehearsal_before["ledger_sha256"],
+        "restored_data_sha256": rehearsal_before["data_sha256"],
+        "restore_mysql_uuid_sha256": rehearsal_before["mysql_uuid_sha256"],
+    }
+    restore_receipt = restore_receipt_sha256(restore_checkpoint)
+    restore_checkpoint["restore_receipt_sha256"] = restore_receipt
     fence_receipt = hashlib.sha256(b"isolated-e2e:no-worker:no-scheduler:no-external-network").hexdigest()
     identity = TransactionIdentity(
         application_sha=application_sha, previous_sha=previous_sha,
@@ -435,14 +523,15 @@ def prove_journaled_real_migration(profile, root: Path, *, application_sha: str,
     transaction = DatabaseReleaseTransaction(profile.state_dir, identity)
     with transaction:
         transaction.advance("BACKUP_VERIFIED", {"backup_sha256": backup_sha256})
-        transaction.advance("RESTORE_REHEARSAL_VERIFIED", {"restore_receipt_sha256": restore_receipt})
+        transaction.advance("RESTORE_REHEARSAL_VERIFIED", restore_checkpoint)
         transaction.advance("MIGRATION_REHEARSAL_VERIFIED", {
             "migration_rehearsal_receipt_sha256": rehearsal_receipt})
         transaction.advance("FENCES_CLOSED", {"fence_receipt_sha256": fence_receipt})
         def observe_execution_database():
             value = migration_database_fingerprint(
                 profile, host=execution_host, username=execution_user, password=execution_password)
-            return {key: value[key] for key in ("schema_sha256", "ledger_sha256", "migrations")}
+            return {key: value[key] for key in (
+                "schema_sha256", "ledger_sha256", "data_sha256", "migrations")}
 
         def apply_reviewed_migration(name):
             return (name == migration_name and execute_laravel_migration(
@@ -453,6 +542,7 @@ def prove_journaled_real_migration(profile, root: Path, *, application_sha: str,
             expected_after={migration_name: {
                 "schema_sha256": rehearsal_after["schema_sha256"],
                 "ledger_sha256": rehearsal_after["ledger_sha256"],
+                "data_sha256": rehearsal_after["data_sha256"],
             }},
             observe=observe_execution_database,
             apply_one=apply_reviewed_migration,
@@ -463,6 +553,7 @@ def prove_journaled_real_migration(profile, root: Path, *, application_sha: str,
             raise RuntimeError("journaled_migration_not_verified")
         if (execution_after["schema_sha256"] != rehearsal_after["schema_sha256"]
                 or execution_after["ledger_sha256"] != rehearsal_after["ledger_sha256"]
+                or execution_after["data_sha256"] != rehearsal_after["data_sha256"]
                 or migration_name not in execution_after["migrations"]):
             raise RuntimeError("journaled_migration_postcondition_mismatch")
         print("MIGRATION_REHEARSAL=PASS;ISOLATED_EXECUTION=PASS;JOURNAL=PASS")
@@ -734,6 +825,7 @@ def main():
         if "Pending" in migration_status:
             raise RuntimeError("isolated_migration_pending_after_run")
         print(f"BASELINE_MIGRATIONS=PASS;COUNT={len(migration_status.splitlines()) - 1}")
+        verify_database_content_fingerprint(profile)
         run([
             "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
             "-u", "root", "--batch", "--skip-column-names",
@@ -880,17 +972,14 @@ def main():
         ], extra_env={"MYSQL_PWD": "synthetic-only-password"}, timeout=10)
         print("MYSQL_ERRNO_1419=HOLD;UNCHANGED_DATABASE=PASS;SYNTHETIC_DBA_RETRY=AUTHORIZED")
 
-        # Simulate abrupt process death after the target migration checkpoint is
-        # durable, before Laravel or MySQL is invoked. Restart must reopen the
-        # exact backup/journal, reconcile the unchanged schema, then continue.
+        # Simulate a real process death after Laravel commits the target DDL and
+        # migration ledger, but before the journal completion checkpoint.
         child = os.fork()
         if child == 0:
-            def die_during_target(*args, **kwargs):
-                if kwargs.get("operation") == "target":
-                    os._exit(86)
-                return execute_migration(*args, **kwargs)
+            def die_after_committed_ddl(_transaction, *_args, **_kwargs):
+                os._exit(86)
 
-            BACKEND._execute_exact_migration = die_during_target
+            BACKEND.DatabaseReleaseTransaction.complete_migration = die_after_committed_ddl
             child_result = BACKEND.deploy_release(
                 profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
             os.write(2, (f"PHASE_B_CRASH_CHILD_RETURN={child_result.status}:{child_result.reason}\n").encode("ascii"))
@@ -911,10 +1000,13 @@ def main():
         crash_ledger = run([
             "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
             "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
-            "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM migrations",
+            "wpcg_staging_next", "-e",
+            "SELECT COUNT(*) FROM migrations; "
+            "SELECT COUNT(*) FROM information_schema.TRIGGERS "
+            "WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='wpcg_phase_b_probe'",
         ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
-        if crash_ledger != "72":
-            raise RuntimeError("phase_b_crash_changed_target_database")
+        if crash_ledger.splitlines() != ["73", "1"]:
+            raise RuntimeError("phase_b_crash_committed_ddl_not_observed")
         result = BACKEND.deploy_release(profile, invoking_uid=1000, application_sha=candidate_sha,
                                         artifact_sha256=artifact_sha)
         if result.status != "PASS":

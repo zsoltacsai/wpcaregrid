@@ -50,6 +50,7 @@ TransactionIdentity = _TRANSACTION_MODULE.TransactionIdentity
 TransactionRefused = _TRANSACTION_MODULE.TransactionRefused
 load_execution_policy = _TRANSACTION_MODULE.load_execution_policy
 database_fingerprint = _TRANSACTION_MODULE.database_fingerprint
+restore_receipt_sha256 = _TRANSACTION_MODULE.restore_receipt_sha256
 create_database_backup = _TRANSACTION_MODULE.create_database_backup
 restore_backup_to_isolated = _TRANSACTION_MODULE.restore_backup_to_isolated
 cleanup_isolated_databases = _TRANSACTION_MODULE.cleanup_isolated_databases
@@ -555,6 +556,7 @@ def _current_release(profile: StagingProfile) -> tuple[str, Path, Mapping[str, s
     _require(REQUIRED_RUNTIME_FILES.issubset(files), "active_release_runtime_incomplete")
     _verify_generated_bootstrap_caches(profile, target)
     _verify_shared_inputs(profile)
+    _verify_shared_vendor_for_lock(profile, target)
     return target.name, target, files
 
 
@@ -599,6 +601,48 @@ def _verify_shared_inputs(profile: StagingProfile) -> None:
              and stat.S_IMODE(autoload_info.st_mode) == 0o644, "shared_vendor_incomplete")
 
 
+def _verify_shared_vendor_for_lock(profile: StagingProfile, release_dir: Path) -> None:
+    """Bind shared Composer code to this release's locked production packages."""
+    lock_raw = _read_regular_nofollow(release_dir / "composer.lock", max_bytes=16_000_000,
+                                      expected_uid=profile.expected_owner_uid, expected_mode=0o644)
+    installed_path = profile.shared_vendor_dir / "composer" / "installed.json"
+    installed_raw = _read_regular_nofollow(installed_path, max_bytes=8_000_000,
+                                           expected_uid=profile.expected_owner_uid,
+                                           expected_mode=0o644)
+    try:
+        lock = json.loads(lock_raw.decode("utf-8"))
+        installed = json.loads(installed_raw.decode("utf-8"))
+    except (UnicodeError, ValueError):
+        raise DeployRefused("composer_provenance_invalid") from None
+    _require(isinstance(lock, dict) and isinstance(lock.get("packages"), list)
+             and isinstance(lock.get("packages-dev"), list)
+             and isinstance(installed, dict) and installed.get("dev") is False
+             and isinstance(installed.get("packages"), list), "composer_provenance_invalid")
+
+    def package_map(packages: list[object], *, installed_tree: bool) -> dict[str, tuple[str, str]]:
+        result = {}
+        for package in packages:
+            _require(isinstance(package, dict), "composer_provenance_invalid")
+            name, version = package.get("name"), package.get("version")
+            _require(isinstance(name, str) and re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", name)
+                     and isinstance(version, str) and re.fullmatch(r"[A-Za-z0-9.+~-]{1,128}", version),
+                     "composer_provenance_invalid")
+            dist = package.get("dist")
+            source = package.get("source")
+            dist_ref = dist.get("reference") if isinstance(dist, dict) else None
+            source_ref = source.get("reference") if isinstance(source, dict) else None
+            reference = dist_ref or source_ref
+            _require(isinstance(reference, str) and re.fullmatch(r"[A-Za-z0-9._/-]{1,256}", reference),
+                     "composer_provenance_invalid")
+            _require(name not in result, "composer_provenance_duplicate_package")
+            result[name] = (version, reference)
+        return result
+
+    locked = package_map(lock["packages"], installed_tree=False)
+    observed = package_map(installed["packages"], installed_tree=True)
+    _require(len(locked) <= 512 and observed == locked, "composer_vendor_lock_mismatch")
+
+
 def _attach_candidate_shared_links(profile: StagingProfile, candidate: Path) -> tuple[tuple[Path, Path], ...]:
     """Temporarily attach only pinned shared inputs while rehearsing the candidate."""
     _verify_shared_inputs(profile)
@@ -612,6 +656,7 @@ def _attach_candidate_shared_links(profile: StagingProfile, candidate: Path) -> 
                 raise DeployRefused("phase_b_candidate_shared_link_collision")
             os.symlink(str(target), link)
             created.append((link, target))
+        _verify_shared_vendor_for_lock(profile, candidate)
     except BaseException:
         for link, target in reversed(created):
             try:
@@ -632,6 +677,7 @@ def _verify_candidate_shared_links(profile: StagingProfile, candidate: Path) -> 
     them without trying to recreate or replace them.
     """
     _verify_shared_inputs(profile)
+    _verify_shared_vendor_for_lock(profile, candidate)
     links = ((candidate / ".env", profile.shared_env_file),
              (candidate / "storage", profile.shared_storage_dir),
              (candidate / "vendor", profile.shared_vendor_dir))
@@ -1729,29 +1775,52 @@ def _prepare_phase_b_database(profile: StagingProfile, release_path: Path, *,
         if not target_may_have_changed:
             _require(target_before["ledger_sha256"] == restored["ledger_sha256"],
                      "phase_b_restore_target_ledger_mismatch")
+            _require(target_before["data_sha256"] == restored["data_sha256"],
+                     "phase_b_restore_target_data_mismatch")
         _require(restored["schema_sha256"] == rehearsal_base["schema_sha256"],
                  "phase_b_restore_rehearsal_schema_mismatch")
         _require(restored["ledger_sha256"] == rehearsal_base["ledger_sha256"],
                  "phase_b_restore_rehearsal_ledger_mismatch")
+        _require(restored["data_sha256"] == rehearsal_base["data_sha256"],
+                 "phase_b_restore_rehearsal_data_mismatch")
         if "BACKUP_VERIFIED" in state["evidence"]:
             _require(state["evidence"]["BACKUP_VERIFIED"].get("backup_sha256") == backup_sha,
                      "phase_b_backup_journal_mismatch")
         elif state["state"] == "PREPARED":
             transaction.advance("BACKUP_VERIFIED", {"backup_sha256": backup_sha})
-        restore_receipt = hashlib.sha256(json.dumps({
-            "backup_sha256": backup_sha,
-            "target_schema_sha256": target_before["schema_sha256"],
-            "target_ledger_sha256": target_before["ledger_sha256"],
-            "restored_schema_sha256": restored["schema_sha256"],
-            "restored_ledger_sha256": restored["ledger_sha256"],
-            "restore_mysql_uuid_sha256": restored["mysql_uuid_sha256"],
-        }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         state = transaction.state
         if "RESTORE_REHEARSAL_VERIFIED" in state["evidence"]:
-            _require(state["evidence"]["RESTORE_REHEARSAL_VERIFIED"].get(
-                "restore_receipt_sha256") == restore_receipt, "phase_b_restore_journal_mismatch")
+            checkpoint = state["evidence"]["RESTORE_REHEARSAL_VERIFIED"]
+            _require(checkpoint.get("backup_sha256") == backup_sha
+                     and checkpoint.get("restored_schema_sha256") == restored["schema_sha256"]
+                     and checkpoint.get("restored_ledger_sha256") == restored["ledger_sha256"]
+                     and checkpoint.get("restored_data_sha256") == restored["data_sha256"]
+                     and checkpoint.get("restore_mysql_uuid_sha256") == restored["mysql_uuid_sha256"]
+                     and (target_may_have_changed
+                          or (checkpoint.get("target_schema_sha256") == target_before["schema_sha256"]
+                              and checkpoint.get("target_ledger_sha256") == target_before["ledger_sha256"]
+                              and checkpoint.get("target_data_sha256") == target_before["data_sha256"]))
+                     and restore_receipt_sha256({key: checkpoint[key] for key in checkpoint
+                                                 if key != "restore_receipt_sha256"})
+                     == checkpoint.get("restore_receipt_sha256"),
+                     "phase_b_restore_journal_mismatch")
+            restore_receipt = checkpoint["restore_receipt_sha256"]
         elif state["state"] == "BACKUP_VERIFIED":
-            transaction.advance("RESTORE_REHEARSAL_VERIFIED", {"restore_receipt_sha256": restore_receipt})
+            checkpoint = {
+                "backup_sha256": backup_sha,
+                "target_schema_sha256": target_before["schema_sha256"],
+                "target_ledger_sha256": target_before["ledger_sha256"],
+                "target_data_sha256": target_before["data_sha256"],
+                "restored_schema_sha256": restored["schema_sha256"],
+                "restored_ledger_sha256": restored["ledger_sha256"],
+                "restored_data_sha256": restored["data_sha256"],
+                "restore_mysql_uuid_sha256": restored["mysql_uuid_sha256"],
+            }
+            restore_receipt = restore_receipt_sha256(checkpoint)
+            checkpoint["restore_receipt_sha256"] = restore_receipt
+            transaction.advance("RESTORE_REHEARSAL_VERIFIED", checkpoint)
+        else:
+            raise DeployRefused("phase_b_restore_checkpoint_missing")
         expected_after: dict[str, dict[str, str]] = {}
         rehearsal_parts = []
         current = rehearsal_base
@@ -1769,11 +1838,13 @@ def _prepare_phase_b_database(profile: StagingProfile, release_path: Path, *,
             expected_after[name] = {
                 "schema_sha256": after["schema_sha256"],
                 "ledger_sha256": after["ledger_sha256"],
+                "data_sha256": after["data_sha256"],
             }
             rehearsal_parts.append({"migration": name, "migration_sha256": migration["sha256"],
                                     "command_receipt_sha256": command_receipt,
                                     "schema_sha256": after["schema_sha256"],
-                                    "ledger_sha256": after["ledger_sha256"]})
+                                    "ledger_sha256": after["ledger_sha256"],
+                                    "data_sha256": after["data_sha256"]})
             current = after
         rehearsal_receipt = hashlib.sha256(json.dumps({
             "transaction_id": transaction.transaction_id,
@@ -2347,7 +2418,8 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
 
             def observe_target_database():
                 snapshot = database_fingerprint(policy, database=DATABASE, isolated=False)
-                return {key: snapshot[key] for key in ("schema_sha256", "ledger_sha256", "migrations")}
+                return {key: snapshot[key] for key in (
+                    "schema_sha256", "ledger_sha256", "data_sha256", "migrations")}
 
             def apply_target_migration(name: str) -> bool:
                 nonlocal database_mutation_started, migration_failure_code
@@ -2409,7 +2481,8 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                      "phase_b_target_migration_state_invalid")
             final_expected = phase_b["expected_after"][tx.identity.migrations[-1]]
             _require(final_database_state["schema_sha256"] == final_expected["schema_sha256"]
-                     and final_database_state["ledger_sha256"] == final_expected["ledger_sha256"],
+                     and final_database_state["ledger_sha256"] == final_expected["ledger_sha256"]
+                     and final_database_state["data_sha256"] == final_expected["data_sha256"],
                      "phase_b_target_final_fingerprint_mismatch")
             cleanup_isolated_databases(policy, tx.transaction_id)
 

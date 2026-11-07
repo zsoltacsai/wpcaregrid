@@ -10,6 +10,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -20,12 +22,28 @@ from scripts.staging_next_db_transaction import (
     _mysql_defaults,
     _mysql_query_failure_code,
     _backup_failure_code,
+    database_fingerprint,
     load_execution_policy,
+    restore_receipt_sha256,
     verify_background_fences,
 )
 
 
 class DatabaseReleaseTransactionTests(unittest.TestCase):
+    def restore_checkpoint(self):
+        evidence = {
+            "backup_sha256": self.identity.backup_sha256,
+            "target_schema_sha256": "1" * 64,
+            "target_ledger_sha256": "2" * 64,
+            "target_data_sha256": "3" * 64,
+            "restored_schema_sha256": "4" * 64,
+            "restored_ledger_sha256": "5" * 64,
+            "restored_data_sha256": "6" * 64,
+            "restore_mysql_uuid_sha256": "f" * 64,
+        }
+        evidence["restore_receipt_sha256"] = restore_receipt_sha256(evidence)
+        return evidence
+
     def test_backup_diagnostics_are_reduced_to_allowlisted_codes(self):
         cases = (
             (b"Access denied for user 'hidden'", "phase_b_backup_authorization_failed"),
@@ -58,6 +76,53 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
                          "phase_b_mysql_authorization_failed")
         self.assertEqual(_mysql_query_failure_code(b"private diagnostic"),
                          "phase_b_mysql_query_failed")
+
+    def test_database_fingerprint_binds_row_counts_and_ordered_table_contents(self):
+        uuid = "00000000-0000-0000-0000-000000000000"
+        policy = SimpleNamespace(target_uuid_sha256=hashlib.sha256(uuid.encode()).hexdigest(),
+                                 isolated_uuid_sha256=hashlib.sha256(uuid.encode()).hexdigest())
+
+        def query_result(sql):
+            if sql.startswith("SELECT VERSION()"):
+                return f"8.4.11\t{uuid}\twpcg_staging_next\n".encode()
+            if "FROM information_schema.TABLES" in sql and "TABLE_TYPE='BASE TABLE'" in sql:
+                return b"users\tInnoDB\t1\n"
+            if sql.startswith("SELECT 'users',COUNT(*)"):
+                return b"users\t3\n"
+            if sql.startswith("SELECT migration FROM migrations"):
+                return b"2026_11_01_000001_test\n"
+            return b""
+
+        with mock.patch("scripts.staging_next_db_transaction._mysql_query",
+                        side_effect=lambda _policy, sql, **_kwargs: query_result(sql)), \
+             mock.patch("scripts.staging_next_db_transaction._database_data_fingerprint",
+                        return_value=("a" * 64, 123)):
+            result = database_fingerprint(policy, database="wpcg_staging_next", isolated=False)
+        expected = hashlib.sha256(
+            b'{"counts":[["users",3]],"dump_sha256":"' + b"a" * 64
+            + b'","dump_bytes":123}').hexdigest()
+        self.assertEqual(result["data_sha256"], expected)
+        self.assertNotIn("users", result)
+
+        def nontransactional(sql):
+            if "FROM information_schema.TABLES" in sql and "TABLE_TYPE='BASE TABLE'" in sql:
+                return b"users\tMyISAM\t1\n"
+            return query_result(sql)
+
+        with mock.patch("scripts.staging_next_db_transaction._mysql_query",
+                        side_effect=lambda _policy, sql, **_kwargs: nontransactional(sql)):
+            with self.assertRaisesRegex(TransactionRefused, "phase_b_nontransactional_table_unsupported"):
+                database_fingerprint(policy, database="wpcg_staging_next", isolated=False)
+
+        def no_primary(sql):
+            if "FROM information_schema.TABLES" in sql and "TABLE_TYPE='BASE TABLE'" in sql:
+                return b"users\tInnoDB\t0\n"
+            return query_result(sql)
+
+        with mock.patch("scripts.staging_next_db_transaction._mysql_query",
+                        side_effect=lambda _policy, sql, **_kwargs: no_primary(sql)):
+            with self.assertRaisesRegex(TransactionRefused, "phase_b_table_without_primary_key_unsupported"):
+                database_fingerprint(policy, database="wpcg_staging_next", isolated=False)
 
     def test_mysql_memfd_option_file_is_private_for_client_acceptance(self):
         fd, path = _mysql_defaults(
@@ -192,6 +257,10 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
                 b"www-data 400 /usr/bin/php artisan queue:listen default\n",
                 b"www-data 401 /usr/bin/php artisan horizon\n",
                 b"www-data 402 /usr/bin/php artisan horizon:work\n",
+                b"www-data 403 /usr/bin/php artisan --env=staging queue:work default\n",
+                b"www-data 404 /usr/bin/php artisan --env staging queue:listen default\n",
+                b"www-data 405 /usr/bin/php artisan --no-ansi horizon\n",
+                b"www-data 406 /usr/bin/php artisan --no-interaction schedule:run\n",
             ):
                 with self.subTest(consumer_command=command):
                     with self.assertRaisesRegex(TransactionRefused, "phase_b_background_consumer_active"):
@@ -207,7 +276,7 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
 
     def advance_to_migrating(self):
         self.tx.advance("BACKUP_VERIFIED", {"backup_sha256": self.identity.backup_sha256})
-        self.tx.advance("RESTORE_REHEARSAL_VERIFIED", {"restore_receipt_sha256": "1" * 64})
+        self.tx.advance("RESTORE_REHEARSAL_VERIFIED", self.restore_checkpoint())
         self.tx.advance("MIGRATION_REHEARSAL_VERIFIED", {"migration_rehearsal_receipt_sha256": "2" * 64})
         self.tx.advance("FENCES_CLOSED", {"fence_receipt_sha256": "3" * 64})
 
@@ -222,10 +291,13 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
             self.assertEqual(self.tx.state["state"], "FENCES_CLOSED")
 
     def test_rehearsed_sequence_executes_exact_migrations_and_verifies_each_postcondition(self):
-        current = {"schema_sha256": "4" * 64, "ledger_sha256": "5" * 64, "migrations": []}
+        current = {"schema_sha256": "4" * 64, "ledger_sha256": "5" * 64,
+                   "data_sha256": "c" * 64, "migrations": []}
         rehearsed = {
-            "2026_11_01_000001_add_widget": {"schema_sha256": "6" * 64, "ledger_sha256": "7" * 64},
-            "2026_11_02_000002_add_gadget": {"schema_sha256": "9" * 64, "ledger_sha256": "a" * 64},
+            "2026_11_01_000001_add_widget": {"schema_sha256": "6" * 64, "ledger_sha256": "7" * 64,
+                                               "data_sha256": "c" * 64},
+            "2026_11_02_000002_add_gadget": {"schema_sha256": "9" * 64, "ledger_sha256": "a" * 64,
+                                               "data_sha256": "c" * 64},
         }
         observed_calls = []
 
@@ -245,10 +317,13 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
             self.assertEqual(self.tx.state["state"], "MIGRATIONS_VERIFIED")
 
     def test_failed_migration_does_not_auto_retry_when_database_is_unchanged(self):
-        current = {"schema_sha256": "4" * 64, "ledger_sha256": "5" * 64, "migrations": []}
+        current = {"schema_sha256": "4" * 64, "ledger_sha256": "5" * 64,
+                   "data_sha256": "c" * 64, "migrations": []}
         rehearsed = {
-            "2026_11_01_000001_add_widget": {"schema_sha256": "6" * 64, "ledger_sha256": "7" * 64},
-            "2026_11_02_000002_add_gadget": {"schema_sha256": "9" * 64, "ledger_sha256": "a" * 64},
+            "2026_11_01_000001_add_widget": {"schema_sha256": "6" * 64, "ledger_sha256": "7" * 64,
+                                               "data_sha256": "c" * 64},
+            "2026_11_02_000002_add_gadget": {"schema_sha256": "9" * 64, "ledger_sha256": "a" * 64,
+                                               "data_sha256": "c" * 64},
         }
         attempts = []
 
@@ -268,8 +343,10 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
             self.tx.begin_migration("2026_11_01_000001_add_widget",
                                     observed_schema_sha256="4" * 64,
                                     observed_ledger_sha256="5" * 64,
+                                    observed_data_sha256="c" * 64,
                                     expected_schema_sha256="6" * 64,
-                                    expected_ledger_sha256="7" * 64)
+                                    expected_ledger_sha256="7" * 64,
+                                    expected_data_sha256="c" * 64)
         # Reopen simulates a process restart after a durable start checkpoint.
         resumed = DatabaseReleaseTransaction(self.state_dir, self.identity)
         with resumed:
@@ -277,6 +354,7 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
                 ledger_contains_started_migration=True,
                 observed_schema_sha256="6" * 64,
                 observed_ledger_sha256="7" * 64,
+                observed_data_sha256="c" * 64,
                 migration_receipt_sha256="8" * 64,
             )
             self.assertEqual(status, "COMPLETED_FROM_VERIFIED_LEDGER")
@@ -284,11 +362,14 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
             resumed.begin_migration("2026_11_02_000002_add_gadget",
                                     observed_schema_sha256="6" * 64,
                                     observed_ledger_sha256="7" * 64,
+                                    observed_data_sha256="c" * 64,
                                     expected_schema_sha256="9" * 64,
-                                    expected_ledger_sha256="a" * 64)
+                                    expected_ledger_sha256="a" * 64,
+                                    expected_data_sha256="c" * 64)
             resumed.complete_migration("2026_11_02_000002_add_gadget",
                                        observed_schema_sha256="9" * 64,
                                        observed_ledger_sha256="a" * 64,
+                                       observed_data_sha256="c" * 64,
                                        migration_receipt_sha256="b" * 64)
             self.assertEqual(resumed.state["state"], "MIGRATIONS_VERIFIED")
             self.assertEqual(resumed.state["migration_cursor"], 2)
@@ -299,8 +380,10 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
             self.tx.begin_migration("2026_11_01_000001_add_widget",
                                     observed_schema_sha256="4" * 64,
                                     observed_ledger_sha256="5" * 64,
+                                    observed_data_sha256="c" * 64,
                                     expected_schema_sha256="6" * 64,
-                                    expected_ledger_sha256="7" * 64)
+                                    expected_ledger_sha256="7" * 64,
+                                    expected_data_sha256="c" * 64)
 
         pending = DatabaseReleaseTransaction.find_unfinished_for_release(
             self.state_dir,
@@ -337,22 +420,27 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
             self.tx.begin_migration("2026_11_01_000001_add_widget",
                                     observed_schema_sha256="4" * 64,
                                     observed_ledger_sha256="5" * 64,
+                                    observed_data_sha256="c" * 64,
                                     expected_schema_sha256="6" * 64,
-                                    expected_ledger_sha256="7" * 64)
+                                    expected_ledger_sha256="7" * 64,
+                                    expected_data_sha256="c" * 64)
         resumed = DatabaseReleaseTransaction(self.state_dir, self.identity)
         with resumed:
             status = resumed.reconcile_interrupted_migration(
                 ledger_contains_started_migration=False,
                 observed_schema_sha256="4" * 64,
                 observed_ledger_sha256="5" * 64,
+                observed_data_sha256="c" * 64,
             )
             self.assertEqual(status, "SAFE_TO_RETRY_UNCHANGED_DATABASE")
             self.assertEqual(resumed.state["state"], "FENCES_CLOSED")
             resumed.begin_migration("2026_11_01_000001_add_widget",
                                     observed_schema_sha256="4" * 64,
                                     observed_ledger_sha256="5" * 64,
+                                    observed_data_sha256="c" * 64,
                                     expected_schema_sha256="6" * 64,
-                                    expected_ledger_sha256="7" * 64)
+                                    expected_ledger_sha256="7" * 64,
+                                    expected_data_sha256="c" * 64)
 
     def test_process_death_reopens_durable_checkpoint_without_resetting_it(self):
         pid = os.fork()
@@ -361,14 +449,16 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
                 child_tx = DatabaseReleaseTransaction(self.state_dir, self.identity)
                 with child_tx:
                     child_tx.advance("BACKUP_VERIFIED", {"backup_sha256": self.identity.backup_sha256})
-                    child_tx.advance("RESTORE_REHEARSAL_VERIFIED", {"restore_receipt_sha256": "1" * 64})
+                    child_tx.advance("RESTORE_REHEARSAL_VERIFIED", self.restore_checkpoint())
                     child_tx.advance("MIGRATION_REHEARSAL_VERIFIED", {"migration_rehearsal_receipt_sha256": "2" * 64})
                     child_tx.advance("FENCES_CLOSED", {"fence_receipt_sha256": "3" * 64})
                     child_tx.begin_migration("2026_11_01_000001_add_widget",
                                              observed_schema_sha256="4" * 64,
                                              observed_ledger_sha256="5" * 64,
+                                             observed_data_sha256="c" * 64,
                                              expected_schema_sha256="6" * 64,
-                                             expected_ledger_sha256="7" * 64)
+                                             expected_ledger_sha256="7" * 64,
+                                             expected_data_sha256="c" * 64)
                 os._exit(73)
             except BaseException:
                 os._exit(74)
@@ -383,6 +473,7 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
                 ledger_contains_started_migration=False,
                 observed_schema_sha256="4" * 64,
                 observed_ledger_sha256="5" * 64,
+                observed_data_sha256="c" * 64,
             )
             self.assertEqual(result, "SAFE_TO_RETRY_UNCHANGED_DATABASE")
 
@@ -392,14 +483,17 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
             self.tx.begin_migration("2026_11_01_000001_add_widget",
                                     observed_schema_sha256="4" * 64,
                                     observed_ledger_sha256="5" * 64,
+                                    observed_data_sha256="c" * 64,
                                     expected_schema_sha256="6" * 64,
-                                    expected_ledger_sha256="7" * 64)
+                                    expected_ledger_sha256="7" * 64,
+                                    expected_data_sha256="c" * 64)
         resumed = DatabaseReleaseTransaction(self.state_dir, self.identity)
         with resumed:
             status = resumed.reconcile_interrupted_migration(
                 ledger_contains_started_migration=False,
                 observed_schema_sha256="6" * 64,
                 observed_ledger_sha256="5" * 64,
+                observed_data_sha256="c" * 64,
             )
             self.assertEqual(status, "MANUAL_RECOVERY_REQUIRED")
             self.assertEqual(resumed.state["state"], "RECOVERY_REQUIRED")
@@ -407,8 +501,10 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
                 resumed.begin_migration("2026_11_01_000001_add_widget",
                                         observed_schema_sha256="6" * 64,
                                         observed_ledger_sha256="5" * 64,
+                                        observed_data_sha256="c" * 64,
                                         expected_schema_sha256="7" * 64,
-                                        expected_ledger_sha256="8" * 64)
+                                        expected_ledger_sha256="8" * 64,
+                                        expected_data_sha256="c" * 64)
 
     def test_identity_mismatch_or_malformed_journal_is_rejected(self):
         with self.tx:

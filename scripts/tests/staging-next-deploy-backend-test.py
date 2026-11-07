@@ -258,6 +258,11 @@ class StagingDeployBackendTests(unittest.TestCase):
         self.shared_vendor.mkdir(mode=0o755)
         (self.shared_vendor / "autoload.php").write_text("<?php // shared test autoloader\n")
         os.chmod(self.shared_vendor / "autoload.php", 0o644)
+        composer_metadata = self.shared_vendor / "composer"
+        composer_metadata.mkdir(mode=0o755)
+        (composer_metadata / "installed.json").write_text(
+            '{"dev":false,"packages":[]}\n', encoding="utf-8")
+        os.chmod(composer_metadata / "installed.json", 0o644)
         self.basic_auth_file = root / "basic-auth.json"
         self.basic_auth_file.write_text(json.dumps({
             "username": "e2e-owner", "password": "synthetic-only-password"}))
@@ -304,7 +309,7 @@ class StagingDeployBackendTests(unittest.TestCase):
         return {
             "artisan": b"#!/usr/bin/env php\n<?php echo 'Laravel';\n",
             "composer.json": b'{"require":{"php":"^8.5"}}\n',
-            "composer.lock": b'{"packages":[]}\n',
+            "composer.lock": b'{"packages":[],"packages-dev":[]}\n',
             "bootstrap/app.php": b"<?php return new stdClass();\n",
             "public/index.php": b"<?php http_response_code(200);\n",
             "routes/web.php": b"<?php // synthetic marketing routes\n",
@@ -630,7 +635,8 @@ class StagingDeployBackendTests(unittest.TestCase):
         phase_b = {
             "transaction": transaction, "policy": object(),
             "expected_after": {migration_name: {"schema_sha256": "a" * 64,
-                                                  "ledger_sha256": "b" * 64}},
+                                                  "ledger_sha256": "b" * 64,
+                                                  "data_sha256": "1" * 64}},
             "backup_sha256": "c" * 64, "restore_receipt_sha256": "d" * 64,
             "migration_rehearsal_receipt_sha256": "e" * 64,
         }
@@ -651,6 +657,7 @@ class StagingDeployBackendTests(unittest.TestCase):
              mock.patch.object(BACKEND, "_execute_exact_migration", return_value="2" * 64), \
              mock.patch.object(BACKEND, "database_fingerprint", return_value={
                  "schema_sha256": "a" * 64, "ledger_sha256": "b" * 64,
+                 "data_sha256": "1" * 64,
                  "migrations": (migration_name,),
              }), \
              mock.patch.object(BACKEND, "cleanup_isolated_databases"), \
@@ -703,6 +710,25 @@ class StagingDeployBackendTests(unittest.TestCase):
         result = self._submit({"resources/views/marketing/home.blade.php": b"partial"})
         self.assertEqual((result.status, result.reason), ("HOLD", "artifact_source_file_set_mismatch"))
         self.assertEqual(os.readlink(self.link), str(self.base_path))
+
+    def test_shared_composer_vendor_must_match_release_lock(self):
+        release = Path(self.temp.name) / "composer-lock-release"
+        release.mkdir(mode=0o755)
+        (release / "composer.lock").write_text(
+            '{"packages":[{"name":"vendor/locked","version":"1.2.3",'
+            '"dist":{"reference":"abc123"}}],"packages-dev":[]}\n', encoding="utf-8")
+        installed = self.shared_vendor / "composer" / "installed.json"
+        installed.write_text(
+            '{"dev":false,"packages":[{"name":"vendor/locked","version":"1.2.3",'
+            '"dist":{"reference":"abc123"}}]}\n', encoding="utf-8")
+        os.chmod(release / "composer.lock", 0o644)
+        os.chmod(installed, 0o644)
+        BACKEND._verify_shared_vendor_for_lock(self.profile, release)
+        installed.write_text(
+            '{"dev":false,"packages":[{"name":"vendor/locked","version":"1.2.4",'
+            '"dist":{"reference":"def456"}}]}\n', encoding="utf-8")
+        with self.assertRaisesRegex(BACKEND.DeployRefused, "composer_vendor_lock_mismatch"):
+            BACKEND._verify_shared_vendor_for_lock(self.profile, release)
 
     def test_symlink_archive_member_is_rejected(self):
         buffer = io.BytesIO()
