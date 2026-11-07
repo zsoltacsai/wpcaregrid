@@ -86,7 +86,8 @@ acceptance gates and must be refreshed after any source change.
 The helper does not require external GitHub `APPROVED` reviews or
 `WPCG_RELEASE_REVIEW_V2` records in issue #174. Runtime authorization still
 requires the exact merged PR on the protected primary branch, successful
-required CI for the PR head and merge SHA, and matching source and helper
-hashes. Missing or inconsistent merge, CI, source, or artifact evidence is a
-HOLD. Branch protection and the protected merge workflow remain enabled.
+required CI for the PR head and merge SHA, a GitHub primary-branch ref reporting
+`protected: true`, and matching source and helper hashes. Missing or
+inconsistent merge, protection, CI, source, or artifact evidence is a HOLD.
+Branch protection and the protected merge workflow remain enabled.
 Production deployment requires separate Owner approval.
