@@ -30,36 +30,45 @@ class StagingNextHelperContractTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.entrypoint = self.root / "entrypoint.py"
         self.backend = self.root / "backend.py"
+        self.transaction = self.root / "staging_next_db_transaction.py"
         self.policy = self.root / "policy.json"
         self.entrypoint.write_bytes((ROOT / "scripts" / "wpcaregrid-staging-next-deploy-priv.py").read_bytes())
         self.backend.write_bytes((ROOT / "scripts" / "staging_next_deploy_backend.py").read_bytes())
+        self.transaction.write_bytes((ROOT / "scripts" / "staging_next_db_transaction.py").read_bytes())
         os.chmod(self.entrypoint, 0o755)
         os.chmod(self.backend, 0o644)
-        self._patch = mock.patch.multiple(HELPER, ENTRYPOINT=self.entrypoint, BACKEND=self.backend, POLICY=self.policy)
+        os.chmod(self.transaction, 0o644)
+        self._patch = mock.patch.multiple(HELPER, ENTRYPOINT=self.entrypoint, BACKEND=self.backend,
+                                          TRANSACTION=self.transaction, POLICY=self.policy)
         self._patch.start()
         self.addCleanup(self._patch.stop)
         self.entry_hash = hashlib.sha256(self.entrypoint.read_bytes()).hexdigest()
         self.backend_hash = hashlib.sha256(self.backend.read_bytes()).hexdigest()
-        self.artifact_hash = self._artifact_hash(self.entry_hash, self.backend_hash)
+        self.transaction_hash = hashlib.sha256(self.transaction.read_bytes()).hexdigest()
+        self.artifact_hash = self._artifact_hash(self.entry_hash, self.backend_hash, self.transaction_hash)
         self.policy.write_text(json.dumps({
             "schema": 1, "profile": "staging-next", "enabled": True, "allowed_uid": 1000,
             "app_dir": "/var/www/wpcaregrid-staging-new", "database": "wpcg_staging_next",
             "host": "staging-next.wpcaregrid.com", "php_fpm_uid": 33, "php_fpm_gid": 33,
             "mysql_server_uuid_sha256": "a" * 64,
             "integration_qa_reviewer": "qa-reviewer", "m17_appsec_reviewer": "appsec-reviewer",
-            "helper_version": "1.3.3", "compatibility_contract": "wpcaregrid-staging-next-deploy-v3",
+            "helper_version": "1.4.4", "compatibility_contract": "wpcaregrid-staging-next-deploy-v8",
             "entrypoint_sha256": self.entry_hash, "backend_sha256": self.backend_hash,
+            "transaction_module_sha256": self.transaction_hash,
+            "phase_b_policy_file": "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.4.json",
+            "phase_b_policy_sha256": None,
             "helper_artifact_sha256": self.artifact_hash,
             "operations": ["authorize", "deploy", "preflight", "stage"],
         }, sort_keys=True, separators=(",", ":")), encoding="utf-8")
         os.chmod(self.policy, 0o644)
 
     @staticmethod
-    def _artifact_hash(entry_hash, backend_hash):
+    def _artifact_hash(entry_hash, backend_hash, transaction_hash):
         payload = json.dumps({
-            "schema": 1, "helper_version": "1.3.3",
-            "compatibility_contract": "wpcaregrid-staging-next-deploy-v3",
+            "schema": 1, "helper_version": "1.4.4",
+            "compatibility_contract": "wpcaregrid-staging-next-deploy-v8",
             "entrypoint_sha256": entry_hash, "backend_sha256": backend_hash,
+            "transaction_module_sha256": transaction_hash,
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
@@ -73,8 +82,8 @@ class StagingNextHelperContractTests(unittest.TestCase):
         self.assertEqual(profile.php_fpm_gid, 33)
         self.assertEqual(profile.php_fpm_uid, 33)
         self.assertEqual((backend.HELPER_VERSION, backend.HELPER_CONTRACT), (
-            "1.3.3", "wpcaregrid-staging-next-deploy-v3"))
-        self.assertEqual(backend.__name__, "_wpcaregrid_staging_next_backend_v1_3_3")
+            "1.4.4", "wpcaregrid-staging-next-deploy-v8"))
+        self.assertEqual(backend.__name__, "_wpcaregrid_staging_next_backend_v1_4_4")
 
     def test_wrong_caller_and_runtime_target_override_are_rejected(self):
         with self.assertRaises(HELPER.Refused) as error:

@@ -28,6 +28,10 @@ sys.path.insert(0, str(ROOT))
 
 from scripts import staging_next_deploy_backend as BACKEND
 from scripts import staging_next_deploy_controller as CONTROLLER
+from scripts.staging_next_db_transaction import (
+    DatabaseReleaseTransaction, TransactionIdentity, TransactionRefused, _mysql_defaults, _mysql_query,
+    _mysql_query_failure_code, database_fingerprint, restore_receipt_sha256,
+)
 
 
 def run(argv, *, cwd=None, timeout=15, extra_env=None, maximum=2_000_000):
@@ -40,6 +44,12 @@ def run(argv, *, cwd=None, timeout=15, extra_env=None, maximum=2_000_000):
     if result.returncode != 0 or len(result.stdout) > maximum or len(result.stderr) > maximum:
         raise RuntimeError("isolated_laravel_command_failed")
     return result.stdout.decode("utf-8").strip()
+
+
+def run_as_php_fpm(argv, *, cwd=None, timeout=15, extra_env=None, maximum=2_000_000):
+    """Run Laravel setup commands as the same unprivileged FPM identity used by deployment."""
+    return run(["/usr/sbin/runuser", "--user", "www-data", "--group", "www-data", "--", *argv],
+               cwd=cwd, timeout=timeout, extra_env=extra_env, maximum=maximum)
 
 
 def drain_bounded(stream, result, limit=16_384):
@@ -56,8 +66,134 @@ def mysql_error_codes(raw):
     return ",".join(f"{number}:{state}" for number, state in errors[:8]) or "UNCLASSIFIED"
 
 
+def verify_mysqldump_option_file():
+    """Confirm the real mysqldump client consumes the inherited private options."""
+    credentials = {
+        "username": os.environ["WPCG_MYSQL_USER"],
+        "password": os.environ["WPCG_MYSQL_PASSWORD"],
+    }
+    option_fd, defaults_path = _mysql_defaults(credentials, os.environ["WPCG_MYSQL_HOST"], 3306)
+    try:
+        result = subprocess.run(
+            ["/usr/bin/mysqldump", f"--defaults-file={defaults_path}", "--print-defaults"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=5, check=False, pass_fds=(option_fd,),
+        )
+    finally:
+        os.close(option_fd)
+    # The output contains the synthetic password. Inspect only in memory and
+    # report a boolean; never include the output or credential in diagnostics.
+    output = result.stdout
+    flags = {
+        "HOST": os.environ["WPCG_MYSQL_HOST"].encode("ascii") in output,
+        "PROTOCOL": b"protocol" in output.lower() and b"tcp" in output.lower(),
+        "USER": os.environ["WPCG_MYSQL_USER"].encode("ascii") in output,
+        "PASSWORD": b"password" in output.lower(),
+    }
+    valid = result.returncode == 0 and len(output) <= 4096 and len(result.stderr) <= 4096 and all(flags.values())
+    report = " ".join(f"{key}={'PASS' if value else 'FAIL'}" for key, value in flags.items())
+    error = result.stderr.lower()
+    if b"defaults" in error and (b"open" in error or b"read" in error):
+        error_class = "DEFAULTS_FILE_REJECTED"
+    elif b"could not open" in error or b"cannot open" in error or b"couldn't open" in error:
+        error_class = "OPEN_FAILED"
+    elif b"permission denied" in error:
+        error_class = "PERMISSION_DENIED"
+    elif b"unknown option" in error:
+        error_class = "OPTION_REJECTED"
+    elif b"plugin" in error:
+        error_class = "AUTH_PLUGIN"
+    elif b"defaults" in error:
+        error_class = "DEFAULTS_DIAGNOSTIC"
+    elif error:
+        error_class = "OTHER"
+    else:
+        error_class = "NONE"
+    allowed_words = {
+        b"error", b"warning", b"option", b"file", b"group", b"section", b"config",
+        b"defaults", b"proc", b"fd", b"open", b"read", b"cannot", b"could", b"couldn't",
+        b"found", b"without", b"preceding", b"required", b"ignored", b"unknown", b"invalid",
+        b"not", b"specified", b"argument", b"line", b"mysql", b"mysqldump",
+    }
+    safe_tokens = sorted(set(re.findall(rb"[a-z']+", error)) & allowed_words)
+    safe_tokens_text = ",".join(token.decode("ascii") for token in safe_tokens) or "NONE"
+    print(f"MYSQLDUMP_OPTION_FILE={'PASS' if valid else 'FAIL'};RC={result.returncode};OUT={len(output)};ERR={len(result.stderr)};STDERR_CLASS={error_class};STDERR_TOKENS={safe_tokens_text};{report}")
+    if not valid:
+        raise RuntimeError("mysqldump_option_file_probe_failed")
+
+
+def verify_mysql_client_query():
+    """Check the mysql CLI's inherited credentials using a read-only identity query."""
+    credentials = {
+        "username": os.environ["WPCG_MYSQL_USER"],
+        "password": os.environ["WPCG_MYSQL_PASSWORD"],
+    }
+    option_fd, defaults_path = _mysql_defaults(credentials, os.environ["WPCG_MYSQL_HOST"], 3306)
+    try:
+        result = subprocess.run(
+            ["/usr/bin/mysql", f"--defaults-file={defaults_path}", "--batch", "--skip-column-names",
+             "--raw", "--database", "wpcg_staging_next", "-e", "SELECT VERSION(),DATABASE()"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=5, check=False, pass_fds=(option_fd,),
+        )
+    finally:
+        os.close(option_fd)
+    output = result.stdout.decode("ascii", "replace").strip().split("\t")
+    valid = result.returncode == 0 and len(result.stdout) <= 4096 and len(result.stderr) <= 4096 \
+        and len(output) == 2 and output[0].startswith("8.4.") and output[1] == "wpcg_staging_next"
+    diagnostic = _mysql_query_failure_code(result.stderr + b"\n" + result.stdout[:16_384])
+    allowed_words = {b"mysql", b"error", b"warning", b"plugin", b"load", b"loading", b"shared",
+                     b"library", b"libraries", b"file", b"not", b"found", b"cannot", b"could",
+                     b"open", b"failed", b"permission", b"denied", b"option", b"unknown",
+                     b"auth", b"authentication", b"client", b"missing", b"required"}
+    tokens = sorted(set(re.findall(rb"[a-z']+", (result.stderr + b"\n" + result.stdout[:16_384]).lower()))
+                    & allowed_words)
+    safe_tokens = ",".join(token.decode("ascii") for token in tokens) or "NONE"
+    print(f"MYSQL_CLIENT_READ_ONLY_PROBE={'PASS' if valid else 'FAIL'};RC={result.returncode};"
+          f"OUT={len(result.stdout)};ERR={len(result.stderr)};"
+          f"RESULT={'PASS' if valid else 'MISMATCH'};DIAGNOSTIC={diagnostic};TOKENS={safe_tokens}")
+    if not valid:
+        raise RuntimeError("mysql_client_read_only_probe_failed")
+
+
+def verify_php_vendor_readability(vendor: Path, application_cwd: Path):
+    result = subprocess.run(
+        ["/usr/sbin/runuser", "--user", "www-data", "--group", "www-data", "--",
+         "/usr/bin/test", "-r", "vendor/autoload.php"], cwd=application_cwd,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=5, check=False,
+    )
+    modes = []
+    for path in (Path("/opt"), vendor.parent, vendor, vendor / "autoload.php"):
+        try:
+            info = path.stat()
+            modes.append(f"{info.st_uid}:{info.st_gid}:{stat.S_IMODE(info.st_mode):04o}")
+        except OSError:
+            modes.append("MISSING")
+    valid = result.returncode == 0
+    print(f"PHP_VENDOR_READABILITY={'PASS' if valid else 'FAIL'};RC={result.returncode};"
+          f"METADATA={'/'.join(modes)}")
+    if not valid:
+        raise RuntimeError("php_vendor_readability_failed")
+    load = subprocess.run(
+        ["/usr/sbin/runuser", "--user", "www-data", "--group", "www-data", "--",
+         "/usr/local/bin/php", "-r", 'require "vendor/autoload.php";'],
+        cwd=application_cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, timeout=5, check=False,
+    )
+    print(f"PHP_VENDOR_LOAD={'PASS' if load.returncode == 0 else 'FAIL'};RC={load.returncode}")
+    if load.returncode != 0:
+        raise RuntimeError("php_vendor_load_failed")
+
+
 def prove_mysql_backup_restore(profile, root: Path):
-    """Create a private compressed DB backup, restore it to a second MySQL instance, compare metadata."""
+    """Restore a private backup twice and compare schema, ledger, and row-count proofs."""
+    run([
+        "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+        "-u", os.environ["WPCG_MYSQL_USER"], "wpcg_staging_next", "-e",
+        "CREATE TABLE wpcg_e2e_restore_probe (id BIGINT PRIMARY KEY, marker VARCHAR(32) NOT NULL) ENGINE=InnoDB; "
+        "INSERT INTO wpcg_e2e_restore_probe VALUES (1,'synthetic-row');",
+    ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
     backup = root / "wpcg-staging-next-e2e.sql.gz"
     backup_env = {"MYSQL_PWD": os.environ["WPCG_BACKUP_MYSQL_PASSWORD"]}
     with backup.open("xb") as stream:
@@ -95,32 +231,37 @@ def prove_mysql_backup_restore(profile, root: Path):
     except (OSError, EOFError):
         raise RuntimeError("isolated_database_backup_integrity_failed") from None
 
-    restore_env = {"MYSQL_PWD": os.environ["WPCG_RESTORE_MYSQL_PASSWORD"]}
-    importer = subprocess.Popen([
-        "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_RESTORE_MYSQL_HOST"],
-        "-u", os.environ["WPCG_RESTORE_MYSQL_USER"], "wpcg_staging_next",
-    ], env={"PATH": "/usr/bin:/bin", "LANG": "C", **restore_env},
-       stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    import_diagnostic = bytearray()
-    import_reader = threading.Thread(target=drain_bounded, args=(importer.stderr, import_diagnostic), daemon=True)
-    import_reader.start()
-    unpacked = 0
-    try:
-        with gzip.open(backup, "rb") as source:
-            while chunk := source.read(1024 * 1024):
-                unpacked += len(chunk)
-                if unpacked > 2 * 1024 * 1024 * 1024:
-                    raise RuntimeError("isolated_database_restore_size_limit")
-                importer.stdin.write(chunk)
-        importer.stdin.close()
-        restore_rc = importer.wait(timeout=600)
-        import_reader.join(timeout=5)
-    except BaseException:
-        importer.kill()
-        importer.wait(timeout=5)
-        raise
-    if restore_rc != 0:
-        raise RuntimeError(f"isolated_database_restore_failed:{mysql_error_codes(import_diagnostic)}")
+    import_targets = (
+        (os.environ["WPCG_RESTORE_MYSQL_HOST"], os.environ["WPCG_RESTORE_MYSQL_USER"],
+         os.environ["WPCG_RESTORE_MYSQL_PASSWORD"]),
+        (os.environ["WPCG_MIGRATION_MYSQL_HOST"], os.environ["WPCG_MIGRATION_MYSQL_USER"],
+         os.environ["WPCG_MIGRATION_MYSQL_PASSWORD"]),
+    )
+    for host, username, password in import_targets:
+        importer = subprocess.Popen([
+            "/usr/bin/mysql", "--no-defaults", "-h", host, "-u", username, "wpcg_staging_next",
+        ], env={"PATH": "/usr/bin:/bin", "LANG": "C", "MYSQL_PWD": password},
+           stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        import_diagnostic = bytearray()
+        import_reader = threading.Thread(target=drain_bounded, args=(importer.stderr, import_diagnostic), daemon=True)
+        import_reader.start()
+        unpacked = 0
+        try:
+            with gzip.open(backup, "rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    unpacked += len(chunk)
+                    if unpacked > 2 * 1024 * 1024 * 1024:
+                        raise RuntimeError("isolated_database_restore_size_limit")
+                    importer.stdin.write(chunk)
+            importer.stdin.close()
+            restore_rc = importer.wait(timeout=600)
+            import_reader.join(timeout=5)
+        except BaseException:
+            importer.kill()
+            importer.wait(timeout=5)
+            raise
+        if restore_rc != 0:
+            raise RuntimeError(f"isolated_database_restore_failed:{mysql_error_codes(import_diagnostic)}")
 
     probe = (
         "$p=new PDO(sprintf('mysql:host=%s;port=3306;dbname=wpcg_staging_next;charset=utf8mb4',getenv('H')),"
@@ -135,25 +276,287 @@ def prove_mysql_backup_restore(profile, root: Path):
         "getenv('U'),getenv('P'),[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);"
         "$sql=\"SELECT VERSION() version,@@server_uuid uuid,(SELECT COUNT(*) FROM information_schema.tables "
         "WHERE table_schema=DATABASE() AND table_type='BASE TABLE') tables,(SELECT COUNT(*) FROM migrations) migrations\";"
-        "$r=$p->query($sql); echo json_encode($r->fetch(PDO::FETCH_ASSOC));"
+        "$r=$p->query($sql)->fetch(PDO::FETCH_ASSOC);"
+        "$counts=[];$tables=$p->query(\"SELECT TABLE_NAME,ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME\")->fetchAll(PDO::FETCH_NUM);"
+        "foreach($tables as [$n,$e]){if($e!=='InnoDB'||!preg_match('/^[A-Za-z0-9_$]{1,64}$/D',$n))exit(32);$counts[]=[$n,(int)$p->query(\"SELECT COUNT(*) FROM `\".$n.\"`\")->fetchColumn()];}"
+        "$r['data_sha256']=hash('sha256',json_encode($counts,JSON_UNESCAPED_SLASHES));echo json_encode($r);"
     )
     observed = []
     for host, username, password in (
         (os.environ["WPCG_MYSQL_HOST"], os.environ["WPCG_MYSQL_USER"], os.environ["WPCG_MYSQL_PASSWORD"]),
         (os.environ["WPCG_RESTORE_MYSQL_HOST"], os.environ["WPCG_RESTORE_MYSQL_USER"], os.environ["WPCG_RESTORE_MYSQL_PASSWORD"]),
+        (os.environ["WPCG_MIGRATION_MYSQL_HOST"], os.environ["WPCG_MIGRATION_MYSQL_USER"], os.environ["WPCG_MIGRATION_MYSQL_PASSWORD"]),
     ):
         raw = run(["/usr/local/bin/php", "-r", probe], cwd=profile.application_link, timeout=20,
                   extra_env={"H": host, "U": username, "P": password})
         observed.append(json.loads(raw))
-    first, second = observed
-    if (not str(first.get("version", "")).startswith("8.4.11")
-            or not str(second.get("version", "")).startswith("8.4.11")
-            or first.get("uuid") == second.get("uuid")
-            or first.get("tables") != second.get("tables")
-            or first.get("migrations") != second.get("migrations")
+    first, second, third = observed
+    if (any(not str(value.get("version", "")).startswith("8.4.11") for value in observed)
+            or len({value.get("uuid") for value in observed}) != len(observed)
+            or len({value.get("tables") for value in observed}) != 1
+            or len({value.get("migrations") for value in observed}) != 1
             or int(first.get("tables", 0)) <= 0 or int(first.get("migrations", 0)) <= 0):
         raise RuntimeError("isolated_database_restore_verification_failed")
+    if len({value.get("data_sha256") for value in observed}) != 1:
+        raise RuntimeError("isolated_database_restore_data_mismatch")
+    restore_env = {"MYSQL_PWD": os.environ["WPCG_RESTORE_MYSQL_PASSWORD"]}
+    run([
+        "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_RESTORE_MYSQL_HOST"],
+        "-u", os.environ["WPCG_RESTORE_MYSQL_USER"], "wpcg_staging_next", "-e",
+        "DELETE FROM wpcg_e2e_restore_probe WHERE id=1",
+    ], extra_env=restore_env, timeout=15)
+    omitted = json.loads(run(
+        ["/usr/local/bin/php", "-r", probe], cwd=profile.application_link, timeout=20,
+        extra_env={"H": os.environ["WPCG_RESTORE_MYSQL_HOST"],
+                   "U": os.environ["WPCG_RESTORE_MYSQL_USER"],
+                   "P": os.environ["WPCG_RESTORE_MYSQL_PASSWORD"]}))
+    if omitted.get("data_sha256") == first.get("data_sha256"):
+        raise RuntimeError("isolated_restore_row_omission_not_detected")
+    run([
+        "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_RESTORE_MYSQL_HOST"],
+        "-u", os.environ["WPCG_RESTORE_MYSQL_USER"], "wpcg_staging_next", "-e",
+        "INSERT INTO wpcg_e2e_restore_probe VALUES (1,'synthetic-row')",
+    ], extra_env=restore_env, timeout=15)
     return backup_sha, int(first["tables"]), int(first["migrations"])
+
+
+def migration_database_fingerprint(profile, *, host, username, password):
+    """Hash real MySQL schema/ledger metadata through the deployed Laravel runtime."""
+    script = r'''require "vendor/autoload.php";
+$app=require "bootstrap/app.php";
+$kernel=$app->make(Illuminate\Contracts\Console\Kernel::class);
+$kernel->bootstrap();
+$config=$app["config"];
+$config->set("database.default","mysql");
+foreach (["host"=>"H","database"=>"D","username"=>"U","password"=>"P","port"=>"3306"] as $key=>$env) {
+  $config->set("database.connections.mysql.".$key,getenv("WPCG_DB_".$env));
+}
+$app["db"]->purge("mysql");
+$pdo=$app["db"]->connection("mysql")->getPdo();
+$identity=$pdo->query("SELECT DATABASE() database_name,VERSION() version,@@server_uuid uuid")->fetch(PDO::FETCH_ASSOC);
+if ($identity["database_name"]!=="wpcg_staging_next" || !str_starts_with($identity["version"],"8.4.")) exit(31);
+$schema=[];
+foreach ([
+  "SELECT TABLE_NAME,COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,EXTRA,GENERATION_EXPRESSION FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,ORDINAL_POSITION",
+  "SELECT TABLE_NAME,INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,SUB_PART,INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX",
+  "SELECT TABLE_NAME,COLUMN_NAME,CONSTRAINT_NAME,REFERENCED_TABLE_SCHEMA,REFERENCED_TABLE_NAME,REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,CONSTRAINT_NAME,ORDINAL_POSITION",
+  "SELECT TRIGGER_NAME,EVENT_MANIPULATION,EVENT_OBJECT_TABLE,ACTION_TIMING,ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY TRIGGER_NAME",
+] as $sql) $schema[]=$pdo->query($sql)->fetchAll(PDO::FETCH_NUM);
+$ledger=$pdo->query("SELECT migration,batch FROM migrations ORDER BY migration")->fetchAll(PDO::FETCH_NUM);
+$tables=$pdo->query("SELECT TABLE_NAME,ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME")->fetchAll(PDO::FETCH_NUM);
+$counts=[];
+foreach ($tables as [$name,$engine]) {
+  if ($engine!=="InnoDB" || !preg_match('/^[A-Za-z0-9_$]{1,64}$/D',$name)) exit(32);
+  $counts[]=[$name,(int)$pdo->query("SELECT COUNT(*) FROM `".$name."`")->fetchColumn()];
+}
+echo json_encode(["database"=>$identity["database_name"],"version"=>$identity["version"],
+  "mysql_uuid_sha256"=>hash("sha256",$identity["uuid"]),
+  "schema_sha256"=>hash("sha256",json_encode($schema,JSON_UNESCAPED_SLASHES)),
+  "ledger_sha256"=>hash("sha256",json_encode($ledger,JSON_UNESCAPED_SLASHES)),
+  "data_sha256"=>hash("sha256",json_encode($counts,JSON_UNESCAPED_SLASHES)),
+  "migrations"=>array_column($ledger,0)],JSON_UNESCAPED_SLASHES);'''
+    result = subprocess.run(["/usr/local/bin/php", "-r", script], cwd=profile.application_link,
+                            env={"PATH": "/usr/local/bin:/usr/bin:/bin",
+                                 "WPCG_DB_H": host, "WPCG_DB_D": "wpcg_staging_next",
+                                 "WPCG_DB_U": username, "WPCG_DB_P": password},
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            timeout=30, check=False)
+    if result.returncode != 0 or len(result.stdout) > 65_536 or len(result.stderr) > 16_384:
+        raise RuntimeError("migration_database_probe_failed")
+    try:
+        value = json.loads(result.stdout)
+    except (UnicodeError, ValueError):
+        raise RuntimeError("migration_database_probe_invalid") from None
+    if (not isinstance(value, dict) or value.get("database") != "wpcg_staging_next"
+            or not value.get("version", "").startswith("8.4.")
+            or not isinstance(value.get("migrations"), list)):
+        raise RuntimeError("migration_database_identity_mismatch")
+    return value
+
+
+def verify_database_content_fingerprint(profile):
+    """Prove that same-count row-content changes alter the in-memory dump digest."""
+    policy = BACKEND._load_phase_b_policy(profile)
+    existing = _mysql_query(
+        policy, isolated=False,
+        sql="SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() "
+            "AND TABLE_NAME='wpcg_e2e_content_fingerprint_probe' AND TABLE_TYPE='BASE TABLE'",
+        database="wpcg_staging_next", timeout=15,
+    )
+    if existing != b"0\n":
+        raise RuntimeError("content_fingerprint_probe_table_not_absent")
+    _mysql_query(
+        policy, isolated=False,
+        sql="CREATE TABLE `wpcg_e2e_content_fingerprint_probe` "
+            "(`id` BIGINT PRIMARY KEY,`marker` VARCHAR(32) NOT NULL) ENGINE=InnoDB; "
+            "INSERT INTO `wpcg_e2e_content_fingerprint_probe` VALUES (1,'original-row')",
+        database="wpcg_staging_next", timeout=15,
+    )
+    before = database_fingerprint(policy, database="wpcg_staging_next", isolated=False)
+    _mysql_query(
+        policy, isolated=False,
+        sql="UPDATE `wpcg_e2e_content_fingerprint_probe` SET `marker`='changed-row' WHERE `id`=1",
+        database="wpcg_staging_next", timeout=15,
+    )
+    changed = database_fingerprint(policy, database="wpcg_staging_next", isolated=False)
+    if (before["data_sha256"] == changed["data_sha256"]
+            or before["schema_sha256"] != changed["schema_sha256"]
+            or before["ledger_sha256"] != changed["ledger_sha256"]):
+        raise RuntimeError("same_count_row_content_change_not_detected")
+    _mysql_query(
+        policy, isolated=False,
+        sql="UPDATE `wpcg_e2e_content_fingerprint_probe` SET `marker`='original-row' WHERE `id`=1",
+        database="wpcg_staging_next", timeout=15,
+    )
+    restored = database_fingerprint(policy, database="wpcg_staging_next", isolated=False)
+    if restored["data_sha256"] != before["data_sha256"]:
+        raise RuntimeError("same_count_row_content_fingerprint_not_reproducible")
+    print("MYSQL_DATA_CONTENT_FINGERPRINT=PASS;SAME_COUNT_MUTATION_DETECTED=YES")
+
+
+def execute_laravel_migration(profile, *, host, username, password, path):
+    """Run one absolute, test-created Laravel migration through the real Artisan migrator."""
+    script = r'''require "vendor/autoload.php";
+$app=require "bootstrap/app.php";
+$kernel=$app->make(Illuminate\Contracts\Console\Kernel::class);
+$kernel->bootstrap();
+$config=$app["config"];
+$config->set("database.default","mysql");
+foreach (["host"=>"H","database"=>"D","username"=>"U","password"=>"P","port"=>"3306"] as $key=>$env) {
+  $config->set("database.connections.mysql.".$key,getenv("WPCG_DB_".$env));
+}
+$app["db"]->purge("mysql");
+$status=Illuminate\Support\Facades\Artisan::call("migrate",[
+  "--path"=>getenv("WPCG_MIGRATION_PATH"),"--realpath"=>true,"--force"=>true,
+  "--isolated"=>true,"--no-interaction"=>true,"--no-ansi"=>true,
+]);
+echo json_encode(["exit_code"=>$status]); exit($status);'''
+    result = subprocess.run(["/usr/local/bin/php", "-r", script], cwd=profile.application_link,
+                            env={"PATH": "/usr/local/bin:/usr/bin:/bin",
+                                 "WPCG_DB_H": host, "WPCG_DB_D": "wpcg_staging_next",
+                                 "WPCG_DB_U": username, "WPCG_DB_P": password,
+                                 "WPCG_MIGRATION_PATH": str(path)},
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            timeout=300, check=False)
+    if len(result.stdout) > 4096 or len(result.stderr) > 16_384:
+        raise RuntimeError("migration_command_output_limit")
+    try:
+        payload = json.loads(result.stdout)
+    except (UnicodeError, ValueError):
+        payload = None
+    if (result.returncode != 0 or not isinstance(payload, dict)
+            or payload.get("exit_code") != 0):
+        return False
+    return True
+
+
+def prove_journaled_real_migration(profile, root: Path, *, application_sha: str,
+                                   previous_sha: str, artifact_sha256: str, backup_sha256: str):
+    """Rehearse then execute one exact migration across two restored disposable MySQL 8.4 instances."""
+    migration_name = "2026_11_06_000001_create_wpcg_phase_b_probe"
+    migration_dir = root / "phase-b-migration"
+    migration_dir.mkdir(mode=0o700)
+    migration_path = migration_dir / f"{migration_name}.php"
+    migration_path.write_text(
+        "<?php\nuse Illuminate\\Database\\Migrations\\Migration;\n"
+        "use Illuminate\\Database\\Schema\\Blueprint;\n"
+        "use Illuminate\\Support\\Facades\\Schema;\n"
+        "return new class extends Migration { public function up(): void { "
+        "Schema::create('wpcg_phase_b_probe', function (Blueprint $table): void { "
+        "$table->id(); $table->string('value'); $table->timestamps(); }); } "
+        "public function down(): void { Schema::dropIfExists('wpcg_phase_b_probe'); } };\n",
+        encoding="utf-8")
+    os.chmod(migration_path, 0o600)
+    rehearsal_host = os.environ["WPCG_MIGRATION_MYSQL_HOST"]
+    rehearsal_user = os.environ["WPCG_MIGRATION_MYSQL_USER"]
+    rehearsal_password = os.environ["WPCG_MIGRATION_MYSQL_PASSWORD"]
+    execution_host = os.environ["WPCG_RESTORE_MYSQL_HOST"]
+    execution_user = os.environ["WPCG_RESTORE_MYSQL_USER"]
+    execution_password = os.environ["WPCG_RESTORE_MYSQL_PASSWORD"]
+    rehearsal_before = migration_database_fingerprint(
+        profile, host=rehearsal_host, username=rehearsal_user, password=rehearsal_password)
+    if not execute_laravel_migration(profile, host=rehearsal_host, username=rehearsal_user,
+                                     password=rehearsal_password, path=migration_path):
+        raise RuntimeError("migration_rehearsal_failed")
+    rehearsal_after = migration_database_fingerprint(
+        profile, host=rehearsal_host, username=rehearsal_user, password=rehearsal_password)
+    if (migration_name not in rehearsal_after["migrations"]
+            or rehearsal_after["schema_sha256"] == rehearsal_before["schema_sha256"]):
+        raise RuntimeError("migration_rehearsal_postcondition_failed")
+    execution_before = migration_database_fingerprint(
+        profile, host=execution_host, username=execution_user, password=execution_password)
+    if (execution_before["schema_sha256"] != rehearsal_before["schema_sha256"]
+            or execution_before["ledger_sha256"] != rehearsal_before["ledger_sha256"]):
+        raise RuntimeError("migration_restore_baseline_mismatch")
+    receipt = hashlib.sha256(json.dumps({
+        "application_sha": application_sha,
+        "backup_sha256": backup_sha256,
+        "migration": migration_name,
+        "migration_sha256": hashlib.sha256(migration_path.read_bytes()).hexdigest(),
+        "before_schema_sha256": rehearsal_before["schema_sha256"],
+        "before_ledger_sha256": rehearsal_before["ledger_sha256"],
+        "after_schema_sha256": rehearsal_after["schema_sha256"],
+        "after_ledger_sha256": rehearsal_after["ledger_sha256"],
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    rehearsal_receipt = hashlib.sha256((backup_sha256 + receipt).encode()).hexdigest()
+    restore_checkpoint = {
+        "backup_sha256": backup_sha256,
+        "target_schema_sha256": execution_before["schema_sha256"],
+        "target_ledger_sha256": execution_before["ledger_sha256"],
+        "target_data_sha256": execution_before["data_sha256"],
+        "restored_schema_sha256": rehearsal_before["schema_sha256"],
+        "restored_ledger_sha256": rehearsal_before["ledger_sha256"],
+        "restored_data_sha256": rehearsal_before["data_sha256"],
+        "restore_mysql_uuid_sha256": rehearsal_before["mysql_uuid_sha256"],
+    }
+    restore_receipt = restore_receipt_sha256(restore_checkpoint)
+    restore_checkpoint["restore_receipt_sha256"] = restore_receipt
+    fence_receipt = hashlib.sha256(b"isolated-e2e:no-worker:no-scheduler:no-external-network").hexdigest()
+    identity = TransactionIdentity(
+        application_sha=application_sha, previous_sha=previous_sha,
+        artifact_sha256=artifact_sha256,
+        backup_sha256=backup_sha256,
+        backup_filename=f"staging-next-{application_sha}-1-00000000.sql.gz",
+        mysql_uuid_sha256=execution_before["mysql_uuid_sha256"],
+        migrations=(migration_name,),
+    )
+    transaction = DatabaseReleaseTransaction(profile.state_dir, identity)
+    with transaction:
+        transaction.advance("BACKUP_VERIFIED", {"backup_sha256": backup_sha256})
+        transaction.advance("RESTORE_REHEARSAL_VERIFIED", restore_checkpoint)
+        transaction.advance("MIGRATION_REHEARSAL_VERIFIED", {
+            "migration_rehearsal_receipt_sha256": rehearsal_receipt})
+        transaction.advance("FENCES_CLOSED", {"fence_receipt_sha256": fence_receipt})
+        def observe_execution_database():
+            value = migration_database_fingerprint(
+                profile, host=execution_host, username=execution_user, password=execution_password)
+            return {key: value[key] for key in (
+                "schema_sha256", "ledger_sha256", "data_sha256", "migrations")}
+
+        def apply_reviewed_migration(name):
+            return (name == migration_name and execute_laravel_migration(
+                profile, host=execution_host, username=execution_user,
+                password=execution_password, path=migration_path))
+
+        transaction.apply_rehearsed_migrations(
+            expected_after={migration_name: {
+                "schema_sha256": rehearsal_after["schema_sha256"],
+                "ledger_sha256": rehearsal_after["ledger_sha256"],
+                "data_sha256": rehearsal_after["data_sha256"],
+            }},
+            observe=observe_execution_database,
+            apply_one=apply_reviewed_migration,
+        )
+        execution_after = migration_database_fingerprint(
+            profile, host=execution_host, username=execution_user, password=execution_password)
+        if transaction.state["state"] != "MIGRATIONS_VERIFIED":
+            raise RuntimeError("journaled_migration_not_verified")
+        if (execution_after["schema_sha256"] != rehearsal_after["schema_sha256"]
+                or execution_after["ledger_sha256"] != rehearsal_after["ledger_sha256"]
+                or execution_after["data_sha256"] != rehearsal_after["data_sha256"]
+                or migration_name not in execution_after["migrations"]):
+            raise RuntimeError("journaled_migration_postcondition_mismatch")
+        print("MIGRATION_REHEARSAL=PASS;ISOLATED_EXECUTION=PASS;JOURNAL=PASS")
 
 
 def git(repo, *args):
@@ -179,8 +582,18 @@ def prepare_tree(repo: Path):
     base = git(repo, "rev-parse", "HEAD")
     home = repo / "resources/views/pages/home.blade.php"
     home.write_text(home.read_text(encoding="utf-8") + "\n<!-- WPCG_LARAVEL_DEPLOY_E2E -->\n", encoding="utf-8")
-    git(repo, "add", "resources/views/pages/home.blade.php")
-    git(repo, "commit", "--quiet", "-m", "isolated marketing-only release")
+    migration = repo / "database/migrations/2026_11_06_000001_create_wpcg_phase_b_probe.php"
+    migration.parent.mkdir(parents=True, exist_ok=True)
+    migration.write_text(
+        "<?php\nuse Illuminate\\Database\\Migrations\\Migration;\n"
+        "use Illuminate\\Support\\Facades\\DB;\n"
+        "return new class extends Migration { public function up(): void { "
+        "DB::unprepared('CREATE TRIGGER wpcg_phase_b_probe AFTER INSERT ON users "
+        "FOR EACH ROW SET @wpcg_phase_b_probe = NEW.id'); } "
+        "public function down(): void { DB::unprepared('DROP TRIGGER IF EXISTS wpcg_phase_b_probe'); } };\n",
+        encoding="utf-8")
+    git(repo, "add", "resources/views/pages/home.blade.php", "database/migrations/2026_11_06_000001_create_wpcg_phase_b_probe.php")
+    git(repo, "commit", "--quiet", "-m", "isolated database migration release")
     candidate = git(repo, "rev-parse", "HEAD")
     return base, candidate
 
@@ -318,6 +731,67 @@ def main():
             os.chmod(storage / child, 0o2770)
         for path in (storage, *storage.rglob("*")):
             os.chown(path, 33, 33, follow_symlinks=False)
+        backup_dir = root / "database-backups"
+        backup_dir.mkdir(mode=0o700)
+        os.chmod(backup_dir, 0o700)
+        worker_marker = state / "workers-disabled"
+        scheduler_marker = state / "scheduler-paused"
+        worker_marker.write_bytes(b"schema=1;profile=staging-next;workers=disabled\n")
+        scheduler_marker.write_bytes(b"schema=1;profile=staging-next;scheduler=paused\n")
+        os.chmod(worker_marker, 0o600)
+        os.chmod(scheduler_marker, 0o600)
+        policy_dir = root / "phase-b-policy"
+        policy_dir.mkdir(mode=0o700)
+        os.chmod(policy_dir, 0o700)
+        credentials_file = policy_dir / "credentials.json"
+        credentials_raw = json.dumps({
+            "schema": 1,
+            "target": {"username": os.environ["WPCG_MYSQL_USER"],
+                       "password": os.environ["WPCG_MYSQL_PASSWORD"]},
+            "isolated": {"username": "root", "password": "synthetic-only-password"},
+        }, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        credentials_file.write_bytes(credentials_raw)
+        os.chmod(credentials_file, 0o600)
+        policy_file = policy_dir / "staging-next.json"
+        policy_value = {
+            "schema": 1, "profile": "staging-next", "enabled": True,
+            "target_database": "wpcg_staging_next",
+            "target_uuid_sha256": os.environ["WPCG_MYSQL_UUID_SHA256"],
+            "isolated_uuid_sha256": os.environ["WPCG_RESTORE_MYSQL_UUID_SHA256"],
+            "backup_directory": str(backup_dir), "credentials_file": str(credentials_file),
+            "credentials_sha256": hashlib.sha256(credentials_raw).hexdigest(),
+            "target_host": os.environ["WPCG_MYSQL_HOST"], "target_port": 3306,
+            "restore_host": os.environ["WPCG_RESTORE_MYSQL_HOST"], "restore_port": 3306,
+            "maintenance_file": str(storage / "framework" / "down"),
+            "worker_programs": ["wpcaregrid-staging-next-default", "wpcaregrid-staging-next-backups"],
+            "scheduler_unit": "wpcaregrid-staging-next-scheduler.timer",
+            "worker_disabled_marker": str(worker_marker),
+            "scheduler_paused_marker": str(scheduler_marker),
+        }
+        policy_raw = json.dumps(policy_value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        policy_file.write_bytes(policy_raw)
+        os.chmod(policy_file, 0o644)
+
+        def phase_b_command_runner(argv, **kwargs):
+            if argv[:2] == ["/usr/bin/supervisorctl", "status"]:
+                program = argv[2]
+                return subprocess.CompletedProcess(argv, 3, f"{program} STOPPED\n".encode(), b"")
+            if argv[:3] == ["/bin/systemctl", "show", "--property=ActiveState"]:
+                return subprocess.CompletedProcess(argv, 0, b"inactive\n", b"")
+            if argv[:3] == ["/usr/bin/systemctl", "show", "--property=UnitFileState"]:
+                return subprocess.CompletedProcess(argv, 0, b"disabled\n", b"")
+            return subprocess.run(argv, **kwargs)
+
+        phase_b_test_paths = {
+            "policy": policy_file, "credentials": credentials_file, "backup": backup_dir,
+            "target_host": policy_value["target_host"], "target_port": 3306,
+            "restore_host": policy_value["restore_host"], "restore_port": 3306,
+            "worker_disabled_marker": worker_marker,
+            "scheduler_paused_marker": scheduler_marker,
+            "command_runner": phase_b_command_runner,
+        }
+        verify_mysqldump_option_file()
+        verify_mysql_client_query()
         vendor = Path("/opt/wpcaregrid-source/vendor")
         if not (vendor / "autoload.php").is_file():
             raise RuntimeError("composer_vendor_missing")
@@ -337,16 +811,41 @@ def main():
                                                        ("/register", 404), ("/checkout", 404), ("/api", 404))),
             protected_acceptance_urls=(f"http://localhost:{port}/hu", f"http://localhost:{port}/en"),
             build_application_bootstrap=True, test_only=True, verify_test_database=True,
+            phase_b_policy_file=policy_file,
+            phase_b_policy_sha256=hashlib.sha256(policy_raw).hexdigest(),
+            phase_b_test_only_paths=phase_b_test_paths,
         )
         create_active_release(profile, repo, base_sha)
-        run(["/usr/local/bin/php", "artisan", "migrate", "--force", "--isolated", "--no-interaction"],
-            cwd=profile.application_link, timeout=900)
-        migration_status = run(["/usr/local/bin/php", "artisan", "migrate:status", "--no-interaction"],
-                               cwd=profile.application_link, timeout=60)
+        verify_php_vendor_readability(vendor, profile.application_link)
+        run_as_php_fpm(["/usr/local/bin/php", "artisan", "migrate", "--force", "--isolated", "--no-interaction"],
+                       cwd=profile.application_link, timeout=900)
+        migration_status = run_as_php_fpm(
+            ["/usr/local/bin/php", "artisan", "migrate:status", "--no-interaction"],
+            cwd=profile.application_link, timeout=60)
         if "Pending" in migration_status:
             raise RuntimeError("isolated_migration_pending_after_run")
-        backup_sha, restored_tables, restored_migrations = prove_mysql_backup_restore(profile, root)
-        print(f"MIGRATIONS=PASS;COUNT={restored_migrations};ISOLATED_RESTORE=PASS;TABLES={restored_tables};BACKUP_SHA256={backup_sha}")
+        print(f"BASELINE_MIGRATIONS=PASS;COUNT={len(migration_status.splitlines()) - 1}")
+        verify_database_content_fingerprint(profile)
+        run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", os.environ["WPCG_MYSQL_USER"], "wpcg_staging_next", "-e",
+            "CREATE TABLE `wpcg_e2e_restore_probe` (`id` BIGINT PRIMARY KEY,"
+            "`marker` VARCHAR(32) NOT NULL) ENGINE=InnoDB; "
+            "INSERT INTO `wpcg_e2e_restore_probe` VALUES (1,'synthetic-row')",
+        ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
+        run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", "root", "--batch", "--skip-column-names",
+            "-e", "SET GLOBAL log_bin_trust_function_creators=OFF",
+        ], extra_env={"MYSQL_PWD": "synthetic-only-password"}, timeout=10)
+        binlog_state = run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", "root", "--batch", "--skip-column-names",
+            "-e", "SELECT @@global.log_bin,@@global.binlog_format,@@global.log_bin_trust_function_creators",
+        ], extra_env={"MYSQL_PWD": "synthetic-only-password"}, timeout=10)
+        if binlog_state != "1\tROW\t0":
+            raise RuntimeError("synthetic_binlog_1419_precondition_invalid")
+        print("MYSQL_BINLOG_TRIGGER_RESTRICTION=PASS;BINLOG=ON;FORMAT=ROW;TRUST=OFF")
         php_env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(storage),
                    "WPCG_CURRENT_APP": str(profile.application_link),
                    "WPCG_TEST_HTTP_AUTH_USER": "e2e-owner",
@@ -409,15 +908,263 @@ def main():
                                         artifact_sha256=artifact_sha)
         if staged.status != "PASS":
             raise RuntimeError(f"artifact_stage_{staged.reason}")
+        # Exercise a real MySQL identity-contract failure, then resume once with the
+        # verified disposable instance identity. The first attempt must not gate,
+        # switch releases, or modify the target migration ledger.
+        wrong_identity_profile = replace(profile, mysql_server_uuid_sha256="0" * 64)
+        rejected = BACKEND.deploy_release(
+            wrong_identity_profile, invoking_uid=1000, application_sha=candidate_sha,
+            artifact_sha256=artifact_sha)
+        if (rejected.status, rejected.reason) != ("HOLD", "database_identity_mismatch"):
+            raise RuntimeError(f"phase_b_failure_injection_not_held:{rejected.status}:{rejected.reason}")
+        if (profile.application_link.resolve() != (release_dir / base_sha).resolve()
+                or (storage / "framework" / "down").exists()):
+            raise RuntimeError("phase_b_failure_injection_changed_active_state")
+        unchanged_ledger = run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
+            "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM migrations",
+        ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
+        if unchanged_ledger != "72":
+            raise RuntimeError("phase_b_failure_injection_modified_database")
+        execute_migration = BACKEND._execute_exact_migration
+
+        def fail_rehearsal_once(*args, **kwargs):
+            if kwargs.get("operation") == "rehearsal":
+                raise BACKEND.DeployRefused("synthetic_rehearsal_failure")
+            return execute_migration(*args, **kwargs)
+
+        BACKEND._execute_exact_migration = fail_rehearsal_once
+        rehearsal_failure = BACKEND.deploy_release(
+            profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+        BACKEND._execute_exact_migration = execute_migration
+        if (rehearsal_failure.status, rehearsal_failure.reason) != ("HOLD", "synthetic_rehearsal_failure"):
+            raise RuntimeError("phase_b_rehearsal_failure_not_held")
+        if ((release_dir / candidate_sha).exists()
+                or profile.application_link.resolve() != (release_dir / base_sha).resolve()
+                or (storage / "framework" / "down").exists()):
+            raise RuntimeError("phase_b_rehearsal_failure_changed_release_state")
+        rehearsal_journals = list(state.glob("db-release-*.json"))
+        if len(rehearsal_journals) != 1:
+            raise RuntimeError("phase_b_rehearsal_failure_journal_missing")
+        rehearsal_state = json.loads(rehearsal_journals[0].read_text(encoding="utf-8"))
+        if rehearsal_state.get("state") != "RESTORE_REHEARSAL_VERIFIED":
+            raise RuntimeError("phase_b_rehearsal_failure_checkpoint_invalid")
+
+        # Change a synthetic target row only after the isolated migration rehearsal
+        # and persistent fences are complete. The production path must detect that
+        # the tested baseline is stale before invoking any target migration.
+        verify_fences = BACKEND._verify_phase_b_fences
+        injected_target_change = [False]
+        fence_verifications = [0]
+
+        def mutate_after_fencing(active_profile, policy):
+            observed_fences = verify_fences(active_profile, policy)
+            fence_verifications[0] += 1
+            # The first two fence checks occur while the rehearsal is being
+            # prepared. Inject only after its target snapshot and durable fence
+            # checkpoint have both been recorded, immediately before target
+            # migration execution.
+            if fence_verifications[0] == 3 and not injected_target_change[0]:
+                _mysql_query(
+                    policy, isolated=False,
+                    sql="UPDATE `wpcg_e2e_restore_probe` SET `marker`='rehearsal-race' WHERE `id`=1",
+                    database="wpcg_staging_next", timeout=15,
+                )
+                injected_target_change[0] = True
+            return observed_fences
+
+        BACKEND._verify_phase_b_fences = mutate_after_fencing
+        stale_failure_classes = []
+
+        def capture_stale_failure(frame, event, arg):
+            if (event == "exception" and frame.f_code.co_filename.endswith((
+                    "staging_next_deploy_backend.py", "staging_next_db_transaction.py"))):
+                exception_type, exception, _traceback = arg
+                if isinstance(exception, (BACKEND.DeployRefused, TransactionRefused)):
+                    safe_reason = str(exception)
+                    if not re.fullmatch(r"[a-z][a-z0-9_]{2,95}", safe_reason):
+                        safe_reason = "non_allowlisted_reason"
+                    stale_failure_classes.append(f"{exception_type.__name__}:{safe_reason}")
+                else:
+                    stale_failure_classes.append(exception_type.__name__)
+            return capture_stale_failure
+
+        sys.settrace(capture_stale_failure)
+        try:
+            stale_rehearsal = BACKEND.deploy_release(
+                profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+        finally:
+            sys.settrace(None)
+        BACKEND._verify_phase_b_fences = verify_fences
+        if not injected_target_change[0] or (stale_rehearsal.status, stale_rehearsal.reason) != (
+                "HOLD", "target_changed_since_migration_rehearsal"):
+            observed_failure = stale_failure_classes[-1] if stale_failure_classes else "NO_EXCEPTION_CAPTURED"
+            raise RuntimeError(
+                f"phase_b_stale_rehearsal_not_held:{stale_rehearsal.status}:"
+                f"{stale_rehearsal.reason}:{observed_failure}")
+        stale_ledger = run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
+            "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM migrations",
+        ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
+        if stale_ledger != "72":
+            raise RuntimeError("phase_b_stale_rehearsal_ran_target_migration")
+        _mysql_query(
+            BACKEND._load_phase_b_policy(profile), isolated=False,
+            sql="UPDATE `wpcg_e2e_restore_probe` SET `marker`='synthetic-row' WHERE `id`=1",
+            database="wpcg_staging_next", timeout=15,
+        )
+        print("PHASE_B_STALE_REHEARSAL_HOLD=PASS;TARGET_MIGRATIONS=NOT_RUN")
+
+        errno_1419 = BACKEND.deploy_release(
+            profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+        if (errno_1419.status, errno_1419.reason) != (
+                "HOLD", "mysql_errno_1419_sqlstate_hy000"):
+            raise RuntimeError(f"mysql_errno_1419_not_safely_classified:{errno_1419.status}:{errno_1419.reason}")
+        if (profile.application_link.resolve() != (release_dir / base_sha).resolve()
+                or not (storage / "framework" / "down").is_file()):
+            raise RuntimeError("mysql_errno_1419_release_fence_invalid")
+        after_1419_ledger = run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
+            "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM migrations",
+        ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
+        if after_1419_ledger != "72":
+            raise RuntimeError("mysql_errno_1419_changed_target_ledger")
+        retry_state = json.loads(rehearsal_journals[0].read_text(encoding="utf-8"))
+        if (retry_state.get("state") != "FENCES_CLOSED"
+                or retry_state.get("migration_cursor") != 0):
+            raise RuntimeError("mysql_errno_1419_checkpoint_not_retryable")
+        # This root-only setting change is confined to the disposable E2E MySQL.
+        # The production helper never changes MySQL global variables.
+        run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", "root", "--batch", "--skip-column-names",
+            "-e", "SET GLOBAL log_bin_trust_function_creators=ON",
+        ], extra_env={"MYSQL_PWD": "synthetic-only-password"}, timeout=10)
+        print("MYSQL_ERRNO_1419=HOLD;UNCHANGED_DATABASE=PASS;SYNTHETIC_DBA_RETRY=AUTHORIZED")
+
+        # Simulate a real process death after Laravel commits the target DDL and
+        # migration ledger, but before the journal completion checkpoint.
+        child = os.fork()
+        if child == 0:
+            def die_after_committed_ddl(_transaction, *_args, **_kwargs):
+                os._exit(86)
+
+            BACKEND.DatabaseReleaseTransaction.complete_migration = die_after_committed_ddl
+            child_result = BACKEND.deploy_release(
+                profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+            os.write(2, (f"PHASE_B_CRASH_CHILD_RETURN={child_result.status}:{child_result.reason}\n").encode("ascii"))
+            os._exit(87)
+        _child, child_status = os.waitpid(child, 0)
+        if not os.WIFEXITED(child_status) or os.WEXITSTATUS(child_status) != 86:
+            observed_exit = os.WEXITSTATUS(child_status) if os.WIFEXITED(child_status) else "SIGNAL"
+            raise RuntimeError(f"phase_b_process_crash_injection_failed:{observed_exit}")
+        crash_journals = list(state.glob("db-release-*.json"))
+        if len(crash_journals) != 1:
+            raise RuntimeError("phase_b_crash_journal_missing")
+        crash_state = json.loads(crash_journals[0].read_text(encoding="utf-8"))
+        if crash_state.get("state") != "MIGRATING":
+            raise RuntimeError("phase_b_crash_checkpoint_not_durable")
+        if (profile.application_link.resolve() != (release_dir / base_sha).resolve()
+                or not (storage / "framework" / "down").is_file()):
+            raise RuntimeError("phase_b_crash_fences_not_preserved")
+        crash_ledger = run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
+            "wpcg_staging_next", "-e",
+            "SELECT COUNT(*) FROM migrations; "
+            "SELECT COUNT(*) FROM information_schema.TRIGGERS "
+            "WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='wpcg_phase_b_probe'",
+        ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
+        if crash_ledger.splitlines() != ["73", "1"]:
+            raise RuntimeError("phase_b_crash_committed_ddl_not_observed")
+
+        # Re-enter the interrupted migration with a real PHP-FPM cache build,
+        # then terminate the controller after config:cache has written files.
+        # The inactive immutable release must be safely repairable on restart.
+        cache_crash_child = os.fork()
+        if cache_crash_child == 0:
+            original_runner = BACKEND._run_as_php_fpm
+
+            def run_php_fpm_then_die(*args, **kwargs):
+                result = original_runner(*args, **kwargs)
+                argv = args[1]
+                if len(argv) > 2 and argv[2] == "config:cache":
+                    os._exit(84)
+                return result
+
+            BACKEND._run_as_php_fpm = run_php_fpm_then_die
+            child_result = BACKEND.deploy_release(
+                profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+            os.write(2, (f"PHASE_B_CACHE_CHILD_RETURN={child_result.status}:{child_result.reason}\n").encode("ascii"))
+            os._exit(87)
+        _cache_child, cache_child_status = os.waitpid(cache_crash_child, 0)
+        if not os.WIFEXITED(cache_child_status) or os.WEXITSTATUS(cache_child_status) != 84:
+            observed_exit = os.WEXITSTATUS(cache_child_status) if os.WIFEXITED(cache_child_status) else "SIGNAL"
+            raise RuntimeError(f"phase_b_cache_process_crash_injection_failed:{observed_exit}")
+        candidate_cache = release_dir / candidate_sha / "bootstrap/cache"
+        cache_metadata = []
+        for name in (".gitignore", "config.php", "packages.php", "services.php"):
+            try:
+                item = os.lstat(candidate_cache / name)
+                cache_metadata.append(
+                    f"{name}:{item.st_uid}:{item.st_gid}:{stat.S_IMODE(item.st_mode):04o}:"
+                    f"{item.st_nlink}:{item.st_size}")
+            except FileNotFoundError:
+                cache_metadata.append(f"{name}:ABSENT")
+        print("PHASE_B_INTERRUPTED_CACHE_METADATA=" + ",".join(cache_metadata))
+        cache_config = candidate_cache / "config.php"
+        if ((candidate_cache.stat().st_uid, candidate_cache.stat().st_gid,
+             stat.S_IMODE(candidate_cache.stat().st_mode)) != (33, 33, 0o2750)
+                or cache_config.stat().st_uid != 33
+                or profile.application_link.resolve() != (release_dir / base_sha).resolve()
+                or not (storage / "framework" / "down").is_file()):
+            raise RuntimeError("phase_b_cache_crash_state_not_preserved")
+        print("PHASE_B_REAL_LARAVEL_CACHE_CRASH=PASS;FPM_OWNED_CACHE=OBSERVED")
+
+        receipt_crash_child = os.fork()
+        if receipt_crash_child == 0:
+            original_advance = BACKEND.DatabaseReleaseTransaction.advance
+
+            def die_after_receipt_commit(transaction, target, evidence):
+                if target == "COMPLETE":
+                    os._exit(85)
+                return original_advance(transaction, target, evidence)
+
+            BACKEND.DatabaseReleaseTransaction.advance = die_after_receipt_commit
+            child_result = BACKEND.deploy_release(
+                profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+            os.write(2, (f"PHASE_B_RECEIPT_CHILD_RETURN={child_result.status}:{child_result.reason}\n").encode("ascii"))
+            os._exit(87)
+        _receipt_child, receipt_child_status = os.waitpid(receipt_crash_child, 0)
+        if not os.WIFEXITED(receipt_child_status) or os.WEXITSTATUS(receipt_child_status) != 85:
+            observed_exit = os.WEXITSTATUS(receipt_child_status) if os.WIFEXITED(receipt_child_status) else "SIGNAL"
+            raise RuntimeError(f"phase_b_receipt_crash_injection_failed:{observed_exit}")
+        receipt_journal = state / f"db-release-{crash_state['transaction_id']}.json"
+        accepted_state = json.loads(receipt_journal.read_text(encoding="utf-8"))
+        if accepted_state.get("state") != "ACCEPTANCE_VERIFIED":
+            raise RuntimeError("phase_b_receipt_crash_state_invalid")
+        durable_receipts = []
+        for receipt_file in profile.receipts_dir.glob("deploy-*.json"):
+            item = json.loads(receipt_file.read_text(encoding="utf-8"))
+            if (item.get("application_sha") == candidate_sha and item.get("artifact_sha256") == artifact_sha
+                    and item.get("database_changed") is True and item.get("result") == "PASS"):
+                durable_receipts.append((receipt_file, item, hashlib.sha256(receipt_file.read_bytes()).hexdigest()))
+        if len(durable_receipts) != 1:
+            raise RuntimeError("phase_b_durable_receipt_missing_or_ambiguous")
+        durable_receipt_path, receipt, durable_receipt_sha = durable_receipts[0]
         result = BACKEND.deploy_release(profile, invoking_uid=1000, application_sha=candidate_sha,
                                         artifact_sha256=artifact_sha)
-        if result.status != "PASS":
+        if (result.status, result.reason) != ("NO_OP", "exact_release_already_active"):
+            raise RuntimeError(f"phase_b_receipt_restart_not_reconciled:{result.status}:{result.reason}")
+        if result.status != "PASS" and result.status != "NO_OP":
             observed_codes = []
             laravel_error_class = "UNAVAILABLE"
             log_path = storage / "logs" / "laravel.log"
             if log_path.is_file() and not log_path.is_symlink():
                 # Keep exception messages, SQL, paths, and credentials private.
-                import re
                 for match in re.finditer(r"production\.ERROR: ([A-Za-z0-9_\\]+)",
                                          log_path.read_text(encoding="utf-8", errors="replace")):
                     laravel_error_class = match.group(1)
@@ -425,9 +1172,20 @@ def main():
                 failure_receipt = json.loads(Path(result.receipt_path).read_text(encoding="utf-8"))
                 observed_codes = [check.get("observed_status") for check in failure_receipt.get("acceptance", [])]
             raise RuntimeError(f"deployment_{result.status.lower()}_{result.reason}:http={observed_codes}:laravel_error_class={laravel_error_class}")
-        receipt = json.loads(Path(result.receipt_path).read_text(encoding="utf-8"))
-        if receipt.get("active_sha_after_deploy") != candidate_sha or receipt.get("result") != "PASS":
+        if (receipt.get("active_sha_after_deploy") != candidate_sha or receipt.get("result") != "PASS"
+                or receipt.get("database_changed") is not True
+                or not re.fullmatch(r"[0-9a-f]{64}", receipt.get("database_backup_sha256", ""))
+                or not re.fullmatch(r"[0-9a-f]{64}", receipt.get("restore_receipt_sha256", ""))
+                or not re.fullmatch(r"[0-9a-f]{64}", receipt.get("migration_rehearsal_receipt_sha256", ""))
+                or not re.fullmatch(r"[0-9a-f]{64}", receipt.get("migration_receipt_sha256", ""))):
             raise RuntimeError("observed_receipt_mismatch")
+        journal = state / f"db-release-{receipt['database_transaction_id']}.json"
+        journal_state = json.loads(journal.read_text(encoding="utf-8"))
+        if (journal_state.get("state") != "COMPLETE"
+                or journal_state.get("evidence", {}).get("COMPLETE", {}).get("release_receipt_sha256")
+                != durable_receipt_sha):
+            raise RuntimeError("database_transaction_not_complete")
+        print(f"PHASE_B_RECEIPT_RESTART=PASS;DURABLE_PASS_RECEIPT_SHA256={durable_receipt_sha}")
         # The real backend reloads PHP-FPM after atomically switching current.
         # Restart the disposable PHP server to model that worker generation change.
         php_process.terminate()
@@ -461,7 +1219,6 @@ def main():
             with urllib.request.urlopen(acceptance_request, timeout=3) as response:
                 body = response.read(2_000_000).decode("utf-8", "replace")
         except urllib.error.HTTPError as error:
-            import re
             log_path = storage / "logs" / "laravel.log"
             exception_class = "UNAVAILABLE"
             if php_stderr is not None:
@@ -524,7 +1281,24 @@ def main():
                                       artifact_sha256=artifact_sha)
         if (noop.status, noop.reason) != ("NO_OP", "exact_release_already_active"):
             raise RuntimeError("repeat_deployment_not_noop")
-        print(f"LARAVEL_DEPLOY=PASS\nLARAVEL_RELEASE={candidate_sha}\nMYSQL=8.4\nHTTP=6/6_PASS\nNO_OP=PASS\nRECEIPT_SHA256={result.receipt_sha256}")
+        migration_status = run(["/usr/local/bin/php", "artisan", "migrate:status", "--no-interaction"],
+                               cwd=profile.application_link, timeout=60)
+        if "Pending" in migration_status or "2026_11_06_000001_create_wpcg_phase_b_probe" not in migration_status:
+            raise RuntimeError("phase_b_target_migration_postcheck_failed")
+        trigger_count = run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
+            "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM information_schema.triggers "
+            "WHERE trigger_schema='wpcg_staging_next' AND trigger_name='wpcg_phase_b_probe'",
+        ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
+        if trigger_count != "1":
+            raise RuntimeError("phase_b_synthetic_trigger_postcheck_failed")
+        print(f"PHASE_B_DEPLOY=PASS\nPHASE_B_BACKUP_RESTORE_REHEARSAL=PASS\n"
+              f"PHASE_B_FAILURE_INJECTION_RECOVERY=PASS\nPHASE_B_PRETARGET_RESUME=PASS\n"
+              f"PHASE_B_PROCESS_RESTART_RESUME=PASS\nMYSQL_TRIGGER_MIGRATION=PASS\n"
+              f"PHASE_B_MIGRATIONS=PASS;COUNT={len(migration_status.splitlines()) - 1}\n"
+              f"LARAVEL_RELEASE={candidate_sha}\nMYSQL=8.4.11\nHTTP=6/6_PASS\nNO_OP=PASS\n"
+              f"RECEIPT_SHA256={durable_receipt_sha}\nBACKUP_SHA256={receipt['database_backup_sha256']}")
     finally:
         if php_process is not None:
             php_process.terminate()

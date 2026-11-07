@@ -59,8 +59,9 @@ class StagingNextControllerTests(unittest.TestCase):
                                  b"'resources/js/app.js':{file:'assets/app-test.js',isEntry:true}}));\n"),
         }
         self._write_commit()
+        self.base_sha = self._git("rev-parse", "HEAD").strip()
+        self._git("commit", "--quiet", "--allow-empty", "-m", "synthetic application release")
         self.app_sha = self._git("rev-parse", "HEAD").strip()
-        self.base_sha = "a" * 40
         CONTROLLER.SOURCE_CHECKOUT = self.repo
         CONTROLLER.INCOMING_DIRECTORY = self.incoming
 
@@ -123,8 +124,8 @@ class StagingNextControllerTests(unittest.TestCase):
     def test_exact_active_primary_is_noop_without_build_or_staging(self):
         digest = "a" * 40
         helper_result = {
-            "result": "PASS", "application_sha": digest, "helper_version": "1.3.3",
-            "helper_contract": "wpcaregrid-staging-next-deploy-v3",
+            "result": "PASS", "application_sha": digest, "helper_version": "1.4.4",
+            "helper_contract": "wpcaregrid-staging-next-deploy-v8",
             "helper_artifact_sha256": CONTROLLER.HELPER_ARTIFACT_SHA256,
             "artifact_sha256": "b" * 64,
         }
