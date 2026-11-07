@@ -26,10 +26,10 @@ from pathlib import Path
 ROOT = Path("/repo")
 sys.path.insert(0, str(ROOT))
 
-from scripts import staging_next_deploy_backend as BACKEND
+from scripts import staging_next_deploy_backend_1_4_6 as BACKEND
 from scripts import staging_next_deploy_controller as CONTROLLER
-from scripts.staging_next_db_transaction import (
-    DatabaseReleaseTransaction, TransactionIdentity, TransactionRefused, _mysql_defaults, _mysql_query,
+from scripts.staging_next_db_transaction_1_4_6 import (
+    DatabaseReleaseTransaction, TransactionIdentity, _mysql_defaults, _mysql_query,
     _mysql_query_failure_code, database_fingerprint, restore_receipt_sha256,
 )
 
@@ -978,9 +978,10 @@ def main():
 
         def capture_stale_failure(frame, event, arg):
             if (event == "exception" and frame.f_code.co_filename.endswith((
-                    "staging_next_deploy_backend.py", "staging_next_db_transaction.py"))):
+                    "staging_next_deploy_backend_1_4_6.py",
+                    "staging_next_db_transaction_1_4_6.py"))):
                 exception_type, exception, _traceback = arg
-                if isinstance(exception, (BACKEND.DeployRefused, TransactionRefused)):
+                if isinstance(exception, (BACKEND.DeployRefused, BACKEND.TransactionRefused)):
                     safe_reason = str(exception)
                     if not re.fullmatch(r"[a-z][a-z0-9_]{2,95}", safe_reason):
                         safe_reason = "non_allowlisted_reason"
