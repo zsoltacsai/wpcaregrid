@@ -121,7 +121,7 @@ jobs:
           python3 scripts/tests/daily-staging-sync-policy-test.py
           python3 scripts/tests/staging-next-helper-consistency-test.py
           python3 scripts/tests/staging-next-helper-installer-test.py
-          python3 scripts/tests/staging-next-helper-installer-1-4-6-test.py scripts/tests/staging-next-helper-installer-1-4-7-test.py
+          python3 scripts/tests/staging-next-helper-installer-1-4-6-test.py
           python3 scripts/tests/staging-next-helper-installer-1-4-7-test.py
           python3 scripts/tests/staging-next-release-evidence-test.py
           python3 scripts/tests/staging-recovery-operator-test.py
