@@ -73,9 +73,9 @@ class ProductionDeploymentArtifactConsistencyTests(unittest.TestCase):
             "CONTROLLER_SHA256": manifest["controller_sha256"],
             "SUDOERS_SHA256": manifest["sudoers_template_sha256"],
         }
-        for constant, digest in installer_pins.items():
+        for constant, pinned_value in installer_pins.items():
             self.assertIsNotNone(re.search(
-                rf'^{constant} = "{re.escape(digest)}"$', installer_text, re.M), constant)
+                rf'^{constant} = "{re.escape(pinned_value)}"$', installer_text, re.M), constant)
         runbook = (ROOT / "docs/PRODUCTION_MARKETING_RELEASE_RUNBOOK.md").read_text(encoding="utf-8")
         install_doc = (ROOT / "docs/PRODUCTION_HELPER_INSTALL_2_0_0.md").read_text(encoding="utf-8")
         for pinned_digest in (*hashes.values(), digest, controller_hash,

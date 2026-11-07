@@ -14,6 +14,7 @@ Recompute every digest from that exact Git tree immediately before source stagin
 | `scripts/deployment_backend_v2.py` | `d1cbde99eef1168e42797268ce170e451b28051d7d980876a6167fb19bf85576` |
 | `scripts/deployment_transaction_v2.py` | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
 | `scripts/deployment_environment_contract.py` | `f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1` |
+| Combined helper artifact (derived) | `0e50791ee708de571dbcaa5420bd06b31698e3b7a8683f7501bee6880ead96fc` |
 | `scripts/production_deploy_controller.py` | `a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283` |
 | `deploy/sudoers/wpcaregrid-production-v2.0.0` | `fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963` |
 | Root installer `scripts/install_production_helper_2_0_0.py` | `3ebb74d8ece4b1f338f138ee6339455524383dc010783303e5a574a87732f001` |
