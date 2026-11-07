@@ -17,10 +17,12 @@ from scripts import staging_next_deploy_backend_1_4_7 as BACKEND
 
 MERGED_SHA = "a" * 40
 PR_HEAD_SHA = "b" * 40
+PR_HEAD_REF = "codex/staging-next-review-policy"
 
 
 class ReleaseAuthorizationEvidenceTests(unittest.TestCase):
-    def api(self, *, omit_job=None, omit_pr=False):
+    def api(self, *, omit_job=None, omit_pr=False, omit_pull_request_run=False,
+            dispatch_branch=PR_HEAD_REF):
         calls = []
         repo = BACKEND.GITHUB_REPOSITORY
         branch = BACKEND.PRIMARY_BRANCH
@@ -34,18 +36,23 @@ class ReleaseAuthorizationEvidenceTests(unittest.TestCase):
                          "base": {"ref": branch}}]
             if path == f"/repos/{repo}/pulls/42":
                 return {"number": 42, "merged_at": "2026-11-07T12:00:00Z",
-                        "base": {"ref": branch}, "head": {"sha": PR_HEAD_SHA}}
+                        "base": {"ref": branch}, "head": {"sha": PR_HEAD_SHA,
+                                                           "ref": PR_HEAD_REF}}
             parsed = urlsplit(path)
             if parsed.path == f"/repos/{repo}/actions/runs":
                 query = parse_qs(parsed.query)
                 head = query["head_sha"][0]
                 event = query["event"][0]
+                if event == "pull_request" and omit_pull_request_run:
+                    return {"total_count": 0, "workflow_runs": []}
                 run_id = 101 if event == "pull_request" else 202
                 run = {"id": run_id, "head_sha": head, "event": event,
                        "path": ".github/workflows/ci.yml", "status": "completed",
                        "conclusion": "success", "created_at": "2026-11-07T12:10:00Z",
-                       "head_branch": branch,
+                       "head_branch": branch if event == "push" else PR_HEAD_REF,
                        "pull_requests": [{"number": 42, "base": {"ref": branch}}]}
+                if event == "workflow_dispatch":
+                    run["head_branch"] = dispatch_branch
                 return {"total_count": 1, "workflow_runs": [run]}
             if parsed.path.startswith(f"/repos/{repo}/actions/runs/") \
                     and parsed.path.endswith("/jobs"):
@@ -70,6 +77,25 @@ class ReleaseAuthorizationEvidenceTests(unittest.TestCase):
         push_query = next(query for query in run_queries if query["event"] == ["push"])
         self.assertEqual(push_query["branch"], [BACKEND.PRIMARY_BRANCH])
         self.assertFalse(any("/reviews" in path or "issues/174" in path for path in calls))
+
+    def test_dispatch_ci_may_cover_exact_head_only_when_github_binds_same_pr_ref(self):
+        calls, github_json = self.api(omit_pull_request_run=True)
+        with patch.object(BACKEND, "_github_json", side_effect=github_json):
+            BACKEND._verify_primary_ci(SimpleNamespace(test_only=False), MERGED_SHA)
+        run_queries = [parse_qs(urlsplit(path).query) for path in calls
+                       if urlsplit(path).path.endswith("/actions/runs")]
+        dispatch = next(query for query in run_queries
+                        if query["event"] == ["workflow_dispatch"])
+        self.assertEqual(dispatch["head_sha"], [PR_HEAD_SHA])
+        self.assertEqual(dispatch["branch"], [PR_HEAD_REF])
+        self.assertFalse(any("/reviews" in path or "issues/174" in path for path in calls))
+
+    def test_dispatch_ci_for_another_branch_does_not_authorize_pr_head(self):
+        calls, github_json = self.api(omit_pull_request_run=True, dispatch_branch="other-branch")
+        with patch.object(BACKEND, "_github_json", side_effect=github_json):
+            with self.assertRaises(BACKEND.DeployRefused) as error:
+                BACKEND._verify_primary_ci(SimpleNamespace(test_only=False), MERGED_SHA)
+        self.assertEqual(str(error.exception), "ci_evidence_missing")
 
     def test_missing_required_ci_job_still_holds_release(self):
         missing = BACKEND.REQUIRED_CI_JOBS[0]

@@ -983,10 +983,21 @@ def _verify_primary_ci(profile: StagingProfile, application_sha: str) -> None:
              "merged_pr_evidence_invalid")
     pr_head = pr_detail.get("head")
     pr_head_sha = pr_head.get("sha") if isinstance(pr_head, dict) else None
+    pr_head_ref = pr_head.get("ref") if isinstance(pr_head, dict) else None
     _require(type(pr_number) is int and isinstance(pr_head_sha, str)
-             and re.fullmatch(r"[0-9a-f]{40}", pr_head_sha) is not None,
+             and re.fullmatch(r"[0-9a-f]{40}", pr_head_sha) is not None
+             and isinstance(pr_head_ref, str) and pr_head_ref,
              "merged_pr_evidence_invalid")
-    verify_run(pr_head_sha, event="pull_request", branch=None, pr_number=pr_number)
+    try:
+        verify_run(pr_head_sha, event="pull_request", branch=None, pr_number=pr_number)
+    except DeployRefused as error:
+        if str(error) != "ci_evidence_missing":
+            raise
+        # GitHub may suppress pull_request runs for app-authored ref updates.
+        # A manual CI dispatch remains equivalent only when GitHub associates
+        # that exact commit and exact PR ref with this same PR and primary base.
+        verify_run(pr_head_sha, event="workflow_dispatch", branch=pr_head_ref,
+                   pr_number=pr_number)
     verify_run(application_sha, event="push", branch=PRIMARY_BRANCH)
 def authorize_release(profile: StagingProfile, *, invoking_uid: int,
                       application_sha: str) -> Mapping[str, object]:
