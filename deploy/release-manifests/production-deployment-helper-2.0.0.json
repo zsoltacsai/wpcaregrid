@@ -13,7 +13,7 @@
   "environment_contract_sha256": "f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1",
   "helper_artifact_sha256": "0e50791ee708de571dbcaa5420bd06b31698e3b7a8683f7501bee6880ead96fc",
   "controller": "scripts/production_deploy_controller.py",
-  "controller_sha256": "fe1f26992210938b1fed4178da49b384f8974b2fba3183fffb47dc8e69f5f28a",
+  "controller_sha256": "a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283",
   "sudoers_template": "deploy/sudoers/wpcaregrid-production-v2.0.0",
   "sudoers_template_sha256": "fb7716132c9d48a6a55c305ecff932a1bd518a575e7dd974162bc0d4f89fc963",
   "phase_b_default": "DISABLED",

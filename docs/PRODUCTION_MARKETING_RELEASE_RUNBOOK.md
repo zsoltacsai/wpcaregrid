@@ -105,16 +105,23 @@ approved before P1.
 
 ### Gate P2 — application deployment (separate exact-release authorization)
 
-Only after P0 and P1 pass and the production release receives its own GO:
+Only after P0 and P1 pass and the production release receives an exact-SHA GO.
+Set `AUTHORIZED_APPLICATION_SHA` to the 40-character SHA named by that GO, then
+verify it still equals the protected primary immediately before invoking the
+controller. The controller and privileged helper independently recheck that
+the supplied SHA is the current primary release; any mismatch returns HOLD.
+Do not replace it with a moving `latest` value or retry after a HOLD without a
+new authorization.
 
 ```sh
 sudo -u deploy-production -- /usr/bin/python3 \
-  /var/lib/wpcaregrid-deploy/production/source/scripts/production_deploy_controller.py sync
+  /var/lib/wpcaregrid-deploy/production/source/scripts/production_deploy_controller.py \
+  sync "$AUTHORIZED_APPLICATION_SHA"
 ```
 
 This is the sole controller invocation. It checks the fixed source checkout and
-helper, reads the latest protected-primary SHA, authorizes that exact SHA using
-GitHub CI/review evidence, packages the exact Git source, builds Vite assets in
+helper, verifies the caller-supplied authorized SHA equals the latest protected
+primary, authorizes that exact SHA using GitHub CI/review evidence, packages the exact Git source, builds Vite assets in
 a private disposable directory with the lockfile and pinned Node/npm major
 versions, stages the immutable artifact by SHA-256, and asks the helper to
 deploy it. Do not supply a path, database name, host, branch, or arbitrary
