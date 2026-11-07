@@ -139,6 +139,57 @@ class StagingDeployBackendTests(unittest.TestCase):
         self.assertLess(secret_unlink_index, reopen_index)
         self.assertEqual(events[secret_unlink_index][1], 0o700)
 
+    @unittest.skipUnless(hasattr(os, "fork"), "process termination test requires Linux fork")
+    def test_sealed_interrupted_cache_cleanup_resumes_after_process_death(self):
+        profile = replace(self.profile, build_application_bootstrap=True,
+                          php_fpm_uid=33, php_fpm_gid=33)
+        manifest = {"files_sha256": "expected-tree"}
+        for crash_point, expected_owner in (("before_chown", (33, 33)),
+                                            ("after_chown", (0, 0))):
+            with self.subTest(crash_point=crash_point):
+                release = Path(self.temp.name) / f"cache-resume-{crash_point}"
+                cache = release / "bootstrap/cache"
+                cache.mkdir(parents=True)
+                os.chown(cache, 33, 33)
+                os.chmod(cache, 0o2750)
+                gitignore = cache / ".gitignore"
+                gitignore.write_text("*\n!.gitignore\n")
+                os.chown(gitignore, 0, 0)
+                os.chmod(gitignore, 0o644)
+                secret = cache / "config.php"
+                secret.write_text("<?php return ['APP_KEY' => 'synthetic'];\n")
+                os.chown(secret, 33, 33)
+                os.chmod(secret, 0o755)
+                pid = os.fork()
+                if pid == 0:
+                    original_chown = os.chown
+
+                    def die_during_seal(path, uid, gid, *args, **kwargs):
+                        if Path(path) == cache and uid == profile.expected_owner_uid:
+                            if crash_point == "before_chown":
+                                os._exit(91)
+                            original_chown(path, uid, gid, *args, **kwargs)
+                            os._exit(92)
+                        return original_chown(path, uid, gid, *args, **kwargs)
+
+                    BACKEND.os.chown = die_during_seal
+                    BACKEND._repair_interrupted_bootstrap_cache(profile, release, manifest)
+                    os._exit(93)
+                _pid, status = os.waitpid(pid, 0)
+                self.assertTrue(os.WIFEXITED(status))
+                self.assertEqual(os.WEXITSTATUS(status), 91 if crash_point == "before_chown" else 92)
+                info = cache.stat()
+                self.assertEqual((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)),
+                                 (*expected_owner, 0o700))
+                with (mock.patch.object(BACKEND, "_hash_release_tree", return_value={"ok": "hash"}),
+                      mock.patch.object(BACKEND, "_canonical_files_hash",
+                                        return_value="expected-tree")):
+                    BACKEND._repair_interrupted_bootstrap_cache(profile, release, manifest)
+                self.assertFalse(secret.exists())
+                final = cache.stat()
+                self.assertEqual((final.st_uid, final.st_gid, stat.S_IMODE(final.st_mode)),
+                                 (0, 0, 0o755))
+
     def test_package_discovery_cache_is_built_for_fpm_then_restored_root_owned(self):
         root = Path(self.temp.name) / "candidate"
         cache = root / "bootstrap/cache"

@@ -625,11 +625,12 @@ def _repair_interrupted_bootstrap_cache(profile: StagingProfile, release_path: P
     _require(active_path != release_path, "cache_repair_candidate_is_active")
     cache = release_path / "bootstrap/cache"
     info = _lstat(cache, "bootstrap_cache_unavailable")
+    cache_mode = stat.S_IMODE(info.st_mode)
     valid_directory_owner = (
         (info.st_uid == profile.expected_owner_uid and info.st_gid == 0
-         and stat.S_IMODE(info.st_mode) == 0o755)
+         and cache_mode in {0o700, 0o755})
         or (info.st_uid == profile.php_fpm_uid and info.st_gid == profile.php_fpm_gid
-            and stat.S_IMODE(info.st_mode) in {0o755, 0o2750})
+            and cache_mode in {0o700, 0o755, 0o2750})
     )
     _require(stat.S_ISDIR(info.st_mode) and valid_directory_owner,
              "interrupted_bootstrap_cache_directory_invalid")
