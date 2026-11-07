@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts import staging_next_deploy_backend as BACKEND
+from scripts import staging_next_deploy_backend_1_4_6 as BACKEND
 
 
 HEAD = "a" * 40
@@ -141,6 +141,13 @@ class NginxRouteTests(unittest.TestCase):
         """
         if duplicate:
             app += app
+        http = """server {
+            listen 80;
+            server_name staging-next.wpcaregrid.com;
+            return 301 https://$host$request_uri;
+        }
+        """
+        app += http
         other = "server { listen 443 ssl; server_name unrelated.example; }" if extra else ""
         main = "http { include /etc/nginx/sites-enabled/*.conf; }"
         snippet = f"fastcgi_pass {app_socket};\n"
@@ -149,7 +156,9 @@ class NginxRouteTests(unittest.TestCase):
                 "# configuration file /etc/nginx/snippets/fastcgi-php.conf:\n"
                 f"{snippet}") .encode()
 
-    def test_multiple_server_blocks_are_allowed_and_app_vhost_uses_expected_socket(self):
+    def test_included_https_vhost_is_counted_once_with_separate_http_vhost(self):
+        # nginx -T contains both the root include expansion and each included
+        # file's own source section. The HTTPS vhost must not be counted twice.
         BACKEND._verify_staging_next_nginx_route(self.dump(extra=True))
 
     def test_wrong_php_fpm_socket_is_rejected(self):
