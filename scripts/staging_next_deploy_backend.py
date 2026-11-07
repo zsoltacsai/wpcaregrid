@@ -1661,20 +1661,24 @@ def _nginx_walk(nodes):
 def _verify_staging_next_nginx_route(dump: bytes, *, hostname: str = APPLICATION_HOST,
                                      socket_path: str = EXPECTED_FPM_SOCKET) -> None:
     sources = _nginx_dump_sources(dump)
+    # nginx -T prints every included file as a separate source section. Expand
+    # the actual root config once; walking each source as another root counts
+    # server blocks from included vhosts again and falsely reports ambiguity.
+    root_path = "/etc/nginx/nginx.conf"
+    _require(root_path in sources, "nginx_config_root_missing")
+    parsed = _nginx_parse(sources[root_path])
+    expanded = _nginx_expand(parsed, source_path=root_path, sources=sources, stack=())
     servers = []
-    for path, source in sources.items():
-        parsed = _nginx_parse(source)
-        expanded = _nginx_expand(parsed, source_path=path, sources=sources, stack=())
-        for head, children in expanded:
-            if head == ["server"] and children is not None:
-                directives = list(_nginx_walk(children))
-                names = [arg for command, _ in directives if command and command[0] == "server_name"
-                         for arg in command[1:]]
-                listens = [command[1:] for command, _ in directives
-                           if command and command[0] == "listen"]
-                if hostname in names and any(any(re.search(r"(?:^|:)443$", item) for item in listen)
-                                             and "ssl" in listen for listen in listens):
-                    servers.append(directives)
+    for head, children in _nginx_walk(expanded):
+        if head == ["server"] and children is not None:
+            directives = list(_nginx_walk(children))
+            names = [arg for command, _ in directives if command and command[0] == "server_name"
+                     for arg in command[1:]]
+            listens = [command[1:] for command, _ in directives
+                       if command and command[0] == "listen"]
+            if hostname in names and any(any(re.search(r"(?:^|:)443$", item) for item in listen)
+                                         and "ssl" in listen for listen in listens):
+                servers.append(directives)
     _require(len(servers) == 1, "nginx_staging_https_vhost_ambiguous")
     fastcgi = [command[1] for command, _ in servers[0]
                if command and command[0] == "fastcgi_pass" and len(command) == 2]
