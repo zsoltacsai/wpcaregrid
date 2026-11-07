@@ -12,10 +12,13 @@ test.skip(
 
 for (const locale of ['en', 'hu'] as const) {
     for (const viewport of [
+        { name: 'narrow-mobile', width: 320, height: 740 },
+        { name: 'mobile', width: 375, height: 812 },
+        { name: 'wide-mobile', width: 390, height: 844 },
+        { name: 'tablet', width: 768, height: 1024 },
         { name: 'desktop', width: 1440, height: 900 },
-        { name: 'mobile', width: 390, height: 844 },
     ]) {
-        test(`${locale} homepage ${viewport.name}: focused layout, CTA and anchor regressions`, async ({ page }, testInfo) => {
+        test(`${locale} homepage ${viewport.width}px (${viewport.name}): layout, CTA and anchor regressions`, async ({ page }, testInfo) => {
             const pageErrors: string[] = [];
             const consoleErrors: string[] = [];
             const externalRequests: string[] = [];
