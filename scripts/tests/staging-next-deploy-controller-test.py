@@ -124,8 +124,8 @@ class StagingNextControllerTests(unittest.TestCase):
     def test_exact_active_primary_is_noop_without_build_or_staging(self):
         digest = "a" * 40
         helper_result = {
-            "result": "PASS", "application_sha": digest, "helper_version": "1.4.4",
-            "helper_contract": "wpcaregrid-staging-next-deploy-v8",
+            "result": "PASS", "application_sha": digest, "helper_version": "1.4.5",
+            "helper_contract": "wpcaregrid-staging-next-deploy-v9",
             "helper_artifact_sha256": CONTROLLER.HELPER_ARTIFACT_SHA256,
             "artifact_sha256": "b" * 64,
         }

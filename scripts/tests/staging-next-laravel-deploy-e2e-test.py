@@ -803,7 +803,6 @@ def main():
             incoming_dir=incoming, inbox_dir=inbox, state_dir=state, receipts_dir=receipts,
             shared_env_file=env_file, shared_storage_dir=storage, shared_vendor_dir=vendor,
             basic_auth_file=basic_auth_file, mysql_server_uuid_sha256=os.environ["WPCG_MYSQL_UUID_SHA256"],
-            integration_qa_reviewer=None, m17_appsec_reviewer=None,
             helper_artifact_sha256=CONTROLLER.HELPER_ARTIFACT_SHA256, php_fpm_uid=33, php_fpm_gid=33,
             test_git_repo=repo, allowed_uid=1000, expected_owner_uid=0,
             acceptance_urls=tuple((f"http://localhost:{port}{path}", status)

@@ -487,7 +487,7 @@ class StagingDeployBackendTests(unittest.TestCase):
             expected_owner_uid=0, acceptance_urls=self.acceptance, test_only=True,
             shared_env_file=self.shared_env, shared_storage_dir=self.shared_storage,
             shared_vendor_dir=self.shared_vendor, basic_auth_file=self.basic_auth_file, mysql_server_uuid_sha256=None,
-            integration_qa_reviewer=None, m17_appsec_reviewer=None, test_git_repo=self.git_repo,
+            test_git_repo=self.git_repo,
             helper_artifact_sha256="e" * 64, php_fpm_uid=0, php_fpm_gid=0,
             protected_acceptance_urls=(self.acceptance[1][0], self.acceptance[2][0]),
         )
@@ -1140,6 +1140,23 @@ class StagingDeployBackendTests(unittest.TestCase):
         finally:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
+
+    def test_helper_installation_probe_is_strictly_read_only(self):
+        before = sorted(path.name for path in self.state.iterdir())
+        with mock.patch.object(BACKEND, "_reconcile_unreceipted_active_release",
+                               side_effect=AssertionError("installer must not reconcile")), \
+                mock.patch.object(BACKEND, "_current_release",
+                                  side_effect=AssertionError("installer probe must not inspect live release")):
+            result = BACKEND.verify_helper_installation(self.profile, invoking_uid=1000)
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(sorted(path.name for path in self.state.iterdir()), before)
+
+    def test_helper_installation_probe_rejects_wrong_identity_without_state_change(self):
+        before = sorted(path.name for path in self.state.iterdir())
+        with self.assertRaises(BACKEND.DeployRefused) as error:
+            BACKEND.verify_helper_installation(self.profile, invoking_uid=1001)
+        self.assertEqual(str(error.exception), "caller_identity_invalid")
+        self.assertEqual(sorted(path.name for path in self.state.iterdir()), before)
 
     def test_exact_primary_authorization_precedes_any_build_or_mutation(self):
         result = BACKEND.authorize_release(self.profile, invoking_uid=1000,
