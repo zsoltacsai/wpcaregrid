@@ -29,10 +29,10 @@ from typing import Callable, Iterator, Mapping
 
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
-SCHEMA = 1
+SCHEMA = 2
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
-PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.1.json")
-PHASE_B_CREDENTIALS_PATH = Path("/etc/wpcaregrid-deploy/credentials/staging-next-database-1.4.1.json")
+PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.2.json")
+PHASE_B_CREDENTIALS_PATH = Path("/etc/wpcaregrid-deploy/credentials/staging-next-database-1.4.2.json")
 PHASE_B_BACKUP_PATH = Path("/var/lib/wpcaregrid-deploy/staging-next/database-backups")
 PHASE_B_TARGET_HOST = "127.0.0.1"
 PHASE_B_TARGET_PORT = 3306
@@ -72,7 +72,7 @@ EVIDENCE_KEYS = {
 }
 JOURNAL_KEYS = {
     "schema", "profile", "database", "transaction_id", "application_sha",
-    "previous_sha", "artifact_sha256", "backup_sha256", "mysql_uuid_sha256",
+    "previous_sha", "artifact_sha256", "backup_sha256", "backup_filename", "mysql_uuid_sha256",
     "migrations", "state", "evidence", "migration_cursor", "migration_before",
     "migration_started_at", "updated_at",
 }
@@ -278,7 +278,9 @@ def verify_background_fences(policy: DatabaseExecutionPolicy, *,
         raise TransactionRefused("phase_b_consumer_census_unavailable") from None
     _require(census.returncode == 0 and len(census.stdout) <= 1_000_000,
              "phase_b_consumer_census_unavailable")
-    consumers = re.compile(rb"(?:^|\s)artisan\s+(?:queue:work|schedule:run|schedule:work)(?:\s|$)")
+    consumers = re.compile(
+        rb"(?:^|\s)artisan\s+(?:queue:(?:work|listen)|schedule:(?:run|work)|horizon(?::work)?)(?:\s|$)"
+    )
     _require(consumers.search(census.stdout) is None, "phase_b_background_consumer_active")
     digest = hashlib.sha256(
         b"workers=stopped;scheduler=inactive-disabled;consumer_census=empty;markers=verified"
@@ -436,7 +438,8 @@ def database_fingerprint(policy: DatabaseExecutionPolicy, *, database: str,
     }
 
 
-def _verify_backup_sql(path: Path) -> tuple[str, int]:
+def _verify_backup_sql(path: Path, *, expected_uid: int | None = None,
+                       expected_mode: int | None = None) -> tuple[str, int]:
     digest = hashlib.sha256()
     compressed_size = 0
     forbidden = re.compile(
@@ -445,21 +448,37 @@ def _verify_backup_sql(path: Path) -> tuple[str, int]:
     )
     qualified_schema = re.compile(rb"(?i)`(?:wpcaregrid|mysql|performance_schema|sys)`\s*\.\s*`")
     try:
-        with path.open("rb") as raw:
-            while True:
-                block = raw.read(1024 * 1024)
-                if not block:
-                    break
-                digest.update(block)
-                compressed_size += len(block)
-        with gzip.open(path, "rb") as stream:
-            while True:
-                line = stream.readline(1_048_577)
-                if not line:
-                    break
-                _require(len(line) <= 1_048_576, "phase_b_backup_line_too_large")
-                _require(not forbidden.search(line) and not qualified_schema.search(line),
-                         "phase_b_backup_sql_unsafe")
+        before = os.lstat(path)
+        _require(stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode)
+                 and (expected_uid is None or before.st_uid == expected_uid)
+                 and (expected_mode is None or stat.S_IMODE(before.st_mode) == expected_mode),
+                 "phase_b_backup_file_metadata_invalid")
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+        try:
+            opened = os.fstat(fd)
+            _require(stat.S_ISREG(opened.st_mode) and opened.st_ino == before.st_ino
+                     and opened.st_dev == before.st_dev and opened.st_size == before.st_size
+                     and (expected_uid is None or opened.st_uid == expected_uid)
+                     and (expected_mode is None or stat.S_IMODE(opened.st_mode) == expected_mode),
+                     "phase_b_backup_file_changed")
+            with os.fdopen(fd, "rb", closefd=False) as raw:
+                while True:
+                    block = raw.read(1024 * 1024)
+                    if not block:
+                        break
+                    digest.update(block)
+                    compressed_size += len(block)
+                raw.seek(0)
+                with gzip.GzipFile(fileobj=raw, mode="rb") as stream:
+                    while True:
+                        line = stream.readline(1_048_577)
+                        if not line:
+                            break
+                        _require(len(line) <= 1_048_576, "phase_b_backup_line_too_large")
+                        _require(not forbidden.search(line) and not qualified_schema.search(line),
+                                 "phase_b_backup_sql_unsafe")
+        finally:
+            os.close(fd)
     except TransactionRefused:
         raise
     except (OSError, EOFError, gzip.BadGzipFile):
@@ -564,7 +583,7 @@ def create_database_backup(policy: DatabaseExecutionPolicy, *, application_sha: 
         if return_code != 0:
             raise TransactionRefused(_backup_failure_code(bytes(stderr_sample)))
         _require(total > 0 and not stderr_truncated, "phase_b_backup_output_invalid")
-        digest, _size = _verify_backup_sql(destination)
+        digest, _size = _verify_backup_sql(destination, expected_uid=0, expected_mode=0o600)
         return destination, digest
     except TransactionRefused:
         if process is not None and process.poll() is None:
@@ -683,6 +702,7 @@ class TransactionIdentity:
     previous_sha: str
     artifact_sha256: str
     backup_sha256: str
+    backup_filename: str
     mysql_uuid_sha256: str
     migrations: tuple[str, ...]
 
@@ -708,6 +728,12 @@ class DatabaseReleaseTransaction:
         _require(all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value)
                      for value in values[:2]), "release_sha_invalid")
         _require(all(_hash(value) for value in values[2:]), "release_hash_invalid")
+        _require(isinstance(identity.backup_filename, str)
+                 and re.fullmatch(
+                     rf"staging-next-{identity.application_sha}-[0-9]{{1,30}}-[0-9a-f]{{8}}\.sql\.gz",
+                     identity.backup_filename,
+                 ) is not None,
+                 "backup_filename_invalid")
         _require(bool(identity.migrations) and len(identity.migrations) <= 1000
                  and len(set(identity.migrations)) == len(identity.migrations)
                  and all(MIGRATION_RE.fullmatch(item) for item in identity.migrations),
@@ -715,7 +741,8 @@ class DatabaseReleaseTransaction:
         material = json.dumps({
             "profile": PROFILE, "database": DATABASE, "application_sha": identity.application_sha,
             "previous_sha": identity.previous_sha, "artifact_sha256": identity.artifact_sha256,
-            "backup_sha256": identity.backup_sha256, "mysql_uuid_sha256": identity.mysql_uuid_sha256,
+            "backup_sha256": identity.backup_sha256, "backup_filename": identity.backup_filename,
+            "mysql_uuid_sha256": identity.mysql_uuid_sha256,
             "migrations": identity.migrations,
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(material).hexdigest()[:32]
@@ -771,7 +798,8 @@ class DatabaseReleaseTransaction:
             "schema": SCHEMA, "profile": PROFILE, "database": DATABASE,
             "transaction_id": self.transaction_id, "application_sha": i.application_sha,
             "previous_sha": i.previous_sha, "artifact_sha256": i.artifact_sha256,
-            "backup_sha256": i.backup_sha256, "mysql_uuid_sha256": i.mysql_uuid_sha256,
+            "backup_sha256": i.backup_sha256, "backup_filename": i.backup_filename,
+            "mysql_uuid_sha256": i.mysql_uuid_sha256,
             "migrations": list(i.migrations), "state": "PREPARED", "evidence": {},
             "migration_cursor": 0, "migration_before": None, "migration_started_at": None,
             "updated_at": time.time_ns(),
@@ -843,12 +871,95 @@ class DatabaseReleaseTransaction:
             if value["state"] != "COMPLETE":
                 raise TransactionRefused("unfinished_database_transaction")
 
+    @classmethod
+    def find_unfinished_for_release(
+        cls,
+        state_dir: Path,
+        *,
+        application_sha: str,
+        previous_sha: str,
+        artifact_sha256: str,
+        mysql_uuid_sha256: str,
+        migrations: tuple[str, ...],
+    ) -> tuple[TransactionIdentity, Mapping[str, object]] | None:
+        """Locate one exact-release journal for safe backend restart reconciliation.
+
+        The caller must already hold the staging-next deployment lock. Unknown,
+        malformed, or different-release unfinished journals block this release.
+        """
+        try:
+            directory = os.lstat(state_dir)
+            _require(stat.S_ISDIR(directory.st_mode) and not stat.S_ISLNK(directory.st_mode)
+                     and directory.st_uid == 0 and stat.S_IMODE(directory.st_mode) == 0o700,
+                     "transaction_state_directory_metadata_invalid")
+            paths = sorted(state_dir.glob("db-release-*.json"))
+        except TransactionRefused:
+            raise
+        except OSError:
+            raise TransactionRefused("transaction_journal_enumeration_failed") from None
+
+        expected_release = (application_sha, previous_sha, artifact_sha256, mysql_uuid_sha256, migrations)
+        pending: tuple[TransactionIdentity, Mapping[str, object]] | None = None
+        for path in paths:
+            try:
+                before = os.lstat(path)
+                _require(stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode)
+                         and before.st_uid == 0 and stat.S_IMODE(before.st_mode) == 0o600
+                         and before.st_size <= 256 * 1024, "transaction_journal_metadata_invalid")
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                try:
+                    opened = os.fstat(fd)
+                    _require(opened.st_ino == before.st_ino and opened.st_dev == before.st_dev
+                             and opened.st_uid == 0 and stat.S_IMODE(opened.st_mode) == 0o600
+                             and opened.st_size == before.st_size,
+                             "transaction_journal_changed_during_open")
+                    with os.fdopen(fd, "rb", closefd=False) as stream:
+                        raw = stream.read(256 * 1024 + 1)
+                finally:
+                    os.close(fd)
+                value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json)
+            except TransactionRefused:
+                raise
+            except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+                raise TransactionRefused("transaction_journal_invalid") from None
+
+            _require(isinstance(value, dict) and set(value) == JOURNAL_KEYS
+                     and value.get("schema") == SCHEMA and value.get("profile") == PROFILE
+                     and value.get("database") == DATABASE
+                     and isinstance(value.get("migrations"), list)
+                     and all(isinstance(item, str) for item in value["migrations"]),
+                     "transaction_journal_schema_invalid")
+            identity = TransactionIdentity(
+                application_sha=value.get("application_sha"),
+                previous_sha=value.get("previous_sha"),
+                artifact_sha256=value.get("artifact_sha256"),
+                backup_sha256=value.get("backup_sha256"),
+                backup_filename=value.get("backup_filename"),
+                mysql_uuid_sha256=value.get("mysql_uuid_sha256"),
+                migrations=tuple(value["migrations"]),
+            )
+            transaction = cls(state_dir, identity)
+            _require(value.get("transaction_id") == transaction.transaction_id
+                     and path.name == f"db-release-{transaction.transaction_id}.json",
+                     "transaction_journal_identity_invalid")
+            transaction._validate_state(value)
+            if value["state"] == "COMPLETE":
+                continue
+            observed_release = (
+                identity.application_sha, identity.previous_sha, identity.artifact_sha256,
+                identity.mysql_uuid_sha256, identity.migrations,
+            )
+            _require(observed_release == expected_release, "unfinished_database_transaction")
+            _require(pending is None, "multiple_unfinished_database_transactions")
+            pending = (identity, value)
+        return pending
+
     def _validate_state(self, value: object) -> None:
         _require(isinstance(value, dict) and set(value) == JOURNAL_KEYS,
                  "transaction_journal_schema_invalid")
         expected = self._new_state()
         for key in ("schema", "profile", "database", "transaction_id", "application_sha", "previous_sha",
-                    "artifact_sha256", "backup_sha256", "mysql_uuid_sha256", "migrations"):
+                    "artifact_sha256", "backup_sha256", "backup_filename", "mysql_uuid_sha256", "migrations"):
             _require(value.get(key) == expected[key], "transaction_identity_mismatch")
         _require(value.get("state") in STATES and type(value.get("migration_cursor")) is int
                  and 0 <= value["migration_cursor"] <= len(self.identity.migrations),

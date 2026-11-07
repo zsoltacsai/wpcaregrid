@@ -81,10 +81,12 @@ if [[ "$network_internal" != "true" ]]; then
 fi
 docker run -d --label "com.wpcg.e2e-run=$run_id" --name "$mysql_name" --network "$network" --network-alias wpcg-mysql \
     -e MYSQL_ROOT_PASSWORD=synthetic-only-password \
+    -e MYSQL_ROOT_HOST=% \
     -e MYSQL_DATABASE=wpcg_staging_next \
     --health-cmd='mysqladmin ping -h 127.0.0.1 -uroot -psynthetic-only-password --silent' \
     --health-interval=2s --health-timeout=2s --health-retries=30 \
-    "$mysql_image" --skip-log-bin >/dev/null
+    "$mysql_image" --log-bin=mysql-bin --server-id=17 --binlog-format=ROW \
+    --log-bin-trust-function-creators=ON >/dev/null
 created_mysql=1
 docker run -d --label "com.wpcg.e2e-run=$run_id" --name "$restore_name" --network "$network" --network-alias wpcg-mysql-restore \
     -e MYSQL_ROOT_PASSWORD=synthetic-only-password \
@@ -92,7 +94,8 @@ docker run -d --label "com.wpcg.e2e-run=$run_id" --name "$restore_name" --networ
     -e MYSQL_DATABASE=wpcg_staging_next \
     --health-cmd='mysqladmin ping -h 127.0.0.1 -uroot -psynthetic-only-password --silent' \
     --health-interval=2s --health-timeout=2s --health-retries=30 \
-    "$mysql_image" --skip-log-bin >/dev/null
+    "$mysql_image" --log-bin=mysql-bin --server-id=18 --binlog-format=ROW \
+    --log-bin-trust-function-creators=ON >/dev/null
 created_restore=1
 ready=0
 for service in "$mysql_name" "$restore_name"; do

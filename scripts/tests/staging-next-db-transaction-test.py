@@ -82,6 +82,7 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
             previous_sha="b" * 40,
             artifact_sha256="c" * 64,
             backup_sha256="d" * 64,
+            backup_filename=f"staging-next-{'a' * 40}-123456789-abcdef12.sql.gz",
             mysql_uuid_sha256="e" * 64,
             migrations=("2026_11_01_000001_add_widget", "2026_11_02_000002_add_gadget"),
         )
@@ -165,7 +166,8 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
                     self.returncode = code
                     self.stdout = output
 
-            def fence_runner(active_consumer=False, scheduler_enabled=False,
+            def fence_runner(active_consumer=False, consumer_command=b"php artisan queue:work default\n",
+                             scheduler_enabled=False,
                              worker_state="STOPPED", worker_rc=3):
                 def run(argv, **_kwargs):
                     if argv[:3] == ["/usr/bin/supervisorctl", "status", "wpcaregrid-staging-next-default"]:
@@ -177,7 +179,7 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
                     if argv[0].endswith("systemctl") and "UnitFileState" in argv[2]:
                         return Result(0, b"enabled\n" if scheduler_enabled else b"disabled\n")
                     if argv[0].endswith("ps"):
-                        return Result(0, b"php artisan queue:work default\n" if active_consumer else b"/sbin/init\n")
+                        return Result(0, consumer_command if active_consumer else b"/sbin/init\n")
                     raise AssertionError("unexpected fixed command")
                 return run
 
@@ -186,6 +188,15 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
                 verify_background_fences(loaded, runner=fence_runner(scheduler_enabled=True))
             with self.assertRaisesRegex(TransactionRefused, "phase_b_background_consumer_active"):
                 verify_background_fences(loaded, runner=fence_runner(active_consumer=True))
+            for command in (
+                b"www-data 400 /usr/bin/php artisan queue:listen default\n",
+                b"www-data 401 /usr/bin/php artisan horizon\n",
+                b"www-data 402 /usr/bin/php artisan horizon:work\n",
+            ):
+                with self.subTest(consumer_command=command):
+                    with self.assertRaisesRegex(TransactionRefused, "phase_b_background_consumer_active"):
+                        verify_background_fences(
+                            loaded, runner=fence_runner(active_consumer=True, consumer_command=command))
             with self.assertRaisesRegex(TransactionRefused, "phase_b_worker_not_stopped"):
                 verify_background_fences(loaded, runner=fence_runner(worker_state="RUNNING", worker_rc=0))
             with self.assertRaisesRegex(TransactionRefused, "phase_b_worker_not_stopped"):
@@ -281,6 +292,44 @@ class DatabaseReleaseTransactionTests(unittest.TestCase):
                                        migration_receipt_sha256="b" * 64)
             self.assertEqual(resumed.state["state"], "MIGRATIONS_VERIFIED")
             self.assertEqual(resumed.state["migration_cursor"], 2)
+
+    def test_backend_lookup_reopens_exact_unfinished_transaction_after_restart(self):
+        with self.tx:
+            self.advance_to_migrating()
+            self.tx.begin_migration("2026_11_01_000001_add_widget",
+                                    observed_schema_sha256="4" * 64,
+                                    observed_ledger_sha256="5" * 64,
+                                    expected_schema_sha256="6" * 64,
+                                    expected_ledger_sha256="7" * 64)
+
+        pending = DatabaseReleaseTransaction.find_unfinished_for_release(
+            self.state_dir,
+            application_sha=self.identity.application_sha,
+            previous_sha=self.identity.previous_sha,
+            artifact_sha256=self.identity.artifact_sha256,
+            mysql_uuid_sha256=self.identity.mysql_uuid_sha256,
+            migrations=self.identity.migrations,
+        )
+        self.assertIsNotNone(pending)
+        identity, state = pending
+        self.assertEqual(identity, self.identity)
+        self.assertEqual(state["state"], "MIGRATING")
+        resumed = DatabaseReleaseTransaction(self.state_dir, identity)
+        with resumed:
+            self.assertEqual(resumed.state["state"], "MIGRATING")
+
+    def test_backend_lookup_holds_unfinished_transaction_for_another_release(self):
+        with self.tx:
+            self.advance_to_migrating()
+        with self.assertRaisesRegex(TransactionRefused, "unfinished_database_transaction"):
+            DatabaseReleaseTransaction.find_unfinished_for_release(
+                self.state_dir,
+                application_sha="f" * 40,
+                previous_sha=self.identity.previous_sha,
+                artifact_sha256=self.identity.artifact_sha256,
+                mysql_uuid_sha256=self.identity.mysql_uuid_sha256,
+                migrations=self.identity.migrations,
+            )
 
     def test_interrupted_migration_with_unchanged_db_is_the_only_retry_case(self):
         with self.tx:

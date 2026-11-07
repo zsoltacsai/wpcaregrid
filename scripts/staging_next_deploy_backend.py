@@ -54,11 +54,12 @@ create_database_backup = _TRANSACTION_MODULE.create_database_backup
 restore_backup_to_isolated = _TRANSACTION_MODULE.restore_backup_to_isolated
 cleanup_isolated_databases = _TRANSACTION_MODULE.cleanup_isolated_databases
 verify_background_fences = _TRANSACTION_MODULE.verify_background_fences
+_verify_backup_sql = _TRANSACTION_MODULE._verify_backup_sql
 
 
-HELPER_VERSION = "1.4.1"
-HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v5"
-PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.1.json")
+HELPER_VERSION = "1.4.2"
+HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v6"
+PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.2.json")
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
@@ -230,7 +231,7 @@ def _safe_profile(profile: StagingProfile) -> None:
              "helper_artifact_identity_invalid")
     if not profile.test_only:
         _require(profile.phase_b_policy_file == Path(
-            "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.1.json"),
+            "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.2.json"),
             "phase_b_policy_path_invalid")
         _require(profile.phase_b_policy_sha256 is None
                  or _sha(profile.phase_b_policy_sha256, SHA256_RE), "phase_b_policy_pin_invalid")
@@ -621,6 +622,27 @@ def _attach_candidate_shared_links(profile: StagingProfile, candidate: Path) -> 
                 pass
         raise
     return links
+
+
+def _verify_candidate_shared_links(profile: StagingProfile, candidate: Path) -> None:
+    """Verify the exact shared-input links on an already published candidate.
+
+    Published candidates can be resumed after a process interruption. Their
+    links are part of the immutable release identity, so this path must verify
+    them without trying to recreate or replace them.
+    """
+    _verify_shared_inputs(profile)
+    links = ((candidate / ".env", profile.shared_env_file),
+             (candidate / "storage", profile.shared_storage_dir),
+             (candidate / "vendor", profile.shared_vendor_dir))
+    for link, target in links:
+        info = _lstat(link, "release_shared_link_invalid")
+        _require(stat.S_ISLNK(info.st_mode), "release_shared_link_invalid")
+        try:
+            observed = os.readlink(link)
+        except OSError:
+            raise DeployRefused("release_shared_link_invalid") from None
+        _require(observed == str(target), "release_shared_link_invalid")
 
 
 def _remove_candidate_shared_links(links: tuple[tuple[Path, Path], ...]) -> None:
@@ -1644,43 +1666,78 @@ def _verify_maintenance_gate_closed(profile: StagingProfile) -> None:
 def _prepare_phase_b_database(profile: StagingProfile, release_path: Path, *,
                               previous_sha: str, application_sha: str,
                               artifact_sha256: str, migrations: list[dict[str, str]]):
-    """Back up, restore and rehearse the exact migration list before target mutation."""
+    """Back up, restore and rehearse, resuming only one exact durable transaction."""
     _require(bool(migrations) and migrations == sorted(migrations, key=lambda item: item["name"]),
              "release_migration_manifest_invalid")
     policy = _load_phase_b_policy(profile)
     _verify_phase_b_fences(profile, policy)
     transaction = None
     try:
-        backup_path, backup_sha = create_database_backup(policy, application_sha=application_sha)
         target_before = database_fingerprint(policy, database=DATABASE, isolated=False)
         _require(target_before["mysql_uuid_sha256"] == profile.mysql_server_uuid_sha256,
                  "phase_b_target_identity_mismatch")
-        identity = TransactionIdentity(
-            application_sha=application_sha, previous_sha=previous_sha,
-            artifact_sha256=artifact_sha256, backup_sha256=backup_sha,
-            mysql_uuid_sha256=target_before["mysql_uuid_sha256"],
-            migrations=tuple(item["name"] for item in migrations),
+        migration_names = tuple(item["name"] for item in migrations)
+        pending = DatabaseReleaseTransaction.find_unfinished_for_release(
+            profile.state_dir, application_sha=application_sha, previous_sha=previous_sha,
+            artifact_sha256=artifact_sha256, mysql_uuid_sha256=target_before["mysql_uuid_sha256"],
+            migrations=migration_names,
         )
+        if pending is None:
+            backup_path, backup_sha = create_database_backup(policy, application_sha=application_sha)
+            identity = TransactionIdentity(
+                application_sha=application_sha, previous_sha=previous_sha,
+                artifact_sha256=artifact_sha256, backup_sha256=backup_sha,
+                backup_filename=backup_path.name,
+                mysql_uuid_sha256=target_before["mysql_uuid_sha256"], migrations=migration_names,
+            )
+            previous_state = None
+        else:
+            identity, previous_state = pending
+            _require(previous_state.get("state") != "RECOVERY_REQUIRED",
+                     "phase_b_manual_recovery_required")
+            backup_path = policy.backup_directory / identity.backup_filename
+            backup_sha, _backup_size = _verify_backup_sql(
+                backup_path, expected_uid=0, expected_mode=0o600)
+            _require(backup_sha == identity.backup_sha256,
+                     "phase_b_pinned_backup_identity_mismatch")
         transaction = DatabaseReleaseTransaction(profile.state_dir, identity)
         transaction.__enter__()
+        state = transaction.state
+        _require(state.get("state") != "RECOVERY_REQUIRED", "phase_b_manual_recovery_required")
+        _require(state.get("state") in {
+            "PREPARED", "BACKUP_VERIFIED", "RESTORE_REHEARSAL_VERIFIED",
+            "MIGRATION_REHEARSAL_VERIFIED", "FENCES_CLOSED", "MIGRATING",
+            "MIGRATIONS_VERIFIED",
+        }, "phase_b_transaction_state_requires_recovery")
+        # Rebuild only the two transaction-named schemas on the pinned isolated
+        # MySQL instance. This recovers process death during restore or rehearsal.
+        cleanup_isolated_databases(policy, transaction.transaction_id)
         restore_name, rehearsal_name = restore_backup_to_isolated(
             policy, backup_path, transaction.transaction_id)
         restored = database_fingerprint(policy, database=restore_name, isolated=True)
         rehearsal_base = database_fingerprint(policy, database=rehearsal_name, isolated=True)
-        if target_before["schema_sha256"] != restored["schema_sha256"]:
+        target_may_have_changed = transaction.state["state"] in {
+            "FENCES_CLOSED", "MIGRATING", "MIGRATIONS_VERIFIED",
+        }
+        if not target_may_have_changed and target_before["schema_sha256"] != restored["schema_sha256"]:
             components = target_before.get("schema_components", {})
             restored_components = restored.get("schema_components", {})
             differing = [name for name in ("tables", "columns", "indexes", "foreign_keys", "triggers")
                          if components.get(name) != restored_components.get(name)]
             suffix = "_".join(differing) if differing else "unknown_component"
             raise DeployRefused(f"phase_b_restore_target_schema_mismatch_{suffix}")
-        _require(target_before["ledger_sha256"] == restored["ledger_sha256"],
-                 "phase_b_restore_target_ledger_mismatch")
+        if not target_may_have_changed:
+            _require(target_before["ledger_sha256"] == restored["ledger_sha256"],
+                     "phase_b_restore_target_ledger_mismatch")
         _require(restored["schema_sha256"] == rehearsal_base["schema_sha256"],
                  "phase_b_restore_rehearsal_schema_mismatch")
         _require(restored["ledger_sha256"] == rehearsal_base["ledger_sha256"],
                  "phase_b_restore_rehearsal_ledger_mismatch")
-        transaction.advance("BACKUP_VERIFIED", {"backup_sha256": backup_sha})
+        if "BACKUP_VERIFIED" in state["evidence"]:
+            _require(state["evidence"]["BACKUP_VERIFIED"].get("backup_sha256") == backup_sha,
+                     "phase_b_backup_journal_mismatch")
+        elif state["state"] == "PREPARED":
+            transaction.advance("BACKUP_VERIFIED", {"backup_sha256": backup_sha})
         restore_receipt = hashlib.sha256(json.dumps({
             "backup_sha256": backup_sha,
             "target_schema_sha256": target_before["schema_sha256"],
@@ -1689,7 +1746,12 @@ def _prepare_phase_b_database(profile: StagingProfile, release_path: Path, *,
             "restored_ledger_sha256": restored["ledger_sha256"],
             "restore_mysql_uuid_sha256": restored["mysql_uuid_sha256"],
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-        transaction.advance("RESTORE_REHEARSAL_VERIFIED", {"restore_receipt_sha256": restore_receipt})
+        state = transaction.state
+        if "RESTORE_REHEARSAL_VERIFIED" in state["evidence"]:
+            _require(state["evidence"]["RESTORE_REHEARSAL_VERIFIED"].get(
+                "restore_receipt_sha256") == restore_receipt, "phase_b_restore_journal_mismatch")
+        elif state["state"] == "BACKUP_VERIFIED":
+            transaction.advance("RESTORE_REHEARSAL_VERIFIED", {"restore_receipt_sha256": restore_receipt})
         expected_after: dict[str, dict[str, str]] = {}
         rehearsal_parts = []
         current = rehearsal_base
@@ -1717,16 +1779,36 @@ def _prepare_phase_b_database(profile: StagingProfile, release_path: Path, *,
             "transaction_id": transaction.transaction_id,
             "backup_sha256": backup_sha, "migrations": rehearsal_parts,
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-        transaction.advance("MIGRATION_REHEARSAL_VERIFIED", {
-            "migration_rehearsal_receipt_sha256": rehearsal_receipt,
-        })
+        state = transaction.state
+        if "MIGRATION_REHEARSAL_VERIFIED" in state["evidence"]:
+            _require(state["evidence"]["MIGRATION_REHEARSAL_VERIFIED"].get(
+                "migration_rehearsal_receipt_sha256") == rehearsal_receipt,
+                "phase_b_migration_rehearsal_journal_mismatch")
+        elif state["state"] == "RESTORE_REHEARSAL_VERIFIED":
+            transaction.advance("MIGRATION_REHEARSAL_VERIFIED", {
+                "migration_rehearsal_receipt_sha256": rehearsal_receipt,
+            })
+        state = transaction.state
+        if state["state"] == "MIGRATION_REHEARSAL_VERIFIED":
+            gate = _ensure_maintenance_gate_closed(profile)
+            fences_sha256 = _verify_phase_b_fences(profile, policy)
+            current_fence_receipt = hashlib.sha256((fences_sha256 + gate[2]).encode("ascii")).hexdigest()
+            transaction.advance("FENCES_CLOSED", {"fence_receipt_sha256": current_fence_receipt})
+        elif state["state"] in {"FENCES_CLOSED", "MIGRATING", "MIGRATIONS_VERIFIED"}:
+            gate = _ensure_maintenance_gate_closed(profile)
+            fences_sha256 = _verify_phase_b_fences(profile, policy)
+            current_fence_receipt = hashlib.sha256((fences_sha256 + gate[2]).encode("ascii")).hexdigest()
+            recorded = state["evidence"].get("FENCES_CLOSED", {}).get("fence_receipt_sha256")
+            _require(recorded == current_fence_receipt, "phase_b_fence_journal_mismatch")
+        else:
+            gate = None
         return {
             "transaction": transaction, "policy": policy, "backup_path": backup_path,
             "backup_sha256": backup_sha, "restore_name": restore_name,
             "rehearsal_name": rehearsal_name, "expected_after": expected_after,
             "restore_receipt_sha256": restore_receipt,
             "migration_rehearsal_receipt_sha256": rehearsal_receipt,
-            "target_before": target_before,
+            "target_before": target_before, "maintenance_gate": gate,
         }
     except DeployRefused:
         if transaction is not None:
@@ -2054,6 +2136,7 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
     maintenance_gate = None
     database_mutation_started = False
     lock_fd = None
+    migration_failure_code = None
     observed_statuses: tuple[int, ...] = ()
     unauthenticated_statuses: tuple[int, ...] = ()
     try:
@@ -2134,10 +2217,32 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                 profile, final, application_sha=application_sha, base_sha=previous_sha,
                 artifact_sha256=artifact_sha256,
             )
-            if manifest.get("database_scope") == "migrations":
-                return DeploymentResult("HOLD", "phase_b_candidate_requires_recovery",
-                                        application_sha, previous_sha, artifact_sha256)
             _prepare_application_bootstrap(profile, final)
+            if manifest.get("database_scope") == "migrations":
+                migrations = manifest.get("database_migrations")
+                _require(isinstance(migrations, list) and migrations,
+                         "release_migration_manifest_invalid")
+                _require(profile.phase_b_policy_file is not None and profile.phase_b_policy_sha256 is not None,
+                         "phase_b_policy_unavailable")
+                candidate_links = ()
+                try:
+                    _verify_candidate_shared_links(profile, final)
+                    # _prepare_application_bootstrap above already rebuilt and
+                    # verified package discovery caches for this published
+                    # release. Re-running the rehearsal-only builder would
+                    # require PHP-FPM ownership on files that are deliberately
+                    # restored to immutable root ownership after publication.
+                    phase_b = _prepare_phase_b_database(
+                        profile, final, previous_sha=previous_sha,
+                        application_sha=application_sha, artifact_sha256=artifact_sha256,
+                        migrations=migrations,
+                    )
+                except DeployRefused as error:
+                    return DeploymentResult("HOLD", str(error), application_sha,
+                                            previous_sha, artifact_sha256)
+                finally:
+                    if candidate_links:
+                        _remove_candidate_shared_links(candidate_links)
         else:
             staging_dir = Path(tempfile.mkdtemp(prefix=f".stage-{application_sha}-", dir=profile.releases_dir))
             os.chmod(staging_dir, 0o700)
@@ -2229,24 +2334,39 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
         if phase_b is not None:
             tx = phase_b["transaction"]
             policy = phase_b["policy"]
-            maintenance_gate = _create_maintenance_gate(profile)
+            maintenance_gate = phase_b.get("maintenance_gate")
+            if maintenance_gate is None:
+                maintenance_gate = _ensure_maintenance_gate_closed(profile)
             fences_sha256 = _verify_phase_b_fences(profile, policy)
             gate_evidence = hashlib.sha256((fences_sha256 + maintenance_gate[2]).encode("ascii")).hexdigest()
-            tx.advance("FENCES_CLOSED", {"fence_receipt_sha256": gate_evidence})
+            if tx.state["state"] == "MIGRATION_REHEARSAL_VERIFIED":
+                tx.advance("FENCES_CLOSED", {"fence_receipt_sha256": gate_evidence})
+            else:
+                _require(tx.state["evidence"].get("FENCES_CLOSED", {}).get(
+                    "fence_receipt_sha256") == gate_evidence, "phase_b_fence_journal_mismatch")
 
             def observe_target_database():
                 snapshot = database_fingerprint(policy, database=DATABASE, isolated=False)
                 return {key: snapshot[key] for key in ("schema_sha256", "ledger_sha256", "migrations")}
 
             def apply_target_migration(name: str) -> bool:
-                nonlocal database_mutation_started
+                nonlocal database_mutation_started, migration_failure_code
                 migration = next((item for item in manifest["database_migrations"]
                                   if item["name"] == name), None)
                 _require(migration is not None, "phase_b_migration_not_in_manifest")
                 database_mutation_started = True
-                _execute_exact_migration(profile, final, migration=migration, database=DATABASE,
-                                         isolated=False, operation="target", policy=policy)
-                return True
+                try:
+                    _execute_exact_migration(profile, final, migration=migration, database=DATABASE,
+                                             isolated=False, operation="target", policy=policy)
+                    return True
+                except DeployRefused as error:
+                    failure_code = str(error)
+                    mysql_failure = re.search(
+                        r"mysql_errno_([0-9]{1,5})_sqlstate_([a-z0-9]{3,8})", failure_code)
+                    migration_failure_code = (
+                        f"mysql_errno_{mysql_failure.group(1)}_sqlstate_{mysql_failure.group(2)}"
+                        if mysql_failure else "phase_b_migration_command_failed")
+                    return False
 
             try:
                 tx.apply_rehearsed_migrations(
@@ -2254,6 +2374,32 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                     apply_one=apply_target_migration,
                 )
             except TransactionRefused as error:
+                # The transaction coordinator resets MIGRATING to FENCES_CLOSED
+                # only after independently observing the exact pre-migration
+                # schema and ledger hashes. Preserve that explicit retryable
+                # checkpoint; never mark it ambiguous or retry in this process.
+                tx_state = tx.state
+                if (str(error) == "migration_execution_not_verified"
+                        and tx_state.get("state") == "FENCES_CLOSED"):
+                    _verify_maintenance_gate_closed(profile)
+                    observed_fences = _verify_phase_b_fences(profile, policy)
+                    gate_info = _lstat(profile.shared_storage_dir / "framework" / "down",
+                                       "phase_b_maintenance_gate_missing")
+                    gate_raw = _read_regular_nofollow(
+                        profile.shared_storage_dir / "framework" / "down", max_bytes=4096,
+                        expected_uid=profile.expected_owner_uid, expected_mode=0o640)
+                    gate_digest = hashlib.sha256(gate_raw).hexdigest()
+                    observed_gate_evidence = hashlib.sha256(
+                        (observed_fences + gate_digest).encode("ascii")).hexdigest()
+                    recorded_gate_evidence = tx_state["evidence"].get("FENCES_CLOSED", {}).get(
+                        "fence_receipt_sha256")
+                    _require(recorded_gate_evidence == observed_gate_evidence and gate_info.st_ino > 0,
+                             "phase_b_safe_retry_fence_mismatch")
+                    reason_code = migration_failure_code or "phase_b_migration_retry_safe"
+                    if not re.fullmatch(r"[a-z0-9_]{1,95}", reason_code):
+                        reason_code = "phase_b_migration_retry_safe"
+                    return DeploymentResult("HOLD", reason_code, application_sha,
+                                            previous_sha, artifact_sha256)
                 raise DeployRefused(str(error)) from None
             database_mutation_started = True
             final_database_state = observe_target_database()
@@ -2261,6 +2407,10 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                      and all(name in final_database_state["migrations"]
                              for name in tx.identity.migrations),
                      "phase_b_target_migration_state_invalid")
+            final_expected = phase_b["expected_after"][tx.identity.migrations[-1]]
+            _require(final_database_state["schema_sha256"] == final_expected["schema_sha256"]
+                     and final_database_state["ledger_sha256"] == final_expected["ledger_sha256"],
+                     "phase_b_target_final_fingerprint_mismatch")
             cleanup_isolated_databases(policy, tx.transaction_id)
 
         # The atomic exchange may replace the pointer successfully and then

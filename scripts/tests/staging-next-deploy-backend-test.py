@@ -467,6 +467,21 @@ class StagingDeployBackendTests(unittest.TestCase):
         self.assertTrue(final.is_dir())
         self.assertEqual(os.readlink(self.link), str(self.base_path))
 
+        # Resume must accept the exact immutable shared links already
+        # published with the candidate, and reject a substituted link without
+        # deleting or replacing it.
+        self.assertEqual(os.readlink(final / ".env"), str(self.shared_env))
+        vendor_link = final / "vendor"
+        unexpected_vendor = self.shared / "unexpected-vendor"
+        vendor_link.unlink()
+        vendor_link.symlink_to(unexpected_vendor)
+        rejected = deploy_release(self.profile, invoking_uid=1000, application_sha=target_sha,
+                                  artifact_sha256=digest)
+        self.assertEqual((rejected.status, rejected.reason), ("HOLD", "release_shared_link_invalid"))
+        self.assertEqual(os.readlink(vendor_link), str(unexpected_vendor))
+        vendor_link.unlink()
+        vendor_link.symlink_to(self.shared_vendor)
+
         resumed = deploy_release(self.profile, invoking_uid=1000, application_sha=target_sha,
                                  artifact_sha256=digest)
         self.assertEqual((resumed.status, resumed.reason), ("PASS", "release_accepted"))

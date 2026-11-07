@@ -427,7 +427,9 @@ def prove_journaled_real_migration(profile, root: Path, *, application_sha: str,
     identity = TransactionIdentity(
         application_sha=application_sha, previous_sha=previous_sha,
         artifact_sha256=artifact_sha256,
-        backup_sha256=backup_sha256, mysql_uuid_sha256=execution_before["mysql_uuid_sha256"],
+        backup_sha256=backup_sha256,
+        backup_filename=f"staging-next-{application_sha}-1-00000000.sql.gz",
+        mysql_uuid_sha256=execution_before["mysql_uuid_sha256"],
         migrations=(migration_name,),
     )
     transaction = DatabaseReleaseTransaction(profile.state_dir, identity)
@@ -493,12 +495,11 @@ def prepare_tree(repo: Path):
     migration.parent.mkdir(parents=True, exist_ok=True)
     migration.write_text(
         "<?php\nuse Illuminate\\Database\\Migrations\\Migration;\n"
-        "use Illuminate\\Database\\Schema\\Blueprint;\n"
-        "use Illuminate\\Support\\Facades\\Schema;\n"
+        "use Illuminate\\Support\\Facades\\DB;\n"
         "return new class extends Migration { public function up(): void { "
-        "Schema::create('wpcg_phase_b_probe', function (Blueprint $table): void { "
-        "$table->id(); $table->string('marker'); }); } "
-        "public function down(): void { Schema::dropIfExists('wpcg_phase_b_probe'); } };\n",
+        "DB::unprepared('CREATE TRIGGER wpcg_phase_b_probe AFTER INSERT ON users "
+        "FOR EACH ROW SET @wpcg_phase_b_probe = NEW.id'); } "
+        "public function down(): void { DB::unprepared('DROP TRIGGER IF EXISTS wpcg_phase_b_probe'); } };\n",
         encoding="utf-8")
     git(repo, "add", "resources/views/pages/home.blade.php", "database/migrations/2026_11_06_000001_create_wpcg_phase_b_probe.php")
     git(repo, "commit", "--quiet", "-m", "isolated database migration release")
@@ -733,6 +734,19 @@ def main():
         if "Pending" in migration_status:
             raise RuntimeError("isolated_migration_pending_after_run")
         print(f"BASELINE_MIGRATIONS=PASS;COUNT={len(migration_status.splitlines()) - 1}")
+        run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", "root", "--batch", "--skip-column-names",
+            "-e", "SET GLOBAL log_bin_trust_function_creators=OFF",
+        ], extra_env={"MYSQL_PWD": "synthetic-only-password"}, timeout=10)
+        binlog_state = run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", "root", "--batch", "--skip-column-names",
+            "-e", "SELECT @@global.log_bin,@@global.binlog_format,@@global.log_bin_trust_function_creators",
+        ], extra_env={"MYSQL_PWD": "synthetic-only-password"}, timeout=10)
+        if binlog_state != "1\tROW\t0":
+            raise RuntimeError("synthetic_binlog_1419_precondition_invalid")
+        print("MYSQL_BINLOG_TRIGGER_RESTRICTION=PASS;BINLOG=ON;FORMAT=ROW;TRUST=OFF")
         php_env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(storage),
                    "WPCG_CURRENT_APP": str(profile.application_link),
                    "WPCG_TEST_HTTP_AUTH_USER": "e2e-owner",
@@ -814,6 +828,93 @@ def main():
         ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
         if unchanged_ledger != "72":
             raise RuntimeError("phase_b_failure_injection_modified_database")
+        execute_migration = BACKEND._execute_exact_migration
+
+        def fail_rehearsal_once(*args, **kwargs):
+            if kwargs.get("operation") == "rehearsal":
+                raise BACKEND.DeployRefused("synthetic_rehearsal_failure")
+            return execute_migration(*args, **kwargs)
+
+        BACKEND._execute_exact_migration = fail_rehearsal_once
+        rehearsal_failure = BACKEND.deploy_release(
+            profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+        BACKEND._execute_exact_migration = execute_migration
+        if (rehearsal_failure.status, rehearsal_failure.reason) != ("HOLD", "synthetic_rehearsal_failure"):
+            raise RuntimeError("phase_b_rehearsal_failure_not_held")
+        if ((release_dir / candidate_sha).exists()
+                or profile.application_link.resolve() != (release_dir / base_sha).resolve()
+                or (storage / "framework" / "down").exists()):
+            raise RuntimeError("phase_b_rehearsal_failure_changed_release_state")
+        rehearsal_journals = list(state.glob("db-release-*.json"))
+        if len(rehearsal_journals) != 1:
+            raise RuntimeError("phase_b_rehearsal_failure_journal_missing")
+        rehearsal_state = json.loads(rehearsal_journals[0].read_text(encoding="utf-8"))
+        if rehearsal_state.get("state") != "RESTORE_REHEARSAL_VERIFIED":
+            raise RuntimeError("phase_b_rehearsal_failure_checkpoint_invalid")
+
+        errno_1419 = BACKEND.deploy_release(
+            profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+        if (errno_1419.status, errno_1419.reason) != (
+                "HOLD", "mysql_errno_1419_sqlstate_hy000"):
+            raise RuntimeError(f"mysql_errno_1419_not_safely_classified:{errno_1419.status}:{errno_1419.reason}")
+        if (profile.application_link.resolve() != (release_dir / base_sha).resolve()
+                or not (storage / "framework" / "down").is_file()):
+            raise RuntimeError("mysql_errno_1419_release_fence_invalid")
+        after_1419_ledger = run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
+            "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM migrations",
+        ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
+        if after_1419_ledger != "72":
+            raise RuntimeError("mysql_errno_1419_changed_target_ledger")
+        retry_state = json.loads(rehearsal_journals[0].read_text(encoding="utf-8"))
+        if (retry_state.get("state") != "FENCES_CLOSED"
+                or retry_state.get("migration_cursor") != 0):
+            raise RuntimeError("mysql_errno_1419_checkpoint_not_retryable")
+        # This root-only setting change is confined to the disposable E2E MySQL.
+        # The production helper never changes MySQL global variables.
+        run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", "root", "--batch", "--skip-column-names",
+            "-e", "SET GLOBAL log_bin_trust_function_creators=ON",
+        ], extra_env={"MYSQL_PWD": "synthetic-only-password"}, timeout=10)
+        print("MYSQL_ERRNO_1419=HOLD;UNCHANGED_DATABASE=PASS;SYNTHETIC_DBA_RETRY=AUTHORIZED")
+
+        # Simulate abrupt process death after the target migration checkpoint is
+        # durable, before Laravel or MySQL is invoked. Restart must reopen the
+        # exact backup/journal, reconcile the unchanged schema, then continue.
+        child = os.fork()
+        if child == 0:
+            def die_during_target(*args, **kwargs):
+                if kwargs.get("operation") == "target":
+                    os._exit(86)
+                return execute_migration(*args, **kwargs)
+
+            BACKEND._execute_exact_migration = die_during_target
+            child_result = BACKEND.deploy_release(
+                profile, invoking_uid=1000, application_sha=candidate_sha, artifact_sha256=artifact_sha)
+            os.write(2, (f"PHASE_B_CRASH_CHILD_RETURN={child_result.status}:{child_result.reason}\n").encode("ascii"))
+            os._exit(87)
+        _child, child_status = os.waitpid(child, 0)
+        if not os.WIFEXITED(child_status) or os.WEXITSTATUS(child_status) != 86:
+            observed_exit = os.WEXITSTATUS(child_status) if os.WIFEXITED(child_status) else "SIGNAL"
+            raise RuntimeError(f"phase_b_process_crash_injection_failed:{observed_exit}")
+        crash_journals = list(state.glob("db-release-*.json"))
+        if len(crash_journals) != 1:
+            raise RuntimeError("phase_b_crash_journal_missing")
+        crash_state = json.loads(crash_journals[0].read_text(encoding="utf-8"))
+        if crash_state.get("state") != "MIGRATING":
+            raise RuntimeError("phase_b_crash_checkpoint_not_durable")
+        if (profile.application_link.resolve() != (release_dir / base_sha).resolve()
+                or not (storage / "framework" / "down").is_file()):
+            raise RuntimeError("phase_b_crash_fences_not_preserved")
+        crash_ledger = run([
+            "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
+            "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
+            "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM migrations",
+        ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
+        if crash_ledger != "72":
+            raise RuntimeError("phase_b_crash_changed_target_database")
         result = BACKEND.deploy_release(profile, invoking_uid=1000, application_sha=candidate_sha,
                                         artifact_sha256=artifact_sha)
         if result.status != "PASS":
@@ -940,15 +1041,17 @@ def main():
                                cwd=profile.application_link, timeout=60)
         if "Pending" in migration_status or "2026_11_06_000001_create_wpcg_phase_b_probe" not in migration_status:
             raise RuntimeError("phase_b_target_migration_postcheck_failed")
-        probe_count = run([
+        trigger_count = run([
             "/usr/bin/mysql", "--no-defaults", "-h", os.environ["WPCG_MYSQL_HOST"],
             "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
-            "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM wpcg_phase_b_probe",
+            "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM information_schema.triggers "
+            "WHERE trigger_schema='wpcg_staging_next' AND trigger_name='wpcg_phase_b_probe'",
         ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
-        if probe_count != "0":
-            raise RuntimeError("phase_b_synthetic_table_postcheck_failed")
+        if trigger_count != "1":
+            raise RuntimeError("phase_b_synthetic_trigger_postcheck_failed")
         print(f"PHASE_B_DEPLOY=PASS\nPHASE_B_BACKUP_RESTORE_REHEARSAL=PASS\n"
-              f"PHASE_B_FAILURE_INJECTION_RECOVERY=PASS\n"
+              f"PHASE_B_FAILURE_INJECTION_RECOVERY=PASS\nPHASE_B_PRETARGET_RESUME=PASS\n"
+              f"PHASE_B_PROCESS_RESTART_RESUME=PASS\nMYSQL_TRIGGER_MIGRATION=PASS\n"
               f"PHASE_B_MIGRATIONS=PASS;COUNT={len(migration_status.splitlines()) - 1}\n"
               f"LARAVEL_RELEASE={candidate_sha}\nMYSQL=8.4.11\nHTTP=6/6_PASS\nNO_OP=PASS\n"
               f"RECEIPT_SHA256={result.receipt_sha256}\nBACKUP_SHA256={receipt['database_backup_sha256']}")
