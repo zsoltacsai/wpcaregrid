@@ -180,6 +180,12 @@ for (const locale of ['en', 'hu'] as const) {
                 await currencySelect.selectOption(alternateCurrency as string);
                 await expect(currencySelect).toHaveValue(alternateCurrency as string);
                 await expect(pricing).toContainText(alternateCurrency as string);
+                // Currency selection is a server-backed display preference and
+                // reloads the page, so the pricing component returns to its
+                // default monthly interval. Re-select annual before comparing
+                // the rendered market price.
+                await billingOptions.nth(1).click();
+                await expect(billingOptions.nth(1)).toHaveAttribute('aria-pressed', 'true');
                 await expect(firstAnnualPrice).not.toHaveText(priceBeforeCurrencyChange ?? '');
                 await expect(page).not.toHaveURL(/checkout|register/);
             }
