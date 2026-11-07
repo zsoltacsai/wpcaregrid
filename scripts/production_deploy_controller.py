@@ -368,12 +368,16 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
             pass
 
 
-def sync() -> dict[str, object]:
+def sync(application_sha: str) -> dict[str, object]:
     _verify_install_identity()
+    if not SHA_RE.fullmatch(application_sha):
+        raise ControllerHold("release_identity_invalid")
     readiness = _helper("preflight")
     if readiness.get("result") != "PASS":
         return {"result": "HOLD", "reason": "helper_preflight_failed"}
     latest_sha = _latest_primary_sha()
+    if latest_sha != application_sha:
+        raise ControllerHold("authorized_release_not_latest_primary")
     base_sha = readiness.get("application_sha")
     if not isinstance(base_sha, str) or not SHA_RE.fullmatch(base_sha):
         raise ControllerHold("active_release_identity_invalid")
@@ -399,11 +403,11 @@ def sync() -> dict[str, object]:
 
 def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if args != ["sync"]:
+    if len(args) != 2 or args[0] != "sync" or not SHA_RE.fullmatch(args[1]):
         print(json.dumps({"result": "HOLD", "reason": "operation_not_allowed"}, separators=(",", ":")))
         return 3
     try:
-        result = sync()
+        result = sync(args[1])
     except ControllerHold as error:
         result = {"result": "HOLD", "reason": error.code}
     except Exception:
