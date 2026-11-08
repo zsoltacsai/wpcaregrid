@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mountGraphiteWave } from '../../resources/js/components/graphite-wave.js';
 
-function createHarness({ width = 1200, reduced = false } = {}) {
-    const calls = { stroke: 0, raf: new Map(), cancelled: [], listeners: new Map(), observer: null };
+function createHarness({ width = 1200, reduced = false, legacyMotionApi = false } = {}) {
+    const calls = { stroke: 0, gradients: 0, raf: new Map(), cancelled: [], listeners: new Map(), observer: null };
     let nextHandle = 1;
     const gradient = { addColorStop() {} };
     const context = {
         clearRect() {}, setTransform() {}, beginPath() {}, moveTo() {}, lineTo() {},
-        createLinearGradient() { return gradient; }, stroke() { calls.stroke += 1; },
+        createLinearGradient() { calls.gradients += 1; return gradient; }, stroke() { calls.stroke += 1; },
     };
     const container = { getBoundingClientRect: () => ({ width, height: 360 }) };
     const canvas = { parentElement: container, getContext: () => context, width: 0, height: 0 };
@@ -18,11 +18,17 @@ function createHarness({ width = 1200, reduced = false } = {}) {
         addEventListener(name, handler) { calls.listeners.set(name, handler); },
         removeEventListener(name) { calls.listeners.delete(name); },
     };
-    const motionPreference = {
-        matches: reduced,
-        addEventListener(_name, handler) { calls.motionChange = handler; },
-        removeEventListener() { calls.motionChange = null; },
-    };
+    const motionPreference = legacyMotionApi
+        ? {
+            matches: reduced,
+            addListener(handler) { calls.motionChange = handler; },
+            removeListener() { calls.motionChange = null; },
+        }
+        : {
+            matches: reduced,
+            addEventListener(_name, handler) { calls.motionChange = handler; },
+            removeEventListener() { calls.motionChange = null; },
+        };
     class IntersectionObserverMock {
         constructor(callback) { this.callback = callback; calls.observer = this; }
         observe() { this.callback([{ isIntersecting: true }]); }
@@ -91,4 +97,40 @@ test('uses fewer ribbon paths on mobile and pauses when the hero is out of view 
     assert.equal(animated.calls.raf.size, 1);
     animated.cleanup();
     assert.equal(animated.calls.raf.size, 0);
+});
+
+test('builds gradients once per resize instead of on every animation frame', () => {
+    const harness = createHarness();
+    harness.cleanup = mountGraphiteWave(harness);
+
+    const afterMount = harness.calls.gradients;
+    assert.ok(afterMount > 0);
+    const strokesAfterMount = harness.calls.stroke;
+
+    for (let frame = 1; frame <= 5; frame += 1) {
+        const [handle, callback] = harness.calls.raf.entries().next().value;
+        harness.calls.raf.delete(handle);
+        callback(frame * 64);
+    }
+
+    assert.equal(harness.calls.gradients, afterMount, 'Animation frames reuse cached gradients.');
+    assert.ok(harness.calls.stroke > strokesAfterMount, 'Frames still draw every strand.');
+
+    harness.calls.resizeObserver.callback();
+    assert.equal(harness.calls.gradients, afterMount * 2, 'A resize rebuilds the gradients once.');
+    harness.cleanup();
+});
+
+test('honours reduced-motion changes in browsers that only implement addListener', () => {
+    const harness = createHarness({ legacyMotionApi: true });
+    harness.cleanup = mountGraphiteWave(harness);
+    assert.equal(harness.calls.raf.size, 1);
+    assert.equal(typeof harness.calls.motionChange, 'function', 'Legacy listener is registered.');
+
+    harness.motionPreference.matches = true;
+    harness.calls.motionChange();
+    assert.equal(harness.calls.raf.size, 0, 'Switching to reduced motion stops the animation.');
+
+    harness.cleanup();
+    assert.equal(harness.calls.motionChange, null, 'Legacy listener is removed on cleanup.');
 });
