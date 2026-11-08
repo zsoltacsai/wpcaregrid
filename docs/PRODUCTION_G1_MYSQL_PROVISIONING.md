@@ -49,9 +49,9 @@ files before copying):
 
 | Source artifact | SHA-256 |
 | --- | --- |
-| `production-g1-mysql.py` | `ad8b26dd5916282a4fcf80035990b89643d995d2ccfc2c76de68dd6bae19d37f` |
-| `production_g1_mysql_contract.py` | `8437eeab1dd8c755a36c8b4dacf0e7c1ff2e0bd6187f4e7bd7407fde419357e2` |
-| `production-g1-mysql-manifest.json` | `f002fbca8ff53c527cecef0f7eb0dce601498587c905d3e9a9f32681e74b6b6e` |
+| `production-g1-mysql.py` | `5bddfcc886c8f94653f1aa9c55c63da7dca259042156db3e7e8a5378639e215a` |
+| `production_g1_mysql_contract.py` | `45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3` |
+| `production-g1-mysql-manifest.json` | `87f7aa3a8acee74fbf0bb697ec5e93b540fe9484927bab4212b24df71e2d22e9` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not
@@ -78,6 +78,26 @@ template to contain exactly `ExecStart=/usr/sbin/mysqld --defaults-group-suffix=
 reset and one literal override, and requires the effective unit to run exactly one
 command whose argv is the mysqld binary and that instance's suffix. No vendor file
 is edited.
+
+### Option-file ordering (`zz-` file names)
+
+The instance configs are installed as
+`/etc/mysql/mysql.conf.d/zz-wpcaregrid-production.cnf` and
+`/etc/mysql/mysql.conf.d/zz-wpcaregrid-production-restore.cnf`. mysqld and
+`my_print_defaults` read `!includedir` files in file-name order and the **last**
+occurrence of an option wins. The first package (#325/#327) used `90-` names, which
+sort *before* the distribution's `mysqld.cnf`; on the staging VPS its shared
+`[mysqld]` group therefore overrode `datadir`, `socket`, `pid-file` and
+`log-error` of both instances (the contract values were present but not last), and
+`GO-3` stopped with `effective_option_mismatch`. `zz-` sorts after every
+distribution file (`mysqld.cnf`, `99-*.cnf`). The validators are unchanged: any
+file that still sorts later and changes one of the 13 contract options is refused
+at install-time and start-time (`effective_option_mismatch`). The installer also
+refuses a leftover `90-<instance>.cnf` (`legacy_config_name_present`); it must be
+removed by the Rollback procedure first. The shared files are never edited.
+`scripts/tests/production-g1-mysql-config-order-test.py` proves this with the
+real `my_print_defaults` and `mysqld --validate-config` of the official MySQL 8.4
+image (no mocked output).
 
 ### X Plugin and inherited `mysqlx-*` options
 
@@ -108,7 +128,10 @@ it is byte-identical, so running a newer package over an installed one stops wit
 `managed_file_content_mismatch`. There is no upgrade command. Before
 initialization, the supported path is the Rollback procedure below (exact
 recorded files only, whose SHA-256 still matches the installed package) followed
-by a fresh `install` of the new package. After initialization the configuration
+by a fresh `install` of the new package. This is also the path from the
+first package (#325, `90-` option-file names): its nine files and two profiles are
+rolled back first because the new package uses different option-file names and a
+leftover `90-` file is refused. After initialization the configuration
 must not be reverted without a separately reviewed recovery procedure. Never
 overwrite installed files by hand. Network
 filtering permits only loopback IP traffic; the AppArmor profiles allow each

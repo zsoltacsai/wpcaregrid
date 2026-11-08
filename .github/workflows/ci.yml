@@ -68,6 +68,11 @@ jobs:
       - name: Production G1 artifact integrity regression tests
         run: python3 scripts/tests/production-g1-mysql-contract-test.py
 
+      - name: Production G1 option-file ordering against real MySQL 8.4
+        env:
+          G1_REQUIRE_REAL_MYSQL: "1"
+        run: python3 scripts/tests/production-g1-mysql-config-order-test.py
+
       - name: Install AppArmor parser for generated G1 profile validation
         run: |
           sudo apt-get update
