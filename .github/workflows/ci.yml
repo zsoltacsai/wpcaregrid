@@ -68,6 +68,14 @@ jobs:
       - name: Production G1 artifact integrity regression tests
         run: python3 scripts/tests/production-g1-mysql-contract-test.py
 
+      - name: Install AppArmor parser for generated G1 profile validation
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes apparmor
+
+      - name: Compile generated Production G1 profiles without kernel load or cache
+        run: python3 scripts/tests/production-g1-apparmor-parser-test.py
+
       - name: Staging diagnostics output and policy tests
         run: |
           python3 scripts/tests/staging-diagnostics-output-test.py

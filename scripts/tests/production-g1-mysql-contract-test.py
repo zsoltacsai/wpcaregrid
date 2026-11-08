@@ -248,6 +248,23 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         self.assertIn("/var/lib/mysql-wpcaregrid-production-restore/** rwk,", restore)
         self.assertIn("deny /run/mysqld/mysqld.sock", prod + restore)
 
+    def test_generated_profiles_keep_deny_permissions_separate_and_restrictive(self):
+        artifacts = CONTRACT.artifact_files()
+        for instance in CONTRACT.INSTANCES.values():
+            path = f"/etc/apparmor.d/{instance.apparmor_profile}"
+            profile = artifacts[path].decode("utf-8")
+            other = next(item for item in CONTRACT.INSTANCES.values() if item.name != instance.name)
+            denied_paths = (
+                "/var/lib/mysql/", "/var/lib/mysql/**",
+                f"{other.datadir}/", f"{other.datadir}/**",
+                f"{other.tmpdir}/", f"{other.tmpdir}/**",
+            )
+            for denied_path in denied_paths:
+                with self.subTest(profile=path, denied_path=denied_path):
+                    self.assertIn(f"deny {denied_path} rwklm,", profile)
+                    self.assertIn(f"deny {denied_path} x,", profile)
+            self.assertNotIn("rwklmix", profile)
+
     def test_resource_configuration_is_exact_and_has_no_fallback_group(self):
         artifacts = CONTRACT.artifact_files()
         for instance in CONTRACT.INSTANCES.values():
@@ -343,13 +360,13 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
 
         expected = {
             "production-g1-mysql.py": "577097aad15f53a6c144c6c4107e16646c338810b3b1575b5708ec7a17ab0b77",
-            "production_g1_mysql_contract.py": "7ad317e3f09d1271531386263289cc821d99d8fa0a82959742dca666c78ed01a",
-            "production-g1-mysql-manifest.json": "711a36662fbf4f6d53d13eb0b9390c0419b85ea9b04f2fdc00ff9d047231e575",
+            "production_g1_mysql_contract.py": "6859cc9033b297bc0206af1ed5597719f7a46dd797f5589d0843e74812b435a0",
+            "production-g1-mysql-manifest.json": "f94f786974cc7ddff29825473d283f3b7362760a5612b51f83d165283af8d145",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "c4cac4c521dad2be9731945bbf0ebf48a2a63b5d8bd0115ec26ce8fbc8b6b370")
+                         "4ab4956780e0d69429e2df8345e19c730d870cffcc50e89a3dbe9d21f8312925")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):
