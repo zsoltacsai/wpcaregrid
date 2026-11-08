@@ -1,0 +1,54 @@
+/*
+ * Direction 04.1 design tokens.
+ *
+ * Values only: no selectors, so the tokens can be consumed by the public
+ * homepage today and by the Customer Dashboard later. Each token is a literal
+ * value; component rules in ../m16-direction-041.css reference them by name.
+ * See docs/DESIGN_TOKENS_041.md for naming and usage.
+ */
+:root {
+    /* Text and surfaces */
+    --m16-ink: #102732;
+    --m16-graphite: #273d44;
+    --m16-muted: #516b70;
+    --m16-paper: #fafbf8;
+    --m16-paper-deep: #f4f8f5;
+    --m16-surface: #ffffff;
+    --m16-on-dark: #f7fbf9;
+    --m16-on-dark-muted: #c3d8d4;
+
+    /* Brand greens */
+    --m16-teal: #087b6c;
+    --m16-teal-deep: #075e59;
+    --m16-mint: #21b898;
+    --m16-mint-soft: #dff6ed;
+    --m16-green-ink: #286b55;
+    --m16-mint-on-dark: #70e0c4;
+
+    /* Dark section surface (gradient stops) */
+    --m16-surface-dark: #102732;
+    --m16-surface-dark-mid: #123941;
+    --m16-surface-dark-end: #105c52;
+
+    /* Pricing tint surface (gradient stops) */
+    --m16-tint-start: #dff3eb;
+    --m16-tint-mid: #eff9f4;
+    --m16-tint-end: #d8eee4;
+
+    /* Lines and borders */
+    --m16-line: #cedbd6;
+    --m16-line-action: #9bb9af;
+    --m16-line-card: #b6cfc4;
+    --m16-line-tint: #b7d9ce;
+    --m16-line-dark: #23414a;
+
+    /* Shape and elevation */
+    --m16-radius-control: 0.5rem;
+    --m16-radius-card: 1rem;
+    --m16-shadow-card: 0 10px 30px rgb(16 39 50 / 7%);
+    --m16-shadow-raised: 0 20px 48px rgb(0 13 20 / 24%);
+
+    /* Type */
+    --m16-font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+    --m16-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}

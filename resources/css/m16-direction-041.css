@@ -1,27 +1,10 @@
+@import './tokens/direction-041.css';
+
 /*
  * Direction 04.1 — homepage-only visual layer.
  * IBM Plex Sans / IBM Plex Mono remain the application fonts from app.css.
  * Pricing markup, data, selectors, calculations and actions are not replaced.
  */
-:root {
-    --m16-ink: #102732;
-    --m16-graphite: #273d44;
-    --m16-muted: #516b70;
-    --m16-paper: #fafbf8;
-    --m16-surface: #ffffff;
-    --m16-line: #cedbd6;
-    --m16-teal: #087b6c;
-    --m16-mint: #21b898;
-    --m16-mint-soft: #dff6ed;
-    --m16-on-dark: #f7fbf9;
-    --m16-on-dark-muted: #c3d8d4;
-    --m16-radius-control: 0.5rem;
-    --m16-radius-card: 1rem;
-    --m16-shadow-card: 0 10px 30px rgb(16 39 50 / 7%);
-    --m16-shadow-raised: 0 20px 48px rgb(0 13 20 / 24%);
-    --m16-font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
-    --m16-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-}
 
 @layer components {
     .caregrid-041-panel {
@@ -75,7 +58,7 @@ body.marketing-home .m16-hero {
     padding-block: clamp(4.5rem, 8vw, 7.5rem) clamp(3rem, 5vw, 4.75rem);
     background:
         radial-gradient(ellipse at 78% 18%, rgb(33 184 152 / 8%), transparent 39%),
-        linear-gradient(180deg, #fafbf8 0%, #f4f8f5 100%);
+        linear-gradient(180deg, var(--m16-paper) 0%, var(--m16-paper-deep) 100%);
 }
 
 body.marketing-home .m16-hero > .container-site {
@@ -103,24 +86,24 @@ body.marketing-home .m16-hero p.text-muted {
 }
 
 body.marketing-home .m16-hero .text-accent-ink {
-    color: #286b55;
+    color: var(--m16-green-ink);
 }
 
 body.marketing-home .m16-hero .bg-action {
     border-radius: 0.5rem;
     background-color: var(--m16-teal);
-    background-image: linear-gradient(105deg, #087b6c, #075e59);
+    background-image: linear-gradient(105deg, var(--m16-teal), var(--m16-teal-deep));
     box-shadow: 0 8px 22px rgb(8 123 108 / 20%);
 }
 
 body.marketing-home .m16-hero .bg-action:hover {
-    background-color: #075e59;
-    background-image: linear-gradient(105deg, #087b6c, #075e59);
+    background-color: var(--m16-teal-deep);
+    background-image: linear-gradient(105deg, var(--m16-teal), var(--m16-teal-deep));
 }
 
 body.marketing-home .m16-hero .border-line-strong {
     border-radius: 0.5rem;
-    border-color: #9bb9af;
+    border-color: var(--m16-line-action);
 }
 
 body.marketing-home .hero-wave {
@@ -153,7 +136,7 @@ body.marketing-home .m16-dashboard-section {
     border: 0;
     background:
         radial-gradient(ellipse at 83% 5%, rgb(33 184 152 / 24%), transparent 45%),
-        linear-gradient(122deg, #102732 0%, #123941 64%, #105c52 100%);
+        linear-gradient(122deg, var(--m16-surface-dark) 0%, var(--m16-surface-dark-mid) 64%, var(--m16-surface-dark-end) 100%);
 }
 
 body.marketing-home .m16-dashboard-section > .container-site > .flex > div:first-child h2 {
@@ -177,7 +160,7 @@ body.marketing-home #how-it-works {
     border: 0;
     background:
         radial-gradient(ellipse at 14% 0%, rgb(33 184 152 / 18%), transparent 42%),
-        #102732;
+        var(--m16-surface-dark);
 }
 
 body.marketing-home #how-it-works h2,
@@ -194,12 +177,12 @@ body.marketing-home #how-it-works li {
 }
 
 body.marketing-home #how-it-works .text-accent-ink {
-    color: #70e0c4;
+    color: var(--m16-mint-on-dark);
 }
 
 body.marketing-home #pricing {
-    border-block-color: #b7d9ce;
-    background: linear-gradient(128deg, #dff3eb 0%, #eff9f4 52%, #d8eee4 100%);
+    border-block-color: var(--m16-line-tint);
+    background: linear-gradient(128deg, var(--m16-tint-start) 0%, var(--m16-tint-mid) 52%, var(--m16-tint-end) 100%);
 }
 
 body.marketing-home #pricing [role="tablist"],
@@ -211,13 +194,13 @@ body.marketing-home #pricing select {
 body.marketing-home #pricing li > article {
     min-width: 0;
     border-radius: 1rem;
-    border-color: #b6cfc4;
+    border-color: var(--m16-line-card);
     box-shadow: 0 10px 30px rgb(16 39 50 / 7%);
 }
 
 body.marketing-home #pricing li > article.ring-1 {
-    border-color: #087b6c;
-    outline: 2px solid #087b6c;
+    border-color: var(--m16-teal);
+    outline: 2px solid var(--m16-teal);
     outline-offset: 2px;
     box-shadow: 0 18px 42px rgb(8 123 108 / 18%);
 }
@@ -229,7 +212,7 @@ body.marketing-home #pricing [aria-pressed] {
 }
 
 body.marketing-home footer {
-    border-color: #23414a;
+    border-color: var(--m16-line-dark);
 }
 
 @media (max-width: 1024px) {
