@@ -18,7 +18,7 @@ return [
 
     'nav' => [
         'label' => 'Fiók',
-        'dashboard' => 'Vezérlőpult',
+        'dashboard' => 'Irányítópult',
         'websites' => 'Weboldalak',
         'subscription' => 'Előfizetés',
         'billing' => 'Számlázás',
@@ -34,7 +34,7 @@ return [
 
     'auth' => [
         'login_title' => 'Belépés',
-        'login_lead' => 'Lépjen be az előfizetése és a weboldalai követéséhez.',
+        'login_lead' => 'Lépjen be a karbantartási csomagja és a weboldalai követéséhez.',
         'email' => 'E-mail-cím',
         'password' => 'Jelszó',
         'password_confirmation' => 'Jelszó megerősítése',
@@ -91,7 +91,7 @@ return [
     ],
 
     'dashboard' => [
-        'title' => 'Vezérlőpult',
+        'title' => 'Irányítópult',
         'welcome' => 'Üdv újra, :name',
         'subscription' => 'Előfizetés',
         'status' => 'Állapot',
@@ -101,12 +101,12 @@ return [
         'connected_count' => ':count csatlakoztatva',
         'added_count' => '{0} Még nincs weboldal|{1} :count weboldal hozzáadva|[2,*] :count weboldal hozzáadva',
         'setup_title' => 'Beállítás szükséges',
-        'setup_text' => 'Adjon hozzá új weboldalt egy meglévő előfizetéssel vagy válasszon új csomagot, majd csatlakoztassa az oldalát a fiókjához.',
+        'setup_text' => 'Adjon hozzá új weboldalt egy meglévő karbantartási csomaggal vagy válasszon újat, majd csatlakoztassa az oldalát a fiókjához.',
         'add_website' => 'Weboldal hozzáadása',
         'confirming' => 'A fizetése megerősítése folyamatban van. Az előfizetése abban a pillanatban aktívvá válik, amint a Stripe megerősíti, általában egy percen belül.',
         'payment_problem' => 'Probléma van a legutóbbi fizetésével. A csatlakoztatás és új weboldalak hozzáadása a megoldásig szünetel.',
         'ended' => 'Ez az előfizetés véget ért.',
-        'no_subscription' => 'Még nincs előfizetése.',
+        'no_subscription' => 'Még nincs karbantartási csomagja.',
         'view_plans' => 'Csomagok megtekintése',
         'view_subscription' => 'Előfizetés megtekintése',
         'view_websites' => 'Weboldalak megtekintése',
@@ -183,7 +183,7 @@ return [
                 'admin_access' => 'Ideiglenes WordPress-adminisztrátori hozzáférés',
             ],
         ],
-        'none' => 'Még nincs előfizetése.',
+        'none' => 'Még nincs karbantartási csomagja.',
     ],
 
     'billing' => [
@@ -305,7 +305,7 @@ return [
         'add' => 'Weboldal hozzáadása',
         'add_another' => 'Új weboldal hozzáadása',
         'empty' => 'Még nincs weboldal.',
-        'no_access' => 'Új weboldal hozzáadásához válasszon előfizetést.',
+        'no_access' => 'Új weboldal hozzáadásához válasszon karbantartási csomagot.',
         'no_slot' => 'Minden csomag egy weboldalra vonatkozik, és az összes csomagjához már tartozik egy. További weboldal hozzáadásához válasszon másik csomagot.',
         'type' => 'Típus',
         'status' => 'Állapot',
@@ -315,13 +315,13 @@ return [
         'types' => ['wordpress' => 'WordPress', 'woocommerce' => 'WooCommerce'],
         'duplicate' => 'Ez a weboldal már hozzá van adva.',
         'invalid_url' => 'Adja meg a weboldal nyilvános címét, például: https://company.example.',
-        'options_title' => 'Előfizetés kiválasztása ehhez a weboldalhoz',
-        'options_lead' => 'Válasszon egy megfelelő, fel nem használt előfizetést, vagy egy új csomagot ehhez a weboldalhoz.',
+        'options_title' => 'Karbantartási csomag kiválasztása ehhez a weboldalhoz',
+        'options_lead' => 'Válasszon egy megfelelő, fel nem használt karbantartási csomagot, vagy egy újat ehhez a weboldalhoz.',
         'selected_site' => 'Hozzáadandó weboldal',
         'continue_to_options' => 'Tovább',
-        'use_existing_subscription' => 'Meglévő előfizetés felhasználása',
-        'use_subscription' => 'Előfizetés használata',
-        'buy_subscription' => 'Új előfizetés választása',
+        'use_existing_subscription' => 'Meglévő karbantartási csomag felhasználása',
+        'use_subscription' => 'Karbantartási csomag használata',
+        'buy_subscription' => 'Új karbantartási csomag választása',
         'monthly' => 'Havi',
         'annual' => 'Éves',
         'renewal' => 'Megújul :interval időközönként a lemondásig.',
@@ -331,7 +331,7 @@ return [
         'no_available_prices' => 'Ehhez a számlázási piachoz jelenleg nincs megvásárolható ár. Segítségért forduljon az ügyfélszolgálathoz.',
         'draft_expired' => 'A weboldal kiválasztása lejárt. Kérjük, adja meg újra.',
         'login_required' => 'A weboldal hozzáadásának folytatásához jelentkezzen be ügyfélfiókjába.',
-        'slot_unavailable' => 'Ez az előfizetés már nem használható ehhez a weboldalhoz. Válasszon másik lehetőséget.',
+        'slot_unavailable' => 'Ez a karbantartási csomag már nem használható ehhez a weboldalhoz. Válasszon másik lehetőséget.',
         'checkout_target_invalid' => 'A kiválasztott csomag nem egyezik a weboldal típusával. Válasszon megfelelő csomagot.',
         'checkout_pending' => 'Ehhez a választáshoz már folyamatban van a fizetés előkészítése. Várjon egy kicsit, majd frissítse az előfizetések oldalát, mielőtt újrapróbálja.',
         'connect_website' => 'Weboldal csatlakoztatása',
@@ -363,7 +363,7 @@ return [
     ],
 
     'success' => [
-        'existing_account_complete' => 'Az új weboldal-előfizetés ehhez a fiókhoz tartozik. A fiókjában folytathatja.',
+        'existing_account_complete' => 'Az új weboldal-karbantartási csomag ehhez a fiókhoz tartozik. A fiókjában folytathatja.',
         'open_account' => 'Fiókom megnyitása',
         'confirming_title' => 'A fizetés megerősítése folyamatban van.',
         'confirming_body' => 'A Stripe megerősíti a fizetését. Ez általában egy percnél rövidebb ideig tart. Amint megtörtént, e-mailben értesítjük, a fiókja aktiválásához szükséges hivatkozással. Addig semmi nem aktiválódik.',

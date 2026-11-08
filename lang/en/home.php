@@ -168,7 +168,7 @@ return [
         'items' => [
             'includes' => [
                 'question' => 'What does WordPress maintenance include?',
-                'answer' => 'Depending on the plan: WordPress, plugin and theme updates, backups, security checks, uptime monitoring on supported sites and an activity log. Business and Secure also include functional checks after important updates and license checks; Secure adds priority support, a monthly report and malware cleanup in eligible, supported cases. Third-party licenses and custom development are not included.',
+                'answer' => 'Depending on the plan: WordPress, plugin and theme updates, backups, security checks, uptime monitoring on supported websites and an activity log. Business and Secure also include functional checks after important updates and license checks; Secure adds priority support, a monthly report and malware cleanup in eligible, supported cases. Third-party licenses and custom development are not included.',
             ],
             'why' => [
                 'question' => 'Why is regular WordPress maintenance important?',
@@ -176,27 +176,27 @@ return [
             ],
             'woocommerce' => [
                 'question' => 'Do you maintain WooCommerce stores too?',
-                'answer' => 'Yes, with separate WooCommerce plans. Besides WordPress maintenance, the Business and Secure plans also check the checkout flow and payment and order emails after updates. Backups are made weekly on Basic and daily on Business and Secure, where the plan and site setup support them.',
+                'answer' => 'Yes, with separate WooCommerce plans. Besides WordPress maintenance, the Business and Secure plans also check the checkout flow and payment and order emails after updates. Backups are made weekly on Basic and daily on Business and Secure, where the plan and website setup support them.',
             ],
             'start' => [
-                'question' => 'How does the collaboration start?',
-                'answer' => 'Currently by getting in touch: send us your website address and what you need. We confirm whether we can help, which plan fits and what your site setup supports. We never ask for your WordPress, hosting or database password. Online ordering and self-service connecting are not available at the moment.',
+                'question' => 'How does working together begin?',
+                'answer' => 'For now it starts with getting in touch: send us your website address and what you need. We confirm whether we can help, which plan fits and what your website setup supports. We never ask for your WordPress, hosting or database password. Online ordering and self-service connecting are not available at the moment.',
             ],
             'downtime' => [
                 'question' => 'Can my website become unavailable during maintenance?',
-                'answer' => 'During an update WordPress can briefly switch to maintenance mode, so the site may be unavailable or slower for a short time. This cannot be ruled out entirely, and we do not guarantee availability. A backup is made before the update where the plan and site setup support it, and afterwards we check that the site loads without errors.',
+                'answer' => 'During an update WordPress can briefly switch to maintenance mode, so the site may be unavailable or slower for a short time. This cannot be ruled out entirely, and we do not guarantee availability. A backup is made before the update where the plan and website setup support it, and afterwards we check that the site loads without errors.',
             ],
             'failure' => [
                 'question' => 'What happens if my website breaks?',
-                'answer' => 'If a check after an update reports a problem, we review the available backup and recovery options; restoring also depends on the backup and the hosting environment. If a security check reports a finding, we notify you and agree the next steps. Malware cleanup is available for eligible Secure-plan cases and supported sites. We do not promise response or recovery times.',
+                'answer' => 'If a check after an update reports a problem, we review the available backup and recovery options; restoring also depends on the backup and the hosting environment. If a security check reports a finding, we notify you and agree the next steps. Malware cleanup is available for eligible Secure-plan cases and supported websites. We do not promise response or recovery times.',
             ],
             'tracking' => [
-                'question' => 'How can I follow the maintenance?',
-                'answer' => 'Every plan includes an activity log that shows the recorded results of supported backups, updates and checks; the Secure plan also includes a monthly maintenance report. The customer area where you can follow this is not publicly available yet, so we agree the details with you when you get in touch.',
+                'question' => 'How can I keep track of the maintenance?',
+                'answer' => 'Every plan includes an activity log that shows the recorded results of supported backups, updates and checks; the Secure plan also includes a monthly maintenance report. The dashboard where you can follow this is not publicly available yet, so we agree the details with you when you get in touch.',
             ],
             'cancellation' => [
                 'question' => 'How does cancelling the subscription work?',
-                'answer' => 'With monthly billing there is no long-term contract. Cancellation is requested with the subscription cancellation function in the customer account and takes effect at the end of the period already paid, so the subscription stays active until then. Online ordering and the customer account are not public yet, so for now we agree cancellation when you get in touch. The details are set out in the terms.',
+                'answer' => 'With monthly billing there is no long-term contract. You can cancel at the end of the period you have already paid for, and the subscription stays active until then. Online ordering and the customer account are not public yet, so for now we agree cancellation when you get in touch. The details are set out in the terms.',
             ],
         ],
     ],

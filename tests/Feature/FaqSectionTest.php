@@ -56,6 +56,67 @@ class FaqSectionTest extends TestCase
         $this->assertStringContainsString('garantált elérhetőséget nem vállalunk', $hu['downtime']['answer']);
     }
 
+    public function test_hungarian_faq_uses_informal_address_consistently(): void
+    {
+        $faq = (require lang_path('hu/home.php'))['faq'];
+        $text = implode(' ', array_merge(
+            array_column($faq['items'], 'question'),
+            array_column($faq['items'], 'answer'),
+            [$faq['contact_prompt'], $faq['contact_link'], $faq['cta']],
+        ));
+
+        $this->assertDoesNotMatchRegularExpression('/\bÖn(nek|t|ök|re|ről)?\b/u', $text, 'No formal pronoun.');
+        foreach (['írja', 'követheti', 'jelszavát', 'találja', 'keres?', 'weboldala ', 'igényeit', 'értesítjük', 'egyeztessen', 'vegye fel'] as $formal) {
+            $this->assertStringNotContainsString($formal, $text, "Formal form '{$formal}' found in the Hungarian FAQ.");
+        }
+
+        $this->assertStringContainsString('írd meg', $faq['items']['start']['answer']);
+        $this->assertStringContainsString('értesítünk', $faq['items']['failure']['answer']);
+        $this->assertSame('Nem találod, amit keresel?', $faq['contact_prompt']);
+        $this->assertSame('Kérdésed van? Beszéljük meg!', $faq['cta']);
+    }
+
+    public function test_faq_follows_the_owner_approved_hungarian_terminology(): void
+    {
+        $hungarian = mb_strtolower(json_encode((require lang_path('hu/home.php'))['faq'], JSON_UNESCAPED_UNICODE));
+        foreach (['honlap', 'backup', 'ügyfélfelület', 'vezérlőpult'] as $avoid) {
+            $this->assertStringNotContainsString($avoid, $hungarian, "Hungarian FAQ must not use '{$avoid}'.");
+        }
+        foreach (['weboldal', 'biztonsági mentés', 'irányítópult'] as $use) {
+            $this->assertStringContainsString($use, $hungarian, "Hungarian FAQ should use '{$use}'.");
+        }
+
+        // "előfizetés" is reserved for cancellation and contract wording.
+        $items = (require lang_path('hu/home.php'))['faq']['items'];
+        foreach ($items as $key => $item) {
+            if ($key !== 'cancellation') {
+                $this->assertStringNotContainsString('előfizet', mb_strtolower($item['question'].' '.$item['answer']), "'előfizetés' outside cancellation ({$key}).");
+            }
+        }
+
+        $english = mb_strtolower(json_encode((require lang_path('en/home.php'))['faq']));
+        foreach (['customer area', 'homepage', 'supported sites'] as $avoid) {
+            $this->assertStringNotContainsString($avoid, $english, "English FAQ must not use '{$avoid}'.");
+        }
+        $this->assertDoesNotMatchRegularExpression('/\bsite setup\b/', $english);
+        foreach (['website', 'backup', 'plan', 'subscription', 'dashboard'] as $use) {
+            $this->assertStringContainsString($use, $english, "English FAQ should use '{$use}'.");
+        }
+    }
+
+    public function test_english_and_hungarian_faq_have_the_same_structure(): void
+    {
+        $en = (require lang_path('en/home.php'))['faq'];
+        $hu = (require lang_path('hu/home.php'))['faq'];
+
+        $this->assertSame(array_keys($en['items']), array_keys($hu['items']));
+        $this->assertSame("Have questions? Let's talk!", $en['cta']);
+        foreach (array_keys($en['items']) as $key) {
+            $this->assertNotSame('', trim($en['items'][$key]['answer']));
+            $this->assertNotSame('', trim($hu['items'][$key]['answer']));
+        }
+    }
+
     public function test_cta_below_the_faq_links_to_the_existing_contact_route_in_both_languages(): void
     {
         foreach (['en' => 'Have questions? Let&#039;s talk!', 'hu' => 'Kérdésed van? Beszéljük meg!'] as $locale => $label) {
