@@ -164,38 +164,39 @@ return [
         'title' => 'Frequently asked questions',
         'contact_prompt' => "Can't find what you're looking for?",
         'contact_link' => 'Contact us',
+        'cta' => 'Have questions? Let\'s talk!',
         'items' => [
-            'password' => [
-                'question' => 'Do I need to give you my WordPress password?',
-                'answer' => 'No. We never ask for your WordPress administrator, hosting or database password. Where access to a site is needed, it is a connection set up with you that you can revoke at any time.',
+            'includes' => [
+                'question' => 'What does WordPress maintenance include?',
+                'answer' => 'Depending on the plan: WordPress, plugin and theme updates, backups, security checks, uptime monitoring on supported sites and an activity log. Business and Secure also include functional checks after important updates and license checks; Secure adds priority support, a monthly report and malware cleanup in eligible, supported cases. Third-party licenses and custom development are not included.',
             ],
-            'availability' => [
-                'question' => 'Is the service available for my website?',
-                'answer' => 'It depends on your site and its setup. Contact us with your website address and what you need; we confirm whether and how we can help, and which plan fits, before anything starts. Backups depend on the plan and site support.',
+            'why' => [
+                'question' => 'Why is regular WordPress maintenance important?',
+                'answer' => 'WordPress, plugins and themes change constantly. Outdated software can cause security and compatibility problems, recovering from a problem is much harder without a recent backup, and a successful update does not automatically mean every important function still works. Regular maintenance reduces these risks but does not remove them.',
             ],
-            'broken_update' => [
-                'question' => 'What happens if an update breaks my website?',
-                'answer' => 'A pre-update backup is created where the plan and site setup support it. If a post-update check fails, we review the available backup and recovery options; restore capability depends on the backup and hosting environment.',
+            'woocommerce' => [
+                'question' => 'Do you maintain WooCommerce stores too?',
+                'answer' => 'Yes, with separate WooCommerce plans. Besides WordPress maintenance, the Business and Secure plans also check the checkout flow and payment and order emails after updates. Backups are made weekly on Basic and daily on Business and Secure, where the plan and site setup support them.',
             ],
-            'infected' => [
-                'question' => 'What happens if my website is infected?',
-                'answer' => 'We notify you when an applicable security check reports a finding and agree the next steps with you. Malware cleanup is available for eligible Secure-plan cases and supported sites; other cases are assessed and quoted separately.',
+            'start' => [
+                'question' => 'How does the collaboration start?',
+                'answer' => 'Currently by getting in touch: send us your website address and what you need. We confirm whether we can help, which plan fits and what your site setup supports. We never ask for your WordPress, hosting or database password. Online ordering and self-service connecting are not available at the moment.',
             ],
-            'backup_frequency' => [
-                'question' => 'How often are backups made?',
-                'answer' => 'It depends on the plan. WordPress: monthly on Basic, weekly on Business, daily on Secure. WooCommerce: weekly on Basic, daily on Business and Secure. Additional pre-update backups are made where the plan and site setup support them.',
+            'downtime' => [
+                'question' => 'Can my website become unavailable during maintenance?',
+                'answer' => 'During an update WordPress can briefly switch to maintenance mode, so the site may be unavailable or slower for a short time. This cannot be ruled out entirely, and we do not guarantee availability. A backup is made before the update where the plan and site setup support it, and afterwards we check that the site loads without errors.',
             ],
-            'backup_location' => [
-                'question' => 'Where are backups stored?',
-                'answer' => 'Backup storage is configured separately from the website hosting for supported plans. Storage location and recovery options depend on the service configuration; a separate copy does not guarantee restoration in every hosting environment.',
+            'failure' => [
+                'question' => 'What happens if my website breaks?',
+                'answer' => 'If a check after an update reports a problem, we review the available backup and recovery options; restoring also depends on the backup and the hosting environment. If a security check reports a finding, we notify you and agree the next steps. Malware cleanup is available for eligible Secure-plan cases and supported sites. We do not promise response or recovery times.',
             ],
-            'license' => [
-                'question' => 'What happens if a plugin license expires?',
-                'answer' => 'When a license appears expired or invalid, we record it and notify you. Renewing third-party licenses remains your responsibility. Until a license is renewed, that plugin or theme may not receive updates.',
+            'tracking' => [
+                'question' => 'How can I follow the maintenance?',
+                'answer' => 'Every plan includes an activity log that shows the recorded results of supported backups, updates and checks; the Secure plan also includes a monthly maintenance report. The customer area where you can follow this is not publicly available yet, so we agree the details with you when you get in touch.',
             ],
-            'custom_plugins' => [
-                'question' => 'Can you develop custom plugins?',
-                'answer' => 'Yes. We build custom plugins, API integrations and WooCommerce functionality as a separate service. Tell us what you need and we will reply with a proposal.',
+            'cancellation' => [
+                'question' => 'How does cancelling the subscription work?',
+                'answer' => 'With monthly billing there is no long-term contract. Cancellation is requested with the subscription cancellation function in the customer account and takes effect at the end of the period already paid, so the subscription stays active until then. Online ordering and the customer account are not public yet, so for now we agree cancellation when you get in touch. The details are set out in the terms.',
             ],
         ],
     ],

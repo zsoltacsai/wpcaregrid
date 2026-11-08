@@ -163,7 +163,7 @@ class HungarianContentTest extends TestCase
         foreach ([
             'Karbantartott WordPress. Működő weboldal.', 'A háttérben dolgozunk. Ön tisztán lát.', 'Mit tartalmaz a karbantartás',
             'Nemcsak frissítünk. Ellenőrzünk is.', 'Csomagok és árak', 'Minden weboldala egy helyen.', 'A lejárt licencek nem maradnak észrevétlenek.',
-            'Webáruházaknál többet ellenőrzünk.', 'Többre van szüksége a karbantartásnál?', 'Gyakran ismételt kérdések', 'Meg kell adnom a WordPress-jelszavamat?',
+            'Webáruházaknál többet ellenőrzünk.', 'Többre van szüksége a karbantartásnál?', 'Gyakran ismételt kérdések', 'Mit tartalmaz a WordPress karbantartás?', 'Kérdésed van? Beszéljük meg!',
             'Tartsa karbantartva a WordPress-oldalát.', 'Szerződési feltételek', 'Belépés', 'Rendben', 'Tevékenységnapló',
         ] as $text) {
             $this->assertStringContainsString($text, $home);
@@ -256,7 +256,7 @@ class HungarianContentTest extends TestCase
 
         $this->get(route('owner.content.edit', ['home.faq', 'hu']))->assertOk()
             ->assertDontSee('No Magyar content yet')
-            ->assertSee('Meg kell adnom a WordPress-jelszavamat?');
+            ->assertSee('Mit tartalmaz a WordPress karbantartás?');
     }
 
     public function test_the_owner_area_still_reports_a_translation_that_is_really_missing(): void
