@@ -122,6 +122,7 @@ test('unknown address returns a not-found page without debug details', async ({ 
     const response = await page.goto('/this-page-does-not-exist');
     expect(response?.status()).toBe(404);
     await expect(page.locator('body')).toContainText('Az oldal nem található');
+    expect(await htmlLang(page)).toBe('hu');
     await expect(page.locator('body')).not.toContainText(/stack trace|exception|database/i);
 });
 
