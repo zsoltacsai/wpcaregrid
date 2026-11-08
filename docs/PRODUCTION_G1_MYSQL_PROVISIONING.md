@@ -44,8 +44,8 @@ The root-only source bundle directory must contain exactly these files:
   SHA-256 manifest.
 * `SHA256SUMS` — operator-side source checksums, delivered alongside the bundle.
 
-Current locally prepared artifact hashes (recompute from the final reviewed
-files before copying):
+Artifact hashes from the merged, reviewed source commit `1d2591e4353857242430b84fb6a0005b15a85e85`
+(recompute from the Git objects before copying):
 
 | Source artifact | SHA-256 |
 | --- | --- |
@@ -53,9 +53,9 @@ files before copying):
 | `production_g1_mysql_contract.py` | `7ad317e3f09d1271531386263289cc821d99d8fa0a82959742dca666c78ed01a` |
 | `production-g1-mysql-manifest.json` | `60ca7544edddd58937ac73daa2249367773319b5a563992ce579677f9cc441fc` |
 
-These are source-file hashes, not a protected-primary commit identity or a
-VPS installation receipt. The code is not merged and the installation has not
-been run.
+These are source-file hashes, not a VPS installation receipt. The package is
+merged into protected primary at `1d2591e4353857242430b84fb6a0005b15a85e85`;
+installation and provisioning have not been run on the VPS.
 
 The script source is required to be `root:root 0600` inside a `root:root 0700`
 directory before it is executed. The installed files are `root:root 0755` for
