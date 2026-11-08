@@ -395,5 +395,95 @@ class HardeningTests(unittest.TestCase):
             B.check_backup(NEXT, path, lstat_fn=hardlinked)
 
 
+class AppSecRoundTwoTests(unittest.TestCase):
+    def test_unhashable_or_non_string_target_name_is_target_refused(self):
+        import dataclasses
+        for name in ([], {}, 5, None):
+            forged = dataclasses.replace(LEGACY, name=name)
+            for call in (lambda: B.check_path(forged, forged.app_dir, "app", must_exist=False),
+                         lambda: B.validate_pair(forged, forged.app_dir, forged.database)):
+                with self.assertRaises(B.TargetRefused) as ctx:
+                    call()
+                self.assertEqual(str(ctx.exception), "target_not_registered")
+
+    def test_hostile_marker_document_and_fence_probe_are_target_refused(self):
+        class Boom(dict):
+            def __getitem__(self, key):
+                raise KeyError(key)
+
+        import collections.abc
+        with self.assertRaises(B.TargetRefused):
+            B.check_marker_document(NEXT, Boom({"target": "staging-next"}))
+
+        def explode(_path):
+            raise RuntimeError("probe")
+
+        with self.assertRaises(B.TargetRefused) as ctx:
+            B.check_fences(NEXT, explode)
+        self.assertEqual(str(ctx.exception), "fence_check_unavailable")
+        with self.assertRaises(B.TargetRefused):
+            B.check_fences(NEXT, lambda _p: "yes")
+        with self.assertRaises(B.TargetRefused):
+            B.check_fences(NEXT, lambda _p: 1)
+
+    def test_preseeded_sys_modules_cannot_poison_the_contract(self):
+        import types
+        name = "_wpcg_target_binding_environment_contract"
+        fake = types.ModuleType(name)
+        fake.STAGING_NEXT = types.SimpleNamespace(app_root=LEGACY.app_dir, database=LEGACY.database)
+        sys.modules[name] = fake
+        try:
+            fresh = B._load_contract()
+            self.assertIsNot(fresh, fake)
+            self.assertEqual(fresh.STAGING_NEXT.app_root, NEXT.app_dir)
+            self.assertIs(sys.modules[name], fake)
+        finally:
+            sys.modules.pop(name, None)
+
+    def test_contract_load_failures_are_target_refused(self):
+        with unittest.mock.patch.object(B.importlib.util, "spec_from_file_location", side_effect=OSError):
+            with self.assertRaises(B.TargetRefused) as ctx:
+                B._load_contract()
+        self.assertEqual(str(ctx.exception), "environment_contract_unavailable")
+
+    def test_registry_validation_rejects_overlap_and_malformed_targets(self):
+        import dataclasses
+        overlap = dataclasses.replace(NEXT, name="x", database="other",
+                                      app_dir=LEGACY.app_dir + "/sub",
+                                      maintenance_marker=NEXT.maintenance_marker + "2",
+                                      worker_fence_marker=NEXT.worker_fence_marker + "2",
+                                      scheduler_fence_marker=NEXT.scheduler_fence_marker + "2")
+        with self.assertRaises(B.TargetRefused):
+            B._validate_registry((LEGACY, overlap))
+        same_db = dataclasses.replace(NEXT, name="y")
+        with self.assertRaises(B.TargetRefused):
+            B._validate_registry((NEXT, same_db))
+        relative = dataclasses.replace(NEXT, lock_file="state/deploy.lock")
+        with self.assertRaises(B.TargetRefused):
+            B._validate_registry((LEGACY, relative))
+        B._validate_registry((LEGACY, NEXT))
+
+    def test_staging_next_state_root_is_derived_from_the_contract(self):
+        contract = B._load_contract().STAGING_NEXT
+        self.assertEqual(NEXT.state_root, str(PurePosixPath(contract.state_root).parent))
+        self.assertEqual(NEXT.lock_file, contract.state_root + "/deploy.lock")
+
+    def test_backup_name_suffix_and_group_writable_mode_mutation_gaps(self):
+        junk = next_backup(name=f"staging-next-{SHA}-1-abcdef01.sql.gz.evil")
+        with self.assertRaises(B.TargetRefused):
+            B.check_backup(NEXT, junk, lstat_fn=FakeFs(files=[junk]).lstat)
+        junk2 = next_backup(name=f"staging-next-{SHA}-1-abcdef0123.sql.gz")
+        with self.assertRaises(B.TargetRefused):
+            B.check_backup(NEXT, junk2, lstat_fn=FakeFs(files=[junk2]).lstat)
+        marker = NEXT.worker_fence_marker
+        group_writable = FakeFs(files=[marker], mode=0o660)
+        with self.assertRaises(B.TargetRefused) as ctx:
+            B.check_path(NEXT, marker, "marker", lstat_fn=group_writable.lstat, expected_uid=UID)
+        self.assertEqual(str(ctx.exception), "path_permission_mismatch")
+        other_writable = FakeFs(files=[marker], mode=0o602)
+        with self.assertRaises(B.TargetRefused):
+            B.check_path(NEXT, marker, "marker", lstat_fn=other_writable.lstat, expected_uid=UID)
+
+
 if __name__ == "__main__":
     unittest.main()

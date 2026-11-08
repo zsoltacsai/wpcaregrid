@@ -41,17 +41,25 @@ class TargetRefused(ValueError):
 def _load_contract():
     path = Path(__file__).resolve().with_name("deployment_environment_contract.py")
     name = "_wpcg_target_binding_environment_contract"
-    module = sys.modules.get(name)
-    if module is None:
-        try:
-            spec = importlib.util.spec_from_file_location(name, path)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[name] = module
-            spec.loader.exec_module(module)
-        except Exception:
+    previous = sys.modules.get(name)
+    try:
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module  # needed while dataclasses are created
+        spec.loader.exec_module(module)
+        if Path(module.__file__).resolve() != path:
+            raise TargetRefused("environment_contract_unavailable")
+        return module
+    except TargetRefused:
+        raise
+    except Exception:
+        raise TargetRefused("environment_contract_unavailable") from None
+    finally:
+        # Never leave (or keep trusting) a module registered under a private name.
+        if previous is None:
             sys.modules.pop(name, None)
-            raise TargetRefused("environment_contract_unavailable") from None
-    return module
+        else:
+            sys.modules[name] = previous
 
 
 @dataclass(frozen=True)
@@ -99,23 +107,54 @@ LEGACY_STAGING = DeploymentTarget(
 
 
 def _staging_next() -> DeploymentTarget:
-    contract = _load_contract().STAGING_NEXT
-    state = contract.state_root
+    try:
+        contract = _load_contract().STAGING_NEXT
+        state = contract.state_root
+        state_root = str(PurePosixPath(state).parent)
+        app_root, database, backup_root = contract.app_root, contract.database, contract.backup_root
+        markers = (contract.maintenance_marker, contract.worker_fence_marker, contract.scheduler_fence_marker)
+    except TargetRefused:
+        raise
+    except Exception:
+        raise TargetRefused("environment_contract_unavailable") from None
     return DeploymentTarget(
         name="staging-next",
-        app_dir=contract.app_root,
-        database=contract.database,
-        state_root="/var/lib/wpcaregrid-deploy/staging-next",
-        backup_root=contract.backup_root,
+        app_dir=app_root,
+        database=database,
+        state_root=state_root,
+        backup_root=backup_root,
         backup_name_pattern=r"staging-next-[0-9a-f]{40}-[0-9]{1,30}-[0-9a-f]{8}\.sql\.gz",
         lock_file=f"{state}/deploy.lock",
-        maintenance_marker=contract.maintenance_marker,
-        worker_fence_marker=contract.worker_fence_marker,
-        scheduler_fence_marker=contract.scheduler_fence_marker,
+        maintenance_marker=markers[0],
+        worker_fence_marker=markers[1],
+        scheduler_fence_marker=markers[2],
     )
 
 
 STAGING_NEXT = _staging_next()
+
+
+def _validate_registry(targets) -> None:
+    """Refuse a registry whose targets are malformed or overlap each other."""
+    seen_roots: list[PurePosixPath] = []
+    for target in targets:
+        values = (target.app_dir, target.state_root, target.backup_root, target.lock_file,
+                  *target.extra_locks, *target.marker_paths())
+        for value in values:
+            path = PurePosixPath(value) if isinstance(value, str) else None
+            if (path is None or not path.is_absolute() or str(path) != value
+                    or any(part in {"", ".", ".."} for part in path.parts[1:])):
+                raise TargetRefused("target_registry_invalid")
+        if not all(_within(PurePosixPath(m), target.state_root) for m in target.marker_paths()):
+            raise TargetRefused("target_registry_invalid")
+        for root in map(PurePosixPath, target.owned_roots()):
+            if any(root == other or root in other.parents or other in root.parents for other in seen_roots):
+                raise TargetRefused("target_registry_invalid")
+        seen_roots.extend(map(PurePosixPath, target.owned_roots()))
+    if len({t.database for t in targets}) != len(list(targets)):
+        raise TargetRefused("target_registry_invalid")
+    if len({m for t in targets for m in t.marker_paths()}) != 3 * len(list(targets)):
+        raise TargetRefused("target_registry_invalid")
 
 TARGETS: Mapping[str, DeploymentTarget] = MappingProxyType({
     LEGACY_STAGING.name: LEGACY_STAGING,
@@ -153,7 +192,8 @@ def _syntax(value: object) -> PurePosixPath:
 
 
 def _registered(target: object) -> DeploymentTarget:
-    if not isinstance(target, DeploymentTarget) or TARGETS.get(target.name) is not target:
+    if (not isinstance(target, DeploymentTarget) or type(target.name) is not str
+            or TARGETS.get(target.name) is not target):
         raise TargetRefused("target_not_registered")
     return target
 
@@ -269,9 +309,13 @@ def check_backup(
 def check_marker_document(target: DeploymentTarget, document: object) -> None:
     """A state marker/journal naming any other target is STOP; it must name this one."""
     _registered(target)
-    if not isinstance(document, Mapping) or "target" not in document:
+    try:
+        recorded = document["target"] if isinstance(document, Mapping) and "target" in document else None
+        present = isinstance(document, Mapping) and "target" in document
+    except Exception:
+        raise TargetRefused("marker_target_missing") from None
+    if not present:
         raise TargetRefused("marker_target_missing")
-    recorded = document["target"]
     if recorded != target.name:
         raise TargetRefused("marker_belongs_to_other_target")
 
@@ -279,9 +323,15 @@ def check_marker_document(target: DeploymentTarget, document: object) -> None:
 def check_fences(target: DeploymentTarget, exists_fn: Callable[[str], bool]) -> None:
     """Both fences of *this* target must be active; the other target's are irrelevant."""
     _registered(target)
-    if not exists_fn(target.worker_fence_marker):
+    def active(path: str) -> bool:
+        try:
+            return exists_fn(path) is True
+        except Exception:
+            raise TargetRefused("fence_check_unavailable") from None
+
+    if not active(target.worker_fence_marker):
         raise TargetRefused("worker_fence_inactive")
-    if not exists_fn(target.scheduler_fence_marker):
+    if not active(target.scheduler_fence_marker):
         raise TargetRefused("scheduler_fence_inactive")
 
 
@@ -324,3 +374,6 @@ def recovery_decision(
     if not (maintenance_active and workers_fenced and scheduler_fenced):
         raise TargetRefused("partial_deploy_gate_missing")
     return "recover"
+
+
+_validate_registry(tuple(TARGETS.values()))

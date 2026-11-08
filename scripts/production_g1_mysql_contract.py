@@ -18,6 +18,18 @@ class Refused(ValueError):
     """Sanitized, stable refusal code; never contains config values."""
 
 
+# The instance option files live in the distribution's `!includedir` directory.
+# mysqld and my_print_defaults read that directory in byte-wise file-name order and
+# the LAST occurrence of an option wins. Digit prefixes sort before `mysqld.cnf`, so a
+# `90-` file was overridden by the shared `[mysqld]` group (datadir, socket, pid-file,
+# log-error measured on the staging VPS). `zz-` sorts after every distribution file
+# (`mysqld.cnf`, `99-*.cnf`); anything that still sorts later fails the effective
+# option check (`effective_option_mismatch`) instead of being tolerated.
+CONFIG_DIR = "/etc/mysql/mysql.conf.d"
+CONFIG_FILE_PREFIX = "zz-"
+LEGACY_CONFIG_FILE_PREFIX = "90-"  # #325/#327 name; only used to refuse a leftover file
+
+
 @dataclass(frozen=True)
 class Instance:
     name: str
@@ -34,6 +46,14 @@ class Instance:
     @property
     def section(self) -> str:
         return f"mysqld@{self.name}"
+
+    @property
+    def config_path(self) -> str:
+        return f"{CONFIG_DIR}/{CONFIG_FILE_PREFIX}{self.name}.cnf"
+
+    @property
+    def legacy_config_path(self) -> str:
+        return f"{CONFIG_DIR}/{LEGACY_CONFIG_FILE_PREFIX}{self.name}.cnf"
 
     def expected_options(self) -> dict[str, str]:
         return {
@@ -401,7 +421,7 @@ def artifact_files() -> dict[str, bytes]:
             "Environment=PYTHONDONTWRITEBYTECODE=1",
             "IPAddressDeny=any", "IPAddressAllow=127.0.0.0/8", "",
         ))
-        result[f"/etc/mysql/mysql.conf.d/90-{instance.name}.cnf"] = cnf.encode()
+        result[instance.config_path] = cnf.encode()
         result[f"/etc/systemd/system/{instance.unit}.d/90-wpcaregrid-g1.conf"] = dropin.encode()
         result[f"/etc/apparmor.d/{instance.apparmor_profile}"] = apparmor_profile(instance).encode()
     return result
