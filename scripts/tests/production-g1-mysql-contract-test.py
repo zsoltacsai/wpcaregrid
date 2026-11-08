@@ -7,8 +7,10 @@ import importlib.util
 import hashlib
 import json
 import sys
+import types
 import unittest
-from pathlib import Path
+from unittest import mock
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("production_g1_mysql_contract", ROOT / "production_g1_mysql_contract.py")
@@ -28,6 +30,71 @@ def group(instance):
 
 
 class ProductionG1MySQLContractTests(unittest.TestCase):
+    def _load_installer(self):
+        spec = importlib.util.spec_from_file_location(
+            "production_g1_mysql_installer_test", ROOT / "production-g1-mysql.py")
+        installer = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        sys.modules[spec.name] = installer
+        # The production runner uses POSIX account modules; provide inert
+        # modules so its pure manifest validation can be exercised on Windows.
+        with mock.patch.dict(sys.modules, {
+            "pwd": types.ModuleType("pwd"),
+            "grp": types.ModuleType("grp"),
+        }):
+            spec.loader.exec_module(installer)
+        return installer
+
+    def test_source_manifest_bytes_match_authoritative_installer_serialization(self):
+        installer = self._load_installer()
+        script = (ROOT / "production-g1-mysql.py").read_bytes()
+        contract = (ROOT / "production_g1_mysql_contract.py").read_bytes()
+        generated = CONTRACT.artifact_files()
+        expected_sources = {
+            "production-g1-mysql.py": hashlib.sha256(script).hexdigest(),
+            "production_g1_mysql_contract.py": hashlib.sha256(contract).hexdigest(),
+        }
+        expected_installed = {
+            "/usr/local/libexec/wpcaregrid-g1-mysql.py": expected_sources["production-g1-mysql.py"],
+            "/usr/local/libexec/production_g1_mysql_contract.py": expected_sources["production_g1_mysql_contract.py"],
+            **{path: hashlib.sha256(content).hexdigest() for path, content in generated.items()},
+        }
+        expected_payload = {
+            "schema": 1,
+            "tool": "wpcaregrid-production-mysql-g1-v1",
+            "sources": expected_sources,
+            "installed_artifacts": expected_installed,
+        }
+        expected = (json.dumps(expected_payload, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+        with (
+            mock.patch.object(installer, "HELPER", PurePosixPath("/usr/local/libexec/wpcaregrid-g1-mysql.py")),
+            mock.patch.object(installer, "CONTRACT", PurePosixPath("/usr/local/libexec/production_g1_mysql_contract.py")),
+        ):
+            self.assertEqual(expected, installer._manifest_bytes(script, contract, generated))
+        self.assertEqual((ROOT / "production-g1-mysql-manifest.json").read_bytes(), expected)
+
+    def test_install_rejects_manifest_mismatch_before_any_write(self):
+        installer = self._load_installer()
+        with (
+            mock.patch.object(installer, "require_root"),
+            mock.patch.object(installer, "_check_vendor_boundary"),
+            mock.patch.object(installer.Path, "is_file", return_value=True),
+            mock.patch.object(installer, "_systemd_inactive"),
+            mock.patch.object(installer, "check_directory"),
+            mock.patch.object(installer, "_source_bytes",
+                              side_effect=[b"installer", b"contract", b"pretty manifest"]),
+            mock.patch.object(installer, "_ensure_directory") as ensure_directory,
+            mock.patch.object(installer, "_atomic_noreplace") as publish_file,
+            mock.patch.object(installer, "run") as run_command,
+        ):
+            with self.assertRaises(installer.Refused) as caught:
+                installer.install()
+            self.assertEqual(str(caught.exception), "source_manifest_mismatch")
+            ensure_directory.assert_not_called()
+            publish_file.assert_not_called()
+            run_command.assert_not_called()
+
     def test_two_fixed_profiles_have_disjoint_resources(self):
         prod = CONTRACT.get_instance("wpcaregrid-production")
         restore = CONTRACT.get_instance("wpcaregrid-production-restore")
@@ -277,12 +344,12 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         expected = {
             "production-g1-mysql.py": "577097aad15f53a6c144c6c4107e16646c338810b3b1575b5708ec7a17ab0b77",
             "production_g1_mysql_contract.py": "7ad317e3f09d1271531386263289cc821d99d8fa0a82959742dca666c78ed01a",
-            "production-g1-mysql-manifest.json": "60ca7544edddd58937ac73daa2249367773319b5a563992ce579677f9cc441fc",
+            "production-g1-mysql-manifest.json": "711a36662fbf4f6d53d13eb0b9390c0419b85ea9b04f2fdc00ff9d047231e575",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "d285049fb81b627f068a0a22bc64dd275b5f694b5b81560a46c874cfef77b2a2")
+                         "c4cac4c521dad2be9731945bbf0ebf48a2a63b5d8bd0115ec26ce8fbc8b6b370")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):
