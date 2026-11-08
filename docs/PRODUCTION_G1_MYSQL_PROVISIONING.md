@@ -49,9 +49,9 @@ files before copying):
 
 | Source artifact | SHA-256 |
 | --- | --- |
-| `production-g1-mysql.py` | `fe2f712a62d556ff25f07e53c39137639225a582afdeee1fe8ed8e16aef4c077` |
-| `production_g1_mysql_contract.py` | `669014a01366cfa5ec3f2d0e80d3eec3a44a57955a1ba8a3bd91c6772fc60029` |
-| `production-g1-mysql-manifest.json` | `3aa181c1fde33f04a8ddd5a16dd313675225a6032d87c3becd943da1527e0e49` |
+| `production-g1-mysql.py` | `ad8b26dd5916282a4fcf80035990b89643d995d2ccfc2c76de68dd6bae19d37f` |
+| `production_g1_mysql_contract.py` | `8437eeab1dd8c755a36c8b4dacf0e7c1ff2e0bd6187f4e7bd7407fde419357e2` |
+| `production-g1-mysql-manifest.json` | `f002fbca8ff53c527cecef0f7eb0dce601498587c905d3e9a9f32681e74b6b6e` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not
@@ -77,7 +77,40 @@ template to contain exactly `ExecStart=/usr/sbin/mysqld --defaults-group-suffix=
 (so nothing is lost by the override), requires each drop-in to contain exactly one
 reset and one literal override, and requires the effective unit to run exactly one
 command whose argv is the mysqld binary and that instance's suffix. No vendor file
-is edited. Network
+is edited.
+
+### X Plugin and inherited `mysqlx-*` options
+
+Both instance configs disable the X Plugin (`mysqlx=0`). The distribution's shared
+`[mysqld]` group ships `mysqlx-bind-address=127.0.0.1`, which both instances
+inherit. Measured on MySQL Community Server 8.4.13: with `mysqlx=0` the plugin is
+`DISABLED`, no X listener exists (only the instance port listens) and no
+`mysqlx_*` variable is defined, whatever the inherited address is; without
+`mysqlx=0` the plugin is `ACTIVE` and listens on port 33060; an unknown
+`mysqlx-*` option makes mysqld abort. The verifier therefore accepts exactly one
+inherited X option, `mysqlx-bind-address=127.0.0.1`, and only when every effective
+`mysqlx` value is `0` (`x_protocol_not_disabled` otherwise). Every other
+`mysqlx-*` option (other names, other values such as `0.0.0.0` or `::1`, `loose-`
+and `admin-` forms, an option without a value) remains
+`unsafe_effective_option_present`.
+
+The resolved values printed by `mysqld --verbose --help` are compared after
+normalizing both sides (mysqld renders `mysqlx=0` as `OFF` and booleans as
+`FALSE`). `--help` prints `stderr` for `log-error` before the log subsystem
+starts, although the configured file is honored at runtime; only `stderr` or the
+exact path is accepted there, and the exact path is still required from
+`my_print_defaults`.
+
+### Upgrading an installed package
+
+The installer never replaces a managed file: it accepts an existing file only if
+it is byte-identical, so running a newer package over an installed one stops with
+`managed_file_content_mismatch`. There is no upgrade command. Before
+initialization, the supported path is the Rollback procedure below (exact
+recorded files only, whose SHA-256 still matches the installed package) followed
+by a fresh `install` of the new package. After initialization the configuration
+must not be reverted without a separately reviewed recovery procedure. Never
+overwrite installed files by hand. Network
 filtering permits only loopback IP traffic; the AppArmor profiles allow each
 instance its own data, socket, PID, log and temp paths, with explicit denies for
 the legacy `/var/lib/mysql` and the other new instance's paths.

@@ -117,6 +117,15 @@ _UNSAFE_EFFECTIVE_OPTIONS = frozenset({
     "skip-grant-tables", "skip-networking", "init-file", "init-connect",
     "init-replica", "init-slave", "daemonize", "plugin-dir",
 })
+# Inherited X Plugin options that are inert while the instance disables the plugin
+# (`mysqlx=0`). Measured on MySQL Community Server 8.4.13: with `mysqlx=0` the
+# plugin is DISABLED, no X listener (port 33060) exists and no mysqlx_* variable
+# is defined, whatever the inherited address is; without `mysqlx=0` the plugin is
+# ACTIVE and listens. The distribution's shared `[mysqld]` group ships
+# `mysqlx-bind-address=127.0.0.1`. Only this exact option and loopback value are
+# accepted, and only together with `mysqlx=0`; any other `mysqlx-*` option stays
+# unsafe (an unknown one makes mysqld abort, a listener/port option is refused).
+_APPROVED_INHERITED_X_OPTIONS = {"mysqlx-bind-address": frozenset({"127.0.0.1"})}
 _KEYRING_OPTIONS = frozenset({
     "early-plugin-load", "plugin-load", "plugin-load-add", "component-load",
     "component-load-add", "keyring-file-data", "keyring-encrypted-file-data",
@@ -190,6 +199,7 @@ def parse_defaults_output(output: str | bytes) -> list[tuple[str, str | None]]:
 def validate_effective_options(instance: Instance, output: str | bytes) -> None:
     options = parse_defaults_output(output)
     by_key: dict[str, list[str | None]] = {}
+    inherited_x_options = False
     for key, value in options:
         by_key.setdefault(key, []).append(value)
         if key in _KEYRING_OPTIONS or "keyring" in key or "plugin-load" in key or "component-load" in key or (
@@ -199,8 +209,16 @@ def validate_effective_options(instance: Instance, output: str | bytes) -> None:
         if (key.startswith(("replicate-", "source-", "master-", "slave-", "relay-log"))
                 or key in {"log-slave-updates", "log-replica-updates", "skip-slave-start", "skip-replica-start"}):
             raise Refused("replication_configuration_present")
-        if key in _UNSAFE_EFFECTIVE_OPTIONS or key.startswith(("loose-", "admin-", "mysqlx-")):
+        if key.startswith("mysqlx-"):
+            if value not in _APPROVED_INHERITED_X_OPTIONS.get(key, frozenset()):
+                raise Refused("unsafe_effective_option_present")
+            inherited_x_options = True
+        elif key in _UNSAFE_EFFECTIVE_OPTIONS or key.startswith(("loose-", "admin-")):
             raise Refused("unsafe_effective_option_present")
+    if inherited_x_options:
+        x_values = by_key.get("mysqlx")
+        if not x_values or any(value != "0" for value in x_values):
+            raise Refused("x_protocol_not_disabled")
     for key, expected in instance.expected_options().items():
         values = by_key.get(key)
         if not values or values[-1] is None:
@@ -211,6 +229,27 @@ def validate_effective_options(instance: Instance, output: str | bytes) -> None:
             if any(values[-1] == forbidden or values[-1].startswith(forbidden + "/")
                    for forbidden in _FORBIDDEN_PATHS[key]):
                 raise Refused("shared_path_selected")
+
+
+def validate_resolved_options(instance: Instance, found: dict[str, str]) -> None:
+    """Compare mysqld's own `--verbose --help` rendering with the instance contract.
+
+    Both sides are normalized (mysqld renders `mysqlx=0` as `OFF` and booleans as
+    `FALSE`). `log-error` is the one option `--help` cannot report: before the log
+    subsystem starts mysqld prints `stderr` (measured on 8.4.13 with the file
+    configured and honored at runtime). Its exact path is still required from
+    `my_print_defaults` and `--validate-config`; here only `stderr` or the exact
+    path is accepted.
+    """
+    expected = instance.expected_options()
+    if set(found) != set(expected):
+        raise Refused("mysqld_resolved_option_missing")
+    for key, value in expected.items():
+        actual = normalize_resolved_value(key, found[key])
+        if key == "log-error" and actual == "stderr":
+            continue
+        if actual != normalize_resolved_value(key, value):
+            raise Refused("mysqld_resolved_option_mismatch")
 
 
 def validate_instance_group(instance: Instance, text: str) -> None:

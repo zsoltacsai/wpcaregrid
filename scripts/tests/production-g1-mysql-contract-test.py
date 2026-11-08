@@ -48,6 +48,29 @@ def dropin_for(instance):
                 if path.endswith(f"{instance.unit}.d/90-wpcaregrid-g1.conf"))
 
 
+INHERITED_FROM_SHARED_GROUP = " --user=mysql --bind-address=127.0.0.1 --mysqlx-bind-address=127.0.0.1"
+
+
+def real_defaults(instance):
+    """my_print_defaults as captured on MySQL 8.4.13 with an Ubuntu-style shared [mysqld]
+    group (user, bind-address, mysqlx-bind-address) next to the generated instance group."""
+    return defaults(instance) + INHERITED_FROM_SHARED_GROUP
+
+
+def real_help(instance, **overrides):
+    """`mysqld --verbose --help` lines for the contract options, as rendered by 8.4.13:
+    booleans as FALSE, mysqlx=0 as OFF, datadir with a trailing slash, log-error as stderr."""
+    values = {
+        "bind-address": "127.0.0.1", "binlog-encryption": "FALSE", "datadir": instance.datadir + "/",
+        "default-table-encryption": "FALSE", "innodb-redo-log-encrypt": "FALSE",
+        "innodb-undo-log-encrypt": "FALSE", "log-error": "stderr", "mysqlx": "OFF",
+        "pid-file": instance.pid_file, "port": str(instance.port), "secure-file-priv": "NULL",
+        "socket": instance.socket, "tmpdir": instance.tmpdir,
+    }
+    values.update(overrides)
+    return "\n".join(f"{key:<61}{value}" for key, value in values.items()) + "\n"
+
+
 class ProductionG1MySQLContractTests(unittest.TestCase):
     def _load_installer(self):
         spec = importlib.util.spec_from_file_location(
@@ -482,12 +505,128 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         self.assertIn("validate_vendor_execstart(text)", source)
         self.assertNotIn('f"--defaults-group-suffix=@{instance.name}" not in', source)
 
+    def _resolved_from_help(self, instance, text):
+        installer = self._load_installer()
+        with mock.patch.object(installer, "run", return_value=text):
+            return installer._effective_help(instance)
+
+    def test_inherited_mysqlx_bind_address_with_disabled_x_protocol_passes_for_both_instances(self):
+        # MySQL 8.4.13 measurement: mysqlx=0 -> plugin DISABLED, only the instance port listens.
+        for instance in CONTRACT.INSTANCES.values():
+            with self.subTest(instance=instance.name):
+                CONTRACT.validate_effective_options(instance, real_defaults(instance))
+                found = self._resolved_from_help(instance, real_help(instance))
+                CONTRACT.validate_resolved_options(instance, found)
+
+    def test_original_unsafe_option_regression_without_the_exception_still_applies(self):
+        # Before the fix every mysqlx-* option was refused. The same output without an
+        # approved exact option and loopback value is still refused with that code.
+        for instance in CONTRACT.INSTANCES.values():
+            for option in ("--mysqlx-bind-address=0.0.0.0", "--mysqlx-bind-address=::1", "--mysqlx-bind-address=*",
+                           "--mysqlx-bind-address", "--mysqlx-port=33060", "--mysqlx-port=33061",
+                           "--mysqlx-socket=/tmp/mysqlx.sock", "--mysqlx-no-such-option=1",
+                           "--loose-mysqlx-bind-address=127.0.0.1", "--mysqlx_bind_address=0.0.0.0"):
+                with self.subTest(instance=instance.name, option=option):
+                    with self.assertRaises(CONTRACT.Refused) as caught:
+                        CONTRACT.validate_effective_options(instance, defaults(instance) + " " + option)
+                    self.assertEqual(str(caught.exception), "unsafe_effective_option_present")
+
+    def test_inherited_x_option_requires_every_mysqlx_value_to_be_zero(self):
+        production = CONTRACT.get_instance("wpcaregrid-production")
+        base = real_defaults(production)
+        cases = {
+            "x protocol enabled": (base.replace("--mysqlx=0", "--mysqlx=1"), "x_protocol_not_disabled"),
+            "x protocol on": (base.replace("--mysqlx=0", "--mysqlx=ON"), "x_protocol_not_disabled"),
+            "x protocol option without value": (base.replace("--mysqlx=0", "--mysqlx"), "x_protocol_not_disabled"),
+            "disable missing": (base.replace(" --mysqlx=0", ""), "x_protocol_not_disabled"),
+            "disabled then enabled": (base + " --mysqlx=1", "x_protocol_not_disabled"),
+            "enabled then disabled": (base.replace("--mysqlx=0", "--mysqlx=1") + " --mysqlx=0", "x_protocol_not_disabled"),
+        }
+        for name, (text, code) in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaises(CONTRACT.Refused) as caught:
+                    CONTRACT.validate_effective_options(production, text)
+                self.assertEqual(str(caught.exception), code)
+
+    def test_x_protocol_enabled_without_an_inherited_option_is_still_refused(self):
+        production = CONTRACT.get_instance("wpcaregrid-production")
+        for text, code in (
+            (defaults(production).replace("--mysqlx=0", "--mysqlx=1"), "effective_option_mismatch"),
+            (defaults(production).replace(" --mysqlx=0", ""), "required_option_missing"),
+        ):
+            with self.subTest(code=code):
+                with self.assertRaises(CONTRACT.Refused) as caught:
+                    CONTRACT.validate_effective_options(production, text)
+                self.assertEqual(str(caught.exception), code)
+
+    def test_other_unsafe_options_are_still_refused_next_to_the_approved_x_option(self):
+        for instance in CONTRACT.INSTANCES.values():
+            for option, code in (
+                ("--skip-grant-tables", "unsafe_effective_option_present"),
+                ("--skip-networking", "unsafe_effective_option_present"),
+                ("--init-file=/tmp/wpcg-init.sql", "unsafe_effective_option_present"),
+                ("--admin-address=0.0.0.0", "unsafe_effective_option_present"),
+                ("--loose-init-file=/tmp/x.sql", "unsafe_effective_option_present"),
+                ("--daemonize=ON", "unsafe_effective_option_present"),
+                ("--early-plugin-load=keyring_file.so", "keyring_configuration_present"),
+                ("--source-host=10.0.0.1", "replication_configuration_present"),
+            ):
+                with self.subTest(instance=instance.name, option=option):
+                    with self.assertRaises(CONTRACT.Refused) as caught:
+                        CONTRACT.validate_effective_options(instance, real_defaults(instance) + " " + option)
+                    self.assertEqual(str(caught.exception), code)
+
+    def test_production_and_restore_outputs_are_not_interchangeable(self):
+        production = CONTRACT.get_instance("wpcaregrid-production")
+        restore = CONTRACT.get_instance("wpcaregrid-production-restore")
+        for instance, other in ((production, restore), (restore, production)):
+            with self.subTest(instance=instance.name):
+                with self.assertRaises(CONTRACT.Refused) as caught:
+                    CONTRACT.validate_effective_options(instance, real_defaults(other))
+                self.assertEqual(str(caught.exception), "effective_option_mismatch")
+                found = self._resolved_from_help(other, real_help(other))
+                with self.assertRaises(CONTRACT.Refused) as caught:
+                    CONTRACT.validate_resolved_options(instance, found)
+                self.assertEqual(str(caught.exception), "mysqld_resolved_option_mismatch")
+
+    def test_resolved_options_compare_normalized_values_and_stay_strict(self):
+        production = CONTRACT.get_instance("wpcaregrid-production")
+        found = self._resolved_from_help(production, real_help(production))
+        CONTRACT.validate_resolved_options(production, found)
+        bad = {
+            "x protocol on": dict(found, mysqlx="ON"),
+            "x protocol true": dict(found, mysqlx="TRUE"),
+            "shared datadir": dict(found, datadir="/var/lib/mysql/"),
+            "shared log": dict(found, **{"log-error": "/var/log/mysql/error.log"}),
+            "other log": dict(found, **{"log-error": "stdout"}),
+            "wrong port": dict(found, port="3306"),
+            "encryption on": dict(found, **{"default-table-encryption": "TRUE"}),
+            "secure-file-priv open": dict(found, **{"secure-file-priv": "/tmp"}),
+            "non loopback bind": dict(found, **{"bind-address": "0.0.0.0"}),
+        }
+        for name, resolved in bad.items():
+            with self.subTest(case=name):
+                with self.assertRaises(CONTRACT.Refused) as caught:
+                    CONTRACT.validate_resolved_options(production, resolved)
+                self.assertEqual(str(caught.exception), "mysqld_resolved_option_mismatch")
+        missing = {key: value for key, value in found.items() if key != "mysqlx"}
+        with self.assertRaises(CONTRACT.Refused) as caught:
+            CONTRACT.validate_resolved_options(production, missing)
+        self.assertEqual(str(caught.exception), "mysqld_resolved_option_missing")
+        # log-error is accepted as stderr (help cannot render the file) or as the exact path.
+        CONTRACT.validate_resolved_options(production, dict(found, **{"log-error": production.log_file}))
+
+    def test_installer_uses_the_shared_resolved_option_validator(self):
+        source = (ROOT / "production-g1-mysql.py").read_text(encoding="utf-8")
+        self.assertIn("validate_resolved_options(instance, configured)", source)
+        self.assertNotIn("if actual != value:", source)
+
     def test_downloaded_artifacts_have_exact_bytes_and_valid_provenance(self):
         files = {
             "production-g1-mysql.py": b"#!",
             "production_g1_mysql_contract.py": b"#!",
             "production-g1-mysql-manifest.json": b"{",
-            "SHA256SUMS": b"f",
+            "SHA256SUMS": b"a",
         }
         for name, prefix in files.items():
             with self.subTest(name=name):
@@ -496,14 +635,14 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
                 self.assertFalse(payload.startswith(b"_"))
 
         expected = {
-            "production-g1-mysql.py": "fe2f712a62d556ff25f07e53c39137639225a582afdeee1fe8ed8e16aef4c077",
-            "production_g1_mysql_contract.py": "669014a01366cfa5ec3f2d0e80d3eec3a44a57955a1ba8a3bd91c6772fc60029",
-            "production-g1-mysql-manifest.json": "3aa181c1fde33f04a8ddd5a16dd313675225a6032d87c3becd943da1527e0e49",
+            "production-g1-mysql.py": "ad8b26dd5916282a4fcf80035990b89643d995d2ccfc2c76de68dd6bae19d37f",
+            "production_g1_mysql_contract.py": "8437eeab1dd8c755a36c8b4dacf0e7c1ff2e0bd6187f4e7bd7407fde419357e2",
+            "production-g1-mysql-manifest.json": "f002fbca8ff53c527cecef0f7eb0dce601498587c905d3e9a9f32681e74b6b6e",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "b61667c773ea02410c8dab5d94afa77a342cd893049fe81bac84a8d24b1c98b7")
+                         "51a202b3ff507f8b4e7ba2b82025f21e672c7558a94889e67ef849b94b985185")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):
