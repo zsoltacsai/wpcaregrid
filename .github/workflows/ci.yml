@@ -73,6 +73,11 @@ jobs:
           G1_REQUIRE_REAL_MYSQL: "1"
         run: python3 scripts/tests/production-g1-mysql-config-order-test.py
 
+      - name: Production G1 operator toolkit integrity and dry-run tests
+        env:
+          G1_REQUIRE_REAL_MYSQL: "1"
+        run: python3 scripts/tests/production-g1-ops-test.py
+
       - name: Install AppArmor parser for generated G1 profile validation
         run: |
           sudo apt-get update
