@@ -2,20 +2,28 @@
 
 Base: protected `claude/ecstatic-wozniak-oemyuf` at `c1d5ba4`. No Elliot/infra file touched.
 
-## Branches
+## Status
 
-| Task | Branch / HEAD | State |
+| Task | PR | State |
 |---|---|---|
-| M16.3/A hero a11y + canvas perf | `codex/m16-3-accessibility-motion-audit-20261108` `17cd1f7` | PR #305. All required checks and the marketing browser E2E pass on `17cd1f7` after the Gitleaks download recovered. Needs Integration & QA and M17 AppSec. |
-| M16.3/B design tokens | `codex/m16-3-design-tokens-20261108` `074f3a1` | PR #306. |
-| M16.2 three-step How it works | `codex/m16-2-how-it-works-three-steps-20261108` `67ee69b` | Draft PR #307. Owner approved the structure; copy adjusted (below). |
-| Localization E2E 404 expectation | `codex/localization-e2e-404-expectation-20261108` `cc7bb63` | PR #308 (one-line test fix). |
+| M16.3/A hero a11y + canvas perf | #305 | Merged as `f3830d32fe45e034e1332b3c8292acb778f96db8`. |
+| Localization E2E 404 expectation | #308 | Merged as `c0e0e7bb2f3861a01d99577bf67d2e1859650bfd`. |
+| M16.3/B design tokens | #306 | Open. Waiting for a clean required CI run. |
+| M16.2 three-step How it works | #307 | Draft. Waiting for a clean required CI run; see release prerequisite below. |
+| This handoff | #309 | Merged last. |
 
-## Resume
+Independent QA/AppSec agent reviews are no longer mandatory (Owner, 2026-11-08). Required CI, Gitleaks and the up-to-date-branch rule still gate every merge. Merges are serial: each merge makes the other open branches behind, so they are updated and re-run one at a time.
 
-1. Required checks and browser E2E have run on #305 (green). Run them on #306-#308 as they complete; do not change the workflow or skip the scan.
-2. #307 stays draft until CI and the independent reviews exist.
-3. Integration & QA and M17 AppSec on the exact HEAD of each PR before any merge.
+## Open blockers and prerequisites
+
+- The Gitleaks 8.30.0 archive download intermittently times out or returns 504 in the Quality job (seen on #305, #306, #307). The scanner then never starts. It is not bypassed; the failed job is re-run once the workflow run completes.
+- Release prerequisite for #307: read production `home.how` content in Owner Admin (both locales) and republish it if present. No production access was used or requested. Nothing was published.
+- GitHub reports the protected branch as having no classic branch protection rule (API 404) although required checks clearly gate merging; this is probably rulesets. Not changed.
+- Separate finding, issue #310: the Hungarian 404 page has `lang="en"` with Hungarian text.
+
+## Next safe M16 task
+
+M16.3 follow-up: apply the Direction 04.1 tokens to one Customer Dashboard surface (for example the website list header and status chips), with before/after screenshots and the existing customer-portal tests. Then M16.2 next section (FAQ ordering and wording review) as a draft for the Owner.
 
 ## M16.2 decisions and copy
 
