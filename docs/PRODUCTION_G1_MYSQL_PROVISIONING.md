@@ -51,7 +51,7 @@ files before copying):
 | --- | --- |
 | `production-g1-mysql.py` | `577097aad15f53a6c144c6c4107e16646c338810b3b1575b5708ec7a17ab0b77` |
 | `production_g1_mysql_contract.py` | `7ad317e3f09d1271531386263289cc821d99d8fa0a82959742dca666c78ed01a` |
-| `production-g1-mysql-manifest.json` | `60ca7544edddd58937ac73daa2249367773319b5a563992ce579677f9cc441fc` |
+| `production-g1-mysql-manifest.json` | `711a36662fbf4f6d53d13eb0b9390c0419b85ea9b04f2fdc00ff9d047231e575` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not
