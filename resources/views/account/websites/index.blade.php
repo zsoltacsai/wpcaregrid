@@ -1,5 +1,5 @@
 <x-layouts.account :title="__('account.websites.title')">
-    <x-account.page-header class="m16-site-list__header" :title="__('account.websites.title')" :lead="__('account.websites.lead')">
+    <x-account.page-header class="m16-dash-header" :title="__('account.websites.title')" :lead="__('account.websites.lead')">
         <x-slot:actions>
             <x-ui.button :href="route('account.websites.create')" icon="plus">{{ __('account.websites.add_another') }}</x-ui.button>
         </x-slot:actions>
