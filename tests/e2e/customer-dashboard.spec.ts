@@ -29,9 +29,9 @@ async function guardNetwork(page: Page, externalRequests: string[]): Promise<voi
     });
 }
 
-async function login(page: Page, locale: 'en' | 'hu'): Promise<void> {
+async function login(page: Page, locale: 'en' | 'hu', account = 'dashboard'): Promise<void> {
     await page.goto('/login');
-    await page.locator('input[name=email]').fill(`dashboard-${locale}@example.test`);
+    await page.locator('input[name=email]').fill(`${account}-${locale}@example.test`);
     await page.locator('input[name=password]').fill(PASSWORD);
     await page.getByRole('button', { name: LOGIN_BUTTON }).first().click();
     await expect(page).toHaveURL(/\/account\/?$/);
@@ -219,6 +219,44 @@ for (const locale of ['en', 'hu'] as const) {
                     .map((element) => element.outerHTML.slice(0, 80)),
             );
             expect(unnamed).toEqual([]);
+        });
+
+        test(`${locale}: a customer without websites sees helpful empty states, keyboard reachable`, async ({ page }) => {
+            const emptyTitle = locale === 'en' ? 'No websites yet' : 'Még nincs weboldal';
+            const addLabel = locale === 'en' ? 'Add a website' : 'Weboldal hozzáadása';
+
+            for (const width of [320, 768, 1440]) {
+                await page.setViewportSize({ width, height: 900 });
+                await login(page, locale, 'dashboard-empty');
+                await expect(page.getByText(locale === 'en' ? '0 connected' : '0 csatlakoztatva')).toBeVisible();
+                await noHorizontalOverflow(page);
+
+                await page.goto('/account/websites');
+                const empty = page.locator('.m16-empty');
+                await expect(empty).toBeVisible();
+                await expect(empty.getByRole('heading', { level: 2, name: emptyTitle })).toBeVisible();
+                await expect(page.locator('h1')).toHaveCount(1);
+                await expect(page.locator('[data-tone]')).toHaveCount(0);
+                await noHorizontalOverflow(page);
+
+                const action = empty.getByRole('link', { name: addLabel });
+                await expect(action).toHaveAttribute('href', /\/account\/websites\/new$/);
+                await action.focus();
+                const focus = await action.evaluate((element) => {
+                    const style = getComputedStyle(element);
+                    return { visible: element.matches(':focus-visible'), style: style.outlineStyle, width: style.outlineWidth };
+                });
+                expect(focus.visible).toBe(true);
+                expect(focus.style).not.toBe('none');
+                expect(focus.width).not.toBe('0px');
+
+                await page.context().clearCookies();
+            }
+
+            await login(page, locale, 'dashboard-empty');
+            await page.goto('/account/websites');
+            await page.getByRole('link', { name: addLabel, exact: true }).click();
+            await expect(page).toHaveURL(/\/account\/websites\/new$/);
         });
 
         test(`${locale}: logging out protects the dashboard again`, async ({ page }) => {

@@ -104,6 +104,12 @@ foreach (['en', 'hu'] as $locale) {
     }
 }
 
+foreach (['en', 'hu'] as $locale) {
+    $customer = Customer::factory()->withUser()->create(['first_name' => 'Empty']);
+    $customer->user->forceFill(['email' => "dashboard-empty-{$locale}@example.test", 'locale' => $locale])->save();
+    Subscription::factory()->for($customer)->create();
+}
+
 foreach (User::query()->where('email', 'like', 'dashboard-%@example.test')->get() as $user) {
     foreach (['en', 'hu'] as $locale) {
         $document = app(LegalDocumentCatalog::class)->current('terms_of_service', $locale);
@@ -124,4 +130,4 @@ foreach (User::query()->where('email', 'like', 'dashboard-%@example.test')->get(
     }
 }
 
-echo "DASHBOARD_FIXTURE=SEEDED customers=2 websites=6\n";
+echo "DASHBOARD_FIXTURE=SEEDED customers=4 websites=6\n";

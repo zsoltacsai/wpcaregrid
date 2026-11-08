@@ -1,7 +1,9 @@
 <x-layouts.account :title="__('account.websites.title')">
     <x-account.page-header class="m16-dash-header" :title="__('account.websites.title')" :lead="__('account.websites.lead')">
         <x-slot:actions>
-            <x-ui.button :href="route('account.websites.create')" icon="plus">{{ __('account.websites.add_another') }}</x-ui.button>
+            @if ($websites->isNotEmpty())
+                <x-ui.button :href="route('account.websites.create')" icon="plus">{{ __('account.websites.add_another') }}</x-ui.button>
+            @endif
         </x-slot:actions>
     </x-account.page-header>
 
@@ -12,9 +14,12 @@
     @endunless
 
     @if ($websites->isEmpty())
-        <x-account.panel>
-            <p class="text-sm text-muted">{{ __('account.websites.empty') }}</p>
-            <x-ui.button :href="route('account.websites.create')" icon="plus" class="mt-4">{{ __('account.websites.add_another') }}</x-ui.button>
+        <x-account.panel class="m16-dash-panel">
+            <x-account.empty-state heading="h2" :title="__('account.websites.empty_title')" :text="__('account.websites.empty_text')">
+                <x-slot:action>
+                    <x-ui.button :href="route('account.websites.create')" icon="plus">{{ __('account.websites.add_first') }}</x-ui.button>
+                </x-slot:action>
+            </x-account.empty-state>
         </x-account.panel>
     @else
         <ul class="m16-site-list__rows divide-y divide-line rounded-lg border border-line bg-surface">
@@ -27,7 +32,7 @@
                             {{ __('account.websites.connector') }}: {{ $website->isConnected() ? $website->connector_status->label() : __('account.onboarding.not_connected') }}
                         </p>
                     </div>
-                    <x-ui.status-badge :tone="$website->status->tone()">{{ $website->status->label() }}</x-ui.status-badge>
+                    <x-account.status-chip :status="$website->status" />
                 </li>
             @endforeach
         </ul>
