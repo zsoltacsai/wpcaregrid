@@ -192,6 +192,14 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
             self.assertIn("log-error=" + instance.log_file + "\n", text)
             self.assertIn("tmpdir=" + instance.tmpdir + "\n", text)
 
+    def test_systemd_service_identity_must_remain_mysql(self):
+        CONTRACT.validate_systemd_identity("mysql\n", "mysql\n")
+        for user, group in (("root", "mysql"), ("mysql", "root"), ("", ""), ("www-data", "www-data")):
+            with self.subTest(user=user, group=group):
+                with self.assertRaises(CONTRACT.Refused) as caught:
+                    CONTRACT.validate_systemd_identity(user, group)
+                self.assertEqual(str(caught.exception), "systemd_service_identity_mismatch")
+
     def test_instance_must_be_exactly_inactive_before_path_provisioning(self):
         CONTRACT.validate_unit_inactive(3, "inactive\n")
         for returncode, stdout in ((0, "active\n"), (3, "failed\n"), (4, "inactive\n"),

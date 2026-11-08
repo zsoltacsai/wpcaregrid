@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+_#!/usr/bin/env python3
 """Root-only, fixed-target G1 provisioning and verification for the two MySQL 8.4 instances.
 
 Commands are intentionally phase-separated. `install` never initializes or
@@ -46,6 +46,7 @@ validate_unit_dropin = _CONTRACT.validate_unit_dropin
 provisioning_path_specs = _CONTRACT.provisioning_path_specs
 validate_provisioning_resource_empty = _CONTRACT.validate_provisioning_resource_empty
 validate_unit_inactive = _CONTRACT.validate_unit_inactive
+validate_systemd_identity = _CONTRACT.validate_systemd_identity
 
 
 ROOT = Path("/")
@@ -153,6 +154,12 @@ def verify_systemd_contract(instance: Instance) -> None:
             refuse("unexpected_instance_dropin")
     except OSError:
         refuse("instance_dropin_unreadable")
+    service_user = run([str(SYSTEMCTL), "show", instance.unit, "--property=User", "--value"])
+    service_group = run([str(SYSTEMCTL), "show", instance.unit, "--property=Group", "--value"])
+    try:
+        validate_systemd_identity(service_user, service_group)
+    except Refused as exc:
+        refuse(str(exc))
 
 
 def verify_apparmor(instance: Instance) -> None:

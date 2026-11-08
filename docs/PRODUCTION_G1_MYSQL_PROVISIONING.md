@@ -49,9 +49,9 @@ files before copying):
 
 | Source artifact | SHA-256 |
 | --- | --- |
-| `production-g1-mysql.py` | `ed1ef759c739cb7df62bd1b6dcfbe69b6c727b93918bf7bb196c5aaa177e4c22` |
-| `production_g1_mysql_contract.py` | `ac53393d80b36bc3c2cf431dc8af564dd15dc148ce713fb3e812a9465dc1ef95` |
-| `production-g1-mysql-manifest.json` | `2405b7590990291f4601e0fa8e5c1139ffa3df7250e7b9ce193161d06fdc1796` |
+| `production-g1-mysql.py` | `577097aad15f53a6c144c6c4107e16646c338810b3b1575b5708ec7a17ab0b77` |
+| `production_g1_mysql_contract.py` | `7ad317e3f09d1271531386263289cc821d99d8fa0a82959742dca666c78ed01a` |
+| `production-g1-mysql-manifest.json` | `60ca7544edddd58937ac73daa2249367773319b5a563992ce579677f9cc441fc` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not
@@ -104,8 +104,8 @@ Each command must return exit 0 and its documented structured PASS. Any
 datadir, restart a service, or invoke `mysql-systemd-start`. `install` performs
 no MySQL initialization or service start. It validates source identities and
 destinations, syntax-checks/loads only the two new named AppArmor profiles,
-calls `systemctl daemon-reload`, then checks installed hashes and effective
-unit directives. `provision-paths` first verifies that both exact instance units are inactive, then creates only the exact approved datadir, log and tmp paths;
+calls `systemctl daemon-reload`, then checks installed hashes, effective User=mysql/Group=mysql identity,
+and all expected unit directives. `provision-paths` first verifies that both exact instance units are inactive, then creates only the exact approved datadir, log and tmp paths;
 it requires their parent directory identities/modes to match the Ubuntu layout
 and rolls back only empty files/directories created by that invocation if it
 fails. It refuses any pre-existing non-empty datadir, tmpdir or log file for either instance and does not initialize either database. `verify-install` and each
@@ -149,7 +149,8 @@ path.
 
 Acceptance is complete only after:
 
-1. `install` and `verify-install` PASS, with both named profiles loaded in
+1. `install` and `verify-install` PASS, with both services effectively running as
+   mysql:mysql, both named profiles loaded in
    enforce mode and both instance `ExecStartPre` overrides effective.
 2. Both option-resolution/preflight commands PASS for exact MySQL 8.4 binaries,
    datadirs, sockets, PID files, logs, tmpdirs, loopback ports,

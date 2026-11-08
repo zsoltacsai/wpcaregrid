@@ -104,6 +104,12 @@ def validate_unit_inactive(returncode: int, stdout: str) -> None:
         raise Refused("instance_must_be_inactive")
 
 
+def validate_systemd_identity(user: str, group: str) -> None:
+    """Require the MySQL daemon to run as its dedicated unprivileged account."""
+    if user.strip() != "mysql" or group.strip() != "mysql":
+        raise Refused("systemd_service_identity_mismatch")
+
+
 _UNSAFE_EFFECTIVE_OPTIONS = frozenset({
     # These inherited options can bypass authentication, execute SQL during
     # startup/connection, daemonize away from systemd, or add listeners.

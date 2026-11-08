@@ -6,13 +6,13 @@ _{
     "/etc/mysql/mysql.conf.d/90-wpcaregrid-production.cnf": "7de16da204b888e634ea46a61e00b592bcfa69b5426a02228534b627e9567ad9",
     "/etc/systemd/system/mysql@wpcaregrid-production-restore.service.d/90-wpcaregrid-g1.conf": "df0658d94044501efad5074e7dd5401ff505df7034ea6fcae1e57fae9ee3d9c6",
     "/etc/systemd/system/mysql@wpcaregrid-production.service.d/90-wpcaregrid-g1.conf": "caaee5b62105ab718f53a42acc990e165040b8621d14d69af4fa0e4c1c9d29ae",
-    "/usr/local/libexec/production_g1_mysql_contract.py": "ac53393d80b36bc3c2cf431dc8af564dd15dc148ce713fb3e812a9465dc1ef95",
-    "/usr/local/libexec/wpcaregrid-g1-mysql.py": "ed1ef759c739cb7df62bd1b6dcfbe69b6c727b93918bf7bb196c5aaa177e4c22"
+    "/usr/local/libexec/production_g1_mysql_contract.py": "7ad317e3f09d1271531386263289cc821d99d8fa0a82959742dca666c78ed01a",
+    "/usr/local/libexec/wpcaregrid-g1-mysql.py": "577097aad15f53a6c144c6c4107e16646c338810b3b1575b5708ec7a17ab0b77"
   },
   "schema": 1,
   "sources": {
-    "production-g1-mysql.py": "ed1ef759c739cb7df62bd1b6dcfbe69b6c727b93918bf7bb196c5aaa177e4c22",
-    "production_g1_mysql_contract.py": "ac53393d80b36bc3c2cf431dc8af564dd15dc148ce713fb3e812a9465dc1ef95"
+    "production-g1-mysql.py": "577097aad15f53a6c144c6c4107e16646c338810b3b1575b5708ec7a17ab0b77",
+    "production_g1_mysql_contract.py": "7ad317e3f09d1271531386263289cc821d99d8fa0a82959742dca666c78ed01a"
   },
   "tool": "wpcaregrid-production-mysql-g1-v1"
 }
