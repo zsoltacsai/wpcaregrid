@@ -11,7 +11,7 @@ installed on a host, and no existing helper imports it yet.
 | Application | `/var/www/wpcaregrid` | `/var/www/wpcaregrid-staging-new` |
 | Database | `wpcaregrid` | `wpcg_staging_next` |
 | Markers | `/var/lib/wpcaregrid/{deploy-maintenance,workers-disabled,scheduler-paused}` | `/var/lib/wpcaregrid-deploy/staging-next/state/{maintenance,workers-disabled,scheduler-paused}` |
-| Lock | `/home/deploy/private-backups/.deploy.lock`, `/var/lib/wpcaregrid/scheduler.lock` | `/var/lib/wpcaregrid-deploy/staging-next/deploy.lock` |
+| Lock | `/home/deploy/private-backups/.deploy.lock`, `/var/lib/wpcaregrid/scheduler.lock` | `/var/lib/wpcaregrid-deploy/staging-next/state/deploy.lock` |
 | Backups | `/home/deploy/private-backups/wpcaregrid-pre-{deploy,recovery}-*.sql.gz` | `/var/lib/wpcaregrid-deploy/staging-next/database-backups/staging-next-<sha>-*.sql.gz` |
 
 `staging-next` values come from the compiled `STAGING_NEXT` environment contract
@@ -40,9 +40,16 @@ values mirror `recover-staging-deployment.py`, `deploy-staging.sh`,
 
 ## Known limits
 
-* Ownership/mode checks (`expected_uid`) apply to the leaf only; ancestor
+* Ownership/mode checks (`expected_uid`) apply to the leaf only and are skipped
+  entirely when the leaf is missing (`must_exist=False`); ancestor
   directory permissions and check-to-use races (TOCTOU) remain the caller's
   responsibility (open with `O_NOFOLLOW`, re-verify after open).
+* The registry and its frozen dataclasses are not protected against in-process
+  mutation (`object.__setattr__`); the module guards callers, not a hostile
+  process already running as the same user. The environment contract is loaded
+  fresh from its sibling file and the resulting registry is validated at import.
+* Fence probes must return exactly `True`; the probe is an injected callable and
+  does not itself check for symlinks or file type.
 * Marker and lock kinds match exact files only. Backups must be regular,
   single-link files. Target objects must be the registered instances.
 
