@@ -148,8 +148,8 @@ return [
         'title' => 'Három lépésben indul a karbantartás.',
         'steps' => [
             'plan' => ['title' => 'Csomagok megismerése', 'text' => 'Tekintse át a lehetőségeket, és érdeklődjön e-mailben a webhelye szolgáltatásának elérhetőségéről.'],
-            'agree' => ['title' => 'Egyeztetés', 'text' => 'Megbeszéljük a webhely igényeit, felmérjük a beállításokat, és közösen kiválasztjuk a csomagot. A mentés a csomagtól és a webhely támogatásától függ.'],
-            'maintain' => ['title' => 'Folyamatos karbantartás', 'text' => 'A megállapodás után a csomag és a támogatott webhelybeállítás szerint végezzük a frissítéseket, mentéseket, ellenőrzéseket és felügyeletet.'],
+            'agree' => ['title' => 'Egyeztetés', 'text' => 'Megbeszéljük a webhely igényeit, felmérjük a beállításokat, és egyeztetjük, hogyan tudunk segíteni. A mentés a csomagtól és a webhely támogatásától függ.'],
+            'maintain' => ['title' => 'Folyamatos karbantartás', 'text' => 'Ahol a szolgáltatás elérhető a webhelyéhez, a karbantartás a frissítéseket, mentéseket, ellenőrzéseket és felügyeletet a csomag és a beállítás szerint fedi le.'],
         ],
     ],
 

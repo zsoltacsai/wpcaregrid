@@ -24,7 +24,7 @@ class HowItWorksSectionTest extends TestCase
     {
         $en = $this->howSection('en');
         $this->assertSame(3, substr_count($en, '<li class="border-t-2'));
-        foreach (['Up and running in three steps.', 'Explore the plans', 'Talk it through', 'Ongoing maintenance', 'Once agreed'] as $text) {
+        foreach (['Up and running in three steps.', 'Explore the plans', 'Talk it through', 'Ongoing maintenance', 'Where service is available'] as $text) {
             $this->assertStringContainsString($text, $en);
         }
         foreach (['Connect your website', 'Initial check', 'Connect and check your site'] as $removed) {
@@ -33,7 +33,7 @@ class HowItWorksSectionTest extends TestCase
 
         $hu = $this->howSection('hu');
         $this->assertSame(3, substr_count($hu, '<li class="border-t-2'));
-        foreach (['Három lépésben indul a karbantartás.', 'Egyeztetés', 'A megállapodás után'] as $text) {
+        foreach (['Három lépésben indul a karbantartás.', 'Egyeztetés', 'Ahol a szolgáltatás elérhető'] as $text) {
             $this->assertStringContainsString($text, $hu);
         }
         $this->assertStringNotContainsString('Weboldal csatlakoztatása', $hu);
