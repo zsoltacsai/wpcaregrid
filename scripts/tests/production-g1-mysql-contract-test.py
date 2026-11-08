@@ -310,7 +310,7 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
     def test_resource_configuration_is_exact_and_has_no_fallback_group(self):
         artifacts = CONTRACT.artifact_files()
         for instance in CONTRACT.INSTANCES.values():
-            path = f"/etc/mysql/mysql.conf.d/90-{instance.name}.cnf"
+            path = instance.config_path
             text = artifacts[path].decode()
             CONTRACT.validate_instance_group(instance, text)
             self.assertIn("secure-file-priv=NULL\n", text)
@@ -626,7 +626,7 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
             "production-g1-mysql.py": b"#!",
             "production_g1_mysql_contract.py": b"#!",
             "production-g1-mysql-manifest.json": b"{",
-            "SHA256SUMS": b"a",
+            "SHA256SUMS": b"5",
         }
         for name, prefix in files.items():
             with self.subTest(name=name):
@@ -635,14 +635,14 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
                 self.assertFalse(payload.startswith(b"_"))
 
         expected = {
-            "production-g1-mysql.py": "ad8b26dd5916282a4fcf80035990b89643d995d2ccfc2c76de68dd6bae19d37f",
-            "production_g1_mysql_contract.py": "8437eeab1dd8c755a36c8b4dacf0e7c1ff2e0bd6187f4e7bd7407fde419357e2",
-            "production-g1-mysql-manifest.json": "f002fbca8ff53c527cecef0f7eb0dce601498587c905d3e9a9f32681e74b6b6e",
+            "production-g1-mysql.py": "5bddfcc886c8f94653f1aa9c55c63da7dca259042156db3e7e8a5378639e215a",
+            "production_g1_mysql_contract.py": "45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3",
+            "production-g1-mysql-manifest.json": "87f7aa3a8acee74fbf0bb697ec5e93b540fe9484927bab4212b24df71e2d22e9",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "51a202b3ff507f8b4e7ba2b82025f21e672c7558a94889e67ef849b94b985185")
+                         "d5f82bddd2d908b84062bfb8c115c92478df2e26a14b424f4006d913dd219a92")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):

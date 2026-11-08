@@ -57,7 +57,6 @@ ROOT = Path("/")
 HELPER = Path("/usr/local/libexec/wpcaregrid-g1-mysql.py")
 CONTRACT = Path("/usr/local/libexec/production_g1_mysql_contract.py")
 INSTALLED_MANIFEST = Path("/usr/local/libexec/production_g1_mysql_manifest.json")
-CONFIG_DIR = Path("/etc/mysql/mysql.conf.d")
 LIBEXEC_DIR = Path("/usr/local/libexec")
 APPARMOR_DIR = Path("/etc/apparmor.d")
 MYSQLD = Path("/usr/sbin/mysqld")
@@ -257,7 +256,9 @@ def _defaults(instance: Instance) -> str:
 
 
 def verify_effective_config(instance: Instance) -> None:
-    config = CONFIG_DIR / f"90-{instance.name}.cnf"
+    if os.path.lexists(instance.legacy_config_path):
+        refuse("legacy_config_name_present")
+    config = Path(instance.config_path)
     text = check_file(config, owner="root", group="root", mode=0o644).decode("utf-8", "strict")
     validate_instance_group(instance, text)
     defaults = _defaults(instance)
@@ -548,7 +549,7 @@ def _verify_installed_bundle(instance: Instance | None = None) -> None:
     for target, content in generated.items():
         if instance is not None:
             owned_targets = {
-                f"/etc/mysql/mysql.conf.d/90-{instance.name}.cnf",
+                instance.config_path,
                 f"/etc/systemd/system/{instance.unit}.d/90-wpcaregrid-g1.conf",
                 f"/etc/apparmor.d/{instance.apparmor_profile}",
             }
@@ -660,6 +661,11 @@ def install() -> None:
             check_directory(directory, owner="root", group="root", mode=0o755)
             if any(item.name != allowed_name for item in directory.iterdir()):
                 refuse("unexpected_instance_dropin")
+    # A leftover #325/#327 `90-` file must be rolled back first; it would be a second,
+    # differently ordered definition of the same instance group.
+    for instance in INSTANCES.values():
+        if os.path.lexists(instance.legacy_config_path):
+            refuse("legacy_config_name_present")
     # Preflight all destinations before publishing any artifact.
     for path, content in manifest.items():
         _assert_parent_chain(path.parent)
