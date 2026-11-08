@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+_#!/usr/bin/env python3
 """Synthetic fail-closed tests for the Production G1 MySQL config contract."""
 
 from __future__ import annotations
@@ -238,6 +238,9 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
             "production_g1_mysql_contract.py": expected_sources["production_g1_mysql_contract.py"],
             "production-g1-mysql-manifest.json": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
         })
+        docs = (ROOT.parent / "docs/PRODUCTION_G1_MYSQL_PROVISIONING.md").read_text(encoding="utf-8")
+        for name, digest in sums.items():
+            self.assertIn(f"| `{name}` | `{digest}` |", docs)
 
 
 if __name__ == "__main__":

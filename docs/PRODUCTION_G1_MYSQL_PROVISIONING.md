@@ -1,4 +1,4 @@
-# Production G1 — MySQL 8.4 instance provisioning package
+_# Production G1 — MySQL 8.4 instance provisioning package
 
 Status: **root-console package prepared; not executed on the VPS**.
 
@@ -47,9 +47,9 @@ files before copying):
 
 | Source artifact | SHA-256 |
 | --- | --- |
-| `production-g1-mysql.py` | `b40f0cad844b8c258142998b2a0d7c3b9666e00c9ab5a39eb5d14b5c365595cc` |
-| `production_g1_mysql_contract.py` | `d2d1bb5bdb70fd94f005019c1e1e8ef60c27e0a0e9dfade146a0e4a06ce108c4` |
-| `production-g1-mysql-manifest.json` | `30d4c06fe2d55ae7f7abca6d33539c0d50e84f0e731cbe8d3d0193b687192ec8` |
+| `production-g1-mysql.py` | `ed1ef759c739cb7df62bd1b6dcfbe69b6c727b93918bf7bb196c5aaa177e4c22` |
+| `production_g1_mysql_contract.py` | `1e619ccc7d4723859feae12a9cc8106ba8d271fcdb7dece2d826c8edea3a7186` |
+| `production-g1-mysql-manifest.json` | `27ccf13d88e3c0dc9e7177e92dc0494a8c6aa9299def5553fbb56909e2a40612` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not
