@@ -19,6 +19,9 @@ Base: protected `claude/ecstatic-wozniak-oemyuf` at `c1d5ba4`. No Elliot/infra f
 | Handoff: integration checkpoint 1 | #320 | Merged as `6dbbd334115707d6dc926508ae3ff8dad0b0ce7d`. |
 | M16.3 Customer Dashboard navigation (sidebar, mobile header) | #321 | Merged as `119185f0eff65087f2f801d00d46c8ec700a4488`. Focus returns to the menu button after Escape, outside click and resize close the menu, teal active item. The bar keeps `#17212B`: the logo artwork is drawn on it. |
 | FAQ informal address and Owner terminology | #322 | Merged as `0306fd19d113fda54664c9fec98f9dbf28c52ea2`. See `docs/CONTENT_TERMINOLOGY.md`. |
+| Handoff: integration checkpoint 2 | #323 | Merged as `0f4f81107129b5443b599005fb0c1a78f23b9cc1`. |
+| M16.3 Customer Dashboard empty states and reusable status chip | #324 | Merged as `b6a7043a12158345d3d86bb1bab770e85d8d8314`. `x-account.status-chip`, `x-account.empty-state`. |
+| G1 systemd ExecStart hotfix (Elliot's G1 area, done on request) | #325 | Merged as `32d57653ec2da3f81ca16489efbec33f810b29ca`. Not an M16 change; recorded here because it ended the M16 queue. |
 
 Independent QA/AppSec agent reviews are no longer mandatory (Owner, 2026-11-08). Required CI, Gitleaks and the up-to-date-branch rule still gate every merge. Merges were serial: each merge made the other open branches behind, so they were updated and re-run one at a time. Post-merge CI on `af6fbaa` was still running when this was written.
 
@@ -38,9 +41,11 @@ Checkpoint 1 (after #318, #317, #314): authoritative primary `0a8494bcafad4c0b06
 
 Checkpoint 2 (after #320, #321, #322): authoritative primary `0306fd19d113fda54664c9fec98f9dbf28c52ea2`. Previous primary heads `6dbbd33` and `fde2336` (Elliot's G1 AppArmor fix) have green CI; the run on `119185f` was cancelled by the next push and the run on `0306fd1` was still queued when recorded. Open PRs (#303, #270, #248, #247, #246, #244, #224, #218) are Elliot's G1, Gate 1 and policy work: none overlaps a file changed by these merges. No conflicts; no branch needed synchronizing because of them.
 
+Checkpoint 3 (after #323, #324, #325): authoritative primary `32d57653ec2da3f81ca16489efbec33f810b29ca`; its CI run (`42518370107`) passed all 38 jobs, including Quality, the G1 artifact regression tests, AppArmor profile compilation and the Gitleaks scan. Open PRs: #270, #248, #247, #246, #244, #224, #218 have no file overlap with these merges (#247 and #246 are behind, #244 conflicts: Elliot's branches, not touched). **#303 overlaps** `docs/PRODUCTION_G1_MYSQL_PROVISIONING.md` (hash table and the drop-in paragraph changed by #325); its owner was told in a PR comment and its branch was not modified.
+
 ## Next safe M16 task
 
-Empty states and a reusable status chip for the Customer Dashboard: a small Blade component that wraps the current `x-ui.status-badge` hook (`data-tone`, text label always visible), helpful empty states for the website list and the dashboard summary, HU/EN, with the existing dashboard E2E extended. Separate Owner-scoped follow-up: convert the remaining formal Hungarian (account area, checkout, emails) to informal address and replace the remaining "webhely" in the pricing table and the update-process section.
+No M16 PR is open. Candidates, in order: (1) convert the remaining formal Hungarian (account area, checkout, emails) to informal address and replace "webhely" in the pricing table and the update-process section, as one content PR; (2) apply the status chip component to the remaining account pages (website detail, offers, backups); (3) field Core Web Vitals measurement for the hero once a production-like environment is available.
 
 ## M16.2 decisions and copy
 
