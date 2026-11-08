@@ -43,10 +43,14 @@ def _load_contract():
     name = "_wpcg_target_binding_environment_contract"
     module = sys.modules.get(name)
     if module is None:
-        spec = importlib.util.spec_from_file_location(name, path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
+        try:
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(name, None)
+            raise TargetRefused("environment_contract_unavailable") from None
     return module
 
 
@@ -62,6 +66,10 @@ class DeploymentTarget:
     maintenance_marker: str
     worker_fence_marker: str
     scheduler_fence_marker: str
+    extra_locks: tuple[str, ...] = ()
+
+    def locks(self) -> tuple[str, ...]:
+        return (self.lock_file, *self.extra_locks)
 
     def owned_roots(self) -> tuple[str, ...]:
         return (self.app_dir, self.state_root, self.backup_root)
@@ -86,6 +94,7 @@ LEGACY_STAGING = DeploymentTarget(
     maintenance_marker="/var/lib/wpcaregrid/deploy-maintenance",
     worker_fence_marker="/var/lib/wpcaregrid/workers-disabled",
     scheduler_fence_marker="/var/lib/wpcaregrid/scheduler-paused",
+    extra_locks=("/var/lib/wpcaregrid/scheduler.lock",),
 )
 
 
@@ -143,12 +152,19 @@ def _syntax(value: object) -> PurePosixPath:
     return path
 
 
+def _registered(target: object) -> DeploymentTarget:
+    if not isinstance(target, DeploymentTarget) or TARGETS.get(target.name) is not target:
+        raise TargetRefused("target_not_registered")
+    return target
+
+
 def _other_targets(target: DeploymentTarget):
     return [other for other in TARGETS.values() if other.name != target.name]
 
 
 def validate_pair(target: DeploymentTarget, app_dir: object, database: object) -> None:
     """The application directory and database must be exactly the bound pair."""
+    _registered(target)
     if not isinstance(app_dir, str) or not isinstance(database, str):
         raise TargetRefused("target_pair_invalid")
     for other in _other_targets(target):
@@ -162,7 +178,7 @@ def _allowed_roots(target: DeploymentTarget, kind: str) -> tuple[str, ...]:
     if kind == "marker":
         return target.marker_paths()
     if kind == "lock":
-        return (target.lock_file,)
+        return target.locks()
     if kind == "backup":
         return (target.backup_root,)
     if kind == "state":
@@ -185,6 +201,7 @@ def check_path(
     other target, paths outside the target, any symlink component, and (when
     ``expected_uid`` is given) wrong owner or group/other-writable mode.
     """
+    _registered(target)
     if kind not in _PATH_KINDS:
         raise TargetRefused("path_kind_unknown")
     path = _syntax(value)
@@ -192,7 +209,12 @@ def check_path(
         if any(_within(path, root) for root in _allowed_roots(other, kind)) or any(
                 _within(path, root) for root in other.owned_roots()):
             raise TargetRefused("path_belongs_to_other_target")
-    if not any(_within(path, root) for root in _allowed_roots(target, kind)):
+    roots = _allowed_roots(target, kind)
+    if kind in {"marker", "lock"}:
+        # Single files: exact match only, never a child path.
+        if str(path) not in roots:
+            raise TargetRefused("path_outside_target")
+    elif not any(_within(path, root) for root in roots):
         raise TargetRefused("path_outside_target")
 
     current = PurePosixPath("/")
@@ -224,6 +246,7 @@ def check_backup(
     expected_uid: int | None = None,
 ) -> str:
     """A backup is usable only if it sits in, and is named for, this target."""
+    _registered(target)
     try:
         checked = check_path(target, value, "backup", lstat_fn=lstat_fn, expected_uid=expected_uid)
     except TargetRefused as error:
@@ -234,11 +257,18 @@ def check_backup(
     if candidate.parent != PurePosixPath(target.backup_root) \
             or re.fullmatch(target.backup_name_pattern, candidate.name) is None:
         raise TargetRefused("backup_identity_invalid")
+    try:
+        info = lstat_fn(checked)
+    except OSError:
+        raise TargetRefused("path_unavailable") from None
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise TargetRefused("backup_not_regular_file")
     return checked
 
 
 def check_marker_document(target: DeploymentTarget, document: object) -> None:
     """A state marker/journal naming any other target is STOP; it must name this one."""
+    _registered(target)
     if not isinstance(document, Mapping) or "target" not in document:
         raise TargetRefused("marker_target_missing")
     recorded = document["target"]
@@ -248,6 +278,7 @@ def check_marker_document(target: DeploymentTarget, document: object) -> None:
 
 def check_fences(target: DeploymentTarget, exists_fn: Callable[[str], bool]) -> None:
     """Both fences of *this* target must be active; the other target's are irrelevant."""
+    _registered(target)
     if not exists_fn(target.worker_fence_marker):
         raise TargetRefused("worker_fence_inactive")
     if not exists_fn(target.scheduler_fence_marker):
@@ -276,6 +307,11 @@ def recovery_decision(
     (other target's journal, unknown phase, interrupted deploy with a missing
     gate or fence) raises ``TargetRefused`` so nothing is replayed blindly.
     """
+    _registered(target)
+    if not all(type(flag) is bool for flag in (maintenance_active, workers_fenced, scheduler_fenced)):
+        raise TargetRefused("recovery_flags_invalid")
+    if not isinstance(phase, str):
+        raise TargetRefused("recovery_phase_unknown")
     if journal_target != target.name:
         raise TargetRefused("journal_belongs_to_other_target")
     if phase in _COMPLETE_PHASES:

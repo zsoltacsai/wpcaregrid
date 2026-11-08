@@ -335,5 +335,63 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(results, {"recover"})
 
 
+class HardeningTests(unittest.TestCase):
+    def test_non_bool_recovery_flags_and_unhashable_phase_are_refused(self):
+        for flags in ((1, True, True), (True, "no", True), (True, True, [0]), (None, True, True)):
+            with self.assertRaises(B.TargetRefused) as ctx:
+                B.recovery_decision(NEXT, "staging-next", "migrating", maintenance_active=flags[0],
+                                    workers_fenced=flags[1], scheduler_fenced=flags[2])
+            self.assertEqual(str(ctx.exception), "recovery_flags_invalid")
+        for phase in (["x"], {"a": 1}, b"migrating"):
+            with self.assertRaises(B.TargetRefused):
+                B.recovery_decision(NEXT, "staging-next", phase, maintenance_active=True,
+                                    workers_fenced=True, scheduler_fenced=True)
+
+    def test_marker_and_lock_paths_are_exact_not_prefixes(self):
+        for kind, base in (("marker", LEGACY.maintenance_marker), ("lock", LEGACY.lock_file)):
+            for suffix in ("/x", "/x/y"):
+                with self.assertRaises(B.TargetRefused, msg=base + suffix):
+                    B.check_path(LEGACY, base + suffix, kind, must_exist=False)
+
+    def test_legacy_scheduler_lock_is_modelled(self):
+        lock = "/var/lib/wpcaregrid/scheduler.lock"
+        self.assertEqual(B.check_path(LEGACY, lock, "lock", must_exist=False), lock)
+        with self.assertRaises(B.TargetRefused):
+            B.check_path(NEXT, lock, "lock", must_exist=False)
+
+    def test_forged_target_instances_are_refused_everywhere(self):
+        forged = B.DeploymentTarget(**{**NEXT.__dict__, "app_dir": LEGACY.app_dir})
+        calls = (
+            lambda: B.check_path(forged, forged.app_dir, "app", must_exist=False),
+            lambda: B.validate_pair(forged, forged.app_dir, forged.database),
+            lambda: B.check_fences(forged, lambda _p: True),
+            lambda: B.check_marker_document(forged, {"target": "staging-next"}),
+            lambda: B.check_backup(forged, next_backup()),
+            lambda: B.recovery_decision(forged, "staging-next", "idle", maintenance_active=False,
+                                        workers_fenced=False, scheduler_fenced=False),
+        )
+        for call in calls:
+            with self.assertRaises(B.TargetRefused) as ctx:
+                call()
+            self.assertEqual(str(ctx.exception), "target_not_registered")
+
+    def test_backup_must_be_a_single_link_regular_file(self):
+        path = next_backup()
+        for mode in (stat.S_IFDIR | 0o755, stat.S_IFIFO | 0o600):
+            fs = FakeFs(files=[path])
+            fs.entries[path] = (mode, UID)
+            with self.assertRaises(B.TargetRefused) as ctx:
+                B.check_backup(NEXT, path, lstat_fn=fs.lstat)
+            self.assertEqual(str(ctx.exception), "backup_not_regular_file")
+        base = FakeFs(files=[path])
+
+        def hardlinked(p):
+            r = base.lstat(p)
+            return os.stat_result((r.st_mode, 0, 0, 2, r.st_uid, 0, 0, 0, 0, 0)) if p == path else r
+
+        with self.assertRaises(B.TargetRefused):
+            B.check_backup(NEXT, path, lstat_fn=hardlinked)
+
+
 if __name__ == "__main__":
     unittest.main()
