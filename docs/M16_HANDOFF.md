@@ -16,6 +16,9 @@ Base: protected `claude/ecstatic-wozniak-oemyuf` at `c1d5ba4`. No Elliot/infra f
 | M16.3 Customer Dashboard home | #317 | Merged as `5ba984039a9e90eefa1e1dca4ac5ff76676e756a`. Hook classes `.m16-dash-header/-panel/-setup`; shared components unchanged. |
 | Authenticated dashboard browser E2E | #318 | Merged as `c51097af75eed2cd6093fb8b7cb67fd042e4492a`. Guarded synthetic fixture and 19-test spec, run inside the sandboxed marketing workflow after the cancellation verification (it accepts the current terms document, which that verification fingerprints). |
 | M16.2 FAQ (8 approved questions) and contact CTA | #314 | Merged as `0a8494bcafad4c0b06a51825eddf5260bd17aaa2`. Owner-approved content, answers checked against plan definitions; no SLA, uptime, refund or self-service claims. |
+| Handoff: integration checkpoint 1 | #320 | Merged as `6dbbd334115707d6dc926508ae3ff8dad0b0ce7d`. |
+| M16.3 Customer Dashboard navigation (sidebar, mobile header) | #321 | Merged as `119185f0eff65087f2f801d00d46c8ec700a4488`. Focus returns to the menu button after Escape, outside click and resize close the menu, teal active item. The bar keeps `#17212B`: the logo artwork is drawn on it. |
+| FAQ informal address and Owner terminology | #322 | Merged as `0306fd19d113fda54664c9fec98f9dbf28c52ea2`. See `docs/CONTENT_TERMINOLOGY.md`. |
 
 Independent QA/AppSec agent reviews are no longer mandatory (Owner, 2026-11-08). Required CI, Gitleaks and the up-to-date-branch rule still gate every merge. Merges were serial: each merge made the other open branches behind, so they were updated and re-run one at a time. Post-merge CI on `af6fbaa` was still running when this was written.
 
@@ -33,9 +36,11 @@ Independent QA/AppSec agent reviews are no longer mandatory (Owner, 2026-11-08).
 
 Checkpoint 1 (after #318, #317, #314): authoritative primary `0a8494bcafad4c0b06a51825eddf5260bd17aaa2`. CI and the marketing browser E2E are green on the two previous primary heads (`c51097a`, `5ba9840`); the run on `0a8494b` was still in progress. Open PRs (#319, #303, #270, #248, #247, #246, #244, #224, #218) are Elliot's G1, Gate 1 and policy work: none touches a file changed in these three merges, and none needs synchronization because of them. No conflicts.
 
+Checkpoint 2 (after #320, #321, #322): authoritative primary `0306fd19d113fda54664c9fec98f9dbf28c52ea2`. Previous primary heads `6dbbd33` and `fde2336` (Elliot's G1 AppArmor fix) have green CI; the run on `119185f` was cancelled by the next push and the run on `0306fd1` was still queued when recorded. Open PRs (#303, #270, #248, #247, #246, #244, #224, #218) are Elliot's G1, Gate 1 and policy work: none overlaps a file changed by these merges. No conflicts; no branch needed synchronizing because of them.
+
 ## Next safe M16 task
 
-Responsive sidebar and mobile header of the Customer Dashboard layout (`resources/views/components/layouts/account.blade.php`), in its own PR: return focus to the menu button after Escape, close the menu on navigation and outside click, keep `aria-expanded` and the visible focus outline, Direction 04.1 token styling, with before/after screenshots in HU/EN and the existing dashboard E2E. Then empty states and a reusable status-chip component.
+Empty states and a reusable status chip for the Customer Dashboard: a small Blade component that wraps the current `x-ui.status-badge` hook (`data-tone`, text label always visible), helpful empty states for the website list and the dashboard summary, HU/EN, with the existing dashboard E2E extended. Separate Owner-scoped follow-up: convert the remaining formal Hungarian (account area, checkout, emails) to informal address and replace the remaining "webhely" in the pricing table and the update-process section.
 
 ## M16.2 decisions and copy
 
