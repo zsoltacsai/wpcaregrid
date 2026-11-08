@@ -1,4 +1,4 @@
-_#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Root-only, fixed-target G1 provisioning and verification for the two MySQL 8.4 instances.
 
 Commands are intentionally phase-separated. `install` never initializes or

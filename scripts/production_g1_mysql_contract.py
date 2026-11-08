@@ -1,4 +1,4 @@
-_#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Fail-closed configuration contract for the two Production G1 MySQL instances.
 
 This module is used by the root-owned ExecStartPre checker. It is intentionally
