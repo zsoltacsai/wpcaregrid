@@ -1,0 +1,18 @@
+{
+  "installed_artifacts": {
+    "/etc/apparmor.d/wpcaregrid-mysql-production": "0b98a2f7ad67a47570f64ad34427bdda257a76b05a0256eb0001aab9f6817872",
+    "/etc/apparmor.d/wpcaregrid-mysql-production-restore": "591f0333a7021ea396afdf0722f491743d8f8b0331cabeced0f10f87cec1d229",
+    "/etc/mysql/mysql.conf.d/90-wpcaregrid-production-restore.cnf": "14fb59069eb42c7d0a938799330595f195bc43265df60b385e073ba58bf80a7b",
+    "/etc/mysql/mysql.conf.d/90-wpcaregrid-production.cnf": "7de16da204b888e634ea46a61e00b592bcfa69b5426a02228534b627e9567ad9",
+    "/etc/systemd/system/mysql@wpcaregrid-production-restore.service.d/90-wpcaregrid-g1.conf": "df0658d94044501efad5074e7dd5401ff505df7034ea6fcae1e57fae9ee3d9c6",
+    "/etc/systemd/system/mysql@wpcaregrid-production.service.d/90-wpcaregrid-g1.conf": "caaee5b62105ab718f53a42acc990e165040b8621d14d69af4fa0e4c1c9d29ae",
+    "/usr/local/libexec/production_g1_mysql_contract.py": "1e619ccc7d4723859feae12a9cc8106ba8d271fcdb7dece2d826c8edea3a7186",
+    "/usr/local/libexec/wpcaregrid-g1-mysql.py": "ed1ef759c739cb7df62bd1b6dcfbe69b6c727b93918bf7bb196c5aaa177e4c22"
+  },
+  "schema": 1,
+  "sources": {
+    "production-g1-mysql.py": "ed1ef759c739cb7df62bd1b6dcfbe69b6c727b93918bf7bb196c5aaa177e4c22",
+    "production_g1_mysql_contract.py": "1e619ccc7d4723859feae12a9cc8106ba8d271fcdb7dece2d826c8edea3a7186"
+  },
+  "tool": "wpcaregrid-production-mysql-g1-v1"
+}
