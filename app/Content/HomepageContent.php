@@ -2,6 +2,7 @@
 
 namespace App\Content;
 
+use App\Content\Schema\ContentSchema;
 use App\Localization\MarketingRoutes;
 
 /**
@@ -111,9 +112,16 @@ final class HomepageContent
     /** @return list<array{number: string, title: string, text: string}> */
     public function steps(): array
     {
-        $steps = $this->items('home.how', 'steps', ['plan' => null, 'connect' => null, 'audit' => null, 'ongoing' => null]);
+        $steps = $this->items('home.how', 'steps', ['plan' => null, 'agree' => null, 'maintain' => null]);
+
+        $builtIn = ContentSchema::section('home.how')?->builtIn($this->content->section('home.how')->locale)['steps'] ?? [];
 
         foreach ($steps as $index => $step) {
+            // A section published before a step was added has no wording for it: show the built-in step, not a blank one.
+            if (trim((string) ($step['title'] ?? '').(string) ($step['text'] ?? '')) === '' && isset($builtIn[$step['key']])) {
+                $steps[$index] = ['key' => $step['key'], 'icon' => $step['icon']] + $builtIn[$step['key']];
+            }
+
             $steps[$index]['number'] = sprintf('%02d', $index + 1);
         }
 

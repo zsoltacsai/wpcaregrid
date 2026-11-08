@@ -3,7 +3,7 @@
 <x-ui.section id="how-it-works" tone="surface" labelledby="how-title" :lang="$content->fallbackLang()">
     <x-ui.section-heading id="how-title" :eyebrow="$content['eyebrow']" :title="$content['title']" />
 
-    <ol class="mt-10 grid gap-8 sm:grid-cols-2 lg:grid-cols-4 lg:gap-6">
+    <ol class="mt-10 grid gap-8 md:grid-cols-3 lg:gap-8">
         @foreach ($steps as $step)
             <li class="border-t-2 border-primary pt-6">
                 <p class="text-sm font-semibold text-accent-ink tabular-nums" aria-hidden="true">{{ $step['number'] }}</p>
