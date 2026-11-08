@@ -6,15 +6,15 @@ Base: protected `claude/ecstatic-wozniak-oemyuf` at `c1d5ba4`. No Elliot/infra f
 
 | Task | Branch / HEAD | State |
 |---|---|---|
-| M16.3/A hero a11y + canvas perf | `codex/m16-3-accessibility-motion-audit-20261108` `17cd1f7` | PR #305 open. Only Quality failed: Gitleaks download returned HTTP 504 so the scanner never started. Failed job re-run once GitHub recovers. Needs Integration & QA and M17 AppSec. |
-| M16.3/B design tokens | `codex/m16-3-design-tokens-20261108` `074f3a1` | Local; push when the Gitleaks download works. |
-| M16.2 three-step How it works | `codex/m16-2-how-it-works-three-steps-20261108` `67ee69b` | Local; open as draft PR. Owner approved the structure; copy adjusted (below). |
-| Localization E2E 404 expectation | `codex/localization-e2e-404-expectation-20261108` `cc7bb63` | Local; one-line test fix. |
+| M16.3/A hero a11y + canvas perf | `codex/m16-3-accessibility-motion-audit-20261108` `17cd1f7` | PR #305. All required checks and the marketing browser E2E pass on `17cd1f7` after the Gitleaks download recovered. Needs Integration & QA and M17 AppSec. |
+| M16.3/B design tokens | `codex/m16-3-design-tokens-20261108` `074f3a1` | PR #306. |
+| M16.2 three-step How it works | `codex/m16-2-how-it-works-three-steps-20261108` `67ee69b` | Draft PR #307. Owner approved the structure; copy adjusted (below). |
+| Localization E2E 404 expectation | `codex/localization-e2e-404-expectation-20261108` `cc7bb63` | PR #308 (one-line test fix). |
 
 ## Resume
 
-1. Confirm the Gitleaks download works (`curl -sI -L https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz` returns 200), then re-run failed Quality jobs. Do not change the workflow or skip the scan.
-2. Push each branch, one PR each, link and watch. M16.2 as draft first.
+1. Required checks and browser E2E have run on #305 (green). Run them on #306-#308 as they complete; do not change the workflow or skip the scan.
+2. #307 stays draft until CI and the independent reviews exist.
 3. Integration & QA and M17 AppSec on the exact HEAD of each PR before any merge.
 
 ## M16.2 decisions and copy
