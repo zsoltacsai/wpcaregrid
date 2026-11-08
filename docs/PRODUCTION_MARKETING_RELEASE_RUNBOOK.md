@@ -220,7 +220,7 @@ smoke checks using the approved authenticated probe path:
   production `APP_DEBUG=false` are correct. No secrets are printed in evidence.
 * Registration, customer/operator APIs, checkout, Stripe/webhook provisioning,
   Connector onboarding and SaaS background jobs remain denied or disabled.
-* Verify runtime PHP-FPM unit/socket matches the profile (PHP 8.4 baseline),
+* Verify runtime PHP-FPM unit/socket matches the Production G1 PHP 8.5 target;
   logs have no new application errors, and worker/scheduler fences remain
   active.
 * Confirm receipt outcome and HTTP/function checks before any separately
