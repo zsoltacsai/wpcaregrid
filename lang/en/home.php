@@ -146,8 +146,8 @@ return [
         'title' => 'Up and running in three steps.',
         'steps' => [
             'plan' => ['title' => 'Explore the plans', 'text' => 'Review the available options and contact us to ask about service availability for your site.'],
-            'connect' => ['title' => 'Connect and check your site', 'text' => 'Connect your WordPress site securely. We then assess the setup; backups depend on the plan and site support.'],
-            'ongoing' => ['title' => 'Ongoing maintenance', 'text' => 'Updates, backups, checks and monitoring according to the plan and supported site setup.'],
+            'agree' => ['title' => 'Talk it through', 'text' => 'We discuss your site, assess the setup and agree which plan fits. Backups depend on the plan and site support.'],
+            'maintain' => ['title' => 'Ongoing maintenance', 'text' => 'Once agreed, we handle updates, backups, checks and monitoring according to the plan and supported site setup.'],
         ],
     ],
 

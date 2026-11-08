@@ -148,8 +148,8 @@ return [
         'title' => 'Három lépésben indul a karbantartás.',
         'steps' => [
             'plan' => ['title' => 'Csomagok megismerése', 'text' => 'Tekintse át a lehetőségeket, és érdeklődjön e-mailben a webhelye szolgáltatásának elérhetőségéről.'],
-            'connect' => ['title' => 'Csatlakoztatás és első ellenőrzés', 'text' => 'Csatlakoztassa a WordPress-oldalt biztonságosan, majd felmérjük a beállításokat. A mentés a csomagtól és a webhely támogatásától függ.'],
-            'ongoing' => ['title' => 'Folyamatos karbantartás', 'text' => 'Frissítések, mentések, ellenőrzések és felügyelet a csomag és a támogatott webhelybeállítás szerint.'],
+            'agree' => ['title' => 'Egyeztetés', 'text' => 'Megbeszéljük a webhely igényeit, felmérjük a beállításokat, és közösen kiválasztjuk a csomagot. A mentés a csomagtól és a webhely támogatásától függ.'],
+            'maintain' => ['title' => 'Folyamatos karbantartás', 'text' => 'A megállapodás után a csomag és a támogatott webhelybeállítás szerint végezzük a frissítéseket, mentéseket, ellenőrzéseket és felügyeletet.'],
         ],
     ],
 
