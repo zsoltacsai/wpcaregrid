@@ -271,3 +271,49 @@ for (const locale of ['en', 'hu'] as const) {
         expect(cls).toBeLessThan(0.1);
     });
 }
+
+for (const locale of ['en', 'hu'] as const) {
+    test(`${locale} FAQ: eight questions, keyboard accordion and contact CTA`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.goto(`/${locale}/`);
+
+        const faq = page.locator('section#faq');
+        const buttons = faq.locator('h3 > button[aria-controls]');
+        await expect(buttons).toHaveCount(8);
+        await expect(faq.locator('h2')).toHaveCount(1);
+
+        const first = buttons.first();
+        await first.scrollIntoViewIfNeeded();
+        await first.focus();
+        await expect(first).toHaveAttribute('aria-expanded', 'false');
+        await page.keyboard.press('Enter');
+        await expect(first).toHaveAttribute('aria-expanded', 'true');
+        const panel = faq.locator(`#${await first.getAttribute('aria-controls')}`);
+        await expect(panel).toBeVisible();
+        await page.keyboard.press('Space');
+        await expect(first).toHaveAttribute('aria-expanded', 'false');
+        await expect(panel).toBeHidden();
+
+        const cta = faq.getByRole('link', { name: locale === 'en' ? "Have questions? Let's talk!" : 'Kérdésed van? Beszéljük meg!' });
+        await expect(cta).toBeVisible();
+        await expect(cta).toHaveAttribute('href', /contact|mailto:/);
+        const order = await page.evaluate(() => {
+            const last = document.querySelector('#faq-8-button')!;
+            const link = [...document.querySelectorAll('#faq a')].pop()!;
+            return last.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING;
+        });
+        expect(order).toBeTruthy();
+
+        await cta.focus();
+        const focus = await cta.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return { visible: element.matches(':focus-visible'), style: style.outlineStyle, width: style.outlineWidth };
+        });
+        expect(focus.visible).toBe(true);
+        expect(focus.style).not.toBe('none');
+        expect(focus.width).not.toBe('0px');
+
+        const sizes = await page.evaluate(() => ({ document: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth }));
+        expect(sizes.document).toBeLessThanOrEqual(sizes.viewport);
+    });
+}

@@ -127,10 +127,10 @@ class MarketingConversionLinksTest extends TestCase
         $englishPricing = require lang_path('en/pricing.php');
         $hungarianPricing = require lang_path('hu/pricing.php');
 
-        $this->assertStringContainsString('where the plan and site setup support them', $english['faq']['items']['backup_frequency']['answer']);
-        $this->assertStringContainsString('ahol ezt a csomag és a webhely beállítása támogatja', $hungarian['faq']['items']['backup_frequency']['answer']);
-        $this->assertStringContainsString('eligible Secure-plan cases and supported sites', $english['faq']['items']['infected']['answer']);
-        $this->assertStringContainsString('jogosultsági és támogatott webhelyfeltételek mellett', $hungarian['faq']['items']['infected']['answer']);
+        $this->assertStringContainsString('where the plan and site setup support them', $english['faq']['items']['woocommerce']['answer']);
+        $this->assertStringContainsString('ahol a csomag és a webhely beállítása ezt támogatja', $hungarian['faq']['items']['woocommerce']['answer']);
+        $this->assertStringContainsString('eligible Secure-plan cases and supported sites', $english['faq']['items']['failure']['answer']);
+        $this->assertStringContainsString('jogosult, támogatott Secure-esetekben', $hungarian['faq']['items']['failure']['answer']);
         $this->assertStringNotContainsString('faster response', strtolower($englishPricing['plans']['wordpress']['secure']['description']));
         $this->assertStringNotContainsString('gyorsabb reagálás', strtolower($hungarianPricing['plans']['wordpress']['secure']['description']));
         $this->assertStringContainsString('where configured', $englishPricing['features']['remote_backups']['daily']);

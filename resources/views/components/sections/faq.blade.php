@@ -26,6 +26,10 @@
                     {!! $faq['answer'] !!}
                 </x-faq.faq-item>
             @endforeach
+
+            <div class="mt-8">
+                <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->localize($contactUrl)" size="lg" icon="arrow-right">{{ filled($content['cta_label']) ? $content['cta_label'] : __('home.faq.cta') }}</x-ui.button>
+            </div>
         </div>
     </div>
 </x-ui.section>
