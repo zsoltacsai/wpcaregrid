@@ -169,27 +169,31 @@ return [
         'items' => [
             'password' => [
                 'question' => 'Meg kell adnom a WordPress-jelszavamat?',
-                'answer' => 'Nem. A weboldalt biztonságos kapcsolaton keresztül csatlakoztatja, amelyet bármikor visszavonhat. Az adminisztrátori jelszavát nem kell elküldenie nekünk.',
+                'answer' => 'Nem. Soha nem kérjük el a WordPress-adminisztrátori, a tárhely- vagy az adatbázisjelszavát. Ahol egy webhelyhez hozzáférés szükséges, azt Önnel együtt állítjuk be, és bármikor visszavonhatja.',
+            ],
+            'availability' => [
+                'question' => 'Elérhető a szolgáltatás a weboldalamhoz?',
+                'answer' => 'Ez a webhelytől és a beállításoktól függ. Írja meg a weboldala címét és az igényeit; mielőtt bármi elindulna, egyeztetjük, hogy tudunk-e segíteni, és melyik csomag illik hozzá. A mentés a csomagtól és a webhely támogatásától függ.',
             ],
             'broken_update' => [
                 'question' => 'Mi történik, ha egy frissítés elrontja a weboldalamat?',
                 'answer' => 'A frissítés előtti mentés ott készül el, ahol ezt a csomag és a webhely beállítása támogatja. Ha az ellenőrzés hibát jelez, áttekintjük az elérhető mentési és helyreállítási lehetőségeket; a visszaállítás a mentéstől és a tárhelykörnyezettől is függ.',
             ],
-            'backup_location' => [
-                'question' => 'Hol tárolják a mentéseket?',
-                'answer' => 'A támogatott csomagok mentései a webhely tárhelyétől elkülönített, beállított tárolóba kerülnek. A tárolási hely és a helyreállítási lehetőségek a szolgáltatás beállításaitól függenek; az elkülönített másolat sem garantál minden tárhelykörnyezetben visszaállítást.',
+            'infected' => [
+                'question' => 'Mi történik, ha a weboldalam megfertőződik?',
+                'answer' => 'Értesítjük, ha az adott webhelyre érvényes biztonsági ellenőrzés találatot jelez, és egyeztetjük a következő lépéseket. Malware-eltávolítás a Secure csomaggal, jogosultsági és támogatott webhelyfeltételek mellett érhető el; más eseteket felmérünk és külön árazunk.',
             ],
             'backup_frequency' => [
                 'question' => 'Milyen gyakran készül mentés?',
                 'answer' => 'Ez a csomagtól függ. WordPress: a Basic csomagban havonta, a Business csomagban hetente, a Secure csomagban naponta. WooCommerce: a Basic csomagban hetente, a Business és a Secure csomagban naponta. Ezen felül frissítés előtti mentés ott készül, ahol ezt a csomag és a webhely beállítása támogatja.',
             ],
+            'backup_location' => [
+                'question' => 'Hol tárolják a mentéseket?',
+                'answer' => 'A támogatott csomagok mentései a webhely tárhelyétől elkülönített, beállított tárolóba kerülnek. A tárolási hely és a helyreállítási lehetőségek a szolgáltatás beállításaitól függenek; az elkülönített másolat sem garantál minden tárhelykörnyezetben visszaállítást.',
+            ],
             'license' => [
                 'question' => 'Mi történik, ha egy bővítmény licence lejár?',
                 'answer' => 'Ha egy licenc lejártnak vagy érvénytelennek tűnik, rögzítjük, és értesítjük Önt. A harmadik féltől származó licencek megújítása továbbra is az Ön feladata. A licenc megújításáig az adott bővítmény vagy téma nem biztos, hogy kap frissítéseket.',
-            ],
-            'infected' => [
-                'question' => 'Mi történik, ha a weboldalam megfertőződik?',
-                'answer' => 'Értesítjük, ha az adott webhelyre érvényes biztonsági ellenőrzés találatot jelez, és egyeztetjük a következő lépéseket. Malware-eltávolítás a Secure csomaggal, jogosultsági és támogatott webhelyfeltételek mellett érhető el; más eseteket felmérünk és külön árazunk.',
             ],
             'custom_plugins' => [
                 'question' => 'Fejlesztenek egyedi bővítményeket?',

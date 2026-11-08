@@ -167,27 +167,31 @@ return [
         'items' => [
             'password' => [
                 'question' => 'Do I need to give you my WordPress password?',
-                'answer' => 'No. You connect your website through a secure connection that you can revoke at any time. You do not need to send us your administrator password.',
+                'answer' => 'No. We never ask for your WordPress administrator, hosting or database password. Where access to a site is needed, it is a connection set up with you that you can revoke at any time.',
+            ],
+            'availability' => [
+                'question' => 'Is the service available for my website?',
+                'answer' => 'It depends on your site and its setup. Contact us with your website address and what you need; we confirm whether and how we can help, and which plan fits, before anything starts. Backups depend on the plan and site support.',
             ],
             'broken_update' => [
                 'question' => 'What happens if an update breaks my website?',
                 'answer' => 'A pre-update backup is created where the plan and site setup support it. If a post-update check fails, we review the available backup and recovery options; restore capability depends on the backup and hosting environment.',
             ],
-            'backup_location' => [
-                'question' => 'Where are backups stored?',
-                'answer' => 'Backup storage is configured separately from the website hosting for supported plans. Storage location and recovery options depend on the service configuration; a separate copy does not guarantee restoration in every hosting environment.',
+            'infected' => [
+                'question' => 'What happens if my website is infected?',
+                'answer' => 'We notify you when an applicable security check reports a finding and agree the next steps with you. Malware cleanup is available for eligible Secure-plan cases and supported sites; other cases are assessed and quoted separately.',
             ],
             'backup_frequency' => [
                 'question' => 'How often are backups made?',
                 'answer' => 'It depends on the plan. WordPress: monthly on Basic, weekly on Business, daily on Secure. WooCommerce: weekly on Basic, daily on Business and Secure. Additional pre-update backups are made where the plan and site setup support them.',
             ],
+            'backup_location' => [
+                'question' => 'Where are backups stored?',
+                'answer' => 'Backup storage is configured separately from the website hosting for supported plans. Storage location and recovery options depend on the service configuration; a separate copy does not guarantee restoration in every hosting environment.',
+            ],
             'license' => [
                 'question' => 'What happens if a plugin license expires?',
                 'answer' => 'When a license appears expired or invalid, we record it and notify you. Renewing third-party licenses remains your responsibility. Until a license is renewed, that plugin or theme may not receive updates.',
-            ],
-            'infected' => [
-                'question' => 'What happens if my website is infected?',
-                'answer' => 'We notify you when an applicable security check reports a finding and agree the next steps with you. Malware cleanup is available for eligible Secure-plan cases and supported sites; other cases are assessed and quoted separately.',
             ],
             'custom_plugins' => [
                 'question' => 'Can you develop custom plugins?',
