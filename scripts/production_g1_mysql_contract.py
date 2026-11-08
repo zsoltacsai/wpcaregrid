@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+_#!/usr/bin/env python3
 """Fail-closed configuration contract for the two Production G1 MySQL instances.
 
 This module is used by the root-owned ExecStartPre checker. It is intentionally
@@ -104,6 +104,12 @@ def validate_unit_inactive(returncode: int, stdout: str) -> None:
         raise Refused("instance_must_be_inactive")
 
 
+_UNSAFE_EFFECTIVE_OPTIONS = frozenset({
+    # These inherited options can bypass authentication, execute SQL during
+    # startup/connection, daemonize away from systemd, or add listeners.
+    "skip-grant-tables", "skip-networking", "init-file", "init-connect",
+    "init-replica", "init-slave", "daemonize", "plugin-dir",
+})
 _KEYRING_OPTIONS = frozenset({
     "early-plugin-load", "plugin-load", "plugin-load-add", "component-load",
     "component-load-add", "keyring-file-data", "keyring-encrypted-file-data",
@@ -186,6 +192,8 @@ def validate_effective_options(instance: Instance, output: str | bytes) -> None:
         if (key.startswith(("replicate-", "source-", "master-", "slave-", "relay-log"))
                 or key in {"log-slave-updates", "log-replica-updates", "skip-slave-start", "skip-replica-start"}):
             raise Refused("replication_configuration_present")
+        if key in _UNSAFE_EFFECTIVE_OPTIONS or key.startswith(("loose-", "admin-", "mysqlx-")):
+            raise Refused("unsafe_effective_option_present")
     for key, expected in instance.expected_options().items():
         values = by_key.get(key)
         if not values or values[-1] is None:

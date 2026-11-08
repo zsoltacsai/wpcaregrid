@@ -24,7 +24,9 @@ backup, enable units, or open production traffic.
 
 Both instance configs set `secure-file-priv=NULL`, disable MySQL X, and explicitly
 disable InnoDB table/redo/undo and binary-log encryption. Plugin/component load
-options, keyring references, and replication configuration are rejected. The
+options, keyring references, replication settings, authentication bypass and
+startup SQL hooks are rejected from effective inherited options. Auxiliary
+Admin/MySQL X listeners and loose options are also refused. The
 G1 initializer uses MySQL's secure `--initialize` mode, not
 `--initialize-insecure`; its generated temporary root credential is written
 only to the corresponding error log, which is created `mysql:mysql 0600` and is
@@ -48,8 +50,8 @@ files before copying):
 | Source artifact | SHA-256 |
 | --- | --- |
 | `production-g1-mysql.py` | `ed1ef759c739cb7df62bd1b6dcfbe69b6c727b93918bf7bb196c5aaa177e4c22` |
-| `production_g1_mysql_contract.py` | `1e619ccc7d4723859feae12a9cc8106ba8d271fcdb7dece2d826c8edea3a7186` |
-| `production-g1-mysql-manifest.json` | `27ccf13d88e3c0dc9e7177e92dc0494a8c6aa9299def5553fbb56909e2a40612` |
+| `production_g1_mysql_contract.py` | `ac53393d80b36bc3c2cf431dc8af564dd15dc148ce713fb3e812a9465dc1ef95` |
+| `production-g1-mysql-manifest.json` | `2405b7590990291f4601e0fa8e5c1139ffa3df7250e7b9ce193161d06fdc1796` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not

@@ -120,6 +120,17 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
                     CONTRACT.validate_effective_options(instance, defaults(instance) + " " + option)
                 self.assertEqual(str(caught.exception), "replication_configuration_present")
 
+    def test_unsafe_inherited_startup_and_listener_options_are_rejected(self):
+        for instance in CONTRACT.INSTANCES.values():
+            for option in ("--skip-grant-tables", "--skip-grant-tables=ON",
+                           "--init-file=/tmp/wpcg-init.sql", '--init-connect=\"SELECT 1\"',
+                           "--loose-init-file=/tmp/wpcg-init.sql", "--daemonize=ON",
+                           "--admin-port=33060", "--mysqlx-port=33060"):
+                with self.subTest(instance=instance.name, option=option):
+                    with self.assertRaises(CONTRACT.Refused) as caught:
+                        CONTRACT.validate_effective_options(instance, defaults(instance) + " " + option)
+                    self.assertEqual(str(caught.exception), "unsafe_effective_option_present")
+
     def test_persisted_keyring_registry_must_be_exact_zero(self):
         CONTRACT.validate_keyring_registry_count("0\n")
         for invalid in ("1\n", "0\n1", "NULL", "", "credential=hidden"):
