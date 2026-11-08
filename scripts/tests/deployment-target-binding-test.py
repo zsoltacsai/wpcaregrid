@@ -13,6 +13,7 @@ import stat
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -201,8 +202,9 @@ class PathTests(unittest.TestCase):
                 worker_fence_marker="/x/w", scheduler_fence_marker="/x/s")
             if not PurePosixPath(link.as_posix()).is_absolute():
                 self.skipTest("fixture path is not POSIX-absolute on this host")
-            with self.assertRaises(B.TargetRefused) as ctx:
-                B.check_path(target, target.app_dir, "app")
+            with unittest.mock.patch.object(B, "TARGETS", {"fixture": target}):
+                with self.assertRaises(B.TargetRefused) as ctx:
+                    B.check_path(target, target.app_dir, "app")
             self.assertEqual(str(ctx.exception), "path_symlink")
 
     def test_permission_mismatch_is_rejected(self):
