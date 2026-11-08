@@ -39,6 +39,7 @@ artifact_files = _CONTRACT.artifact_files
 get_instance = _CONTRACT.get_instance
 validate_effective_options = _CONTRACT.validate_effective_options
 validate_instance_group = _CONTRACT.validate_instance_group
+validate_resolved_options = _CONTRACT.validate_resolved_options
 validate_keyring_registry_count = _CONTRACT.validate_keyring_registry_count
 normalize_resolved_value = _CONTRACT.normalize_resolved_value
 validate_port_probe = _CONTRACT.validate_port_probe
@@ -265,13 +266,10 @@ def verify_effective_config(instance: Instance) -> None:
     run([str(MYSQLD), f"--defaults-file={BASE_CONFIG}",
          f"--defaults-group-suffix=@{instance.name}", "--validate-config"])
     configured = _effective_help(instance)
-    expected = instance.expected_options()
-    for key, value in expected.items():
-        actual = configured.get(key)
-        if actual is not None:
-            actual = normalize_resolved_value(key, actual)
-        if actual != value:
-            refuse("mysqld_resolved_option_mismatch")
+    try:
+        validate_resolved_options(instance, configured)
+    except Refused as exc:
+        refuse(str(exc))
 
 
 def _effective_help(instance: Instance) -> dict[str, str]:
