@@ -484,6 +484,47 @@ class AppSecRoundTwoTests(unittest.TestCase):
         with self.assertRaises(B.TargetRefused):
             B.check_path(NEXT, marker, "marker", lstat_fn=other_writable.lstat, expected_uid=UID)
 
+    def test_registry_validation_remaining_branches(self):
+        import dataclasses
+        other = dict(name="z", database="z_db", app_dir="/var/www/z", state_root="/var/lib/z",
+                     backup_root="/srv/z-backups", lock_file="/var/lib/z/l",
+                     maintenance_marker="/var/lib/z/m", worker_fence_marker="/var/lib/z/w",
+                     scheduler_fence_marker="/var/lib/z/s")
+        base = dataclasses.replace(LEGACY, **other)
+        B._validate_registry((NEXT, base))
+        for change in ({"database": NEXT.database},
+                       {"maintenance_marker": "/elsewhere/m"},
+                       {"extra_locks": ("relative.lock",)},
+                       {"app_dir": "/var/www/z/../y"},
+                       {"app_dir": "/var/www/z/"},
+                       {"worker_fence_marker": NEXT.worker_fence_marker}):
+            with self.assertRaises(B.TargetRefused, msg=change):
+                B._validate_registry((NEXT, dataclasses.replace(base, **change)))
+
+    def test_contract_load_leaves_sys_modules_clean_and_checks_origin(self):
+        name = "_wpcg_target_binding_environment_contract"
+        sys.modules.pop(name, None)
+        B._load_contract()
+        self.assertNotIn(name, sys.modules)
+        fake_file = types_module_with_file("/tmp/elsewhere.py")
+        with unittest.mock.patch.object(B.importlib.util, "module_from_spec", return_value=fake_file),                 unittest.mock.patch.object(B.importlib.util, "spec_from_file_location") as spec:
+            spec.return_value.loader.exec_module = lambda module: None
+            with self.assertRaises(B.TargetRefused):
+                B._load_contract()
+        self.assertNotIn(name, sys.modules)
+
+    def test_registered_requires_a_deployment_target_instance(self):
+        for value in (None, "staging-next", {"name": "staging-next"}, object()):
+            with self.assertRaises(B.TargetRefused):
+                B._registered(value)
+
+
+def types_module_with_file(path):
+    import types
+    module = types.ModuleType("fake")
+    module.__file__ = path
+    return module
+
 
 if __name__ == "__main__":
     unittest.main()
