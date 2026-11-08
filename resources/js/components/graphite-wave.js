@@ -11,6 +11,17 @@ export function mountGraphiteWave({ documentRef = globalThis.document, windowRef
     }
 
     const motionPreference = windowRef.matchMedia?.('(prefers-reduced-motion: reduce)') ?? { matches: false };
+    // Some browsers (e.g. Safari < 14) only implement the legacy MediaQueryList
+    // listener API; without this fallback those browsers never learn that the
+    // user's reduced-motion preference changed.
+    const addMotionListener = (handler) => {
+        if (motionPreference.addEventListener) motionPreference.addEventListener('change', handler);
+        else motionPreference.addListener?.(handler);
+    };
+    const removeMotionListener = (handler) => {
+        if (motionPreference.removeEventListener) motionPreference.removeEventListener('change', handler);
+        else motionPreference.removeListener?.(handler);
+    };
     let width = 0;
     let height = 0;
     let elapsed = 0;
@@ -18,6 +29,40 @@ export function mountGraphiteWave({ documentRef = globalThis.document, windowRef
     let frameHandle = 0;
     let inView = !windowRef.IntersectionObserver;
     let disposed = false;
+    let ribbonLayers = [];
+
+    // Gradient stops depend only on each ribbon's static color/alpha and the
+    // strand's position, never on the animation clock or elapsed time, so
+    // they are built once per resize instead of being recreated every frame.
+    function buildRibbonLayers() {
+        const compact = width < 768;
+        const ribbons = compact
+            ? [
+                { count: 8, alpha: 0.14, color: '43, 59, 64', lineWidth: 0.8 },
+                { count: 10, alpha: 0.17, color: '25, 41, 47', lineWidth: 0.9 },
+                { count: 6, alpha: 0.1, color: '85, 97, 99', lineWidth: 0.7 },
+            ]
+            : [
+                { count: 15, alpha: 0.16, color: '43, 59, 64', lineWidth: 0.85 },
+                { count: 18, alpha: 0.19, color: '25, 41, 47', lineWidth: 1 },
+                { count: 11, alpha: 0.12, color: '85, 97, 99', lineWidth: 0.75 },
+            ];
+
+        ribbonLayers = ribbons.map((ribbon) => {
+            const strands = [];
+            for (let strand = 0; strand < ribbon.count; strand += 1) {
+                const strength = 1 - Math.abs(strand / Math.max(1, ribbon.count - 1) - 0.5) * 0.65;
+                const gradient = context.createLinearGradient(0, 0, width, 0);
+                gradient.addColorStop(0, `rgba(${ribbon.color}, 0)`);
+                gradient.addColorStop(0.25, `rgba(${ribbon.color}, ${ribbon.alpha * 0.5 * strength})`);
+                gradient.addColorStop(0.55, `rgba(${ribbon.color}, ${ribbon.alpha * strength})`);
+                gradient.addColorStop(0.83, `rgba(${ribbon.color}, ${ribbon.alpha * 0.82 * strength})`);
+                gradient.addColorStop(1, `rgba(${ribbon.color}, 0)`);
+                strands.push({ strand, gradient });
+            }
+            return { count: ribbon.count, lineWidth: ribbon.lineWidth, strands };
+        });
+    }
 
     function resize() {
         const bounds = container.getBoundingClientRect();
@@ -27,6 +72,7 @@ export function mountGraphiteWave({ documentRef = globalThis.document, windowRef
         canvas.width = Math.round(width * ratio);
         canvas.height = Math.round(height * ratio);
         context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        buildRibbonLayers();
         draw(elapsed);
     }
 
@@ -50,30 +96,10 @@ export function mountGraphiteWave({ documentRef = globalThis.document, windowRef
         context.lineCap = 'round';
         context.lineJoin = 'round';
 
-        const compact = width < 768;
-        const pointCount = compact ? 42 : 58;
-        const ribbons = compact
-            ? [
-                { count: 8, alpha: 0.14, color: '43, 59, 64', lineWidth: 0.8 },
-                { count: 10, alpha: 0.17, color: '25, 41, 47', lineWidth: 0.9 },
-                { count: 6, alpha: 0.1, color: '85, 97, 99', lineWidth: 0.7 },
-            ]
-            : [
-                { count: 15, alpha: 0.16, color: '43, 59, 64', lineWidth: 0.85 },
-                { count: 18, alpha: 0.19, color: '25, 41, 47', lineWidth: 1 },
-                { count: 11, alpha: 0.12, color: '85, 97, 99', lineWidth: 0.75 },
-            ];
+        const pointCount = width < 768 ? 42 : 58;
 
-        ribbons.forEach((ribbon, layer) => {
-            for (let strand = 0; strand < ribbon.count; strand += 1) {
-                const strength = 1 - Math.abs(strand / Math.max(1, ribbon.count - 1) - 0.5) * 0.65;
-                const gradient = context.createLinearGradient(0, 0, width, 0);
-                gradient.addColorStop(0, `rgba(${ribbon.color}, 0)`);
-                gradient.addColorStop(0.25, `rgba(${ribbon.color}, ${ribbon.alpha * 0.5 * strength})`);
-                gradient.addColorStop(0.55, `rgba(${ribbon.color}, ${ribbon.alpha * strength})`);
-                gradient.addColorStop(0.83, `rgba(${ribbon.color}, ${ribbon.alpha * 0.82 * strength})`);
-                gradient.addColorStop(1, `rgba(${ribbon.color}, 0)`);
-
+        ribbonLayers.forEach((ribbon, layer) => {
+            ribbon.strands.forEach(({ strand, gradient }) => {
                 context.beginPath();
                 for (let point = 0; point <= pointCount; point += 1) {
                     const x = width * point / pointCount;
@@ -84,7 +110,7 @@ export function mountGraphiteWave({ documentRef = globalThis.document, windowRef
                 context.strokeStyle = gradient;
                 context.lineWidth = ribbon.lineWidth;
                 context.stroke();
-            }
+            });
         });
     }
 
@@ -124,7 +150,7 @@ export function mountGraphiteWave({ documentRef = globalThis.document, windowRef
     resizeObserver?.observe(container);
     if (!resizeObserver) windowRef.addEventListener?.('resize', resize);
     documentRef.addEventListener?.('visibilitychange', updateMotion);
-    motionPreference.addEventListener?.('change', updateMotion);
+    addMotionListener(updateMotion);
     resize();
     updateMotion();
 
@@ -134,7 +160,7 @@ export function mountGraphiteWave({ documentRef = globalThis.document, windowRef
         intersectionObserver?.disconnect();
         resizeObserver?.disconnect();
         documentRef.removeEventListener?.('visibilitychange', updateMotion);
-        motionPreference.removeEventListener?.('change', updateMotion);
+        removeMotionListener(updateMotion);
         if (!resizeObserver) windowRef.removeEventListener?.('resize', resize);
     };
 }

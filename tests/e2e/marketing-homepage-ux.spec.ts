@@ -207,3 +207,67 @@ for (const locale of ['en', 'hu'] as const) {
         });
     }
 }
+
+// Decorative hero canvas: motion preference, pause behaviour and layout stability.
+// The layout-shift value is a synthetic, single-run headless measurement on the
+// local test application; it is not a field Core Web Vitals result.
+async function heroCanvasSignature(page: import('@playwright/test').Page) {
+    return page.evaluate(() => {
+        const canvas = document.querySelector<HTMLCanvasElement>('[data-graphite-wave]');
+        if (!canvas) return null;
+        const context = canvas.getContext('2d');
+        if (!context) return null;
+        const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let hash = 0;
+        for (let index = 0; index < data.length; index += 97) hash = (hash * 31 + data[index]) | 0;
+        return hash;
+    });
+}
+
+for (const locale of ['en', 'hu'] as const) {
+    test(`${locale} hero canvas honours reduced motion and animates otherwise`, async ({ browser }) => {
+        const reduced = await browser.newContext({ reducedMotion: 'reduce', viewport: { width: 1440, height: 900 }, baseURL: localBaseUrl?.origin });
+        const reducedPage = await reduced.newPage();
+        await reducedPage.goto(`/${locale}/`);
+        await expect(reducedPage.locator('[data-graphite-wave]')).toHaveAttribute('aria-hidden', 'true');
+        const staticFirst = await heroCanvasSignature(reducedPage);
+        await reducedPage.waitForTimeout(700);
+        const staticSecond = await heroCanvasSignature(reducedPage);
+        expect(staticFirst).not.toBeNull();
+        expect(staticSecond).toBe(staticFirst);
+        await reduced.close();
+
+        const motion = await browser.newContext({ reducedMotion: 'no-preference', viewport: { width: 1440, height: 900 }, baseURL: localBaseUrl?.origin });
+        const motionPage = await motion.newPage();
+        await motionPage.goto(`/${locale}/`);
+        const animatedFirst = await heroCanvasSignature(motionPage);
+        await motionPage.waitForTimeout(900);
+        const animatedSecond = await heroCanvasSignature(motionPage);
+        expect(animatedSecond).not.toBe(animatedFirst);
+
+        await motionPage.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+        await motionPage.waitForTimeout(300);
+        const pausedFirst = await heroCanvasSignature(motionPage);
+        await motionPage.waitForTimeout(500);
+        expect(await heroCanvasSignature(motionPage)).toBe(pausedFirst);
+        await motion.close();
+    });
+
+    test(`${locale} hero introduces no layout shift (synthetic, single headless run)`, async ({ page }, testInfo) => {
+        await page.addInitScript(() => {
+            (window as unknown as { __cls: number }).__cls = 0;
+            new PerformanceObserver((list) => {
+                for (const entry of list.getEntries() as unknown as Array<{ value: number; hadRecentInput: boolean }>) {
+                    if (!entry.hadRecentInput) (window as unknown as { __cls: number }).__cls += entry.value;
+                }
+            }).observe({ type: 'layout-shift', buffered: true });
+        });
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(`/${locale}/`);
+        await page.waitForLoadState('networkidle');
+        await page.waitForTimeout(500);
+        const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
+        testInfo.annotations.push({ type: 'synthetic-cls', description: String(cls) });
+        expect(cls).toBeLessThan(0.1);
+    });
+}
