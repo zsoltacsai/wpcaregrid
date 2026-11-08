@@ -121,7 +121,7 @@ test('unknown address returns a not-found page without debug details', async ({ 
     await chooseLanguage(page, 'Magyar');
     const response = await page.goto('/this-page-does-not-exist');
     expect(response?.status()).toBe(404);
-    await expect(page.locator('body')).toContainText('Not Found');
+    await expect(page.locator('body')).toContainText('Az oldal nem található');
     await expect(page.locator('body')).not.toContainText(/stack trace|exception|database/i);
 });
 
