@@ -78,7 +78,7 @@ class HomepageTest extends TestCase
         $this->get('/en/')->assertSeeInOrder([
             'We work in the background. You see it all clearly.',
             'Functional checks',
-            'Up and running in four steps.',
+            'Up and running in three steps.',
             'WordPress doesn&#039;t maintain itself.',
             'We don&#039;t just update. We check.',
             'Plans and pricing',

@@ -111,7 +111,7 @@ final class HomepageContent
     /** @return list<array{number: string, title: string, text: string}> */
     public function steps(): array
     {
-        $steps = $this->items('home.how', 'steps', ['plan' => null, 'connect' => null, 'audit' => null, 'ongoing' => null]);
+        $steps = $this->items('home.how', 'steps', ['plan' => null, 'connect' => null, 'ongoing' => null]);
 
         foreach ($steps as $index => $step) {
             $steps[$index]['number'] = sprintf('%02d', $index + 1);

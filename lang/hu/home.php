@@ -145,11 +145,10 @@ return [
 
     'how' => [
         'eyebrow' => 'Hogyan működik',
-        'title' => 'Négy lépésben indul a karbantartás.',
+        'title' => 'Három lépésben indul a karbantartás.',
         'steps' => [
             'plan' => ['title' => 'Csomagok megismerése', 'text' => 'Tekintse át a lehetőségeket, és érdeklődjön e-mailben a webhelye szolgáltatásának elérhetőségéről.'],
-            'connect' => ['title' => 'Weboldal csatlakoztatása', 'text' => 'Csatlakoztassa a WordPress-oldalt biztonságos kapcsolaton keresztül.'],
-            'audit' => ['title' => 'Első ellenőrzés', 'text' => 'Felmérjük a webhely beállításait és az elérhető szolgáltatási lehetőségeket; a mentés a csomagtól és a webhely támogatásától függ.'],
+            'connect' => ['title' => 'Csatlakoztatás és első ellenőrzés', 'text' => 'Csatlakoztassa a WordPress-oldalt biztonságosan, majd felmérjük a beállításokat. A mentés a csomagtól és a webhely támogatásától függ.'],
             'ongoing' => ['title' => 'Folyamatos karbantartás', 'text' => 'Frissítések, mentések, ellenőrzések és felügyelet a csomag és a támogatott webhelybeállítás szerint.'],
         ],
     ],

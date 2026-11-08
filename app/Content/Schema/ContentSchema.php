@@ -182,7 +182,7 @@ final class ContentSchema
             self::make('home.how', 'homepage', [
                 Field::text('eyebrow', max: 60),
                 Field::text('title'),
-                Field::group('steps', ['plan', 'connect', 'audit', 'ongoing'], [Field::text('title', max: 60), Field::text('text', max: 160)]),
+                Field::group('steps', ['plan', 'connect', 'ongoing'], [Field::text('title', max: 60), Field::text('text', max: 160)]),
             ], 'home', fn ($t) => [
                 'eyebrow' => $t('home.how.eyebrow'),
                 'title' => $t('home.how.title'),

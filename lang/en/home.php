@@ -143,11 +143,10 @@ return [
 
     'how' => [
         'eyebrow' => 'How it works',
-        'title' => 'Up and running in four steps.',
+        'title' => 'Up and running in three steps.',
         'steps' => [
             'plan' => ['title' => 'Explore the plans', 'text' => 'Review the available options and contact us to ask about service availability for your site.'],
-            'connect' => ['title' => 'Connect your website', 'text' => 'Connect your WordPress site using a secure connection.'],
-            'audit' => ['title' => 'Initial check', 'text' => 'We assess the site setup and available service options; backups are subject to plan and site support.'],
+            'connect' => ['title' => 'Connect and check your site', 'text' => 'Connect your WordPress site securely. We then assess the setup; backups depend on the plan and site support.'],
             'ongoing' => ['title' => 'Ongoing maintenance', 'text' => 'Updates, backups, checks and monitoring according to the plan and supported site setup.'],
         ],
     ],
