@@ -116,3 +116,20 @@
         align-self: flex-start;
     }
 }
+
+/* Sidebar (desktop) and top bar with menu (smaller screens). The bar keeps the brand primary background the logo artwork is drawn on. */
+.m16-account-shell nav a:not([aria-current="page"]) {
+    color: var(--m16-on-dark-muted);
+}
+
+.m16-account-shell nav a[aria-current="page"] {
+    border-radius: var(--m16-radius-control);
+    background-color: var(--m16-teal);
+    background-image: linear-gradient(105deg, var(--m16-teal), var(--m16-teal-deep));
+    color: var(--m16-on-dark);
+}
+
+.m16-account-shell :focus-visible {
+    outline: 2px solid var(--m16-on-dark);
+    outline-offset: 2px;
+}

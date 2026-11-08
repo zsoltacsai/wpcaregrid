@@ -37,15 +37,21 @@
             {{ __('home.skip_link') }}
         </a>
 
-        <div x-data="{ open: false }" @keydown.escape.window="open = false" class="lg:grid lg:min-h-screen lg:grid-cols-[248px_minmax(0,1fr)]">
+        <div
+            x-data="{ open: false }"
+            @keydown.escape.window="if (open) { open = false; $refs.menuButton.focus() }"
+            @resize.window="if (window.innerWidth >= 1024) open = false"
+            class="lg:grid lg:min-h-screen lg:grid-cols-[248px_minmax(0,1fr)]"
+        >
             {{-- Sidebar (lg) / top bar with menu (smaller screens) --}}
-            <header class="on-dark sticky top-0 z-40 bg-primary text-on-dark lg:static lg:flex lg:flex-col">
+            <header class="m16-account-shell on-dark sticky top-0 z-40 bg-primary text-on-dark lg:static lg:flex lg:flex-col" @click.outside="open = false">
                 <div class="flex h-16 items-center justify-between gap-4 px-4 sm:px-6 lg:h-auto lg:px-6 lg:pt-6 lg:pb-8">
                     <a href="{{ app(\App\Localization\MarketingRoutes::class)->home() }}" class="rounded-sm" aria-label="{{ __('home.home_link') }}">
                         <x-brand.logo tone="dark" :descriptor="false" class="h-8" />
                     </a>
                     <button
                         type="button"
+                        x-ref="menuButton"
                         class="-mr-2 inline-flex size-10 items-center justify-center rounded-sm hover:bg-white/10 lg:hidden"
                         @click="open = !open"
                         aria-controls="account-nav"

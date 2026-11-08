@@ -131,6 +131,14 @@ for (const locale of ['en', 'hu'] as const) {
                     await expect(nav).toBeVisible();
                     await page.keyboard.press('Escape');
                     await expect(nav).toBeHidden();
+                    await expect(menuButton).toBeFocused();
+                    await expect(menuButton).toHaveAttribute('aria-expanded', 'false');
+
+                    await menuButton.click();
+                    await expect(nav).toBeVisible();
+                    await page.locator('main#main').click({ position: { x: 4, y: 4 } });
+                    await expect(nav).toBeHidden();
+                    await expect(menuButton).toHaveAttribute('aria-expanded', 'false');
                 } else {
                     await expect(menuButton).toBeHidden();
                     await expect(nav).toBeVisible();
@@ -140,6 +148,45 @@ for (const locale of ['en', 'hu'] as const) {
                 await noHorizontalOverflow(page);
             });
         }
+
+        test(`${locale}: widening the window closes the mobile menu and the sidebar shows the current page`, async ({ page }) => {
+            await page.setViewportSize({ width: 768, height: 900 });
+            await login(page, locale);
+            const menuButton = page.locator('button[aria-controls="account-nav"]');
+            await menuButton.click();
+            await expect(menuButton).toHaveAttribute('aria-expanded', 'true');
+
+            await page.setViewportSize({ width: 1440, height: 900 });
+            await expect(menuButton).toHaveAttribute('aria-expanded', 'false');
+            await expect(page.locator('#account-nav')).toBeVisible();
+
+            const current = page.locator('#account-nav a[aria-current="page"]');
+            await expect(current).toHaveCount(1);
+            const colors = await current.evaluate((element) => {
+                const channel = (value: number) => {
+                    const scaled = value / 255;
+                    return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+                };
+                const luminance = (rgb: string) => {
+                    const [red, green, blue] = (rgb.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+                    return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue);
+                };
+                const style = getComputedStyle(element);
+                const [high, low] = [luminance(style.color), luminance(style.backgroundColor)].sort((a, b) => b - a);
+                return (high + 0.05) / (low + 0.05);
+            });
+            expect(colors).toBeGreaterThanOrEqual(4.5);
+
+            await page.keyboard.press('Tab');
+            await page.keyboard.press('Tab');
+            const focus = await page.locator(':focus').evaluate((element) => {
+                const style = getComputedStyle(element);
+                return { visible: element.matches(':focus-visible'), style: style.outlineStyle, width: style.outlineWidth };
+            });
+            expect(focus.visible).toBe(true);
+            expect(focus.style).not.toBe('none');
+            expect(focus.width).not.toBe('0px');
+        });
 
         test(`${locale}: status chips keep readable contrast and every control has an accessible name`, async ({ page }) => {
             await login(page, locale);
