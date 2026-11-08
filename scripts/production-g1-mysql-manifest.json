@@ -1,4 +1,4 @@
-_{
+{
   "installed_artifacts": {
     "/etc/apparmor.d/wpcaregrid-mysql-production": "0b98a2f7ad67a47570f64ad34427bdda257a76b05a0256eb0001aab9f6817872",
     "/etc/apparmor.d/wpcaregrid-mysql-production-restore": "591f0333a7021ea396afdf0722f491743d8f8b0331cabeced0f10f87cec1d229",

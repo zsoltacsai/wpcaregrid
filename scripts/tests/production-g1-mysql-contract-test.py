@@ -1,4 +1,4 @@
-_#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Synthetic fail-closed tests for the Production G1 MySQL config contract."""
 
 from __future__ import annotations
@@ -260,6 +260,62 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         docs = (ROOT.parent / "docs/PRODUCTION_G1_MYSQL_PROVISIONING.md").read_text(encoding="utf-8")
         for name, digest in sums.items():
             self.assertIn(f"| `{name}` | `{digest}` |", docs)
+
+    def test_downloaded_artifacts_have_exact_bytes_and_valid_provenance(self):
+        files = {
+            "production-g1-mysql.py": b"#!",
+            "production_g1_mysql_contract.py": b"#!",
+            "production-g1-mysql-manifest.json": b"{",
+            "SHA256SUMS": b"5",
+        }
+        for name, prefix in files.items():
+            with self.subTest(name=name):
+                payload = (ROOT / name).read_bytes()
+                self.assertTrue(payload.startswith(prefix))
+                self.assertFalse(payload.startswith(b"_"))
+
+        expected = {
+            "production-g1-mysql.py": "577097aad15f53a6c144c6c4107e16646c338810b3b1575b5708ec7a17ab0b77",
+            "production_g1_mysql_contract.py": "7ad317e3f09d1271531386263289cc821d99d8fa0a82959742dca666c78ed01a",
+            "production-g1-mysql-manifest.json": "60ca7544edddd58937ac73daa2249367773319b5a563992ce579677f9cc441fc",
+        }
+        sums_path = ROOT / "SHA256SUMS"
+        sums_bytes = sums_path.read_bytes()
+        self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
+                         "d285049fb81b627f068a0a22bc64dd275b5f694b5b81560a46c874cfef77b2a2")
+        self.assertTrue(sums_bytes.endswith(bytes([10])))
+        sums = {}
+        for line in sums_bytes.splitlines(keepends=True):
+            self.assertTrue(line.endswith(bytes([10])))
+            parts = line[:-1].decode("ascii").split("  ")
+            self.assertEqual(len(parts), 2)
+            digest, filename = parts
+            self.assertEqual(len(digest), 64)
+            self.assertTrue(all(char in "0123456789abcdef" for char in digest))
+            self.assertNotIn(filename, sums)
+            sums[filename] = digest
+        self.assertEqual(sums, expected)
+        for filename, digest in expected.items():
+            self.assertEqual(hashlib.sha256((ROOT / filename).read_bytes()).hexdigest(), digest)
+
+        manifest = json.loads((ROOT / "production-g1-mysql-manifest.json").read_text(encoding="ascii"))
+        self.assertEqual(manifest["schema"], 1)
+        self.assertEqual(manifest["tool"], "wpcaregrid-production-mysql-g1-v1")
+        self.assertEqual(manifest["sources"], {
+            "production-g1-mysql.py": expected["production-g1-mysql.py"],
+            "production_g1_mysql_contract.py": expected["production_g1_mysql_contract.py"],
+        })
+
+        checkout = ROOT.parent
+        for relative, prefix in (
+            ("scripts/tests/production-g1-mysql-contract-test.py", b"#!"),
+            ("docs/PRODUCTION_G1_MYSQL_PROVISIONING.md", b"#"),
+        ):
+            with self.subTest(path=relative):
+                payload = (checkout / relative).read_bytes()
+                self.assertTrue(payload.startswith(prefix))
+                self.assertFalse(payload.startswith(b"_"))
+
 
 
 if __name__ == "__main__":

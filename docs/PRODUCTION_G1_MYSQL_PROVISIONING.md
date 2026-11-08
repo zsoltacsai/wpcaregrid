@@ -1,4 +1,4 @@
-_# Production G1 — MySQL 8.4 instance provisioning package
+# Production G1 — MySQL 8.4 instance provisioning package
 
 Status: **root-console package prepared; not executed on the VPS**.
 

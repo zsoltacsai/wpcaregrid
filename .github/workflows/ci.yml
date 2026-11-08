@@ -65,6 +65,9 @@ jobs:
       - name: Tracked secret-path policy tests
         run: python3 scripts/tests/repository-secret-path-policy-test.py
 
+      - name: Production G1 artifact integrity regression tests
+        run: python3 scripts/tests/production-g1-mysql-contract-test.py
+
       - name: Staging diagnostics output and policy tests
         run: |
           python3 scripts/tests/staging-diagnostics-output-test.py
