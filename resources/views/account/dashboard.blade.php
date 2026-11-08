@@ -1,5 +1,5 @@
 <x-layouts.account :title="__('account.dashboard.title')">
-    <x-account.page-header :title="__('account.dashboard.welcome', ['name' => $customer->first_name])" />
+    <x-account.page-header class="m16-dash-header" :title="__('account.dashboard.welcome', ['name' => $customer->first_name])" />
 
     @if ($openOffers > 0)
         <x-account.notice tone="warning" class="mb-6">
@@ -9,7 +9,7 @@
     @endif
 
     <div class="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <x-account.panel :title="__('account.dashboard.subscription')" heading-id="dashboard-subscription">
+        <x-account.panel class="m16-dash-panel" :title="__('account.dashboard.subscription')" heading-id="dashboard-subscription">
             @if ($subscription)
                 <x-slot:action>
                     <a href="{{ route('account.subscription') }}" class="rounded-sm text-sm font-medium text-primary underline decoration-line-strong underline-offset-4 hover:decoration-primary">{{ __('account.dashboard.view_subscription') }}</a>
@@ -43,7 +43,7 @@
             @endif
         </x-account.panel>
 
-        <x-account.panel :title="__('account.dashboard.websites')" heading-id="dashboard-websites">
+        <x-account.panel class="m16-dash-panel" :title="__('account.dashboard.websites')" heading-id="dashboard-websites">
             <x-slot:action>
                 <a href="{{ route('account.websites.index') }}" class="rounded-sm text-sm font-medium text-primary underline decoration-line-strong underline-offset-4 hover:decoration-primary">{{ __('account.dashboard.view_websites') }}</a>
             </x-slot:action>
@@ -53,7 +53,7 @@
         </x-account.panel>
     </div>
 
-        <section class="mt-6 flex flex-col gap-4 rounded-lg border border-accent bg-accent-soft p-6 sm:flex-row sm:items-center sm:justify-between" aria-labelledby="setup-title">
+        <section class="m16-dash-setup mt-6 flex flex-col gap-4 rounded-lg border border-accent bg-accent-soft p-6 sm:flex-row sm:items-center sm:justify-between" aria-labelledby="setup-title">
             <div class="flex items-start gap-4">
                 <x-ui.icon-tile name="globe" tone="positive" class="bg-surface" />
                 <div>

@@ -27,7 +27,7 @@ class WebsiteListSurfaceTest extends TestCase
 
             $html = $this->actingAs($customer->user)->get(route('account.websites.index'))->assertOk()->getContent();
 
-            $this->assertStringContainsString('class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between m16-site-list__header"', $html);
+            $this->assertStringContainsString('class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between m16-dash-header"', $html);
             $this->assertStringContainsString('m16-site-list__rows', $html);
 
             foreach (WebsiteStatus::cases() as $status) {
