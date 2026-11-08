@@ -13,7 +13,9 @@ Base: protected `claude/ecstatic-wozniak-oemyuf` at `c1d5ba4`. No Elliot/infra f
 | Handoff | #309, #311 | Merged as `9b98f7b2f12d49905665acdb8fb074f02e563acf` and `001dfa28bdb09345d6067e43bdd7c6786ce6dd84`. |
 | M16.3 Customer Dashboard: website list header, rows, status chips | #312 | Merged as `74b46b06a7a317429acab723e9f1f32540dcfe14`. Scoped to `.m16-site-list__header/__rows`; the shared status badge only gained a `data-tone` attribute. |
 | 404 page `lang` attribute (issue #310) | #313 | Merged as `d665ba0dd83bee2480d6192cb90b8c55f2ff9355`. App-level `resources/views/errors/minimal.blade.php` takes `lang` from the active locale. Issue closed. |
-| M16.2 FAQ order and wording | #314 | **Draft, needs Owner content approval.** Do not merge before then. |
+| M16.3 Customer Dashboard home | #317 | Merged as `5ba984039a9e90eefa1e1dca4ac5ff76676e756a`. Hook classes `.m16-dash-header/-panel/-setup`; shared components unchanged. |
+| Authenticated dashboard browser E2E | #318 | Merged as `c51097af75eed2cd6093fb8b7cb67fd042e4492a`. Guarded synthetic fixture and 19-test spec, run inside the sandboxed marketing workflow after the cancellation verification (it accepts the current terms document, which that verification fingerprints). |
+| M16.2 FAQ (8 approved questions) and contact CTA | #314 | Merged as `0a8494bcafad4c0b06a51825eddf5260bd17aaa2`. Owner-approved content, answers checked against plan definitions; no SLA, uptime, refund or self-service claims. |
 
 Independent QA/AppSec agent reviews are no longer mandatory (Owner, 2026-11-08). Required CI, Gitleaks and the up-to-date-branch rule still gate every merge. Merges were serial: each merge made the other open branches behind, so they were updated and re-run one at a time. Post-merge CI on `af6fbaa` was still running when this was written.
 
@@ -23,12 +25,17 @@ Independent QA/AppSec agent reviews are no longer mandatory (Owner, 2026-11-08).
 - Release prerequisite for #307: read production `home.how` content in Owner Admin (both locales) and republish it if present. No production access was used or requested. Nothing was published.
 - GitHub reports the protected branch as having no classic branch protection rule (API 404) although required checks clearly gate merging; this is probably rulesets. Not changed.
 - Release prerequisite: field Core Web Vitals for the hero have not been measured (the #305 layout-shift test is a synthetic single headless run).
-- #314: approve or change the FAQ order, the new availability question and the reworded password answer. Published `home.faq` content in production overrides built-in copy and would need republishing; it was not read.
+- Release prerequisite for #314: production `home.faq` content, if published, overrides the built-in copy and must be republished; it was not read. The Owner's earlier baseline answers were not available to me, so the answers were written from verified facts; compare them with the baseline. The approved questions and CTA use informal "te" while the rest of the Hungarian site uses "Ön".
+- `WebsiteProbeTest::test_http_probe_keeps_failure_candidate_attention_until_confirmation` is time-sensitive (compares `next_check_at` with `now()->addMinutes(5)` without freezing time) and failed once on #317, then passed on re-run. Not changed (monitoring domain); freezing time in that test would remove the flake.
 - Possible FAQ accessibility follow-ups (not done): eight `role="region"` panels is above the usual guidance of about six; answers stay hidden until JavaScript runs.
+
+## Integration checkpoints
+
+Checkpoint 1 (after #318, #317, #314): authoritative primary `0a8494bcafad4c0b06a51825eddf5260bd17aaa2`. CI and the marketing browser E2E are green on the two previous primary heads (`c51097a`, `5ba9840`); the run on `0a8494b` was still in progress. Open PRs (#319, #303, #270, #248, #247, #246, #244, #224, #218) are Elliot's G1, Gate 1 and policy work: none touches a file changed in these three merges, and none needs synchronization because of them. No conflicts.
 
 ## Next safe M16 task
 
-Apply the Direction 04.1 tokens to the next Customer Dashboard surface (suggested: the dashboard home subscription and websites summary cards), again scoped with before/after screenshots in HU/EN at 375/768/1440, keyboard focus checks and the existing customer-portal tests. Local run recipe is in the environment notes below (synthetic SQLite customer; no production data).
+Responsive sidebar and mobile header of the Customer Dashboard layout (`resources/views/components/layouts/account.blade.php`), in its own PR: return focus to the menu button after Escape, close the menu on navigation and outside click, keep `aria-expanded` and the visible focus outline, Direction 04.1 token styling, with before/after screenshots in HU/EN and the existing dashboard E2E. Then empty states and a reusable status-chip component.
 
 ## M16.2 decisions and copy
 
