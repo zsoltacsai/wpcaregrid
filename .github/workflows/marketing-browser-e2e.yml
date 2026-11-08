@@ -16,6 +16,8 @@ on:
       - 'tests/e2e/marketing-launch-ctas.spec.ts'
       - 'tests/e2e/subscription-cancellation.spec.ts'
       - 'tests/e2e/fixtures/seed-subscription-cancellation.php'
+      - 'tests/e2e/customer-dashboard.spec.ts'
+      - 'tests/e2e/fixtures/seed-customer-dashboard.php'
       - 'composer.json'
       - 'composer.lock'
       - 'package.json'
@@ -39,6 +41,8 @@ on:
       - 'tests/e2e/marketing-launch-ctas.spec.ts'
       - 'tests/e2e/subscription-cancellation.spec.ts'
       - 'tests/e2e/fixtures/seed-subscription-cancellation.php'
+      - 'tests/e2e/customer-dashboard.spec.ts'
+      - 'tests/e2e/fixtures/seed-customer-dashboard.php'
       - 'composer.json'
       - 'composer.lock'
       - 'package.json'
@@ -189,6 +193,11 @@ jobs:
           M16_CANCELLATION_FIXTURES_PATH: ${{ github.workspace }}/storage/framework/testing/subscription-cancellation.json
         run: php tests/e2e/fixtures/seed-subscription-cancellation.php
 
+      - name: Seed isolated synthetic customer dashboard accounts
+        env:
+          M16_DASHBOARD_E2E: '1'
+        run: php tests/e2e/fixtures/seed-customer-dashboard.php
+
       - name: Execute actual Chromium browser tests
         shell: bash
         env:
@@ -284,7 +293,7 @@ jobs:
           echo "SANDBOX_WORKSPACE_ACCESS=PASS"
           test -d storage && test ! -L storage
           test -d bootstrap/cache && test ! -L bootstrap/cache
-          mkdir -p playwright-report/html playwright-report/cancellation-html storage/playwright
+          mkdir -p playwright-report/html playwright-report/cancellation-html playwright-report/dashboard-html storage/playwright
           sudo chown -R "$e2e_user:$e2e_group" storage bootstrap/cache
           sudo chown "$e2e_user:$e2e_group" .env
           sudo chmod 0640 .env
@@ -450,6 +459,12 @@ jobs:
             tests/e2e/marketing-launch-ctas.spec.ts \
             --trace=off \
             --reporter=list,html,junit
+          PLAYWRIGHT_OUTPUT_DIR=storage/playwright/customer-dashboard \
+          PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/dashboard-html \
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME=playwright-report/dashboard-junit.xml \
+            ./node_modules/.bin/playwright test tests/e2e/customer-dashboard.spec.ts \
+              --trace=off \
+              --reporter=list,html,junit
           PLAYWRIGHT_OUTPUT_DIR=storage/playwright/subscription-cancellation \
           PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/cancellation-html \
           PLAYWRIGHT_JUNIT_OUTPUT_NAME=playwright-report/cancellation-junit.xml \
