@@ -1,0 +1,73 @@
+/*
+ * Direction 04.1 on the Customer Dashboard — website list only.
+ * Scoped to .m16-site-list__header and .m16-site-list__rows so shared components elsewhere are unchanged.
+ * Colours come from tokens/direction-041.css.
+ */
+.m16-site-list__header {
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--m16-line);
+}
+
+.m16-site-list__header h1 {
+    color: var(--m16-ink);
+    letter-spacing: -0.025em;
+}
+
+.m16-site-list__header p {
+    color: var(--m16-muted);
+}
+
+.m16-site-list__header a.bg-action {
+    border-radius: var(--m16-radius-control);
+    background-color: var(--m16-teal);
+    background-image: linear-gradient(105deg, var(--m16-teal), var(--m16-teal-deep));
+    box-shadow: 0 8px 22px rgb(8 123 108 / 20%);
+}
+
+.m16-site-list__header a.bg-action:hover {
+    background-color: var(--m16-teal-deep);
+}
+
+.m16-site-list__rows {
+    overflow: hidden;
+    border-color: var(--m16-line);
+    border-radius: var(--m16-radius-card);
+    box-shadow: var(--m16-shadow-card);
+}
+
+.m16-site-list__rows > li + li {
+    border-color: var(--m16-line);
+}
+
+.m16-site-list__rows > li:hover {
+    background: var(--m16-paper);
+}
+
+.m16-site-list__rows a:focus-visible {
+    outline: 2px solid var(--m16-teal);
+    outline-offset: 3px;
+}
+
+.m16-site-list__rows [data-tone="positive"] {
+    border-color: var(--m16-line-action);
+    background: var(--m16-mint-soft);
+    color: var(--m16-green-ink);
+}
+
+.m16-site-list__rows [data-tone="positive"] > span[aria-hidden="true"] {
+    background: var(--m16-teal);
+}
+
+@media (max-width: 639px) {
+    .m16-site-list__header {
+        margin-bottom: 1.5rem;
+    }
+
+    .m16-site-list__rows > li {
+        padding-inline: 1rem;
+    }
+
+    .m16-site-list__rows [data-tone] {
+        align-self: flex-start;
+    }
+}

@@ -20,7 +20,7 @@
     ];
 @endphp
 
-<span {{ $attributes->merge(['class' => 'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border px-2.5 whitespace-nowrap '.$tones[$tone].' '.$variants[$variant]]) }}>
+<span data-tone="{{ $tone }}" {{ $attributes->merge(['class' => 'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border px-2.5 whitespace-nowrap '.$tones[$tone].' '.$variants[$variant]]) }}>
     <x-ui.status-dot :tone="$tone" class="size-1.5" />
     {{ $slot->isEmpty() ? $status?->label() : $slot }}
 </span>
