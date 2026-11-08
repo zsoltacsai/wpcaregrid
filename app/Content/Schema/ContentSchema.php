@@ -202,6 +202,7 @@ final class ContentSchema
                 Field::text('title'),
                 Field::text('contact_prompt', max: 120),
                 Field::text('contact_label', max: 40),
+                Field::text('cta_label', max: 60),
                 Field::url('contact_url', false),
                 Field::repeater('items', [
                     Field::text('question', max: 200),
@@ -214,6 +215,7 @@ final class ContentSchema
                 'title' => $t('home.faq.title'),
                 'contact_prompt' => $t('home.faq.contact_prompt'),
                 'contact_label' => $t('home.faq.contact_link'),
+                'cta_label' => $t('home.faq.cta'),
                 'contact_url' => $contact(),
                 'items' => array_map(
                     fn (array $item, int $index) => ['question' => $item['question'], 'answer' => e($item['answer']), 'enabled' => true, 'position' => $index + 1],
