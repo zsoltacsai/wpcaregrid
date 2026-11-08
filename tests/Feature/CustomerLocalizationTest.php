@@ -405,7 +405,7 @@ class CustomerLocalizationTest extends TestCase
 
         $hu = $this->in('hu')->get(route('login'))->assertOk()->getContent();
         $this->assertStringContainsString('<html lang="hu">', $hu);
-        $this->assertStringContainsString('Lépjen be az előfizetése és a weboldalai követéséhez.', $hu);
+        $this->assertStringContainsString('Lépjen be a karbantartási csomagja és a weboldalai követéséhez.', $hu);
         $this->assertStringContainsString('Elfelejtette a jelszavát?', $hu);
         $this->assertStringContainsString('Jelszó', $hu);
         $this->assertStringContainsString('<title>Belépés – WP CareGrid</title>', $hu);
@@ -577,7 +577,7 @@ class CustomerLocalizationTest extends TestCase
         }
 
         $hu = $this->actingAs($customer->user)->in('hu')->get(route('account.dashboard'));
-        foreach (['Üdv újra, Anna', 'Vezérlőpult', 'Weboldalak', 'Előfizetés', 'Számlázás', 'Profil', 'Kilépés', trans('account.dashboard.setup_text', [], 'hu'), 'Aktív'] as $text) {
+        foreach (['Üdv újra, Anna', 'Irányítópult', 'Weboldalak', 'Előfizetés', 'Számlázás', 'Profil', 'Kilépés', trans('account.dashboard.setup_text', [], 'hu'), 'Aktív'] as $text) {
             $hu->assertSee($text);
         }
         $hu->assertDontSee('Welcome back')->assertDontSee('Log out');

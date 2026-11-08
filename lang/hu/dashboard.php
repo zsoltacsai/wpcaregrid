@@ -2,10 +2,10 @@
 
 /*
 |--------------------------------------------------------------------------
-| Vezérlőpult szövegei (magyar)
+| Irányítópult szövegei (magyar)
 |--------------------------------------------------------------------------
 |
-| A nyilvános oldal vezérlőpult-bemutatói használják, a lang/en/dashboard.php
+| A nyilvános oldal irányítópult-bemutatói használják, a lang/en/dashboard.php
 | kulcsaival azonos szerkezetben. A bemutatók adatai szemléltető demóadatok.
 |
 */
@@ -17,9 +17,9 @@ return [
 
     'preview' => [
         'compact_title' => 'Weboldalak',
-        'compact_caption' => 'Példa a WP CareGrid vezérlőpultra, demóadatokkal.',
-        'full_title' => 'CareGrid vezérlőpult',
-        'full_caption' => 'Példa a WP CareGrid vezérlőpult áttekintésére, demóadatokkal.',
+        'compact_caption' => 'Példa a WP CareGrid irányítópultra, demóadatokkal.',
+        'full_title' => 'CareGrid irányítópult',
+        'full_caption' => 'Példa a WP CareGrid irányítópult áttekintésére, demóadatokkal.',
     ],
 
     'nav' => [

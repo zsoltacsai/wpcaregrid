@@ -60,7 +60,7 @@ return [
         'title' => 'Mit tartalmaz a karbantartás',
         'items' => [
             'updates' => ['title' => 'Frissítések', 'text' => 'WordPress, bővítmények és témák'],
-            'backups' => ['title' => 'Mentések', 'text' => 'Mentések támogatott beállításokhoz; elkülönített tárhely, ahol be van állítva'],
+            'backups' => ['title' => 'Biztonsági mentések', 'text' => 'Biztonsági mentések támogatott beállításokhoz; elkülönített tárhely, ahol be van állítva'],
             'security' => ['title' => 'Biztonság', 'text' => 'A csomag szerinti, ütemezett biztonsági ellenőrzések'],
             'functional' => ['title' => 'Funkcionális ellenőrzés', 'text' => 'A frissítések után ellenőrizzük a fontos funkciókat'],
         ],
@@ -72,7 +72,7 @@ return [
         'lead' => 'A bővítmények, a témák és maga a WordPress is folyamatosan változik. Rendszeres gondozás nélkül a kisebb problémák felhalmozódnak.',
         'items' => [
             'outdated' => ['title' => 'Elavult szoftverek', 'text' => 'A régi bővítmények és témák biztonsági és kompatibilitási problémákat okozhatnak.'],
-            'backup' => ['title' => 'Nincs friss mentés', 'text' => 'Friss mentés nélkül egy hiba utáni helyreállítás sokkal nehezebb lehet.'],
+            'backup' => ['title' => 'Nincs friss biztonsági mentés', 'text' => 'Friss biztonsági mentés nélkül egy hiba utáni helyreállítás sokkal nehezebb lehet.'],
             'updates' => ['title' => 'A frissítés elronthat valamit', 'text' => 'A sikeres frissítés nem mindig jelenti azt, hogy minden fontos funkció továbbra is működik.'],
         ],
     ],
@@ -83,7 +83,7 @@ return [
         'lead' => 'A csomag és a webhely beállításainak támogatása esetén a karbantartás mentést, frissítéseket, technikai és funkcionális ellenőrzéseket is tartalmaz.',
         'step_label' => ':number. lépés',
         'steps' => [
-            'backup' => ['title' => 'Mentés', 'text' => 'Frissítés előtti mentés ott készül, ahol ezt a csomag és a webhely beállítása támogatja.', 'result' => 'Ellenőrizve'],
+            'backup' => ['title' => 'Biztonsági mentés', 'text' => 'Frissítés előtti biztonsági mentés ott készül, ahol ezt a csomag és a webhely beállítása támogatja.', 'result' => 'Ellenőrizve'],
             'update' => ['title' => 'Frissítés', 'text' => 'A WordPress-mag, a bővítmények és a témák ellenőrzött sorrendben frissülnek.', 'result' => 'Frissítve'],
             'check' => ['title' => 'Ellenőrzés', 'text' => 'Meggyőződünk arról, hogy az oldal hibák nélkül betöltődik.', 'result' => 'Nincs hiba'],
             'functional' => ['title' => 'Funkcionális teszt', 'text' => 'A fontos oldalakat, űrlapokat és a belépést teszteljük.', 'result' => 'Sikeres'],
@@ -98,11 +98,11 @@ return [
     ],
 
     'dashboard' => [
-        'eyebrow' => 'Vezérlőpult',
+        'eyebrow' => 'Irányítópult',
         'title' => 'Minden weboldala egy helyen.',
         'lead' => 'A fiókjához csatlakoztatott webhelyek elérhető állapot-, mentési, frissítési, biztonsági és licencadatai.',
         'demo_note' => 'Szemléltető adatok, nem valódi ügyféladatok.',
-        'metrics_label' => 'Példa vezérlőpult-mutatók (demóadatok)',
+        'metrics_label' => 'Példa irányítópult-mutatók (demóadatok)',
     ],
 
     'licenses' => [
@@ -134,7 +134,7 @@ return [
         'title' => 'Többre van szüksége a karbantartásnál?',
         'lead' => 'Egyedi WordPress- és WooCommerce-megoldásokat is fejlesztünk.',
         'cta' => 'Beszéljünk a projektről',
-        'note' => 'Az egyedi fejlesztés külön szolgáltatás: árajánlata és számlázása független a karbantartási előfizetéstől.',
+        'note' => 'Az egyedi fejlesztés külön szolgáltatás: árajánlata és számlázása független a karbantartási csomagtól.',
         'items' => [
             'plugins' => ['title' => 'Egyedi bővítmények', 'text' => 'Egyedi funkciók a weboldalához.'],
             'api' => ['title' => 'API-integrációk', 'text' => 'A WordPress vagy a WooCommerce összekötése külső rendszerekkel.'],
@@ -164,41 +164,41 @@ return [
     'faq' => [
         'eyebrow' => 'GYIK',
         'title' => 'Gyakran ismételt kérdések',
-        'contact_prompt' => 'Nem találja, amit keres?',
+        'contact_prompt' => 'Nem találod, amit keresel?',
         'contact_link' => 'Kapcsolatfelvétel',
         'cta' => 'Kérdésed van? Beszéljük meg!',
         'items' => [
             'includes' => [
                 'question' => 'Mit tartalmaz a WordPress karbantartás?',
-                'answer' => 'A csomagtól függően: WordPress-, bővítmény- és témafrissítések, mentések, biztonsági ellenőrzések, elérhetőség-figyelés támogatott webhelyeken és tevékenységnapló. A Business és a Secure csomag a fontos frissítések utáni funkcionális ellenőrzést és licencellenőrzést is tartalmaz; a Secure ezen felül elsőbbségi támogatást, havi jelentést és jogosult, támogatott esetekben malware-eltávolítást. Harmadik féltől származó licencek és egyedi fejlesztés nem tartoznak bele.',
+                'answer' => 'A csomagtól függően: WordPress-, bővítmény- és témafrissítések, biztonsági mentések, biztonsági ellenőrzések, elérhetőség-figyelés támogatott weboldalakon és tevékenységnapló. A Business és a Secure csomag a fontos frissítések utáni funkcionális ellenőrzést és licencellenőrzést is tartalmaz; a Secure ezen felül elsőbbségi támogatást, havi jelentést és jogosult, támogatott esetekben malware-eltávolítást. Harmadik féltől származó licencek és egyedi fejlesztés nem tartoznak bele.',
             ],
             'why' => [
                 'question' => 'Miért fontos a rendszeres WordPress karbantartás?',
-                'answer' => 'A WordPress, a bővítmények és a témák folyamatosan változnak. Az elavult szoftver biztonsági és kompatibilitási problémákat okozhat, friss mentés nélkül a hibák utáni helyreállítás sokkal nehezebb, és egy sikeres frissítés sem jelenti automatikusan, hogy minden fontos funkció tovább működik. A rendszeres karbantartás csökkenti ezeket a kockázatokat, de nem szünteti meg őket.',
+                'answer' => 'A WordPress, a bővítmények és a témák folyamatosan változnak. Az elavult szoftver biztonsági és kompatibilitási problémákat okozhat, friss biztonsági mentés nélkül a hibák utáni helyreállítás sokkal nehezebb, és egy sikeres frissítés sem jelenti automatikusan, hogy minden fontos funkció tovább működik. A rendszeres karbantartás csökkenti ezeket a kockázatokat, de nem szünteti meg őket.',
             ],
             'woocommerce' => [
                 'question' => 'WooCommerce webáruházakat is karbantartotok?',
-                'answer' => 'Igen, külön WooCommerce csomagokkal. A WordPress-karbantartás mellett a Business és a Secure csomag a frissítések után a pénztári folyamatot, valamint a fizetési és rendelési e-maileket is ellenőrzi. A mentés a Basic csomagban hetente, a Business és a Secure csomagban naponta készül, ahol a csomag és a webhely beállítása ezt támogatja.',
+                'answer' => 'Igen, külön WooCommerce csomagokkal. A WordPress-karbantartás mellett a Business és a Secure csomag a frissítések után a pénztári folyamatot, valamint a fizetési és rendelési e-maileket is ellenőrzi. A biztonsági mentés a Basic csomagban hetente, a Business és a Secure csomagban naponta készül, ahol a csomag és a weboldal beállítása ezt támogatja.',
             ],
             'start' => [
                 'question' => 'Hogyan indul az együttműködés?',
-                'answer' => 'Jelenleg kapcsolatfelvétellel: írja meg a weboldala címét és az igényeit. Egyeztetjük, hogy tudunk-e segíteni, melyik csomag illik hozzá, és mit támogat a webhely beállítása. A WordPress-, a tárhely- és az adatbázisjelszavát nem kérjük el. Az online rendelés és az önkiszolgáló csatlakoztatás jelenleg nem érhető el.',
+                'answer' => 'Jelenleg kapcsolatfelvétellel indul: írd meg a weboldalad címét és az igényeidet. Megbeszéljük, hogy tudunk-e segíteni, melyik csomag illik hozzá, és mit támogat a weboldalad beállítása. A WordPress-, a tárhely- és az adatbázisjelszavadat soha nem kérjük el. Az online rendelés és az önkiszolgáló csatlakoztatás jelenleg nem érhető el.',
             ],
             'downtime' => [
                 'question' => 'Elérhetetlenné válhat a weboldalam karbantartás közben?',
-                'answer' => 'Frissítés közben a WordPress rövid időre karbantartási üzemmódba kapcsolhat, ilyenkor az oldal átmenetileg nem vagy lassabban érhető el. Ezt nem lehet teljesen kizárni, és garantált elérhetőséget nem vállalunk. A frissítés előtt mentés készül, ahol a csomag és a webhely beállítása ezt támogatja, utána pedig ellenőrizzük, hogy az oldal hiba nélkül betöltődik.',
+                'answer' => 'Frissítés közben a WordPress rövid időre karbantartási üzemmódba kapcsolhat, ilyenkor az oldal átmenetileg nem vagy lassabban érhető el. Ezt nem lehet teljesen kizárni, és garantált elérhetőséget nem vállalunk. Frissítés előtt – ahol a csomag és a weboldal beállítása ezt támogatja – biztonsági mentés készül, utána pedig ellenőrizzük, hogy az oldal hiba nélkül betöltődik.',
             ],
             'failure' => [
                 'question' => 'Mi történik, ha meghibásodik a weboldalam?',
-                'answer' => 'Ha egy frissítés utáni ellenőrzés hibát jelez, áttekintjük az elérhető mentési és helyreállítási lehetőségeket; a visszaállítás a mentéstől és a tárhelykörnyezettől is függ. Biztonsági ellenőrzési találatról értesítjük, és egyeztetjük a következő lépéseket. Malware-eltávolítás jogosult, támogatott Secure-esetekben érhető el. Válasz- vagy helyreállítási határidőt nem ígérünk.',
+                'answer' => 'Ha egy frissítés utáni ellenőrzés hibát jelez, áttekintjük az elérhető biztonsági mentési és helyreállítási lehetőségeket; a visszaállítás a biztonsági mentéstől és a tárhelykörnyezettől is függ. Ha a biztonsági ellenőrzés találatot jelez, értesítünk, és megbeszéljük a következő lépéseket. Malware-eltávolítás jogosult, támogatott Secure-esetekben érhető el. Válasz- vagy helyreállítási határidőt nem ígérünk.',
             ],
             'tracking' => [
                 'question' => 'Hogyan követhetem nyomon a karbantartást?',
-                'answer' => 'Minden csomag része a tevékenységnapló, amely a támogatott mentések, frissítések és ellenőrzések rögzített eredményeit mutatja; a Secure csomagban havi karbantartási jelentés is jár. Az ügyfélfelület, ahol ezt követheti, jelenleg még nem nyilvánosan elérhető, ezért a részletekről a kapcsolatfelvétel során egyeztetünk.',
+                'answer' => 'Minden csomag része a tevékenységnapló, amely a támogatott biztonsági mentések, frissítések és ellenőrzések rögzített eredményeit mutatja; a Secure csomagban havi karbantartási jelentés is jár. Az irányítópult, ahol ezt követhetnéd, jelenleg még nem nyilvánosan elérhető, ezért a részletekről a kapcsolatfelvételkor egyeztetünk.',
             ],
             'cancellation' => [
                 'question' => 'Hogyan működik az előfizetés lemondása?',
-                'answer' => 'Havi számlázásnál nincs hűségidő. A lemondás az előfizetés ügyfélfiókban kezelt lemondási funkciójával a már fizetett időszak végére kérhető, addig az előfizetés aktív marad. Az online rendelés és az ügyfélfiók jelenleg még nem nyilvános, ezért most a lemondásról a kapcsolatfelvétel során egyeztetünk. A részleteket a szerződési feltételek tartalmazzák.',
+                'answer' => 'Havi számlázásnál nincs hűségidő. Az előfizetést a már kifizetett időszak végére mondhatod le, addig aktív marad. Az online rendelés és az ügyfélfiók jelenleg még nem nyilvános, ezért most a lemondást a kapcsolatfelvételkor egyeztetjük. A részleteket a szerződési feltételek tartalmazzák.',
             ],
         ],
     ],

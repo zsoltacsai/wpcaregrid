@@ -82,9 +82,9 @@ return [
         'core_plugin_theme_updates' => 'WordPress-, bővítmény- és témafrissítések',
         'core_woocommerce_plugin_theme_updates' => 'WordPress-, WooCommerce-, bővítmény- és témafrissítések',
         'remote_backups' => [
-            'daily' => 'Napi mentés; elkülönített tárhely, ahol be van állítva',
-            'weekly' => 'Heti mentés; elkülönített tárhely, ahol be van állítva',
-            'monthly' => 'Havi mentés; elkülönített tárhely, ahol be van állítva',
+            'daily' => 'Napi biztonsági mentés; elkülönített tárhely, ahol be van állítva',
+            'weekly' => 'Heti biztonsági mentés; elkülönített tárhely, ahol be van állítva',
+            'monthly' => 'Havi biztonsági mentés; elkülönített tárhely, ahol be van állítva',
         ],
         'security_check' => [
             'daily' => 'Napi biztonsági ellenőrzés',
