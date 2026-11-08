@@ -49,9 +49,9 @@ files before copying):
 
 | Source artifact | SHA-256 |
 | --- | --- |
-| `production-g1-mysql.py` | `577097aad15f53a6c144c6c4107e16646c338810b3b1575b5708ec7a17ab0b77` |
-| `production_g1_mysql_contract.py` | `6859cc9033b297bc0206af1ed5597719f7a46dd797f5589d0843e74812b435a0` |
-| `production-g1-mysql-manifest.json` | `f94f786974cc7ddff29825473d283f3b7362760a5612b51f83d165283af8d145` |
+| `production-g1-mysql.py` | `fe2f712a62d556ff25f07e53c39137639225a582afdeee1fe8ed8e16aef4c077` |
+| `production_g1_mysql_contract.py` | `669014a01366cfa5ec3f2d0e80d3eec3a44a57955a1ba8a3bd91c6772fc60029` |
+| `production-g1-mysql-manifest.json` | `3aa181c1fde33f04a8ddd5a16dd313675225a6032d87c3becd943da1527e0e49` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not
@@ -65,8 +65,19 @@ configs, systemd drop-ins and AppArmor profiles.
 The installed systemd drop-ins reset the factory `ExecStartPre` list and replace
 it with the fixed read-only checker. This prevents
 `mysql-systemd-start pre @%I` from invoking the vendor helper that can initialize
-the default `/var/lib/mysql`. The vendor `ExecStart` is preserved and its
-effective instance suffix is verified. No vendor file is edited. Network
+the default `/var/lib/mysql`.
+
+The drop-ins also reset `ExecStart` and replace it with
+`/usr/sbin/mysqld --defaults-group-suffix=@<instance>` using the literal instance
+name. The vendor template's `@%I` cannot be used: systemd's `%I` unescapes the
+instance name (`-` becomes `/`), so `wpcaregrid-production` would select the
+non-existent group `mysqld@wpcaregrid/production` and mysqld would start without
+the instance's own configuration. The installer therefore requires the vendor
+template to contain exactly `ExecStart=/usr/sbin/mysqld --defaults-group-suffix=@%I`
+(so nothing is lost by the override), requires each drop-in to contain exactly one
+reset and one literal override, and requires the effective unit to run exactly one
+command whose argv is the mysqld binary and that instance's suffix. No vendor file
+is edited. Network
 filtering permits only loopback IP traffic; the AppArmor profiles allow each
 instance its own data, socket, PID, log and temp paths, with explicit denies for
 the legacy `/var/lib/mysql` and the other new instance's paths.

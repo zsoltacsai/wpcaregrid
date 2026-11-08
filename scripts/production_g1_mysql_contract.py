@@ -8,6 +8,7 @@ or starts/stops a service.
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass
 from typing import Iterable
@@ -252,14 +253,63 @@ def validate_instance_group(instance: Instance, text: str) -> None:
         raise Refused("instance_option_value_invalid")
 
 
+MYSQLD_BINARY = "/usr/sbin/mysqld"
+VENDOR_EXECSTART = f"ExecStart={MYSQLD_BINARY} --defaults-group-suffix=@%I"
+
+
+def execstart_line(instance: Instance) -> str:
+    """The instance ExecStart. The vendor template uses `@%I`, but systemd's %I
+    unescapes the instance name (`-` becomes `/`), so `wpcaregrid-production`
+    would select the non-existent group `mysqld@wpcaregrid/production` and the
+    instance would start without its own configuration. The drop-in therefore
+    names the group literally, exactly as written in the instance config."""
+    return f"ExecStart={MYSQLD_BINARY} --defaults-group-suffix=@{instance.name}"
+
+
+def validate_vendor_execstart(vendor_text: str) -> None:
+    """The drop-in replaces the vendor ExecStart, so the vendor command must be
+    exactly the one the replacement mirrors (no extra arguments to lose)."""
+    if VENDOR_EXECSTART not in [line.strip() for line in vendor_text.splitlines()]:
+        raise Refused("vendor_execstart_unrecognized")
+
+
+def validate_effective_execstart(instance: Instance, output: str) -> None:
+    """Require exactly one effective ExecStart whose argv is the instance command.
+
+    `systemctl show --property=ExecStart --value` prints
+    `{ path=... ; argv[]=... ; ignore_errors=no ; ... }`. Prefix or substring
+    matching is not enough: the production suffix is a prefix of the restore one.
+    """
+    blocks = re.findall(r"\{ ([^{}]*) \}", output)
+    if len(blocks) != 1:
+        raise Refused("effective_systemd_execstart_mismatch")
+    fields = [part.strip() for part in blocks[0].split(" ; ")]
+    values = dict(part.split("=", 1) for part in fields if "=" in part)
+    expected_argv = [MYSQLD_BINARY, f"--defaults-group-suffix=@{instance.name}"]
+    if (values.get("path") != MYSQLD_BINARY
+            or values.get("argv[]", "").split(" ") != expected_argv
+            or values.get("ignore_errors", "no") != "no"):
+        raise Refused("effective_systemd_execstart_mismatch")
+
+
+def validate_process_arguments(instance: Instance, cmdline: str) -> None:
+    """Require the running mysqld argv to be exactly the instance command."""
+    if cmdline.split() != [MYSQLD_BINARY, f"--defaults-group-suffix=@{instance.name}"]:
+        raise Refused("instance_process_arguments_mismatch")
+
+
 def validate_unit_dropin(instance: Instance, text: str) -> None:
     """Require a reset of the vendor initializer and a fixed checker/profile."""
     lines = [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
     if not lines or lines[0] != "[Service]":
         raise Refused("dropin_section_invalid")
+    if [line for line in lines[1:] if line.startswith("ExecStart=")] != ["ExecStart=", execstart_line(instance)]:
+        raise Refused("dropin_execstart_invalid")
     expected = {
         "ExecStartPre=",
         f"ExecStartPre=+/usr/bin/python3 /usr/local/libexec/wpcaregrid-g1-mysql.py preflight --instance {instance.name}",
+        execstart_line(instance),
+        "ExecStart=",
         f"AppArmorProfile={instance.apparmor_profile}",
         "Environment=HOME=/nonexistent",
         "Environment=PYTHONDONTWRITEBYTECODE=1",
@@ -306,6 +356,7 @@ def artifact_files() -> dict[str, bytes]:
         dropin = "\n".join((
             "[Service]", "ExecStartPre=",
             f"ExecStartPre=+/usr/bin/python3 /usr/local/libexec/wpcaregrid-g1-mysql.py preflight --instance {instance.name}",
+            "ExecStart=", execstart_line(instance),
             f"AppArmorProfile={instance.apparmor_profile}",
             "Environment=HOME=/nonexistent",
             "Environment=PYTHONDONTWRITEBYTECODE=1",

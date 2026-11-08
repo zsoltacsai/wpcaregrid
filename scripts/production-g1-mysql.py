@@ -43,6 +43,9 @@ validate_keyring_registry_count = _CONTRACT.validate_keyring_registry_count
 normalize_resolved_value = _CONTRACT.normalize_resolved_value
 validate_port_probe = _CONTRACT.validate_port_probe
 validate_unit_dropin = _CONTRACT.validate_unit_dropin
+validate_vendor_execstart = _CONTRACT.validate_vendor_execstart
+validate_effective_execstart = _CONTRACT.validate_effective_execstart
+validate_process_arguments = _CONTRACT.validate_process_arguments
 provisioning_path_specs = _CONTRACT.provisioning_path_specs
 validate_provisioning_resource_empty = _CONTRACT.validate_provisioning_resource_empty
 validate_unit_inactive = _CONTRACT.validate_unit_inactive
@@ -435,8 +438,10 @@ def verify_running(instance: Instance) -> None:
         apparmor = Path(f"/proc/{main_pid}/attr/current").read_text(encoding="ascii").strip()
     except (OSError, UnicodeError):
         refuse("instance_process_identity_unavailable")
-    if f"--defaults-group-suffix=@{instance.name}" not in cmdline:
-        refuse("instance_process_arguments_mismatch")
+    try:
+        validate_process_arguments(instance, cmdline)
+    except Refused as exc:
+        refuse(str(exc))
     if not apparmor.startswith(instance.apparmor_profile + " (enforce)"):
         refuse("instance_process_apparmor_mismatch")
     _verify_server_uuid_identity(instance)
@@ -614,8 +619,10 @@ def _check_vendor_boundary() -> None:
     text = check_file(vendor, owner="root", group="root", mode=0o644).decode("utf-8", "strict")
     if "ExecStartPre=+/usr/share/mysql-8.4/mysql-systemd-start pre @%I" not in text:
         refuse("vendor_template_unrecognized")
-    if "ExecStart=/usr/sbin/mysqld --defaults-group-suffix=@%I" not in text:
-        refuse("vendor_execstart_unrecognized")
+    try:
+        validate_vendor_execstart(text)
+    except Refused as exc:
+        refuse(str(exc))
     if "ExecStartPost=" in text:
         refuse("vendor_post_hook_unrecognized")
 
@@ -835,8 +842,10 @@ def verify_static_install() -> None:
         if show.count("wpcaregrid-g1-mysql.py preflight") != 1:
             refuse("effective_systemd_preflight_ambiguous")
         exec_start = run([str(SYSTEMCTL), "show", instance.unit, "--property=ExecStart", "--value"])
-        if "/usr/sbin/mysqld" not in exec_start or f"--defaults-group-suffix=@{instance.name}" not in exec_start:
-            refuse("effective_systemd_execstart_mismatch")
+        try:
+            validate_effective_execstart(instance, exec_start)
+        except Refused as exc:
+            refuse(str(exc))
         state = run([str(SYSTEMCTL), "show", instance.unit, "--property=DropInPaths", "--value"])
         if set(state.split()) != {str(dropin)}:
             refuse("effective_systemd_dropin_missing")

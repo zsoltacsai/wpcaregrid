@@ -29,6 +29,25 @@ def group(instance):
         f"{key}={value}\n" for key, value in instance.expected_options().items())
 
 
+VENDOR_TEMPLATE_EXECSTART = "ExecStart=/usr/sbin/mysqld --defaults-group-suffix=@%I"
+
+
+def systemd_unescaped_instance(instance):
+    """What systemd substitutes for %I: the unescaped instance name ('-' becomes '/')."""
+    return instance.name.replace("-", "/")
+
+
+def effective_execstart(argv, *, path="/usr/sbin/mysqld", ignore_errors="no"):
+    """Shape of `systemctl show --property=ExecStart --value` for one command."""
+    return (f"{{ path={path} ; argv[]={argv} ; ignore_errors={ignore_errors} ; "
+            "start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }")
+
+
+def dropin_for(instance):
+    return next(value.decode() for path, value in CONTRACT.artifact_files().items()
+                if path.endswith(f"{instance.unit}.d/90-wpcaregrid-g1.conf"))
+
+
 class ProductionG1MySQLContractTests(unittest.TestCase):
     def _load_installer(self):
         spec = importlib.util.spec_from_file_location(
@@ -345,12 +364,130 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         for name, digest in sums.items():
             self.assertIn(f"| `{name}` | `{digest}` |", docs)
 
+    def test_vendor_percent_I_unescapes_the_instance_name_and_selects_a_missing_config_group(self):
+        # The defect: the vendor template's @%I becomes @wpcaregrid/production, a group
+        # that does not exist, so mysqld would start without the instance configuration.
+        for instance in CONTRACT.INSTANCES.values():
+            with self.subTest(instance=instance.name):
+                unescaped = systemd_unescaped_instance(instance)
+                self.assertNotEqual(unescaped, instance.name)
+                self.assertEqual(unescaped, instance.name.replace("-", "/"))
+                self.assertEqual(f"mysqld@{instance.name}", instance.section)
+                self.assertNotEqual(f"mysqld@{unescaped}", instance.section)
+                with self.assertRaises(CONTRACT.Refused) as raised:
+                    CONTRACT.validate_effective_execstart(
+                        instance, effective_execstart(f"/usr/sbin/mysqld --defaults-group-suffix=@{unescaped}"))
+                self.assertEqual(str(raised.exception), "effective_systemd_execstart_mismatch")
+
+    def test_generated_dropins_replace_execstart_with_the_literal_instance_group(self):
+        for instance in CONTRACT.INSTANCES.values():
+            with self.subTest(instance=instance.name):
+                contents = dropin_for(instance)
+                lines = contents.splitlines()
+                reset = lines.index("ExecStart=")
+                override = lines.index(f"ExecStart=/usr/sbin/mysqld --defaults-group-suffix=@{instance.name}")
+                self.assertEqual(override, reset + 1, "reset immediately precedes the single override")
+                self.assertEqual(sum(line.startswith("ExecStart=") for line in lines), 2)
+                self.assertNotIn("%", contents, "no systemd specifier is left to be mis-resolved")
+                CONTRACT.validate_unit_dropin(instance, contents)
+                suffix = lines[override].split("--defaults-group-suffix=", 1)[1]
+                self.assertEqual("mysqld" + suffix, instance.section)
+                CONTRACT.validate_effective_execstart(
+                    instance, effective_execstart(f"/usr/sbin/mysqld --defaults-group-suffix=@{instance.name}"))
+
+    def test_dropin_execstart_must_be_exact_and_ordered(self):
+        production = CONTRACT.get_instance("wpcaregrid-production")
+        restore = CONTRACT.get_instance("wpcaregrid-production-restore")
+        good = dropin_for(production)
+        override = f"ExecStart=/usr/sbin/mysqld --defaults-group-suffix=@{production.name}\n"
+        bad = {
+            "missing reset": good.replace("ExecStart=\n", "", 1),
+            "missing override": good.replace(override, ""),
+            "vendor specifier": good.replace(override, "ExecStart=/usr/sbin/mysqld --defaults-group-suffix=@%I\n"),
+            "lowercase specifier": good.replace(override, "ExecStart=/usr/sbin/mysqld --defaults-group-suffix=@%i\n"),
+            "unescaped suffix": good.replace(override, "ExecStart=/usr/sbin/mysqld --defaults-group-suffix=@wpcaregrid/production\n"),
+            "restore suffix in production": good.replace(override, f"ExecStart=/usr/sbin/mysqld --defaults-group-suffix=@{restore.name}\n"),
+            "extra argument": good.replace(override, override.rstrip("\n") + " --skip-grant-tables\n"),
+            "other binary": good.replace(override, f"ExecStart=/usr/bin/mysqld --defaults-group-suffix=@{production.name}\n"),
+            "duplicate override": good.replace(override, override + override),
+            "override before reset": good.replace("ExecStart=\n" + override, override + "ExecStart=\n"),
+            "ignore-errors prefix": good.replace(override, "ExecStart=-" + override[len("ExecStart="):]),
+        }
+        for name, text in bad.items():
+            with self.subTest(case=name):
+                with self.assertRaises(CONTRACT.Refused):
+                    CONTRACT.validate_unit_dropin(production, text)
+        # Each instance rejects the other instance's drop-in.
+        with self.assertRaises(CONTRACT.Refused):
+            CONTRACT.validate_unit_dropin(production, dropin_for(restore))
+        with self.assertRaises(CONTRACT.Refused):
+            CONTRACT.validate_unit_dropin(restore, dropin_for(production))
+
+    def test_effective_execstart_requires_one_exact_command_per_instance(self):
+        production = CONTRACT.get_instance("wpcaregrid-production")
+        restore = CONTRACT.get_instance("wpcaregrid-production-restore")
+        prod_argv = f"/usr/sbin/mysqld --defaults-group-suffix=@{production.name}"
+        restore_argv = f"/usr/sbin/mysqld --defaults-group-suffix=@{restore.name}"
+        CONTRACT.validate_effective_execstart(production, effective_execstart(prod_argv))
+        CONTRACT.validate_effective_execstart(restore, effective_execstart(restore_argv))
+        bad = {
+            "production unit running the restore group": (production, effective_execstart(restore_argv)),
+            "restore unit running the production group": (restore, effective_execstart(prod_argv)),
+            "extra argument": (production, effective_execstart(prod_argv + " --skip-grant-tables")),
+            "missing suffix": (production, effective_execstart("/usr/sbin/mysqld")),
+            "wrong binary": (production, effective_execstart(prod_argv, path="/usr/bin/mysqld")),
+            "ignore errors": (production, effective_execstart(prod_argv, ignore_errors="yes")),
+            "two commands": (production, effective_execstart(prod_argv) + effective_execstart(prod_argv)),
+            "no command": (production, ""),
+            "unparseable": (production, "ExecStart=/usr/sbin/mysqld"),
+        }
+        for name, (instance, output) in bad.items():
+            with self.subTest(case=name):
+                with self.assertRaises(CONTRACT.Refused) as raised:
+                    CONTRACT.validate_effective_execstart(instance, output)
+                self.assertEqual(str(raised.exception), "effective_systemd_execstart_mismatch")
+
+    def test_running_process_arguments_must_be_exact(self):
+        production = CONTRACT.get_instance("wpcaregrid-production")
+        restore = CONTRACT.get_instance("wpcaregrid-production-restore")
+        CONTRACT.validate_process_arguments(production, f"/usr/sbin/mysqld --defaults-group-suffix=@{production.name} ")
+        for text in (
+            f"/usr/sbin/mysqld --defaults-group-suffix=@{restore.name} ",
+            f"/usr/sbin/mysqld --defaults-group-suffix=@{production.name} --skip-grant-tables ",
+            "/usr/sbin/mysqld ",
+            "/usr/sbin/mysqld --defaults-group-suffix=@wpcaregrid/production ",
+        ):
+            with self.subTest(cmdline=text):
+                with self.assertRaises(CONTRACT.Refused):
+                    CONTRACT.validate_process_arguments(production, text)
+
+    def test_vendor_template_must_contain_the_exact_execstart_the_dropin_mirrors(self):
+        template = "[Service]\nType=notify\n" + VENDOR_TEMPLATE_EXECSTART + "\nRestart=on-failure\n"
+        CONTRACT.validate_vendor_execstart(template)
+        for text in (
+            template.replace(VENDOR_TEMPLATE_EXECSTART, VENDOR_TEMPLATE_EXECSTART + " $MYSQLD_OPTS"),
+            template.replace(VENDOR_TEMPLATE_EXECSTART, "ExecStart=/usr/sbin/mysqld"),
+            template.replace("@%I", "@%i"),
+            "[Service]\nType=notify\n",
+        ):
+            with self.subTest(template=text):
+                with self.assertRaises(CONTRACT.Refused) as raised:
+                    CONTRACT.validate_vendor_execstart(text)
+                self.assertEqual(str(raised.exception), "vendor_execstart_unrecognized")
+
+    def test_installer_uses_the_exact_validators_not_substring_checks(self):
+        source = (ROOT / "production-g1-mysql.py").read_text(encoding="utf-8")
+        self.assertIn("validate_effective_execstart(instance, exec_start)", source)
+        self.assertIn("validate_process_arguments(instance, cmdline)", source)
+        self.assertIn("validate_vendor_execstart(text)", source)
+        self.assertNotIn('f"--defaults-group-suffix=@{instance.name}" not in', source)
+
     def test_downloaded_artifacts_have_exact_bytes_and_valid_provenance(self):
         files = {
             "production-g1-mysql.py": b"#!",
             "production_g1_mysql_contract.py": b"#!",
             "production-g1-mysql-manifest.json": b"{",
-            "SHA256SUMS": b"5",
+            "SHA256SUMS": b"f",
         }
         for name, prefix in files.items():
             with self.subTest(name=name):
@@ -359,14 +496,14 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
                 self.assertFalse(payload.startswith(b"_"))
 
         expected = {
-            "production-g1-mysql.py": "577097aad15f53a6c144c6c4107e16646c338810b3b1575b5708ec7a17ab0b77",
-            "production_g1_mysql_contract.py": "6859cc9033b297bc0206af1ed5597719f7a46dd797f5589d0843e74812b435a0",
-            "production-g1-mysql-manifest.json": "f94f786974cc7ddff29825473d283f3b7362760a5612b51f83d165283af8d145",
+            "production-g1-mysql.py": "fe2f712a62d556ff25f07e53c39137639225a582afdeee1fe8ed8e16aef4c077",
+            "production_g1_mysql_contract.py": "669014a01366cfa5ec3f2d0e80d3eec3a44a57955a1ba8a3bd91c6772fc60029",
+            "production-g1-mysql-manifest.json": "3aa181c1fde33f04a8ddd5a16dd313675225a6032d87c3becd943da1527e0e49",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "4ab4956780e0d69429e2df8345e19c730d870cffcc50e89a3dbe9d21f8312925")
+                         "b61667c773ea02410c8dab5d94afa77a342cd893049fe81bac84a8d24b1c98b7")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):
