@@ -19,7 +19,7 @@
 
                 <dl class="mt-5 grid gap-5 text-sm sm:grid-cols-2">
                     <x-account.detail :label="__('account.dashboard.status')">
-                        <x-ui.status-badge :tone="$subscription->status->tone()">{{ $subscription->status->label() }}</x-ui.status-badge>
+                        <x-account.status-chip :status="$subscription->status" />
                     </x-account.detail>
                     <x-account.detail :label="__('account.dashboard.next_billing')">
                         @if ($subscription->nextBillingDate())
@@ -38,8 +38,11 @@
                     <x-account.notice class="mt-6">{{ __('account.dashboard.ended') }}</x-account.notice>
                 @endif
             @else
-                <p class="text-sm text-muted">{{ __('account.dashboard.no_subscription') }}</p>
-                <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->pricing()" variant="secondary" class="mt-4">{{ __('account.dashboard.view_plans') }}</x-ui.button>
+                <x-account.empty-state icon="clipboard" :title="__('account.dashboard.no_subscription_title')" :text="__('account.dashboard.no_subscription_text')">
+                    <x-slot:action>
+                        <x-ui.button :href="app(\App\Localization\MarketingRoutes::class)->pricing()" variant="secondary">{{ __('account.dashboard.view_plans') }}</x-ui.button>
+                    </x-slot:action>
+                </x-account.empty-state>
             @endif
         </x-account.panel>
 
@@ -49,7 +52,7 @@
             </x-slot:action>
 
             <p class="text-2xl font-semibold tracking-[-0.01em] text-primary tabular-nums">{{ __('account.dashboard.connected_count', ['count' => $connectedCount]) }}</p>
-            <p class="mt-2 text-sm text-muted">{{ trans_choice('account.dashboard.added_count', $websiteCount) }}</p>
+            <p class="mt-2 text-sm text-muted">{{ $websiteCount === 0 ? __('account.websites.empty_text') : trans_choice('account.dashboard.added_count', $websiteCount) }}</p>
         </x-account.panel>
     </div>
 
