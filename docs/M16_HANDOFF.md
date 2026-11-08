@@ -8,11 +8,11 @@ Base: protected `claude/ecstatic-wozniak-oemyuf` at `c1d5ba4`. No Elliot/infra f
 |---|---|---|
 | M16.3/A hero a11y + canvas perf | #305 | Merged as `f3830d32fe45e034e1332b3c8292acb778f96db8`. |
 | Localization E2E 404 expectation | #308 | Merged as `c0e0e7bb2f3861a01d99577bf67d2e1859650bfd`. |
-| M16.3/B design tokens | #306 | Open. Waiting for a clean required CI run. |
-| M16.2 three-step How it works | #307 | Draft. Waiting for a clean required CI run; see release prerequisite below. |
-| This handoff | #309 | Merged last. |
+| M16.3/B design tokens | #306 | Merged as `1d010e8a0d2fe3857bcb2e6f0e99a126cec04f10`. |
+| M16.2 three-step How it works | #307 | Merged as `af6fbaaf5a3cc0f2e09f866dc54fae57ad4a5f4c` (source only; see release prerequisite below). |
+| Handoff | #309 | Merged as `9b98f7b2f12d49905665acdb8fb074f02e563acf`. |
 
-Independent QA/AppSec agent reviews are no longer mandatory (Owner, 2026-11-08). Required CI, Gitleaks and the up-to-date-branch rule still gate every merge. Merges are serial: each merge makes the other open branches behind, so they are updated and re-run one at a time.
+Independent QA/AppSec agent reviews are no longer mandatory (Owner, 2026-11-08). Required CI, Gitleaks and the up-to-date-branch rule still gate every merge. Merges were serial: each merge made the other open branches behind, so they were updated and re-run one at a time. Post-merge CI on `af6fbaa` was still running when this was written.
 
 ## Open blockers and prerequisites
 
