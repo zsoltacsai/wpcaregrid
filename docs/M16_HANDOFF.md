@@ -12,7 +12,7 @@ Base: protected `claude/ecstatic-wozniak-oemyuf` at `c1d5ba4`. No Elliot/infra f
 
 ## Resume (when GitHub is stable)
 
-1. `gh run rerun 42468705471 --failed` (or push an empty-diff-free re-run); confirm Gitleaks actually runs.
+1. `gh run rerun 42468705471 --failed`; confirm Gitleaks actually runs.
 2. Push each local branch normally, open one PR per branch against the protected branch, link and watch it.
 3. Request Integration & QA and M17 AppSec per PR on the exact HEAD. Nothing may merge without them and green required checks.
 4. Open the M16.2 PR as draft until the Owner answers the questions below.
