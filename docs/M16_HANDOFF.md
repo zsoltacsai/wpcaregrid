@@ -10,7 +10,10 @@ Base: protected `claude/ecstatic-wozniak-oemyuf` at `c1d5ba4`. No Elliot/infra f
 | Localization E2E 404 expectation | #308 | Merged as `c0e0e7bb2f3861a01d99577bf67d2e1859650bfd`. |
 | M16.3/B design tokens | #306 | Merged as `1d010e8a0d2fe3857bcb2e6f0e99a126cec04f10`. |
 | M16.2 three-step How it works | #307 | Merged as `af6fbaaf5a3cc0f2e09f866dc54fae57ad4a5f4c` (source only; see release prerequisite below). |
-| Handoff | #309 | Merged as `9b98f7b2f12d49905665acdb8fb074f02e563acf`. |
+| Handoff | #309, #311 | Merged as `9b98f7b2f12d49905665acdb8fb074f02e563acf` and `001dfa28bdb09345d6067e43bdd7c6786ce6dd84`. |
+| M16.3 Customer Dashboard: website list header, rows, status chips | #312 | Merged as `74b46b06a7a317429acab723e9f1f32540dcfe14`. Scoped to `.m16-site-list__header/__rows`; the shared status badge only gained a `data-tone` attribute. |
+| 404 page `lang` attribute (issue #310) | #313 | Merged as `d665ba0dd83bee2480d6192cb90b8c55f2ff9355`. App-level `resources/views/errors/minimal.blade.php` takes `lang` from the active locale. Issue closed. |
+| M16.2 FAQ order and wording | #314 | **Draft, needs Owner content approval.** Do not merge before then. |
 
 Independent QA/AppSec agent reviews are no longer mandatory (Owner, 2026-11-08). Required CI, Gitleaks and the up-to-date-branch rule still gate every merge. Merges were serial: each merge made the other open branches behind, so they were updated and re-run one at a time. Post-merge CI on `af6fbaa` was still running when this was written.
 
@@ -19,11 +22,13 @@ Independent QA/AppSec agent reviews are no longer mandatory (Owner, 2026-11-08).
 - The Gitleaks 8.30.0 archive download intermittently times out or returns 504 in the Quality job (seen on #305, #306, #307). The scanner then never starts. It is not bypassed; the failed job is re-run once the workflow run completes.
 - Release prerequisite for #307: read production `home.how` content in Owner Admin (both locales) and republish it if present. No production access was used or requested. Nothing was published.
 - GitHub reports the protected branch as having no classic branch protection rule (API 404) although required checks clearly gate merging; this is probably rulesets. Not changed.
-- Separate finding, issue #310: the Hungarian 404 page has `lang="en"` with Hungarian text.
+- Release prerequisite: field Core Web Vitals for the hero have not been measured (the #305 layout-shift test is a synthetic single headless run).
+- #314: approve or change the FAQ order, the new availability question and the reworded password answer. Published `home.faq` content in production overrides built-in copy and would need republishing; it was not read.
+- Possible FAQ accessibility follow-ups (not done): eight `role="region"` panels is above the usual guidance of about six; answers stay hidden until JavaScript runs.
 
 ## Next safe M16 task
 
-M16.3 follow-up: apply the Direction 04.1 tokens to one Customer Dashboard surface (for example the website list header and status chips), with before/after screenshots and the existing customer-portal tests. Then M16.2 next section (FAQ ordering and wording review) as a draft for the Owner.
+Apply the Direction 04.1 tokens to the next Customer Dashboard surface (suggested: the dashboard home subscription and websites summary cards), again scoped with before/after screenshots in HU/EN at 375/768/1440, keyboard focus checks and the existing customer-portal tests. Local run recipe is in the environment notes below (synthetic SQLite customer; no production data).
 
 ## M16.2 decisions and copy
 
