@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use App\Legal\LegalDocumentCatalog;
 use App\Models\Customer;
+use App\Models\LegalDocumentAcceptance;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Models\Website;
@@ -13,6 +15,10 @@ use Illuminate\Contracts\Console\Kernel;
  * authenticated Customer Dashboard browser tests. Refuses to run unless the
  * application is the isolated testing SQLite application with Stripe, mail
  * and queues disabled, so it cannot touch real data or billing services.
+ *
+ * Run it after the subscription cancellation fixture has been verified: it
+ * accepts whatever terms document is current, which adds legal acceptance rows
+ * that fixture fingerprints.
  */
 
 $root = dirname(__DIR__, 3);
@@ -94,6 +100,26 @@ foreach (['en', 'hu'] as $locale) {
         Website::factory()->for($customer)->create([
             'url' => "https://dashboard-{$locale}-{$index}.example",
             'status' => $status,
+        ]);
+    }
+}
+
+foreach (User::query()->where('email', 'like', 'dashboard-%@example.test')->get() as $user) {
+    foreach (['en', 'hu'] as $locale) {
+        $document = app(LegalDocumentCatalog::class)->current('terms_of_service', $locale);
+        if ($document?->acceptance_mode !== 'acceptance_required_before_account_use') {
+            continue;
+        }
+
+        LegalDocumentAcceptance::query()->create([
+            'user_id' => $user->id,
+            'customer_id' => $user->customer->id,
+            'legal_document_version_id' => $document->id,
+            'document_type' => $document->document_type,
+            'locale' => $locale,
+            'content_sha256' => $document->content_sha256,
+            'source' => 'customer_legal_area',
+            'accepted_at' => now('UTC'),
         ]);
     }
 }

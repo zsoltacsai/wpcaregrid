@@ -193,11 +193,6 @@ jobs:
           M16_CANCELLATION_FIXTURES_PATH: ${{ github.workspace }}/storage/framework/testing/subscription-cancellation.json
         run: php tests/e2e/fixtures/seed-subscription-cancellation.php
 
-      - name: Seed isolated synthetic customer dashboard accounts
-        env:
-          M16_DASHBOARD_E2E: '1'
-        run: php tests/e2e/fixtures/seed-customer-dashboard.php
-
       - name: Execute actual Chromium browser tests
         shell: bash
         env:
@@ -459,12 +454,6 @@ jobs:
             tests/e2e/marketing-launch-ctas.spec.ts \
             --trace=off \
             --reporter=list,html,junit
-          PLAYWRIGHT_OUTPUT_DIR=storage/playwright/customer-dashboard \
-          PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/dashboard-html \
-          PLAYWRIGHT_JUNIT_OUTPUT_NAME=playwright-report/dashboard-junit.xml \
-            ./node_modules/.bin/playwright test tests/e2e/customer-dashboard.spec.ts \
-              --trace=off \
-              --reporter=list,html,junit
           PLAYWRIGHT_OUTPUT_DIR=storage/playwright/subscription-cancellation \
           PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/cancellation-html \
           PLAYWRIGHT_JUNIT_OUTPUT_NAME=playwright-report/cancellation-junit.xml \
@@ -472,6 +461,15 @@ jobs:
               --trace=off \
               --reporter=list,html,junit
           "$E2E_PHP_BIN" tests/e2e/fixtures/seed-subscription-cancellation.php --verify-read-only
+          # The dashboard fixture accepts the current terms document, which changes the
+          # legal acceptance rows fingerprinted above, so it runs only after that check.
+          M16_DASHBOARD_E2E=1 "$E2E_PHP_BIN" tests/e2e/fixtures/seed-customer-dashboard.php
+          PLAYWRIGHT_OUTPUT_DIR=storage/playwright/customer-dashboard \
+          PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/dashboard-html \
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME=playwright-report/dashboard-junit.xml \
+            ./node_modules/.bin/playwright test tests/e2e/customer-dashboard.spec.ts \
+              --trace=off \
+              --reporter=list,html,junit
           SANDBOX_SCRIPT
           chmod 500 "$sandbox_script"
           sudo chown "$e2e_user:$e2e_group" "$sandbox_script"
