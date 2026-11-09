@@ -12,13 +12,15 @@ Usage (root):  python3 -I -B go4b-upgrade-installed-helper.py <hotfix-package-di
 Checks before any write: the package directory (root-owned, no symlinks) holds the two new files with
 the pinned hashes; the installed helper, contract and manifest are the pinned OLD #328 files (or already
 the new ones: idempotent); both G1 units are inactive. Each replacement is a same-directory temporary
-file + fsync + atomic rename. After the replacement the helper's own `verify-install` runs; if it or any
+file + fsync + atomic rename. After the replacement the helper's static verification (`verify_static_install`, the same check
+`install` ends with; not `verify-install`, which needs the post-provision tmpdirs) runs; if it or any
 step fails, the old bytes are restored. Prints one tag line:
   G1_GO4B_HELPER_UPGRADE=PASS[;NOTE=already_upgraded]                       exit 0
   G1_GO4B_HELPER_UPGRADE=STOP;CODE=<cause>[;ROLLED_BACK=yes|NO]              exit 3
 """
 import hashlib
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -40,6 +42,19 @@ NEW = {  # the hotfix package
 SOURCE_NAMES = {HELPER: "production-g1-mysql.py", MANIFEST: "production-g1-mysql-manifest.json"}
 MODES = {HELPER: 0o755, CONTRACT: 0o644, MANIFEST: 0o644}
 UNITS = ("mysql@wpcaregrid-production.service", "mysql@wpcaregrid-production-restore.service")
+STATIC_VERIFY_SNIPPET = (
+    "import importlib.util, sys\n"
+    "sys.dont_write_bytecode = True\n"
+    "spec = importlib.util.spec_from_file_location('g1_helper_static_verify', " + repr(HELPER) + ")\n"
+    "module = importlib.util.module_from_spec(spec)\n"
+    "sys.modules[spec.name] = module\n"
+    "spec.loader.exec_module(module)\n"
+    "try:\n"
+    "    module.verify_static_install()\n"
+    "except module.Refused as exc:\n"
+    "    print('G1_MYSQL=STOP;CODE=%s' % exc)\n"
+    "    raise SystemExit(3)\n"
+)
 ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/nonexistent", "LANG": "C", "LC_ALL": "C"}
 
 
@@ -124,9 +139,13 @@ def main(package_dir, run=default_run, euid=None):
         raise Stop("installed_helper_or_manifest_unrecognized")
 
     def verify():
-        done = run(["/usr/bin/python3", "-I", HELPER, "verify-install"])
+        # Static verification only. The helper's `verify-install` command also runs `mysqld --validate-config`
+        # and `--verbose --help`, which need the instance tmpdirs that exist only after `provision-paths`; before
+        # that gate it always fails. verify_static_install() is exactly the check `install` itself ends with.
+        done = run(["/usr/bin/python3", "-I", "-B", "-c", STATIC_VERIFY_SNIPPET])
         if done.returncode != 0 or "STATIC_INSTALL_VERIFY=PASS" not in done.stdout:
-            raise Stop("verify_install_failed")
+            found = re.search(r"G1_MYSQL=STOP;CODE=([a-z0-9_]{1,80})", done.stdout)
+            raise Stop("verify_static_install_failed" + (":" + found.group(1) if found else ""))
 
     if already:
         verify()
