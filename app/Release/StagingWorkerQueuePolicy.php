@@ -30,7 +30,8 @@ final class StagingWorkerQueuePolicy
         if (! is_array($settings)
             || ($settings['queue'] ?? null) !== self::ACTIVE_STAGING_NEXT_QUEUE
             || ($settings['connection'] ?? null) !== $connection
-            || config("queue.connections.{$connection}.queue") !== self::ACTIVE_STAGING_NEXT_QUEUE) {
+            || config("queue.connections.{$connection}.queue") !== self::ACTIVE_STAGING_NEXT_QUEUE
+            || ! self::usesApplicationDatabase($connection)) {
             return [];
         }
 
@@ -53,6 +54,25 @@ final class StagingWorkerQueuePolicy
         ));
     }
 
+    /**
+     * The database queue must resolve through Laravel's application DB connection,
+     * because queue health reads that same connection via the DB facade.
+     */
+    private static function usesApplicationDatabase(string $queueConnection): bool
+    {
+        $applicationConnection = config('database.default');
+        $queueDatabaseConnection = config("queue.connections.{$queueConnection}.connection");
+        if (! is_string($applicationConnection) || $applicationConnection === '') {
+            return false;
+        }
+
+        return $queueDatabaseConnection === null
+            ? true
+            : is_string($queueDatabaseConnection)
+                && $queueDatabaseConnection !== ''
+                && $queueDatabaseConnection === $applicationConnection;
+    }
+
     public static function activeQueueName(string $connection): ?string
     {
         $configured = (array) config('monitoring.worker_queues', []);
@@ -62,7 +82,8 @@ final class StagingWorkerQueuePolicy
             || ($workerSettings['queue'] ?? null) !== self::ACTIVE_STAGING_NEXT_QUEUE
             || ($workerSettings['connection'] ?? null) !== $connection
             || $connection !== (string) config('queue.default')
-            || config("queue.connections.{$connection}.queue") !== self::ACTIVE_STAGING_NEXT_QUEUE) {
+            || config("queue.connections.{$connection}.queue") !== self::ACTIVE_STAGING_NEXT_QUEUE
+            || ! self::usesApplicationDatabase($connection)) {
             return null;
         }
 
