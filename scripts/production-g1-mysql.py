@@ -61,6 +61,15 @@ LIBEXEC_DIR = Path("/usr/local/libexec")
 APPARMOR_DIR = Path("/etc/apparmor.d")
 MYSQLD = Path("/usr/sbin/mysqld")
 BASE_CONFIG = Path("/etc/mysql/my.cnf")
+# Ubuntu manages /etc/mysql/my.cnf through update-alternatives: my.cnf -> /etc/alternatives/my.cnf ->
+# /etc/mysql/mysql.cnf. Exactly this chain (and nothing else) is accepted; every hop and the final file are
+# verified by check_base_config(). The generic check_file() keeps refusing every symlink.
+BASE_CONFIG_LINK_TARGETS = {
+    Path("/etc/mysql/my.cnf"): "/etc/alternatives/my.cnf",
+    Path("/etc/alternatives/my.cnf"): "/etc/mysql/mysql.cnf",
+}
+BASE_CONFIG_FINAL = Path("/etc/mysql/mysql.cnf")
+BASE_CONFIG_CHAIN_DIRS = (Path("/etc"), Path("/etc/mysql"), Path("/etc/alternatives"))
 MY_PRINT_DEFAULTS = Path("/usr/bin/my_print_defaults")
 APPARMOR_PARSER = Path("/usr/sbin/apparmor_parser")
 SYSTEMCTL = Path("/usr/bin/systemctl")
@@ -129,6 +138,53 @@ def check_file(path: Path, *, owner: str, group: str, mode: int, expected: bytes
     if expected is not None and data != expected:
         refuse("managed_file_content_mismatch")
     return data
+
+
+def check_base_config() -> bytes:
+    """Verify the MySQL base configuration, including Ubuntu's fixed alternatives symlink chain.
+
+    A regular /etc/mysql/my.cnf is verified by check_file(). A symlink is accepted only when every hop is a
+    root-owned symlink whose target is exactly the next hop of BASE_CONFIG_LINK_TARGETS (no relative targets,
+    no cycles, no other destination), the directories holding the chain are root-owned and not writable by
+    group/other, and the final file is a root:root 0644 regular file at BASE_CONFIG_FINAL.
+    """
+    current = BASE_CONFIG
+    seen: set[Path] = set()
+    for _ in range(len(BASE_CONFIG_LINK_TARGETS) + 1):
+        try:
+            st = current.lstat()
+        except OSError:
+            refuse("base_config_unavailable")
+        if not stat.S_ISLNK(st.st_mode):
+            break
+        if current in seen:
+            refuse("base_config_link_cycle")
+        seen.add(current)
+        expected = BASE_CONFIG_LINK_TARGETS.get(current)
+        if expected is None:
+            refuse("base_config_link_target_unexpected")
+        if st.st_uid != 0 or st.st_gid != 0:
+            refuse("base_config_link_owner_invalid")
+        try:
+            target = os.readlink(current)
+        except OSError:
+            refuse("base_config_unavailable")
+        if target != expected:
+            refuse("base_config_link_target_unexpected")
+        current = Path(target)
+    else:
+        refuse("base_config_link_chain_too_long")
+    if current != BASE_CONFIG:
+        if current != BASE_CONFIG_FINAL:
+            refuse("base_config_link_target_unexpected")
+        for directory in BASE_CONFIG_CHAIN_DIRS:
+            try:
+                dst = directory.lstat()
+            except OSError:
+                refuse("base_config_unavailable")
+            if not stat.S_ISDIR(dst.st_mode) or dst.st_uid != 0 or stat.S_IMODE(dst.st_mode) & 0o022:
+                refuse("base_config_directory_unsafe")
+    return check_file(current, owner="root", group="root", mode=0o644)
 
 
 def check_directory(path: Path, *, owner: str, group: str, mode: int | frozenset[int]) -> None:
@@ -325,10 +381,10 @@ def verify_paths(instance: Instance, *, for_init: bool = False) -> None:
 def verify_preflight(instance: Instance, *, for_init: bool = False, allow_running: bool = False) -> None:
     require_root()
     _verify_installed_bundle(instance)
-    check_file(BASE_CONFIG, owner="root", group="root", mode=0o644)
+    check_base_config()
     _check_vendor_boundary()
     if (not MYSQLD.is_file() or not MY_PRINT_DEFAULTS.is_file()
-            or not BASE_CONFIG.is_file() or BASE_CONFIG.is_symlink()):
+            or not BASE_CONFIG.is_file()):
         refuse("mysql_84_tools_missing")
     verify_systemd_contract(instance)
     verify_apparmor(instance)

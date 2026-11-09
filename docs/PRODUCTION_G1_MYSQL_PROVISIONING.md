@@ -49,9 +49,9 @@ files before copying):
 
 | Source artifact | SHA-256 |
 | --- | --- |
-| `production-g1-mysql.py` | `457ddb292f2ddf1f094375254a031de3bb6a450838cb201429363cb2397f02da` |
+| `production-g1-mysql.py` | `32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e` |
 | `production_g1_mysql_contract.py` | `45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3` |
-| `production-g1-mysql-manifest.json` | `290ed20acfdac72f4150f572521b8f0e6564de33f7ff2979fc5b5a2381410732` |
+| `production-g1-mysql-manifest.json` | `c2b693195f542ab88d261bd65dc586c56880526a65707c135cee2d29a61dea73` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not
@@ -137,13 +137,42 @@ directories and all instance paths keep their exact checks. The shared directory
 The hotfix changes only `production-g1-mysql.py` and the manifest; the contract, the option files, the
 AppArmor profiles and the systemd drop-ins are byte-identical to the previous package.
 
+### Base configuration through the Ubuntu alternatives symlink (`/etc/mysql/my.cnf`)
+
+On Ubuntu `/etc/mysql/my.cnf` is a symlink managed by `update-alternatives`:
+`/etc/mysql/my.cnf` -> `/etc/alternatives/my.cnf` -> `/etc/mysql/mysql.cnf`. GO-5.2 (`verify-install`) stopped with
+`managed_file_type_invalid` because the generic `check_file()` (which still refuses every symlink) was applied to
+it. `check_base_config()` now accepts the base configuration only as
+
+* a regular `root:root 0644` file (as before), or
+* exactly this chain: each hop is a `root:root` symlink whose target string equals the next hop of a fixed table
+  (absolute paths only; no relative, trailing-slash or other target; a repeated hop is a cycle), the final
+  `/etc/mysql/mysql.cnf` is a `root:root 0644` regular file (checked by `check_file()`, so a symlink there is
+  refused), and `/etc`, `/etc/mysql` and `/etc/alternatives` are root-owned real directories that are not writable
+  by group or others.
+
+Anything else (another alternatives target such as `/etc/mysql/mariadb.cnf`, a different owner or mode, a missing
+hop, a writable directory) is refused with `base_config_link_target_unexpected`, `base_config_link_owner_invalid`,
+`base_config_directory_unsafe`, `base_config_link_cycle`, `base_config_unavailable` or the usual `managed_file_*`
+code. MySQL tools still receive the unresolved `--defaults-file=/etc/mysql/my.cnf`; nothing is rewritten or replaced.
+The chain is checked immediately before the work of each command (not held open), which is acceptable because every
+element is root-owned in root-only directories. Only `production-g1-mysql.py` and the manifest change; the contract,
+the option files, the AppArmor profiles and the systemd drop-ins stay byte-identical (runbook, GO-5.2 hotfix).
+
+**Open point (AppArmor):** the generated profiles grant `/etc/mysql/my.cnf r,` but not the symlink target
+`/etc/mysql/mysql.cnf`. AppArmor mediates the resolved path, so a *confined* mysqld may be unable to read the base
+file through the chain. `verify-install` runs MySQL unconfined and is not affected; `initialize` and `start` are.
+The runbook has a read-only confined probe (GO-5.2c) that must PASS before GO-5.3; a profile change would be a
+separate, separately approved hotfix.
+
 ### Upgrading an installed package
 
 The installer never replaces a managed file: it accepts an existing file only if
 it is byte-identical, so running a newer package over an installed one stops with
 `managed_file_content_mismatch`. There is no upgrade command in the installer itself; the only supported
-in-place replacement is the narrow, hash-pinned operator tool `go4b-upgrade-installed-helper.py` of the
-log-directory hotfix (it replaces the installed helper and manifest and nothing else, see the runbook, GO-4b). Before
+in-place replacements are the narrow, hash-pinned operator tools `go4b-upgrade-installed-helper.py` (log-directory
+hotfix) and `go5h-upgrade-installed-helper.py` (base-config symlink hotfix); each replaces the installed helper and
+manifest and nothing else (see the runbook, GO-4b and GO-5.2 hotfix). Before
 initialization, the supported path is the Rollback procedure below (exact
 recorded files only, whose SHA-256 still matches the installed package) followed
 by a fresh `install` of the new package. This is also the path from the

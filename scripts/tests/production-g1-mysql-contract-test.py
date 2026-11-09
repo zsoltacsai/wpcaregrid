@@ -703,28 +703,232 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
             ("/run/mysqld", "mysql", "mysql", 0o755),
         ])
 
+    # ---- Ubuntu alternatives symlink chain of /etc/mysql/my.cnf (GO-5.2 hotfix) --------------
+    CNF = b"!includedir /etc/mysql/conf.d/\n!includedir /etc/mysql/mysql.conf.d/\n"
+
+    @classmethod
+    def _chain_fs(cls, changes=None):
+        """Virtual filesystem of the real Ubuntu layout; `changes` replace single nodes (None removes one)."""
+        directory = {"kind": "dir", "mode": 0o755, "uid": 0, "gid": 0}
+        nodes = {
+            "/etc": dict(directory),
+            "/etc/mysql": dict(directory),
+            "/etc/alternatives": dict(directory),
+            "/etc/mysql/my.cnf": {"kind": "lnk", "mode": 0o777, "uid": 0, "gid": 0, "target": "/etc/alternatives/my.cnf"},
+            "/etc/alternatives/my.cnf": {"kind": "lnk", "mode": 0o777, "uid": 0, "gid": 0, "target": "/etc/mysql/mysql.cnf"},
+            "/etc/mysql/mysql.cnf": {"kind": "reg", "mode": 0o644, "uid": 0, "gid": 0, "data": cls.CNF},
+        }
+        for path, value in (changes or {}).items():
+            if value is None:
+                nodes.pop(path, None)
+            else:
+                nodes[path] = value
+        return nodes
+
+    def _with_fs(self, nodes, action):
+        import stat as _stat
+        import types as _types
+        installer = self._load_installer()
+        names, groups = {0: "root", 2: "mysql", 3: "other"}, {0: "root", 10: "adm", 13: "other"}
+        installer.pwd = _types.SimpleNamespace(getpwuid=lambda uid: _types.SimpleNamespace(pw_name=names[uid]))
+        installer.grp = _types.SimpleNamespace(getgrgid=lambda gid: _types.SimpleNamespace(gr_name=groups[gid]))
+        bits = {"dir": _stat.S_IFDIR, "lnk": _stat.S_IFLNK, "reg": _stat.S_IFREG}
+
+        def key(path):
+            return str(path).replace("\\", "/")
+
+        def fake_lstat(path):
+            node = nodes.get(key(path))
+            if node is None:
+                raise FileNotFoundError(key(path))
+            return _types.SimpleNamespace(st_mode=bits[node["kind"]] | node["mode"], st_uid=node["uid"], st_gid=node["gid"])
+
+        def fake_readlink(path):
+            node = nodes.get(key(path))
+            if node is None or node["kind"] != "lnk":
+                raise OSError("not a symlink")
+            return node["target"]
+
+        def fake_read_bytes(path):
+            return nodes[key(path)]["data"]
+
+        with (
+            mock.patch.object(installer.Path, "lstat", fake_lstat),
+            mock.patch.object(installer.Path, "read_bytes", fake_read_bytes),
+            mock.patch.object(installer.os, "readlink", fake_readlink),
+        ):
+            return action(installer)
+
+    def _chain_result(self, changes=None, **overrides):
+        def action(installer):
+            for name, value in overrides.items():
+                setattr(installer, name, value)
+            try:
+                return ("PASS", installer.check_base_config())
+            except installer.Refused as exc:
+                return ("STOP", str(exc))
+        return self._with_fs(self._chain_fs(changes), action)
+
+    @staticmethod
+    def _link(target, **extra):
+        return {"kind": "lnk", "mode": 0o777, "uid": 0, "gid": 0, "target": target, **extra}
+
+    def test_base_config_ubuntu_alternatives_chain_is_accepted_and_the_final_bytes_are_returned(self):
+        self.assertEqual(self._chain_result(), ("PASS", self.CNF))
+
+    def test_base_config_regular_file_is_still_accepted_and_verified_by_check_file(self):
+        regular = {"kind": "reg", "mode": 0o644, "uid": 0, "gid": 0, "data": b"x\n"}
+        self.assertEqual(self._chain_result({"/etc/mysql/my.cnf": regular}), ("PASS", b"x\n"))
+        for broken, code in (({**regular, "mode": 0o664}, "managed_file_mode_invalid"),
+                             ({**regular, "uid": 3}, "managed_file_owner_invalid"),
+                             ({**regular, "gid": 13}, "managed_file_owner_invalid")):
+            with self.subTest(code=code, mode=oct(broken["mode"])):
+                self.assertEqual(self._chain_result({"/etc/mysql/my.cnf": broken}), ("STOP", code))
+
+    def test_generic_check_file_still_refuses_every_symlink(self):
+        def action(installer):
+            with self.assertRaises(installer.Refused) as caught:
+                installer.check_file(installer.BASE_CONFIG, owner="root", group="root", mode=0o644)
+            return str(caught.exception)
+        self.assertEqual(self._with_fs(self._chain_fs(), action), "managed_file_type_invalid")
+
+    def test_base_config_chain_rejects_unexpected_hops_and_targets(self):
+        link = self._link
+        unexpected = "base_config_link_target_unexpected"
+        cases = {
+            "first_hop_skips_alternatives": ({"/etc/mysql/my.cnf": link("/etc/mysql/mysql.cnf")}, unexpected),
+            "first_hop_relative": ({"/etc/mysql/my.cnf": link("../alternatives/my.cnf")}, unexpected),
+            "first_hop_elsewhere": ({"/etc/mysql/my.cnf": link("/tmp/my.cnf")}, unexpected),
+            "first_hop_trailing_slash": ({"/etc/mysql/my.cnf": link("/etc/alternatives/my.cnf/")}, unexpected),
+            "second_hop_mariadb": ({"/etc/alternatives/my.cnf": link("/etc/mysql/mariadb.cnf")}, unexpected),
+            "second_hop_relative": ({"/etc/alternatives/my.cnf": link("../mysql/mysql.cnf")}, unexpected),
+            "second_hop_back_to_start": ({"/etc/alternatives/my.cnf": link("/etc/mysql/my.cnf")}, unexpected),
+            "second_hop_other_dir": ({"/etc/alternatives/my.cnf": link("/var/tmp/mysql.cnf")}, unexpected),
+            "final_is_symlink": ({"/etc/mysql/mysql.cnf": link("/etc/shadow")}, unexpected),
+            "alternatives_hop_is_regular_file": (
+                {"/etc/alternatives/my.cnf": {"kind": "reg", "mode": 0o644, "uid": 0, "gid": 0, "data": b"x"}}, unexpected),
+            "link_owner_not_root": ({"/etc/mysql/my.cnf": link("/etc/alternatives/my.cnf", uid=3)},
+                                    "base_config_link_owner_invalid"),
+            "link_group_not_root": ({"/etc/alternatives/my.cnf": link("/etc/mysql/mysql.cnf", gid=13)},
+                                    "base_config_link_owner_invalid"),
+            "first_hop_missing": ({"/etc/mysql/my.cnf": None}, "base_config_unavailable"),
+            "second_hop_missing": ({"/etc/alternatives/my.cnf": None}, "base_config_unavailable"),
+            "final_missing": ({"/etc/mysql/mysql.cnf": None}, "base_config_unavailable"),
+        }
+        for name, (changes, code) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self._chain_result(changes), ("STOP", code))
+
+    def test_base_config_chain_rejects_an_unsafe_final_file(self):
+        final = {"kind": "reg", "mode": 0o644, "uid": 0, "gid": 0, "data": b"x"}
+        cases = {
+            "mode_664": ({**final, "mode": 0o664}, "managed_file_mode_invalid"),
+            "mode_666": ({**final, "mode": 0o666}, "managed_file_mode_invalid"),
+            "mode_600": ({**final, "mode": 0o600}, "managed_file_mode_invalid"),
+            "setuid": ({**final, "mode": 0o4644}, "managed_file_mode_invalid"),
+            "owner_mysql": ({**final, "uid": 2}, "managed_file_owner_invalid"),
+            "group_other": ({**final, "gid": 13}, "managed_file_owner_invalid"),
+            "directory": ({"kind": "dir", "mode": 0o755, "uid": 0, "gid": 0}, "managed_file_type_invalid"),
+        }
+        for name, (node, code) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self._chain_result({"/etc/mysql/mysql.cnf": node}), ("STOP", code))
+
+    def test_base_config_chain_rejects_unsafe_directories_holding_the_chain(self):
+        base = {"kind": "dir", "mode": 0o755, "uid": 0, "gid": 0}
+        for path in ("/etc", "/etc/mysql", "/etc/alternatives"):
+            for name, node in (("group_writable", {**base, "mode": 0o775}), ("world_writable", {**base, "mode": 0o777}),
+                               ("owned_by_other", {**base, "uid": 3}), ("symlinked", {**base, "kind": "lnk", "target": "/x"}),
+                               ("regular", {**base, "kind": "reg", "data": b""})):
+                with self.subTest(path=path, case=name):
+                    self.assertEqual(self._chain_result({path: node}), ("STOP", "base_config_directory_unsafe"))
+            with self.subTest(path=path, case="missing"):
+                self.assertEqual(self._chain_result({path: None}), ("STOP", "base_config_unavailable"))
+
+    def test_base_config_chain_detects_a_cycle_if_the_allow_list_were_to_loop(self):
+        def action(installer):
+            installer.BASE_CONFIG_LINK_TARGETS = {
+                installer.Path("/etc/mysql/my.cnf"): "/etc/alternatives/my.cnf",
+                installer.Path("/etc/alternatives/my.cnf"): "/etc/mysql/my.cnf",
+            }
+            try:
+                installer.check_base_config()
+            except installer.Refused as exc:
+                return str(exc)
+        nodes = self._chain_fs({"/etc/alternatives/my.cnf": self._link("/etc/mysql/my.cnf")})
+        self.assertEqual(self._with_fs(nodes, action), "base_config_link_cycle")
+
+    def test_base_config_allow_list_is_exactly_the_ubuntu_alternatives_chain(self):
+        installer = self._load_installer()
+        self.assertEqual({str(k).replace("\\", "/"): v for k, v in installer.BASE_CONFIG_LINK_TARGETS.items()},
+                         {"/etc/mysql/my.cnf": "/etc/alternatives/my.cnf",
+                          "/etc/alternatives/my.cnf": "/etc/mysql/mysql.cnf"})
+        self.assertEqual(str(installer.BASE_CONFIG_FINAL).replace("\\", "/"), "/etc/mysql/mysql.cnf")
+        self.assertEqual([str(p).replace("\\", "/") for p in installer.BASE_CONFIG_CHAIN_DIRS],
+                         ["/etc", "/etc/mysql", "/etc/alternatives"])
+
+    def test_verify_preflight_uses_the_chain_check_and_no_longer_refuses_a_symlinked_base_config(self):
+        installer = self._load_installer()
+        source = (ROOT / "production-g1-mysql.py").read_text(encoding="utf-8")
+        body = source.split("def verify_preflight", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("check_base_config()", body)
+        self.assertNotIn("is_symlink()", body.split("verify_systemd_contract", 1)[0])
+        self.assertNotIn("check_file(BASE_CONFIG", body)
+        order = []
+        with (
+            mock.patch.object(installer, "require_root"),
+            mock.patch.object(installer, "_verify_installed_bundle"),
+            mock.patch.object(installer, "check_base_config", side_effect=lambda: order.append("chain")),
+            mock.patch.object(installer, "_check_vendor_boundary", side_effect=lambda: order.append("vendor")),
+            mock.patch.object(installer.Path, "is_file", return_value=True),
+            mock.patch.object(installer, "verify_systemd_contract"),
+            mock.patch.object(installer, "verify_apparmor"),
+            mock.patch.object(installer, "verify_effective_config", side_effect=lambda i: order.append("effective")),
+            mock.patch.object(installer, "verify_paths"),
+            mock.patch.object(installer.Path, "exists", return_value=False),
+            mock.patch.object(installer.Path, "is_symlink", return_value=True),
+        ):
+            installer.verify_preflight(installer.get_instance("wpcaregrid-production"), allow_running=True)
+        self.assertEqual(order, ["chain", "vendor", "effective"])
+        with (
+            mock.patch.object(installer, "require_root"),
+            mock.patch.object(installer, "_verify_installed_bundle"),
+            mock.patch.object(installer, "check_base_config", side_effect=installer.Refused("base_config_link_target_unexpected")),
+            mock.patch.object(installer, "_check_vendor_boundary") as vendor,
+        ):
+            with self.assertRaises(installer.Refused) as caught:
+                installer.verify_preflight(installer.get_instance("wpcaregrid-production"))
+            self.assertEqual(str(caught.exception), "base_config_link_target_unexpected")
+            vendor.assert_not_called()
+
+    def test_mysql_tools_are_still_given_the_unresolved_base_config_path(self):
+        source = (ROOT / "production-g1-mysql.py").read_text(encoding="utf-8")
+        self.assertEqual(source.count('f"--defaults-file={BASE_CONFIG}"'), 4)
+
     def test_downloaded_artifacts_have_exact_bytes_and_valid_provenance(self):
         files = {
             "production-g1-mysql.py": b"#!",
             "production_g1_mysql_contract.py": b"#!",
             "production-g1-mysql-manifest.json": b"{",
-            "SHA256SUMS": b"4",
+            "SHA256SUMS": b"",
         }
         for name, prefix in files.items():
             with self.subTest(name=name):
                 payload = (ROOT / name).read_bytes()
                 self.assertTrue(payload.startswith(prefix))
+                if name == "SHA256SUMS":
+                    self.assertRegex(payload[:64].decode("ascii"), r"^[0-9a-f]{64}$")
                 self.assertFalse(payload.startswith(b"_"))
 
         expected = {
-            "production-g1-mysql.py": "457ddb292f2ddf1f094375254a031de3bb6a450838cb201429363cb2397f02da",
+            "production-g1-mysql.py": "32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e",
             "production_g1_mysql_contract.py": "45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3",
-            "production-g1-mysql-manifest.json": "290ed20acfdac72f4150f572521b8f0e6564de33f7ff2979fc5b5a2381410732",
+            "production-g1-mysql-manifest.json": "c2b693195f542ab88d261bd65dc586c56880526a65707c135cee2d29a61dea73",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "01f803d3628b47f11719751e365ab95bc664189d8dfcb457bf0fec8eb460e8e2")
+                         "2e67841f723ed2f82049645d842a45e1c9c6b581c84d79ea4abd4ae0094a2f38")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):

@@ -12,6 +12,7 @@ import sys
 #   clean state after the documented rollback (GO-2 verification, also the GO-4 precondition)
 #   328   installed #328 package (GO-4 post-install check, zz- option-file names)
 #   328h  #328 artifacts with the log-directory hotfix helper/manifest (after go4b-upgrade-installed-helper.py)
+#   328h2 #328 artifacts with the base-config symlink hotfix helper/manifest (after go5h-upgrade-installed-helper.py)
 
 PROFILES_AND_DROPINS = {
     "/etc/apparmor.d/wpcaregrid-mysql-production": "5ad9b53b5a0001d32bffbd3e56d15d92158b026e9cf645411dda95d73f6478cd",
@@ -39,6 +40,10 @@ EXPECTED = {
              LIBEXEC + "wpcaregrid-g1-mysql.py": "457ddb292f2ddf1f094375254a031de3bb6a450838cb201429363cb2397f02da",
              LIBEXEC + "production_g1_mysql_contract.py": "45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3",
              LIBEXEC + "production_g1_mysql_manifest.json": "290ed20acfdac72f4150f572521b8f0e6564de33f7ff2979fc5b5a2381410732"},
+    "328h2": {**PROFILES_AND_DROPINS, **CNF_ZZ,
+              LIBEXEC + "wpcaregrid-g1-mysql.py": "32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e",
+              LIBEXEC + "production_g1_mysql_contract.py": "45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3",
+              LIBEXEC + "production_g1_mysql_manifest.json": "c2b693195f542ab88d261bd65dc586c56880526a65707c135cee2d29a61dea73"},
 }
 INSTANCES = {
     "wpcaregrid-production": {"port": 3308, "runtime": [
@@ -51,7 +56,7 @@ INSTANCES = {
         "/run/mysqld/wpcaregrid-production-restore.pid"]},
 }
 TAGS = {"325": "G1_GO1_PREFLIGHT", "clean": "G1_GO2_ROLLBACK_VERIFY", "328": "G1_GO4_POSTINSTALL",
-        "328h": "G1_GO4B_POSTUPGRADE"}
+        "328h": "G1_GO4B_POSTUPGRADE", "328h2": "G1_GO5H_POSTUPGRADE"}
 VENDOR_TEMPLATE = "/usr/lib/systemd/system/mysql@.service"
 VENDOR_ALIASES = ("/usr/lib/systemd/system/mysql@.service", "/lib/systemd/system/mysql@.service")
 VENDOR_EXECSTART = "ExecStart=/usr/sbin/mysqld --defaults-group-suffix=@%I"
@@ -142,7 +147,7 @@ def main(state, root="/", run=default_run, euid=None):
             if any(name.startswith(("90-wpcaregrid-production", "zz-wpcaregrid-production")) for name in listing):
                 raise Fail("g1_config_still_present", "/etc/mysql/mysql.conf.d")
             return
-        if state in ("328", "328h"):
+        if state in ("328", "328h", "328h2"):
             for path in CNF_90:
                 if lexists(path):
                     raise Fail("legacy_config_name_present", path)
@@ -326,7 +331,7 @@ def main(state, root="/", run=default_run, euid=None):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2 or sys.argv[1] not in TAGS:
-        print("usage: <325|clean|328|328h>")
+        print("usage: <325|clean|328|328h|328h2>")
         raise SystemExit(2)
     try:
         code = main(sys.argv[1])
