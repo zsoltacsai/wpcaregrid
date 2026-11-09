@@ -44,7 +44,7 @@ return [
         'backup.stale' => 'Nincs friss, ellenőrzött webhelymentés', 'backup.failed' => 'A webhelymentés sikertelen',
         'backup.stuck' => 'A webhelymentés túl sokáig fut', 'backup.storage_unavailable' => 'Nem érhető el a webhelymentés tárhelye',
         'platform.backup_stale' => 'Elavult platform-adatbázismentés', 'platform.recovery_degraded' => 'Gyengült platform-helyreállítási készültség',
-        'queue.backlog' => 'Megnövekedett feldolgozási sor', 'worker.paused_by_profile' => 'A környezeti profil szándékosan leállította a feldolgozót',
+        'queue.backlog' => 'Megnövekedett feldolgozási sor',
         'worker.stale' => 'Elavult feldolgozói aktivitás',
         'scheduler.stale' => 'Elavult ütemező heartbeat', 'database.unavailable' => 'Nem érhető el az alkalmazás-adatbázis',
         'security.scan_overdue' => 'Elmaradt biztonsági vizsgálat', 'security.findings_open' => 'A biztonsági találatok figyelmet igényelnek', 'security.feed_stale' => 'Elavult sérülékenységi adatforrás',
