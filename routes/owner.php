@@ -26,6 +26,7 @@ use App\Http\Controllers\Owner\PrivacyRetentionController;
 use App\Http\Controllers\Owner\RecoveryOfferController;
 use App\Http\Controllers\Owner\SellerTaxProfileController;
 use App\Http\Controllers\Owner\SeoController;
+use App\Http\Controllers\Owner\StripeCatalogueController;
 use App\Http\Controllers\Owner\SyntheticSzamlazzTestController;
 use App\Http\Controllers\Owner\SystemController;
 use App\Http\Controllers\Owner\VatVerificationController as OwnerVatVerificationController;
@@ -97,6 +98,13 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::put('/pricing/prices/{price}', [PricingController::class, 'update'])->middleware(['can:owner.pricing.manage', 'throttle:owner-sensitive'])->name('pricing.prices.update');
         Route::post('/pricing/prices/{price}/publish', [PricingController::class, 'publish'])->middleware(['can:owner.pricing.manage', 'throttle:owner-sensitive', 'throttle:owner-external'])->name('pricing.prices.publish');
         Route::post('/pricing/prices/{price}/discard', [PricingController::class, 'discard'])->middleware(['can:owner.pricing.manage', 'throttle:owner-sensitive'])->name('pricing.prices.discard');
+
+        // Stripe Catalogue (docs/STRIPE_CATALOGUE.md): dry-run preview first; changing Stripe needs an approved, stored plan.
+        Route::get('/pricing/stripe-catalogue', [StripeCatalogueController::class, 'index'])->middleware('can:owner.pricing.manage')->name('pricing.stripe-catalogue.index');
+        Route::post('/pricing/stripe-catalogue/preview', [StripeCatalogueController::class, 'preview'])->middleware(['can:owner.pricing.manage', 'throttle:owner-external'])->name('pricing.stripe-catalogue.preview');
+        Route::post('/pricing/stripe-catalogue/products/{productType}', [StripeCatalogueController::class, 'mapProduct'])->middleware(['can:owner.pricing.manage', 'throttle:owner-sensitive', 'throttle:owner-external'])->name('pricing.stripe-catalogue.products.map');
+        Route::get('/pricing/stripe-catalogue/{operation}', [StripeCatalogueController::class, 'show'])->middleware('can:owner.pricing.manage')->name('pricing.stripe-catalogue.show');
+        Route::post('/pricing/stripe-catalogue/{operation}/apply', [StripeCatalogueController::class, 'apply'])->middleware(['can:owner.pricing.manage', 'throttle:owner-sensitive', 'throttle:owner-external'])->name('pricing.stripe-catalogue.apply');
 
         // Coupons (docs/COUPONS.md): the one coupon engine, managed here.
         Route::get('/coupons', [CouponController::class, 'index'])->middleware('can:owner.coupons.manage')->name('coupons.index');
