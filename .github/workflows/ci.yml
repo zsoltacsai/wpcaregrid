@@ -79,7 +79,7 @@ jobs:
         run: python3 scripts/tests/production-g1-ops-test.py
 
       - name: GO-5.3 helper upgrade transaction tests
-        run: python3 -B -m unittest scripts/tests/test_go53_upgrade_transaction.py
+        run: sudo -n python3 -B -m unittest scripts/tests/test_go53_upgrade_transaction.py
 
       - name: Install AppArmor parser for generated G1 profile validation
         run: |
