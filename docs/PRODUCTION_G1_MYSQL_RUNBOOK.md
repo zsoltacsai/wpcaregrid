@@ -193,6 +193,16 @@ configuration. It can therefore be started again from any point after a STOP tha
 a successful upgrade. It never runs `provision-paths`, `initialize` or `start`, never deletes or changes the
 MySQL directories, the logs, `mysql.service` or `/etc/mysql/my.cnf`. State `328h2` stays the pre-GO-5.1 state.
 
+Before anything else the script re-verifies the toolkit directory (`sha256sum -c --strict SHA256SUMS`, exact file
+count). An existing package directory is reused only after the same checks the fetch script applies before its rename
+(root:root 0700 directory, exactly four root:root 0600 files, the pinned `SHA256SUMS` hash, `sha256sum -c --strict`).
+If a fetch was interrupted it leaves `/root/wpcg-production-g1-mysql-hf2-<sha7>.incoming-UNVERIFIED`; the next run
+then stops with `staging_directory_exists`. Nothing was installed at that point: report it, the Owner removes that one
+unverified staging directory by hand (it is not a MySQL path) and starts the same command again. A hard kill
+(SIGKILL, power loss) during the upgrade can leave a `.g1-upgrade-tmp` file or a helper/manifest pair that is half
+replaced; the sequence then stops (`leftover_temporary_file` / `installed_helper_or_manifest_unrecognized`) and needs a
+manual look before any retry.
+
 
 The upgrade tool checks before any write: the package files (hash-pinned, root-owned directory), the installed
 helper/contract/manifest (GO-4b pins, owner, mode, no symlink), both G1 units inactive and no leftover temporary file.

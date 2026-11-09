@@ -783,6 +783,10 @@ HF2 = "/root/wpcg-production-g1-mysql-hf2-0123456"
 text = open("/src/go52h-sequence.sh").read()
 text = re.sub(r"(?m)^HELPER_OLD=[0-9a-f]{64}", "HELPER_OLD=" + sha(OLDB), text)
 text = re.sub(r"(?m)^HELPER_NEW=[0-9a-f]{64}", "HELPER_NEW=" + sha(NEWB), text)
+PKG = {"production-g1-mysql.py": b"helper-fixture" + bytes([10]), "production_g1_mysql_contract.py": b"contract-fixture" + bytes([10]),
+       "production-g1-mysql-manifest.json": b"manifest-fixture" + bytes([10])}
+PKG_SUMS = "".join("%s  %s" % (sha(data), name) + chr(10) for name, data in PKG.items()).encode()
+text = re.sub(r"(?m)^PACKAGE_SUMS=[0-9a-f]{64}", "PACKAGE_SUMS=" + sha(PKG_SUMS), text)
 STUB_PY = "import os, sys" + chr(10) + \
     "name = os.path.basename(sys.argv[0]); args = sys.argv[1:]" + chr(10) + \
     "open('/tmp/calls.log', 'a').write(name + (':' + args[0] if name == 'g1-state-check.py' else '') + chr(10))" + chr(10) + \
@@ -793,7 +797,21 @@ STUB_SH = "echo go5h-fetch-hotfix-package.sh >> /tmp/calls.log" + chr(10) + \
     "grep -qx go5h-fetch-hotfix-package.sh /tmp/fail 2>/dev/null && exit 3" + chr(10) + \
     "mkdir -p " + HF2 + chr(10)
 
-def setup(helper=OLDB, hf2=False, fail=(), ops_mode=0o700, helper_symlink=False):
+def build_package(tamper=None):
+    os.makedirs(HF2)
+    files = dict(PKG)
+    files["SHA256SUMS"] = PKG_SUMS
+    for name, data in files.items():
+        path = HF2 + "/" + name
+        open(path, "wb").write(data + (b"x" if tamper == "source" and name == "production-g1-mysql.py" else b""))
+        os.chmod(path, 0o644 if tamper == "file_mode" and name == "SHA256SUMS" else 0o600)
+    if tamper == "extra_file":
+        open(HF2 + "/extra", "w").write("x")
+    if tamper == "sums_pin":
+        open(HF2 + "/SHA256SUMS", "wb").write(PKG_SUMS + b"# changed" + bytes([10]))
+    os.chmod(HF2, 0o755 if tamper == "dir_mode" else 0o700)
+
+def setup(helper=OLDB, hf2=False, fail=(), ops_mode=0o700, helper_symlink=False, tamper_toolkit=False):
     shutil.rmtree("/ops", ignore_errors=True); shutil.rmtree(HF2, ignore_errors=True)
     for path in ("/tmp/calls.log", "/tmp/fail", HELPER):
         if os.path.lexists(path):
@@ -803,6 +821,10 @@ def setup(helper=OLDB, hf2=False, fail=(), ops_mode=0o700, helper_symlink=False)
         open("/ops/" + name, "w").write(STUB_PY)
     open("/ops/go5h-fetch-hotfix-package.sh", "w").write(STUB_SH)
     open("/ops/go52h-sequence.sh", "w").write(text)
+    names = sorted(os.listdir("/ops"))
+    open("/ops/SHA256SUMS", "w").write("".join("%s  %s" % (sha(open("/ops/" + n, "rb").read()), n) + chr(10) for n in names))
+    if tamper_toolkit:
+        open("/ops/g1-state-check.py", "a").write("# tampered" + chr(10))
     os.chmod("/ops", ops_mode); os.chown("/ops", 0, 0)
     if helper is not None:
         if helper_symlink:
@@ -810,7 +832,7 @@ def setup(helper=OLDB, hf2=False, fail=(), ops_mode=0o700, helper_symlink=False)
         else:
             open(HELPER, "wb").write(helper)
     if hf2:
-        os.makedirs(HF2)
+        build_package(None if hf2 is True else hf2)
     open("/tmp/fail", "w").write(" ".join(fail))
 
 def run(name, arg=M, **kw):
@@ -825,6 +847,9 @@ run("hotfix1_fresh")
 run("hotfix1_package_dir_exists", hf2=True)
 run("already_upgraded", helper=NEWB, hf2=True)
 run("already_upgraded_without_package_dir", helper=NEWB)
+run("toolkit_file_tampered", tamper_toolkit=True)
+for tamper in ("source", "extra_file", "file_mode", "dir_mode", "sums_pin"):
+    run("reuse_" + tamper, hf2=tamper)
 run("unknown_helper", helper=b"foreign" + bytes([10]))
 run("missing_helper", helper=None)
 run("symlinked_helper", helper_symlink=True)
@@ -929,7 +954,8 @@ class PostProvisionStateAndSequenceTest(unittest.TestCase):
         for name, step in (("unknown_helper", "installed_helper_unrecognized"), ("missing_helper", "installed_helper_missing"),
                            ("symlinked_helper", "installed_helper_missing"), ("bad_commit_argument", "commit_argument_invalid"),
                            ("no_commit_argument", "commit_argument_invalid"),
-                           ("toolkit_dir_mode_755", "toolkit_directory_invalid")):
+                           ("toolkit_dir_mode_755", "toolkit_directory_invalid"),
+                           ("toolkit_file_tampered", "toolkit_hash_check")):
             with self.subTest(name):
                 self.assertEqual(self.seq_result(name), ("rc=1", f"G1_GO52H_SEQUENCE=STOP;STEP={step}", "-"))
 
@@ -950,8 +976,17 @@ class PostProvisionStateAndSequenceTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(self.seq_result(name), ("rc=1", f"G1_GO52H_SEQUENCE=STOP;STEP={step}", calls))
 
+    def test_a_reused_package_directory_must_pass_the_same_checks_as_a_fresh_download(self):
+        state = "g1-state-check.py:328hp"
+        for name, step in (("reuse_source", "package_hash_check"), ("reuse_extra_file", "package_file_count"),
+                           ("reuse_file_mode", "package_file_invalid"), ("reuse_dir_mode", "package_directory_invalid"),
+                           ("reuse_sums_pin", "package_sums_mismatch")):
+            with self.subTest(name):
+                self.assertEqual(self.seq_result(name), ("rc=1", f"G1_GO52H_SEQUENCE=STOP;STEP={step}", state))
+
     def test_sequence_script_never_provisions_initializes_starts_or_deletes(self):
         text = (OPS / "go52h-sequence.sh").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"(?m)^PACKAGE_SUMS=([0-9a-f]{64})", text), [sha((SCRIPTS / "SHA256SUMS").read_bytes())])
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         for forbidden in ("provision-paths", "initialize", "systemctl", "rm ", "rmdir", "mv ", "chmod", "chown",
                           "mysql.service", "/var/lib/mysql", "/etc/mysql", "apparmor_parser", "verify-install"):
