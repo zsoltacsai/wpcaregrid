@@ -154,8 +154,8 @@ final class StagingNextQueueMonitoringTest extends TestCase
                 MonitoringResult::query()->where($pausedIdentity)->firstOrFail()->observed_at?->toDateTimeString(),
             );
             $this->assertSame($transitionCount, MonitoringTransition::query()->where('incident_id', $incidentId)->count());
-            $this->assertCount(2, Queue::pushed(RecordWorkerPulse::class));
-            $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[1]['job']->queue);
+            $this->assertCount(1, Queue::pushed(RecordWorkerPulse::class));
+            $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[0]['job']->queue);
         } finally {
             Carbon::setTestNow();
         }
