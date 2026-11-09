@@ -1,6 +1,7 @@
 <x-layouts.owner :title="__('owner.pricing.title')">
     <x-operator.page-header :title="__('owner.pricing.title')" :lead="__('owner.pricing.lead')">
         <x-slot:actions>
+            <x-ui.button :href="route('owner.pricing.stripe-catalogue.index')" size="sm" variant="secondary">{{ __('owner.stripe_catalogue.title') }}</x-ui.button>
             <form method="POST" action="{{ route('owner.pricing.verify') }}">
                 @csrf
                 <x-ui.button type="submit" size="sm" variant="secondary" :disabled="! $stripeConfigured">{{ __('owner.pricing.verify') }}</x-ui.button>

@@ -38,6 +38,8 @@ final class AdminAudit
         'platform_backup.manual_requested', 'platform_backup.configuration_updated', 'platform_backup.disabled', 'platform_backup.escrow_attested', 'platform_backup.escrow_revoked', 'platform_backup.s3_connection_tested',
         'operator.invited', 'operator.invitation_resent', 'operator.permissions_changed', 'operator.disabled', 'operator.enabled',
         'stripe.verified',
+        'stripe_catalogue.previewed', 'stripe_catalogue.preview_failed', 'stripe_catalogue.apply_refused', 'stripe_catalogue.apply_started',
+        'stripe_catalogue.object_created', 'stripe_catalogue.price_linked', 'stripe_catalogue.product_linked', 'stripe_catalogue.applied',
         'integration_credential.updated', 'integration_credential.cleared',
         'ai_provider.credential_created', 'ai_provider.credential_replaced', 'ai_provider.credential_removed', 'ai_provider.health_checked',
         'billing_tax.configuration_published', 'billing_tax.seller_profile_published', 'billing_tax.review_proposed', 'billing_tax.intent_snapshot_refreshed', 'billing_tax.tax_decision_approved', 'billing_tax.local_invoice_validation', 'billing_tax.issuance_reconciliation',

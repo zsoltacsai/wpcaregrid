@@ -3,6 +3,8 @@
 namespace App\Pricing;
 
 use App\Billing\StripeClientFactory;
+use App\Models\StripeCatalogueProduct;
+use Illuminate\Database\QueryException;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
 
@@ -51,8 +53,20 @@ class StripePriceVerifier
     public function expectedProduct(ProductType $productType): ?string
     {
         $product = config("pricing.stripe_products.{$productType->value}");
+        if (is_string($product) && $product !== '') {
+            return $product;
+        }
 
-        return is_string($product) && $product !== '' ? $product : null;
+        // Else the Product the Stripe catalogue manager linked or created for this Stripe mode.
+        try {
+            $linked = StripeCatalogueProduct::query()
+                ->where(['mode' => (string) config('services.stripe.mode'), 'product_type' => $productType->value])
+                ->value('stripe_product_id');
+        } catch (QueryException) {
+            return null;
+        }
+
+        return is_string($linked) && $linked !== '' ? $linked : null;
     }
 
     /** "ok", or what is wrong with the Price itself ("missing ID", "not found (…)", "amount 100"…). */
