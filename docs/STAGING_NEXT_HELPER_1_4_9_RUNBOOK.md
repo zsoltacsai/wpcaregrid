@@ -57,6 +57,26 @@ atomically, rolls back only its own objects on failure, re-reads and re-hashes e
 
 Afterwards re-run the read-only root preflight: `source.staged` must be `REQUIRED_PRESENT` and the result `PASS`.
 
+### Alternative Step 1+2 - run directly on the VPS as root (no local git clone needed)
+
+`scripts/staging-149-stage-on-host.py` (paste block in the hand-over) is run from the root console of the staging
+host: `... | python3 -I -B - check` first (downloads the six files over HTTPS from the pinned commit, verifies every
+sha256 pin in memory, checks all host preconditions, **writes nothing**), then the same block with `stage`. It writes
+only `/home/deploy/.private` (created 0700 if absent; sources in `wpcg-staging-next-helper-1.4.9/` 0700/0600; the
+installer as `wpcaregrid-staging-next-helper-installer-1.4.9.py` 0600), all owned by `deploy`, create-only (an existing
+destination is a STOP), rolled back on any failure, read back and re-hashed. Root writes only through directory
+file descriptors opened with `O_NOFOLLOW` and validated with `fstat`, so the deploy-owned tree cannot redirect it:
+before creating anything it drops to the `deploy` identity (`setgroups`/`setegid`/`seteuid`), so everything is
+deploy-owned by construction and no `chown` is ever issued; every directory is created with `mkdir` (never replaced) and
+checked (owner, mode, empty); files use `O_EXCL|O_NOFOLLOW`. There is no temp tree and no rename.
+Rollback removes only objects whose device/inode it still recognises, one at a time, never recursively. The environment
+is scrubbed, reads are non-blocking and type-checked, and a 300 s watchdog stops the run. A `kill -9` or power loss
+cannot be rolled back: a partial `.private/wpcg-staging-next-helper-1.4.9` would then make the next run STOP with
+`destination_exists` and must be inspected and removed by hand by the Owner.
+Download: HTTPS only from `raw.githubusercontent.com` (public repository), no proxy, no redirect, size-capped; the bytes are
+never executed. Result line: `STAGING_149_STAGE=CHECK_PASS` / `PASS` / `STOP;CODE=...`. The helper installation (Step 3)
+remains a separate Owner GO.
+
 ## Step 3 - Owner GO #2: root installation (privileged change: root-owned files + sudoers rule)
 
 From a root console, the single command in `docs/STAGING_NEXT_HELPER_1_4_9_INSTALL.md` ("Root-console
