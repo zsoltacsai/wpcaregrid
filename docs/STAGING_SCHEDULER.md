@@ -30,7 +30,7 @@ Extra: `backup:monitor` deletes below `backup.upload.staging_path`; it is held u
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `connector:update-presence` | local | yes | none (marks websites disconnected in the DB) | only websites with an active connector | classification | policy matrix, route inventory |
 | 2 | `backup:schedule` | connector | **no** | queues connector backup jobs for paired sites; storage target if configured | needs an active connector, entitlement, capability; connector API closed by default | held until connector opt-in | group test |
-| 3 | `backup:monitor` | local | yes | deletes the backup staging directory of failed backups | path from `BACKUP_STAGING_PATH` | held if the path is outside `storage/` | path test |
+| 3 | `backup:monitor` | local | yes | deletes the backup staging directory of failed backups; re-dispatches `TransferBackup` (upload to the configured backup storage) for backups stuck uploaded/verifying, which only exist once a connector has produced backups; staging has no `BACKUP_STORAGE` configured | path from `BACKUP_STAGING_PATH` | held if the path is outside `storage/` | path test |
 | 4 | `backup:retention` | local | yes | none (report only, deletes nothing) | explicit "no backups were deleted" | classification | matrix |
 | 5 | `privacy:exports-expire` | local | yes | none (deletes expired temporary exports on the `local` disk only) | refuses any other disk | classification | matrix |
 | 6 | `platform:database-backup-schedule` | external | **no** | platform database backup to object storage | disabled unless Owner-enabled; own encryption/verification | held until external opt-in | group test |
@@ -38,7 +38,7 @@ Extra: `backup:monitor` deletes below `backup.upload.staging_path`; it is held u
 | 8 | `security:monitor` | local | yes | none | DB only | classification | matrix |
 | 9 | `security:schedule` | connector | **no** | queues scans on paired sites | `SECURITY_SCHEDULE_ENABLED` (default off), connected sites only | held until connector opt-in | group test |
 | 10 | `security:vulnerabilities:sync` | external | **no** | downloads a third-party vulnerability feed | needs source, URL and `scheduled_sync_enabled` | held until external opt-in | group test |
-| 11 | `monitoring:run` | local | yes | website probes contact customer sites | probes fenced on staging-next (PR #340: only the synthetic fixture, never a customer site) | classification | PR #340 monitoring tests, matrix |
+| 11 | `monitoring:run` | local | yes | website probes contact customer sites | probes fenced on staging-next (PR #340: only the synthetic fixture, never a customer site); **the fence lifts together with `STAGING_ACTIVE_EXTERNAL_SERVICES=true`**, after which probes go to every website in the staging database | classification | PR #340 monitoring tests, matrix |
 | 12 | `monitoring:deliver-alerts` | mail | only with a sink/allowlist | alert e-mail | mail guard (allowlist) | held while mail is not confined | group test |
 | 13 | `system:scheduler-heartbeat` | local | yes (even when the rest is held) | none (cache timestamp) | — | exempt from rule 2 by design | unproven-environment test |
 | 14 | `internal-plans:sync` | local | yes | none | DB only | classification | matrix |
@@ -66,7 +66,7 @@ Code only: no migration, composer, npm or `.env` change. Backups first (`.env`, 
 ## Activation (Owner, root) — only after the checks above are green
 
 ```sh
-# 1. read-only: the units are as contracted and the dry list is as expected
+# 1. read-only: the units are as contracted. NOTE: schedule:list shows all 19 tasks (it does not evaluate the policy); the held tasks are shown by system:check ("Scheduler tasks")
 systemctl cat wpcg-staging-next-scheduler.service wpcg-staging-next-scheduler.timer
 systemd-analyze verify /etc/systemd/system/wpcg-staging-next-scheduler.service /etc/systemd/system/wpcg-staging-next-scheduler.timer
 sudo -u deploy /usr/bin/php8.5 /var/www/wpcaregrid-staging-new/artisan schedule:list
@@ -80,3 +80,9 @@ sudo -u deploy /usr/bin/php8.5 /var/www/wpcaregrid-staging-new/artisan system:ch
 # rollback (stops new runs; running tasks finish)
 systemctl disable --now wpcg-staging-next-scheduler.timer
 ```
+
+## Operating notes
+
+* Do **not** use `php artisan schedule:test` on staging-next: it runs a task without evaluating the policy. `schedule:run` (also with `--name`) does evaluate it.
+* `schedule:run` runs tasks one after another and the service is killed after 55 s: a hanging task also stops the tasks after it in that minute (the heartbeat is 13th). The next run retries after the 15-minute mutex expiry; no task can run twice in parallel (systemd does not start the oneshot while it is active).
+* The policy recognises staging-next by the deployment id, by a requested `staging_active` profile (even when refused) or by the exact origin. Any one is enough, so a mis-identified stack is held, not released.

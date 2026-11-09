@@ -187,6 +187,31 @@ class StagingSchedulerPolicyTest extends TestCase
         $this->assertSame('environment_unproven', app(StagingSchedulePolicy::class)->denial('internal-plans:sync'));
     }
 
+    public function test_a_requested_staging_active_profile_holds_everything_even_with_a_wrong_deployment_id_and_url(): void
+    {
+        // The stack asks for staging_active but identifies itself as neither staging-next by id nor by origin.
+        $this->proven();
+        config([
+            'app.deployment_environment' => 'production',
+            'app.url' => 'https://somewhere-else.example',
+            'marketing_release.profile' => 'marketing_only',
+            'marketing_release.requested_profile' => 'staging_active',
+            'marketing_release.staging_active_enabled' => false,
+        ]);
+
+        $this->assertTrue(StagingSchedulePolicy::appliesHere());
+        $policy = app(StagingSchedulePolicy::class);
+        foreach (array_keys(StagingSchedulePolicy::TASKS) as $task) {
+            if ($task === StagingSchedulePolicy::HEARTBEAT) {
+                $this->assertNull($policy->denial($task));
+
+                continue;
+            }
+            $this->assertSame('environment_unproven', $policy->denial($task), $task);
+        }
+        $this->assertSame('task_not_allowlisted', $policy->denial('brand:new-task'));
+    }
+
     public function test_the_task_name_is_read_from_commands_with_arguments_and_from_the_heartbeat(): void
     {
         $this->assertContains('privacy:exports-expire', $this->scheduledKeys());

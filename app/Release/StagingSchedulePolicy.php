@@ -67,10 +67,15 @@ final class StagingSchedulePolicy
 
     public function __construct(private readonly StagingActiveProfile $staging) {}
 
-    /** True on the staging-next stack, recognised by its deployment id or its exact origin. */
+    /**
+     * True on the staging-next stack, recognised by its deployment id, by the staging_active
+     * profile having been requested (also when it was refused), or by its exact origin. Any
+     * one of them is enough, so a stack that claims to be staging-next but is mis-identified
+     * is held, never released.
+     */
     public static function appliesHere(): bool
     {
-        return config('app.deployment_environment') === StagingActiveProfile::DEPLOYMENT_ENV
+        return StagingActiveProfile::isStagingNextEnvironment()
             || strtolower((string) parse_url((string) config('app.url'), PHP_URL_HOST)) === StagingActiveProfile::HOST;
     }
 
