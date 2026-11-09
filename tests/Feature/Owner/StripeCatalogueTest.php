@@ -139,7 +139,8 @@ class StripeCatalogueTest extends TestCase
     {
         $plan = $this->preview()->plan;
 
-        $this->assertSame(['create_price' => 48, 'create_product' => 2], $plan['summary']['actions']);
+        // JSON columns are compared as data: MySQL stores objects with their keys re-ordered.
+        $this->assertEquals(['create_price' => 48, 'create_product' => 2], $plan['summary']['actions']);
         $this->assertEqualsCanonicalizing(['create_product:wordpress', 'create_product:woocommerce'], array_slice(array_column($plan['actions'], 'id'), 0, 2));
         $this->assertSame(['missing' => 48], $plan['summary']['prices']);
     }
@@ -161,7 +162,7 @@ class StripeCatalogueTest extends TestCase
             ->assertDontSee(self::SECRET);
         // price_bad conflicts by its key; the other two yearly HUF prices of the product conflict because
         // a differently priced price already sits in their slot (Product, currency, period).
-        $this->assertSame(['ambiguous' => 1, 'conflict' => 3, 'exact' => 1, 'missing' => 43], $operation->plan['summary']['prices']);
+        $this->assertEquals(['ambiguous' => 1, 'conflict' => 3, 'exact' => 1, 'missing' => 43], $operation->plan['summary']['prices']);
     }
 
     public function test_the_index_page_shows_the_environment_and_that_changes_are_off_by_default(): void
@@ -255,7 +256,7 @@ class StripeCatalogueTest extends TestCase
 
         $operation->refresh();
         $this->assertSame(StripeCatalogueOperation::PARTIAL, $operation->status);
-        $this->assertSame(['status' => 'failed', 'code' => 'invalid_request'], $operation->result['items']['create_price:wordpress.basic.monthly.hu']);
+        $this->assertEquals(['status' => 'failed', 'code' => 'invalid_request'], $operation->result['items']['create_price:wordpress.basic.monthly.hu']);
         $this->assertSame(47, $operation->result['done'] - 2);
         $this->assertCount(47, $this->stripe->prices);
         $this->assertSame(47, PriceDefinition::count());
