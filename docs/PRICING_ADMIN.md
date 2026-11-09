@@ -57,3 +57,7 @@ Per plan and locale: name, description, badge (empty: no badge), button text (em
 1. `php artisan migrate` (creates `price_definitions`).
 2. Nothing changes until an owner publishes a price: config/pricing.php and the `STRIPE_PRICE_*` variables keep working.
 3. After publishing prices, run "Check prices in Stripe" (or `php artisan pricing:verify-stripe`).
+
+## Stripe Catalogue
+
+Matching the catalogue with the Stripe Products and Prices, and creating the missing ones after explicit approval, is Pricing → Stripe Catalogue: see STRIPE_CATALOGUE.md. A Product linked or created there is also the Product `verify()` expects for its product type when `STRIPE_PRODUCT_*` is not set (configuration still wins).

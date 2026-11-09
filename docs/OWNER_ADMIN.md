@@ -29,7 +29,7 @@ Every owner route has `auth:owner`, `owner` and exactly one ability `can:owner.*
 | `owner.customers.view` / `owner.customers.manage` | customer list and detail / editing customer details |
 | `owner.websites.view` / `owner.websites.operate` | website list and detail / backup and security scan |
 | `owner.operators.manage` | operators, invitations, permissions, disable/enable |
-| `owner.pricing.manage` | prices, plan wording links, Stripe price check |
+| `owner.pricing.manage` | prices, plan wording links, Stripe price check, Stripe Catalogue (STRIPE_CATALOGUE.md) |
 | `owner.coupons.manage` | coupons: create, edit rules, activate / deactivate, delete if unused ([COUPONS.md](COUPONS.md)) |
 | `owner.plans.assign` | assign, change and end PROBONO, the internal plan ([PROBONO.md](PROBONO.md)) |
 | `owner.offers.manage` | custom recovery offers: create, send, edit, cancel, complete ([RECOVERY_OFFERS.md](RECOVERY_OFFERS.md)) |

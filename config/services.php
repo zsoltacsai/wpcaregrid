@@ -41,6 +41,14 @@ return [
         'allow_live_mode' => (bool) env('STRIPE_ALLOW_LIVE_MODE', false),
         'mode' => env('STRIPE_MODE', env('STRIPE_ALLOW_LIVE_MODE', false) ? 'live' : 'test'),
         'payment_method_portal_configuration' => env('STRIPE_PAYMENT_METHOD_PORTAL_CONFIGURATION'),
+        // Owner → Pricing → Stripe Catalogue (docs/STRIPE_CATALOGUE.md). The catalogue is only ever read
+        // unless the Owner turns apply_enabled on; changing LIVE needs live_apply_approved as well, and
+        // a staging stack can never use a live key at all.
+        'catalogue' => [
+            'apply_enabled' => (bool) env('STRIPE_CATALOGUE_APPLY_ENABLED', false),
+            'live_apply_approved' => (bool) env('STRIPE_CATALOGUE_LIVE_APPLY_APPROVED', false),
+            'plan_ttl_minutes' => 30,
+        ],
     ],
 
     'cloudflare' => [
