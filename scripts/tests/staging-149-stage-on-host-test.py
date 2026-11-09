@@ -51,6 +51,7 @@ class Host(unittest.TestCase):
         self.home = self.base / "deploy"
         self.home.mkdir(mode=0o755)
         self.home.chmod(0o755)
+        self.drops = []
         self.priv = self.home / ".private"
         self.src = self.priv / "wpcg-staging-next-helper-1.4.9"
         self.inst = self.priv / "wpcaregrid-staging-next-helper-installer-1.4.9.py"
@@ -78,6 +79,9 @@ class Host(unittest.TestCase):
             stack.enter_context(contextlib.redirect_stdout(out))
             if root:
                 stack.enter_context(mock.patch.object(os, "geteuid", return_value=0))
+                for fn in ("setgroups", "setegid", "seteuid"):
+                    stack.enter_context(mock.patch.object(
+                        os, fn, lambda value, fn=fn: self.drops.append((fn, value))))
             for patcher in patches:
                 stack.enter_context(patcher)
             try:
@@ -320,20 +324,42 @@ class PreconditionTests(Host):
 
 
 class SafetyTests(Host):
-    def test_every_created_object_is_explicitly_chowned_to_deploy(self):
-        calls = []
-        real = os.fchown
-
-        def spy(fd, uid, gid):
-            calls.append((os.fstat(fd).st_mode, uid, gid))
-            return real(fd, uid, gid)
-
-        with mock.patch.object(os, "fchown", spy):
+    def test_privileges_are_dropped_to_deploy_before_anything_is_created_and_no_chown_exists(self):
+        self.assertNotIn("chown(", CODE)
+        self.assertNotIn("fchown", CODE)
+        order = []
+        real_mkdir = os.mkdir
+        with mock.patch.object(os, "mkdir", lambda *a, **k: (order.append("mkdir"), real_mkdir(*a, **k))[1]):
             self.run_host()
-        directories = [c for c in calls if stat.S_ISDIR(c[0])]
-        files = [c for c in calls if stat.S_ISREG(c[0])]
-        self.assertEqual((len(directories), len(files)), (2, 6))  # .private, src / six files
-        self.assertTrue(all((uid, gid) == (ENTRY.pw_uid, ENTRY.pw_gid) for _, uid, gid in calls))
+        self.assertEqual(self.drops[:3], [("setgroups", []), ("setegid", ENTRY.pw_gid), ("seteuid", ENTRY.pw_uid)])
+        self.assertEqual(order[0], "mkdir")
+        # check mode never drops privileges
+        shutil.rmtree(self.priv)
+        self.drops.clear()
+        self.run_host(mode="check")
+        self.assertEqual(self.drops, [])
+
+    def test_a_failed_privilege_drop_is_a_stop_before_any_write(self):
+        patch = mock.patch.object(os, "setegid", side_effect=PermissionError("no"))
+        self.stop("privilege_drop_failed", patches=[patch])
+
+    def test_a_swapped_in_root_owned_non_empty_directory_with_link_count_two_is_rejected(self):
+        self.priv.mkdir(mode=0o700)
+        victim = self.base / "victim"
+        victim.mkdir(mode=0o700)
+        (victim / "file").write_text("x")  # no subdirectory: link count 2, but not empty
+        real = os.mkdir
+
+        def swapping(path, mode=0o777, *, dir_fd=None):
+            real(path, mode, dir_fd=dir_fd)
+            if path == self.src.name:
+                os.rename(self.src, self.base / "moved-src")
+                os.rename(victim, self.src)
+
+        with mock.patch.object(os, "mkdir", swapping):
+            lines, _ = self.run_host()
+        self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=stage_failed:RuntimeError")
+        self.assertEqual((self.src / "file").read_text(), "x")
 
     def test_a_swapped_private_directory_cannot_redirect_root(self):
         self.priv.mkdir(mode=0o700)
@@ -381,7 +407,7 @@ class SafetyTests(Host):
             lines, _ = self.run_host()
         self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=stage_failed:OSError")
         self.assertEqual(self.snapshot(), before)
-        with mock.patch.object(os, "fchown", side_effect=PermissionError("no")):
+        with mock.patch.object(os, "fchmod", side_effect=PermissionError("no")):
             lines, _ = self.run_host()
         self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=stage_failed:PermissionError")
         self.assertEqual(self.snapshot(), before)
@@ -418,7 +444,6 @@ class SafetyTests(Host):
         with mock.patch.object(os, "mkdir", swapping), mock.patch.object(os, "fchown", lambda *a: chowns.append(a)):
             lines, status = self.run_host()
         self.assertEqual((lines[-1], status), ("STAGING_149_STAGE=STOP;CODE=stage_failed:RuntimeError", 2))
-        self.assertEqual(stat.S_IMODE(os.lstat(self.src).st_mode), 0o777)
         self.assertEqual(chowns, [])
 
     def test_a_swapped_in_directory_with_content_or_a_foreign_owner_is_rejected_before_chown(self):
@@ -457,18 +482,18 @@ class SafetyTests(Host):
         self.assertTrue(lines[-1].startswith("STAGING_149_STAGE=STOP;CODE="), lines)
         self.assertEqual(chowns, [])
 
-    def test_a_file_or_symlink_planted_in_the_new_directory_is_never_followed_or_truncated(self):
+    def test_a_file_or_symlink_planted_at_the_file_name_is_never_followed_or_truncated(self):
         self.priv.mkdir(mode=0o700)
         target = self.base / "target.txt"
         target.write_text("precious")
-        real = os.mkdir
+        real = os.open
 
-        def planting(path, mode=0o777, *, dir_fd=None):
-            real(path, mode, dir_fd=dir_fd)
-            if path == self.src.name:
+        def planting(path, flags, *args, **kwargs):
+            if path == NAMES[0] and flags & os.O_EXCL:
                 os.symlink(target, self.src / NAMES[0])
+            return real(path, flags, *args, **kwargs)
 
-        with mock.patch.object(os, "mkdir", planting):
+        with mock.patch.object(os, "open", planting):
             lines, _ = self.run_host()
         self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=stage_failed:FileExistsError")
         self.assertEqual(target.read_text(), "precious")

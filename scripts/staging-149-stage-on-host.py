@@ -9,8 +9,9 @@ sha256 pin in memory (nothing is written before all six match), and in `stage` m
 
 Safety properties: no git clone needed; HTTPS only, redirects and proxies refused, size-capped, overall
 watchdog; downloaded bytes are never executed; the environment is scrubbed. Root works only through
-directory file descriptors opened with O_NOFOLLOW and validated with fstat: every directory it creates is
-proven (owner, link count, mode) to be the empty directory it just made BEFORE it is chowned; objects are
+directory file descriptors opened with O_NOFOLLOW and validated with fstat, and before creating anything it drops to the
+deploy identity (setgroups/setegid/seteuid), so everything it creates is deploy-owned by construction and no
+chown is ever issued; each created directory is checked (owner, link count, mode, empty); objects are
 created with mkdir/O_EXCL (nothing is ever replaced or overwritten); rollback removes only objects whose
 recorded device/inode it can still prove, one at a time, never recursively; reads are non-blocking and
 type-checked. It installs nothing and touches no sudoers/helper/service/DB/G1/legacy staging path, and
@@ -133,18 +134,29 @@ def verified_downloads(fetcher):
     return files
 
 
+def drop_privileges(uid, gid):
+    """From here on every create/chmod/unlink runs with the deploy identity, so anything this program
+    creates is deploy-owned by construction and it never uses root authority inside the deploy tree
+    (no ownership changes, no confused deputy)."""
+    try:
+        os.setgroups([])
+        os.setegid(gid)
+        os.seteuid(uid)
+    except OSError:
+        stop("privilege_drop_failed")
+
+
 def create_dir(parent_fd, name, uid, gid, created):
-    """mkdir (EEXIST => nothing is ever replaced), prove the opened inode is the empty directory we just
-    made, record its identity, and only then chown/chmod it."""
+    """mkdir as deploy (EEXIST => nothing is ever replaced), record the identity of what was opened, and
+    refuse anything that is not an empty directory owned by deploy with the expected mode."""
     os.mkdir(name, 0o700, dir_fd=parent_fd)
     fd = os.open(name, NOFOLLOW_DIR, dir_fd=parent_fd)
     try:
         info = os.fstat(fd)
-        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 2
-                or stat.S_IMODE(info.st_mode) & ~0o700):
-            raise RuntimeError("created_directory_identity")
         created.append(("dir", parent_fd, name, info.st_dev, info.st_ino))
-        os.fchown(fd, uid, gid)
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_nlink != 2
+                or stat.S_IMODE(info.st_mode) & ~0o700 or os.listdir(fd)):
+            raise RuntimeError("created_directory_identity")
         os.fchmod(fd, 0o700)
     except BaseException:
         os.close(fd)
@@ -160,7 +172,6 @@ def create_file(dir_fd, name, data, uid, gid, created):
         view = memoryview(data)
         while view:
             view = view[os.write(fd, view):]
-        os.fchown(fd, uid, gid)
         os.fchmod(fd, 0o600)
         os.fsync(fd)
     finally:
@@ -287,6 +298,7 @@ def main(mode=None, fetcher=None):
             emit("STAGING_149_STAGE=CHECK_PASS")
             return
 
+        drop_privileges(uid, gid)
         src_fd = None
         try:
             if priv_fd is None:
@@ -299,6 +311,7 @@ def main(mode=None, fetcher=None):
             os.fsync(src_fd)
             os.fsync(priv_fd)
             report = readback(priv_fd, uid, gid)
+            signal.pthread_sigmask(signal.SIG_BLOCK, {getattr(signal, n) for n in SIGNALS})
         except BaseException as error:
             signal.pthread_sigmask(signal.SIG_BLOCK, {getattr(signal, n) for n in SIGNALS})
             signal.alarm(0)

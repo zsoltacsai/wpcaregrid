@@ -66,8 +66,9 @@ only `/home/deploy/.private` (created 0700 if absent; sources in `wpcg-staging-n
 installer as `wpcaregrid-staging-next-helper-installer-1.4.9.py` 0600), all owned by `deploy`, create-only (an existing
 destination is a STOP), rolled back on any failure, read back and re-hashed. Root writes only through directory
 file descriptors opened with `O_NOFOLLOW` and validated with `fstat`, so the deploy-owned tree cannot redirect it:
-every directory is created with `mkdir` (never replaced) and proven by `fstat` to be the empty directory just made
-(owner, link count, mode) before it is chowned; files use `O_EXCL|O_NOFOLLOW`. There is no temp tree and no rename.
+before creating anything it drops to the `deploy` identity (`setgroups`/`setegid`/`seteuid`), so everything is
+deploy-owned by construction and no `chown` is ever issued; every directory is created with `mkdir` (never replaced) and
+checked (owner, link count, mode, empty); files use `O_EXCL|O_NOFOLLOW`. There is no temp tree and no rename.
 Rollback removes only objects whose device/inode it still recognises, one at a time, never recursively. The environment
 is scrubbed, reads are non-blocking and type-checked, and a 300 s watchdog stops the run. A `kill -9` or power loss
 cannot be rolled back: a partial `.private/wpcg-staging-next-helper-1.4.9` would then make the next run STOP with
