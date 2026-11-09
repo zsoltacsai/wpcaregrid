@@ -12,6 +12,7 @@ HELPER=/usr/local/libexec/wpcaregrid-g1-mysql.py
 CONTRACT=/usr/local/libexec/production_g1_mysql_contract.py
 HELPER_PIN=32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e
 CONTRACT_OLD=45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3
+KERNEL_PROFILES=/sys/kernel/security/apparmor/profiles
 CONTRACT_NEW=270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f
 PACKAGE_SUMS=135430167c9ff42949efd2c1a123dabb3239003ecee328ac40763e170fc020cd  # SHA256SUMS of the hotfix package
 STOPPED() { echo "G1_GO52C_SEQUENCE=STOP;STEP=$1"; exit 1; }
@@ -34,7 +35,7 @@ baseline() {  # unchanged-ness proof: mysql.service main PID and the distributio
   pid=$(/usr/bin/systemctl show mysql.service -P MainPID) || return 1
   [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
   if [ -e /etc/apparmor.d/usr.sbin.mysqld ]; then prof=$(sha256sum -- /etc/apparmor.d/usr.sbin.mysqld | cut -d' ' -f1); else prof=ABSENT; fi
-  kern=$(grep -F 'usr.sbin.mysqld (' /sys/kernel/security/apparmor/profiles 2>/dev/null | head -1)
+  kern=$(grep -E '^/usr/sbin/mysqld \(' "$KERNEL_PROFILES" 2>/dev/null | head -1)
   local_prof=ABSENT; [ -e /etc/apparmor.d/local/usr.sbin.mysqld ] && local_prof=$(sha256sum -- /etc/apparmor.d/local/usr.sbin.mysqld | cut -d' ' -f1)
   echo "MAINPID=$pid;USR_SBIN_MYSQLD_PROFILE=$prof;LOCAL_OVERRIDE=$local_prof;KERNEL_PROFILE=${kern:-NONE}"
 }

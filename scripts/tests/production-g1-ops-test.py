@@ -1182,6 +1182,7 @@ HELPER, CONTRACT = "/usr/local/libexec/wpcaregrid-g1-mysql.py", "/usr/local/libe
 AP = "/root/wpcg-production-g1-mysql-ap-0123456"
 text = open("/src/go5p-sequence.sh").read()
 text = re.sub(r"(?m)^HELPER_PIN=[0-9a-f]{64}", "HELPER_PIN=" + sha(HELPERB), text)
+text = text.replace("KERNEL_PROFILES=/sys/kernel/security/apparmor/profiles", "KERNEL_PROFILES=/tmp/kernel-profiles")
 text = re.sub(r"(?m)^CONTRACT_OLD=[0-9a-f]{64}", "CONTRACT_OLD=" + sha(OLDC), text)
 text = re.sub(r"(?m)^CONTRACT_NEW=[0-9a-f]{64}", "CONTRACT_NEW=" + sha(NEWC), text)
 PKG = {"production-g1-mysql.py": b"h" + NL.encode(), "production_g1_mysql_contract.py": b"c" + NL.encode(),
@@ -1196,6 +1197,8 @@ STUB_PY = ("import os, sys" + NL + "name = os.path.basename(sys.argv[0]); args =
     "    what = open('/tmp/mutate').read().strip()" + NL +
     "    if what == 'pid': open('/tmp/mainpid', 'w').write('4242')" + NL +
     "    if what == 'profile': open('/etc/apparmor.d/usr.sbin.mysqld', 'w').write('changed')" + NL +
+    "    if what == 'kernel': open('/tmp/kernel-profiles', 'w').write('/usr/sbin/mysqld (complain)' + chr(10))" + NL +
+    "    if what == 'local': os.makedirs('/etc/apparmor.d/local', exist_ok=True); open('/etc/apparmor.d/local/usr.sbin.mysqld', 'w').write('x')" + NL +
     "raise SystemExit(3 if key in fail else 0)" + NL)
 STUB_SH = ("echo $(basename $0) >> /tmp/calls.log" + NL + "grep -qx $(basename $0) /tmp/fail 2>/dev/null && exit 3" + NL +
            "mkdir -p " + AP + NL)
@@ -1236,6 +1239,7 @@ def setup(contract=OLDC, helper=HELPERB, pkg=False, fail=(), ops_mode=0o700, con
     if pkg: build_package(None if pkg is True else pkg)
     open("/tmp/fail", "w").write(" ".join(fail))
     open("/tmp/mainpid", "w").write(pid)
+    open("/tmp/kernel-profiles", "w").write("wpcaregrid-mysql-production (enforce)" + NL + "/usr/sbin/mysqld (enforce)" + NL + "docker-default (enforce)" + NL)
     if mutate: open("/tmp/mutate", "w").write(mutate)
     open("/usr/bin/systemctl", "w").write(SYSTEMCTL); os.chmod("/usr/bin/systemctl", 0o755)
 
@@ -1273,6 +1277,8 @@ run("effective_config_fails", fail=("g1-effective-config-check.py",))
 run("probe_fails", fail=("go5p-confined-probe.sh",))
 run("mysql_pid_changes", mutate="pid")
 run("distribution_profile_changes", mutate="profile")
+run("loaded_distribution_profile_mode_changes", mutate="kernel")
+run("local_override_appears", mutate="local")
 run("mysql_service_pid_unavailable", pid="0")
 """
 
@@ -1514,7 +1520,7 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
         self.assertEqual(self.seqx["upgrade_fails_and_mysql_changed"], "G1_GO52C_BASELINE_UNCHANGED=NO")
 
     def test_sequence_proves_mysql_service_and_the_distribution_profile_unchanged(self):
-        for name in ("mysql_pid_changes", "distribution_profile_changes"):
+        for name in ("mysql_pid_changes", "distribution_profile_changes", "loaded_distribution_profile_mode_changes", "local_override_appears"):
             with self.subTest(name):
                 rc, last, calls = self.seq_result(name)
                 self.assertEqual((rc, last), ("rc=1", "G1_GO52C_SEQUENCE=STOP;STEP=mysql_service_or_distribution_profile_changed"))
@@ -1526,6 +1532,8 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
         for forbidden in ("provision-paths", "initialize", "rm ", "rmdir", "mv ", "chmod", "chown", "apparmor_parser", "verify-install",
                           "daemon-reload", "systemctl start", "systemctl stop", "systemctl restart", "systemctl reload", "/var/lib/mysql"):
             self.assertNotIn(forbidden, code, forbidden)
+        self.assertIn("grep -E '^/usr/sbin/mysqld \(' \"$KERNEL_PROFILES\"", code)
+        self.assertEqual(re.findall(r"(?m)^KERNEL_PROFILES=(.*)", code), ["/sys/kernel/security/apparmor/profiles"])
         self.assertEqual(re.findall(r"(?m)^HELPER_PIN=([0-9a-f]{64})", code), [HF2_HELPER])
         self.assertEqual(re.findall(r"(?m)^CONTRACT_OLD=([0-9a-f]{64})", code), [HF2_CONTRACT])
         self.assertEqual(re.findall(r"(?m)^CONTRACT_NEW=([0-9a-f]{64})", code), [sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())])
