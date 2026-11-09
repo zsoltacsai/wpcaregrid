@@ -132,6 +132,33 @@ STOP after a failed `install`: if the installer reports
 `install_rollback_incomplete_preserve_files`, nothing is deleted automatically; report and
 decide (the state is then exactly what `g1-state-check.py 328`/`clean` print).
 
+## GO-4b — log-directory hotfix of the installed helper (Owner approval; replaces two installed files)
+
+Why: the helper installed by GO-4 refuses `/var/log/mysql` unless it is `mysql:adm 02750`; Ubuntu 26.04.1
+ships `0750` and `provision-paths` stops with `managed_directory_mode_invalid` (nothing is created before that
+check). The hotfix package accepts exactly `0750` and `02750` (see the package document). The installer is
+no-overwrite, so GO-4b replaces **only** `/usr/local/libexec/wpcaregrid-g1-mysql.py` and
+`/usr/local/libexec/production_g1_mysql_manifest.json`; the contract, the option files, the AppArmor profiles and
+the systemd drop-ins stay byte-identical (the tool refuses to run otherwise). `<MERGE_SHA>` is the 40-hex merge
+commit of the hotfix pull request, `OPS` is the toolkit directory fetched by GO-0 from that same commit.
+
+```bash
+python3 -I -B "$OPS/g1-state-check.py" 328                   # G1_GO4_POSTINSTALL=PASS  (old installed state, nothing provisioned)
+bash "$OPS/go4b-fetch-hotfix-package.sh" <MERGE_SHA>         # G1_GO4B_DOWNLOAD=PASS    (new dir /root/wpcg-production-g1-mysql-hf-<sha7>)
+HF=/root/wpcg-production-g1-mysql-hf-<sha7>
+python3 -I -B "$OPS/go3-manifest-check.py" "$HF"             # G1_GO3_MANIFEST=PASS
+python3 -I -B "$OPS/go4b-upgrade-installed-helper.py" "$HF"  # G1_GO4B_HELPER_UPGRADE=PASS
+python3 -I -B "$OPS/g1-state-check.py" 328h                  # G1_GO4B_POSTUPGRADE=PASS
+python3 -I -B "$OPS/g1-effective-config-check.py"            # G1_EFFECTIVE_CONFIG=PASS
+```
+
+The upgrade tool checks before any write: the package files (hash-pinned, root-owned directory), the installed
+helper/contract/manifest (old pinned hashes, owner, mode, no symlink), both G1 units inactive and no leftover
+temporary file. Each file is replaced by a same-directory temporary file, `fsync` and atomic `rename`; afterwards
+the new helper's own `verify-install` must pass, otherwise the old bytes are restored (`ROLLED_BACK=yes`). A second
+run reports `NOTE=already_upgraded`. State `328` in `g1-state-check.py` is the old installed state, `328h` the
+hotfix state. `provision-paths` (GO-5.1) is a separate gate afterwards.
+
 ## GO-5 — runtime preparation (each step is its own Owner gate)
 
 `provision-paths` is the first step that creates instance paths. After it, the clean-state

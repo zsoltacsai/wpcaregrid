@@ -621,12 +621,94 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         self.assertIn("validate_resolved_options(instance, configured)", source)
         self.assertNotIn("if actual != value:", source)
 
+    # ---- shared /var/log/mysql directory (GO-5.1 hotfix) ---------------------------------
+    def _installer_with_accounts(self):
+        import types as _types
+        installer = self._load_installer()
+        names = {1: "root", 2: "mysql", 3: "other"}
+        groups = {10: "adm", 11: "root", 12: "mysql", 13: "other"}
+        installer.pwd = _types.SimpleNamespace(
+            getpwuid=lambda uid: _types.SimpleNamespace(pw_name=names[uid]),
+            getpwnam=lambda name: _types.SimpleNamespace(pw_uid=2))
+        installer.grp = _types.SimpleNamespace(
+            getgrgid=lambda gid: _types.SimpleNamespace(gr_name=groups[gid]),
+            getgrnam=lambda name: _types.SimpleNamespace(gr_gid=12))
+        return installer
+
+    @staticmethod
+    def _fake_dir(mode, uid=2, gid=10, kind=None):
+        import stat as _stat
+        import types as _types
+        kind = _stat.S_IFDIR if kind is None else kind
+        return _types.SimpleNamespace(lstat=lambda: _types.SimpleNamespace(st_mode=kind | mode, st_uid=uid, st_gid=gid))
+
+    def test_shared_log_directory_accepts_exactly_0750_and_02750_for_mysql_adm(self):
+        installer = self._installer_with_accounts()
+        self.assertEqual(installer.SHARED_LOG_DIR_MODES, frozenset({0o750, 0o2750}))
+        self.assertEqual(str(installer.SHARED_LOG_DIR).replace("\\", "/"), "/var/log/mysql")
+        for mode in (0o750, 0o2750):
+            with self.subTest(mode=oct(mode)):
+                installer.check_directory(self._fake_dir(mode), owner="mysql", group="adm",
+                                          mode=installer.SHARED_LOG_DIR_MODES)
+        for mode in (0o700, 0o751, 0o755, 0o770, 0o775, 0o777, 0o2770, 0o2755, 0o1750, 0o3750, 0o4750, 0o6750, 0o640):
+            with self.subTest(rejected=oct(mode)):
+                with self.assertRaises(installer.Refused) as caught:
+                    installer.check_directory(self._fake_dir(mode), owner="mysql", group="adm",
+                                              mode=installer.SHARED_LOG_DIR_MODES)
+                self.assertEqual(str(caught.exception), "managed_directory_mode_invalid")
+
+    def test_shared_log_directory_still_requires_mysql_adm_a_real_directory_and_no_symlink(self):
+        import stat as _stat
+        installer = self._installer_with_accounts()
+        modes = installer.SHARED_LOG_DIR_MODES
+        for uid, gid, code in ((3, 10, "managed_directory_owner_invalid"), (1, 10, "managed_directory_owner_invalid"),
+                               (2, 12, "managed_directory_owner_invalid"), (2, 13, "managed_directory_owner_invalid"),
+                               (2, 11, "managed_directory_owner_invalid")):
+            with self.subTest(uid=uid, gid=gid):
+                with self.assertRaises(installer.Refused) as caught:
+                    installer.check_directory(self._fake_dir(0o750, uid, gid), owner="mysql", group="adm", mode=modes)
+                self.assertEqual(str(caught.exception), code)
+        for kind in (_stat.S_IFLNK, _stat.S_IFREG):
+            with self.subTest(kind=kind):
+                with self.assertRaises(installer.Refused) as caught:
+                    installer.check_directory(self._fake_dir(0o750, 2, 10, kind), owner="mysql", group="adm", mode=modes)
+                self.assertEqual(str(caught.exception), "managed_directory_type_invalid")
+
+    def test_integer_mode_checks_of_all_other_managed_directories_stay_exact(self):
+        installer = self._installer_with_accounts()
+        installer.check_directory(self._fake_dir(0o755, 1, 11), owner="root", group="root", mode=0o755)
+        for mode in (0o2755, 0o750, 0o775, 0o700, 0o1755):
+            with self.subTest(mode=oct(mode)):
+                with self.assertRaises(installer.Refused) as caught:
+                    installer.check_directory(self._fake_dir(mode, 1, 11), owner="root", group="root", mode=0o755)
+                self.assertEqual(str(caught.exception), "managed_directory_mode_invalid")
+
+    def test_provision_paths_checks_the_four_shared_directories_with_unchanged_strictness(self):
+        installer = self._installer_with_accounts()
+        calls = []
+
+        def spy(path, *, owner, group, mode):
+            calls.append((str(path).replace("\\", "/"), owner, group, mode))
+            if len(calls) == 4:
+                raise installer.Refused("spy_stop_after_shared_directories")
+
+        with mock.patch.object(installer, "require_root"), mock.patch.object(installer, "verify_static_install"),                 mock.patch.object(installer, "_systemd_inactive"), mock.patch.object(installer, "check_directory", spy):
+            with self.assertRaises(installer.Refused) as caught:
+                installer.provision_paths()
+        self.assertEqual(str(caught.exception), "spy_stop_after_shared_directories")
+        self.assertEqual(calls, [
+            ("/var/lib", "root", "root", 0o755),
+            ("/var/log/mysql", "mysql", "adm", frozenset({0o750, 0o2750})),
+            ("/var/tmp", "root", "root", 0o1777),
+            ("/run/mysqld", "mysql", "mysql", 0o755),
+        ])
+
     def test_downloaded_artifacts_have_exact_bytes_and_valid_provenance(self):
         files = {
             "production-g1-mysql.py": b"#!",
             "production_g1_mysql_contract.py": b"#!",
             "production-g1-mysql-manifest.json": b"{",
-            "SHA256SUMS": b"5",
+            "SHA256SUMS": b"4",
         }
         for name, prefix in files.items():
             with self.subTest(name=name):
@@ -635,14 +717,14 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
                 self.assertFalse(payload.startswith(b"_"))
 
         expected = {
-            "production-g1-mysql.py": "5bddfcc886c8f94653f1aa9c55c63da7dca259042156db3e7e8a5378639e215a",
+            "production-g1-mysql.py": "457ddb292f2ddf1f094375254a031de3bb6a450838cb201429363cb2397f02da",
             "production_g1_mysql_contract.py": "45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3",
-            "production-g1-mysql-manifest.json": "87f7aa3a8acee74fbf0bb697ec5e93b540fe9484927bab4212b24df71e2d22e9",
+            "production-g1-mysql-manifest.json": "290ed20acfdac72f4150f572521b8f0e6564de33f7ff2979fc5b5a2381410732",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "d5f82bddd2d908b84062bfb8c115c92478df2e26a14b424f4006d913dd219a92")
+                         "01f803d3628b47f11719751e365ab95bc664189d8dfcb457bf0fec8eb460e8e2")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):

@@ -67,6 +67,11 @@ SYSTEMCTL = Path("/usr/bin/systemctl")
 AA_EXEC = Path("/usr/bin/aa-exec")
 MANAGED_VERSION = "wpcaregrid-production-mysql-g1-v1"
 LEGACY_MYSQL_SERVER_UUID_SHA256 = "bc35682d80f0894c2c2c2879552fb8fe13dc2a530868d79d817a6280e31bde1c"
+# Shared log directory of the distribution. Ubuntu 26.04 / MySQL 8.4.13 ships it as mysql:adm 0750; older
+# packages used 02750 (setgid). Both give no write access to the group and no access to others. The G1 log
+# files are created with an explicit owner/group by `provision-paths`, so the setgid bit is not relied on.
+SHARED_LOG_DIR = Path("/var/log/mysql")
+SHARED_LOG_DIR_MODES = frozenset({0o750, 0o2750})
 ALLOWED_CREATE_DIRS = {
     Path("/usr/local/libexec"),
     Path("/etc/systemd/system/mysql@wpcaregrid-production.service.d"),
@@ -126,14 +131,15 @@ def check_file(path: Path, *, owner: str, group: str, mode: int, expected: bytes
     return data
 
 
-def check_directory(path: Path, *, owner: str, group: str, mode: int) -> None:
+def check_directory(path: Path, *, owner: str, group: str, mode: int | frozenset[int]) -> None:
+    allowed_modes = frozenset({mode}) if isinstance(mode, int) else mode
     try:
         st = path.lstat()
         if not stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode):
             refuse("managed_directory_type_invalid")
         if pwd.getpwuid(st.st_uid).pw_name != owner or grp.getgrgid(st.st_gid).gr_name != group:
             refuse("managed_directory_owner_invalid")
-        if stat.S_IMODE(st.st_mode) != mode:
+        if stat.S_IMODE(st.st_mode) not in allowed_modes:
             refuse("managed_directory_mode_invalid")
     except Refused:
         raise
@@ -755,7 +761,7 @@ def provision_paths() -> None:
     requested = provisioning_path_specs()
     for path, owner, group, mode in (
         (Path("/var/lib"), "root", "root", 0o755),
-        (Path("/var/log/mysql"), "mysql", "adm", 0o2750),
+        (SHARED_LOG_DIR, "mysql", "adm", SHARED_LOG_DIR_MODES),
         (Path("/var/tmp"), "root", "root", 0o1777),
         (Path("/run/mysqld"), "mysql", "mysql", 0o755),
     ):
