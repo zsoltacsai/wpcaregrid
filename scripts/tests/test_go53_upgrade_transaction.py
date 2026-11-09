@@ -25,13 +25,14 @@ class TxTests(unittest.TestCase):
   for d in (self.data1,self.data2): (d/'data').write_bytes(b'data');(d/'data').chmod(0o600)
   for p,b in self.new.items():(self.pkg/go.NAMES[p]).write_bytes(b)
   sums=''.join(f'{go.sha(b)}  {go.NAMES[p]}\n' for p,b in self.new.items());(self.pkg/'SHA256SUMS').write_text(sums);self.pkg.chmod(0o700)
-  self.calls=[];self.active_unit=False
+  self.calls=[];self.active_unit=False;self.activate_after_verify=False
  def tearDown(self):
   (go.LIBEXEC,go.HELPER,go.MANIFEST,go.CONTRACT,go.PROFILE_P,go.PROFILE_R,go.DATADIRS,go.LOGS,go.JOURNAL,go.OLD,go.NEW,go.PINS,go.NAMES,go.MODES,go.UNITS)=self.orig
   self.t.cleanup()
  def runner(self,args):
   self.calls.append(args)
   if self.active_unit and args[1:2]==['is-active']:return types.SimpleNamespace(returncode=0,stdout='active')
+  if self.activate_after_verify and args[1:2]==['is-active'] and any('STATIC_PREFLIGHT' in c for call in self.calls for c in call):return types.SimpleNamespace(returncode=0,stdout='active')
   if args[1:2]==['show']:return types.SimpleNamespace(returncode=0,stdout='1131\n')
   if args[1:2]==['is-active']:return types.SimpleNamespace(returncode=3,stdout='inactive')
   if args[0].endswith('python3') or args[0].endswith('python'):
@@ -84,5 +85,18 @@ class TxTests(unittest.TestCase):
  def test_symlink_in_datadir_is_rejected(self):
   target=self.root/'outside';target.write_text('secret');(self.data1/'link').symlink_to(target)
   with self.assertRaisesRegex(go.Stop,'datadir_symlink'):self.install()
+ def test_traversal_error_fails_closed(self):
+  original=go.os.fwalk
+  def denied(*args,**kwargs):
+   kwargs['onerror'](PermissionError('injected'))
+   return iter(())
+  go.os.fwalk=denied
+  try:
+   with self.assertRaisesRegex(go.Stop,'datadir_traversal_failed'):self.install()
+  finally:go.os.fwalk=original
+ def test_unit_activation_during_verification_blocks_success(self):
+  self.activate_after_verify=True
+  with self.assertRaisesRegex(go.Stop,'g1_unit_not_inactive'):self.install()
+  self.assertEqual([Path(p).read_bytes() for p in self.paths.values()],list(self.old.values()))
 
 if __name__=='__main__':unittest.main(verbosity=2)

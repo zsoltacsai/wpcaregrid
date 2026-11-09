@@ -9,7 +9,7 @@ CONTRACT=LIBEXEC+'/production_g1_mysql_contract.py'
 PROFILE_P='/etc/apparmor.d/wpcaregrid-mysql-production'
 PROFILE_R='/etc/apparmor.d/wpcaregrid-mysql-production-restore'
 DATADIRS=('/var/lib/mysql-wpcaregrid-production','/var/lib/mysql-wpcaregrid-production-restore')
-LOGS=('/var/log/mysql-wpcaregrid-production/error.log','/var/log/mysql-wpcaregrid-production-restore/error.log')
+LOGS=('/var/log/mysql/wpcaregrid-production.log','/var/log/mysql/wpcaregrid-production-restore.log')
 OLD={HELPER:'32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e',MANIFEST:'70490acf887f3222ffaa0087c215826dc70a8b8cda7016d0f8807b7099cab6cb'}
 NEW={HELPER:'27c7e1e6ba8536f7f64e9a4bd53ed31fe846678ff05b0a051ca2ca7abe705e1b',MANIFEST:'0af365c9515e2eff34d552c185c8d46fff3a5d5f7cade6d1ab3c0de1809ef911'}
 PINS={CONTRACT:'270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f',PROFILE_P:'9a40053158880f0e6baf0db06431587651701487910634015e712e878dcfe13d',PROFILE_R:'ce56847e98f23b45590aaf55ad069df89f97dc12b672c2a289bb0fa7fb923b3e'}
@@ -59,7 +59,8 @@ def tree_fingerprint(path):
  out=[]
  mysql_owner=(pwd.getpwnam('mysql').pw_uid,grp.getgrnam('mysql').gr_gid)
  if (root.st_uid,root.st_gid)!=mysql_owner or stat.S_IMODE(root.st_mode)&0o022:raise Stop('datadir_owner_or_mode_invalid')
- for base,dirs,files,dirfd in os.fwalk(path,topdown=True,follow_symlinks=False):
+ def walk_error(exc):raise Stop('datadir_traversal_failed')
+ for base,dirs,files,dirfd in os.fwalk(path,topdown=True,follow_symlinks=False,onerror=walk_error):
   dirs.sort();files.sort()
   for n in dirs+files:
    s=os.stat(n,dir_fd=dirfd,follow_symlinks=False);rel=os.path.relpath(os.path.join(base,n),path)
@@ -123,9 +124,7 @@ def main(pkg,runfn=run,euid=None,replace=atomic,hook=None):
  logs=[sha(read_mysql_log(p)) for p in LOGS]
  current={p:read(p,MODES[p]) for p in (HELPER,MANIFEST)}; state={p:sha(b) for p,b in current.items()}
  already=all(state[p]==NEW[p] for p in NEW)
- for u in UNITS:
-  x=runfn(['/usr/bin/systemctl','is-active',u])
-  if x.returncode!=3 or x.stdout.strip()!='inactive':raise Stop('g1_unit_not_inactive')
+ assert_units_inactive(runfn)
  j=journal_state()
  if j:
   if any(state[p] not in (OLD[p],NEW[p]) for p in OLD):raise Stop('journal_file_state_unknown_manual_recovery_required')
@@ -143,6 +142,7 @@ def main(pkg,runfn=run,euid=None,replace=atomic,hook=None):
   current={p:read(p,MODES[p]) for p in OLD};state={p:sha(b) for p,b in current.items()}
  if not already and any(state[p]!=OLD[p] for p in OLD):raise Stop('installed_baseline_mismatch')
  def invariants():
+  assert_units_inactive(runfn)
   if read_pid(runfn)!=before_pid:raise Stop('mysql_mainpid_changed')
   if [tree_fingerprint(p) for p in DATADIRS]!=datadirs:raise Stop('datadir_changed')
   if [sha(read_mysql_log(p)) for p in LOGS]!=logs:raise Stop('mysql_logs_changed')
@@ -157,7 +157,9 @@ def main(pkg,runfn=run,euid=None,replace=atomic,hook=None):
   p=runfn(['/usr/bin/python3','-I','-B','-c',code])
   if p.returncode or 'STATIC_PREFLIGHT=PASS' not in p.stdout:raise Stop('instance_static_preflight_failed')
  if already:
-  verify();invariants();return 'G1_GO53_HELPER_UPGRADE=PASS;NOTE=already_upgraded'
+  verify();invariants()
+  if any(sha(read(p,MODES[p]))!=NEW[p] for p in NEW):raise Stop('target_hash_missing_before_pass')
+  return 'G1_GO53_HELPER_UPGRADE=PASS;NOTE=already_upgraded'
  try:
   journal={'schema':1,'phase':'prepared','old':OLD,'new':NEW,'backup':{p:base64.b64encode(current[p]).decode('ascii') for p in OLD}}
   durable_json(JOURNAL,journal)
@@ -166,6 +168,7 @@ def main(pkg,runfn=run,euid=None,replace=atomic,hook=None):
   replace(MANIFEST,package[MANIFEST],MODES[MANIFEST],hook)
   if any(sha(read(p,MODES[p]))!=NEW[p] for p in NEW):raise Stop('post_write_hash_mismatch')
   verify();invariants()
+  if any(sha(read(p,MODES[p]))!=NEW[p] for p in NEW):raise Stop('target_hash_missing_before_pass')
   journal['phase']='committed';durable_json(JOURNAL,journal)
   os.unlink(JOURNAL); d=os.open(LIBEXEC,os.O_RDONLY|os.O_DIRECTORY);os.fsync(d);os.close(d)
  except BaseException as exc:
@@ -187,6 +190,10 @@ def read_pid(runfn):
  x=runfn(['/usr/bin/systemctl','show','--property=MainPID','--value','mysql.service'])
  if x.returncode or not x.stdout.strip().isdigit():raise Stop('mysql_mainpid_unavailable')
  return x.stdout.strip()
+def assert_units_inactive(runfn):
+ for u in UNITS:
+  x=runfn(['/usr/bin/systemctl','is-active',u])
+  if x.returncode!=3 or x.stdout.strip()!='inactive':raise Stop('g1_unit_not_inactive')
 if __name__=='__main__':
  try:
   if len(sys.argv)!=2:raise Stop('usage')
