@@ -29,7 +29,8 @@ final class StagingWorkerQueuePolicy
         $connection = (string) config('queue.default');
         if (! is_array($settings)
             || ($settings['queue'] ?? null) !== self::ACTIVE_STAGING_NEXT_QUEUE
-            || ($settings['connection'] ?? null) !== $connection) {
+            || ($settings['connection'] ?? null) !== $connection
+            || config("queue.connections.{$connection}.queue") !== self::ACTIVE_STAGING_NEXT_QUEUE) {
             return [];
         }
 

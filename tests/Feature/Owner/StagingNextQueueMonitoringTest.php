@@ -62,6 +62,20 @@ final class StagingNextQueueMonitoringTest extends TestCase
         $this->assertSame(false, $backups->evidence['worker_enabled']);
     }
 
+    public function test_staging_next_does_not_dispatch_a_pulse_when_the_active_queue_identity_mismatches(): void
+    {
+        config([
+            'app.deployment_environment' => 'staging_next',
+            'queue.connections.database.queue' => 'backups',
+        ]);
+        Queue::fake();
+
+        $method = new ReflectionMethod(RunMonitoring::class, 'workers');
+        $method->invoke(app(RunMonitoring::class), app(MonitoringEngine::class));
+
+        $this->assertCount(0, Queue::pushed(RecordWorkerPulse::class));
+    }
+
     public function test_production_and_legacy_staging_continue_to_monitor_both_configured_workers(): void
     {
         foreach (['production', 'staging'] as $environment) {
