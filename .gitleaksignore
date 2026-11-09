@@ -1,1 +1,10 @@
 99fcfa6f594e618a55577a6aff0058c11242a7fe:reports/m9-platform-dr/closure-risk-register.md:generic-api-key:8
+# Stripe Catalogue Manager (PR #344): synthetic test-fixture keys (never real) in two history commits that cannot be rewritten.
+# The files now use the accepted sk_test_unit convention; these are the 7 exact historical findings, nothing else.
+3ae677732116c6d9efef3a992efe10d715edc592:tests/Feature/Owner/StripeCatalogueTest.php:stripe-access-token:382
+919235357507771bde04797d21002b2f02185368:tests/Feature/StripeApiCatalogueGatewayTest.php:stripe-access-token:18
+919235357507771bde04797d21002b2f02185368:tests/Feature/Owner/StripeCatalogueTest.php:stripe-access-token:33
+919235357507771bde04797d21002b2f02185368:tests/Feature/Owner/StripeCatalogueTest.php:stripe-access-token:47
+919235357507771bde04797d21002b2f02185368:tests/Feature/Owner/StripeCatalogueTest.php:stripe-access-token:408
+919235357507771bde04797d21002b2f02185368:tests/Feature/Owner/StripeCatalogueTest.php:stripe-access-token:420
+919235357507771bde04797d21002b2f02185368:tests/Feature/Owner/StripeCatalogueTest.php:stripe-access-token:445

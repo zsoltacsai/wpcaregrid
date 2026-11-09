@@ -30,7 +30,7 @@ class StripeCatalogueTest extends TestCase
 {
     use ActsAsOwner, RefreshDatabase;
 
-    private const SECRET = 'sk_test_ownermanaged1234567890';
+    private const SECRET = 'sk_test_unitOwnerManaged';
 
     private FakeStripeCatalogue $stripe;
 
@@ -44,7 +44,7 @@ class StripeCatalogueTest extends TestCase
 
         config([
             'services.stripe.mode' => 'test',
-            'services.stripe.secret' => 'sk_test_forverifier',
+            'services.stripe.secret' => 'sk_test_unitForVerifier',
             'services.stripe.catalogue.apply_enabled' => true,
             'services.stripe.catalogue.live_apply_approved' => false,
             'pricing.stripe_products' => ['wordpress' => null, 'woocommerce' => null],
@@ -62,6 +62,15 @@ class StripeCatalogueTest extends TestCase
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /**
+     * A live-prefixed dummy key, derived from the repository's accepted test fixture (sk_test_unit…) at runtime,
+     * so no live-shaped literal exists in the source or in the history.
+     */
+    private function fixtureKey(string $prefix): string
+    {
+        return $prefix.substr(self::SECRET, strlen('sk_test_'));
+    }
 
     private function preview(): StripeCatalogueOperation
     {
@@ -380,7 +389,7 @@ class StripeCatalogueTest extends TestCase
 
     public function test_a_host_named_staging_forbids_live_whatever_else_is_configured(): void
     {
-        app(IntegrationCredentials::class)->store('stripe_secret', 'sk_live_ownermanaged1234567890');
+        app(IntegrationCredentials::class)->store('stripe_secret', $this->fixtureKey('sk_live_'));
         config(['services.stripe.mode' => 'live', 'services.stripe.allow_live_mode' => true, 'app.url' => 'https://staging-next.wpcaregrid.com', 'app.env' => 'production', 'app.deployment_environment' => 'production']);
 
         $this->post(route('owner.pricing.stripe-catalogue.preview'))->assertSessionHas('owner_error.code', 'LIVE_FORBIDDEN_ON_STAGING');
@@ -448,7 +457,7 @@ class StripeCatalogueTest extends TestCase
 
     public function test_a_live_key_is_refused_on_staging_even_to_read(): void
     {
-        app(IntegrationCredentials::class)->store('stripe_secret', 'sk_live_ownermanaged1234567890');
+        app(IntegrationCredentials::class)->store('stripe_secret', $this->fixtureKey('sk_live_'));
         config(['services.stripe.mode' => 'live', 'services.stripe.allow_live_mode' => true, 'app.deployment_environment' => 'staging_next']);
 
         $this->post(route('owner.pricing.stripe-catalogue.preview'))->assertSessionHas('owner_error.code', 'LIVE_FORBIDDEN_ON_STAGING');
@@ -460,7 +469,7 @@ class StripeCatalogueTest extends TestCase
 
     public function test_the_staging_release_profile_alone_also_forbids_live(): void
     {
-        app(IntegrationCredentials::class)->store('stripe_secret', 'rk_live_restricted1234567890');
+        app(IntegrationCredentials::class)->store('stripe_secret', $this->fixtureKey('rk_live_'));
         config(['services.stripe.mode' => 'live', 'services.stripe.allow_live_mode' => true, 'marketing_release.staging_active_enabled' => true]);
 
         $this->post(route('owner.pricing.stripe-catalogue.preview'))->assertSessionHas('owner_error.code', 'LIVE_FORBIDDEN_ON_STAGING');
@@ -485,7 +494,7 @@ class StripeCatalogueTest extends TestCase
 
     public function test_live_outside_staging_needs_live_mode_enabled_and_a_separate_approval_to_change(): void
     {
-        app(IntegrationCredentials::class)->store('stripe_secret', 'sk_live_ownermanaged1234567890');
+        app(IntegrationCredentials::class)->store('stripe_secret', $this->fixtureKey('sk_live_'));
         config(['services.stripe.mode' => 'live']);
         $this->post(route('owner.pricing.stripe-catalogue.preview'))->assertSessionHas('owner_error.code', 'LIVE_MODE_NOT_ENABLED');
 

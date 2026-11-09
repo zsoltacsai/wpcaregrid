@@ -15,12 +15,6 @@ regexes = [
   '''test-access-key''',
   '''sk_test_unit[A-Za-z_]*''',
   '''sk_test_SECRET_STRIPE_KEY_123''',
-  # Stripe Catalogue Manager tests: exact dummy keys that only exist in tests (docs/STRIPE_CATALOGUE.md).
-  '''sk_test_ownermanaged1234567890''',
-  '''sk_test_gatewaysecret1234567890''',
-  '''sk_test_forverifier''',
-  '''sk_live_ownermanaged1234567890''',
-  '''rk_live_restricted1234567890''',
   '''pk_test_PUBLISHABLE_456''',
   '''whsec_WEBHOOK_SECRET_789''',
   '''whsec_test[A-Za-z0-9_]*''',
