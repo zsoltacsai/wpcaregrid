@@ -136,7 +136,7 @@ final class SystemStatus
         ] + $details;
 
         $critical = $identity !== [] || $database !== [] || in_array('stripe_secret_not_test', $stripe, true)
-            || in_array('stripe_publishable_not_test', $stripe, true) || in_array('stripe_live_mode_allowed', $stripe, true);
+            || in_array('stripe_publishable_not_test', $stripe, true) || in_array('stripe_live_mode_allowed', $stripe, true) || in_array('stripe_mode_not_test', $stripe, true);
         $attention = $stripe !== [] || (! $sink && $allowlisted === 0);
 
         return new StatusCheck('staging_isolation', match (true) {

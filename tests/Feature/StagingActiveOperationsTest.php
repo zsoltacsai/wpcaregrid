@@ -11,6 +11,9 @@ use App\Monitoring\MonitoringEngine;
 use App\Monitoring\WebsiteProbe;
 use App\Owner\StatusCheck;
 use App\Owner\SystemStatus;
+use App\Pricing\StripeCatalogue\CatalogueGuard;
+use App\Pricing\StripeCatalogue\CatalogueRefused;
+use App\Pricing\StripeCatalogue\StripeMode;
 use App\Release\StagingActiveProfile;
 use App\Release\StagingDatabaseProbe;
 use App\SyntheticFixtures\SyntheticFixturePolicy;
@@ -165,6 +168,60 @@ class StagingActiveOperationsTest extends TestCase
         config(['marketing_release.staging_active_features.external_services' => true]);
         collect(app(SystemStatus::class)->checks())->firstWhere('key', 'cloudflare');
         Http::assertSentCount(1);
+    }
+
+    public function test_an_unknown_or_incomplete_stripe_configuration_cannot_run_a_catalogue_operation(): void
+    {
+        config([
+            'app.deployment_environment' => 'staging_next', 'app.env' => 'staging', 'app.url' => 'https://staging-next.wpcaregrid.com',
+            'marketing_release.requested_profile' => 'staging_active', 'marketing_release.staging_active_enabled' => true,
+            'services.stripe.allow_live_mode' => false, 'services.stripe.key' => null,
+            'services.stripe.catalogue.apply_enabled' => false, 'services.stripe.catalogue.live_apply_approved' => false,
+        ]);
+        $profile = app(StagingActiveProfile::class);
+        $writes = [['POST', '/owner/pricing/stripe-catalogue/preview'], ['POST', '/owner/pricing/stripe-catalogue/products/wordpress'], ['POST', '/owner/pricing/stripe-catalogue/1/apply']];
+
+        // [secret, configured mode, reason the catalogue guard gives]. Both layers must refuse each one.
+        $unproven = [
+            'no key' => [null, 'test', 'stripe_not_configured'],
+            'empty key' => ['', 'test', 'stripe_not_configured'],
+            'unknown key' => ['not-a-stripe-key', 'test', 'key_mode_unknown'],
+            'live key, test mode configured' => ['sk_live_unit', 'test', 'key_mode_mismatch'],
+            'live key, live mode configured, on staging' => ['sk_live_unit', 'live', 'live_forbidden_on_staging'],
+            'restricted live key on staging' => ['rk_live_unit', 'live', 'live_forbidden_on_staging'],
+            'test key, live mode configured' => ['sk_test_unit', 'live', 'key_mode_mismatch'],
+        ];
+        foreach ($unproven as $label => [$secret, $mode, $reason]) {
+            config(['services.stripe.secret' => $secret, 'services.stripe.mode' => $mode]);
+
+            foreach ($writes as [$method, $path]) {
+                $group = $profile->groupFor($path, $method);
+                $this->assertSame(StagingActiveProfile::GROUP_STRIPE, $group, $path);
+                $this->assertFalse($profile->groupOpen($group, $path), "{$label}: the staging gate must close {$method} {$path}");
+            }
+            try {
+                app(CatalogueGuard::class)->mode();
+                $this->fail("{$label}: the catalogue guard must refuse");
+            } catch (CatalogueRefused $refused) {
+                $this->assertSame($reason, $refused->reason, $label);
+            }
+        }
+
+        // Proven test-mode keys open the route fence, but a change still needs the Owner's apply switch (off by default).
+        config(['services.stripe.secret' => 'sk_test_unit', 'services.stripe.key' => 'pk_test_unit', 'services.stripe.mode' => 'test']);
+        foreach ($writes as [$method, $path]) {
+            $this->assertTrue($profile->groupOpen(StagingActiveProfile::GROUP_STRIPE, $path), "{$method} {$path}");
+        }
+        $this->assertSame(StripeMode::Test, app(CatalogueGuard::class)->mode());
+        try {
+            app(CatalogueGuard::class)->assertCanWrite(StripeMode::Test);
+            $this->fail('changing the catalogue needs STRIPE_CATALOGUE_APPLY_ENABLED');
+        } catch (CatalogueRefused $refused) {
+            $this->assertSame('apply_disabled', $refused->reason);
+        }
+        // The pages that only read local data are not part of the Stripe group.
+        $this->assertNull($profile->groupFor('/owner/pricing/stripe-catalogue', 'GET'));
+        $this->assertNull($profile->groupFor('/owner/pricing/stripe-catalogue/1', 'GET'));
     }
 
     public function test_monitoring_does_not_probe_customer_websites_from_staging_next(): void
