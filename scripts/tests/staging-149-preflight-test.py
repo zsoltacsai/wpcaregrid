@@ -105,7 +105,7 @@ class Fixture(unittest.TestCase):
         self.put("/usr/local/libexec/wpcaregrid-deploy/staging-next", directory=True, mode=0o755)
         self.put("/etc/wpcaregrid-deploy/profiles", directory=True, mode=0o755)
         self.put("/etc/sudoers.d", directory=True, mode=0o755)
-        self.put("/etc/passwd", f"deploy:x:{UID + 1}:{UID + 1}::/home/deploy:/bin/bash\n"
+        self.put("/etc/passwd", f"deploy:x:{UID}:{UID}::/home/deploy:/bin/bash\n"
                                 f"deploy-staging-next:x:{UID + 7}:{UID + 7}::/nonexistent:/usr/sbin/nologin\n")
         self.put("/var/lib/mysql/auto.cnf", "[auto]\nserver-uuid=11111111-2222-3333-4444-555555555555\n")
 
@@ -118,7 +118,7 @@ class Fixture(unittest.TestCase):
         if name == "php8.5":
             return 0, self.php_version
         if name == "supervisorctl":
-            return 2, f"{argv[-1]}: ERROR (no such process)\n".encode()
+            return self.extra_run.get("supervisorctl", (0, b"legacy-default   RUNNING   pid 12, uptime 1:00:00\n"))
         if name == "visudo":
             return self.extra_run.get("visudo", (0, b"/etc/sudoers: parsed OK\n"))
         if name == "ps":
@@ -233,7 +233,7 @@ class OutcomeTests(Fixture):
         self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=sudoers_syntax")
 
     def build_passwd(self):
-        self.put("/etc/passwd", f"deploy:x:{UID + 1}:{UID + 1}::/h:/bin/sh\n"
+        self.put("/etc/passwd", f"deploy:x:{UID}:{UID}::/h:/bin/sh\n"
                                 f"deploy-staging-next:x:{UID + 7}:{UID + 7}::/n:/sbin/nologin\n")
 
 
@@ -312,10 +312,12 @@ class StopConditionTests(Fixture):
                  "deploy ALL=(root) NOPASSWD: /usr/local/libexec/wpcaregrid-deploy-priv preflight\n", 0o440)
         self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
 
-    def test_unexpected_rule_text_is_shown_for_diagnosis(self):
-        self.put("/etc/sudoers.d/wpcaregrid-extra", "deploy-staging-next ALL=(ALL) NOPASSWD: ALL\n", 0o440)
+    def test_unexpected_rule_is_located_by_file_and_line_without_printing_its_text(self):
+        self.put("/etc/sudoers.d/wpcaregrid-extra", "# c\ndeploy-staging-next ALL=(ALL) NOPASSWD: ALL\n", 0o440)
         _, _, lines = self.result()
-        self.assertTrue(any("rule[deploy-staging-next ALL=(ALL) NOPASSWD: ALL]" in line for line in lines))
+        text = "\n".join(lines)
+        self.assertIn("wpcaregrid-extra:rule@2", text)
+        self.assertNotIn("NOPASSWD", text)
 
     def test_long_procfs_style_reads_are_complete(self):
         big = "x" * 200000
@@ -331,6 +333,121 @@ class StopConditionTests(Fixture):
         os.unlink(self.path("/usr/bin/php8.5"))
         self.put("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.9.json", b"{}")
         self.stop("phase_b_policy_present")
+
+
+class HardeningRoundTests(Fixture):
+    def test_symlinked_nginx_includes_inside_the_nginx_tree_are_followed(self):
+        os.unlink(self.path("/etc/nginx/conf.d/sites.conf"))
+        self.put("/etc/nginx/sites-available/staging", VHOST)
+        os.makedirs(self.path("/etc/nginx/sites-enabled"))
+        os.symlink(self.path("/etc/nginx/sites-available/staging"), self.path("/etc/nginx/sites-enabled/staging"))
+        self.put("/etc/nginx/nginx.conf", "http { include /etc/nginx/sites-enabled/*; }")
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+
+    def test_symlinked_nginx_include_leaving_the_nginx_tree_is_unknown_blocked(self):
+        os.unlink(self.path("/etc/nginx/conf.d/sites.conf"))
+        self.put("/elsewhere/vhost.conf", VHOST)
+        os.symlink(self.path("/elsewhere/vhost.conf"), self.path("/etc/nginx/conf.d/sites.conf"))
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=nginx_route_unknown")
+
+    def test_server_level_fastcgi_without_a_php_location_is_not_a_route(self):
+        self.put("/etc/nginx/conf.d/sites.conf",
+                 "server { listen 443 ssl; server_name staging-next.wpcaregrid.com; "
+                 "fastcgi_pass unix:/run/php/php8.5-fpm.sock; }")
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=nginx_route_mismatch")
+
+    def test_server_level_fastcgi_must_also_match(self):
+        self.put("/etc/nginx/conf.d/sites.conf",
+                 "server { listen 443 ssl; server_name staging-next.wpcaregrid.com; "
+                 "fastcgi_pass unix:/run/php/php8.4-fpm.sock; location ~ php$ { fastcgi_pass unix:/run/php/php8.5-fpm.sock; } }")
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=nginx_route_mismatch")
+
+    def test_supervisor_connection_errors_are_unknown_not_clear(self):
+        self.extra_run["supervisorctl"] = (3, b"unix:///var/run/supervisor.sock no such file\n")
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=worker_state_unknown")
+        self.extra_run["supervisorctl"] = (1, b"error: <class 'ConnectionRefusedError'>\n")
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=worker_state_unknown")
+        del self.extra_run["supervisorctl"]
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+
+    def test_running_or_grouped_staging_next_workers_stop(self):
+        for row in (b"wpcaregrid-staging-next-default   RUNNING  pid 1, uptime 0:01\n",
+                    b"wpcaregrid-staging-next-backups:wpcaregrid-staging-next-backups_00   STARTING\n"):
+            self.extra_run["supervisorctl"] = (0, row)
+            final, _, _ = self.result()
+            self.assertEqual(final, "STAGING_149_PREFLIGHT=STOP;CODE=worker_running")
+        self.extra_run["supervisorctl"] = (0, b"wpcaregrid-staging-next-default   STOPPED  Nov 09 01:00 AM\n")
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+
+    def test_sudoers_symlinks_includes_and_main_file_rules_stop(self):
+        self.put("/elsewhere/rules", "deploy-staging-next ALL=(ALL) NOPASSWD: ALL\n")
+        os.symlink(self.path("/elsewhere/rules"), self.path("/etc/sudoers.d/90-misc"))
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=STOP;CODE=unexpected_sudoers_state")
+        os.unlink(self.path("/etc/sudoers.d/90-misc"))
+        self.put("/etc/sudoers.d/91-inc", "#include /etc/other\n", 0o440)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=STOP;CODE=unexpected_sudoers_state")
+        os.unlink(self.path("/etc/sudoers.d/91-inc"))
+        self.put("/etc/sudoers", "root ALL=(ALL:ALL) ALL\n@includedir /etc/sudoers.d\n", 0o640)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+        self.put("/etc/sudoers", "deploy-staging-next ALL=(ALL) NOPASSWD: ALL\n", 0o640)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=STOP;CODE=unexpected_sudoers_state")
+
+    def test_unexpected_exceptions_still_produce_the_single_final_line(self):
+        self.put("/etc/nginx/conf.d/sites.conf", "{" * 100000)
+        final, _, _ = self.result()
+        self.assertTrue(final.startswith("STAGING_149_PREFLIGHT=BLOCKED;CODE="))
+        self.put("/etc/nginx/conf.d/sites.conf", VHOST)
+        def check_environment(host, report):
+            raise RuntimeError("boom")
+
+        with mock.patch.object(M, "check_environment", check_environment):
+            final, _, lines = self.result()
+        self.assertEqual(final, "STAGING_149_PREFLIGHT=BLOCKED;CODE=preflight_internal_error")
+        self.assertNotIn("boom", "\n".join(lines))
+
+    def test_wrong_deploy_staging_next_uid_is_blocked(self):
+        with mock.patch.object(M, "DEPLOY_UID", UID + 99):
+            self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=deploy_identity_mismatch")
+
+    def test_installer_directory_chains_need_root_owned_non_writable_components(self):
+        os.chmod(self.path("/etc/wpcaregrid-deploy"), 0o775)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=installer_directory_metadata")
+        os.chmod(self.path("/etc/wpcaregrid-deploy"), 0o755)
+        os.chmod(self.path("/usr/local/libexec/wpcaregrid-deploy/staging-next"), 0o700)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=installer_directory_metadata")
+        os.chmod(self.path("/usr/local/libexec/wpcaregrid-deploy/staging-next"), 0o755)
+        os.chmod(self.path("/usr/local/libexec"), 0o777)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=installer_directory_metadata")
+
+    def test_staged_source_needs_deploy_ownership_and_a_non_writable_parent_chain(self):
+        self.stage_sources()
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+        os.chmod(self.path("/home/deploy"), 0o777)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=staged_source_mismatch")
+        os.chmod(self.path("/home/deploy"), 0o755)
+        self.put("/etc/passwd", f"deploy:x:{UID + 1}:{UID + 1}::/h:/bin/sh\n"
+                                f"deploy-staging-next:x:{UID + 7}:{UID + 7}::/n:/sbin/nologin\n")
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=staged_source_mismatch")
+
+    def test_installer_hash_mismatch_is_blocked(self):
+        self.stage_sources()
+        self.put(M.INSTALLER, b"a different installer", 0o600)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=staged_source_mismatch")
+
+    def test_symlinked_os_release_is_read_but_other_symlink_targets_are_not(self):
+        os.unlink(self.path("/etc/os-release"))
+        self.put("/usr/lib/os-release", 'PRETTY_NAME="Ubuntu 26.04.1 LTS"\nVERSION_ID="26.04"\n')
+        os.symlink(self.path("/usr/lib/os-release"), self.path("/etc/os-release"))
+        _, _, lines = self.result()
+        self.assertTrue(any(line.startswith("CHECK|os.release|INFO|Ubuntu 26.04.1 LTS") for line in lines))
+        os.unlink(self.path("/etc/os-release"))
+        self.put("/tmp-outside/os-release", "PRETTY_NAME=x\n")
+        os.symlink(self.path("/tmp-outside/os-release"), self.path("/etc/os-release"))
+        _, _, lines = self.result()
+        self.assertTrue(any(line.startswith("CHECK|os.release|UNKNOWN") for line in lines))
+
+    def test_shebang_has_no_extra_arguments(self):
+        self.assertEqual(SOURCE.splitlines()[0], "#!/usr/bin/python3")
 
 
 class StagedSourceTests(Fixture):
@@ -387,7 +504,7 @@ class NoSecretsAndNoWritesTests(Fixture):
             if name == "systemctl":
                 self.assertEqual(command[1:3], ["show", "--no-pager"])
             if name == "supervisorctl":
-                self.assertEqual(command[1], "status")
+                self.assertEqual(command[1:], ["status"])
             if name == "visudo":
                 self.assertEqual(command[1:], ["-c"])
             if name == "php8.5":
@@ -395,7 +512,7 @@ class NoSecretsAndNoWritesTests(Fixture):
             if name == "ps":
                 self.assertEqual(command[1:], ["-eo", "args="])
             if name == "mysqld":
-                self.assertEqual(command[1:], ["--version"])
+                self.assertEqual(command[1:], ["--no-defaults", "--version"])
 
     def test_static_source_has_no_write_network_or_mutating_operations(self):
         tree = ast.parse(SOURCE)

@@ -1,4 +1,4 @@
-#!/usr/bin/python3 -I -B
+#!/usr/bin/python3
 """WP CareGrid staging-next helper 1.4.9 - READ-ONLY host preflight (run as root on the staging host).
 
 Guarantees: creates/modifies/deletes nothing, installs nothing, starts or stops nothing, opens no network
@@ -6,6 +6,8 @@ connection, reads no secret (no .env, password, token, key, backup content), pri
 Only lstat/stat/statvfs, reads of non-secret system files (/etc/os-release, /proc, nginx and php-fpm
 config, sudoers rule files, MySQL auto.cnf for the instance UUID digest only) and a fixed list of read-only
 commands (systemctl show, supervisorctl status, ps, visudo -c, php8.5 -n -r, mysqld --version) are used.
+
+Run it as:  /usr/bin/python3 -I -B scripts/staging-149-preflight.py   (or pasted via stdin: python3 -I -B -)
 
 Final line, exactly one of:
   STAGING_149_PREFLIGHT=PASS
@@ -103,6 +105,23 @@ class Host:
         except OSError:
             return None
 
+    def read_nginx(self, path, limit=2_000_000):
+        return self.read_follow(path, ("/etc/nginx", "/etc/letsencrypt", "/usr/share/nginx"), limit)
+
+    def read_follow(self, path, trees, limit=262144):
+        """Like read(), but follows a symlink only when its final target stays inside one of `trees`."""
+        info, _ = self.lstat(path)
+        if info is None:
+            return None
+        if not stat.S_ISLNK(info.st_mode):
+            return self.read(path, limit)
+        real = os.path.realpath(self.p(path))
+        allowed = [os.path.realpath(self.p(x)) for x in trees]
+        if not any(real == a or real.startswith(a + "/") for a in allowed):
+            return None
+        shown = real if self.root == "/" else real[len(os.path.realpath(self.root)):]
+        return self.read(shown, limit)
+
     def listdir(self, path):
         try:
             return sorted(os.listdir(self.p(path)))
@@ -186,6 +205,45 @@ def dir_check(h, r, cid, path, *, uid=None, mode=None, required, effect_absent="
         r.line(cid, "REQUIRED_PRESENT" if required else "PRESENT", f"{path} uid={info.st_uid} mode={mode_of(info):o}")
 
 
+def root_chain(h, r, cid, path, terminal_mode=None):
+    """Mirror of the installer's _check_directory_chain: every component root-owned, not a symlink,
+    a directory, not group/other writable; optional exact terminal mode."""
+    cursor = ""
+    for index, part in enumerate([""] + [x for x in path.split("/") if x]):
+        cursor = cursor + "/" + part if part else "/"
+        cursor = cursor.replace("//", "/")
+        info, err = h.lstat(cursor)
+        last = cursor.rstrip("/") == path.rstrip("/")
+        if info is None:
+            r.line(cid, "MISMATCH" if err == "absent" else "UNKNOWN", f"{cursor} missing/unreadable (required)",
+                   "BLOCKED", "installer_directory_missing")
+            return
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != h.root_uid \
+                or mode_of(info) & 0o022 or (last and terminal_mode is not None and mode_of(info) != terminal_mode):
+            r.line(cid, "MISMATCH", f"{cursor} uid={info.st_uid} mode={mode_of(info):o} (installer needs root-owned, "
+                   f"non-symlink, not group/other writable" + (f", mode {terminal_mode:o}" if terminal_mode and last else "") + ")",
+                   "BLOCKED", "installer_directory_metadata")
+            return
+    r.line(cid, "REQUIRED_PRESENT", path)
+
+
+def source_chain_problems(h, deploy_uid):
+    """Mirror of the installer's _check_source_directory_chain."""
+    problems, cursor = [], ""
+    parts = [x for x in SOURCE_DIR.split("/") if x]
+    for index, part in enumerate(parts):
+        cursor += "/" + part
+        info, _ = h.lstat(cursor)
+        if info is None or not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+            problems.append("source_parent_invalid:" + cursor)
+            break
+        if index < len(parts) - 1 and mode_of(info) & 0o022:
+            problems.append("source_parent_writable:" + cursor)
+        if index == len(parts) - 1 and (info.st_uid != deploy_uid or mode_of(info) != 0o700):
+            problems.append("source_dir_owner_or_mode")
+    return problems
+
+
 # ---------------------------------------------------------------------------------------------- nginx
 def nginx_tokens(text):
     out, i, n = [], 0, len(text)
@@ -245,7 +303,7 @@ def nginx_parse(tokens):
 def nginx_load(h, path, depth=0, seen=None):
     seen = seen if seen is not None else [0]
     seen[0] += 1
-    raw = h.read(path, 2_000_000)
+    raw = h.read_nginx(path, 2_000_000)
     if raw is None or depth > 10 or seen[0] > 300:
         raise ValueError("unreadable")
     return nginx_expand(h, nginx_parse(nginx_tokens(raw.decode("utf-8", "replace"))), depth, seen)
@@ -278,8 +336,8 @@ def nginx_route(h):
     """Return (state, detail). Mirrors the helper's own route check, without running nginx."""
     try:
         tree = nginx_load(h, "/etc/nginx/nginx.conf")
-    except (ValueError, OSError):
-        return "UNKNOWN", "nginx config unreadable or include limit exceeded"
+    except (ValueError, OSError, RecursionError):
+        return "UNKNOWN", "nginx config unreadable, symlink outside nginx trees, or limits exceeded"
     servers = []
     for args, kids in nginx_walk(tree):
         if args == ["server"] and kids is not None:
@@ -291,9 +349,12 @@ def nginx_route(h):
                 servers.append(kids)
     if len(servers) != 1:
         return "MISMATCH", f"https vhosts for {HOST}: {len(servers)} (need exactly 1)"
-    passes = [d[1] for d, _ in nginx_walk(servers[0]) if d[:1] == ["fastcgi_pass"] and len(d) == 2]
-    if not passes:
-        return "MISMATCH", "no fastcgi_pass in the staging-next vhost"
+    direct = [d[1] for d, kids in servers[0] if d[:1] == ["fastcgi_pass"] and len(d) == 2]
+    in_locations = [nested[1] for d, kids in servers[0] if d[:1] == ["location"] and kids is not None
+                    for nested, _ in nginx_walk(kids) if nested[:1] == ["fastcgi_pass"] and len(nested) == 2]
+    passes = direct + in_locations
+    if not in_locations:
+        return "MISMATCH", "no fastcgi_pass inside a location of the staging-next vhost"
     wrong = sorted({p for p in passes if p != f"unix:{SOCKET}"})
     if wrong:
         return "MISMATCH", "fastcgi_pass targets differ from the php8.5 socket: " + ",".join(wrong)[:150]
@@ -326,7 +387,7 @@ def listening_ports(h):
 
 
 def flock_held(h, info):
-    raw = h.read("/proc/locks")
+    raw = h.read("/proc/locks", 8_000_000)
     if raw is None:
         return None
     needle = f"{os.major(info.st_dev):02x}:{os.minor(info.st_dev):02x}:{info.st_ino}"
@@ -354,7 +415,7 @@ def check_host_and_resources(h, r):
         info, _ = h.lstat(name)
         r.line("env.not_production:" + name, "MISMATCH" if info else "EXPECTED_ABSENT", name,
                "STOP" if info else None, "production_paths_present")
-    osr = (h.read("/etc/os-release") or b"").decode("utf-8", "replace")
+    osr = (h.read_follow("/etc/os-release", ("/usr/lib", "/etc")) or b"").decode("utf-8", "replace")
     pretty = re.search(r'^PRETTY_NAME="?([^"\n]*)', osr, re.M)
     version = re.search(r'^VERSION_ID="?([^"\n]*)', osr, re.M)
     r.line("os.release", "INFO" if version else "UNKNOWN",
@@ -491,10 +552,11 @@ def check_environment(h, r):
     legacy = h.listdir("/home/deploy/private-backups")
     r.line("backups.legacy_present", "INFO" if legacy is not None else "UNKNOWN",
            f"files={len(legacy)}" if legacy is not None else "directory unreadable")
-    policy, _ = h.lstat("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.9.json")
-    r.line("phase_b.policy_1_4_9", "MISMATCH" if policy else "EXPECTED_ABSENT",
-           "Phase B policy " + ("present" if policy else "absent (must stay absent during helper install)"),
-           "STOP" if policy else None, "phase_b_policy_present")
+    policy, perr = h.lstat("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.9.json")
+    r.line("phase_b.policy_1_4_9", "MISMATCH" if policy or perr == "error" else "EXPECTED_ABSENT",
+           "Phase B policy " + ("present" if policy else "unreadable" if perr == "error"
+                                else "absent (must stay absent during helper install)"),
+           "STOP" if policy or perr == "error" else None, "phase_b_policy_present")
     creds = h.listdir("/etc/wpcaregrid-deploy/credentials")
     if creds is None:
         r.line("secrets.credentials_dir", "INFO", "no credentials directory")
@@ -511,6 +573,7 @@ def check_environment(h, r):
 
 
 def check_identity_and_helpers(h, r):
+    identities = {}
     for name in ("deploy", "deploy-staging-next"):
         try:
             entry = pwd.getpwnam(name) if h.root == "/" else None
@@ -522,6 +585,7 @@ def check_identity_and_helpers(h, r):
             uid = int(row[2]) if row else None
         else:
             uid = entry.pw_uid if entry else None
+        identities[name] = uid
         expected = DEPLOY_UID if name == "deploy-staging-next" else None
         ok = uid is not None and (expected is None or uid == expected)
         r.line("identity." + name, "REQUIRED_PRESENT" if ok else "MISMATCH",
@@ -540,22 +604,34 @@ def check_identity_and_helpers(h, r):
                "STOP" if info or err == "error" else None, "destination_exists_" + name)
     for path, mode in ((LIBEXEC, 0o755), ("/etc/wpcaregrid-deploy", None), ("/etc/wpcaregrid-deploy/profiles", 0o755),
                        ("/etc/sudoers.d", None)):
-        dir_check(h, r, "installer.dir:" + path, path, mode=mode, required=True, code="installer_directory",
-                  effect_absent="BLOCKED")
+        root_chain(h, r, "installer.dir:" + path, path, mode)
     names = h.listdir("/etc/sudoers.d") or []
     related = [n for n in names if "wpcaregrid" in n or "staging" in n]
     bad = []
-    for n in names:
-        raw = (h.read("/etc/sudoers.d/" + n, 65536) or b"").decode("utf-8", "replace")
-        info, _ = h.lstat("/etc/sudoers.d/" + n)
-        if n in related and (info is None or not stat.S_ISREG(info.st_mode) or info.st_uid != h.root_uid
-                             or mode_of(info) & 0o022):
+    files = [("/etc/sudoers", "sudoers")] + [("/etc/sudoers.d/" + n, n) for n in names]
+    for full, n in files:
+        info, err = h.lstat(full)
+        if info is None:
+            if full != "/etc/sudoers":
+                bad.append(n + ":unreadable")
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            bad.append(n + ":not_regular")
+            continue
+        if n in related and (info.st_uid != h.root_uid or mode_of(info) & 0o022):
             bad.append(n + ":metadata")
-        for line in raw.splitlines():
+        raw = h.read(full, 1_000_000)
+        if raw is None:
+            bad.append(n + ":unreadable")
+            continue
+        for number, line in enumerate(raw.decode("utf-8", "replace").splitlines(), 1):
             line = line.strip()
-            if line and not line.startswith("#") and ("deploy-staging-next" in line or "/wpcaregrid-deploy/staging-next/" in line)                     and not SUDOERS_LINE.fullmatch(line):
-                bad.append(n + ":rule[" + line[:160] + "]")
-                break
+            directive = re.match(r"[#@]\s*include(dir)?\s", line)
+            if directive and n != "sudoers":
+                bad.append(f"{n}:include@{number}")
+            elif line and not line.startswith("#") and ("deploy-staging-next" in line or "/wpcaregrid-deploy/staging-next/" in line) \
+                    and not SUDOERS_LINE.fullmatch(line):
+                bad.append(f"{n}:rule@{number}")
     r.line("sudoers.inventory", "MISMATCH" if bad else "INFO",
            f"wpcaregrid files={','.join(related) or 'none'}" + (f" unexpected={','.join(bad)}" if bad else ""),
            "STOP", "unexpected_sudoers_state")
@@ -569,6 +645,11 @@ def check_identity_and_helpers(h, r):
         r.line("source.staged", "EXPECTED_ABSENT", "installer and source directory not copied yet (Owner GO #1)")
         return
     problems = []
+    deploy_uid = identities.get("deploy")
+    if deploy_uid is None:
+        problems.append("deploy_identity_unknown")
+    else:
+        problems.extend(source_chain_problems(h, deploy_uid))
     if src is None or not stat.S_ISDIR(src.st_mode) or stat.S_ISLNK(src.st_mode) or mode_of(src) != 0o700:
         problems.append("source_dir_metadata")
     elif (h.listdir(SOURCE_DIR) or []) != sorted(SOURCE_PINS):
@@ -576,9 +657,11 @@ def check_identity_and_helpers(h, r):
     else:
         for name, pin in SOURCE_PINS.items():
             info, _ = h.lstat(f"{SOURCE_DIR}/{name}")
-            if info is None or not stat.S_ISREG(info.st_mode) or mode_of(info) != 0o600 or sha256_file(h, f"{SOURCE_DIR}/{name}") != pin:
+            if info is None or not stat.S_ISREG(info.st_mode) or mode_of(info) != 0o600 or info.st_uid != deploy_uid \
+                    or sha256_file(h, f"{SOURCE_DIR}/{name}") != pin:
                 problems.append(name)
-    if inst is None or not stat.S_ISREG(inst.st_mode) or mode_of(inst) != 0o600 or sha256_file(h, INSTALLER) != INSTALLER_SHA256:
+    if inst is None or not stat.S_ISREG(inst.st_mode) or mode_of(inst) != 0o600 or inst.st_uid != deploy_uid \
+            or sha256_file(h, INSTALLER) != INSTALLER_SHA256:
         problems.append("installer")
     r.line("source.staged", "MISMATCH" if problems else "REQUIRED_PRESENT",
            "staged files verified (5 sources + installer)" if not problems else "mismatch: " + ",".join(problems)[:200],
@@ -587,15 +670,24 @@ def check_identity_and_helpers(h, r):
 
 def check_services_and_data(h, r):
     ports = listening_ports(h)
-    for programs in ("wpcaregrid-staging-next-default", "wpcaregrid-staging-next-backups"):
-        out = h.run(["/usr/bin/supervisorctl", "status", programs])
-        text = out[1].decode("ascii", "replace") if out else ""
-        if out is None:
-            r.line("worker." + programs, "UNKNOWN", "supervisorctl unavailable", "BLOCKED", "worker_state_unknown")
-        elif "RUNNING" in text or "STARTING" in text:
-            r.line("worker." + programs, "MISMATCH", "worker running", "STOP", "worker_running")
+    out = h.run(["/usr/bin/supervisorctl", "status"])
+    states = {}
+    if out is not None and out[0] in (0, 3):
+        for row in out[1].decode("ascii", "replace").splitlines():
+            match = re.match(r"(\S+)\s+(RUNNING|STOPPED|STARTING|BACKOFF|STOPPING|EXITED|FATAL|UNKNOWN)\b", row)
+            if match:
+                states[match.group(1)] = match.group(2)
+    readable = out is not None and out[0] in (0, 3) and (bool(states) or not out[1].strip())
+    for program in ("wpcaregrid-staging-next-default", "wpcaregrid-staging-next-backups"):
+        mine = {k: v for k, v in states.items() if k == program or k.startswith(program + ":")}
+        if not readable:
+            r.line("worker." + program, "UNKNOWN", "supervisorctl status unavailable or unparsable",
+                   "BLOCKED", "worker_state_unknown")
+        elif any(v in ("RUNNING", "STARTING", "BACKOFF", "STOPPING") for v in mine.values()):
+            r.line("worker." + program, "MISMATCH", "worker active", "STOP", "worker_running")
         else:
-            r.line("worker." + programs, "EXPECTED_ABSENT" if "no such" in text.lower() else "INFO", text.strip()[:80] or "stopped")
+            r.line("worker." + program, "INFO" if mine else "EXPECTED_ABSENT",
+                   ",".join(sorted(set(mine.values()))) if mine else "program not configured")
     timer = unit_state(h, "wpcaregrid-staging-next-scheduler.timer")
     r.line("scheduler.timer", "UNKNOWN" if timer is None else "MISMATCH" if timer.get("ActiveState") == "active" else "INFO",
            (timer.get("ActiveState") + "/" + timer.get("LoadState", "?")) if timer else "systemctl unavailable",
@@ -616,7 +708,7 @@ def check_services_and_data(h, r):
     r.line("NEXT_GATE.mysql_ports", "INFO" if ports is not None else "UNKNOWN",
            ",".join(f"{p}={'listening' if ports and p in ports else 'closed'}" for p in (3306, 3307, 3308, 3309))
            if ports is not None else "/proc/net/tcp unreadable")
-    version = h.run(["/usr/sbin/mysqld", "--version"], 10)
+    version = h.run(["/usr/sbin/mysqld", "--no-defaults", "--version"], 10)
     text = version[1].decode("ascii", "replace") if version else ""
     r.line("NEXT_GATE.mysql_version", "INFO" if re.search(r"Ver 8\.4\.", text) else "UNKNOWN",
            text.strip()[:80] or "mysqld --version not runnable")
@@ -656,11 +748,17 @@ def main(h=None):
     h = h or Host()
     r = Report()
     print("# WP CareGrid staging-next 1.4.9 read-only preflight")
-    check_host_and_resources(h, r)
-    check_php_and_web(h, r)
-    check_environment(h, r)
-    check_identity_and_helpers(h, r)
-    check_services_and_data(h, r)
+    if h.euid != h.root_uid:
+        # Without root most checks cannot be proven; fail fast instead of reporting misleading findings.
+        r.line("env.root_identity", "MISMATCH", f"euid={h.euid}", "BLOCKED", "not_root")
+        print("# blockers: not_root")
+        return r.final()
+    for step in (check_host_and_resources, check_php_and_web, check_environment, check_identity_and_helpers,
+                 check_services_and_data):
+        try:
+            step(h, r)
+        except Exception as error:  # the output contract must hold even for unexpected host states
+            r.line("internal." + step.__name__, "UNKNOWN", type(error).__name__, "BLOCKED", "preflight_internal_error")
     print("# blockers: " + (",".join(c for c, _ in r.stops + r.blockers) or "none"))
     return r.final()
 

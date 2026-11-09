@@ -19,7 +19,7 @@ Every step below that changes the host is behind its own Owner GO; steps 0-1 are
 
 ## Step 0 - read-only preflight (permitted now; no GO needed beyond the read-only authorization)
 
-Run `scripts/staging-149-preflight.py` as root on `stg1.wpcaregrid.com` (copy-paste block in the hand-over).
+Run `scripts/staging-149-preflight.py` as root on `stg1.wpcaregrid.com` (`/usr/bin/python3 -I -B -` with the file on stdin, as in the hand-over block, or `python3 -I -B staging-149-preflight.py`).
 Required result before anything else: `STAGING_149_PREFLIGHT=PASS`. Save the full output (it contains no
 secrets) and the `legacy.fingerprint` value. `BLOCKED` = a prerequisite is missing (do not "fix" it ad hoc:
 PHP 8.5, FPM socket, nginx route, application directory, installer directories and users each need their own
@@ -77,7 +77,8 @@ compiled `staging-next` contract - STOP and report, do not edit the layout to sa
 * The installer rolls back its own newly created files if a step fails. A reported `ROLLBACK=HOLD` means an object
   no longer matched what it created: leave it untouched and report.
 * After a successful install a rollback is a separate Owner decision: removing `1.4.9` means deleting the sudoers
-  file first, then the policy file, then the version directory (all root-owned, all created by this installer);
+  file first, then the policy file, then the five files in the version directory and finally the (then empty)
+  version directory itself (all root-owned, all created by this installer);
   older helper versions and the legacy staging tools are untouched by this installation.
 * STOP on: any hash mismatch, any preflight `STOP`, any unexpected file in the source directory, any non-`PASS`
   installer/probe line, an active deploy lock, fence marker, maintenance gate, running worker or scheduler.
