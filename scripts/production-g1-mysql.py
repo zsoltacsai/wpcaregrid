@@ -15,6 +15,7 @@ import json
 import os
 import pwd
 import grp
+import signal
 import stat
 import subprocess
 import sys
@@ -372,10 +373,16 @@ def verify_paths(instance: Instance, *, for_init: bool = False) -> None:
             refuse("mysql_path_identity_mismatch")
     if for_init:
         try:
-            if any(Path(instance.datadir).iterdir()):
-                refuse("datadir_not_empty")
+            entries = {entry.name for entry in Path(instance.datadir).iterdir()}
         except OSError:
             refuse("datadir_unreadable")
+        if entries:
+            # A datadir that already carries initialization artefacts is never "empty enough": a second
+            # initialization must be impossible, and the Owner has to recover it deliberately (never automatically).
+            refuse("datadir_initialization_present" if entries & INIT_ARTEFACTS else "datadir_not_empty")
+        if log_path.stat().st_size != 0:
+            # Markers are proven from this run only: the error log must be empty when initialization starts.
+            refuse("initialize_log_not_empty")
 
 
 def verify_preflight(instance: Instance, *, for_init: bool = False, allow_running: bool = False) -> None:
@@ -421,21 +428,216 @@ def _port_free(instance: Instance) -> None:
     validate_port_probe(True)
 
 
-def initialize(instance: Instance) -> None:
-    verify_preflight(instance, for_init=True)
-    _systemd_inactive(instance)
-    _port_free(instance)
-    run([
+INIT_ARTEFACTS = frozenset({"auto.cnf", "mysql", "ibdata1", "mysql.ibd", "#innodb_redo", "undo_001", "undo_002"})
+INIT_REQUIRED_DIRS = ("mysql", "sys", "performance_schema", "#innodb_redo")
+INIT_REQUIRED_FILES = ("auto.cnf", "ibdata1", "mysql.ibd", "undo_001", "undo_002", "mysql_upgrade_history")
+# Measured with MySQL Community Server 8.4.13: a complete `mysqld --initialize` logs the start line and, last, the end line.
+INIT_START_MARKER = b"[MY-015017] [Server] MySQL Server Initialization - start."
+INIT_END_MARKER = b"[MY-015018] [Server] MySQL Server Initialization - end."
+INIT_LOG_LIMIT = 2 * 1024 * 1024
+INITIALIZE_TIMEOUT_SECONDS = 600
+INITIALIZE_TERM_GRACE_SECONDS = 30
+INITIALIZE_KILL_WAIT_SECONDS = 10
+PROC_ROOT = Path("/proc")
+INIT_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/nonexistent", "LANG": "C", "LC_ALL": "C"}
+
+
+def _live_processes(proc_root: Path = PROC_ROOT):
+    """(pid, pgrp, session, argv) of every live, non-zombie process; unreadable entries are skipped."""
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat_text = (entry / "stat").read_text(encoding="ascii", errors="replace")
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        try:
+            fields = stat_text[stat_text.rindex(")") + 2:].split()
+            state, pgrp, session = fields[0], int(fields[2]), int(fields[3])
+        except (ValueError, IndexError):
+            continue
+        if state in ("Z", "X"):
+            continue
+        yield int(entry.name), pgrp, session, [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
+
+
+def _instance_processes(instance: Instance, *, group: int | None = None, proc_root: Path = PROC_ROOT) -> list[int]:
+    """Live processes of this instance (command line names its group suffix) or of the given process group/session."""
+    suffix = f"--defaults-group-suffix=@{instance.name}"
+    found = []
+    for pid, pgrp, session, argv in _live_processes(proc_root):
+        if pid == os.getpid():
+            continue
+        if suffix in argv or (group is not None and group in (pgrp, session)):
+            found.append(pid)
+    return sorted(found)
+
+
+def _terminate_group(pgid: int, instance: Instance, *, grace: float, kill_wait: float,
+                     proc_root: Path = PROC_ROOT, sleep: Callable[[float], None] = time.sleep) -> bool:
+    """SIGTERM, then SIGKILL, to the initializer's own process group; True only when nothing of it is left.
+
+    The group id is the pid of the child this helper started in a new session and has not reaped yet (or of a group
+    that still has live members), so it cannot belong to an unrelated process."""
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, kill_wait)):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            break
+        except PermissionError:
+            return False
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            if not _instance_processes(instance, group=pgid, proc_root=proc_root):
+                return True
+            sleep(0.2)
+    return not _instance_processes(instance, group=pgid, proc_root=proc_root)
+
+
+def _run_initializer(instance: Instance, argv: list[str], *, timeout: float = INITIALIZE_TIMEOUT_SECONDS,
+                     grace: float = INITIALIZE_TERM_GRACE_SECONDS, kill_wait: float = INITIALIZE_KILL_WAIT_SECONDS,
+                     proc_root: Path = PROC_ROOT, popen: Callable = subprocess.Popen) -> None:
+    """Run the whole runuser -> aa-exec -> mysqld chain in its own session and never leave any of it behind.
+
+    The previous implementation used the blocking run-with-timeout helper of subprocess, which on a timeout kills only its direct
+    child (runuser); the rest of the chain was re-parented to init and kept running (PPID=1) for minutes.
+
+    Signals sent to the helper (SIGTERM/SIGHUP/SIGINT) only set a flag that the wait loop polls, so no exception can interrupt the
+    cleanup half-way; the chain itself inherits no blocked signals and starts with the default action for them (verified by test)."""
+    if _instance_processes(instance, proc_root=proc_root):
+        refuse("initialize_process_already_running")
+    received = []
+    previous = {}
+    try:
+        for name in ("SIGTERM", "SIGHUP", "SIGINT"):
+            previous[name] = signal.signal(getattr(signal, name), lambda signum, frame: received.append(signum))
+        proc = popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     close_fds=True, env=INIT_ENV, start_new_session=True)
+        pgid = proc.pid
+        deadline = time.monotonic() + timeout
+        outcome, rc = None, None
+        while True:
+            try:
+                rc = proc.wait(timeout=max(0.0, min(0.5, deadline - time.monotonic())))
+                break
+            except subprocess.TimeoutExpired:
+                if received:
+                    outcome = "interrupted"
+                    break
+                if time.monotonic() >= deadline:
+                    outcome = "timeout"
+                    break
+        if outcome is not None:
+            cleaned = _terminate_group(pgid, instance, grace=grace, kill_wait=kill_wait, proc_root=proc_root)
+            try:
+                proc.wait(timeout=kill_wait)
+            except Exception:
+                cleaned = False
+            if _instance_processes(instance, group=pgid, proc_root=proc_root):
+                cleaned = False
+            print("INITIALIZE_DATADIR=PRESERVED;INITIALIZE_RETRY=NOT_ATTEMPTED")
+            if not cleaned:
+                refuse("initialize_process_survived")
+            refuse("initialize_timeout_terminated_partial_datadir" if outcome == "timeout"
+                   else "initialize_interrupted_partial_datadir")
+        if _instance_processes(instance, group=pgid, proc_root=proc_root):
+            _terminate_group(pgid, instance, grace=grace, kill_wait=kill_wait, proc_root=proc_root)
+            print("INITIALIZE_DATADIR=PRESERVED;INITIALIZE_RETRY=NOT_ATTEMPTED")
+            refuse("initialize_orphan_process_after_exit")
+        if received:
+            print("INITIALIZE_DATADIR=PRESERVED;INITIALIZE_RETRY=NOT_ATTEMPTED")
+            refuse("initialize_interrupted_partial_datadir")
+        if rc != 0:
+            print("INITIALIZE_DATADIR=PRESERVED;INITIALIZE_RETRY=NOT_ATTEMPTED")
+            refuse("initialize_failed_partial_datadir")
+    finally:
+        for name, handler in previous.items():
+            signal.signal(getattr(signal, name), handler)
+
+
+def _initialization_proof(instance: Instance, *, proc_root: Path = PROC_ROOT) -> None:
+    """Completion is proven by evidence, never by a file merely being there: exact datadir contents of a finished
+    `--initialize` (real files, mysql-owned, no symlinks), the server's own start and end log lines in that order,
+    no error line, no leftover process and no socket/pid marker. Raises initialize_completion_not_proven otherwise.
+    The log is read but never printed (it contains the generated root password)."""
+    def not_proven(token: str):
+        print(f"INITIALIZE_PROOF_MISSING={token};INITIALIZE_DATADIR=PRESERVED;INITIALIZE_RETRY=NOT_ATTEMPTED")
+        refuse("initialize_completion_not_proven")
+
+    mysql_uid = pwd.getpwnam("mysql").pw_uid
+    data = Path(instance.datadir)
+    check_directory(data, owner="mysql", group="mysql", mode=0o750)
+    for name in INIT_REQUIRED_DIRS + INIT_REQUIRED_FILES:
+        try:
+            st = (data / name).lstat()
+        except OSError:
+            not_proven(name)
+        want_dir = name in INIT_REQUIRED_DIRS
+        if (stat.S_ISDIR(st.st_mode) if want_dir else stat.S_ISREG(st.st_mode)) is not True or st.st_uid != mysql_uid:
+            not_proven(name)
+    scanned, stack = 0, [str(data)]
+    while stack:
+        current = stack.pop()
+        try:
+            names = os.listdir(current)
+        except OSError:
+            not_proven("datadir_entry")
+        for entry in names:
+            scanned += 1
+            if scanned > 200000:
+                not_proven("datadir_scan_limit")
+            path = os.path.join(current, entry)
+            try:
+                info = os.lstat(path)
+            except OSError:
+                not_proven("datadir_entry")
+            if info.st_uid != mysql_uid or not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+                not_proven("datadir_entry")  # symlink, special file or foreign owner anywhere in the tree
+            if stat.S_ISDIR(info.st_mode):
+                stack.append(path)
+    log_fd = None
+    try:
+        log_fd = os.open(instance.log_file, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+        st = os.fstat(log_fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != mysql_uid or stat.S_IMODE(st.st_mode) != 0o600:
+            not_proven("log")
+        with os.fdopen(log_fd, "rb", closefd=True) as stream:
+            log_fd = None
+            log = stream.read(INIT_LOG_LIMIT)
+    except OSError:
+        not_proven("log")
+    finally:
+        if log_fd is not None:
+            os.close(log_fd)
+    start, end = log.find(INIT_START_MARKER), log.rfind(INIT_END_MARKER)
+    if start < 0 or end < start:
+        not_proven("log_end_marker")
+    if b"[ERROR]" in log:
+        not_proven("log_error_lines")
+    if _instance_processes(instance, proc_root=proc_root):
+        not_proven("process_present")
+    for marker in (instance.socket, instance.pid_file):
+        if os.path.lexists(marker):
+            not_proven("runtime_marker")
+
+
+def _initializer_argv(instance: Instance) -> list[str]:
+    return [
         "/usr/sbin/runuser", "--user=mysql", "--",
         str(AA_EXEC), "-p", instance.apparmor_profile, "--",
         str(MYSQLD), f"--defaults-file={BASE_CONFIG}",
         f"--defaults-group-suffix=@{instance.name}",
         "--initialize",
-    ], timeout=180)
-    data = Path(instance.datadir)
-    if not (data / "mysql").is_dir() or not (data / "auto.cnf").is_file():
-        refuse("initialized_datadir_incomplete")
-    check_directory(data, owner="mysql", group="mysql", mode=0o750)
+    ]
+
+
+def initialize(instance: Instance) -> None:
+    verify_preflight(instance, for_init=True)
+    _systemd_inactive(instance)
+    _port_free(instance)
+    _run_initializer(instance, _initializer_argv(instance))
+    _initialization_proof(instance)
     _verify_server_uuid_identity(instance)
     print(f"INITIALIZE=PASS;INSTANCE={instance.name};UNIT_NOT_STARTED=YES")
 

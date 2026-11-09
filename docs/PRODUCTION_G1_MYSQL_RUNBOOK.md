@@ -263,6 +263,65 @@ profiles (heals an interruption between swap and reload). After a hard kill (SIG
 If the probe still fails after PASS of the sequence, STOP before GO-5.3; nothing in this procedure initializes or starts
 MySQL. GO-5.3 stays a separate Owner approval.
 
+## GO-5.3 incident — interrupted `initialize` of `wpcaregrid-production` (recovery, read-only diagnosis)
+
+**Proven on the VPS:** `initialize` stopped with `G1_MYSQL=STOP;CODE=command_unavailable_or_timeout` after the 180 s limit; the
+`mysqld --initialize` process (PPID 1, 28 threads waiting) kept running for more than 7 minutes, created about 200 MB of data in the datadir (Owner's report)
+(`mysql` directory, `auto.cnf`, redo/undo files) and an error log of only 655 bytes; the Owner stopped it with a verified
+`SIGTERM`; the datadir is preserved, the restore instance was not initialized, `mysql.service` (MainPID 1131) is unchanged.
+
+**Root causes (separated):**
+* *Proven (reproduced by `InitializerRecoveryTest.test_the_old_subprocess_run_timeout_really_orphaned_the_child_chain`):* the helper ran the chain
+  `runuser -> aa-exec -> mysqld` with the blocking run-with-timeout helper of `subprocess`; on a timeout that kills only its direct
+  child (`runuser`), the rest is re-parented to init and keeps running, and nothing checked for it afterwards.
+* *Proven by measurement (real MySQL 8.4.13):* a normal `--initialize` takes about 5 s and logs, in order,
+  `MY-015017 Initialization - start`, `MY-013576 InnoDB initialization has started`, `MY-013577 ... has ended` and, last,
+  `MY-015018 Initialization - end`. `mysql`, `auto.cnf` and the other artefacts appear long before the end marker, so their presence
+  proves nothing about completion.
+* *Not proven (hypothesis):* why this run stalled. A 655-byte log is consistent with a stall inside InnoDB initialization (start lines present,
+  no `has ended`). Candidates are an AppArmor denial, storage/AIO limits or memory limits; the diagnostic below prints the
+  kernel's `wpcaregrid-mysql` AppArmor denials and the log marker flags to decide this without guessing.
+* The old success test looked only at the existence of `mysql/` and `auto.cnf` after an exit code 0; the new proof (below) does not.
+
+**Fix in the helper (`production-g1-mysql.py`, no longer a simple timeout increase):**
+* the chain runs in its own session; on timeout, on `SIGTERM`/`SIGHUP`/`SIGINT` of the helper and on an orphan left after exit
+  the helper sends `SIGTERM`, then `SIGKILL`, to that process group, verifies by `/proc` that neither the group nor any process naming the
+  instance's `--defaults-group-suffix` is left, and stops with a distinct code:
+  `initialize_timeout_terminated_partial_datadir`, `initialize_interrupted_partial_datadir`,
+  `initialize_orphan_process_after_exit`, `initialize_failed_partial_datadir` (non-zero exit) or `initialize_process_survived`;
+  all of them print `INITIALIZE_DATADIR=PRESERVED;INITIALIZE_RETRY=NOT_ATTEMPTED`. The limit is 600 s (it was 180 s; a real run takes seconds);
+* a second start is refused while any process of the instance exists (`initialize_process_already_running`) and while the error log is not empty (`initialize_log_not_empty`, so the proof can only come from this run's markers);
+* success needs proof (`initialize_completion_not_proven` otherwise, with `INITIALIZE_PROOF_MISSING=<token>`): exit 0, the exact datadir
+  contents of a finished initialization (no symlink/special file/foreign owner anywhere in the tree), the server's own start line followed by its end
+  line in the error log (never printed: it contains the generated root password), no `[ERROR]` line, log `mysql:mysql 0600`, no process, no socket/pid file;
+* a datadir that already holds initialization artefacts is refused with `datadir_initialization_present` (other content: `datadir_not_empty`),
+  so an accidental second initialization is impossible. Nothing is ever deleted, cleaned or restarted by the helper.
+
+**Read-only diagnostic (`go53-init-state.py`, toolkit; root; no argument; writes, signals and starts nothing):**
+
+```bash
+python3 -I -B "$OPS/go53-init-state.py"
+```
+
+It prints per instance: entry count, size, the first 40 top-level names, log size and marker flags (`start`, `end`, `innodb_started`,
+`innodb_ended`, `errors`), process and socket/pid markers, missing required entries and the `STATE`, then the kernel AppArmor denials
+of the two profiles (distinct paths only) and a final `G1_GO53_INIT_STATE=DONE;WPCAREGRID_PRODUCTION=<state>;WPCAREGRID_PRODUCTION_RESTORE=<state>`.
+States: `EMPTY` (exactly as `provision-paths` left it), `PROVEN_COMPLETE` (proof above), `PARTIAL` (sane, artefacts present, end marker missing),
+`UNCLEAR` (anything else, e.g. symlink, foreign owner/mode, running process, end marker without the files, error lines): completion is **not**
+proven for `PARTIAL` and `UNCLEAR`; STOP. Expected for the incident: production `PARTIAL` with `innodb_started=yes innodb_ended=no`, restore `EMPTY`.
+
+**Recovery plan (every step a separate Owner decision; nothing automatic):**
+1. Run the diagnostic. `PROVEN_COMPLETE` would allow `verify-install`/`preflight` and a later GO-5.4; `PARTIAL`/`UNCLEAR` stays STOP.
+2. Find out *why* the run stalled before any retry (denials in the diagnostic, then `journalctl -k` for the AppArmor profile, storage and memory limits). A retry
+   without a cause is not approved.
+3. The fixed helper must be installed (replaces helper and manifest only, hash-pinned, like the earlier hotfixes) before `initialize` runs again; the installed
+   helper still has the 180 s blind timeout. That installer is a separate follow-up change.
+4. A `PARTIAL` datadir contains only system tables created by the killed run (the instance never started, no application data). Cleaning it is a
+   deliberate Owner decision with its own narrowly scoped, verified procedure (state `PARTIAL`, units inactive, no process, exact path, no symlink; it must
+   also reset the instance error log to an empty `mysql:mysql 0600` file, because `initialize` refuses a non-empty log with `initialize_log_not_empty`); the helper and the
+   toolkit contain no such step and never will remove the datadir on their own. Until then the datadir stays untouched and `initialize` is refused with `datadir_initialization_present`.
+5. GO-5.4 (start) and GO-5.5 stay HOLD; `mysql.service`, 3306, `/etc/mysql/my.cnf`, `/etc/apparmor.d/usr.sbin.mysqld` and the restore datadir are never touched.
+
 ## GO-5 — runtime preparation (each step is its own Owner gate)
 
 `provision-paths` is the first step that creates instance paths. After it, the clean-state

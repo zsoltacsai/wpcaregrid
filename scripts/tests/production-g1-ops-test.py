@@ -57,6 +57,12 @@ HF2_HELPER = "32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e"
 HF2_CONTRACT = "45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3"
 HF2_MANIFEST = "c2b693195f542ab88d261bd65dc586c56880526a65707c135cee2d29a61dea73"
 HF2_SUMS = "2e67841f723ed2f82049645d842a45e1c9c6b581c84d79ea4abd4ae0094a2f38"
+# GO-5.2c AppArmor hotfix (installed on the VPS, historical from the GO-5.3 initializer hotfix on)
+# Frozen copy of the package of the installed AppArmor hotfix (merge a218882): the go5p tools are tested against it
+AP_PKG = SCRIPTS / "tests" / "fixtures" / "g1-apparmor-package"
+AP_HELPER = "32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e"
+AP_MANIFEST = "70490acf887f3222ffaa0087c215826dc70a8b8cda7016d0f8807b7099cab6cb"
+AP_SUMS = "135430167c9ff42949efd2c1a123dabb3239003ecee328ac40763e170fc020cd"
 HF2_PROFILES = {"/etc/apparmor.d/wpcaregrid-mysql-production": "5ad9b53b5a0001d32bffbd3e56d15d92158b026e9cf645411dda95d73f6478cd",
                 "/etc/apparmor.d/wpcaregrid-mysql-production-restore": "8210c0193f6487cf3f90d969560020b4e611d6e986341d28397510839872a72e"}
 
@@ -93,7 +99,13 @@ class ToolkitStaticTest(unittest.TestCase):
             "/usr/local/libexec/production_g1_mysql_contract.py": sha(contract),
             "/usr/local/libexec/production_g1_mysql_manifest.json": sha(manifest_raw),
         }
-        self.assertEqual(ENGINE.EXPECTED["328ap"], expected)
+        libexec = "/usr/local/libexec/"
+        # The repository package now carries the GO-5.3 initializer hotfix (new helper + manifest); everything else is
+        # still exactly the installed AppArmor-hotfix state 328ap.
+        moved = {libexec + "wpcaregrid-g1-mysql.py", libexec + "production_g1_mysql_manifest.json"}
+        self.assertEqual({k: v for k, v in expected.items() if k not in moved},
+                         {k: v for k, v in ENGINE.EXPECTED["328ap"].items() if k not in moved})
+        self.assertNotEqual(expected[libexec + "wpcaregrid-g1-mysql.py"], ENGINE.EXPECTED["328ap"][libexec + "wpcaregrid-g1-mysql.py"])
         self.assertEqual(json.loads(manifest_raw)["installed_artifacts"],
                          {k: v for k, v in expected.items() if not k.endswith("manifest.json")})
         for path in ENGINE.CNF_ZZ:
@@ -129,7 +141,7 @@ class ToolkitStaticTest(unittest.TestCase):
         manifest_check = (OPS / "go5p-manifest-check.py").read_text(encoding="utf-8")
         for path, digest in CONTRACT.artifact_files().items():
             self.assertIn(f'"{path}": "{sha(digest)}"', manifest_check)
-        self.assertIn(f'"{sha((SCRIPTS / "production-g1-mysql.py").read_bytes())}", "helper_not_the_installed_hotfix"', manifest_check)
+        self.assertIn(f'"{AP_HELPER}", "helper_not_the_installed_hotfix"', manifest_check)
         self.assertIn(f'"{contract_sha}", "contract_not_the_apparmor_hotfix"', manifest_check)
         self.assertNotIn("mysql.conf.d/90-", manifest_check)
         historical = (OPS / "go3-manifest-check.py").read_text(encoding="utf-8")
@@ -175,9 +187,10 @@ class ToolkitStaticTest(unittest.TestCase):
 
     def test_hotfix_fetch_script_pins_the_current_package_hashes(self):
         text = (OPS / "go5p-fetch-package.sh").read_text(encoding="utf-8")
-        for name in ("production-g1-mysql.py", "production_g1_mysql_contract.py", "production-g1-mysql-manifest.json"):
-            self.assertIn(f"{sha((SCRIPTS / name).read_bytes())} {name}", text)
-        self.assertIn(sha((SCRIPTS / "SHA256SUMS").read_bytes()) + " SHA256SUMS", text)
+        for digest, name in ((AP_HELPER, "production-g1-mysql.py"), (sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes()), "production_g1_mysql_contract.py"),
+                             (AP_MANIFEST, "production-g1-mysql-manifest.json")):
+            self.assertIn(f"{digest} {name}", text)
+        self.assertIn(AP_SUMS + " SHA256SUMS", text)
         self.assertIn("--proto '=https'", text)
         self.assertIn('[[ $M =~ ^[0-9a-f]{40}$ ]]', text)
         self.assertIn("/root/wpcg-production-g1-mysql-ap-${M:0:7}", text)
@@ -211,10 +224,17 @@ class ToolkitStaticTest(unittest.TestCase):
         self.assertIn("BASE_CONFIG_CHECK=PASS", text)
         self.assertNotIn('"verify-install"]', text)
 
+    def test_the_frozen_apparmor_package_fixture_is_exactly_the_installed_package(self):
+        self.assertEqual(sha((AP_PKG / "production-g1-mysql.py").read_bytes()), AP_HELPER)
+        self.assertEqual(sha((AP_PKG / "production-g1-mysql-manifest.json").read_bytes()), AP_MANIFEST)
+        self.assertEqual(sha((AP_PKG / "SHA256SUMS").read_bytes()), AP_SUMS)
+        self.assertEqual(sha((AP_PKG / "production_g1_mysql_contract.py").read_bytes()),
+                         sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes()))
+
     def run_manifest_check(self, mutate=None):
         with tempfile.TemporaryDirectory() as tmp:
             for name in ("production-g1-mysql.py", "production_g1_mysql_contract.py", "production-g1-mysql-manifest.json"):
-                shutil.copy(SCRIPTS / name, tmp)
+                shutil.copy(AP_PKG / name, tmp)
             if mutate:
                 mutate(Path(tmp))
             done = subprocess.run([sys.executable, "-I", "-B", str(OPS / "go5p-manifest-check.py"), tmp],
@@ -1323,7 +1343,7 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
                                   input=tar_of(files), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=600)
             return done.stdout.decode(), done.stderr.decode()
 
-        pkg = {"/pkg-src/" + n: (SCRIPTS / n).read_bytes()
+        pkg = {"/pkg-src/" + n: (AP_PKG / n).read_bytes()
                for n in ("production_g1_mysql_contract.py", "production-g1-mysql-manifest.json")}
         out, err = container({"/ops/go5p-upgrade-apparmor.py": (OPS / "go5p-upgrade-apparmor.py").read_bytes(),
                               "/drive/ap.py": AP_DRIVER.encode(), **pkg}, "/drive/ap.py")
@@ -1365,7 +1385,7 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
     @staticmethod
     def new_state():
         generated = CONTRACT.artifact_files()
-        parts = [(SCRIPTS / "production_g1_mysql_contract.py").read_bytes(), (SCRIPTS / "production-g1-mysql-manifest.json").read_bytes(),
+        parts = [(AP_PKG / "production_g1_mysql_contract.py").read_bytes(), (AP_PKG / "production-g1-mysql-manifest.json").read_bytes(),
                  generated["/etc/apparmor.d/wpcaregrid-mysql-production"], generated["/etc/apparmor.d/wpcaregrid-mysql-production-restore"]]
         return " ".join(f"{sha(data)[:8]}:644:0:0" for data in parts) + " tmp=[]"
 
@@ -1459,7 +1479,7 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
         self.assertEqual(upgrade.NEW, {p: ENGINE.EXPECTED["328ap"][p] for p in upgrade.NEW})
         self.assertEqual(set(upgrade.NEW), set(upgrade.OLD))
         self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_contract.py"], sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes()))
-        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_manifest.json"], sha((SCRIPTS / "production-g1-mysql-manifest.json").read_bytes()))
+        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_manifest.json"], AP_MANIFEST)
         self.assertEqual(ENGINE.EXPECTED["328ap"][libexec + "wpcaregrid-g1-mysql.py"], upgrade.HELPER_SHA)
         changed = {p for p in ENGINE.EXPECTED["328h2"] if ENGINE.EXPECTED["328h2"][p] != ENGINE.EXPECTED["328ap"][p]}
         self.assertEqual(changed, set(upgrade.NEW))
@@ -1537,7 +1557,7 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
         self.assertEqual(re.findall(r"(?m)^HELPER_PIN=([0-9a-f]{64})", code), [HF2_HELPER])
         self.assertEqual(re.findall(r"(?m)^CONTRACT_OLD=([0-9a-f]{64})", code), [HF2_CONTRACT])
         self.assertEqual(re.findall(r"(?m)^CONTRACT_NEW=([0-9a-f]{64})", code), [sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())])
-        self.assertEqual(re.findall(r"(?m)^PACKAGE_SUMS=([0-9a-f]{64})", code), [sha((SCRIPTS / "SHA256SUMS").read_bytes())])
+        self.assertEqual(re.findall(r"(?m)^PACKAGE_SUMS=([0-9a-f]{64})", code), [AP_SUMS])
 
     # ---- confined probe --------------------------------------------------------------------------------------
     def test_probe_passes_only_when_both_instances_read_their_exact_datadir_under_their_own_profile(self):
@@ -1566,6 +1586,420 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
         self.assertIn("/usr/bin/my_print_defaults", code)
         for forbidden in ("/usr/sbin/mysqld", "systemctl", "initialize", "apparmor_parser", "rm ", "tee ", ">>", "> /"):
             self.assertNotIn(forbidden, code, forbidden)
+
+
+INIT_DRIVER = r"""
+import contextlib, importlib.util, io, os, pwd, grp, shutil, signal, subprocess, sys, threading, time
+sys.dont_write_bytecode = True
+NL = chr(10)
+spec = importlib.util.spec_from_file_location("g1h", "/hp/production-g1-mysql.py")
+H = importlib.util.module_from_spec(spec); sys.modules[spec.name] = H; spec.loader.exec_module(H)
+dspec = importlib.util.spec_from_file_location("g1d", "/ops/go53-init-state.py")
+D = importlib.util.module_from_spec(dspec); sys.modules[dspec.name] = D; dspec.loader.exec_module(D)
+NAME = "wpcaregrid-production"
+INST = H.get_instance(NAME)
+UID, GID = pwd.getpwnam("mysql").pw_uid, grp.getgrnam("mysql").gr_gid
+SUFFIX = "--defaults-group-suffix=@" + NAME
+CNF = "/tmp/g1test.cnf"
+open(CNF, "w").write("[mysqld@" + NAME + "]" + NL + "user=mysql" + NL + "datadir=" + INST.datadir + NL + "log-error=" + INST.log_file + NL +
+                     "tmpdir=" + INST.tmpdir + NL + "mysqlx=0" + NL + "secure-file-priv=NULL" + NL + "default-table-encryption=OFF" + NL)
+REAL = ["/usr/sbin/mysqld", "--defaults-file=" + CNF, SUFFIX, "--initialize"]
+SNAP = "/tmp/snap"
+
+def out(name, value):
+    print("R %s | %s" % (name, value), flush=True)
+
+def sh(*args):
+    subprocess.run(args, check=True)
+
+def reset():
+    for p in (INST.datadir, INST.tmpdir, INST.log_file, INST.socket, INST.pid_file):
+        if os.path.islink(p) or os.path.isfile(p): os.unlink(p)
+        elif os.path.isdir(p): shutil.rmtree(p)
+    os.makedirs("/run/mysqld", exist_ok=True); os.chown("/run/mysqld", UID, GID); os.chmod("/run/mysqld", 0o755)
+    os.makedirs("/var/log/mysql", exist_ok=True)
+    for p, mode in ((INST.datadir, 0o750), (INST.tmpdir, 0o700)):
+        os.makedirs(p); os.chown(p, UID, GID); os.chmod(p, mode)
+    open(INST.log_file, "w").close(); os.chown(INST.log_file, UID, GID); os.chmod(INST.log_file, 0o600)
+
+def refusal(fn, *a, **k):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        try:
+            fn(*a, **k)
+            return "NO_REFUSAL"
+        except H.Refused as exc:
+            return str(exc)
+        except BaseException as exc:
+            return "EXC:" + exc.__class__.__name__
+
+def procs():
+    return H._instance_processes(INST)
+
+def kill_all():
+    for pid in procs():
+        try: os.kill(pid, signal.SIGKILL)
+        except OSError: pass
+    time.sleep(0.3)
+
+def proof():
+    return refusal(H._initialization_proof, INST)
+
+def diag():
+    state, reasons, facts = D.classify(NAME, D.INSTANCES[NAME])
+    return state + ":" + ",".join(reasons)
+
+FAST = dict(grace=2, kill_wait=2)
+FAKE_CHILD = "import time; time.sleep(300)"
+CHAIN = (
+    "import subprocess, sys, time" + NL +
+    "mode = sys.argv[1]" + NL +
+    "if mode == 'fail': sys.exit(7)" + NL +
+    "child = [sys.executable, '-c', 'import signal, time' + chr(10) + ('signal.signal(signal.SIGTERM, signal.SIG_IGN)' + chr(10) if mode == 'stubborn' else '') + 'time.sleep(300)'] + sys.argv[2:]" + NL +
+    "if mode == 'graceful': child = [sys.executable, '-c', 'import signal, sys, time' + chr(10) + 'signal.signal(signal.SIGTERM, lambda *a: (open(' + chr(34) + '/tmp/got-term' + chr(34) + ', ' + chr(34) + 'w' + chr(34) + ').write(' + chr(34) + 'x' + chr(34) + '), sys.exit(0)))' + chr(10) + 'time.sleep(300)'] + sys.argv[2:]" + NL +
+    "p = subprocess.Popen(child)" + NL +
+    "if mode == 'leave': sys.exit(0)" + NL +
+    "p.wait()" + NL)
+open("/tmp/chain.py", "w").write(CHAIN)
+def chain(mode):
+    return [sys.executable, "/tmp/chain.py", mode, SUFFIX, "--initialize"]
+
+# ---- 1. real successful initialization -------------------------------------------------------------------------
+reset()
+before = refusal(H._run_initializer, INST, REAL)
+out("real_run", before)
+out("real_proof", proof())
+out("real_diag", diag())
+out("real_processes", len(procs()))
+out("real_second_init_blocked", refusal(H.verify_paths, INST, for_init=True))
+sh("cp", "-a", INST.datadir, SNAP)
+snap_log = open(INST.log_file, "rb").read()
+password_line = [l for l in snap_log.splitlines() if b"temporary password" in l]
+secret = password_line[0].rsplit(b": ", 1)[1].decode() if password_line else ""
+buf = io.StringIO()
+D.main(euid=0, run=lambda a: (0, ""), out=lambda line: buf.write(line + NL))
+text = buf.getvalue()
+out("diag_output_has_no_log_secret", "yes" if secret and secret not in text and "temporary password" not in text else "NO")
+out("diag_final_line", text.strip().splitlines()[-1])
+
+# ---- 2. mutations of a complete datadir: the proof and the diagnostic must agree -------------------------------
+def restore():
+    shutil.rmtree(INST.datadir); sh("cp", "-a", SNAP, INST.datadir)
+    if os.path.lexists(INST.log_file): os.unlink(INST.log_file)
+    open(INST.log_file, "wb").write(snap_log); os.chown(INST.log_file, UID, GID); os.chmod(INST.log_file, 0o600)
+    for p in (INST.socket, INST.pid_file):
+        if os.path.lexists(p): os.unlink(p)
+
+def mutation(name, change, expect_proof_ok=False):
+    restore(); change()
+    out("mut_" + name, "proof=%s | diag=%s" % (proof(), diag()))
+    kill_all()
+
+mutation("none", lambda: None)
+mutation("missing_undo", lambda: os.unlink(INST.datadir + "/undo_001"))
+mutation("missing_mysql_ibd", lambda: os.unlink(INST.datadir + "/mysql.ibd"))
+mutation("missing_sys_dir", lambda: shutil.rmtree(INST.datadir + "/sys"))
+mutation("symlinked_ibdata", lambda: (os.unlink(INST.datadir + "/ibdata1"), os.symlink("/etc/passwd", INST.datadir + "/ibdata1")))
+mutation("symlink_elsewhere", lambda: os.symlink("/etc/passwd", INST.datadir + "/extra-link"))
+mutation("foreign_owner_file", lambda: os.chown(INST.datadir + "/ibdata1", 0, GID))
+mutation("datadir_mode_755", lambda: os.chmod(INST.datadir, 0o755))
+mutation("fifo_in_datadir", lambda: os.mkfifo(INST.datadir + "/pipe"))
+def no_end():
+    data = open(INST.log_file, "rb").read()
+    open(INST.log_file, "wb").write(b"".join(l + NL.encode() for l in data.splitlines() if b"MY-015018" not in l))
+mutation("log_without_end_marker", no_end)
+def only_end():
+    data = open(INST.log_file, "rb").read()
+    open(INST.log_file, "wb").write(b"".join(l + NL.encode() for l in data.splitlines() if b"MY-015017" not in l))
+mutation("log_without_start_marker", only_end)
+mutation("log_error_line", lambda: open(INST.log_file, "ab").write(b"2026-01-01T00:00:00.000000Z 0 [ERROR] [MY-000000] [Server] boom" + NL.encode()))
+mutation("log_mode_644", lambda: os.chmod(INST.log_file, 0o644))
+mutation("socket_marker", lambda: open(INST.socket, "w").close())
+mutation("pid_marker", lambda: open(INST.pid_file, "w").close())
+def running():
+    subprocess.Popen([sys.executable, "-c", FAKE_CHILD, SUFFIX], start_new_session=True)
+    time.sleep(0.5)
+mutation("instance_process_running", running)
+def init_running():
+    subprocess.Popen([sys.executable, "-c", FAKE_CHILD, SUFFIX, "--initialize"], start_new_session=True)
+    time.sleep(0.5)
+mutation("initializer_running", init_running)
+
+# ---- 3. partial datadir like the VPS one: the real initializer stopped by the timeout --------------------------
+reset()
+out("partial_run", refusal(H._run_initializer, INST, REAL, timeout=2.0, **FAST))
+out("partial_processes_after", len(procs()))
+out("partial_datadir_entries", "non_empty" if os.listdir(INST.datadir) else "empty")
+out("partial_proof", proof())
+out("partial_diag", diag())
+out("partial_second_init_blocked", refusal(H.verify_paths, INST, for_init=True))
+out("partial_log_has_start_no_end", "yes" if (b"MY-015017" in open(INST.log_file, "rb").read() and b"MY-015018" not in open(INST.log_file, "rb").read()) else "NO")
+
+# a FIFO planted as the error log must neither hang the helper nor the diagnostic
+restore(); os.unlink(INST.log_file); os.mkfifo(INST.log_file); os.chown(INST.log_file, UID, GID); os.chmod(INST.log_file, 0o600)
+signal.alarm(30)
+out("fifo_log", "proof=%s | diag=%s" % (proof(), diag()))
+signal.alarm(0)
+restore()
+open(INST.datadir + "/evil" + NL, "w").close(); os.chown(INST.datadir + "/evil" + NL, UID, GID)
+facts = D.classify(NAME, D.INSTANCES[NAME])[2]
+out("unsafe_name_is_masked", "%s | newline_in_output=%s" % (facts["top"].count("<unsafe-name>"), any(NL in n for n in facts["top"])))
+restore()
+
+# ---- 4. fresh provisioned state ------------------------------------------------------------------------------
+reset()
+out("empty_diag", diag())
+out("empty_for_init_ok", refusal(H.verify_paths, INST, for_init=True))
+open(INST.datadir + "/stray.txt", "w").close(); os.chown(INST.datadir + "/stray.txt", UID, GID)
+out("stray_file_blocked", refusal(H.verify_paths, INST, for_init=True))
+reset(); open(INST.log_file, "w").write("x")
+out("empty_datadir_nonempty_log", diag())
+out("empty_datadir_nonempty_log_blocked", refusal(H.verify_paths, INST, for_init=True))
+reset(); shutil.rmtree(INST.datadir)
+out("datadir_missing", diag())
+
+# ---- 4b. initialize() wiring: preflight -> run -> PROOF -> uuid identity ----------------------------------------
+H.verify_preflight = lambda *a, **k: None
+H._systemd_inactive = lambda *a, **k: None
+H._port_free = lambda *a, **k: None
+reset()
+H._initializer_argv = lambda instance: [sys.executable, "-c", "pass"]     # exits 0 without creating anything
+out("initialize_wired_to_the_proof", refusal(H.initialize, INST))
+reset()
+H._initializer_argv = lambda instance: REAL
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    H.initialize(INST)
+out("initialize_real_pass_line", buf.getvalue().strip())
+
+# ---- 5. process chain handling (fake chain: parent -> child, like runuser -> aa-exec -> mysqld) --------------------
+def chain_case(name, mode, timeout=1.5, expect_code=None):
+    reset(); kill_all()
+    result = refusal(H._run_initializer, INST, chain(mode), timeout=timeout, **FAST)
+    left = len(procs())
+    kill_all()
+    out(name, "%s | left=%d" % (result, left))
+
+chain_case("chain_timeout", "wait")
+chain_case("chain_timeout_sigterm_ignored", "stubborn")
+chain_case("chain_parent_fails", "fail", timeout=20)
+chain_case("chain_parent_exits_child_left", "leave", timeout=20)
+
+# regression: the old subprocess.run(timeout) kills only its direct child and orphans the rest
+reset(); kill_all()
+try:
+    subprocess.run(chain("wait"), timeout=1.5, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+except subprocess.TimeoutExpired:
+    pass
+time.sleep(0.5)
+out("old_behaviour_leaves_orphan", "yes" if len(procs()) >= 1 else "NO")
+kill_all()
+
+# the chain gets SIGTERM first and may exit gracefully (not only SIGKILL), and starts with no blocked signals
+reset(); kill_all()
+if os.path.exists("/tmp/got-term"): os.unlink("/tmp/got-term")
+t0 = time.monotonic()
+res = refusal(H._run_initializer, INST, chain("graceful"), timeout=1.5, grace=8, kill_wait=2)
+out("graceful_term_reaches_the_chain", "%s | term_seen=%s | fast=%s | left=%d" % (res, os.path.exists("/tmp/got-term"), time.monotonic() - t0 < 6, len(procs())))
+kill_all()
+reset(); kill_all()
+probe = ("import re; line = [l for l in open('/proc/self/status') if l.startswith('SigBlk')][0]; "
+         "open('/tmp/sigblk', 'w').write(line.split()[1])")
+res = refusal(H._run_initializer, INST, [sys.executable, "-c", probe, SUFFIX], timeout=20, **FAST)
+blk = int(open("/tmp/sigblk").read(), 16)
+out("child_signal_mask", "%s | blocked_term_hup_int=%s" % (res, bool(blk & (1 | 2 | 16384))))
+reset(); kill_all()
+threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+threading.Timer(1.8, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+threading.Timer(2.4, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
+res = refusal(H._run_initializer, INST, chain("stubborn"), timeout=30, grace=3, kill_wait=3)
+out("signals_during_cleanup_do_not_escape", "%s | left=%d" % (res, len(procs())))
+kill_all()
+
+# interruption of the helper itself (SIGTERM during the wait)
+reset(); kill_all()
+threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+result = refusal(H._run_initializer, INST, chain("wait"), timeout=30, **FAST)
+out("chain_interrupted_by_sigterm", "%s | left=%d | handler_restored=%s" % (result, len(procs()), signal.getsignal(signal.SIGTERM) == signal.SIG_DFL))
+kill_all()
+reset(); kill_all()
+threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
+out("chain_interrupted_by_sigint", refusal(H._run_initializer, INST, chain("wait"), timeout=30, **FAST) + " | left=%d" % len(procs()))
+kill_all()
+
+# an initializer for the instance is already running -> nothing is started
+reset(); kill_all()
+blocker = subprocess.Popen([sys.executable, "-c", FAKE_CHILD, SUFFIX], start_new_session=True)
+time.sleep(0.5)
+marker = "/tmp/second-chain-ran"
+if os.path.exists(marker): os.unlink(marker)
+second = [sys.executable, "-c", "open('%s','w').close()" % marker, SUFFIX]
+out("second_initializer_refused", refusal(H._run_initializer, INST, second, timeout=5, **FAST) + " | started=%s" % os.path.exists(marker))
+blocker.kill(); blocker.wait(); kill_all()
+
+# the group id used for signalling is the pid of the child that this helper started in a new session
+captured = {}
+class Spy(subprocess.Popen):
+    def __init__(self, *a, **k):
+        captured["kwargs"] = {key: k.get(key) for key in ("start_new_session", "close_fds")}
+        super().__init__(*a, **k)
+        captured["pid"] = self.pid
+reset(); kill_all()
+refusal(H._run_initializer, INST, chain("wait"), timeout=1.2, popen=Spy, **FAST)
+out("process_identity", "new_session=%s | group_is_child_pid=%s" % (captured["kwargs"]["start_new_session"], captured["pid"] > 1))
+kill_all()
+
+# diagnostic classifier of kernel denial lines and the dmesg failure handling
+lines = [
+    'audit: type=1400 apparmor="DENIED" operation="open" profile="wpcaregrid-mysql-production" name="/etc/mysql/mysql.cnf" pid=1 comm="mysqld" requested_mask="r" denied_mask="r" fsuid=0 ouid=0',
+    'audit: type=1400 apparmor="DENIED" operation="open" profile="wpcaregrid-mysql-production" name="/etc/mysql/mysql.cnf" pid=2 comm="mysqld" requested_mask="r" denied_mask="r" fsuid=0 ouid=0',
+    'audit: type=1400 apparmor="DENIED" operation="open" profile="other-profile" name="/etc/shadow" denied_mask="r"',
+    'audit: type=1400 apparmor="DENIED" operation="open" profile="wpcaregrid-mysql-production" name="/etc/x y;rm -rf" denied_mask="r"',
+]
+den = D.kernel_denials(lambda a: (0, NL.join(lines)))
+out("denials", "%s | total=%d" % (sorted(den), sum(den.values())))
+out("denials_unavailable", D.kernel_denials(lambda a: (1, "")))
+"""
+
+
+@unittest.skipUnless(ready() or REQUIRE, "Docker / MySQL image unavailable")
+class InitializerRecoveryTest(unittest.TestCase):
+    """GO-5.3 recovery: process-chain handling, completion proof and the read-only diagnostic, against the real
+    MySQL 8.4 binary and a disposable container (never against production data)."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not ready():
+            raise AssertionError("G1_REQUIRE_REAL_MYSQL=1 but Docker or the MySQL image is unavailable")
+        files = {"/hp/production-g1-mysql.py": (SCRIPTS / "production-g1-mysql.py").read_bytes(),
+                 "/hp/production_g1_mysql_contract.py": (SCRIPTS / "production_g1_mysql_contract.py").read_bytes(),
+                 "/ops/go53-init-state.py": (OPS / "go53-init-state.py").read_bytes(),
+                 "/drive/init.py": INIT_DRIVER.encode()}
+        done = subprocess.run(["docker", "run", "--rm", "-i", "--entrypoint", "bash", TEST_IMAGE, "-c",
+                               "tar -x -C / && python3 -I -B /drive/init.py"],
+                              input=tar_of(files), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=900)
+        cls.output, cls.stderr = done.stdout.decode(), done.stderr.decode()
+        cls.r = {}
+        for line in cls.output.splitlines():
+            if line.startswith("R "):
+                name, value = line[2:].split(" | ", 1)
+                cls.r[name.strip()] = value.strip()
+
+    def get(self, name):
+        self.assertIn(name, self.r, self.output + self.stderr)
+        return self.r[name]
+
+    PROOF = "initialize_completion_not_proven"
+
+    def test_a_real_initialization_is_proven_complete_and_a_second_one_is_blocked(self):
+        self.assertEqual(self.get("real_run"), "NO_REFUSAL")
+        self.assertEqual(self.get("real_proof"), "NO_REFUSAL")
+        self.assertEqual(self.get("real_diag"), "PROVEN_COMPLETE:")
+        self.assertEqual(self.get("real_processes"), "0")
+        self.assertEqual(self.get("real_second_init_blocked"), "datadir_initialization_present")
+
+    def test_the_proof_and_the_diagnostic_agree_on_every_mutation_of_a_complete_datadir(self):
+        ok = "proof=NO_REFUSAL | diag=PROVEN_COMPLETE:"
+        P = self.PROOF
+        expected = {
+            "none": ok,
+            "missing_undo": f"proof={P} | diag=UNCLEAR:end_marker_but_required_entries_missing",
+            "missing_mysql_ibd": f"proof={P} | diag=UNCLEAR:end_marker_but_required_entries_missing",
+            "missing_sys_dir": f"proof={P} | diag=UNCLEAR:end_marker_but_required_entries_missing",
+            "symlinked_ibdata": f"proof={P} | diag=UNCLEAR:foreign_owner_in_datadir,required_entry_wrong_type,symlink_in_datadir",
+            "symlink_elsewhere": f"proof={P} | diag=UNCLEAR:foreign_owner_in_datadir,symlink_in_datadir",
+            "foreign_owner_file": f"proof={P} | diag=UNCLEAR:foreign_owner_in_datadir",
+            "datadir_mode_755": "proof=managed_directory_mode_invalid | diag=UNCLEAR:datadir_owner_or_mode",
+            "fifo_in_datadir": f"proof={P} | diag=UNCLEAR:foreign_owner_in_datadir,special_file_in_datadir",
+            "log_without_end_marker": f"proof={P} | diag=PARTIAL:log_end_marker_missing",
+            "log_without_start_marker": f"proof={P} | diag=UNCLEAR:datadir_not_empty_but_log_has_no_start_marker",
+            "log_error_line": f"proof={P} | diag=UNCLEAR:end_marker_but_error_lines",
+            "log_mode_644": f"proof={P} | diag=UNCLEAR:log_type_owner_or_mode",
+            "socket_marker": f"proof={P} | diag=UNCLEAR:runtime_marker_present",
+            "pid_marker": f"proof={P} | diag=UNCLEAR:runtime_marker_present",
+            "instance_process_running": f"proof={P} | diag=UNCLEAR:instance_process_present",
+            "initializer_running": f"proof={P} | diag=UNCLEAR:initializer_running",
+        }
+        for name, value in expected.items():
+            with self.subTest(name):
+                self.assertEqual(self.get("mut_" + name), value)
+
+    def test_only_a_proven_complete_datadir_is_ever_called_complete(self):
+        for name, value in self.r.items():
+            if name.startswith("mut_") and "diag=PROVEN_COMPLETE" in value:
+                self.assertEqual(name, "mut_none")
+                self.assertIn("proof=NO_REFUSAL", value)
+            if name.startswith("mut_") and "proof=NO_REFUSAL" in value:
+                self.assertIn("diag=PROVEN_COMPLETE", value)
+
+    def test_the_initializer_stopped_by_the_timeout_leaves_a_partial_datadir_that_is_reported_not_complete(self):
+        self.assertEqual(self.get("partial_run"), "initialize_timeout_terminated_partial_datadir")
+        self.assertEqual(self.get("partial_processes_after"), "0")
+        self.assertEqual(self.get("partial_datadir_entries"), "non_empty")
+        self.assertEqual(self.get("partial_proof"), self.PROOF)
+        self.assertTrue(self.get("partial_diag").startswith("PARTIAL:log_end_marker_missing"), self.get("partial_diag"))
+        self.assertEqual(self.get("partial_second_init_blocked"), "datadir_initialization_present")
+        self.assertEqual(self.get("partial_log_has_start_no_end"), "yes")
+
+    def test_provisioned_empty_state_is_unchanged_and_other_non_empty_datadirs_keep_their_own_refusal(self):
+        self.assertEqual(self.get("empty_diag"), "EMPTY:")
+        self.assertEqual(self.get("empty_for_init_ok"), "NO_REFUSAL")
+        self.assertEqual(self.get("stray_file_blocked"), "datadir_not_empty")
+        self.assertEqual(self.get("empty_datadir_nonempty_log"), "UNCLEAR:datadir_empty_but_log_not_empty")
+        self.assertEqual(self.get("datadir_missing"), "UNCLEAR:datadir_missing")
+        self.assertEqual(self.get("empty_datadir_nonempty_log_blocked"), "initialize_log_not_empty")
+
+    def test_a_timeout_or_interruption_never_leaves_any_part_of_the_process_chain_running(self):
+        self.assertEqual(self.get("chain_timeout"), "initialize_timeout_terminated_partial_datadir | left=0")
+        self.assertEqual(self.get("chain_timeout_sigterm_ignored"), "initialize_timeout_terminated_partial_datadir | left=0")
+        self.assertEqual(self.get("chain_interrupted_by_sigterm"),
+                         "initialize_interrupted_partial_datadir | left=0 | handler_restored=True")
+        self.assertEqual(self.get("chain_interrupted_by_sigint"), "initialize_interrupted_partial_datadir | left=0")
+
+    def test_failures_after_the_start_have_their_own_codes_and_leave_nothing_running(self):
+        self.assertEqual(self.get("chain_parent_fails"), "initialize_failed_partial_datadir | left=0")
+        self.assertEqual(self.get("chain_parent_exits_child_left"), "initialize_orphan_process_after_exit | left=0")
+
+    def test_the_old_subprocess_run_timeout_really_orphaned_the_child_chain(self):
+        self.assertEqual(self.get("old_behaviour_leaves_orphan"), "yes")
+
+    def test_sigterm_reaches_the_chain_it_starts_unblocked_and_signals_during_cleanup_cannot_escape(self):
+        self.assertEqual(self.get("graceful_term_reaches_the_chain"),
+                         "initialize_timeout_terminated_partial_datadir | term_seen=True | fast=True | left=0")
+        self.assertEqual(self.get("child_signal_mask"), "NO_REFUSAL | blocked_term_hup_int=False")
+        self.assertEqual(self.get("signals_during_cleanup_do_not_escape"), "initialize_interrupted_partial_datadir | left=0")
+
+    def test_a_fifo_as_error_log_hangs_nothing_and_unsafe_names_are_masked(self):
+        self.assertEqual(self.get("fifo_log"), f"proof={self.PROOF} | diag=UNCLEAR:log_type_owner_or_mode")
+        self.assertEqual(self.get("unsafe_name_is_masked"), "1 | newline_in_output=False")
+
+    def test_a_running_initializer_blocks_a_second_start_and_the_group_is_the_helpers_own_child(self):
+        self.assertEqual(self.get("second_initializer_refused"), "initialize_process_already_running | started=False")
+        self.assertEqual(self.get("process_identity"), "new_session=True | group_is_child_pid=True")
+
+    def test_the_diagnostic_never_prints_the_log_contents_and_reads_kernel_denials_safely(self):
+        self.assertEqual(self.get("diag_output_has_no_log_secret"), "yes")
+        self.assertTrue(self.get("diag_final_line").startswith("G1_GO53_INIT_STATE=DONE;WPCAREGRID_PRODUCTION=PROVEN_COMPLETE;"))
+        self.assertEqual(self.get("denials"),
+                         "[('wpcaregrid-mysql-production', 'open', '/etc/mysql/mysql.cnf', 'r')] | total=2")
+        self.assertEqual(self.get("denials_unavailable"), "None")
+
+    def test_initialize_is_wired_to_the_completion_proof(self):
+        self.assertEqual(self.get("initialize_wired_to_the_proof"), self.PROOF)
+        self.assertEqual(self.get("initialize_real_pass_line"), "INITIALIZE=PASS;INSTANCE=wpcaregrid-production;UNIT_NOT_STARTED=YES")
+
+    def test_sources_use_no_blind_timeout_run_deletion_or_start(self):
+        helper = (SCRIPTS / "production-g1-mysql.py").read_text(encoding="utf-8")
+        body = helper.split("def _run_initializer", 1)[1].split("def _server_uuid_sha256", 1)[0]
+        for forbidden in ("subprocess.run(", "rmtree", "os.unlink", "os.remove", "rmdir", "shutil", "systemctl\", \"start"):
+            self.assertNotIn(forbidden, body, forbidden)
+        self.assertIn("start_new_session=True", body)
+        diag = (OPS / "go53-init-state.py").read_text(encoding="utf-8")
+        code = chr(10).join(line for line in diag.split('"""', 2)[2].splitlines() if not line.lstrip().startswith("#"))
+        for forbidden in ("os.remove", "os.unlink", "rmtree", "os.rmdir", "os.kill", "os.chmod", "os.chown", "os.rename",
+                          "shutil", "systemctl", "open(path, \"w", "'w'", "\"w\"", "\"a\"", "\"ab\"", "\"wb\""):
+            self.assertNotIn(forbidden, code, forbidden)
+        self.assertEqual(helper.count("INITIALIZE_TIMEOUT_SECONDS = 600"), 1)
 
 
 class Go4bUpgradeToolTest(HelperUpgradeToolBase, unittest.TestCase):
