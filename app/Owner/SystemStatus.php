@@ -17,6 +17,7 @@ use App\Privacy\DestructiveRetentionGate;
 use App\Privacy\PrivacyRestoreSafety;
 use App\Privacy\RetentionSourceScanner;
 use App\Release\StagingActiveProfile;
+use App\Release\StagingSchedulePolicy;
 use App\Security\ScanStatus;
 use App\Security\Vulnerabilities\VulnerabilitySource;
 use Carbon\CarbonImmutable;
@@ -70,6 +71,22 @@ final class SystemStatus
         return $checks;
     }
 
+    /** Which scheduled tasks run on staging-next and which are held back (task names and reason codes only). */
+    private function schedulerSummary(): string
+    {
+        $held = app(StagingSchedulePolicy::class)->held();
+        $total = count(StagingSchedulePolicy::TASKS);
+        if ($held === []) {
+            return __('owner.system.staging.scheduler_all', ['count' => $total]);
+        }
+
+        return __('owner.system.staging.scheduler_held', [
+            'running' => $total - count($held),
+            'total' => $total,
+            'held' => implode(', ', array_map(fn (string $task, string $reason): string => "{$task} ({$reason})", array_keys($held), $held)),
+        ]);
+    }
+
     /**
      * Proof that the staging_active profile is confined to the staging stack. Workers, the
      * scheduler and external services are started only after this reads OK. Reason codes
@@ -85,6 +102,7 @@ final class SystemStatus
             'mail' => __('owner.system.staging.mail'),
             'connector' => __('owner.system.staging.connector'),
             'external' => __('owner.system.staging.external'),
+            'scheduler' => __('owner.system.staging.scheduler'),
         ];
         $codes = fn (array $problems): string => $problems === [] ? __('owner.system.staging.proven') : implode(', ', $problems);
 
@@ -101,6 +119,7 @@ final class SystemStatus
             $labels['mail'] => $mail,
             $labels['connector'] => $this->onOff(config('marketing_release.staging_active_features.connector_api') === true),
             $labels['external'] => $this->onOff(config('marketing_release.staging_active_features.external_services') === true),
+            $labels['scheduler'] => $this->schedulerSummary(),
         ];
 
         if (! StagingActiveProfile::requested()) {

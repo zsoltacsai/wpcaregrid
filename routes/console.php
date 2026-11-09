@@ -1,7 +1,7 @@
 <?php
 
 use App\Owner\SystemStatus;
-use App\Release\StagingActiveProfile;
+use App\Release\StagingSchedulePolicy;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
@@ -27,8 +27,7 @@ Schedule::command('backup:retention')->dailyAt('03:30')->withoutOverlapping()->o
 Schedule::command('privacy:exports-expire --limit=100')->everyFifteenMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer();
 // Owner-managed cadence is evaluated from the database-backed settings on each
 // invocation. A unique UTC slot row bounds catch-up and prevents duplicate dispatch.
-Schedule::command('platform:database-backup-schedule')->everyTenMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer()
-    ->when(fn () => ! StagingActiveProfile::externalContactClosed());
+Schedule::command('platform:database-backup-schedule')->everyTenMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer();
 
 // Admin access: unused tokens and ended sessions expire server-side.
 Schedule::command('admin-access:expire')->everyMinute()->withoutOverlapping()->onOneServer();
@@ -40,8 +39,7 @@ Schedule::command('security:schedule')->hourly()->withoutOverlapping()->onOneSer
 Schedule::command('security:vulnerabilities:sync')->dailyAt('04:10')->withoutOverlapping()->onOneServer()
     ->when(fn () => config('security.vulnerabilities.source') === 'wordfence'
         && config('security.vulnerabilities.feed_url')
-        && config('security.vulnerabilities.scheduled_sync_enabled')
-        && ! StagingActiveProfile::externalContactClosed());
+        && config('security.vulnerabilities.scheduled_sync_enabled'));
 
 // Monitoring is a single bounded dispatcher; probe jobs are site-unique and queued.
 Schedule::command('monitoring:run')->everyFiveMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer();
@@ -53,12 +51,20 @@ Schedule::call(fn () => Cache::forever(SystemStatus::SCHEDULER_HEARTBEAT, now()-
 
 // Internal plans (PROBONO) and recovery offers follow their dates.
 Schedule::command('internal-plans:sync')->hourly()->withoutOverlapping()->onOneServer();
-// Commands that call Stripe do not run on staging-next until the Stripe test-mode keys are proven.
-Schedule::command('offers:expire')->hourly()->withoutOverlapping()->onOneServer()
-    ->when(fn () => ! StagingActiveProfile::stripeClosed());
-Schedule::command('stripe:webhooks:drain')->everyMinute()->timezone('UTC')->withoutOverlapping()->onOneServer()
-    ->when(fn () => ! StagingActiveProfile::stripeClosed());
+Schedule::command('offers:expire')->hourly()->withoutOverlapping()->onOneServer();
+Schedule::command('stripe:webhooks:drain')->everyMinute()->timezone('UTC')->withoutOverlapping()->onOneServer();
 Schedule::command('billing:emails:drain')->everyMinute()->timezone('UTC')->withoutOverlapping()->onOneServer();
-Schedule::command('stripe:subscriptions:reconcile --limit=100')->everyFifteenMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer()
-    ->when(fn () => ! StagingActiveProfile::stripeClosed());
+Schedule::command('stripe:subscriptions:reconcile --limit=100')->everyFifteenMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer();
 Schedule::command('billing:subscriptions:expire-grace')->hourly()->timezone('UTC')->withoutOverlapping()->onOneServer();
+
+// staging-next only (docs/STAGING_ACTIVE.md, docs/STAGING_SCHEDULER.md): every task above is checked
+// against one central, fail-closed allowlist (App\Release\StagingSchedulePolicy). A task that is not
+// classified there, or whose isolation is not proven, does not run. Elsewhere this changes nothing.
+// Keep this block LAST so that it sees every event defined above.
+foreach (Schedule::events() as $event) {
+    $event->when(fn () => app(StagingSchedulePolicy::class)->permits($event));
+    if (StagingSchedulePolicy::appliesHere() && $event->withoutOverlapping) {
+        // A run killed by the one-minute oneshot timeout must not lock its task for the default 24 hours.
+        $event->expiresAt = StagingSchedulePolicy::MUTEX_MINUTES;
+    }
+}
