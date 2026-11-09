@@ -29,6 +29,13 @@ unexpected sudoers rule, symlink or wrong ownership in the staging-next tree): s
 Note: the preflight parses the nginx configuration files itself (it never runs `nginx`). The installer later
 runs the authoritative `nginx -t`/`nginx -T` check; a preflight PASS therefore does not replace that check.
 
+The preflight accepts exactly one pre-existing staging-next sudoers rule besides the 1.4.x forms: the helper 1.0.2
+`preflight` rule (`deploy-staging-next ALL=(root) NOSETENV: NOPASSWD: .../staging-next/1.0.2/wpcaregrid-deploy-staging-next-priv preflight`,
+either tag order - sudo tags are order-independent). It is accepted only while the installed 1.0.2 entrypoint and
+profiles module match the audited sha256 pins (deploy/release-manifests/staging-next-helper.json), are root-owned with
+modes 0755/0644, and their directory chain is root-owned and not group/other writable; that helper only performs a
+read-only `preflight` (lstat of the pinned application directory). Any other, broader or modified rule is a STOP.
+
 ## Step 1 - prepare the six files on the Owner machine (read-only for the host)
 
 ```sh

@@ -64,6 +64,18 @@ SUDOERS_LINE = re.compile(
     r"stage \"[^\"\n]+\"|deploy \"[^\"\n]+\")\Z")
 MIB = 1024 * 1024
 
+# The installed staging-next helper 1.0.2 (read-only `preflight`) and its sudoers rule. Sudo tag order
+# (NOPASSWD/NOSETENV) is irrelevant to semantics, so exactly these two spellings of the one rule are accepted,
+# and only while the installed helper bytes are the audited ones (deploy/release-manifests/staging-next-helper.json).
+LEGACY_102_DIR = "/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.2"
+LEGACY_102_ENTRYPOINT = LEGACY_102_DIR + "/wpcaregrid-deploy-staging-next-priv"
+LEGACY_102_MODULE = LEGACY_102_DIR + "/wpcaregrid_deploy_profiles.py"
+LEGACY_102_ENTRY_SHA256 = "c874dd85b8555fdcac94372f3b488857115bcd08e4f3548e74286bfdea3dbf57"
+LEGACY_102_MODULE_SHA256 = "80bbe2cb1ff40a1fc8f3ad6e04e6e7cdc1b5438a490e4720e165839cb5c82947"
+LEGACY_102_RULES = frozenset(
+    f"deploy-staging-next ALL=(root) {tags} {LEGACY_102_ENTRYPOINT} preflight"
+    for tags in ("NOPASSWD: NOSETENV:", "NOSETENV: NOPASSWD:"))
+
 
 class Host:
     """Filesystem/command access. `root` is "/" in production; tests point it at a fixture tree."""
@@ -225,6 +237,28 @@ def root_chain(h, r, cid, path, terminal_mode=None):
                    "BLOCKED", "installer_directory_metadata")
             return
     r.line(cid, "REQUIRED_PRESENT", path)
+
+
+def legacy_102_problem(h):
+    """None when the helper behind the legacy 1.0.2 sudoers rule is exactly the audited read-only helper:
+    both files regular, root-owned, correct mode, pinned sha256, and every parent root-owned and not writable
+    by group/other. Otherwise a short reason (hashes only, no content)."""
+    cursor = ""
+    for part in [x for x in LEGACY_102_DIR.split("/") if x]:
+        cursor += "/" + part
+        info, _ = h.lstat(cursor)
+        if info is None or not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) \
+                or info.st_uid != h.root_uid or mode_of(info) & 0o022:
+            return "directory:" + cursor
+    for label, path, pin, mode in (("entrypoint", LEGACY_102_ENTRYPOINT, LEGACY_102_ENTRY_SHA256, 0o755),
+                                   ("module", LEGACY_102_MODULE, LEGACY_102_MODULE_SHA256, 0o644)):
+        info, _ = h.lstat(path)
+        if info is None or not stat.S_ISREG(info.st_mode) or info.st_uid != h.root_uid or mode_of(info) != mode:
+            return label + "_metadata"
+        digest = sha256_file(h, path)
+        if digest != pin:
+            return f"{label}_sha256={digest}"
+    return None
 
 
 def source_chain_problems(h, deploy_uid):
@@ -608,6 +642,7 @@ def check_identity_and_helpers(h, r):
     names = h.listdir("/etc/sudoers.d") or []
     related = [n for n in names if "wpcaregrid" in n or "staging" in n]
     bad = []
+    legacy_rules = 0
     files = [("/etc/sudoers", "sudoers")] + [("/etc/sudoers.d/" + n, n) for n in names]
     for full, n in files:
         info, err = h.lstat(full)
@@ -629,11 +664,20 @@ def check_identity_and_helpers(h, r):
             directive = re.match(r"[#@]include(dir)?\s", line)
             if directive and n != "sudoers":
                 bad.append(f"{n}:include@{number}")
+            elif line in LEGACY_102_RULES:
+                legacy_rules += 1
             elif line and not line.startswith("#") and ("deploy-staging-next" in line or "/wpcaregrid-deploy/staging-next/" in line) \
                     and not SUDOERS_LINE.fullmatch(line):
                 bad.append(f"{n}:rule@{number}")
+    legacy_note = ""
+    if legacy_rules:
+        problem = legacy_102_problem(h)
+        if problem:
+            bad.append("legacy_1_0_2_helper_unverified:" + problem)
+        else:
+            legacy_note = f" legacy_1.0.2_preflight_rules={legacy_rules}(helper bytes verified)"
     r.line("sudoers.inventory", "MISMATCH" if bad else "INFO",
-           f"wpcaregrid files={','.join(related) or 'none'}" + (f" unexpected={','.join(bad)}" if bad else ""),
+           f"wpcaregrid files={','.join(related) or 'none'}" + legacy_note + (f" unexpected={','.join(bad)}" if bad else ""),
            "STOP", "unexpected_sudoers_state")
     out = h.run(["/usr/sbin/visudo", "-c"])
     r.line("sudoers.syntax", "UNKNOWN" if out is None else "REQUIRED_PRESENT" if out[0] == 0 else "MISMATCH",

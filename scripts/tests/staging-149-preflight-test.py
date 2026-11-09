@@ -578,6 +578,173 @@ class NarrowedFollowTreeTests(Fixture):
         self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
 
 
+REPORTED_LEGACY_RULE = ("deploy-staging-next ALL=(root) NOSETENV: NOPASSWD: "
+                        "/usr/local/libexec/wpcaregrid-deploy/staging-next/1.0.2/wpcaregrid-deploy-staging-next-priv preflight")
+CANONICAL_LEGACY_RULE = REPORTED_LEGACY_RULE.replace("NOSETENV: NOPASSWD:", "NOPASSWD: NOSETENV:")
+STOP_SUDOERS = "STAGING_149_PREFLIGHT=STOP;CODE=unexpected_sudoers_state"
+
+
+class LegacyHelper102Tests(Fixture):
+    ENTRY = b"fixture legacy entrypoint 1.0.2"
+    MODULE = b"fixture legacy profiles module 1.0.2"
+
+    def stage_legacy(self, entry=None, module=None, entry_mode=0o755, module_mode=0o644, pin=True):
+        directory = self.put(M.LEGACY_102_DIR, directory=True, mode=0o755)
+        for parent in ("/usr/local/libexec", "/usr/local/libexec/wpcaregrid-deploy"):
+            os.chmod(self.path(parent), 0o755)
+        self.put(M.LEGACY_102_ENTRYPOINT, self.ENTRY if entry is None else entry, entry_mode)
+        self.put(M.LEGACY_102_MODULE, self.MODULE if module is None else module, module_mode)
+        if pin:
+            for name, data in (("LEGACY_102_ENTRY_SHA256", self.ENTRY), ("LEGACY_102_MODULE_SHA256", self.MODULE)):
+                patcher = mock.patch.object(M, name, hashlib.sha256(data).hexdigest())
+                patcher.start()
+                self.addCleanup(patcher.stop)
+        return directory
+
+    def rule_file(self, line=REPORTED_LEGACY_RULE, name="wpcaregrid-staging-next", mode=0o440):
+        return self.put("/etc/sudoers.d/" + name, line + "\n", mode)
+
+    # ---- the reported VPS state
+    def test_the_reported_legacy_rule_with_the_audited_helper_passes(self):
+        self.stage_legacy()
+        self.rule_file()
+        final, _, lines = self.result()
+        self.assertEqual(final, "STAGING_149_PREFLIGHT=PASS", "\n".join(lines))
+        inventory = next(l for l in lines if l.startswith("CHECK|sudoers.inventory|"))
+        self.assertIn("legacy_1.0.2_preflight_rules=1(helper bytes verified)", inventory)
+
+    def test_both_tag_spellings_are_accepted_even_together(self):
+        self.stage_legacy()
+        self.assertEqual(M.LEGACY_102_RULES, {REPORTED_LEGACY_RULE, CANONICAL_LEGACY_RULE})
+        self.put("/etc/sudoers.d/wpcaregrid-staging-next", REPORTED_LEGACY_RULE + "\n" + CANONICAL_LEGACY_RULE + "\n", 0o440)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+
+    def test_the_real_pinned_hashes_match_the_repository_helper_sources(self):
+        manifest = (ROOT / "deploy" / "release-manifests" / "staging-next-helper.json").read_text(encoding="utf-8")
+        self.assertIn(M.LEGACY_102_ENTRY_SHA256, manifest)
+        self.assertIn(M.LEGACY_102_MODULE_SHA256, manifest)
+        self.assertEqual(hashlib.sha256((ROOT / "scripts" / "wpcaregrid-deploy-env-priv.py").read_bytes()).hexdigest(),
+                         M.LEGACY_102_ENTRY_SHA256)
+        self.assertEqual(hashlib.sha256((ROOT / "scripts" / "wpcaregrid_deploy_profiles.py").read_bytes()).hexdigest(),
+                         M.LEGACY_102_MODULE_SHA256)
+        self.assertIn(M.LEGACY_102_ENTRYPOINT, manifest)
+
+    def test_the_rule_matches_what_the_audited_helper_authorizes(self):
+        source = (ROOT / "scripts" / "wpcaregrid_deploy_profiles.py").read_text(encoding="utf-8")
+        self.assertIn('operations=frozenset({"preflight"})', source)
+        self.assertIn(M.LEGACY_102_ENTRYPOINT, source)
+        helper = (ROOT / "scripts" / "wpcaregrid-deploy-env-priv.py").read_text(encoding="utf-8")
+        self.assertNotIn("subprocess", helper)
+        self.assertNotIn("subprocess", source)
+
+    # ---- helper not proven => STOP
+    def test_a_rule_without_a_verifiable_helper_stops(self):
+        self.rule_file()
+        final, _, lines = self.result()
+        self.assertEqual(final, STOP_SUDOERS)
+        self.assertTrue(any("legacy_1_0_2_helper_unverified:directory:" in l for l in lines))
+
+    def test_tampered_or_replaced_helper_bytes_stop_and_show_only_the_hash(self):
+        self.stage_legacy()
+        self.rule_file()
+        self.put(M.LEGACY_102_MODULE, b"tampered", 0o644)
+        os.chmod(self.path(M.LEGACY_102_MODULE), 0o644)
+        final, _, lines = self.result()
+        self.assertEqual(final, STOP_SUDOERS)
+        self.assertTrue(any("module_sha256=" + hashlib.sha256(b"tampered").hexdigest() in l for l in lines))
+        self.put(M.LEGACY_102_MODULE, self.MODULE, 0o644)
+        os.chmod(self.path(M.LEGACY_102_ENTRYPOINT), 0o644)
+        self.put(M.LEGACY_102_ENTRYPOINT, b"other entry", 0o755)
+        self.assertEqual(self.result()[0], STOP_SUDOERS)
+
+    def test_helper_files_need_root_ownership_exact_modes_and_a_non_writable_chain(self):
+        self.stage_legacy()
+        self.rule_file()
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+        os.chmod(self.path(M.LEGACY_102_ENTRYPOINT), 0o775)
+        self.assertEqual(self.result()[0], STOP_SUDOERS)
+        os.chmod(self.path(M.LEGACY_102_ENTRYPOINT), 0o755)
+        os.chmod(self.path(M.LEGACY_102_MODULE), 0o664)
+        self.assertEqual(self.result()[0], STOP_SUDOERS)
+        os.chmod(self.path(M.LEGACY_102_MODULE), 0o644)
+        for directory in (M.LEGACY_102_DIR, "/usr/local/libexec/wpcaregrid-deploy", "/usr/local/libexec", "/usr"):
+            os.chmod(self.path(directory), 0o775)
+            self.assertEqual(self.result()[0], STOP_SUDOERS, directory)
+            os.chmod(self.path(directory), 0o755)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+
+    def test_helper_owned_by_a_non_root_uid_stops(self):
+        self.stage_legacy()
+        self.rule_file()
+        for path in (M.LEGACY_102_ENTRYPOINT, M.LEGACY_102_MODULE, M.LEGACY_102_DIR, "/usr/local/libexec"):
+            UidHost.overrides = {path: UID + 5}
+            host = UidHost(root=self.root, euid=UID, root_uid=UID, runner=self.runner, hostname="stg1")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                M.main(host)
+            self.assertEqual(out.getvalue().splitlines()[-1], STOP_SUDOERS, path)
+        UidHost.overrides = {}
+
+    def test_symlinked_helper_files_stop(self):
+        self.stage_legacy()
+        self.rule_file()
+        os.unlink(self.path(M.LEGACY_102_MODULE))
+        self.put("/elsewhere/module.py", self.MODULE, 0o644)
+        os.symlink(self.path("/elsewhere/module.py"), self.path(M.LEGACY_102_MODULE))
+        self.assertEqual(self.result()[0], STOP_SUDOERS)
+
+    def test_a_broken_helper_without_any_legacy_rule_does_not_stop_the_preflight(self):
+        self.stage_legacy()
+        self.put(M.LEGACY_102_MODULE, b"tampered", 0o644)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+
+    # ---- anything but exactly that rule stays a STOP
+    def test_every_variation_of_the_rule_stays_a_stop(self):
+        self.stage_legacy()
+        base = REPORTED_LEGACY_RULE
+        entry = M.LEGACY_102_ENTRYPOINT
+        variants = {
+            "other_version": base.replace("/1.0.2/", "/1.0.3/"),
+            "other_operation": base.replace("preflight", "verify-install"),
+            "deploy_operation": base.replace("preflight", "deploy"),
+            "wildcard_arg": base + " *",
+            "wildcard_glued": base + "*",
+            "two_operations": base + " deploy",
+            "operation_list": base + ", /bin/sh",
+            "no_operation": base.rsplit(" preflight", 1)[0],
+            "runas_all": base.replace("ALL=(root)", "ALL=(ALL)"),
+            "runas_all_groups": base.replace("ALL=(root)", "ALL=(root:ALL)"),
+            "other_host": base.replace("ALL=(root)", "localhost=(root)"),
+            "other_user": base.replace("deploy-staging-next ", "deploy "),
+            "any_user": base.replace("deploy-staging-next ", "ALL "),
+            "setenv": base.replace("NOSETENV:", "SETENV:"),
+            "extra_tag": base.replace("NOSETENV: NOPASSWD:", "NOSETENV: NOPASSWD: NOEXEC:"),
+            "no_nopasswd": base.replace("NOSETENV: NOPASSWD:", "NOSETENV:"),
+            "extra_space": base.replace("NOSETENV: NOPASSWD:", "NOSETENV:  NOPASSWD:"),
+            "other_binary": base.replace("wpcaregrid-deploy-staging-next-priv", "wpcaregrid-deploy-staging-next-priv2"),
+            "other_dir": base.replace("/staging-next/1.0.2/", "/staging-next/1.0.2/../1.0.2/"),
+            "semicolon": base + ";",
+            "uppercase_op": base.replace("preflight", "Preflight"),
+        }
+        for name, line in variants.items():
+            self.rule_file(line, name="wpcaregrid-staging-next", mode=0o640)
+            self.assertEqual(self.result()[0], STOP_SUDOERS, name)
+
+    def test_the_legacy_rule_does_not_excuse_a_second_broader_rule_in_the_same_file(self):
+        self.stage_legacy()
+        self.put("/etc/sudoers.d/wpcaregrid-staging-next",
+                 REPORTED_LEGACY_RULE + "\n" + REPORTED_LEGACY_RULE.replace("preflight", "deploy") + "\n", 0o440)
+        final, _, lines = self.result()
+        self.assertEqual(final, STOP_SUDOERS)
+        self.assertTrue(any("wpcaregrid-staging-next:rule@2" in l for l in lines))
+
+    def test_rule_text_is_still_not_printed(self):
+        self.stage_legacy()
+        self.rule_file(REPORTED_LEGACY_RULE.replace("preflight", "deploy"))
+        _, _, lines = self.result()
+        self.assertNotIn("NOPASSWD", "\n".join(lines))
+
+
 class StagedSourceTests(Fixture):
     def test_correct_staged_files_pass_and_are_reported(self):
         self.stage_sources()
