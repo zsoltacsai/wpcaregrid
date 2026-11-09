@@ -87,12 +87,14 @@ class StripeCatalogueController extends Controller
             'confirm.accepted' => __('owner.stripe_catalogue.errors.confirm'),
         ]);
 
-        // The Owner types the mode being changed: TEST or LIVE cannot be approved by accident.
-        if (trim($data['confirm_text']) !== 'APPLY '.strtoupper($operation->mode)) {
-            return back()->with('owner_error', $this->refusal('confirm_text'));
-        }
-
+        // The Owner types what is being done and in which mode: linking existing objects is "LINK", anything that
+        // would create Stripe objects is "APPLY"; TEST or LIVE cannot be approved by accident.
         try {
+            $verb = $manager->linksOnly($operation, array_values($data['items'])) ? 'LINK ' : 'APPLY ';
+            if (trim($data['confirm_text']) !== $verb.strtoupper($operation->mode)) {
+                return back()->with('owner_error', $this->refusal('confirm_text'));
+            }
+
             $manager->apply($operation, array_values($data['items']), $request->user());
         } catch (CatalogueRefused|CatalogueGatewayException $e) {
             AdminAudit::record($request->user(), 'stripe_catalogue.apply_refused', 'stripe_catalogue', $operation->id, ['code' => $e->reason]);
@@ -106,7 +108,7 @@ class StripeCatalogueController extends Controller
     /** Link an existing Stripe Product to a product type on the Owner's explicit decision (local change only). */
     public function mapProduct(Request $request, string $productType, CatalogueManager $manager): RedirectResponse
     {
-        $data = $request->validate(['stripe_product_id' => ['required', 'string', 'regex:/^prod_[A-Za-z0-9_]{3,96}$/']]);
+        $data = $request->validate(['stripe_product_id' => ['required', 'string', 'regex:/^prod_[A-Za-z0-9_]{3,96}$/'], 'confirm' => ['accepted']], ['confirm.accepted' => __('owner.stripe_catalogue.errors.confirm')]);
 
         try {
             $manager->mapProduct($productType, $data['stripe_product_id'], $request->user());
@@ -117,6 +119,22 @@ class StripeCatalogueController extends Controller
         }
 
         return back()->with('status', __('owner.stripe_catalogue.product_linked'));
+    }
+
+    /** Link one existing Stripe Price to one catalogue price on the Owner's explicit decision (local change only). */
+    public function mapPrice(Request $request, string $priceKey, CatalogueManager $manager): RedirectResponse
+    {
+        $data = $request->validate(['stripe_price_id' => ['required', 'string', 'regex:/^price_[A-Za-z0-9_]{3,96}$/'], 'confirm' => ['accepted']], ['confirm.accepted' => __('owner.stripe_catalogue.errors.confirm')]);
+
+        try {
+            $manager->mapPrice($priceKey, $data['stripe_price_id'], $request->user());
+        } catch (CatalogueRefused|CatalogueGatewayException $e) {
+            AdminAudit::record($request->user(), 'stripe_catalogue.apply_refused', 'stripe_catalogue', 'price:'.mb_substr($priceKey, 0, 100), ['code' => $e->reason]);
+
+            return back()->with('owner_error', $this->refusal($e->reason));
+        }
+
+        return back()->with('status', __('owner.stripe_catalogue.price_linked'));
     }
 
     /** @return array{kind: string, message: string, code: string} */

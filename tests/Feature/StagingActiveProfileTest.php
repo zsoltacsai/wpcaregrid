@@ -300,7 +300,7 @@ class StagingActiveProfileTest extends TestCase
             ['GET', '/checkout/cancel/abc'], ['POST', '/stripe/webhook'], ['GET', '/account/billing'],
             ['POST', '/account/billing/payment-method'], ['POST', '/account/subscriptions/1/cancel'],
             ['POST', '/account/subscriptions/1/change'], ['POST', '/account/offers/1/pay'], ['POST', '/account/offers/1/accept'], ['POST', '/account/websites/purchase'],
-            ['POST', '/owner/pricing/verify-stripe'], ['POST', '/owner/pricing/stripe-catalogue/preview'], ['POST', '/owner/pricing/stripe-catalogue/products/wordpress'], ['POST', '/owner/pricing/stripe-catalogue/1/apply'], ['PUT', '/owner/pricing/prices/1'], ['POST', '/owner/pricing/prices/1/publish'], ['POST', '/owner/coupons'], ['PUT', '/owner/coupons/1'],
+            ['POST', '/owner/pricing/verify-stripe'], ['POST', '/owner/pricing/stripe-catalogue/preview'], ['POST', '/owner/pricing/stripe-catalogue/products/wordpress'], ['POST', '/owner/pricing/stripe-catalogue/prices/wordpress.basic.monthly.hu'], ['POST', '/owner/pricing/stripe-catalogue/1/apply'], ['PUT', '/owner/pricing/prices/1'], ['POST', '/owner/pricing/prices/1/publish'], ['POST', '/owner/coupons'], ['PUT', '/owner/coupons/1'],
             ['DELETE', '/owner/coupons/1'], ['POST', '/owner/offers'], ['POST', '/owner/offers/1/send'],
         ];
         foreach ($stripe as [$method, $path]) {
@@ -346,7 +346,7 @@ class StagingActiveProfileTest extends TestCase
             [, $dispatched] = $this->runGate($path);
             $this->assertTrue($dispatched, 'GET '.$path);
         }
-        foreach (['POST' => '/owner/coupons', 'PUT' => '/owner/coupons/1', 'POST ' => '/owner/offers/1/send', 'POST  ' => '/owner/pricing/stripe-catalogue/preview', 'POST   ' => '/owner/pricing/stripe-catalogue/1/apply', 'POST    ' => '/owner/pricing/stripe-catalogue/products/wordpress'] as $method => $path) {
+        foreach (['POST' => '/owner/coupons', 'PUT' => '/owner/coupons/1', 'POST ' => '/owner/offers/1/send', 'POST  ' => '/owner/pricing/stripe-catalogue/preview', 'POST   ' => '/owner/pricing/stripe-catalogue/1/apply', 'POST    ' => '/owner/pricing/stripe-catalogue/products/wordpress', 'POST     ' => '/owner/pricing/stripe-catalogue/prices/wordpress.basic.monthly.hu'] as $method => $path) {
             [, $dispatched] = $this->runGate($path, trim($method));
             $this->assertFalse($dispatched, trim($method).' '.$path);
         }
@@ -536,6 +536,7 @@ class StagingActiveProfileTest extends TestCase
         'stripe POST owner/offers/{offer}/send',
         'stripe POST owner/pricing/prices/{price}/publish',
         'stripe POST owner/pricing/stripe-catalogue/preview',
+        'stripe POST owner/pricing/stripe-catalogue/prices/{priceKey}',
         'stripe POST owner/pricing/stripe-catalogue/products/{productType}',
         'stripe POST owner/pricing/stripe-catalogue/{operation}/apply',
         'stripe POST owner/pricing/verify-stripe',
