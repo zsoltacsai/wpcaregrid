@@ -2,12 +2,12 @@
 
 namespace Tests\Feature\Owner;
 
-use App\Console\Commands\Monitoring\RunMonitoring;
 use App\Connector\HealthStatus;
+use App\Console\Commands\Monitoring\RunMonitoring;
 use App\Jobs\Monitoring\RecordWorkerPulse;
+use App\Models\MonitoringResult;
 use App\Monitoring\MonitoringEngine;
 use App\Monitoring\MonitoringReason;
-use App\Models\MonitoringResult;
 use App\Owner\SystemStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
