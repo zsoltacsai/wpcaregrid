@@ -600,6 +600,46 @@ class SafetyTests(Host):
             with self.assertRaises(SystemExit):
                 namespace["stop"]("code")
 
+    def test_readback_rejects_tampered_content_mode_links_owner_and_extra_files(self):
+        self.run_host()
+        namespace = self.load()
+        victim = self.src / NAMES[0]
+
+        def readback():
+            fd = os.open(self.priv, os.O_RDONLY | os.O_DIRECTORY)
+            out = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+                    namespace["readback"](fd, ENTRY.pw_uid, ENTRY.pw_gid)
+            finally:
+                os.close(fd)
+            return out.getvalue().strip()
+
+        original = victim.read_bytes()
+        victim.write_bytes(b"changed")
+        self.assertEqual(readback(), "STAGING_149_STAGE=STOP;CODE=readback_hash:" + NAMES[0])
+        victim.write_bytes(original)
+        victim.chmod(0o644)
+        self.assertEqual(readback(), "STAGING_149_STAGE=STOP;CODE=readback_metadata:" + NAMES[0])
+        victim.chmod(0o600)
+        os.link(victim, self.base / "second-link")
+        self.assertEqual(readback(), "STAGING_149_STAGE=STOP;CODE=readback_metadata:" + NAMES[0])
+        (self.base / "second-link").unlink()
+        (self.src / "extra.py").write_text("x")
+        self.assertEqual(readback(), "STAGING_149_STAGE=STOP;CODE=readback_contents")
+        (self.src / "extra.py").unlink()
+        self.src.chmod(0o755)
+        self.assertEqual(readback(), "STAGING_149_STAGE=STOP;CODE=directory_mode:" + self.src.name)
+        self.src.chmod(0o700)
+        fd = os.open(self.priv, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(len(namespace["readback"](fd, ENTRY.pw_uid, ENTRY.pw_gid)), 6)
+                with self.assertRaises(SystemExit):
+                    namespace["readback"](fd, ENTRY.pw_uid + 1, ENTRY.pw_gid)
+        finally:
+            os.close(fd)
+
     def test_a_failing_readback_rolls_everything_back(self):
         before = self.snapshot()
         namespace = self.load()

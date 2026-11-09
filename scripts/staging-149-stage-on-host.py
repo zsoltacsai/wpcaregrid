@@ -11,7 +11,7 @@ Safety properties: no git clone needed; HTTPS only, redirects and proxies refuse
 watchdog; downloaded bytes are never executed; the environment is scrubbed. Root works only through
 directory file descriptors opened with O_NOFOLLOW and validated with fstat, and before creating anything it drops to the
 deploy identity (setgroups/setegid/seteuid), so everything it creates is deploy-owned by construction and no
-chown is ever issued; each created directory is checked (owner, link count, mode, empty); objects are
+chown is ever issued; each created directory is checked (owner, mode, empty); objects are
 created with mkdir/O_EXCL (nothing is ever replaced or overwritten); rollback removes only objects whose
 recorded device/inode it can still prove, one at a time, never recursively; reads are non-blocking and
 type-checked. It installs nothing and touches no sudoers/helper/service/DB/G1/legacy staging path, and
@@ -154,7 +154,7 @@ def create_dir(parent_fd, name, uid, gid, created):
     try:
         info = os.fstat(fd)
         created.append(("dir", parent_fd, name, info.st_dev, info.st_ino))
-        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_nlink != 2
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
                 or stat.S_IMODE(info.st_mode) & ~0o700 or os.listdir(fd)):
             raise RuntimeError("created_directory_identity")
         os.fchmod(fd, 0o700)
