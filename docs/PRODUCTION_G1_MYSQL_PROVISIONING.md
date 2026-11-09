@@ -49,9 +49,9 @@ files before copying):
 
 | Source artifact | SHA-256 |
 | --- | --- |
-| `production-g1-mysql.py` | `5bddfcc886c8f94653f1aa9c55c63da7dca259042156db3e7e8a5378639e215a` |
+| `production-g1-mysql.py` | `457ddb292f2ddf1f094375254a031de3bb6a450838cb201429363cb2397f02da` |
 | `production_g1_mysql_contract.py` | `45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3` |
-| `production-g1-mysql-manifest.json` | `87f7aa3a8acee74fbf0bb697ec5e93b540fe9484927bab4212b24df71e2d22e9` |
+| `production-g1-mysql-manifest.json` | `290ed20acfdac72f4150f572521b8f0e6564de33f7ff2979fc5b5a2381410732` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not
@@ -121,11 +121,29 @@ starts, although the configured file is honored at runtime; only `stderr` or the
 exact path is accepted there, and the exact path is still required from
 `my_print_defaults`.
 
+### Shared log directory mode (`/var/log/mysql`)
+
+`provision-paths` first checks the four shared parent directories: `/var/lib` (`root:root 0755`),
+`/var/log/mysql`, `/var/tmp` (`root:root 1777`) and `/run/mysqld` (`mysql:mysql 0755`). The first package
+required `/var/log/mysql` to be exactly `mysql:adm 02750`. On Ubuntu 26.04.1 LTS with MySQL 8.4.13 the
+directory is `mysql:adm 0750` (no setgid bit), so `provision-paths` stopped with
+`managed_directory_mode_invalid` before it created anything. The package now accepts exactly `0750` and
+`02750` for `mysql:adm`: both give the owner full access, the group read/execute only and others nothing; the
+only difference is that the setgid bit makes *new* entries inherit group `adm`, which the G1 instances do not
+rely on because `provision-paths` creates their two log files with an explicit `mysql:mysql 0600` and mysqld
+only writes to those existing files. Every other mode (for example `0700`, `0751`, `0755`, `0770`, `02770`,
+`01750`, `04750`), another owner or group, or a symlink is still refused, and the other three shared
+directories and all instance paths keep their exact checks. The shared directory is never changed by the tool.
+The hotfix changes only `production-g1-mysql.py` and the manifest; the contract, the option files, the
+AppArmor profiles and the systemd drop-ins are byte-identical to the previous package.
+
 ### Upgrading an installed package
 
 The installer never replaces a managed file: it accepts an existing file only if
 it is byte-identical, so running a newer package over an installed one stops with
-`managed_file_content_mismatch`. There is no upgrade command. Before
+`managed_file_content_mismatch`. There is no upgrade command in the installer itself; the only supported
+in-place replacement is the narrow, hash-pinned operator tool `go4b-upgrade-installed-helper.py` of the
+log-directory hotfix (it replaces the installed helper and manifest and nothing else, see the runbook, GO-4b). Before
 initialization, the supported path is the Rollback procedure below (exact
 recorded files only, whose SHA-256 still matches the installed package) followed
 by a fresh `install` of the new package. This is also the path from the

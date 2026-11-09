@@ -46,6 +46,8 @@ def load(path, name):
 CONTRACT = load(SCRIPTS / "production_g1_mysql_contract.py", "production_g1_mysql_contract")
 ENGINE = load(OPS / "g1-state-check.py", "g1_state_check")
 sha = lambda data: hashlib.sha256(data).hexdigest()  # noqa: E731
+OLD_HELPER = "5bddfcc886c8f94653f1aa9c55c63da7dca259042156db3e7e8a5378639e215a"    # #328 bb7e20e as installed by GO-4
+OLD_MANIFEST = "87f7aa3a8acee74fbf0bb697ec5e93b540fe9484927bab4212b24df71e2d22e9"
 
 
 class ToolkitStaticTest(unittest.TestCase):
@@ -69,7 +71,7 @@ class ToolkitStaticTest(unittest.TestCase):
             elif path.suffix == ".sh" and shutil.which("bash"):
                 subprocess.run(["bash", "-n"], input=path.read_bytes(), check=True)
 
-    def test_engine_expectations_equal_the_328_package_and_generated_artifacts(self):
+    def test_engine_expectations_equal_the_current_package_and_generated_artifacts(self):
         generated = {p: sha(b) for p, b in CONTRACT.artifact_files().items()}
         script = (SCRIPTS / "production-g1-mysql.py").read_bytes()
         contract = (SCRIPTS / "production_g1_mysql_contract.py").read_bytes()
@@ -80,13 +82,23 @@ class ToolkitStaticTest(unittest.TestCase):
             "/usr/local/libexec/production_g1_mysql_contract.py": sha(contract),
             "/usr/local/libexec/production_g1_mysql_manifest.json": sha(manifest_raw),
         }
-        self.assertEqual(ENGINE.EXPECTED["328"], expected)
+        self.assertEqual(ENGINE.EXPECTED["328h"], expected)
         self.assertEqual(json.loads(manifest_raw)["installed_artifacts"],
                          {k: v for k, v in expected.items() if not k.endswith("manifest.json")})
         for path in ENGINE.CNF_ZZ:
             self.assertIn(path, generated)
         for path in ENGINE.CNF_90:
             self.assertNotIn(path, generated)
+
+    def test_engine_state_328_is_the_historical_bb7e20e_install_and_differs_only_in_helper_and_manifest(self):
+        libexec = "/usr/local/libexec/"
+        historical = {libexec + "wpcaregrid-g1-mysql.py": OLD_HELPER, libexec + "production_g1_mysql_manifest.json": OLD_MANIFEST}
+        for path, digest in historical.items():
+            self.assertEqual(ENGINE.EXPECTED["328"][path], digest)
+        changed = {p for p in ENGINE.EXPECTED["328"] if ENGINE.EXPECTED["328"][p] != ENGINE.EXPECTED["328h"][p]}
+        self.assertEqual(changed, set(historical))
+        self.assertEqual(set(ENGINE.EXPECTED["328"]), set(ENGINE.EXPECTED["328h"]))
+        self.assertEqual(ENGINE.TAGS["328h"], "G1_GO4B_POSTUPGRADE")
 
     def test_manifest_check_and_dryrun_and_diagnostic_pin_the_current_package(self):
         contract_sha = sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())
@@ -98,13 +110,34 @@ class ToolkitStaticTest(unittest.TestCase):
             self.assertIn(f'"{path}": "{sha(digest)}"', manifest_check)
         self.assertNotIn("mysql.conf.d/90-", manifest_check)
 
-    def test_fetch_script_pins_the_current_package_hashes(self):
+    def test_go3_fetch_script_keeps_pinning_the_historical_bb7e20e_package(self):
         text = (OPS / "go3-fetch-package.sh").read_text(encoding="utf-8")
+        self.assertIn(f"{OLD_HELPER} production-g1-mysql.py", text)
+        self.assertIn(f"{OLD_MANIFEST} production-g1-mysql-manifest.json", text)
+        self.assertIn("M=bb7e20e8c62d7977b7f2650b39d76d9b203198c4", text)
+        self.assertIn("--proto '=https'", text)
+
+    def test_hotfix_fetch_script_pins_the_current_package_hashes(self):
+        text = (OPS / "go4b-fetch-hotfix-package.sh").read_text(encoding="utf-8")
         for name in ("production-g1-mysql.py", "production_g1_mysql_contract.py", "production-g1-mysql-manifest.json"):
             self.assertIn(f"{sha((SCRIPTS / name).read_bytes())} {name}", text)
         self.assertIn(sha((SCRIPTS / "SHA256SUMS").read_bytes()) + " SHA256SUMS", text)
-        self.assertRegex(text, r"\nM=[0-9a-f]{40}\n")
         self.assertIn("--proto '=https'", text)
+        self.assertIn('[[ $M =~ ^[0-9a-f]{40}$ ]]', text)
+        self.assertIn("/root/wpcg-production-g1-mysql-hf-${M:0:7}", text)
+
+    def test_upgrade_script_pins_old_and_new_helper_and_manifest(self):
+        upgrade = load(OPS / "go4b-upgrade-installed-helper.py", "go4b_upgrade_static")
+        libexec = "/usr/local/libexec/"
+        self.assertEqual(upgrade.OLD[libexec + "wpcaregrid-g1-mysql.py"], OLD_HELPER)
+        self.assertEqual(upgrade.OLD[libexec + "production_g1_mysql_manifest.json"], OLD_MANIFEST)
+        self.assertEqual(upgrade.OLD, {p: ENGINE.EXPECTED["328"][p] for p in upgrade.OLD})
+        self.assertEqual(upgrade.NEW, {p: ENGINE.EXPECTED["328h"][p] for p in upgrade.NEW})
+        self.assertEqual(upgrade.NEW[libexec + "wpcaregrid-g1-mysql.py"], sha((SCRIPTS / "production-g1-mysql.py").read_bytes()))
+        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_manifest.json"],
+                         sha((SCRIPTS / "production-g1-mysql-manifest.json").read_bytes()))
+        self.assertEqual(upgrade.CONTRACT, libexec + "production_g1_mysql_contract.py")
+        self.assertEqual(upgrade.OLD[upgrade.CONTRACT], upgrade.NEW[upgrade.CONTRACT])
 
     def test_rollback_script_targets_exactly_the_nine_325_files(self):
         text = (OPS / "go2-rollback.sh").read_text(encoding="utf-8")
@@ -252,6 +285,155 @@ class DryRunAgainstRealMysqlTest(unittest.TestCase):
         out = self.run_dryrun({"mysqld.cnf": self.UBUNTU},
                               package=(SCRIPTS / "production_g1_mysql_contract.py").read_bytes() + b"#")
         self.assertIn("G1_GO3_DRYRUN=STOP;CODE=contract_file_hash_mismatch", out)
+
+
+DRIVER = r"""
+import hashlib, importlib.util, os, shutil, types
+spec = importlib.util.spec_from_file_location("up", "/ops/go4b-upgrade-installed-helper.py")
+up = importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+H, C, M = up.HELPER, up.CONTRACT, up.MANIFEST
+sha = lambda b: hashlib.sha256(b).hexdigest()
+OLDH, OLDM = b"old-helper\n", b"old-manifest\n"
+up.OLD[H], up.OLD[M] = sha(OLDH), sha(OLDM)          # fixtures stand in for the historical bytes
+CONTRACT_BYTES = open("/pkg-src/production_g1_mysql_contract.py", "rb").read()
+up.OLD[C] = up.NEW[C] = sha(CONTRACT_BYTES)
+
+def write(path, data, mode):
+    if os.path.lexists(path):
+        os.unlink(path)
+    with open(path, "wb") as f:
+        f.write(data)
+    os.chown(path, 0, 0); os.chmod(path, mode)
+
+def reset(active=(), verify="ok", pkg_tamper=False, helper=OLDH, helper_mode=0o755, contract=CONTRACT_BYTES,
+          manifest=OLDM, symlink=False, leftover=False, pkg_mode=0o700):
+    shutil.rmtree("/usr/local/libexec", ignore_errors=True); shutil.rmtree("/pkg", ignore_errors=True)
+    os.makedirs("/usr/local/libexec", mode=0o755); os.makedirs("/pkg", mode=pkg_mode); os.chmod("/pkg", pkg_mode)
+    write(H, helper, helper_mode); write(C, contract, 0o644); write(M, manifest, 0o644)
+    if symlink:
+        os.unlink(H); os.symlink("/etc/passwd", H)
+    if leftover:
+        write(H + ".g1-upgrade-tmp", b"x", 0o600)
+    for name in ("production-g1-mysql.py", "production-g1-mysql-manifest.json"):
+        data = open("/pkg-src/" + name, "rb").read() + (b"#" if pkg_tamper else b"")
+        write("/pkg/" + name, data, 0o600)
+    def run(args):
+        if args[1] == "is-active":
+            if args[2] in active:
+                return types.SimpleNamespace(returncode=0, stdout="active\n")
+            return types.SimpleNamespace(returncode=3, stdout="inactive\n")
+        if verify == "ok":
+            return types.SimpleNamespace(returncode=0, stdout="STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL\n")
+        return types.SimpleNamespace(returncode=3, stdout="G1_MYSQL=STOP;CODE=x\n")
+    return run
+
+def state():
+    out = []
+    for path in (H, C, M):
+        st = os.lstat(path)
+        out.append("%s:%o:%d:%d" % (sha(open(path, "rb").read())[:12], st.st_mode & 0o7777, st.st_uid, st.st_gid))
+    out.append("tmp=%s" % sorted(n for n in os.listdir("/usr/local/libexec") if n.endswith(".g1-upgrade-tmp")))
+    return " ".join(out)
+
+def scenario(name, twice=False, **kw):
+    run = reset(**kw)
+    results = []
+    for _ in range(2 if twice else 1):
+        try:
+            results.append(up.main("/pkg", run=run, euid=0))
+        except up.Stop as exc:
+            results.append("STOP;CODE=%s;ROLLED_BACK=%s" % (exc.code, exc.rolled_back))
+    print("SCENARIO %s | %s | %s" % (name, " || ".join(results), state()))
+
+scenario("pass")
+scenario("idempotent", twice=True)
+scenario("unit_active", active=("mysql@wpcaregrid-production-restore.service",))
+scenario("verify_fails", verify="bad")
+scenario("tampered_installed_helper", helper=b"foreign\n")
+scenario("tampered_package", pkg_tamper=True)
+scenario("symlinked_helper", symlink=True)
+scenario("leftover_tmp", leftover=True)
+scenario("changed_contract", contract=CONTRACT_BYTES + b"#")
+scenario("helper_mode_wrong", helper_mode=0o644)
+scenario("package_dir_group_writable", pkg_mode=0o770)
+"""
+
+
+@unittest.skipUnless(ready() or REQUIRE, "Docker / MySQL image unavailable")
+class HelperUpgradeToolTest(unittest.TestCase):
+    """go4b-upgrade-installed-helper.py as root in a disposable container, with fixture 'old' bytes."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not ready():
+            raise AssertionError("G1_REQUIRE_REAL_MYSQL=1 but Docker or the MySQL image is unavailable")
+        files = {
+            "/ops/go4b-upgrade-installed-helper.py": (OPS / "go4b-upgrade-installed-helper.py").read_bytes(),
+            "/ops/drive.py": DRIVER.encode(),
+        }
+        for name in ("production-g1-mysql.py", "production_g1_mysql_contract.py", "production-g1-mysql-manifest.json"):
+            files["/pkg-src/" + name] = (SCRIPTS / name).read_bytes()
+        done = subprocess.run(["docker", "run", "--rm", "-i", "--entrypoint", "bash", TEST_IMAGE, "-c",
+                               "tar -x -C / && python3 -I -B /ops/drive.py"],
+                              input=tar_of(files), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=300)
+        cls.output = done.stdout.decode()
+        cls.stderr = done.stderr.decode()
+        cls.scenarios = {}
+        for line in cls.output.splitlines():
+            if line.startswith("SCENARIO "):
+                name, result, state = [part.strip() for part in line[len("SCENARIO "):].split(" | ")]
+                cls.scenarios[name] = (result, state)
+
+    def scenario(self, name):
+        self.assertIn(name, self.scenarios, self.output + self.stderr)
+        return self.scenarios[name]
+
+    @staticmethod
+    def parts(state):
+        return tuple(state.split(" "))
+
+    def test_success_replaces_exactly_helper_and_manifest_with_root_owner_and_modes(self):
+        result, state = self.scenario("pass")
+        self.assertEqual(result, "G1_GO4B_HELPER_UPGRADE=PASS")
+        new_helper = sha((SCRIPTS / "production-g1-mysql.py").read_bytes())[:12]
+        new_manifest = sha((SCRIPTS / "production-g1-mysql-manifest.json").read_bytes())[:12]
+        contract = sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())[:12]
+        self.assertEqual(self.parts(state), (f"{new_helper}:755:0:0", f"{contract}:644:0:0",
+                                             f"{new_manifest}:644:0:0", "tmp=[]"))
+
+    def test_second_run_is_idempotent(self):
+        result, _ = self.scenario("idempotent")
+        self.assertEqual(result, "G1_GO4B_HELPER_UPGRADE=PASS || G1_GO4B_HELPER_UPGRADE=PASS;NOTE=already_upgraded")
+
+    def test_every_refusal_happens_before_any_write(self):
+        old_helper, old_manifest = sha(b"old-helper\n")[:12], sha(b"old-manifest\n")[:12]
+        refusals = {
+            "unit_active": "g1_unit_not_inactive",
+            "tampered_package": "package_file_hash_mismatch:production-g1-mysql.py",
+            "symlinked_helper": "not_a_regular_file:wpcaregrid-g1-mysql.py",
+            "leftover_tmp": "leftover_temporary_file",
+            "changed_contract": "installed_contract_hash_mismatch",
+            "helper_mode_wrong": "mode_invalid:wpcaregrid-g1-mysql.py",
+            "package_dir_group_writable": "package_directory_owner_or_mode_invalid",
+            "tampered_installed_helper": "installed_helper_or_manifest_unrecognized",
+        }
+        for name, code in refusals.items():
+            with self.subTest(name=name):
+                result, state = self.scenario(name)
+                self.assertEqual(result, f"STOP;CODE={code};ROLLED_BACK=None")
+                helper, _, manifest, tmp = self.parts(state)
+                self.assertTrue(manifest.startswith(old_manifest + ":644:0:0"), state)
+                if name not in ("symlinked_helper", "tampered_installed_helper", "helper_mode_wrong"):
+                    self.assertTrue(helper.startswith(old_helper + ":755:0:0"), state)
+                if name != "leftover_tmp":
+                    self.assertEqual(tmp, "tmp=[]")
+
+    def test_failed_post_check_restores_the_old_bytes_and_modes(self):
+        result, state = self.scenario("verify_fails")
+        self.assertEqual(result, "STOP;CODE=verify_install_failed;ROLLED_BACK=yes")
+        contract = sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())[:12]
+        self.assertEqual(self.parts(state), (sha(b"old-helper\n")[:12] + ":755:0:0", f"{contract}:644:0:0",
+                                             sha(b"old-manifest\n")[:12] + ":644:0:0", "tmp=[]"))
 
 
 if __name__ == "__main__":
