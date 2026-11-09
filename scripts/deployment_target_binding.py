@@ -28,6 +28,7 @@ import os
 import re
 import stat
 import sys
+import types
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -42,7 +43,18 @@ def _load_contract():
     path = Path(__file__).resolve().with_name("deployment_environment_contract.py")
     name = "_wpcg_target_binding_environment_contract"
     previous = sys.modules.get(name)
+    preloaded = globals().get("_PRELOADED_CONTRACT_SOURCE")
     try:
+        if preloaded is not None:
+            # A privileged loader already authenticated these exact bytes; do not
+            # read the contract from disk a second time.
+            if not isinstance(preloaded, bytes):
+                raise TargetRefused("environment_contract_unavailable")
+            module = types.ModuleType(name)
+            module.__file__ = str(path)
+            sys.modules[name] = module  # needed while dataclasses are created
+            exec(compile(preloaded, str(path), "exec", dont_inherit=True), module.__dict__)
+            return module
         spec = importlib.util.spec_from_file_location(name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module  # needed while dataclasses are created
@@ -52,7 +64,7 @@ def _load_contract():
         return module
     except TargetRefused:
         raise
-    except Exception:
+    except (Exception, SystemExit):
         raise TargetRefused("environment_contract_unavailable") from None
     finally:
         # Never leave (or keep trusting) a module registered under a private name.
@@ -268,12 +280,20 @@ def check_path(
                 raise TargetRefused("path_missing") from None
             info = None
             break
-        except OSError:
+        except Exception:
             raise TargetRefused("path_unavailable") from None
-        if stat.S_ISLNK(info.st_mode):
+        try:
+            is_link = stat.S_ISLNK(info.st_mode)
+        except Exception:
+            raise TargetRefused("path_unavailable") from None
+        if is_link:
             raise TargetRefused("path_symlink")
     if info is not None and expected_uid is not None:
-        if info.st_uid != expected_uid or stat.S_IMODE(info.st_mode) & 0o022:
+        try:
+            wrong = info.st_uid != expected_uid or bool(stat.S_IMODE(info.st_mode) & 0o022)
+        except Exception:
+            raise TargetRefused("path_unavailable") from None
+        if wrong:
             raise TargetRefused("path_permission_mismatch")
     return str(path)
 
@@ -299,9 +319,10 @@ def check_backup(
         raise TargetRefused("backup_identity_invalid")
     try:
         info = lstat_fn(checked)
-    except OSError:
+        regular = stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+    except Exception:
         raise TargetRefused("path_unavailable") from None
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+    if not regular:
         raise TargetRefused("backup_not_regular_file")
     return checked
 
@@ -316,7 +337,7 @@ def check_marker_document(target: DeploymentTarget, document: object) -> None:
         raise TargetRefused("marker_target_missing") from None
     if not present:
         raise TargetRefused("marker_target_missing")
-    if recorded != target.name:
+    if type(recorded) is not str or recorded != target.name:
         raise TargetRefused("marker_belongs_to_other_target")
 
 
@@ -374,6 +395,55 @@ def recovery_decision(
     if not (maintenance_active and workers_fenced and scheduler_fenced):
         raise TargetRefused("partial_deploy_gate_missing")
     return "recover"
+
+
+# Real transaction journal states of the staging-next database release
+# (scripts/staging_next_db_transaction_*.py). Order is the progression order.
+TRANSACTION_STATES = (
+    "PREPARED", "BACKUP_VERIFIED", "RESTORE_REHEARSAL_VERIFIED", "MIGRATION_REHEARSAL_VERIFIED",
+    "FENCES_CLOSED", "MIGRATING", "MIGRATIONS_VERIFIED", "RELEASE_ACTIVATED",
+    "ACCEPTANCE_VERIFIED", "COMPLETE", "RECOVERY_REQUIRED",
+)
+_FENCED_STATES = frozenset(TRANSACTION_STATES[4:9])
+
+
+def check_journal_identity(target: DeploymentTarget, journal: object) -> None:
+    """A transaction journal must name exactly this target's profile and database."""
+    _registered(target)
+    try:
+        profile = journal["profile"] if isinstance(journal, Mapping) else None
+        database = journal["database"] if isinstance(journal, Mapping) else None
+    except Exception:
+        raise TargetRefused("journal_identity_missing") from None
+    if profile is None or database is None:
+        raise TargetRefused("journal_identity_missing")
+    if type(profile) is not str or type(database) is not str:
+        raise TargetRefused("journal_belongs_to_other_target")
+    if profile != target.name or database != target.database:
+        raise TargetRefused("journal_belongs_to_other_target")
+
+
+def transaction_state_decision(target: DeploymentTarget, state: object, *, fences_verified: object) -> str:
+    """Classify a real journal state for resumption; anything uncertain is a STOP.
+
+    ``"resume"`` - the interrupted release may continue under the existing,
+    independently re-verified gate; ``"none"`` - nothing to recover.
+    A state past the fence step is resumable only when the caller has just
+    verified the worker/scheduler fences; ``RECOVERY_REQUIRED`` and unknown
+    states are never resumed automatically.
+    """
+    _registered(target)
+    if type(fences_verified) is not bool:
+        raise TargetRefused("recovery_flags_invalid")
+    if type(state) is not str or state not in TRANSACTION_STATES:
+        raise TargetRefused("recovery_phase_unknown")
+    if state == "COMPLETE":
+        return "none"
+    if state == "RECOVERY_REQUIRED":
+        raise TargetRefused("manual_recovery_required")
+    if state in _FENCED_STATES and not fences_verified:
+        raise TargetRefused("partial_deploy_gate_missing")
+    return "resume"
 
 
 _validate_registry(tuple(TARGETS.values()))

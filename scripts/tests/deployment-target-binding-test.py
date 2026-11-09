@@ -526,5 +526,125 @@ def types_module_with_file(path):
     return module
 
 
+class JournalAndTransactionStateTests(unittest.TestCase):
+    def test_journal_identity_must_match_target_profile_and_database(self):
+        B.check_journal_identity(NEXT, {"profile": "staging-next", "database": "wpcg_staging_next"})
+        for journal in ({"profile": "staging-next", "database": "wpcaregrid"},
+                        {"profile": "legacy-staging", "database": "wpcg_staging_next"},
+                        {"profile": "production", "database": "wpcg_prod_main"},
+                        {"profile": ["staging-next"], "database": "wpcg_staging_next"}):
+            with self.assertRaises(B.TargetRefused) as ctx:
+                B.check_journal_identity(NEXT, journal)
+            self.assertEqual(str(ctx.exception), "journal_belongs_to_other_target")
+        for journal in ({}, {"profile": "staging-next"}, None, "x", []):
+            with self.assertRaises(B.TargetRefused) as ctx:
+                B.check_journal_identity(NEXT, journal)
+            self.assertEqual(str(ctx.exception), "journal_identity_missing")
+
+        class Hostile(dict):
+            def __getitem__(self, key):
+                raise RuntimeError
+
+        with self.assertRaises(B.TargetRefused):
+            B.check_journal_identity(NEXT, Hostile(profile="staging-next", database="x"))
+
+    def test_real_states_resume_only_with_verified_fences_when_past_the_fence_step(self):
+        for state in B.TRANSACTION_STATES[:4]:
+            self.assertEqual(B.transaction_state_decision(NEXT, state, fences_verified=False), "resume")
+        for state in B.TRANSACTION_STATES[4:9]:
+            self.assertEqual(B.transaction_state_decision(NEXT, state, fences_verified=True), "resume")
+            with self.assertRaises(B.TargetRefused) as ctx:
+                B.transaction_state_decision(NEXT, state, fences_verified=False)
+            self.assertEqual(str(ctx.exception), "partial_deploy_gate_missing")
+        self.assertEqual(B.transaction_state_decision(NEXT, "COMPLETE", fences_verified=False), "none")
+
+    def test_recovery_required_unknown_states_and_non_bool_flags_are_stops(self):
+        with self.assertRaises(B.TargetRefused) as ctx:
+            B.transaction_state_decision(NEXT, "RECOVERY_REQUIRED", fences_verified=True)
+        self.assertEqual(str(ctx.exception), "manual_recovery_required")
+        for state in ("migrating", "", None, 5, ["COMPLETE"], "COMPLETE "):
+            with self.assertRaises(B.TargetRefused, msg=repr(state)):
+                B.transaction_state_decision(NEXT, state, fences_verified=True)
+        for flag in (1, "yes", None):
+            with self.assertRaises(B.TargetRefused):
+                B.transaction_state_decision(NEXT, "MIGRATING", fences_verified=flag)
+
+        class SneakyState(str):
+            def __eq__(self, other):
+                return True
+
+            __hash__ = str.__hash__
+
+        with self.assertRaises(B.TargetRefused):
+            B.transaction_state_decision(NEXT, SneakyState("anything"), fences_verified=True)
+
+    def test_state_list_matches_the_real_transaction_module(self):
+        text = (ROOT / "scripts" / "staging_next_db_transaction_1_4_8.py").read_text(encoding="utf-8")
+        block = text[text.index("STATES = ("):]
+        block = block[:block.index(")")]
+        import re as _re
+        self.assertEqual(tuple(_re.findall(r'"([A-Z_]+)"', block)), B.TRANSACTION_STATES)
+
+    def test_injected_lstat_failures_are_target_refused(self):
+        marker = NEXT.worker_fence_marker
+        for fn in (lambda p: 1 / 0, lambda p: object(), lambda p: types_namespace()):
+            with self.assertRaises(B.TargetRefused) as ctx:
+                B.check_path(NEXT, marker, "marker", lstat_fn=fn, expected_uid=0)
+            self.assertEqual(str(ctx.exception), "path_unavailable")
+        backup = next_backup()
+        fs = FakeFs(files=[backup])
+        broken = lambda p: object() if p == backup else fs.lstat(p)
+        with self.assertRaises(B.TargetRefused):
+            B.check_backup(NEXT, backup, lstat_fn=broken)
+
+    def test_marker_document_target_must_be_a_real_string(self):
+        class Sneaky(str):
+            def __ne__(self, other):
+                return False
+
+            def __eq__(self, other):
+                return True
+
+            __hash__ = str.__hash__
+
+        with self.assertRaises(B.TargetRefused):
+            B.check_marker_document(NEXT, {"target": Sneaky("anything")})
+
+
+def types_namespace():
+    import types
+    return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600)
+
+
+class PreloadedContractTests(unittest.TestCase):
+    def run_binding(self, preloaded):
+        import types as _types
+        source_path = ROOT / "scripts" / "deployment_target_binding.py"
+        module = _types.ModuleType("_binding_under_test")
+        module.__file__ = str(source_path)
+        module.__dict__["_PRELOADED_CONTRACT_SOURCE"] = preloaded
+        sys.modules[module.__name__] = module
+        try:
+            exec(compile(source_path.read_bytes(), str(source_path), "exec", dont_inherit=True), module.__dict__)
+        finally:
+            sys.modules.pop(module.__name__, None)
+        return module
+
+    def test_authenticated_contract_bytes_are_used_instead_of_the_disk_file(self):
+        real = (ROOT / "scripts" / "deployment_environment_contract.py").read_bytes()
+        self.assertEqual(self.run_binding(real).STAGING_NEXT.database, NEXT.database)
+        altered = real.replace(b'database="wpcg_staging_next"', b'database="wpcg_from_preload"', 1)
+        self.assertNotEqual(altered, real)
+        self.assertEqual(self.run_binding(altered).STAGING_NEXT.database, "wpcg_from_preload")
+
+    def test_invalid_preloaded_contract_is_target_refused_and_leaves_no_module_behind(self):
+        for bad in ("text", 5, b"raise SystemExit(3)", b"syntax error here", b"X = 1"):
+            with self.assertRaises(Exception, msg=repr(bad)) as ctx:
+                self.run_binding(bad)
+            self.assertEqual(type(ctx.exception).__name__, "TargetRefused", repr(bad))
+            self.assertEqual(str(ctx.exception), "environment_contract_unavailable")
+        self.assertNotIn("_wpcg_target_binding_environment_contract", sys.modules)
+
+
 if __name__ == "__main__":
     unittest.main()
