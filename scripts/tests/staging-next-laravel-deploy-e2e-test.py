@@ -924,7 +924,7 @@ def main():
             "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
             "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM migrations",
         ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
-        if unchanged_ledger != "72":
+        if unchanged_ledger != "73":
             raise RuntimeError("phase_b_failure_injection_modified_database")
         execute_migration = BACKEND._execute_exact_migration
 
@@ -1008,7 +1008,7 @@ def main():
             "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
             "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM migrations",
         ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
-        if stale_ledger != "72":
+        if stale_ledger != "73":
             raise RuntimeError("phase_b_stale_rehearsal_ran_target_migration")
         _mysql_query(
             BACKEND._load_phase_b_policy(profile), isolated=False,
@@ -1030,7 +1030,7 @@ def main():
             "-u", os.environ["WPCG_MYSQL_USER"], "--batch", "--skip-column-names",
             "wpcg_staging_next", "-e", "SELECT COUNT(*) FROM migrations",
         ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
-        if after_1419_ledger != "72":
+        if after_1419_ledger != "73":
             raise RuntimeError("mysql_errno_1419_changed_target_ledger")
         retry_state = json.loads(rehearsal_journals[0].read_text(encoding="utf-8"))
         if (retry_state.get("state") != "FENCES_CLOSED"
