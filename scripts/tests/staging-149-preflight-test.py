@@ -745,6 +745,42 @@ class LegacyHelper102Tests(Fixture):
         self.assertNotIn("NOPASSWD", "\n".join(lines))
 
 
+class SudoersLineSplittingTests(Fixture):
+    ENTRY = LegacyHelper102Tests.ENTRY
+    MODULE = LegacyHelper102Tests.MODULE
+    stage_legacy = LegacyHelper102Tests.stage_legacy
+
+    def test_control_and_unicode_line_separators_after_an_accepted_rule_stop(self):
+        self.stage_legacy()
+        for separator in ("\x0b", "\x0c", "\x1c", "\x85", "\u2028", "\r", "\x00"):
+            self.put("/etc/sudoers.d/wpcaregrid-staging-next", REPORTED_LEGACY_RULE + separator + ", /bin/sh\n", 0o640)
+            final, _, lines = self.result()
+            self.assertEqual(final, STOP_SUDOERS, repr(separator))
+            self.assertTrue(any("control_characters" in l for l in lines), repr(separator))
+
+    def test_crlf_files_that_mention_the_helper_stop_but_unrelated_crlf_files_do_not(self):
+        self.stage_legacy()
+        self.put("/etc/sudoers.d/wpcaregrid-staging-next", REPORTED_LEGACY_RULE + "\r\n", 0o640)
+        self.assertEqual(self.result()[0], STOP_SUDOERS)
+        os.unlink(self.path("/etc/sudoers.d/wpcaregrid-staging-next"))
+        self.put("/etc/sudoers.d/unrelated", "Defaults\tenv_reset\r\n", 0o640)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+
+    def test_leading_and_trailing_blanks_around_the_exact_rule_are_fine_but_inner_changes_are_not(self):
+        self.stage_legacy()
+        self.put("/etc/sudoers.d/wpcaregrid-staging-next", "\t  " + REPORTED_LEGACY_RULE + " \t\n", 0o640)
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+        self.put("/etc/sudoers.d/wpcaregrid-staging-next", REPORTED_LEGACY_RULE.replace(" ALL=", "\tALL=") + "\n", 0o640)
+        self.assertEqual(self.result()[0], STOP_SUDOERS)
+
+    def test_sudoers_files_are_split_on_lf_only(self):
+        self.stage_legacy()
+        self.put("/etc/sudoers.d/wpcaregrid-staging-next",
+                 "# header\n" + REPORTED_LEGACY_RULE + "\n" + REPORTED_LEGACY_RULE.replace("preflight", "deploy") + "\n", 0o640)
+        _, _, lines = self.result()
+        self.assertTrue(any("wpcaregrid-staging-next:rule@3" in l for l in lines))
+
+
 class StagedSourceTests(Fixture):
     def test_correct_staged_files_pass_and_are_reported(self):
         self.stage_sources()

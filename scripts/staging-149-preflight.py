@@ -659,8 +659,14 @@ def check_identity_and_helpers(h, r):
         if raw is None:
             bad.append(n + ":unreadable")
             continue
-        for number, line in enumerate(raw.decode("utf-8", "replace").splitlines(), 1):
-            line = line.strip()
+        text = raw.decode("utf-8", "replace")
+        if re.search(r"[^\x20-\x7e\t\n]", text) and ("deploy-staging-next" in text or "/wpcaregrid-deploy/staging-next/" in text):
+            # sudo splits lines on LF only; any other control/non-ASCII character in a file that grants
+            # staging-next rights could make this check and sudo see different lines.
+            bad.append(n + ":control_characters")
+            continue
+        for number, line in enumerate(text.split("\n"), 1):
+            line = line.strip(" \t")
             directive = re.match(r"[#@]include(dir)?\s", line)
             if directive and n != "sudoers":
                 bad.append(f"{n}:include@{number}")
