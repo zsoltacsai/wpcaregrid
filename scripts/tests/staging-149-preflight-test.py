@@ -555,6 +555,29 @@ class DistinctUidTests(Fixture):
         self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=STOP;CODE=unexpected_sudoers_state")
 
 
+class NarrowedFollowTreeTests(Fixture):
+    def test_os_release_symlink_into_etc_is_refused(self):
+        os.unlink(self.path("/etc/os-release"))
+        self.put("/etc/secret-ish", 'PRETTY_NAME="Leaked Value"\n')
+        os.symlink(self.path("/etc/secret-ish"), self.path("/etc/os-release"))
+        _, _, lines = self.result()
+        text = "\n".join(lines)
+        self.assertNotIn("Leaked Value", text)
+        self.assertTrue(any(l.startswith("CHECK|os.release|UNKNOWN") for l in lines))
+
+    def test_nginx_symlink_into_letsencrypt_is_refused(self):
+        os.unlink(self.path("/etc/nginx/conf.d/sites.conf"))
+        self.put("/etc/letsencrypt/vhost.conf", VHOST)
+        os.symlink(self.path("/etc/letsencrypt/vhost.conf"), self.path("/etc/nginx/conf.d/sites.conf"))
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=nginx_route_unknown")
+
+    def test_nginx_symlink_into_usr_share_nginx_is_followed(self):
+        os.unlink(self.path("/etc/nginx/conf.d/sites.conf"))
+        self.put("/usr/share/nginx/modules-available/vhost.conf", VHOST)
+        os.symlink(self.path("/usr/share/nginx/modules-available/vhost.conf"), self.path("/etc/nginx/conf.d/sites.conf"))
+        self.assertEqual(self.result()[0], "STAGING_149_PREFLIGHT=PASS")
+
+
 class StagedSourceTests(Fixture):
     def test_correct_staged_files_pass_and_are_reported(self):
         self.stage_sources()
