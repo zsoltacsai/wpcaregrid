@@ -61,8 +61,9 @@ final class StagingWorkerQueuePolicy
     private static function usesApplicationDatabase(string $queueConnection): bool
     {
         $applicationConnection = config('database.default');
+        $queueDriver = config("queue.connections.{$queueConnection}.driver");
         $queueDatabaseConnection = config("queue.connections.{$queueConnection}.connection");
-        if (! is_string($applicationConnection) || $applicationConnection === '') {
+        if ($queueDriver !== 'database' || ! is_string($applicationConnection) || $applicationConnection === '') {
             return false;
         }
 
