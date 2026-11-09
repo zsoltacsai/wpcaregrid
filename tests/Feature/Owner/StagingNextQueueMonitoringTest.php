@@ -5,6 +5,11 @@ namespace Tests\Feature\Owner;
 use App\Connector\HealthStatus;
 use App\Console\Commands\Monitoring\RunMonitoring;
 use App\Jobs\Monitoring\RecordWorkerPulse;
+use App\Models\MonitoringIncident;
+use App\Models\MonitoringResult;
+use App\Monitoring\MonitoringReason;
+use App\Monitoring\MonitoringScope;
+use App\Monitoring\MonitoringSeverity;
 use App\Monitoring\MonitoringEngine;
 use App\Owner\SystemStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -52,7 +57,87 @@ final class StagingNextQueueMonitoringTest extends TestCase
         $pulses = Queue::pushed(RecordWorkerPulse::class);
         $this->assertCount(1, $pulses);
         $this->assertSame('default', $pulses[0]['job']->queue);
+        $this->assertFalse(MonitoringResult::query()->where('check_id', 'platform.worker')
+            ->where('subject_type', 'queue')->where('subject_id', 'backups')->exists());
 
+    }
+
+    public function test_staging_next_resolves_legacy_paused_worker_state_without_pulsing_it(): void
+    {
+        config(['app.deployment_environment' => 'staging_next']);
+        Queue::fake();
+
+        $now = now();
+        $scope = MonitoringScope::Platform;
+        $workerIdentity = [
+            'check_id' => 'platform.worker',
+            'scope' => $scope->value,
+            'subject_type' => 'queue',
+            'subject_id' => 'default',
+        ];
+        MonitoringResult::query()->create($workerIdentity + [
+            'state' => HealthStatus::Healthy,
+            'severity' => null,
+            'reason_code' => MonitoringReason::MONITORING_OK,
+            'source' => 'queue',
+            'evidence' => ['pulse_age_seconds' => 1],
+            'observed_at' => $now,
+            'fresh_until' => $now->copy()->addMinutes(15),
+            'next_check_at' => $now->copy()->addMinutes(15),
+            'consecutive_failures' => 0,
+            'consecutive_successes' => 1,
+        ]);
+
+        $pausedIdentity = [
+            'check_id' => 'platform.worker',
+            'scope' => $scope->value,
+            'subject_type' => 'queue',
+            'subject_id' => 'backups',
+        ];
+        MonitoringResult::query()->create($pausedIdentity + [
+            'state' => HealthStatus::Critical,
+            'severity' => MonitoringSeverity::Critical,
+            'reason_code' => MonitoringReason::WORKER_STALE,
+            'source' => 'queue',
+            'evidence' => ['pulse_age_seconds' => 1800],
+            'observed_at' => $now->copy()->subMinutes(30),
+            'fresh_until' => $now->copy()->subMinutes(15),
+            'next_check_at' => $now->copy()->subMinutes(15),
+            'consecutive_failures' => 2,
+            'consecutive_successes' => 0,
+        ]);
+
+        $incidentKey = hash('sha256', implode('|', [
+            'platform.worker', $scope->value, 'queue', 'backups',
+        ]));
+        MonitoringIncident::query()->create([
+            'incident_key' => $incidentKey,
+            'generation' => 1,
+            'check_id' => 'platform.worker',
+            'scope' => $scope,
+            'subject_type' => 'queue',
+            'subject_id' => 'backups',
+            'severity' => MonitoringSeverity::Critical,
+            'reason_code' => MonitoringReason::WORKER_STALE,
+            'status' => 'open',
+            'evidence' => ['pulse_age_seconds' => 1800],
+            'opened_at' => $now->copy()->subMinutes(30),
+            'last_observed_at' => $now->copy()->subMinutes(20),
+            'observation_count' => 2,
+        ]);
+
+        $method = new ReflectionMethod(RunMonitoring::class, 'workers');
+        $method->invoke(app(RunMonitoring::class), app(MonitoringEngine::class));
+
+        $paused = MonitoringResult::query()->where($pausedIdentity)->firstOrFail();
+        $this->assertSame(HealthStatus::Healthy, $paused->state);
+        $this->assertSame(MonitoringReason::WORKER_PAUSED, $paused->reason_code);
+        $this->assertSame('backups', $paused->evidence['queue']);
+        $this->assertSame(false, $paused->evidence['configured']);
+        $this->assertSame('resolved', MonitoringIncident::query()
+            ->where('incident_key', $incidentKey)->value('status'));
+        $this->assertCount(1, Queue::pushed(RecordWorkerPulse::class));
+        $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[0]['job']->queue);
     }
 
     public function test_staging_next_does_not_dispatch_a_pulse_when_the_active_queue_identity_mismatches(): void
