@@ -7,6 +7,7 @@ use App\Jobs\Monitoring\RecordWorkerPulse;
 use App\Jobs\Monitoring\RunWebsiteProbe;
 use App\Models\AdminAuditEvent;
 use App\Models\MonitoringAlertDelivery;
+use App\Models\MonitoringIncident;
 use App\Models\MonitoringResult;
 use App\Models\PlatformBackupDelivery;
 use App\Models\PlatformDatabaseBackup;
@@ -324,6 +325,32 @@ final class RunMonitoring extends Command
     private function workers(MonitoringEngine $engine): void
     {
         $configured = (array) config('monitoring.worker_queues', []);
+
+        foreach (StagingWorkerQueuePolicy::inactiveWorkerQueueNames($configured) as $name) {
+            $identity = [
+                'check_id' => 'platform.worker',
+                'scope' => MonitoringScope::Platform->value,
+                'subject_type' => 'queue',
+                'subject_id' => $name,
+            ];
+            $result = MonitoringResult::query()->where($identity)->first();
+            $incidentKey = hash('sha256', implode('|', array_values($identity)));
+            $hasOpenIncident = MonitoringIncident::query()
+                ->where('incident_key', $incidentKey)
+                ->where('status', 'open')
+                ->exists();
+
+            // Resolve prior stale worker state only when this queue was monitored before.
+            if (! $result && ! $hasOpenIncident) {
+                continue;
+            }
+
+            $engine->record(new MonitoringObservation(
+                'platform.worker', MonitoringScope::Platform, 'queue', $name,
+                HealthStatus::Healthy, null, MonitoringReason::WORKER_PAUSED, 'queue',
+                ['configured' => false, 'queue' => $name], now(), 900, 1, 1, false,
+            ));
+        }
 
         foreach (StagingWorkerQueuePolicy::monitorableWorkerQueues($configured) as $name => $settings) {
             $result = MonitoringResult::query()->where('check_id', 'platform.worker')
