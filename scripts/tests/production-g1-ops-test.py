@@ -131,6 +131,20 @@ class ToolkitStaticTest(unittest.TestCase):
         self.assertIn("M=bb7e20e8c62d7977b7f2650b39d76d9b203198c4", text)
         self.assertIn("--proto '=https'", text)
 
+    def test_post_provision_states_are_the_hotfix_states_with_the_exact_go51_runtime_paths(self):
+        self.assertEqual(ENGINE.EXPECTED["328hp"], ENGINE.EXPECTED["328h"])
+        self.assertEqual(ENGINE.EXPECTED["328h2p"], ENGINE.EXPECTED["328h2"])
+        self.assertEqual(ENGINE.PROVISIONED_STATES, ("328hp", "328h2p"))
+        self.assertEqual(ENGINE.TAGS["328hp"], "G1_GO52H_PROVISIONED_HOTFIX1")
+        self.assertEqual(ENGINE.TAGS["328h2p"], "G1_GO52H_PROVISIONED_HOTFIX2")
+        specs = {path: (kind, mode) for path, _o, _g, mode, kind, _e in CONTRACT.provisioning_path_specs()}
+        for instance in ENGINE.INSTANCES.values():
+            datadir, tmpdir, log_file, _sock, _pid = instance["runtime"]
+            self.assertEqual((specs[datadir], specs[tmpdir], specs[log_file]),
+                             (("directory", 0o750), ("directory", 0o700), ("file", 0o600)))
+        text = (OPS / "g1-state-check.py").read_text(encoding="utf-8")
+        self.assertIn('check("g1_runtime_paths_absent"', text.replace('"g1_runtime_paths_provisioned" if state in PROVISIONED_STATES else ', ""))
+
     def test_go4b_fetch_script_keeps_pinning_the_historical_log_directory_hotfix_package(self):
         text = (OPS / "go4b-fetch-hotfix-package.sh").read_text(encoding="utf-8")
         self.assertIn(f"{HF1_HELPER} production-g1-mysql.py", text)
@@ -676,6 +690,275 @@ class BaseConfigChainRealFilesystemTest(unittest.TestCase):
 
     def test_the_generic_check_file_keeps_refusing_the_symlink(self):
         self.assertEqual(self.result("generic_check_file_on_symlink"), ("STOP", "managed_file_type_invalid"))
+
+
+PROVISIONED_DRIVER = r"""
+import importlib.util, os, shutil, sys, pwd, grp
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("sc", "/ops/g1-state-check.py")
+sc = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = sc
+spec.loader.exec_module(sc)
+UID, GID = pwd.getpwnam("mysql").pw_uid, grp.getgrnam("mysql").gr_gid
+RUNTIME = [p for spec_ in sc.INSTANCES.values() for p in spec_["runtime"]]
+
+def wipe():
+    for path in RUNTIME:
+        if os.path.islink(path) or os.path.isfile(path):
+            os.unlink(path)
+        elif os.path.isdir(path):
+            shutil.rmtree(path)
+
+def owned(path, mode, uid=UID, gid=GID):
+    os.chown(path, uid, gid)
+    os.chmod(path, mode)
+
+def build():
+    wipe()
+    os.makedirs("/var/log/mysql", exist_ok=True)
+    os.makedirs("/run/mysqld", exist_ok=True)
+    for spec_ in sc.INSTANCES.values():
+        datadir, tmpdir, log_file, sock, pid = spec_["runtime"]
+        os.mkdir(datadir); owned(datadir, 0o750)
+        os.mkdir(tmpdir); owned(tmpdir, 0o700)
+        open(log_file, "wb").close(); owned(log_file, 0o600)
+
+def result(name):
+    try:
+        sc.check_provisioned_runtime_paths()
+        print("SCEN %s | PASS | -" % name)
+    except sc.Fail as exc:
+        print("SCEN %s | STOP | %s" % (name, exc.code))
+
+P1 = sc.INSTANCES["wpcaregrid-production"]["runtime"]
+P2 = sc.INSTANCES["wpcaregrid-production-restore"]["runtime"]
+build(); result("provisioned_ok")
+build(); shutil.rmtree(P1[0]); result("datadir_missing")
+build(); shutil.rmtree(P1[1]); result("tmpdir_missing")
+build(); os.unlink(P1[2]); result("log_missing")
+build(); shutil.rmtree(P2[0]); result("restore_datadir_missing")
+build(); os.chmod(P1[0], 0o755); result("datadir_mode_755")
+build(); os.chmod(P1[0], 0o700); result("datadir_mode_700")
+build(); os.chmod(P1[1], 0o750); result("tmpdir_mode_750")
+build(); os.chmod(P1[2], 0o644); result("log_mode_644")
+build(); open(P1[0] + "/auto.cnf", "w").close(); result("datadir_not_empty")
+build(); open(P2[1] + "/x", "w").close(); result("tmpdir_not_empty")
+build(); open(P1[2], "w").write("started"); result("log_not_empty")
+build(); os.chown(P1[0], 0, GID); result("datadir_owner_root")
+build(); os.chown(P2[1], UID, 0); result("tmpdir_group_root")
+build(); os.chown(P1[2], 0, 0); result("log_owner_root")
+build(); shutil.rmtree(P1[0]); os.symlink("/tmp", P1[0]); result("datadir_symlink")
+build(); os.unlink(P1[2]); os.mkdir(P1[2]); owned(P1[2], 0o600); result("log_is_directory")
+build(); shutil.rmtree(P1[1]); open(P1[1], "w").close(); owned(P1[1], 0o700); result("tmpdir_is_file")
+build(); open(P1[3], "w").close(); result("socket_marker")
+build(); open(P2[4], "w").close(); result("pid_marker")
+import contextlib, io
+
+def main_lines(state):
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        sc.main(state, run=lambda args: (1, ""), euid=0)
+    return [line for line in buffer.getvalue().splitlines() if "runtime_paths" in line]
+
+for state_name in ("328hp", "328h2p", "328h", "328h2"):
+    build()
+    print("MAIN %s_on_provisioned_host | %s" % (state_name, " / ".join(main_lines(state_name))))
+    wipe()
+    print("MAIN %s_on_unprovisioned_host | %s" % (state_name, " / ".join(main_lines(state_name))))
+wipe()
+try:
+    sc.check_provisioned_runtime_paths()
+    print("SCEN pre_go51_state_is_not_provisioned | PASS | -")
+except sc.Fail as exc:
+    print("SCEN pre_go51_state_is_not_provisioned | STOP | %s" % exc.code)
+"""
+
+SEQUENCE_DRIVER = r"""
+import hashlib, os, re, shutil, subprocess
+sha = lambda b: hashlib.sha256(b).hexdigest()
+OLDB, NEWB = b"fixture-hotfix1-helper" + bytes([10]), b"fixture-hotfix2-helper" + bytes([10])
+M = "0123456789abcdef0123456789abcdef01234567"
+HELPER = "/usr/local/libexec/wpcaregrid-g1-mysql.py"
+HF2 = "/root/wpcg-production-g1-mysql-hf2-0123456"
+text = open("/src/go52h-sequence.sh").read()
+text = re.sub(r"(?m)^HELPER_OLD=[0-9a-f]{64}", "HELPER_OLD=" + sha(OLDB), text)
+text = re.sub(r"(?m)^HELPER_NEW=[0-9a-f]{64}", "HELPER_NEW=" + sha(NEWB), text)
+STUB_PY = "import os, sys" + chr(10) + \
+    "name = os.path.basename(sys.argv[0]); args = sys.argv[1:]" + chr(10) + \
+    "open('/tmp/calls.log', 'a').write(name + (':' + args[0] if name == 'g1-state-check.py' else '') + chr(10))" + chr(10) + \
+    "fail = open('/tmp/fail').read().split() if os.path.exists('/tmp/fail') else []" + chr(10) + \
+    "key = name + (':' + args[0] if name == 'g1-state-check.py' else '')" + chr(10) + \
+    "raise SystemExit(3 if key in fail else 0)" + chr(10)
+STUB_SH = "echo go5h-fetch-hotfix-package.sh >> /tmp/calls.log" + chr(10) + \
+    "grep -qx go5h-fetch-hotfix-package.sh /tmp/fail 2>/dev/null && exit 3" + chr(10) + \
+    "mkdir -p " + HF2 + chr(10)
+
+def setup(helper=OLDB, hf2=False, fail=(), ops_mode=0o700, helper_symlink=False):
+    shutil.rmtree("/ops", ignore_errors=True); shutil.rmtree(HF2, ignore_errors=True)
+    for path in ("/tmp/calls.log", "/tmp/fail", HELPER):
+        if os.path.lexists(path):
+            os.unlink(path)
+    os.makedirs("/ops"); os.makedirs("/usr/local/libexec", exist_ok=True)
+    for name in ("g1-state-check.py", "go3-manifest-check.py", "go5h-upgrade-installed-helper.py", "g1-effective-config-check.py"):
+        open("/ops/" + name, "w").write(STUB_PY)
+    open("/ops/go5h-fetch-hotfix-package.sh", "w").write(STUB_SH)
+    open("/ops/go52h-sequence.sh", "w").write(text)
+    os.chmod("/ops", ops_mode); os.chown("/ops", 0, 0)
+    if helper is not None:
+        if helper_symlink:
+            os.symlink("/etc/passwd", HELPER)
+        else:
+            open(HELPER, "wb").write(helper)
+    if hf2:
+        os.makedirs(HF2)
+    open("/tmp/fail", "w").write(" ".join(fail))
+
+def run(name, arg=M, **kw):
+    setup(**kw)
+    done = subprocess.run(["bash", "/ops/go52h-sequence.sh"] + ([arg] if arg is not None else []),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    lines = done.stdout.strip().splitlines()
+    calls = open("/tmp/calls.log").read().split() if os.path.exists("/tmp/calls.log") else []
+    print("SEQ %s | rc=%d | %s | %s" % (name, done.returncode, lines[-1] if lines else "<none>", ",".join(calls) or "-"))
+
+run("hotfix1_fresh")
+run("hotfix1_package_dir_exists", hf2=True)
+run("already_upgraded", helper=NEWB, hf2=True)
+run("already_upgraded_without_package_dir", helper=NEWB)
+run("unknown_helper", helper=b"foreign" + bytes([10]))
+run("missing_helper", helper=None)
+run("symlinked_helper", helper_symlink=True)
+run("bad_commit_argument", arg="main")
+run("no_commit_argument", arg=None)
+run("toolkit_dir_mode_755", ops_mode=0o755)
+run("state_before_fails", fail=("g1-state-check.py:328hp",))
+run("state_before_fails_when_upgraded", helper=NEWB, fail=("g1-state-check.py:328h2p",))
+run("fetch_fails", fail=("go5h-fetch-hotfix-package.sh",))
+run("manifest_check_fails", fail=("go3-manifest-check.py",))
+run("upgrade_fails", fail=("go5h-upgrade-installed-helper.py",))
+run("state_after_fails", fail=("g1-state-check.py:328h2p",))
+run("effective_config_fails", fail=("g1-effective-config-check.py",))
+"""
+
+
+@unittest.skipUnless(ready() or REQUIRE, "Docker / MySQL image unavailable")
+class PostProvisionStateAndSequenceTest(unittest.TestCase):
+    """The GO-5.1-complete host: state checker on real paths as root, and the resumable GO-5.2 hotfix sequence."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not ready():
+            raise AssertionError("G1_REQUIRE_REAL_MYSQL=1 but Docker or the MySQL image is unavailable")
+
+        def container(files, driver):
+            done = subprocess.run(["docker", "run", "--rm", "-i", "--entrypoint", "bash", TEST_IMAGE, "-c",
+                                   "tar -x -C / && python3 -I -B " + driver],
+                                  input=tar_of(files), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=300)
+            return done.stdout.decode(), done.stderr.decode()
+
+        cls.scen, cls.seq = {}, {}
+        out, err = container({"/ops/g1-state-check.py": (OPS / "g1-state-check.py").read_bytes(),
+                              "/ops/drive.py": PROVISIONED_DRIVER.encode()}, "/ops/drive.py")
+        cls.state_output = out + err
+        cls.main_lines = {line[5:].split(" | ")[0].strip(): line[5:].split(" | ")[1].strip()
+                          for line in out.splitlines() if line.startswith("MAIN ")}
+        for line in out.splitlines():
+            if line.startswith("SCEN "):
+                name, verdict, detail = [part.strip() for part in line[5:].split(" | ")]
+                cls.scen[name] = (verdict, detail)
+        out, err = container({"/src/go52h-sequence.sh": (OPS / "go52h-sequence.sh").read_bytes(),
+                              "/drive/seq.py": SEQUENCE_DRIVER.encode()}, "/drive/seq.py")
+        cls.seq_output = out + err
+        for line in out.splitlines():
+            if line.startswith("SEQ "):
+                name, rc, last, calls = [part.strip() for part in line[4:].split(" | ")]
+                cls.seq[name] = (rc, last, calls)
+
+    def test_provisioned_state_is_accepted_only_when_every_runtime_path_is_exactly_as_provision_paths_made_it(self):
+        self.assertEqual(self.scen.get("provisioned_ok"), ("PASS", "-"), self.state_output)
+
+    def test_every_deviation_in_the_provisioned_state_is_refused_with_its_own_code(self):
+        cases = {
+            "datadir_missing": "g1_runtime_path_missing", "tmpdir_missing": "g1_runtime_path_missing",
+            "log_missing": "g1_runtime_path_missing", "restore_datadir_missing": "g1_runtime_path_missing",
+            "datadir_mode_755": "g1_runtime_path_mode_invalid", "datadir_mode_700": "g1_runtime_path_mode_invalid",
+            "tmpdir_mode_750": "g1_runtime_path_mode_invalid", "log_mode_644": "g1_runtime_path_mode_invalid",
+            "datadir_not_empty": "g1_runtime_path_not_empty", "tmpdir_not_empty": "g1_runtime_path_not_empty",
+            "log_not_empty": "g1_runtime_path_not_empty",
+            "datadir_owner_root": "g1_runtime_path_owner_invalid", "tmpdir_group_root": "g1_runtime_path_owner_invalid",
+            "log_owner_root": "g1_runtime_path_owner_invalid",
+            "datadir_symlink": "g1_runtime_path_type_invalid", "log_is_directory": "g1_runtime_path_type_invalid",
+            "tmpdir_is_file": "g1_runtime_path_type_invalid",
+            "socket_marker": "g1_runtime_marker_present", "pid_marker": "g1_runtime_marker_present",
+            "pre_go51_state_is_not_provisioned": "g1_runtime_path_missing",
+        }
+        for name, code in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.scen.get(name), ("STOP", code), self.state_output)
+
+    def test_the_state_checker_main_uses_the_provisioned_check_only_for_the_post_go51_states(self):
+        ok = "CHECK g1_runtime_paths_provisioned OK"
+        for state in ("328hp", "328h2p"):
+            self.assertEqual(self.main_lines[state + "_on_provisioned_host"], ok, self.state_output)
+            self.assertEqual(self.main_lines[state + "_on_unprovisioned_host"],
+                             "FAIL  g1_runtime_paths_provisioned g1_runtime_path_missing /var/lib/mysql-wpcaregrid-production")
+        for state in ("328h", "328h2"):
+            self.assertEqual(self.main_lines[state + "_on_provisioned_host"],
+                             "FAIL  g1_runtime_paths_absent g1_runtime_path_present /var/lib/mysql-wpcaregrid-production")
+            self.assertEqual(self.main_lines[state + "_on_unprovisioned_host"], "CHECK g1_runtime_paths_absent OK")
+
+    def seq_result(self, name):
+        self.assertIn(name, self.seq, self.seq_output)
+        return self.seq[name]
+
+    def test_sequence_resumes_from_the_hotfix1_state_and_runs_each_step_once_in_order(self):
+        steps = ("g1-state-check.py:328hp,go5h-fetch-hotfix-package.sh,go3-manifest-check.py,"
+                 "go5h-upgrade-installed-helper.py,g1-state-check.py:328h2p,g1-effective-config-check.py")
+        self.assertEqual(self.seq_result("hotfix1_fresh"), ("rc=0", "G1_GO52H_SEQUENCE=PASS", steps))
+        self.assertEqual(self.seq_result("hotfix1_package_dir_exists"),
+                         ("rc=0", "G1_GO52H_SEQUENCE=PASS", steps.replace("go5h-fetch-hotfix-package.sh,", "")))
+
+    def test_sequence_continues_after_the_helper_was_already_replaced(self):
+        steps = ("g1-state-check.py:328h2p,go3-manifest-check.py,go5h-upgrade-installed-helper.py,"
+                 "g1-state-check.py:328h2p,g1-effective-config-check.py")
+        self.assertEqual(self.seq_result("already_upgraded"), ("rc=0", "G1_GO52H_SEQUENCE=PASS", steps))
+        self.assertEqual(self.seq_result("already_upgraded_without_package_dir"),
+                         ("rc=0", "G1_GO52H_SEQUENCE=PASS", steps.replace("go3-manifest-check.py", "go5h-fetch-hotfix-package.sh,go3-manifest-check.py", 1)))
+
+    def test_sequence_stops_before_any_step_for_unrecognized_input(self):
+        for name, step in (("unknown_helper", "installed_helper_unrecognized"), ("missing_helper", "installed_helper_missing"),
+                           ("symlinked_helper", "installed_helper_missing"), ("bad_commit_argument", "commit_argument_invalid"),
+                           ("no_commit_argument", "commit_argument_invalid"),
+                           ("toolkit_dir_mode_755", "toolkit_directory_invalid")):
+            with self.subTest(name):
+                self.assertEqual(self.seq_result(name), ("rc=1", f"G1_GO52H_SEQUENCE=STOP;STEP={step}", "-"))
+
+    def test_sequence_stops_at_the_first_failing_step_and_never_runs_a_later_one(self):
+        cases = {
+            "state_before_fails": ("state_before", "g1-state-check.py:328hp"),
+            "state_before_fails_when_upgraded": ("state_before", "g1-state-check.py:328h2p"),
+            "fetch_fails": ("fetch_hotfix_package", "g1-state-check.py:328hp,go5h-fetch-hotfix-package.sh"),
+            "manifest_check_fails": ("manifest_check", "g1-state-check.py:328hp,go5h-fetch-hotfix-package.sh,go3-manifest-check.py"),
+            "upgrade_fails": ("helper_upgrade", "g1-state-check.py:328hp,go5h-fetch-hotfix-package.sh,go3-manifest-check.py,"
+                                                "go5h-upgrade-installed-helper.py"),
+            "state_after_fails": ("state_after", "g1-state-check.py:328hp,go5h-fetch-hotfix-package.sh,go3-manifest-check.py,"
+                                                 "go5h-upgrade-installed-helper.py,g1-state-check.py:328h2p"),
+            "effective_config_fails": ("effective_config", "g1-state-check.py:328hp,go5h-fetch-hotfix-package.sh,go3-manifest-check.py,"
+                                                           "go5h-upgrade-installed-helper.py,g1-state-check.py:328h2p,g1-effective-config-check.py"),
+        }
+        for name, (step, calls) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.seq_result(name), ("rc=1", f"G1_GO52H_SEQUENCE=STOP;STEP={step}", calls))
+
+    def test_sequence_script_never_provisions_initializes_starts_or_deletes(self):
+        text = (OPS / "go52h-sequence.sh").read_text(encoding="utf-8")
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        for forbidden in ("provision-paths", "initialize", "systemctl", "rm ", "rmdir", "mv ", "chmod", "chown",
+                          "mysql.service", "/var/lib/mysql", "/etc/mysql", "apparmor_parser", "verify-install"):
+            self.assertNotIn(forbidden, code, forbidden)
+        self.assertEqual(sorted(re.findall(r"HELPER_(?:OLD|NEW)=([0-9a-f]{64})", code)),
+                         sorted([ENGINE.EXPECTED["328h"]["/usr/local/libexec/wpcaregrid-g1-mysql.py"],
+                                 ENGINE.EXPECTED["328h2"]["/usr/local/libexec/wpcaregrid-g1-mysql.py"]]))
 
 
 class Go4bUpgradeToolTest(HelperUpgradeToolBase, unittest.TestCase):

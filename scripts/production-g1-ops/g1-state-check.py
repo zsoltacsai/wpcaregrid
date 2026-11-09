@@ -12,6 +12,7 @@ import sys
 #   clean state after the documented rollback (GO-2 verification, also the GO-4 precondition)
 #   328   installed #328 package (GO-4 post-install check, zz- option-file names)
 #   328h  #328 artifacts with the log-directory hotfix helper/manifest (after go4b-upgrade-installed-helper.py)
+#   328hp / 328h2p  328h / 328h2 after GO-5.1 (provision-paths): the exact empty runtime paths exist, nothing initialized
 #   328h2 #328 artifacts with the base-config symlink hotfix helper/manifest (after go5h-upgrade-installed-helper.py)
 
 PROFILES_AND_DROPINS = {
@@ -45,6 +46,13 @@ EXPECTED = {
               LIBEXEC + "production_g1_mysql_contract.py": "45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3",
               LIBEXEC + "production_g1_mysql_manifest.json": "c2b693195f542ab88d261bd65dc586c56880526a65707c135cee2d29a61dea73"},
 }
+# States after GO-5.1 (`provision-paths`): the same installed files as 328h / 328h2, but the per-instance datadir,
+# tmpdir and error-log exist exactly as provision-paths creates them (empty, mysql:mysql, 0750 / 0700 / 0600), and
+# there is no socket/pid marker (no instance was initialized or started). The pre-GO-5.1 states above keep
+# requiring that none of these paths exists.
+EXPECTED["328hp"] = dict(EXPECTED["328h"])
+EXPECTED["328h2p"] = dict(EXPECTED["328h2"])
+PROVISIONED_STATES = ("328hp", "328h2p")
 INSTANCES = {
     "wpcaregrid-production": {"port": 3308, "runtime": [
         "/var/lib/mysql-wpcaregrid-production", "/var/tmp/wpcaregrid-production",
@@ -56,7 +64,45 @@ INSTANCES = {
         "/run/mysqld/wpcaregrid-production-restore.pid"]},
 }
 TAGS = {"325": "G1_GO1_PREFLIGHT", "clean": "G1_GO2_ROLLBACK_VERIFY", "328": "G1_GO4_POSTINSTALL",
-        "328h": "G1_GO4B_POSTUPGRADE", "328h2": "G1_GO5H_POSTUPGRADE"}
+        "328h": "G1_GO4B_POSTUPGRADE", "328h2": "G1_GO5H_POSTUPGRADE",
+        "328hp": "G1_GO52H_PROVISIONED_HOTFIX1", "328h2p": "G1_GO52H_PROVISIONED_HOTFIX2"}
+
+
+def mysql_ids():
+    import grp
+    import pwd
+    return pwd.getpwnam("mysql").pw_uid, grp.getgrnam("mysql").gr_gid
+
+
+def check_provisioned_runtime_paths(root="/", ids=mysql_ids):
+    """The exact post-GO-5.1 runtime state of both instances; raises Fail on any deviation. Read-only."""
+    uid, gid = ids()
+    R = lambda p: root.rstrip("/") + p  # noqa: E731
+    for name, spec in INSTANCES.items():
+        datadir, tmpdir, log_file, socket_path, pid_file = spec["runtime"]
+        for path, kind, mode in ((datadir, "dir", 0o750), (tmpdir, "dir", 0o700), (log_file, "file", 0o600)):
+            current = ""
+            for part in path.split("/")[1:-1]:
+                current += "/" + part
+                if os.path.islink(R(current)):
+                    raise Fail("installed_path_symlink_component", current)
+            if not os.path.lexists(R(path)):
+                raise Fail("g1_runtime_path_missing", path)
+            st = os.lstat(R(path))
+            if not (stat.S_ISDIR(st.st_mode) if kind == "dir" else stat.S_ISREG(st.st_mode)):
+                raise Fail("g1_runtime_path_type_invalid", path)
+            if st.st_uid != uid or st.st_gid != gid:
+                raise Fail("g1_runtime_path_owner_invalid", path)
+            if stat.S_IMODE(st.st_mode) != mode:
+                raise Fail("g1_runtime_path_mode_invalid", path)
+            if kind == "dir":
+                if os.listdir(R(path)):
+                    raise Fail("g1_runtime_path_not_empty", path)
+            elif st.st_size != 0:
+                raise Fail("g1_runtime_path_not_empty", path)
+        for marker in (socket_path, pid_file):
+            if os.path.lexists(R(marker)):
+                raise Fail("g1_runtime_marker_present", marker)
 VENDOR_TEMPLATE = "/usr/lib/systemd/system/mysql@.service"
 VENDOR_ALIASES = ("/usr/lib/systemd/system/mysql@.service", "/lib/systemd/system/mysql@.service")
 VENDOR_EXECSTART = "ExecStart=/usr/sbin/mysqld --defaults-group-suffix=@%I"
@@ -91,7 +137,7 @@ def sha256_of(path):
     return digest.hexdigest()
 
 
-def main(state, root="/", run=default_run, euid=None):
+def main(state, root="/", run=default_run, euid=None, ids=mysql_ids):
     tag = TAGS[state]
     results, infos = [], []
     R = lambda p: root.rstrip("/") + p
@@ -147,7 +193,7 @@ def main(state, root="/", run=default_run, euid=None):
             if any(name.startswith(("90-wpcaregrid-production", "zz-wpcaregrid-production")) for name in listing):
                 raise Fail("g1_config_still_present", "/etc/mysql/mysql.conf.d")
             return
-        if state in ("328", "328h", "328h2"):
+        if state in ("328", "328h", "328h2") + PROVISIONED_STATES:
             for path in CNF_90:
                 if lexists(path):
                     raise Fail("legacy_config_name_present", path)
@@ -239,6 +285,9 @@ def main(state, root="/", run=default_run, euid=None):
                 raise Fail("systemd_execstartpre_mismatch", unit)
 
     def c_runtime_paths():
+        if state in PROVISIONED_STATES:
+            check_provisioned_runtime_paths(root, ids)
+            return
         for name, spec in INSTANCES.items():
             for path in spec["runtime"]:
                 if lexists(path):
@@ -315,7 +364,7 @@ def main(state, root="/", run=default_run, euid=None):
     check("g1_units_inactive", c_units_inactive)
     check("apparmor", c_apparmor)
     check("systemd_effective", c_systemd)
-    check("g1_runtime_paths_absent", c_runtime_paths)
+    check("g1_runtime_paths_provisioned" if state in PROVISIONED_STATES else "g1_runtime_paths_absent", c_runtime_paths)
     check("mysql_3306_and_g1_ports", c_mysql_and_ports)
     check("vendor_template", c_vendor)
 
@@ -331,7 +380,7 @@ def main(state, root="/", run=default_run, euid=None):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2 or sys.argv[1] not in TAGS:
-        print("usage: <325|clean|328|328h|328h2>")
+        print("usage: <325|clean|328|328h|328h2|328hp|328h2p>")
         raise SystemExit(2)
     try:
         code = main(sys.argv[1])

@@ -174,26 +174,33 @@ the already created data and temporary directories are left as they are; no MySQ
 `mysql.service` (3306) is not touched. The tool replaces **only** `/usr/local/libexec/wpcaregrid-g1-mysql.py` and
 `/usr/local/libexec/production_g1_mysql_manifest.json`; contract, option files, AppArmor profiles and drop-ins must be
 byte-identical: the tool itself checks the contract hash and that both units are inactive, and the mandatory
-`g1-state-check.py 328h` step before it proves the rest (any STOP there ends the procedure). `<MERGE_SHA>` is the 40-hex merge commit of the hotfix pull request,
+`g1-state-check.py 328hp` step (run first by the sequence) proves the rest (any STOP there ends the procedure). `<MERGE_SHA>` is the 40-hex merge commit of the hotfix pull request,
 `OPS` the toolkit directory fetched by GO-0 from that same commit.
 
 ```bash
-python3 -I -B "$OPS/g1-state-check.py" 328h                  # G1_GO4B_POSTUPGRADE=PASS  (installed GO-4b state)
-bash "$OPS/go5h-fetch-hotfix-package.sh" <MERGE_SHA>         # G1_GO5H_DOWNLOAD=PASS     (new dir /root/wpcg-production-g1-mysql-hf2-<sha7>)
-HF2=/root/wpcg-production-g1-mysql-hf2-<sha7>
-python3 -I -B "$OPS/go3-manifest-check.py" "$HF2"            # G1_GO3_MANIFEST=PASS
-python3 -I -B "$OPS/go5h-upgrade-installed-helper.py" "$HF2" # G1_GO5H_HELPER_UPGRADE=PASS
-python3 -I -B "$OPS/g1-state-check.py" 328h2                 # G1_GO5H_POSTUPGRADE=PASS
-python3 -I -B "$OPS/g1-effective-config-check.py"            # G1_EFFECTIVE_CONFIG=PASS
+bash "$OPS/go52h-sequence.sh" <MERGE_SHA>                    # G1_GO52H_SEQUENCE=PASS
 ```
+
+The sequence is written for the host as it really is after GO-5.1: `provision-paths` has created the empty datadir
+(`mysql:mysql 0750`), tmpdir (`0700`) and error log (`0600`) of both instances, nothing was initialized or started.
+Therefore it does **not** use state `328h` / `328h2` (those require the runtime paths to be absent, GO-4b era) but
+`328hp` / `328h2p` (same installed files, plus: the three paths of each instance exist, empty, `mysql:mysql` with the
+exact modes, no socket/pid marker). The script (a) detects the installed helper by SHA-256 (GO-4b hotfix 1 ->
+`328hp`; already replaced -> `328h2p`; anything else is a STOP), (b) verifies that state first, (c) fetches the
+package into `/root/wpcg-production-g1-mysql-hf2-<sha7>` or re-verifies it if the directory already exists,
+(d) runs the manifest check and the (idempotent) upgrade tool, (e) verifies `328h2p` and the effective
+configuration. It can therefore be started again from any point after a STOP that left the host unchanged or after
+a successful upgrade. It never runs `provision-paths`, `initialize` or `start`, never deletes or changes the
+MySQL directories, the logs, `mysql.service` or `/etc/mysql/my.cnf`. State `328h2` stays the pre-GO-5.1 state.
+
 
 The upgrade tool checks before any write: the package files (hash-pinned, root-owned directory), the installed
 helper/contract/manifest (GO-4b pins, owner, mode, no symlink), both G1 units inactive and no leftover temporary file.
 Each file is replaced by a same-directory temporary file, `fsync` and atomic `rename`; then the new helper's
 `verify_static_install()` **and** `check_base_config()` must pass, otherwise the old bytes are restored
 (`ROLLED_BACK=yes`) and the exact code of the host's `/etc/mysql/my.cnf` problem is reported
-(`verify_static_install_failed:<code>`). A second run reports `NOTE=already_upgraded`. State `328h2` in
-`g1-state-check.py` is the hotfix state; `328h` remains the previous one.
+(`verify_static_install_failed:<code>`). A second run reports `NOTE=already_upgraded`. State `328h2p` in
+`g1-state-check.py` is the hotfix state after GO-5.1; `328hp` is the previous one (`328h` / `328h2` are the pre-GO-5.1 variants).
 
 After PASS, GO-5.2 is repeated (`verify-install`, then `preflight --instance <each>`, see below). GO-5.1 is not.
 
