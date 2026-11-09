@@ -5,9 +5,7 @@ namespace Tests\Feature\Owner;
 use App\Connector\HealthStatus;
 use App\Console\Commands\Monitoring\RunMonitoring;
 use App\Jobs\Monitoring\RecordWorkerPulse;
-use App\Models\MonitoringResult;
 use App\Monitoring\MonitoringEngine;
-use App\Monitoring\MonitoringReason;
 use App\Owner\SystemStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -42,7 +40,7 @@ final class StagingNextQueueMonitoringTest extends TestCase
         ]);
     }
 
-    public function test_staging_next_only_dispatches_default_worker_pulse_and_marks_backups_intentionally_paused(): void
+    public function test_staging_next_dispatches_only_the_active_default_worker_pulse(): void
     {
         config(['app.deployment_environment' => 'staging_next']);
         Queue::fake();
@@ -55,12 +53,6 @@ final class StagingNextQueueMonitoringTest extends TestCase
         $this->assertCount(1, $pulses);
         $this->assertSame('default', $pulses[0]['job']->queue);
 
-        $backups = MonitoringResult::query()->where('check_id', 'platform.worker')
-            ->where('subject_type', 'queue')->where('subject_id', 'backups')->firstOrFail();
-        $this->assertSame(HealthStatus::Healthy, $backups->state);
-        $this->assertSame(MonitoringReason::WORKER_PAUSED, $backups->reason_code);
-        $this->assertSame(false, $backups->evidence['configured']);
-        $this->assertSame('backups', $backups->evidence['queue']);
     }
 
     public function test_staging_next_does_not_dispatch_a_pulse_when_the_active_queue_identity_mismatches(): void
@@ -128,6 +120,12 @@ final class StagingNextQueueMonitoringTest extends TestCase
 
         $this->assertSame(HealthStatus::Healthy, $this->queueStatus());
         $this->assertSame(23, DB::table('jobs')->where('queue', 'backups')->count());
+        $queueCheck = collect(app(SystemStatus::class)->checks())->firstWhere('key', 'queue');
+        $this->assertNotNull($queueCheck);
+        $this->assertSame(
+            'backups',
+            $queueCheck->details[__('owner.system.details.intentionally_paused_queues')],
+        );
 
         $this->insertJob('default', now()->subMinutes(30)->timestamp);
         $this->assertSame(HealthStatus::Critical, $this->queueStatus());
