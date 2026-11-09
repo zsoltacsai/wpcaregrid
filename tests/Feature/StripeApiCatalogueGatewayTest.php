@@ -15,7 +15,7 @@ use Tests\TestCase;
 /** The real Stripe gateway, against a scripted HTTP layer: paging, rate limits, errors, mode, secrets. */
 class StripeApiCatalogueGatewayTest extends TestCase
 {
-    private const SECRET = 'sk_test_gatewaysecret1234567890';
+    private const SECRET = 'sk_test_unitGatewaySecret';
 
     /** @var list<int> */
     private array $pauses = [];
