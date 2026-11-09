@@ -54,8 +54,11 @@ class Host(unittest.TestCase):
         self.priv = self.home / ".private"
         self.src = self.priv / "wpcg-staging-next-helper-1.4.9"
         self.inst = self.priv / "wpcaregrid-staging-next-helper-installer-1.4.9.py"
-        self.saved = {name: signal.getsignal(getattr(signal, name)) for name in ("SIGHUP", "SIGTERM", "SIGINT")}
+        names = ("SIGHUP", "SIGTERM", "SIGINT", "SIGALRM")
+        self.saved = {name: signal.getsignal(getattr(signal, name)) for name in names}
         self.addCleanup(lambda: [signal.signal(getattr(signal, n), h) for n, h in self.saved.items()])
+        self.addCleanup(lambda: signal.pthread_sigmask(signal.SIG_UNBLOCK, {getattr(signal, n) for n in names}))
+        self.addCleanup(signal.alarm, 0)
 
     def load(self, user=ENTRY.pw_name, pw_dir=ENTRY.pw_dir, home=None):
         text = (SOURCE.replace('USER = "deploy"', f'USER = "{user}"')
@@ -329,7 +332,7 @@ class SafetyTests(Host):
             self.run_host()
         directories = [c for c in calls if stat.S_ISDIR(c[0])]
         files = [c for c in calls if stat.S_ISREG(c[0])]
-        self.assertEqual((len(directories), len(files)), (3, 6))  # .private, temp, src / six files
+        self.assertEqual((len(directories), len(files)), (2, 6))  # .private, src / six files
         self.assertTrue(all((uid, gid) == (ENTRY.pw_uid, ENTRY.pw_gid) for _, uid, gid in calls))
 
     def test_a_swapped_private_directory_cannot_redirect_root(self):
@@ -350,7 +353,7 @@ class SafetyTests(Host):
 
     def test_failure_during_publication_rolls_back_everything_it_created(self):
         before = self.snapshot()
-        with mock.patch.object(os, "link", side_effect=OSError("boom")):
+        with mock.patch.object(os, "fsync", side_effect=OSError("boom")):
             lines, status = self.run_host()
         self.assertEqual((lines[-1], status), ("STAGING_149_STAGE=STOP;CODE=stage_failed:OSError", 2))
         self.assertEqual(self.snapshot(), before)
@@ -359,7 +362,7 @@ class SafetyTests(Host):
         self.priv.mkdir(mode=0o700)
         (self.priv / "keep.txt").write_text("keep")
         before = self.snapshot()
-        with mock.patch.object(os, "link", side_effect=OSError("boom")):
+        with mock.patch.object(os, "fsync", side_effect=OSError("boom")):
             self.run_host()
         self.assertEqual(self.snapshot(), before)
 
@@ -383,21 +386,194 @@ class SafetyTests(Host):
         self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=stage_failed:PermissionError")
         self.assertEqual(self.snapshot(), before)
 
-    def test_a_destination_that_appears_before_publication_is_never_replaced(self):
+    def test_a_destination_that_appears_before_creation_is_never_replaced(self):
+        self.priv.mkdir(mode=0o700)
+
+        def racing(name):
+            if name == NAMES[0]:
+                self.src.mkdir(mode=0o700)
+                (self.src / "intruder.txt").write_text("mine")
+            return CONTENT[name]
+
+        lines, _ = self.run_host(fetcher=racing)
+        self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=stage_failed:FileExistsError")
+        self.assertEqual([p.name for p in self.src.iterdir()], ["intruder.txt"])
+        self.assertEqual(sorted(p.name for p in self.priv.iterdir()), [self.src.name])
+
+    def test_a_directory_swapped_in_after_mkdir_is_never_chowned_or_chmoded(self):
+        self.priv.mkdir(mode=0o700)
+        victim = self.base / "victim"
+        victim.mkdir()
+        victim.chmod(0o777)
+        moved = self.base / "moved-src"
+        real = os.mkdir
+
+        def swapping(path, mode=0o777, *, dir_fd=None):
+            real(path, mode, dir_fd=dir_fd)
+            if path == self.src.name:
+                os.rename(self.src, moved)
+                os.rename(victim, self.src)
+
+        chowns = []
+        with mock.patch.object(os, "mkdir", swapping), mock.patch.object(os, "fchown", lambda *a: chowns.append(a)):
+            lines, status = self.run_host()
+        self.assertEqual((lines[-1], status), ("STAGING_149_STAGE=STOP;CODE=stage_failed:RuntimeError", 2))
+        self.assertEqual(stat.S_IMODE(os.lstat(self.src).st_mode), 0o777)
+        self.assertEqual(chowns, [])
+
+    def test_a_swapped_in_directory_with_content_or_a_foreign_owner_is_rejected_before_chown(self):
+        self.priv.mkdir(mode=0o700)
+        victim = self.base / "victim"
+        victim.mkdir(mode=0o700)
+        (victim / "sub").mkdir()  # link count 3: not the empty directory that was just made
+        real = os.mkdir
+
+        def swapping(path, mode=0o777, *, dir_fd=None):
+            real(path, mode, dir_fd=dir_fd)
+            if path == self.src.name:
+                os.rename(self.src, self.base / "moved-src")
+                os.rename(victim, self.src)
+
+        chowns = []
+        with mock.patch.object(os, "mkdir", swapping), mock.patch.object(os, "fchown", lambda *a: chowns.append(a)):
+            lines, _ = self.run_host()
+        self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=stage_failed:RuntimeError")
+        self.assertEqual(chowns, [])
+        # a directory owned by somebody else (as seen by fstat) is rejected too
+        shutil.rmtree(self.src)
+        shutil.rmtree(self.base / "moved-src")
+        real_fstat = os.fstat
+
+        def foreign(fd):
+            info = real_fstat(fd)
+            if stat.S_ISDIR(info.st_mode) and info.st_nlink == 2 and info.st_ino != os.lstat(self.home).st_ino:
+                fields = list(info)[:10]
+                fields[4] = info.st_uid + 1
+                return os.stat_result(tuple(fields))
+            return info
+
+        with mock.patch.object(os, "fstat", foreign), mock.patch.object(os, "fchown", lambda *a: chowns.append(a)):
+            lines, _ = self.run_host()
+        self.assertTrue(lines[-1].startswith("STAGING_149_STAGE=STOP;CODE="), lines)
+        self.assertEqual(chowns, [])
+
+    def test_a_file_or_symlink_planted_in_the_new_directory_is_never_followed_or_truncated(self):
+        self.priv.mkdir(mode=0o700)
+        target = self.base / "target.txt"
+        target.write_text("precious")
+        real = os.mkdir
+
+        def planting(path, mode=0o777, *, dir_fd=None):
+            real(path, mode, dir_fd=dir_fd)
+            if path == self.src.name:
+                os.symlink(target, self.src / NAMES[0])
+
+        with mock.patch.object(os, "mkdir", planting):
+            lines, _ = self.run_host()
+        self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=stage_failed:FileExistsError")
+        self.assertEqual(target.read_text(), "precious")
+
+    def test_rollback_removes_only_objects_whose_identity_it_can_prove(self):
+        namespace = self.load()
+        fd = os.open(self.home, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, fd)
+        os.mkdir("mine", 0o700, dir_fd=fd)
+        (self.home / "file.txt").write_text("f")
+        d = os.lstat(self.home / "mine")
+        f = os.lstat(self.home / "file.txt")
+        created = [("dir", fd, "mine", d.st_dev, d.st_ino), ("file", fd, "file.txt", f.st_dev, f.st_ino)]
+        (self.home / "mine").rename(self.home / "moved")
+        (self.home / "mine").mkdir()
+        (self.home / "mine" / "keep.txt").write_text("keep")
+        (self.home / "file.txt").unlink()
+        (self.home / "file.txt").write_text("other")
+        # the file is recreated while the old inode may be reused: make sure the identity differs
+        if os.lstat(self.home / "file.txt").st_ino == f.st_ino:
+            created[1] = ("file", fd, "file.txt", f.st_dev, f.st_ino + 1)
+        namespace["rollback"](created)
+        self.assertEqual((self.home / "mine" / "keep.txt").read_text(), "keep")
+        self.assertEqual((self.home / "file.txt").read_text(), "other")
+
+    def test_rollback_never_removes_a_non_empty_directory(self):
+        namespace = self.load()
+        fd = os.open(self.home, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, fd)
+        os.mkdir("d", 0o700, dir_fd=fd)
+        (self.home / "d" / "x").write_text("x")
+        info = os.lstat(self.home / "d")
+        namespace["rollback"]([("dir", fd, "d", info.st_dev, info.st_ino)])
+        self.assertTrue((self.home / "d" / "x").exists())
+
+    def test_reading_a_fifo_never_blocks_and_is_rejected(self):
+        namespace = self.load()
+        os.mkfifo(self.home / "pipe")
+        fd = os.open(self.home, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, fd)
+        signal.alarm(5)
+        _, data = namespace["read_regular"](fd, "pipe")
+        signal.alarm(0)
+        self.assertIsNone(data)
+
+    def test_watchdog_is_armed_and_cancelled(self):
+        calls = []
+        real = signal.alarm
+        with mock.patch.object(signal, "alarm", lambda n: (calls.append(n), real(n))[1]):
+            self.run_host(mode="check")
+            self.assertEqual(calls, [300, 0])
+            self.run_host()
+        self.assertEqual(calls[2], 300)
+        self.assertEqual(calls[-1], 0)
+        self.assertLessEqual(max(calls), 300)
+
+    def test_sigalrm_is_handled_as_a_clean_stop(self):
+        before = self.snapshot()
         original = os.fsync
         count = {"n": 0}
 
-        def racing(fd):
+        def alarmed(fd):
             count["n"] += 1
-            if count["n"] == 8:
-                self.src.mkdir(mode=0o700)
+            if count["n"] == 3:
+                os.kill(os.getpid(), signal.SIGALRM)
             return original(fd)
 
-        with mock.patch.object(os, "fsync", racing):
+        with mock.patch.object(os, "fsync", alarmed):
             lines, _ = self.run_host()
-        self.assertTrue(lines[-1].startswith("STAGING_149_STAGE=STOP;CODE=stage_failed:"), lines)
-        self.assertEqual(sorted(p.name for p in self.priv.iterdir()), [self.src.name])
-        self.assertEqual(list(self.src.iterdir()), [])
+        self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=terminated_by_signal_" + str(int(signal.SIGALRM)))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_signals_are_blocked_while_rolling_back(self):
+        namespace = self.load()
+        seen = []
+        real = namespace["rollback"]
+
+        def watching(created):
+            seen.append(signal.pthread_sigmask(signal.SIG_BLOCK, set()))
+            return real(created)
+
+        namespace["rollback"] = watching
+        with mock.patch.object(os, "fsync", side_effect=OSError("boom")):
+            self.run_host(namespace=namespace)
+        self.assertEqual(len(seen), 1)
+        self.assertTrue({signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGALRM} <= seen[0])
+
+    def test_gid_zero_is_rejected(self):
+        fake = types.SimpleNamespace(pw_uid=ENTRY.pw_uid, pw_gid=0, pw_dir=ENTRY.pw_dir)
+        self.stop("deploy_user_identity_invalid", patches=[mock.patch.object(pwd, "getpwnam", return_value=fake)])
+
+    def test_the_environment_is_scrubbed_before_anything_runs(self):
+        namespace = self.load()
+        seen = {}
+        namespace["main"] = lambda: seen.update(os.environ)
+        with mock.patch.dict(os.environ, {"LD_PRELOAD": "/x", "PYTHONPATH": "/y", "HTTPS_PROXY": "http://p"}):
+            namespace["run"]()
+            self.assertEqual(seen, {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"})
+
+    def test_a_closed_output_pipe_does_not_crash_the_final_line(self):
+        namespace = self.load()
+        with mock.patch("builtins.print", side_effect=BrokenPipeError):
+            namespace["emit"]("x")
+            with self.assertRaises(SystemExit):
+                namespace["stop"]("code")
 
     def test_a_failing_readback_rolls_everything_back(self):
         before = self.snapshot()

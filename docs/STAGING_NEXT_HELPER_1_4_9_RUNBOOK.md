@@ -64,8 +64,14 @@ host: `... | python3 -I -B - check` first (downloads the six files over HTTPS fr
 sha256 pin in memory, checks all host preconditions, **writes nothing**), then the same block with `stage`. It writes
 only `/home/deploy/.private` (created 0700 if absent; sources in `wpcg-staging-next-helper-1.4.9/` 0700/0600; the
 installer as `wpcaregrid-staging-next-helper-installer-1.4.9.py` 0600), all owned by `deploy`, create-only (an existing
-destination is a STOP), atomic, rolled back on any failure, read back and re-hashed. Root writes only through directory
-file descriptors opened with `O_NOFOLLOW` and validated with `fstat`, so the deploy-owned tree cannot redirect it.
+destination is a STOP), rolled back on any failure, read back and re-hashed. Root writes only through directory
+file descriptors opened with `O_NOFOLLOW` and validated with `fstat`, so the deploy-owned tree cannot redirect it:
+every directory is created with `mkdir` (never replaced) and proven by `fstat` to be the empty directory just made
+(owner, link count, mode) before it is chowned; files use `O_EXCL|O_NOFOLLOW`. There is no temp tree and no rename.
+Rollback removes only objects whose device/inode it still recognises, one at a time, never recursively. The environment
+is scrubbed, reads are non-blocking and type-checked, and a 300 s watchdog stops the run. A `kill -9` or power loss
+cannot be rolled back: a partial `.private/wpcg-staging-next-helper-1.4.9` would then make the next run STOP with
+`destination_exists` and must be inspected and removed by hand by the Owner.
 Download: HTTPS only from `raw.githubusercontent.com` (public repository), no proxy, no redirect, size-capped; the bytes are
 never executed. Result line: `STAGING_149_STAGE=CHECK_PASS` / `PASS` / `STOP;CODE=...`. The helper installation (Step 3)
 remains a separate Owner GO.
