@@ -317,7 +317,8 @@ proven for `PARTIAL` and `UNCLEAR`; STOP. Expected for the incident: production 
 3. The fixed helper must be installed (replaces helper and manifest only, hash-pinned, like the earlier hotfixes) before `initialize` runs again; the installed
    helper still has the 180 s blind timeout. That installer is a separate follow-up change.
 4. A `PARTIAL` datadir contains only system tables created by the killed run (the instance never started, no application data). Cleaning it is a
-   deliberate Owner decision with its own narrowly scoped, verified procedure (state `PARTIAL`, units inactive, no process, exact path, no symlink); the helper and the
+   deliberate Owner decision with its own narrowly scoped, verified procedure (state `PARTIAL`, units inactive, no process, exact path, no symlink; it must
+   also reset the instance error log to an empty `mysql:mysql 0600` file, because `initialize` refuses a non-empty log with `initialize_log_not_empty`); the helper and the
    toolkit contain no such step and never will remove the datadir on their own. Until then the datadir stays untouched and `initialize` is refused with `datadir_initialization_present`.
 5. GO-5.4 (start) and GO-5.5 stay HOLD; `mysql.service`, 3306, `/etc/mysql/my.cnf`, `/etc/apparmor.d/usr.sbin.mysqld` and the restore datadir are never touched.
 
