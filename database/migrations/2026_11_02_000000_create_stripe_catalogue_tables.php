@@ -6,6 +6,9 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    // Dated before the Phase 2B transition migrations on purpose: scripts/tests/staging-recovery-mysql-rehearsal.py
+    // pins the LAST three migration files (sorted by name) as the Phase 2B recovery target set. This one depends
+    // only on the users table, and Laravel runs any unran migration whatever its position.
     public function up(): void
     {
         // Which Stripe Product stands for a product type, per Stripe mode (test and live never mix).
