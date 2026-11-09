@@ -1,5 +1,5 @@
 """Isolated transaction tests; all paths are temporary and subprocesses are faked."""
-import base64, hashlib, importlib.util, json, os, tempfile, types, unittest
+import base64, contextlib, hashlib, importlib.util, io, json, os, sys, tempfile, threading, time, types, unittest
 from pathlib import Path
 
 SRC=Path(__file__).parents[1]/'production-g1-ops'/'go53-upgrade-helper.py'
@@ -32,7 +32,7 @@ class TxTests(unittest.TestCase):
  def runner(self,args):
   self.calls.append(args)
   if self.active_unit and args[1:2]==['is-active']:return types.SimpleNamespace(returncode=0,stdout='active')
-  if self.activate_after_verify and args[1:2]==['is-active'] and any('STATIC_PREFLIGHT' in c for call in self.calls for c in call):return types.SimpleNamespace(returncode=0,stdout='active')
+  if self.activate_after_verify and args[1:2]==['is-active'] and any('STATIC_INSTALL_VERIFY' in c for call in self.calls for c in call):return types.SimpleNamespace(returncode=0,stdout='active')
   if args[1:2]==['show']:return types.SimpleNamespace(returncode=0,stdout='1131\n')
   if args[1:2]==['is-active']:return types.SimpleNamespace(returncode=3,stdout='inactive')
   if args[0].endswith('python3') or args[0].endswith('python'):
@@ -98,5 +98,33 @@ class TxTests(unittest.TestCase):
   self.activate_after_verify=True
   with self.assertRaisesRegex(go.Stop,'g1_unit_not_inactive'):self.install()
   self.assertEqual([Path(p).read_bytes() for p in self.paths.values()],list(self.old.values()))
+ def test_parallel_transactions_are_serialized_by_directory_flock(self):
+  entered=[]; first=threading.Event(); release=threading.Event(); original=go._main_locked
+  def body(*args,**kwargs):
+   entered.append(threading.get_ident())
+   if len(entered)==1:first.set();release.wait(3)
+   return 'G1_GO53_HELPER_UPGRADE=PASS'
+  go._main_locked=body
+  result=[]
+  try:
+   a=threading.Thread(target=lambda:result.append(go.main(str(self.pkg),euid=0)))
+   b=threading.Thread(target=lambda:result.append(go.main(str(self.pkg),euid=0)))
+   a.start();self.assertTrue(first.wait(2));b.start();time.sleep(.15)
+   self.assertEqual(len(entered),1,'second transaction entered before first released lock')
+   release.set();a.join(2);b.join(2)
+   self.assertEqual(len(entered),2);self.assertEqual(result,['G1_GO53_HELPER_UPGRADE=PASS']*2)
+  finally:release.set();go._main_locked=original
+ def test_cli_success_returns_zero_without_converting_system_exit_into_failure(self):
+  output=io.StringIO()
+  with contextlib.redirect_stdout(output):rc=go.cli(['package'],execute=lambda _: 'G1_GO53_HELPER_UPGRADE=PASS')
+  self.assertEqual(rc,0);self.assertEqual(output.getvalue().strip(),'G1_GO53_HELPER_UPGRADE=PASS')
+ def test_pinned_log_paths_match_the_contract(self):
+  contract_path=Path(__file__).parents[1]/'production_g1_mysql_contract.py'
+  cs=importlib.util.spec_from_file_location('go53_contract_for_test',contract_path);contract=importlib.util.module_from_spec(cs);sys.modules[cs.name]=contract;cs.loader.exec_module(contract)
+  self.assertEqual(self.orig[7],tuple(instance.log_file for instance in contract.INSTANCES.values()))
+ def test_structural_verification_never_calls_dynamic_path_or_mysql_checks(self):
+  source=SRC.read_text(encoding='utf-8')
+  verify=source.split('def verify():',1)[1].split('if already:',1)[0]
+  self.assertNotIn('verify_paths',verify);self.assertNotIn('verify_preflight',verify);self.assertNotIn('verify-install',verify)
 
 if __name__=='__main__':unittest.main(verbosity=2)

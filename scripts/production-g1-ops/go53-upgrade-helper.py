@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """GO-5.3 helper-only upgrade. Never starts MySQL or changes policy/data."""
-import base64, grp, hashlib, json, os, pwd, re, stat, subprocess, sys
+import base64, fcntl, grp, hashlib, json, os, pwd, re, stat, subprocess, sys
 
 LIBEXEC='/usr/local/libexec'
 HELPER=LIBEXEC+'/wpcaregrid-g1-mysql.py'
@@ -96,7 +96,7 @@ def journal_state():
   if any(sha(base64.b64decode(j['backup'][p],validate=True))!=OLD[p] for p in OLD):raise ValueError()
  except Exception:raise Stop('journal_backup_invalid_manual_recovery_required')
  return j
-def main(pkg,runfn=run,euid=None,replace=atomic,hook=None):
+def _main_locked(pkg,runfn=run,euid=None,replace=atomic,hook=None):
  if (os.geteuid() if euid is None else euid)!=0:raise Stop('not_root')
  if os.path.islink(pkg) or not os.path.isdir(pkg):raise Stop('package_directory_invalid')
  ps=os.lstat(pkg)
@@ -152,10 +152,7 @@ def main(pkg,runfn=run,euid=None,replace=atomic,hook=None):
   code="import runpy; d=runpy.run_path(%r); d['verify_static_install'](); print('STATIC_INSTALL_VERIFY=PASS'); d['check_base_config'](); print('BASE_CONFIG_CHECK=PASS')"%HELPER
   done=runfn(['/usr/bin/python3','-I','-B','-c',code])
   if done.returncode or 'STATIC_INSTALL_VERIFY=PASS' not in done.stdout or 'BASE_CONFIG_CHECK=PASS' not in done.stdout:raise Stop('helper_static_verification_failed')
-  # Structural preflight only: do not invoke verify_preflight(), because it launches mysqld --validate-config.
-  code="import runpy; d=runpy.run_path(%r); [(d['verify_systemd_contract'](i), d['verify_apparmor'](i), d['verify_paths'](i)) for i in d['INSTANCES'].values()]; print('STATIC_PREFLIGHT=PASS')"%HELPER
-  p=runfn(['/usr/bin/python3','-I','-B','-c',code])
-  if p.returncode or 'STATIC_PREFLIGHT=PASS' not in p.stdout:raise Stop('instance_static_preflight_failed')
+  # verify_static_install checks the structural systemd/AppArmor contract for both instances.
  if already:
   verify();invariants()
   if any(sha(read(p,MODES[p]))!=NEW[p] for p in NEW):raise Stop('target_hash_missing_before_pass')
@@ -186,6 +183,27 @@ def main(pkg,runfn=run,euid=None,replace=atomic,hook=None):
    except BaseException:restored=False
   raise Stop(code,'yes' if restored else 'NO')
  return 'G1_GO53_HELPER_UPGRADE=PASS'
+def main(pkg,runfn=run,euid=None,replace=atomic,hook=None):
+ # Lock the existing libexec directory inode: no extra lock file is created, and the lock spans
+ # baseline inspection, recovery, replacements, verification, rollback, and final PASS checks.
+ flags=os.O_RDONLY|getattr(os,'O_DIRECTORY',0)|getattr(os,'O_CLOEXEC',0)
+ try:fd=os.open(LIBEXEC,flags)
+ except OSError:raise Stop('libexec_lock_unavailable')
+ try:
+  fcntl.flock(fd,fcntl.LOCK_EX)
+  return _main_locked(pkg,runfn=runfn,euid=euid,replace=replace,hook=hook)
+ finally:
+  try:fcntl.flock(fd,fcntl.LOCK_UN)
+  finally:os.close(fd)
+def cli(argv=None,execute=main):
+ argv=sys.argv[1:] if argv is None else argv
+ try:
+  if len(argv)!=1:raise Stop('usage')
+  print(execute(argv[0]));return 0
+ except Stop as e:
+  print('G1_GO53_HELPER_UPGRADE=STOP;CODE='+e.code+(';ROLLED_BACK='+e.rollback if e.rollback else ''));return 3
+ except Exception as e:
+  print('G1_GO53_HELPER_UPGRADE=STOP;CODE=internal_error:'+type(e).__name__);return 4
 def read_pid(runfn):
  x=runfn(['/usr/bin/systemctl','show','--property=MainPID','--value','mysql.service'])
  if x.returncode or not x.stdout.strip().isdigit():raise Stop('mysql_mainpid_unavailable')
@@ -195,9 +213,4 @@ def assert_units_inactive(runfn):
   x=runfn(['/usr/bin/systemctl','is-active',u])
   if x.returncode!=3 or x.stdout.strip()!='inactive':raise Stop('g1_unit_not_inactive')
 if __name__=='__main__':
- try:
-  if len(sys.argv)!=2:raise Stop('usage')
-  print(main(sys.argv[1]));sys.exit(0)
- except Stop as e:
-  print('G1_GO53_HELPER_UPGRADE=STOP;CODE='+e.code+(';ROLLED_BACK='+e.rollback if e.rollback else ''));sys.exit(3)
- except BaseException as e:print('G1_GO53_HELPER_UPGRADE=STOP;CODE=internal_error:'+type(e).__name__);sys.exit(4)
+ sys.exit(cli())
