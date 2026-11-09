@@ -28,7 +28,7 @@ import sys
 import tempfile
 import types
 
-CONTRACT_SHA256 = "45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3"  # #328 bb7e20e
+CONTRACT_SHA256 = "270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f"  # GO-5.2c AppArmor hotfix
 ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
 LEGACY_G1_FILES = ("90-wpcaregrid-production.cnf", "90-wpcaregrid-production-restore.cnf")
 CONFIG_DIR = "/etc/mysql/mysql.conf.d"

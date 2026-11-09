@@ -25,7 +25,7 @@ import sys
 import types
 
 CONTRACT_PATH = "/usr/local/libexec/production_g1_mysql_contract.py"
-CONTRACT_SHA256 = "45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3"  # #328 bb7e20e
+CONTRACT_SHA256 = "270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f"  # GO-5.2c AppArmor hotfix
 MY_PRINT_DEFAULTS = "/usr/bin/my_print_defaults"
 MYSQLD = "/usr/sbin/mysqld"
 BASE_CONFIG = "/etc/mysql/my.cnf"

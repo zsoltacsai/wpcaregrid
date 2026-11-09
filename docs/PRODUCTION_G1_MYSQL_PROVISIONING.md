@@ -50,8 +50,8 @@ files before copying):
 | Source artifact | SHA-256 |
 | --- | --- |
 | `production-g1-mysql.py` | `32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e` |
-| `production_g1_mysql_contract.py` | `45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3` |
-| `production-g1-mysql-manifest.json` | `c2b693195f542ab88d261bd65dc586c56880526a65707c135cee2d29a61dea73` |
+| `production_g1_mysql_contract.py` | `270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f` |
+| `production-g1-mysql-manifest.json` | `70490acf887f3222ffaa0087c215826dc70a8b8cda7016d0f8807b7099cab6cb` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not
@@ -159,11 +159,13 @@ The chain is checked immediately before the work of each command (not held open)
 element is root-owned in root-only directories. Only `production-g1-mysql.py` and the manifest change; the contract,
 the option files, the AppArmor profiles and the systemd drop-ins stay byte-identical (runbook, GO-5.2 hotfix).
 
-**Open point (AppArmor):** the generated profiles grant `/etc/mysql/my.cnf r,` but not the symlink target
-`/etc/mysql/mysql.cnf`. AppArmor mediates the resolved path, so a *confined* mysqld may be unable to read the base
-file through the chain. `verify-install` runs MySQL unconfined and is not affected; `initialize` and `start` are.
-The runbook has a read-only confined probe (GO-5.2c), a mandatory gate that must PASS before GO-5.3; a profile change would be a
-separate, separately approved hotfix.
+**AppArmor (fixed by the GO-5.2c hotfix):** AppArmor mediates the resolved path, and the first profiles granted
+`/etc/mysql/my.cnf r,` but not the symlink target, so the confined `my_print_defaults`/mysqld was denied reading
+`/etc/mysql/mysql.cnf` (kernel log: `denied_mask="r"`). The generated profiles now contain exactly one more rule,
+`/etc/mysql/mysql.cnf r,` (read only, one file, directly after the `my.cnf` rule); the previous profiles are reproduced
+byte for byte by removing that line (tested). Contract, manifest and the two profiles changed; the helper, option files and
+drop-ins did not. The in-place replacement is `go5p-upgrade-apparmor.py` (runbook, "GO-5.2c hotfix"); `verify-install`
+cannot show this gap because it runs MySQL unconfined, which is why the confined probe `go5p-confined-probe.sh` is a gate.
 
 ### Upgrading an installed package
 
@@ -171,8 +173,9 @@ The installer never replaces a managed file: it accepts an existing file only if
 it is byte-identical, so running a newer package over an installed one stops with
 `managed_file_content_mismatch`. There is no upgrade command in the installer itself; the only supported
 in-place replacements are the narrow, hash-pinned operator tools `go4b-upgrade-installed-helper.py` (log-directory
-hotfix) and `go5h-upgrade-installed-helper.py` (base-config symlink hotfix); each replaces the installed helper and
-manifest and nothing else (see the runbook, GO-4b and GO-5.2 hotfix). Before
+hotfix), `go5h-upgrade-installed-helper.py` (base-config symlink hotfix; helper and manifest) and
+`go5p-upgrade-apparmor.py` (AppArmor hotfix; contract, manifest and the two profiles); each replaces only the named
+files (see the runbook, GO-4b, GO-5.2 and GO-5.2c hotfix). Before
 initialization, the supported path is the Rollback procedure below (exact
 recorded files only, whose SHA-256 still matches the installed package) followed
 by a fresh `install` of the new package. This is also the path from the
