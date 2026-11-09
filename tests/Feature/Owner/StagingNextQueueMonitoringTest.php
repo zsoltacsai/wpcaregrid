@@ -7,12 +7,14 @@ use App\Console\Commands\Monitoring\RunMonitoring;
 use App\Jobs\Monitoring\RecordWorkerPulse;
 use App\Models\MonitoringIncident;
 use App\Models\MonitoringResult;
+use App\Models\MonitoringTransition;
 use App\Monitoring\MonitoringReason;
 use App\Monitoring\MonitoringScope;
 use App\Monitoring\MonitoringSeverity;
 use App\Monitoring\MonitoringEngine;
 use App\Owner\SystemStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use ReflectionMethod;
@@ -138,6 +140,25 @@ final class StagingNextQueueMonitoringTest extends TestCase
             ->where('incident_key', $incidentKey)->value('status'));
         $this->assertCount(1, Queue::pushed(RecordWorkerPulse::class));
         $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[0]['job']->queue);
+
+        $firstObservedAt = $paused->observed_at?->toDateTimeString();
+        $incidentId = MonitoringIncident::query()->where('incident_key', $incidentKey)->value('id');
+        $transitionCount = MonitoringTransition::query()->where('incident_id', $incidentId)->count();
+
+        Carbon::setTestNow($now->copy()->addMinute());
+        try {
+            $method->invoke(app(RunMonitoring::class), app(MonitoringEngine::class));
+
+            $this->assertSame(
+                $firstObservedAt,
+                MonitoringResult::query()->where($pausedIdentity)->firstOrFail()->observed_at?->toDateTimeString(),
+            );
+            $this->assertSame($transitionCount, MonitoringTransition::query()->where('incident_id', $incidentId)->count());
+            $this->assertCount(2, Queue::pushed(RecordWorkerPulse::class));
+            $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[1]['job']->queue);
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     public function test_staging_next_does_not_dispatch_a_pulse_when_the_active_queue_identity_mismatches(): void
