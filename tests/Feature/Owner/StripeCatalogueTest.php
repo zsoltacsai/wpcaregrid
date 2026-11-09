@@ -16,8 +16,13 @@ use App\Pricing\StripeCatalogue\CatalogueGuard;
 use App\Pricing\StripeCatalogue\CatalogueMatcher;
 use App\Pricing\StripeCatalogue\StripeMode;
 use App\Pricing\StripePriceVerifier;
+use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Route;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\Concerns\ActsAsOwner;
 use Tests\Fakes\FakeCatalogueGuard;
@@ -84,10 +89,13 @@ class StripeCatalogueTest extends TestCase
     {
         $items ??= array_column($operation->plan['actions'], 'id');
 
+        // Linking existing objects is confirmed with LINK, anything that creates Stripe objects with APPLY.
+        $verb = $items !== [] && collect($items)->every(fn ($id) => str_starts_with($id, 'link_')) ? 'LINK ' : 'APPLY ';
+
         return $this->post(route('owner.pricing.stripe-catalogue.apply', $operation), $extra + [
             'items' => $items,
             'confirm' => '1',
-            'confirm_text' => 'APPLY '.strtoupper($operation->mode),
+            'confirm_text' => $verb.strtoupper($operation->mode),
         ]);
     }
 
@@ -337,7 +345,7 @@ class StripeCatalogueTest extends TestCase
         $this->assertSame('prod_legacy', $first->plan['products']['wordpress']['suggestions'][0]['id']);
 
         // The Owner states explicitly that prod_legacy is the WordPress product.
-        $this->post(route('owner.pricing.stripe-catalogue.products.map', 'wordpress'), ['stripe_product_id' => 'prod_legacy'])->assertSessionHasNoErrors();
+        $this->post(route('owner.pricing.stripe-catalogue.products.map', 'wordpress'), ['stripe_product_id' => 'prod_legacy', 'confirm' => '1'])->assertSessionHasNoErrors();
         $second = $this->preview();
         $this->assertSame(24, collect($second->plan['prices'])->where('via', 'attributes')->count());
         $this->assertSame(24, $second->plan['summary']['actions']['link_price']);
@@ -357,7 +365,7 @@ class StripeCatalogueTest extends TestCase
     public function test_a_different_stripe_price_that_appears_after_the_preview_is_not_linked(): void
     {
         $this->seedLegacyWordPress();
-        $this->post(route('owner.pricing.stripe-catalogue.products.map', 'wordpress'), ['stripe_product_id' => 'prod_legacy']);
+        $this->post(route('owner.pricing.stripe-catalogue.products.map', 'wordpress'), ['stripe_product_id' => 'prod_legacy', 'confirm' => '1']);
         $operation = $this->preview();
         $approvedId = $operation->plan['prices']['wordpress.basic.monthly.hu']['stripe_price_id'];
 
@@ -449,7 +457,7 @@ class StripeCatalogueTest extends TestCase
         $operation = $this->preview();
 
         $this->apply($operation)->assertSessionHas('owner_error.code', 'APPLY_DISABLED');
-        $this->post(route('owner.pricing.stripe-catalogue.products.map', 'wordpress'), ['stripe_product_id' => 'prod_xyz123'])->assertSessionHas('owner_error.code', 'APPLY_DISABLED');
+        $this->post(route('owner.pricing.stripe-catalogue.products.map', 'wordpress'), ['stripe_product_id' => 'prod_xyz123', 'confirm' => '1'])->assertSessionHas('owner_error.code', 'PRODUCT_NOT_FOUND');
 
         $this->assertSame(0, $this->stripe->created('createProduct') + $this->stripe->created('createPrice'));
         $this->assertSame(StripeCatalogueOperation::PREVIEWED, $operation->refresh()->status);
@@ -557,5 +565,298 @@ class StripeCatalogueTest extends TestCase
         $this->assertStringNotContainsString(self::SECRET, (string) $this->get(route('owner.pricing.stripe-catalogue.index'))->getContent());
         $this->assertNotSame(self::SECRET, config('services.stripe.secret'), 'the Owner-managed key is not copied into configuration');
         $this->assertFalse(getenv('STRIPE_SECRET') === self::SECRET);
+    }
+
+    // ---------------------------------------------------------------- linking existing objects (no creation switch)
+
+    private const BASIC_MONTHLY = 'wordpress.basic.monthly.hu';
+
+    private function linkProduct(string $id = 'prod_legacy'): void
+    {
+        $this->stripe->products[$id] ??= $this->stripe->addProduct($id, 'WordPress');
+        $this->post(route('owner.pricing.stripe-catalogue.products.map', 'wordpress'), ['stripe_product_id' => $id, 'confirm' => '1'])->assertSessionHasNoErrors();
+    }
+
+    private function legacyPrice(string $id = 'price_legacy_basic', array $override = []): void
+    {
+        $o = $override + ['currency' => 'HUF', 'amount' => 899000, 'interval' => 'month', 'metadata' => [], 'active' => true];
+        $this->stripe->addPrice($id, 'prod_legacy', $o['currency'], $o['amount'], $o['interval'], $o['metadata'], $o['active']);
+        $this->verifier->products[$id] = 'prod_legacy';
+    }
+
+    private function mapPrice(string $priceId, string $key = self::BASIC_MONTHLY, array $extra = [])
+    {
+        return $this->post(route('owner.pricing.stripe-catalogue.prices.map', $key), $extra + ['stripe_price_id' => $priceId, 'confirm' => '1']);
+    }
+
+    private function linkedId(string $key = self::BASIC_MONTHLY): ?string
+    {
+        $catalog = $this->catalogue();
+        $parts = explode('.', $key);
+
+        return $catalog->price(ProductType::from($parts[0]), PlanTier::from($parts[1]), BillingInterval::from($parts[2]), $catalog->market($parts[3]))?->stripePriceId;
+    }
+
+    public function test_existing_objects_are_linked_with_creation_switched_off_and_nothing_is_created(): void
+    {
+        config(['services.stripe.catalogue.apply_enabled' => false]);
+        $customer = $this->customerWithWebsite();
+        $before = $customer['subscription']->fresh()->getAttributes();
+        $this->seedLegacyWordPress();
+        $this->linkProduct();
+        $operation = $this->preview();
+        $linkItems = array_values(array_filter(array_column($operation->plan['actions'], 'id'), fn ($id) => str_starts_with($id, 'link_')));
+        $this->assertCount(24, $linkItems);
+
+        $this->apply($operation, $linkItems, ['confirm_text' => 'LINK TEST'])->assertSessionHasNoErrors();
+
+        $operation->refresh();
+        $this->assertSame(StripeCatalogueOperation::COMPLETED, $operation->status);
+        $this->assertCount(24, array_filter($this->catalogue()->allPrices(), fn ($price) => $price->hasStripePrice()));
+        $this->assertSame(0, $this->stripe->created('createProduct') + $this->stripe->created('createPrice'));
+        $this->assertCount(24, $this->stripe->prices, 'no Stripe object was added');
+        $this->assertEquals($before, $customer['subscription']->fresh()->getAttributes());
+        $this->assertSame(24, $this->auditCount('stripe_catalogue.price_linked'));
+    }
+
+    public function test_link_only_runs_need_the_link_confirmation_and_creation_needs_the_switch(): void
+    {
+        config(['services.stripe.catalogue.apply_enabled' => false]);
+        $this->seedLegacyWordPress();
+        $this->linkProduct();
+        $operation = $this->preview();
+        $links = array_values(array_filter(array_column($operation->plan['actions'], 'id'), fn ($id) => str_starts_with($id, 'link_')));
+        $creates = array_values(array_filter(array_column($operation->plan['actions'], 'id'), fn ($id) => str_starts_with($id, 'create_')));
+
+        $this->apply($operation, $links, ['confirm_text' => 'APPLY TEST'])->assertSessionHas('owner_error.code', 'CONFIRM_TEXT');
+        $this->apply($operation, [...$links, $creates[0]], ['confirm_text' => 'APPLY TEST'])->assertSessionHas('owner_error.code', 'APPLY_DISABLED');
+        $this->apply($operation, [$creates[0]], ['confirm_text' => 'APPLY TEST'])->assertSessionHas('owner_error.code', 'APPLY_DISABLED');
+
+        $this->assertSame(0, PriceDefinition::count(), 'nothing was linked by the refused runs');
+        $this->assertSame(StripeCatalogueOperation::PREVIEWED, $operation->refresh()->status);
+        $this->assertSame(0, $this->stripe->created('createPrice'));
+    }
+
+    public function test_the_preview_page_offers_link_actions_and_shows_create_actions_disabled(): void
+    {
+        config(['services.stripe.catalogue.apply_enabled' => false]);
+        $this->seedLegacyWordPress();
+        $this->linkProduct();
+        $operation = $this->preview();
+
+        $page = $this->get(route('owner.pricing.stripe-catalogue.show', $operation))->assertOk();
+
+        $page->assertSee('Link existing Price')->assertSee('creates nothing in Stripe', false)->assertSee('does not touch subscriptions')->assertSee('disabled: creating Stripe objects is switched off');
+        $html = $page->getContent();
+        $this->assertMatchesRegularExpression('/<input type="checkbox" name="items\[\]" value="link_price:[^"]+" checked/', $html);
+        $this->assertMatchesRegularExpression('/<input type="checkbox" name="items\[\]" value="create_price:[^"]+"\s+disabled/', $html);
+    }
+
+    public function test_a_matching_existing_price_is_linked_individually(): void
+    {
+        config(['services.stripe.catalogue.apply_enabled' => false]);
+        $this->linkProduct();
+        $this->legacyPrice();
+        $snapshot = $this->stripe->prices['price_legacy_basic'];
+
+        $this->mapPrice('price_legacy_basic')->assertSessionHasNoErrors()->assertSessionHas('status');
+
+        $this->assertSame('price_legacy_basic', $this->linkedId());
+        $this->assertEquals($snapshot, $this->stripe->prices['price_legacy_basic']);
+        $this->assertSame(0, $this->stripe->created('createPrice') + $this->stripe->created('createProduct'));
+        $this->assertSame(1, $this->auditCount('stripe_catalogue.price_linked'));
+    }
+
+    public function test_an_ambiguous_price_can_be_resolved_by_the_owner_choosing_one_candidate(): void
+    {
+        $this->linkProduct();
+        $this->legacyPrice('price_legacy_a');
+        $this->legacyPrice('price_legacy_b');
+        $this->assertSame('ambiguous', $this->preview()->plan['prices'][self::BASIC_MONTHLY]['state']);
+
+        $this->mapPrice('price_legacy_b')->assertSessionHasNoErrors();
+
+        $this->assertSame('price_legacy_b', $this->linkedId());
+    }
+
+    public static function mismatchingPrices(): array
+    {
+        return [
+            'amount' => [['amount' => 999000]],
+            'currency' => [['currency' => 'EUR']],
+            'interval' => [['interval' => 'year']],
+            'archived' => [['active' => false], 'PRICE_INACTIVE'],
+            'tagged for another price' => [['metadata' => ['wpcg_price_key' => 'wordpress.business.monthly.hu']], 'PRICE_CLAIMED_BY_OTHER'],
+        ];
+    }
+
+    #[DataProvider('mismatchingPrices')]
+    public function test_a_price_that_differs_from_the_catalogue_is_refused(array $override, string $code = 'PRICE_DIFFERS'): void
+    {
+        $this->linkProduct();
+        $this->legacyPrice('price_legacy_bad', $override);
+
+        $this->mapPrice('price_legacy_bad')->assertSessionHas('owner_error.code', $code);
+
+        $this->assertNull($this->linkedId() ?: null);
+        $this->assertSame(0, PriceDefinition::count());
+        $this->assertSame(1, $this->auditCount('stripe_catalogue.apply_refused'));
+    }
+
+    public function test_a_price_of_another_product_or_an_unknown_price_is_refused(): void
+    {
+        $this->linkProduct();
+        $this->stripe->addProduct('prod_other', 'Other');
+        $this->stripe->addPrice('price_other_product', 'prod_other', 'HUF', 899000, 'month');
+
+        $this->mapPrice('price_other_product')->assertSessionHas('owner_error.code', 'PRICE_DIFFERS');
+        $this->mapPrice('price_does_not_exist')->assertSessionHas('owner_error.code', 'PRICE_NOT_FOUND');
+        $this->assertSame(0, PriceDefinition::count());
+    }
+
+    public function test_the_product_must_be_linked_before_its_prices(): void
+    {
+        $this->stripe->addProduct('prod_legacy', 'WordPress');
+        $this->legacyPrice();
+
+        $this->mapPrice('price_legacy_basic')->assertSessionHas('owner_error.code', 'PRODUCT_NOT_MAPPED');
+    }
+
+    public function test_an_existing_price_id_is_never_overwritten_and_a_price_id_cannot_be_used_twice(): void
+    {
+        $this->linkProduct();
+        $this->legacyPrice('price_legacy_one');
+        $this->legacyPrice('price_legacy_two');
+        $this->mapPrice('price_legacy_one')->assertSessionHasNoErrors();
+
+        $this->mapPrice('price_legacy_two')->assertSessionHas('owner_error.code', 'PRICE_ALREADY_MAPPED');
+        $this->assertSame('price_legacy_one', $this->linkedId());
+
+        // the same Stripe Price for a different catalogue price (same amount in the annual slot is impossible; use EUR parity)
+        $this->mapPrice('price_legacy_one', 'wordpress.basic.monthly.eu')->assertSessionHas('owner_error.code', 'PRICE_IN_USE');
+        $this->assertSame(1, PriceDefinition::count());
+    }
+
+    public function test_an_existing_published_price_id_from_configuration_is_not_replaced(): void
+    {
+        $this->linkProduct();
+        $this->legacyPrice();
+        $index = collect(config('pricing.prices'))->search(fn ($row) => $row['product_type'] === 'wordpress' && $row['plan'] === 'basic' && $row['interval'] === 'monthly' && $row['market'] === 'hu');
+        config(["pricing.prices.{$index}.stripe_price_id" => 'price_from_config']);
+
+        $this->mapPrice('price_legacy_basic')->assertSessionHas('owner_error.code', 'PRICE_ALREADY_MAPPED');
+
+        $this->assertSame('price_from_config', $this->linkedId());
+    }
+
+    public function test_linking_needs_the_explicit_confirmation_and_valid_ids(): void
+    {
+        $this->linkProduct();
+        $this->legacyPrice();
+
+        $this->post(route('owner.pricing.stripe-catalogue.prices.map', self::BASIC_MONTHLY), ['stripe_price_id' => 'price_legacy_basic'])->assertSessionHasErrors('confirm');
+        $this->mapPrice('not-a-price-id')->assertSessionHasErrors('stripe_price_id');
+        $this->mapPrice('price_legacy_basic', 'evil.key.monthly.hu')->assertSessionHas('owner_error.code', 'PRICE_UNKNOWN');
+        $this->post(route('owner.pricing.stripe-catalogue.products.map', 'wordpress'), ['stripe_product_id' => 'prod_legacy'])->assertSessionHasErrors('confirm');
+
+        $this->assertSame(0, PriceDefinition::count());
+    }
+
+    public function test_linking_follows_the_same_environment_rules_as_everything_else(): void
+    {
+        $this->linkProduct();
+        $this->legacyPrice();
+
+        // Live key on a staging stack: refused before any Stripe client is built.
+        app(IntegrationCredentials::class)->store('stripe_secret', $this->fixtureKey('sk_live_'));
+        config(['services.stripe.mode' => 'live', 'services.stripe.allow_live_mode' => true, 'app.deployment_environment' => 'staging_next']);
+        $built = $this->guard->gatewaysBuilt;
+        $this->mapPrice('price_legacy_basic')->assertSessionHas('owner_error.code', 'LIVE_FORBIDDEN_ON_STAGING');
+        $this->post(route('owner.pricing.stripe-catalogue.products.map', 'woocommerce'), ['stripe_product_id' => 'prod_x1234', 'confirm' => '1'])->assertSessionHas('owner_error.code', 'LIVE_FORBIDDEN_ON_STAGING');
+        $this->assertSame($built, $this->guard->gatewaysBuilt);
+
+        // Live outside staging needs the separate live approval even to link.
+        config(['app.deployment_environment' => 'production', 'app.env' => 'production', 'app.url' => 'https://wpcaregrid.example']);
+        $this->mapPrice('price_legacy_basic')->assertSessionHas('owner_error.code', 'LIVE_APPLY_NOT_APPROVED');
+
+        // Key and configured mode must agree.
+        app(IntegrationCredentials::class)->store('stripe_secret', self::SECRET);
+        $this->mapPrice('price_legacy_basic')->assertSessionHas('owner_error.code', 'KEY_MODE_MISMATCH');
+        $this->assertSame(0, PriceDefinition::count());
+    }
+
+    public function test_a_stripe_object_of_the_other_mode_or_an_api_error_stops_linking(): void
+    {
+        $this->linkProduct();
+        $this->legacyPrice();
+        $this->stripe->failList = 'api_connection';
+
+        $this->mapPrice('price_legacy_basic')->assertSessionHas('owner_error.code', 'API_CONNECTION');
+        $this->stripe->failList = 'mode_mismatch';
+        $this->mapPrice('price_legacy_basic')->assertSessionHas('owner_error.code', 'MODE_MISMATCH');
+
+        $this->assertSame(0, PriceDefinition::count());
+    }
+
+    public function test_parallel_linking_is_serialised(): void
+    {
+        $this->linkProduct();
+        $this->legacyPrice();
+        $other = Cache::lock('stripe-catalogue-apply', 600);
+        $this->assertTrue($other->get());
+
+        $this->mapPrice('price_legacy_basic')->assertSessionHas('owner_error.code', 'APPLY_IN_PROGRESS');
+        $this->assertSame(0, PriceDefinition::count());
+
+        $other->release();
+        $this->mapPrice('price_legacy_basic')->assertSessionHasNoErrors();
+        $this->mapPrice('price_legacy_basic')->assertSessionHas('owner_error.code', 'PRICE_ALREADY_MAPPED');
+        $this->assertSame(1, PriceDefinition::count());
+    }
+
+    public function test_only_owners_can_link_existing_objects(): void
+    {
+        $this->linkProduct();
+        $this->legacyPrice();
+        auth('owner')->logout();
+
+        $this->post(route('owner.pricing.stripe-catalogue.prices.map', self::BASIC_MONTHLY), ['stripe_price_id' => 'price_legacy_basic', 'confirm' => '1'])->assertRedirect(route('owner.login'));
+        foreach ([User::factory()->operator()->create(), User::factory()->create()] as $other) {
+            $this->actingAs($other, 'owner');
+            $this->assertContains($this->post(route('owner.pricing.stripe-catalogue.prices.map', self::BASIC_MONTHLY), ['stripe_price_id' => 'price_legacy_basic', 'confirm' => '1'])->status(), [302, 403, 404]);
+            $this->assertContains($this->post(route('owner.pricing.stripe-catalogue.products.map', 'woocommerce'), ['stripe_product_id' => 'prod_legacy', 'confirm' => '1'])->status(), [302, 403, 404]);
+            auth('owner')->logout();
+        }
+
+        $this->assertSame(0, PriceDefinition::count());
+        $this->assertSame(1, StripeCatalogueProduct::count(), 'only the earlier owner link exists');
+    }
+
+    public function test_linking_routes_are_csrf_protected_and_throttled(): void
+    {
+        foreach (['owner.pricing.stripe-catalogue.prices.map', 'owner.pricing.stripe-catalogue.products.map'] as $name) {
+            $route = Route::getRoutes()->getByName($name);
+            $middleware = $route->gatherMiddleware();
+            $this->assertContains('web', $middleware);
+            $this->assertContains('can:owner.pricing.manage', $middleware);
+            $this->assertNotEmpty(array_filter($middleware, fn ($m) => is_string($m) && str_starts_with($m, 'throttle:')));
+        }
+        $this->assertContains(PreventRequestForgery::class, app(Kernel::class)->getMiddlewareGroups()['web']);
+    }
+
+    public function test_after_linking_the_products_a_new_dry_run_reclassifies_all_48_prices_without_creating_any(): void
+    {
+        config(['services.stripe.catalogue.apply_enabled' => false]);
+        $this->seedLegacyWordPress();
+        $this->stripe->addProduct('prod_legacy_woo', 'WooCommerce');
+        $this->linkProduct();
+        $this->post(route('owner.pricing.stripe-catalogue.products.map', 'woocommerce'), ['stripe_product_id' => 'prod_legacy_woo', 'confirm' => '1'])->assertSessionHasNoErrors();
+
+        $plan = $this->preview()->plan;
+
+        $this->assertSame(48, $plan['summary']['total_prices']);
+        $this->assertEquals(['exact' => 24, 'missing' => 24], $plan['summary']['prices']);
+        $this->assertSame(['exact', 'exact'], array_values(array_column($plan['products'], 'state')));
+        $this->assertSame(0, $this->stripe->created('createProduct') + $this->stripe->created('createPrice'));
     }
 }

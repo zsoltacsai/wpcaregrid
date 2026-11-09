@@ -1,7 +1,9 @@
 @php
     $tones = ['exact' => 'positive', 'missing' => 'warning', 'ambiguous' => 'danger', 'conflict' => 'danger', 'blocked' => 'neutral', 'skipped' => 'neutral'];
     $actions = collect($plan['actions']);
-    $canApply = $operation->status === \App\Models\StripeCatalogueOperation::PREVIEWED && ! $expired && $currentMode?->value === $operation->mode && $applyEnabled && $actions->isNotEmpty();
+    $canLink = $operation->status === \App\Models\StripeCatalogueOperation::PREVIEWED && ! $expired && $currentMode?->value === $operation->mode && $actions->isNotEmpty();
+    $canCreate = $canLink && $applyEnabled;
+    $isLink = fn (array $action) => in_array($action['kind'], ['link_product', 'link_price'], true);
     $itemResults = $result['items'] ?? [];
 @endphp
 
@@ -59,13 +61,14 @@
                             <td class="px-2 py-2 text-xs text-muted">
                                 @if ($product['source']) {{ __('owner.stripe_catalogue.sources.'.$product['source']) }} @endif
                                 @if ($product['reason']) {{ __('owner.stripe_catalogue.reasons.'.$product['reason']) }} @endif
-                                @if ($product['suggestions'] !== [] && $canApply)
+                                @if ($product['suggestions'] !== [] && $canLink)
                                     <div class="mt-1">{{ __('owner.stripe_catalogue.similar_products') }}</div>
                                     @foreach ($product['suggestions'] as $suggestion)
                                         <form method="POST" action="{{ route('owner.pricing.stripe-catalogue.products.map', $type) }}" class="mt-1 flex flex-wrap items-center gap-2">
                                             @csrf
                                             <input type="hidden" name="stripe_product_id" value="{{ $suggestion['id'] }}">
                                             <span>{{ $suggestion['name'] }} <span class="font-mono">{{ $suggestion['id'] }}</span></span>
+                                            <label class="flex items-center gap-1"><input type="checkbox" name="confirm" value="1" class="size-4"> {{ __('owner.stripe_catalogue.confirm_link_short') }}</label>
                                             <x-ui.button type="submit" size="sm" variant="secondary">{{ __('owner.stripe_catalogue.use_product') }}</x-ui.button>
                                         </form>
                                     @endforeach
@@ -103,6 +106,17 @@
                                 @if ($price['via']) {{ __('owner.stripe_catalogue.via.'.$price['via']) }} @endif
                                 @if ($price['reason']) {{ __('owner.stripe_catalogue.reasons.'.$price['reason']) }} @endif
                                 @if ($price['details'] !== []) <span class="font-mono">{{ implode(', ', $price['details']) }}</span> @endif
+                                @if ($price['state'] === 'ambiguous' && $canLink)
+                                    @foreach ($price['candidates'] as $candidate)
+                                        <form method="POST" action="{{ route('owner.pricing.stripe-catalogue.prices.map', $key) }}" class="mt-1 flex flex-wrap items-center gap-2">
+                                            @csrf
+                                            <input type="hidden" name="stripe_price_id" value="{{ $candidate }}">
+                                            <span class="font-mono">{{ $candidate }}</span>
+                                            <label class="flex items-center gap-1"><input type="checkbox" name="confirm" value="1" class="size-4"> {{ __('owner.stripe_catalogue.confirm_link_short') }}</label>
+                                            <x-ui.button type="submit" size="sm" variant="secondary">{{ __('owner.stripe_catalogue.use_price') }}</x-ui.button>
+                                        </form>
+                                    @endforeach
+                                @endif
                                 @if ($price['action']) <span class="font-medium text-ink">→ {{ __('owner.stripe_catalogue.actions.'.$price['action']) }}</span> @endif
                                 @if (isset($itemResults['create_price:'.$key]) || isset($itemResults['link_price:'.$key]))
                                     @php $r = $itemResults['create_price:'.$key] ?? $itemResults['link_price:'.$key]; @endphp
@@ -123,11 +137,15 @@
                 <ul class="grid gap-1 text-sm">
                     @foreach ($actions as $action)
                         <li class="flex items-start gap-2">
-                            @if ($canApply)
-                                <input type="checkbox" name="items[]" value="{{ $action['id'] }}" checked class="mt-0.5 size-4">
+                            @if ($isLink($action))
+                                <input type="checkbox" name="items[]" value="{{ $action['id'] }}" @checked($canLink) @disabled(! $canLink) class="mt-0.5 size-4">
+                            @else
+                                {{-- Creating Stripe objects stays disabled unless creation was switched on separately. --}}
+                                <input type="checkbox" name="items[]" value="{{ $action['id'] }}" @disabled(! $canCreate) class="mt-0.5 size-4">
                             @endif
                             <span>
                                 <span class="font-medium">{{ __('owner.stripe_catalogue.kinds.'.$action['kind']) }}</span>
+                                @if (! $isLink($action) && ! $canCreate) <span class="text-xs text-muted">({{ __('owner.stripe_catalogue.disabled') }})</span> @endif
                                 <span class="font-mono text-xs text-muted">{{ $action['key'] ?? $action['product_type'] }}</span>
                                 @if (isset($itemResults[$action['id']]))
                                     <span class="font-mono text-xs">— {{ $itemResults[$action['id']]['status'] }}: {{ $itemResults[$action['id']]['code'] }} {{ $itemResults[$action['id']]['stripe_id'] ?? '' }}</span>
@@ -137,16 +155,17 @@
                     @endforeach
                 </ul>
 
-                @if ($canApply)
+                @if ($canLink)
+                    <x-account.notice tone="neutral">{{ __('owner.stripe_catalogue.link_only_notice') }}</x-account.notice>
                     <x-account.notice tone="warning">{{ __('owner.stripe_catalogue.approval_'.$operation->mode) }}</x-account.notice>
                     <label class="flex items-start gap-2 text-sm">
                         <input type="checkbox" name="confirm" value="1" class="mt-0.5 size-4">
                         <span>{{ __('owner.stripe_catalogue.confirm') }}</span>
                     </label>
-                    <x-form.field name="confirm_text" :label="__('owner.stripe_catalogue.confirm_text', ['text' => 'APPLY '.strtoupper($operation->mode)])" maxlength="20" class="font-mono" autocomplete="off" />
-                    <div><x-ui.button type="submit">{{ __('owner.stripe_catalogue.apply') }}</x-ui.button></div>
+                    <x-form.field name="confirm_text" :label="__('owner.stripe_catalogue.confirm_text', ['text' => 'LINK '.strtoupper($operation->mode)]).' '.__('owner.stripe_catalogue.confirm_text_create', ['text' => 'APPLY '.strtoupper($operation->mode)])" maxlength="20" class="font-mono" autocomplete="off" />
+                    <div><x-ui.button type="submit">{{ __('owner.stripe_catalogue.apply_selected') }}</x-ui.button></div>
                 @elseif ($operation->status === \App\Models\StripeCatalogueOperation::PREVIEWED)
-                    <x-account.notice tone="neutral">{{ $applyEnabled ? __('owner.stripe_catalogue.cannot_apply') : __('owner.stripe_catalogue.changes_off_long') }}</x-account.notice>
+                    <x-account.notice tone="neutral">{{ __('owner.stripe_catalogue.cannot_apply') }}</x-account.notice>
                 @endif
             </form>
         </x-operator.section>

@@ -12,7 +12,7 @@ It is not part of checkout. It never touches customers, subscriptions, invoices,
 | The mode comes from the key prefix (`sk_/rk_` + `test_/live_`) and must equal `STRIPE_MODE`. Unknown prefix: refused. | `StripeMode::fromKey`, `CatalogueGuard` |
 | A staging stack (`staging_active` profile, `APP_ENV=staging` or `CAREGRID_DEPLOYMENT_ENV=staging*`) can only use a TEST key. A LIVE key is refused even to read, and no Stripe client is built. | `CatalogueGuard::isStaging()` |
 | LIVE outside staging needs `STRIPE_ALLOW_LIVE_MODE=true`; **changing** LIVE additionally needs `STRIPE_CATALOGUE_LIVE_APPLY_APPROVED=true` (a separate production approval) and typing `APPLY LIVE`. | `CatalogueGuard::assertCanWrite()` |
-| Nothing is changed unless `STRIPE_CATALOGUE_APPLY_ENABLED=true` (default off). With it off, loading the catalogue is a pure dry run. | `CatalogueGuard::assertCanWrite()` |
+| Nothing is **created** unless `STRIPE_CATALOGUE_APPLY_ENABLED=true` (default off). Loading the catalogue is a pure dry run, and linking existing objects is local only and does not need the switch. | `CatalogueGuard::assertCanWrite()` / `assertCanLink()` |
 | Every object returned by Stripe must belong to the key's mode (`livemode`); an object of the other mode aborts the run. | `StripeApiCatalogueGateway::assertMode()` |
 | Existing Stripe Products and Prices are only read. The gateway has no update/archive/delete method (a test enforces the method list). | `StripeCatalogueGateway` |
 | Subscriptions are never read or written. An existing catalogue Price ID is never replaced; a different one is a conflict. | `CatalogueMatcher`, `CatalogueManager::linkPrice()` |
@@ -32,6 +32,24 @@ A Stripe Price matches a catalogue price only when **all** hold and exactly one 
 The stable key in the Price metadata (`wpcg_price_key`, e.g. `wordpress.basic.monthly.hu`) is decided first. If a Price carries our key but differs, that is a **conflict** (never silently re-matched). Without our key, a Price in the same Product, currency and period but with another amount is also a conflict (no second active Price in the same slot is proposed). Name similarity is never used for prices; for Products it is only a hint ("similar existing Products") and the Owner must link such a Product explicitly.
 
 A Product is known by configuration (`STRIPE_PRODUCT_WORDPRESS` / `STRIPE_PRODUCT_WOOCOMMERCE`), an earlier link (`stripe_catalogue_products`, per mode) or the metadata `wpcg_product_type`.
+
+## Two separate permissions
+
+| | A. Link existing objects | B. Create Stripe objects |
+| --- | --- | --- |
+| What | Link an existing Stripe Product to a product type, an existing Stripe Price to a catalogue price | Create a Product or Price in Stripe |
+| Effect | **Local mapping only**: nothing is created or changed in Stripe, no subscription, customer or invoice is touched | Writes to Stripe (create only; never update, archive or delete) |
+| Needs `STRIPE_CATALOGUE_APPLY_ENABLED` | **No** | Yes (default off) |
+| Staging | TEST key only (a LIVE key is refused before any client is built) | TEST key only |
+| LIVE (never on staging) | `STRIPE_ALLOW_LIVE_MODE` + `STRIPE_CATALOGUE_LIVE_APPLY_APPROVED` | same |
+| Owner confirmation | tick the confirmation and, for a run, type `LINK TEST` / `LINK LIVE` | tick the confirmation and type `APPLY TEST` / `APPLY LIVE` |
+| UI | `Link existing Product`, `Link existing Price` | `Create Product`, `Create Price` (disabled while creation is off) |
+
+Linking is done in two ways: **per object** (a Product from the "similar Products" hints, a Price chosen among the candidates of an ambiguous price) or **in bulk** by approving the `link_price` items of a previewed plan. A run is link-only exactly when every approved item is a link; one create item makes the whole run a creation run with the stricter rules.
+
+Server-side checks for linking a Price (all from a fresh read of Stripe, none from the browser): the key must be a catalogue price on sale; the Stripe Price must exist in this account and mode, be active and a plain recurring Price of the **linked Product** with exactly the catalogue's currency, amount and interval (1); it must not be tagged (`wpcg_price_key`) for another catalogue price and not be linked to one already; the catalogue price must have **no Price ID yet and no pending draft** (a published ID is never replaced). Then the existing price editor publishes it (Stripe verification, version, audit). Linking a Product needs it to be an active Product of the account and the product type not to be set by configuration or an earlier link. Parallel linking is serialised by one lock. Audit: `stripe_catalogue.product_linked`, `price_linked`, `apply_refused` (with a fixed code).
+
+After linking the Products, start a new dry run: all 48 on-sale prices are classified again as exact, missing, ambiguous, conflict or blocked; missing prices are never created unless creation was switched on separately and approved.
 
 ## Dry run → approval → execution
 
@@ -55,7 +73,7 @@ Creating Stripe objects does not change existing subscriptions, and published pr
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `STRIPE_CATALOGUE_APPLY_ENABLED` | `false` | Allow creating Stripe objects and linking Products. Off: dry run only. |
+| `STRIPE_CATALOGUE_APPLY_ENABLED` | `false` | Allow **creating** Stripe Products and Prices. Off: dry run and linking of existing objects only. |
 | `STRIPE_CATALOGUE_LIVE_APPLY_APPROVED` | `false` | Separate approval to change the LIVE catalogue (never effective on staging). |
 
 The Stripe secret key itself is not an environment variable of this feature: it is the Owner-managed credential (Owner → Integrations).
@@ -63,6 +81,6 @@ The Stripe secret key itself is not an environment variable of this feature: it 
 ## Release and rollout
 
 - Merge needs the V3 review policy (`RELEASE_REVIEW_POLICY.md`).
-- Staging: deploy normally. The Stripe Sandbox is **read only** until the Owner sets `STRIPE_CATALOGUE_APPLY_ENABLED=true` for staging, after reviewing the preview of the 48 prices.
+- Staging: deploy normally. The Stripe Sandbox is **read only**: existing Products and Prices can be linked without any switch; creating objects needs `STRIPE_CATALOGUE_APPLY_ENABLED=true`, only after a separate Owner approval.
 - Production: this feature is not enabled there by this change; LIVE needs its own Owner approval.
 - `php artisan migrate` creates `stripe_catalogue_products` and `stripe_catalogue_operations` (additive).
