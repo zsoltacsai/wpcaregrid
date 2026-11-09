@@ -16,6 +16,24 @@ use Illuminate\Support\Facades\Log;
  */
 final class StagingMailGuard
 {
+    /** True when the default mailer cannot reach anybody (log/array sink). */
+    public static function isSink(): bool
+    {
+        $default = (string) config('mail.default');
+
+        return in_array((string) config("mail.mailers.{$default}.transport", $default), ['log', 'array'], true);
+    }
+
+    /**
+     * True when mail on staging-next is confined: a sink mailer, or a recipient allowlist.
+     * Without either the guard blocks everything, so mail-sending tasks are held instead of
+     * recording blocked messages as delivered.
+     */
+    public static function restricted(): bool
+    {
+        return self::isSink() || (array) config('marketing_release.staging_mail_allowlist', []) !== [];
+    }
+
     /** Returning false cancels the message (Illuminate\Mail\Mailer honours it). */
     public function handle(MessageSending $event): ?bool
     {

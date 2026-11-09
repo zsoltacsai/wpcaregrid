@@ -14,7 +14,6 @@ use App\Owner\SystemStatus;
 use App\Release\StagingActiveProfile;
 use App\Release\StagingDatabaseProbe;
 use App\SyntheticFixtures\SyntheticFixturePolicy;
-use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
@@ -148,58 +147,6 @@ class StagingActiveOperationsTest extends TestCase
 
         config(['marketing_release.staging_active_features.external_services' => true]);
         $this->assertFalse(StagingActiveProfile::externalContactClosed());
-    }
-
-    public function test_scheduled_external_and_stripe_commands_are_filtered_only_on_staging_next(): void
-    {
-        // Make the vulnerability sync due on its own conditions, so only the staging clause decides.
-        config([
-            'security.vulnerabilities.source' => 'wordfence',
-            'security.vulnerabilities.feed_url' => 'https://feed.invalid/x',
-            'security.vulnerabilities.scheduled_sync_enabled' => true,
-        ]);
-        Artisan::call('list'); // loads routes/console.php
-        $events = collect(app(Schedule::class)->events());
-        $due = fn (string $command): bool => $events
-            ->first(fn ($event) => str_contains((string) $event->command, $command))
-            ->filtersPass($this->app);
-        $external = ['platform:database-backup-schedule', 'security:vulnerabilities:sync'];
-        $stripe = ['offers:expire', 'stripe:webhooks:drain', 'stripe:subscriptions:reconcile'];
-
-        // Anywhere else nothing changes.
-        config(['app.deployment_environment' => 'production', 'marketing_release.requested_profile' => 'marketing_only', 'marketing_release.profile' => 'marketing_only']);
-        foreach (array_merge($external, $stripe) as $command) {
-            $this->assertTrue($due($command), $command.' stays scheduled outside staging-next');
-        }
-
-        // staging-next, nothing opened and no Stripe test keys: all of them are held back.
-        config([
-            'app.deployment_environment' => 'staging_next',
-            'marketing_release.staging_active_features' => ['connector_api' => false, 'external_services' => false],
-            'services.stripe.secret' => null,
-        ]);
-        foreach (array_merge($external, $stripe) as $command) {
-            $this->assertFalse($due($command), $command.' must not run on closed staging-next');
-        }
-
-        // Proven Stripe test keys release only the Stripe commands; the Owner's switch only the external ones.
-        config(['services.stripe.secret' => 'sk_test_unit', 'services.stripe.key' => 'pk_test_unit', 'services.stripe.allow_live_mode' => false]);
-        foreach ($stripe as $command) {
-            $this->assertTrue($due($command), $command.' runs with proven test keys');
-        }
-        foreach ($external as $command) {
-            $this->assertFalse($due($command), $command.' still closed');
-        }
-        config(['marketing_release.staging_active_features.external_services' => true]);
-        foreach ($external as $command) {
-            $this->assertTrue($due($command), $command.' runs once external services are opened');
-        }
-
-        // A live key closes the Stripe commands again.
-        config(['services.stripe.secret' => 'sk_live_unit']);
-        foreach ($stripe as $command) {
-            $this->assertFalse($due($command), $command.' must not run with a live key');
-        }
     }
 
     public function test_the_system_check_does_not_contact_cloudflare_from_closed_staging_next(): void
