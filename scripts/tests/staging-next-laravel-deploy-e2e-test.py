@@ -1078,7 +1078,7 @@ def main():
             "SELECT COUNT(*) FROM information_schema.TRIGGERS "
             "WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='wpcg_phase_b_probe'",
         ], extra_env={"MYSQL_PWD": os.environ["WPCG_MYSQL_PASSWORD"]}, timeout=15)
-        if crash_ledger.splitlines() != ["73", "1"]:
+        if crash_ledger.splitlines() != ["74", "1"]:
             raise RuntimeError("phase_b_crash_committed_ddl_not_observed")
 
         # Re-enter the interrupted migration with a real PHP-FPM cache build,
