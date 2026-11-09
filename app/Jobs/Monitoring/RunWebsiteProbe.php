@@ -11,6 +11,7 @@ use App\Monitoring\MonitoringReason;
 use App\Monitoring\MonitoringScope;
 use App\Monitoring\MonitoringSeverity;
 use App\Monitoring\WebsiteProbe;
+use App\Release\StagingActiveProfile;
 use App\Security\SecurityPosture;
 use App\SiteHealth\Dimension;
 use App\SiteHealth\SiteHealth;
@@ -52,7 +53,10 @@ final class RunWebsiteProbe implements ShouldBeUnique, ShouldQueue
         if (! $website) {
             return;
         }
-        if (config('app.deployment_environment') === 'staging' && ! $synthetic->ownerPairingAllowed($website)) {
+        // Staging never probes a customer website, unless it is the synthetic fixture
+        // (legacy staging) or the Owner has opened external services (staging-next).
+        if ((config('app.deployment_environment') === 'staging' || StagingActiveProfile::externalContactClosed())
+            && ! $synthetic->ownerPairingAllowed($website)) {
             return;
         }
 
