@@ -325,16 +325,6 @@ final class RunMonitoring extends Command
     {
         $configured = (array) config('monitoring.worker_queues', []);
 
-        // An intentionally paused staging-next worker is healthy policy state, not a stale worker.
-        // Record the state but never enqueue a pulse onto its inactive queue.
-        foreach (StagingWorkerQueuePolicy::inactiveWorkerQueueNames($configured) as $name) {
-            $engine->record(new MonitoringObservation(
-                'platform.worker', MonitoringScope::Platform, 'queue', $name,
-                HealthStatus::Healthy, null, MonitoringReason::WORKER_PAUSED, 'queue',
-                ['configured' => false, 'queue' => $name], now(), 900, 1, 1, false,
-            ));
-        }
-
         foreach (StagingWorkerQueuePolicy::monitorableWorkerQueues($configured) as $name => $settings) {
             $result = MonitoringResult::query()->where('check_id', 'platform.worker')
                 ->where('scope', MonitoringScope::Platform->value)->where('subject_type', 'queue')->where('subject_id', $name)->first();
