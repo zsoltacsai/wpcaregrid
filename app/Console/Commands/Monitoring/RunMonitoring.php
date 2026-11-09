@@ -331,7 +331,7 @@ final class RunMonitoring extends Command
             $engine->record(new MonitoringObservation(
                 'platform.worker', MonitoringScope::Platform, 'queue', $name,
                 HealthStatus::Healthy, null, MonitoringReason::WORKER_PAUSED, 'queue',
-                ['worker_enabled' => false, 'pause_scope' => 'staging_next'], now(), 900, 1, 1, false,
+                ['configured' => false, 'queue' => $name], now(), 900, 1, 1, false,
             ));
         }
 
