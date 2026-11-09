@@ -60,6 +60,8 @@ final class MonitoringReason
 
     public const QUEUE_BACKLOG = 'queue.backlog';
 
+    public const WORKER_PAUSED = 'worker.paused_by_profile';
+
     public const WORKER_STALE = 'worker.stale';
 
     public const SCHEDULER_STALE = 'scheduler.stale';
