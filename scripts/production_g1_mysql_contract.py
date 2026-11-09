@@ -452,6 +452,7 @@ profile {instance.apparmor_profile} {{
   /usr/share/mysql-8.4/** r,
   /etc/mysql/ r,
   /etc/mysql/my.cnf r,
+  /etc/mysql/mysql.cnf r,
   /etc/mysql/conf.d/ r,
   /etc/mysql/conf.d/** r,
   /etc/mysql/mysql.conf.d/ r,

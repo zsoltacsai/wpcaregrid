@@ -50,9 +50,17 @@ EXPECTED = {
 # tmpdir and error-log exist exactly as provision-paths creates them (empty, mysql:mysql, 0750 / 0700 / 0600), and
 # there is no socket/pid marker (no instance was initialized or started). The pre-GO-5.1 states above keep
 # requiring that none of these paths exists.
+# 328ap: the AppArmor hotfix state after GO-5.2 (profiles additionally allow `/etc/mysql/mysql.cnf r,`): new profiles,
+# contract and manifest; helper, option files and drop-ins as in 328h2. Only exists in the provisioned form.
+EXPECTED["328ap"] = {**PROFILES_AND_DROPINS, **CNF_ZZ,
+                     "/etc/apparmor.d/wpcaregrid-mysql-production": "9a40053158880f0e6baf0db06431587651701487910634015e712e878dcfe13d",
+                     "/etc/apparmor.d/wpcaregrid-mysql-production-restore": "ce56847e98f23b45590aaf55ad069df89f97dc12b672c2a289bb0fa7fb923b3e",
+                     LIBEXEC + "wpcaregrid-g1-mysql.py": "32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e",
+                     LIBEXEC + "production_g1_mysql_contract.py": "270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f",
+                     LIBEXEC + "production_g1_mysql_manifest.json": "70490acf887f3222ffaa0087c215826dc70a8b8cda7016d0f8807b7099cab6cb"}
 EXPECTED["328hp"] = dict(EXPECTED["328h"])
 EXPECTED["328h2p"] = dict(EXPECTED["328h2"])
-PROVISIONED_STATES = ("328hp", "328h2p")
+PROVISIONED_STATES = ("328hp", "328h2p", "328ap")
 INSTANCES = {
     "wpcaregrid-production": {"port": 3308, "runtime": [
         "/var/lib/mysql-wpcaregrid-production", "/var/tmp/wpcaregrid-production",
@@ -65,7 +73,8 @@ INSTANCES = {
 }
 TAGS = {"325": "G1_GO1_PREFLIGHT", "clean": "G1_GO2_ROLLBACK_VERIFY", "328": "G1_GO4_POSTINSTALL",
         "328h": "G1_GO4B_POSTUPGRADE", "328h2": "G1_GO5H_POSTUPGRADE",
-        "328hp": "G1_GO52H_PROVISIONED_HOTFIX1", "328h2p": "G1_GO52H_PROVISIONED_HOTFIX2"}
+        "328hp": "G1_GO52H_PROVISIONED_HOTFIX1", "328h2p": "G1_GO52H_PROVISIONED_HOTFIX2",
+        "328ap": "G1_GO52C_PROFILE_HOTFIX"}
 
 
 def mysql_ids():
@@ -380,7 +389,7 @@ def main(state, root="/", run=default_run, euid=None, ids=mysql_ids):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2 or sys.argv[1] not in TAGS:
-        print("usage: <325|clean|328|328h|328h2|328hp|328h2p>")
+        print("usage: <325|clean|328|328h|328h2|328hp|328h2p|328ap>")
         raise SystemExit(2)
     try:
         code = main(sys.argv[1])
