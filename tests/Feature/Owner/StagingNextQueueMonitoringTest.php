@@ -59,7 +59,8 @@ final class StagingNextQueueMonitoringTest extends TestCase
             ->where('subject_type', 'queue')->where('subject_id', 'backups')->firstOrFail();
         $this->assertSame(HealthStatus::Healthy, $backups->state);
         $this->assertSame(MonitoringReason::WORKER_PAUSED, $backups->reason_code);
-        $this->assertSame(false, $backups->evidence['worker_enabled']);
+        $this->assertSame(false, $backups->evidence['configured']);
+        $this->assertSame('backups', $backups->evidence['queue']);
     }
 
     public function test_staging_next_does_not_dispatch_a_pulse_when_the_active_queue_identity_mismatches(): void
