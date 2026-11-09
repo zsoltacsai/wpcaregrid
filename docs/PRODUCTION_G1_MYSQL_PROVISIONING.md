@@ -49,9 +49,9 @@ files before copying):
 
 | Source artifact | SHA-256 |
 | --- | --- |
-| `production-g1-mysql.py` | `32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e` |
+| `production-g1-mysql.py` | `a3a1f056047db06f6f2a5c720978b4ac7378edb3cbedce9cb4a742eba20c12bc` |
 | `production_g1_mysql_contract.py` | `270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f` |
-| `production-g1-mysql-manifest.json` | `70490acf887f3222ffaa0087c215826dc70a8b8cda7016d0f8807b7099cab6cb` |
+| `production-g1-mysql-manifest.json` | `eb5e31b29a4b6dde727baeac3840f9079c62ca9bd6218fe7e39bba58f9a3f2cd` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not
@@ -166,6 +166,14 @@ the option files, the AppArmor profiles and the systemd drop-ins stay byte-ident
 byte for byte by removing that line (tested). Contract, manifest and the two profiles changed; the helper, option files and
 drop-ins did not. The in-place replacement is `go5p-upgrade-apparmor.py` (runbook, "GO-5.2c hotfix"); `verify-install`
 cannot show this gap because it runs MySQL unconfined, which is why the confined probe `go5p-confined-probe.sh` is a gate.
+
+### Initialization (`initialize`) process handling and completion proof
+
+`initialize` runs `runuser -> aa-exec -> mysqld --initialize` in its own session with a 600 s limit. On a timeout, an interruption of the helper or an
+orphan left after exit, the whole process group is stopped (`SIGTERM`, then `SIGKILL`) and verified gone via `/proc`; the datadir is always preserved
+and a distinct `initialize_*` code is reported. Success requires evidence (exit 0, exact datadir contents, the server's start and end log lines, no error
+line, no process or socket/pid marker); the existence of `mysql/` and `auto.cnf` alone proves nothing, because they appear early. A datadir that already
+carries initialization artefacts is refused with `datadir_initialization_present`. See the runbook, "GO-5.3 incident", for the diagnostic and recovery plan.
 
 ### Upgrading an installed package
 
