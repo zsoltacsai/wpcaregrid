@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Cloudflare\CloudflareDnsService;
 use App\Connector\HealthStatus;
 use App\Jobs\Monitoring\RunWebsiteProbe;
 use App\Mail\StaffInvitation;
@@ -207,12 +206,18 @@ class StagingActiveOperationsTest extends TestCase
     {
         config(['services.cloudflare.api_token' => 'token-not-used', 'app.deployment_environment' => 'staging_next',
             'marketing_release.staging_active_features' => ['connector_api' => false, 'external_services' => false]]);
-        $this->mock(CloudflareDnsService::class)->shouldNotReceive('diagnose');
+        Http::fake();
 
         $check = collect(app(SystemStatus::class)->checks())->firstWhere('key', 'cloudflare');
 
         $this->assertSame('NOT CONFIGURED', $check->level());
         $this->assertStringNotContainsString('token-not-used', json_encode($check));
+        Http::assertNothingSent();
+
+        // Positive control: once the Owner opens external services the probe is attempted.
+        config(['marketing_release.staging_active_features.external_services' => true]);
+        collect(app(SystemStatus::class)->checks())->firstWhere('key', 'cloudflare');
+        Http::assertSentCount(1);
     }
 
     public function test_monitoring_does_not_probe_customer_websites_from_staging_next(): void
