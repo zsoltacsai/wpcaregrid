@@ -361,4 +361,13 @@ return [
             'reconcile' => 'Szolgáltatói állapot lekérése és csak ezen előfizetés egyeztetése',
         ],
     ],
+    'system' => [
+        'summaries' => [
+            'queue_scope_unverified' => 'A staging-next feldolgozási sor hatóköre nem ellenőrizhető.',
+        ],
+        'details' => [
+            'monitored_queue' => 'Felügyelt feldolgozási sor',
+            'intentionally_paused_queues' => 'Szándékosan szüneteltetett sorok',
+        ],
+    ],
 ];

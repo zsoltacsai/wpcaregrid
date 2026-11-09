@@ -901,6 +901,7 @@ return [
             'connected' => 'Connected.',
             'queue_ok' => 'Jobs are processed (:driver).',
             'queue_stuck' => 'Jobs have been waiting :minutes minutes. Is a queue worker running?',
+            'queue_scope_unverified' => 'The staging-next queue scope could not be verified.',
             'failed_jobs' => ':count failed jobs.',
             'scheduler_never' => 'No scheduler run recorded yet.',
             'scheduler_stopped' => 'The scheduler has not run in the last 5 minutes.',
@@ -970,6 +971,8 @@ return [
             'https' => 'HTTPS',
             'secure_cookie' => 'Secure cookies',
             'backup_queue' => 'Backup transfer queue',
+            'monitored_queue' => 'Monitored queue',
+            'intentionally_paused_queues' => 'Intentionally paused queues',
             'staging_free' => 'Staging free space',
         ],
         'values' => [

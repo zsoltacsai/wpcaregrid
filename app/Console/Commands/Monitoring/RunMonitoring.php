@@ -21,6 +21,7 @@ use App\Owner\OwnerSettings;
 use App\Owner\SystemStatus;
 use App\Platform\DisasterRecovery\PlatformRecoveryHealth;
 use App\Release\StagingActiveProfile;
+use App\Release\StagingWorkerQueuePolicy;
 use App\Security\Vulnerabilities\VulnerabilitySource;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
@@ -322,7 +323,19 @@ final class RunMonitoring extends Command
 
     private function workers(MonitoringEngine $engine): void
     {
-        foreach ((array) config('monitoring.worker_queues', []) as $name => $settings) {
+        $configured = (array) config('monitoring.worker_queues', []);
+
+        // An intentionally paused staging-next worker is healthy policy state, not a stale worker.
+        // Record the state but never enqueue a pulse onto its inactive queue.
+        foreach (StagingWorkerQueuePolicy::inactiveWorkerQueueNames($configured) as $name) {
+            $engine->record(new MonitoringObservation(
+                'platform.worker', MonitoringScope::Platform, 'queue', $name,
+                HealthStatus::Healthy, null, MonitoringReason::WORKER_PAUSED, 'queue',
+                ['worker_enabled' => false, 'pause_scope' => 'staging_next'], now(), 900, 1, 1, false,
+            ));
+        }
+
+        foreach (StagingWorkerQueuePolicy::monitorableWorkerQueues($configured) as $name => $settings) {
             $result = MonitoringResult::query()->where('check_id', 'platform.worker')
                 ->where('scope', MonitoringScope::Platform->value)->where('subject_type', 'queue')->where('subject_id', $name)->first();
             $stale = ! $result || $result->observed_at?->lt(now()->subMinutes(15));
