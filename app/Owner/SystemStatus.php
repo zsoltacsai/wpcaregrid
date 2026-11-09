@@ -16,6 +16,7 @@ use App\Pricing\PricingCatalog;
 use App\Privacy\DestructiveRetentionGate;
 use App\Privacy\PrivacyRestoreSafety;
 use App\Privacy\RetentionSourceScanner;
+use App\Release\StagingActiveProfile;
 use App\Security\ScanStatus;
 use App\Security\Vulnerabilities\VulnerabilitySource;
 use Carbon\CarbonImmutable;
@@ -44,7 +45,7 @@ final class SystemStatus
     /** @return list<StatusCheck> */
     public function checks(): array
     {
-        return [
+        $checks = [
             $this->application(),
             $this->database(),
             $this->queue(),
@@ -60,6 +61,74 @@ final class SystemStatus
             $this->privacyRestoreSafety(),
             $this->privacyExports(),
         ];
+
+        // Only on a deployment that identifies itself as staging-next; nothing changes elsewhere.
+        if (StagingActiveProfile::isStagingNextEnvironment()) {
+            $checks[] = $this->stagingIsolation();
+        }
+
+        return $checks;
+    }
+
+    /**
+     * Proof that the staging_active profile is confined to the staging stack. Workers, the
+     * scheduler and external services are started only after this reads OK. Reason codes
+     * only: no key, address, hostname or credential is ever shown.
+     */
+    private function stagingIsolation(): StatusCheck
+    {
+        $staging = app(StagingActiveProfile::class);
+        $labels = [
+            'identity' => __('owner.system.staging.identity'),
+            'database' => __('owner.system.staging.database'),
+            'stripe' => __('owner.system.staging.stripe'),
+            'mail' => __('owner.system.staging.mail'),
+            'connector' => __('owner.system.staging.connector'),
+            'external' => __('owner.system.staging.external'),
+        ];
+        $codes = fn (array $problems): string => $problems === [] ? __('owner.system.staging.proven') : implode(', ', $problems);
+
+        $mailer = (string) config('mail.default');
+        $driver = (string) config("mail.mailers.{$mailer}.transport", $mailer);
+        $allowlisted = count((array) config('marketing_release.staging_mail_allowlist', []));
+        $sink = in_array($driver, ['log', 'array'], true);
+        $mail = match (true) {
+            $sink => __('owner.system.staging.mail_sink'),
+            $allowlisted > 0 => __('owner.system.staging.mail_allowlist', ['count' => $allowlisted]),
+            default => __('owner.system.staging.mail_blocked'),
+        };
+        $details = [
+            $labels['mail'] => $mail,
+            $labels['connector'] => $this->onOff(config('marketing_release.staging_active_features.connector_api') === true),
+            $labels['external'] => $this->onOff(config('marketing_release.staging_active_features.external_services') === true),
+        ];
+
+        if (! StagingActiveProfile::requested()) {
+            return new StatusCheck('staging_isolation', HealthStatus::Healthy, __('owner.system.staging.inactive'), $details);
+        }
+
+        $identity = $staging->identityProblems();
+        $database = $identity === [] ? $staging->databaseProblems() : [];
+        $stripe = $staging->stripeProblems();
+        $details = [
+            $labels['identity'] => $codes($identity),
+            $labels['database'] => $identity === [] ? $codes($database) : __('owner.system.staging.skipped'),
+            $labels['stripe'] => $stripe === [] ? __('owner.system.staging.stripe_test') : __('owner.system.staging.closed', ['codes' => implode(', ', $stripe)]),
+        ] + $details;
+
+        $critical = $identity !== [] || $database !== [] || in_array('stripe_secret_not_test', $stripe, true)
+            || in_array('stripe_publishable_not_test', $stripe, true) || in_array('stripe_live_mode_allowed', $stripe, true);
+        $attention = $stripe !== [] || (! $sink && $allowlisted === 0);
+
+        return new StatusCheck('staging_isolation', match (true) {
+            $critical => HealthStatus::Critical,
+            $attention => HealthStatus::Attention,
+            default => HealthStatus::Healthy,
+        }, match (true) {
+            $critical => __('owner.system.staging.refused'),
+            $attention => __('owner.system.staging.partial'),
+            default => __('owner.system.staging.proven_all'),
+        }, $details);
     }
 
     private function privacyRestoreSafety(): StatusCheck
@@ -315,6 +384,14 @@ final class SystemStatus
         if (! $token) {
             return new StatusCheck('cloudflare', HealthStatus::Unknown, __('owner.system.summaries.cloudflare_not_configured'), [
                 __('owner.system.details.credentials') => __('owner.system.values.not_configured'),
+            ], notConfigured: true, optional: true);
+        }
+
+        // Staging-next does not contact Cloudflare, not even read-only, until the Owner opens external services.
+        if (StagingActiveProfile::externalContactClosed()) {
+            return new StatusCheck('cloudflare', HealthStatus::Unknown, __('owner.system.summaries.cloudflare_closed'), [
+                __('owner.system.details.credentials') => __('owner.system.values.configured'),
+                __('owner.system.details.dns_read') => __('owner.system.values.not_probed'),
             ], notConfigured: true, optional: true);
         }
 

@@ -40,6 +40,9 @@ use App\Privacy\ObjectStoragePrivacyTombstoneJournal;
 use App\Privacy\PlatformBackupPrivacyTombstoneObjectStore;
 use App\Privacy\PrivacyTombstoneJournal;
 use App\Privacy\PrivacyTombstoneObjectStore;
+use App\Release\MysqlStagingDatabaseProbe;
+use App\Release\StagingDatabaseProbe;
+use App\Release\StagingMailGuard;
 use App\Security\EngineScanner;
 use App\Security\SecurityScanner;
 use App\Security\Vulnerabilities\NoVulnerabilitySource;
@@ -51,7 +54,9 @@ use GuzzleHttp\Client;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
+use Illuminate\Mail\Events\MessageSending;
 use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Schema;
@@ -74,6 +79,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(PlatformBackupS3BucketProber::class, PlatformBackupS3BucketProbe::class);
         $this->app->bind(PublicAddressLookup::class, SystemPublicAddressLookup::class);
         $this->app->bind(VatNumberProvider::class, ViesSoapProvider::class);
+        $this->app->bind(StagingDatabaseProbe::class, MysqlStagingDatabaseProbe::class);
         $this->app->bind(InvoiceProvider::class, fn ($app) => new SzamlazzDryRunProvider($app->make(SzamlazzResponseParser::class)));
         $this->app->bind(InvoiceSubmissionProvider::class, SzamlazzAgentProvider::class);
         $this->app->bind(SyntheticInvoiceTestProvider::class, SzamlazzAgentProvider::class);
@@ -141,6 +147,9 @@ class AppServiceProvider extends ServiceProvider
         Blade::directive('displayDateTime', fn (string $expression) => "<?php echo e(app(\\App\\Support\\DisplayDateTime::class)->format({$expression})); ?>");
 
         URL::defaults(['locale' => config('localization.default', 'en')]);
+
+        // staging-next never mails real customers (web process and queue workers alike).
+        Event::listen(MessageSending::class, [StagingMailGuard::class, 'handle']);
 
         // Database-backed service credentials override their fixed config keys at runtime.
         // Never bake these values into bootstrap/cache/config.php.

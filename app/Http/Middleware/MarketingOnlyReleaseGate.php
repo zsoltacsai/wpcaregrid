@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Release\StagingActiveProfile;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -15,7 +16,7 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class MarketingOnlyReleaseGate
 {
-    private const PROFILES = ['marketing_only', 'invitation_beta', 'staging_admin_qa'];
+    private const PROFILES = ['marketing_only', 'invitation_beta', 'staging_admin_qa', 'staging_active'];
 
     private const STAGING_ADMIN_QA_READ_PATHS = [
         '/owner', '/owner/customers', '/owner/operators',
@@ -73,6 +74,12 @@ final class MarketingOnlyReleaseGate
             }
 
             return $next($request);
+        }
+
+        if ($profile === 'staging_active') {
+            return $this->isAuthorizedStagingActiveRequest($request)
+                ? $next($request)
+                : $this->notFound();
         }
 
         if (! $this->isAllowedPublicRequest($request)) {
@@ -154,6 +161,43 @@ final class MarketingOnlyReleaseGate
         }
 
         return $this->isAllowedPublicRequest($request);
+    }
+
+    /**
+     * staging_active lifts the marketing restriction for the application as a whole, but
+     * only for the exact staging-next origin and only while the whole environment is proven:
+     * configuration identity, the live database, HTTPS and the Host header. It is not an
+     * authorisation: routes keep their own guards, roles and CSRF protection. Routes that
+     * touch something outside this stack (Stripe, Connectors, third-party services) stay
+     * closed until their isolation is proven or the Owner opens them.
+     * Any doubt is an empty 404, the same answer the marketing profile gives.
+     */
+    private function isAuthorizedStagingActiveRequest(Request $request): bool
+    {
+        $staging = app(StagingActiveProfile::class);
+
+        if ($staging->identityProblems() !== [] || ! $request->isSecure()) {
+            return false;
+        }
+
+        $host = $request->headers->get('host');
+        if (! is_string($host) || strtolower($host) !== StagingActiveProfile::HOST
+            || $request->headers->has('x-forwarded-host')
+            || $request->headers->has('forwarded')
+            || ! $this->hasUnambiguousTarget($request)) {
+            return false;
+        }
+
+        if ($staging->databaseProblems() !== []) {
+            return false;
+        }
+
+        // The effective method (including the framework's form method spoofing) decides,
+        // because that is the method the router will dispatch.
+        $path = $request->getPathInfo();
+        $group = $staging->groupFor($path, $request->method());
+
+        return $group === null || $staging->groupOpen($group, $path);
     }
 
     private function notFound(): Response

@@ -20,6 +20,7 @@ use App\Monitoring\MonitoringSeverity;
 use App\Owner\OwnerSettings;
 use App\Owner\SystemStatus;
 use App\Platform\DisasterRecovery\PlatformRecoveryHealth;
+use App\Release\StagingActiveProfile;
 use App\Security\Vulnerabilities\VulnerabilitySource;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
@@ -51,7 +52,7 @@ final class RunMonitoring extends Command
         $batchSize = max(1, min(2000, (int) config('monitoring.website_batch_size', 250)));
         $queued = 0;
         $sites = Website::query();
-        if (config('app.deployment_environment') === 'staging') {
+        if (config('app.deployment_environment') === 'staging' || StagingActiveProfile::externalContactClosed()) {
             $fixtureUuid = (string) config('synthetic_fixtures.site_uuid');
             if ($fixtureUuid === '') {
                 $sites->whereRaw('1 = 0');
@@ -342,7 +343,7 @@ final class RunMonitoring extends Command
         $last = Cache::get('monitoring.last_probe_completed_at');
         $at = is_string($last) ? Carbon::parse($last) : null;
         $siteQuery = Website::query();
-        if (config('app.deployment_environment') === 'staging') {
+        if (config('app.deployment_environment') === 'staging' || StagingActiveProfile::externalContactClosed()) {
             $siteQuery->where('uuid', (string) config('synthetic_fixtures.site_uuid'))->whereHas('syntheticFixture', fn ($query) => $query
                 ->where('purpose', config('synthetic_fixtures.purpose'))->where('environment', 'staging')->where('enabled', true)
                 ->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', now())));

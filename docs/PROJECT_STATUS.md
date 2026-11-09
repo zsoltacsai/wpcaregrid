@@ -1,5 +1,12 @@
 # WP CareGrid — Project Status
 
+## Update — 2026-11-09 (Owner decision: `staging_active` profile for staging-next)
+
+- **Decision:** staging-next is a full-function development, integration and demonstration environment; `marketing_only` was a temporary deployment state. The final staging profile is `staging_active`, valid only on the isolated staging-next stack. Production keeps `marketing_only` and cannot enable the new profile.
+- **Source (this change):** `MarketingOnlyReleaseGate` gains the `staging_active` branch (full application behind exact environment identity, HTTPS origin, exact host and live-database identity); Stripe routes open only with test-mode keys; Connector API and external-service routes stay closed until the Owner opens them; `StagingMailGuard` blocks all mail to non-allowlisted recipients on staging-next; `system:check` reports `staging_isolation`. Details and the Owner-GO deployment/rollback plan: [STAGING_ACTIVE.md](STAGING_ACTIVE.md).
+- **Not done:** no VPS change, no deployment, no worker/scheduler start, no external service. Installed staging SHA at the time of writing: `f5e9c562b4d896d944104f375008e04b1a7ebc21`. The Owner account exists and is kept; activation is pending the Owner (`owner:user` re-issues a link).
+- **Independent of** the G1 MySQL hotfix; no G1 file or state was touched.
+
 ## Current authoritative status — 2026-11-04 (latest Owner Laravel marketing-release decision)
 
 This section is the current project-memory and decision-ledger entry. Older milestone sections below are historical snapshots and are not current environment evidence unless explicitly revalidated.
