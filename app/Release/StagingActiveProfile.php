@@ -47,6 +47,8 @@ final class StagingActiveProfile
     private const STRIPE_WRITE_PATHS = [
         '~^/owner/coupons(?:/|$)~i',
         '~^/owner/offers(?:/|$)~i',
+        // Saving or publishing a price verifies it against Stripe.
+        '~^/owner/pricing/prices/[^/]+(?:/publish)?/?$~i',
     ];
 
     /** Operations that call a third-party service or change infrastructure. */

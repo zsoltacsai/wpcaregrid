@@ -387,6 +387,14 @@ final class SystemStatus
             ], notConfigured: true, optional: true);
         }
 
+        // Staging-next does not contact Cloudflare, not even read-only, until the Owner opens external services.
+        if (StagingActiveProfile::externalContactClosed()) {
+            return new StatusCheck('cloudflare', HealthStatus::Unknown, __('owner.system.summaries.cloudflare_closed'), [
+                __('owner.system.details.credentials') => __('owner.system.values.configured'),
+                __('owner.system.details.dns_read') => __('owner.system.values.not_probed'),
+            ], notConfigured: true, optional: true);
+        }
+
         try {
             $diagnostic = app(CloudflareDnsService::class)->diagnose();
 

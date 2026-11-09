@@ -34,7 +34,7 @@ Optional, all closed by default:
 STAGING_MAIL_ALLOWLIST=owner@example.test,@testmail.example   # addresses or @domains; see Mail
 STAGING_ACTIVE_CONNECTOR_API=false      # opens /api/v1/connector/*
 STAGING_ACTIVE_EXTERNAL_SERVICES=false  # opens Cloudflare DNS, platform backups, Szamlazz, VIES, AI health checks
-STAGING_ACTIVE_DB_UUID_SHA256=          # optional pin: SHA-256 of the MySQL server_uuid
+STAGING_ACTIVE_DB_UUID_SHA256=          # recommended pin: SHA-256 of the MySQL server_uuid (also guards against a DB_URL/socket pointing at another server)
 ```
 
 `STAGING_ADMIN_QA_*` and the `staging_admin_qa` profile are unchanged and unrelated.
@@ -52,7 +52,7 @@ Nothing in these checks logs or returns a value; only fixed reason codes are use
 
 | Group | Routes | Opens when |
 | --- | --- | --- |
-| Stripe | `/checkout*`, `/stripe/webhook`, `/account/billing*`, `/account/subscriptions/*`, `/account/offers/*/pay`, `/account/websites/purchase`, `/owner/pricing/verify-stripe`, and the writes of `/owner/coupons*`, `/owner/offers*` | `STRIPE_SECRET` is `sk_test_…`/`rk_test_…`, any publishable key is `pk_test_…`, live mode is off (the webhook also needs `STRIPE_WEBHOOK_SECRET`). A live key closes the group. |
+| Stripe | `/checkout*`, `/stripe/webhook`, `/account/billing*`, `/account/subscriptions/*`, `/account/offers/*/accept` and `/pay`, `/account/websites/purchase`, `/owner/pricing/verify-stripe`, and the writes of `/owner/coupons*`, `/owner/offers*` and price save/publish (`/owner/pricing/prices/{price}`, `…/publish`; they verify against Stripe) | `STRIPE_SECRET` is `sk_test_…`/`rk_test_…`, any publishable key is `pk_test_…`, live mode is off (the webhook also needs `STRIPE_WEBHOOK_SECRET`). A live key closes the group. |
 | Connector API | `/api/v1/connector/*` | `STAGING_ACTIVE_CONNECTOR_API=true` (Owner decision, e.g. for a non-production test site) |
 | External services | `/owner/dns/cloudflare*`, `/owner/infrastructure/platform-backups*`, `/owner/billing/synthetic-szamlazz-test*`, `/owner/billing/m11-lifecycle-validation*`, invoice-intent `reconcile`, `/owner/integrations/ai/*`, VAT (VIES) verification | `STAGING_ACTIVE_EXTERNAL_SERVICES=true` |
 | Everything else | Owner, Customer, Operator, login, activation, content, SEO, pricing management, onboarding | always (after the checks above) |
@@ -67,7 +67,7 @@ On any deployment that identifies itself as staging-next (also when the profile 
 
 ## Owner activation
 
-* The existing Owner account is kept. `php artisan owner:user <owner-email>` on an unactivated owner **re-issues** a new single-use token (the previous token stops working) and prints the link once; it never creates a second account. On an already activated owner it only says so (use "Forgot password"). Run `--remove` only to remove owner access — never as part of this procedure.
+* The existing Owner account is kept. `php artisan owner:user <owner-email>` on an unactivated owner **re-issues** a new single-use token (the previous token stops working) and prints the link once; it never creates a second account **when given the exact existing Owner email** (a different or mistyped email creates a new unactivated Owner and prints "Owner … created"; check the first output line). The invitation is also queued as mail: it waits while workers are fenced and is later sent (if allowlisted) or dropped by the mail guard, by which time the token is superseded or used. On an already activated owner it only says so (use "Forgot password" — that mail is blocked unless the Owner's address or domain is on `STAGING_MAIL_ALLOWLIST`, and with Mailpit as the mailer it is captured there). Run `--remove` only to remove owner access — never as part of this procedure.
 * `/staff/activate/{token}` is served under `staging_active` (it is an ordinary route). The Owner sets the password; nobody else sees it.
 * The token is in the URL path, so it appears in the web server access log until it is used. It is single-use and expires; do not paste it into tickets, CI output or reports.
 

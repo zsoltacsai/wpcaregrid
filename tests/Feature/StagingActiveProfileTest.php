@@ -300,7 +300,7 @@ class StagingActiveProfileTest extends TestCase
             ['GET', '/checkout/cancel/abc'], ['POST', '/stripe/webhook'], ['GET', '/account/billing'],
             ['POST', '/account/billing/payment-method'], ['POST', '/account/subscriptions/1/cancel'],
             ['POST', '/account/subscriptions/1/change'], ['POST', '/account/offers/1/pay'], ['POST', '/account/offers/1/accept'], ['POST', '/account/websites/purchase'],
-            ['POST', '/owner/pricing/verify-stripe'], ['POST', '/owner/coupons'], ['PUT', '/owner/coupons/1'],
+            ['POST', '/owner/pricing/verify-stripe'], ['PUT', '/owner/pricing/prices/1'], ['POST', '/owner/pricing/prices/1/publish'], ['POST', '/owner/coupons'], ['PUT', '/owner/coupons/1'],
             ['DELETE', '/owner/coupons/1'], ['POST', '/owner/offers'], ['POST', '/owner/offers/1/send'],
         ];
         foreach ($stripe as [$method, $path]) {
@@ -329,6 +329,10 @@ class StagingActiveProfileTest extends TestCase
             $this->assertTrue($dispatched, $label.': owner login is not a Stripe route');
             [, $dispatched] = $this->runGate('/owner/pricing');
             $this->assertTrue($dispatched, $label.': pricing management is not a Stripe route');
+            foreach ([['GET', '/owner/pricing/prices/1'], ['POST', '/owner/pricing/prices/1/discard']] as [$method, $path]) {
+                [, $dispatched] = $this->runGate($path, $method);
+                $this->assertTrue($dispatched, $label.': '.$method.' '.$path.' is local only');
+            }
         }
     }
 
@@ -528,10 +532,12 @@ class StagingActiveProfileTest extends TestCase
         'stripe POST owner/offers/{offer}/cancel',
         'stripe POST owner/offers/{offer}/complete',
         'stripe POST owner/offers/{offer}/send',
+        'stripe POST owner/pricing/prices/{price}/publish',
         'stripe POST owner/pricing/verify-stripe',
         'stripe POST stripe/webhook',
         'stripe PUT owner/coupons/{coupon}',
         'stripe PUT owner/offers/{offer}',
+        'stripe PUT owner/pricing/prices/{price}',
     ];
 
     // ---- helpers ----

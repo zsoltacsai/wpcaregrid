@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Cloudflare\CloudflareDnsService;
 use App\Connector\HealthStatus;
 use App\Jobs\Monitoring\RunWebsiteProbe;
 use App\Mail\StaffInvitation;
@@ -200,6 +201,18 @@ class StagingActiveOperationsTest extends TestCase
         foreach ($stripe as $command) {
             $this->assertFalse($due($command), $command.' must not run with a live key');
         }
+    }
+
+    public function test_the_system_check_does_not_contact_cloudflare_from_closed_staging_next(): void
+    {
+        config(['services.cloudflare.api_token' => 'token-not-used', 'app.deployment_environment' => 'staging_next',
+            'marketing_release.staging_active_features' => ['connector_api' => false, 'external_services' => false]]);
+        $this->mock(CloudflareDnsService::class)->shouldNotReceive('diagnose');
+
+        $check = collect(app(SystemStatus::class)->checks())->firstWhere('key', 'cloudflare');
+
+        $this->assertSame('NOT CONFIGURED', $check->level());
+        $this->assertStringNotContainsString('token-not-used', json_encode($check));
     }
 
     public function test_monitoring_does_not_probe_customer_websites_from_staging_next(): void

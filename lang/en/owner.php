@@ -910,6 +910,7 @@ return [
             'price_ids_missing' => ':count prices on sale have no Stripe Price ID.',
             'configured' => 'Configured.',
             'cloudflare_not_configured' => 'Cloudflare DNS management is not configured.',
+            'cloudflare_closed' => 'Cloudflare is not contacted from staging until external services are opened.',
             'cloudflare_connected' => 'Cloudflare API is reachable and approved zones are readable.',
             'cloudflare_unavailable' => 'Cloudflare is configured, but token or approved-zone checks did not pass.',
             'storage_not_selected' => 'No backup storage selected (BACKUP_STORAGE).',
