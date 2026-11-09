@@ -387,6 +387,27 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         for name, digest in sums.items():
             self.assertIn(f"| `{name}` | `{digest}` |", docs)
 
+    OLD_PROFILE_SHA = {"wpcaregrid-mysql-production": "5ad9b53b5a0001d32bffbd3e56d15d92158b026e9cf645411dda95d73f6478cd",
+                       "wpcaregrid-mysql-production-restore": "8210c0193f6487cf3f90d969560020b4e611d6e986341d28397510839872a72e"}
+
+    def test_profiles_differ_from_the_previous_ones_by_exactly_the_mysql_cnf_read_rule(self):
+        for instance in CONTRACT.INSTANCES.values():
+            text = CONTRACT.apparmor_profile(instance)
+            lines = text.splitlines()
+            self.assertEqual(lines.count("  /etc/mysql/mysql.cnf r,"), 1)
+            self.assertEqual(lines.index("  /etc/mysql/mysql.cnf r,"), lines.index("  /etc/mysql/my.cnf r,") + 1)
+            without = text.replace("  /etc/mysql/mysql.cnf r," + chr(10), "", 1)
+            self.assertEqual(hashlib.sha256(without.encode()).hexdigest(), self.OLD_PROFILE_SHA[instance.apparmor_profile])
+
+    def test_the_new_rule_is_read_only_exact_and_adds_no_write_exec_or_wildcard_access(self):
+        for instance in CONTRACT.INSTANCES.values():
+            lines = CONTRACT.apparmor_profile(instance).splitlines()
+            self.assertNotIn("  /etc/mysql/** r,", lines)
+            for line in lines:
+                if "/etc/mysql/mysql.cnf" in line or "/etc/alternatives" in line:
+                    self.assertEqual(line, "  /etc/mysql/mysql.cnf r,")
+            self.assertFalse([l for l in lines if l.startswith("  /etc/") and (" w" in l or " x" in l) and "mysql" in l and "systemd" not in l and "apparmor" not in l])
+
     def test_vendor_percent_I_unescapes_the_instance_name_and_selects_a_missing_config_group(self):
         # The defect: the vendor template's @%I becomes @wpcaregrid/production, a group
         # that does not exist, so mysqld would start without the instance configuration.
@@ -922,13 +943,13 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
 
         expected = {
             "production-g1-mysql.py": "32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e",
-            "production_g1_mysql_contract.py": "45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3",
-            "production-g1-mysql-manifest.json": "c2b693195f542ab88d261bd65dc586c56880526a65707c135cee2d29a61dea73",
+            "production_g1_mysql_contract.py": "270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f",
+            "production-g1-mysql-manifest.json": "70490acf887f3222ffaa0087c215826dc70a8b8cda7016d0f8807b7099cab6cb",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "2e67841f723ed2f82049645d842a45e1c9c6b581c84d79ea4abd4ae0094a2f38")
+                         "135430167c9ff42949efd2c1a123dabb3239003ecee328ac40763e170fc020cd")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):

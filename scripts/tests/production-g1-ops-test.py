@@ -52,6 +52,13 @@ OLD_MANIFEST = "87f7aa3a8acee74fbf0bb697ec5e93b540fe9484927bab4212b24df71e2d22e9
 HF1_HELPER = "457ddb292f2ddf1f094375254a031de3bb6a450838cb201429363cb2397f02da"
 HF1_MANIFEST = "290ed20acfdac72f4150f572521b8f0e6564de33f7ff2979fc5b5a2381410732"
 HF1_SUMS = "01f803d3628b47f11719751e365ab95bc664189d8dfcb457bf0fec8eb460e8e2"
+# GO-5.2 base-config hotfix (installed on the VPS, historical from the AppArmor hotfix on)
+HF2_HELPER = "32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e"
+HF2_CONTRACT = "45a9cab39c1276b7c9585c63b4204867ea8696b392589f750ba36cac972397a3"
+HF2_MANIFEST = "c2b693195f542ab88d261bd65dc586c56880526a65707c135cee2d29a61dea73"
+HF2_SUMS = "2e67841f723ed2f82049645d842a45e1c9c6b581c84d79ea4abd4ae0094a2f38"
+HF2_PROFILES = {"/etc/apparmor.d/wpcaregrid-mysql-production": "5ad9b53b5a0001d32bffbd3e56d15d92158b026e9cf645411dda95d73f6478cd",
+                "/etc/apparmor.d/wpcaregrid-mysql-production-restore": "8210c0193f6487cf3f90d969560020b4e611d6e986341d28397510839872a72e"}
 
 
 class ToolkitStaticTest(unittest.TestCase):
@@ -86,7 +93,7 @@ class ToolkitStaticTest(unittest.TestCase):
             "/usr/local/libexec/production_g1_mysql_contract.py": sha(contract),
             "/usr/local/libexec/production_g1_mysql_manifest.json": sha(manifest_raw),
         }
-        self.assertEqual(ENGINE.EXPECTED["328h2"], expected)
+        self.assertEqual(ENGINE.EXPECTED["328ap"], expected)
         self.assertEqual(json.loads(manifest_raw)["installed_artifacts"],
                          {k: v for k, v in expected.items() if not k.endswith("manifest.json")})
         for path in ENGINE.CNF_ZZ:
@@ -119,10 +126,15 @@ class ToolkitStaticTest(unittest.TestCase):
         for name in ("go3-effective-config-dryrun.py", "g1-effective-config-check.py"):
             text = (OPS / name).read_text(encoding="utf-8")
             self.assertEqual(re.findall(r'CONTRACT_SHA256 = "([0-9a-f]{64})"', text), [contract_sha], name)
-        manifest_check = (OPS / "go3-manifest-check.py").read_text(encoding="utf-8")
+        manifest_check = (OPS / "go5p-manifest-check.py").read_text(encoding="utf-8")
         for path, digest in CONTRACT.artifact_files().items():
             self.assertIn(f'"{path}": "{sha(digest)}"', manifest_check)
+        self.assertIn(f'"{sha((SCRIPTS / "production-g1-mysql.py").read_bytes())}", "helper_not_the_installed_hotfix"', manifest_check)
+        self.assertIn(f'"{contract_sha}", "contract_not_the_apparmor_hotfix"', manifest_check)
         self.assertNotIn("mysql.conf.d/90-", manifest_check)
+        historical = (OPS / "go3-manifest-check.py").read_text(encoding="utf-8")
+        for path, digest in HF2_PROFILES.items():
+            self.assertIn(f'"{path}": "{digest}"', historical)
 
     def test_go3_fetch_script_keeps_pinning_the_historical_bb7e20e_package(self):
         text = (OPS / "go3-fetch-package.sh").read_text(encoding="utf-8")
@@ -134,7 +146,7 @@ class ToolkitStaticTest(unittest.TestCase):
     def test_post_provision_states_are_the_hotfix_states_with_the_exact_go51_runtime_paths(self):
         self.assertEqual(ENGINE.EXPECTED["328hp"], ENGINE.EXPECTED["328h"])
         self.assertEqual(ENGINE.EXPECTED["328h2p"], ENGINE.EXPECTED["328h2"])
-        self.assertEqual(ENGINE.PROVISIONED_STATES, ("328hp", "328h2p"))
+        self.assertEqual(ENGINE.PROVISIONED_STATES, ("328hp", "328h2p", "328ap"))
         self.assertEqual(ENGINE.TAGS["328hp"], "G1_GO52H_PROVISIONED_HOTFIX1")
         self.assertEqual(ENGINE.TAGS["328h2p"], "G1_GO52H_PROVISIONED_HOTFIX2")
         specs = {path: (kind, mode) for path, _o, _g, mode, kind, _e in CONTRACT.provisioning_path_specs()}
@@ -152,15 +164,24 @@ class ToolkitStaticTest(unittest.TestCase):
         self.assertIn(HF1_SUMS + " SHA256SUMS", text)
         self.assertIn("/root/wpcg-production-g1-mysql-hf-${M:0:7}", text)
 
-    def test_hotfix_fetch_script_pins_the_current_package_hashes(self):
+    def test_go5h_fetch_script_keeps_pinning_the_historical_base_config_hotfix_package(self):
         text = (OPS / "go5h-fetch-hotfix-package.sh").read_text(encoding="utf-8")
+        for digest, name in ((HF2_HELPER, "production-g1-mysql.py"), (HF2_CONTRACT, "production_g1_mysql_contract.py"),
+                             (HF2_MANIFEST, "production-g1-mysql-manifest.json")):
+            self.assertIn(f"{digest} {name}", text)
+        self.assertIn(HF2_SUMS + " SHA256SUMS", text)
+        self.assertIn("/root/wpcg-production-g1-mysql-hf2-${M:0:7}", text)
+        self.assertIn("G1_GO5H_DOWNLOAD", text)
+
+    def test_hotfix_fetch_script_pins_the_current_package_hashes(self):
+        text = (OPS / "go5p-fetch-package.sh").read_text(encoding="utf-8")
         for name in ("production-g1-mysql.py", "production_g1_mysql_contract.py", "production-g1-mysql-manifest.json"):
             self.assertIn(f"{sha((SCRIPTS / name).read_bytes())} {name}", text)
         self.assertIn(sha((SCRIPTS / "SHA256SUMS").read_bytes()) + " SHA256SUMS", text)
         self.assertIn("--proto '=https'", text)
         self.assertIn('[[ $M =~ ^[0-9a-f]{40}$ ]]', text)
-        self.assertIn("/root/wpcg-production-g1-mysql-hf2-${M:0:7}", text)
-        self.assertIn("G1_GO5H_DOWNLOAD", text)
+        self.assertIn("/root/wpcg-production-g1-mysql-ap-${M:0:7}", text)
+        self.assertIn("G1_GO52C_DOWNLOAD", text)
 
     def test_go4b_upgrade_script_keeps_pinning_the_historical_files(self):
         upgrade = load(OPS / "go4b-upgrade-installed-helper.py", "go4b_upgrade_static")
@@ -181,15 +202,48 @@ class ToolkitStaticTest(unittest.TestCase):
         self.assertEqual(upgrade.OLD[libexec + "production_g1_mysql_manifest.json"], HF1_MANIFEST)
         self.assertEqual(upgrade.OLD, {p: ENGINE.EXPECTED["328h"][p] for p in upgrade.OLD})
         self.assertEqual(upgrade.NEW, {p: ENGINE.EXPECTED["328h2"][p] for p in upgrade.NEW})
-        self.assertEqual(upgrade.NEW[libexec + "wpcaregrid-g1-mysql.py"], sha((SCRIPTS / "production-g1-mysql.py").read_bytes()))
-        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_manifest.json"],
-                         sha((SCRIPTS / "production-g1-mysql-manifest.json").read_bytes()))
+        self.assertEqual(upgrade.NEW[libexec + "wpcaregrid-g1-mysql.py"], HF2_HELPER)
+        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_manifest.json"], HF2_MANIFEST)
         self.assertEqual(upgrade.CONTRACT, libexec + "production_g1_mysql_contract.py")
         self.assertEqual(upgrade.OLD[upgrade.CONTRACT], upgrade.NEW[upgrade.CONTRACT])
         text = (OPS / "go5h-upgrade-installed-helper.py").read_text(encoding="utf-8")
         self.assertIn("module.check_base_config()", text)
         self.assertIn("BASE_CONFIG_CHECK=PASS", text)
         self.assertNotIn('"verify-install"]', text)
+
+    def run_manifest_check(self, mutate=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("production-g1-mysql.py", "production_g1_mysql_contract.py", "production-g1-mysql-manifest.json"):
+                shutil.copy(SCRIPTS / name, tmp)
+            if mutate:
+                mutate(Path(tmp))
+            done = subprocess.run([sys.executable, "-I", "-B", str(OPS / "go5p-manifest-check.py"), tmp],
+                                  stdout=subprocess.PIPE, universal_newlines=True)
+            return done.returncode, done.stdout.strip()
+
+    def test_go5p_manifest_check_accepts_the_package_and_rejects_every_deviation(self):
+        self.assertEqual(self.run_manifest_check(), (0, "G1_GO52C_MANIFEST=PASS"))
+
+        def append(name):
+            return lambda d: (d / name).write_bytes((d / name).read_bytes() + b"#")
+
+        def rewrite_manifest(change):
+            def apply(d):
+                data = json.loads((d / "production-g1-mysql-manifest.json").read_text())
+                change(data)
+                (d / "production-g1-mysql-manifest.json").write_text(json.dumps(data, sort_keys=True, separators=(",", ":")) + chr(10))
+            return apply
+        profile = "/etc/apparmor.d/wpcaregrid-mysql-production"
+        cases = {
+            "contract_changed": (append("production_g1_mysql_contract.py"), "manifest_sources_mismatch"),
+            "helper_changed": (append("production-g1-mysql.py"), "manifest_sources_mismatch"),
+            "old_profile_hash_in_manifest": (rewrite_manifest(lambda m: m["installed_artifacts"].__setitem__(
+                profile, HF2_PROFILES[profile])), "manifest_differs_for_unchanged_artifact"),
+            "extra_artifact": (rewrite_manifest(lambda m: m["installed_artifacts"].__setitem__("/etc/x", "0" * 64)), "manifest_artifact_set"),
+        }
+        for name, (mutate, code) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.run_manifest_check(mutate), (3, f"G1_GO52C_MANIFEST=STOP;CODE={code}"))
 
     def test_rollback_script_targets_exactly_the_nine_325_files(self):
         text = (OPS / "go2-rollback.sh").read_text(encoding="utf-8")
@@ -760,7 +814,7 @@ def main_lines(state):
         sc.main(state, run=lambda args: (1, ""), euid=0)
     return [line for line in buffer.getvalue().splitlines() if "runtime_paths" in line]
 
-for state_name in ("328hp", "328h2p", "328h", "328h2"):
+for state_name in ("328hp", "328h2p", "328ap", "328h", "328h2"):
     build()
     print("MAIN %s_on_provisioned_host | %s" % (state_name, " / ".join(main_lines(state_name))))
     wipe()
@@ -842,6 +896,8 @@ def run(name, arg=M, **kw):
     lines = done.stdout.strip().splitlines()
     calls = open("/tmp/calls.log").read().split() if os.path.exists("/tmp/calls.log") else []
     print("SEQ %s | rc=%d | %s | %s" % (name, done.returncode, lines[-1] if lines else "<none>", ",".join(calls) or "-"))
+    flag = [l for l in lines if l.startswith("G1_GO52C_BASELINE_UNCHANGED=")]
+    if flag: print("SEQX %s | %s" % (name, flag[0]))
 
 run("hotfix1_fresh")
 run("hotfix1_package_dir_exists", hf2=True)
@@ -923,7 +979,7 @@ class PostProvisionStateAndSequenceTest(unittest.TestCase):
 
     def test_the_state_checker_main_uses_the_provisioned_check_only_for_the_post_go51_states(self):
         ok = "CHECK g1_runtime_paths_provisioned OK"
-        for state in ("328hp", "328h2p"):
+        for state in ("328hp", "328h2p", "328ap"):
             self.assertEqual(self.main_lines[state + "_on_provisioned_host"], ok, self.state_output)
             self.assertEqual(self.main_lines[state + "_on_unprovisioned_host"],
                              "FAIL  g1_runtime_paths_provisioned g1_runtime_path_missing /var/lib/mysql-wpcaregrid-production")
@@ -986,7 +1042,7 @@ class PostProvisionStateAndSequenceTest(unittest.TestCase):
 
     def test_sequence_script_never_provisions_initializes_starts_or_deletes(self):
         text = (OPS / "go52h-sequence.sh").read_text(encoding="utf-8")
-        self.assertEqual(re.findall(r"(?m)^PACKAGE_SUMS=([0-9a-f]{64})", text), [sha((SCRIPTS / "SHA256SUMS").read_bytes())])
+        self.assertEqual(re.findall(r"(?m)^PACKAGE_SUMS=([0-9a-f]{64})", text), [HF2_SUMS])
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         for forbidden in ("provision-paths", "initialize", "systemctl", "rm ", "rmdir", "mv ", "chmod", "chown",
                           "mysql.service", "/var/lib/mysql", "/etc/mysql", "apparmor_parser", "verify-install"):
@@ -994,6 +1050,522 @@ class PostProvisionStateAndSequenceTest(unittest.TestCase):
         self.assertEqual(sorted(re.findall(r"HELPER_(?:OLD|NEW)=([0-9a-f]{64})", code)),
                          sorted([ENGINE.EXPECTED["328h"]["/usr/local/libexec/wpcaregrid-g1-mysql.py"],
                                  ENGINE.EXPECTED["328h2"]["/usr/local/libexec/wpcaregrid-g1-mysql.py"]]))
+
+
+AP_DRIVER = r"""
+import hashlib, os, shutil, types, sys
+import importlib.util
+spec = importlib.util.spec_from_file_location("ap", "/ops/go5p-upgrade-apparmor.py")
+ap = importlib.util.module_from_spec(spec); spec.loader.exec_module(ap)
+sha = lambda b: hashlib.sha256(b).hexdigest()
+NL = chr(10)
+H, C, M, PP, PR = ap.HELPER, ap.CONTRACT, ap.MANIFEST, ap.PROFILE_P, ap.PROFILE_R
+FIX = {H: b"fixture-helper" + NL.encode(), C: b"old-contract" + NL.encode(), M: b"old-manifest" + NL.encode(),
+       PP: b"old-profile-p" + NL.encode(), PR: b"old-profile-r" + NL.encode()}
+ap.HELPER_SHA = sha(FIX[H])
+for path in (C, M, PP, PR):
+    ap.OLD[path] = sha(FIX[path])
+CALLS = []
+
+def write(path, data, mode):
+    if os.path.lexists(path):
+        os.unlink(path)
+    with open(path, "wb") as f:
+        f.write(data)
+    os.chown(path, 0, 0); os.chmod(path, mode)
+
+def reset(files=None, pkg_tamper=None, pkg_mode=0o700, leftover=None, symlink=None, modes=None):
+    for d in ("/usr/local/libexec", "/etc/apparmor.d", "/pkg"):
+        shutil.rmtree(d, ignore_errors=True)
+    os.makedirs("/usr/local/libexec", mode=0o755); os.makedirs("/etc/apparmor.d", mode=0o755); os.makedirs("/pkg", mode=pkg_mode)
+    os.chmod("/pkg", pkg_mode)
+    base = dict(FIX); base.update(files or {})
+    for path, data in base.items():
+        write(path, data, (modes or {}).get(path, ap.MODES[path]))
+    if symlink:
+        os.unlink(symlink); os.symlink("/etc/passwd", symlink)
+    if leftover:
+        write(leftover, b"x", 0o600)
+    for target, name in ap.SOURCE_NAMES.items():
+        data = open("/pkg-src/" + name, "rb").read() + (b"#" if pkg_tamper == name else b"")
+        write("/pkg/" + name, data, 0o600)
+
+def runner(active=(), compile_fail=None, reload_fail=None, verify="ok", old_reload_fail=False):
+    def run(args, data=None):
+        CALLS.append((tuple(args), None if data is None else sha(data)[:12]))
+        out = lambda rc, text="": types.SimpleNamespace(returncode=rc, stdout=text.encode())
+        if args[:2] == ["/usr/bin/systemctl", "is-active"]:
+            return out(0, "active" + NL) if args[2] in active else out(3, "inactive" + NL)
+        if args[:3] == [ap.PARSER, "-Q", "-T"]:
+            return out(1 if compile_fail and sha(data) == ap.NEW[compile_fail] else 0)
+        if args[:3] == [ap.PARSER, "-r", "-T"]:
+            now = sha(open(args[3], "rb").read())
+            if old_reload_fail and now == ap.OLD[args[3]]:
+                return out(1)
+            return out(1 if reload_fail == args[3] and now == ap.NEW[args[3]] else 0)
+        if args[0] == "/usr/bin/python3":
+            if verify == "ok":
+                return out(0, "STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL" + NL + "BASE_CONFIG_CHECK=PASS" + NL)
+            if verify == "nochain":
+                return out(0, "STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL" + NL)
+            return out(3, "G1_MYSQL=STOP;CODE=apparmor_not_enforced" + NL)
+        raise AssertionError(args)
+    return run
+
+def state():
+    out = []
+    for path in (C, M, PP, PR):
+        st = os.lstat(path)
+        out.append("%s:%o:%d:%d" % (sha(open(path, "rb").read())[:8], st.st_mode & 0o7777, st.st_uid, st.st_gid))
+    left = sorted(n for d in ("/usr/local/libexec", "/etc/apparmor.d") for n in os.listdir(d) if n.endswith((".g1-upgrade-tmp", ".dpkg-new")))
+    out.append("tmp=%s" % left)
+    return " ".join(out)
+
+def scenario(name, twice=False, loaded=True, **kw):
+    run_kw = {k: kw.pop(k) for k in ("active", "compile_fail", "reload_fail", "verify", "old_reload_fail") if k in kw}
+    reset(**kw)
+    results = []
+    for _ in range(2 if twice else 1):
+        try:
+            results.append(ap.main("/pkg", run=runner(**run_kw), euid=0, loaded=(lambda: loaded.pop(0)) if isinstance(loaded, list) else (lambda: loaded)))
+        except ap.Stop as exc:
+            results.append("STOP;CODE=%s;ROLLED_BACK=%s" % (exc.code, exc.rolled_back))
+    reloads = [c[0][3] for c in CALLS if c[0][:3] == (ap.PARSER, "-r", "-T")]
+    print("SCENARIO %s | %s | %s | reloads=%s" % (name, " || ".join(results), state(), ",".join(os.path.basename(p) for p in reloads) or "-"))
+    del CALLS[:]
+
+NEWC = open("/pkg-src/production_g1_mysql_contract.py", "rb").read()
+NEWM = open("/pkg-src/production-g1-mysql-manifest.json", "rb").read()
+import importlib
+def profile_bytes():
+    m = types.ModuleType("gen"); sys.modules["gen"] = m
+    exec(compile(NEWC, "gen", "exec"), m.__dict__)
+    return m.artifact_files()
+NEWFILES = {C: NEWC, M: NEWM, **{p: b for p, b in profile_bytes().items() if p in (PP, PR)}}
+
+scenario("pass")
+scenario("idempotent", twice=True)
+scenario("already_upgraded_heals", files=NEWFILES)
+scenario("unit_active", active=("mysql@wpcaregrid-production-restore.service",))
+scenario("profile_not_loaded", loaded=False)
+scenario("new_profile_does_not_compile", compile_fail=PR)
+_saved = ap.NEW[PR]
+ap.NEW[PR] = "0" * 64   # the pinned profile hash no longer matches what the (hash-verified) contract generates
+scenario("generated_profile_mismatch")
+ap.NEW[PR] = _saved
+scenario("tampered_package_contract", pkg_tamper="production_g1_mysql_contract.py")
+scenario("tampered_package_manifest", pkg_tamper="production-g1-mysql-manifest.json")
+scenario("mixed_installed_state", files={C: NEWC})
+scenario("mixed_installed_profiles", files={PP: NEWFILES[PP]})
+scenario("unrecognized_contract", files={C: b"foreign" + NL.encode()})
+scenario("tampered_helper", files={H: b"foreign" + NL.encode()})
+scenario("leftover_libexec_tmp", leftover=C + ".g1-upgrade-tmp")
+scenario("leftover_profile_tmp", leftover=PP + ".dpkg-new")
+scenario("symlinked_profile", symlink=PP)
+scenario("profile_mode_wrong", modes={PR: 0o666})
+scenario("package_dir_group_writable", pkg_mode=0o770)
+scenario("reload_fails_rolls_back", reload_fail=PR)
+scenario("verify_fails_rolls_back", verify="bad")
+scenario("verify_without_chain_marker_rolls_back", verify="nochain")
+scenario("rollback_reload_fails", reload_fail=PR, old_reload_fail=True)
+scenario("not_loaded_after_reload", loaded=[True, False, True])
+scenario("not_enforced_after_rollback", loaded=[True, False, False])
+"""
+
+AP_SEQ_DRIVER = r"""
+import hashlib, os, re, shutil, subprocess
+sha = lambda b: hashlib.sha256(b).hexdigest()
+NL = chr(10)
+HELPERB, OLDC, NEWC = b"fx-helper" + NL.encode(), b"fx-old-contract" + NL.encode(), b"fx-new-contract" + NL.encode()
+M = "0123456789abcdef0123456789abcdef01234567"
+HELPER, CONTRACT = "/usr/local/libexec/wpcaregrid-g1-mysql.py", "/usr/local/libexec/production_g1_mysql_contract.py"
+AP = "/root/wpcg-production-g1-mysql-ap-0123456"
+text = open("/src/go5p-sequence.sh").read()
+text = re.sub(r"(?m)^HELPER_PIN=[0-9a-f]{64}", "HELPER_PIN=" + sha(HELPERB), text)
+text = text.replace("KERNEL_PROFILES=/sys/kernel/security/apparmor/profiles", "KERNEL_PROFILES=/tmp/kernel-profiles")
+text = re.sub(r"(?m)^CONTRACT_OLD=[0-9a-f]{64}", "CONTRACT_OLD=" + sha(OLDC), text)
+text = re.sub(r"(?m)^CONTRACT_NEW=[0-9a-f]{64}", "CONTRACT_NEW=" + sha(NEWC), text)
+PKG = {"production-g1-mysql.py": b"h" + NL.encode(), "production_g1_mysql_contract.py": b"c" + NL.encode(),
+       "production-g1-mysql-manifest.json": b"m" + NL.encode()}
+PKG_SUMS = "".join("%s  %s" % (sha(d), n) + NL for n, d in PKG.items()).encode()
+text = re.sub(r"(?m)^PACKAGE_SUMS=[0-9a-f]{64}", "PACKAGE_SUMS=" + sha(PKG_SUMS), text)
+STUB_PY = ("import os, sys" + NL + "name = os.path.basename(sys.argv[0]); args = sys.argv[1:]" + NL +
+    "key = name + (':' + args[0] if name == 'g1-state-check.py' else '')" + NL +
+    "open('/tmp/calls.log', 'a').write(key + chr(10))" + NL +
+    "fail = open('/tmp/fail').read().split() if os.path.exists('/tmp/fail') else []" + NL +
+    "if name == 'go5p-upgrade-apparmor.py' and os.path.exists('/tmp/mutate'):" + NL +
+    "    what = open('/tmp/mutate').read().strip()" + NL +
+    "    if what == 'pid': open('/tmp/mainpid', 'w').write('4242')" + NL +
+    "    if what == 'profile': open('/etc/apparmor.d/usr.sbin.mysqld', 'w').write('changed')" + NL +
+    "    if what == 'kernel': open('/tmp/kernel-profiles', 'w').write('/usr/sbin/mysqld (complain)' + chr(10))" + NL +
+    "    if what == 'local': os.makedirs('/etc/apparmor.d/local', exist_ok=True); open('/etc/apparmor.d/local/usr.sbin.mysqld', 'w').write('x')" + NL +
+    "raise SystemExit(3 if key in fail else 0)" + NL)
+STUB_SH = ("echo $(basename $0) >> /tmp/calls.log" + NL + "grep -qx $(basename $0) /tmp/fail 2>/dev/null && exit 3" + NL +
+           "mkdir -p " + AP + NL)
+STUB_PROBE = "echo go5p-confined-probe.sh >> /tmp/calls.log" + NL + "grep -qx go5p-confined-probe.sh /tmp/fail 2>/dev/null && exit 3" + NL + "exit 0" + NL
+SYSTEMCTL = "#!/bin/sh" + NL + 'cat /tmp/mainpid' + NL
+
+def build_package(tamper=None):
+    os.makedirs(AP)
+    files = dict(PKG); files["SHA256SUMS"] = PKG_SUMS
+    for name, data in files.items():
+        path = AP + "/" + name
+        open(path, "wb").write(data + (b"x" if tamper == "source" and name == "production-g1-mysql.py" else b""))
+        os.chmod(path, 0o644 if tamper == "file_mode" and name == "SHA256SUMS" else 0o600)
+    if tamper == "extra_file": open(AP + "/extra", "w").write("x")
+    if tamper == "sums_pin": open(AP + "/SHA256SUMS", "wb").write(PKG_SUMS + b"# changed" + NL.encode())
+    os.chmod(AP, 0o755 if tamper == "dir_mode" else 0o700)
+
+def setup(contract=OLDC, helper=HELPERB, pkg=False, fail=(), ops_mode=0o700, contract_symlink=False, tamper_toolkit=False,
+          mutate=None, pid="1234"):
+    shutil.rmtree("/ops", ignore_errors=True); shutil.rmtree(AP, ignore_errors=True)
+    for path in ("/tmp/calls.log", "/tmp/fail", "/tmp/mutate", HELPER, CONTRACT):
+        if os.path.lexists(path): os.unlink(path)
+    os.makedirs("/ops"); os.makedirs("/usr/local/libexec", exist_ok=True); os.makedirs("/etc/apparmor.d", exist_ok=True)
+    open("/etc/apparmor.d/usr.sbin.mysqld", "w").write("distribution profile")
+    for name in ("g1-state-check.py", "go5p-manifest-check.py", "go5p-upgrade-apparmor.py", "g1-effective-config-check.py"):
+        open("/ops/" + name, "w").write(STUB_PY)
+    open("/ops/go5p-fetch-package.sh", "w").write(STUB_SH)
+    open("/ops/go5p-confined-probe.sh", "w").write(STUB_PROBE)
+    open("/ops/go5p-sequence.sh", "w").write(text)
+    names = sorted(os.listdir("/ops"))
+    open("/ops/SHA256SUMS", "w").write("".join("%s  %s" % (sha(open("/ops/" + n, "rb").read()), n) + NL for n in names))
+    if tamper_toolkit: open("/ops/g1-state-check.py", "a").write("# tampered" + NL)
+    os.chmod("/ops", ops_mode); os.chown("/ops", 0, 0)
+    if helper is not None: open(HELPER, "wb").write(helper)
+    if contract is not None:
+        if contract_symlink: os.symlink("/etc/passwd", CONTRACT)
+        else: open(CONTRACT, "wb").write(contract)
+    if pkg: build_package(None if pkg is True else pkg)
+    open("/tmp/fail", "w").write(" ".join(fail))
+    open("/tmp/mainpid", "w").write(pid)
+    open("/tmp/kernel-profiles", "w").write("wpcaregrid-mysql-production (enforce)" + NL + "/usr/sbin/mysqld (enforce)" + NL + "docker-default (enforce)" + NL)
+    if mutate: open("/tmp/mutate", "w").write(mutate)
+    open("/usr/bin/systemctl", "w").write(SYSTEMCTL); os.chmod("/usr/bin/systemctl", 0o755)
+
+def run(name, arg=M, **kw):
+    setup(**kw)
+    done = subprocess.run(["bash", "/ops/go5p-sequence.sh"] + ([arg] if arg is not None else []),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    lines = done.stdout.strip().splitlines()
+    calls = open("/tmp/calls.log").read().split() if os.path.exists("/tmp/calls.log") else []
+    print("SEQ %s | rc=%d | %s | %s" % (name, done.returncode, lines[-1] if lines else "<none>", ",".join(calls) or "-"))
+    flag = [l for l in lines if l.startswith("G1_GO52C_BASELINE_UNCHANGED=")]
+    if flag: print("SEQX %s | %s" % (name, flag[0]))
+
+run("fresh")
+run("package_dir_exists", pkg=True)
+run("already_upgraded", contract=NEWC, pkg=True)
+run("unknown_contract", contract=b"foreign" + NL.encode())
+run("unknown_helper", helper=b"foreign" + NL.encode())
+run("missing_contract", contract=None)
+run("symlinked_contract", contract_symlink=True)
+run("bad_commit", arg="main")
+run("no_commit", arg=None)
+run("toolkit_mode_755", ops_mode=0o755)
+run("toolkit_tampered", tamper_toolkit=True)
+for tamper in ("source", "extra_file", "file_mode", "dir_mode", "sums_pin"):
+    run("reuse_" + tamper, pkg=tamper)
+run("state_before_fails", fail=("g1-state-check.py:328h2p",))
+run("state_before_fails_when_upgraded", contract=NEWC, fail=("g1-state-check.py:328ap",))
+run("fetch_fails", fail=("go5p-fetch-package.sh",))
+run("manifest_check_fails", fail=("go5p-manifest-check.py",))
+run("upgrade_fails", fail=("go5p-upgrade-apparmor.py",))
+run("upgrade_fails_and_mysql_changed", fail=("go5p-upgrade-apparmor.py",), mutate="pid")
+run("state_after_fails", fail=("g1-state-check.py:328ap",))
+run("effective_config_fails", fail=("g1-effective-config-check.py",))
+run("probe_fails", fail=("go5p-confined-probe.sh",))
+run("mysql_pid_changes", mutate="pid")
+run("distribution_profile_changes", mutate="profile")
+run("loaded_distribution_profile_mode_changes", mutate="kernel")
+run("local_override_appears", mutate="local")
+run("mysql_service_pid_unavailable", pid="0")
+"""
+
+AP_PROBE_DRIVER = r"""
+import os, shutil, subprocess
+NL = chr(10)
+script = open("/src/go5p-confined-probe.sh").read()
+def run(name, behaviour):
+    for path in ("/usr/bin/aa-exec", "/usr/bin/my_print_defaults", "/tmp/aa.log"):
+        if os.path.lexists(path): os.unlink(path)
+    open("/usr/bin/aa-exec", "w").write("#!/bin/sh" + NL + 'echo "$2" >> /tmp/aa.log' + NL + 'shift 3' + NL + 'exec "$@"' + NL)
+    open("/usr/bin/my_print_defaults", "w").write("#!/bin/sh" + NL + behaviour)
+    for path in ("/usr/bin/aa-exec", "/usr/bin/my_print_defaults"): os.chmod(path, 0o755)
+    open("/tmp/probe.sh", "w").write(script)
+    done = subprocess.run(["bash", "/tmp/probe.sh"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    prof = open("/tmp/aa.log").read().split() if os.path.exists("/tmp/aa.log") else []
+    print("PROBE %s | rc=%d | %s | profiles=%s | stderr=%s" % (name, done.returncode, done.stdout.strip().splitlines()[-1],
+          ",".join(prof), "clean" if not done.stderr.strip() else "NOISY"))
+    print("PROBEOUT %s | %s" % (name, done.stdout.replace(NL, " / ")))
+GOOD = 'for a in "$@"; do case "$a" in --defaults-group-suffix=@*) I=${a#*@};; esac; done' + NL + 'echo "--datadir=/var/lib/mysql-$I"' + NL + 'echo "--tmpdir=/var/tmp/secret-value"' + NL
+run("pass", GOOD)
+run("denied", "echo 'denied' >&2; exit 2" + NL)
+run("rc_nonzero_but_datadir", GOOD + "exit 1" + NL)
+run("rc_zero_without_datadir", "echo '--port=3308'" + NL)
+run("datadir_of_the_other_instance_only", 'echo "--datadir=/var/lib/mysql-wpcaregrid-production"' + NL)
+run("datadir_only_as_prefix", 'for a in "$@"; do case "$a" in --defaults-group-suffix=@*) I=${a#*@};; esac; done' + NL + 'echo "--datadir=/var/lib/mysql-$I-extra"' + NL)
+"""
+
+
+@unittest.skipUnless(ready() or REQUIRE, "Docker / MySQL image unavailable")
+class AppArmorHotfixToolsTest(unittest.TestCase):
+    """GO-5.2c hotfix: upgrade tool, sequence and confined probe as root in a disposable container."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not ready():
+            raise AssertionError("G1_REQUIRE_REAL_MYSQL=1 but Docker or the MySQL image is unavailable")
+
+        def container(files, driver):
+            done = subprocess.run(["docker", "run", "--rm", "-i", "--entrypoint", "bash", TEST_IMAGE, "-c",
+                                   "tar -x -C / && python3 -I -B " + driver],
+                                  input=tar_of(files), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=600)
+            return done.stdout.decode(), done.stderr.decode()
+
+        pkg = {"/pkg-src/" + n: (SCRIPTS / n).read_bytes()
+               for n in ("production_g1_mysql_contract.py", "production-g1-mysql-manifest.json")}
+        out, err = container({"/ops/go5p-upgrade-apparmor.py": (OPS / "go5p-upgrade-apparmor.py").read_bytes(),
+                              "/drive/ap.py": AP_DRIVER.encode(), **pkg}, "/drive/ap.py")
+        cls.upgrade_output = out + err
+        cls.upgrade = {}
+        for line in out.splitlines():
+            if line.startswith("SCENARIO "):
+                name, result, state, reloads = [part.strip() for part in line[9:].split(" | ")]
+                cls.upgrade[name] = (result, state, reloads[len("reloads="):])
+        out, err = container({"/src/go5p-sequence.sh": (OPS / "go5p-sequence.sh").read_bytes(),
+                              "/drive/seq.py": AP_SEQ_DRIVER.encode()}, "/drive/seq.py")
+        cls.seq_output = out + err
+        cls.seq, cls.seqx = {}, {}
+        for line in out.splitlines():
+            if line.startswith("SEQX "):
+                name, flag = line[5:].split(" | ")
+                cls.seqx[name.strip()] = flag.strip()
+            elif line.startswith("SEQ "):
+                name, rc, last, calls = [part.strip() for part in line[4:].split(" | ")]
+                cls.seq[name] = (rc, last, calls)
+        out, err = container({"/src/go5p-confined-probe.sh": (OPS / "go5p-confined-probe.sh").read_bytes(),
+                              "/drive/probe.py": AP_PROBE_DRIVER.encode()}, "/drive/probe.py")
+        cls.probe_output = out + err
+        cls.probe, cls.probe_text = {}, {}
+        for line in out.splitlines():
+            if line.startswith("PROBE "):
+                name, rc, last, profiles, noise = [part.strip() for part in line[6:].split(" | ")]
+                cls.probe[name] = (rc, last, profiles, noise)
+            elif line.startswith("PROBEOUT "):
+                name, text = line[9:].split(" | ", 1)
+                cls.probe_text[name.strip()] = text
+
+    # ---- upgrade tool ---------------------------------------------------------------------------------------
+    @staticmethod
+    def fixture_state():
+        return " ".join(f"{sha(data)[:8]}:644:0:0" for data in (b"old-contract\n", b"old-manifest\n", b"old-profile-p\n",
+                                                                b"old-profile-r\n")) + " tmp=[]"
+
+    @staticmethod
+    def new_state():
+        generated = CONTRACT.artifact_files()
+        parts = [(SCRIPTS / "production_g1_mysql_contract.py").read_bytes(), (SCRIPTS / "production-g1-mysql-manifest.json").read_bytes(),
+                 generated["/etc/apparmor.d/wpcaregrid-mysql-production"], generated["/etc/apparmor.d/wpcaregrid-mysql-production-restore"]]
+        return " ".join(f"{sha(data)[:8]}:644:0:0" for data in parts) + " tmp=[]"
+
+    def scenario(self, name):
+        self.assertIn(name, self.upgrade, self.upgrade_output)
+        return self.upgrade[name]
+
+    P, R = "wpcaregrid-mysql-production", "wpcaregrid-mysql-production-restore"
+
+    def test_upgrade_replaces_exactly_four_files_and_reloads_exactly_the_two_named_profiles(self):
+        self.assertEqual(self.scenario("pass"), ("G1_GO52C_PROFILE_UPGRADE=PASS", self.new_state(), f"{self.P},{self.R}"))
+
+    def test_upgrade_is_idempotent_and_heals_an_interrupted_reload(self):
+        self.assertEqual(self.scenario("idempotent"),
+                         ("G1_GO52C_PROFILE_UPGRADE=PASS || G1_GO52C_PROFILE_UPGRADE=PASS;NOTE=already_upgraded",
+                          self.new_state(), f"{self.P},{self.R},{self.P},{self.R}"))
+        self.assertEqual(self.scenario("already_upgraded_heals"),
+                         ("G1_GO52C_PROFILE_UPGRADE=PASS;NOTE=already_upgraded", self.new_state(), f"{self.P},{self.R}"))
+
+    def test_every_refusal_happens_before_any_write_or_reload(self):
+        refusals = {
+            "unit_active": "g1_unit_not_inactive",
+            "profile_not_loaded": "profile_not_loaded_enforce",
+            "new_profile_does_not_compile": "new_profile_does_not_compile:" + self.R,
+            "generated_profile_mismatch": "generated_profile_hash_mismatch:" + self.R,
+            "tampered_package_contract": "package_file_hash_mismatch:production_g1_mysql_contract.py",
+            "tampered_package_manifest": "package_file_hash_mismatch:production-g1-mysql-manifest.json",
+            "unrecognized_contract": "installed_files_unrecognized",
+            "tampered_helper": "installed_helper_not_the_pinned_hotfix",
+            "leftover_libexec_tmp": "leftover_temporary_file",
+            "leftover_profile_tmp": "leftover_temporary_file",
+            "profile_mode_wrong": "mode_invalid:" + self.R,
+            "package_dir_group_writable": "package_directory_owner_or_mode_invalid",
+        }
+        for name, code in refusals.items():
+            with self.subTest(name):
+                result, state, reloads = self.scenario(name)
+                self.assertEqual(result, f"STOP;CODE={code};ROLLED_BACK=None")
+                self.assertEqual(reloads, "-")
+                if name not in ("unrecognized_contract", "profile_mode_wrong", "leftover_libexec_tmp", "leftover_profile_tmp"):
+                    self.assertEqual(state, self.fixture_state())
+
+    def test_a_mixed_or_foreign_installed_state_and_a_symlinked_profile_are_refused_untouched(self):
+        for name, code in (("mixed_installed_state", "installed_files_unrecognized"),
+                           ("mixed_installed_profiles", "installed_files_unrecognized"),
+                           ("symlinked_profile", "not_a_regular_file:" + self.P)):
+            with self.subTest(name):
+                result, state, reloads = self.scenario(name)
+                self.assertEqual((result, reloads), (f"STOP;CODE={code};ROLLED_BACK=None", "-"))
+        old = self.fixture_state().split(" ")
+        new = self.new_state().split(" ")
+        self.assertEqual(self.scenario("mixed_installed_state")[1], " ".join([new[0], old[1], old[2], old[3], "tmp=[]"]))
+        self.assertEqual(self.scenario("mixed_installed_profiles")[1], " ".join([old[0], old[1], new[2], old[3], "tmp=[]"]))
+
+    def test_a_failure_after_the_swap_restores_the_old_files_and_reloads_the_old_profiles(self):
+        both = f"{self.P},{self.R},{self.P},{self.R}"
+        cases = {
+            "reload_fails_rolls_back": f"STOP;CODE=profile_reload_failed:{self.R};ROLLED_BACK=yes",
+            "verify_fails_rolls_back": "STOP;CODE=verify_static_install_failed:apparmor_not_enforced;ROLLED_BACK=yes",
+            "verify_without_chain_marker_rolls_back": "STOP;CODE=verify_static_install_failed;ROLLED_BACK=yes",
+            "not_loaded_after_reload": "STOP;CODE=profile_not_loaded_enforce_after_reload;ROLLED_BACK=yes",
+        }
+        for name, result in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.scenario(name), (result, self.fixture_state(), both))
+        # explicit partial-reload case: production reloads (new), restore reload fails, then BOTH old profiles are reloaded
+        self.assertEqual(self.scenario("reload_fails_rolls_back")[2], f"{self.P},{self.R},{self.P},{self.R}")
+
+    def test_a_rollback_that_leaves_a_profile_not_enforced_is_reported_as_not_rolled_back(self):
+        result, state, _ = self.scenario("not_enforced_after_rollback")
+        self.assertEqual(result, "STOP;CODE=profile_not_loaded_enforce_after_reload;ROLLED_BACK=NO")
+        self.assertEqual(state, self.fixture_state())
+
+    def test_a_failing_rollback_reload_is_reported_as_not_rolled_back(self):
+        result, state, _ = self.scenario("rollback_reload_fails")
+        self.assertEqual(result, f"STOP;CODE=profile_reload_failed:{self.R};ROLLED_BACK=NO")
+        self.assertEqual(state, self.fixture_state())
+
+    def test_upgrade_tool_source_is_scoped_to_the_four_files_and_the_two_profiles(self):
+        text = (OPS / "go5p-upgrade-apparmor.py").read_text(encoding="utf-8")
+        code = chr(10).join(line for line in text.split('"""', 2)[2].splitlines() if not line.lstrip().startswith("#"))
+        for forbidden in ("provision-paths", "initialize", '"start"', "usr.sbin.mysqld", "my.cnf", "/var/lib/mysql",
+                          '"-R"', '"-a"', "daemon-reload", "systemctl\", \"stop", "shutil", "os.remove", "rmtree"):
+            self.assertNotIn(forbidden, code, forbidden)
+        upgrade = load(OPS / "go5p-upgrade-apparmor.py", "go5p_upgrade_static")
+        libexec = "/usr/local/libexec/"
+        self.assertEqual(upgrade.OLD[libexec + "production_g1_mysql_contract.py"], HF2_CONTRACT)
+        self.assertEqual(upgrade.OLD[libexec + "production_g1_mysql_manifest.json"], HF2_MANIFEST)
+        self.assertEqual({p: upgrade.OLD[p] for p in HF2_PROFILES}, HF2_PROFILES)
+        self.assertEqual(upgrade.HELPER_SHA, HF2_HELPER)
+        self.assertEqual(upgrade.NEW, {p: ENGINE.EXPECTED["328ap"][p] for p in upgrade.NEW})
+        self.assertEqual(set(upgrade.NEW), set(upgrade.OLD))
+        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_contract.py"], sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes()))
+        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_manifest.json"], sha((SCRIPTS / "production-g1-mysql-manifest.json").read_bytes()))
+        self.assertEqual(ENGINE.EXPECTED["328ap"][libexec + "wpcaregrid-g1-mysql.py"], upgrade.HELPER_SHA)
+        changed = {p for p in ENGINE.EXPECTED["328h2"] if ENGINE.EXPECTED["328h2"][p] != ENGINE.EXPECTED["328ap"][p]}
+        self.assertEqual(changed, set(upgrade.NEW))
+        self.assertIn("module.check_base_config()", text)
+        self.assertEqual(upgrade.UNITS, ("mysql@wpcaregrid-production.service", "mysql@wpcaregrid-production-restore.service"))
+
+    # ---- sequence --------------------------------------------------------------------------------------------
+    def seq_result(self, name):
+        self.assertIn(name, self.seq, self.seq_output)
+        return self.seq[name]
+
+    FRESH = ("g1-state-check.py:328h2p,go5p-fetch-package.sh,go5p-manifest-check.py,go5p-upgrade-apparmor.py,"
+             "g1-state-check.py:328ap,g1-effective-config-check.py,go5p-confined-probe.sh")
+
+    def test_sequence_runs_every_step_once_in_order_and_ends_with_the_confined_probe(self):
+        self.assertEqual(self.seq_result("fresh"), ("rc=0", "G1_GO52C_SEQUENCE=PASS", self.FRESH))
+        self.assertEqual(self.seq_result("package_dir_exists"),
+                         ("rc=0", "G1_GO52C_SEQUENCE=PASS", self.FRESH.replace("go5p-fetch-package.sh,", "")))
+        self.assertEqual(self.seq_result("already_upgraded"),
+                         ("rc=0", "G1_GO52C_SEQUENCE=PASS", self.FRESH.replace("328h2p", "328ap").replace("go5p-fetch-package.sh,", "")))
+
+    def test_sequence_stops_before_any_step_for_unrecognized_input(self):
+        for name, step in (("unknown_contract", "installed_contract_unrecognized"), ("unknown_helper", "installed_helper_unrecognized"),
+                           ("missing_contract", "installed_file_missing"), ("symlinked_contract", "installed_file_missing"),
+                           ("bad_commit", "commit_argument_invalid"), ("no_commit", "commit_argument_invalid"),
+                           ("toolkit_mode_755", "toolkit_directory_invalid"), ("toolkit_tampered", "toolkit_hash_check"),
+                           ("mysql_service_pid_unavailable", "baseline_before")):
+            with self.subTest(name):
+                self.assertEqual(self.seq_result(name), ("rc=1", f"G1_GO52C_SEQUENCE=STOP;STEP={step}", "-"))
+
+    def test_a_reused_package_directory_must_pass_the_fetch_scripts_checks_before_any_tool_runs(self):
+        for name, step in (("reuse_source", "package_hash_check"), ("reuse_extra_file", "package_file_count"),
+                           ("reuse_file_mode", "package_file_invalid"), ("reuse_dir_mode", "package_directory_invalid"),
+                           ("reuse_sums_pin", "package_sums_mismatch")):
+            with self.subTest(name):
+                self.assertEqual(self.seq_result(name),
+                                 ("rc=1", f"G1_GO52C_SEQUENCE=STOP;STEP={step}", "g1-state-check.py:328h2p"))
+
+    def test_sequence_stops_at_the_first_failing_step_and_never_runs_a_later_one(self):
+        order = self.FRESH.split(",")
+        cases = {"state_before_fails": ("state_before", 1), "fetch_fails": ("fetch_package", 2),
+                 "manifest_check_fails": ("manifest_check", 3), "upgrade_fails": ("profile_upgrade", 4),
+                 "state_after_fails": ("state_after", 5), "effective_config_fails": ("effective_config", 6),
+                 "probe_fails": ("confined_probe", 7)}
+        for name, (step, count) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.seq_result(name), ("rc=1", f"G1_GO52C_SEQUENCE=STOP;STEP={step}", ",".join(order[:count])))
+        self.assertEqual(self.seq_result("state_before_fails_when_upgraded"),
+                         ("rc=1", "G1_GO52C_SEQUENCE=STOP;STEP=state_before", "g1-state-check.py:328ap"))
+
+    def test_after_a_failed_upgrade_the_rollback_leaves_mysql_service_and_distribution_profile_unchanged(self):
+        # Partial reload failure (first profile reloaded, second fails -> files and loaded policy rolled back, files and
+        # reload order proven by test_a_failure_after_the_swap_restores_the_old_files_and_reloads_the_old_profiles
+        # [reload_fails_rolls_back]); here: the sequence stops with profile_upgrade and proves the service untouched.
+        self.assertEqual(self.seq_result("upgrade_fails")[1], "G1_GO52C_SEQUENCE=STOP;STEP=profile_upgrade")
+        self.assertEqual(self.seqx["upgrade_fails"], "G1_GO52C_BASELINE_UNCHANGED=yes")
+        self.assertEqual(self.seq_result("upgrade_fails_and_mysql_changed")[1], "G1_GO52C_SEQUENCE=STOP;STEP=profile_upgrade")
+        self.assertEqual(self.seqx["upgrade_fails_and_mysql_changed"], "G1_GO52C_BASELINE_UNCHANGED=NO")
+
+    def test_sequence_proves_mysql_service_and_the_distribution_profile_unchanged(self):
+        for name in ("mysql_pid_changes", "distribution_profile_changes", "loaded_distribution_profile_mode_changes", "local_override_appears"):
+            with self.subTest(name):
+                rc, last, calls = self.seq_result(name)
+                self.assertEqual((rc, last), ("rc=1", "G1_GO52C_SEQUENCE=STOP;STEP=mysql_service_or_distribution_profile_changed"))
+                self.assertTrue(calls.endswith("g1-effective-config-check.py"), calls)
+
+    def test_sequence_script_is_read_only_apart_from_its_tools(self):
+        text = (OPS / "go5p-sequence.sh").read_text(encoding="utf-8")
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        for forbidden in ("provision-paths", "initialize", "rm ", "rmdir", "mv ", "chmod", "chown", "apparmor_parser", "verify-install",
+                          "daemon-reload", "systemctl start", "systemctl stop", "systemctl restart", "systemctl reload", "/var/lib/mysql"):
+            self.assertNotIn(forbidden, code, forbidden)
+        self.assertIn("grep -E '^/usr/sbin/mysqld \(' \"$KERNEL_PROFILES\"", code)
+        self.assertEqual(re.findall(r"(?m)^KERNEL_PROFILES=(.*)", code), ["/sys/kernel/security/apparmor/profiles"])
+        self.assertEqual(re.findall(r"(?m)^HELPER_PIN=([0-9a-f]{64})", code), [HF2_HELPER])
+        self.assertEqual(re.findall(r"(?m)^CONTRACT_OLD=([0-9a-f]{64})", code), [HF2_CONTRACT])
+        self.assertEqual(re.findall(r"(?m)^CONTRACT_NEW=([0-9a-f]{64})", code), [sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())])
+        self.assertEqual(re.findall(r"(?m)^PACKAGE_SUMS=([0-9a-f]{64})", code), [sha((SCRIPTS / "SHA256SUMS").read_bytes())])
+
+    # ---- confined probe --------------------------------------------------------------------------------------
+    def test_probe_passes_only_when_both_instances_read_their_exact_datadir_under_their_own_profile(self):
+        self.assertEqual(self.probe["pass"], ("rc=0", "G1_GO52C_CONFINED_PROBE=PASS",
+                                              "profiles=wpcaregrid-mysql-production,wpcaregrid-mysql-production-restore", "stderr=clean"))
+        self.assertIn("G1_GO52C_CONFINED_PROBE;INSTANCE=wpcaregrid-production;RC=0;DATADIR_LINE=yes", self.probe_text["pass"])
+        self.assertIn("G1_GO52C_CONFINED_PROBE;INSTANCE=wpcaregrid-production-restore;RC=0;DATADIR_LINE=yes", self.probe_text["pass"])
+
+    def test_probe_fails_closed_for_denial_nonzero_exit_missing_prefix_or_foreign_datadir(self):
+        for name in ("denied", "rc_nonzero_but_datadir", "rc_zero_without_datadir", "datadir_of_the_other_instance_only",
+                     "datadir_only_as_prefix"):
+            with self.subTest(name):
+                rc, last, _, _ = self.probe[name]
+                self.assertEqual((rc, last), ("rc=3", "G1_GO52C_CONFINED_PROBE=STOP;CODE=confined_read_failed"))
+
+    def test_probe_never_prints_option_values(self):
+        for name, text in self.probe_text.items():
+            self.assertNotIn("secret-value", text, name)
+            self.assertNotIn("--tmpdir", text, name)
+        for name, (_, _, _, noise) in self.probe.items():
+            self.assertEqual(noise, "stderr=clean", name)
+
+    def test_probe_runs_only_my_print_defaults_and_nothing_else(self):
+        text = (OPS / "go5p-confined-probe.sh").read_text(encoding="utf-8")
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        self.assertIn("/usr/bin/my_print_defaults", code)
+        for forbidden in ("/usr/sbin/mysqld", "systemctl", "initialize", "apparmor_parser", "rm ", "tee ", ">>", "> /"):
+            self.assertNotIn(forbidden, code, forbidden)
 
 
 class Go4bUpgradeToolTest(HelperUpgradeToolBase, unittest.TestCase):
