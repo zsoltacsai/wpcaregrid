@@ -23,6 +23,7 @@ TRANSACTION = ENTRYPOINT.parent / "staging_next_db_transaction_1_4_9.py"
 BINDING = ENTRYPOINT.parent / "deployment_target_binding.py"
 ENVIRONMENT_CONTRACT = ENTRYPOINT.parent / "deployment_environment_contract.py"
 BINDING_MODULE_NAME = "_wpcg_deployment_target_binding_v1"
+TRANSACTION_MODULE_NAME = "_wpcg_staging_next_db_transaction_v1"
 POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-1.4.9.json")
 POLICY_KEYS = {
     "schema", "profile", "enabled", "allowed_uid", "app_dir", "database", "host",
@@ -173,6 +174,18 @@ def _load_backend(entrypoint: str, argv: list[str], sudo_uid: str | None):
     except BaseException:
         sys.modules.pop(BINDING_MODULE_NAME, None)
         raise Refused("target_binding_load_failed") from None
+
+    # The transaction module is likewise executed from the authenticated bytes; the backend
+    # accepts a preloaded module and never reads it from disk a second time.
+    transaction = types.ModuleType(TRANSACTION_MODULE_NAME)
+    transaction.__file__ = str(TRANSACTION)
+    sys.modules[TRANSACTION_MODULE_NAME] = transaction
+    try:
+        exec(compile(transaction_raw, str(TRANSACTION), "exec", dont_inherit=True), transaction.__dict__)
+    except BaseException:
+        sys.modules.pop(TRANSACTION_MODULE_NAME, None)
+        sys.modules.pop(BINDING_MODULE_NAME, None)
+        raise Refused("transaction_module_load_failed") from None
 
     module = types.ModuleType("_wpcaregrid_staging_next_backend_v1_4_9")
     module.__file__ = str(BACKEND)

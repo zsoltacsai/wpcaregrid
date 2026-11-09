@@ -18,13 +18,13 @@ manifest `deploy/release-manifests/staging-next-helper-1.4.9.json`.
 
 | Artifact | Source path | SHA-256 |
 | --- | --- | --- |
-| Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_9.py` | `59357e552f282ee0ee3936953014b085bdea22e24da23336afb36b39dfa47750` |
+| Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_9.py` | `7b4fda009e1d098b7886866b6b0cafc4166dccf480c5cead595c89beabadd798` |
 | Backend | `scripts/staging_next_deploy_backend_1_4_9.py` | `68bc80ad8a87b06e19a2f9be1a52dc50f80db25183f66a39b1936f8434b1975f` |
 | Transaction module | `scripts/staging_next_db_transaction_1_4_9.py` | `809faa581019a9349eaae09ed18198f164781354ba5a89de55a858258dd7d290` |
-| Target binding | `scripts/deployment_target_binding.py` | `2038beb3e1a3d74582af5e9a5a08b096d8d7021b94f7f392a22391e67ea3c3bc` |
+| Target binding | `scripts/deployment_target_binding.py` | `987220381d5ea5d02aea1571e7b150f3f9596b27ff56d4b764a4a9e1bbdbb910` |
 | Environment contract | `scripts/deployment_environment_contract.py` | `f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1` |
-| Combined helper artifact | Manifest-derived | `bf49a138e9f9933ddcad8bb41cd931a97bb4cb297604c621c88a499d5f8fd9e4` |
-| Root installer | `scripts/install_staging_next_helper_1_4_9.py` | `d08cbb91cf5aa622fd4cabcf074c46380dcc3bd87b24d04eeea935533d6e36e2` |
+| Combined helper artifact | Manifest-derived | `d88de19203770680e919000484b4d26f916ee03b906c5d8a55ff70d6887d229f` |
+| Root installer | `scripts/install_staging_next_helper_1_4_9.py` | `d26120cb4f8066aef8a754315c1cd5a5252e2f69fcc338578b44694fe09558e5` |
 
 The compatibility contract is `wpcaregrid-staging-next-deploy-v14`. Recalculate
 these values from the final merged Git tree (LF bytes) before any installation; a
@@ -36,13 +36,20 @@ different source revision requires a new manifest and review.
   (`deployment_target_binding.py`, `deployment_environment_contract.py`); the helper
   policy pins both (`target_binding_sha256`, `environment_contract_sha256`) and the combined
   artifact digest covers them.
-* The privileged entrypoint executes the binding from the authenticated bytes and hands it
-  the authenticated contract bytes; the privileged process does not read either from disk again.
+* The privileged entrypoint executes the transaction module and the binding from the
+  authenticated bytes and hands the binding the authenticated contract bytes; the privileged
+  process does not read any of them from disk again.
 * `_safe_profile`, the deploy/preflight lock, every backup path, the fence markers and the
   transaction journal are checked against the one compiled `staging-next` target. A path,
-  backup, marker, lock or journal belonging to legacy staging, a symlink or hardlink
-  component, wrong owner/mode, or an unknown/`RECOVERY_REQUIRED` journal state is a fixed
-  `target_binding_*` HOLD. Production cannot be selected.
+  backup, marker, lock or journal belonging to legacy staging, a symlink in any path
+  component, a hardlinked or non-regular backup, wrong owner/mode on the checked leaf, or an
+  unknown/`RECOVERY_REQUIRED` journal state is a fixed `target_binding_*` HOLD. Production
+  cannot be selected. Owner/mode is checked on the leaf only (not ancestors), and the
+  check-to-use gap is covered by the root-owned directory chain and `O_NOFOLLOW` opens.
+* Two refusal codes change (both remain HOLD): a missing fence marker is now reported as
+  `target_binding_path_missing` (was `phase_b_background_fence_marker_invalid`), and an unknown
+  journal state as `target_binding_recovery_phase_unknown` (was
+  `phase_b_transaction_state_requires_recovery`).
 * Policy file, sudoers file and Phase B policy/credential paths are versioned `1.4.9`.
 
 ## Scope of installation
@@ -75,7 +82,7 @@ From a root console on `stg1.wpcaregrid.com`, run this single command in a
 subshell so failure does not close the console:
 
 ```sh
-( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.9.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = d08cbb91cf5aa622fd4cabcf074c46380dcc3bd87b24d04eeea935533d6e36e2; exec /usr/bin/python3 -I "$i" )
+( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.9.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = d26120cb4f8066aef8a754315c1cd5a5252e2f69fcc338578b44694fe09558e5; exec /usr/bin/python3 -I "$i" )
 ```
 
 The script itself checks the exact source hashes and directory contents,

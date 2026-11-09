@@ -129,6 +129,44 @@ class IdentityTests(Fixture):
         self.assertEqual(self.refusal(BE._safe_profile, wrong_owner), "target_binding_path_permission_mismatch")
 
 
+class IdentityCoverageTests(Fixture):
+    """Each directory/file the identity binding covers is individually enforced."""
+
+    def linked(self):
+        real = self.root / "real"
+        real.mkdir(exist_ok=True)
+        link = self.state_root / "via-link"
+        if not link.exists():
+            link.symlink_to(real, target_is_directory=True)
+        return link
+
+    def test_every_covered_path_rejects_a_symlinked_component(self):
+        link = self.linked()
+        fields = {
+            "releases_dir": link / "releases", "incoming_dir": link / "incoming", "inbox_dir": link / "inbox",
+            "receipts_dir": link / "receipts", "shared_storage_dir": link / "storage",
+            "shared_vendor_dir": link / "vendor", "shared_env_file": link / ".env",
+        }
+        for field, value in fields.items():
+            profile = dataclasses.replace(self.profile, **{field: value})
+            self.assertEqual(self.refusal(BE._safe_profile, profile), "target_binding_path_symlink", field)
+
+    def test_every_covered_path_rejects_a_path_outside_the_target(self):
+        for field in ("releases_dir", "incoming_dir", "inbox_dir", "receipts_dir", "shared_storage_dir",
+                      "shared_vendor_dir", "shared_env_file"):
+            profile = dataclasses.replace(self.profile, **{field: Path("/tmp/outside") / field})
+            self.assertEqual(self.refusal(BE._safe_profile, profile), "target_binding_path_outside_target", field)
+
+    def test_scheduler_marker_is_checked_independently_of_the_worker_marker(self):
+        worker = self.marker("workers-disabled")
+        for scheduler, code in ((Path(LEGACY.scheduler_fence_marker), "target_binding_path_belongs_to_other_target"),
+                                (self.state / "scheduler-paused", "target_binding_path_missing")):
+            self.assertEqual(self.refusal(BE._bound_markers, self.profile, self.policy(worker, scheduler)), code)
+        scheduler = self.marker("scheduler-paused", mode=0o666)
+        self.assertEqual(self.refusal(BE._bound_markers, self.profile, self.policy(worker, scheduler)),
+                         "target_binding_path_permission_mismatch")
+
+
 class LockTests(Fixture):
     def test_validated_lock_path_gives_real_cross_process_exclusion(self):
         lock = self.state / "deploy.lock"
@@ -299,8 +337,12 @@ class WiringTests(unittest.TestCase):
 
     def test_helper_family_pins_the_new_modules_and_keeps_old_versions_unchanged(self):
         entry = (ROOT / "scripts" / "wpcaregrid-staging-next-deploy-priv-1_4_9.py").read_text(encoding="utf-8")
-        for needle in ("target_binding_sha256", "environment_contract_sha256", "_PRELOADED_CONTRACT_SOURCE"):
+        for needle in ("target_binding_sha256", "environment_contract_sha256", "_PRELOADED_CONTRACT_SOURCE",
+                       "TRANSACTION_MODULE_NAME", "transaction_module_load_failed"):
             self.assertIn(needle, entry)
+        # the transaction module must be executed from authenticated bytes before the backend runs
+        self.assertLess(entry.index("exec(compile(transaction_raw"), entry.index("exec(compile(backend_raw"))
+        self.assertLess(entry.index("exec(compile(binding_raw"), entry.index("exec(compile(backend_raw"))
         for old in ("staging_next_deploy_backend_1_4_8.py", "staging_next_db_transaction_1_4_8.py"):
             self.assertNotIn("_bound_", (ROOT / "scripts" / old).read_text(encoding="utf-8"))
 

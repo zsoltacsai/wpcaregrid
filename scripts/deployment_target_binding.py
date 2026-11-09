@@ -435,7 +435,7 @@ def transaction_state_decision(target: DeploymentTarget, state: object, *, fence
     _registered(target)
     if type(fences_verified) is not bool:
         raise TargetRefused("recovery_flags_invalid")
-    if not isinstance(state, str) or state not in TRANSACTION_STATES:
+    if type(state) is not str or state not in TRANSACTION_STATES:
         raise TargetRefused("recovery_phase_unknown")
     if state == "COMPLETE":
         return "none"

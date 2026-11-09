@@ -569,6 +569,15 @@ class JournalAndTransactionStateTests(unittest.TestCase):
             with self.assertRaises(B.TargetRefused):
                 B.transaction_state_decision(NEXT, "MIGRATING", fences_verified=flag)
 
+        class SneakyState(str):
+            def __eq__(self, other):
+                return True
+
+            __hash__ = str.__hash__
+
+        with self.assertRaises(B.TargetRefused):
+            B.transaction_state_decision(NEXT, SneakyState("anything"), fences_verified=True)
+
     def test_state_list_matches_the_real_transaction_module(self):
         text = (ROOT / "scripts" / "staging_next_db_transaction_1_4_8.py").read_text(encoding="utf-8")
         block = text[text.index("STATES = ("):]
