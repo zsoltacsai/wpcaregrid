@@ -341,7 +341,11 @@ final class RunMonitoring extends Command
                 ->exists();
 
             // Resolve prior stale worker state only when this queue was monitored before.
-            if (! $result && ! $hasOpenIncident) {
+            // Once that state is already healthy and marked paused, avoid rewriting it on every run.
+            if (! $hasOpenIncident
+                && (! $result
+                    || $result->state === HealthStatus::Healthy
+                        && $result->reason_code === MonitoringReason::WORKER_PAUSED)) {
                 continue;
             }
 
