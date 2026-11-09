@@ -36,34 +36,26 @@ profiles module match the audited sha256 pins (deploy/release-manifests/staging-
 modes 0755/0644, and their directory chain is root-owned and not group/other writable; that helper only performs a
 read-only `preflight` (lstat of the pinned application directory). Any other, broader or modified rule is a STOP.
 
-## Step 1 - prepare the six files on the Owner machine (read-only for the host)
+## Step 1+2 - Owner GO #1: stage the six pinned files (one command, run on the Owner workstation)
 
-```sh
-git fetch origin && git cat-file -e 49234694f062168a27b471fc43774409e6c4219a^{commit}
-mkdir -p ~/wpcg-149 && cd ~/wpcg-149
-for f in wpcaregrid-staging-next-deploy-priv-1_4_9.py staging_next_deploy_backend_1_4_9.py \
-         staging_next_db_transaction_1_4_9.py deployment_target_binding.py \
-         deployment_environment_contract.py install_staging_next_helper_1_4_9.py; do
-  git show "49234694f062168a27b471fc43774409e6c4219a:scripts/$f" > "$f"
-done
-sha256sum *            # compare every line with the table above; any difference = STOP
-```
+`scripts/staging-149-stage-sources.sh` (paste block in the hand-over) runs inside a clone of the repository. It
+exports the six files from the pinned merge commit `49234694f062168a27b471fc43774409e6c4219a`, verifies every sha256
+pin locally (STOP on any difference, before SSH is used), and streams them over SSH to a python program that runs on
+the host **as the `deploy` login user** (it refuses root and any other user). The host program changes only
+`/home/deploy/.private`: it creates the directory if absent (0700), writes the five sources into
+`wpcg-staging-next-helper-1.4.9/` (0700, files 0600) and the installer as
+`wpcaregrid-staging-next-helper-installer-1.4.9.py` (0600), create-only (an existing destination is a STOP), publishes
+atomically, rolls back only its own objects on failure, re-reads and re-hashes everything, and prints no content.
 
-## Step 2 - Owner GO #1: stage the files (changes only `/home/deploy/.private`)
+* `SSH_TARGET` (default `caregrid-staging`) must log in as `deploy`; anything else is a STOP on the host.
+* `MODE=check` verifies all preconditions and the payload on the host and writes **nothing**; run it first.
+* Run it with `bash` (the file is not executable). Result line: `STAGING_149_STAGE=CHECK_PASS` / `PASS` / `STOP;CODE=...`;
+  exactly one such line is printed (the host's own result is shown as `REMOTE_RESULT=`). In stage mode the driver
+  cross-checks that the host reported all six files with the pinned digests, mode 0600 and the expected paths;
+  a bare `PASS` from the host is not trusted. A second run ends in `STOP;CODE=destination_exists` (create-only).
+* SIGHUP/SIGTERM/SIGINT on the host program and any read-back failure roll back what the run created.
 
-As the `deploy` user on the host (not root), after the preflight was `PASS`:
-
-```sh
-install -d -m 700 /home/deploy/.private /home/deploy/.private/wpcg-staging-next-helper-1.4.9
-# copy from the Owner machine, e.g.:  scp ~/wpcg-149/<file> deploy@stg1.wpcaregrid.com:/home/deploy/.private/...
-# five sources go into wpcg-staging-next-helper-1.4.9/, the installer is renamed on arrival:
-#   install_staging_next_helper_1_4_9.py -> /home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.9.py
-chmod 600 /home/deploy/.private/wpcg-staging-next-helper-1.4.9/* /home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.9.py
-sha256sum /home/deploy/.private/wpcg-staging-next-helper-1.4.9/* /home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.9.py
-```
-
-Exactly five files in the source directory, no extras, owner `deploy:deploy`, directory `0700`, files `0600`.
-Re-run the preflight: it now reports `source.staged ... REQUIRED_PRESENT` and must still be `PASS`.
+Afterwards re-run the read-only root preflight: `source.staged` must be `REQUIRED_PRESENT` and the result `PASS`.
 
 ## Step 3 - Owner GO #2: root installation (privileged change: root-owned files + sudoers rule)
 
