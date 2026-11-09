@@ -155,7 +155,11 @@ python3 -I -B "$OPS/g1-effective-config-check.py"            # G1_EFFECTIVE_CONF
 The upgrade tool checks before any write: the package files (hash-pinned, root-owned directory), the installed
 helper/contract/manifest (old pinned hashes, owner, mode, no symlink), both G1 units inactive and no leftover
 temporary file. Each file is replaced by a same-directory temporary file, `fsync` and atomic `rename`; afterwards
-the new helper's own `verify-install` must pass, otherwise the old bytes are restored (`ROLLED_BACK=yes`). A second
+the new helper's static verification (`verify_static_install()`, the same check `install` ends with: bundle, systemd,
+AppArmor) must pass, otherwise the old bytes are restored (`ROLLED_BACK=yes`). It deliberately does not call the helper's
+`verify-install` command: that also runs `mysqld --validate-config`, which needs the instance tmpdirs created only by
+`provision-paths`, so it fails on every host between GO-4 and GO-5.1 (the first GO-4b attempt stopped with
+`verify_install_failed` for exactly this reason; nothing was changed, the rollback restored the old files). A second
 run reports `NOTE=already_upgraded`. State `328` in `g1-state-check.py` is the old installed state, `328h` the
 hotfix state. `provision-paths` (GO-5.1) is a separate gate afterwards.
 

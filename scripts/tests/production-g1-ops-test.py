@@ -305,6 +305,8 @@ def write(path, data, mode):
         f.write(data)
     os.chown(path, 0, 0); os.chmod(path, mode)
 
+CALLS = []
+
 def reset(active=(), verify="ok", pkg_tamper=False, helper=OLDH, helper_mode=0o755, contract=CONTRACT_BYTES,
           manifest=OLDM, symlink=False, leftover=False, pkg_mode=0o700):
     shutil.rmtree("/usr/local/libexec", ignore_errors=True); shutil.rmtree("/pkg", ignore_errors=True)
@@ -318,13 +320,19 @@ def reset(active=(), verify="ok", pkg_tamper=False, helper=OLDH, helper_mode=0o7
         data = open("/pkg-src/" + name, "rb").read() + (b"#" if pkg_tamper else b"")
         write("/pkg/" + name, data, 0o600)
     def run(args):
+        # Behaves like the host between GO-4 (install) and GO-5.1 (provision-paths): the static verification
+        # passes, but the helper's full `verify-install` fails (`mysqld --validate-config` needs the tmpdirs
+        # that provision-paths creates). Calls are recorded so a test can prove which command was used.
+        CALLS.append(list(args))
         if args[1] == "is-active":
             if args[2] in active:
                 return types.SimpleNamespace(returncode=0, stdout="active\n")
             return types.SimpleNamespace(returncode=3, stdout="inactive\n")
+        if "verify-install" in args:
+            return types.SimpleNamespace(returncode=3, stdout="STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL\nG1_MYSQL=STOP;CODE=command_failed\n")
         if verify == "ok":
             return types.SimpleNamespace(returncode=0, stdout="STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL\n")
-        return types.SimpleNamespace(returncode=3, stdout="G1_MYSQL=STOP;CODE=x\n")
+        return types.SimpleNamespace(returncode=3, stdout="G1_MYSQL=STOP;CODE=apparmor_profile_not_enforced\n")
     return run
 
 def state():
@@ -343,7 +351,9 @@ def scenario(name, twice=False, **kw):
             results.append(up.main("/pkg", run=run, euid=0))
         except up.Stop as exc:
             results.append("STOP;CODE=%s;ROLLED_BACK=%s" % (exc.code, exc.rolled_back))
-    print("SCENARIO %s | %s | %s" % (name, " || ".join(results), state()))
+    verify_calls = [c[-1] == up.STATIC_VERIFY_SNIPPET for c in CALLS if c[1] != "is-active"]
+    print("SCENARIO %s | %s | %s | static_only=%s" % (name, " || ".join(results), state(), all(verify_calls) and bool(verify_calls) or not verify_calls))
+    del CALLS[:]
 
 scenario("pass")
 scenario("idempotent", twice=True)
@@ -356,6 +366,24 @@ scenario("leftover_tmp", leftover=True)
 scenario("changed_contract", contract=CONTRACT_BYTES + b"#")
 scenario("helper_mode_wrong", helper_mode=0o644)
 scenario("package_dir_group_writable", pkg_mode=0o770)
+import subprocess
+PASS_HELPER = b"class Refused(Exception):\n    pass\ndef verify_static_install():\n    print('STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL')\n"
+FAIL_HELPER = b"class Refused(Exception):\n    pass\ndef verify_static_install():\n    raise Refused('apparmor_profile_not_enforced')\n"
+
+def snippet_run(name, helper_bytes):
+    shutil.rmtree("/usr/local/libexec", ignore_errors=True)
+    os.makedirs("/usr/local/libexec", mode=0o755)
+    write(H, helper_bytes, 0o755)
+    write(C, CONTRACT_BYTES, 0o644)
+    done = subprocess.run(["/usr/bin/python3", "-I", "-B", "-c", up.STATIC_VERIFY_SNIPPET], stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, universal_newlines=True)
+    first = (done.stdout.strip().splitlines() or ["<none>"])[0]
+    print("SNIPPET %s | rc=%d | %s | traceback=%s | pycache=%s" % (
+        name, done.returncode, first, "Traceback" in done.stderr, os.path.lexists("/usr/local/libexec/__pycache__")))
+
+snippet_run("pass_fixture", PASS_HELPER)
+snippet_run("refused_fixture", FAIL_HELPER)
+snippet_run("real_helper_on_bare_host", open("/pkg-src/production-g1-mysql.py", "rb").read())
 """
 
 
@@ -379,10 +407,16 @@ class HelperUpgradeToolTest(unittest.TestCase):
         cls.output = done.stdout.decode()
         cls.stderr = done.stderr.decode()
         cls.scenarios = {}
+        cls.static_only = {}
+        cls.snippets = {}
         for line in cls.output.splitlines():
             if line.startswith("SCENARIO "):
-                name, result, state = [part.strip() for part in line[len("SCENARIO "):].split(" | ")]
+                name, result, state, static_only = [part.strip() for part in line[len("SCENARIO "):].split(" | ")]
                 cls.scenarios[name] = (result, state)
+                cls.static_only[name] = static_only
+            elif line.startswith("SNIPPET "):
+                name, rc, first, traceback, pycache = [part.strip() for part in line[len("SNIPPET "):].split(" | ")]
+                cls.snippets[name] = (rc, first, traceback, pycache)
 
     def scenario(self, name):
         self.assertIn(name, self.scenarios, self.output + self.stderr)
@@ -428,9 +462,29 @@ class HelperUpgradeToolTest(unittest.TestCase):
                 if name != "leftover_tmp":
                     self.assertEqual(tmp, "tmp=[]")
 
+    def test_regression_go4b_does_not_use_the_full_verify_install_before_provision_paths(self):
+        """GO-4b failed on the VPS with verify_install_failed: `verify-install` also runs mysqld --validate-config,
+        which needs the tmpdirs created only by provision-paths, so it exits 3 on every host between GO-4 and GO-5.1."""
+        result, state = self.scenario("pass")
+        self.assertEqual(result, "G1_GO4B_HELPER_UPGRADE=PASS", self.output + self.stderr)
+        for name, static_only in self.static_only.items():
+            self.assertEqual(static_only, "static_only=True", name)
+        text = (OPS / "go4b-upgrade-installed-helper.py").read_text(encoding="utf-8")
+        self.assertNotIn('"verify-install"]', text)
+        self.assertIn("verify_static_install()", text)
+
+    def test_static_verify_snippet_runs_the_helper_function_and_reports_refusals_without_a_traceback(self):
+        self.assertEqual(self.snippets["pass_fixture"], ("rc=0", "STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL",
+                                                         "traceback=False", "pycache=False"))
+        self.assertEqual(self.snippets["refused_fixture"], ("rc=3", "G1_MYSQL=STOP;CODE=apparmor_profile_not_enforced",
+                                                            "traceback=False", "pycache=False"))
+        rc, first, traceback, pycache = self.snippets["real_helper_on_bare_host"]
+        self.assertEqual((rc, traceback, pycache), ("rc=3", "traceback=False", "pycache=False"))
+        self.assertRegex(first, r"^G1_MYSQL=STOP;CODE=[a-z_]+$")   # the real function exists and fails closed
+
     def test_failed_post_check_restores_the_old_bytes_and_modes(self):
         result, state = self.scenario("verify_fails")
-        self.assertEqual(result, "STOP;CODE=verify_install_failed;ROLLED_BACK=yes")
+        self.assertEqual(result, "STOP;CODE=verify_static_install_failed:apparmor_profile_not_enforced;ROLLED_BACK=yes")
         contract = sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())[:12]
         self.assertEqual(self.parts(state), (sha(b"old-helper\n")[:12] + ":755:0:0", f"{contract}:644:0:0",
                                              sha(b"old-manifest\n")[:12] + ":644:0:0", "tmp=[]"))
