@@ -92,6 +92,21 @@ final class StagingNextQueueMonitoringTest extends TestCase
         $this->assertSame(HealthStatus::Critical, $this->queueStatus());
     }
 
+    public function test_staging_next_refuses_a_non_database_queue_driver(): void
+    {
+        config([
+            'app.deployment_environment' => 'staging_next',
+            'queue.connections.database.driver' => 'sync',
+        ]);
+        Queue::fake();
+
+        $method = new ReflectionMethod(RunMonitoring::class, 'workers');
+        $method->invoke(app(RunMonitoring::class), app(MonitoringEngine::class));
+
+        $this->assertCount(0, Queue::pushed(RecordWorkerPulse::class));
+        $this->assertSame(HealthStatus::Critical, $this->queueStatus());
+    }
+
     public function test_production_and_legacy_staging_continue_to_monitor_both_configured_workers(): void
     {
         foreach (['production', 'staging'] as $environment) {
