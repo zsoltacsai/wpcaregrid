@@ -163,6 +163,58 @@ AppArmor) must pass, otherwise the old bytes are restored (`ROLLED_BACK=yes`). I
 run reports `NOTE=already_upgraded`. State `328` in `g1-state-check.py` is the old installed state, `328h` the
 hotfix state. `provision-paths` (GO-5.1) is a separate gate afterwards.
 
+## GO-5.2 hotfix — base-config symlink (Owner approval; replaces the same two installed files)
+
+Why: GO-5.2 `verify-install` stopped with `G1_MYSQL=STOP;CODE=managed_file_type_invalid` because Ubuntu provides
+`/etc/mysql/my.cnf` as a symlink (`/etc/mysql/my.cnf` -> `/etc/alternatives/my.cnf` -> `/etc/mysql/mysql.cnf`) and the
+installed helper's `verify_preflight()` applied the generic no-symlink `check_file()` to it. The new helper verifies
+exactly that chain and its final file (see the package document, "Base configuration through the Ubuntu alternatives
+symlink") and still refuses everything else. `/etc/mysql/my.cnf` is **not** replaced or edited. GO-5.1 is not repeated;
+the already created data and temporary directories are left as they are; no MySQL is initialized or started and
+`mysql.service` (3306) is not touched. The tool replaces **only** `/usr/local/libexec/wpcaregrid-g1-mysql.py` and
+`/usr/local/libexec/production_g1_mysql_manifest.json`; contract, option files, AppArmor profiles and drop-ins must be
+byte-identical: the tool itself checks the contract hash and that both units are inactive, and the mandatory
+`g1-state-check.py 328h` step before it proves the rest (any STOP there ends the procedure). `<MERGE_SHA>` is the 40-hex merge commit of the hotfix pull request,
+`OPS` the toolkit directory fetched by GO-0 from that same commit.
+
+```bash
+python3 -I -B "$OPS/g1-state-check.py" 328h                  # G1_GO4B_POSTUPGRADE=PASS  (installed GO-4b state)
+bash "$OPS/go5h-fetch-hotfix-package.sh" <MERGE_SHA>         # G1_GO5H_DOWNLOAD=PASS     (new dir /root/wpcg-production-g1-mysql-hf2-<sha7>)
+HF2=/root/wpcg-production-g1-mysql-hf2-<sha7>
+python3 -I -B "$OPS/go3-manifest-check.py" "$HF2"            # G1_GO3_MANIFEST=PASS
+python3 -I -B "$OPS/go5h-upgrade-installed-helper.py" "$HF2" # G1_GO5H_HELPER_UPGRADE=PASS
+python3 -I -B "$OPS/g1-state-check.py" 328h2                 # G1_GO5H_POSTUPGRADE=PASS
+python3 -I -B "$OPS/g1-effective-config-check.py"            # G1_EFFECTIVE_CONFIG=PASS
+```
+
+The upgrade tool checks before any write: the package files (hash-pinned, root-owned directory), the installed
+helper/contract/manifest (GO-4b pins, owner, mode, no symlink), both G1 units inactive and no leftover temporary file.
+Each file is replaced by a same-directory temporary file, `fsync` and atomic `rename`; then the new helper's
+`verify_static_install()` **and** `check_base_config()` must pass, otherwise the old bytes are restored
+(`ROLLED_BACK=yes`) and the exact code of the host's `/etc/mysql/my.cnf` problem is reported
+(`verify_static_install_failed:<code>`). A second run reports `NOTE=already_upgraded`. State `328h2` in
+`g1-state-check.py` is the hotfix state; `328h` remains the previous one.
+
+After PASS, GO-5.2 is repeated (`verify-install`, then `preflight --instance <each>`, see below). GO-5.1 is not.
+
+**GO-5.2c — confined read-only probe (mandatory gate before GO-5.3).** AppArmor mediates the resolved path of a symlink,
+and the generated profiles grant `/etc/mysql/my.cnf` but not its target `/etc/mysql/mysql.cnf`. `verify-install` runs
+MySQL unconfined and cannot show this. The probe runs only `my_print_defaults` (reads option files, prints values,
+starts no server) under the instance's enforcing profile and prints no option value:
+
+```bash
+for I in wpcaregrid-production wpcaregrid-production-restore; do
+  OUT=$(aa-exec -p "wpcaregrid-mysql-${I#wpcaregrid-}" -- /usr/bin/my_print_defaults \
+        --defaults-file=/etc/mysql/my.cnf --defaults-group-suffix=@"$I" mysqld 2>&1); RC=$?
+  case "$OUT" in *"--datadir=/var/lib/mysql-$I"*) HAS=yes;; *) HAS=no;; esac
+  echo "G1_GO52C_CONFINED_PROBE;INSTANCE=$I;RC=$RC;DATADIR_LINE=$HAS"
+done
+```
+
+PASS only if both lines show `RC=0;DATADIR_LINE=yes`. Anything else means the confined mysqld cannot read the chain
+target: STOP before GO-5.3 and request a separate profile hotfix (adding exactly `/etc/mysql/mysql.cnf r,` to the two
+generated profiles; AppArmor mediates the resolved file, not the intermediate symlink); do not initialize.
+
 ## GO-5 — runtime preparation (each step is its own Owner gate)
 
 `provision-paths` is the first step that creates instance paths. After it, the clean-state
@@ -173,7 +225,7 @@ directories/files created by it.
 | Gate | Command | Notes |
 | --- | --- | --- |
 | 5.1 | `python3 -I /usr/local/libexec/wpcaregrid-g1-mysql.py provision-paths` | creates the exact datadir (mysql:mysql 0750), tmpdir (0700) and error-log (0600) of both instances; refuses non-empty existing paths and active units |
-| 5.2 | `python3 -I /usr/local/libexec/wpcaregrid-g1-mysql.py verify-install` and `preflight --instance <each>` | first run of `mysqld --validate-config` and `--verbose --help` (they need the tmpdirs) |
+| 5.2 | `python3 -I /usr/local/libexec/wpcaregrid-g1-mysql.py verify-install` and `preflight --instance <each>` | first run of `mysqld --validate-config` and `--verbose --help` (they need the tmpdirs); first attempt stopped with `managed_file_type_invalid` (symlinked `/etc/mysql/my.cnf`) -> GO-5.2 hotfix above, then repeat; GO-5.2c probe before 5.3 |
 | 5.3 | `… initialize --instance wpcaregrid-production`, then `… wpcaregrid-production-restore` | one-time, never retried, never cleaned automatically |
 | 5.4 | `… start --instance <each>` then `… verify-running --instance <each>` | one `systemctl start` per instance, no retry; failed postcheck stops only that instance and keeps datadir/log |
 | 5.5 | `python3 -I -B "$OPS/go5-runtime-acceptance.py" --mysql-main-pid <GO-1 MainPID>` | read-only: AppArmor `enforce` label, instance group in the process arguments, loopback-only 3308/3309, no 33060, `mysql.service` PID unchanged, three distinct processes |

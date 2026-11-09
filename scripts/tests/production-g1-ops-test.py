@@ -48,6 +48,10 @@ ENGINE = load(OPS / "g1-state-check.py", "g1_state_check")
 sha = lambda data: hashlib.sha256(data).hexdigest()  # noqa: E731
 OLD_HELPER = "5bddfcc886c8f94653f1aa9c55c63da7dca259042156db3e7e8a5378639e215a"    # #328 bb7e20e as installed by GO-4
 OLD_MANIFEST = "87f7aa3a8acee74fbf0bb697ec5e93b540fe9484927bab4212b24df71e2d22e9"
+# GO-4b log-directory hotfix (installed on the VPS, historical from the base-config hotfix on)
+HF1_HELPER = "457ddb292f2ddf1f094375254a031de3bb6a450838cb201429363cb2397f02da"
+HF1_MANIFEST = "290ed20acfdac72f4150f572521b8f0e6564de33f7ff2979fc5b5a2381410732"
+HF1_SUMS = "01f803d3628b47f11719751e365ab95bc664189d8dfcb457bf0fec8eb460e8e2"
 
 
 class ToolkitStaticTest(unittest.TestCase):
@@ -82,7 +86,7 @@ class ToolkitStaticTest(unittest.TestCase):
             "/usr/local/libexec/production_g1_mysql_contract.py": sha(contract),
             "/usr/local/libexec/production_g1_mysql_manifest.json": sha(manifest_raw),
         }
-        self.assertEqual(ENGINE.EXPECTED["328h"], expected)
+        self.assertEqual(ENGINE.EXPECTED["328h2"], expected)
         self.assertEqual(json.loads(manifest_raw)["installed_artifacts"],
                          {k: v for k, v in expected.items() if not k.endswith("manifest.json")})
         for path in ENGINE.CNF_ZZ:
@@ -95,10 +99,20 @@ class ToolkitStaticTest(unittest.TestCase):
         historical = {libexec + "wpcaregrid-g1-mysql.py": OLD_HELPER, libexec + "production_g1_mysql_manifest.json": OLD_MANIFEST}
         for path, digest in historical.items():
             self.assertEqual(ENGINE.EXPECTED["328"][path], digest)
-        changed = {p for p in ENGINE.EXPECTED["328"] if ENGINE.EXPECTED["328"][p] != ENGINE.EXPECTED["328h"][p]}
-        self.assertEqual(changed, set(historical))
-        self.assertEqual(set(ENGINE.EXPECTED["328"]), set(ENGINE.EXPECTED["328h"]))
+        for state in ("328h", "328h2"):
+            changed = {p for p in ENGINE.EXPECTED["328"] if ENGINE.EXPECTED["328"][p] != ENGINE.EXPECTED[state][p]}
+            self.assertEqual(changed, set(historical), state)
+            self.assertEqual(set(ENGINE.EXPECTED["328"]), set(ENGINE.EXPECTED[state]), state)
         self.assertEqual(ENGINE.TAGS["328h"], "G1_GO4B_POSTUPGRADE")
+        self.assertEqual(ENGINE.TAGS["328h2"], "G1_GO5H_POSTUPGRADE")
+
+    def test_engine_state_328h_is_the_installed_go4b_hotfix_and_328h2_differs_only_in_helper_and_manifest(self):
+        libexec = "/usr/local/libexec/"
+        self.assertEqual(ENGINE.EXPECTED["328h"][libexec + "wpcaregrid-g1-mysql.py"], HF1_HELPER)
+        self.assertEqual(ENGINE.EXPECTED["328h"][libexec + "production_g1_mysql_manifest.json"], HF1_MANIFEST)
+        changed = {p for p in ENGINE.EXPECTED["328h"] if ENGINE.EXPECTED["328h"][p] != ENGINE.EXPECTED["328h2"][p]}
+        self.assertEqual(changed, {libexec + "wpcaregrid-g1-mysql.py", libexec + "production_g1_mysql_manifest.json"})
+        self.assertEqual(set(ENGINE.EXPECTED["328h"]), set(ENGINE.EXPECTED["328h2"]))
 
     def test_manifest_check_and_dryrun_and_diagnostic_pin_the_current_package(self):
         contract_sha = sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())
@@ -117,27 +131,51 @@ class ToolkitStaticTest(unittest.TestCase):
         self.assertIn("M=bb7e20e8c62d7977b7f2650b39d76d9b203198c4", text)
         self.assertIn("--proto '=https'", text)
 
-    def test_hotfix_fetch_script_pins_the_current_package_hashes(self):
+    def test_go4b_fetch_script_keeps_pinning_the_historical_log_directory_hotfix_package(self):
         text = (OPS / "go4b-fetch-hotfix-package.sh").read_text(encoding="utf-8")
+        self.assertIn(f"{HF1_HELPER} production-g1-mysql.py", text)
+        self.assertIn(f"{HF1_MANIFEST} production-g1-mysql-manifest.json", text)
+        self.assertIn(HF1_SUMS + " SHA256SUMS", text)
+        self.assertIn("/root/wpcg-production-g1-mysql-hf-${M:0:7}", text)
+
+    def test_hotfix_fetch_script_pins_the_current_package_hashes(self):
+        text = (OPS / "go5h-fetch-hotfix-package.sh").read_text(encoding="utf-8")
         for name in ("production-g1-mysql.py", "production_g1_mysql_contract.py", "production-g1-mysql-manifest.json"):
             self.assertIn(f"{sha((SCRIPTS / name).read_bytes())} {name}", text)
         self.assertIn(sha((SCRIPTS / "SHA256SUMS").read_bytes()) + " SHA256SUMS", text)
         self.assertIn("--proto '=https'", text)
         self.assertIn('[[ $M =~ ^[0-9a-f]{40}$ ]]', text)
-        self.assertIn("/root/wpcg-production-g1-mysql-hf-${M:0:7}", text)
+        self.assertIn("/root/wpcg-production-g1-mysql-hf2-${M:0:7}", text)
+        self.assertIn("G1_GO5H_DOWNLOAD", text)
 
-    def test_upgrade_script_pins_old_and_new_helper_and_manifest(self):
+    def test_go4b_upgrade_script_keeps_pinning_the_historical_files(self):
         upgrade = load(OPS / "go4b-upgrade-installed-helper.py", "go4b_upgrade_static")
         libexec = "/usr/local/libexec/"
         self.assertEqual(upgrade.OLD[libexec + "wpcaregrid-g1-mysql.py"], OLD_HELPER)
         self.assertEqual(upgrade.OLD[libexec + "production_g1_mysql_manifest.json"], OLD_MANIFEST)
         self.assertEqual(upgrade.OLD, {p: ENGINE.EXPECTED["328"][p] for p in upgrade.OLD})
         self.assertEqual(upgrade.NEW, {p: ENGINE.EXPECTED["328h"][p] for p in upgrade.NEW})
+        self.assertEqual(upgrade.NEW[libexec + "wpcaregrid-g1-mysql.py"], HF1_HELPER)
+        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_manifest.json"], HF1_MANIFEST)
+        self.assertEqual(upgrade.CONTRACT, libexec + "production_g1_mysql_contract.py")
+        self.assertEqual(upgrade.OLD[upgrade.CONTRACT], upgrade.NEW[upgrade.CONTRACT])
+
+    def test_go5h_upgrade_script_pins_the_installed_go4b_state_and_the_current_package(self):
+        upgrade = load(OPS / "go5h-upgrade-installed-helper.py", "go5h_upgrade_static")
+        libexec = "/usr/local/libexec/"
+        self.assertEqual(upgrade.OLD[libexec + "wpcaregrid-g1-mysql.py"], HF1_HELPER)
+        self.assertEqual(upgrade.OLD[libexec + "production_g1_mysql_manifest.json"], HF1_MANIFEST)
+        self.assertEqual(upgrade.OLD, {p: ENGINE.EXPECTED["328h"][p] for p in upgrade.OLD})
+        self.assertEqual(upgrade.NEW, {p: ENGINE.EXPECTED["328h2"][p] for p in upgrade.NEW})
         self.assertEqual(upgrade.NEW[libexec + "wpcaregrid-g1-mysql.py"], sha((SCRIPTS / "production-g1-mysql.py").read_bytes()))
         self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_manifest.json"],
                          sha((SCRIPTS / "production-g1-mysql-manifest.json").read_bytes()))
         self.assertEqual(upgrade.CONTRACT, libexec + "production_g1_mysql_contract.py")
         self.assertEqual(upgrade.OLD[upgrade.CONTRACT], upgrade.NEW[upgrade.CONTRACT])
+        text = (OPS / "go5h-upgrade-installed-helper.py").read_text(encoding="utf-8")
+        self.assertIn("module.check_base_config()", text)
+        self.assertIn("BASE_CONFIG_CHECK=PASS", text)
+        self.assertNotIn('"verify-install"]', text)
 
     def test_rollback_script_targets_exactly_the_nine_325_files(self):
         text = (OPS / "go2-rollback.sh").read_text(encoding="utf-8")
@@ -289,7 +327,7 @@ class DryRunAgainstRealMysqlTest(unittest.TestCase):
 
 DRIVER = r"""
 import hashlib, importlib.util, os, shutil, types
-spec = importlib.util.spec_from_file_location("up", "/ops/go4b-upgrade-installed-helper.py")
+spec = importlib.util.spec_from_file_location("up", "/ops/__TOOL__")
 up = importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
 H, C, M = up.HELPER, up.CONTRACT, up.MANIFEST
 sha = lambda b: hashlib.sha256(b).hexdigest()
@@ -297,6 +335,10 @@ OLDH, OLDM = b"old-helper\n", b"old-manifest\n"
 up.OLD[H], up.OLD[M] = sha(OLDH), sha(OLDM)          # fixtures stand in for the historical bytes
 CONTRACT_BYTES = open("/pkg-src/production_g1_mysql_contract.py", "rb").read()
 up.OLD[C] = up.NEW[C] = sha(CONTRACT_BYTES)
+# the package in /pkg-src is the CURRENT package; the tool under test pins its own NEW hashes (checked statically)
+up.NEW[H] = sha(open("/pkg-src/production-g1-mysql.py", "rb").read())
+up.NEW[M] = sha(open("/pkg-src/production-g1-mysql-manifest.json", "rb").read())
+EXTRA = "__EXTRA__"
 
 def write(path, data, mode):
     if os.path.lexists(path):
@@ -331,6 +373,10 @@ def reset(active=(), verify="ok", pkg_tamper=False, helper=OLDH, helper_mode=0o7
         if "verify-install" in args:
             return types.SimpleNamespace(returncode=3, stdout="STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL\nG1_MYSQL=STOP;CODE=command_failed\n")
         if verify == "ok":
+            return types.SimpleNamespace(returncode=0, stdout="STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL\n" + EXTRA)
+        if verify == "chain":
+            return types.SimpleNamespace(returncode=3, stdout="G1_MYSQL=STOP;CODE=base_config_link_target_unexpected\n")
+        if verify == "nochainline":
             return types.SimpleNamespace(returncode=0, stdout="STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL\n")
         return types.SimpleNamespace(returncode=3, stdout="G1_MYSQL=STOP;CODE=apparmor_profile_not_enforced\n")
     return run
@@ -359,6 +405,9 @@ scenario("pass")
 scenario("idempotent", twice=True)
 scenario("unit_active", active=("mysql@wpcaregrid-production-restore.service",))
 scenario("verify_fails", verify="bad")
+if EXTRA:
+    scenario("chain_fails", verify="chain")
+    scenario("chain_check_not_reported", verify="nochainline")
 scenario("tampered_installed_helper", helper=b"foreign\n")
 scenario("tampered_package", pkg_tamper=True)
 scenario("symlinked_helper", symlink=True)
@@ -367,7 +416,8 @@ scenario("changed_contract", contract=CONTRACT_BYTES + b"#")
 scenario("helper_mode_wrong", helper_mode=0o644)
 scenario("package_dir_group_writable", pkg_mode=0o770)
 import subprocess
-PASS_HELPER = b"class Refused(Exception):\n    pass\ndef verify_static_install():\n    print('STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL')\n"
+PASS_HELPER = b"class Refused(Exception):\n    pass\ndef verify_static_install():\n    print('STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL')\ndef check_base_config():\n    return b''\n"
+CHAIN_HELPER = b"class Refused(Exception):\n    pass\ndef verify_static_install():\n    print('STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL')\ndef check_base_config():\n    raise Refused('base_config_link_target_unexpected')\n"
 FAIL_HELPER = b"class Refused(Exception):\n    pass\ndef verify_static_install():\n    raise Refused('apparmor_profile_not_enforced')\n"
 
 def snippet_run(name, helper_bytes):
@@ -383,21 +433,26 @@ def snippet_run(name, helper_bytes):
 
 snippet_run("pass_fixture", PASS_HELPER)
 snippet_run("refused_fixture", FAIL_HELPER)
+snippet_run("chain_refused_fixture", CHAIN_HELPER)
 snippet_run("real_helper_on_bare_host", open("/pkg-src/production-g1-mysql.py", "rb").read())
 """
 
 
 @unittest.skipUnless(ready() or REQUIRE, "Docker / MySQL image unavailable")
-class HelperUpgradeToolTest(unittest.TestCase):
-    """go4b-upgrade-installed-helper.py as root in a disposable container, with fixture 'old' bytes."""
+class HelperUpgradeToolBase:
+    """An upgrade tool as root in a disposable container, with fixture 'old' bytes (subclasses name the tool)."""
+
+    TOOL = ""
+    TAG = ""
+    EXTRA = ""
 
     @classmethod
     def setUpClass(cls):
         if not ready():
             raise AssertionError("G1_REQUIRE_REAL_MYSQL=1 but Docker or the MySQL image is unavailable")
         files = {
-            "/ops/go4b-upgrade-installed-helper.py": (OPS / "go4b-upgrade-installed-helper.py").read_bytes(),
-            "/ops/drive.py": DRIVER.encode(),
+            "/ops/" + cls.TOOL: (OPS / cls.TOOL).read_bytes(),
+            "/ops/drive.py": DRIVER.replace("__TOOL__", cls.TOOL).replace("__EXTRA__", cls.EXTRA).encode(),
         }
         for name in ("production-g1-mysql.py", "production_g1_mysql_contract.py", "production-g1-mysql-manifest.json"):
             files["/pkg-src/" + name] = (SCRIPTS / name).read_bytes()
@@ -428,7 +483,7 @@ class HelperUpgradeToolTest(unittest.TestCase):
 
     def test_success_replaces_exactly_helper_and_manifest_with_root_owner_and_modes(self):
         result, state = self.scenario("pass")
-        self.assertEqual(result, "G1_GO4B_HELPER_UPGRADE=PASS")
+        self.assertEqual(result, self.TAG + "=PASS")
         new_helper = sha((SCRIPTS / "production-g1-mysql.py").read_bytes())[:12]
         new_manifest = sha((SCRIPTS / "production-g1-mysql-manifest.json").read_bytes())[:12]
         contract = sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())[:12]
@@ -437,7 +492,7 @@ class HelperUpgradeToolTest(unittest.TestCase):
 
     def test_second_run_is_idempotent(self):
         result, _ = self.scenario("idempotent")
-        self.assertEqual(result, "G1_GO4B_HELPER_UPGRADE=PASS || G1_GO4B_HELPER_UPGRADE=PASS;NOTE=already_upgraded")
+        self.assertEqual(result, f"{self.TAG}=PASS || {self.TAG}=PASS;NOTE=already_upgraded")
 
     def test_every_refusal_happens_before_any_write(self):
         old_helper, old_manifest = sha(b"old-helper\n")[:12], sha(b"old-manifest\n")[:12]
@@ -466,10 +521,10 @@ class HelperUpgradeToolTest(unittest.TestCase):
         """GO-4b failed on the VPS with verify_install_failed: `verify-install` also runs mysqld --validate-config,
         which needs the tmpdirs created only by provision-paths, so it exits 3 on every host between GO-4 and GO-5.1."""
         result, state = self.scenario("pass")
-        self.assertEqual(result, "G1_GO4B_HELPER_UPGRADE=PASS", self.output + self.stderr)
+        self.assertEqual(result, self.TAG + "=PASS", self.output + self.stderr)
         for name, static_only in self.static_only.items():
             self.assertEqual(static_only, "static_only=True", name)
-        text = (OPS / "go4b-upgrade-installed-helper.py").read_text(encoding="utf-8")
+        text = (OPS / self.TOOL).read_text(encoding="utf-8")
         self.assertNotIn('"verify-install"]', text)
         self.assertIn("verify_static_install()", text)
 
@@ -488,6 +543,170 @@ class HelperUpgradeToolTest(unittest.TestCase):
         contract = sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())[:12]
         self.assertEqual(self.parts(state), (sha(b"old-helper\n")[:12] + ":755:0:0", f"{contract}:644:0:0",
                                              sha(b"old-manifest\n")[:12] + ":644:0:0", "tmp=[]"))
+
+
+CHAIN_DRIVER = r"""
+import importlib.util, os, shutil, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("g1helper", "/pkg-src/production-g1-mysql.py")
+helper = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = helper
+spec.loader.exec_module(helper)
+MY, ALT, FINAL = "/etc/mysql/my.cnf", "/etc/alternatives/my.cnf", "/etc/mysql/mysql.cnf"
+BODY = b"!includedir /etc/mysql/conf.d/\n"
+
+def clean():
+    for path in (MY, ALT, FINAL, "/etc/mysql/mariadb.cnf", "/var/tmp/x.cnf"):
+        if os.path.lexists(path):
+            os.unlink(path)
+    for directory in ("/etc", "/etc/mysql", "/etc/alternatives"):
+        os.makedirs(directory, exist_ok=True)
+        os.chown(directory, 0, 0)
+        os.chmod(directory, 0o755)
+
+def write(path, data=BODY, mode=0o644, uid=0, gid=0):
+    with open(path, "wb") as stream:
+        stream.write(data)
+    os.chown(path, uid, gid)
+    os.chmod(path, mode)
+
+def ubuntu():
+    clean()
+    write(FINAL)
+    os.symlink(FINAL, ALT)
+    os.symlink(ALT, MY)
+
+def result(name):
+    try:
+        data = helper.check_base_config()
+        print("SCEN %s | PASS | %s" % (name, "bytes_ok" if data == BODY else "bytes_differ"))
+    except helper.Refused as exc:
+        print("SCEN %s | STOP | %s" % (name, exc))
+
+ubuntu(); result("ubuntu_chain")
+clean(); write(MY); result("regular_file")
+clean(); write(MY, mode=0o664); result("regular_file_mode_664")
+
+ubuntu(); os.unlink(MY); os.symlink(FINAL, MY); result("skips_alternatives")
+ubuntu(); os.unlink(MY); os.symlink("../alternatives/my.cnf", MY); result("relative_first_hop")
+ubuntu(); os.unlink(ALT); os.symlink("../mysql/mysql.cnf", ALT); result("relative_second_hop")
+ubuntu(); os.unlink(ALT); write("/etc/mysql/mariadb.cnf"); os.symlink("/etc/mysql/mariadb.cnf", ALT); result("mariadb_target")
+ubuntu(); os.unlink(ALT); write("/var/tmp/x.cnf"); os.symlink("/var/tmp/x.cnf", ALT); result("foreign_target")
+ubuntu(); os.unlink(ALT); os.symlink(MY, ALT); result("cycle_back_to_start")
+ubuntu(); os.unlink(FINAL); os.symlink(MY, FINAL); result("final_is_symlink_loop")
+ubuntu(); os.unlink(FINAL); result("final_missing")
+ubuntu(); os.unlink(ALT); result("middle_missing")
+ubuntu(); os.unlink(MY); result("first_missing")
+ubuntu(); os.chmod(FINAL, 0o664); result("final_mode_664")
+ubuntu(); os.chmod(FINAL, 0o666); result("final_mode_666")
+ubuntu(); os.chown(FINAL, 2, 0); result("final_owner_other")
+ubuntu(); os.chown(FINAL, 0, 2); result("final_group_other")
+ubuntu(); os.lchown(ALT, 2, 0); result("middle_link_owner_other")
+ubuntu(); os.lchown(MY, 0, 2); result("first_link_group_other")
+ubuntu(); os.chmod("/etc/mysql", 0o775); result("etc_mysql_group_writable")
+ubuntu(); os.chmod("/etc/alternatives", 0o777); result("alternatives_world_writable")
+ubuntu(); os.chmod("/etc", 0o775); result("etc_group_writable")
+ubuntu(); os.chown("/etc/alternatives", 2, 0); result("alternatives_owner_other")
+ubuntu()
+try:
+    helper.check_file(helper.BASE_CONFIG, owner="root", group="root", mode=0o644)
+    print("SCEN generic_check_file_on_symlink | PASS | accepted")
+except helper.Refused as exc:
+    print("SCEN generic_check_file_on_symlink | STOP | %s" % exc)
+"""
+
+
+@unittest.skipUnless(ready() or REQUIRE, "Docker / MySQL image unavailable")
+class BaseConfigChainRealFilesystemTest(unittest.TestCase):
+    """check_base_config() of the real helper as root on a real filesystem with Ubuntu's alternatives layout."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not ready():
+            raise AssertionError("G1_REQUIRE_REAL_MYSQL=1 but Docker or the MySQL image is unavailable")
+        files = {"/ops/chain.py": CHAIN_DRIVER.encode()}
+        for name in ("production-g1-mysql.py", "production_g1_mysql_contract.py"):
+            files["/pkg-src/" + name] = (SCRIPTS / name).read_bytes()
+        done = subprocess.run(["docker", "run", "--rm", "-i", "--entrypoint", "bash", TEST_IMAGE, "-c",
+                               "tar -x -C / && python3 -I -B /ops/chain.py"],
+                              input=tar_of(files), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=300)
+        cls.output, cls.stderr = done.stdout.decode(), done.stderr.decode()
+        cls.results = {}
+        for line in cls.output.splitlines():
+            if line.startswith("SCEN "):
+                name, verdict, detail = [part.strip() for part in line[5:].split(" | ")]
+                cls.results[name] = (verdict, detail)
+
+    def result(self, name):
+        self.assertIn(name, self.results, self.output + self.stderr)
+        return self.results[name]
+
+    def test_the_ubuntu_alternatives_chain_and_a_regular_file_are_accepted(self):
+        self.assertEqual(self.result("ubuntu_chain"), ("PASS", "bytes_ok"))
+        self.assertEqual(self.result("regular_file"), ("PASS", "bytes_ok"))
+
+    def test_every_deviation_from_the_chain_is_refused_with_its_own_code(self):
+        unexpected = ("STOP", "base_config_link_target_unexpected")
+        cases = {
+            "regular_file_mode_664": ("STOP", "managed_file_mode_invalid"),
+            "skips_alternatives": unexpected,
+            "relative_first_hop": unexpected,
+            "relative_second_hop": unexpected,
+            "mariadb_target": unexpected,
+            "foreign_target": unexpected,
+            "cycle_back_to_start": unexpected,
+            "final_is_symlink_loop": unexpected,
+            "final_missing": ("STOP", "base_config_unavailable"),
+            "middle_missing": ("STOP", "base_config_unavailable"),
+            "first_missing": ("STOP", "base_config_unavailable"),
+            "final_mode_664": ("STOP", "managed_file_mode_invalid"),
+            "final_mode_666": ("STOP", "managed_file_mode_invalid"),
+            "final_owner_other": ("STOP", "managed_file_owner_invalid"),
+            "final_group_other": ("STOP", "managed_file_owner_invalid"),
+            "middle_link_owner_other": ("STOP", "base_config_link_owner_invalid"),
+            "first_link_group_other": ("STOP", "base_config_link_owner_invalid"),
+            "etc_mysql_group_writable": ("STOP", "base_config_directory_unsafe"),
+            "alternatives_world_writable": ("STOP", "base_config_directory_unsafe"),
+            "etc_group_writable": ("STOP", "base_config_directory_unsafe"),
+            "alternatives_owner_other": ("STOP", "base_config_directory_unsafe"),
+        }
+        for name, expected in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.result(name), expected)
+
+    def test_the_generic_check_file_keeps_refusing_the_symlink(self):
+        self.assertEqual(self.result("generic_check_file_on_symlink"), ("STOP", "managed_file_type_invalid"))
+
+
+class Go4bUpgradeToolTest(HelperUpgradeToolBase, unittest.TestCase):
+    TOOL = "go4b-upgrade-installed-helper.py"
+    TAG = "G1_GO4B_HELPER_UPGRADE"
+
+
+class Go5hUpgradeToolTest(HelperUpgradeToolBase, unittest.TestCase):
+    """GO-5.2 base-config symlink hotfix: same safety properties plus the read-only chain check."""
+
+    TOOL = "go5h-upgrade-installed-helper.py"
+    TAG = "G1_GO5H_HELPER_UPGRADE"
+    EXTRA = "BASE_CONFIG_CHECK=PASS\\n"
+
+    def test_a_failing_base_config_chain_restores_the_old_bytes_and_names_the_code(self):
+        result, state = self.scenario("chain_fails")
+        self.assertEqual(result, "STOP;CODE=verify_static_install_failed:base_config_link_target_unexpected;ROLLED_BACK=yes")
+        contract = sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())[:12]
+        self.assertEqual(self.parts(state), (sha(b"old-helper\n")[:12] + ":755:0:0", f"{contract}:644:0:0",
+                                             sha(b"old-manifest\n")[:12] + ":644:0:0", "tmp=[]"))
+
+    def test_the_upgrade_requires_the_helper_to_report_the_chain_check(self):
+        result, state = self.scenario("chain_check_not_reported")
+        self.assertTrue(result.startswith("STOP;CODE=verify_static_install_failed"), result)
+        self.assertTrue(result.endswith("ROLLED_BACK=yes"), result)
+        self.assertEqual(self.parts(state)[0], sha(b"old-helper\n")[:12] + ":755:0:0")
+
+    def test_snippet_runs_the_chain_check_and_reports_its_refusal_without_a_traceback(self):
+        self.assertEqual(self.snippets["pass_fixture"][:1], ("rc=0",))
+        self.assertEqual(self.snippets["chain_refused_fixture"],
+                         ("rc=3", "STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL", "traceback=False", "pycache=False"))
 
 
 if __name__ == "__main__":
