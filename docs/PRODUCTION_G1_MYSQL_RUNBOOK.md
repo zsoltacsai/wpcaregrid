@@ -266,12 +266,12 @@ MySQL. GO-5.3 stays a separate Owner approval.
 ## GO-5.3 incident — interrupted `initialize` of `wpcaregrid-production` (recovery, read-only diagnosis)
 
 **Proven on the VPS:** `initialize` stopped with `G1_MYSQL=STOP;CODE=command_unavailable_or_timeout` after the 180 s limit; the
-`mysqld --initialize` process (PPID 1, 28 threads waiting) kept running for more than 7 minutes, wrote about 200 MB
+`mysqld --initialize` process (PPID 1, 28 threads waiting) kept running for more than 7 minutes, created about 200 MB of data in the datadir (Owner's report)
 (`mysql` directory, `auto.cnf`, redo/undo files) and an error log of only 655 bytes; the Owner stopped it with a verified
 `SIGTERM`; the datadir is preserved, the restore instance was not initialized, `mysql.service` (MainPID 1131) is unchanged.
 
 **Root causes (separated):**
-* *Proven (reproduced by `InitializerRecoveryTest.old_behaviour_leaves_orphan`):* the helper ran the chain
+* *Proven (reproduced by `InitializerRecoveryTest.test_the_old_subprocess_run_timeout_really_orphaned_the_child_chain`):* the helper ran the chain
   `runuser -> aa-exec -> mysqld` with the blocking run-with-timeout helper of `subprocess`; on a timeout that kills only its direct
   child (`runuser`), the rest is re-parented to init and keeps running, and nothing checked for it afterwards.
 * *Proven by measurement (real MySQL 8.4.13):* a normal `--initialize` takes about 5 s and logs, in order,
@@ -290,7 +290,7 @@ MySQL. GO-5.3 stays a separate Owner approval.
   `initialize_timeout_terminated_partial_datadir`, `initialize_interrupted_partial_datadir`,
   `initialize_orphan_process_after_exit`, `initialize_failed_partial_datadir` (non-zero exit) or `initialize_process_survived`;
   all of them print `INITIALIZE_DATADIR=PRESERVED;INITIALIZE_RETRY=NOT_ATTEMPTED`. The limit is 600 s (it was 180 s; a real run takes seconds);
-* a second start is refused while any process of the instance exists (`initialize_process_already_running`);
+* a second start is refused while any process of the instance exists (`initialize_process_already_running`) and while the error log is not empty (`initialize_log_not_empty`, so the proof can only come from this run's markers);
 * success needs proof (`initialize_completion_not_proven` otherwise, with `INITIALIZE_PROOF_MISSING=<token>`): exit 0, the exact datadir
   contents of a finished initialization (no symlink/special file/foreign owner anywhere in the tree), the server's own start line followed by its end
   line in the error log (never printed: it contains the generated root password), no `[ERROR]` line, log `mysql:mysql 0600`, no process, no socket/pid file;

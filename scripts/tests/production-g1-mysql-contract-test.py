@@ -942,14 +942,14 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
                 self.assertFalse(payload.startswith(b"_"))
 
         expected = {
-            "production-g1-mysql.py": "a3a1f056047db06f6f2a5c720978b4ac7378edb3cbedce9cb4a742eba20c12bc",
+            "production-g1-mysql.py": "27c7e1e6ba8536f7f64e9a4bd53ed31fe846678ff05b0a051ca2ca7abe705e1b",
             "production_g1_mysql_contract.py": "270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f",
-            "production-g1-mysql-manifest.json": "eb5e31b29a4b6dde727baeac3840f9079c62ca9bd6218fe7e39bba58f9a3f2cd",
+            "production-g1-mysql-manifest.json": "0af365c9515e2eff34d552c185c8d46fff3a5d5f7cade6d1ab3c0de1809ef911",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "34dcb6389bd68e137421c03cb7d7383a8fb127c39425fe9d2534451e55467b97")
+                         "9cb4ebb455bbd8c6096c10eb5ace2331e39e99b36fe3a4c63e69e97ed202e339")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):

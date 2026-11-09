@@ -380,6 +380,9 @@ def verify_paths(instance: Instance, *, for_init: bool = False) -> None:
             # A datadir that already carries initialization artefacts is never "empty enough": a second
             # initialization must be impossible, and the Owner has to recover it deliberately (never automatically).
             refuse("datadir_initialization_present" if entries & INIT_ARTEFACTS else "datadir_not_empty")
+        if log_path.stat().st_size != 0:
+            # Markers are proven from this run only: the error log must be empty when initialization starts.
+            refuse("initialize_log_not_empty")
 
 
 def verify_preflight(instance: Instance, *, for_init: bool = False, allow_running: bool = False) -> None:
@@ -437,10 +440,6 @@ INITIALIZE_TERM_GRACE_SECONDS = 30
 INITIALIZE_KILL_WAIT_SECONDS = 10
 PROC_ROOT = Path("/proc")
 INIT_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/nonexistent", "LANG": "C", "LC_ALL": "C"}
-
-
-class _InitInterrupted(BaseException):
-    """SIGTERM/SIGHUP/SIGINT received by the helper while the initializer runs."""
 
 
 def _live_processes(proc_root: Path = PROC_ROOT):
@@ -501,39 +500,35 @@ def _run_initializer(instance: Instance, argv: list[str], *, timeout: float = IN
                      proc_root: Path = PROC_ROOT, popen: Callable = subprocess.Popen) -> None:
     """Run the whole runuser -> aa-exec -> mysqld chain in its own session and never leave any of it behind.
 
-    The previous implementation used the blocking run-with-timeout helper of subprocess, which on a timeout kills only its direct child
-    (runuser); the rest of the chain was re-parented to init and kept running (PPID=1) for minutes."""
+    The previous implementation used the blocking run-with-timeout helper of subprocess, which on a timeout kills only its direct
+    child (runuser); the rest of the chain was re-parented to init and kept running (PPID=1) for minutes.
+
+    Signals sent to the helper (SIGTERM/SIGHUP/SIGINT) only set a flag that the wait loop polls, so no exception can interrupt the
+    cleanup half-way; the chain itself inherits no blocked signals and starts with the default action for them (verified by test)."""
     if _instance_processes(instance, proc_root=proc_root):
         refuse("initialize_process_already_running")
-
-    def interrupted(signum, frame):
-        raise _InitInterrupted()
-
+    received = []
     previous = {}
     try:
         for name in ("SIGTERM", "SIGHUP", "SIGINT"):
-            previous[name] = signal.signal(getattr(signal, name), interrupted)
-        masked = {signal.SIGTERM, signal.SIGHUP, signal.SIGINT}
-        signal.pthread_sigmask(signal.SIG_BLOCK, masked)  # a signal arriving during the spawn is delivered once the pid is known
-        try:
-            proc = popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         close_fds=True, env=INIT_ENV, start_new_session=True)
-        except BaseException:
-            signal.pthread_sigmask(signal.SIG_UNBLOCK, masked)
-            raise
+            previous[name] = signal.signal(getattr(signal, name), lambda signum, frame: received.append(signum))
+        proc = popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     close_fds=True, env=INIT_ENV, start_new_session=True)
         pgid = proc.pid
-        outcome = None
-        rc = None
-        try:
-            signal.pthread_sigmask(signal.SIG_UNBLOCK, masked)
-            rc = proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            outcome = "timeout"
-        except (_InitInterrupted, KeyboardInterrupt):
-            outcome = "interrupted"
+        deadline = time.monotonic() + timeout
+        outcome, rc = None, None
+        while True:
+            try:
+                rc = proc.wait(timeout=max(0.0, min(0.5, deadline - time.monotonic())))
+                break
+            except subprocess.TimeoutExpired:
+                if received:
+                    outcome = "interrupted"
+                    break
+                if time.monotonic() >= deadline:
+                    outcome = "timeout"
+                    break
         if outcome is not None:
-            for name in previous:  # no second interruption while the chain is being stopped
-                signal.signal(getattr(signal, name), signal.SIG_IGN)
             cleaned = _terminate_group(pgid, instance, grace=grace, kill_wait=kill_wait, proc_root=proc_root)
             try:
                 proc.wait(timeout=kill_wait)
@@ -546,13 +541,13 @@ def _run_initializer(instance: Instance, argv: list[str], *, timeout: float = IN
                 refuse("initialize_process_survived")
             refuse("initialize_timeout_terminated_partial_datadir" if outcome == "timeout"
                    else "initialize_interrupted_partial_datadir")
-        left = _instance_processes(instance, group=pgid, proc_root=proc_root)
-        if left:
-            for name in previous:
-                signal.signal(getattr(signal, name), signal.SIG_IGN)
+        if _instance_processes(instance, group=pgid, proc_root=proc_root):
             _terminate_group(pgid, instance, grace=grace, kill_wait=kill_wait, proc_root=proc_root)
             print("INITIALIZE_DATADIR=PRESERVED;INITIALIZE_RETRY=NOT_ATTEMPTED")
             refuse("initialize_orphan_process_after_exit")
+        if received:
+            print("INITIALIZE_DATADIR=PRESERVED;INITIALIZE_RETRY=NOT_ATTEMPTED")
+            refuse("initialize_interrupted_partial_datadir")
         if rc != 0:
             print("INITIALIZE_DATADIR=PRESERVED;INITIALIZE_RETRY=NOT_ATTEMPTED")
             refuse("initialize_failed_partial_datadir")
@@ -603,7 +598,7 @@ def _initialization_proof(instance: Instance, *, proc_root: Path = PROC_ROOT) ->
                 stack.append(path)
     log_fd = None
     try:
-        log_fd = os.open(instance.log_file, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        log_fd = os.open(instance.log_file, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
         st = os.fstat(log_fd)
         if not stat.S_ISREG(st.st_mode) or st.st_uid != mysql_uid or stat.S_IMODE(st.st_mode) != 0o600:
             not_proven("log")

@@ -1656,6 +1656,7 @@ CHAIN = (
     "mode = sys.argv[1]" + NL +
     "if mode == 'fail': sys.exit(7)" + NL +
     "child = [sys.executable, '-c', 'import signal, time' + chr(10) + ('signal.signal(signal.SIGTERM, signal.SIG_IGN)' + chr(10) if mode == 'stubborn' else '') + 'time.sleep(300)'] + sys.argv[2:]" + NL +
+    "if mode == 'graceful': child = [sys.executable, '-c', 'import signal, sys, time' + chr(10) + 'signal.signal(signal.SIGTERM, lambda *a: (open(' + chr(34) + '/tmp/got-term' + chr(34) + ', ' + chr(34) + 'w' + chr(34) + ').write(' + chr(34) + 'x' + chr(34) + '), sys.exit(0)))' + chr(10) + 'time.sleep(300)'] + sys.argv[2:]" + NL +
     "p = subprocess.Popen(child)" + NL +
     "if mode == 'leave': sys.exit(0)" + NL +
     "p.wait()" + NL)
@@ -1684,6 +1685,7 @@ out("diag_final_line", text.strip().splitlines()[-1])
 # ---- 2. mutations of a complete datadir: the proof and the diagnostic must agree -------------------------------
 def restore():
     shutil.rmtree(INST.datadir); sh("cp", "-a", SNAP, INST.datadir)
+    if os.path.lexists(INST.log_file): os.unlink(INST.log_file)
     open(INST.log_file, "wb").write(snap_log); os.chown(INST.log_file, UID, GID); os.chmod(INST.log_file, 0o600)
     for p in (INST.socket, INST.pid_file):
         if os.path.lexists(p): os.unlink(p)
@@ -1733,6 +1735,17 @@ out("partial_diag", diag())
 out("partial_second_init_blocked", refusal(H.verify_paths, INST, for_init=True))
 out("partial_log_has_start_no_end", "yes" if (b"MY-015017" in open(INST.log_file, "rb").read() and b"MY-015018" not in open(INST.log_file, "rb").read()) else "NO")
 
+# a FIFO planted as the error log must neither hang the helper nor the diagnostic
+restore(); os.unlink(INST.log_file); os.mkfifo(INST.log_file); os.chown(INST.log_file, UID, GID); os.chmod(INST.log_file, 0o600)
+signal.alarm(30)
+out("fifo_log", "proof=%s | diag=%s" % (proof(), diag()))
+signal.alarm(0)
+restore()
+open(INST.datadir + "/evil" + NL, "w").close(); os.chown(INST.datadir + "/evil" + NL, UID, GID)
+facts = D.classify(NAME, D.INSTANCES[NAME])[2]
+out("unsafe_name_is_masked", "%s | newline_in_output=%s" % (facts["top"].count("<unsafe-name>"), any(NL in n for n in facts["top"])))
+restore()
+
 # ---- 4. fresh provisioned state ------------------------------------------------------------------------------
 reset()
 out("empty_diag", diag())
@@ -1741,6 +1754,7 @@ open(INST.datadir + "/stray.txt", "w").close(); os.chown(INST.datadir + "/stray.
 out("stray_file_blocked", refusal(H.verify_paths, INST, for_init=True))
 reset(); open(INST.log_file, "w").write("x")
 out("empty_datadir_nonempty_log", diag())
+out("empty_datadir_nonempty_log_blocked", refusal(H.verify_paths, INST, for_init=True))
 reset(); shutil.rmtree(INST.datadir)
 out("datadir_missing", diag())
 
@@ -1779,6 +1793,27 @@ except subprocess.TimeoutExpired:
     pass
 time.sleep(0.5)
 out("old_behaviour_leaves_orphan", "yes" if len(procs()) >= 1 else "NO")
+kill_all()
+
+# the chain gets SIGTERM first and may exit gracefully (not only SIGKILL), and starts with no blocked signals
+reset(); kill_all()
+if os.path.exists("/tmp/got-term"): os.unlink("/tmp/got-term")
+t0 = time.monotonic()
+res = refusal(H._run_initializer, INST, chain("graceful"), timeout=1.5, grace=8, kill_wait=2)
+out("graceful_term_reaches_the_chain", "%s | term_seen=%s | fast=%s | left=%d" % (res, os.path.exists("/tmp/got-term"), time.monotonic() - t0 < 6, len(procs())))
+kill_all()
+reset(); kill_all()
+probe = ("import re; line = [l for l in open('/proc/self/status') if l.startswith('SigBlk')][0]; "
+         "open('/tmp/sigblk', 'w').write(line.split()[1])")
+res = refusal(H._run_initializer, INST, [sys.executable, "-c", probe, SUFFIX], timeout=20, **FAST)
+blk = int(open("/tmp/sigblk").read(), 16)
+out("child_signal_mask", "%s | blocked_term_hup_int=%s" % (res, bool(blk & (1 | 2 | 16384))))
+reset(); kill_all()
+threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+threading.Timer(1.8, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+threading.Timer(2.4, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
+res = refusal(H._run_initializer, INST, chain("stubborn"), timeout=30, grace=3, kill_wait=3)
+out("signals_during_cleanup_do_not_escape", "%s | left=%d" % (res, len(procs())))
 kill_all()
 
 # interruption of the helper itself (SIGTERM during the wait)
@@ -1912,6 +1947,7 @@ class InitializerRecoveryTest(unittest.TestCase):
         self.assertEqual(self.get("stray_file_blocked"), "datadir_not_empty")
         self.assertEqual(self.get("empty_datadir_nonempty_log"), "UNCLEAR:datadir_empty_but_log_not_empty")
         self.assertEqual(self.get("datadir_missing"), "UNCLEAR:datadir_missing")
+        self.assertEqual(self.get("empty_datadir_nonempty_log_blocked"), "initialize_log_not_empty")
 
     def test_a_timeout_or_interruption_never_leaves_any_part_of_the_process_chain_running(self):
         self.assertEqual(self.get("chain_timeout"), "initialize_timeout_terminated_partial_datadir | left=0")
@@ -1926,6 +1962,16 @@ class InitializerRecoveryTest(unittest.TestCase):
 
     def test_the_old_subprocess_run_timeout_really_orphaned_the_child_chain(self):
         self.assertEqual(self.get("old_behaviour_leaves_orphan"), "yes")
+
+    def test_sigterm_reaches_the_chain_it_starts_unblocked_and_signals_during_cleanup_cannot_escape(self):
+        self.assertEqual(self.get("graceful_term_reaches_the_chain"),
+                         "initialize_timeout_terminated_partial_datadir | term_seen=True | fast=True | left=0")
+        self.assertEqual(self.get("child_signal_mask"), "NO_REFUSAL | blocked_term_hup_int=False")
+        self.assertEqual(self.get("signals_during_cleanup_do_not_escape"), "initialize_interrupted_partial_datadir | left=0")
+
+    def test_a_fifo_as_error_log_hangs_nothing_and_unsafe_names_are_masked(self):
+        self.assertEqual(self.get("fifo_log"), f"proof={self.PROOF} | diag=UNCLEAR:log_type_owner_or_mode")
+        self.assertEqual(self.get("unsafe_name_is_masked"), "1 | newline_in_output=False")
 
     def test_a_running_initializer_blocks_a_second_start_and_the_group_is_the_helpers_own_child(self):
         self.assertEqual(self.get("second_initializer_refused"), "initialize_process_already_running | started=False")

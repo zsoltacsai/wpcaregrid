@@ -105,7 +105,7 @@ def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
     seen, size = 0, 0
     top = sorted(os.listdir(datadir))
     facts["entries"] = len(top)
-    facts["top"] = [n if SAFE_NAME.match(n) else "<unsafe-name>" for n in top[:40]]
+    facts["top"] = [n if SAFE_NAME.fullmatch(n) else "<unsafe-name>" for n in top[:40]]
     stack = [datadir]
     while stack and seen < WALK_LIMIT:
         current = stack.pop()
@@ -143,7 +143,7 @@ def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
             unclear.append("log_type_owner_or_mode")
         else:
             facts["log_size"] = info.st_size
-            fd = os.open(R(spec["log"]), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            fd = os.open(R(spec["log"]), os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
             with os.fdopen(fd, "rb") as handle:
                 log = handle.read(LOG_LIMIT)
     except OSError:
@@ -190,7 +190,7 @@ def kernel_denials(run=default_run):
             continue
         fields = dict(re.findall(r'(\w+)="([^"]*)"', line))
         key = tuple(fields.get(k, "?") for k in ("profile", "operation", "name", "denied_mask"))
-        if all(SAFE_PATH.match(part) for part in key):
+        if all(SAFE_PATH.fullmatch(part) for part in key):
             counts[key] = counts.get(key, 0) + 1
     return counts
 
