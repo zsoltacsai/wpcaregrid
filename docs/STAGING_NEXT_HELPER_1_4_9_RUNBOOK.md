@@ -26,6 +26,9 @@ PHP 8.5, FPM socket, nginx route, application directory, installer directories a
 reviewed step); `STOP` = an unexpected or active state (existing 1.4.9 files, fence/lock/gate, workers,
 unexpected sudoers rule, symlink or wrong ownership in the staging-next tree): stop and report.
 
+Note: the preflight parses the nginx configuration files itself (it never runs `nginx`). The installer later
+runs the authoritative `nginx -t`/`nginx -T` check; a preflight PASS therefore does not replace that check.
+
 ## Step 1 - prepare the six files on the Owner machine (read-only for the host)
 
 ```sh

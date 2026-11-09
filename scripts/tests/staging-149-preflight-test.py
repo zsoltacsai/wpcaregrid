@@ -170,6 +170,20 @@ class Fixture(unittest.TestCase):
         return source
 
 
+class UidHost(M.Host):
+    """Host whose lstat reports chosen owners, so root/deploy/test-user uids can differ."""
+
+    overrides = {}
+
+    def lstat(self, path):
+        info, err = super().lstat(path)
+        if info is not None and path in self.overrides:
+            fields = list(info)[:10]
+            fields[4] = self.overrides[path]
+            info = os.stat_result(tuple(fields))
+        return info, err
+
+
 class OutcomeTests(Fixture):
     def test_clean_host_passes_and_is_a_pure_read(self):
         before = self.snapshot()
@@ -448,6 +462,97 @@ class HardeningRoundTests(Fixture):
 
     def test_shebang_has_no_extra_arguments(self):
         self.assertEqual(SOURCE.splitlines()[0], "#!/usr/bin/python3")
+
+
+class DistinctUidTests(Fixture):
+    def run_as(self, overrides, euid=None):
+        UidHost.overrides = overrides
+        host = UidHost(root=self.root, euid=UID if euid is None else euid, root_uid=UID, runner=self.runner,
+                       hostname="stg1")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            M.main(host)
+        lines = out.getvalue().splitlines()
+        return lines[-1], lines
+
+    def test_each_root_chain_component_must_be_root_owned(self):
+        for path in ("/", "/etc", "/etc/wpcaregrid-deploy", "/etc/wpcaregrid-deploy/profiles", "/usr", "/usr/local",
+                     "/usr/local/libexec", "/usr/local/libexec/wpcaregrid-deploy",
+                     "/usr/local/libexec/wpcaregrid-deploy/staging-next", "/etc/sudoers.d"):
+            final, _ = self.run_as({path: UID + 5})
+            self.assertEqual(final, "STAGING_149_PREFLIGHT=BLOCKED;CODE=installer_directory_metadata", path)
+
+    def test_root_chain_component_must_be_a_directory(self):
+        shutil.rmtree(self.path("/etc/wpcaregrid-deploy"))
+        self.put("/etc/wpcaregrid-deploy", b"a file")
+        final, _, lines = self.result()
+        self.assertNotEqual(final, "STAGING_149_PREFLIGHT=PASS")
+        self.assertTrue(any(l.startswith("CHECK|installer.dir:/etc/wpcaregrid-deploy|MISMATCH") for l in lines))
+
+    def test_each_staged_object_must_be_owned_by_deploy(self):
+        self.stage_sources()
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=PASS")
+        objects = [M.SOURCE_DIR, M.INSTALLER] + [f"{M.SOURCE_DIR}/{n}" for n in M.SOURCE_PINS]
+        for path in objects:
+            final, _ = self.run_as({path: UID + 5})
+            self.assertEqual(final, "STAGING_149_PREFLIGHT=BLOCKED;CODE=staged_source_mismatch", path)
+        for parent in ("/home", "/home/deploy"):
+            os.chmod(self.path(parent), 0o777)
+            self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=staged_source_mismatch", parent)
+            os.chmod(self.path(parent), 0o755)
+
+    def test_staged_object_with_wrong_mode_or_type_is_blocked(self):
+        self.stage_sources()
+        os.chmod(self.path(M.INSTALLER), 0o644)
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=staged_source_mismatch")
+        os.chmod(self.path(M.INSTALLER), 0o600)
+        os.chmod(self.path(M.SOURCE_DIR), 0o755)
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=staged_source_mismatch")
+
+    def test_related_sudoers_files_need_root_ownership_and_no_group_other_write(self):
+        self.put("/etc/sudoers.d/wpcaregrid-staging-next-1.4.8", "# nothing\n", 0o440)
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=PASS")
+        final, _ = self.run_as({"/etc/sudoers.d/wpcaregrid-staging-next-1.4.8": UID + 5})
+        self.assertEqual(final, "STAGING_149_PREFLIGHT=STOP;CODE=unexpected_sudoers_state")
+        os.chmod(self.path("/etc/sudoers.d/wpcaregrid-staging-next-1.4.8"), 0o660)
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=STOP;CODE=unexpected_sudoers_state")
+
+    def test_incoming_directory_must_belong_to_the_deploy_uid(self):
+        self.put(f"{M.BASE}/incoming", directory=True, mode=0o700)
+        self.put("/etc/passwd", f"deploy:x:{UID}:{UID}::/h:/bin/sh\ndeploy-staging-next:x:{UID}:{UID}::/n:/sbin/nologin\n")
+        with mock.patch.object(M, "DEPLOY_UID", UID):
+            self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=PASS")
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=STOP;CODE=staging_next_incoming_metadata")
+
+    def test_not_root_fails_fast_with_only_the_identity_line(self):
+        final, lines = self.run_as({}, euid=UID + 999)
+        self.assertEqual(final, "STAGING_149_PREFLIGHT=BLOCKED;CODE=not_root")
+        self.assertEqual([l for l in lines if l.startswith("CHECK|")], [lines[1]])
+        self.assertEqual(self.commands, [])  # no command was run before the identity check
+
+    def test_supervisor_exit_codes(self):
+        rows = b"wpcaregrid-staging-next-default   STOPPED   Nov 09 01:00 AM\n"
+        self.extra_run["supervisorctl"] = (3, rows)
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=PASS")
+        self.extra_run["supervisorctl"] = (1, rows)
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=worker_state_unknown")
+        self.extra_run["supervisorctl"] = (0, b"")
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=PASS")
+
+    def test_route_requires_ssl_on_443_and_a_php85_binary_version(self):
+        for listen in ("listen 443;", "listen 8443 ssl;", "listen 80;"):
+            self.put("/etc/nginx/conf.d/sites.conf", VHOST.replace("listen 443 ssl;", listen, 1))
+            self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=nginx_route_mismatch", listen)
+        self.put("/etc/nginx/conf.d/sites.conf", VHOST.replace("listen 443 ssl;", "listen [::]:443 ssl;", 1))
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=PASS")
+        self.php_version = b"8.4.9"
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=BLOCKED;CODE=php85_unavailable")
+
+    def test_comment_style_sudoers_text_is_not_an_include_but_a_real_include_is(self):
+        self.put("/etc/sudoers.d/README", "# include the following notes\n", 0o640)
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=PASS")
+        self.put("/etc/sudoers.d/README", "#includedir /etc/other.d\n", 0o640)
+        self.assertEqual(self.run_as({})[0], "STAGING_149_PREFLIGHT=STOP;CODE=unexpected_sudoers_state")
 
 
 class StagedSourceTests(Fixture):

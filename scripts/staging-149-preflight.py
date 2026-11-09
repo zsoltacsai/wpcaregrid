@@ -106,7 +106,7 @@ class Host:
             return None
 
     def read_nginx(self, path, limit=2_000_000):
-        return self.read_follow(path, ("/etc/nginx", "/etc/letsencrypt", "/usr/share/nginx"), limit)
+        return self.read_follow(path, ("/etc/nginx", "/usr/share/nginx"), limit)
 
     def read_follow(self, path, trees, limit=262144):
         """Like read(), but follows a symlink only when its final target stays inside one of `trees`."""
@@ -415,7 +415,7 @@ def check_host_and_resources(h, r):
         info, _ = h.lstat(name)
         r.line("env.not_production:" + name, "MISMATCH" if info else "EXPECTED_ABSENT", name,
                "STOP" if info else None, "production_paths_present")
-    osr = (h.read_follow("/etc/os-release", ("/usr/lib", "/etc")) or b"").decode("utf-8", "replace")
+    osr = (h.read_follow("/etc/os-release", ("/usr/lib",)) or b"").decode("utf-8", "replace")
     pretty = re.search(r'^PRETTY_NAME="?([^"\n]*)', osr, re.M)
     version = re.search(r'^VERSION_ID="?([^"\n]*)', osr, re.M)
     r.line("os.release", "INFO" if version else "UNKNOWN",
@@ -626,7 +626,7 @@ def check_identity_and_helpers(h, r):
             continue
         for number, line in enumerate(raw.decode("utf-8", "replace").splitlines(), 1):
             line = line.strip()
-            directive = re.match(r"[#@]\s*include(dir)?\s", line)
+            directive = re.match(r"[#@]include(dir)?\s", line)
             if directive and n != "sudoers":
                 bad.append(f"{n}:include@{number}")
             elif line and not line.startswith("#") and ("deploy-staging-next" in line or "/wpcaregrid-deploy/staging-next/" in line) \
