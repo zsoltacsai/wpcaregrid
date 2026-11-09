@@ -112,3 +112,7 @@ Preconditions (read-only): CHECK1 passes with the new expectations; the installe
 **Rollback:** close the gate; `git checkout f5e9c562b4d896d944104f375008e04b1a7ebc21`, `composer install --no-dev --optimize-autoloader`; restore the backed-up `.env` (verify its hash); reload PHP-FPM; reopen the gate. The database is untouched by this release (no migrations), so no restore is needed; the dump exists only as a precaution.
 
 Origin bypass check (read-only, from a host outside Cloudflare's ranges): `curl -sk -o /dev/null -w '%{http_code}\n' --resolve staging-next.wpcaregrid.com:443:<origin-ip> https://staging-next.wpcaregrid.com/up` must not return `200`.
+
+## Scheduler (2026-11-09)
+
+- Staging-next scheduler tasks are governed by one central fail-closed allowlist (`App\Release\StagingSchedulePolicy`); audit, rules and the root activation procedure: [STAGING_SCHEDULER.md](STAGING_SCHEDULER.md). Production and legacy staging schedules are unchanged.

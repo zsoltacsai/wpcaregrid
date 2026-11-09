@@ -90,15 +90,6 @@ final class StagingActiveProfile
             && config('marketing_release.staging_active_features.external_services') !== true;
     }
 
-    /**
-     * True on staging-next while Stripe is not proven to be in test mode: scheduled
-     * Stripe commands (webhook drain, reconciliation, offer expiry) do not run.
-     */
-    public static function stripeClosed(): bool
-    {
-        return self::isStagingNextEnvironment() && app(self::class)->stripeProblems() !== [];
-    }
-
     /** @return list<string> */
     public function identityProblems(): array
     {
