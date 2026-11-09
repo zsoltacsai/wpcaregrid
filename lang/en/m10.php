@@ -62,7 +62,6 @@ return [
         'platform.backup_stale' => 'Platform database backup is stale',
         'platform.recovery_degraded' => 'Platform recovery readiness is degraded',
         'queue.backlog' => 'Queue backlog is elevated',
-        'worker.paused_by_profile' => 'Queue worker is intentionally paused by the environment profile',
         'worker.stale' => 'Queue worker progress is stale',
         'scheduler.stale' => 'Scheduler heartbeat is stale',
         'database.unavailable' => 'Application database is unavailable',
