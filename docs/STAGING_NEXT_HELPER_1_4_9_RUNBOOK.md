@@ -49,7 +49,11 @@ atomically, rolls back only its own objects on failure, re-reads and re-hashes e
 
 * `SSH_TARGET` (default `caregrid-staging`) must log in as `deploy`; anything else is a STOP on the host.
 * `MODE=check` verifies all preconditions and the payload on the host and writes **nothing**; run it first.
-* Result line: `STAGING_149_STAGE=CHECK_PASS` / `PASS` / `STOP;CODE=...`.
+* Run it with `bash` (the file is not executable). Result line: `STAGING_149_STAGE=CHECK_PASS` / `PASS` / `STOP;CODE=...`;
+  exactly one such line is printed (the host's own result is shown as `REMOTE_RESULT=`). In stage mode the driver
+  cross-checks that the host reported all six files with the pinned digests, mode 0600 and the expected paths;
+  a bare `PASS` from the host is not trusted. A second run ends in `STOP;CODE=destination_exists` (create-only).
+* SIGHUP/SIGTERM/SIGINT on the host program and any read-back failure roll back what the run created.
 
 Afterwards re-run the read-only root preflight: `source.staged` must be `REQUIRED_PRESENT` and the result `PASS`.
 

@@ -64,6 +64,7 @@ import hashlib
 import os
 import pwd
 import secrets
+import signal
 import stat
 import sys
 
@@ -160,7 +161,35 @@ def fsync_dir(path):
         os.close(fd)
 
 
+def readback(uid):
+    """Independent read-back of the final objects (inside the rollback scope)."""
+    need_dir(SRC, owner=uid, exact_mode=0o700)
+    if sorted(os.listdir(SRC)) != sorted(n for n in PINS if n != INSTALLER_NAME):
+        stop("readback_contents")
+    lines = []
+    for path, name in [(SRC + "/" + n, n) for n in PINS if n != INSTALLER_NAME] + [(INST, INSTALLER_NAME)]:
+        info = lst(path)
+        if info is None or not stat.S_ISREG(info.st_mode) or info.st_uid != uid or stat.S_IMODE(info.st_mode) != 0o600 \
+                or info.st_nlink != 1:
+            stop("readback_metadata:" + name)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            digest = hashlib.sha256(os.read(fd, MAX_FILE + 1)).hexdigest()
+        finally:
+            os.close(fd)
+        if digest != PINS[name]:
+            stop("readback_hash:" + name)
+        lines.append("FILE|" + path + "|" + digest + "|0600|uid=" + str(info.st_uid))
+    return lines
+
+
+def terminated(signum, frame):
+    stop("terminated_by_signal_" + str(signum))
+
+
 def main():
+    for name in ("SIGHUP", "SIGTERM", "SIGINT"):
+        signal.signal(getattr(signal, name), terminated)
     uid = os.geteuid()
     if uid == 0:
         stop("must_not_run_as_root")
@@ -209,6 +238,7 @@ def main():
         os.rmdir(temp)
         temp = None
         fsync_dir(PRIV)
+        report = readback(uid)
     except BaseException as error:
         # roll back only what this run created (temporary tree first, then published objects)
         if temp is not None:
@@ -237,22 +267,8 @@ def main():
             raise
         stop("stage_failed:" + type(error).__name__)
 
-    # independent read-back of the final objects
-    need_dir(SRC, owner=uid, exact_mode=0o700)
-    if sorted(os.listdir(SRC)) != sorted(n for n in PINS if n != INSTALLER_NAME):
-        stop("readback_contents")
-    for path, name in [(SRC + "/" + n, n) for n in PINS if n != INSTALLER_NAME] + [(INST, INSTALLER_NAME)]:
-        info = lst(path)
-        if info is None or not stat.S_ISREG(info.st_mode) or info.st_uid != uid or stat.S_IMODE(info.st_mode) != 0o600:
-            stop("readback_metadata:" + name)
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        try:
-            digest = hashlib.sha256(os.read(fd, MAX_FILE + 1)).hexdigest()
-        finally:
-            os.close(fd)
-        if digest != PINS[name]:
-            stop("readback_hash:" + name)
-        print("FILE|" + path + "|" + digest + "|0600|uid=" + str(info.st_uid))
+    for line in report:
+        print(line)
     print("STAGING_149_STAGE=PASS")
 
 
@@ -270,13 +286,47 @@ B64="$(printf '%s' "$REMOTE_PY" | base64 | tr -d '\n')"
 # 4. run it on the host as the SSH login user (the program refuses anything but `deploy`, and refuses root)
 set +e
 ssh -T -o BatchMode=yes -o ConnectTimeout=15 "$SSH_TARGET" \
-  "python3 -I -c \"import base64;exec(base64.b64decode('${B64}'))\"" < "${WORK}/payload" | tee "${WORK}/out"
-status=${PIPESTATUS[0]}
+  "python3 -I -c \"import base64;exec(base64.b64decode('${B64}'))\"" < "${WORK}/payload" > "${WORK}/out"
+status=$?
 set -e
+# Show the host's report; its own result line is renamed so that exactly one STAGING_149_STAGE= line exists:
+# the driver's final verdict below.
+sed 's/^STAGING_149_STAGE=/REMOTE_RESULT=/' "${WORK}/out" || true
+
+# In stage mode the host must have reported exactly one FILE line per pin, with our digest, mode 0600 and the
+# expected path suffix; a bare "PASS" line is not trusted on its own.
+verify_stage_lines() {
+  local total=${#PINS[@]} entry name pin rel
+  [ "$(grep -c '^FILE|' "${WORK}/out" || true)" -eq "$total" ] || return 1
+  for entry in "${PINS[@]}"; do
+    name="${entry%% *}"; pin="${entry##* }"
+    case "$name" in
+      install_*) rel="/.private/wpcaregrid-staging-next-helper-installer-1.4.9.py" ;;
+      *) rel="/.private/wpcg-staging-next-helper-1.4.9/${name}" ;;
+    esac
+    awk -F'|' -v rel="$rel" -v pin="$pin" \
+      '$1=="FILE" && length($2)>=length(rel) && substr($2, length($2)-length(rel)+1)==rel && $3==pin && $4=="0600" {f=1} END {exit f?0:1}' \
+      "${WORK}/out" || return 1
+  done
+}
 
 LAST="$(tail -n 1 "${WORK}/out" 2>/dev/null || true)"
 case "$LAST" in
-  "STAGING_149_STAGE=PASS"|"STAGING_149_STAGE=CHECK_PASS") [ "$status" -eq 0 ] || stop "remote_exit_${status}" ; exit 0 ;;
-  STAGING_149_STAGE=STOP\;CODE=*) exit 2 ;;
+  "STAGING_149_STAGE=PASS")
+    [ "$status" -eq 0 ] || stop "remote_exit_${status}"
+    [ "$MODE" = stage ] || stop "unexpected_pass_in_check_mode"
+    verify_stage_lines || stop "remote_report_does_not_match_pins"
+    echo "LOCAL_CROSSCHECK=PASS;REPORTED_FILES=${#PINS[@]}"
+    echo "STAGING_149_STAGE=PASS"
+    exit 0 ;;
+  "STAGING_149_STAGE=CHECK_PASS")
+    [ "$status" -eq 0 ] || stop "remote_exit_${status}"
+    [ "$MODE" = check ] || stop "unexpected_check_pass_in_stage_mode"
+    echo "STAGING_149_STAGE=CHECK_PASS"
+    exit 0 ;;
+  STAGING_149_STAGE=STOP\;CODE=*)
+    CODE="${LAST#STAGING_149_STAGE=STOP;CODE=}"
+    case "$CODE" in ""|*[!A-Za-z0-9_:./-]*) CODE=remote_stop_unparseable ;; esac
+    stop "$CODE" ;;
   *) stop "no_valid_result_ssh_exit_${status}" ;;
 esac

@@ -267,6 +267,81 @@ class StageTests(Remote):
         self.assertTrue(all(str(self.PRIV) in p for p in changed), changed)
 
 
+@unittest.skipIf(IS_ROOT, "the host program refuses root by design")
+class HardeningTests(Remote):
+    PRIV = property(lambda self: self.home / ".private")
+    SRC = property(lambda self: self.home / ".private" / "wpcg-staging-next-helper-1.4.9")
+
+    def test_home_must_be_owned_by_the_login_user(self):
+        real = os.lstat
+        wrong = types.SimpleNamespace()
+
+        def fake(path, *a, **k):
+            info = real(path, *a, **k)
+            if str(path) == str(self.home):
+                fields = list(info)[:10]
+                fields[4] = os.getuid() + 1
+                return os.stat_result(tuple(fields))
+            return info
+
+        before = self.snapshot()
+        with mock.patch.object(os, "lstat", fake):
+            lines, status = self.run_remote(frame())
+        self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=directory_owner:" + str(self.home))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_destination_that_appears_before_publication_is_never_replaced(self):
+        calls = {"n": 0}
+        original = os.fsync
+
+        def racing(fd):
+            calls["n"] += 1
+            if calls["n"] == 7:  # after all files and both directory syncs, before the re-check
+                self.SRC.mkdir(mode=0o700)
+            return original(fd)
+
+        with mock.patch.object(os, "fsync", racing):
+            lines, status = self.run_remote(frame())
+        self.assertTrue(lines[-1].startswith("STAGING_149_STAGE=STOP;CODE=stage_failed:"), lines)
+        self.assertEqual(sorted(p.name for p in self.PRIV.iterdir()), [self.SRC.name])  # only the intruder remains
+        self.assertEqual(list(self.SRC.iterdir()), [])
+
+    def test_a_failing_readback_rolls_everything_back(self):
+        before = self.snapshot()
+        code = self.code().replace("digest = hashlib.sha256(os.read(fd, MAX_FILE + 1)).hexdigest()",
+                                   "digest = '0' * 64")
+        out = io.StringIO()
+        stdin = types.SimpleNamespace(buffer=io.BytesIO(frame()))
+        with contextlib.redirect_stdout(out), mock.patch.object(sys, "stdin", stdin):
+            with self.assertRaises(SystemExit) as raised:
+                exec(compile(code, "<remote>", "exec"), {"__name__": "remote"})
+        self.assertEqual(raised.exception.code, 2)
+        self.assertTrue(out.getvalue().splitlines()[-1].startswith("STAGING_149_STAGE=STOP;CODE=readback_hash:"))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_termination_signals_roll_back_instead_of_leaving_partial_state(self):
+        import signal
+        before = self.snapshot()
+        original = os.fsync
+        calls = {"n": 0}
+
+        def killed(fd):
+            calls["n"] += 1
+            if calls["n"] == 4:
+                os.kill(os.getpid(), signal.SIGTERM)
+            return original(fd)
+
+        old = signal.getsignal(signal.SIGTERM)
+        try:
+            with mock.patch.object(os, "fsync", killed):
+                lines, status = self.run_remote(frame())
+        finally:
+            for name in ("SIGHUP", "SIGTERM", "SIGINT"):
+                signal.signal(getattr(signal, name), signal.SIG_DFL if name != "SIGINT" else signal.default_int_handler)
+        self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=terminated_by_signal_" + str(int(signal.SIGTERM)))
+        self.assertEqual(self.snapshot(), before)
+
+
 class StaticTests(unittest.TestCase):
     def test_host_program_has_no_network_process_or_deletion_surface(self):
         for forbidden in ("subprocess", "socket", "urllib", "shutil", "os.system", "os.popen", "rmtree", "chown",
@@ -417,6 +492,48 @@ class DriverEndToEnd(unittest.TestCase):
         staged = self.home / ".private" / "wpg-none"
         src = self.home / ".private" / "wpcg-staging-next-helper-1.4.9" / NAMES[0]
         self.assertEqual(hashlib.sha256(src.read_bytes()).hexdigest(), PINS[NAMES[0]])
+
+    def test_a_bare_pass_from_the_host_is_not_trusted(self):
+        fake = self.bin / "ssh"
+        fake.write_text('#!/bin/sh\ncat > /dev/null\necho STAGING_149_STAGE=PASS\n', encoding="utf-8")
+        code, lines, _ = self.run_driver()
+        self.assertEqual((code, lines[-1]), (2, "STAGING_149_STAGE=STOP;CODE=remote_report_does_not_match_pins"))
+
+    def test_reported_digests_must_match_the_local_pins(self):
+        fake = self.bin / "ssh"
+        reported = "".join(f"echo 'FILE|/home/deploy/.private/{'wpcaregrid-staging-next-helper-installer-1.4.9.py' if n.startswith('install_') else 'wpcg-staging-next-helper-1.4.9/' + n}|{'0' * 64 if i == 0 else PINS[n]}|0600|uid=1'\n"
+                           for i, n in enumerate(NAMES))
+        fake.write_text('#!/bin/sh\ncat > /dev/null\n' + reported + 'echo STAGING_149_STAGE=PASS\n', encoding="utf-8")
+        code, lines, _ = self.run_driver()
+        self.assertEqual((code, lines[-1]), (2, "STAGING_149_STAGE=STOP;CODE=remote_report_does_not_match_pins"))
+
+    def test_a_forged_check_pass_in_stage_mode_and_vice_versa_are_stops(self):
+        fake = self.bin / "ssh"
+        fake.write_text('#!/bin/sh\ncat > /dev/null\necho STAGING_149_STAGE=CHECK_PASS\n', encoding="utf-8")
+        self.assertEqual(self.run_driver(mode="stage")[1][-1], "STAGING_149_STAGE=STOP;CODE=unexpected_check_pass_in_stage_mode")
+        fake.write_text('#!/bin/sh\ncat > /dev/null\necho STAGING_149_STAGE=PASS\n', encoding="utf-8")
+        self.assertEqual(self.run_driver(mode="check")[1][-1], "STAGING_149_STAGE=STOP;CODE=unexpected_pass_in_check_mode")
+
+    def test_driver_crosscheck_line_is_printed_on_success(self):
+        code, lines, _ = self.run_driver()
+        self.assertEqual(code, 0)
+        self.assertIn("LOCAL_CROSSCHECK=PASS;REPORTED_FILES=6", lines)
+        self.assertEqual(lines[-1], "STAGING_149_STAGE=PASS")
+        self.assertEqual(len([l for l in lines if l.startswith("STAGING_149_STAGE=")]), 1)
+        self.assertEqual(len([l for l in lines if l.startswith("REMOTE_RESULT=")]), 1)
+
+    def test_driver_never_shows_a_remote_pass_followed_by_its_own_stop(self):
+        fake = self.bin / "ssh"
+        fake.write_text('#!/bin/sh\ncat > /dev/null\necho STAGING_149_STAGE=PASS\n', encoding="utf-8")
+        code, lines, _ = self.run_driver()
+        self.assertEqual(len([l for l in lines if l.startswith("STAGING_149_STAGE=")]), 1, lines)
+        self.assertEqual(lines[-1], "STAGING_149_STAGE=STOP;CODE=remote_report_does_not_match_pins")
+
+    def test_unparseable_remote_stop_codes_are_sanitised(self):
+        fake = self.bin / "ssh"
+        fake.write_text('#!/bin/sh\ncat > /dev/null\nprintf "STAGING_149_STAGE=STOP;CODE=bad code;rm -rf /\\n"\n', encoding="utf-8")
+        code, lines, _ = self.run_driver()
+        self.assertEqual((code, lines[-1]), (2, "STAGING_149_STAGE=STOP;CODE=remote_stop_unparseable"))
 
     def test_the_pasted_form_with_an_integrity_guard_refuses_corruption(self):
         text = self.driver.read_text(encoding="utf-8")

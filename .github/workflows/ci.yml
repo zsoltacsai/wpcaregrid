@@ -152,6 +152,7 @@ jobs:
           python3 scripts/tests/staging-next-target-binding-integration-test.py
           python3 scripts/tests/staging-149-preflight-test.py
           python3 scripts/tests/staging-149-stage-sources-test.py
+          bash -n scripts/staging-149-stage-sources.sh
           python3 scripts/tests/staging-next-release-evidence-test.py
           python3 scripts/tests/staging-recovery-operator-test.py
           bash scripts/tests/staging-next-deploy-e2e.sh
