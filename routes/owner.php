@@ -103,6 +103,7 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::get('/pricing/stripe-catalogue', [StripeCatalogueController::class, 'index'])->middleware('can:owner.pricing.manage')->name('pricing.stripe-catalogue.index');
         Route::post('/pricing/stripe-catalogue/preview', [StripeCatalogueController::class, 'preview'])->middleware(['can:owner.pricing.manage', 'throttle:owner-external'])->name('pricing.stripe-catalogue.preview');
         Route::post('/pricing/stripe-catalogue/products/{productType}', [StripeCatalogueController::class, 'mapProduct'])->middleware(['can:owner.pricing.manage', 'throttle:owner-sensitive', 'throttle:owner-external'])->name('pricing.stripe-catalogue.products.map');
+        Route::post('/pricing/stripe-catalogue/prices/{priceKey}', [StripeCatalogueController::class, 'mapPrice'])->middleware(['can:owner.pricing.manage', 'throttle:owner-sensitive', 'throttle:owner-external'])->name('pricing.stripe-catalogue.prices.map');
         Route::get('/pricing/stripe-catalogue/{operation}', [StripeCatalogueController::class, 'show'])->middleware('can:owner.pricing.manage')->name('pricing.stripe-catalogue.show');
         Route::post('/pricing/stripe-catalogue/{operation}/apply', [StripeCatalogueController::class, 'apply'])->middleware(['can:owner.pricing.manage', 'throttle:owner-sensitive', 'throttle:owner-external'])->name('pricing.stripe-catalogue.apply');
 

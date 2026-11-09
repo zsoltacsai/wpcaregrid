@@ -84,7 +84,11 @@ final class CatalogueManager
     public function apply(StripeCatalogueOperation $operation, array $approved, User $owner): StripeCatalogueOperation
     {
         $mode = StripeMode::from($operation->mode);
-        $this->guard->assertCanWrite($mode);
+        if ($this->linksOnly($operation, $approved)) {
+            $this->guard->assertCanLink($mode);
+        } else {
+            $this->guard->assertCanWrite($mode);
+        }
 
         $lock = Cache::lock('stripe-catalogue-apply', 600);
         if (! $lock->get()) {
@@ -102,6 +106,25 @@ final class CatalogueManager
     }
 
     /**
+     * True when every approved item only links an existing Stripe object (no Stripe object is created).
+     *
+     * @param  list<string>  $approved
+     *
+     * @throws CatalogueRefused when an item is not part of the stored plan
+     */
+    public function linksOnly(StripeCatalogueOperation $operation, array $approved): bool
+    {
+        $kinds = collect($operation->plan['actions'])->pluck('kind', 'id');
+        foreach ($approved as $id) {
+            if (! $kinds->has($id)) {
+                throw new CatalogueRefused('item_not_in_plan');
+            }
+        }
+
+        return $approved !== [] && collect($approved)->every(fn (string $id) => in_array($kinds[$id], ['link_product', 'link_price'], true));
+    }
+
+    /**
      * Link an existing Stripe Product to a product type, on the Owner's explicit word. Local change only.
      *
      * @throws CatalogueRefused
@@ -113,7 +136,7 @@ final class CatalogueManager
             throw new CatalogueRefused('product_type_unknown');
         }
         $gateway = $this->guard->gateway();
-        $this->guard->assertCanWrite($gateway->mode());
+        $this->guard->assertCanLink($gateway->mode());
 
         $product = collect($gateway->products())->first(fn (RemoteProduct $p) => $p->id === $stripeProductId);
         if ($product === null || ! $product->active) {
@@ -124,6 +147,66 @@ final class CatalogueManager
         }
 
         $this->saveProductLink($gateway->mode(), $productType, $stripeProductId, 'owner', $owner);
+    }
+
+    /**
+     * Link one EXISTING Stripe Price to one catalogue price on the Owner's explicit word. Local change only.
+     * Everything is decided on the server from a fresh read of Stripe: the Price must be active, a plain recurring
+     * Price of the mapped Product with exactly the catalogue's currency, amount and interval, not claimed by another
+     * catalogue price, and the catalogue price must have no Price ID yet (nothing is ever replaced).
+     *
+     * @throws CatalogueRefused
+     * @throws CatalogueGatewayException
+     */
+    public function mapPrice(string $key, string $stripePriceId, User $owner): void
+    {
+        $priceKey = PriceKey::tryFrom($key) ?? throw new CatalogueRefused('price_unknown');
+        $gateway = $this->guard->gateway();
+        $mode = $gateway->mode();
+        $this->guard->assertCanLink($mode);
+
+        $lock = Cache::lock('stripe-catalogue-apply', 600);
+        if (! $lock->get()) {
+            throw new CatalogueRefused('apply_in_progress');
+        }
+
+        try {
+            $entries = collect($this->expected())->keyBy('key');
+            $entry = $entries->get($priceKey->value()) ?? throw new CatalogueRefused('price_not_on_sale');
+            if ($entry['current_id'] !== null) {
+                throw new CatalogueRefused('price_already_mapped');
+            }
+            if ($entry['draft']) {
+                throw new CatalogueRefused('draft_pending');
+            }
+            if ($entries->contains(fn (array $other) => $other['current_id'] === $stripePriceId)) {
+                throw new CatalogueRefused('price_in_use');
+            }
+
+            $productId = $this->mappedProducts($mode)[$entry['product_type']]['id'] ?? throw new CatalogueRefused('product_not_mapped');
+            $remote = collect($gateway->prices())->first(fn (RemotePrice $p) => $p->id === $stripePriceId);
+            if ($remote === null) {
+                throw new CatalogueRefused('price_not_found');
+            }
+            if (! $remote->active) {
+                throw new CatalogueRefused('price_inactive');
+            }
+            $claimed = $remote->metadata[CatalogueMatcher::PRICE_KEY_METADATA] ?? null;
+            if ($claimed !== null && $claimed !== $priceKey->value()) {
+                throw new CatalogueRefused('price_claimed_by_other');
+            }
+            if ($this->matcher->differences($remote, $entry, $productId) !== []) {
+                throw new CatalogueRefused('price_differs');
+            }
+
+            try {
+                $this->linkPrice($priceKey->value(), $stripePriceId, $owner);
+            } catch (ValidationException $e) {
+                throw new CatalogueRefused('price_rejected');
+            }
+        } finally {
+            $lock->release();
+        }
     }
 
     /** @return array<string, mixed> The matcher's plan for the current catalogue and a fresh read of Stripe. */

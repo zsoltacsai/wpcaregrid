@@ -43,6 +43,24 @@ class CatalogueGuard
         return new StripeApiCatalogueGateway($secret, $mode);
     }
 
+    /**
+     * Linking EXISTING Stripe objects to the catalogue is a local change only (nothing is created or changed
+     * in Stripe), so it does not need the creation switch. It still needs a proven key, a matching mode, never
+     * LIVE on staging, and for LIVE the separate approval.
+     *
+     * @throws CatalogueRefused
+     */
+    public function assertCanLink(StripeMode $mode): void
+    {
+        [, $current] = $this->resolve();
+        if ($current !== $mode) {
+            throw new CatalogueRefused('mode_changed');
+        }
+        if ($mode === StripeMode::Live && ! (bool) config('services.stripe.catalogue.live_apply_approved')) {
+            throw new CatalogueRefused('live_apply_not_approved');
+        }
+    }
+
     /** @throws CatalogueRefused unless Stripe objects may be created in this mode */
     public function assertCanWrite(StripeMode $mode): void
     {

@@ -180,7 +180,7 @@ final class CatalogueMatcher
             if (! $remote->active) {
                 return [...$result, 'state' => 'conflict', 'reason' => 'mapped_price_inactive', 'stripe_price_id' => $remote->id];
             }
-            $problems = $this->mismatches($remote, $entry, $productBlocked ? null : $productId);
+            $problems = $this->differences($remote, $entry, $productBlocked ? null : $productId);
             if ($problems !== []) {
                 return [...$result, 'state' => 'conflict', 'reason' => 'mapped_price_differs', 'details' => $problems, 'stripe_price_id' => $remote->id];
             }
@@ -198,7 +198,7 @@ final class CatalogueMatcher
         }
         if (count($activeClaimed) === 1) {
             $remote = $activeClaimed[0];
-            $problems = $this->mismatches($remote, $entry, $productBlocked ? null : $productId);
+            $problems = $this->differences($remote, $entry, $productBlocked ? null : $productId);
 
             return $problems === []
                 ? [...$result, 'state' => 'exact', 'via' => 'metadata', 'stripe_price_id' => $remote->id, 'candidates' => [$remote->id]]
@@ -215,7 +215,7 @@ final class CatalogueMatcher
 
         $sameProduct = array_filter($prices, static fn (RemotePrice $p) => $p->active && $p->productId === $productId && $p->isSimpleRecurring()
             && strtoupper($p->currency) === $entry['currency'] && ! isset($p->metadata[self::PRICE_KEY_METADATA]));
-        $matching = array_values(array_filter($sameProduct, fn (RemotePrice $p) => $this->mismatches($p, $entry, $productId) === []));
+        $matching = array_values(array_filter($sameProduct, fn (RemotePrice $p) => $this->differences($p, $entry, $productId) === []));
         if (count($matching) === 1) {
             return [...$result, 'state' => 'exact', 'via' => 'attributes', 'stripe_price_id' => $matching[0]->id, 'candidates' => [$matching[0]->id]];
         }
@@ -240,7 +240,7 @@ final class CatalogueMatcher
      * @param  array<string, mixed>  $entry
      * @return list<string>
      */
-    private function mismatches(RemotePrice $remote, array $entry, ?string $productId): array
+    public function differences(RemotePrice $remote, array $entry, ?string $productId): array
     {
         $problems = [];
         if (! $remote->isSimpleRecurring()) {
