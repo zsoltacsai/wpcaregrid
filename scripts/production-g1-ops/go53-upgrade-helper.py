@@ -27,11 +27,18 @@ def read(path,mode=None):
  if (s.st_uid,s.st_gid)!=(0,0): raise Stop('owner_invalid:'+os.path.basename(path))
  if mode is not None and stat.S_IMODE(s.st_mode)!=mode: raise Stop('mode_invalid:'+os.path.basename(path))
  with open(path,'rb') as f:return f.read()
-def read_mysql_file(path):
- s=os.lstat(path)
- if not stat.S_ISREG(s.st_mode) or (s.st_uid,s.st_gid)!=(pwd.getpwnam('mysql').pw_uid,grp.getgrnam('mysql').gr_gid): raise Stop('datadir_file_type_or_owner_invalid')
- if stat.S_IMODE(s.st_mode)&0o022: raise Stop('datadir_file_mode_invalid')
- with open(path,'rb') as f:return f.read()
+def read_mysql_file(path,exact_mode=None):
+ flags=os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0)
+ fd=os.open(path,flags)
+ try:
+  s=os.fstat(fd)
+  if not stat.S_ISREG(s.st_mode) or (s.st_uid,s.st_gid)!=(pwd.getpwnam('mysql').pw_uid,grp.getgrnam('mysql').gr_gid): raise Stop('datadir_file_type_or_owner_invalid')
+  if stat.S_IMODE(s.st_mode)&0o022: raise Stop('datadir_file_mode_invalid')
+  if exact_mode is not None and stat.S_IMODE(s.st_mode)!=exact_mode:raise Stop('mysql_log_mode_invalid')
+  with os.fdopen(fd,'rb',closefd=False) as f:return f.read()
+ finally:os.close(fd)
+def read_mysql_log(path):
+ return read_mysql_file(path,0o600)
 def run(args):return subprocess.run(args,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,timeout=120,close_fds=True,env=ENV,check=False)
 def atomic(path,data,mode,hook=None):
  tmp=path+'.g1-upgrade-tmp'; fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o600)
@@ -50,15 +57,24 @@ def tree_fingerprint(path):
  root=os.lstat(path)
  if not stat.S_ISDIR(root.st_mode):raise Stop('datadir_not_directory')
  out=[]
- for base,dirs,files in os.walk(path,topdown=True,followlinks=False):
+ mysql_owner=(pwd.getpwnam('mysql').pw_uid,grp.getgrnam('mysql').gr_gid)
+ if (root.st_uid,root.st_gid)!=mysql_owner or stat.S_IMODE(root.st_mode)&0o022:raise Stop('datadir_owner_or_mode_invalid')
+ for base,dirs,files,dirfd in os.fwalk(path,topdown=True,follow_symlinks=False):
   dirs.sort();files.sort()
   for n in dirs+files:
-   p=os.path.join(base,n);s=os.lstat(p);rel=os.path.relpath(p,path)
+   s=os.stat(n,dir_fd=dirfd,follow_symlinks=False);rel=os.path.relpath(os.path.join(base,n),path)
    if stat.S_ISLNK(s.st_mode):raise Stop('datadir_symlink')
    if not (stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode)):raise Stop('datadir_special_file')
-   if (s.st_uid,s.st_gid)!=(pwd.getpwnam('mysql').pw_uid,grp.getgrnam('mysql').gr_gid):raise Stop('datadir_owner_invalid')
+   if (s.st_uid,s.st_gid)!=mysql_owner:raise Stop('datadir_owner_invalid')
    if stat.S_IMODE(s.st_mode)&0o022:raise Stop('datadir_mode_invalid')
-   h=sha(read_mysql_file(p)) if stat.S_ISREG(s.st_mode) else '-'
+   h='-'
+   if stat.S_ISREG(s.st_mode):
+    fd=os.open(n,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0),dir_fd=dirfd)
+    try:
+     opened=os.fstat(fd)
+     if not stat.S_ISREG(opened.st_mode) or (opened.st_dev,opened.st_ino)!=(s.st_dev,s.st_ino) or (opened.st_uid,opened.st_gid)!=mysql_owner:raise Stop('datadir_changed_during_read')
+     with os.fdopen(fd,'rb',closefd=False) as f:h=sha(f.read())
+    finally:os.close(fd)
    out.append((rel,s.st_mode,s.st_uid,s.st_gid,s.st_size,s.st_mtime_ns,h))
  return sha(repr((root.st_mode,root.st_uid,root.st_gid,root.st_mtime_ns,out)).encode())
 def durable_json(path,obj):
@@ -101,12 +117,15 @@ def main(pkg,runfn=run,euid=None,replace=atomic,hook=None):
  if sha(read(CONTRACT,0o644))!=PINS[CONTRACT]:raise Stop('contract_changed')
  for p in (PROFILE_P,PROFILE_R):
   if sha(read(p,0o644))!=PINS[p]:raise Stop('apparmor_profile_changed')
- if any(os.path.lexists(p+'.g1-upgrade-tmp') for p in (HELPER,MANIFEST)):raise Stop('leftover_temporary_file')
+ if any(os.path.lexists(p+'.g1-upgrade-tmp') for p in (HELPER,MANIFEST)) or os.path.lexists(JOURNAL+'.tmp'):raise Stop('leftover_temporary_file_manual_recovery_required')
  before_pid=read_pid(runfn)
  datadirs=[tree_fingerprint(p) for p in DATADIRS]
- logs=[sha(read(p)) for p in LOGS]
+ logs=[sha(read_mysql_log(p)) for p in LOGS]
  current={p:read(p,MODES[p]) for p in (HELPER,MANIFEST)}; state={p:sha(b) for p,b in current.items()}
  already=all(state[p]==NEW[p] for p in NEW)
+ for u in UNITS:
+  x=runfn(['/usr/bin/systemctl','is-active',u])
+  if x.returncode!=3 or x.stdout.strip()!='inactive':raise Stop('g1_unit_not_inactive')
  j=journal_state()
  if j:
   if any(state[p] not in (OLD[p],NEW[p]) for p in OLD):raise Stop('journal_file_state_unknown_manual_recovery_required')
@@ -119,27 +138,24 @@ def main(pkg,runfn=run,euid=None,replace=atomic,hook=None):
     if state[p]!=OLD[p]:atomic(p,base64.b64decode(j['backup'][p],validate=True),MODES[p])
    if any(sha(read(p,MODES[p]))!=OLD[p] for p in OLD):raise Stop('journal_recovery_failed_manual_recovery_required')
    os.unlink(JOURNAL)
+   already=False
   d=os.open(LIBEXEC,os.O_RDONLY|os.O_DIRECTORY);os.fsync(d);os.close(d)
   current={p:read(p,MODES[p]) for p in OLD};state={p:sha(b) for p,b in current.items()}
  if not already and any(state[p]!=OLD[p] for p in OLD):raise Stop('installed_baseline_mismatch')
- for u in UNITS:
-  x=runfn(['/usr/bin/systemctl','is-active',u])
-  if x.returncode!=3 or x.stdout.strip()!='inactive':raise Stop('g1_unit_not_inactive')
  def invariants():
   if read_pid(runfn)!=before_pid:raise Stop('mysql_mainpid_changed')
   if [tree_fingerprint(p) for p in DATADIRS]!=datadirs:raise Stop('datadir_changed')
-  if [sha(read(p)) for p in LOGS]!=logs:raise Stop('mysql_logs_changed')
+  if [sha(read_mysql_log(p)) for p in LOGS]!=logs:raise Stop('mysql_logs_changed')
   for p in (CONTRACT,PROFILE_P,PROFILE_R):
    if sha(read(p,0o644))!=PINS[p]:raise Stop('protected_file_changed')
  def verify():
-  done=runfn(['/usr/bin/python3','-I','-B',HELPER,'verify-install'])
-  # verify-install is dynamic and may run mysqld validate-config; use explicit static checks instead.
   code="import runpy; d=runpy.run_path(%r); d['verify_static_install'](); print('STATIC_INSTALL_VERIFY=PASS'); d['check_base_config'](); print('BASE_CONFIG_CHECK=PASS')"%HELPER
   done=runfn(['/usr/bin/python3','-I','-B','-c',code])
   if done.returncode or 'STATIC_INSTALL_VERIFY=PASS' not in done.stdout or 'BASE_CONFIG_CHECK=PASS' not in done.stdout:raise Stop('helper_static_verification_failed')
-  h=runfn(['/usr/bin/python3','-I','-B',HELPER,'preflight','--instance','wpcaregrid-production'])
-  r=runfn(['/usr/bin/python3','-I','-B',HELPER,'preflight','--instance','wpcaregrid-production-restore'])
-  if h.returncode or 'PREFLIGHT=PASS' not in h.stdout or r.returncode or 'PREFLIGHT=PASS' not in r.stdout:raise Stop('instance_preflight_failed')
+  # Structural preflight only: do not invoke verify_preflight(), because it launches mysqld --validate-config.
+  code="import runpy; d=runpy.run_path(%r); [(d['verify_systemd_contract'](i), d['verify_apparmor'](i), d['verify_paths'](i)) for i in d['INSTANCES'].values()]; print('STATIC_PREFLIGHT=PASS')"%HELPER
+  p=runfn(['/usr/bin/python3','-I','-B','-c',code])
+  if p.returncode or 'STATIC_PREFLIGHT=PASS' not in p.stdout:raise Stop('instance_static_preflight_failed')
  if already:
   verify();invariants();return 'G1_GO53_HELPER_UPGRADE=PASS;NOTE=already_upgraded'
  try:

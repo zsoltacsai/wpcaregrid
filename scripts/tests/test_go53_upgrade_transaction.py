@@ -21,20 +21,21 @@ class TxTests(unittest.TestCase):
   go.pwd.getpwnam=lambda name:types.SimpleNamespace(pw_uid=os.getuid())
   go.grp.getgrnam=lambda name:types.SimpleNamespace(gr_gid=os.getgid())
   go.NAMES={go.HELPER:'helper',go.MANIFEST:'manifest'};go.MODES={go.HELPER:0o755,go.MANIFEST:0o644};go.UNITS=('prod','restore')
-  for p,b,mode in [(self.files[0],self.old[go.HELPER],0o755),(self.files[1],self.old[go.MANIFEST],0o644),(Path(go.CONTRACT),b'c',0o644),(Path(go.PROFILE_P),b'ap',0o644),(Path(go.PROFILE_R),b'ar',0o644),(Path(go.LOGS[0]),b'logp',0o644),(Path(go.LOGS[1]),b'logr',0o644)]:p.write_bytes(b);p.chmod(mode)
+  for p,b,mode in [(self.files[0],self.old[go.HELPER],0o755),(self.files[1],self.old[go.MANIFEST],0o644),(Path(go.CONTRACT),b'c',0o644),(Path(go.PROFILE_P),b'ap',0o644),(Path(go.PROFILE_R),b'ar',0o644),(Path(go.LOGS[0]),b'logp',0o600),(Path(go.LOGS[1]),b'logr',0o600)]:p.write_bytes(b);p.chmod(mode)
   for d in (self.data1,self.data2): (d/'data').write_bytes(b'data');(d/'data').chmod(0o600)
   for p,b in self.new.items():(self.pkg/go.NAMES[p]).write_bytes(b)
   sums=''.join(f'{go.sha(b)}  {go.NAMES[p]}\n' for p,b in self.new.items());(self.pkg/'SHA256SUMS').write_text(sums);self.pkg.chmod(0o700)
-  self.calls=[]
+  self.calls=[];self.active_unit=False
  def tearDown(self):
   (go.LIBEXEC,go.HELPER,go.MANIFEST,go.CONTRACT,go.PROFILE_P,go.PROFILE_R,go.DATADIRS,go.LOGS,go.JOURNAL,go.OLD,go.NEW,go.PINS,go.NAMES,go.MODES,go.UNITS)=self.orig
   self.t.cleanup()
  def runner(self,args):
   self.calls.append(args)
+  if self.active_unit and args[1:2]==['is-active']:return types.SimpleNamespace(returncode=0,stdout='active')
   if args[1:2]==['show']:return types.SimpleNamespace(returncode=0,stdout='1131\n')
   if args[1:2]==['is-active']:return types.SimpleNamespace(returncode=3,stdout='inactive')
   if args[0].endswith('python3') or args[0].endswith('python'):
-   out='PREFLIGHT=PASS' if 'preflight' in args else 'STATIC_INSTALL_VERIFY=PASS BASE_CONFIG_CHECK=PASS'
+   out='STATIC_PREFLIGHT=PASS' if any('STATIC_PREFLIGHT' in x for x in args) else 'STATIC_INSTALL_VERIFY=PASS BASE_CONFIG_CHECK=PASS'
    return types.SimpleNamespace(returncode=0,stdout=out)
   return types.SimpleNamespace(returncode=0,stdout='')
  def install(self,**kw):return go.main(str(self.pkg),runfn=self.runner,euid=0,**kw)
@@ -60,6 +61,17 @@ class TxTests(unittest.TestCase):
   backup={p:base64.b64encode(b).decode() for p,b in self.old.items()};(self.files[0]).write_bytes(self.new[go.HELPER])
   go.durable_json(go.JOURNAL,{'schema':1,'phase':'replacing','old':go.OLD,'new':go.NEW,'backup':backup})
   self.install();self.assertEqual(self.files[0].read_bytes(),self.new[go.HELPER]);self.assertFalse(Path(go.JOURNAL).exists())
+ def test_sigkill_after_both_renames_with_replacing_journal_recovers_then_reinstalls_new_pair(self):
+  backup={p:base64.b64encode(b).decode() for p,b in self.old.items()}
+  for p,b in self.new.items():Path(p).write_bytes(b)
+  go.durable_json(go.JOURNAL,{'schema':1,'phase':'replacing','old':go.OLD,'new':go.NEW,'backup':backup})
+  self.install();self.assertEqual([p.read_bytes() for p in self.files],list(self.new.values()))
+ def test_active_unit_stops_before_journal_recovery_writes(self):
+  backup={p:base64.b64encode(b).decode() for p,b in self.old.items()};self.files[0].write_bytes(self.new[go.HELPER])
+  go.durable_json(go.JOURNAL,{'schema':1,'phase':'replacing','old':go.OLD,'new':go.NEW,'backup':backup})
+  self.active_unit=True
+  with self.assertRaisesRegex(go.Stop,'g1_unit_not_inactive'):self.install()
+  self.assertEqual(self.files[0].read_bytes(),self.new[go.HELPER]);self.assertTrue(Path(go.JOURNAL).exists())
  def test_corrupt_journal_fails_closed(self):
   Path(go.JOURNAL).write_text('{bad');Path(go.JOURNAL).chmod(0o600)
   with self.assertRaisesRegex(go.Stop,'journal_corrupt'):self.install()
@@ -69,5 +81,8 @@ class TxTests(unittest.TestCase):
  def test_service_commands_never_include_start_or_initialize(self):
   self.install()
   flat=' '.join(' '.join(c) for c in self.calls);self.assertNotIn(' start ',flat);self.assertNotIn(' initialize ',flat)
+ def test_symlink_in_datadir_is_rejected(self):
+  target=self.root/'outside';target.write_text('secret');(self.data1/'link').symlink_to(target)
+  with self.assertRaisesRegex(go.Stop,'datadir_symlink'):self.install()
 
 if __name__=='__main__':unittest.main(verbosity=2)
