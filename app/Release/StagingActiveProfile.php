@@ -49,6 +49,10 @@ final class StagingActiveProfile
         '~^/owner/offers(?:/|$)~i',
         // Saving or publishing a price verifies it against Stripe.
         '~^/owner/pricing/prices/[^/]+(?:/publish)?/?$~i',
+        // Stripe Catalogue Manager: preview reads Stripe, product mapping and apply create/link Stripe
+        // objects. The pages themselves (index, stored plan) are local reads and stay open so that the
+        // Owner can see why the catalogue is refused. Its own guard (mode, test/live, apply switch) still applies.
+        '~^/owner/pricing/stripe-catalogue(?:/|$)~i',
     ];
 
     /** Operations that call a third-party service or change infrastructure. */
@@ -167,6 +171,10 @@ final class StagingActiveProfile
         }
         if (config('services.stripe.allow_live_mode') !== false) {
             $problems[] = 'stripe_live_mode_allowed';
+        }
+        // The configured Stripe mode must be exactly "test" (an unset or unknown mode is not a proof).
+        if (config('services.stripe.mode') !== 'test') {
+            $problems[] = 'stripe_mode_not_test';
         }
         $webhook = config('services.stripe.webhook_secret');
         if ($needsWebhookSecret && (! is_string($webhook) || $webhook === '')) {
