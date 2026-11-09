@@ -3,7 +3,7 @@ set -uo pipefail
 # (hotfix-2 contract -> state 328h2p, already upgraded -> 328ap, anything else STOP), verifies the matching state first,
 # fetches or re-verifies the package directory, replaces exactly contract, manifest and the two G1 AppArmor profiles
 # (idempotent tool, rolls back on failure), verifies 328ap and the effective configuration, proves that mysql.service
-# (MainPID, 3306) and /etc/apparmor.d/usr.sbin.mysqld are unchanged and runs the confined read-only probe.
+# (MainPID, distribution profile file/local override/loaded state) and /etc/apparmor.d/usr.sbin.mysqld are unchanged and runs the confined read-only probe.
 # Never runs provision-paths, initialize or start; never touches the MySQL directories, my.cnf or mysql.service.
 # Usage: go5p-sequence.sh <40-hex merge commit>
 M=${1:-}
@@ -34,7 +34,9 @@ baseline() {  # unchanged-ness proof: mysql.service main PID and the distributio
   pid=$(/usr/bin/systemctl show mysql.service -P MainPID) || return 1
   [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
   if [ -e /etc/apparmor.d/usr.sbin.mysqld ]; then prof=$(sha256sum -- /etc/apparmor.d/usr.sbin.mysqld | cut -d' ' -f1); else prof=ABSENT; fi
-  echo "MAINPID=$pid;USR_SBIN_MYSQLD_PROFILE=$prof"
+  kern=$(grep -F 'usr.sbin.mysqld (' /sys/kernel/security/apparmor/profiles 2>/dev/null | head -1)
+  local_prof=ABSENT; [ -e /etc/apparmor.d/local/usr.sbin.mysqld ] && local_prof=$(sha256sum -- /etc/apparmor.d/local/usr.sbin.mysqld | cut -d' ' -f1)
+  echo "MAINPID=$pid;USR_SBIN_MYSQLD_PROFILE=$prof;LOCAL_OVERRIDE=$local_prof;KERNEL_PROFILE=${kern:-NONE}"
 }
 BEFORE=$(baseline) || STOPPED baseline_before
 echo "G1_GO52C_BASELINE_BEFORE $BEFORE"
@@ -53,7 +55,13 @@ else
   step fetch_package bash "$OPS/go5p-fetch-package.sh" "$M"
 fi
 step manifest_check   python3 -I -B "$OPS/go5p-manifest-check.py" "$AP"
-step profile_upgrade  python3 -I -B "$OPS/go5p-upgrade-apparmor.py" "$AP"
+python3 -I -B "$OPS/go5p-upgrade-apparmor.py" "$AP" || {
+  # The tool has already rolled back (it reports ROLLED_BACK=yes|NO). Prove the service and the distribution profile untouched.
+  AFTER_FAIL=$(baseline) || AFTER_FAIL=UNAVAILABLE
+  echo "G1_GO52C_BASELINE_AFTER_FAILURE $AFTER_FAIL"
+  if [ "$AFTER_FAIL" = "$BEFORE" ]; then echo "G1_GO52C_BASELINE_UNCHANGED=yes"; else echo "G1_GO52C_BASELINE_UNCHANGED=NO"; fi
+  STOPPED profile_upgrade
+}
 step state_after      python3 -I -B "$OPS/g1-state-check.py" 328ap
 step effective_config python3 -I -B "$OPS/g1-effective-config-check.py"
 AFTER=$(baseline) || STOPPED baseline_after

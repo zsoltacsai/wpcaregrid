@@ -7,7 +7,7 @@ contract generates both profiles with exactly one additional rule, `/etc/mysql/m
 no-overwrite by design, so this tool is the only place that replaces installed bytes. It replaces only:
   /usr/local/libexec/production_g1_mysql_contract.py   /usr/local/libexec/production_g1_mysql_manifest.json
   /etc/apparmor.d/wpcaregrid-mysql-production          /etc/apparmor.d/wpcaregrid-mysql-production-restore
-and reloads exactly those two named profiles (`apparmor_parser -r`). The helper (hash-pinned, unchanged), the option
+and reloads exactly those two named profiles (`apparmor_parser -r -T`, cache skipped). The helper (hash-pinned, unchanged), the option
 files and the systemd drop-ins are not touched, nothing is initialized or started, `mysql.service`,
 `/etc/mysql/my.cnf` and `/etc/apparmor.d/usr.sbin.mysqld` are not touched.
 
@@ -199,7 +199,7 @@ def main(package_dir, run=default_run, euid=None, loaded=loaded_enforce):
 
     def reload_profiles():
         for path in (PROFILE_P, PROFILE_R):
-            done = run([PARSER, "-r", path])
+            done = run([PARSER, "-r", "-T", path])
             if done.returncode != 0:
                 raise Stop("profile_reload_failed:" + os.path.basename(path))
 
@@ -240,8 +240,10 @@ def main(package_dir, run=default_run, euid=None, loaded=loaded_enforce):
                 restored = False
         try:
             for path in (PROFILE_P, PROFILE_R):
-                if run([PARSER, "-r", path]).returncode != 0:
+                if run([PARSER, "-r", "-T", path]).returncode != 0:
                     restored = False
+            if not loaded():
+                restored = False
         except BaseException:
             restored = False
         code = exc.code if isinstance(exc, Stop) else "internal_error:" + exc.__class__.__name__

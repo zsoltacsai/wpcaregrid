@@ -896,6 +896,8 @@ def run(name, arg=M, **kw):
     lines = done.stdout.strip().splitlines()
     calls = open("/tmp/calls.log").read().split() if os.path.exists("/tmp/calls.log") else []
     print("SEQ %s | rc=%d | %s | %s" % (name, done.returncode, lines[-1] if lines else "<none>", ",".join(calls) or "-"))
+    flag = [l for l in lines if l.startswith("G1_GO52C_BASELINE_UNCHANGED=")]
+    if flag: print("SEQX %s | %s" % (name, flag[0]))
 
 run("hotfix1_fresh")
 run("hotfix1_package_dir_exists", hf2=True)
@@ -1094,13 +1096,13 @@ def runner(active=(), compile_fail=None, reload_fail=None, verify="ok", old_relo
         out = lambda rc, text="": types.SimpleNamespace(returncode=rc, stdout=text.encode())
         if args[:2] == ["/usr/bin/systemctl", "is-active"]:
             return out(0, "active" + NL) if args[2] in active else out(3, "inactive" + NL)
-        if args[:3] == [ap.PARSER, "-Q", "-T"] or args[:2] == [ap.PARSER, "-Q"]:
+        if args[:3] == [ap.PARSER, "-Q", "-T"]:
             return out(1 if compile_fail and sha(data) == ap.NEW[compile_fail] else 0)
-        if args[:2] == [ap.PARSER, "-r"]:
-            now = sha(open(args[2], "rb").read())
-            if old_reload_fail and now == ap.OLD[args[2]]:
+        if args[:3] == [ap.PARSER, "-r", "-T"]:
+            now = sha(open(args[3], "rb").read())
+            if old_reload_fail and now == ap.OLD[args[3]]:
                 return out(1)
-            return out(1 if reload_fail == args[2] and now == ap.NEW[args[2]] else 0)
+            return out(1 if reload_fail == args[3] and now == ap.NEW[args[3]] else 0)
         if args[0] == "/usr/bin/python3":
             if verify == "ok":
                 return out(0, "STATIC_INSTALL_VERIFY=PASS;MYSQL_3306=UNMODIFIED_BY_TOOL" + NL + "BASE_CONFIG_CHECK=PASS" + NL)
@@ -1128,7 +1130,7 @@ def scenario(name, twice=False, loaded=True, **kw):
             results.append(ap.main("/pkg", run=runner(**run_kw), euid=0, loaded=(lambda: loaded.pop(0)) if isinstance(loaded, list) else (lambda: loaded)))
         except ap.Stop as exc:
             results.append("STOP;CODE=%s;ROLLED_BACK=%s" % (exc.code, exc.rolled_back))
-    reloads = [c[0][2] for c in CALLS if c[0][:2] == (ap.PARSER, "-r")]
+    reloads = [c[0][3] for c in CALLS if c[0][:3] == (ap.PARSER, "-r", "-T")]
     print("SCENARIO %s | %s | %s | reloads=%s" % (name, " || ".join(results), state(), ",".join(os.path.basename(p) for p in reloads) or "-"))
     del CALLS[:]
 
@@ -1166,7 +1168,8 @@ scenario("reload_fails_rolls_back", reload_fail=PR)
 scenario("verify_fails_rolls_back", verify="bad")
 scenario("verify_without_chain_marker_rolls_back", verify="nochain")
 scenario("rollback_reload_fails", reload_fail=PR, old_reload_fail=True)
-scenario("not_loaded_after_reload", loaded=[True, False])
+scenario("not_loaded_after_reload", loaded=[True, False, True])
+scenario("not_enforced_after_rollback", loaded=[True, False, False])
 """
 
 AP_SEQ_DRIVER = r"""
@@ -1243,6 +1246,8 @@ def run(name, arg=M, **kw):
     lines = done.stdout.strip().splitlines()
     calls = open("/tmp/calls.log").read().split() if os.path.exists("/tmp/calls.log") else []
     print("SEQ %s | rc=%d | %s | %s" % (name, done.returncode, lines[-1] if lines else "<none>", ",".join(calls) or "-"))
+    flag = [l for l in lines if l.startswith("G1_GO52C_BASELINE_UNCHANGED=")]
+    if flag: print("SEQX %s | %s" % (name, flag[0]))
 
 run("fresh")
 run("package_dir_exists", pkg=True)
@@ -1262,6 +1267,7 @@ run("state_before_fails_when_upgraded", contract=NEWC, fail=("g1-state-check.py:
 run("fetch_fails", fail=("go5p-fetch-package.sh",))
 run("manifest_check_fails", fail=("go5p-manifest-check.py",))
 run("upgrade_fails", fail=("go5p-upgrade-apparmor.py",))
+run("upgrade_fails_and_mysql_changed", fail=("go5p-upgrade-apparmor.py",), mutate="pid")
 run("state_after_fails", fail=("g1-state-check.py:328ap",))
 run("effective_config_fails", fail=("g1-effective-config-check.py",))
 run("probe_fails", fail=("go5p-confined-probe.sh",))
@@ -1324,9 +1330,12 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
         out, err = container({"/src/go5p-sequence.sh": (OPS / "go5p-sequence.sh").read_bytes(),
                               "/drive/seq.py": AP_SEQ_DRIVER.encode()}, "/drive/seq.py")
         cls.seq_output = out + err
-        cls.seq = {}
+        cls.seq, cls.seqx = {}, {}
         for line in out.splitlines():
-            if line.startswith("SEQ "):
+            if line.startswith("SEQX "):
+                name, flag = line[5:].split(" | ")
+                cls.seqx[name.strip()] = flag.strip()
+            elif line.startswith("SEQ "):
                 name, rc, last, calls = [part.strip() for part in line[4:].split(" | ")]
                 cls.seq[name] = (rc, last, calls)
         out, err = container({"/src/go5p-confined-probe.sh": (OPS / "go5p-confined-probe.sh").read_bytes(),
@@ -1416,6 +1425,13 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
         for name, result in cases.items():
             with self.subTest(name):
                 self.assertEqual(self.scenario(name), (result, self.fixture_state(), both))
+        # explicit partial-reload case: production reloads (new), restore reload fails, then BOTH old profiles are reloaded
+        self.assertEqual(self.scenario("reload_fails_rolls_back")[2], f"{self.P},{self.R},{self.P},{self.R}")
+
+    def test_a_rollback_that_leaves_a_profile_not_enforced_is_reported_as_not_rolled_back(self):
+        result, state, _ = self.scenario("not_enforced_after_rollback")
+        self.assertEqual(result, "STOP;CODE=profile_not_loaded_enforce_after_reload;ROLLED_BACK=NO")
+        self.assertEqual(state, self.fixture_state())
 
     def test_a_failing_rollback_reload_is_reported_as_not_rolled_back(self):
         result, state, _ = self.scenario("rollback_reload_fails")
@@ -1487,6 +1503,15 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
                 self.assertEqual(self.seq_result(name), ("rc=1", f"G1_GO52C_SEQUENCE=STOP;STEP={step}", ",".join(order[:count])))
         self.assertEqual(self.seq_result("state_before_fails_when_upgraded"),
                          ("rc=1", "G1_GO52C_SEQUENCE=STOP;STEP=state_before", "g1-state-check.py:328ap"))
+
+    def test_after_a_failed_upgrade_the_rollback_leaves_mysql_service_and_distribution_profile_unchanged(self):
+        # Partial reload failure (first profile reloaded, second fails -> files and loaded policy rolled back, files and
+        # reload order proven by test_a_failure_after_the_swap_restores_the_old_files_and_reloads_the_old_profiles
+        # [reload_fails_rolls_back]); here: the sequence stops with profile_upgrade and proves the service untouched.
+        self.assertEqual(self.seq_result("upgrade_fails")[1], "G1_GO52C_SEQUENCE=STOP;STEP=profile_upgrade")
+        self.assertEqual(self.seqx["upgrade_fails"], "G1_GO52C_BASELINE_UNCHANGED=yes")
+        self.assertEqual(self.seq_result("upgrade_fails_and_mysql_changed")[1], "G1_GO52C_SEQUENCE=STOP;STEP=profile_upgrade")
+        self.assertEqual(self.seqx["upgrade_fails_and_mysql_changed"], "G1_GO52C_BASELINE_UNCHANGED=NO")
 
     def test_sequence_proves_mysql_service_and_the_distribution_profile_unchanged(self):
         for name in ("mysql_pid_changes", "distribution_profile_changes"):

@@ -250,8 +250,10 @@ contract/manifest/both profiles all OLD or all NEW, both units inactive, both pr
 temporary file. Then each file is replaced by a same-directory temporary file (`.dpkg-new` suffix in `/etc/apparmor.d`, which
 the AppArmor loader ignores), `fsync` and atomic `rename`; exactly the two named profiles are reloaded with
 `apparmor_parser -r`; the helper's `verify_static_install()` and `check_base_config()` must pass and both profiles must be
-in enforce mode. Any failure restores the four old files, reloads the two old profiles and reports `ROLLED_BACK=yes|NO`
-(`NO` means the rollback itself failed: stop and look). A second run reports `NOTE=already_upgraded` and re-reloads the two
+in enforce mode. Any failure (including: first profile reloaded, second reload fails) restores the four old files, reloads both
+old profiles, re-checks that both are loaded in enforce mode and reports `ROLLED_BACK=yes|NO` (`NO` means a file, a reload or
+the enforce check of the rollback itself failed: stop and look). After a failed upgrade the sequence prints
+`G1_GO52C_BASELINE_UNCHANGED=yes|NO` (mysql.service MainPID, `usr.sbin.mysqld` file/local override/loaded profile). A second run reports `NOTE=already_upgraded` and re-reloads the two
 profiles (heals an interruption between swap and reload). After a hard kill (SIGKILL, power loss) a leftover `*.dpkg-new` /
 `*.g1-upgrade-tmp` file or a half-replaced set makes the tool and the sequence STOP (`leftover_temporary_file` /
 `installed_files_unrecognized`): look before retrying. Rollback by hand is never needed for the normal failure paths.
