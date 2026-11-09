@@ -162,7 +162,7 @@ the option files, the AppArmor profiles and the systemd drop-ins stay byte-ident
 **Open point (AppArmor):** the generated profiles grant `/etc/mysql/my.cnf r,` but not the symlink target
 `/etc/mysql/mysql.cnf`. AppArmor mediates the resolved path, so a *confined* mysqld may be unable to read the base
 file through the chain. `verify-install` runs MySQL unconfined and is not affected; `initialize` and `start` are.
-The runbook has a read-only confined probe (GO-5.2c) that must PASS before GO-5.3; a profile change would be a
+The runbook has a read-only confined probe (GO-5.2c), a mandatory gate that must PASS before GO-5.3; a profile change would be a
 separate, separately approved hotfix.
 
 ### Upgrading an installed package

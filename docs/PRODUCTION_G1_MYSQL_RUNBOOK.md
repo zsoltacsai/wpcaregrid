@@ -173,7 +173,8 @@ symlink") and still refuses everything else. `/etc/mysql/my.cnf` is **not** repl
 the already created data and temporary directories are left as they are; no MySQL is initialized or started and
 `mysql.service` (3306) is not touched. The tool replaces **only** `/usr/local/libexec/wpcaregrid-g1-mysql.py` and
 `/usr/local/libexec/production_g1_mysql_manifest.json`; contract, option files, AppArmor profiles and drop-ins must be
-byte-identical (the tool refuses otherwise). `<MERGE_SHA>` is the 40-hex merge commit of the hotfix pull request,
+byte-identical: the tool itself checks the contract hash and that both units are inactive, and the mandatory
+`g1-state-check.py 328h` step before it proves the rest (any STOP there ends the procedure). `<MERGE_SHA>` is the 40-hex merge commit of the hotfix pull request,
 `OPS` the toolkit directory fetched by GO-0 from that same commit.
 
 ```bash
@@ -196,7 +197,7 @@ Each file is replaced by a same-directory temporary file, `fsync` and atomic `re
 
 After PASS, GO-5.2 is repeated (`verify-install`, then `preflight --instance <each>`, see below). GO-5.1 is not.
 
-**GO-5.2c — confined read-only probe (recommended before GO-5.3).** AppArmor mediates the resolved path of a symlink,
+**GO-5.2c — confined read-only probe (mandatory gate before GO-5.3).** AppArmor mediates the resolved path of a symlink,
 and the generated profiles grant `/etc/mysql/my.cnf` but not its target `/etc/mysql/mysql.cnf`. `verify-install` runs
 MySQL unconfined and cannot show this. The probe runs only `my_print_defaults` (reads option files, prints values,
 starts no server) under the instance's enforcing profile and prints no option value:
@@ -211,8 +212,8 @@ done
 ```
 
 PASS only if both lines show `RC=0;DATADIR_LINE=yes`. Anything else means the confined mysqld cannot read the chain
-target: STOP before GO-5.3 and request a separate profile hotfix (adding exactly `/etc/mysql/mysql.cnf r,` and
-`/etc/alternatives/my.cnf r,` to the two generated profiles); do not initialize.
+target: STOP before GO-5.3 and request a separate profile hotfix (adding exactly `/etc/mysql/mysql.cnf r,` to the two
+generated profiles; AppArmor mediates the resolved file, not the intermediate symlink); do not initialize.
 
 ## GO-5 — runtime preparation (each step is its own Owner gate)
 
