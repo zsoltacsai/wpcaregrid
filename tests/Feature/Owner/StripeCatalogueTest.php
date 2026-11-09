@@ -344,6 +344,48 @@ class StripeCatalogueTest extends TestCase
         $this->assertSame(1, $this->stripe->created('createProduct'));
     }
 
+    public function test_a_different_stripe_price_that_appears_after_the_preview_is_not_linked(): void
+    {
+        $this->seedLegacyWordPress();
+        $this->post(route('owner.pricing.stripe-catalogue.products.map', 'wordpress'), ['stripe_product_id' => 'prod_legacy']);
+        $operation = $this->preview();
+        $approvedId = $operation->plan['prices']['wordpress.basic.monthly.hu']['stripe_price_id'];
+
+        // The previewed Price is archived and another identical one is added meanwhile.
+        $this->stripe->addPrice($approvedId, 'prod_legacy', 'HUF', 899000, 'month', active: false);
+        $this->stripe->addPrice('price_wordpress_legacy_new', 'prod_legacy', 'HUF', 899000, 'month');
+        $this->verifier->products['price_wordpress_legacy_new'] = 'prod_legacy';
+
+        $this->apply($operation, ['link_price:wordpress.basic.monthly.hu']);
+
+        $item = $operation->refresh()->result['items']['link_price:wordpress.basic.monthly.hu'];
+        $this->assertSame(['skipped', 'plan_changed'], [$item['status'], $item['code']]);
+        $this->assertEmpty($this->catalogue()->price(ProductType::WordPress, PlanTier::Basic, BillingInterval::Monthly, $this->catalogue()->market('hu'))->stripePriceId);
+    }
+
+    public function test_a_price_whose_catalogue_amount_changed_after_the_preview_is_not_created(): void
+    {
+        $operation = $this->preview();
+        $index = collect(config('pricing.prices'))->search(fn ($row) => $row['product_type'] === 'wordpress' && $row['plan'] === 'basic' && $row['interval'] === 'monthly' && $row['market'] === 'hu');
+        config(["pricing.prices.{$index}.amount" => 999000]);
+        $this->catalogue();
+
+        $this->apply($operation);
+
+        $item = $operation->refresh()->result['items']['create_price:wordpress.basic.monthly.hu'];
+        $this->assertSame(['skipped', 'plan_changed'], [$item['status'], $item['code']]);
+        $this->assertCount(47, $this->stripe->prices);
+    }
+
+    public function test_a_host_named_staging_forbids_live_whatever_else_is_configured(): void
+    {
+        app(IntegrationCredentials::class)->store('stripe_secret', 'sk_live_ownermanaged1234567890');
+        config(['services.stripe.mode' => 'live', 'services.stripe.allow_live_mode' => true, 'app.url' => 'https://staging-next.wpcaregrid.com', 'app.env' => 'production', 'app.deployment_environment' => 'production']);
+
+        $this->post(route('owner.pricing.stripe-catalogue.preview'))->assertSessionHas('owner_error.code', 'LIVE_FORBIDDEN_ON_STAGING');
+        $this->assertSame(0, $this->guard->gatewaysBuilt);
+    }
+
     public function test_a_stale_preview_is_refused(): void
     {
         $operation = $this->preview();

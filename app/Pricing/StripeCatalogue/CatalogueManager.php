@@ -271,6 +271,9 @@ final class CatalogueManager
             } elseif (! $fresh->has($id)) {
                 // Stripe or the catalogue changed since the preview: this item is no longer what was approved.
                 $items[$id] = ['status' => 'skipped', 'code' => 'no_longer_needed'];
+            } elseif (! $this->sameTarget($operation, $action, $fresh->get($id), $expected)) {
+                // The approval was for a specific Stripe object / amount; something else fits now.
+                $items[$id] = ['status' => 'skipped', 'code' => 'plan_changed'];
             } else {
                 try {
                     $items[$id] = $this->perform($fresh->get($id), $mode, $gateway, $expected, $products, $created, $owner);
@@ -298,6 +301,30 @@ final class CatalogueManager
         };
 
         return $this->finish($operation, $status, ['items' => $items, 'done' => $done, 'failed' => $failed], $owner);
+    }
+
+    /**
+     * The Owner approved a specific target: the Stripe Product or Price to link, or the amount and currency to
+     * create. If the fresh state points anywhere else, nothing is done and a new preview is needed.
+     *
+     * @param  array<string, mixed>  $approved  the action as previewed
+     * @param  array<string, mixed>  $fresh  the action as it is now
+     * @param  Collection<string, array<string, mixed>>  $expected
+     */
+    private function sameTarget(StripeCatalogueOperation $operation, array $approved, array $fresh, $expected): bool
+    {
+        if (($approved['stripe_price_id'] ?? null) !== ($fresh['stripe_price_id'] ?? null)
+            || ($approved['stripe_product_id'] ?? null) !== ($fresh['stripe_product_id'] ?? null)) {
+            return false;
+        }
+        if ($approved['kind'] === 'create_price') {
+            $planned = $operation->plan['prices'][$approved['key']] ?? null;
+            $now = $expected->get($approved['key']);
+
+            return $planned !== null && $now !== null && $planned['amount'] === $now['amount'] && $planned['currency'] === $now['currency'] && $planned['interval'] === $now['interval'];
+        }
+
+        return true;
     }
 
     /** A dependency is met when it was done, or was found to be unnecessary because Stripe already has it. */

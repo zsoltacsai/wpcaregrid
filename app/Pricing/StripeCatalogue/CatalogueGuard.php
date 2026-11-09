@@ -63,7 +63,9 @@ class CatalogueGuard
         return config('marketing_release.staging_active_enabled') === true
             || config('marketing_release.requested_profile') === 'staging_active'
             || config('app.env') === 'staging'
-            || str_starts_with((string) config('app.deployment_environment'), 'staging');
+            || str_starts_with((string) config('app.deployment_environment'), 'staging')
+            // A host that calls itself staging is never treated as anything else, whatever else is configured.
+            || str_contains(strtolower((string) parse_url((string) config('app.url'), PHP_URL_HOST)), 'staging');
     }
 
     /**
