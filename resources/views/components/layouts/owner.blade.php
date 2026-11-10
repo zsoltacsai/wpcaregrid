@@ -18,6 +18,7 @@
         ['route' => 'owner.content.index', 'active' => 'owner.content.*', 'label' => __('owner.nav.content'), 'icon' => 'list'],
         ['route' => 'owner.seo.index', 'active' => 'owner.seo.*', 'label' => __('owner.nav.seo'), 'icon' => 'search'],
         ['route' => 'owner.system', 'active' => 'owner.system', 'label' => __('owner.nav.system'), 'icon' => 'cog'],
+        ['route' => 'owner.platform-updates.index', 'active' => 'owner.platform-updates.*', 'label' => __('platform_updates.nav'), 'icon' => 'activity'],
         ['route' => 'owner.privacy-requests.index', 'active' => 'owner.privacy-requests.*', 'label' => __('owner.nav.privacy_requests'), 'icon' => 'shield'],
         ['route' => 'owner.privacy-retention.index', 'active' => 'owner.privacy-retention.*', 'label' => __('owner.nav.privacy_retention'), 'icon' => 'shield'],
         ['route' => 'owner.legal-documents.index', 'active' => 'owner.legal-documents.*', 'label' => __('owner.nav.legal_documents'), 'icon' => 'list'],
