@@ -264,6 +264,41 @@ class PlatformUpdateNotificationsTest extends TestCase
         }
     }
 
+    public function test_a_fix_proven_for_another_version_is_not_mailed_and_the_real_installed_version_is(): void
+    {
+        // The inventory moved to 1.2.1 while the source was unreachable: the row still holds the fix proven for 1.2.0.
+        $this->advisory(['affected_version' => '1.2.0', 'fixed_version' => '1.2.5'], ['installed_version' => '1.2.1']);
+        $this->check('failed');
+
+        $this->assertTrue($this->notifier()->digest());
+
+        $html = null;
+        Mail::assertSent(PlatformUpdateNotice::class, function (PlatformUpdateNotice $mail) use (&$html) {
+            $html = $mail->render();
+
+            return true;
+        });
+        $this->assertStringContainsString('acme/vulnerable 1.2.1', (string) $html);
+        $this->assertStringNotContainsString('1.2.5', (string) $html);
+        $this->assertStringNotContainsString('fixed in', (string) $html);
+    }
+
+    public function test_a_confirmed_fix_is_mailed_with_the_installed_version(): void
+    {
+        $this->advisory(['affected_version' => '1.2.1', 'fixed_version' => '1.2.5'], ['installed_version' => '1.2.1']);
+
+        $this->notifier()->afterCheck($this->check('succeeded'));
+
+        $html = null;
+        Mail::assertSent(PlatformUpdateNotice::class, function (PlatformUpdateNotice $mail) use (&$html) {
+            $html = $mail->render();
+
+            return true;
+        });
+        $this->assertStringContainsString('acme/vulnerable 1.2.1', (string) $html);
+        $this->assertStringContainsString('fixed in 1.2.5', (string) $html);
+    }
+
     public function test_a_reopened_advisory_is_announced_again(): void
     {
         $advisory = $this->advisory();

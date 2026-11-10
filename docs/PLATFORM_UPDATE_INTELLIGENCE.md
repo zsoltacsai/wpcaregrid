@@ -96,6 +96,8 @@ available versions, Docker and GitHub Actions advisories, any other advisory sou
 
 System → Platform Updates shows: overall state (never healthier than proven: no successful check, a failed last check, unknown versions, unchecked components or a last success older than two days are not "healthy"; healthy only means *no known advisory in the checked components*), tiles (open, critical, advisories with a proven fix, unknown versions, components without an advisory source), last successful check, last check, next scheduled check, advisory list and detail page, component table (filter by kind), history of checks, and one action: **Check for updates** (queued, read-only, throttled; refused when the feature is disabled or staging-next is closed). Development-only advisories are listed per component but never counted. English only (Owner area).
 
+"Fixed in" has three meanings and the page keeps them apart: a version (the source proved a fix for the installed version), **none** (the source names no fixed version) and **not confirmed** (the advisory text was read for another installed version than the current one and could not be read again yet, so no stored fix is shown: the text is read again at the next check). The "Installed" version is always the component's current one, never the version the advisory text was last read for. A fix proven for another version is also not counted in "Advisories with a proven fix" and is not mailed (notices show the installed version and a fix only when it is confirmed).
+
 ## Notifications (Phase D)
 
 Built on the existing Owner mail path (verified owners without a customer account; on staging-next the existing `StagingMailGuard` confines every message and nothing is sent unless it is confined):

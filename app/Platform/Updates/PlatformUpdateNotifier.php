@@ -262,9 +262,12 @@ final class PlatformUpdateNotifier
      * @return list<array<string, scalar|null>> */
     private function items(Collection $advisories): array
     {
+        // The installed version is the component's current one; a fix that was proven for another installed version
+        // (the check could not read the advisory text again yet) is not advice for this one and is not mailed.
         return $advisories->map(fn (PlatformAdvisory $a) => [
-            'component' => $a->component->name, 'installed' => $a->affected_version, 'advisory' => $a->advisory_id,
-            'aliases' => implode(', ', array_slice($a->aliases ?? [], 0, 3)), 'severity' => $a->severity, 'fixed' => $a->fixed_version,
+            'component' => $a->component->name, 'installed' => $a->component->installed_version ?? __('platform_updates.version_states.UNKNOWN'), 'advisory' => $a->advisory_id,
+            'aliases' => implode(', ', array_slice($a->aliases ?? [], 0, 3)), 'severity' => $a->severity,
+            'fixed' => PlatformUpdateOverview::fixNotConfirmed($a) ? null : $a->fixed_version,
             'source' => $a->source_url,
         ])->values()->all();
     }
