@@ -765,6 +765,48 @@ class CheckoutTest extends TestCase
             ->assertDontSee(strtoupper(substr($intent->uuid, 0, 8)));
     }
 
+    public function test_a_logged_out_visitor_cannot_start_checkout_with_the_email_of_a_customer_who_already_has_a_stripe_customer(): void
+    {
+        // Stripe would create a second customer for the email; the payment could then never be matched to its subscription.
+        $customer = Customer::factory()->withUser()->create(['email' => 'customer@company.example', 'country_code' => 'HU', 'stripe_customer_id' => 'cus_already_paying']);
+        Promotion::create(['code' => 'GUEST10', 'stripe_promotion_code_id' => 'promo_guest10', 'discount_type' => 'percent', 'percent_off' => 10, 'duration' => 'once']);
+
+        foreach (['customer@company.example', 'Customer@Company.Example', '  CUSTOMER@company.example '] as $email) {
+            $this->submit(['email' => $email, 'promotion_code' => 'GUEST10'])
+                ->assertRedirect(route('checkout.show', ['product' => 'wordpress', 'plan' => 'business', 'interval' => 'monthly']))
+                ->assertSessionHasErrors(['email' => __('checkout.errors.existing_customer_login_required')]);
+        }
+
+        $this->assertSame(0, CheckoutIntent::count());
+        $this->assertSame(0, PromotionReservation::count(), 'no coupon slot is held');
+        $this->assertSame([], $this->gateway->created, 'nothing was created at Stripe');
+        $this->assertSame('cus_already_paying', $customer->fresh()->stripe_customer_id);
+    }
+
+    public function test_the_same_customer_can_still_order_from_their_own_login_and_other_guests_are_unaffected(): void
+    {
+        $customer = Customer::factory()->withUser()->create(['email' => 'customer@company.example', 'country_code' => 'HU', 'stripe_customer_id' => 'cus_already_paying']);
+
+        $this->actingAs($customer->user);
+        $this->submit(['email' => 'ignored@company.example'])->assertStatus(303);
+        $this->assertSame('cus_already_paying', $this->gateway->created[0]['intent']->customer->stripe_customer_id);
+        $this->assertSame($customer->email, CheckoutIntent::sole()->email);
+
+        auth()->logout();
+        $this->switchBrowser();
+        $this->submit(['email' => 'brand-new@company.example'])->assertStatus(303);   // a new email: unchanged behaviour
+        $this->assertSame(2, CheckoutIntent::count());
+    }
+
+    public function test_a_guest_with_the_email_of_a_customer_without_a_stripe_customer_proceeds_as_before(): void
+    {
+        Customer::factory()->withUser()->create(['email' => 'customer@company.example', 'country_code' => 'HU', 'stripe_customer_id' => null]);
+
+        $this->submit()->assertStatus(303);
+
+        $this->assertSame(1, CheckoutIntent::count());
+    }
+
     public function test_authenticated_customer_buys_second_site_and_signed_webhook_binds_it_once(): void
     {
         Mail::fake();

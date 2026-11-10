@@ -98,6 +98,7 @@ return [
         'price_inactive' => 'This plan is not available for purchase at the moment.',
         'price_not_purchasable' => 'Online checkout for this plan is not available yet. Please contact us to sign up.',
         'unavailable' => 'Online checkout is temporarily unavailable. Please try again later or contact us.',
+        'existing_customer_login_required' => 'This email already belongs to a customer account. Please log in to order from your account.',
     ],
 
     'promotion_errors' => [
