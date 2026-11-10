@@ -7,11 +7,14 @@ use App\Models\PlatformAdvisory;
 use App\Models\PlatformUpdateCheck;
 use App\Models\PlatformUpdateNotification;
 use App\Models\User;
+use App\Owner\AdminAudit;
 use App\Release\StagingActiveProfile;
 use App\Release\StagingMailGuard;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -35,8 +38,12 @@ final class PlatformUpdateNotifier
     /** A claim that was never completed (a killed worker) is released after this many minutes. */
     private const CLAIM_MINUTES = 15;
 
+    /** The check that triggered the current notifications, for the correlation of log and audit entries. */
+    private ?string $checkUuid = null;
+
     public function afterCheck(PlatformUpdateCheck $check): void
     {
+        $this->checkUuid = $check->uuid;
         if (config('platform_updates.enabled') !== true || ! $this->mailAllowed()) {
             return;
         }
@@ -169,6 +176,7 @@ final class PlatformUpdateNotifier
         $more = max(0, $advisories->count() - self::MAX_ITEMS);
         $complete = true;
         $sent = 0;
+        $correlation = (string) Str::uuid();   // ties every log and audit entry of this round together
         foreach ($recipients as $email) {
             try {
                 $claim = PlatformUpdateNotification::create(['kind' => $kind, 'dedupe_key' => $key.':'.substr(sha1($email), 0, 8), 'status' => 'pending', 'items' => $advisories->count(), 'recipients' => 1]);
@@ -178,20 +186,76 @@ final class PlatformUpdateNotifier
 
                 continue;
             }
+            $failure = null;
+            $exceptionClass = null;
             try {
-                Mail::to($email)->send(new PlatformUpdateNotice($kind, $items, $summary, $more));
-            } catch (Throwable) {
+                $message = Mail::to($email)->send(new PlatformUpdateNotice($kind, $items, $summary, $more));
+                if ($message === null && ! Mail::isFake()) {
+                    // No exception, but nothing was sent: a MessageSending listener (the staging mail guard) stopped the message.
+                    // The faked mailer of the tests returns nothing as well, which is not a failure.
+                    $failure = 'mail_not_sent';
+                }
+            } catch (Throwable $exception) {
+                $failure = 'mail_transport_failed';
+                $exceptionClass = $exception::class;   // never the message: transports put hosts, users and addresses in it
+            }
+            if ($failure !== null) {
                 // The key is released so that the next check can try again; the failed row stays as history.
-                $claim->forceFill(['status' => 'failed', 'failure_code' => 'mail_transport_failed', 'dedupe_key' => null])->save();
+                $this->deliveryFailed($claim, $kind, $email, $failure, $exceptionClass, $correlation);
                 $complete = false;
 
                 continue;
             }
-            $claim->forceFill(['status' => 'sent', 'sent_at' => now()])->save();
+            try {
+                $claim->forceFill(['status' => 'sent', 'sent_at' => now()])->save();
+            } catch (Throwable $exception) {
+                // The message went out but the claim could not be marked: it counts as delivered (a retry would send a duplicate);
+                // the pending claim is closed by the abandoned-claim cleanup later. The audit entry is the record of what happened.
+                $this->record('platform_update.notification_unrecorded', 'error', 'Platform update notification was sent but could not be recorded.', $claim, $kind, $email, 'claim_not_marked_sent', $exception::class, $correlation);
+            }
             $sent++;
         }
 
         return ['complete' => $complete, 'sent' => $sent];
+    }
+
+    /** A notice that could not be delivered: the claim is released for a retry, and the failure is logged and audited. Never throws. */
+    private function deliveryFailed(PlatformUpdateNotification $claim, string $kind, string $email, string $code, ?string $exceptionClass, string $correlation): void
+    {
+        try {
+            $claim->forceFill(['status' => 'failed', 'failure_code' => $code, 'dedupe_key' => null])->save();
+        } catch (Throwable) {
+            // The pending claim is closed later by the abandoned-claim cleanup; the failure is still reported below.
+            $code .= '+claim_update_failed';
+        }
+        $this->record('platform_update.notification_failed', 'warning', 'Platform update notification could not be delivered.', $claim, $kind, $email, $code, $exceptionClass, $correlation);
+    }
+
+    /**
+     * One structured log line and one audit entry (the Owner audit trail, actor "system"). Only identifiers, kinds, fixed codes, the class name
+     * of the exception and a short hash of the recipient: no address, no exception message, no mail body, no credentials. A failure to log or
+     * to audit never escapes (a notification problem must not stop the check) and is reported on the log channel as well.
+     */
+    private function record(string $event, string $level, string $message, PlatformUpdateNotification $claim, string $kind, string $email, string $code, ?string $exceptionClass, string $correlation): void
+    {
+        $context = array_filter([
+            'event' => $event, 'kind' => $kind, 'code' => $code, 'exception' => $exceptionClass, 'notification_id' => $claim->id,
+            'check' => $this->checkUuid, 'correlation' => $correlation, 'recipient' => substr(sha1($email), 0, 8),
+        ], fn ($value) => $value !== null);
+        try {
+            Log::{$level}($message, $context);
+        } catch (Throwable) {
+            // nothing more can be done about a broken log channel
+        }
+        try {
+            AdminAudit::record(null, $event, 'platform_update_notification', (string) $claim->id, $context);
+        } catch (Throwable $exception) {
+            try {
+                Log::error('Platform update notification audit entry could not be written.', ['event' => $event, 'notification_id' => $claim->id, 'correlation' => $correlation, 'exception' => $exception::class]);
+            } catch (Throwable) {
+                // see above
+            }
+        }
     }
 
     /** @param  Collection<int, PlatformAdvisory>  $advisories

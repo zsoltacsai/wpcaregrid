@@ -4,6 +4,7 @@ namespace Tests\Feature\Platform;
 
 use App\Jobs\RunPlatformUpdateCheck;
 use App\Mail\PlatformUpdateNotice;
+use App\Models\AdminAuditEvent;
 use App\Models\Customer;
 use App\Models\PlatformAdvisory;
 use App\Models\PlatformComponent;
@@ -12,10 +13,14 @@ use App\Models\PlatformUpdateNotification;
 use App\Models\User;
 use App\Platform\Updates\PlatformUpdateNotifier;
 use App\Platform\Updates\PlatformUpdateScanner;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Mail\MailManager;
+use Illuminate\Mail\SentMessage;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -291,6 +296,169 @@ class PlatformUpdateNotificationsTest extends TestCase
         $advisory->forceFill(['severity' => 'critical', 'details_checked_at' => now()])->save();
         $this->notifier()->afterCheck($this->check('succeeded'));
         Mail::assertSent(PlatformUpdateNotice::class, fn ($mail) => $mail->kind === 'critical');
+    }
+
+    /** A mail layer whose send() outcome is decided per recipient: an exception, null (message stopped) or a SentMessage. */
+    private function mailerWith(callable $outcome): void
+    {
+        $manager = \Mockery::mock(MailManager::class);
+        $manager->shouldReceive('getDefaultDriver')->andReturn('array');
+        $manager->shouldReceive('to')->andReturnUsing(function ($email) use ($outcome) {
+            $pending = \Mockery::mock();
+            $pending->shouldReceive('send')->andReturnUsing(fn () => $outcome((string) $email));
+
+            return $pending;
+        });
+        Mail::swap($manager);
+    }
+
+    private function sentMessage(): SentMessage
+    {
+        return \Mockery::mock(SentMessage::class);
+    }
+
+    private function platformAudit(): Collection
+    {
+        return AdminAuditEvent::query()->where('event', 'like', 'platform_update.%')->orderBy('id')->get();
+    }
+
+    public function test_a_successful_notification_writes_no_failure_log_and_no_audit_entry(): void
+    {
+        Log::spy();
+        $this->advisory();
+
+        $this->notifier()->afterCheck($this->check('succeeded'));
+
+        Mail::assertSent(PlatformUpdateNotice::class, 1);
+        $this->assertSame('sent', PlatformUpdateNotification::sole()->status);
+        $this->assertCount(0, $this->platformAudit());
+        Log::shouldNotHaveReceived('warning');
+        Log::shouldNotHaveReceived('error');
+    }
+
+    public function test_a_message_stopped_without_an_exception_is_a_failure_and_never_reported_as_sent(): void
+    {
+        Log::spy();
+        $advisory = $this->advisory();
+        $this->mailerWith(fn () => null);   // the staging mail guard (a MessageSending listener) stops a message: send() returns null
+
+        $this->notifier()->afterCheck($this->check('succeeded'));
+
+        $claim = PlatformUpdateNotification::sole();
+        $this->assertSame(['failed', 'mail_not_sent', null], [$claim->status, $claim->failure_code, $claim->dedupe_key]);
+        $this->assertNull($advisory->fresh()->notified_at);
+        $audit = $this->platformAudit();
+        $this->assertSame(['platform_update.notification_failed'], $audit->pluck('event')->all());
+        $this->assertSame('mail_not_sent', $audit->first()->data['code']);
+        Log::shouldHaveReceived('warning')->once();
+    }
+
+    public function test_a_delivery_exception_is_logged_and_audited_with_correlation_and_without_secrets(): void
+    {
+        Log::spy();
+        $this->advisory();
+        $check = $this->check('succeeded');
+        $this->mailerWith(function () {
+            throw new \RuntimeException('smtp://mailer:s3cret-pass@smtp.example:587 refused for owner@wpcaregrid.example, body: Remote code execution');
+        });
+
+        $this->notifier()->afterCheck($check);
+
+        $audit = $this->platformAudit();
+        $this->assertCount(1, $audit);
+        $data = $audit->first()->data;
+        $this->assertSame('platform_update.notification_failed', $audit->first()->event);
+        $this->assertSame(
+            ['mail_transport_failed', 'RuntimeException', $check->uuid, substr(sha1('owner@wpcaregrid.example'), 0, 8), PlatformUpdateNotification::sole()->id],
+            [$data['code'], $data['exception'], $data['check'], $data['recipient'], $data['notification_id']]
+        );
+        $this->assertNotEmpty($data['correlation']);
+        $this->assertSame('system', $audit->first()->actor_type);
+
+        $logged = null;
+        Log::shouldHaveReceived('warning')->once()->withArgs(function ($message, $context) use (&$logged) {
+            $logged = $context;
+
+            return true;
+        });
+        $this->assertSame($data['correlation'], $logged['correlation']);
+        $everything = json_encode([$data, $logged, $audit->first()->subject_key, $audit->first()->subject_type]);
+        foreach (['s3cret-pass', 'smtp.example', 'owner@wpcaregrid.example', 'Remote code execution'] as $secret) {
+            $this->assertStringNotContainsString($secret, (string) $everything, "{$secret} must not reach the log or the audit trail");
+        }
+    }
+
+    public function test_repeating_after_a_failure_sends_once_and_never_duplicates_or_re_audits(): void
+    {
+        $advisory = $this->advisory();
+        $this->mailerWith(function () {
+            throw new \RuntimeException('smtp down');
+        });
+        $this->notifier()->afterCheck($this->check('succeeded'));
+        $this->assertCount(1, $this->platformAudit());
+
+        Mail::fake();   // the transport recovered
+        $this->notifier()->afterCheck($this->check('succeeded'));
+        $this->notifier()->afterCheck($this->check('succeeded'));
+        $this->notifier()->afterCheck($this->check('succeeded'));
+
+        Mail::assertSent(PlatformUpdateNotice::class, 1);
+        $this->assertNotNull($advisory->fresh()->notified_at);
+        $this->assertCount(1, $this->platformAudit(), 'no further failure entries once it was delivered');
+        $this->assertSame(['failed', 'sent'], PlatformUpdateNotification::query()->orderBy('id')->pluck('status')->all());
+    }
+
+    public function test_recovery_after_a_partial_failure_reaches_only_the_owner_who_missed_it(): void
+    {
+        User::factory()->owner()->create(['email' => 'second@wpcaregrid.example', 'email_verified_at' => now()]);
+        $advisory = $this->advisory();
+        $this->mailerWith(function (string $email) {
+            if ($email === 'owner@wpcaregrid.example') {
+                throw new \RuntimeException('smtp timeout');
+            }
+
+            return $this->sentMessage();
+        });
+
+        $this->notifier()->afterCheck($this->check('succeeded'));
+
+        $this->assertNull($advisory->fresh()->notified_at, 'the round is not complete');
+        $this->assertSame(['failed', 'sent'], PlatformUpdateNotification::query()->orderBy('id')->pluck('status')->all());
+        $this->assertCount(1, $this->platformAudit());
+
+        Mail::fake();
+        $this->notifier()->afterCheck($this->check('succeeded'));
+
+        Mail::assertSent(PlatformUpdateNotice::class, 1);
+        Mail::assertSent(PlatformUpdateNotice::class, fn ($mail) => $mail->hasTo('owner@wpcaregrid.example'));
+        Mail::assertNotSent(PlatformUpdateNotice::class, fn ($mail) => $mail->hasTo('second@wpcaregrid.example'));
+        $this->assertNotNull($advisory->fresh()->notified_at);
+    }
+
+    public function test_a_message_that_went_out_but_could_not_be_recorded_counts_as_delivered_and_is_audited(): void
+    {
+        Log::spy();
+        $advisory = $this->advisory();
+        $listener = 'eloquent.updating: '.PlatformUpdateNotification::class;
+        Event::listen($listener, function ($model) {
+            if ($model->status === 'sent') {
+                throw new \RuntimeException('database write failed');
+            }
+        });
+        try {
+            $this->notifier()->afterCheck($this->check('succeeded'));
+        } finally {
+            Event::forget($listener);
+        }
+
+        Mail::assertSent(PlatformUpdateNotice::class, 1);
+        $this->assertNotNull($advisory->fresh()->notified_at, 'it was delivered: a retry would be a duplicate');
+        $this->assertSame(['platform_update.notification_unrecorded'], $this->platformAudit()->pluck('event')->all());
+        $this->assertSame('claim_not_marked_sent', $this->platformAudit()->first()->data['code']);
+        Log::shouldHaveReceived('error')->once();
+
+        $this->notifier()->afterCheck($this->check('succeeded'));
+        Mail::assertSent(PlatformUpdateNotice::class, 1);
     }
 
     public function test_an_abandoned_pending_claim_does_not_block_the_notice(): void
