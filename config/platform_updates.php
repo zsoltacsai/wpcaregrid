@@ -7,7 +7,9 @@
 */
 return [
     // Off by default: no scheduled outbound request until the Owner enables it for the environment.
-    'enabled' => (bool) env('PLATFORM_UPDATES_ENABLED', false),
+    // Fail-closed: only a recognised "on" value (true, 1, yes, on) enables it. false, no, off, 0, empty, "disabled" and
+    // any unknown or misspelled value read as off (a plain (bool) cast would turn every non-empty string, "off" included, on).
+    'enabled' => filter_var(env('PLATFORM_UPDATES_ENABLED', false), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) === true,
 
     'timeout' => 10,
     'connect_timeout' => 5,
