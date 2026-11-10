@@ -20,7 +20,8 @@ final class PlatformUpdateOverview
     {
         $lastSuccess = PlatformUpdateCheck::query()->whereIn('status', ['succeeded', 'partial'])->latest('finished_at')->first();
         $last = PlatformUpdateCheck::query()->whereIn('status', ['succeeded', 'partial', 'failed'])->latest('started_at')->first();
-        $open = PlatformAdvisory::query()->where('state', PlatformAdvisory::OPEN);
+        // Development-only packages are not part of a production release: listed, never counted.
+        $open = PlatformAdvisory::query()->where('state', PlatformAdvisory::OPEN)->whereHas('component', fn ($q) => $q->where('development_only', false));
         $openCount = (clone $open)->count();
         $critical = (clone $open)->where('severity', 'critical')->count();
         $security = (clone $open)->whereNotNull('fixed_version')->count();

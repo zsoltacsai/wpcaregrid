@@ -26,7 +26,7 @@ class PlatformUpdatesController extends Controller
             'summary' => $overview->summary(),
             'kind' => $kind,
             'kinds' => self::KINDS,
-            'advisories' => PlatformAdvisory::query()->with('component')->where('state', PlatformAdvisory::OPEN)
+            'advisories' => PlatformAdvisory::query()->with('component')->where('state', PlatformAdvisory::OPEN)->whereHas('component', fn ($q) => $q->where('development_only', false))
                 ->orderByRaw("case severity when 'critical' then 0 when 'high' then 1 when 'medium' then 2 when 'low' then 3 else 4 end")
                 ->orderByDesc('published_at')->limit(100)->get(),
             'components' => PlatformComponent::query()->withCount(['advisories as open_advisories_count' => fn ($q) => $q->where('state', PlatformAdvisory::OPEN)])

@@ -80,6 +80,15 @@ class PlatformUpdatesPageTest extends TestCase
             ->assertSee('Plan an update of acme/vulnerable to 1.2.5 or later. Test it on staging first; nothing is updated automatically.');
     }
 
+    public function test_a_development_only_advisory_is_not_counted_or_listed_as_open(): void
+    {
+        $this->asOwner();
+        $this->makeAdvisory($this->makeComponent('composer:acme/dev', '3.1.0', ['development_only' => true]));
+        $this->makeCheck('succeeded');
+
+        $this->get(route('owner.platform-updates.index'))->assertOk()->assertSee('No known advisories')->assertSee('No open advisories in the checked components.')->assertDontSee('data-advisory', false);
+    }
+
     public function test_without_a_proven_fix_no_fixed_version_is_invented(): void
     {
         $this->asOwner();
