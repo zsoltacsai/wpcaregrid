@@ -11,6 +11,9 @@ return [
     'refused' => [
         'disabled' => 'Platform update checks are disabled (PLATFORM_UPDATES_ENABLED).',
         'staging_external_contact_closed' => 'Blocked: this staging stack has not been opened for external services.',
+        'staging_environment_unproven' => 'Blocked: this staging stack is not proven to be the isolated staging environment.',
+        'staging_mail_not_confined' => 'Blocked: this staging stack has no confined mail transport.',
+        'staging_held' => 'Blocked by the staging policy.',
     ],
     'overall' => 'Platform status',
     'states' => ['healthy' => 'No known advisories in the checked components', 'attention' => 'Attention', 'critical' => 'Critical', 'unknown' => 'Unknown'],

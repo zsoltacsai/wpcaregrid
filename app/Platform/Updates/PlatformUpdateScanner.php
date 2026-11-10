@@ -5,7 +5,6 @@ namespace App\Platform\Updates;
 use App\Models\PlatformAdvisory;
 use App\Models\PlatformComponent;
 use App\Models\PlatformUpdateCheck;
-use App\Release\StagingActiveProfile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Throwable;
@@ -28,9 +27,9 @@ final class PlatformUpdateScanner
     {
         $trigger = $trigger === 'manual' ? 'manual' : 'scheduled';
 
-        if (StagingActiveProfile::externalContactClosed()) {
-            // staging-next without the Owner's external-services opt-in: no outbound request at all.
-            return $this->refused($trigger, 'staging_external_contact_closed', persist: true);
+        if (($refusal = PlatformUpdateGate::checkRefusal()) !== null) {
+            // Disabled, or staging-next that is not opened and proven for external contact: no outbound request at all.
+            return $this->refused($trigger, $refusal, persist: $refusal !== 'disabled');
         }
         if ($this->checkedRecently()) {
             return $this->refused($trigger, 'checked_recently');

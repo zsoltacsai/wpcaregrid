@@ -43,7 +43,7 @@ class PlatformUpdatesFlagTest extends TestCase
 
     public function test_the_shipped_configuration_is_off_in_the_test_environment(): void
     {
-        // No code path may rely on truthiness of a string: every reader compares with === true.
+        // Every reader goes through PlatformUpdateGate::enabled(), which compares with === true.
         $this->assertFalse(config('platform_updates.enabled'));
     }
 }

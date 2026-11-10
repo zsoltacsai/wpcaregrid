@@ -8,8 +8,6 @@ use App\Models\PlatformUpdateCheck;
 use App\Models\PlatformUpdateNotification;
 use App\Models\User;
 use App\Owner\AdminAudit;
-use App\Release\StagingActiveProfile;
-use App\Release\StagingMailGuard;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
@@ -44,7 +42,7 @@ final class PlatformUpdateNotifier
     public function afterCheck(PlatformUpdateCheck $check): void
     {
         $this->checkUuid = $check->uuid;
-        if (config('platform_updates.enabled') !== true || ! $this->mailAllowed()) {
+        if (PlatformUpdateGate::mailRefusal() !== null) {
             return;
         }
         if ($check->status === 'failed') {
@@ -64,7 +62,7 @@ final class PlatformUpdateNotifier
     /** The daily summary. Returns true when a summary was sent. */
     public function digest(): bool
     {
-        if (config('platform_updates.enabled') !== true || ! $this->mailAllowed()) {
+        if (PlatformUpdateGate::mailRefusal() !== null) {
             return false;
         }
         $overview = (new PlatformUpdateOverview)->summary();
@@ -270,11 +268,5 @@ final class PlatformUpdateNotifier
             'fixed' => PlatformUpdateOverview::fixNotConfirmed($a) ? null : $a->fixed_version,
             'source' => $a->source_url,
         ])->values()->all();
-    }
-
-    /** On staging-next mail is sent only where the existing guard confines it (sink mailer or recipient allowlist). */
-    private function mailAllowed(): bool
-    {
-        return ! StagingActiveProfile::isStagingNextEnvironment() || StagingMailGuard::restricted();
     }
 }

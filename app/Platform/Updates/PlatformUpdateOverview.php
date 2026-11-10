@@ -46,7 +46,7 @@ final class PlatformUpdateOverview
 
         return [
             'state' => $state,
-            'enabled' => config('platform_updates.enabled') === true,
+            'enabled' => PlatformUpdateGate::enabled(),
             'open' => $openCount,
             'critical' => $critical,
             'fixes_available' => $security,
@@ -56,7 +56,7 @@ final class PlatformUpdateOverview
             'unverified' => (clone $components)->where('advisory_state', 'UNVERIFIED')->count(),
             'last_check' => $last,
             'last_success' => $lastSuccess,
-            'next_check' => config('platform_updates.enabled') === true ? $this->nextScheduled() : null,
+            'next_check' => PlatformUpdateGate::enabled() ? $this->nextScheduled() : null,
         ];
     }
 
