@@ -67,12 +67,20 @@ final class SubscriptionManagement
         }
 
         $operation = $scheduled ? 'downgrade' : (($subscription->interval !== $interval) ? 'billing_period_switch' : 'upgrade');
-        $operationKey = hash('sha256', implode('|', [
+        $baseKey = hash('sha256', implode('|', [
             $subscription->uuid,
             $operation,
             $target->stripePriceId,
-            $effectiveAt?->utc()->format('YmdHis') ?? 'now',
+            // An immediate change has no date: a clock value here made every retry (even a second later) a different request.
+            $scheduled ? ($effectiveAt?->utc()->format('YmdHis') ?? 'scheduled') : 'immediate',
         ]));
+        // A request that comes after the earlier identical attempt was closed (paid, payment failed, expired) is a new attempt with
+        // its own operation and idempotency key; while the earlier one is open, the same request keeps the same key.
+        $closedBefore = SubscriptionOperation::query()
+            ->where('subscription_id', $subscription->id)->where('operation', $operation)
+            ->whereJsonContains('request_snapshot->target_stripe_price_id', $target->stripePriceId)
+            ->whereIn('status', ['confirmed', 'payment_failed', 'expired'])->count();
+        $operationKey = $closedBefore === 0 ? $baseKey : hash('sha256', $baseKey.'|attempt|'.$closedBefore);
         try {
             $row = DB::transaction(function () use ($subscription, $customer, $operation, $operationKey, $target, $effectiveAt, $scheduled, $userId): SubscriptionOperation {
                 $lockedSubscription = Subscription::query()->whereKey($subscription->id)->lockForUpdate()->firstOrFail();
@@ -121,7 +129,15 @@ final class SubscriptionManagement
             $row = SubscriptionOperation::where('operation_key', $operationKey)->firstOrFail();
         }
 
-        if (! in_array($row->status, ['requested', 'processing'], true)) {
+        // An immediate change whose Stripe call had an unknown outcome is replayed with the same idempotency key: Stripe returns the
+        // original result if it had processed it, otherwise it applies the change now. The replay is bounded; after that an
+        // operator has to settle it (it is surfaced by the audit trail and the billing monitoring), never guessed.
+        $replayable = ['requested', 'processing'];
+        if (! $scheduled && $row->status === 'reconciliation_required') {
+            $this->assertReplayAllowed($row, $subscription);
+            $replayable[] = 'reconciliation_required';
+        }
+        if (! in_array($row->status, $replayable, true)) {
             if ($scheduled && in_array($row->status, ['awaiting_confirmation', 'confirmed'], true)
                 && is_string(data_get($row->request_snapshot, 'provider_schedule_id'))) {
                 $this->queueScheduledChangeEmail($row, $subscription, $customer, $productType, $tier, $interval, $effectiveAt);
@@ -131,13 +147,16 @@ final class SubscriptionManagement
         }
 
         $claimed = DB::table('subscription_operations')->where('id', $row->id)
-            ->whereIn('status', ['requested', 'processing'])
+            ->whereIn('status', $replayable)
             ->where(function ($query) {
                 $query->whereNull('lease_expires_at')->orWhere('lease_expires_at', '<=', now());
             })
             ->update(['status' => 'processing', 'lease_expires_at' => now()->addMinutes(2), 'updated_at' => now()]);
         if ($claimed !== 1) {
             return $row->refresh();
+        }
+        if ($row->status === 'reconciliation_required') {
+            $this->countReplay($row);
         }
 
         try {
@@ -152,6 +171,8 @@ final class SubscriptionManagement
                 throw new \UnexpectedValueException('Stripe did not confirm the requested subscription schedule.');
             }
             DB::transaction(function () use ($row, $response): void {
+                // Subscription first, then the operation: the order of every other writer (webhooks, reconciliation).
+                Subscription::query()->whereKey($row->subscription_id)->lockForUpdate()->firstOrFail();
                 $operation = SubscriptionOperation::query()->whereKey($row->id)->lockForUpdate()->firstOrFail();
                 $snapshot = $operation->request_snapshot;
                 if (is_string($response['invoice_id'] ?? null) && $response['invoice_id'] !== '') {
@@ -161,13 +182,22 @@ final class SubscriptionManagement
                     $snapshot['provider_schedule_id'] = $response['schedule_id'];
                 }
 
+                // A webhook that settled the change while the request was in flight (paid, failed, expired) is final: the late
+                // response never takes the operation back to "awaiting".
                 $operation->forceFill([
                     'request_snapshot' => $snapshot,
-                    'status' => $operation->status === 'confirmed' ? 'confirmed' : 'awaiting_confirmation',
+                    'status' => in_array($operation->status, ['confirmed', 'payment_failed', 'expired'], true) ? $operation->status : 'awaiting_confirmation',
                     'provider_request_id' => $response['request_id'],
                     'submitted_at' => $operation->submitted_at ?? now(),
                     'lease_expires_at' => null,
                 ])->save();
+                // Stripe has now confirmed an earlier unknown request: the payment is awaited, as after a first successful request.
+                if (! (data_get($snapshot, 'scheduled') === true) && $operation->status === 'awaiting_confirmation') {
+                    Subscription::query()->whereKey($operation->subscription_id)
+                        ->where('pending_change_status', 'reconciliation_required')
+                        ->where('pending_stripe_price_id', data_get($snapshot, 'target_stripe_price_id'))
+                        ->update(['pending_change_status' => 'awaiting_payment', 'updated_at' => now()]);
+                }
                 if (is_string($response['schedule_id'] ?? null) && $response['schedule_id'] !== '') {
                     Subscription::query()->whereKey($operation->subscription_id)
                         ->where('pending_change_status', 'awaiting_confirmation')
@@ -185,7 +215,8 @@ final class SubscriptionManagement
             $confirmedWhileRequestFailed = DB::transaction(function () use ($row, $subscription, $target, $effectiveAt, $exception): bool {
                 $locked = Subscription::query()->whereKey($subscription->id)->lockForUpdate()->firstOrFail();
                 $lockedOperation = SubscriptionOperation::query()->whereKey($row->id)->lockForUpdate()->firstOrFail();
-                if ($lockedOperation->status === 'confirmed') {
+                // Settled by a webhook while the request was failing (paid, payment failed, expired): final, never reopened.
+                if (in_array($lockedOperation->status, ['confirmed', 'payment_failed', 'expired'], true)) {
                     return true;
                 }
 
@@ -222,6 +253,43 @@ final class SubscriptionManagement
         }
 
         return $row->refresh();
+    }
+
+    /** Automatic replays of one unknown-outcome request, after the first attempt. */
+    private const MAX_REPLAYS = 3;
+
+    private function assertReplayAllowed(SubscriptionOperation $row, Subscription $subscription): void
+    {
+        if ((int) data_get($row->request_snapshot, 'replays', 0) < self::MAX_REPLAYS) {
+            return;
+        }
+        if (data_get($row->request_snapshot, 'operator_required_at') === null) {
+            DB::transaction(function () use ($row, $subscription): void {
+                $locked = SubscriptionOperation::query()->whereKey($row->id)->lockForUpdate()->firstOrFail();
+                if (data_get($locked->request_snapshot, 'operator_required_at') !== null) {
+                    return;
+                }
+                $snapshot = $locked->request_snapshot;
+                $snapshot['operator_required_at'] = now()->toIso8601String();
+                $locked->forceFill(['request_snapshot' => $snapshot])->save();
+                AdminAudit::record(null, 'billing.subscription_change_operator_required', 'subscription', $subscription->uuid, [
+                    'operation_uuid' => $locked->uuid,
+                    'replays' => (int) data_get($snapshot, 'replays', 0),
+                ]);
+            }, attempts: 3);
+        }
+
+        throw new LogicException('This plan change could not be confirmed with Stripe automatically and needs an operator to settle it.');
+    }
+
+    private function countReplay(SubscriptionOperation $row): void
+    {
+        DB::transaction(function () use ($row): void {
+            $locked = SubscriptionOperation::query()->whereKey($row->id)->lockForUpdate()->firstOrFail();
+            $snapshot = $locked->request_snapshot;
+            $snapshot['replays'] = (int) data_get($snapshot, 'replays', 0) + 1;
+            $locked->forceFill(['request_snapshot' => $snapshot])->save();
+        }, attempts: 3);
     }
 
     private function queueScheduledChangeEmail(

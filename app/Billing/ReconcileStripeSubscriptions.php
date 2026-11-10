@@ -16,6 +16,7 @@ final class ReconcileStripeSubscriptions
         private readonly StripeSubscriptionReader $reader,
         private readonly SubscriptionSync $sync,
         private readonly InvoiceEvents $invoices,
+        private readonly SubscriptionPlanChangeConfirmation $planChanges,
     ) {}
 
     /** @return array{checked:int,reconciled:int,changed:int,failed:int,skipped:int} */
@@ -112,6 +113,9 @@ final class ReconcileStripeSubscriptions
 
                     if ($outcome !== 'skipped') {
                         $this->reconcileLatestInvoice($remote, $candidate);
+                        // After the invoice: a paid invoice always wins. Only then can a pending immediate change that Stripe no
+                        // longer shows (window passed, nothing pending, old price) be closed as not applied.
+                        $this->planChanges->expireIfGone($candidate->fresh(), $remote);
                     }
                     $result[$outcome]++;
                 } catch (Throwable $exception) {

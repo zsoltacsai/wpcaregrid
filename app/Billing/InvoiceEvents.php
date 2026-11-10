@@ -153,6 +153,26 @@ final class InvoiceEvents
             return;
         }
 
+        // The payment of a pending plan change failed (or the same failure arrives again): the subscription keeps the plan it has
+        // paid for, so this is neither a failed subscription payment nor a reason for grace, and the generic "Stripe will retry"
+        // notice would be wrong. The customer is told that the change was not applied.
+        if ($this->planChanges->failUnpaidInvoice($subscription, $invoice)) {
+            if ($notifyFailure) {
+                AdminAudit::record(null, 'billing.payment_failure', 'subscription', $subscription->uuid, ['stripe_invoice_id' => $invoice->id]);
+            }
+            if ($subscription->customer) {
+                $this->billingEmails->enqueue(
+                    'subscription:'.$subscription->uuid.':upgrade-payment-failed:'.$invoice->id,
+                    'upgrade_payment_failed',
+                    $subscription->customer,
+                    $subscription,
+                    payload: ['plan_name' => $subscription->planName()],
+                );
+            }
+
+            return;
+        }
+
         $firstGraceFailure = $subscription->grace_started_at === null;
         $subscription->update(['last_payment_status' => 'failed']);
         $subscription->beginPaymentGrace(Carbon::createFromTimestamp($eventCreated ?: time()));
