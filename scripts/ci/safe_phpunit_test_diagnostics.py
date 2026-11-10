@@ -16,8 +16,8 @@ MAX_LINE_BYTES = 2048
 
 # IDs are intentionally short, fixed, and unrelated to runtime input.
 DIAGNOSTIC_TESTS = {
-    "dispatch_active_default_pulse": "dispatch_active_default_pulse",
-    "resolve_legacy_paused_worker": "resolve_legacy_paused_worker",
+    "dispatch_active_default_pulse": "phpunit_run_bare",
+    "resolve_legacy_paused_worker": "phpunit_run_bare",
 }
 _CLASS = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*\\)*[A-Za-z_][A-Za-z0-9_]*\Z")
 _SQLSTATE = re.compile(r"[A-Z0-9]{5}\Z")
