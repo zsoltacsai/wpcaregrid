@@ -291,6 +291,45 @@ class PlatformUpdatesBackendTest extends TestCase
         }
     }
 
+    public function test_a_failed_reread_never_downgrades_a_known_advisory(): void
+    {
+        $hit = ['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']];
+        $this->osv($hit);
+        app(PlatformUpdateScanner::class)->run('manual');
+        $before = PlatformAdvisory::firstOrFail();
+        $this->assertSame(['critical', '1.2.5'], [$before->severity, $before->fixed_version]);
+
+        $this->travel(25)->hours();
+        Http::swap(new Factory);
+        Http::fake([
+            'api.osv.dev/v1/querybatch' => fn ($r) => Http::response(['results' => array_map(fn ($q) => $q['package']['name'] === 'acme/vulnerable' ? ['vulns' => [['id' => 'GHSA-aaaa-bbbb-cccc']]] : (object) [], $r['queries'])], 200),
+            'api.osv.dev/v1/vulns/*' => Http::response('x', 503),
+        ]);
+        $check = app(PlatformUpdateScanner::class)->run('manual');
+
+        $after = PlatformAdvisory::firstOrFail();
+        $this->assertSame(['critical', '1.2.5', 'open', 1], [$after->severity, $after->fixed_version, $after->state, $check->advisories_critical]);
+    }
+
+    public function test_a_resolved_advisory_stays_resolved_when_its_text_cannot_be_read(): void
+    {
+        $hit = ['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']];
+        $this->osv($hit);
+        app(PlatformUpdateScanner::class)->run('manual');
+        PlatformAdvisory::query()->update(['state' => 'resolved', 'resolved_at' => now(), 'notified_at' => now()]);
+
+        Http::swap(new Factory);
+        Http::fake([
+            'api.osv.dev/v1/querybatch' => fn ($r) => Http::response(['results' => array_map(fn ($q) => $q['package']['name'] === 'acme/vulnerable' ? ['vulns' => [['id' => 'GHSA-aaaa-bbbb-cccc']]] : (object) [], $r['queries'])], 200),
+            'api.osv.dev/v1/vulns/*' => Http::response('x', 503),
+        ]);
+        app(PlatformUpdateScanner::class)->run('manual');
+
+        $advisory = PlatformAdvisory::firstOrFail();
+        $this->assertSame('resolved', $advisory->state);
+        $this->assertNotNull($advisory->notified_at, 'no new notification');
+    }
+
     public function test_the_client_asks_for_uncompressed_answers(): void
     {
         $this->osv();

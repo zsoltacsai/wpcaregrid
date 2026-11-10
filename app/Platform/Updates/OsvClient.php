@@ -157,6 +157,7 @@ final class OsvClient
                 ->connectTimeout((int) config('platform_updates.connect_timeout', 5))
                 ->withOptions([
                     'allow_redirects' => false,
+                    'decode_content' => false,   // never expand a compressed answer: the cap counts what is held
                     // Abort as soon as the announced or the received size exceeds the cap (before it is held in memory).
                     'on_headers' => function ($response) use ($limit, &$tooLarge): void {
                         if ((int) $response->getHeaderLine('Content-Length') > $limit) {

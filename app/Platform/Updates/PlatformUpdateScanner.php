@@ -112,6 +112,16 @@ final class PlatformUpdateScanner
                         $partial = 'advisory_detail_budget_exhausted';   // detail count or the run's time budget
                     }
                     $withdrawn = $details['withdrawn'] ?? false;
+                    if ($details === null && $advisory->exists) {
+                        // The source could not be read now: what is already known (severity, fix, text) is kept, never downgraded,
+                        // and a resolved advisory stays resolved until its text can be read again.
+                        if ($advisory->state === PlatformAdvisory::RESOLVED) {
+                            continue;
+                        }
+                        $advisory->fill(['last_seen_check_id' => $check->id, 'state' => PlatformAdvisory::OPEN])->save();
+
+                        continue;
+                    }
                     $advisory->fill([
                         'aliases' => $details['aliases'] ?? ($advisory->aliases ?? []),
                         'severity' => $details['severity'] ?? 'unknown',
