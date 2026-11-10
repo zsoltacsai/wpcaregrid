@@ -30,6 +30,12 @@ Existing platform-monitoring that this module sits next to (and does not replace
 * `platform_advisories` — one row per component and advisory id: aliases (CVE), severity (`critical|high|medium|low|unknown`,
   never estimated), summary, installed version at detection, `fixed_version` **only when the source proves one**, publication date,
   official source URL, `open`/`resolved`, `notified_at` (de-duplication for Phase D).
+* **Freshness of an advisory row.** A fix is proven for one installed version only. When the installed version of a component changed and
+  the advisory text cannot be read again (source error, detail budget), the advisory stays open and keeps its severity (the source still says it
+  affects the new version) but its `fixed_version` is cleared; `affected_version` and `details_checked_at` stay as they were, so the row is
+  never shown as freshly verified and is read again on the next check. A text read that succeeds replaces severity (a lowered one is taken
+  over, a missing one becomes `unknown`), fix and `details_checked_at`. A resolved advisory that is reported again is reopened and announced again;
+  a withdrawn advisory is never open.
 * `platform_update_checks` — history of runs: trigger, status (`succeeded|partial|failed|refused`), fixed reason code, counts. No payloads.
 
 ## Sources of truth
@@ -67,6 +73,15 @@ Redis/Supervisor, Docker images, GitHub Actions advisories, Composer/NPM *availa
 
 `php artisan platform:updates:check [--manual]` (scheduled daily 05:20 UTC when enabled). No VPS configuration change is required to ship the code;
 enabling it is an environment variable decision of the Owner.
+
+`PLATFORM_UPDATES_ENABLED` is declared in `.env.example` as `false`. With it off the scheduled check does not run and `platform:updates:check`
+refuses (`CODE=disabled`). Neither setting ever installs or updates software. (The Owner page, the manual queued check and the notifications
+belong to the later phases C and D and are gated by the same flag in their own pull requests.)
+
+### Not covered yet (no claim is made for these)
+
+Ubuntu/OS and PHP/MySQL advisory coverage (runtime components stay `UNVERIFIED`), connector-specific advisory intelligence, detection of newer
+available versions, Docker and GitHub Actions advisories, any other advisory source than OSV (Phase E).
 
 ## Phases
 

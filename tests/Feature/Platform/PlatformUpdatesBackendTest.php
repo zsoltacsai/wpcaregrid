@@ -311,6 +311,109 @@ class PlatformUpdatesBackendTest extends TestCase
         $this->assertSame(['critical', '1.2.5', 'open', 1], [$after->severity, $after->fixed_version, $after->state, $check->advisories_critical]);
     }
 
+    /** Rewrites the installed version of acme/vulnerable in the fake composer.lock (the inventory reads it on every check). */
+    private function installVulnerableVersion(string $version): void
+    {
+        file_put_contents($this->dir.'/composer.lock', json_encode([
+            'packages' => [['name' => 'acme/vulnerable', 'version' => $version], ['name' => 'acme/fine', 'version' => '2.0.0']],
+            'packages-dev' => [],
+        ]));
+    }
+
+    /** A source that still reports GHSA-aaaa-bbbb-cccc for every queried version but cannot serve its text. */
+    private function osvStillReportsButTextUnreadable(): void
+    {
+        Http::swap(new Factory);
+        Http::fake([
+            'api.osv.dev/v1/querybatch' => fn ($r) => Http::response(['results' => array_map(fn ($q) => $q['package']['name'] === 'acme/vulnerable' ? ['vulns' => [['id' => 'GHSA-aaaa-bbbb-cccc']]] : (object) [], $r['queries'])], 200),
+            'api.osv.dev/v1/vulns/*' => Http::response('x', 503),
+        ]);
+    }
+
+    public function test_a_stale_fix_is_dropped_when_the_installed_version_changed_and_the_text_cannot_be_read(): void
+    {
+        $this->osv(['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']]);
+        app(PlatformUpdateScanner::class)->run('manual');
+        $known = PlatformAdvisory::firstOrFail();
+        $this->assertSame(['1.2.0', '1.2.5', 'critical'], [$known->affected_version, $known->fixed_version, $known->severity]);
+        $verifiedAt = $known->details_checked_at;
+
+        // The component was changed to another vulnerable version; the source still affects it but its text is unreadable now.
+        $this->installVulnerableVersion('1.2.1');
+        $this->travel(1)->minutes();
+        $this->osvStillReportsButTextUnreadable();
+        $check = app(PlatformUpdateScanner::class)->run('manual');
+
+        $stale = PlatformAdvisory::firstOrFail();
+        // Still open and never downgraded (the source says it affects 1.2.1), but a fix that was proven for 1.2.0 is not
+        // presented for 1.2.1; the old text is not claimed as freshly verified either.
+        $this->assertSame(['open', 'critical', null, '1.2.0'], [$stale->state, $stale->severity, $stale->fixed_version, $stale->affected_version]);
+        $this->assertTrue($verifiedAt->equalTo($stale->details_checked_at), 'details_checked_at must not move when nothing was re-read');
+        $this->assertSame('partial', $check->status);
+
+        // Once the text can be read again the fix is proven for the installed version and the row is current.
+        $this->travel(1)->minutes();
+        $this->osv(['acme/vulnerable@1.2.1' => ['GHSA-aaaa-bbbb-cccc']]);
+        app(PlatformUpdateScanner::class)->run('manual');
+        $fresh = PlatformAdvisory::firstOrFail();
+        $this->assertSame(['open', '1.2.1', '1.2.5', 1], [$fresh->state, $fresh->affected_version, $fresh->fixed_version, PlatformAdvisory::count()]);
+        $this->assertTrue($fresh->details_checked_at->greaterThan($verifiedAt));
+    }
+
+    public function test_a_failed_reread_for_the_same_installed_version_keeps_its_proven_fix(): void
+    {
+        $this->osv(['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']]);
+        app(PlatformUpdateScanner::class)->run('manual');
+
+        $this->travel(25)->hours();
+        $this->osvStillReportsButTextUnreadable();
+        app(PlatformUpdateScanner::class)->run('manual');
+
+        $kept = PlatformAdvisory::firstOrFail();
+        $this->assertSame(['open', '1.2.0', '1.2.5', 'critical'], [$kept->state, $kept->affected_version, $kept->fixed_version, $kept->severity]);
+    }
+
+    public function test_a_changed_severity_is_taken_from_the_fresh_read_and_a_missing_one_is_unknown(): void
+    {
+        $detail = fn (?string $severity) => [
+            'id' => 'GHSA-aaaa-bbbb-cccc', 'aliases' => ['CVE-2026-0001'], 'summary' => 'Remote code execution', 'published' => '2026-02-03T04:05:06Z',
+            'database_specific' => $severity === null ? [] : ['severity' => $severity],
+            'affected' => [['package' => ['ecosystem' => 'Packagist', 'name' => 'acme/vulnerable'], 'ranges' => [['type' => 'ECOSYSTEM', 'events' => [['introduced' => '0'], ['fixed' => '1.2.5']]]]]],
+        ];
+        $hits = ['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']];
+
+        $this->osv($hits, $detail('CRITICAL'));
+        $check = app(PlatformUpdateScanner::class)->run('manual');
+        $this->assertSame(['critical', 1], [PlatformAdvisory::firstOrFail()->severity, $check->advisories_critical]);
+
+        $this->travel(25)->hours();   // re-read after a day: the publisher lowered it
+        $this->osv($hits, $detail('LOW'));
+        $check = app(PlatformUpdateScanner::class)->run('manual');
+        $this->assertSame(['low', 0, 1], [PlatformAdvisory::firstOrFail()->severity, $check->advisories_critical, PlatformAdvisory::count()]);
+
+        $this->travel(25)->hours();   // the record no longer states any severity: not invented, read again next time
+        $this->osv($hits, $detail(null));
+        app(PlatformUpdateScanner::class)->run('manual');
+        $this->assertSame(['unknown', 'open'], [PlatformAdvisory::firstOrFail()->severity, PlatformAdvisory::firstOrFail()->state]);
+    }
+
+    public function test_a_resolved_advisory_that_comes_back_is_open_again_and_announced_again(): void
+    {
+        $hits = ['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']];
+        $this->osv($hits);
+        app(PlatformUpdateScanner::class)->run('manual');
+        $this->osv();   // gone from the source: resolved
+        app(PlatformUpdateScanner::class)->run('manual');
+        PlatformAdvisory::query()->update(['notified_at' => now()]);
+        $this->assertSame(PlatformAdvisory::RESOLVED, PlatformAdvisory::firstOrFail()->state);
+
+        $this->osv($hits);   // reported again and readable
+        app(PlatformUpdateScanner::class)->run('manual');
+
+        $back = PlatformAdvisory::firstOrFail();
+        $this->assertSame([PlatformAdvisory::OPEN, null, null, 1], [$back->state, $back->resolved_at, $back->notified_at, PlatformAdvisory::count()]);
+    }
+
     public function test_a_resolved_advisory_stays_resolved_when_its_text_cannot_be_read(): void
     {
         $hit = ['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']];
@@ -372,6 +475,12 @@ class PlatformUpdatesBackendTest extends TestCase
         $keys = collect(app(ComponentInventory::class)->collect())->pluck('key');
 
         $this->assertTrue($keys->every(fn ($key) => strlen($key) <= 190));
+    }
+
+    public function test_the_feature_flag_defaults_to_off_and_is_documented_off(): void
+    {
+        $this->assertStringContainsString("env('PLATFORM_UPDATES_ENABLED', false)", (string) file_get_contents(base_path('config/platform_updates.php')));
+        $this->assertMatchesRegularExpression('/^PLATFORM_UPDATES_ENABLED=false$/m', (string) file_get_contents(base_path('.env.example')));
     }
 
     public function test_the_module_can_execute_nothing_and_update_nothing(): void

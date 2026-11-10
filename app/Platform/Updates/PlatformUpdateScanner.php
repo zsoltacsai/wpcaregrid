@@ -118,7 +118,14 @@ final class PlatformUpdateScanner
                         if ($advisory->state === PlatformAdvisory::RESOLVED) {
                             continue;
                         }
-                        $advisory->fill(['last_seen_check_id' => $check->id, 'state' => PlatformAdvisory::OPEN])->save();
+                        $changes = ['last_seen_check_id' => $check->id, 'state' => PlatformAdvisory::OPEN];
+                        if ($advisory->affected_version !== $component->version) {
+                            // A fix is proven for one installed version only. The stored one was proven for the previous version
+                            // and cannot be shown for this one until the text is read again (affected_version stays as it was, so
+                            // the next check reads it again). details_checked_at is untouched: nothing was freshly verified.
+                            $changes['fixed_version'] = null;
+                        }
+                        $advisory->fill($changes)->save();
 
                         continue;
                     }
