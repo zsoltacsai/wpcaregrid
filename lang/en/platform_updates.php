@@ -46,6 +46,7 @@ return [
     'checked_at' => 'checked',
     'action' => [
         'fixed_version' => 'Plan an update of :component to :fixed or later. Test it on staging first; nothing is updated automatically.',
+        'fix_not_confirmed' => 'No fix is confirmed for the installed version yet; the advisory text is read again at the next check. Review the advisory; nothing is updated automatically.',
         'review_no_fix' => 'The source names no fixed version. Review the advisory and decide; nothing is updated automatically.',
         'review_unknown' => 'The source does not state a severity or fix. Review the advisory; nothing is updated automatically.',
     ],
@@ -59,6 +60,7 @@ return [
         'last_checked' => 'Last confirmed',
         'recommended' => 'Recommended action',
         'none' => 'none',
+        'not_confirmed' => 'not confirmed',
     ],
     'note' => 'Source: OSV (osv.dev), which aggregates the GitHub Advisory Database. Ubuntu, PHP and MySQL announcements are not connected yet.',
 ];

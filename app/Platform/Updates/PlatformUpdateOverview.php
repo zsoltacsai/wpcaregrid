@@ -67,8 +67,23 @@ final class PlatformUpdateOverview
     /** The action text for an advisory: only what the source proves, and never an automatic action. */
     public static function action(PlatformAdvisory $advisory): string
     {
-        return $advisory->fixed_version !== null
-            ? 'fixed_version'
-            : ($advisory->severity === 'unknown' ? 'review_unknown' : 'review_no_fix');
+        return match (true) {
+            $advisory->fixed_version !== null => 'fixed_version',
+            self::fixNotConfirmed($advisory) => 'fix_not_confirmed',
+            $advisory->severity === 'unknown' => 'review_unknown',
+            default => 'review_no_fix',
+        };
+    }
+
+    /**
+     * No fix is stored because the advisory text was read for another installed version than the current one and could not be
+     * read again (the scanner clears the fix then): "no fix is confirmed yet", which is not the same as "the source names none".
+     */
+    public static function fixNotConfirmed(PlatformAdvisory $advisory): bool
+    {
+        return $advisory->fixed_version === null
+            && $advisory->affected_version !== null
+            && $advisory->component !== null
+            && $advisory->component->installed_version !== $advisory->affected_version;
     }
 }
