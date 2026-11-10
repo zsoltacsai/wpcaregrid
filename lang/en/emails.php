@@ -76,6 +76,7 @@ return [
         'cancellation_scheduled' => ['subject' => 'Subscription cancellation scheduled', 'body' => 'Your :plan subscription will remain active until the end of the paid period, then it will end.'],
         'subscription_reactivated' => ['subject' => 'Subscription reactivated', 'body' => 'Your request to keep the :plan subscription active was confirmed.'],
         'upgrade_completed' => ['subject' => 'Plan change confirmed', 'body' => 'Your :plan plan change was confirmed after payment.'],
+        'upgrade_payment_failed' => ['subject' => 'Plan change not applied', 'body' => 'The payment for your plan change could not be collected, so the change was not applied. Your current :plan plan remains active. You can request the change again from your account.'],
         'downgrade_scheduled' => ['subject' => 'Plan change scheduled', 'body' => 'Your :plan (:interval) plan change is scheduled for the next renewal. Your current access remains until then.'],
         'payment_recovered' => ['subject' => 'Payment issue resolved', 'body' => 'Payment for your :plan subscription was confirmed and service access is active.'],
         'grace_started' => ['subject' => 'Action needed for your subscription payment', 'body' => 'We could not collect payment for :plan. Your account remains available during the payment grace period.'],

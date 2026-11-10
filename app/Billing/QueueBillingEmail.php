@@ -15,7 +15,7 @@ final class QueueBillingEmail
     private const NOTIFICATIONS = [
         'subscription_activated', 'payment_received', 'payment_failed', 'subscription_canceled',
         'cancellation_scheduled', 'subscription_reactivated', 'upgrade_completed', 'downgrade_scheduled',
-        'payment_recovered', 'grace_started', 'grace_reminder', 'invoice_available', 'billing_action_required',
+        'payment_recovered', 'grace_started', 'grace_reminder', 'invoice_available', 'billing_action_required', 'upgrade_payment_failed',
     ];
 
     /** @param array<string, scalar|null> $payload */
