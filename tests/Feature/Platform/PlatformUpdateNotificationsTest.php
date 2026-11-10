@@ -543,6 +543,37 @@ class PlatformUpdateNotificationsTest extends TestCase
         ]);
     }
 
+    private function fakeOsvSeverity(string $severity): void
+    {
+        Http::swap(new Factory);
+        Http::fake([
+            'api.osv.dev/v1/querybatch' => fn ($request) => Http::response(['results' => array_map(
+                fn ($q) => $q['package']['name'] === 'laravel/framework' ? ['vulns' => [['id' => 'GHSA-zzzz-zzzz-zzzz']]] : (object) [], $request['queries'],
+            )], 200),
+            'api.osv.dev/v1/vulns/*' => Http::response(['id' => 'GHSA-zzzz-zzzz-zzzz', 'summary' => 's', 'database_specific' => ['severity' => $severity], 'aliases' => []], 200),
+        ]);
+    }
+
+    public function test_an_advisory_announced_as_non_critical_is_escalated_with_a_critical_notice_when_it_becomes_critical(): void
+    {
+        config(['platform_updates.min_interval_seconds' => 0]);
+        $this->fakeOsvSeverity('LOW');
+        $this->artisan('platform:updates:check')->assertSuccessful();
+        Mail::assertSent(PlatformUpdateNotice::class, 1);
+        Mail::assertSent(PlatformUpdateNotice::class, fn ($mail) => $mail->kind === 'security');
+
+        $this->travel(25)->hours();   // the source re-read after a day: the publisher raised it to critical
+        $this->fakeOsvSeverity('CRITICAL');
+        $this->artisan('platform:updates:check')->assertSuccessful();
+
+        Mail::assertSent(PlatformUpdateNotice::class, 2);
+        Mail::assertSent(PlatformUpdateNotice::class, fn ($mail) => $mail->kind === 'critical' && $mail->items[0]['advisory'] === 'GHSA-zzzz-zzzz-zzzz' && $mail->items[0]['severity'] === 'critical');
+
+        $this->travel(25)->hours();   // and it is announced exactly once as critical
+        $this->artisan('platform:updates:check')->assertSuccessful();
+        Mail::assertSent(PlatformUpdateNotice::class, 2);
+    }
+
     public function test_the_check_command_notifies_after_a_check(): void
     {
         config(['platform_updates.min_interval_seconds' => 0]);

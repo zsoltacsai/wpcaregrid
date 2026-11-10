@@ -1,6 +1,6 @@
 # Platform Update Intelligence
 
-Status: **Phases A-D are implemented as four stacked pull requests** (backend #352, Owner page #353, notifications #354, and this document). None of them is merged or deployed. Nothing here updates, installs or restarts anything: it checks and reports.
+Status: **Phases A-D are implemented in the source** as stacked pull requests (backend #352 and Owner page #353 are merged; notifications #354 is the last one). Nothing is deployed or enabled in any environment (`PLATFORM_UPDATES_ENABLED=false` by default). Nothing here updates, installs or restarts anything: it checks and reports.
 
 ## Principle
 
@@ -87,9 +87,9 @@ available versions, Docker and GitHub Actions advisories, any other advisory sou
 | Phase | Content | State |
 |---|---|---|
 | A | Discovery, architecture, boundaries | this document |
-| B | Inventory, advisory processing, scheduled check, history, critical detection | PR 1 (this change) |
+| B | Inventory, advisory processing, scheduled check, history, critical detection | PR #352 |
 | C | Owner UI "System → Platform Updates" (`/owner/system/platform-updates`) | PR #353 |
-| D | Notifications with de-duplication and daily summary | PR #354 (this change) |
+| D | Notifications with de-duplication and daily summary | PR #354 |
 | E | Further sources: Ubuntu USN, PHP/MySQL announcements, available-version lookup, GitHub Actions/Docker | planned |
 
 ## Owner page (Phase C)
@@ -109,7 +109,7 @@ Built on the existing Owner mail path (verified owners without a customer accoun
 | The check failed | one system warning per UTC day (`failure`) |
 | Daily summary (06:30 UTC) | only when something is open, the last check failed, or results are stale or missing |
 
-De-duplication: an advisory is announced once (`notified_at`; re-opened advisories are announced again); the same vulnerability under another id (CVE/GHSA alias) is marked announced without a mail; every notice is claimed by a unique key (`platform_update_notifications.dedupe_key`) before it is sent; a failed send releases the key (the failed row stays as history) so the next check retries. UNKNOWN/UNVERIFIED data and development-only components never notify. Notice content: component, installed version, advisory/CVE, severity, fixed version only if proven, official source, and the statement that nothing is updated automatically.
+De-duplication: an advisory is announced once (`notified_at`; re-opened advisories are announced again, and so is one that was announced as less serious and is later read as `critical` — escalation; a lowered or unchanged severity is never a new notice); the same vulnerability under another id (CVE/GHSA alias) is marked announced without a mail; every notice is claimed by a unique key (`platform_update_notifications.dedupe_key`) before it is sent; a failed send releases the key (the failed row stays as history) so the next check retries. UNKNOWN/UNVERIFIED data and development-only components never notify. Notice content: component, installed version, advisory/CVE, severity, fixed version only if proven, official source, and the statement that nothing is updated automatically.
 
 Failure handling: a notice that cannot be delivered is never reported as sent. An exception from the mail layer (`mail_transport_failed`) and a message that a `MessageSending` listener stopped without an exception, such as the staging mail guard (`mail_not_sent`), release the claim (status `failed`, key freed) and leave the advisories unannounced, so the next check retries only the owners who did not get it; a failure is retried at most once per check, never in a loop. Each failure is written as one structured `warning` log line and one Owner audit entry (`platform_update.notification_failed`, actor `system`) carrying the notification id, the notice kind, the fixed code, the exception class, the check uuid, a per-round correlation id and a short hash of the recipient. Never the exception message, the address, the mail body or any credential. If the message went out but its claim could not be marked sent, it counts as delivered (a retry would be a duplicate) and is recorded as `platform_update.notification_unrecorded` with an `error` log line. Writing the log or the audit entry can fail without stopping the check.
 
