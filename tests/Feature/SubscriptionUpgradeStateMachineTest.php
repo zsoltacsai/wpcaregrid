@@ -89,14 +89,14 @@ class SubscriptionUpgradeStateMachineTest extends TestCase
     }
 
     /** @return array<string, mixed> */
-    private function invoice(string $id, string $status, ?string $priceId = null, array $extra = []): array
+    private function invoice(string $id, string $status, ?string $priceId = null, array $extra = [], ?int $paidAt = null): array
     {
         return $extra + [
             'id' => $id, 'object' => 'invoice', 'customer' => $this->subscription->stripe_customer_id,
             'billing_reason' => 'subscription_update', 'status' => $status, 'currency' => 'huf',
             'amount_paid' => $status === 'paid' ? 190000 : 0, 'amount_due' => $status === 'paid' ? 0 : 190000,
             'attempted' => $status !== 'draft', 'attempt_count' => 1,
-            'created' => now()->timestamp, 'status_transitions' => $status === 'paid' ? ['paid_at' => now()->timestamp] : [],
+            'created' => now()->timestamp, 'status_transitions' => $status === 'paid' ? ['paid_at' => $paidAt ?? now()->timestamp] : [],
             'parent' => ['subscription_details' => ['subscription' => $this->subscription->stripe_subscription_id]],
             'lines' => ['data' => [['pricing' => ['price_details' => ['price' => $priceId ?? $this->targetPrice]]]]],
         ];
@@ -104,7 +104,7 @@ class SubscriptionUpgradeStateMachineTest extends TestCase
 
     protected function paid(string $invoiceId = 'in_test_change', string $eventId = 'evt_paid', ?int $created = null): void
     {
-        $this->stripeEvent('invoice.paid', $this->invoice($invoiceId, 'paid'), $eventId, $created)->assertStatus(204);
+        $this->stripeEvent('invoice.paid', $this->invoice($invoiceId, 'paid', null, [], $created), $eventId, $created)->assertStatus(204);
     }
 
     private function paymentFailed(string $invoiceId = 'in_test_change', string $eventId = 'evt_failed', ?int $created = null): void
@@ -276,7 +276,7 @@ class SubscriptionUpgradeStateMachineTest extends TestCase
         $this->assertNull($subscription->grace_started_at);
     }
 
-    public function test_a_payment_that_comes_after_the_attempt_was_closed_as_expired_still_applies_the_paid_upgrade(): void
+    public function test_a_payment_after_the_attempt_expired_never_grants_the_plan_by_itself(): void
     {
         $operation = $this->requestUpgrade();
         $this->useRemote($this->remoteSubscription($this->currentPrice));
@@ -285,11 +285,113 @@ class SubscriptionUpgradeStateMachineTest extends TestCase
         $this->assertSame('expired', $operation->fresh()->status);
         $this->assertSame(PlanTier::Business, $this->plan());
 
+        // paying the invoice after Stripe discarded the pending update does not change the Stripe subscription: no plan here either
         $this->paid('in_test_change', 'evt_paid_after_expiry', now()->timestamp);
+        $this->assertSame(PlanTier::Business, $this->plan());
+        $this->assertSame('expired', $operation->fresh()->status);
+        $this->assertNull($this->subscription->fresh()->pending_change_status);
+
+        // only Stripe showing the new price (the update really was applied) moves the plan, through the subscription object
+        $this->subscriptionEvent($this->targetPrice, 'evt_applied_by_stripe', now()->addMinute()->timestamp);
+        $this->assertSame(PlanTier::Secure, $this->plan());
+    }
+
+    public function test_a_payment_of_a_failed_attempt_after_the_pending_window_is_not_treated_as_the_upgrade(): void
+    {
+        $operation = $this->requestUpgrade();
+        $this->paymentFailed('in_test_change', 'evt_failed', now()->timestamp);
+
+        $this->paid('in_test_change', 'evt_paid_much_later', now()->addHours(30)->timestamp);
+        $this->paid('in_test_change', 'evt_paid_much_later_again', now()->addHours(30)->timestamp);
+
+        $this->assertSame(PlanTier::Business, $this->plan());
+        $this->assertSame('payment_failed', $operation->fresh()->status);
+        // a real payment that cannot be applied is surfaced to an operator, once
+        $this->assertSame(1, AdminAuditEvent::query()->where('event', 'billing.subscription_change_late_payment_unapplied')->count());
+    }
+
+    public function test_a_failure_redelivered_after_the_attempt_expired_starts_no_grace(): void
+    {
+        $this->requestUpgrade();
+        $this->useRemote($this->remoteSubscription($this->currentPrice));
+        $this->travel(26)->hours();
+        app(ReconcileStripeSubscriptions::class)->run(10, $this->subscription->id);
+
+        $this->paymentFailed('in_test_change', 'evt_failed_after_expiry', now()->timestamp);
+
+        $subscription = $this->subscription->fresh();
+        $this->assertNull($subscription->grace_started_at);
+        $this->assertNotSame('failed', $subscription->last_payment_status);
+    }
+
+    public function test_a_failure_redelivered_for_an_earlier_attempt_does_not_start_grace_while_a_new_attempt_is_open(): void
+    {
+        $this->gateway->invoiceId = 'in_one';
+        $this->requestUpgrade();
+        $this->paymentFailed('in_one', 'evt_failed_one', now()->timestamp);
+        $this->gateway->invoiceId = 'in_two';
+        $second = $this->requestUpgrade();
+        $this->assertSame('awaiting_payment', $this->subscription->fresh()->pending_change_status);
+
+        $this->paymentFailed('in_one', 'evt_failed_one_again', now()->addSecond()->timestamp);   // a redelivery of the first failure
+
+        $subscription = $this->subscription->fresh();
+        $this->assertNull($subscription->grace_started_at);
+        $this->assertSame('awaiting_payment', $subscription->pending_change_status, 'the open second attempt is untouched');
+        $this->assertSame('awaiting_confirmation', $second->fresh()->status);
+    }
+
+    public function test_a_late_payment_of_the_first_of_two_failed_attempts_is_not_lost(): void
+    {
+        $this->gateway->invoiceId = 'in_one';
+        $first = $this->requestUpgrade();
+        $this->paymentFailed('in_one', 'evt_failed_one', now()->timestamp);
+        $this->gateway->invoiceId = 'in_two';
+        $second = $this->requestUpgrade();
+        $this->paymentFailed('in_two', 'evt_failed_two', now()->addSecond()->timestamp);
+        $this->assertSame(['payment_failed', 'payment_failed'], [$first->fresh()->status, $second->fresh()->status]);
+
+        $this->paid('in_one', 'evt_paid_one', now()->addMinutes(10)->timestamp);
 
         $this->assertSame(PlanTier::Secure, $this->plan());
-        $this->assertSame('confirmed', $operation->fresh()->status);
+        $this->assertSame('confirmed', $first->fresh()->status);
+        $this->assertSame('payment_failed', $second->fresh()->status);
+    }
+
+    public function test_a_late_payment_while_another_change_is_pending_is_not_applied_over_it_and_is_surfaced(): void
+    {
+        $this->gateway->invoiceId = 'in_one';
+        $first = $this->requestUpgrade();
+        $this->paymentFailed('in_one', 'evt_failed_one', now()->timestamp);
+        $this->gateway->invoiceId = 'in_two';
+        $second = $this->requestUpgrade();
+
+        $this->paid('in_one', 'evt_paid_one', now()->addMinutes(10)->timestamp);
+
+        $subscription = $this->subscription->fresh();
+        $this->assertSame(PlanTier::Business, $subscription->plan, 'the pending second attempt is not wiped by the first one');
+        $this->assertSame('awaiting_payment', $subscription->pending_change_status);
+        $this->assertSame('payment_failed', $first->fresh()->status);
+        $this->assertSame('awaiting_confirmation', $second->fresh()->status);
+        $this->assertDatabaseHas('admin_audit_events', ['event' => 'billing.subscription_change_late_payment_unapplied', 'subject_key' => $subscription->uuid]);
+    }
+
+    public function test_a_failure_webhook_that_settles_the_change_while_the_request_fails_is_final_and_a_later_payment_still_applies(): void
+    {
+        $this->gateway->duringPriceChange = function (): void {
+            $this->paymentFailed('in_test_change', 'evt_failed_during_failing_request', now()->timestamp);
+
+            throw new \RuntimeException('Stripe timeout');
+        };
+
+        $operation = $this->requestUpgrade();   // the settled outcome is returned, nothing is thrown or reopened
+
+        $this->assertSame('payment_failed', $operation->fresh()->status);
         $this->assertNull($this->subscription->fresh()->pending_change_status);
+
+        $this->paid('in_test_change', 'evt_paid_after', now()->addMinutes(5)->timestamp);
+        $this->assertSame(PlanTier::Secure, $this->plan());
+        $this->assertSame('confirmed', $operation->fresh()->status);
     }
 
     // ---- Finding B: an unknown outcome is retried, bounded, and visible ----

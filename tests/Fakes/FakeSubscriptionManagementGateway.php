@@ -19,6 +19,9 @@ class FakeSubscriptionManagementGateway implements SubscriptionManagementGateway
 
     public ?string $scheduleId = 'sub_sched_test';
 
+    /** The proration invoice Stripe reports for an immediate change. */
+    public string $invoiceId = 'in_test_change';
+
     /** @var Closure():void|null */
     public ?Closure $duringPriceChange = null;
 
@@ -51,7 +54,7 @@ class FakeSubscriptionManagementGateway implements SubscriptionManagementGateway
         }
 
         return $immediate
-            ? ['request_id' => 'req_price_123', 'invoice_id' => 'in_test_change']
+            ? ['request_id' => 'req_price_123', 'invoice_id' => $this->invoiceId]
             : array_filter(['request_id' => 'req_price_123', 'invoice_id' => null, 'schedule_id' => $this->scheduleId], static fn ($value) => $value !== null);
     }
 }

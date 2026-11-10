@@ -171,6 +171,8 @@ final class SubscriptionManagement
                 throw new \UnexpectedValueException('Stripe did not confirm the requested subscription schedule.');
             }
             DB::transaction(function () use ($row, $response): void {
+                // Subscription first, then the operation: the order of every other writer (webhooks, reconciliation).
+                Subscription::query()->whereKey($row->subscription_id)->lockForUpdate()->firstOrFail();
                 $operation = SubscriptionOperation::query()->whereKey($row->id)->lockForUpdate()->firstOrFail();
                 $snapshot = $operation->request_snapshot;
                 if (is_string($response['invoice_id'] ?? null) && $response['invoice_id'] !== '') {
@@ -213,7 +215,8 @@ final class SubscriptionManagement
             $confirmedWhileRequestFailed = DB::transaction(function () use ($row, $subscription, $target, $effectiveAt, $exception): bool {
                 $locked = Subscription::query()->whereKey($subscription->id)->lockForUpdate()->firstOrFail();
                 $lockedOperation = SubscriptionOperation::query()->whereKey($row->id)->lockForUpdate()->firstOrFail();
-                if ($lockedOperation->status === 'confirmed') {
+                // Settled by a webhook while the request was failing (paid, payment failed, expired): final, never reopened.
+                if (in_array($lockedOperation->status, ['confirmed', 'payment_failed', 'expired'], true)) {
                     return true;
                 }
 
