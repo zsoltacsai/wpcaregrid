@@ -74,8 +74,9 @@ Redis/Supervisor, Docker images, GitHub Actions advisories, Composer/NPM *availa
 `php artisan platform:updates:check [--manual]` (scheduled daily 05:20 UTC when enabled). No VPS configuration change is required to ship the code;
 enabling it is an environment variable decision of the Owner.
 
-`PLATFORM_UPDATES_ENABLED` is declared in `.env.example` as `false`. With it off the scheduled check and the digest are not scheduled, the command
-refuses to run and the queued manual check does nothing. Neither value ever installs or updates software.
+`PLATFORM_UPDATES_ENABLED` is declared in `.env.example` as `false`. With it off the scheduled check does not run and `platform:updates:check`
+refuses (`CODE=disabled`). Neither setting ever installs or updates software. (The Owner page, the manual queued check and the notifications
+belong to the later phases C and D and are gated by the same flag in their own pull requests.)
 
 ### Not covered yet (no claim is made for these)
 
