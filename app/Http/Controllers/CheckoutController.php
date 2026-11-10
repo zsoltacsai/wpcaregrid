@@ -9,6 +9,7 @@ use App\Checkout\CheckoutOfferResolver;
 use App\Checkout\CheckoutStatus;
 use App\Checkout\CheckoutUnavailable;
 use App\Checkout\ExistingCustomerCurrencyLock;
+use App\Checkout\ExistingCustomerLoginRequired;
 use App\Checkout\PromotionPreview;
 use App\Checkout\PromotionRejected;
 use App\Checkout\StartCheckout;
@@ -187,6 +188,8 @@ class CheckoutController extends Controller
             }
 
             return back()->withInput()->withErrors(['billing_identity' => __('checkout.identity.incomplete')]);
+        } catch (ExistingCustomerLoginRequired) {
+            return back()->withInput()->withErrors(['email' => __('checkout.errors.existing_customer_login_required')]);
         } catch (CheckoutInProgress) {
             return redirect()->route('account.subscription')->with('status', __('account.websites.checkout_pending'));
         } catch (MarketNotAvailable $e) {

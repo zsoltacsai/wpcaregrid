@@ -98,6 +98,7 @@ return [
         'price_inactive' => 'Ez a csomag jelenleg nem rendelhető meg.',
         'price_not_purchasable' => 'A csomag online rendelése még nem érhető el. A feliratkozáshoz kérjük, lépjen kapcsolatba velünk.',
         'unavailable' => 'Az online rendelés átmenetileg nem elérhető. Kérjük, próbálja újra később, vagy lépjen kapcsolatba velünk.',
+        'existing_customer_login_required' => 'Ez az e-mail-cím már egy ügyfélfiókhoz tartozik. Kérjük, jelentkezzen be, és a fiókjából rendeljen.',
     ],
 
     'promotion_errors' => [
