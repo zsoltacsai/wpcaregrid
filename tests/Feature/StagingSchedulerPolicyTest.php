@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Owner\SystemStatus;
+use App\Release\StagingActiveProfile;
 use App\Release\StagingDatabaseProbe;
 use App\Release\StagingSchedulePolicy;
 use Illuminate\Console\Scheduling\CacheEventMutex;
@@ -32,7 +33,9 @@ class StagingSchedulerPolicyTest extends TestCase
 
     private const CONNECTOR = ['backup:schedule', 'security:schedule'];
 
-    private const EXTERNAL = ['platform:database-backup-schedule', 'security:vulnerabilities:sync', 'platform:updates:check'];
+    private const EXTERNAL = ['platform:database-backup-schedule', 'security:vulnerabilities:sync'];
+
+    private const PLATFORM_UPDATES = ['platform:updates:check'];
 
     protected function setUp(): void
     {
@@ -55,7 +58,7 @@ class StagingSchedulerPolicyTest extends TestCase
         $this->assertSame([], array_diff(array_keys(StagingSchedulePolicy::TASKS), $scheduled), 'a classification for a task that is not scheduled');
         $this->assertCount(21, $scheduled);
         $this->assertEqualsCanonicalizing(
-            array_merge(self::LOCAL, self::STRIPE, self::MAIL, self::CONNECTOR, self::EXTERNAL),
+            array_merge(self::LOCAL, self::STRIPE, self::MAIL, self::CONNECTOR, self::EXTERNAL, self::PLATFORM_UPDATES),
             array_keys(StagingSchedulePolicy::TASKS),
         );
     }
@@ -88,7 +91,8 @@ class StagingSchedulerPolicyTest extends TestCase
         $expected = array_fill_keys(self::STRIPE, 'stripe_closed')
             + array_fill_keys(self::MAIL, 'mail_closed')
             + array_fill_keys(self::CONNECTOR, 'connector_closed')
-            + array_fill_keys(self::EXTERNAL, 'external_closed');
+            + array_fill_keys(self::EXTERNAL, 'external_closed')
+            + array_fill_keys(self::PLATFORM_UPDATES, 'platform_updates_outbound_closed');
         ksort($expected);
         $this->assertSame($expected, $this->sorted(app(StagingSchedulePolicy::class)->held()));
     }
@@ -128,6 +132,32 @@ class StagingSchedulerPolicyTest extends TestCase
         config(['marketing_release.staging_active_features.connector_api' => false, 'marketing_release.staging_active_features.external_services' => true]);
         $this->assertGroupDue(self::EXTERNAL);
         $this->assertGroupHeld(self::CONNECTOR);
+        $this->assertGroupHeld(self::PLATFORM_UPDATES, 'the external-services opt-in does not open the platform update check');
+    }
+
+    public function test_the_platform_update_check_has_its_own_opt_in_that_opens_nothing_else(): void
+    {
+        $this->proven();
+        $policy = app(StagingSchedulePolicy::class);
+        $this->assertGroupHeld(self::PLATFORM_UPDATES);
+        $this->assertSame('platform_updates_outbound_closed', $policy->denial('platform:updates:check'));
+
+        config(['marketing_release.staging_active_features.platform_updates_outbound' => true]);
+
+        $this->assertGroupDue(self::PLATFORM_UPDATES);
+        // every other group stays exactly as it was: nothing external, no website probe, no connector work, no mail, no Stripe
+        $this->assertGroupHeld(self::EXTERNAL, 'external services stay closed');
+        $this->assertGroupHeld(self::CONNECTOR);
+        $this->assertGroupHeld(self::MAIL);
+        $this->assertGroupHeld(self::STRIPE);
+        $this->assertTrue(StagingActiveProfile::externalContactClosed(), 'website probes, Cloudflare, platform backups and the vulnerability feed stay fenced');
+        foreach (['/owner/dns/cloudflare', '/owner/infrastructure/platform-backups', '/owner/integrations/ai/health'] as $path) {
+            $this->assertFalse(app(StagingActiveProfile::class)->groupOpen(StagingActiveProfile::GROUP_EXTERNAL, $path), $path);
+        }
+
+        // and it is a proof-bound opt-in, not a replacement for the proof
+        $this->probe('wpcg_somewhere_else');
+        $this->assertSame('environment_unproven', app(StagingSchedulePolicy::class)->denial('platform:updates:check'));
     }
 
     public function test_an_unproven_environment_holds_everything_except_the_heartbeat(): void
@@ -292,7 +322,7 @@ class StagingSchedulerPolicyTest extends TestCase
             'marketing_release.requested_profile' => 'staging_active',
             'marketing_release.staging_active_enabled' => true,
             'marketing_release.enforcement_mode' => 'enforced',
-            'marketing_release.staging_active_features' => ['connector_api' => false, 'external_services' => false],
+            'marketing_release.staging_active_features' => ['connector_api' => false, 'external_services' => false, 'platform_updates_outbound' => false],
             'marketing_release.staging_active_db_uuid_sha256' => null,
             'marketing_release.staging_mail_allowlist' => [],
             'app.env' => 'staging',

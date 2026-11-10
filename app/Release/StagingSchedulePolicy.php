@@ -21,6 +21,8 @@ use Illuminate\Console\Scheduling\Event;
  *  - mail:      sends mail; needs a sink mailer or a recipient allowlist.
  *  - connector: works on paired customer sites; needs the Owner's connector opt-in.
  *  - external:  contacts a third party or infrastructure; needs the Owner's opt-in.
+ *  - platform_updates: the advisory check of Platform Update Intelligence only (one fixed public endpoint, no customer data);
+ *               needs its own opt-in, which opens nothing else and is not opened by `external`.
  */
 final class StagingSchedulePolicy
 {
@@ -33,6 +35,8 @@ final class StagingSchedulePolicy
     public const CONNECTOR = 'connector';
 
     public const EXTERNAL = 'external';
+
+    public const PLATFORM_UPDATES = 'platform_updates';
 
     public const HEARTBEAT = 'system:scheduler-heartbeat';
 
@@ -57,7 +61,7 @@ final class StagingSchedulePolicy
         'billing:emails:drain' => self::MAIL,
         'stripe:subscriptions:reconcile' => self::STRIPE,
         'billing:subscriptions:expire-grace' => self::LOCAL,
-        'platform:updates:check' => self::EXTERNAL,
+        'platform:updates:check' => self::PLATFORM_UPDATES,
         'platform:updates:digest' => self::MAIL,
     ];
 
@@ -128,6 +132,9 @@ final class StagingSchedulePolicy
         }
         if ($group === self::EXTERNAL && config('marketing_release.staging_active_features.external_services') !== true) {
             return 'external_closed';
+        }
+        if ($group === self::PLATFORM_UPDATES && config('marketing_release.staging_active_features.platform_updates_outbound') !== true) {
+            return 'platform_updates_outbound_closed';
         }
         if ($task === 'backup:monitor' && ! $this->backupStagingInsideStorage()) {
             return 'backup_staging_path_outside_storage';

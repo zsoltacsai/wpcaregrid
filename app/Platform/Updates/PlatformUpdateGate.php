@@ -37,9 +37,9 @@ final class PlatformUpdateGate
         if (! StagingSchedulePolicy::appliesHere()) {
             return null;
         }
-        // Fixed code kept from before: staging-next without the Owner's external-services opt-in.
-        if (config('marketing_release.staging_active_features.external_services') !== true) {
-            return 'staging_external_contact_closed';
+        // staging-next without the dedicated opt-in (never implied by the external-services opt-in, which opens much more).
+        if (config('marketing_release.staging_active_features.platform_updates_outbound') !== true) {
+            return 'staging_platform_updates_closed';
         }
 
         return self::environment(self::CHECK_TASK);
@@ -65,7 +65,7 @@ final class PlatformUpdateGate
 
         return match ($denial) {
             null => null,
-            'external_closed' => 'staging_external_contact_closed',
+            'platform_updates_outbound_closed' => 'staging_platform_updates_closed',
             'mail_closed' => 'staging_mail_not_confined',
             'environment_unproven' => 'staging_environment_unproven',
             default => 'staging_held',

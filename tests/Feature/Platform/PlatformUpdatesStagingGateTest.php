@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Platform\Updates\PlatformUpdateGate;
 use App\Platform\Updates\PlatformUpdateNotifier;
 use App\Platform\Updates\PlatformUpdateScanner;
+use App\Release\StagingActiveProfile;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
@@ -47,7 +48,7 @@ class PlatformUpdatesStagingGateTest extends TestCase
      */
     public static function heldStacks(): array
     {
-        $open = ['marketing_release.staging_active_features.external_services' => true, 'marketing_release.staging_mail_allowlist' => ['@example.test']];
+        $open = ['marketing_release.staging_active_features.platform_updates_outbound' => true, 'marketing_release.staging_mail_allowlist' => ['@example.test']];
 
         return [
             'identified only by its host' => [$open + ['app.deployment_environment' => 'production', 'app.url' => 'https://staging-next.wpcaregrid.com']],
@@ -110,11 +111,11 @@ class PlatformUpdatesStagingGateTest extends TestCase
     {
         Queue::fake();
         $this->asOwner();
-        config(['app.deployment_environment' => 'staging_next']);   // external services still closed
+        config(['app.deployment_environment' => 'staging_next', 'marketing_release.staging_active_features.external_services' => true]);   // the broad opt-in is not enough
 
-        $this->post(route('owner.platform-updates.check'))->assertRedirect()->assertSessionHas('owner_error', 'Blocked: this staging stack has not been opened for external services.');
+        $this->post(route('owner.platform-updates.check'))->assertRedirect()->assertSessionHas('owner_error', 'Blocked: this staging stack has not been opened for the platform update check (STAGING_ACTIVE_PLATFORM_UPDATES_OUTBOUND).');
 
-        config(['marketing_release.staging_active_features.external_services' => true]);   // opened, but the stack is not proven
+        config(['marketing_release.staging_active_features.platform_updates_outbound' => true]);   // opened, but the stack is not proven
         $this->post(route('owner.platform-updates.check'))->assertRedirect()->assertSessionHas('owner_error', 'Blocked: this staging stack is not proven to be the isolated staging environment.');
         Queue::assertNothingPushed();
     }
@@ -123,14 +124,17 @@ class PlatformUpdatesStagingGateTest extends TestCase
     {
         $this->provenStagingNext();
 
-        // external services closed (the default): no check; a sink-confined mail is still allowed
+        // closed (the default): no check; a sink-confined mail is still allowed
         config(['mail.default' => 'log']);
-        $this->assertSame('staging_external_contact_closed', PlatformUpdateGate::checkRefusal());
+        $this->assertSame('staging_platform_updates_closed', PlatformUpdateGate::checkRefusal());
         $this->assertNull(PlatformUpdateGate::mailRefusal());
 
-        // opened: the check may run
+        // the broad external-services opt-in does not open it, the dedicated one does
         config(['marketing_release.staging_active_features.external_services' => true]);
+        $this->assertSame('staging_platform_updates_closed', PlatformUpdateGate::checkRefusal());
+        config(['marketing_release.staging_active_features.external_services' => false, 'marketing_release.staging_active_features.platform_updates_outbound' => true]);
         $this->assertNull(PlatformUpdateGate::checkRefusal());
+        $this->assertTrue(StagingActiveProfile::externalContactClosed(), 'everything else external stays closed');
 
         // mail needs a sink or an allowlist, never just the opt-in
         config(['mail.default' => 'smtp', 'marketing_release.staging_mail_allowlist' => []]);
@@ -150,7 +154,7 @@ class PlatformUpdatesStagingGateTest extends TestCase
     public function test_the_proof_is_read_again_on_every_call_so_a_long_running_worker_never_keeps_a_stale_yes(): void
     {
         $this->provenStagingNext();
-        config(['marketing_release.staging_active_features.external_services' => true]);
+        config(['marketing_release.staging_active_features.platform_updates_outbound' => true]);
         $this->assertNull(PlatformUpdateGate::checkRefusal());
 
         $this->stagingDatabaseProbe('wpcg_somewhere_else');   // the connection now is not the staging database
