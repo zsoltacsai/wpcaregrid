@@ -57,6 +57,11 @@ Schedule::command('billing:emails:drain')->everyMinute()->timezone('UTC')->witho
 Schedule::command('stripe:subscriptions:reconcile --limit=100')->everyFifteenMinutes()->timezone('UTC')->withoutOverlapping()->onOneServer();
 Schedule::command('billing:subscriptions:expire-grace')->hourly()->timezone('UTC')->withoutOverlapping()->onOneServer();
 
+// Platform Update Intelligence: a daily, read-only advisory check (off unless PLATFORM_UPDATES_ENABLED). It reports;
+// it never updates or installs anything (docs/PLATFORM_UPDATE_INTELLIGENCE.md).
+Schedule::command('platform:updates:check')->dailyAt('05:20')->timezone('UTC')->withoutOverlapping()->onOneServer()
+    ->when(fn () => config('platform_updates.enabled') === true);
+
 // staging-next only (docs/STAGING_ACTIVE.md, docs/STAGING_SCHEDULER.md): every task above is checked
 // against one central, fail-closed allowlist (App\Release\StagingSchedulePolicy). A task that is not
 // classified there, or whose isolation is not proven, does not run. Elsewhere this changes nothing.

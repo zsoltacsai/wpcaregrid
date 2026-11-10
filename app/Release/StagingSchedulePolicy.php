@@ -57,6 +57,7 @@ final class StagingSchedulePolicy
         'billing:emails:drain' => self::MAIL,
         'stripe:subscriptions:reconcile' => self::STRIPE,
         'billing:subscriptions:expire-grace' => self::LOCAL,
+        'platform:updates:check' => self::EXTERNAL,
     ];
 
     /** A killed run must not keep a task locked for the default 24 hours. */
