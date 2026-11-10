@@ -259,6 +259,76 @@ class PlatformUpdateNotificationsTest extends TestCase
         }
     }
 
+    public function test_a_reopened_advisory_is_announced_again(): void
+    {
+        $advisory = $this->advisory();
+        $this->notifier()->afterCheck($this->check('succeeded'));
+        $advisory->forceFill(['state' => 'resolved'])->save();
+        $advisory->forceFill(['state' => 'open', 'notified_at' => null])->save();
+
+        $this->notifier()->afterCheck($this->check('succeeded'));
+
+        Mail::assertSent(PlatformUpdateNotice::class, 2);
+    }
+
+    public function test_the_failure_notice_states_the_real_unverified_count(): void
+    {
+        PlatformComponent::create(['component_key' => 'runtime:php', 'kind' => 'runtime', 'name' => 'php', 'installed_version' => '8.4.1', 'version_state' => 'VERIFIED',
+            'advisory_state' => 'UNVERIFIED', 'evidence_source' => 'runtime', 'present' => true]);
+
+        $this->notifier()->afterCheck($this->check('failed'));
+
+        Mail::assertSent(PlatformUpdateNotice::class, fn ($mail) => $mail->kind === 'failure' && $mail->summary['unverified'] === 1);
+    }
+
+    public function test_an_advisory_with_unread_severity_is_held_back_until_it_is_read(): void
+    {
+        $advisory = $this->advisory(['severity' => 'unknown', 'details_checked_at' => null]);
+
+        $this->notifier()->afterCheck($this->check('succeeded'));
+        Mail::assertNothingSent();
+
+        $advisory->forceFill(['severity' => 'critical', 'details_checked_at' => now()])->save();
+        $this->notifier()->afterCheck($this->check('succeeded'));
+        Mail::assertSent(PlatformUpdateNotice::class, fn ($mail) => $mail->kind === 'critical');
+    }
+
+    public function test_an_abandoned_pending_claim_does_not_block_the_notice(): void
+    {
+        $this->advisory();
+        $this->notifier()->afterCheck($this->check('succeeded'));
+        PlatformUpdateNotification::query()->update(['status' => 'pending', 'created_at' => now()->subHour()]);
+        PlatformAdvisory::query()->update(['notified_at' => null]);
+
+        $this->notifier()->afterCheck($this->check('succeeded'));
+
+        Mail::assertSent(PlatformUpdateNotice::class, 2);
+    }
+
+    public function test_one_owner_failing_does_not_cause_a_second_mail_to_the_others(): void
+    {
+        User::factory()->owner()->create(['email' => 'second@wpcaregrid.example', 'email_verified_at' => now()]);
+        $this->advisory();
+
+        $this->notifier()->afterCheck($this->check('succeeded'));
+        $this->assertNotNull(PlatformAdvisory::first()->notified_at);
+        Mail::assertSent(PlatformUpdateNotice::class, 2);
+
+        $this->notifier()->afterCheck($this->check('succeeded'));
+        Mail::assertSent(PlatformUpdateNotice::class, 2);
+    }
+
+    public function test_a_notice_lists_at_most_the_item_cap_and_counts_the_rest(): void
+    {
+        for ($i = 0; $i < PlatformUpdateNotifier::MAX_ITEMS + 5; $i++) {
+            $this->advisory(['advisory_id' => 'GHSA-n'.str_pad((string) $i, 3, '0', STR_PAD_LEFT).'-aaaa-bbbb', 'aliases' => []]);
+        }
+
+        $this->notifier()->afterCheck($this->check('succeeded'));
+
+        Mail::assertSent(PlatformUpdateNotice::class, fn ($mail) => count($mail->items) === PlatformUpdateNotifier::MAX_ITEMS && $mail->more === 5);
+    }
+
     private function fakeOsvCritical(): void
     {
         Http::swap(new Factory);

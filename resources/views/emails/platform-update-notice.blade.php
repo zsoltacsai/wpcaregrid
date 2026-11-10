@@ -9,6 +9,9 @@
             </li>
         @endforeach
     </ul>
+    @if ($more > 0)
+        <p>{{ __('platform_updates.mail.more', ['count' => $more]) }}</p>
+    @endif
 @endif
 @if ($summary !== [])
     <p>{{ __('platform_updates.mail.summary', $summary) }}</p>

@@ -15,6 +15,9 @@ use Illuminate\Support\Carbon;
  */
 final class PlatformUpdateOverview
 {
+    /** A successful check older than this is stale: the page and the daily summary use the same threshold. */
+    public const STALE_DAYS = 2;
+
     /** @return array<string, mixed> */
     public function summary(): array
     {
@@ -30,7 +33,7 @@ final class PlatformUpdateOverview
         $unknown = (clone $components)->where('version_state', 'UNKNOWN')->count();
         // Components that have a version and an advisory source but were not answered (yet): a gap, not a clean bill.
         $unchecked = (clone $components)->where('version_state', 'VERIFIED')->whereNotNull('ecosystem')->where('advisory_state', '!=', 'CHECKED')->count();
-        $stale = $lastSuccess === null || $lastSuccess->finished_at->lt(now()->subDays(2));
+        $stale = $lastSuccess === null || $lastSuccess->finished_at->lt(now()->subDays(self::STALE_DAYS));
 
         $state = match (true) {
             $critical > 0 => HealthStatus::Critical,

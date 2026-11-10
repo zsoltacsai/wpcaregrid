@@ -18,15 +18,17 @@ final class PlatformUpdateNotice extends Mailable
         public readonly string $kind,
         public readonly array $items = [],
         public readonly array $summary = [],
+        public readonly int $more = 0,
     ) {}
 
     public function build(): self
     {
-        return $this->subject(__('platform_updates.mail.subject.'.$this->kind, ['count' => count($this->items)]))
+        return $this->subject(__('platform_updates.mail.subject.'.$this->kind, ['count' => count($this->items) + $this->more]))
             ->view('emails.platform-update-notice', [
                 'kind' => $this->kind,
                 'items' => $this->items,
                 'summary' => $this->summary,
+                'more' => $this->more,
                 'url' => route('owner.platform-updates.index'),
             ]);
     }

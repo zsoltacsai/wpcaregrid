@@ -74,6 +74,7 @@ return [
             'digest' => 'Daily summary of the platform update check.',
         ],
         'fixed_in' => 'fixed in :version',
+        'more' => 'and :count more — see the Platform Updates page.',
         'summary' => 'Open advisories: :open (critical: :critical). Last successful check: :last. Components without an advisory source: :unverified.',
         'no_automatic' => 'Nothing is updated automatically. Review the advisory, test the update on staging, then update deliberately.',
         'open_page' => 'Open Platform Updates',
