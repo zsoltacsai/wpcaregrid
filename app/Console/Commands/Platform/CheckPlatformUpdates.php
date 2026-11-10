@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands\Platform;
 
+use App\Platform\Updates\PlatformUpdateGate;
 use App\Platform\Updates\PlatformUpdateNotifier;
 use App\Platform\Updates\PlatformUpdateScanner;
 use Illuminate\Console\Command;
@@ -15,7 +16,7 @@ class CheckPlatformUpdates extends Command
 
     public function handle(PlatformUpdateScanner $scanner, PlatformUpdateNotifier $notifier): int
     {
-        if (! config('platform_updates.enabled')) {
+        if (! PlatformUpdateGate::enabled()) {
             $this->line('PLATFORM_UPDATE_CHECK=REFUSED;CODE=disabled');
 
             return self::FAILURE;

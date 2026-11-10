@@ -23,12 +23,13 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
+use Tests\Concerns\ProvesStagingNext;
 use Tests\TestCase;
 
 /** Phase D: Owner notifications, de-duplication, daily summary, staging isolation. */
 class PlatformUpdateNotificationsTest extends TestCase
 {
-    use RefreshDatabase;
+    use ProvesStagingNext, RefreshDatabase;
 
     private User $owner;
 
@@ -234,7 +235,7 @@ class PlatformUpdateNotificationsTest extends TestCase
     public function test_staging_next_sends_nothing_unless_the_existing_mail_guard_confines_it(): void
     {
         $this->advisory();
-        config(['app.deployment_environment' => 'staging_next', 'mail.default' => 'smtp', 'marketing_release.staging_mail_allowlist' => []]);
+        $this->provenStagingNext();   // proven staging-next, mail transport real and not confined
         $this->notifier()->afterCheck($this->check('succeeded'));
         $this->assertFalse($this->notifier()->digest());
         Mail::assertNothingSent();

@@ -1,6 +1,7 @@
 <?php
 
 use App\Owner\SystemStatus;
+use App\Platform\Updates\PlatformUpdateGate;
 use App\Release\StagingSchedulePolicy;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -60,10 +61,10 @@ Schedule::command('billing:subscriptions:expire-grace')->hourly()->timezone('UTC
 // Platform Update Intelligence: a daily, read-only advisory check (off unless PLATFORM_UPDATES_ENABLED). It reports;
 // it never updates or installs anything (docs/PLATFORM_UPDATE_INTELLIGENCE.md).
 Schedule::command('platform:updates:check')->dailyAt('05:20')->timezone('UTC')->withoutOverlapping()->onOneServer()
-    ->when(fn () => config('platform_updates.enabled') === true);
+    ->when(fn () => PlatformUpdateGate::enabled());
 
 Schedule::command('platform:updates:digest')->dailyAt('06:30')->timezone('UTC')->withoutOverlapping()->onOneServer()
-    ->when(fn () => config('platform_updates.enabled') === true);
+    ->when(fn () => PlatformUpdateGate::enabled());
 
 // staging-next only (docs/STAGING_ACTIVE.md, docs/STAGING_SCHEDULER.md): every task above is checked
 // against one central, fail-closed allowlist (App\Release\StagingSchedulePolicy). A task that is not

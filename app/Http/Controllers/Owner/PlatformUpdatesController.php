@@ -7,8 +7,8 @@ use App\Jobs\RunPlatformUpdateCheck;
 use App\Models\PlatformAdvisory;
 use App\Models\PlatformComponent;
 use App\Models\PlatformUpdateCheck;
+use App\Platform\Updates\PlatformUpdateGate;
 use App\Platform\Updates\PlatformUpdateOverview;
-use App\Release\StagingActiveProfile;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -43,11 +43,8 @@ class PlatformUpdatesController extends Controller
 
     public function check(): RedirectResponse
     {
-        if (config('platform_updates.enabled') !== true) {
-            return back()->with('owner_error', __('platform_updates.refused.disabled'));
-        }
-        if (StagingActiveProfile::externalContactClosed()) {
-            return back()->with('owner_error', __('platform_updates.refused.staging_external_contact_closed'));
+        if (($refusal = PlatformUpdateGate::checkRefusal()) !== null) {
+            return back()->with('owner_error', __('platform_updates.refused.'.$refusal));
         }
         RunPlatformUpdateCheck::dispatch();
 
