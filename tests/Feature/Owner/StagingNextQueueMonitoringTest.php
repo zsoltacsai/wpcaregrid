@@ -49,6 +49,11 @@ final class StagingNextQueueMonitoringTest extends TestCase
 
     public function test_staging_next_dispatches_only_the_active_default_worker_pulse(): void
     {
+        $this->captureSafeDiagnostic('dispatch_active_default_pulse', 'dispatch_active_default_pulse', fn () => $this->exerciseActiveDefaultPulse());
+    }
+
+    private function exerciseActiveDefaultPulse(): void
+    {
         config(['app.deployment_environment' => 'staging_next']);
         Queue::fake();
 
@@ -65,6 +70,11 @@ final class StagingNextQueueMonitoringTest extends TestCase
     }
 
     public function test_staging_next_resolves_legacy_paused_worker_state_without_pulsing_it(): void
+    {
+        $this->captureSafeDiagnostic('resolve_legacy_paused_worker', 'resolve_legacy_paused_worker', fn () => $this->exerciseLegacyPausedWorkerResolution());
+    }
+
+    private function exerciseLegacyPausedWorkerResolution(): void
     {
         config(['app.deployment_environment' => 'staging_next']);
         Queue::fake();
@@ -291,4 +301,83 @@ final class StagingNextQueueMonitoringTest extends TestCase
 
         return $check->status;
     }
+
+    /**
+     * Temporary #350-only safe diagnostics. Never inspect or emit exception messages,
+     * SQL, bindings, connection information, or traces; rethrow unchanged.
+     */
+    private function captureSafeDiagnostic(string $testId, string $stepId, \Closure $operation): void
+    {
+        $allowed = [
+            'dispatch_active_default_pulse' => 'dispatch_active_default_pulse',
+            'resolve_legacy_paused_worker' => 'resolve_legacy_paused_worker',
+        ];
+        if (($allowed[$testId] ?? null) !== $stepId) {
+            throw new \LogicException('Invalid temporary diagnostic identity.');
+        }
+
+        try {
+            $operation();
+        } catch (\Throwable $exception) {
+            $class = $this->safeDiagnosticClass($exception::class);
+            $sqlState = 'UNKNOWN';
+            $databaseCode = 'UNKNOWN';
+            $current = $exception;
+
+            for ($depth = 0; $depth < 8; $depth++) {
+                if ($current instanceof \PDOException) {
+                    $errorInfo = $current->errorInfo ?? null;
+                    if (is_array($errorInfo)) {
+                        $candidateState = $errorInfo[0] ?? null;
+                        $candidateCode = $errorInfo[1] ?? null;
+                        if (is_string($candidateState)) {
+                            $candidateState = strtoupper($candidateState);
+                            if (preg_match('/\A[A-Z0-9]{5}\z/D', $candidateState) === 1) {
+                                $sqlState = $candidateState;
+                            }
+                        }
+                        if ((is_int($candidateCode) || is_string($candidateCode))
+                            && preg_match('/\A(?:0|[1-9][0-9]{0,4})\z/D', (string) $candidateCode) === 1
+                            && (int) $candidateCode <= 65535) {
+                            $databaseCode = (string) $candidateCode;
+                        }
+                    }
+                    break;
+                }
+
+                $previous = $current->getPrevious();
+                if (! $previous instanceof \Throwable) {
+                    break;
+                }
+                $current = $previous;
+            }
+
+            $record = implode('|', [
+                'WPCG_TEST_DIAG_V1',
+                'test='.$testId,
+                'step='.$stepId,
+                'exception_class='.$class,
+                'sqlstate='.$sqlState,
+                'db_code='.$databaseCode,
+            ]);
+            fwrite(STDERR, $record.PHP_EOL);
+            throw $exception;
+        }
+    }
+
+    private function safeDiagnosticClass(string $class): string
+    {
+        if ($class === '' || strlen($class) > 192) {
+            return 'UNKNOWN';
+        }
+
+        foreach (explode('\\', $class) as $segment) {
+            if (preg_match('/\A[A-Za-z_][A-Za-z0-9_]*\z/D', $segment) !== 1) {
+                return 'UNKNOWN';
+            }
+        }
+
+        return $class;
+    }
+
 }
