@@ -801,7 +801,10 @@ Every session starts with that minimal context, including `git status` and
 `git log --oneline -12`. Load the additional documents required by the task, as
 defined in `AGENTS.md` §1. In particular:
 - full `CLAUDE.md` is mandatory for engineering implementation that requires
-  the complete contract;
+  the complete contract — any task touching `app/`, `wordpress/`, `routes/`,
+  `scripts/`, migrations, authentication, backup/restore, admin access or the
+  operator console is such a task, and §11, §15–§20 and §30 are the mandatory
+  minimum;
 - Release Review Policy V3, the Release Checklist and the current CI/helper
   implementation are mandatory for PR, release or review work;
 - infrastructure, growth and security-sensitive tasks load their own domain
