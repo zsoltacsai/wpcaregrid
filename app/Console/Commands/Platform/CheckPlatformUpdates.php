@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands\Platform;
 
+use App\Platform\Updates\PlatformUpdateNotifier;
 use App\Platform\Updates\PlatformUpdateScanner;
 use Illuminate\Console\Command;
 
@@ -12,7 +13,7 @@ class CheckPlatformUpdates extends Command
 
     protected $description = 'Check installed platform components against published advisories (report only)';
 
-    public function handle(PlatformUpdateScanner $scanner): int
+    public function handle(PlatformUpdateScanner $scanner, PlatformUpdateNotifier $notifier): int
     {
         if (! config('platform_updates.enabled')) {
             $this->line('PLATFORM_UPDATE_CHECK=REFUSED;CODE=disabled');
@@ -20,6 +21,7 @@ class CheckPlatformUpdates extends Command
             return self::FAILURE;
         }
         $check = $scanner->run($this->option('manual') ? 'manual' : 'scheduled');
+        $notifier->afterCheck($check);
         $this->line(sprintf(
             'PLATFORM_UPDATE_CHECK=%s;CODE=%s;COMPONENTS=%d;UNKNOWN=%d;OPEN_ADVISORIES=%d;CRITICAL=%d',
             strtoupper($check->status), $check->reason_code ?? 'none', $check->components_total ?? 0,

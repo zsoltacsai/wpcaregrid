@@ -62,5 +62,24 @@ return [
         'none' => 'none',
         'not_confirmed' => 'not confirmed',
     ],
+    'mail' => [
+        'subject' => [
+            'critical' => 'WP CareGrid: critical platform advisory (:count)',
+            'security' => 'WP CareGrid: new platform security advisory (:count)',
+            'failure' => 'WP CareGrid: the platform update check failed',
+            'digest' => 'WP CareGrid: daily platform update summary',
+        ],
+        'intro' => [
+            'critical' => 'A critical published advisory affects a component installed on this platform.',
+            'security' => 'A new published security advisory affects a component installed on this platform.',
+            'failure' => 'The platform update check could not be completed. Nothing was marked as safe; the last known results are unchanged.',
+            'digest' => 'Daily summary of the platform update check.',
+        ],
+        'fixed_in' => 'fixed in :version',
+        'more' => 'and :count more — see the Platform Updates page.',
+        'summary' => 'Open advisories: :open (critical: :critical). Last successful check: :last. Components without an advisory source: :unverified.',
+        'no_automatic' => 'Nothing is updated automatically. Review the advisory, test the update on staging, then update deliberately.',
+        'open_page' => 'Open Platform Updates',
+    ],
     'note' => 'Source: OSV (osv.dev), which aggregates the GitHub Advisory Database. Ubuntu, PHP and MySQL announcements are not connected yet.',
 ];

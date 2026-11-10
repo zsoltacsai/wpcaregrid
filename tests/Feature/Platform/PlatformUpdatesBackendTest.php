@@ -414,6 +414,35 @@ class PlatformUpdatesBackendTest extends TestCase
         $this->assertSame([PlatformAdvisory::OPEN, null, null, 1], [$back->state, $back->resolved_at, $back->notified_at, PlatformAdvisory::count()]);
     }
 
+    public function test_an_advisory_that_becomes_critical_after_it_was_announced_is_announced_again_and_other_changes_are_not(): void
+    {
+        $detail = fn (string $severity) => [
+            'id' => 'GHSA-aaaa-bbbb-cccc', 'aliases' => ['CVE-2026-0001'], 'summary' => 'Remote code execution', 'published' => '2026-02-03T04:05:06Z',
+            'database_specific' => ['severity' => $severity],
+            'affected' => [['package' => ['ecosystem' => 'Packagist', 'name' => 'acme/vulnerable'], 'ranges' => [['type' => 'ECOSYSTEM', 'events' => [['introduced' => '0'], ['fixed' => '1.2.5']]]]]],
+        ];
+        $hits = ['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']];
+        $run = function (string $severity) use ($hits, $detail) {
+            $this->travel(25)->hours();   // the text is re-read once a day
+            $this->osv($hits, $detail($severity));
+            app(PlatformUpdateScanner::class)->run('manual');
+
+            return PlatformAdvisory::firstOrFail();
+        };
+
+        $this->osv($hits, $detail('LOW'));
+        app(PlatformUpdateScanner::class)->run('manual');
+        PlatformAdvisory::query()->update(['notified_at' => now()]);   // announced as a non-critical advisory
+
+        $this->assertNotNull($run('LOW')->notified_at, 'unchanged severity: nothing to announce again');
+        $escalated = $run('CRITICAL');
+        $this->assertSame(['critical', null], [$escalated->severity, $escalated->notified_at], 'now critical: announced again');
+
+        PlatformAdvisory::query()->update(['notified_at' => now()]);   // it was announced as critical
+        $this->assertNotNull($run('CRITICAL')->notified_at, 'still critical: not announced again');
+        $this->assertNotNull($run('LOW')->notified_at, 'a lowered severity is never a new notice');
+    }
+
     public function test_a_resolved_advisory_stays_resolved_when_its_text_cannot_be_read(): void
     {
         $hit = ['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']];

@@ -142,6 +142,9 @@ final class PlatformUpdateScanner
                     ]);
                     if (! $advisory->exists) {
                         $advisory->first_seen_check_id = $check->id;
+                    } elseif ($advisory->isDirty('severity') && $advisory->severity === 'critical') {
+                        // Announced (or held back) as something less serious and now critical: a critical notice is justified.
+                        $advisory->notified_at = null;
                     }
                 }
                 if ($withdrawn) {

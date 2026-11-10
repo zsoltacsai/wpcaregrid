@@ -58,6 +58,7 @@ final class AdminAudit
         'billing.subscription_activated', 'billing.payment_failure', 'billing.grace_started', 'billing.grace_expired', 'billing.payment_recovered', 'billing.payment_received',
         'billing.m11_validation_run',
         'probono.assigned', 'probono.changed', 'probono.ended', 'probono.started', 'probono.expired',
+        'platform_update.notification_failed', 'platform_update.notification_unrecorded',
         'offer.created', 'offer.updated', 'offer.sent', 'offer.accepted', 'offer.declined', 'offer.paid', 'offer.cancelled', 'offer.expired', 'offer.completed',
     ];
 
