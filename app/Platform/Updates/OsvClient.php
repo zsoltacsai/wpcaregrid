@@ -171,7 +171,7 @@ final class OsvClient
                         }
                     },
                 ])
-                ->withHeaders(['User-Agent' => 'WP-CareGrid-Platform-Updates/1'])
+                ->withHeaders(['User-Agent' => 'WP-CareGrid-Platform-Updates/1', 'Accept-Encoding' => 'identity'])   // no compressed answers: the size cap counts what is held
                 ->acceptJson();
             $response = $method === 'post' ? $pending->asJson()->post($url, $payload) : $pending->get($url);
         } catch (Throwable) {

@@ -96,7 +96,10 @@ final class PlatformUpdateScanner
             foreach ($ids as $id) {
                 $advisory = PlatformAdvisory::firstOrNew(['platform_component_id' => $row->id, 'advisory_id' => $id]);
                 $withdrawn = false;
-                if (! $advisory->exists || $advisory->affected_version !== $component->version || $advisory->severity === 'unknown') {
+                if (! $advisory->exists || $advisory->state === PlatformAdvisory::RESOLVED || $advisory->affected_version !== $component->version
+                    || $advisory->severity === 'unknown' || $advisory->details_checked_at === null || $advisory->details_checked_at->lt(now()->subHours(20))) {
+                    // New, back from resolved, a different installed version, unknown severity or not re-read for a day:
+                    // the text is read again from the source (it may have been corrected or withdrawn).
                     $details = null;
                     if ($budget > 0 && microtime(true) < $deadline) {
                         $budget--;
@@ -118,6 +121,7 @@ final class PlatformUpdateScanner
                         'affected_version' => $component->version,
                         'source' => 'osv',
                         'source_url' => OsvClient::PUBLIC_URL.$id,
+                        'details_checked_at' => $details === null ? $advisory->details_checked_at : now(),
                     ]);
                     if (! $advisory->exists) {
                         $advisory->first_seen_check_id = $check->id;

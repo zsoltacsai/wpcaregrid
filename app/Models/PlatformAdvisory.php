@@ -16,7 +16,7 @@ class PlatformAdvisory extends Model
 
     protected function casts(): array
     {
-        return ['aliases' => 'array', 'published_at' => 'datetime', 'resolved_at' => 'datetime', 'notified_at' => 'datetime'];
+        return ['aliases' => 'array', 'published_at' => 'datetime', 'resolved_at' => 'datetime', 'notified_at' => 'datetime', 'details_checked_at' => 'datetime'];
     }
 
     public function component(): BelongsTo

@@ -276,6 +276,29 @@ class PlatformUpdatesBackendTest extends TestCase
         $this->assertSame(0, $check->advisories_critical);
     }
 
+    public function test_a_withdrawn_advisory_does_not_flip_back_to_open_on_the_next_run(): void
+    {
+        $hit = ['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']];
+        $this->osv($hit);
+        app(PlatformUpdateScanner::class)->run('manual');
+        $this->assertSame(1, PlatformAdvisory::where('state', 'open')->count());
+
+        $this->osv($hit, ['id' => 'GHSA-aaaa-bbbb-cccc', 'withdrawn' => '2026-03-01T00:00:00Z']);   // the publisher withdraws it, OSV still lists it
+        $this->travel(25)->hours();   // advisories are re-read from the source once a day
+        foreach ([1, 2, 3] as $run) {
+            $check = app(PlatformUpdateScanner::class)->run('manual');
+            $this->assertSame(0, PlatformAdvisory::where('state', 'open')->count(), "run $run: {$check->status} {$check->reason_code}");
+        }
+    }
+
+    public function test_the_client_asks_for_uncompressed_answers(): void
+    {
+        $this->osv();
+        app(PlatformUpdateScanner::class)->run('manual');
+
+        Http::assertSent(fn ($request) => $request->header('Accept-Encoding') === ['identity']);
+    }
+
     public function test_development_only_components_do_not_count_as_open_or_critical(): void
     {
         $this->osv(['acme/dev@3.1.0' => ['GHSA-dev1-dev1-dev1']], detail: ['id' => 'GHSA-dev1-dev1-dev1', 'database_specific' => ['severity' => 'CRITICAL'], 'affected' => []]);

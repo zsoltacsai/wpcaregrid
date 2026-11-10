@@ -60,6 +60,7 @@ return new class extends Migration
             $table->foreignId('first_seen_check_id')->nullable()->constrained('platform_update_checks')->nullOnDelete();
             $table->foreignId('last_seen_check_id')->nullable()->constrained('platform_update_checks')->nullOnDelete();
             $table->timestamp('resolved_at')->nullable();
+            $table->timestamp('details_checked_at')->nullable(); // when the advisory text was last read from the source (daily re-validation)
             $table->timestamp('notified_at')->nullable();   // notification de-duplication (Phase D)
             $table->timestamps();
             $table->unique(['platform_component_id', 'advisory_id']);
