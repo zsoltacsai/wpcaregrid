@@ -25,7 +25,7 @@ class SafePhpunitDiagnosticTests(unittest.TestCase):
     def test_valid_markers_emit_only_allowlisted_structured_fields(self):
         result = diagnostics_from_bytes(marker(FIRST) + b"\n", (FIRST,))
         self.assertEqual(
-            [f"{PREFIX}|test={FIRST}|step={FIRST}|exception_class=PDOException|sqlstate=HY000|db_code=1205"],
+            [f"{PREFIX}|test={FIRST}|step={DIAGNOSTIC_TESTS[FIRST]}|exception_class=PDOException|sqlstate=HY000|db_code=1205"],
             result,
         )
         self.assertNotIn("message", result[0])
@@ -35,7 +35,7 @@ class SafePhpunitDiagnosticTests(unittest.TestCase):
     def test_missing_structured_codes_are_reported_as_unknown(self):
         record = marker(FIRST, exception_class="UNKNOWN", sqlstate="UNKNOWN", db_code="UNKNOWN")
         self.assertEqual(
-            [f"{PREFIX}|test={FIRST}|step={FIRST}|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN"],
+            [f"{PREFIX}|test={FIRST}|step={DIAGNOSTIC_TESTS[FIRST]}|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN"],
             diagnostics_from_bytes(record, (FIRST,)),
         )
 
@@ -71,7 +71,7 @@ class SafePhpunitDiagnosticTests(unittest.TestCase):
 
     def test_absent_duplicate_and_oversized_diagnostics_return_unknown(self):
         self.assertEqual(
-            [f"{PREFIX}|test={FIRST}|step={FIRST}|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN"],
+            [f"{PREFIX}|test={FIRST}|step={DIAGNOSTIC_TESTS[FIRST]}|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN"],
             diagnostics_from_bytes(b"unrelated test output", (FIRST,)),
         )
         self.assertIn("exception_class=UNKNOWN", diagnostics_from_bytes(marker(FIRST) + b"\n" + marker(FIRST), (FIRST,))[0])
