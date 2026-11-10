@@ -28,7 +28,10 @@ final class SubscriptionPlanChangeConfirmation
 
         return DB::transaction(function () use ($subscription, $invoiceId, $priceIds): bool {
             $locked = Subscription::query()->whereKey($subscription->id)->lockForUpdate()->firstOrFail();
-            if ($locked->pending_change_status !== 'awaiting_payment' || ! $locked->pending_stripe_price_id
+            // 'reconciliation_required': the Stripe response to the change request was lost, but Stripe applied it and this paid
+            // invoice is for exactly the pending target price (checked below); refusing it would charge the customer for a plan
+            // they never get.
+            if (! in_array($locked->pending_change_status, ['awaiting_payment', 'reconciliation_required'], true) || ! $locked->pending_stripe_price_id
                 || ! in_array($locked->pending_stripe_price_id, $priceIds, true)) {
                 return false;
             }
