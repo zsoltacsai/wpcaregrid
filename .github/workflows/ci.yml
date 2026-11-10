@@ -65,6 +65,9 @@ jobs:
       - name: Tracked secret-path policy tests
         run: python3 scripts/tests/repository-secret-path-policy-test.py
 
+      - name: Safe targeted PHPUnit diagnostic parser tests
+        run: python3 scripts/tests/safe-phpunit-target-diagnostic-test.py
+
       - name: Production G1 artifact integrity regression tests
         run: python3 scripts/tests/production-g1-mysql-contract-test.py
 
@@ -1677,6 +1680,11 @@ jobs:
           source_contract_test_failed = False
           backup_import_test_method = "PlatformDatabaseBackupMysqlTest::test_mysql_dump_is_imported_into_a_generated_disposable_schema_and_sanity_checked"
           backup_import_test_failed = False
+          queue_test_diagnostic_ids = {
+              r"Tests\Feature\Owner\StagingNextQueueMonitoringTest::test_staging_next_dispatches_only_the_active_default_worker_pulse": "dispatch_active_default_pulse",
+              r"Tests\Feature\Owner\StagingNextQueueMonitoringTest::test_staging_next_resolves_legacy_paused_worker_state_without_pulsing_it": "resolve_legacy_paused_worker",
+          }
+          queue_test_diagnostic_failures = set()
           backup_import_diagnostic_stages = {
               "fixture_setup", "probe_setup", "backup_create", "verify", "assert_verified", "assert_status",
               "assert_method", "assert_manifest", "assert_probe", "assert_critical_count", "cleanup_probe",
@@ -2147,6 +2155,7 @@ jobs:
           def process_events(stream):
               global last_passed, target_name, target_active, target_start_offset
               global active_transaction_seen, backup_import_test_failed, source_contract_test_failed
+              global queue_test_diagnostic_failures
               while True:
                   line = stream.readline()
                   if not line:
@@ -2162,6 +2171,9 @@ jobs:
                           backup_import_test_failed = True
                       if raw_name.endswith(source_contract_test_method):
                           source_contract_test_failed = True
+                      diagnostic_test_id = queue_test_diagnostic_ids.get(raw_name)
+                      if diagnostic_test_id is not None:
+                          queue_test_diagnostic_failures.add(diagnostic_test_id)
                   if event == "Test Passed":
                       last_passed = name
                   if event == "Test Preparation Started":
@@ -2234,6 +2246,19 @@ jobs:
                       watchdog_thread.join()
 
           if status != 0:
+              if queue_test_diagnostic_failures:
+                  try:
+                      from scripts.ci.safe_phpunit_test_diagnostics import diagnostics_for_log
+                      safe_records = diagnostics_for_log(log_path, sorted(queue_test_diagnostic_failures))
+                  except Exception:
+                      safe_records = [
+                          "WPCG_TEST_DIAG_V1|test=" + test_id
+                          + "|step=" + test_id
+                          + "|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN"
+                          for test_id in sorted(queue_test_diagnostic_failures)
+                      ]
+                  for safe_record in safe_records:
+                      print(safe_record, flush=True)
               emit_safe_rpc_diagnostic()
               emit_safe_test_failure_source_line(
                   r"Tests\Feature\Deployment\TransitionPersistenceBridgeTest::test_rpc_preflight_cache_source_contract_guards_are_explicit",
