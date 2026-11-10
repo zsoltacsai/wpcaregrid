@@ -376,6 +376,73 @@ class SubscriptionUpgradeStateMachineTest extends TestCase
         $this->assertDatabaseHas('admin_audit_events', ['event' => 'billing.subscription_change_late_payment_unapplied', 'subject_key' => $subscription->uuid]);
     }
 
+    public function test_a_redelivered_failure_of_a_closed_attempt_does_not_close_an_open_attempt_that_has_no_invoice_id_yet(): void
+    {
+        $this->gateway->invoiceId = 'in_one';
+        $this->requestUpgrade();
+        $this->paymentFailed('in_one', 'evt_failed_one', now()->timestamp);
+        $second = $this->requestUpgradeWithLostResponse();   // the second attempt: outcome unknown, no invoice id recorded
+        $this->assertSame('reconciliation_required', $second->status);
+
+        $this->paymentFailed('in_one', 'evt_failed_one_again', now()->addSecond()->timestamp);   // the first attempt's failure, redelivered
+
+        $this->assertSame('reconciliation_required', $second->fresh()->status);
+        $this->assertSame('reconciliation_required', $this->subscription->fresh()->pending_change_status);
+        $this->assertNull($this->subscription->fresh()->grace_started_at);
+
+        // and the first attempt's late payment does not settle the second attempt either
+        $this->paid('in_one', 'evt_paid_one', now()->addMinutes(2)->timestamp);
+        $this->assertSame('reconciliation_required', $second->fresh()->status);
+        $this->assertSame(PlanTier::Business, $this->plan());
+    }
+
+    public function test_a_late_payment_is_not_applied_behind_a_later_change_that_was_already_settled(): void
+    {
+        $catalog = app(PricingCatalog::class);
+        $businessAnnual = (string) $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Business, BillingInterval::Annual), 'HU', 'HUF')->stripePriceId;
+        $this->gateway->invoiceId = 'in_one';
+        $this->requestUpgrade();   // Secure monthly
+        $this->paymentFailed('in_one', 'evt_failed_one', now()->timestamp);
+        $this->gateway->invoiceId = 'in_two';
+        $this->management()->changePlan($this->subscription->fresh(), $this->customer, ProductType::WordPress, PlanTier::Business, BillingInterval::Annual);   // a switch to annual
+        $this->stripeEvent('invoice.paid', $this->invoice('in_two', 'paid', $businessAnnual), 'evt_paid_two')->assertStatus(204);
+        $this->assertSame(BillingInterval::Annual, $this->subscription->fresh()->interval);
+
+        $this->paid('in_one', 'evt_paid_one_late', now()->addMinutes(10)->timestamp);   // the superseded Secure invoice
+
+        $subscription = $this->subscription->fresh();
+        $this->assertSame([PlanTier::Business, BillingInterval::Annual, $businessAnnual], [$subscription->plan, $subscription->interval, $subscription->stripe_price_id]);
+        $this->assertDatabaseHas('admin_audit_events', ['event' => 'billing.subscription_change_late_payment_unapplied', 'subject_key' => $subscription->uuid]);
+    }
+
+    public function test_the_late_payment_window_runs_from_the_first_request_not_from_a_replay(): void
+    {
+        $first = $this->requestUpgradeWithLostResponse();
+        $this->travel(22)->hours();
+        $this->requestUpgrade();   // the replay is answered; submitted_at is now 22 hours after the first request
+        $this->paymentFailed('in_test_change', 'evt_failed', now()->timestamp);
+        $this->assertSame('payment_failed', $first->fresh()->status);
+
+        $this->travel(2)->hours();
+        $this->paid('in_test_change', 'evt_paid_24h_after_first_request', now()->timestamp);
+
+        $this->assertSame(PlanTier::Business, $this->plan(), 'Stripe discarded the pending update 23 hours after the first request');
+    }
+
+    public function test_an_expired_attempt_that_lost_its_response_records_stripes_invoice_so_its_failure_is_recognised(): void
+    {
+        $operation = $this->requestUpgradeWithLostResponse();
+        $this->useRemote($this->remoteSubscription($this->currentPrice, [], $this->invoice('in_draft_lost', 'draft')));
+        $this->travel(26)->hours();
+        app(ReconcileStripeSubscriptions::class)->run(10, $this->subscription->id);
+        $this->assertSame('expired', $operation->fresh()->status);
+        $this->assertSame('in_draft_lost', data_get($operation->fresh()->request_snapshot, 'provider_invoice_id'));
+
+        $this->paymentFailed('in_draft_lost', 'evt_failed_expired_lost', now()->timestamp);
+
+        $this->assertNull($this->subscription->fresh()->grace_started_at);
+    }
+
     public function test_a_failure_webhook_that_settles_the_change_while_the_request_fails_is_final_and_a_later_payment_still_applies(): void
     {
         $this->gateway->duringPriceChange = function (): void {

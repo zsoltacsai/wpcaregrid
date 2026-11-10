@@ -48,9 +48,12 @@ final class SubscriptionPlanChangeConfirmation
         return DB::transaction(function () use ($subscription, $invoiceId, $priceIds, $paidAt): bool {
             $locked = Subscription::query()->whereKey($subscription->id)->lockForUpdate()->firstOrFail();
 
+            // An invoice that an earlier, closed attempt recorded belongs to that attempt, never to an open one that has no invoice id yet.
+            $late = $this->closedOperationFor($locked, $priceIds, $invoiceId, self::CLOSED_UNPAID);
+
             // 'reconciliation_required': the Stripe response to the change request was lost, but this paid invoice is for exactly
             // the pending target price (checked below); refusing it would charge the customer for a plan they never get.
-            if (in_array($locked->pending_change_status, self::OPEN_PENDING, true) && $locked->pending_stripe_price_id
+            if (! $late && in_array($locked->pending_change_status, self::OPEN_PENDING, true) && $locked->pending_stripe_price_id
                 && in_array($locked->pending_stripe_price_id, $priceIds, true)) {
                 $operation = $this->operation($locked, (string) $locked->pending_stripe_price_id, self::SETTLEABLE);
                 if ($operation && $this->sameInvoice($operation, $invoiceId)) {
@@ -61,13 +64,14 @@ final class SubscriptionPlanChangeConfirmation
             // A payment that comes after an attempt was closed as failed, but inside Stripe's pending-update window: Stripe applied the
             // change, so the change was paid after all. Not after the window, not for an attempt closed as expired, and not while
             // another change is pending (it is never cleared by this one): those payments are surfaced to an operator instead.
-            $late = $this->closedOperationFor($locked, $priceIds, $invoiceId, self::CLOSED_UNPAID);
             if ($late) {
-                $since = $late->submitted_at ?? $late->created_at;
+                // The window runs from the first request: a replay answered with the original result must not extend it.
+                $since = $late->created_at;
                 $reason = match (true) {
                     $late->status !== 'payment_failed' => 'attempt_expired',
                     $locked->pending_change_status !== null => 'another_change_pending',
                     ! $since || $paidAt > $since->copy()->addHours(self::STRIPE_PENDING_WINDOW_HOURS)->getTimestamp() => 'outside_pending_window',
+                    $this->laterChangeSettled($locked, $late) => 'later_change_settled',
                     default => null,
                 };
                 if ($reason === null) {
@@ -95,12 +99,16 @@ final class SubscriptionPlanChangeConfirmation
         return DB::transaction(function () use ($subscription, $invoiceId, $priceIds): bool {
             $locked = Subscription::query()->whereKey($subscription->id)->lockForUpdate()->firstOrFail();
 
+            // The redelivered failure of an earlier, closed attempt (which recorded this invoice) is that attempt's, whatever is open now.
+            if ($this->closedOperationFor($locked, $priceIds, $invoiceId, self::CLOSED_UNPAID) !== null) {
+                return true;
+            }
+
             if (in_array($locked->pending_change_status, self::OPEN_PENDING, true) && $locked->pending_stripe_price_id
                 && in_array($locked->pending_stripe_price_id, $priceIds, true)) {
                 $operation = $this->operation($locked, (string) $locked->pending_stripe_price_id, self::SETTLEABLE);
                 if (! $operation || ! $this->sameInvoice($operation, $invoiceId)) {
-                    // Another attempt is open for the same price: this may still be the redelivered failure of an earlier, closed one.
-                    return $this->closedOperationFor($locked, $priceIds, $invoiceId, self::CLOSED_UNPAID) !== null;
+                    return false;
                 }
                 $snapshot = $operation->request_snapshot;
                 $snapshot['provider_invoice_id'] ??= $invoiceId;
@@ -115,11 +123,6 @@ final class SubscriptionPlanChangeConfirmation
                 ]);
 
                 return true;
-            }
-
-            // The same failure delivered again (another event id, a reconciliation): already recorded, nothing more to do.
-            if ($locked->pending_change_status === null) {
-                return $this->closedOperationFor($locked, $priceIds, $invoiceId, self::CLOSED_UNPAID) !== null;
             }
 
             return false;
@@ -143,7 +146,11 @@ final class SubscriptionPlanChangeConfirmation
             return false;
         }
 
-        return DB::transaction(function () use ($subscription, $remotePriceId): bool {
+        $latest = $remote->latest_invoice ?? null;
+        $latestInvoice = is_object($latest) ? $this->identify($latest) : null;
+        $latestInvoice = $latestInvoice !== null && $latestInvoice[0] !== null ? $latestInvoice : null;
+
+        return DB::transaction(function () use ($subscription, $remotePriceId, $latestInvoice): bool {
             $locked = Subscription::query()->whereKey($subscription->id)->lockForUpdate()->firstOrFail();
             if (! in_array($locked->pending_change_status, self::OPEN_PENDING, true) || ! $locked->pending_stripe_price_id
                 || hash_equals((string) $locked->pending_stripe_price_id, $remotePriceId)) {
@@ -159,6 +166,10 @@ final class SubscriptionPlanChangeConfirmation
             }
             $snapshot = $operation->request_snapshot;
             $snapshot['provider_truth_resolution'] = ['result' => 'expired_not_applied', 'checked_at' => now()->toIso8601String()];
+            if (! is_string($snapshot['provider_invoice_id'] ?? null) && $latestInvoice !== null
+                && in_array((string) $locked->pending_stripe_price_id, $latestInvoice[1], true)) {
+                $snapshot['provider_invoice_id'] = $latestInvoice[0];   // Stripe's latest invoice is this change's proration invoice
+            }
             $operation->forceFill([
                 'status' => 'expired', 'error_category' => 'PendingUpdateExpired', 'request_snapshot' => $snapshot, 'lease_expires_at' => null,
             ])->save();
@@ -259,6 +270,17 @@ final class SubscriptionPlanChangeConfirmation
             ->get()
             ->first(fn (SubscriptionOperation $operation): bool => in_array(data_get($operation->request_snapshot, 'target_stripe_price_id'), $priceIds, true)
                 && data_get($operation->request_snapshot, 'provider_invoice_id') === $invoiceId);
+    }
+
+    /** A later immediate or scheduled change was already settled: applying this older attempt now would put the plan behind Stripe. */
+    private function laterChangeSettled(Subscription $locked, SubscriptionOperation $late): bool
+    {
+        return SubscriptionOperation::query()
+            ->where('subscription_id', $locked->id)
+            ->where('id', '>', $late->id)
+            ->whereIn('operation', [...self::IMMEDIATE_OPERATIONS, 'downgrade'])
+            ->where('status', 'confirmed')
+            ->exists();
     }
 
     /** A real payment that cannot be applied as the upgrade is recorded once for an operator. */
