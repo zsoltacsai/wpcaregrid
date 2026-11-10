@@ -1728,16 +1728,17 @@ mutation("initializer_running", init_running)
 # ---- 3. partial datadir like the VPS one: the real initializer stopped by the timeout --------------------------
 reset()
 partial_result = refusal(H._run_initializer, INST, REAL, timeout=2.0, **FAST)
-if partial_result == "NO_REFUSAL":
-    # On fast runners real --initialize may finish before the 2 s timeout. Keep the test deterministic by
-    # converting its disposable successful log into an end-marker-missing fixture; the fake process-chain
-    # tests below separately prove timeout cleanup. Never touch a host or production datadir.
-    log = Path(INST.log_file)
-    contents = log.read_bytes()
-    end = contents.find(H.INIT_END_MARKER)
-    if end >= 0:
-        log.write_bytes(contents[:end])
-        partial_result = "real_init_completed_before_timeout;partial_log_fixture"
+# Whether the real --initialize is still running at 2 s depends on the runner's speed (3-5 s on a developer machine, about
+# 2 s on a fast CI runner). mysqld defers SIGTERM until its bootstrap is done, so near the timeout it can finish after the
+# helper's SIGTERM: the helper still refuses (timeout, the group is gone), but the datadir is then genuinely complete and
+# the completion proof rightly accepts it. That is not what this fixture is about, so turn such a disposable run into
+# the end-marker-missing state deterministically. The proof is not relaxed; the fake process-chain tests below prove the
+# timeout cleanup. Never touches a host or production datadir.
+contents = open(INST.log_file, "rb").read()
+end = contents.find(H.INIT_END_MARKER)
+if end >= 0:
+    open(INST.log_file, "r+b").truncate(end)
+    partial_result += ";real_init_reached_end_marker;partial_log_fixture"
 out("partial_run", partial_result)
 out("partial_processes_after", len(procs()))
 out("partial_datadir_entries", "non_empty" if os.listdir(INST.datadir) else "empty")
@@ -1943,9 +1944,13 @@ class InitializerRecoveryTest(unittest.TestCase):
             if name.startswith("mut_") and "proof=NO_REFUSAL" in value:
                 self.assertIn("diag=PROVEN_COMPLETE", value)
 
-    def test_timeout_or_fast_real_init_fixture_is_never_reported_complete_without_end_marker(self):
-        self.assertIn(self.get("partial_run"), ("initialize_timeout_terminated_partial_datadir",
-                                                   "real_init_completed_before_timeout;partial_log_fixture"))
+    def test_the_initializer_stopped_by_the_timeout_leaves_a_partial_datadir_that_is_reported_not_complete(self):
+        run = self.get("partial_run")
+        timeout = "initialize_timeout_terminated_partial_datadir"
+        # either the real run was cut by the timeout, or (fast runner) it reached its end marker before or right after
+        # the SIGTERM; in that case the fixture removed the end marker and says so. Nothing else is accepted.
+        self.assertIn(run, (timeout, timeout + ";real_init_reached_end_marker;partial_log_fixture",
+                            "NO_REFUSAL;real_init_reached_end_marker;partial_log_fixture"))
         self.assertEqual(self.get("partial_processes_after"), "0")
         self.assertEqual(self.get("partial_datadir_entries"), "non_empty")
         self.assertEqual(self.get("partial_proof"), self.PROOF)

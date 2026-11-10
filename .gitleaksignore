@@ -8,3 +8,7 @@
 919235357507771bde04797d21002b2f02185368:tests/Feature/Owner/StripeCatalogueTest.php:stripe-access-token:408
 919235357507771bde04797d21002b2f02185368:tests/Feature/Owner/StripeCatalogueTest.php:stripe-access-token:420
 919235357507771bde04797d21002b2f02185368:tests/Feature/Owner/StripeCatalogueTest.php:stripe-access-token:445
+# PR #355 (staging recovery harness): the migration-file => sha256 map in the fixture is flagged as generic-api-key because the key names contain "access"/"credentials". Values are public file hashes, not secrets.
+# These are the 2 exact historical findings in commit 88753a5d; nothing else is pinned.
+88753a5df06f1a64f73a579a4c92a97a85a63562:scripts/tests/staging-recovery-historical-migrations.json:generic-api-key:15
+88753a5df06f1a64f73a579a4c92a97a85a63562:scripts/tests/staging-recovery-historical-migrations.json:generic-api-key:24
