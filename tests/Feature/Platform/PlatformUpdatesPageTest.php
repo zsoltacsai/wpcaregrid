@@ -101,6 +101,53 @@ class PlatformUpdatesPageTest extends TestCase
             ->assertSee('does not state a severity or fix')->assertSee('none')->assertDontSee('or later');
     }
 
+    public function test_a_fix_the_source_does_not_name_says_so_and_shows_the_installed_version(): void
+    {
+        $this->asOwner();
+        $advisory = $this->makeAdvisory($this->makeComponent(), ['fixed_version' => null, 'severity' => 'high']);
+
+        $this->get(route('owner.platform-updates.advisory', $advisory->id))->assertOk()
+            ->assertSee('The source names no fixed version')->assertSee('none')
+            ->assertDontSee('No fix is confirmed for the installed version')->assertDontSee('not confirmed');
+    }
+
+    public function test_a_fix_cleared_because_the_installed_version_changed_is_not_confirmed_never_none_and_the_real_version_is_shown(): void
+    {
+        $this->asOwner();
+        // The component was changed to 1.2.1; the advisory text (read for 1.2.0) could not be read again, so its fix was cleared.
+        $component = $this->makeComponent('composer:acme/vulnerable', '1.2.1');
+        $advisory = $this->makeAdvisory($component, ['affected_version' => '1.2.0', 'fixed_version' => null, 'severity' => 'critical']);
+
+        $detail = $this->get(route('owner.platform-updates.advisory', $advisory->id))->assertOk();
+        $detail->assertSee('No fix is confirmed for the installed version')->assertSee('not confirmed')
+            ->assertDontSee('The source names no fixed version')->assertDontSee('or later')
+            ->assertSee('1.2.1')->assertDontSee('1.2.0');
+
+        $this->get(route('owner.platform-updates.index'))->assertOk()->assertSee('acme/vulnerable 1.2.1')->assertDontSee('acme/vulnerable 1.2.0');
+    }
+
+    public function test_a_stored_fix_proven_for_another_version_is_not_advice_for_the_installed_one(): void
+    {
+        $this->asOwner();
+        // The inventory moved to 1.2.1 but the source was unreachable since: the row still carries the fix proven for 1.2.0.
+        $component = $this->makeComponent('composer:acme/vulnerable', '1.2.1');
+        $advisory = $this->makeAdvisory($component, ['affected_version' => '1.2.0', 'fixed_version' => '1.2.5', 'severity' => 'critical']);
+        $this->makeCheck('failed');
+
+        $detail = $this->get(route('owner.platform-updates.advisory', $advisory->id))->assertOk();
+        $detail->assertSee('No fix is confirmed for the installed version')->assertSee('not confirmed')
+            ->assertDontSee('Plan an update')->assertDontSee('1.2.5')->assertDontSee('or later');
+
+        $index = $this->get(route('owner.platform-updates.index'))->assertOk();
+        $index->assertDontSee('1.2.5')->assertSee('acme/vulnerable 1.2.1');
+        $this->assertSame(0, (new PlatformUpdateOverview)->summary()['fixes_available'], 'an unconfirmed fix is not counted as available');
+
+        // Once the text was read again for 1.2.1 the fix is proven for it and is shown and counted.
+        $advisory->forceFill(['affected_version' => '1.2.1', 'fixed_version' => '1.2.5'])->save();
+        $this->get(route('owner.platform-updates.advisory', $advisory->id))->assertOk()->assertSee('Plan an update')->assertSee('1.2.5');
+        $this->assertSame(1, (new PlatformUpdateOverview)->summary()['fixes_available']);
+    }
+
     public function test_unknown_versions_unchecked_components_and_a_stale_success_are_never_healthy(): void
     {
         $this->asOwner();

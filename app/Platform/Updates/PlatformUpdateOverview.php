@@ -27,7 +27,9 @@ final class PlatformUpdateOverview
         $open = PlatformAdvisory::query()->where('state', PlatformAdvisory::OPEN)->whereHas('component', fn ($q) => $q->where('development_only', false));
         $openCount = (clone $open)->count();
         $critical = (clone $open)->where('severity', 'critical')->count();
-        $security = (clone $open)->whereNotNull('fixed_version')->count();
+        // A fix counts only while it was proven for the version that is installed now.
+        $security = (clone $open)->whereNotNull('fixed_version')
+            ->whereHas('component', fn ($q) => $q->whereColumn('platform_components.installed_version', 'platform_advisories.affected_version'))->count();
         $components = PlatformComponent::query()->where('present', true);
 
         $unknown = (clone $components)->where('version_state', 'UNKNOWN')->count();
@@ -70,8 +72,23 @@ final class PlatformUpdateOverview
     /** The action text for an advisory: only what the source proves, and never an automatic action. */
     public static function action(PlatformAdvisory $advisory): string
     {
-        return $advisory->fixed_version !== null
-            ? 'fixed_version'
-            : ($advisory->severity === 'unknown' ? 'review_unknown' : 'review_no_fix');
+        return match (true) {
+            self::fixNotConfirmed($advisory) => 'fix_not_confirmed',
+            $advisory->fixed_version !== null => 'fixed_version',
+            $advisory->severity === 'unknown' => 'review_unknown',
+            default => 'review_no_fix',
+        };
+    }
+
+    /**
+     * The advisory text (and with it any fix) was read for another installed version than the current one and could not be read
+     * again yet (the source was unreachable, or the detail budget ran out): whatever fix is stored was proven for the previous
+     * version only. "No fix is confirmed yet" is not "the source names none", and a stored fix must not be shown as advice.
+     */
+    public static function fixNotConfirmed(PlatformAdvisory $advisory): bool
+    {
+        return $advisory->affected_version !== null
+            && $advisory->component !== null
+            && $advisory->component->installed_version !== $advisory->affected_version;
     }
 }
