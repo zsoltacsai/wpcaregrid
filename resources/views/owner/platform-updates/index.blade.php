@@ -42,7 +42,7 @@
                     <x-ui.status-badge :tone="$tone($advisory->severity)">{{ __('platform_updates.severity.'.$advisory->severity) }}</x-ui.status-badge>
                     <a class="font-mono text-sm font-semibold text-primary underline" href="{{ route('owner.platform-updates.advisory', $advisory->id) }}">{{ $advisory->advisory_id }}</a>
                     <span class="text-sm">{{ $advisory->component->name }} {{ $advisory->component->installed_version ?? __('platform_updates.version_states.UNKNOWN') }}</span>
-                    @if ($advisory->fixed_version)<span class="text-xs text-muted">→ {{ $advisory->fixed_version }}</span>@endif
+                    @if ($advisory->fixed_version && ! \App\Platform\Updates\PlatformUpdateOverview::fixNotConfirmed($advisory))<span class="text-xs text-muted">→ {{ $advisory->fixed_version }}</span>@endif
                 </div>
                 @if ($advisory->summary)<p class="mt-1 break-words text-xs text-muted">{{ $advisory->summary }}</p>@endif
             </article>
