@@ -117,6 +117,102 @@ def isolated_mysql_uuid_sha(value):
     return hashlib.sha256(value.encode('ascii')).hexdigest()
 
 
+MANIFEST_PATH = ROOT / 'scripts/tests/staging-recovery-historical-migrations.json'
+MIGRATION_NAME = re.compile(r'^[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}_[a-z0-9_]{1,160}\.php$')
+APP_TREE_LINKS = ('app', 'config', 'lang', 'resources', 'routes', 'vendor', 'composer.json', 'composer.lock')
+
+
+def load_historical_manifest(path=MANIFEST_PATH, app_sha=None):
+    """The migration files (name -> sha256) of the commit the recovery helper is pinned to.
+
+    The recovery rehearsal models the state the helper was written for: the application at
+    RECOVERY.APP_SHA, which had exactly these migrations. Migrations added later are not part of that
+    state and must never be applied to, or seen by, the rehearsal.
+    """
+    app_sha = RECOVERY.APP_SHA if app_sha is None else app_sha
+    try:
+        data = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        raise RuntimeError('historical_manifest_unreadable')
+    if not isinstance(data, dict) or set(data) != {'recovery_app_sha', 'migrations'}:
+        raise RuntimeError('historical_manifest_invalid')
+    if data['recovery_app_sha'] != app_sha:
+        raise RuntimeError('historical_manifest_commit_mismatch')
+    migrations = data['migrations']
+    if not isinstance(migrations, dict) or not migrations:
+        raise RuntimeError('historical_manifest_invalid')
+    for name, digest in migrations.items():
+        if not isinstance(name, str) or MIGRATION_NAME.fullmatch(name) is None:
+            raise RuntimeError('historical_manifest_invalid')
+        if not isinstance(digest, str) or re.fullmatch(r'[0-9a-f]{64}', digest) is None:
+            raise RuntimeError('historical_manifest_invalid')
+    return dict(sorted(migrations.items()))
+
+
+def select_historical_migrations(manifest, target_files, available):
+    """Return (baseline_names, all_historical_names) or raise a stable refusal code.
+
+    `available` maps the migration files present in the working tree to their sha256. Selection is by
+    the pinned manifest, not by position in the current directory listing, so a later migration can
+    neither join the historical state nor push the recovery targets away from its end.
+    """
+    names = sorted(manifest)
+    targets = list(target_files)
+    if len(set(targets)) != len(targets) or any(target not in manifest for target in targets):
+        raise RuntimeError('recovery_target_migration_missing')
+    if names[-len(targets):] != targets:
+        # The recovery targets must be the last two migrations of the historical state, in the declared order.
+        raise RuntimeError('recovery_target_migration_order_invalid')
+    for name in names:
+        if name not in available:
+            raise RuntimeError('recovery_target_migration_missing' if name in targets
+                               else 'historical_migration_missing')
+        if available[name] != manifest[name]:
+            raise RuntimeError('recovery_target_migration_integrity_mismatch' if name in targets
+                               else 'historical_baseline_content_mismatch')
+    return names[:-len(targets)], names
+
+
+def migration_digests(directory):
+    return {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(Path(directory).glob('*.php'))}
+
+
+def build_historical_app_tree(root, overlay, names):
+    """A throw-away application view whose database/migrations holds exactly the historical files.
+
+    Code, configuration and vendor are the current ones (linked, read-only use); only the migration
+    directory is historical. Everything the recovery controller and artisan resolve through
+    base_path() therefore sees the state the helper was written for.
+    """
+    root, overlay = Path(root), Path(overlay)
+    overlay.mkdir(mode=0o700)
+    for entry in APP_TREE_LINKS:
+        if (root / entry).exists():
+            os.symlink(root / entry, overlay / entry)
+    # Copied, not linked: PHP resolves __DIR__ through a link and would boot the real tree.
+    shutil.copyfile(root / 'artisan', overlay / 'artisan')
+    (overlay / 'bootstrap' / 'cache').mkdir(parents=True)
+    for name in ('app.php', 'providers.php'):
+        if (root / 'bootstrap' / name).exists():
+            shutil.copyfile(root / 'bootstrap' / name, overlay / 'bootstrap' / name)
+    database = overlay / 'database'
+    database.mkdir()
+    for entry in (root / 'database').iterdir():
+        if entry.name != 'migrations':
+            os.symlink(entry, database / entry.name)
+    (database / 'migrations').mkdir()
+    for name in names:
+        shutil.copyfile(root / 'database' / 'migrations' / name, database / 'migrations' / name)
+    for sub in ('framework/cache', 'framework/sessions', 'framework/views', 'framework/testing', 'logs'):
+        (overlay / 'storage' / sub).mkdir(parents=True)
+    return overlay
+
+
+def historical_tree_migration_names(overlay):
+    return sorted(path.name for path in (Path(overlay) / 'database' / 'migrations').glob('*.php'))
+
+
 def test_baseline_failure_diagnostic_classifier():
     assert baseline_failure_code(2, 'SQLSTATE[HY000]: General error: 1419 trigger rejected') == (
         'historical_baseline_failed_rc2_kindMYSQL_ERROR_sqlstateHY000_errno1419')
@@ -179,7 +275,140 @@ def test_isolated_mysql_uuid_pin_is_derived_from_service_identity():
             raise AssertionError('invalid isolated MySQL identity was accepted')
 
 
+def _synthetic_history(directory, names):
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (directory / name).write_text(f'<?php // {name}\n', encoding='utf-8')
+    return migration_digests(directory)
+
+
+SYN_BASE = ['2026_01_01_000000_create_a_table.php', '2026_02_01_000000_create_b_table.php']
+SYN_TARGETS = ['2026_03_01_000002_create_target_one.php', '2026_03_01_000003_create_target_two.php']
+
+
+def _expect_refusal(code, function, *args):
+    try:
+        function(*args)
+    except RuntimeError as error:
+        assert str(error) == code, (code, str(error))
+    else:
+        raise AssertionError('no refusal, expected ' + code)
+
+
+def test_the_real_manifest_is_the_pinned_recovery_state():
+    manifest = load_historical_manifest()
+    names = sorted(manifest)
+    assert names[-len(TARGET_FILES):] == list(TARGET_FILES)
+    available = migration_digests(ROOT / 'database' / 'migrations')
+    baseline, everything = select_historical_migrations(manifest, TARGET_FILES, available)
+    assert everything == names and baseline == names[:-len(TARGET_FILES)]
+    # Opportunistic cross-check against git when the pinned commit is present (a shallow checkout lacks it).
+    probe = subprocess.run(['git', 'cat-file', '-e', RECOVERY.APP_SHA + '^{commit}'], cwd=ROOT,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if probe.returncode == 0:
+        listed = subprocess.run(['git', 'ls-tree', '--name-only', RECOVERY.APP_SHA, 'database/migrations/'],
+                                cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True, check=True)
+        assert sorted(line.rsplit('/', 1)[-1] for line in listed.stdout.split()) == names
+        for name in names:
+            blob = subprocess.run(['git', 'show', f'{RECOVERY.APP_SHA}:database/migrations/{name}'], cwd=ROOT,
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, check=True).stdout
+            assert hashlib.sha256(blob).hexdigest() == manifest[name]
+
+
+def test_a_later_migration_never_joins_the_historical_state():
+    with tempfile.TemporaryDirectory() as tmp:
+        migrations = Path(tmp) / 'database' / 'migrations'
+        manifest = _synthetic_history(migrations, SYN_BASE + SYN_TARGETS)
+        before = select_historical_migrations(manifest, SYN_TARGETS, migration_digests(migrations))
+        # a newer migration after the targets, and one dated between baseline and targets (backdated)
+        _synthetic_history(migrations, ['2026_04_01_000000_create_later_table.php',
+                                        '2026_02_15_000000_create_backdated_table.php'])
+        available = migration_digests(migrations)
+        assert len(available) == len(manifest) + 2
+        after = select_historical_migrations(manifest, SYN_TARGETS, available)
+        assert after == before
+        (Path(tmp) / 'artisan').write_text('<?php\n')
+        (Path(tmp) / 'bootstrap').mkdir()
+        (Path(tmp) / 'bootstrap' / 'app.php').write_text('<?php\n')
+        for entry in ('app', 'config', 'vendor'):
+            (Path(tmp) / entry).mkdir()
+        (Path(tmp) / 'database' / 'seeders').mkdir()
+        overlay = build_historical_app_tree(tmp, Path(tmp) / 'overlay', after[1])
+        assert historical_tree_migration_names(overlay) == sorted(SYN_BASE + SYN_TARGETS)
+        assert not any('later' in n or 'backdated' in n for n in historical_tree_migration_names(overlay))
+        assert (overlay / 'artisan').is_file() and not (overlay / 'artisan').is_symlink()
+        assert (overlay / 'vendor').is_symlink() and (overlay / 'database' / 'seeders').is_symlink()
+        # the real tree is untouched: it still holds the historical and the two extra files
+        assert len(list(migrations.glob('*.php'))) == len(SYN_BASE + SYN_TARGETS) + 2
+
+
+def test_a_missing_target_migration_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        manifest = _synthetic_history(Path(tmp) / 'm', SYN_BASE + SYN_TARGETS)
+        available = dict(manifest)
+        del available[SYN_TARGETS[1]]
+        _expect_refusal('recovery_target_migration_missing', select_historical_migrations, manifest, SYN_TARGETS, available)
+        # a target the manifest does not know at all
+        _expect_refusal('recovery_target_migration_missing', select_historical_migrations,
+                        {k: v for k, v in manifest.items() if k != SYN_TARGETS[0]}, SYN_TARGETS, available)
+
+
+def test_a_wrong_target_order_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        manifest = _synthetic_history(Path(tmp) / 'm', SYN_BASE + SYN_TARGETS)
+        available = dict(manifest)
+        _expect_refusal('recovery_target_migration_order_invalid', select_historical_migrations,
+                        manifest, list(reversed(SYN_TARGETS)), available)
+        # a historical migration sorted after the targets pushes them off the end of the history
+        later = '2026_03_01_000004_zz_after.php'
+        _expect_refusal('recovery_target_migration_order_invalid', select_historical_migrations,
+                        {**manifest, later: 'a' * 64}, SYN_TARGETS, {**available, later: 'a' * 64})
+
+
+def test_a_corrupted_or_missing_baseline_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        migrations = Path(tmp) / 'm'
+        manifest = _synthetic_history(migrations, SYN_BASE + SYN_TARGETS)
+        (migrations / SYN_BASE[0]).write_text('<?php // tampered\n', encoding='utf-8')
+        _expect_refusal('historical_baseline_content_mismatch', select_historical_migrations, manifest,
+                        SYN_TARGETS, migration_digests(migrations))
+        (migrations / SYN_BASE[0]).write_text(f'<?php // {SYN_BASE[0]}\n', encoding='utf-8')
+        (migrations / SYN_TARGETS[1]).write_text('<?php // tampered\n', encoding='utf-8')
+        _expect_refusal('recovery_target_migration_integrity_mismatch', select_historical_migrations, manifest,
+                        SYN_TARGETS, migration_digests(migrations))
+        (migrations / SYN_TARGETS[1]).write_text(f'<?php // {SYN_TARGETS[1]}\n', encoding='utf-8')
+        (migrations / SYN_BASE[1]).unlink()
+        _expect_refusal('historical_migration_missing', select_historical_migrations, manifest,
+                        SYN_TARGETS, migration_digests(migrations))
+
+
+def test_the_manifest_is_validated():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'm.json'
+        good = {'recovery_app_sha': RECOVERY.APP_SHA, 'migrations': {SYN_BASE[0]: 'b' * 64}}
+        path.write_text(json.dumps(good), encoding='utf-8')
+        assert load_historical_manifest(path) == good['migrations']
+        for bad, code in (
+                ({**good, 'recovery_app_sha': 'c' * 40}, 'historical_manifest_commit_mismatch'),
+                ({**good, 'extra': 1}, 'historical_manifest_invalid'),
+                ({**good, 'migrations': {}}, 'historical_manifest_invalid'),
+                ({**good, 'migrations': {'../evil.php': 'b' * 64}}, 'historical_manifest_invalid'),
+                ({**good, 'migrations': {SYN_BASE[0]: 'XYZ'}}, 'historical_manifest_invalid')):
+            path.write_text(json.dumps(bad), encoding='utf-8')
+            _expect_refusal(code, load_historical_manifest, path)
+        path.write_text('not json', encoding='utf-8')
+        _expect_refusal('historical_manifest_unreadable', load_historical_manifest, path)
+        _expect_refusal('historical_manifest_unreadable', load_historical_manifest, Path(tmp) / 'absent.json')
+
+
 def main():
+    test_the_real_manifest_is_the_pinned_recovery_state()
+    test_a_later_migration_never_joins_the_historical_state()
+    test_a_missing_target_migration_is_refused()
+    test_a_wrong_target_order_is_refused()
+    test_a_corrupted_or_missing_baseline_is_refused()
+    test_the_manifest_is_validated()
     test_baseline_failure_diagnostic_classifier()
     test_off_setting_child_failure_classifier()
     test_trigger_rejection_probe_loads_composer_autoloader()
@@ -234,7 +463,7 @@ def main():
 
     def php_run(code):
         result = subprocess.run(
-            [php, '-r', code], cwd=ROOT, env=db_env, stdin=subprocess.DEVNULL,
+            [php, '-r', code], cwd=app_tree, env=db_env, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=90,
         )
         return result
@@ -280,20 +509,24 @@ def main():
         )
         require(install.returncode == 0, 'migration_repository_setup_failed')
 
-        migration_paths = sorted((ROOT / 'database' / 'migrations').glob('*.php'))
-        target_names = {Path(name).stem for name in TARGET_FILES}
-        migration_names = [path.stem for path in migration_paths]
-        require(target_names == TARGETS and migration_names[-len(target_names):] == sorted(target_names),
-                'migration_history_tail_contract_invalid')
-        baseline_paths = migration_paths[:-len(target_names)]
-        baseline_names = [path.stem for path in baseline_paths]
+        # The state the recovery helper was written for: the application at RECOVERY.APP_SHA, selected from a
+        # pinned manifest (names and sha256), never from the tail of today's directory listing. Migrations added
+        # since are not part of it and are never applied to, or visible to, this rehearsal.
+        require({Path(name).stem for name in TARGET_FILES} == TARGETS, 'migration_history_target_contract_invalid')
+        manifest = load_historical_manifest()
+        baseline_files, historical_files = select_historical_migrations(
+            manifest, TARGET_FILES, migration_digests(ROOT / 'database' / 'migrations'))
+        app_tree = build_historical_app_tree(ROOT, pre_recovery_dir / 'historical-app', historical_files)
+        require(historical_tree_migration_names(app_tree) == sorted(historical_files),
+                'historical_tree_migration_set_mismatch')
+        baseline_names = [Path(name).stem for name in baseline_files]
         baseline_dir = pre_recovery_dir / 'historical-baseline'
         baseline_dir.mkdir(mode=0o700)
-        for source in baseline_paths:
-            shutil.copyfile(source, baseline_dir / source.name)
+        for name in baseline_files:
+            shutil.copyfile(app_tree / 'database' / 'migrations' / name, baseline_dir / name)
         baseline = subprocess.run(
             [php, 'artisan', 'migrate', '--force', '--no-interaction', '--realpath',
-             '--path=' + str(baseline_dir)], cwd=ROOT, env=db_env,
+             '--path=' + str(baseline_dir)], cwd=app_tree, env=db_env,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, timeout=600,
         )
@@ -325,7 +558,7 @@ def main():
         require(partial == '1|0', 'partial_schema_after_1419_mismatch')
 
         php_snapshot = subprocess.run(
-            [php, '-r', RECOVERY.PHP_SNAPSHOT], cwd=ROOT, env=db_env,
+            [php, '-r', RECOVERY.PHP_SNAPSHOT], cwd=app_tree, env=db_env,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, timeout=90,
         )
@@ -342,7 +575,7 @@ def main():
         require(mysql_admin('SELECT @@GLOBAL.log_bin_trust_function_creators') in ('1', 'ON'),
                 'migration_window_setting_not_confirmed')
         ci_run_ids = {RECOVERY.APP_SHA: 1234, 'f' * 40: 5678}
-        RECOVERY.APP = ROOT
+        RECOVERY.APP = app_tree
         RECOVERY.PHP = php
         def verified_fatal_inert_protected_state():
             # The isolated rehearsal substitutes the host-only helper checks,
@@ -358,7 +591,8 @@ def main():
         RECOVERY._readiness_runtime = lambda: {'php': '8.4'}
         RECOVERY._readiness_composer = lambda: {'platform_requirements': 'PASS'}
 
-        def real_test_run(argv, *, cwd=ROOT, timeout=90, check=True):
+        def real_test_run(argv, *, cwd=None, timeout=90, check=True):
+            cwd = app_tree if cwd is None else cwd
             result = subprocess.run(argv, cwd=cwd, env=db_env, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                     timeout=timeout, check=False)

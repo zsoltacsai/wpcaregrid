@@ -153,3 +153,12 @@ Nginx gates, and final host commands remain stubbed in this database test and ar
 covered by separate deterministic controller and operator policy tests. This is a
 full source-history migration rehearsal through the interrupted point; it is not
 evidence of a staging backup restore, live-host recovery, or deployment readiness.
+
+## MySQL rehearsal: historical state (CI harness)
+
+`scripts/tests/staging-recovery-mysql-rehearsal.py` rehearses the interrupted two-migration recovery against a disposable MySQL 8.4.11. It models the application at `RECOVERY.APP_SHA` (the commit the recovery helper is pinned to), not today's migration directory:
+
+* The migrations of that commit (file name and sha256) are pinned in `scripts/tests/staging-recovery-historical-migrations.json`. The rehearsal applies the baseline of that list, reproduces the errno 1419 trigger failure on the first target, and continues the two target migrations through the unchanged controller in a throw-away application view whose `database/migrations` holds exactly that list.
+* Migrations added later (any name, including one dated before the targets) are not applied and not visible to it. Adding a migration therefore needs no change here.
+* The rehearsal still refuses: a missing target, targets not last and in the declared order, a changed historical file (baseline or target), a malformed manifest or one for another commit. The manifest changes only if `RECOVERY.APP_SHA` or `MIGRATION_FILES` change; regenerate it from `git ls-tree`/`git show` of that commit and review the diff.
+* When the pinned commit is present in the checkout, the rehearsal also compares the manifest to git; a shallow checkout skips that comparison only.
