@@ -101,6 +101,11 @@ final class StartCheckout
             billingAddress: $customer->billingAddress,
         );
 
+        if (! $account && is_string($existingStripeCustomer = Customer::findByEmail($customer->email)?->stripe_customer_id) && $existingStripeCustomer !== '') {
+            // Checked before anything is reserved or created at Stripe.
+            throw new ExistingCustomerLoginRequired;
+        }
+
         $offer = $this->offers->resolve($selection, $customer->country, $customer->email, $currency, $promotionCode, $account);
         $price = $offer['price'];
         $promotion = $offer['promotion'];
