@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Platform\Updates\PlatformUpdateNotifier;
 use App\Platform\Updates\PlatformUpdateScanner;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -18,10 +19,10 @@ class RunPlatformUpdateCheck implements ShouldBeUnique, ShouldQueue
 
     public int $uniqueFor = 600;
 
-    public function handle(PlatformUpdateScanner $scanner): void
+    public function handle(PlatformUpdateScanner $scanner, PlatformUpdateNotifier $notifier): void
     {
         if (config('platform_updates.enabled') === true) {
-            $scanner->run('manual');
+            $notifier->afterCheck($scanner->run('manual'));
         }
     }
 }

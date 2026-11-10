@@ -8,6 +8,7 @@ use App\Models\PlatformAdvisory;
 use App\Models\PlatformComponent;
 use App\Models\PlatformUpdateCheck;
 use App\Models\User;
+use App\Platform\Updates\PlatformUpdateNotifier;
 use App\Platform\Updates\PlatformUpdateOverview;
 use App\Platform\Updates\PlatformUpdateScanner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -206,7 +207,7 @@ class PlatformUpdatesPageTest extends TestCase
     {
         Http::fake();
         config(['platform_updates.enabled' => false]);
-        (new RunPlatformUpdateCheck)->handle(app(PlatformUpdateScanner::class));
+        (new RunPlatformUpdateCheck)->handle(app(PlatformUpdateScanner::class), app(PlatformUpdateNotifier::class));
         Http::assertNothingSent();
         $this->assertSame(0, PlatformUpdateCheck::count());
     }

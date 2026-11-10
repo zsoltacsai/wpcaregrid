@@ -28,7 +28,7 @@ class StagingSchedulerPolicyTest extends TestCase
 
     private const STRIPE = ['offers:expire', 'stripe:webhooks:drain', 'stripe:subscriptions:reconcile'];
 
-    private const MAIL = ['monitoring:deliver-alerts', 'billing:emails:drain'];
+    private const MAIL = ['monitoring:deliver-alerts', 'billing:emails:drain', 'platform:updates:digest'];
 
     private const CONNECTOR = ['backup:schedule', 'security:schedule'];
 
@@ -53,7 +53,7 @@ class StagingSchedulerPolicyTest extends TestCase
 
         $this->assertSame([], array_diff($scheduled, array_keys(StagingSchedulePolicy::TASKS)), 'a scheduled task without a classification');
         $this->assertSame([], array_diff(array_keys(StagingSchedulePolicy::TASKS), $scheduled), 'a classification for a task that is not scheduled');
-        $this->assertCount(20, $scheduled);
+        $this->assertCount(21, $scheduled);
         $this->assertEqualsCanonicalizing(
             array_merge(self::LOCAL, self::STRIPE, self::MAIL, self::CONNECTOR, self::EXTERNAL),
             array_keys(StagingSchedulePolicy::TASKS),
