@@ -49,11 +49,6 @@ final class StagingNextQueueMonitoringTest extends TestCase
 
     public function test_staging_next_dispatches_only_the_active_default_worker_pulse(): void
     {
-        $this->captureSafeDiagnostic('dispatch_active_default_pulse', 'dispatch_active_default_pulse', fn () => $this->exerciseActiveDefaultPulse());
-    }
-
-    private function exerciseActiveDefaultPulse(): void
-    {
         config(['app.deployment_environment' => 'staging_next']);
         Queue::fake();
 
@@ -70,11 +65,6 @@ final class StagingNextQueueMonitoringTest extends TestCase
     }
 
     public function test_staging_next_resolves_legacy_paused_worker_state_without_pulsing_it(): void
-    {
-        $this->captureSafeDiagnostic('resolve_legacy_paused_worker', 'resolve_legacy_paused_worker', fn () => $this->exerciseLegacyPausedWorkerResolution());
-    }
-
-    private function exerciseLegacyPausedWorkerResolution(): void
     {
         config(['app.deployment_environment' => 'staging_next']);
         Queue::fake();
@@ -303,65 +293,83 @@ final class StagingNextQueueMonitoringTest extends TestCase
     }
 
     /**
-     * Temporary #350-only safe diagnostics. Never inspect or emit exception messages,
-     * SQL, bindings, connection information, or traces; rethrow unchanged.
+     * Temporary diagnostics for only the two #350 MySQL failures.
+     * The PHPUnit lifecycle is rethrown unchanged; no exception message is read.
      */
-    private function captureSafeDiagnostic(string $testId, string $stepId, \Closure $operation): void
+    public function runBare(): void
     {
-        $allowed = [
-            'dispatch_active_default_pulse' => 'dispatch_active_default_pulse',
-            'resolve_legacy_paused_worker' => 'resolve_legacy_paused_worker',
+        $testIds = [
+            'test_staging_next_dispatches_only_the_active_default_worker_pulse' => 'dispatch_active_default_pulse',
+            'test_staging_next_resolves_legacy_paused_worker_state_without_pulsing_it' => 'resolve_legacy_paused_worker',
         ];
-        if (($allowed[$testId] ?? null) !== $stepId) {
-            throw new \LogicException('Invalid temporary diagnostic identity.');
-        }
+        $testId = $testIds[$this->name()] ?? null;
 
         try {
-            $operation();
+            parent::runBare();
         } catch (\Throwable $exception) {
-            $class = $this->safeDiagnosticClass($exception::class);
-            $sqlState = 'UNKNOWN';
-            $databaseCode = 'UNKNOWN';
-            $current = $exception;
-
-            for ($depth = 0; $depth < 8; $depth++) {
-                if ($current instanceof \PDOException) {
-                    $errorInfo = $current->errorInfo ?? null;
-                    if (is_array($errorInfo)) {
-                        $candidateState = $errorInfo[0] ?? null;
-                        $candidateCode = $errorInfo[1] ?? null;
-                        if (is_string($candidateState)) {
-                            $candidateState = strtoupper($candidateState);
-                            if (preg_match('/\A[A-Z0-9]{5}\z/D', $candidateState) === 1) {
-                                $sqlState = $candidateState;
-                            }
-                        }
-                        if ((is_int($candidateCode) || is_string($candidateCode))
-                            && preg_match('/\A(?:0|[1-9][0-9]{0,4})\z/D', (string) $candidateCode) === 1
-                            && (int) $candidateCode <= 65535) {
-                            $databaseCode = (string) $candidateCode;
-                        }
-                    }
-                    break;
-                }
-
-                $previous = $current->getPrevious();
-                if (! $previous instanceof \Throwable) {
-                    break;
-                }
-                $current = $previous;
+            if ($testId !== null) {
+                $this->emitSafeDiagnostic($testId, $exception);
             }
 
-            $record = implode('|', [
-                'WPCG_TEST_DIAG_V1',
-                'test='.$testId,
-                'step='.$stepId,
-                'exception_class='.$class,
-                'sqlstate='.$sqlState,
-                'db_code='.$databaseCode,
-            ]);
-            fwrite(STDERR, $record.PHP_EOL);
             throw $exception;
+        }
+    }
+
+    private function emitSafeDiagnostic(string $testId, \Throwable $exception): void
+    {
+        $allowed = [
+            'dispatch_active_default_pulse',
+            'resolve_legacy_paused_worker',
+        ];
+        if (! in_array($testId, $allowed, true)) {
+            return;
+        }
+
+        $class = $this->safeDiagnosticClass($exception::class);
+        $sqlState = 'UNKNOWN';
+        $databaseCode = 'UNKNOWN';
+        $current = $exception;
+
+        for ($depth = 0; $depth < 8; $depth++) {
+            if ($current instanceof \PDOException) {
+                $errorInfo = $current->errorInfo ?? null;
+                if (is_array($errorInfo)) {
+                    $candidateState = $errorInfo[0] ?? null;
+                    $candidateCode = $errorInfo[1] ?? null;
+                    if (is_string($candidateState)) {
+                        $candidateState = strtoupper($candidateState);
+                        if (preg_match('/\A[A-Z0-9]{5}\z/D', $candidateState) === 1) {
+                            $sqlState = $candidateState;
+                        }
+                    }
+                    if ((is_int($candidateCode) || is_string($candidateCode))
+                        && preg_match('/\A(?:0|[1-9][0-9]{0,4})\z/D', (string) $candidateCode) === 1
+                        && (int) $candidateCode <= 65535) {
+                        $databaseCode = (string) $candidateCode;
+                    }
+                }
+                break;
+            }
+
+            $previous = $current->getPrevious();
+            if (! $previous instanceof \Throwable) {
+                break;
+            }
+            $current = $previous;
+        }
+
+        $record = implode('|', [
+            'WPCG_TEST_DIAG_V1',
+            'test='.$testId,
+            'step=phpunit_run_bare',
+            'exception_class='.$class,
+            'sqlstate='.$sqlState,
+            'db_code='.$databaseCode,
+        ]);
+        try {
+            @fwrite(STDERR, $record.PHP_EOL);
+        } catch (\Throwable) {
+            // Diagnostics must never replace the original test failure.
         }
     }
 
