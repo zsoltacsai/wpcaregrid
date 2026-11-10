@@ -24,7 +24,7 @@ Extra: `backup:monitor` deletes below `backup.upload.staging_path`; it is held u
 
 `system:check` (`staging_isolation` → "Scheduler tasks") lists the held tasks with a reason code: `environment_unproven`, `task_not_allowlisted`, `stripe_closed`, `mail_closed`, `connector_closed`, `external_closed`, `backup_staging_path_outside_storage`. Names and codes only.
 
-## Audit of the 19 scheduled tasks
+## Audit of the 21 scheduled tasks
 
 | # | Command | Group | Runs by default on staging-next | Possible external side effect | Existing safeguard | Fix in this change | Test evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -47,8 +47,10 @@ Extra: `backup:monitor` deletes below `backup.upload.staging_path`; it is held u
 | 17 | `billing:emails:drain` | mail | only with a sink/allowlist | customer billing e-mail | mail guard (allowlist) | held while mail is not confined | group test |
 | 18 | `stripe:subscriptions:reconcile` | stripe | **no** until test keys | Stripe API reads | gateways refuse live keys | held until Stripe is proven | group test |
 | 19 | `billing:subscriptions:expire-grace` | local | yes | none (DB; queues a billing e-mail through the outbox) | outbox + mail guard | classification | matrix |
+| 20 | `platform:updates:check` | external | **no** until the external opt-in | read-only advisory lookup at the fixed public OSV endpoint (ecosystem, package name and version of Composer/npm components only) | `PLATFORM_UPDATES_ENABLED` (default off); fixed host, no redirects, 5 MB / 10 s limits, one lock, report-only (installs and updates nothing) | held until the external opt-in; classification | `PlatformUpdatesBackendTest`, policy matrix |
+| 21 | `platform:updates:digest` | mail | only with a sink/allowlist | one daily summary e-mail to verified owners | `PLATFORM_UPDATES_ENABLED`; mail guard (sink or allowlist); one claim per recipient and day; failures logged and audited | held while mail is not confined; classification | `PlatformUpdateNotificationsTest`, policy matrix |
 
-Tests: `tests/Feature/StagingSchedulerPolicyTest.php` (classification inventory of all 19, production/legacy/testing unchanged incl. mutex expiry, local-only default, each group opens only on its own condition, every identity deviation holds everything but the heartbeat, unknown/unreadable tasks, origin-based detection, backup path, mutex bound, `system:check` output without secrets, command-name parsing for `'` and `"` quoting).
+Tests: `tests/Feature/StagingSchedulerPolicyTest.php` (classification inventory of all 21, production/legacy/testing unchanged incl. mutex expiry, local-only default, each group opens only on its own condition, every identity deviation holds everything but the heartbeat, unknown/unreadable tasks, origin-based detection, backup path, mutex bound, `system:check` output without secrets, command-name parsing for `'` and `"` quoting).
 
 Known limits: a blocked mail is dropped (logged), not retried; `billing:emails:drain` with an allowlist records customer mail that the guard dropped as handled. A task that is a closure other than the heartbeat is not allowlisted unless it has a classified name.
 
@@ -66,7 +68,7 @@ Code only: no migration, composer, npm or `.env` change. Backups first (`.env`, 
 ## Activation (Owner, root) — only after the checks above are green
 
 ```sh
-# 1. read-only: the units are as contracted. NOTE: schedule:list shows all 19 tasks (it does not evaluate the policy); the held tasks are shown by system:check ("Scheduler tasks")
+# 1. read-only: the units are as contracted. NOTE: schedule:list shows all 21 tasks (it does not evaluate the policy); the held tasks are shown by system:check ("Scheduler tasks")
 systemctl cat wpcg-staging-next-scheduler.service wpcg-staging-next-scheduler.timer
 systemd-analyze verify /etc/systemd/system/wpcg-staging-next-scheduler.service /etc/systemd/system/wpcg-staging-next-scheduler.timer
 sudo -u deploy /usr/bin/php8.5 /var/www/wpcaregrid-staging-new/artisan schedule:list
