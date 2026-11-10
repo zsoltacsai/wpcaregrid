@@ -138,6 +138,10 @@ class StagingSchedulerPolicyTest extends TestCase
     public function test_the_platform_update_check_has_its_own_opt_in_that_opens_nothing_else(): void
     {
         $this->proven();
+        // A configuration cached by an older release has no such key at all: closed.
+        config(['marketing_release.staging_active_features' => ['connector_api' => false, 'external_services' => true]]);
+        $this->assertSame('platform_updates_outbound_closed', app(StagingSchedulePolicy::class)->denial('platform:updates:check'), 'a missing key reads as closed');
+        $this->proven();
         $policy = app(StagingSchedulePolicy::class);
         $this->assertGroupHeld(self::PLATFORM_UPDATES);
         $this->assertSame('platform_updates_outbound_closed', $policy->denial('platform:updates:check'));
@@ -309,6 +313,8 @@ class StagingSchedulerPolicyTest extends TestCase
         $this->assertStringContainsString('stripe:webhooks:drain (stripe_closed)', $json);
         $this->assertStringContainsString('security:schedule (connector_closed)', $json);
         $this->assertStringContainsString('platform:database-backup-schedule (external_closed)', $json);
+        $this->assertStringContainsString('platform:updates:check (platform_updates_outbound_closed)', $json);
+        $this->assertStringContainsString('Platform update check', $json);
         $this->assertStringNotContainsString('super_secret', $json);
         $this->assertStringNotContainsString('private.person', $json);
     }
