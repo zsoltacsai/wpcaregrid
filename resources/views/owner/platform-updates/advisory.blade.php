@@ -5,7 +5,7 @@
     <p class="mb-4 text-sm"><a class="underline" href="{{ route('owner.platform-updates.index') }}">{{ __('platform_updates.detail.back') }}</a></p>
 
     <x-operator.section :title="__('platform_updates.detail.recommended')">
-        <p class="text-sm" data-testid="recommended-action">{{ __('platform_updates.action.'.\App\Platform\Updates\PlatformUpdateOverview::action($advisory, $part), ['component' => $part->name, 'fixed' => $advisory->fixed_version]) }}</p>
+        <p class="text-sm" data-testid="recommended-action">{{ __('platform_updates.action.'.\App\Platform\Updates\PlatformUpdateOverview::action($advisory), ['component' => $part->name, 'fixed' => $advisory->fixed_version]) }}</p>
     </x-operator.section>
 
     <x-operator.section class="mt-5" :title="__('platform_updates.advisories')">
@@ -18,8 +18,8 @@
             <dt class="text-muted">{{ __('platform_updates.columns.published') }}</dt><dd>@if ($advisory->published_at) @displayDateTime($advisory->published_at, 'Y-m-d') @else — @endif</dd>
             <dt class="text-muted">{{ __('platform_updates.detail.summary') }}</dt><dd class="break-words">{{ $advisory->summary ?? '—' }}</dd>
             <dt class="text-muted">{{ __('platform_updates.detail.official') }}</dt><dd><a class="break-all underline" rel="noopener noreferrer" href="{{ $advisory->source_url }}">{{ $advisory->source_url }}</a></dd>
-            <dt class="text-muted">{{ __('platform_updates.detail.last_checked') }}</dt><dd>@displayDateTime($advisory->updated_at, 'Y-m-d H:i T')</dd>
-            <dt class="text-muted">{{ __('platform_updates.columns.state') }}</dt><dd>{{ $advisory->state }}</dd>
+            <dt class="text-muted">{{ __('platform_updates.detail.last_checked') }}</dt><dd>@displayDateTime($advisory->details_checked_at ?? $advisory->updated_at, 'Y-m-d H:i T')</dd>
+            <dt class="text-muted">{{ __('platform_updates.columns.state') }}</dt><dd>{{ __('platform_updates.advisory_status.'.$advisory->state) }}</dd>
         </dl>
     </x-operator.section>
 </x-layouts.owner>

@@ -9,10 +9,12 @@ use App\Models\PlatformComponent;
 use App\Models\PlatformUpdateCheck;
 use App\Models\User;
 use App\Platform\Updates\PlatformUpdateOverview;
+use App\Platform\Updates\PlatformUpdateScanner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Str;
 use Tests\Concerns\ActsAsOwner;
 use Tests\TestCase;
 
@@ -41,7 +43,7 @@ class PlatformUpdatesPageTest extends TestCase
 
     private function makeCheck(string $status, array $extra = []): PlatformUpdateCheck
     {
-        return PlatformUpdateCheck::create($extra + ['uuid' => (string) \Illuminate\Support\Str::uuid(), 'trigger' => 'scheduled', 'status' => $status, 'started_at' => now()->subMinutes(5), 'finished_at' => now()->subMinutes(4)]);
+        return PlatformUpdateCheck::create($extra + ['uuid' => (string) Str::uuid(), 'trigger' => 'scheduled', 'status' => $status, 'started_at' => now()->subMinutes(5), 'finished_at' => now()->subMinutes(4)]);
     }
 
     public function test_before_any_check_the_state_is_unknown_never_healthy(): void
@@ -60,7 +62,7 @@ class PlatformUpdatesPageTest extends TestCase
         $this->makeComponent('runtime:php', '8.4.1', ['kind' => 'runtime', 'ecosystem' => null, 'advisory_state' => 'UNVERIFIED', 'advisories_checked_at' => null]);
         $this->makeCheck('succeeded');
 
-        $this->get(route('owner.platform-updates.index'))->assertOk()->assertSee('No known advisories')
+        $this->get(route('owner.platform-updates.index'))->assertOk()->assertSee('No known advisories in the checked components')
             ->assertSee('1 components have no advisory source yet', false)->assertSee('Unverified')
             ->assertSee('No open advisories in the checked components.');
     }
@@ -86,7 +88,7 @@ class PlatformUpdatesPageTest extends TestCase
         $this->makeAdvisory($this->makeComponent('composer:acme/dev', '3.1.0', ['development_only' => true]));
         $this->makeCheck('succeeded');
 
-        $this->get(route('owner.platform-updates.index'))->assertOk()->assertSee('No known advisories')->assertSee('No open advisories in the checked components.')->assertDontSee('data-advisory', false);
+        $this->get(route('owner.platform-updates.index'))->assertOk()->assertSee('No known advisories in the checked components')->assertSee('No open advisories in the checked components.')->assertDontSee('data-advisory', false);
     }
 
     public function test_without_a_proven_fix_no_fixed_version_is_invented(): void
@@ -96,6 +98,36 @@ class PlatformUpdatesPageTest extends TestCase
 
         $this->get(route('owner.platform-updates.advisory', $advisory->id))->assertOk()
             ->assertSee('does not state a severity or fix')->assertSee('none')->assertDontSee('or later');
+    }
+
+    public function test_unknown_versions_unchecked_components_and_a_stale_success_are_never_healthy(): void
+    {
+        $this->asOwner();
+        $this->makeComponent('composer:acme/fine', '2.0.0');
+        $this->makeCheck('succeeded');
+        $this->get(route('owner.platform-updates.index'))->assertSee('No known advisories in the checked components');
+
+        $this->makeComponent('composer:acme/noversion', '0', ['installed_version' => null, 'version_state' => 'UNKNOWN', 'advisory_state' => 'UNKNOWN']);
+        $this->get(route('owner.platform-updates.index'))->assertDontSee('No known advisories')->assertSee('Attention');
+        PlatformComponent::where('component_key', 'composer:acme/noversion')->delete();
+
+        $this->makeComponent('composer:acme/unchecked', '1.0.0', ['advisory_state' => 'UNKNOWN']);
+        $this->get(route('owner.platform-updates.index'))->assertDontSee('No known advisories')->assertSee('Attention');
+        PlatformComponent::where('component_key', 'composer:acme/unchecked')->delete();
+
+        PlatformUpdateCheck::query()->update(['finished_at' => now()->subDays(3), 'started_at' => now()->subDays(3)]);
+        $this->get(route('owner.platform-updates.index'))->assertDontSee('No known advisories')->assertSee('more than two days old');
+    }
+
+    public function test_the_component_table_does_not_count_development_only_advisories(): void
+    {
+        $this->asOwner();
+        $this->makeAdvisory($this->makeComponent('composer:acme/dev', '3.1.0', ['development_only' => true]));
+        $this->makeCheck('succeeded');
+
+        $html = $this->get(route('owner.platform-updates.index'))->assertOk()->getContent();
+
+        $this->assertMatchesRegularExpression('#data-component="composer:acme/dev".*?tabular-nums">0</td>#s', $html);
     }
 
     public function test_a_failed_last_check_is_never_shown_as_healthy(): void
@@ -174,7 +206,7 @@ class PlatformUpdatesPageTest extends TestCase
     {
         Http::fake();
         config(['platform_updates.enabled' => false]);
-        (new RunPlatformUpdateCheck)->handle(app(\App\Platform\Updates\PlatformUpdateScanner::class));
+        (new RunPlatformUpdateCheck)->handle(app(PlatformUpdateScanner::class));
         Http::assertNothingSent();
         $this->assertSame(0, PlatformUpdateCheck::count());
     }

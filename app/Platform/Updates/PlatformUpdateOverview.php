@@ -27,11 +27,16 @@ final class PlatformUpdateOverview
         $security = (clone $open)->whereNotNull('fixed_version')->count();
         $components = PlatformComponent::query()->where('present', true);
 
+        $unknown = (clone $components)->where('version_state', 'UNKNOWN')->count();
+        // Components that have a version and an advisory source but were not answered (yet): a gap, not a clean bill.
+        $unchecked = (clone $components)->where('version_state', 'VERIFIED')->whereNotNull('ecosystem')->where('advisory_state', '!=', 'CHECKED')->count();
+        $stale = $lastSuccess === null || $lastSuccess->finished_at->lt(now()->subDays(2));
+
         $state = match (true) {
             $critical > 0 => HealthStatus::Critical,
             $lastSuccess === null || $last?->status === 'failed' => $openCount > 0 ? HealthStatus::Attention : HealthStatus::Unknown,
-            $openCount > 0 || $last?->status === 'partial' => HealthStatus::Attention,
-            default => HealthStatus::Healthy,
+            $openCount > 0 || $last?->status === 'partial' || $unknown > 0 || $unchecked > 0 || $stale => HealthStatus::Attention,
+            default => HealthStatus::Healthy,   // healthy only means: no known advisory in the checked components
         };
 
         return [
@@ -41,7 +46,8 @@ final class PlatformUpdateOverview
             'critical' => $critical,
             'fixes_available' => $security,
             'components' => (clone $components)->count(),
-            'unknown' => (clone $components)->where('version_state', 'UNKNOWN')->count(),
+            'unknown' => $unknown,
+            'stale' => $stale && $lastSuccess !== null,
             'unverified' => (clone $components)->where('advisory_state', 'UNVERIFIED')->count(),
             'last_check' => $last,
             'last_success' => $lastSuccess,
@@ -59,7 +65,7 @@ final class PlatformUpdateOverview
     }
 
     /** The action text for an advisory: only what the source proves, and never an automatic action. */
-    public static function action(PlatformAdvisory $advisory, PlatformComponent $component): string
+    public static function action(PlatformAdvisory $advisory): string
     {
         return $advisory->fixed_version !== null
             ? 'fixed_version'

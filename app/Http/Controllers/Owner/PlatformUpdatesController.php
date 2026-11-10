@@ -29,7 +29,7 @@ class PlatformUpdatesController extends Controller
             'advisories' => PlatformAdvisory::query()->with('component')->where('state', PlatformAdvisory::OPEN)->whereHas('component', fn ($q) => $q->where('development_only', false))
                 ->orderByRaw("case severity when 'critical' then 0 when 'high' then 1 when 'medium' then 2 when 'low' then 3 else 4 end")
                 ->orderByDesc('published_at')->limit(100)->get(),
-            'components' => PlatformComponent::query()->withCount(['advisories as open_advisories_count' => fn ($q) => $q->where('state', PlatformAdvisory::OPEN)])
+            'components' => PlatformComponent::query()->withCount(['advisories as open_advisories_count' => fn ($q) => $q->where('state', PlatformAdvisory::OPEN)->whereHas('component', fn ($c) => $c->where('development_only', false))])
                 ->where('present', true)->when($kind, fn ($q) => $q->where('kind', $kind))
                 ->orderByRaw("case advisory_state when 'UNKNOWN' then 0 when 'UNVERIFIED' then 1 else 2 end")->orderBy('kind')->orderBy('name')->paginate(25)->withQueryString(),
             'history' => PlatformUpdateCheck::query()->latest('started_at')->limit(15)->get(),

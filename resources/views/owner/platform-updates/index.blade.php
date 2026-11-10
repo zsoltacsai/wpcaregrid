@@ -28,6 +28,9 @@
         <div><dt class="text-muted">{{ __('platform_updates.last_check') }}</dt><dd class="font-mono text-primary">@if ($summary['last_check']) @displayDateTime($summary['last_check']->started_at, 'Y-m-d H:i T') · {{ __('platform_updates.check_status.'.$summary['last_check']->status) }} @else {{ __('platform_updates.never') }} @endif</dd></div>
         <div><dt class="text-muted">{{ __('platform_updates.next_check') }}</dt><dd class="font-mono text-primary">@if ($summary['next_check']) @displayDateTime($summary['next_check'], 'Y-m-d H:i T') @else {{ __('platform_updates.scheduled_off') }} @endif</dd></div>
     </dl>
+    @if ($summary['stale'])
+        <p class="mt-3 text-xs text-warning-ink" data-note="stale">{{ __('platform_updates.stale_note') }}</p>
+    @endif
     @if ($summary['unverified'] > 0)
         <p class="mt-3 text-xs text-muted" data-note="unverified">{{ __('platform_updates.unverified_note', ['count' => $summary['unverified']]) }}</p>
     @endif

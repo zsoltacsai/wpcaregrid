@@ -5,7 +5,7 @@ return [
     'nav' => 'Platform Updates',
     'title' => 'Platform Updates',
     'lead' => 'Installed components compared with published security advisories. This page reports; it never updates or installs anything.',
-    'check_requested' => 'A check was requested. It runs in the background; reload this page in a minute.',
+    'check_requested' => 'A check was requested. It runs in the background (it is skipped if another one ran in the last few minutes); reload this page in a minute and see Previous checks.',
     'check_button' => 'Check for updates',
     'check_note' => 'Read-only: contacts the public advisory database (osv.dev) with the names and versions of the installed packages.',
     'refused' => [
@@ -13,11 +13,11 @@ return [
         'staging_external_contact_closed' => 'Blocked: this staging stack has not been opened for external services.',
     ],
     'overall' => 'Platform status',
-    'states' => ['healthy' => 'No known advisories', 'attention' => 'Attention', 'critical' => 'Critical', 'unknown' => 'Unknown'],
+    'states' => ['healthy' => 'No known advisories in the checked components', 'attention' => 'Attention', 'critical' => 'Critical', 'unknown' => 'Unknown'],
     'tiles' => [
         'open' => 'Open advisories',
         'critical' => 'Critical',
-        'fixes' => 'Fixed versions available',
+        'fixes' => 'Advisories with a proven fix',
         'unknown' => 'Version unknown',
         'unverified' => 'No advisory source',
     ],
@@ -40,6 +40,8 @@ return [
     'advisory_states' => ['CHECKED' => 'Checked', 'UNVERIFIED' => 'Unverified', 'UNKNOWN' => 'Unknown'],
     'version_states' => ['VERIFIED' => 'Verified', 'UNKNOWN' => 'Unknown'],
     'check_status' => ['succeeded' => 'Succeeded', 'partial' => 'Partial', 'failed' => 'Failed', 'refused' => 'Refused', 'running' => 'Running'],
+    'advisory_status' => ['open' => 'Open', 'resolved' => 'Resolved'],
+    'stale_note' => 'The last successful check is more than two days old.',
     'filter_all' => 'All',
     'checked_at' => 'checked',
     'action' => [
