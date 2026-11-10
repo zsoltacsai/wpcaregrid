@@ -18,6 +18,7 @@ use App\Http\Controllers\Owner\MonitoringController;
 use App\Http\Controllers\Owner\OperatorController;
 use App\Http\Controllers\Owner\OwnerSettingsController;
 use App\Http\Controllers\Owner\PlatformBackupsController;
+use App\Http\Controllers\Owner\PlatformUpdatesController;
 use App\Http\Controllers\Owner\PricingController;
 use App\Http\Controllers\Owner\PrivacyClosureController;
 use App\Http\Controllers\Owner\PrivacyExecutionPlanController;
@@ -143,6 +144,9 @@ Route::prefix('owner')->name('owner.')->group(function () {
         Route::post('/seo/{section}/{locale}/discard', [ContentController::class, 'discard'])->middleware(['can:owner.seo.manage', 'throttle:owner-sensitive'])->name('seo.discard');
 
         Route::get('/system', SystemController::class)->middleware('can:owner.system.view')->name('system');
+        Route::get('/system/platform-updates', [PlatformUpdatesController::class, 'index'])->middleware('can:owner.system.view')->name('platform-updates.index');
+        Route::get('/system/platform-updates/advisories/{advisory}', [PlatformUpdatesController::class, 'show'])->middleware('can:owner.system.view')->name('platform-updates.advisory');
+        Route::post('/system/platform-updates/check', [PlatformUpdatesController::class, 'check'])->middleware(['can:owner.system.view', 'throttle:owner-external'])->name('platform-updates.check');
         Route::get('/privacy-requests', [PrivacyRequestController::class, 'index'])->middleware('can:owner.privacy.requests.view')->name('privacy-requests.index');
         Route::get('/privacy-requests/closure', [PrivacyClosureController::class, 'create'])->middleware('can:owner.privacy.requests.manage')->name('privacy-requests.closure');
         Route::post('/privacy-requests/closure/preview', [PrivacyClosureController::class, 'preview'])->middleware(['can:owner.privacy.requests.manage', 'throttle:owner-sensitive'])->name('privacy-requests.closure.preview');
