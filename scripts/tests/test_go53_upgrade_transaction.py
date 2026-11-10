@@ -1,5 +1,5 @@
 """Isolated transaction tests; all paths are temporary and subprocesses are faked."""
-import base64, contextlib, hashlib, importlib.util, io, json, os, sys, tempfile, threading, time, types, unittest
+import base64, contextlib, fcntl, hashlib, importlib.util, io, json, os, sys, tempfile, threading, time, types, unittest
 from pathlib import Path
 
 SRC=Path(__file__).parents[1]/'production-g1-ops'/'go53-upgrade-helper.py'
@@ -10,12 +10,12 @@ class TxTests(unittest.TestCase):
   self.t=tempfile.TemporaryDirectory(); self.root=Path(self.t.name); self.pkg=self.root/'pkg';self.pkg.mkdir()
   self.lib=self.root/'lib';self.lib.mkdir();self.aa=self.root/'aa';self.aa.mkdir();self.data1=self.root/'p';self.data2=self.root/'r';self.data1.mkdir();self.data2.mkdir()
   self.logs=self.root/'logs';self.logs.mkdir()
-  self.orig=(go.LIBEXEC,go.HELPER,go.MANIFEST,go.CONTRACT,go.PROFILE_P,go.PROFILE_R,go.DATADIRS,go.LOGS,go.JOURNAL,go.OLD,go.NEW,go.PINS,go.NAMES,go.MODES,go.UNITS)
+  self.orig=(go.LIBEXEC,go.HELPER,go.MANIFEST,go.CONTRACT,go.PROFILE_P,go.PROFILE_R,go.DATADIRS,go.LOGS,go.JOURNAL,go.OLD,go.NEW,go.PINS,go.NAMES,go.MODES,go.UNITS,go.LOCK_PATH)
   self.files=[self.lib/'helper',self.lib/'manifest'];self.paths=dict(zip((go.HELPER,go.MANIFEST),map(str,self.files)))
   self.old={self.paths[self.orig[1]]:b'old helper',self.paths[self.orig[2]]:b'old manifest'};self.new={self.paths[self.orig[1]]:b'new helper',self.paths[self.orig[2]]:b'new manifest'}
   go.LIBEXEC=str(self.lib);go.HELPER=self.paths[go.HELPER];go.MANIFEST=self.paths[go.MANIFEST]
   go.CONTRACT=str(self.lib/'contract');go.PROFILE_P=str(self.aa/'p');go.PROFILE_R=str(self.aa/'r')
-  go.DATADIRS=(str(self.data1),str(self.data2));go.LOGS=(str(self.logs/'p'),str(self.logs/'r'));go.JOURNAL=str(self.lib/'journal')
+  go.DATADIRS=(str(self.data1),str(self.data2));go.LOGS=(str(self.logs/'p'),str(self.logs/'r'));go.JOURNAL=str(self.lib/'journal');go.LOCK_PATH=str(self.root/'run'/'upgrade.lock');Path(go.LOCK_PATH).parent.mkdir()
   go.OLD={go.HELPER:go.sha(self.old[go.HELPER]),go.MANIFEST:go.sha(self.old[go.MANIFEST])};go.NEW={go.HELPER:go.sha(self.new[go.HELPER]),go.MANIFEST:go.sha(self.new[go.MANIFEST])}
   go.PINS={go.CONTRACT:go.sha(b'c'),go.PROFILE_P:go.sha(b'ap'),go.PROFILE_R:go.sha(b'ar')}
   go.pwd.getpwnam=lambda name:types.SimpleNamespace(pw_uid=os.getuid())
@@ -24,10 +24,10 @@ class TxTests(unittest.TestCase):
   for p,b,mode in [(self.files[0],self.old[go.HELPER],0o755),(self.files[1],self.old[go.MANIFEST],0o644),(Path(go.CONTRACT),b'c',0o644),(Path(go.PROFILE_P),b'ap',0o644),(Path(go.PROFILE_R),b'ar',0o644),(Path(go.LOGS[0]),b'logp',0o600),(Path(go.LOGS[1]),b'logr',0o600)]:p.write_bytes(b);p.chmod(mode)
   for d in (self.data1,self.data2): (d/'data').write_bytes(b'data');(d/'data').chmod(0o600)
   for p,b in self.new.items():(self.pkg/go.NAMES[p]).write_bytes(b)
-  sums=''.join(f'{go.sha(b)}  {go.NAMES[p]}\n' for p,b in self.new.items());(self.pkg/'SHA256SUMS').write_text(sums);self.pkg.chmod(0o700)
+  sums=''.join(f'{go.sha(b)}  {go.NAMES[p]}\n' for p,b in self.new.items())+f'{go.sha(b"c")}  {go.PACKAGE_CONTRACT}\n';(self.pkg/go.PACKAGE_CONTRACT).write_bytes(b'c');(self.pkg/go.PACKAGE_CONTRACT).chmod(0o644);(self.pkg/'SHA256SUMS').write_text(sums);self.pkg.chmod(0o700)
   self.calls=[];self.active_unit=False;self.activate_after_verify=False
  def tearDown(self):
-  (go.LIBEXEC,go.HELPER,go.MANIFEST,go.CONTRACT,go.PROFILE_P,go.PROFILE_R,go.DATADIRS,go.LOGS,go.JOURNAL,go.OLD,go.NEW,go.PINS,go.NAMES,go.MODES,go.UNITS)=self.orig
+  (go.LIBEXEC,go.HELPER,go.MANIFEST,go.CONTRACT,go.PROFILE_P,go.PROFILE_R,go.DATADIRS,go.LOGS,go.JOURNAL,go.OLD,go.NEW,go.PINS,go.NAMES,go.MODES,go.UNITS,go.LOCK_PATH)=self.orig
   self.t.cleanup()
  def runner(self,args):
   self.calls.append(args)
@@ -45,6 +45,33 @@ class TxTests(unittest.TestCase):
  def test_bad_baseline_stops(self):
   self.files[0].write_bytes(b'other')
   with self.assertRaisesRegex(go.Stop,'installed_baseline_mismatch'):self.install()
+ def test_package_requires_pinned_unchanged_contract(self):
+  (self.pkg/go.PACKAGE_CONTRACT).unlink()
+  with self.assertRaisesRegex(go.Stop,'package_contents_unexpected'):self.install()
+ def test_large_mysql_log_is_hashed_in_bounded_chunks(self):
+  path=Path(go.LOGS[0]);path.write_bytes(b'x'*(2*1024*1024+17));path.chmod(0o600)
+  original=go.os.fdopen;reads=[]
+  class Reader:
+   def __init__(self,f):self.f=f
+   def __enter__(self):return self
+   def __exit__(self,*a):self.f.close()
+   def read(self,n=-1):reads.append(n);return self.f.read(n)
+  go.os.fdopen=lambda *a,**kw:Reader(original(*a,**kw))
+  try:self.assertEqual(go.read_mysql_log(str(path)),hashlib.sha256(path.read_bytes()).hexdigest())
+  finally:go.os.fdopen=original
+  self.assertTrue(reads);self.assertTrue(all(n==1024*1024 for n in reads))
+ def test_datadir_files_are_hashed_in_bounded_chunks(self):
+  path=self.data1/'data';path.write_bytes(b'x'*(2*1024*1024+17));path.chmod(0o600)
+  original=go.os.fdopen;reads=[]
+  class Reader:
+   def __init__(self,f):self.f=f
+   def __enter__(self):return self
+   def __exit__(self,*a):self.f.close()
+   def read(self,n=-1):reads.append(n);return self.f.read(n)
+  go.os.fdopen=lambda *a,**kw:Reader(original(*a,**kw))
+  try:self.assertEqual(go.tree_fingerprint(str(self.data1)),go.tree_fingerprint(str(self.data1)))
+  finally:go.os.fdopen=original
+  self.assertGreaterEqual(len(reads),2);self.assertTrue(all(n==1024*1024 for n in reads))
  def test_failure_after_first_swap_rolls_back(self):
   def repl(path,data,mode,hook=None):
    if path==go.MANIFEST:raise OSError('injected')
@@ -114,6 +141,13 @@ class TxTests(unittest.TestCase):
    release.set();a.join(2);b.join(2)
    self.assertEqual(len(entered),2);self.assertEqual(result,['G1_GO53_HELPER_UPGRADE=PASS']*2)
   finally:release.set();go._main_locked=original
+ def test_lock_wait_is_bounded_and_does_not_enter_transaction(self):
+  fd=os.open(go.LOCK_PATH,os.O_RDWR|os.O_CREAT,0o600);fcntl.flock(fd,fcntl.LOCK_EX)
+  old=go.LOCK_WAIT_SECONDS;go.LOCK_WAIT_SECONDS=0
+  try:
+   with self.assertRaisesRegex(go.Stop,'transaction_lock_timeout'):go.main(str(self.pkg),runfn=self.runner,euid=0)
+   self.assertEqual(self.calls,[])
+  finally:go.LOCK_WAIT_SECONDS=old;fcntl.flock(fd,fcntl.LOCK_UN);os.close(fd)
  def test_cli_success_returns_zero_without_converting_system_exit_into_failure(self):
   output=io.StringIO()
   with contextlib.redirect_stdout(output):rc=go.cli(['package'],execute=lambda _: 'G1_GO53_HELPER_UPGRADE=PASS')
