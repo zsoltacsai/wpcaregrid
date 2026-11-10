@@ -238,6 +238,80 @@ class PlatformUpdatesBackendTest extends TestCase
         $this->artisan('platform:updates:check')->assertSuccessful();
     }
 
+    public function test_only_a_fixed_version_of_a_version_range_containing_the_installed_version_is_proven(): void
+    {
+        $affected = [[
+            'package' => ['ecosystem' => 'Packagist', 'name' => 'acme/vulnerable'],
+            'ranges' => [
+                ['type' => 'GIT', 'repo' => 'https://example.invalid/x', 'events' => [['introduced' => '0'], ['fixed' => '1234abcd1234abcd1234abcd1234abcd1234abcd']]],
+                ['type' => 'ECOSYSTEM', 'events' => [['introduced' => '0'], ['fixed' => '1.1.9']]],        // does not contain 1.2.0 any more
+                ['type' => 'ECOSYSTEM', 'events' => [['introduced' => '1.2.0'], ['fixed' => '1.2.7']]],    // contains 1.2.0
+                ['type' => 'ECOSYSTEM', 'events' => [['introduced' => '2.0.0'], ['fixed' => '2.0.4']]],    // a later series
+            ],
+        ]];
+        $this->osv(['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']], detail: ['id' => 'GHSA-aaaa-bbbb-cccc', 'database_specific' => ['severity' => 'HIGH'], 'affected' => $affected]);
+
+        app(PlatformUpdateScanner::class)->run('manual');
+
+        $this->assertSame('1.2.7', PlatformAdvisory::firstOrFail()->fixed_version);
+    }
+
+    public function test_a_git_range_alone_never_produces_a_fix(): void
+    {
+        $affected = [['package' => ['ecosystem' => 'Packagist', 'name' => 'acme/vulnerable'], 'ranges' => [['type' => 'GIT', 'events' => [['introduced' => '0'], ['fixed' => '1234abcd1234abcd']]]]]];
+        $this->osv(['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']], detail: ['id' => 'GHSA-aaaa-bbbb-cccc', 'affected' => $affected]);
+
+        app(PlatformUpdateScanner::class)->run('manual');
+
+        $this->assertNull(PlatformAdvisory::firstOrFail()->fixed_version);
+    }
+
+    public function test_a_withdrawn_advisory_is_never_open(): void
+    {
+        $this->osv(['acme/vulnerable@1.2.0' => ['GHSA-aaaa-bbbb-cccc']], detail: ['id' => 'GHSA-aaaa-bbbb-cccc', 'withdrawn' => '2026-03-01T00:00:00Z', 'database_specific' => ['severity' => 'CRITICAL']]);
+
+        $check = app(PlatformUpdateScanner::class)->run('manual');
+
+        $this->assertSame(0, PlatformAdvisory::query()->where('state', 'open')->count());
+        $this->assertSame(0, $check->advisories_critical);
+    }
+
+    public function test_development_only_components_do_not_count_as_open_or_critical(): void
+    {
+        $this->osv(['acme/dev@3.1.0' => ['GHSA-dev1-dev1-dev1']], detail: ['id' => 'GHSA-dev1-dev1-dev1', 'database_specific' => ['severity' => 'CRITICAL'], 'affected' => []]);
+
+        $check = app(PlatformUpdateScanner::class)->run('manual');
+
+        $this->assertSame(1, PlatformAdvisory::where('state', 'open')->count(), 'it is stored, with its component flagged development_only');
+        $this->assertSame([0, 0], [$check->advisories_open, $check->advisories_critical]);
+        $this->assertTrue((bool) PlatformComponent::where('component_key', 'composer:acme/dev')->value('development_only'));
+    }
+
+    public function test_an_oversized_or_non_array_answer_is_refused(): void
+    {
+        config(['platform_updates.max_response_bytes' => 1000]);
+        Http::swap(new Factory);
+        Http::fake(['api.osv.dev/*' => Http::response(str_repeat('x', 5000), 200, ['Content-Length' => '5000'])]);
+        $this->assertSame('osv_response_too_large', app(PlatformUpdateScanner::class)->run('manual')->reason_code);
+
+        config(['platform_updates.max_response_bytes' => 5 * 1024 * 1024]);
+        PlatformUpdateCheck::query()->delete();
+        Http::swap(new Factory);
+        Http::fake(['api.osv.dev/v1/querybatch' => fn ($r) => Http::response(['results' => array_map(fn () => ['vulns' => 'not-a-list'], $r['queries'])], 200)]);
+        $check = app(PlatformUpdateScanner::class)->run('manual');
+        $this->assertSame(['failed', 'osv_batch_entry_invalid'], [$check->status, $check->reason_code]);
+    }
+
+    public function test_an_overlong_npm_key_is_ignored_instead_of_breaking_the_check(): void
+    {
+        $name = str_repeat('a', 150);
+        file_put_contents($this->dir.'/package-lock.json', json_encode(['packages' => ['node_modules/x/node_modules/'.$name => ['version' => '1.0.0-'.str_repeat('b', 50)]]]));
+
+        $keys = collect(app(ComponentInventory::class)->collect())->pluck('key');
+
+        $this->assertTrue($keys->every(fn ($key) => strlen($key) <= 190));
+    }
+
     public function test_the_module_can_execute_nothing_and_update_nothing(): void
     {
         $forbidden = ['exec(', 'shell_exec', 'passthru', 'proc_open', 'popen(', 'system(', 'Process::', 'Artisan::call', 'eval(', 'composer update', 'sudo'];

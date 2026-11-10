@@ -32,14 +32,17 @@ final class PlatformUpdateScanner
             // staging-next without the Owner's external-services opt-in: no outbound request at all.
             return $this->refused($trigger, 'staging_external_contact_closed', persist: true);
         }
-        $recent = PlatformUpdateCheck::query()->whereIn('status', ['succeeded', 'partial', 'failed'])
-            ->where('started_at', '>', now()->subSeconds((int) config('platform_updates.min_interval_seconds', 300)))->exists();
-        if ($recent) {
+        if ($this->checkedRecently()) {
             return $this->refused($trigger, 'checked_recently');
         }
-        $lock = Cache::lock(self::LOCK, (int) config('platform_updates.lock_seconds', 600));
+        $lock = Cache::lock(self::LOCK, (int) config('platform_updates.lock_seconds', 1800));
         if (! $lock->get()) {
             return $this->refused($trigger, 'check_already_running');
+        }
+        if ($this->checkedRecently()) {   // re-checked inside the lock: a run that finished while we waited counts
+            $lock->release();
+
+            return $this->refused($trigger, 'checked_recently');
         }
 
         $check = PlatformUpdateCheck::create(['uuid' => (string) Str::uuid(), 'trigger' => $trigger, 'status' => 'running', 'started_at' => now()]);
@@ -56,8 +59,15 @@ final class PlatformUpdateScanner
         return $check;
     }
 
+    private function checkedRecently(): bool
+    {
+        return PlatformUpdateCheck::query()->whereIn('status', ['succeeded', 'partial', 'failed'])
+            ->where('started_at', '>', now()->subSeconds((int) config('platform_updates.min_interval_seconds', 300)))->exists();
+    }
+
     private function execute(PlatformUpdateCheck $check): void
     {
+        $deadline = microtime(true) + (int) config('platform_updates.run_budget_seconds', 900);
         $detected = $this->inventory->collect();
         if (count($detected) > (int) config('platform_updates.max_components', 1500)) {
             $check->forceFill(['status' => 'failed', 'reason_code' => 'inventory_too_large'])->save();
@@ -85,9 +95,10 @@ final class PlatformUpdateScanner
             $ids = $hits[$component->key] ?? [];
             foreach ($ids as $id) {
                 $advisory = PlatformAdvisory::firstOrNew(['platform_component_id' => $row->id, 'advisory_id' => $id]);
+                $withdrawn = false;
                 if (! $advisory->exists || $advisory->affected_version !== $component->version || $advisory->severity === 'unknown') {
                     $details = null;
-                    if ($budget > 0) {
+                    if ($budget > 0 && microtime(true) < $deadline) {
                         $budget--;
                         try {
                             $details = $this->osv->details($id, $component);
@@ -95,8 +106,9 @@ final class PlatformUpdateScanner
                             $partial = $exception->getMessage();
                         }
                     } else {
-                        $partial = 'advisory_detail_budget_exhausted';
+                        $partial = 'advisory_detail_budget_exhausted';   // detail count or the run's time budget
                     }
+                    $withdrawn = $details['withdrawn'] ?? false;
                     $advisory->fill([
                         'aliases' => $details['aliases'] ?? ($advisory->aliases ?? []),
                         'severity' => $details['severity'] ?? 'unknown',
@@ -110,6 +122,14 @@ final class PlatformUpdateScanner
                     if (! $advisory->exists) {
                         $advisory->first_seen_check_id = $check->id;
                     }
+                }
+                if ($withdrawn) {
+                    // Withdrawn by its publisher: it is not an advisory any more. Kept for history, never open.
+                    if ($advisory->exists) {
+                        $advisory->fill(['state' => PlatformAdvisory::RESOLVED, 'resolved_at' => now(), 'last_seen_check_id' => $check->id])->save();
+                    }
+
+                    continue;
                 }
                 if ($advisory->state === PlatformAdvisory::RESOLVED) {
                     $advisory->notified_at = null;   // it is back: a new notification is justified
@@ -187,7 +207,9 @@ final class PlatformUpdateScanner
     /** @return array<string, int> */
     private function counts(): array
     {
-        $open = PlatformAdvisory::query()->where('state', PlatformAdvisory::OPEN);
+        // Development-only packages (composer require-dev, npm devDependencies) are not part of a production release.
+        $open = PlatformAdvisory::query()->where('state', PlatformAdvisory::OPEN)
+            ->whereHas('component', fn ($q) => $q->where('development_only', false));
 
         return [
             'components_total' => PlatformComponent::query()->where('present', true)->count(),

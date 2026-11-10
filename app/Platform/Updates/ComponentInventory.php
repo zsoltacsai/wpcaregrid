@@ -36,7 +36,7 @@ final class ComponentInventory
         foreach (['packages' => false, 'packages-dev' => true] as $section => $dev) {
             foreach (is_array($lock[$section] ?? null) ? $lock[$section] : [] as $package) {
                 $name = is_array($package) && is_string($package['name'] ?? null) ? $package['name'] : null;
-                if ($name === null || preg_match(self::NAME, $name) !== 1) {
+                if ($name === null || preg_match(self::NAME, $name) !== 1 || strlen($name) > 150) {
                     continue;
                 }
                 $version = $this->version(is_string($package['version'] ?? null) ? ltrim($package['version'], 'v') : null);
@@ -62,12 +62,12 @@ final class ComponentInventory
             }
             $name = substr($path, (int) strrpos('/'.$path, '/node_modules/') + strlen('node_modules/'));
             $version = $this->version(is_string($package['version'] ?? null) ? $package['version'] : null);
-            if (preg_match(self::NAME, $name) !== 1) {
+            if (preg_match(self::NAME, $name) !== 1 || strlen($name) > 150) {   // keeps every key within the 191-character column
                 continue;
             }
             // A nested copy can be a different (vulnerable) version: every distinct name@version is kept.
             $key = $path === 'node_modules/'.$name ? 'npm:'.$name : 'npm:'.$name.'@'.($version ?? 'unknown');
-            if (isset($seen[$key])) {
+            if (strlen($key) > 190 || isset($seen[$key])) {
                 continue;
             }
             $seen[$key] = true;

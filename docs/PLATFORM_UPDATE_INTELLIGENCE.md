@@ -43,18 +43,22 @@ Installed versions are read **only** from fixed, read-only sources of this deplo
 | PHP, OpenSSL (PHP build), database, OS | the running process, the DB connection, `/etc/os-release` | **none yet → `UNVERIFIED`** |
 | WP CareGrid Connector | plugin header of the packaged plugin | **none → `UNVERIFIED`** (first-party) |
 
+Composer and npm entries come from the lock files, including development-only packages (`require-dev`, `devDependencies`). They are stored and flagged `development_only` but **not counted** as open or critical advisories, because a production release does not install them. A `fixed_version` is stored only if the source names one in a version range (ECOSYSTEM/SEMVER, never GIT commits) that contains the installed version; a withdrawn advisory is never open.
+
 A component whose version cannot be read is `UNKNOWN`; a component without an advisory source is `UNVERIFIED`. Neither is ever shown as "up to date".
 Not in the MVP, therefore `UNVERIFIED`/absent and listed as follow-ups: Ubuntu Security Notices, PHP/MySQL official announcements, Nginx/Apache,
 Redis/Supervisor, Docker images, GitHub Actions advisories, Composer/NPM *available-version* lookup (latest release; needs Packagist/npm registry calls).
 
 ## Security boundaries
 
-* The check runs in the application's own unprivileged context (web/queue user), never as root; no shell, no new privilege, no new file write.
+* The check runs in the application's own context (the web/queue/scheduler user of the deployment). That it is unprivileged is a deployment property (production runs the application as a non-root user), not something this code can enforce; the code itself uses no shell, requests no privilege and writes only to the database.
 * Outbound traffic: two fixed HTTPS URLs (`https://api.osv.dev/v1/querybatch`, `https://api.osv.dev/v1/vulns/<id>`) hard-coded in `OsvClient`.
   No configuration or user input reaches a URL (SSRF), redirects are refused, 10 s timeout, 5 MB response cap, ids validated against a strict pattern.
 * Every field of every answer is validated; any doubt raises a fixed code (`osv_*`) and the check is `failed`: **nothing is resolved and no component is marked
   `CHECKED` on the strength of a failed source** — a broken source can never look like "no advisories".
-* A second check cannot start while one runs (cache lock) nor within `min_interval_seconds` (rate limit); the same advisory is one row (idempotent).
+* A second check cannot start while one runs (cache lock, 30 min, longer than the 15 min run budget) nor within `min_interval_seconds` (re-checked inside the lock); the same advisory is one row (idempotent). A failed check also blocks a retry for the interval. `--manual` is refused when the feature is disabled.
+* Privacy: only the ecosystem, package name and installed version of this deployment's components are sent to `api.osv.dev` (no customer data, no installation identifier).
+* Size: a response whose `Content-Length` or received size exceeds 5 MB is aborted while downloading; the run has a time budget (detail lookups stop with a `partial` result).
 * Off by default (`PLATFORM_UPDATES_ENABLED=false`): no scheduled outbound request until the Owner enables it. On staging-next it additionally needs the existing
   external-services opt-in (`StagingActiveProfile::externalContactClosed()`), otherwise the check is `refused` without any request.
 * Output of the command is one fixed line (`PLATFORM_UPDATE_CHECK=<STATUS>;CODE=...;COMPONENTS=..;UNKNOWN=..;OPEN_ADVISORIES=..;CRITICAL=..`).

@@ -15,9 +15,12 @@ return [
     // Bounds of one check.
     'max_components' => 1500,
     'max_advisory_details' => 100,
+
+    // Time budget of one check (detail lookups stop when it is used up) and the lock that must outlast it.
+    'run_budget_seconds' => 900,
     'max_response_bytes' => 5 * 1024 * 1024,
 
     // A second check cannot start while one runs, and not more often than this.
-    'lock_seconds' => 600,
+    'lock_seconds' => 1800,
     'min_interval_seconds' => 300,
 ];

@@ -11,6 +11,9 @@ use Throwable;
  * and others). Two fixed HTTPS endpoints, never configuration or user input; no redirects;
  * bounded time and size; every field of every answer is validated before use. Any doubt is an
  * OsvUnavailable, so a broken source can never look like "no advisories".
+ *
+ * Privacy: the only data sent is the package ecosystem, name and installed version of the
+ * components of this deployment (no customer data, no identifiers of this installation).
  */
 final class OsvClient
 {
@@ -21,6 +24,8 @@ final class OsvClient
     public const PUBLIC_URL = 'https://osv.dev/vulnerability/';
 
     private const ID = '/^[A-Za-z0-9][A-Za-z0-9._-]{2,62}$/';
+
+    private const VERSION = '/^[0-9][0-9A-Za-z.+~-]{0,62}$/';
 
     /**
      * @param  list<DetectedComponent>  $components  checkable components only
@@ -39,7 +44,7 @@ final class OsvClient
             }
             foreach ($chunk as $index => $component) {
                 $answer = $answers[$index];
-                if (! is_array($answer) || isset($answer['next_page_token'])) {
+                if (! is_array($answer) || isset($answer['next_page_token']) || (array_key_exists('vulns', $answer) && ! is_array($answer['vulns']))) {
                     throw new OsvUnavailable('osv_batch_entry_invalid');
                 }
                 $ids = [];
@@ -58,7 +63,7 @@ final class OsvClient
     }
 
     /**
-     * @return array{aliases: list<string>, severity: string, summary: ?string, published_at: ?Carbon, fixed_versions: list<string>}
+     * @return array{aliases: list<string>, severity: string, summary: ?string, published_at: ?Carbon, fixed_versions: list<string>, withdrawn: bool}
      */
     public function details(string $id, DetectedComponent $component): array
     {
@@ -89,6 +94,26 @@ final class OsvClient
                 $published = null;
             }
         }
+
+        return [
+            'aliases' => array_values(array_unique($aliases)),
+            'severity' => $severity,
+            'summary' => $summary === '' ? null : mb_substr($summary, 0, 500),
+            'published_at' => $published,
+            'fixed_versions' => $this->fixedVersions($data, $component),
+            'withdrawn' => isset($data['withdrawn']),   // a withdrawn advisory is not an advisory any more
+        ];
+    }
+
+    /**
+     * Fixed versions that belong to a range which CONTAINS the installed version. Only version
+     * ranges (ECOSYSTEM, SEMVER) count: a GIT range names commits, not versions.
+     *
+     * @param  array<string, mixed>  $data
+     * @return list<string>
+     */
+    private function fixedVersions(array $data, DetectedComponent $component): array
+    {
         $fixed = [];
         foreach (is_array($data['affected'] ?? null) ? $data['affected'] : [] as $affected) {
             if (! is_array($affected) || ($affected['package']['ecosystem'] ?? null) !== $component->ecosystem
@@ -96,22 +121,27 @@ final class OsvClient
                 continue;
             }
             foreach (is_array($affected['ranges'] ?? null) ? $affected['ranges'] : [] as $range) {
+                if (! is_array($range) || ! in_array($range['type'] ?? null, ['ECOSYSTEM', 'SEMVER'], true)) {
+                    continue;
+                }
+                $introduced = null;
                 foreach (is_array($range['events'] ?? null) ? $range['events'] : [] as $event) {
-                    $version = is_array($event) && is_string($event['fixed'] ?? null) ? ltrim($event['fixed'], 'v') : null;
-                    if ($version !== null && preg_match('/^[0-9][0-9A-Za-z.+-]{0,62}$/', $version) === 1) {
+                    if (! is_array($event)) {
+                        continue;
+                    }
+                    if (is_string($event['introduced'] ?? null)) {
+                        $introduced = $event['introduced'] === '0' ? '0' : ltrim($event['introduced'], 'v');
+                    }
+                    $version = is_string($event['fixed'] ?? null) ? ltrim($event['fixed'], 'v') : null;
+                    if ($version !== null && preg_match(self::VERSION, $version) === 1 && $introduced !== null
+                        && version_compare($introduced, (string) $component->version, '<=') && version_compare($version, (string) $component->version, '>')) {
                         $fixed[] = $version;
                     }
                 }
             }
         }
 
-        return [
-            'aliases' => array_values(array_unique($aliases)),
-            'severity' => $severity,
-            'summary' => $summary === '' ? null : mb_substr($summary, 0, 500),
-            'published_at' => $published,
-            'fixed_versions' => array_values(array_unique($fixed)),
-        ];
+        return array_values(array_unique($fixed));
     }
 
     /**
@@ -120,21 +150,38 @@ final class OsvClient
      */
     private function request(string $method, string $url, ?array $payload = null): array
     {
+        $limit = (int) config('platform_updates.max_response_bytes', 5 * 1024 * 1024);
+        $tooLarge = false;
         try {
             $pending = Http::timeout((int) config('platform_updates.timeout', 10))
                 ->connectTimeout((int) config('platform_updates.connect_timeout', 5))
-                ->withOptions(['allow_redirects' => false])
+                ->withOptions([
+                    'allow_redirects' => false,
+                    // Abort as soon as the announced or the received size exceeds the cap (before it is held in memory).
+                    'on_headers' => function ($response) use ($limit, &$tooLarge): void {
+                        if ((int) $response->getHeaderLine('Content-Length') > $limit) {
+                            $tooLarge = true;
+                            throw new \RuntimeException('too_large');
+                        }
+                    },
+                    'progress' => function ($downloadTotal, $downloaded) use ($limit, &$tooLarge): void {
+                        if ($downloaded > $limit) {
+                            $tooLarge = true;
+                            throw new \RuntimeException('too_large');
+                        }
+                    },
+                ])
                 ->withHeaders(['User-Agent' => 'WP-CareGrid-Platform-Updates/1'])
                 ->acceptJson();
             $response = $method === 'post' ? $pending->asJson()->post($url, $payload) : $pending->get($url);
         } catch (Throwable) {
-            throw new OsvUnavailable('osv_unreachable');
+            throw new OsvUnavailable($tooLarge ? 'osv_response_too_large' : 'osv_unreachable');
         }
         if ($response->status() !== 200) {
             throw new OsvUnavailable($response->status() === 429 ? 'osv_rate_limited' : 'osv_http_error');
         }
         $body = $response->body();
-        if (strlen($body) > (int) config('platform_updates.max_response_bytes', 5 * 1024 * 1024)) {
+        if (strlen($body) > $limit) {
             throw new OsvUnavailable('osv_response_too_large');
         }
         $decoded = json_decode($body, true);
