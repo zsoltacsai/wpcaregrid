@@ -50,6 +50,64 @@ class SubscriptionManagementTest extends TestCase
         ]);
     }
 
+    public function test_a_failed_cancel_or_reactivate_call_is_replayed_with_the_same_idempotency_key_on_retry(): void
+    {
+        foreach ([[true, false, 'cancel_at_period_end'], [false, true, 'reactivate']] as [$cancel, $startsCancelling, $operationName]) {
+            $gateway = new FakeSubscriptionManagementGateway;
+            $this->app->instance(SubscriptionManagementGateway::class, $gateway);
+            $subscription = Subscription::factory()->create(['billing_source' => 'stripe', 'cancel_at_period_end' => $startsCancelling]);
+            $management = app(SubscriptionManagement::class);
+            $call = fn () => $cancel
+                ? $management->cancelAtPeriodEnd($subscription, $subscription->customer)
+                : $management->reactivate($subscription, $subscription->customer);
+
+            $gateway->failure = new \RuntimeException('Stripe timeout');
+            try {
+                $call();
+                $this->fail('The first failure must be propagated.');
+            } catch (\RuntimeException) {
+            }
+            $failed = SubscriptionOperation::query()->where('subscription_id', $subscription->id)->sole();
+            $this->assertSame(['reconciliation_required', 0], [$failed->status, count($gateway->calls)], $operationName);
+
+            // The customer retries after Stripe recovered: Stripe is called now, with the same key, on the same operation row.
+            $gateway->failure = null;
+            $retried = $call();
+
+            $this->assertSame($failed->id, $retried->id, $operationName);
+            $this->assertSame('awaiting_confirmation', $retried->status, $operationName);
+            $this->assertCount(1, $gateway->calls, $operationName);
+            $this->assertSame('subscription-operation-'.$failed->uuid, $gateway->calls[0]['key'], $operationName);
+            $this->assertSame($cancel, $gateway->calls[0]['cancel'], $operationName);
+
+            // A further request while it awaits confirmation is idempotent: no second Stripe call.
+            $this->assertSame($failed->id, $call()->id);
+            $this->assertCount(1, $gateway->calls, $operationName);
+        }
+    }
+
+    public function test_a_signed_stripe_update_resolves_a_failed_cancel_row_when_stripe_had_applied_it(): void
+    {
+        $gateway = new FakeSubscriptionManagementGateway;
+        $this->app->instance(SubscriptionManagementGateway::class, $gateway);
+        $subscription = Subscription::factory()->create(['billing_source' => 'stripe']);
+        $gateway->failure = new \RuntimeException('Stripe timeout');
+        try {
+            app(SubscriptionManagement::class)->cancelAtPeriodEnd($subscription, $subscription->customer);
+        } catch (\RuntimeException) {
+        }
+        $operation = SubscriptionOperation::query()->sole();
+        $this->assertSame('reconciliation_required', $operation->status);
+
+        $this->stripeEvent('customer.subscription.updated', $this->stripeSubscription($subscription->stripe_subscription_id, 'active', [
+            'customer' => $subscription->stripe_customer_id,
+            'cancel_at_period_end' => true,
+        ]), 'evt_cancel_applied')->assertStatus(204);
+
+        $this->assertSame('confirmed', $operation->fresh()->status);
+        $this->assertTrue($subscription->fresh()->cancel_at_period_end);
+    }
+
     public function test_reactivation_uses_a_separate_operation_and_foreign_customer_is_refused(): void
     {
         $gateway = new FakeSubscriptionManagementGateway;
@@ -179,6 +237,48 @@ class SubscriptionManagementTest extends TestCase
         } catch (\LogicException $exception) {
             $this->assertSame('A subscription change is already pending confirmation.', $exception->getMessage());
         }
+    }
+
+    public function test_a_paid_upgrade_invoice_is_applied_even_when_the_stripe_response_to_the_request_was_lost(): void
+    {
+        $this->configureStripePriceIds();
+        $catalog = app(PricingCatalog::class);
+        $customer = Customer::factory()->create(['country_code' => 'HU']);
+        $current = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Business, BillingInterval::Monthly), 'HU', 'HUF');
+        $subscription = Subscription::factory()->for($customer)->create([
+            'billing_source' => 'stripe', 'product_type' => ProductType::WordPress, 'plan' => PlanTier::Business,
+            'interval' => BillingInterval::Monthly, 'stripe_price_id' => $current->stripePriceId,
+        ]);
+        $target = $catalog->resolve(new PriceSelection(ProductType::WordPress, PlanTier::Secure, BillingInterval::Monthly), 'HU', 'HUF');
+        $gateway = new FakeSubscriptionManagementGateway;
+        $gateway->failure = new \RuntimeException('Stripe timeout');
+        $this->app->instance(SubscriptionManagementGateway::class, $gateway);
+        try {
+            app(SubscriptionManagement::class)->changePlan($subscription, $customer, ProductType::WordPress, PlanTier::Secure, BillingInterval::Monthly);
+            $this->fail('A provider failure must be propagated.');
+        } catch (\RuntimeException) {
+        }
+        $this->assertSame('reconciliation_required', $subscription->fresh()->pending_change_status);
+        $operation = SubscriptionOperation::query()->sole();
+
+        // Stripe had applied the change and the customer paid the proration invoice.
+        $paid = fn (string $priceId, string $eventId) => $this->stripeEvent('invoice.paid', [
+            'id' => 'in_'.$eventId, 'object' => 'invoice', 'customer' => $subscription->stripe_customer_id,
+            'billing_reason' => 'subscription_update', 'status' => 'paid', 'currency' => 'huf', 'amount_paid' => 190000, 'amount_due' => 0,
+            'created' => now()->timestamp, 'status_transitions' => ['paid_at' => now()->timestamp],
+            'parent' => ['subscription_details' => ['subscription' => $subscription->stripe_subscription_id]],
+            'lines' => ['data' => [['pricing' => ['price_details' => ['price' => $priceId]]]]],
+        ], $eventId)->assertStatus(204);
+
+        // An invoice for any other price changes nothing.
+        $paid($current->stripePriceId, 'evt_paid_other_price');
+        $this->assertSame(PlanTier::Business, $subscription->fresh()->plan);
+        $this->assertSame('reconciliation_required', $subscription->fresh()->pending_change_status);
+
+        $paid($target->stripePriceId, 'evt_paid_lost_response');
+        $this->assertSame(PlanTier::Secure, $subscription->fresh()->plan);
+        $this->assertNull($subscription->fresh()->pending_change_status);
+        $this->assertSame('confirmed', $operation->fresh()->status);
     }
 
     public function test_webhook_confirmation_received_during_provider_request_is_not_regressed_after_response(): void

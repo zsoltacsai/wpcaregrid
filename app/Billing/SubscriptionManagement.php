@@ -298,12 +298,16 @@ final class SubscriptionManagement
             $row = SubscriptionOperation::where('operation_key', $operationKey)->firstOrFail();
         }
 
-        if (! in_array($row->status, ['requested', 'processing'], true)) {
+        // A request whose Stripe call failed (reconciliation_required) is replayed with the same idempotency key: Stripe returns the
+        // original result if it had processed it, otherwise it applies the change now. Returning the row without calling Stripe
+        // would leave the customer unable to cancel (or reactivate) and the controller would still report the request as made.
+        $replayable = ['requested', 'processing', 'reconciliation_required'];
+        if (! in_array($row->status, $replayable, true)) {
             return $row;
         }
 
         $claimed = DB::table('subscription_operations')->where('id', $row->id)
-            ->whereIn('status', ['requested', 'processing'])
+            ->whereIn('status', $replayable)
             ->where(function ($query) {
                 $query->whereNull('lease_expires_at')->orWhere('lease_expires_at', '<=', now());
             })
@@ -325,7 +329,9 @@ final class SubscriptionManagement
                 'effective_at' => $subscription->current_period_end?->toIso8601String(),
             ]);
         } catch (Throwable $exception) {
-            $row->forceFill([
+            // Refreshed first: the claim above changed the row with a query, so this instance still holds the old lease (null)
+            // and would not write the release; the lease would block the retry until it expires.
+            $row->refresh()->forceFill([
                 'status' => 'reconciliation_required',
                 'error_category' => class_basename($exception),
                 'lease_expires_at' => null,
