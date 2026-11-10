@@ -18,7 +18,7 @@ Existing platform-monitoring that this module sits next to (and does not replace
 | `App\Owner\SystemStatus` / Owner "System" page | Health of application, database, queue, scheduler, Stripe, mail ... | Platform Updates becomes a sibling page (Phase C), not a new health dimension |
 | `security:vulnerabilities:sync` (Wordfence v3) | Vulnerabilities of **customer WordPress sites** (plugins/themes) | Different subject; untouched |
 | `monitoring:run`, `monitoring:deliver-alerts`, `MonitoringEngine` | Customer-site probes and alerts | The alert outbox is the candidate transport for Phase D |
-| `App\Release\StagingSchedulePolicy` | Fail-closed allowlist of scheduled tasks on staging-next | `platform:updates:check` is classified `EXTERNAL` (needs the Owner's external-services opt-in) |
+| `App\Release\StagingSchedulePolicy` | Fail-closed allowlist of scheduled tasks on staging-next | `platform:updates:check` is classified `EXTERNAL` (needs the Owner's external-services opt-in), `platform:updates:digest` `MAIL`; `PlatformUpdateGate` asks this policy for every entry point |
 | `.github/workflows/actions.lock`, CI | Action pinning | Read-only source for Phase E (GitHub Actions) |
 
 ## Data model (migration `2026_11_10_000001`)
@@ -64,8 +64,8 @@ Redis/Supervisor, Docker images, GitHub Actions advisories, Composer/NPM *availa
 * A second check cannot start while one runs (cache lock, 30 min, longer than the 15 min run budget) nor within `min_interval_seconds` (re-checked inside the lock); the same advisory is one row (idempotent). A failed check also blocks a retry for the interval. `--manual` is refused when the feature is disabled.
 * Privacy: only the ecosystem, package name and installed version of this deployment's components are sent to `api.osv.dev` (no customer data, no installation identifier).
 * Size: a response whose `Content-Length` or received size exceeds 5 MB is aborted while downloading; the run has a time budget (detail lookups stop with a `partial` result).
-* Off by default (`PLATFORM_UPDATES_ENABLED=false`): no scheduled outbound request until the Owner enables it. On staging-next it additionally needs the existing
-  external-services opt-in (`StagingActiveProfile::externalContactClosed()`), otherwise the check is `refused` without any request.
+* Off by default (`PLATFORM_UPDATES_ENABLED=false`): no scheduled outbound request until the Owner enables it. The flag is read fail-closed: only `true`, `1`, `yes` or `on` enables it; `false`, `no`, `off`, `0`, empty, `disabled` and any unknown or misspelled value read as off.
+* One gate for every entry point (`PlatformUpdateGate`): the scheduler, the command, the queued job, the Owner button, the scanner and the notifier all ask the same question. Where the staging scheduler policy applies (staging-next recognised by its id, a requested `staging_active` profile or its exact host) the check additionally needs the Owner's external-services opt-in **and** the proven environment, otherwise it is `refused` (`staging_external_contact_closed`, `staging_environment_unproven`) without any request; notices and the digest need the proven environment and a confined mail transport (`staging_mail_not_confined`). The proof is read again on every call.
 * Output of the command is one fixed line (`PLATFORM_UPDATE_CHECK=<STATUS>;CODE=...;COMPONENTS=..;UNKNOWN=..;OPEN_ADVISORIES=..;CRITICAL=..`).
 
 ## Operation
@@ -74,8 +74,7 @@ Redis/Supervisor, Docker images, GitHub Actions advisories, Composer/NPM *availa
 enabling it is an environment variable decision of the Owner.
 
 `PLATFORM_UPDATES_ENABLED` is declared in `.env.example` as `false`. With it off the scheduled check does not run and `platform:updates:check`
-refuses (`CODE=disabled`). Neither setting ever installs or updates software. (The Owner page, the manual queued check and the notifications
-belong to the later phases C and D and are gated by the same flag in their own pull requests.)
+refuses (`CODE=disabled`). Neither setting ever installs or updates software. (The Owner page, the manual queued check and the notifications are gated by the same flag and the same `PlatformUpdateGate`.)
 
 ### Not covered yet (no claim is made for these)
 
