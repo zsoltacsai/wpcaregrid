@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """GO-5.3 helper-only upgrade. Never starts MySQL or changes policy/data."""
-import base64, fcntl, grp, hashlib, json, os, pwd, re, stat, subprocess, sys, time
+import base64, errno, fcntl, grp, hashlib, json, os, pwd, re, stat, subprocess, sys, time
 
 LIBEXEC='/usr/local/libexec'
 HELPER=LIBEXEC+'/wpcaregrid-g1-mysql.py'
@@ -25,11 +25,23 @@ class Stop(Exception):
  def __init__(self,code,rollback=None): super().__init__(code); self.code,self.rollback=code,rollback
 def sha(b): return hashlib.sha256(b).hexdigest()
 def read(path,mode=None):
+ name=os.path.basename(path)
+ try:fd=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0))
+ except OSError as e:
+  if e.errno==errno.ELOOP:raise Stop('not_regular:'+name)
+  raise
+ try:
+  # Type, owner and mode are taken from the opened descriptor, so a swap between check and read cannot be used.
+  s=os.fstat(fd)
+  if not stat.S_ISREG(s.st_mode): raise Stop('not_regular:'+name)
+  if (s.st_uid,s.st_gid)!=(0,0): raise Stop('owner_invalid:'+name)
+  if mode is not None and stat.S_IMODE(s.st_mode)!=mode: raise Stop('mode_invalid:'+name)
+  with os.fdopen(fd,'rb',closefd=False) as f:return f.read()
+ finally:os.close(fd)
+def check_dir(path,code):
+ # A directory in which files are created and renamed must be a real root-owned directory nobody else can write to.
  s=os.lstat(path)
- if not stat.S_ISREG(s.st_mode): raise Stop('not_regular:'+os.path.basename(path))
- if (s.st_uid,s.st_gid)!=(0,0): raise Stop('owner_invalid:'+os.path.basename(path))
- if mode is not None and stat.S_IMODE(s.st_mode)!=mode: raise Stop('mode_invalid:'+os.path.basename(path))
- with open(path,'rb') as f:return f.read()
+ if not stat.S_ISDIR(s.st_mode) or s.st_uid!=0 or stat.S_IMODE(s.st_mode)&0o022:raise Stop(code)
 def hash_mysql_file(path,exact_mode=None):
  flags=os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0)
  fd=os.open(path,flags)
@@ -90,8 +102,12 @@ def tree_fingerprint(path):
 def durable_json(path,obj):
  tmp=path+'.tmp'; b=(json.dumps(obj,sort_keys=True,separators=(',',':'))+'\n').encode()
  fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o600)
- with os.fdopen(fd,'wb') as f:f.write(b);f.flush();os.fsync(f.fileno())
- os.chown(tmp,0,0);os.chmod(tmp,0o600);os.replace(tmp,path)
+ try:
+  with os.fdopen(fd,'wb') as f:f.write(b);f.flush();os.fsync(f.fileno())
+  os.chown(tmp,0,0);os.chmod(tmp,0o600);os.replace(tmp,path)
+ except BaseException:
+  if os.path.lexists(tmp):os.unlink(tmp)
+  raise
  d=os.open(os.path.dirname(path),os.O_RDONLY|os.O_DIRECTORY)
  try:os.fsync(d)
  finally:os.close(d)
@@ -113,6 +129,7 @@ def _main_locked(pkg,runfn=run,euid=None,replace=atomic,hook=None):
  # Accept the repository's authenticated four-file G1 package. The pinned
  # contract is verified as package input but is never installed or rewritten.
  expected=set(NAMES.values())|{PACKAGE_CONTRACT,'SHA256SUMS'}
+ check_dir(LIBEXEC,'libexec_directory_unsafe');check_dir(os.path.dirname(PROFILE_P),'apparmor_directory_unsafe')
  if set(os.listdir(pkg))!=expected:raise Stop('package_contents_unexpected')
  for name in expected:
   p=os.path.join(pkg,name)

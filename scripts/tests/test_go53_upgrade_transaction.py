@@ -122,6 +122,31 @@ class TxTests(unittest.TestCase):
   self.active_unit=True
   with self.assertRaisesRegex(go.Stop,'g1_unit_not_inactive'):self.install()
   self.assertEqual(self.files[0].read_bytes(),self.new[go.HELPER]);self.assertTrue(Path(go.JOURNAL).exists())
+ def test_unsafe_target_directories_stop_before_any_write(self):
+  for d,code in ((self.lib,'libexec_directory_unsafe'),(self.aa,'apparmor_directory_unsafe')):
+   with self.subTest(code=code):
+    d.chmod(0o775)
+    try:
+     with self.assertRaisesRegex(go.Stop,code):self.install()
+    finally:d.chmod(0o755)
+    self.assertEqual([Path(p).read_bytes() for p in self.paths.values()],list(self.old.values()));self.assertFalse(Path(go.JOURNAL).exists())
+  real=self.root/'real-lib';real.mkdir();link=self.root/'lib-link';link.symlink_to(real);go.LIBEXEC=str(link)
+  with self.assertRaisesRegex(go.Stop,'libexec_directory_unsafe'):self.install()
+ def test_read_takes_type_owner_and_mode_from_the_opened_descriptor_and_refuses_symlinks(self):
+  target=self.root/'t';target.write_bytes(b'x');target.chmod(0o644);link=self.root/'l';link.symlink_to(target)
+  with self.assertRaisesRegex(go.Stop,'not_regular:l'):go.read(str(link))
+  fifo=self.root/'f';os.mkfifo(fifo)
+  with self.assertRaisesRegex(go.Stop,'not_regular:f'):go.read(str(fifo))
+  with self.assertRaisesRegex(go.Stop,'mode_invalid:t'):go.read(str(target),0o600)
+  self.assertEqual(go.read(str(target),0o644),b'x')
+ def test_journal_write_failure_leaves_no_temporary_file(self):
+  real=os.replace
+  def fail(*a,**k):raise OSError('injected')
+  os.replace=fail
+  try:
+   with self.assertRaises(OSError):go.durable_json(go.JOURNAL,{'schema':1})
+  finally:os.replace=real
+  self.assertFalse(Path(go.JOURNAL+'.tmp').exists());self.assertFalse(Path(go.JOURNAL).exists())
  def test_corrupt_journal_fails_closed(self):
   Path(go.JOURNAL).write_text('{bad');Path(go.JOURNAL).chmod(0o600)
   with self.assertRaisesRegex(go.Stop,'journal_corrupt'):self.install()
