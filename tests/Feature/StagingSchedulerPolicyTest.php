@@ -32,7 +32,7 @@ class StagingSchedulerPolicyTest extends TestCase
 
     private const CONNECTOR = ['backup:schedule', 'security:schedule'];
 
-    private const EXTERNAL = ['platform:database-backup-schedule', 'security:vulnerabilities:sync'];
+    private const EXTERNAL = ['platform:database-backup-schedule', 'security:vulnerabilities:sync', 'platform:updates:check'];
 
     protected function setUp(): void
     {
@@ -40,6 +40,7 @@ class StagingSchedulerPolicyTest extends TestCase
 
         // The vulnerability sync has its own configuration condition; make it due so only the policy decides.
         config([
+            'platform_updates.enabled' => true,
             'security.vulnerabilities.source' => 'wordfence',
             'security.vulnerabilities.feed_url' => 'https://feed.invalid/x',
             'security.vulnerabilities.scheduled_sync_enabled' => true,
@@ -52,7 +53,7 @@ class StagingSchedulerPolicyTest extends TestCase
 
         $this->assertSame([], array_diff($scheduled, array_keys(StagingSchedulePolicy::TASKS)), 'a scheduled task without a classification');
         $this->assertSame([], array_diff(array_keys(StagingSchedulePolicy::TASKS), $scheduled), 'a classification for a task that is not scheduled');
-        $this->assertCount(19, $scheduled);
+        $this->assertCount(20, $scheduled);
         $this->assertEqualsCanonicalizing(
             array_merge(self::LOCAL, self::STRIPE, self::MAIL, self::CONNECTOR, self::EXTERNAL),
             array_keys(StagingSchedulePolicy::TASKS),
