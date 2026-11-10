@@ -132,7 +132,7 @@ def _main_locked(pkg,runfn=run,euid=None,replace=atomic,hook=None):
  if sha(read(CONTRACT,0o644))!=PINS[CONTRACT]:raise Stop('contract_changed')
  for p in (PROFILE_P,PROFILE_R):
   if sha(read(p,0o644))!=PINS[p]:raise Stop('apparmor_profile_changed')
- if any(os.path.lexists(p+'.g1-upgrade-tmp') for p in (HELPER,MANIFEST)) or os.path.lexists(JOURNAL+'.tmp'):raise Stop('leftover_temporary_file_manual_recovery_required')
+ if os.path.lexists(JOURNAL+'.tmp'):raise Stop('leftover_journal_temporary_file_manual_recovery_required')
  before_pid=read_pid(runfn)
  datadirs=[tree_fingerprint(p) for p in DATADIRS]
  logs=[read_mysql_log(p) for p in LOGS]
@@ -140,8 +140,23 @@ def _main_locked(pkg,runfn=run,euid=None,replace=atomic,hook=None):
  already=all(state[p]==NEW[p] for p in NEW)
  assert_units_inactive(runfn)
  j=journal_state()
+ leftovers=[p for p in (HELPER,MANIFEST) if os.path.lexists(p+'.g1-upgrade-tmp')]
+ if leftovers and (j is None or j['phase']!='replacing'):
+  raise Stop('leftover_temporary_file_manual_recovery_required')
  if j:
   if any(state[p] not in (OLD[p],NEW[p]) for p in OLD):raise Stop('journal_file_state_unknown_manual_recovery_required')
+  if leftovers:
+   # A kill during atomic replacement can leave that transaction's partial
+   # temp file beside a valid replacing journal. Remove only a regular,
+   # root-owned, single-link temp in a mode atomic() itself can create.
+   for p in leftovers:
+    tmp=p+'.g1-upgrade-tmp';ts=os.lstat(tmp)
+    if not stat.S_ISREG(ts.st_mode) or (ts.st_uid,ts.st_gid)!=(0,0) or ts.st_nlink!=1 or stat.S_IMODE(ts.st_mode) not in (0o600,MODES[p]):
+     raise Stop('leftover_temporary_file_unrecognized_manual_recovery_required')
+    os.unlink(tmp)
+    d=os.open(os.path.dirname(p),os.O_RDONLY|os.O_DIRECTORY)
+    try:os.fsync(d)
+    finally:os.close(d)
   # A journal proves this exact transaction owns a known OLD/NEW mixture. Recover to OLD, never guess.
   if j['phase']=='committed' and all(state[p]==NEW[p] for p in NEW):
    os.unlink(JOURNAL)

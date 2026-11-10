@@ -1,5 +1,5 @@
 """Isolated transaction tests; all paths are temporary and subprocesses are faked."""
-import base64, contextlib, fcntl, hashlib, importlib.util, io, json, os, sys, tempfile, threading, time, types, unittest
+import base64, contextlib, fcntl, hashlib, importlib.util, io, json, os, signal, sys, tempfile, threading, time, types, unittest
 from pathlib import Path
 
 SRC=Path(__file__).parents[1]/'production-g1-ops'/'go53-upgrade-helper.py'
@@ -94,6 +94,28 @@ class TxTests(unittest.TestCase):
   for p,b in self.new.items():Path(p).write_bytes(b)
   go.durable_json(go.JOURNAL,{'schema':1,'phase':'replacing','old':go.OLD,'new':go.NEW,'backup':backup})
   self.install();self.assertEqual([p.read_bytes() for p in self.files],list(self.new.values()))
+ def test_real_sigkill_during_second_atomic_write_recovers_leftover_temp_and_mixed_pair(self):
+  pid=os.fork()
+  if pid==0:
+   def kill_before_manifest_rename(path):
+    if path==go.MANIFEST:os.kill(os.getpid(),signal.SIGKILL)
+   go.main(str(self.pkg),runfn=self.runner,euid=0,hook=kill_before_manifest_rename)
+   os._exit(99)
+  _,status=os.waitpid(pid,0)
+  self.assertTrue(os.WIFSIGNALED(status));self.assertEqual(os.WTERMSIG(status),signal.SIGKILL)
+  self.assertEqual(self.files[0].read_bytes(),self.new[go.HELPER])
+  self.assertEqual(self.files[1].read_bytes(),self.old[go.MANIFEST])
+  self.assertTrue(Path(go.MANIFEST+'.g1-upgrade-tmp').is_file())
+  self.assertEqual(self.install(),'G1_GO53_HELPER_UPGRADE=PASS')
+  self.assertEqual([p.read_bytes() for p in self.files],list(self.new.values()))
+  self.assertFalse(Path(go.MANIFEST+'.g1-upgrade-tmp').exists())
+ def test_symlink_temporary_file_is_not_removed_even_with_valid_replacing_journal(self):
+  backup={p:base64.b64encode(b).decode() for p,b in self.old.items()};self.files[0].write_bytes(self.new[go.HELPER])
+  go.durable_json(go.JOURNAL,{'schema':1,'phase':'replacing','old':go.OLD,'new':go.NEW,'backup':backup})
+  target=self.root/'outside';target.write_text('untouched')
+  Path(go.HELPER+'.g1-upgrade-tmp').symlink_to(target)
+  with self.assertRaisesRegex(go.Stop,'leftover_temporary_file_unrecognized'):self.install()
+  self.assertEqual(target.read_text(),'untouched');self.assertTrue(Path(go.JOURNAL).exists())
  def test_active_unit_stops_before_journal_recovery_writes(self):
   backup={p:base64.b64encode(b).decode() for p,b in self.old.items()};self.files[0].write_bytes(self.new[go.HELPER])
   go.durable_json(go.JOURNAL,{'schema':1,'phase':'replacing','old':go.OLD,'new':go.NEW,'backup':backup})
