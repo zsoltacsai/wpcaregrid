@@ -11,6 +11,11 @@ return [
     // any unknown or misspelled value read as off (a plain (bool) cast would turn every non-empty string, "off" included, on).
     'enabled' => filter_var(env('PLATFORM_UPDATES_ENABLED', false), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) === true,
 
+    // Phase E1: read-only inventory of the GitHub Actions in .github/workflows/actions.lock. Off by default and only ever
+    // effective while the feature above is on (PlatformUpdateGate::actionsInventoryEnabled). Inventory only: these
+    // components have no advisory source and stay UNVERIFIED. Strict bool, like the switch above.
+    'github_actions_inventory' => filter_var(env('PLATFORM_UPDATES_ACTIONS_INVENTORY', false), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) === true,
+
     'timeout' => 10,
     'connect_timeout' => 5,
 

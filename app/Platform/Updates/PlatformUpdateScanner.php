@@ -205,6 +205,10 @@ final class PlatformUpdateScanner
             $row->save();
             $rows[$component->key] = $row;
         }
+        if (! PlatformUpdateGate::actionsInventoryEnabled()) {
+            // The GitHub Actions inventory is off: earlier rows are no longer reported (they never carried an advisory).
+            PlatformComponent::query()->where('kind', 'github-action')->where('present', true)->update(['present' => false]);
+        }
         // A component is "gone" only when its own source was readable in this run (an unreadable lock file proves nothing).
         foreach (array_keys($readableKinds) as $kind) {
             $gone = PlatformComponent::query()->where('kind', $kind)->where('present', true)->whereNotIn('component_key', array_keys($rows))->pluck('id');

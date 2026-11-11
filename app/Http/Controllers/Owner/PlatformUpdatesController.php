@@ -16,7 +16,7 @@ use Illuminate\Http\Request;
 /** System → Platform Updates. Shows stored results; the only action is a read-only check. */
 class PlatformUpdatesController extends Controller
 {
-    private const KINDS = ['composer', 'npm', 'runtime', 'connector'];
+    private const KINDS = ['composer', 'npm', 'runtime', 'connector', 'github-action'];
 
     public function index(Request $request, PlatformUpdateOverview $overview): View
     {

@@ -79,7 +79,7 @@ refuses (`CODE=disabled`). Neither setting ever installs or updates software. (T
 ### Not covered yet (no claim is made for these)
 
 Ubuntu/OS and PHP/MySQL advisory coverage (runtime components stay `UNVERIFIED`), connector-specific advisory intelligence, detection of newer
-available versions, Docker and GitHub Actions advisories, any other advisory source than OSV (Phase E).
+available versions, Docker and GitHub Actions advisories (the Actions are only inventoried, see Phase E1), any other advisory source than OSV (Phase E).
 
 ## Phases
 
@@ -114,10 +114,19 @@ Failure handling: a notice that cannot be delivered is never reported as sent. A
 
 Not in this version: notifications for *available* (non-security) version updates, because no available-version source is connected yet (Phase E); SMS/chat channels.
 
+## Phase E1 — GitHub Actions inventory (inventory only)
+
+`PLATFORM_UPDATES_ACTIONS_INVENTORY` (default `false`, strict like `PLATFORM_UPDATES_ENABLED`, and only effective while that switch is on; decided by `PlatformUpdateGate::actionsInventoryEnabled()`) adds the GitHub Actions the workflows use to the inventory, read from `.github/workflows/actions.lock`:
+
+* Read only, one local file, no outbound request, no new staging permission, no migration. The file is parsed by `ActionsLockParser` against the one supported structure (format `v0.0.3`) line by line; limits: 64 KiB, 2000 lines, 300 characters per line, 200 entries. Anything else (unknown version, unexpected line, duplicate, over a limit, symlink, unreadable, missing) rejects the whole file and yields one `github-action:lock` component with an unknown version, never a partial or empty list.
+* One component per action and pinned commit (`github-action:<owner>/<repo>@<commit>`; the same action under its tag and its SHA is one component), `kind = github-action`, `ecosystem = null`. The version is the lock's `ref` when it looks like a version, otherwise unknown.
+* **No advisory evaluation.** OSV does not evaluate versions for the `GitHub Actions` ecosystem (a version known to be affected returns nothing), so a version query would look like "no advisories". These components are never sent to OSV, are never `CHECKED`, never have advisories, and always stay `UNVERIFIED` (they count in "no advisory source"). Switching the inventory off stops reporting them.
+* Not done: any advisory source or local vulnerability-range evaluation for Actions (a separate Owner decision).
+
 ## Known limits
 
 * Only Composer, npm and (read-only) runtime/OS/connector inventory; runtime, OS and connector have **no advisory source yet**.
-* Ubuntu USN, PHP/MySQL announcements, Nginx/Apache, Redis/Supervisor, Docker images and GitHub Actions are not monitored (Phase E).
+* Ubuntu USN, PHP/MySQL announcements, Nginx/Apache, Redis/Supervisor and Docker images are not monitored (Phase E). GitHub Actions are only inventoried and stay `UNVERIFIED` (Phase E1).
 * OSV is a third-party service; its availability limits the check (a failed check is reported, never treated as clean).
 * The migrations add table sets; staging-next's deploy e2e ledger literals move accordingly (see the pull requests).
 

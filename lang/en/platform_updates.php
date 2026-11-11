@@ -29,7 +29,7 @@ return [
     'next_check' => 'Next scheduled check',
     'never' => 'never',
     'scheduled_off' => 'Scheduled checks are off',
-    'unverified_note' => ':count components have no advisory source yet (PHP, database, OS, connector); they are listed as UNVERIFIED, not as safe.',
+    'unverified_note' => ':count components have no advisory source yet (PHP, database, OS, connector, GitHub Actions); they are listed as UNVERIFIED, not as safe.',
     'advisories' => 'Open advisories',
     'no_advisories' => 'No open advisories in the checked components.',
     'components' => 'Components',
