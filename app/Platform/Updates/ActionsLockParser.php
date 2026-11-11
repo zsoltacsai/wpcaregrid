@@ -31,6 +31,11 @@ final class ActionsLockParser
 
     public const MAX_ENTRIES = 200;
 
+    /** The component key (github-action:<name>@<40 hex>) must fit the 191-character column: too long is a rejection, never a silent drop. */
+    public const KEY_PREFIX = 'github-action:';
+
+    public const MAX_KEY_LENGTH = 190;
+
     private const SPEC = '([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9._-]{1,100})((?:/[A-Za-z0-9._-]{1,100}){0,3})@([A-Za-z0-9._+\/-]{1,100})';
 
     /** No path segment may be a dot or a double dot (the pattern alone would allow them). */
@@ -62,6 +67,7 @@ final class ActionsLockParser
         $current = null;       // the dependency being read
         $dependencies = [];
         $specs = [];
+        $workflowSpecs = [];   // every action a workflow names must be described in dependencies
 
         $finish = function () use (&$current, &$dependencies, &$specs): bool {
             if ($current === null) {
@@ -90,7 +96,7 @@ final class ActionsLockParser
                 continue;
             }
             if (preg_match("/^version: '(v[0-9]+\\.[0-9]+\\.[0-9]+)'$/", $line, $m) === 1) {
-                if (! $finish() || $version !== null || ! in_array($m[1], self::SUPPORTED_VERSIONS, true)) {
+                if ($seen !== [] || ! $finish() || $version !== null || ! in_array($m[1], self::SUPPORTED_VERSIONS, true)) {
                     return null;
                 }
                 $version = $m[1];
@@ -109,8 +115,12 @@ final class ActionsLockParser
                 continue;
             }
             if ($section === 'workflows') {
-                if (preg_match("#^    '\\.github/workflows/[A-Za-z0-9._-]{1,100}\\.ya?ml':$#", $line) === 1
-                    || (preg_match("#^        - '".$spec."'$#", $line, $m) === 1 && self::safeName($m[1].'/'.$m[2].$m[3]))) {
+                if (preg_match("#^    '\\.github/workflows/[A-Za-z0-9._-]{1,100}\\.ya?ml':$#", $line) === 1) {
+                    continue;
+                }
+                if (preg_match("#^        - '".$spec."'$#", $line, $m) === 1 && self::safeName($m[1].'/'.$m[2].$m[3])) {
+                    $workflowSpecs[$m[1].'/'.$m[2].$m[3].'@'.$m[4]] = true;
+
                     continue;
                 }
 
@@ -118,7 +128,8 @@ final class ActionsLockParser
             }
             if ($section === 'dependencies') {
                 if (preg_match("#^    '".$spec."':$#", $line, $m) === 1) {
-                    if (! self::safeName($m[1].'/'.$m[2].$m[3]) || ! $finish() || count($dependencies) >= self::MAX_ENTRIES) {
+                    if (! self::safeName($m[1].'/'.$m[2].$m[3]) || ! $finish() || count($dependencies) >= self::MAX_ENTRIES
+                        || strlen(self::KEY_PREFIX.$m[1].'/'.$m[2].$m[3].'@'.str_repeat('0', 40)) > self::MAX_KEY_LENGTH) {
                         return null;
                     }
                     $current = ['spec' => $m[1].'/'.$m[2].$m[3].'@'.$m[4], 'name' => $m[1].'/'.$m[2].$m[3],
@@ -152,8 +163,9 @@ final class ActionsLockParser
 
             return null;   // any other line, anywhere
         }
-        if (! $finish() || $version === null || ! isset($seen['workflows'], $seen['dependencies']) || $dependencies === []) {
-            return null;
+        if (! $finish() || $version === null || ! isset($seen['workflows'], $seen['dependencies']) || $dependencies === []
+            || array_diff_key($workflowSpecs, $specs) !== []) {
+            return null;   // including a workflow that names an action the dependencies do not describe
         }
 
         return $dependencies;

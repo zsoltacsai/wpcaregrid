@@ -79,7 +79,15 @@ class PlatformUpdatesActionsInventoryTest extends TestCase
     /** @param  list<string>  $dependencies already formatted dependency blocks */
     private function lock(array $dependencies, string $version = 'v0.0.3'): string
     {
-        return "# This file is machine-generated.\nversion: '$version'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@".self::SHA_A."'\ndependencies:\n".implode('', $dependencies);
+        // The workflow section names exactly the dependencies given (a workflow may only name described actions).
+        $uses = '';
+        foreach ($dependencies as $block) {
+            if (preg_match("/^    '([^']+)':/", $block, $m) === 1) {
+                $uses .= "        - '".$m[1]."'\n";
+            }
+        }
+
+        return "# This file is machine-generated.\nversion: '$version'\nworkflows:\n    '.github/workflows/ci.yml':\n".$uses."dependencies:\n".implode('', $dependencies);
     }
 
     private function validLock(): string
@@ -229,6 +237,11 @@ class PlatformUpdatesActionsInventoryTest extends TestCase
             'spec with a url' => [$head.$dep('https://github.com/actions/checkout@v1')],
             'owner starting with a dash' => [$head.$dep('-actions/checkout@v1')],
             'ref with a space' => [$head.$dep('actions/checkout@v1', 'v 1')],
+            'component key too long for its column' => [$head.$dep('acme/tool/'.str_repeat('a', 100).'/'.str_repeat('b', 100).'/'.str_repeat('c', 50).'@v1', 'v1', self::SHA_B)],
+            'workflow names an action that dependencies do not describe' => [str_replace("- 'actions/checkout@v7.0.1'", "- 'acme/missing@v1'", $head).$dep()],
+            'version after the sections' => [str_replace("version: 'v0.0.3'
+", '', $head).$dep()."version: 'v0.0.3'
+"],
             'over-long line' => [$head.str_repeat('#', ActionsLockParser::MAX_LINE_LENGTH + 1)."\n".$dep()],
             'dependency without any field before the next' => [$head."    'actions/checkout@v7.0.1':\n".$dep('actions/setup-node@v1', 'v1', self::SHA_B)],
         ];
@@ -368,6 +381,28 @@ class PlatformUpdatesActionsInventoryTest extends TestCase
         // 3 actions + PHP, OpenSSL, database, OS, connector.
         $this->assertSame(8, $summary['unverified']);
         $this->get(route('owner.platform-updates.index'))->assertOk()->assertSee('GitHub Actions');
+    }
+
+    public function test_a_lock_with_only_branch_refs_is_still_a_readable_lock_and_old_rows_do_not_linger(): void
+    {
+        $this->enable();
+        $this->fakeOsv();
+        $this->writeLock('not a lock file');
+        app(PlatformUpdateScanner::class)->run('manual');
+        $this->assertTrue((bool) PlatformComponent::query()->where('component_key', 'github-action:lock')->value('present'));
+
+        // The file recovers; none of its refs is a version, so no component has one.
+        $this->writeLock($this->lock([$this->dep('acme/tool@main', 'main', self::SHA_C)]));
+        app(PlatformUpdateScanner::class)->run('manual');
+        $this->assertFalse((bool) PlatformComponent::query()->where('component_key', 'github-action:lock')->value('present'), 'the placeholder does not linger');
+        $this->assertSame(['github-action:acme/tool@'.self::SHA_C], PlatformComponent::query()->where('kind', 'github-action')->where('present', true)->pluck('component_key')->all());
+
+        // A different action replaces it: the old row is no longer reported although it never had a version.
+        $this->writeLock($this->lock([$this->dep('acme/other@main', 'main', self::SHA_B)]));
+        app(PlatformUpdateScanner::class)->run('manual');
+        $this->assertSame(['github-action:acme/other@'.self::SHA_B], PlatformComponent::query()->where('kind', 'github-action')->where('present', true)->pluck('component_key')->all());
+        $this->assertSame(['UNKNOWN'], PlatformComponent::query()->where('kind', 'github-action')->where('present', true)->pluck('version_state')->unique()->values()->all());
+        $this->assertSame(['UNVERIFIED'], PlatformComponent::query()->where('kind', 'github-action')->pluck('advisory_state')->unique()->values()->all());
     }
 
     public function test_missing_advisory_evidence_never_becomes_a_healthy_result(): void

@@ -181,7 +181,8 @@ final class PlatformUpdateScanner
         $rows = [];
         $readableKinds = [];
         foreach ($detected as $component) {
-            if ($component->version !== null) {
+            // A real GitHub Action entry proves its lock was readable even when its ref is no version (the placeholder does not).
+            if ($component->version !== null || ($component->kind === 'github-action' && $component->key !== 'github-action:lock')) {
                 $readableKinds[$component->kind] = true;
             }
             $row = PlatformComponent::firstOrNew(['component_key' => $component->key]);

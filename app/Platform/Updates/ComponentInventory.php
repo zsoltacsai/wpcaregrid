@@ -163,7 +163,7 @@ final class ComponentInventory
         foreach ($entries as $entry) {
             $key = 'github-action:'.$entry['name'].'@'.$entry['commit'];
             // The reference is shown as the version only when it looks like one (v7.0.1 / 2.40.0); a branch or other ref is UNKNOWN.
-            $version = $this->version(ltrim($entry['ref'], 'v'));
+            $version = $this->version((string) preg_replace('/^v/', '', $entry['ref']));
             if (! isset($byKey[$key]) || ($byKey[$key][1] === null && $version !== null)) {
                 $byKey[$key] = [$entry['name'], $version];
             }
@@ -171,9 +171,6 @@ final class ComponentInventory
         ksort($byKey);
         $out = [];
         foreach ($byKey as $key => [$name, $version]) {
-            if (strlen($key) > 190) {
-                continue;   // keeps every key within the 191-character column
-            }
             $out[] = new DetectedComponent($key, 'github-action', $name, $version, null, 'actions.lock');
         }
 
