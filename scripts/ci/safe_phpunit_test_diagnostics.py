@@ -22,8 +22,8 @@ DIAGNOSTIC_TESTS = {
 }
 _CLASS = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*\\)*[A-Za-z_][A-Za-z0-9_]*\Z")
 _SQLSTATE = re.compile(r"[A-Z0-9]{5}\Z")
-_DB_CODE = re.compile(r"(?:0|[1-9][0-9]{0,4})\\Z")
-_ORIGIN_LINE = re.compile(r"[1-9][0-9]{0,4}\\Z")
+_DB_CODE = re.compile(r"(?:0|[1-9][0-9]{0,4})\Z")
+_ORIGIN_LINE = re.compile(r"[1-9][0-9]{0,4}\Z")
 _MAX_ORIGIN_LINE = 99999
 ORIGIN_FILES = frozenset({
     "tests/Feature/Owner/StagingNextQueueMonitoringTest.php",
