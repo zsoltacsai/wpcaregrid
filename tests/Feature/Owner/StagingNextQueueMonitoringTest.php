@@ -293,7 +293,7 @@ final class StagingNextQueueMonitoringTest extends TestCase
         $this->assertNotNull($unknownIssue);
 
         $queueCheck = collect(app(SystemStatus::class)->checks())->firstWhere('key', 'queue');
-        $this->assertSame('1', $queueCheck->details[__('owner.system.details.queue_error_categorys')]);
+        $this->assertSame('1', $queueCheck->details[__('owner.system.details.queue_configuration_issues')]);
     }
 
     public function test_staging_next_malformed_backups_configuration_is_critical_and_does_not_resolve_its_incident(): void
