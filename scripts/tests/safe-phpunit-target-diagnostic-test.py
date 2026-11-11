@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ci.safe_phpunit_test_diagnostics import (
     DIAGNOSTIC_TESTS,
+    ORIGIN_FILES,
     PREFIX,
     UNKNOWN,
     diagnostics_from_bytes,
@@ -18,10 +19,11 @@ SECOND = "resolve_legacy_paused_worker"
 FAILED = (FIRST, SECOND)
 
 
-def marker(test_id, exception_class="PDOException", sqlstate="HY000", db_code="1205"):
+def marker(test_id, exception_class="PDOException", sqlstate="HY000", db_code="1205", origin_file="UNKNOWN", origin_line="UNKNOWN"):
     return (
         f"{PREFIX}|test={test_id}|step={DIAGNOSTIC_TESTS[test_id]}"
         f"|exception_class={exception_class}|sqlstate={sqlstate}|db_code={db_code}"
+        f"|origin_file={origin_file}|origin_line={origin_line}"
     ).encode("ascii")
 
 
@@ -29,7 +31,7 @@ class SafePhpunitDiagnosticTests(unittest.TestCase):
     def test_valid_markers_emit_only_allowlisted_structured_fields(self):
         result = diagnostics_from_bytes(marker(FIRST) + b"\n", (FIRST,))
         self.assertEqual(
-            [f"{PREFIX}|test={FIRST}|step={DIAGNOSTIC_TESTS[FIRST]}|exception_class=PDOException|sqlstate=HY000|db_code=1205"],
+            [f"{PREFIX}|test={FIRST}|step={DIAGNOSTIC_TESTS[FIRST]}|exception_class=PDOException|sqlstate=HY000|db_code=1205|origin_file=UNKNOWN|origin_line=UNKNOWN"],
             result,
         )
         self.assertNotIn("message", result[0])
@@ -39,7 +41,7 @@ class SafePhpunitDiagnosticTests(unittest.TestCase):
     def test_missing_structured_codes_are_reported_as_unknown(self):
         record = marker(FIRST, exception_class="UNKNOWN", sqlstate="UNKNOWN", db_code="UNKNOWN")
         self.assertEqual(
-            [f"{PREFIX}|test={FIRST}|step={DIAGNOSTIC_TESTS[FIRST]}|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN"],
+            [f"{PREFIX}|test={FIRST}|step={DIAGNOSTIC_TESTS[FIRST]}|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN|origin_file=UNKNOWN|origin_line=UNKNOWN"],
             diagnostics_from_bytes(record, (FIRST,)),
         )
 
@@ -52,7 +54,7 @@ class SafePhpunitDiagnosticTests(unittest.TestCase):
         self.assertNotIn("private_table", result[0])
 
     def test_unallowlisted_test_or_step_is_never_emitted(self):
-        invalid = b"WPCG_TEST_DIAG_V1|test=other_test|step=other|exception_class=PDOException|sqlstate=HY000|db_code=1205"
+        invalid = b"WPCG_TEST_DIAG_V1|test=other_test|step=other|exception_class=PDOException|sqlstate=HY000|db_code=1205|origin_file=UNKNOWN|origin_line=UNKNOWN"
         result = diagnostics_from_bytes(invalid, (FIRST,))
         self.assertEqual(1, len(result))
         self.assertEqual("test=" + FIRST, result[0].split("|")[1])
@@ -75,7 +77,7 @@ class SafePhpunitDiagnosticTests(unittest.TestCase):
 
     def test_absent_duplicate_and_oversized_diagnostics_return_unknown(self):
         self.assertEqual(
-            [f"{PREFIX}|test={FIRST}|step={DIAGNOSTIC_TESTS[FIRST]}|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN"],
+            [f"{PREFIX}|test={FIRST}|step={DIAGNOSTIC_TESTS[FIRST]}|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN|origin_file=UNKNOWN|origin_line=UNKNOWN"],
             diagnostics_from_bytes(b"unrelated test output", (FIRST,)),
         )
         self.assertIn("exception_class=UNKNOWN", diagnostics_from_bytes(marker(FIRST) + b"\n" + marker(FIRST), (FIRST,))[0])
@@ -85,6 +87,28 @@ class SafePhpunitDiagnosticTests(unittest.TestCase):
         log = marker(SECOND) + b"\n" + marker(FIRST) + b"\n"
         result = diagnostics_from_bytes(log, (SECOND, FIRST, "not_allowlisted", SECOND))
         self.assertEqual([SECOND, FIRST], [record.split("|")[1].split("=")[1] for record in result])
+
+    def test_allowlisted_origin_file_and_line_are_preserved(self):
+        path = sorted(ORIGIN_FILES)[0]
+        result = diagnostics_from_bytes(marker(FIRST, origin_file=path, origin_line="42"), (FIRST,))
+        self.assertIn(f"|origin_file={path}|origin_line=42", result[0])
+
+    def test_absolute_unexpected_and_secret_paths_are_rejected(self):
+        for path in ("/home/runner/private-secret.php", "app/NotReviewed.php", r"C:\\Users\\secret\\file.php"):
+            result = diagnostics_from_bytes(marker(FIRST, origin_file=path, origin_line="42"), (FIRST,))
+            self.assertIn("|origin_file=UNKNOWN|origin_line=UNKNOWN", result[0])
+            self.assertTrue("secret" not in result[0])
+            self.assertTrue(path not in result[0])
+
+    def test_malformed_origin_lines_are_rejected(self):
+        for line in ("0", "-1", "100000", "100001", "42x", "1.5", "999999"):
+            result = diagnostics_from_bytes(marker(FIRST, origin_file=sorted(ORIGIN_FILES)[0], origin_line=line), (FIRST,))
+            self.assertIn("|origin_file=UNKNOWN|origin_line=UNKNOWN", result[0])
+            self.assertTrue(line not in result[0])
+
+    def test_unknown_origin_requires_unknown_line(self):
+        result = diagnostics_from_bytes(marker(FIRST, origin_line="42"), (FIRST,))
+        self.assertIn("|origin_file=UNKNOWN|origin_line=UNKNOWN", result[0])
 
     def test_no_failure_means_no_diagnostic(self):
         self.assertEqual([], diagnostics_from_bytes(marker(FIRST), ()))
