@@ -18,6 +18,7 @@ use App\Privacy\PrivacyRestoreSafety;
 use App\Privacy\RetentionSourceScanner;
 use App\Release\StagingActiveProfile;
 use App\Release\StagingSchedulePolicy;
+use App\Release\StagingWorkerQueuePolicy;
 use App\Security\ScanStatus;
 use App\Security\Vulnerabilities\VulnerabilitySource;
 use Carbon\CarbonImmutable;
@@ -275,12 +276,34 @@ final class SystemStatus
         $connection = (string) config('queue.default');
         $driver = (string) config("queue.connections.{$connection}.driver");
         $failed = $this->safeCount(fn () => DB::table((string) config('queue.failed.table', 'failed_jobs'))->count());
-        $oldest = $driver === 'database'
-            ? $this->safe(fn () => DB::table((string) config("queue.connections.{$connection}.table", 'jobs'))
-                ->whereNull('reserved_at')
-                ->where('available_at', '<=', now()->timestamp)
-                ->min('available_at'))
-            : null;
+        $stagingNext = StagingWorkerQueuePolicy::isStagingNext();
+        $activeQueue = $stagingNext ? StagingWorkerQueuePolicy::activeQueueName($connection) : null;
+        $queueReadFailed = false;
+        $oldest = null;
+        if ($driver === 'database') {
+            try {
+                $query = DB::table((string) config("queue.connections.{$connection}.table", 'jobs'))
+                    ->whereNull('reserved_at')
+                    ->where('available_at', '<=', now()->timestamp);
+                if ($stagingNext) {
+                    if ($activeQueue === null) {
+                        $queueReadFailed = true;
+                    } else {
+                        $query->where('queue', $activeQueue);
+                    }
+                }
+                if (! $queueReadFailed) {
+                    $oldest = $query->min('available_at');
+                }
+            } catch (Throwable) {
+                // An unreadable staging-next queue is not proven healthy.
+                $queueReadFailed = $stagingNext;
+            }
+        }
+        $configurationIssues = $stagingNext
+            ? StagingWorkerQueuePolicy::queueConfigurationIssues((array) config('monitoring.worker_queues', []))
+            : [];
+        $scopeUnverified = $stagingNext && ($activeQueue === null || $queueReadFailed || $configurationIssues !== []);
         $waiting = $oldest ? (int) now()->diffInMinutes(CarbonImmutable::createFromTimestamp((int) $oldest), true) : 0;
 
         // Backup transfers must not be picked up by a second worker while they still run.
@@ -290,22 +313,31 @@ final class SystemStatus
 
         $status = match (true) {
             ! $transferSafe => HealthStatus::Critical,
+            $scopeUnverified => HealthStatus::Critical,
             $driver === 'sync' && app()->environment('production') => HealthStatus::Attention,
             $waiting > 15 => HealthStatus::Critical,
             $failed > 0 => HealthStatus::Attention,
             default => HealthStatus::Healthy,
         };
 
-        return new StatusCheck('queue', $status, match (true) {
-            ! $transferSafe => __('owner.system.summaries.transfer_queue_unsafe'),
-            $waiting > 15 => __('owner.system.summaries.queue_stuck', ['minutes' => $waiting]),
-            $failed > 0 => __('owner.system.summaries.failed_jobs', ['count' => $failed]),
-            default => __('owner.system.summaries.queue_ok', ['driver' => $driver]),
-        }, [
+        $details = [
             __('owner.system.details.driver') => $driver,
             __('owner.system.details.failed_jobs') => (string) $failed,
             __('owner.system.details.backup_queue') => $driver === 'sync' ? 'sync' : $transferConnection.' / '.config('backup.transfer.queue'),
-        ]);
+        ];
+        if ($stagingNext) {
+            $details[__('owner.system.details.monitored_queue')] = $activeQueue ?? 'unverified';
+            $details[__('owner.system.details.intentionally_paused_queues')] = implode(', ', StagingWorkerQueuePolicy::inactiveWorkerQueueNames((array) config('monitoring.worker_queues', []))) ?: '—';
+            $details[__('owner.system.details.queue_configuration_issues')] = (string) count($configurationIssues);
+        }
+
+        return new StatusCheck('queue', $status, match (true) {
+            ! $transferSafe => __('owner.system.summaries.transfer_queue_unsafe'),
+            $scopeUnverified => __('owner.system.summaries.queue_scope_unverified'),
+            $waiting > 15 => __('owner.system.summaries.queue_stuck', ['minutes' => $waiting]),
+            $failed > 0 => __('owner.system.summaries.failed_jobs', ['count' => $failed]),
+            default => __('owner.system.summaries.queue_ok', ['driver' => $driver]),
+        }, $details);
     }
 
     private function scheduler(): StatusCheck

@@ -28,6 +28,7 @@ final class SubscriptionSync
         private readonly BindCheckoutWebsite $bindCheckoutWebsite,
         private readonly QueueBillingEmail $billingEmails,
         private readonly SubscriptionBackupEntitlementRecorder $backupEntitlements,
+        private readonly SubscriptionPlanChangeConfirmation $planChanges,
     ) {}
 
     /**
@@ -130,17 +131,24 @@ final class SubscriptionSync
             && $subscription->pending_change_effective_at
             && $scheduledPeriodStart
             && $scheduledPeriodStart->greaterThanOrEqualTo($subscription->pending_change_effective_at);
-        $awaitingPaymentChange = $subscription->pending_change_status === 'awaiting_payment'
+        // An immediate change stays pending until its invoice is paid, also while the Stripe response to the request is unknown
+        // (reconciliation_required): an event that shows the new price is not yet the authentic proof of the payment.
+        $awaitingPaymentChange = ($subscription->pending_change_status === 'awaiting_payment'
+                || ($subscription->pending_change_status === 'reconciliation_required' && $this->planChanges->hasImmediateOperation($subscription)))
             && is_string($subscription->pending_stripe_price_id)
             && hash_equals($subscription->pending_stripe_price_id, (string) $stripePriceId);
-        $deferPriceFields = $awaitingPaymentChange || ($scheduledChange && ! $scheduledChangeEffective);
-        $storedStripePriceId = $awaitingPaymentChange ? $subscription->stripe_price_id : $stripePriceId;
+        // An event created before a paid change was confirmed still shows the plan before the payment: it must not take it back.
+        $staleAfterPaidChange = ! $awaitingPaymentChange && $subscription->exists
+            && ($confirmed = $this->planChanges->confirmedChangeAfter($subscription, $eventTime)) !== null
+            && data_get($confirmed->request_snapshot, 'target_stripe_price_id') !== $stripePriceId;
+        $deferPriceFields = $awaitingPaymentChange || $staleAfterPaidChange || ($scheduledChange && ! $scheduledChangeEffective);
+        $storedStripePriceId = ($awaitingPaymentChange || $staleAfterPaidChange) ? $subscription->stripe_price_id : $stripePriceId;
         $unconfirmedTargetPriceId = $subscription->pending_stripe_price_id;
 
         // Plan changes made in Stripe (e.g. a later billing portal) follow the price.
         // An immediate CareGrid plan change remains pending until its invoice is
         // paid; a scheduled downgrade retains old entitlements until renewal.
-        if (! $awaitingPaymentChange && ! ($scheduledChange && ! $scheduledChangeEffective)
+        if (! $awaitingPaymentChange && ! $staleAfterPaidChange && ! ($scheduledChange && ! $scheduledChangeEffective)
             && $stripePriceId && ($price = $this->catalog->priceByStripeId($stripePriceId))) {
             $subscription->fill([
                 'product_type' => $price->productType,

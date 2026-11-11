@@ -181,7 +181,8 @@ final class PlatformUpdateScanner
         $rows = [];
         $readableKinds = [];
         foreach ($detected as $component) {
-            if ($component->version !== null) {
+            // A real GitHub Action entry proves its lock was readable even when its ref is no version (the placeholder does not).
+            if ($component->version !== null || ($component->kind === 'github-action' && $component->key !== 'github-action:lock')) {
                 $readableKinds[$component->kind] = true;
             }
             $row = PlatformComponent::firstOrNew(['component_key' => $component->key]);
@@ -204,6 +205,10 @@ final class PlatformUpdateScanner
             }
             $row->save();
             $rows[$component->key] = $row;
+        }
+        if (! PlatformUpdateGate::actionsInventoryEnabled()) {
+            // The GitHub Actions inventory is off: earlier rows are no longer reported (they never carried an advisory).
+            PlatformComponent::query()->where('kind', 'github-action')->where('present', true)->update(['present' => false]);
         }
         // A component is "gone" only when its own source was readable in this run (an unreadable lock file proves nothing).
         foreach (array_keys($readableKinds) as $kind) {
