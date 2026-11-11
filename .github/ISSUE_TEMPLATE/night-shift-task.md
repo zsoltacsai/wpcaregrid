@@ -24,15 +24,37 @@ title: "[night-shift]"
 - **Base SHA (40 hex, verified at run time):**
 - **Task ID / milestone:**
 
-This body cannot contain its own SHA-256. The enabling Owner approval is an
-explicit approval comment on this issue, written from the repository Owner
-account with the actual Owner identity and `author_association=OWNER`
-verified, quoting the SHA-256 of this body's final revision; the runner
-recomputes the hash from the current body at start and compares it with the
-quoted value. Any edit to this body after approval — including one later
-reverted — invalidates the approval, and a later edit of the approval
-comment requires a new approval. An automated action performed through the
-Owner account is not by itself proof of a human Owner decision.
+The approval digest authenticates both title and body. The canonical
+input is the exact Unicode title returned by the GitHub API encoded as UTF-8,
+one NUL byte, then the exact Unicode body returned by that API encoded as
+UTF-8: SHA-256(UTF8(title) || 0x00 || UTF8(body)). Do not trim, normalize
+Unicode, convert line endings or otherwise transform either value. The digest
+is quoted in the Owner approval comment, never in this issue body.
+
+Unattended execution is disabled until a separate reviewed and merged change
+implements and independently verifies the approval controls. The Owner must
+then separately authorize enablement for the exact commit and environment.
+That does not authorize a run. Each run needs a distinct, one-use Owner GO for
+this exact issue revision, scope, environment and window. Approval is consumed
+when the run starts; retry, resume or another run requires new Owner approval.
+
+For an authorized run, the Owner personally posts the explicit approval using
+GitHub's authenticated UI and separately confirms the exact issue URL, digest,
+scope, environment and window in the authenticated T3 Owner channel. Agents,
+runners and automation must never create, edit or represent such an approval
+as the human Owner, including through CLI/API credentials associated with the
+Owner account. Username and author_association=OWNER prove account eligibility
+only, not human approval. Without both Owner actions the run must stop with
+HOLD.
+
+The verifier records an immutable snapshot of issue ID, title, body, digest,
+approval comment ID and timestamps. Before every state-changing action it
+re-fetches and compares the current title/body and digest with the snapshot.
+Any intervening edit, including one later reverted, or any change/removal of
+the approval comment invalidates the approval. If complete edit history or
+comment integrity cannot be verified, the run must stop with HOLD. These are
+future requirements, not implemented controls; unattended execution remains
+disabled until they are proven.
 
 ## 2. Task
 
