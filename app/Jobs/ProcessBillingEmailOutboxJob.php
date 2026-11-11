@@ -116,7 +116,9 @@ class ProcessBillingEmailOutboxJob implements ShouldBeUnique, ShouldQueue
                     data_get($row->payload, 'interval'),
                 ),
             };
-            Mail::to($customer->email)->send($mailable);
+            // Delivered now, inside this claimed attempt: several of these mailables implement ShouldQueue, and send() would
+            // only push them to the queue, so the row below would say 'sent' while the real delivery could still fail unseen.
+            Mail::to($customer->email)->sendNow($mailable);
             BillingEmailOutbox::query()->whereKey($row->id)->where('status', 'processing')->update([
                 'status' => 'sent',
                 'sent_at' => now(),

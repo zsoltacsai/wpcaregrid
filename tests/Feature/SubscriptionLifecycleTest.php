@@ -510,7 +510,7 @@ class SubscriptionLifecycleTest extends TestCase
         $this->assertDatabaseCount('users', 1);
         $this->assertDatabaseCount('subscriptions', 1);
         Mail::assertQueued(AccountActivation::class, 1);
-        Mail::assertQueued(SubscriptionActivated::class, 1);
+        Mail::assertSent(SubscriptionActivated::class, 1);   // delivered by the outbox job itself, not pushed to the queue
     }
 
     public function test_different_events_for_the_same_subscription_do_not_duplicate_it(): void

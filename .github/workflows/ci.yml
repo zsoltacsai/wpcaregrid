@@ -78,6 +78,9 @@ jobs:
           G1_REQUIRE_REAL_MYSQL: "1"
         run: python3 scripts/tests/production-g1-ops-test.py
 
+      - name: GO-5.3 helper upgrade transaction tests
+        run: sudo -n python3 -B -m unittest scripts/tests/test_go53_upgrade_transaction.py
+
       - name: Install AppArmor parser for generated G1 profile validation
         run: |
           sudo apt-get update

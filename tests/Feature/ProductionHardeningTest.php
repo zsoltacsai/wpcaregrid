@@ -348,7 +348,7 @@ class ProductionHardeningTest extends TestCase
 
     public function test_conservative_defaults_ship_in_the_configuration(): void
     {
-        foreach (['SECURITY_REMEDIATION_ENABLED', 'ADMIN_ACCESS_OPERATOR_FULL_ADMIN', 'BACKUP_RESTORE_ENABLED', 'SECURITY_REMEDIATION_ALLOW_DISABLE_PLUGIN'] as $switch) {
+        foreach (['SECURITY_REMEDIATION_ENABLED', 'ADMIN_ACCESS_OPERATOR_FULL_ADMIN', 'BACKUP_RESTORE_ENABLED', 'SECURITY_REMEDIATION_ALLOW_DISABLE_PLUGIN', 'PLATFORM_UPDATES_ENABLED'] as $switch) {
             $this->assertMatchesRegularExpression("/^{$switch}=false$/m", (string) file_get_contents(base_path('.env.example')), "{$switch} is off in .env.example");
         }
 

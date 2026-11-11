@@ -55,6 +55,7 @@ return [
         'cancellation_scheduled' => ['subject' => 'Az előfizetés lemondása ütemezve', 'body' => 'A(z) :plan előfizetése a kifizetett időszak végéig aktív marad, utána lezárul.'],
         'subscription_reactivated' => ['subject' => 'Az előfizetés újra aktiválva', 'body' => 'A(z) :plan előfizetés aktívan tartására vonatkozó kérését megerősítettük.'],
         'upgrade_completed' => ['subject' => 'A csomagváltás megerősítve', 'body' => 'A(z) :plan csomagváltást a sikeres fizetés után megerősítettük.'],
+        'upgrade_payment_failed' => ['subject' => 'A csomagváltás nem lépett életbe', 'body' => 'A csomagváltás díját nem sikerült levonni, ezért a váltás nem lépett életbe. A jelenlegi :plan csomagja változatlanul aktív. A váltást a fiókjában újra kérheti.'],
         'downgrade_scheduled' => ['subject' => 'A csomagváltás ütemezve', 'body' => 'A(z) :plan (:interval) csomagváltás a következő megújuláskor lép életbe. Addig a jelenlegi hozzáférése marad érvényben.'],
         'payment_recovered' => ['subject' => 'A fizetési probléma megoldódott', 'body' => 'A(z) :plan előfizetés fizetését megerősítettük, a szolgáltatáshoz való hozzáférés aktív.'],
         'grace_started' => ['subject' => 'Teendő az előfizetés fizetésével kapcsolatban', 'body' => 'A(z) :plan díját nem tudtuk levonni. A türelmi időszak alatt a fiókja továbbra is elérhető.'],

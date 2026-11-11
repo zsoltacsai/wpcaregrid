@@ -6,6 +6,8 @@ use App\Billing\QueueBillingEmail;
 use App\Billing\SubscriptionStatus;
 use App\Jobs\ProcessBillingEmailOutboxJob;
 use App\Mail\BillingLifecycleNotice;
+use App\Mail\SubscriptionActivated;
+use App\Mail\SubscriptionCanceled;
 use App\Models\BillingEmailOutbox;
 use App\Models\Customer;
 use App\Models\Subscription;
@@ -41,6 +43,42 @@ final class BillingEmailOutboxTest extends TestCase
 
         $this->assertSame('sent', $first->fresh()->status);
         Mail::assertSent(BillingLifecycleNotice::class, 1);
+    }
+
+    public function test_a_mailable_that_implements_should_queue_is_delivered_inside_the_attempt_not_queued_and_marked_sent(): void
+    {
+        // PaymentFailed, PaymentConfirmation, SubscriptionActivated and SubscriptionCanceled implement ShouldQueue: with send() they
+        // were only pushed to the queue while the outbox row already said 'sent'.
+        Mail::fake();
+        $customer = Customer::factory()->withUser()->create();
+        $subscription = Subscription::factory()->for($customer)->create();
+        $activated = app(QueueBillingEmail::class)->enqueue('subscription:test:activated', 'subscription_activated', $customer, $subscription);
+        $canceled = app(QueueBillingEmail::class)->enqueue('subscription:test:canceled', 'subscription_canceled', $customer, $subscription);
+
+        (new ProcessBillingEmailOutboxJob($activated->id))->handle();
+        (new ProcessBillingEmailOutboxJob($canceled->id))->handle();
+
+        Mail::assertSent(SubscriptionActivated::class, 1);
+        Mail::assertSent(SubscriptionCanceled::class, 1);
+        Mail::assertNotQueued(SubscriptionActivated::class);
+        Mail::assertNotQueued(SubscriptionCanceled::class);
+        $this->assertSame(['sent', 'sent'], [$activated->fresh()->status, $canceled->fresh()->status]);
+    }
+
+    public function test_a_delivery_failure_of_a_should_queue_mailable_is_recorded_on_the_outbox_row(): void
+    {
+        Queue::fake();
+        $customer = Customer::factory()->withUser()->create();
+        $subscription = Subscription::factory()->for($customer)->create();
+        $row = app(QueueBillingEmail::class)->enqueue('subscription:test:activated-fail', 'subscription_activated', $customer, $subscription);
+        Mail::shouldReceive('to')->andReturnSelf();
+        Mail::shouldReceive('sendNow')->andThrow(new TransportException('Connection refused'));
+
+        (new ProcessBillingEmailOutboxJob($row->id))->handle();
+
+        $this->assertNotSame('sent', $row->fresh()->status, 'a failed delivery must never be recorded as sent');
+        $this->assertSame('pending', $row->fresh()->status);
+        $this->assertSame('transient_connectivity', $row->fresh()->failure_category);
     }
 
     public function test_scheduled_change_notice_names_the_target_billing_interval(): void
