@@ -800,11 +800,14 @@ mandatory session context and the task-dependent document-loading matrix.
 Every session starts with that minimal context, including `git status` and
 `git log --oneline -12`. Read this complete file before making any repository
 change, consistent with the instruction at the top of this file. Load the
-additional documents required by the task, as defined in `AGENTS.md` §1. In
-particular, implementation touching `app/`, `wordpress/`, `routes/`, `scripts/`,
+additional documents required by the task, as defined in `AGENTS.md` §1.
+
+For implementation work touching `app/`, `wordpress/`, `routes/`, `scripts/`,
 migrations, authentication, backup/restore, admin access or the operator
-console must also read the Engineering Decision Protocol and relevant domain
-docs/tests; §11, §15–§20 and §30 are the mandatory minimum for those changes.
+console, also read the Engineering Decision Protocol and relevant domain
+docs/tests. The following sections are a minimum focus, not a substitute for
+the complete-file requirement: §11–§20 (including tenant isolation in §12,
+Stripe webhooks in §13 and Connector pairing in §14) and §30.
 - Release Review Policy V3, the Release Checklist and the current CI/helper
   implementation are mandatory for PR, release or review work;
 - infrastructure, growth and security-sensitive tasks load their own domain

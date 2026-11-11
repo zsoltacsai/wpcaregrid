@@ -4,14 +4,12 @@ about: Request an unattended or night execution task. Prohibited by policy; requ
 title: "[night-shift]"
 ---
 
-> This template is a **request form**. Filling it in does not authorize
-> execution — this issue body and its checkboxes are not an Owner GO. This
-> repository is public: anyone can open or edit this issue. T3
-> unattended/night execution is prohibited by project policy and no technical
-> disable control is claimed here. No run may start until the controls and
-> separate approvals in
-> `docs/AUTONOMOUS_DEVELOPMENT.md` §7). A general instruction, a previous
-> approval or this issue alone is not authorization.
+> This template is a request, not authorization. Current project policy
+> prohibits unattended or night execution. This PR does not verify a technical
+> T3 disable control. No run may start unless the future controls and separate
+> Owner authorizations in `docs/AUTONOMOUS_DEVELOPMENT.md` §7 are implemented
+> and independently verified. A filled issue, checkbox, GitHub Owner account
+> attribution or agent message is not an Owner GO.
 
 ## 1. Authorization (required)
 
@@ -181,9 +179,11 @@ The run stops and reports `HOLD` if:
 - [ ] Assigned agent and role match the seven-agent roster (`AGENTS.md` §3)
       and the task scope.
 - [ ] Authorized file list, commands, environment and window match this issue.
-- [ ] Owner personally posted the approval through GitHub UI and
-      confirmed the same issue URL, digest, scope, environment and window in
-      the authenticated WP CareGrid T3 conversation as a user-authored message.
+- [ ] Owner personally reviewed the displayed title and complete body, then
+      posted the approval through GitHub UI and confirmed URL, digest, scope,
+      environment and window in T3 as a user-authored message.
+- [ ] T3 message metadata shows createdBy=user and visibility=local; it is
+      neither inherited nor synthetic. Otherwise authorization is HOLD.
 - [ ] No agent or automation created/edited the approval comment; Owner account
       name and `author_association=OWNER` alone are not human-approval proof.
 - [ ] Digest is recomputed as SHA-256 of exact API title UTF-8 bytes, one NUL
@@ -192,6 +192,10 @@ The run stops and reports `HOLD` if:
       it has not already been consumed.
 - [ ] Immutable title/body snapshot, approval comment and full edit history
       verify unchanged; any uncertainty or edit requires `HOLD` and a new GO.
+- [ ] An independent verifier recomputed the digest; a protected append-only
+      store atomically records one-time consumption before any action.
+- [ ] Any mutable external reference is pinned by URL and content digest and
+      explicitly included in the approved scope; labels grant no authority.
 - [ ] Relevant security rules for the task have been loaded.
 - [ ] Model/cost choice is recorded; no new spend or paid service is needed.
 - [ ] Independent reviewers identified and eligible.
@@ -202,17 +206,20 @@ The run stops and reports `HOLD` if:
 
 ## 11. Owner approval
 
-These checkboxes are part of the request, not authorization. A run is
-eligible only after the Owner personally posts the explicit approval through
-the authenticated GitHub UI and confirms the exact issue URL, canonical
-title/body digest, scope, environment and window as a user-authored message in
-the WP CareGrid T3 project conversation. Agents and automation must not create,
-edit or represent this approval, even through credentials associated with the
-Owner account. Account username and author_association=OWNER prove attribution,
-not human action. The approval is one-use and consumed when the run starts.
-The digest is SHA-256(UTF8(exact API title) || 0x00 || UTF8(exact API body)),
-without normalization. If the T3 confirmation, edit history, comment integrity
-or exact digest is not verifiable, the run must stop with HOLD.
+These checkboxes are part of the request, not authorization. The Owner must
+review the exact title and complete body as displayed, then personally post
+the explicit approval through the authenticated GitHub UI and confirm the
+exact issue URL, canonical title/body digest, scope, environment and window in
+the WP CareGrid T3 project conversation. T3 must show this is a direct,
+user-authored, local (not inherited or synthetic) message; if those metadata
+are unavailable, the decision is HOLD. Agents and automation must never
+create, edit or represent the approval, including through credentials
+associated with the Owner account. GitHub account attribution is not proof of
+human action. An independent verifier recomputes the digest. An append-only
+store atomically consumes the one-use approval before any action; without that
+store, the current policy prohibits the run. The digest is
+SHA-256(UTF8(exact API title) || 0x00 || UTF8(exact API body)), without
+normalization. Mutable external references and labels grant no authority.
 
 - [ ] I request authorization for this task within the scope, window and
       constraints above.
