@@ -51,6 +51,7 @@ class HomepageTest extends TestCase
 
     public function test_login_links_to_the_customer_login_even_when_the_setting_is_empty(): void
     {
+        config(['marketing_release.profile' => 'invitation_beta']);
         // .env.example ships "MARKETING_LOGIN_URL=" with no value; it used to
         // leave the header Login as a button that went nowhere.
         config(['marketing' => $this->marketingConfigWith('MARKETING_LOGIN_URL', '')]);
@@ -63,6 +64,41 @@ class HomepageTest extends TestCase
 
         config(['marketing' => $this->marketingConfigWith('MARKETING_LOGIN_URL', 'https://app.example.com/login')]);
         $this->assertSame(3, substr_count($this->get('/en/')->getContent(), 'href="https://app.example.com/login"'));
+    }
+
+    public function test_marketing_only_hides_guest_and_authenticated_header_navigation_but_keeps_marketing_content(): void
+    {
+        config([
+            'marketing_release.profile' => 'marketing_only',
+        ]);
+
+        $guestHtml = $this->get('/en/')->assertOk()->getContent();
+        $this->assertSame(0, substr_count($guestHtml, 'href="'.config('marketing.links.login').'"'), 'Guest desktop, mobile and footer Login links must be hidden.');
+        $this->assertStringNotContainsString('href="'.route('account.dashboard').'"', $guestHtml);
+        $this->assertStringContainsString(config('marketing.links.contact'), $guestHtml, 'The footer contact link remains available.');
+        $this->assertStringContainsString('id="pricing"', $guestHtml);
+
+        $authenticatedHtml = $this->actingAs(\App\Models\User::factory()->make())
+            ->get('/en/')
+            ->assertOk()
+            ->getContent();
+
+        $this->assertStringNotContainsString('href="'.route('account.dashboard').'"', $authenticatedHtml, 'Authenticated desktop and mobile Account links must be hidden.');
+        $this->assertStringNotContainsString('href="'.config('marketing.links.login').'"', $authenticatedHtml);
+        $this->assertStringContainsString(config('marketing.links.contact'), $authenticatedHtml);
+        $this->assertStringContainsString('id="pricing"', $authenticatedHtml);
+    }
+
+    public function test_non_marketing_only_profile_keeps_authenticated_account_navigation(): void
+    {
+        config(['marketing_release.profile' => 'invitation_beta']);
+
+        $html = $this->actingAs(\App\Models\User::factory()->make())
+            ->get('/en/')
+            ->assertOk()
+            ->getContent();
+
+        $this->assertSame(2, substr_count($html, 'href="'.route('account.dashboard').'"'), 'Desktop and mobile Account links remain outside marketing_only.');
     }
 
     public function test_no_translation_keys_leak_into_the_page(): void

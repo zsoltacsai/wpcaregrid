@@ -3,6 +3,7 @@
     $site = \App\Content\HomepageContent::current();
     $columns = $site->footerColumns();
     $footer = $site->section('site.footer');
+    $marketingOnly = config('marketing_release.profile', 'marketing_only') === 'marketing_only';
 @endphp
 
 <footer class="on-dark border-t border-dark-line bg-primary text-on-dark" @if ($footer->fallbackLang()) lang="{{ $footer->fallbackLang() }}" @endif>
@@ -23,11 +24,13 @@
                     </h2>
                     <ul class="mt-4 space-y-3">
                         @foreach ($column['links'] as $link)
-                            <li>
-                                <a href="{{ $link['href'] }}" class="rounded-sm text-sm text-on-dark transition-colors hover:text-white hover:underline hover:underline-offset-4">
-                                    {{ $link['label'] }}
-                                </a>
-                            </li>
+                            @if (! $marketingOnly || $link['href'] !== config('marketing.links.login'))
+                                <li>
+                                    <a href="{{ $link['href'] }}" class="rounded-sm text-sm text-on-dark transition-colors hover:text-white hover:underline hover:underline-offset-4">
+                                        {{ $link['label'] }}
+                                    </a>
+                                </li>
+                            @endif
                         @endforeach
                     </ul>
                 </nav>
