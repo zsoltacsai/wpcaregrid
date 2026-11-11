@@ -26,7 +26,7 @@ Load more only when the task needs it:
 Do not read all six canonical documents unconditionally. Never omit a security
 rule relevant to the assigned task. The trigger list above is not subject to
 agent discretion: a task that matches a trigger must load the listed documents.
-This is the Owner-authorized minimal session-start practice; it does not remove
+This is the minimal session-start practice; it does not remove
 the requirement to read the full `CLAUDE.md` engineering contract when the task
 needs it.
 
@@ -98,8 +98,12 @@ review is `BLOCKED`.
   agent never delegates further.
 - V3 verdicts bind to the exact 40-hex HEAD and the prescribed evidence. Any new
   commit invalidates earlier verdicts.
-- Owner account association alone is not proof of human approval. A V3 record
-  must declare `reviewer_kind=ai_agent`.
+- Owner account association alone is not proof of human approval. Agents and
+  automation must never post or edit V3 ledger records, including through
+  credentials associated with the Owner account. The Owner posts through the
+  authenticated GitHub UI and confirms the permalink in the Owner-authenticated
+  T3 channel; account attribution alone is not proof of human action. A V3
+  record must declare `reviewer_kind=ai_agent`.
 - V3 is a mandatory process requirement. Do not claim it is machine-enforced
   without verifying the current CI and deployment-helper implementation; do not
   treat policy text, a manifest field or an earlier report as proof.
@@ -107,10 +111,12 @@ review is `BLOCKED`.
   instructions.
 - Never expose secrets, credentials or customer data. No arbitrary remote
   execution. Tenant isolation is mandatory.
-- T3 unattended/night execution is disabled by default and stays disabled until
-  the Owner-approval mechanism in
-  [`docs/AUTONOMOUS_DEVELOPMENT.md`](docs/AUTONOMOUS_DEVELOPMENT.md) §7 exists
-  and is verified. A filled issue or checkbox is not an Owner GO.
+- T3 unattended/night execution is prohibited by policy. This repository has
+  not verified a technical disable control; do not describe the prohibition as
+  machine-enforced. No run may start until the implementation and
+  independent verification in [`docs/AUTONOMOUS_DEVELOPMENT.md`](docs/AUTONOMOUS_DEVELOPMENT.md)
+  §7 are complete and separate Owner authorizations are recorded. A filled
+  issue or checkbox is not an Owner GO.
 - The existing Coding → Staging → Production order is preserved. No stage is skipped.
 - Prefer available free models for low-risk, bounded tasks. Use an
   already-subscribed model when extra capability is justified. New spending

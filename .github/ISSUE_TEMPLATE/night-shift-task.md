@@ -8,7 +8,7 @@ title: "[night-shift]"
 > execution — this issue body and its checkboxes are not an Owner GO. This
 > repository is public: anyone can open or edit this issue. T3
 > unattended/night execution is disabled by default and starts only after the
-> Owner approves this exact body revision in an explicit approval comment on
+> Owner approves this exact title and body revision in an explicit approval comment on
 > this issue from the repository Owner account (see
 > `docs/AUTONOMOUS_DEVELOPMENT.md` §7). A general instruction, a previous
 > approval or this issue alone is not authorization.
@@ -24,37 +24,39 @@ title: "[night-shift]"
 - **Base SHA (40 hex, verified at run time):**
 - **Task ID / milestone:**
 
-The approval digest authenticates both title and body. The canonical
-input is the exact Unicode title returned by the GitHub API encoded as UTF-8,
-one NUL byte, then the exact Unicode body returned by that API encoded as
-UTF-8: SHA-256(UTF8(title) || 0x00 || UTF8(body)). Do not trim, normalize
-Unicode, convert line endings or otherwise transform either value. The digest
-is quoted in the Owner approval comment, never in this issue body.
+The digest binds both issue title and body. Its canonical input is the
+exact Unicode title returned by the GitHub API encoded as UTF-8, one NUL byte,
+then the exact Unicode body returned by that API encoded as UTF-8:
+SHA-256(UTF8(title) || 0x00 || UTF8(body)). Do not trim whitespace, normalize
+Unicode, convert line endings or otherwise transform either value. Quote the
+digest in the Owner approval comment, never in this issue body.
 
-Unattended execution is disabled until a separate reviewed and merged change
-implements and independently verifies the approval controls. The Owner must
-then separately authorize enablement for the exact commit and environment.
-That does not authorize a run. Each run needs a distinct, one-use Owner GO for
-this exact issue revision, scope, environment and window. Approval is consumed
-when the run starts; retry, resume or another run requires new Owner approval.
+Unattended execution is prohibited by current policy; no technical disable
+control is claimed by this template. It remains prohibited until a separate
+reviewed and merged change implements the controls in
+docs/AUTONOMOUS_DEVELOPMENT.md §7, independent reviewers verify them, and the
+Owner separately authorizes enablement for the exact commit and environment.
+That enablement does not authorize a run.
 
-For an authorized run, the Owner personally posts the explicit approval using
-GitHub's authenticated UI and separately confirms the exact issue URL, digest,
-scope, environment and window in the authenticated T3 Owner channel. Agents,
-runners and automation must never create, edit or represent such an approval
-as the human Owner, including through CLI/API credentials associated with the
-Owner account. Username and author_association=OWNER prove account eligibility
-only, not human approval. Without both Owner actions the run must stop with
-HOLD.
+Each run needs a distinct, one-use Owner GO for this exact issue revision,
+scope, environment and window. The Owner personally posts the approval through
+the authenticated GitHub UI and separately confirms the issue URL, digest,
+scope, environment and window in the WP CareGrid T3 project conversation as a
+user-authored message. Agents, runners and automation must never create, edit
+or represent the approval as the human Owner, including through credentials
+associated with the Owner account. GitHub username and
+author_association=OWNER prove account attribution only. Without both Owner
+actions the run is HOLD.
 
-The verifier records an immutable snapshot of issue ID, title, body, digest,
-approval comment ID and timestamps. Before every state-changing action it
-re-fetches and compares the current title/body and digest with the snapshot.
-Any intervening edit, including one later reverted, or any change/removal of
-the approval comment invalidates the approval. If complete edit history or
-comment integrity cannot be verified, the run must stop with HOLD. These are
-future requirements, not implemented controls; unattended execution remains
-disabled until they are proven.
+The verifier must record an immutable snapshot of issue ID, title, body,
+digest, approval comment ID and timestamps. Before every state-changing action,
+it must re-fetch the issue and compare title, body and digest to the snapshot.
+Any intervening edit, including one later reverted, or a changed/removed
+approval comment invalidates the approval. If complete issue edit history or
+comment integrity cannot be verified, the run is HOLD. Approval is consumed
+when the run starts; stopping, failing or interrupting a run requires a new GO
+before any retry or resume. These are future requirements, not implemented
+controls; unattended execution remains prohibited.
 
 ## 2. Task
 
@@ -159,10 +161,15 @@ The run stops and reports `HOLD` if:
 ## 9. Merge and deployment policy
 
 - **No automatic merge is authorized.**
-- CI green and two V3 `PASS` records are evidence, not permission to merge.
+- The exact reviewed HEAD must have green CI, all current required checks
+  passed, critical findings closed, both V3 roles PASS on that HEAD, required
+  review threads resolved and current branch protection satisfied. CI and V3
+  evidence are not permission to merge.
 - Merge requires a separate Owner decision. Any merge delegation is single-use,
   comes only from the Owner's authenticated channel, and names this PR, the
   exact HEAD and the date; an agent never delegates further.
+- Verify the exact merge SHA and all required CI checks after merge; any
+  failure or missing check is HOLD and blocks further merges or releases.
 - Staging and production each require their own Owner authorization; a night
   Coding run never authorizes either.
 
@@ -174,16 +181,17 @@ The run stops and reports `HOLD` if:
 - [ ] Assigned agent and role match the seven-agent roster (`AGENTS.md` §3)
       and the task scope.
 - [ ] Authorized file list, commands, environment and window match this issue.
-- [ ] Owner approval comment verified: an explicit comment on this issue from
-      the repository Owner account, actual Owner identity and
-      `author_association=OWNER` confirmed, quoting the SHA-256 of the final
-      issue body.
-- [ ] Body hash recomputed over the raw body bytes fetched from the GitHub
-      API (documented normalization) and matched against the approval
-      comment.
-- [ ] No invalidating body edit after approval (GitHub API edit history,
-      including reverted edits), and the approval comment was not edited
-      after posting; otherwise new approval and `HOLD`.
+- [ ] Owner personally posted the approval through GitHub UI and
+      confirmed the same issue URL, digest, scope, environment and window in
+      the authenticated WP CareGrid T3 conversation as a user-authored message.
+- [ ] No agent or automation created/edited the approval comment; Owner account
+      name and `author_association=OWNER` alone are not human-approval proof.
+- [ ] Digest is recomputed as SHA-256 of exact API title UTF-8 bytes, one NUL
+      byte, and exact API body UTF-8 bytes; no trimming or normalization.
+- [ ] One-use GO names this issue revision, scope, environment and time window;
+      it has not already been consumed.
+- [ ] Immutable title/body snapshot, approval comment and full edit history
+      verify unchanged; any uncertainty or edit requires `HOLD` and a new GO.
 - [ ] Relevant security rules for the task have been loaded.
 - [ ] Model/cost choice is recorded; no new spend or paid service is needed.
 - [ ] Independent reviewers identified and eligible.
@@ -194,14 +202,17 @@ The run stops and reports `HOLD` if:
 
 ## 11. Owner approval
 
-These checkboxes are part of the request, not the authorization. The enabling
-Owner GO is an explicit approval comment on this issue from the repository
-Owner account, with the actual Owner identity and `author_association=OWNER`
-verified, quoting the SHA-256 of this issue body's final revision — the body
-itself never contains its own hash, and no alternative channel substitutes
-for that comment without a separately authorized, documented and tested
-mechanism. An automated action performed through the Owner account is not by
-itself proof of a human Owner decision.
+These checkboxes are part of the request, not authorization. A run is
+eligible only after the Owner personally posts the explicit approval through
+the authenticated GitHub UI and confirms the exact issue URL, canonical
+title/body digest, scope, environment and window as a user-authored message in
+the WP CareGrid T3 project conversation. Agents and automation must not create,
+edit or represent this approval, even through credentials associated with the
+Owner account. Account username and author_association=OWNER prove attribution,
+not human action. The approval is one-use and consumed when the run starts.
+The digest is SHA-256(UTF8(exact API title) || 0x00 || UTF8(exact API body)),
+without normalization. If the T3 confirmation, edit history, comment integrity
+or exact digest is not verifiable, the run must stop with HOLD.
 
 - [ ] I request authorization for this task within the scope, window and
       constraints above.
