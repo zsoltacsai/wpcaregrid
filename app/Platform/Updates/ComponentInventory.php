@@ -17,12 +17,14 @@ final class ComponentInventory
 
     private const NAME = '/^[A-Za-z0-9@][A-Za-z0-9@._\/-]{0,150}$/';
 
+    private const ACTIONS_MAX_BYTES = 65536;
+
     public function __construct(private readonly ?string $basePath = null, private readonly string $osRelease = '/etc/os-release') {}
 
     /** @return list<DetectedComponent> */
     public function collect(): array
     {
-        return [...$this->composer(), ...$this->npm(), ...$this->runtime(), ...$this->connector()];
+        return [...$this->composer(), ...$this->npm(), ...$this->runtime(), ...$this->connector(), ...(PlatformUpdateGate::actionsInventoryEnabled() ? $this->githubActions() : [])];
     }
 
     /** @return list<DetectedComponent> */
@@ -121,6 +123,58 @@ final class ComponentInventory
         $version = preg_match('/^\s*\*\s*Version:\s*([0-9][0-9A-Za-z.+-]*)\s*$/m', $head, $m) === 1 ? $m[1] : null;
 
         return [new DetectedComponent('connector:wp-caregrid-connector', 'connector', 'WP CareGrid Connector', $this->version($version), null, 'connector_plugin_header')];
+    }
+
+    /**
+     * Phase E1: the GitHub Actions the workflows use, read only from .github/workflows/actions.lock (never modified).
+     *
+     * Inventory only. These components have no advisory source: ecosystem is null, so they are never sent anywhere, never
+     * CHECKED and stay UNVERIFIED. The file must match the one supported structure line by line; anything else (unknown
+     * version, unexpected line, oversized, too many entries, symlink, unreadable) is rejected as a whole and reported as one
+     * UNKNOWN placeholder, never as a partial or empty list.
+     *
+     * @return list<DetectedComponent>
+     */
+    private function githubActions(): array
+    {
+        $placeholder = [new DetectedComponent('github-action:lock', 'github-action', 'actions.lock', null, null, 'actions.lock')];
+        $file = $this->path('.github/workflows/actions.lock');
+        if (! is_file($file) || is_link($file) || (int) filesize($file) > self::ACTIONS_MAX_BYTES) {
+            return $placeholder;
+        }
+        $text = @file_get_contents($file, false, null, 0, self::ACTIONS_MAX_BYTES + 1);
+        if (! is_string($text) || strlen($text) > self::ACTIONS_MAX_BYTES) {
+            return $placeholder;
+        }
+        $entries = ActionsLockParser::parse($text);
+
+        return $entries === null ? $placeholder : $this->actionComponents($entries);
+    }
+
+    /**
+     * One component per action and pinned commit (the same action under its tag and under its SHA is one component).
+     *
+     * @param  list<array{name: string, ref: string, commit: string}>  $entries
+     * @return list<DetectedComponent>
+     */
+    private function actionComponents(array $entries): array
+    {
+        $byKey = [];
+        foreach ($entries as $entry) {
+            $key = 'github-action:'.$entry['name'].'@'.$entry['commit'];
+            // The reference is shown as the version only when it looks like one (v7.0.1 / 2.40.0); a branch or other ref is UNKNOWN.
+            $version = $this->version((string) preg_replace('/^v/', '', $entry['ref']));
+            if (! isset($byKey[$key]) || ($byKey[$key][1] === null && $version !== null)) {
+                $byKey[$key] = [$entry['name'], $version];
+            }
+        }
+        ksort($byKey);
+        $out = [];
+        foreach ($byKey as $key => [$name, $version]) {
+            $out[] = new DetectedComponent($key, 'github-action', $name, $version, null, 'actions.lock');
+        }
+
+        return $out;
     }
 
     /** @return array{name?: string, version?: string} */

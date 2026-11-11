@@ -28,6 +28,15 @@ final class PlatformUpdateGate
         return config('platform_updates.enabled') === true;
     }
 
+    /**
+     * Whether the GitHub Actions inventory (Phase E1) is part of the inventory: the feature is on AND its own switch is
+     * strictly true. It reads one local file and contacts nobody, so it opens no outbound path and needs no other permission.
+     */
+    public static function actionsInventoryEnabled(): bool
+    {
+        return self::enabled() && config('platform_updates.github_actions_inventory') === true;
+    }
+
     /** Why an outbound advisory check must not run now, or null when it may. */
     public static function checkRefusal(): ?string
     {
