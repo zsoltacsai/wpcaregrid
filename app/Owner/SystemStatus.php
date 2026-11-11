@@ -300,7 +300,10 @@ final class SystemStatus
                 $queueReadFailed = $stagingNext;
             }
         }
-        $scopeUnverified = $stagingNext && ($activeQueue === null || $queueReadFailed);
+        $configurationIssues = $stagingNext
+            ? StagingWorkerQueuePolicy::queueConfigurationIssues((array) config('monitoring.worker_queues', []))
+            : [];
+        $scopeUnverified = $stagingNext && ($activeQueue === null || $queueReadFailed || $configurationIssues !== []);
         $waiting = $oldest ? (int) now()->diffInMinutes(CarbonImmutable::createFromTimestamp((int) $oldest), true) : 0;
 
         // Backup transfers must not be picked up by a second worker while they still run.
@@ -325,6 +328,7 @@ final class SystemStatus
         if ($stagingNext) {
             $details[__('owner.system.details.monitored_queue')] = $activeQueue ?? 'unverified';
             $details[__('owner.system.details.intentionally_paused_queues')] = implode(', ', StagingWorkerQueuePolicy::inactiveWorkerQueueNames((array) config('monitoring.worker_queues', []))) ?: '—';
+            $details[__('owner.system.details.queue_configuration_issues')] = (string) count($configurationIssues);
         }
 
         return new StatusCheck('queue', $status, match (true) {

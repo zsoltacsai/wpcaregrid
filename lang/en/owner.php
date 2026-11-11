@@ -973,6 +973,7 @@ return [
             'backup_queue' => 'Backup transfer queue',
             'monitored_queue' => 'Monitored queue',
             'intentionally_paused_queues' => 'Intentionally paused queues',
+            'queue_configuration_issues' => 'Queue configuration issues',
             'staging_free' => 'Staging free space',
         ],
         'values' => [

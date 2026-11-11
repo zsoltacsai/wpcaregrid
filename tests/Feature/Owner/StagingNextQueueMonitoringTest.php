@@ -270,6 +270,184 @@ final class StagingNextQueueMonitoringTest extends TestCase
         $this->assertSame(HealthStatus::Critical, $this->queueStatus());
     }
 
+    public function test_staging_next_rejects_unknown_worker_queues_without_hiding_the_configuration_or_dispatching_them(): void
+    {
+        config([
+            'app.deployment_environment' => 'staging_next',
+            'monitoring.worker_queues.reports' => ['connection' => 'reports', 'queue' => 'reports'],
+        ]);
+        Queue::fake();
+
+        $this->runWorkerMonitor();
+
+        $pulses = Queue::pushed(RecordWorkerPulse::class);
+        $this->assertCount(1, $pulses);
+        $this->assertSame('default', $pulses[0]->queue);
+        $this->assertSame(HealthStatus::Critical, $this->queueStatus());
+
+        $unknownIssue = MonitoringResult::query()
+            ->where('check_id', 'platform.worker')
+            ->where('state', HealthStatus::Critical)
+            ->get()
+            ->first(fn (MonitoringResult $result): bool => data_get($result->evidence, 'configuration_issue') === 'unknown_worker_queue');
+        $this->assertNotNull($unknownIssue);
+
+        $queueCheck = collect(app(SystemStatus::class)->checks())->firstWhere('key', 'queue');
+        $this->assertSame('1', $queueCheck->details[__('owner.system.details.queue_configuration_issues')]);
+    }
+
+    public function test_staging_next_malformed_backups_configuration_is_critical_and_does_not_resolve_its_incident(): void
+    {
+        config([
+            'app.deployment_environment' => 'staging_next',
+            'queue.connections.backups.queue' => 'default',
+        ]);
+        Queue::fake();
+
+        $now = now();
+        $identity = [
+            'check_id' => 'platform.worker',
+            'scope' => MonitoringScope::Platform->value,
+            'subject_type' => 'queue',
+            'subject_id' => 'backups',
+        ];
+        MonitoringResult::query()->create($identity + [
+            'state' => HealthStatus::Critical,
+            'severity' => MonitoringSeverity::Critical,
+            'reason_code' => MonitoringReason::WORKER_STALE,
+            'source' => 'queue',
+            'evidence' => ['pulse_age_seconds' => 1800],
+            'observed_at' => $now->copy()->subMinutes(30),
+            'fresh_until' => $now->copy()->subMinutes(15),
+            'next_check_at' => $now->copy()->subMinutes(15),
+            'consecutive_failures' => 2,
+            'consecutive_successes' => 0,
+        ]);
+        $incidentKey = hash('sha256', implode('|', [
+            'platform.worker', MonitoringScope::Platform->value, 'queue', 'backups',
+        ]));
+        MonitoringIncident::query()->create([
+            'incident_key' => $incidentKey,
+            'generation' => 1,
+            'check_id' => 'platform.worker',
+            'scope' => MonitoringScope::Platform,
+            'subject_type' => 'queue',
+            'subject_id' => 'backups',
+            'severity' => MonitoringSeverity::Critical,
+            'reason_code' => MonitoringReason::WORKER_STALE,
+            'status' => 'open',
+            'evidence' => ['pulse_age_seconds' => 1800],
+            'opened_at' => $now->copy()->subMinutes(30),
+            'last_observed_at' => $now->copy()->subMinutes(20),
+            'observation_count' => 2,
+        ]);
+
+        $this->runWorkerMonitor();
+
+        $backup = MonitoringResult::query()->where($identity)->firstOrFail();
+        $this->assertSame(HealthStatus::Critical, $backup->state);
+        $this->assertSame(MonitoringReason::MONITORING_SOURCE_UNVERIFIED, $backup->reason_code);
+        $this->assertSame('invalid_paused_queue_configuration', $backup->evidence['configuration_issue']);
+        $this->assertSame('open', MonitoringIncident::query()->where('incident_key', $incidentKey)->value('status'));
+        $this->assertSame(HealthStatus::Critical, $this->queueStatus());
+        $this->assertCount(1, Queue::pushed(RecordWorkerPulse::class));
+        $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[0]->queue);
+    }
+
+    public function test_staging_next_missing_or_malformed_default_configuration_fails_closed_without_dispatch(): void
+    {
+        $validBackups = ['connection' => 'backups', 'queue' => 'backups'];
+        $cases = [
+            'missing' => ['backups' => $validBackups],
+            'malformed' => [
+                'default' => ['connection' => 'database', 'queue' => 'backups'],
+                'backups' => $validBackups,
+            ],
+        ];
+
+        foreach ($cases as $case => $workerQueues) {
+            config([
+                'app.deployment_environment' => 'staging_next',
+                'monitoring.worker_queues' => $workerQueues,
+            ]);
+            Queue::fake();
+
+            $this->runWorkerMonitor();
+
+            $this->assertCount(0, Queue::pushed(RecordWorkerPulse::class), $case);
+            $this->assertSame(HealthStatus::Critical, $this->queueStatus(), $case);
+            $default = MonitoringResult::query()->where([
+                'check_id' => 'platform.worker',
+                'subject_type' => 'queue',
+                'subject_id' => 'default',
+            ])->firstOrFail();
+            $this->assertSame(HealthStatus::Critical, $default->state, $case);
+            $this->assertSame('invalid_active_queue_configuration', $default->evidence['configuration_issue']);
+        }
+    }
+
+    public function test_staging_next_leaves_a_preexisting_unknown_queue_failure_and_incident_unresolved(): void
+    {
+        config([
+            'app.deployment_environment' => 'staging_next',
+            'monitoring.worker_queues.reports' => ['connection' => 'reports', 'queue' => 'reports'],
+        ]);
+        Queue::fake();
+
+        $now = now();
+        $identity = [
+            'check_id' => 'platform.worker',
+            'scope' => MonitoringScope::Platform->value,
+            'subject_type' => 'queue',
+            'subject_id' => 'reports',
+        ];
+        MonitoringResult::query()->create($identity + [
+            'state' => HealthStatus::Critical,
+            'severity' => MonitoringSeverity::Critical,
+            'reason_code' => MonitoringReason::WORKER_STALE,
+            'source' => 'queue',
+            'evidence' => ['pulse_age_seconds' => 1800],
+            'observed_at' => $now->copy()->subMinutes(30),
+            'fresh_until' => $now->copy()->subMinutes(15),
+            'next_check_at' => $now->copy()->subMinutes(15),
+            'consecutive_failures' => 2,
+            'consecutive_successes' => 0,
+        ]);
+        $incidentKey = hash('sha256', implode('|', [
+            'platform.worker', MonitoringScope::Platform->value, 'queue', 'reports',
+        ]));
+        MonitoringIncident::query()->create([
+            'incident_key' => $incidentKey,
+            'generation' => 1,
+            'check_id' => 'platform.worker',
+            'scope' => MonitoringScope::Platform,
+            'subject_type' => 'queue',
+            'subject_id' => 'reports',
+            'severity' => MonitoringSeverity::Critical,
+            'reason_code' => MonitoringReason::WORKER_STALE,
+            'status' => 'open',
+            'evidence' => ['pulse_age_seconds' => 1800],
+            'opened_at' => $now->copy()->subMinutes(30),
+            'last_observed_at' => $now->copy()->subMinutes(20),
+            'observation_count' => 2,
+        ]);
+
+        $this->runWorkerMonitor();
+
+        $unknown = MonitoringResult::query()->where($identity)->firstOrFail();
+        $this->assertSame(HealthStatus::Critical, $unknown->state);
+        $this->assertSame('open', MonitoringIncident::query()->where('incident_key', $incidentKey)->value('status'));
+        $this->assertSame(HealthStatus::Critical, $this->queueStatus());
+        $this->assertCount(1, Queue::pushed(RecordWorkerPulse::class));
+        $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[0]->queue);
+    }
+
+    private function runWorkerMonitor(): void
+    {
+        $method = new ReflectionMethod(RunMonitoring::class, 'workers');
+        $method->invoke(app(RunMonitoring::class), app(MonitoringEngine::class));
+    }
+
     private function insertJob(string $queue, int $availableAt, int $count = 1): void
     {
         foreach (range(1, $count) as $i) {

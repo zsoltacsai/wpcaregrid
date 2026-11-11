@@ -368,6 +368,7 @@ return [
         'details' => [
             'monitored_queue' => 'Felügyelt feldolgozási sor',
             'intentionally_paused_queues' => 'Szándékosan szüneteltetett sorok',
+            'queue_configuration_issues' => 'Queue-konfigurációs hibák',
         ],
     ],
 ];

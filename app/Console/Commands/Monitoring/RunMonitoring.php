@@ -326,6 +326,15 @@ final class RunMonitoring extends Command
     {
         $configured = (array) config('monitoring.worker_queues', []);
 
+        foreach (StagingWorkerQueuePolicy::queueConfigurationIssues($configured) as $subjectId => $issue) {
+            $engine->record(new MonitoringObservation(
+                'platform.worker', MonitoringScope::Platform, 'queue', $subjectId,
+                HealthStatus::Critical, MonitoringSeverity::Critical,
+                MonitoringReason::MONITORING_SOURCE_UNVERIFIED, 'queue',
+                ['configuration_issue' => $issue], now(), 900, 1, 1,
+            ));
+        }
+
         foreach (StagingWorkerQueuePolicy::inactiveWorkerQueueNames($configured) as $name) {
             $identity = [
                 'check_id' => 'platform.worker',

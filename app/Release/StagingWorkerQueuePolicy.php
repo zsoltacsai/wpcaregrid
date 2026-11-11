@@ -10,6 +10,8 @@ final class StagingWorkerQueuePolicy
 {
     public const ACTIVE_STAGING_NEXT_QUEUE = 'default';
 
+    public const PAUSED_STAGING_NEXT_QUEUE = 'backups';
+
     public static function isStagingNext(): bool
     {
         return config('app.deployment_environment') === StagingActiveProfile::DEPLOYMENT_ENV;
@@ -25,17 +27,11 @@ final class StagingWorkerQueuePolicy
             return $configured;
         }
 
-        $settings = $configured[self::ACTIVE_STAGING_NEXT_QUEUE] ?? null;
-        $connection = (string) config('queue.default');
-        if (! is_array($settings)
-            || ($settings['queue'] ?? null) !== self::ACTIVE_STAGING_NEXT_QUEUE
-            || ($settings['connection'] ?? null) !== $connection
-            || config("queue.connections.{$connection}.queue") !== self::ACTIVE_STAGING_NEXT_QUEUE
-            || ! self::usesApplicationDatabase($connection)) {
+        if (! self::hasValidActiveQueueConfiguration($configured)) {
             return [];
         }
 
-        return [self::ACTIVE_STAGING_NEXT_QUEUE => $settings];
+        return [self::ACTIVE_STAGING_NEXT_QUEUE => $configured[self::ACTIVE_STAGING_NEXT_QUEUE]];
     }
 
     /**
@@ -48,10 +44,42 @@ final class StagingWorkerQueuePolicy
             return [];
         }
 
-        return array_values(array_filter(
-            array_map('strval', array_keys($configured)),
-            fn (string $name): bool => $name !== self::ACTIVE_STAGING_NEXT_QUEUE,
-        ));
+        return self::hasValidPausedBackupsConfiguration($configured)
+            ? [self::PAUSED_STAGING_NEXT_QUEUE]
+            : [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $configured
+     * @return array<string, string> Sanitized queue subject IDs mapped to fixed issue codes.
+     */
+    public static function queueConfigurationIssues(array $configured): array
+    {
+        if (! self::isStagingNext()) {
+            return [];
+        }
+
+        $issues = [];
+        if (! self::hasValidActiveQueueConfiguration($configured)) {
+            $issues[self::ACTIVE_STAGING_NEXT_QUEUE] = 'invalid_active_queue_configuration';
+        }
+
+        if (array_key_exists(self::PAUSED_STAGING_NEXT_QUEUE, $configured)
+            && ! self::hasValidPausedBackupsConfiguration($configured)) {
+            $issues[self::PAUSED_STAGING_NEXT_QUEUE] = 'invalid_paused_queue_configuration';
+        }
+
+        foreach (array_keys($configured) as $name) {
+            $name = (string) $name;
+            if (in_array($name, [self::ACTIVE_STAGING_NEXT_QUEUE, self::PAUSED_STAGING_NEXT_QUEUE], true)) {
+                continue;
+            }
+
+            // Do not expose arbitrary queue names in health output.
+            $issues['unrecognized-'.substr(hash('sha256', $name), 0, 16)] = 'unknown_worker_queue';
+        }
+
+        return $issues;
     }
 
     /**
@@ -74,17 +102,55 @@ final class StagingWorkerQueuePolicy
                 && $queueDatabaseConnection === $applicationConnection;
     }
 
+    private static function hasValidActiveQueueConfiguration(array $configured): bool
+    {
+        $settings = $configured[self::ACTIVE_STAGING_NEXT_QUEUE] ?? null;
+        $connection = config('queue.default');
+
+        return is_array($settings)
+            && is_string($connection)
+            && $connection !== ''
+            && ($settings['queue'] ?? null) === self::ACTIVE_STAGING_NEXT_QUEUE
+            && ($settings['connection'] ?? null) === $connection
+            && config("queue.connections.{$connection}.driver") === 'database'
+            && config("queue.connections.{$connection}.table", 'jobs') === 'jobs'
+            && config("queue.connections.{$connection}.queue") === self::ACTIVE_STAGING_NEXT_QUEUE
+            && self::usesApplicationDatabase($connection);
+    }
+
+    /**
+     * The backups queue is considered intentionally paused only when its complete
+     * queue and backup-transfer contract matches the staging-next profile.
+     *
+     * @param  array<string, mixed>  $configured
+     */
+    private static function hasValidPausedBackupsConfiguration(array $configured): bool
+    {
+        $settings = $configured[self::PAUSED_STAGING_NEXT_QUEUE] ?? null;
+        $retryAfter = config('queue.connections.backups.retry_after');
+        $timeout = config('backup.transfer.timeout');
+
+        return is_array($settings)
+            && ($settings['queue'] ?? null) === self::PAUSED_STAGING_NEXT_QUEUE
+            && ($settings['connection'] ?? null) === self::PAUSED_STAGING_NEXT_QUEUE
+            && config('queue.connections.backups.driver') === 'database'
+            && config('queue.connections.backups.table', 'jobs') === 'jobs'
+            && config('queue.connections.backups.queue') === self::PAUSED_STAGING_NEXT_QUEUE
+            && config('backup.transfer.connection') === self::PAUSED_STAGING_NEXT_QUEUE
+            && config('backup.transfer.queue') === self::PAUSED_STAGING_NEXT_QUEUE
+            && is_numeric($retryAfter)
+            && is_numeric($timeout)
+            && (int) $retryAfter > (int) $timeout
+            && self::usesApplicationDatabase(self::PAUSED_STAGING_NEXT_QUEUE);
+    }
+
     public static function activeQueueName(string $connection): ?string
     {
         $configured = (array) config('monitoring.worker_queues', []);
-        $workerSettings = $configured[self::ACTIVE_STAGING_NEXT_QUEUE] ?? null;
         if (! self::isStagingNext()
-            || ! is_array($workerSettings)
-            || ($workerSettings['queue'] ?? null) !== self::ACTIVE_STAGING_NEXT_QUEUE
-            || ($workerSettings['connection'] ?? null) !== $connection
             || $connection !== (string) config('queue.default')
-            || config("queue.connections.{$connection}.queue") !== self::ACTIVE_STAGING_NEXT_QUEUE
-            || ! self::usesApplicationDatabase($connection)) {
+            || ! self::hasValidActiveQueueConfiguration($configured)
+            || ($configured[self::ACTIVE_STAGING_NEXT_QUEUE]['connection'] ?? null) !== $connection) {
             return null;
         }
 
