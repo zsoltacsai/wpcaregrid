@@ -1,7 +1,8 @@
 """Strict parser for the two temporary #350 PHPUnit failure markers.
 
-Only fixed test/step IDs and validated exception metadata are returned. Raw PHPUnit
-logs, exception messages, SQL, parameters, paths, and traces are never returned.
+Only fixed test/step IDs, validated exception metadata, and exact allowlisted repository
+file identifiers with bounded line numbers are returned. Raw logs, messages, SQL, parameters,
+absolute or arbitrary paths, and traces are never returned.
 """
 from __future__ import annotations
 
@@ -21,15 +22,29 @@ DIAGNOSTIC_TESTS = {
 }
 _CLASS = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*\\)*[A-Za-z_][A-Za-z0-9_]*\Z")
 _SQLSTATE = re.compile(r"[A-Z0-9]{5}\Z")
-_DB_CODE = re.compile(r"(?:0|[1-9][0-9]{0,4})\Z")
-_KEYS = ("test", "step", "exception_class", "sqlstate", "db_code")
+_DB_CODE = re.compile(r"(?:0|[1-9][0-9]{0,4})\\Z")
+_ORIGIN_LINE = re.compile(r"[1-9][0-9]{0,4}\\Z")
+_MAX_ORIGIN_LINE = 99999
+ORIGIN_FILES = frozenset({
+    "tests/Feature/Owner/StagingNextQueueMonitoringTest.php",
+    "tests/TestCase.php",
+    "app/Console/Commands/Monitoring/RunMonitoring.php",
+    "app/Owner/SystemStatus.php",
+    "app/Release/StagingWorkerQueuePolicy.php",
+    "app/Monitoring/MonitoringEngine.php",
+    "app/Monitoring/MonitoringObservation.php",
+    "app/Models/MonitoringResult.php",
+    "app/Models/MonitoringIncident.php",
+    "app/Models/MonitoringTransition.php",
+})
+_KEYS = ("test", "step", "exception_class", "sqlstate", "db_code", "origin_file", "origin_line")
 
 
 def _unknown(test_id: str) -> str:
     step = DIAGNOSTIC_TESTS[test_id]
     return (
         f"{PREFIX}|test={test_id}|step={step}|exception_class={UNKNOWN}"
-        f"|sqlstate={UNKNOWN}|db_code={UNKNOWN}"
+        f"|sqlstate={UNKNOWN}|db_code={UNKNOWN}|origin_file={UNKNOWN}|origin_line={UNKNOWN}"
     )
 
 
@@ -49,7 +64,7 @@ def _parse_marker(raw_line: bytes) -> tuple[str, str] | None:
         return None
 
     fields = line.split("|")
-    if len(fields) != 6 or fields[0] != PREFIX:
+    if len(fields) != 8 or fields[0] != PREFIX:
         return None
 
     values: dict[str, str] = {}
@@ -79,9 +94,20 @@ def _parse_marker(raw_line: bytes) -> tuple[str, str] | None:
     ):
         return None
 
+    origin_file = values["origin_file"]
+    origin_line = values["origin_line"]
+    if origin_file != UNKNOWN and origin_file not in ORIGIN_FILES:
+        return None
+    if origin_file == UNKNOWN:
+        if origin_line != UNKNOWN:
+            return None
+    elif _ORIGIN_LINE.fullmatch(origin_line) is None or int(origin_line) > _MAX_ORIGIN_LINE:
+        return None
+
     normalized = (
         f"{PREFIX}|test={test_id}|step={DIAGNOSTIC_TESTS[test_id]}"
         f"|exception_class={exception_class}|sqlstate={sqlstate}|db_code={db_code}"
+        f"|origin_file={origin_file}|origin_line={origin_line}"
     )
     return test_id, normalized
 
