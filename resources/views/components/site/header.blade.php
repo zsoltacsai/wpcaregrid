@@ -6,6 +6,7 @@
     $navigation = $site->navigation();
     $labels = $site->section('site.navigation');
     $links = config('marketing.links');
+    $marketingOnly = config('marketing_release.profile', 'marketing_only') === 'marketing_only';
 @endphp
 
 <header
@@ -36,11 +37,13 @@
 
         <div class="hidden items-center gap-2 lg:flex">
             <x-site.language-switcher :form="$localeForm" />
-            @auth
-                <x-ui.button :href="route('account.dashboard')" variant="ghost">{{ __('account.nav.label') }}</x-ui.button>
-            @else
-                <x-ui.button :href="$links['login']" variant="ghost">{{ $labels['login_label'] }}</x-ui.button>
-            @endauth
+            @unless ($marketingOnly)
+                @auth
+                    <x-ui.button :href="route('account.dashboard')" variant="ghost">{{ __('account.nav.label') }}</x-ui.button>
+                @else
+                    <x-ui.button :href="$links['login']" variant="ghost">{{ $labels['login_label'] }}</x-ui.button>
+                @endauth
+            @endunless
             <x-ui.button :href="$marketingRoutes->home().'#pricing'">{{ $labels['cta_label'] }}</x-ui.button>
         </div>
 
@@ -88,11 +91,13 @@
             </div>
 
             <div class="mt-4 grid grid-cols-2 gap-2 pb-2">
-                @auth
-                    <x-ui.button :href="route('account.dashboard')" variant="secondary" size="lg">{{ __('account.nav.label') }}</x-ui.button>
-                @else
-                    <x-ui.button :href="$links['login']" variant="secondary" size="lg">{{ $labels['login_label'] }}</x-ui.button>
-                @endauth
+                @unless ($marketingOnly)
+                    @auth
+                        <x-ui.button :href="route('account.dashboard')" variant="secondary" size="lg">{{ __('account.nav.label') }}</x-ui.button>
+                    @else
+                        <x-ui.button :href="$links['login']" variant="secondary" size="lg">{{ $labels['login_label'] }}</x-ui.button>
+                    @endauth
+                @endunless
                 <x-ui.button :href="$marketingRoutes->home().'#pricing'" size="lg" x-on:click="open = false">{{ $labels['cta_label'] }}</x-ui.button>
             </div>
         </x-ui.container>

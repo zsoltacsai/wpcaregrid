@@ -148,6 +148,7 @@ class HungarianContentTest extends TestCase
     public function test_hungarian_pages_render_without_falling_back_to_english(): void
     {
         $this->useHungarian();
+        config(['marketing_release.profile' => 'invitation_beta']);
         $content = app(ContentRepository::class);
 
         foreach (array_keys(ContentSchema::sections()) as $key) {
