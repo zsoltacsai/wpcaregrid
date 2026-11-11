@@ -2524,8 +2524,8 @@ def main():
     controller = CONTROLLER.read_text(encoding="utf-8")
     controller_lines = controller.splitlines()
     assert "readonly COMPOSER_BIN='/usr/local/bin/composer'" in controller
-    assert "readonly COMPOSER_SHA256='7a2d379d5b8ffdaa028580ef26494c36d2feef4b178d3dd1473a4dbc5e17c8d6'" in controller
-    assert "readonly COMPOSER_VERSION='2.10.3'" in controller
+    assert "readonly COMPOSER_SHA256='dd158c0afd41d15fac89e1b4e47b5d42911fe316c3687cd5edac98319b25d028'" in controller
+    assert "readonly COMPOSER_VERSION='2.11.2'" in controller
     assert '"$PHP_BIN" "$COMPOSER_BIN" "$@"' in controller
     assert 'composer_binary_preflight "$COMPOSER_BIN" "$COMPOSER_SHA256" "$COMPOSER_VERSION" 0 0 "$PHP_BIN"' in controller
     assert '/usr/bin/composer' not in controller, "Composer must not fall back to the obsolete path"
@@ -2551,7 +2551,7 @@ def main():
             def run_preflight(
                 php_binary,
                 *,
-                expected_version="Composer version 2.10.3 2026-01-01",
+                expected_version="Composer version 2.11.2 2026-01-01",
                 digest=composer_sha,
                 uid=os.getuid(),
                 gid=os.getgid(),
@@ -2561,7 +2561,7 @@ def main():
                     [
                         bash,
                         "-c",
-                        'source "$1"; composer_binary_preflight "$2" "$3" 2.10.3 "$4" "$5" "$6"',
+                        'source "$1"; composer_binary_preflight "$2" "$3" 2.11.2 "$4" "$5" "$6"',
                         "composer-preflight-negative-test",
                         str(CONTROLLER),
                         str(path),
@@ -2580,10 +2580,10 @@ digest="$3"
 uid="$4"
 gid="$5"
 php_bin="$6"
-composer_binary_preflight "$path" "$digest" 2.10.3 "$uid" "$gid" "$php_bin" || exit 31
-if composer_binary_preflight "$path" "$(printf '%064d' 0)" 2.10.3 "$uid" "$gid" "$php_bin"; then exit 32; fi
-if composer_binary_preflight "$path" "$digest" 2.10.3 "$((uid + 1))" "$gid" "$php_bin"; then exit 33; fi
-if composer_binary_preflight "$path" "$digest" 2.10.3 "$uid" "$((gid + 1))" "$php_bin"; then exit 34; fi
+composer_binary_preflight "$path" "$digest" 2.11.2 "$uid" "$gid" "$php_bin" || exit 31
+if composer_binary_preflight "$path" "$(printf '%064d' 0)" 2.11.2 "$uid" "$gid" "$php_bin"; then exit 32; fi
+if composer_binary_preflight "$path" "$digest" 2.11.2 "$((uid + 1))" "$gid" "$php_bin"; then exit 33; fi
+if composer_binary_preflight "$path" "$digest" 2.11.2 "$uid" "$((gid + 1))" "$php_bin"; then exit 34; fi
 '''
             subprocess.run(
                 [
@@ -2599,9 +2599,9 @@ if composer_binary_preflight "$path" "$digest" 2.10.3 "$uid" "$((gid + 1))" "$ph
                     str(php_fixture),
                 ],
                 check=True,
-                env={**os.environ, "FAKE_COMPOSER_VERSION": "Composer version 2.10.3 2026-01-01"},
+                env={**os.environ, "FAKE_COMPOSER_VERSION": "Composer version 2.11.2 2026-01-01"},
             )
-            wrong_version = run_preflight(php_fixture, expected_version="Composer version 2.10.30 2026-01-01")
+            wrong_version = run_preflight(php_fixture, expected_version="Composer version 2.11.20 2026-01-01")
             assert wrong_version.returncode != 0, "a similarly prefixed Composer version must be rejected"
             php_failed = run_preflight(php_failure_fixture)
             assert php_failed.returncode != 0, "a failed PHP invocation must fail the Composer preflight"
