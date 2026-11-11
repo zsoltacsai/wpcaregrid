@@ -317,6 +317,51 @@ final class StagingNextQueueMonitoringTest extends TestCase
         $this->fail('Expected PHPUnit failure hook to rethrow the original throwable.');
     }
 
+    public function test_diagnostic_record_emits_only_allowlisted_origin_file_and_valid_line(): void
+    {
+        $exception = new \Error('synthetic-secret-message');
+        $record = $this->diagnosticRecord('dispatch_active_default_pulse', $exception);
+        $fields = array_column(array_map(static fn (string $field): array => explode('=', $field, 2), explode('|', $record)), 1, 0);
+
+        $this->assertSame('tests/Feature/Owner/StagingNextQueueMonitoringTest.php', $fields['origin_file']);
+        $this->assertMatchesRegularExpression('/\A[1-9][0-9]{0,4}\z/D', $fields['origin_line']);
+        $this->assertLessThanOrEqual(99999, (int) $fields['origin_line']);
+    }
+
+    public function test_diagnostic_record_rejects_absolute_and_unexpected_origin_paths(): void
+    {
+        $secretPath = tempnam(sys_get_temp_dir(), 'synthetic-secret-origin-');
+        $this->assertIsString($secretPath);
+        try {
+            file_put_contents($secretPath, "<?php throw new \\Error('synthetic-secret-message');");
+            try {
+                include $secretPath;
+            } catch (\Throwable $exception) {
+                $record = $this->diagnosticRecord('dispatch_active_default_pulse', $exception);
+                $this->assertStringContainsString('|origin_file=UNKNOWN|origin_line=UNKNOWN', $record);
+                $this->assertTrue(! str_contains($record, $secretPath));
+                $this->assertTrue(! str_contains($record, 'synthetic-secret'));
+            }
+        } finally {
+            @unlink($secretPath);
+        }
+    }
+
+    public function test_diagnostic_record_rejects_malformed_or_out_of_range_origin_lines(): void
+    {
+        $validator = new \ReflectionMethod(self::class, 'safeDiagnosticOriginLine');
+        foreach ([0, -1, 100001, '12', '12secret', null, 1.5] as $line) {
+            $result = $validator->invoke($this, $line, 'tests/Feature/Owner/StagingNextQueueMonitoringTest.php');
+            $this->assertSame('UNKNOWN', $result);
+        }
+        $this->assertSame('UNKNOWN', $validator->invoke($this, 12, 'UNKNOWN'));
+        $this->assertSame('12', $validator->invoke(
+            $this,
+            12,
+            'tests/Feature/Owner/StagingNextQueueMonitoringTest.php',
+        ));
+    }
+
     private function insertJob(string $queue, int $availableAt, int $count = 1): void
     {
         foreach (range(1, $count) as $i) {
@@ -369,7 +414,7 @@ final class StagingNextQueueMonitoringTest extends TestCase
             'resolve_legacy_paused_worker',
         ];
         if (! in_array($testId, $allowed, true)) {
-            return 'WPCG_TEST_DIAG_V1|test=UNKNOWN|step=UNKNOWN|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN';
+            return 'WPCG_TEST_DIAG_V1|test=UNKNOWN|step=UNKNOWN|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN|origin_file=UNKNOWN|origin_line=UNKNOWN';
         }
 
         $class = $this->safeDiagnosticClass($exception::class);
@@ -405,6 +450,9 @@ final class StagingNextQueueMonitoringTest extends TestCase
             $current = $previous;
         }
 
+        $originFile = $this->safeDiagnosticOriginFile($exception);
+        $originLine = $this->safeDiagnosticOriginLine($exception->getLine(), $originFile);
+
         return implode('|', [
             'WPCG_TEST_DIAG_V1',
             'test='.$testId,
@@ -412,7 +460,48 @@ final class StagingNextQueueMonitoringTest extends TestCase
             'exception_class='.$class,
             'sqlstate='.$sqlState,
             'db_code='.$databaseCode,
+            'origin_file='.$originFile,
+            'origin_line='.$originLine,
         ]);
+    }
+
+    private function safeDiagnosticOriginFile(\Throwable $exception): string
+    {
+        $file = $exception->getFile();
+        $canonicalFile = realpath($file);
+        if ($canonicalFile === false) {
+            return 'UNKNOWN';
+        }
+
+        $allowedFiles = [
+            'tests/Feature/Owner/StagingNextQueueMonitoringTest.php',
+            'tests/TestCase.php',
+            'app/Console/Commands/Monitoring/RunMonitoring.php',
+            'app/Owner/SystemStatus.php',
+            'app/Release/StagingWorkerQueuePolicy.php',
+            'app/Monitoring/MonitoringEngine.php',
+            'app/Monitoring/MonitoringObservation.php',
+            'app/Models/MonitoringResult.php',
+            'app/Models/MonitoringIncident.php',
+            'app/Models/MonitoringTransition.php',
+        ];
+        foreach ($allowedFiles as $identifier) {
+            $canonicalAllowedFile = realpath(base_path($identifier));
+            if ($canonicalAllowedFile !== false && hash_equals($canonicalAllowedFile, $canonicalFile)) {
+                return $identifier;
+            }
+        }
+
+        return 'UNKNOWN';
+    }
+
+    private function safeDiagnosticOriginLine(mixed $line, string $originFile): string
+    {
+        if ($originFile === 'UNKNOWN' || ! is_int($line) || $line < 1 || $line > 99999) {
+            return 'UNKNOWN';
+        }
+
+        return (string) $line;
     }
 
     private function safeDiagnosticClass(string $class): string
