@@ -64,8 +64,7 @@ final class StagingWorkerQueuePolicy
             $issues[self::ACTIVE_STAGING_NEXT_QUEUE] = 'invalid_active_queue_configuration';
         }
 
-        if (array_key_exists(self::PAUSED_STAGING_NEXT_QUEUE, $configured)
-            && ! self::hasValidPausedBackupsConfiguration($configured)) {
+        if (! self::hasValidPausedBackupsConfiguration($configured)) {
             $issues[self::PAUSED_STAGING_NEXT_QUEUE] = 'invalid_paused_queue_configuration';
         }
 

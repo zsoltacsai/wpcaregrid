@@ -354,6 +354,33 @@ final class StagingNextQueueMonitoringTest extends TestCase
         $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[0]->queue);
     }
 
+    public function test_staging_next_missing_backups_worker_entry_is_critical_when_backup_transfer_uses_that_queue(): void
+    {
+        config([
+            'app.deployment_environment' => 'staging_next',
+            'monitoring.worker_queues' => [
+                'default' => ['connection' => 'database', 'queue' => 'default'],
+            ],
+        ]);
+        Queue::fake();
+
+        $this->runWorkerMonitor();
+
+        $backup = MonitoringResult::query()->where([
+            'check_id' => 'platform.worker',
+            'subject_type' => 'queue',
+            'subject_id' => 'backups',
+        ])->firstOrFail();
+        $this->assertSame(HealthStatus::Critical, $backup->state);
+        $this->assertSame(MonitoringReason::MONITORING_SOURCE_UNVERIFIED, $backup->reason_code);
+        $this->assertSame('invalid_paused_queue_configuration', $backup->evidence['configuration_issue']);
+        $this->assertSame(HealthStatus::Critical, $this->queueStatus());
+
+        $pulses = Queue::pushed(RecordWorkerPulse::class);
+        $this->assertCount(1, $pulses);
+        $this->assertSame('default', $pulses[0]->queue);
+    }
+
     public function test_staging_next_missing_or_malformed_default_configuration_fails_closed_without_dispatch(): void
     {
         $validBackups = ['connection' => 'backups', 'queue' => 'backups'];
