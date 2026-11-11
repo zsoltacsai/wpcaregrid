@@ -188,6 +188,8 @@ class ContentManagementTest extends TestCase
 
     public function test_navigation_is_editable_with_order_and_visibility(): void
     {
+        config(['marketing_release.profile' => 'invitation_beta']);
+
         $this->asOwner();
         $fields = $this->fields('site.navigation', 'en', ['login_label' => 'Sign in', 'cta_label' => 'Start now']);
         $fields['items'] = [
