@@ -18,8 +18,8 @@ readonly SCHEDULER_PAUSE_FILE="${GATE_DIR}/scheduler-paused"
 readonly WORKERS_DISABLED_FILE="${GATE_DIR}/workers-disabled"
 readonly DEPLOY_PRIV_HELPER='/usr/local/sbin/wpcaregrid-deploy-priv'
 readonly COMPOSER_BIN='/usr/local/bin/composer'
-readonly COMPOSER_SHA256='7a2d379d5b8ffdaa028580ef26494c36d2feef4b178d3dd1473a4dbc5e17c8d6'
-readonly COMPOSER_VERSION='2.10.3'
+readonly COMPOSER_SHA256='dd158c0afd41d15fac89e1b4e47b5d42911fe316c3687cd5edac98319b25d028'
+readonly COMPOSER_VERSION='2.11.2'
 readonly CONTROLLER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # Always install the scheduler wrapper from the application checkout being deployed,
 # even when the reviewed deploy script is invoked from a protected temporary copy.
