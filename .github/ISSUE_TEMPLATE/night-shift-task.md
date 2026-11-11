@@ -1,15 +1,15 @@
 ---
 name: Night-shift task
-about: Request an unattended or night execution task. Disabled by default; requires an explicit Owner GO.
+about: Request an unattended or night execution task. Prohibited by policy; requires explicit Owner GO.
 title: "[night-shift]"
 ---
 
 > This template is a **request form**. Filling it in does not authorize
 > execution — this issue body and its checkboxes are not an Owner GO. This
 > repository is public: anyone can open or edit this issue. T3
-> unattended/night execution is disabled by default and starts only after the
-> Owner approves this exact title and body revision in an explicit approval comment on
-> this issue from the repository Owner account (see
+> unattended/night execution is prohibited by project policy and no technical
+> disable control is claimed here. No run may start until the controls and
+> separate approvals in
 > `docs/AUTONOMOUS_DEVELOPMENT.md` §7). A general instruction, a previous
 > approval or this issue alone is not authorization.
 
