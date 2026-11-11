@@ -58,7 +58,7 @@ final class StagingNextQueueMonitoringTest extends TestCase
         Queue::assertPushedOn('default', RecordWorkerPulse::class);
         $pulses = Queue::pushed(RecordWorkerPulse::class);
         $this->assertCount(1, $pulses);
-        $this->assertSame('default', $pulses[0]['job']->queue);
+        $this->assertSame('default', $pulses[0]->queue);
         $this->assertFalse(MonitoringResult::query()->where('check_id', 'platform.worker')
             ->where('subject_type', 'queue')->where('subject_id', 'backups')->exists());
 
@@ -139,7 +139,7 @@ final class StagingNextQueueMonitoringTest extends TestCase
         $this->assertSame('resolved', MonitoringIncident::query()
             ->where('incident_key', $incidentKey)->value('status'));
         $this->assertCount(1, Queue::pushed(RecordWorkerPulse::class));
-        $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[0]['job']->queue);
+        $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[0]->queue);
 
         $firstObservedAt = $paused->observed_at?->toDateTimeString();
         $incidentId = MonitoringIncident::query()->where('incident_key', $incidentKey)->value('id');
@@ -155,7 +155,7 @@ final class StagingNextQueueMonitoringTest extends TestCase
             );
             $this->assertSame($transitionCount, MonitoringTransition::query()->where('incident_id', $incidentId)->count());
             $this->assertCount(1, Queue::pushed(RecordWorkerPulse::class));
-            $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[0]['job']->queue);
+            $this->assertSame('default', Queue::pushed(RecordWorkerPulse::class)[0]->queue);
         } finally {
             Carbon::setTestNow();
         }
