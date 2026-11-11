@@ -331,7 +331,7 @@ final class RunMonitoring extends Command
                 'platform.worker', MonitoringScope::Platform, 'queue', $subjectId,
                 HealthStatus::Critical, MonitoringSeverity::Critical,
                 MonitoringReason::MONITORING_SOURCE_UNVERIFIED, 'queue',
-                ['configuration_issue' => $issue], now(), 900, 1, 1,
+                ['error_category' => $issue], now(), 900, 1, 1,
             ));
         }
 

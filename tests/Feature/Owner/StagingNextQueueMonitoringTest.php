@@ -289,11 +289,11 @@ final class StagingNextQueueMonitoringTest extends TestCase
             ->where('check_id', 'platform.worker')
             ->where('state', HealthStatus::Critical)
             ->get()
-            ->first(fn (MonitoringResult $result): bool => data_get($result->evidence, 'configuration_issue') === 'unknown_worker_queue');
+            ->first(fn (MonitoringResult $result): bool => data_get($result->evidence, 'error_category') === 'unknown_worker_queue');
         $this->assertNotNull($unknownIssue);
 
         $queueCheck = collect(app(SystemStatus::class)->checks())->firstWhere('key', 'queue');
-        $this->assertSame('1', $queueCheck->details[__('owner.system.details.queue_configuration_issues')]);
+        $this->assertSame('1', $queueCheck->details[__('owner.system.details.queue_error_categorys')]);
     }
 
     public function test_staging_next_malformed_backups_configuration_is_critical_and_does_not_resolve_its_incident(): void
@@ -347,7 +347,7 @@ final class StagingNextQueueMonitoringTest extends TestCase
         $backup = MonitoringResult::query()->where($identity)->firstOrFail();
         $this->assertSame(HealthStatus::Critical, $backup->state);
         $this->assertSame(MonitoringReason::MONITORING_SOURCE_UNVERIFIED, $backup->reason_code);
-        $this->assertSame('invalid_paused_queue_configuration', $backup->evidence['configuration_issue']);
+        $this->assertSame('invalid_paused_queue_configuration', $backup->evidence['error_category']);
         $this->assertSame('open', MonitoringIncident::query()->where('incident_key', $incidentKey)->value('status'));
         $this->assertSame(HealthStatus::Critical, $this->queueStatus());
         $this->assertCount(1, Queue::pushed(RecordWorkerPulse::class));
@@ -373,7 +373,7 @@ final class StagingNextQueueMonitoringTest extends TestCase
         ])->firstOrFail();
         $this->assertSame(HealthStatus::Critical, $backup->state);
         $this->assertSame(MonitoringReason::MONITORING_SOURCE_UNVERIFIED, $backup->reason_code);
-        $this->assertSame('invalid_paused_queue_configuration', $backup->evidence['configuration_issue']);
+        $this->assertSame('invalid_paused_queue_configuration', $backup->evidence['error_category']);
         $this->assertSame(HealthStatus::Critical, $this->queueStatus());
 
         $pulses = Queue::pushed(RecordWorkerPulse::class);
@@ -409,7 +409,7 @@ final class StagingNextQueueMonitoringTest extends TestCase
                 'subject_id' => 'default',
             ])->firstOrFail();
             $this->assertSame(HealthStatus::Critical, $default->state, $case);
-            $this->assertSame('invalid_active_queue_configuration', $default->evidence['configuration_issue']);
+            $this->assertSame('invalid_active_queue_configuration', $default->evidence['error_category']);
         }
     }
 
