@@ -1,0 +1,314 @@
+{
+  "schema_version": 1,
+  "source_policy": "authoritative_only_from_verified_protected_primary",
+  "agents": [
+    {
+      "canonical_id": "elliot-operator",
+      "display_name": "Elliot",
+      "role": "lead_operator",
+      "provider_instance_id": "codex",
+      "model_id": "gpt-6-luna",
+      "model_selection_policy": "fixed",
+      "default_model_id": "gpt-6-luna",
+      "reasoning": null,
+      "prompt_path": "agents/prompts/elliot-operator.md",
+      "default_runtime_mode": "approval-required",
+      "allowed_task_types": [
+        "coordination",
+        "status_assessment",
+        "scoped_delegation",
+        "gate_review"
+      ],
+      "prohibited_operations": [
+        "force_push",
+        "history_rewrite",
+        "protected_primary_direct_push",
+        "owner_identity_impersonation",
+        "post_v3_ledger_record",
+        "alter_other_reviewer_evidence",
+        "recursive_delegation",
+        "silent_model_fallback",
+        "unattended_or_scheduled_execution_without_approved_controls",
+        "merge_without_exact_owner_go",
+        "staging_without_exact_owner_go",
+        "production_without_exact_owner_go",
+        "host_database_or_secret_access_without_exact_owner_go",
+        "external_communication_without_exact_owner_go"
+      ],
+      "requires_owner_go": true,
+      "reviewer_role": null,
+      "independence_requirements": [],
+      "delegation_rules": {
+        "may_delegate": true,
+        "max_depth": 1,
+        "recursive": false,
+        "fallback_allowed": false
+      }
+    },
+    {
+      "canonical_id": "dumbledore-architecture",
+      "display_name": "Dumbledore",
+      "role": "architecture",
+      "provider_instance_id": "claudeAgent",
+      "model_id": "claude-opus-5-5",
+      "model_selection_policy": "fixed",
+      "default_model_id": "claude-opus-5-5",
+      "reasoning": null,
+      "prompt_path": "agents/prompts/dumbledore-architecture.md",
+      "default_runtime_mode": "approval-required",
+      "allowed_task_types": [
+        "architecture_design",
+        "architecture_review",
+        "migration_review"
+      ],
+      "prohibited_operations": [
+        "force_push",
+        "history_rewrite",
+        "protected_primary_direct_push",
+        "owner_identity_impersonation",
+        "post_v3_ledger_record",
+        "alter_other_reviewer_evidence",
+        "recursive_delegation",
+        "silent_model_fallback",
+        "unattended_or_scheduled_execution_without_approved_controls",
+        "merge_without_exact_owner_go",
+        "staging_without_exact_owner_go",
+        "production_without_exact_owner_go",
+        "host_database_or_secret_access_without_exact_owner_go",
+        "external_communication_without_exact_owner_go"
+      ],
+      "requires_owner_go": true,
+      "reviewer_role": null,
+      "independence_requirements": [],
+      "delegation_rules": {
+        "may_delegate": false,
+        "max_depth": 0,
+        "recursive": false,
+        "fallback_allowed": false
+      }
+    },
+    {
+      "canonical_id": "hermione-research",
+      "display_name": "Hermione",
+      "role": "research_integration_qa",
+      "provider_instance_id": "antigravity",
+      "model_id": "gemini-3.8-flash",
+      "model_selection_policy": "fixed",
+      "default_model_id": "gemini-3.8-flash",
+      "reasoning": null,
+      "prompt_path": "agents/prompts/hermione-research.md",
+      "default_runtime_mode": "approval-required",
+      "allowed_task_types": [
+        "research",
+        "integration_qa",
+        "documentation_review"
+      ],
+      "prohibited_operations": [
+        "force_push",
+        "history_rewrite",
+        "protected_primary_direct_push",
+        "owner_identity_impersonation",
+        "post_v3_ledger_record",
+        "alter_other_reviewer_evidence",
+        "recursive_delegation",
+        "silent_model_fallback",
+        "unattended_or_scheduled_execution_without_approved_controls",
+        "merge_without_exact_owner_go",
+        "staging_without_exact_owner_go",
+        "production_without_exact_owner_go",
+        "host_database_or_secret_access_without_exact_owner_go",
+        "external_communication_without_exact_owner_go"
+      ],
+      "requires_owner_go": true,
+      "reviewer_role": "integration_qa",
+      "independence_requirements": [
+        "fresh_context",
+        "exact_head",
+        "no_implementer_context",
+        "no_cross_reviewer_verdict",
+        "actual_model_telemetry"
+      ],
+      "delegation_rules": {
+        "may_delegate": false,
+        "max_depth": 0,
+        "recursive": false,
+        "fallback_allowed": false
+      }
+    },
+    {
+      "canonical_id": "moody-appsec",
+      "display_name": "Mad-Eye Moody",
+      "role": "security_appsec",
+      "provider_instance_id": "claudeAgent",
+      "model_id": "claude-sonnet-5-5",
+      "model_selection_policy": "fixed",
+      "default_model_id": "claude-sonnet-5-5",
+      "reasoning": null,
+      "prompt_path": "agents/prompts/moody-appsec.md",
+      "default_runtime_mode": "approval-required",
+      "allowed_task_types": [
+        "appsec_review",
+        "security_analysis"
+      ],
+      "prohibited_operations": [
+        "force_push",
+        "history_rewrite",
+        "protected_primary_direct_push",
+        "owner_identity_impersonation",
+        "post_v3_ledger_record",
+        "alter_other_reviewer_evidence",
+        "recursive_delegation",
+        "silent_model_fallback",
+        "unattended_or_scheduled_execution_without_approved_controls",
+        "merge_without_exact_owner_go",
+        "staging_without_exact_owner_go",
+        "production_without_exact_owner_go",
+        "host_database_or_secret_access_without_exact_owner_go",
+        "external_communication_without_exact_owner_go"
+      ],
+      "requires_owner_go": true,
+      "reviewer_role": "appsec",
+      "independence_requirements": [
+        "fresh_context",
+        "exact_head",
+        "no_implementer_context",
+        "no_cross_reviewer_verdict",
+        "actual_model_telemetry"
+      ],
+      "delegation_rules": {
+        "may_delegate": false,
+        "max_depth": 0,
+        "recursive": false,
+        "fallback_allowed": false
+      }
+    },
+    {
+      "canonical_id": "hagrid-infrastructure",
+      "display_name": "Hagrid",
+      "role": "infrastructure",
+      "provider_instance_id": "codex",
+      "model_id": null,
+      "model_selection_policy": "task_selected_codex",
+      "default_model_id": "gpt-6-luna",
+      "reasoning": null,
+      "prompt_path": "agents/prompts/hagrid-infrastructure.md",
+      "default_runtime_mode": "approval-required",
+      "allowed_task_types": [
+        "infrastructure_assessment",
+        "deployment_plan_review",
+        "recovery_plan_review"
+      ],
+      "prohibited_operations": [
+        "force_push",
+        "history_rewrite",
+        "protected_primary_direct_push",
+        "owner_identity_impersonation",
+        "post_v3_ledger_record",
+        "alter_other_reviewer_evidence",
+        "recursive_delegation",
+        "silent_model_fallback",
+        "unattended_or_scheduled_execution_without_approved_controls",
+        "merge_without_exact_owner_go",
+        "staging_without_exact_owner_go",
+        "production_without_exact_owner_go",
+        "host_database_or_secret_access_without_exact_owner_go",
+        "external_communication_without_exact_owner_go"
+      ],
+      "requires_owner_go": true,
+      "reviewer_role": null,
+      "independence_requirements": [],
+      "delegation_rules": {
+        "may_delegate": false,
+        "max_depth": 0,
+        "recursive": false,
+        "fallback_allowed": false
+      }
+    },
+    {
+      "canonical_id": "neville-development",
+      "display_name": "Neville",
+      "role": "development_testing",
+      "provider_instance_id": "codex",
+      "model_id": null,
+      "model_selection_policy": "task_selected_codex",
+      "default_model_id": "gpt-6-luna",
+      "reasoning": null,
+      "prompt_path": "agents/prompts/neville-development.md",
+      "default_runtime_mode": "approval-required",
+      "allowed_task_types": [
+        "scoped_implementation",
+        "regression_testing",
+        "bug_fix",
+        "ci_preparation"
+      ],
+      "prohibited_operations": [
+        "force_push",
+        "history_rewrite",
+        "protected_primary_direct_push",
+        "owner_identity_impersonation",
+        "post_v3_ledger_record",
+        "alter_other_reviewer_evidence",
+        "recursive_delegation",
+        "silent_model_fallback",
+        "unattended_or_scheduled_execution_without_approved_controls",
+        "merge_without_exact_owner_go",
+        "staging_without_exact_owner_go",
+        "production_without_exact_owner_go",
+        "host_database_or_secret_access_without_exact_owner_go",
+        "external_communication_without_exact_owner_go"
+      ],
+      "requires_owner_go": true,
+      "reviewer_role": null,
+      "independence_requirements": [],
+      "delegation_rules": {
+        "may_delegate": false,
+        "max_depth": 0,
+        "recursive": false,
+        "fallback_allowed": false
+      }
+    },
+    {
+      "canonical_id": "lockhart-growth",
+      "display_name": "Gilderoy Lockhart",
+      "role": "international_growth",
+      "provider_instance_id": "antigravity",
+      "model_id": "gemini-3.8-flash",
+      "model_selection_policy": "fixed",
+      "default_model_id": "gemini-3.8-flash",
+      "reasoning": null,
+      "prompt_path": "agents/prompts/lockhart-growth.md",
+      "default_runtime_mode": "approval-required",
+      "allowed_task_types": [
+        "market_research",
+        "marketing_plan",
+        "seo_content_strategy",
+        "outreach_draft"
+      ],
+      "prohibited_operations": [
+        "force_push",
+        "history_rewrite",
+        "protected_primary_direct_push",
+        "owner_identity_impersonation",
+        "post_v3_ledger_record",
+        "alter_other_reviewer_evidence",
+        "recursive_delegation",
+        "silent_model_fallback",
+        "unattended_or_scheduled_execution_without_approved_controls",
+        "merge_without_exact_owner_go",
+        "staging_without_exact_owner_go",
+        "production_without_exact_owner_go",
+        "host_database_or_secret_access_without_exact_owner_go",
+        "external_communication_without_exact_owner_go"
+      ],
+      "requires_owner_go": true,
+      "reviewer_role": null,
+      "independence_requirements": [],
+      "delegation_rules": {
+        "may_delegate": false,
+        "max_depth": 0,
+        "recursive": false,
+        "fallback_allowed": false
+      }
+    }
+  ]
+}
