@@ -270,6 +270,53 @@ final class StagingNextQueueMonitoringTest extends TestCase
         $this->assertSame(HealthStatus::Critical, $this->queueStatus());
     }
 
+    public function test_diagnostic_record_allows_exception_class_but_never_message(): void
+    {
+        $exception = new \RuntimeException('synthetic-secret-message');
+        $record = $this->diagnosticRecord('dispatch_active_default_pulse', $exception);
+
+        $this->assertStringContainsString('|exception_class=RuntimeException|', $record);
+        $this->assertStringContainsString('|sqlstate=UNKNOWN|db_code=UNKNOWN', $record);
+        $this->assertStringNotContainsString('synthetic-secret-message', $record);
+    }
+
+    public function test_diagnostic_record_extracts_only_structured_pdo_metadata_from_wrapped_error(): void
+    {
+        $pdo = new \PDOException('synthetic-secret-sql');
+        $pdo->errorInfo = ['HY000', 1205, 'synthetic-secret-detail'];
+        $wrapped = new \RuntimeException('synthetic-secret-wrapper', 0, $pdo);
+        $record = $this->diagnosticRecord('resolve_legacy_paused_worker', $wrapped);
+
+        $this->assertStringContainsString('|exception_class=RuntimeException|', $record);
+        $this->assertStringContainsString('|sqlstate=HY000|db_code=1205', $record);
+        $this->assertStringNotContainsString('synthetic-secret', $record);
+    }
+
+    public function test_diagnostic_record_rejects_unexpected_pdo_metadata(): void
+    {
+        $pdo = new \PDOException('synthetic-secret');
+        $pdo->errorInfo = ["HY000;secret", "1205;secret", 'synthetic-secret'];
+        $record = $this->diagnosticRecord('dispatch_active_default_pulse', $pdo);
+
+        $this->assertStringContainsString('|exception_class=PDOException|', $record);
+        $this->assertStringContainsString('|sqlstate=UNKNOWN|db_code=UNKNOWN', $record);
+        $this->assertStringNotContainsString('secret', $record);
+    }
+
+    public function test_non_target_failure_hook_rethrows_the_same_throwable(): void
+    {
+        $original = new \RuntimeException('synthetic-secret');
+        try {
+            $this->onNotSuccessfulTest($original);
+        } catch (\Throwable $caught) {
+            $this->assertSame($original, $caught);
+
+            return;
+        }
+
+        $this->fail('Expected PHPUnit failure hook to rethrow the original throwable.');
+    }
+
     private function insertJob(string $queue, int $availableAt, int $count = 1): void
     {
         foreach (range(1, $count) as $i) {
@@ -294,9 +341,9 @@ final class StagingNextQueueMonitoringTest extends TestCase
 
     /**
      * Temporary diagnostics for only the two #350 MySQL failures.
-     * The PHPUnit lifecycle is rethrown unchanged; no exception message is read.
+     * PHPUnit 13 calls this failure hook; the original throwable is rethrown.
      */
-    public function runBare(): void
+    protected function onNotSuccessfulTest(\Throwable $exception): never
     {
         $testIds = [
             'test_staging_next_dispatches_only_the_active_default_worker_pulse' => 'dispatch_active_default_pulse',
@@ -304,25 +351,25 @@ final class StagingNextQueueMonitoringTest extends TestCase
         ];
         $testId = $testIds[$this->name()] ?? null;
 
-        try {
-            parent::runBare();
-        } catch (\Throwable $exception) {
-            if ($testId !== null) {
-                $this->emitSafeDiagnostic($testId, $exception);
+        if ($testId !== null) {
+            try {
+                @fwrite(STDERR, $this->diagnosticRecord($testId, $exception).PHP_EOL);
+            } catch (\Throwable) {
+                // Diagnostics must never replace the original test failure.
             }
-
-            throw $exception;
         }
+
+        parent::onNotSuccessfulTest($exception);
     }
 
-    private function emitSafeDiagnostic(string $testId, \Throwable $exception): void
+    private function diagnosticRecord(string $testId, \Throwable $exception): string
     {
         $allowed = [
             'dispatch_active_default_pulse',
             'resolve_legacy_paused_worker',
         ];
         if (! in_array($testId, $allowed, true)) {
-            return;
+            return 'WPCG_TEST_DIAG_V1|test=UNKNOWN|step=UNKNOWN|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN';
         }
 
         $class = $this->safeDiagnosticClass($exception::class);
@@ -358,19 +405,14 @@ final class StagingNextQueueMonitoringTest extends TestCase
             $current = $previous;
         }
 
-        $record = implode('|', [
+        return implode('|', [
             'WPCG_TEST_DIAG_V1',
             'test='.$testId,
-            'step=phpunit_run_bare',
+            'step=phpunit_on_not_successful_test',
             'exception_class='.$class,
             'sqlstate='.$sqlState,
             'db_code='.$databaseCode,
         ]);
-        try {
-            @fwrite(STDERR, $record.PHP_EOL);
-        } catch (\Throwable) {
-            // Diagnostics must never replace the original test failure.
-        }
     }
 
     private function safeDiagnosticClass(string $class): string

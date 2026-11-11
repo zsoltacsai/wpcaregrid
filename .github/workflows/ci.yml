@@ -2253,7 +2253,7 @@ jobs:
                   except Exception:
                       safe_records = [
                           "WPCG_TEST_DIAG_V1|test=" + test_id
-                          + "|step=phpunit_run_bare"
+                          + "|step=phpunit_on_not_successful_test"
                           + "|exception_class=UNKNOWN|sqlstate=UNKNOWN|db_code=UNKNOWN"
                           for test_id in sorted(queue_test_diagnostic_failures)
                       ]
