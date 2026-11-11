@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Content\DemoDashboard;
+use App\Models\User;
 use App\Pricing\PricingCatalog;
 use App\Pricing\ProductType;
 use Tests\TestCase;
@@ -78,7 +79,7 @@ class HomepageTest extends TestCase
         $this->assertStringContainsString(config('marketing.links.contact'), $guestHtml, 'The footer contact link remains available.');
         $this->assertStringContainsString('id="pricing"', $guestHtml);
 
-        $authenticatedHtml = $this->actingAs(\App\Models\User::factory()->make())
+        $authenticatedHtml = $this->actingAs(User::factory()->make())
             ->get('/en/')
             ->assertOk()
             ->getContent();
@@ -93,7 +94,7 @@ class HomepageTest extends TestCase
     {
         config(['marketing_release.profile' => 'invitation_beta']);
 
-        $html = $this->actingAs(\App\Models\User::factory()->make())
+        $html = $this->actingAs(User::factory()->make())
             ->get('/en/')
             ->assertOk()
             ->getContent();
