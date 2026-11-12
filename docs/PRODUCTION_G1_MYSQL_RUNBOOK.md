@@ -116,13 +116,14 @@ Preserve that incoming directory unchanged as recovery evidence. Do not resume i
 copy files out of it, delete it, or rename it. The GO-0 block above now creates a fresh
 directory named from a UTC timestamp and random nonce; it never uses the old fixed incoming
 path. It requires both the final destination and generated incoming path to be absent and
-not symlinks. Each run downloads all 21 files again from the pinned toolkit commit and
-does not overwrite or trust the 11 files in the preserved directory.
+not symlinks. Each run downloads all 23 files again from the commit pinned in the GO-0 block above
+(`0951d9e829364296796a1d4acd303feef698cbc7`) and does not overwrite or trust the 11
+files in the preserved directory.
 
 After a separate Owner GO, the exact root-console block above is the recovery procedure.
-It pins toolkit commit `cc46e2a7c7bd827ed5c9dab51945ca68e6f30698` and manifest SHA-256
-`968ec69929b5d6517d57c7d458be300791978edc2969e1338656724af1625176`, verifies 21 unique
-safe filenames including `GO53-HELPER-UPGRADE.md`, checks every file checksum, exact file
+It pins toolkit commit `0951d9e829364296796a1d4acd303feef698cbc7` and manifest SHA-256
+`70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`, verifies 23 unique
+safe filenames including the GO-5.4a tools, checks every file checksum, exact file
 count, regular-file type, `root:root 0600` file metadata, and `root:root 0700` directory
 metadata. Promotion uses Linux `renameat2(..., RENAME_NOREPLACE)` through libc, which performs
 an atomic rename only when the destination does not exist. Missing `renameat2`, any error,
@@ -441,8 +442,9 @@ Before execution, require and record all of the following:
    A unit state of `failed` is not `inactive`: STOP. Do not run `reset-failed`,
    start, reload, or retry as part of this gate.
 4. No transaction, lock, unknown journal, or unrecognized temporary file is present.
-   Record available backup/snapshot metadata and integrity/restore evidence without
-   reading secret payloads. Unknown required host evidence is HOLD.
+   A verified recoverable backup or provider snapshot must exist for the applicable host
+   data and files; record its location/metadata and integrity plus restore evidence without
+   reading secret payloads. Missing or unverified recovery evidence is HOLD.
 5. The fetch package and the updater validate their exact hashes, package ownership/modes,
    regenerated profile hashes, and parser compile before the updater writes anything.
 
@@ -460,6 +462,7 @@ gate. Do not retry in the same invocation. On a transaction failure, accept only
 tool's verified `ROLLED_BACK=yes`; `ROLLED_BACK=NO` means STOP for manual recovery.
 A recognized interrupted journal is recovered and then the invocation stops for
 manual review; do not chain recovery into a new update.
+If the updater reports `G1_GO54A_APPARMOR=PASS;NOTE=already_upgraded`, it did not perform a fresh transaction. Treat that as an unchanged-state report only: verify all five NEW hashes and every post-PASS invariant independently before recording the gate result. If the fetch leaves `/root/wpcg-go54a-0951d9e.incoming-UNVERIFIED`, preserve it and STOP; do not delete it or retry until a read-only inspection and a separate exact-scope Owner decision address that path.
 
 After PASS, independently record all five NEW hashes, exact modes/owners, both profile
 enforce states, unchanged `mysql.service` MainPID and vendor profile, and unchanged
