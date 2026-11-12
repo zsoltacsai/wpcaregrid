@@ -1892,6 +1892,7 @@ mutation("nested_public_name_world_readable", lambda: (
     os.chown(INST.datadir + "/mysql/ca.pem", UID, GID),
     os.chmod(INST.datadir + "/mysql/ca.pem", 0o644)))
 mutation("private_key_world_readable", lambda: os.chmod(INST.datadir + "/private_key.pem", 0o644))
+mutation("private_key_group_readable", lambda: os.chmod(INST.datadir + "/private_key.pem", 0o640))
 mutation("foreign_group_directory", lambda: os.chown(INST.datadir + "/mysql", UID, 0))
 mutation("world_accessible_directory", lambda: os.chmod(INST.datadir + "/mysql", 0o755))
 mutation("datadir_mode_755", lambda: os.chmod(INST.datadir, 0o755))
@@ -2154,6 +2155,7 @@ class InitializerRecoveryTest(unittest.TestCase):
             "public_cert_symlink": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir,foreign_owner_in_datadir,symlink_in_datadir",
             "nested_public_name_world_readable": f"proof={P} | diag=UNCLEAR:unsafe_mode_in_datadir",
             "private_key_world_readable": f"proof={P} | diag=UNCLEAR:unsafe_mode_in_datadir",
+            "private_key_group_readable": f"proof={P} | diag=UNCLEAR:unsafe_mode_in_datadir",
             "foreign_group_directory": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir",
             "world_accessible_directory": f"proof={P} | diag=UNCLEAR:unsafe_mode_in_datadir",
             "datadir_mode_755": "proof=managed_directory_mode_invalid | diag=UNCLEAR:datadir_owner_or_mode",

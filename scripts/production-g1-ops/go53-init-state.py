@@ -73,9 +73,10 @@ def live_processes(proc_root="/proc"):
 
 
 PUBLIC_DATADIR_FILES = frozenset({"ca.pem", "server-cert.pem", "client-cert.pem", "public_key.pem"})
+PRIVATE_DATADIR_FILES = frozenset({"ca-key.pem", "server-key.pem", "client-key.pem", "private_key.pem"})
 
 
-def datadir_entry_problems(info, uid, gid, *, public_file=False):
+def datadir_entry_problems(info, uid, gid, *, public_file=False, private_file=False):
     """Return stable refusal reasons for one lstat result from the datadir walk."""
     problems = []
     is_dir, is_file = stat.S_ISDIR(info.st_mode), stat.S_ISREG(info.st_mode)
@@ -94,6 +95,9 @@ def datadir_entry_problems(info, uid, gid, *, public_file=False):
     elif is_file:
         if public_file:
             if mode != 0o644:
+                problems.append("unsafe_mode_in_datadir")
+        elif private_file:
+            if mode != 0o600:
                 problems.append("unsafe_mode_in_datadir")
         elif mode & 0o007 or mode & 0o020 or mode & 0o600 != 0o600 or mode & 0o7111:
             problems.append("unsafe_mode_in_datadir")
@@ -131,7 +135,9 @@ def scan_datadir_fd(root_fd, uid, gid, unclear):
                         unclear.append("entry_unreadable")
                         continue
                     public_file = top_level and entry in PUBLIC_DATADIR_FILES
-                    unclear.extend(datadir_entry_problems(before, uid, gid, public_file=public_file))
+                    private_file = entry in PRIVATE_DATADIR_FILES
+                    unclear.extend(datadir_entry_problems(before, uid, gid, public_file=public_file,
+                                                         private_file=private_file))
                     if stat.S_ISLNK(before.st_mode) or not (stat.S_ISDIR(before.st_mode) or stat.S_ISREG(before.st_mode)):
                         continue
                     flags = directory_flags if stat.S_ISDIR(before.st_mode) else entry_flags
@@ -145,7 +151,8 @@ def scan_datadir_fd(root_fd, uid, gid, unclear):
                         if not same_entry_snapshot(before, opened):
                             unclear.append("entry_changed_during_read")
                             continue
-                        unclear.extend(datadir_entry_problems(opened, uid, gid, public_file=public_file))
+                        unclear.extend(datadir_entry_problems(opened, uid, gid, public_file=public_file,
+                                                             private_file=private_file))
                         if stat.S_ISDIR(opened.st_mode):
                             stack.append((entry_fd, False))
                             entry_fd = -1
