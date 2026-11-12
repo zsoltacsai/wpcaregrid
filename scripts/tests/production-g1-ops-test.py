@@ -78,6 +78,33 @@ class ToolkitStaticTest(unittest.TestCase):
         actual = {p.name: sha(p.read_bytes()) for p in OPS.iterdir() if p.name != "SHA256SUMS"}
         self.assertEqual(listed, actual)
 
+    def test_go0_runbook_accepts_the_complete_pinned_manifest_and_rejects_unsafe_entries(self):
+        pinned = "cc46e2a7c7bd827ed5c9dab51945ca68e6f30698"
+        done = subprocess.run(["git", "show", f"{pinned}:scripts/production-g1-ops/SHA256SUMS"],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        self.assertEqual(sha(done.stdout), "968ec69929b5d6517d57c7d458be300791978edc2969e1338656724af1625176")
+        manifests = [done.stdout, (OPS / "SHA256SUMS").read_bytes()]
+        runbook = (SCRIPTS.parent / "docs/PRODUCTION_G1_MYSQL_RUNBOOK.md").read_text(encoding="utf-8")
+        self.assertIn("$name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$", runbook)
+        self.assertIn('echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict -', runbook)
+        self.assertIn("sha256sum -c --strict SHA256SUMS", runbook)
+        valid_name = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+        for manifest in manifests:
+            entries = manifest.decode("ascii").splitlines()
+            self.assertTrue(entries)
+            for entry in entries:
+                digest, name = entry.split("  ", 1)
+                with self.subTest(name=name):
+                    self.assertRegex(digest, r"^[0-9a-f]{64}$")
+                    self.assertRegex(name, valid_name)
+            self.assertIn("GO53-HELPER-UPGRADE.md", [line.split("  ", 1)[1] for line in entries])
+        for bad_name in ("../SHA256SUMS", "a/../b", "/etc/passwd", "-leading", "", "a b", "a\\b"):
+            with self.subTest(bad_name=bad_name):
+                self.assertIsNone(valid_name.fullmatch(bad_name))
+        for bad_digest in ("g" * 64, "0" * 63, "0" * 65, "../" + "0" * 61):
+            with self.subTest(bad_digest=bad_digest):
+                self.assertIsNone(re.fullmatch(r"[0-9a-f]{64}", bad_digest))
+
     def test_all_toolkit_sources_compile_and_are_lf_only(self):
         for path in OPS.iterdir():
             if path.name == "SHA256SUMS":
