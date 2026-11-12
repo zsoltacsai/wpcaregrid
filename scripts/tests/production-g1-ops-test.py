@@ -104,7 +104,7 @@ class ToolkitStaticTest(unittest.TestCase):
         self.assertIn(checksum_command, runbook)
         self.assertIn('W="$D.incoming-${RUN_ID}-UNVERIFIED"', runbook)
         self.assertIn('RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N4 -tx1 /dev/urandom | tr -d \'[:space:]\')"', runbook)
-        self.assertIn('mv -T -n -- "$W" "$D"', runbook)
+        self.assertIn('renameat2(-100, os.fsencode(sys.argv[1]), -100, os.fsencode(sys.argv[2]), 1)', runbook)
         self.assertIn("stat -c '%u:%g:%a'", runbook)
         self.assertRegex("20261112T103000Z-0123abcd", r"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
         go0_start = runbook.index("## GO-0 —")
@@ -172,20 +172,57 @@ class ToolkitStaticTest(unittest.TestCase):
             (root / "unexpected-extra").write_bytes(b"unexpected")
             self.assertNotEqual(subprocess.run(["bash", "-c", count_guard], cwd=root, check=False).returncode, 0)
 
+            promotion = re.search(
+                r'python3 - "\$W" "\$D" <<\'PY\'\n(.*?)\nPY', runbook, re.DOTALL,
+            )
+            self.assertIsNotNone(promotion, "runbook atomic promotion helper is missing")
+            promotion_code = promotion.group(1)
+
+            def promote(source, destination):
+                return subprocess.run(
+                    [sys.executable, "-", str(source), str(destination)],
+                    input=promotion_code, text=True, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, check=False,
+                )
+
             incoming = root / "incoming"
             target = root / "final"
             incoming.mkdir()
             (incoming / "payload").write_text("new", encoding="ascii")
             target.mkdir()
             (target / "preserve").write_text("old", encoding="ascii")
-            subprocess.run(["mv", "-T", "-n", "--", incoming, target], check=True)
+            collision = promote(incoming, target)
+            self.assertEqual(collision.returncode, 1, (collision.stdout, collision.stderr))
+            self.assertEqual(collision.stdout, "")
+            self.assertEqual(collision.stderr.strip(), "STOP: final destination already exists")
             self.assertTrue((incoming / "payload").is_file())
+            self.assertEqual((incoming / "payload").read_text(encoding="ascii"), "new")
+            self.assertEqual([p.name for p in target.iterdir()], ["preserve"])
             self.assertEqual((target / "preserve").read_text(encoding="ascii"), "old")
 
+            symlink_target = root / "symlink-final"
+            external = root / "external"
+            external.mkdir()
+            (external / "preserve").write_text("external", encoding="ascii")
+            symlink_target.symlink_to(external, target_is_directory=True)
+            symlink_collision = promote(incoming, symlink_target)
+            self.assertEqual(symlink_collision.returncode, 1,
+                             (symlink_collision.stdout, symlink_collision.stderr))
+            self.assertEqual(symlink_collision.stdout, "")
+            self.assertEqual(symlink_collision.stderr.strip(), "STOP: final destination already exists")
+            self.assertTrue(symlink_target.is_symlink())
+            self.assertEqual(symlink_target.resolve(), external)
+            self.assertEqual((external / "preserve").read_text(encoding="ascii"), "external")
+            self.assertTrue((incoming / "payload").is_file())
+            self.assertEqual((incoming / "payload").read_text(encoding="ascii"), "new")
+
             fresh_target = root / "fresh-final"
-            subprocess.run(["mv", "-T", "-n", "--", incoming, fresh_target], check=True)
+            promoted = promote(incoming, fresh_target)
+            self.assertEqual(promoted.returncode, 0, (promoted.stdout, promoted.stderr))
+            self.assertEqual(promoted.stdout, "")
+            self.assertEqual(promoted.stderr, "")
             self.assertFalse(incoming.exists())
-            self.assertTrue((fresh_target / "payload").is_file())
+            self.assertEqual((fresh_target / "payload").read_text(encoding="ascii"), "new")
 
     def test_go53_nested_datadir_owner_group_mode_and_symlink_policy(self):
         diagnostic = load(OPS / "go53-init-state.py", "go53_init_state_policy")

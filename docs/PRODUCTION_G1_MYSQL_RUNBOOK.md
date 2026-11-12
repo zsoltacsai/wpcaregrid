@@ -65,8 +65,31 @@ directory in place for read-only investigation; reruns get a new path.
     [[ -f "$f" && ! -L "$f" ]] || { echo "STOP: non-regular toolkit entry"; exit 1; }
     [ "$(stat -c '%u:%g:%a' -- "$f")" = "0:0:600" ] || { echo "STOP: toolkit file metadata"; exit 1; }
   done
-  cd /; mv -T -n -- "$W" "$D" || { echo "STOP: promotion failed"; exit 1; }
-  { [ ! -e "$W" ] && [ ! -L "$W" ] && [ -d "$D" ] && [ ! -L "$D" ]; } || { echo "STOP: promotion collision"; exit 1; }
+  cd /
+  python3 - "$W" "$D" <<'PY'
+import ctypes
+import errno
+import os
+import sys
+
+try:
+    renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+except AttributeError:
+    print("STOP: atomic renameat2(RENAME_NOREPLACE) is unavailable", file=sys.stderr)
+    raise SystemExit(2)
+renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+renameat2.restype = ctypes.c_int
+result = renameat2(-100, os.fsencode(sys.argv[1]), -100, os.fsencode(sys.argv[2]), 1)
+if result == 0:
+    raise SystemExit(0)
+error = ctypes.get_errno()
+if error == errno.EEXIST:
+    print("STOP: final destination already exists", file=sys.stderr)
+else:
+    print(f"STOP: atomic promotion failed (errno={error})", file=sys.stderr)
+raise SystemExit(1 if error == errno.EEXIST else 2)
+PY
+  { [ ! -e "$W" ] && [ ! -L "$W" ] && [ -d "$D" ] && [ ! -L "$D" ]; } || { echo "STOP: promotion collision or incomplete rename"; exit 1; }
   [ "$(stat -c '%u:%g:%a' -- "$D")" = "0:0:700" ] || { echo "STOP: promoted directory metadata"; exit 1; }
   cd "$D"
   echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict - >/dev/null || { echo "STOP: promoted manifest hash mismatch"; exit 1; }
@@ -101,7 +124,10 @@ It pins toolkit commit `cc46e2a7c7bd827ed5c9dab51945ca68e6f30698` and manifest S
 `968ec69929b5d6517d57c7d458be300791978edc2969e1338656724af1625176`, verifies 21 unique
 safe filenames including `GO53-HELPER-UPGRADE.md`, checks every file checksum, exact file
 count, regular-file type, `root:root 0600` file metadata, and `root:root 0700` directory
-metadata. Promotion uses no-replace semantics and rechecks the manifest, every file hash,
+metadata. Promotion uses Linux `renameat2(..., RENAME_NOREPLACE)` through libc, which performs
+an atomic rename only when the destination does not exist. Missing `renameat2`, any error,
+or an existing destination stops the procedure; it does not fall back to `mv` or a racy
+existence-check-plus-rename. It then rechecks the manifest, every file hash,
 destination type/mode, and exact count after the rename. Keep the original incomplete
 directory untouched after a successful fresh download as well. Mark `VERIFIED_COMPLETE`
 only after the post-promotion checks pass.
@@ -112,6 +138,15 @@ failed download, interrupted command, or failed/no-replace promotion or post-pro
 verification. Preserve all directories for read-only investigation; cleanup or another
 GO-0 attempt requires a separate Owner decision. This plan authorizes no root command or
 GO-0 execution.
+
+### Pre-push verification
+
+Before committing a GO-0 runbook or regression-test change, run the complete
+`PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/production-g1-ops-test.py` suite, the
+embedded GO-0 Bash syntax check, manifest/name and no-replace regressions, and
+`git diff --check`. Record pass, skip, and failure counts. Docker/MySQL-dependent skips
+are not passes; the corresponding required CI job must complete successfully before
+claiming full validation or starting another CI run.
 
 ## GO-1 — preflight of the installed #325 state (read-only, done before; repeatable)
 
