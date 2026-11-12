@@ -47,7 +47,7 @@ staging directory and renames it only after every file matched.
   get SHA256SUMS || { echo "STOP: download failed: SHA256SUMS"; exit 1; }
   echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict - >/dev/null || { echo "STOP: SHA256SUMS hash mismatch"; exit 1; }
   while read -r digest name; do
-    [[ $name =~ ^[a-z0-9][a-z0-9._-]*$ && $digest =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: bad SHA256SUMS entry"; exit 1; }
+    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $digest =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: bad SHA256SUMS entry"; exit 1; }
     get "$name" || { echo "STOP: download failed: $name"; exit 1; }
   done < SHA256SUMS
   sha256sum -c --strict SHA256SUMS >/dev/null || { echo "STOP: file hash mismatch"; exit 1; }
