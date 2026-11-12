@@ -83,6 +83,7 @@ class ToolkitStaticTest(unittest.TestCase):
 
     def test_go53_nested_datadir_owner_group_mode_and_symlink_policy(self):
         diagnostic = load(OPS / "go53-init-state.py", "go53_init_state_policy")
+        helper = load(SCRIPTS / "production-g1-mysql.py", "go53_init_state_helper_policy")
         uid, gid = 1000, 1000
         def entry(kind, mode, *, owner=uid, group=gid):
             return types.SimpleNamespace(st_mode=kind | mode, st_uid=owner, st_gid=group)
@@ -92,10 +93,51 @@ class ToolkitStaticTest(unittest.TestCase):
                          ["foreign_group_in_datadir"])
         self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFREG, 0o644), uid, gid),
                          ["unsafe_mode_in_datadir"])
+        self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFREG, 0o644), uid, gid,
+                                                           public_file=True), [])
+        self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFREG, 0o664), uid, gid,
+                                                           public_file=True), ["unsafe_mode_in_datadir"])
+        self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFREG, 0o640), uid, gid,
+                                                           public_file=True), ["unsafe_mode_in_datadir"])
+        self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFREG, 0o644, group=0), uid, gid,
+                                                           public_file=True), ["foreign_group_in_datadir"])
+        self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFLNK, 0o777), uid, gid,
+                                                           public_file=True), ["symlink_in_datadir"])
         self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFDIR, 0o755), uid, gid),
                          ["unsafe_mode_in_datadir"])
         self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFLNK, 0o777), uid, gid),
                          ["symlink_in_datadir"])
+        self.assertTrue(helper._initialization_entry_safe(entry(stat.S_IFREG, 0o644), uid, gid,
+                                                          public_file=True))
+        self.assertFalse(helper._initialization_entry_safe(entry(stat.S_IFREG, 0o644), uid, gid))
+        self.assertFalse(helper._initialization_entry_safe(entry(stat.S_IFREG, 0o664), uid, gid,
+                                                           public_file=True))
+        self.assertFalse(helper._initialization_entry_safe(entry(stat.S_IFREG, 0o644, group=0), uid, gid,
+                                                           public_file=True))
+        self.assertFalse(helper._initialization_entry_safe(entry(stat.S_IFLNK, 0o777), uid, gid,
+                                                           public_file=True))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "datadir"
+            root.mkdir(mode=0o700)
+            os.chown(root, os.getuid(), os.getgid())
+            (root / "sub").mkdir(mode=0o700)
+            for path in (root / "ca.pem", root / "sub" / "ca.pem"):
+                path.write_bytes(b"public test data")
+                path.chmod(0o644)
+                os.chown(path, os.getuid(), os.getgid())
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                reasons = []
+                diagnostic.scan_datadir_fd(root_fd, os.getuid(), os.getgid(), reasons)
+                self.assertIn("unsafe_mode_in_datadir", reasons)
+                class SeenRefusal(Exception):
+                    pass
+                def reject(reason):
+                    raise SeenRefusal(reason)
+                with self.assertRaisesRegex(SeenRefusal, "datadir_entry"):
+                    helper._walk_initialized_tree(root_fd, os.getuid(), os.getgid(), reject)
+            finally:
+                os.close(root_fd)
 
     def test_go53_descriptor_walks_fail_closed_on_directory_swap_to_symlink(self):
         diagnostic = load(OPS / "go53-init-state.py", "go53_init_state_swap_policy")
@@ -1733,6 +1775,30 @@ def diag():
     state, reasons, facts = D.classify(NAME, D.INSTANCES[NAME])
     return state + ":" + ",".join(reasons)
 
+PUBLIC_FILES = {"ca.pem", "server-cert.pem", "client-cert.pem", "public_key.pem"}
+PRIVATE_KEY_FILES = {"ca-key.pem", "server-key.pem", "client-key.pem", "private_key.pem"}
+umask_stop = threading.Event()
+umask_samples = set()
+def observe_mysqld_umask():
+    while not umask_stop.is_set():
+        try:
+            pids = os.listdir("/proc")
+        except OSError:
+            pids = []
+        for pid in pids:
+            if not pid.isdigit():
+                continue
+            try:
+                argv = open("/proc/" + pid + "/cmdline", "rb").read().split(b"\0")
+                if not argv or os.path.basename(argv[0].decode("utf-8", "replace")) != "mysqld" or b"--initialize" not in argv:
+                    continue
+                status = open("/proc/" + pid + "/status", encoding="ascii", errors="replace").read()
+                line = next(line for line in status.splitlines() if line.startswith("Umask:"))
+                umask_samples.add(line.split()[1])
+            except (OSError, StopIteration):
+                continue
+        umask_stop.wait(0.001)
+
 FAST = dict(grace=2, kill_wait=2)
 FAKE_CHILD = "import time; time.sleep(300)"
 CHAIN = (
@@ -1750,22 +1816,35 @@ def chain(mode):
 
 # ---- 1. real successful initialization -------------------------------------------------------------------------
 reset()
+observer = threading.Thread(target=observe_mysqld_umask, daemon=True)
+observer.start()
 before = refusal(H._run_initializer, INST, REAL)
+umask_stop.set(); observer.join(timeout=2)
 out("real_run", before)
-unsafe_metadata = {}
+out("mysqld_umask_samples", ",".join(sorted(umask_samples)) or "not_observed")
+unsafe_metadata, public_metadata, private_metadata = {}, {}, {}
 for current, directories, names in os.walk(INST.datadir, followlinks=False):
+    top_level = current == INST.datadir
     for entry in directories + names:
         path = os.path.join(current, entry)
         info = os.lstat(path)
         mode = stat.S_IMODE(info.st_mode)
         is_dir, is_file = stat.S_ISDIR(info.st_mode), stat.S_ISREG(info.st_mode)
+        public_file = top_level and entry in PUBLIC_FILES
         unsafe = (info.st_uid != UID or info.st_gid != GID or not (is_dir or is_file)
                   or (is_dir and (mode & 0o007 or mode & 0o020 or mode & 0o700 != 0o700 or mode & 0o7000))
-                  or (is_file and (mode & 0o007 or mode & 0o020 or mode & 0o600 != 0o600 or mode & 0o7111)))
+                  or (is_file and ((mode != 0o644) if public_file else
+                                   (mode & 0o007 or mode & 0o020 or mode & 0o600 != 0o600 or mode & 0o7111))))
         if unsafe:
             kind = "dir" if is_dir else "file" if is_file else "special"
             key = "%s:%d:%d:%04o" % (kind, info.st_uid, info.st_gid, mode)
             unsafe_metadata[key] = unsafe_metadata.get(key, 0) + 1
+        if public_file:
+            public_metadata[entry] = "%s:%d:%d:%04o" % (entry, info.st_uid, info.st_gid, mode)
+        if top_level and entry in PRIVATE_KEY_FILES:
+            private_metadata[entry] = "%s:%d:%d:%04o" % (entry, info.st_uid, info.st_gid, mode)
+out("real_public_metadata", ",".join(public_metadata[name] for name in sorted(public_metadata)) or "none")
+out("real_private_metadata", ",".join(private_metadata[name] for name in sorted(private_metadata)) or "none")
 out("real_unsafe_metadata", ",".join("%s*%d" % item for item in sorted(unsafe_metadata.items())) or "none")
 out("real_proof", proof())
 out("real_diag", diag())
@@ -1803,6 +1882,16 @@ mutation("symlink_elsewhere", lambda: os.symlink("/etc/passwd", INST.datadir + "
 mutation("foreign_owner_file", lambda: os.chown(INST.datadir + "/ibdata1", 0, GID))
 mutation("foreign_group_file", lambda: os.chown(INST.datadir + "/ibdata1", UID, 0))
 mutation("world_readable_file", lambda: os.chmod(INST.datadir + "/ibdata1", 0o644))
+mutation("public_cert_group_writable", lambda: os.chmod(INST.datadir + "/ca.pem", 0o664))
+mutation("public_cert_foreign_owner", lambda: os.chown(INST.datadir + "/ca.pem", 0, GID))
+mutation("public_cert_foreign_group", lambda: os.chown(INST.datadir + "/ca.pem", UID, 0))
+mutation("public_cert_symlink", lambda: (os.unlink(INST.datadir + "/ca.pem"),
+                                          os.symlink("/etc/passwd", INST.datadir + "/ca.pem")))
+mutation("nested_public_name_world_readable", lambda: (
+    open(INST.datadir + "/mysql/ca.pem", "wb").close(),
+    os.chown(INST.datadir + "/mysql/ca.pem", UID, GID),
+    os.chmod(INST.datadir + "/mysql/ca.pem", 0o644)))
+mutation("private_key_world_readable", lambda: os.chmod(INST.datadir + "/private_key.pem", 0o644))
 mutation("foreign_group_directory", lambda: os.chown(INST.datadir + "/mysql", UID, 0))
 mutation("world_accessible_directory", lambda: os.chmod(INST.datadir + "/mysql", 0o755))
 mutation("datadir_mode_755", lambda: os.chmod(INST.datadir, 0o755))
@@ -2035,6 +2124,12 @@ class InitializerRecoveryTest(unittest.TestCase):
 
     def test_a_real_initialization_is_proven_complete_and_a_second_one_is_blocked(self):
         self.assertEqual(self.get("real_run"), "NO_REFUSAL")
+        self.assertIn("0027", self.get("mysqld_umask_samples").split(","))
+        self.assertEqual(self.get("real_public_metadata"),
+                         "ca.pem:999:999:0644,client-cert.pem:999:999:0644,public_key.pem:999:999:0644,server-cert.pem:999:999:0644")
+        self.assertEqual(self.get("real_private_metadata"),
+                         "ca-key.pem:999:999:0600,client-key.pem:999:999:0600,private_key.pem:999:999:0600,server-key.pem:999:999:0600")
+        self.assertEqual(self.get("real_unsafe_metadata"), "none")
         self.assertEqual(self.get("real_proof"), "NO_REFUSAL")
         self.assertEqual(self.get("real_diag"), "PROVEN_COMPLETE:")
         self.assertEqual(self.get("real_processes"), "0")
@@ -2053,6 +2148,12 @@ class InitializerRecoveryTest(unittest.TestCase):
             "foreign_owner_file": f"proof={P} | diag=UNCLEAR:foreign_owner_in_datadir",
             "foreign_group_file": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir",
             "world_readable_file": f"proof={P} | diag=UNCLEAR:unsafe_mode_in_datadir",
+            "public_cert_group_writable": f"proof={P} | diag=UNCLEAR:unsafe_mode_in_datadir",
+            "public_cert_foreign_owner": f"proof={P} | diag=UNCLEAR:foreign_owner_in_datadir",
+            "public_cert_foreign_group": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir",
+            "public_cert_symlink": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir,foreign_owner_in_datadir,symlink_in_datadir",
+            "nested_public_name_world_readable": f"proof={P} | diag=UNCLEAR:unsafe_mode_in_datadir",
+            "private_key_world_readable": f"proof={P} | diag=UNCLEAR:unsafe_mode_in_datadir",
             "foreign_group_directory": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir",
             "world_accessible_directory": f"proof={P} | diag=UNCLEAR:unsafe_mode_in_datadir",
             "datadir_mode_755": "proof=managed_directory_mode_invalid | diag=UNCLEAR:datadir_owner_or_mode",

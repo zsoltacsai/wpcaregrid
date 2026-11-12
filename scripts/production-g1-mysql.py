@@ -431,6 +431,7 @@ def _port_free(instance: Instance) -> None:
 INIT_ARTEFACTS = frozenset({"auto.cnf", "mysql", "ibdata1", "mysql.ibd", "#innodb_redo", "undo_001", "undo_002"})
 INIT_REQUIRED_DIRS = ("mysql", "sys", "performance_schema", "#innodb_redo")
 INIT_REQUIRED_FILES = ("auto.cnf", "ibdata1", "mysql.ibd", "undo_001", "undo_002", "mysql_upgrade_history")
+INIT_PUBLIC_FILES = frozenset({"ca.pem", "server-cert.pem", "client-cert.pem", "public_key.pem"})
 # Measured with MySQL Community Server 8.4.13: a complete `mysqld --initialize` logs the start line and, last, the end line.
 INIT_START_MARKER = b"[MY-015017] [Server] MySQL Server Initialization - start."
 INIT_END_MARKER = b"[MY-015018] [Server] MySQL Server Initialization - end."
@@ -556,8 +557,9 @@ def _run_initializer(instance: Instance, argv: list[str], *, timeout: float = IN
             signal.signal(getattr(signal, name), handler)
 
 
-def _initialization_entry_safe(info, mysql_uid: int, mysql_gid: int, *, expected_directory: bool | None = None) -> bool:
-    """Apply the same private mysql:mysql metadata policy to required and nested datadir entries."""
+def _initialization_entry_safe(info, mysql_uid: int, mysql_gid: int, *, expected_directory: bool | None = None,
+                               public_file: bool = False) -> bool:
+    """Apply the mysql:mysql mode contract, allowing only named top-level public files to be 0644."""
     is_dir, is_file = stat.S_ISDIR(info.st_mode), stat.S_ISREG(info.st_mode)
     if expected_directory is not None and is_dir is not expected_directory:
         return False
@@ -566,6 +568,8 @@ def _initialization_entry_safe(info, mysql_uid: int, mysql_gid: int, *, expected
     mode = stat.S_IMODE(info.st_mode)
     if is_dir:
         return not (mode & 0o007 or mode & 0o020 or mode & 0o700 != 0o700 or mode & 0o7000)
+    if public_file:
+        return mode == 0o644
     return not (mode & 0o007 or mode & 0o020 or mode & 0o600 != 0o600 or mode & 0o7111)
 
 
@@ -575,13 +579,13 @@ def _same_initialized_entry(before, opened) -> bool:
 
 
 def _walk_initialized_tree(root_fd: int, mysql_uid: int, mysql_gid: int, not_proven) -> None:
-    stack = [os.dup(root_fd)]
+    stack = [(os.dup(root_fd), True)]
     scanned = 0
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     entry_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     try:
         while stack:
-            current_fd = stack.pop()
+            current_fd, top_level = stack.pop()
             try:
                 try:
                     names = sorted(os.listdir(current_fd))
@@ -595,7 +599,8 @@ def _walk_initialized_tree(root_fd: int, mysql_uid: int, mysql_gid: int, not_pro
                         before = os.stat(entry, dir_fd=current_fd, follow_symlinks=False)
                     except OSError:
                         not_proven("datadir_entry")
-                    if not _initialization_entry_safe(before, mysql_uid, mysql_gid):
+                    public_file = top_level and entry in INIT_PUBLIC_FILES
+                    if not _initialization_entry_safe(before, mysql_uid, mysql_gid, public_file=public_file):
                         not_proven("datadir_entry")
                     flags = directory_flags if stat.S_ISDIR(before.st_mode) else entry_flags
                     try:
@@ -605,10 +610,11 @@ def _walk_initialized_tree(root_fd: int, mysql_uid: int, mysql_gid: int, not_pro
                     try:
                         opened = os.fstat(entry_fd)
                         if (not _same_initialized_entry(before, opened)
-                                or not _initialization_entry_safe(opened, mysql_uid, mysql_gid)):
+                                or not _initialization_entry_safe(opened, mysql_uid, mysql_gid,
+                                                                  public_file=public_file)):
                             not_proven("datadir_entry")
                         if stat.S_ISDIR(opened.st_mode):
-                            stack.append(entry_fd)
+                            stack.append((entry_fd, False))
                             entry_fd = -1
                     finally:
                         if entry_fd >= 0:
@@ -616,7 +622,7 @@ def _walk_initialized_tree(root_fd: int, mysql_uid: int, mysql_gid: int, not_pro
             finally:
                 os.close(current_fd)
     finally:
-        for pending_fd in stack:
+        for pending_fd, _ in stack:
             os.close(pending_fd)
 
 
@@ -647,7 +653,8 @@ def _initialization_proof(instance: Instance, *, proc_root: Path = PROC_ROOT) ->
             except OSError:
                 not_proven(name)
             want_dir = name in INIT_REQUIRED_DIRS
-            if not _initialization_entry_safe(st, mysql_uid, mysql_gid, expected_directory=want_dir):
+            if not _initialization_entry_safe(st, mysql_uid, mysql_gid, expected_directory=want_dir,
+                                              public_file=name in INIT_PUBLIC_FILES):
                 not_proven(name)
         _walk_initialized_tree(root_fd, mysql_uid, mysql_gid, not_proven)
     except OSError:

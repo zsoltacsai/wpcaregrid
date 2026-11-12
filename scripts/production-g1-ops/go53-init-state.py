@@ -72,7 +72,10 @@ def live_processes(proc_root="/proc"):
         yield int(entry), [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
 
 
-def datadir_entry_problems(info, uid, gid):
+PUBLIC_DATADIR_FILES = frozenset({"ca.pem", "server-cert.pem", "client-cert.pem", "public_key.pem"})
+
+
+def datadir_entry_problems(info, uid, gid, *, public_file=False):
     """Return stable refusal reasons for one lstat result from the datadir walk."""
     problems = []
     is_dir, is_file = stat.S_ISDIR(info.st_mode), stat.S_ISREG(info.st_mode)
@@ -85,10 +88,15 @@ def datadir_entry_problems(info, uid, gid):
     if info.st_gid != gid:
         problems.append("foreign_group_in_datadir")
     mode = stat.S_IMODE(info.st_mode)
-    if is_dir and (mode & 0o007 or mode & 0o020 or mode & 0o700 != 0o700 or mode & 0o7000):
-        problems.append("unsafe_mode_in_datadir")
-    elif is_file and (mode & 0o007 or mode & 0o020 or mode & 0o600 != 0o600 or mode & 0o7111):
-        problems.append("unsafe_mode_in_datadir")
+    if is_dir:
+        if mode & 0o007 or mode & 0o020 or mode & 0o700 != 0o700 or mode & 0o7000:
+            problems.append("unsafe_mode_in_datadir")
+    elif is_file:
+        if public_file:
+            if mode != 0o644:
+                problems.append("unsafe_mode_in_datadir")
+        elif mode & 0o007 or mode & 0o020 or mode & 0o600 != 0o600 or mode & 0o7111:
+            problems.append("unsafe_mode_in_datadir")
     return problems
 
 
@@ -99,13 +107,13 @@ def same_entry_snapshot(before, opened):
 
 def scan_datadir_fd(root_fd, uid, gid, unclear):
     """Traverse using held descriptors; never resolve child names through a replaceable path."""
-    stack = [os.dup(root_fd)]
+    stack = [(os.dup(root_fd), True)]
     seen = size = 0
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     entry_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     try:
         while stack:
-            current_fd = stack.pop()
+            current_fd, top_level = stack.pop()
             try:
                 try:
                     names = sorted(os.listdir(current_fd))
@@ -122,7 +130,8 @@ def scan_datadir_fd(root_fd, uid, gid, unclear):
                     except OSError:
                         unclear.append("entry_unreadable")
                         continue
-                    unclear.extend(datadir_entry_problems(before, uid, gid))
+                    public_file = top_level and entry in PUBLIC_DATADIR_FILES
+                    unclear.extend(datadir_entry_problems(before, uid, gid, public_file=public_file))
                     if stat.S_ISLNK(before.st_mode) or not (stat.S_ISDIR(before.st_mode) or stat.S_ISREG(before.st_mode)):
                         continue
                     flags = directory_flags if stat.S_ISDIR(before.st_mode) else entry_flags
@@ -136,9 +145,9 @@ def scan_datadir_fd(root_fd, uid, gid, unclear):
                         if not same_entry_snapshot(before, opened):
                             unclear.append("entry_changed_during_read")
                             continue
-                        unclear.extend(datadir_entry_problems(opened, uid, gid))
+                        unclear.extend(datadir_entry_problems(opened, uid, gid, public_file=public_file))
                         if stat.S_ISDIR(opened.st_mode):
-                            stack.append(entry_fd)
+                            stack.append((entry_fd, False))
                             entry_fd = -1
                         else:
                             size += opened.st_size
@@ -148,7 +157,7 @@ def scan_datadir_fd(root_fd, uid, gid, unclear):
             finally:
                 os.close(current_fd)
     finally:
-        for pending_fd in stack:
+        for pending_fd, _ in stack:
             os.close(pending_fd)
     return size
 
