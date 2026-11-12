@@ -96,15 +96,30 @@ class ToolkitStaticTest(unittest.TestCase):
         runbook = (SCRIPTS.parent / "docs/PRODUCTION_G1_MYSQL_RUNBOOK.md").read_text(encoding="utf-8")
         name_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
         self.assertIn(manifest_pin, runbook)
+        self.assertIn("OPS_SHA=" + toolkit_commit, runbook)
+        self.assertIn("SUMS_SHA256=" + manifest_pin, runbook)
         self.assertIn("$name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$", runbook)
         self.assertIn('echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict -', runbook)
         checksum_command = "sha256sum -c --strict SHA256SUMS"
         self.assertIn(checksum_command, runbook)
+        self.assertIn('W="$D.incoming-${RUN_ID}-UNVERIFIED"', runbook)
+        self.assertIn('RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N4 -tx1 /dev/urandom | tr -d \'[:space:]\')"', runbook)
+        self.assertIn('mv -T -n -- "$W" "$D"', runbook)
+        self.assertIn("stat -c '%u:%g:%a'", runbook)
+        self.assertRegex("20261112T103000Z-0123abcd", r"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
+        go0_start = runbook.index("## GO-0 —")
+        block_start = runbook.index("```bash\n", go0_start) + len("```bash\n")
+        block_end = runbook.index("\n```", block_start)
+        bash_syntax = subprocess.run(
+            ["bash", "-n"], input=runbook[block_start:block_end], text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual(bash_syntax.returncode, 0, bash_syntax.stderr)
         shell_name_check = 'name=$1; [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]'
         count_guard = next(
             line.strip().split(" || ", 1)[0]
             for line in runbook.splitlines()
-            if line.strip().startswith('[ "$(ls -A | wc -l)" = "$(( $(wc -l < SHA256SUMS) + 1 ))" ]')
+            if line.strip().startswith('[ "$(ls -A | wc -l)" = 22 ]')
         )
 
         parsed = []
@@ -156,6 +171,21 @@ class ToolkitStaticTest(unittest.TestCase):
             (root / "GO53-HELPER-UPGRADE.md").write_bytes(dict(parsed)["GO53-HELPER-UPGRADE.md"])
             (root / "unexpected-extra").write_bytes(b"unexpected")
             self.assertNotEqual(subprocess.run(["bash", "-c", count_guard], cwd=root, check=False).returncode, 0)
+
+            incoming = root / "incoming"
+            target = root / "final"
+            incoming.mkdir()
+            (incoming / "payload").write_text("new", encoding="ascii")
+            target.mkdir()
+            (target / "preserve").write_text("old", encoding="ascii")
+            subprocess.run(["mv", "-T", "-n", "--", incoming, target], check=True)
+            self.assertTrue((incoming / "payload").is_file())
+            self.assertEqual((target / "preserve").read_text(encoding="ascii"), "old")
+
+            fresh_target = root / "fresh-final"
+            subprocess.run(["mv", "-T", "-n", "--", incoming, fresh_target], check=True)
+            self.assertFalse(incoming.exists())
+            self.assertTrue((fresh_target / "payload").is_file())
 
     def test_go53_nested_datadir_owner_group_mode_and_symlink_policy(self):
         diagnostic = load(OPS / "go53-init-state.py", "go53_init_state_policy")
