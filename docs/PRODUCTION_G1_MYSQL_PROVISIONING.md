@@ -49,9 +49,9 @@ files before copying):
 
 | Source artifact | SHA-256 |
 | --- | --- |
-| `production-g1-mysql.py` | `30422ed4475b7b94b53b279054daeaa1aca0a8206889d6de9d688ec4f96f4428` |
+| `production-g1-mysql.py` | `27c7e1e6ba8536f7f64e9a4bd53ed31fe846678ff05b0a051ca2ca7abe705e1b` |
 | `production_g1_mysql_contract.py` | `270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f` |
-| `production-g1-mysql-manifest.json` | `abd987e20a459e9ec6ebef4a791b376592e162396a8ae8a62d415ff021749dd9` |
+| `production-g1-mysql-manifest.json` | `0af365c9515e2eff34d552c185c8d46fff3a5d5f7cade6d1ab3c0de1809ef911` |
 
 These are source-file hashes, not a protected-primary commit identity or a
 VPS installation receipt. The code is not merged and the installation has not

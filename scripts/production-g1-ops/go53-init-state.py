@@ -10,7 +10,7 @@ Per instance one of:
   PROVEN_COMPLETE  a finished `mysqld --initialize`: the exact datadir contents, the server's own start line followed
                    by its end line in the error log, no [ERROR] line, no process, no socket/pid marker
   PARTIAL          sane but unfinished: initialization artefacts present, end marker missing (and nothing else odd)
-  UNCLEAR          anything else (symlink, foreign owner/group/mode, special file, running process, end marker without the
+  UNCLEAR          anything else (symlink, foreign owner/mode, special file, running process, end marker without the
                    files, error lines, unreadable ...). The completion of an UNCLEAR or PARTIAL datadir is NOT proven.
 Final line:  G1_GO53_INIT_STATE=DONE;WPCAREGRID_PRODUCTION=<state>;WPCAREGRID_PRODUCTION_RESTORE=<state>   (exit 0)
              G1_GO53_INIT_STATE=STOP;CODE=<cause>                                                        (exit 3/4)
@@ -72,87 +72,6 @@ def live_processes(proc_root="/proc"):
         yield int(entry), [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
 
 
-def datadir_entry_problems(info, uid, gid):
-    """Return stable refusal reasons for one lstat result from the datadir walk."""
-    problems = []
-    is_dir, is_file = stat.S_ISDIR(info.st_mode), stat.S_ISREG(info.st_mode)
-    if stat.S_ISLNK(info.st_mode):
-        problems.append("symlink_in_datadir")
-    elif not (is_dir or is_file):
-        problems.append("special_file_in_datadir")
-    if info.st_uid != uid:
-        problems.append("foreign_owner_in_datadir")
-    if info.st_gid != gid:
-        problems.append("foreign_group_in_datadir")
-    mode = stat.S_IMODE(info.st_mode)
-    if is_dir and (mode & 0o007 or mode & 0o020 or mode & 0o700 != 0o700 or mode & 0o7000):
-        problems.append("unsafe_mode_in_datadir")
-    elif is_file and (mode & 0o007 or mode & 0o020 or mode & 0o600 != 0o600 or mode & 0o7111):
-        problems.append("unsafe_mode_in_datadir")
-    return problems
-
-
-def same_entry_snapshot(before, opened):
-    return ((before.st_dev, before.st_ino, before.st_mode, before.st_uid, before.st_gid)
-            == (opened.st_dev, opened.st_ino, opened.st_mode, opened.st_uid, opened.st_gid))
-
-
-def scan_datadir_fd(root_fd, uid, gid, unclear):
-    """Traverse using held descriptors; never resolve child names through a replaceable path."""
-    stack = [os.dup(root_fd)]
-    seen = size = 0
-    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-    entry_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-    try:
-        while stack:
-            current_fd = stack.pop()
-            try:
-                try:
-                    names = sorted(os.listdir(current_fd))
-                except OSError:
-                    unclear.append("datadir_unreadable")
-                    continue
-                for entry in names:
-                    seen += 1
-                    if seen > WALK_LIMIT:
-                        unclear.append("datadir_too_large_to_scan")
-                        return size
-                    try:
-                        before = os.stat(entry, dir_fd=current_fd, follow_symlinks=False)
-                    except OSError:
-                        unclear.append("entry_unreadable")
-                        continue
-                    unclear.extend(datadir_entry_problems(before, uid, gid))
-                    if stat.S_ISLNK(before.st_mode) or not (stat.S_ISDIR(before.st_mode) or stat.S_ISREG(before.st_mode)):
-                        continue
-                    flags = directory_flags if stat.S_ISDIR(before.st_mode) else entry_flags
-                    try:
-                        entry_fd = os.open(entry, flags, dir_fd=current_fd)
-                    except OSError:
-                        unclear.append("entry_unreadable")
-                        continue
-                    try:
-                        opened = os.fstat(entry_fd)
-                        if not same_entry_snapshot(before, opened):
-                            unclear.append("entry_changed_during_read")
-                            continue
-                        unclear.extend(datadir_entry_problems(opened, uid, gid))
-                        if stat.S_ISDIR(opened.st_mode):
-                            stack.append(entry_fd)
-                            entry_fd = -1
-                        else:
-                            size += opened.st_size
-                    finally:
-                        if entry_fd >= 0:
-                            os.close(entry_fd)
-            finally:
-                os.close(current_fd)
-    finally:
-        for pending_fd in stack:
-            os.close(pending_fd)
-    return size
-
-
 def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
     """Returns (state, reasons, facts). Read-only."""
     R = lambda p: root.rstrip("/") + p  # noqa: E731
@@ -182,62 +101,63 @@ def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
         return "UNCLEAR", unclear + ["datadir_not_a_directory"], facts
     if st.st_uid != uid or st.st_gid != gid or stat.S_IMODE(st.st_mode) != 0o750:
         unclear.append("datadir_owner_or_mode")
-    root_fd = None
-    try:
-        root_fd = os.open(datadir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-        opened_root = os.fstat(root_fd)
-        if not same_entry_snapshot(st, opened_root):
-            os.close(root_fd)
-            return "UNCLEAR", unclear + ["datadir_changed_during_read"], facts
-        top = sorted(os.listdir(root_fd))
-    except OSError:
-        if root_fd is not None:
-            os.close(root_fd)
-        return "UNCLEAR", unclear + ["datadir_unreadable"], facts
+    # walk without following links; any link, special file or foreign owner makes the state unclear
+    seen, size = 0, 0
+    top = sorted(os.listdir(datadir))
     facts["entries"] = len(top)
     facts["top"] = [n if SAFE_NAME.fullmatch(n) else "<unsafe-name>" for n in top[:40]]
-    missing = []
-    for entry in REQUIRED_DIRS + REQUIRED_FILES:
+    stack = [datadir]
+    while stack and seen < WALK_LIMIT:
+        current = stack.pop()
         try:
-            info = os.stat(entry, dir_fd=root_fd, follow_symlinks=False)
-        except FileNotFoundError:
-            missing.append(entry)
+            names = os.listdir(current)
         except OSError:
-            unclear.append("required_entry_unreadable")
-        else:
-            want_dir = entry in REQUIRED_DIRS
-            if (stat.S_ISDIR(info.st_mode) if want_dir else stat.S_ISREG(info.st_mode)) is not True:
-                unclear.append("required_entry_wrong_type")
-    try:
-        # The root descriptor pins the checked directory. Child directories are opened relative to held fds
-        # with O_NOFOLLOW and checked against their lstat snapshot before traversal.
-        facts["size"] = scan_datadir_fd(root_fd, uid, gid, unclear)
-    finally:
-        os.close(root_fd)
+            unclear.append("datadir_unreadable")
+            break
+        for entry in names:
+            seen += 1
+            path = os.path.join(current, entry)
+            try:
+                info = os.lstat(path)
+            except OSError:
+                unclear.append("entry_unreadable")
+                continue
+            if stat.S_ISLNK(info.st_mode):
+                unclear.append("symlink_in_datadir")
+            elif stat.S_ISDIR(info.st_mode):
+                stack.append(path)
+            elif stat.S_ISREG(info.st_mode):
+                size += info.st_size
+            else:
+                unclear.append("special_file_in_datadir")
+            if info.st_uid != uid:
+                unclear.append("foreign_owner_in_datadir")
+    if stack:
+        unclear.append("datadir_too_large_to_scan")
+    facts["size"] = size
     # error log: scanned for the server's own marker lines only, never printed
     log = b""
     try:
         info = os.lstat(R(spec["log"]))
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_gid != gid
-                or stat.S_IMODE(info.st_mode) != 0o600):
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != uid or stat.S_IMODE(info.st_mode) != 0o600:
             unclear.append("log_type_owner_or_mode")
         else:
+            facts["log_size"] = info.st_size
             fd = os.open(R(spec["log"]), os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
             with os.fdopen(fd, "rb") as handle:
-                opened = os.fstat(handle.fileno())
-                if not same_entry_snapshot(info, opened):
-                    unclear.append("log_changed_during_read")
-                elif (not stat.S_ISREG(opened.st_mode) or opened.st_uid != uid or opened.st_gid != gid
-                      or stat.S_IMODE(opened.st_mode) != 0o600):
-                    unclear.append("log_type_owner_or_mode")
-                else:
-                    facts["log_size"] = opened.st_size
-                    log = handle.read(LOG_LIMIT)
+                log = handle.read(LOG_LIMIT)
     except OSError:
         unclear.append("log_unavailable")
     start, end = log.find(START), log.rfind(END)
     facts.update(start=start >= 0, end=end >= 0 and end > start >= 0, innodb_started=INNODB_STARTED in log,
                  innodb_ended=INNODB_ENDED in log, errors=log.count(b"[ERROR]"))
+    missing = [n for n in REQUIRED_DIRS + REQUIRED_FILES if not os.path.lexists(os.path.join(datadir, n))]
+    for n in REQUIRED_DIRS + REQUIRED_FILES:
+        path = os.path.join(datadir, n)
+        if os.path.lexists(path):
+            mode = os.lstat(path).st_mode
+            if (stat.S_ISDIR(mode) if n in REQUIRED_DIRS else stat.S_ISREG(mode)) is not True:
+                unclear.append("required_entry_wrong_type")
     facts["missing"] = missing
     if unclear:
         return "UNCLEAR", sorted(set(unclear)), facts

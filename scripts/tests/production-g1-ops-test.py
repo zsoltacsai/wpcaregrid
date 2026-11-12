@@ -1752,6 +1752,19 @@ def chain(mode):
 reset()
 before = refusal(H._run_initializer, INST, REAL)
 out("real_run", before)
+unsafe_metadata = []
+for current, directories, files in os.walk(INST.datadir, followlinks=False):
+    for entry in directories + files:
+        path = os.path.join(current, entry)
+        info = os.lstat(path)
+        mode = stat.S_IMODE(info.st_mode)
+        is_dir, is_file = stat.S_ISDIR(info.st_mode), stat.S_ISREG(info.st_mode)
+        unsafe = (info.st_uid != UID or info.st_gid != GID or not (is_dir or is_file)
+                  or (is_dir and (mode & 0o007 or mode & 0o020 or mode & 0o700 != 0o700 or mode & 0o7000))
+                  or (is_file and (mode & 0o007 or mode & 0o020 or mode & 0o600 != 0o600 or mode & 0o7111)))
+        if unsafe and len(unsafe_metadata) < 50:
+            unsafe_metadata.append("%s:%d:%d:%04o" % (os.path.relpath(path, INST.datadir), info.st_uid, info.st_gid, mode))
+out("real_unsafe_metadata", ",".join(unsafe_metadata) or "none")
 out("real_proof", proof())
 out("real_diag", diag())
 out("real_processes", len(procs()))
