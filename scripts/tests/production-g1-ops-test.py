@@ -79,7 +79,7 @@ class ToolkitStaticTest(unittest.TestCase):
         for line in raw.decode("ascii").splitlines():
             digest, name = line.split("  ", 1)
             listed[name] = digest
-        actual = {p.name: sha(p.read_bytes()) for p in OPS.iterdir() if p.name != "SHA256SUMS"}
+        actual = {p.name: sha(p.read_bytes()) for p in OPS.iterdir() if p.is_file() and p.name != "SHA256SUMS"}
         self.assertEqual(listed, actual)
 
     def test_go54a_upgrade_is_pinned_to_the_current_installed_baseline_and_socket_lock_artifacts(self):
@@ -488,7 +488,7 @@ ad3e4f4ff4334056dd5d9bf0eada77b5bde16bb51d4209e6cac792aaca6d8d0d  go5p-fetch-pac
 
     def test_all_toolkit_sources_compile_and_are_lf_only(self):
         for path in OPS.iterdir():
-            if path.name == "SHA256SUMS":
+            if not path.is_file() or path.name == "SHA256SUMS":
                 continue
             self.assertNotIn(b"\r", path.read_bytes(), path.name)
             if path.suffix == ".py":

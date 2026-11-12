@@ -52,7 +52,10 @@ profiles, verifies the new static helper/configuration, and checks the snapshots
 again. It never starts or initializes MySQL, edits configuration, writes either
 datadir/log, or targets `mysql.service` or the vendor profile. Failures attempt a
 hash-checked rollback to the OLD five-file state and report whether rollback was
-verified. An interrupted journal or unknown file state stops for manual review.
+verified. A recognized interrupted journal is recovered (rollback for `prepared`
+or `replacing`; cleanup for `committed`) and the current invocation then stops
+for manual review. The operator must inspect the resulting state; any retry is a
+separate action. Unknown journal or file state also stops for manual recovery.
 
 The approved operator will first retrieve the fetch/transaction scripts from the
 exact reviewed merge SHA through the verified toolkit workflow and verify their

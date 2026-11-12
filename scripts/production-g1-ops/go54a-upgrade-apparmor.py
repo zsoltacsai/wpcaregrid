@@ -299,7 +299,7 @@ def recover_interrupted(runfn=run):
     if not os.path.lexists(JOURNAL):
         if os.path.lexists(JOURNAL + ".tmp"):
             raise Stop("journal_temporary_file_requires_manual_recovery")
-        return
+        return False
     raw = read_root_file(JOURNAL, 0o600)
     try:
         obj = json.loads(raw)
@@ -331,7 +331,7 @@ def recover_interrupted(runfn=run):
         dfd = os.open(LIBEXEC, os.O_RDONLY | os.O_DIRECTORY)
         try: os.fsync(dfd)
         finally: os.close(dfd)
-        return
+        return True
     for path in reversed(ORDER):
         if current[path] != OLD[path]:
             replace(path, backup[path], MODES[path])
@@ -343,6 +343,7 @@ def recover_interrupted(runfn=run):
     dfd = os.open(LIBEXEC, os.O_RDONLY | os.O_DIRECTORY)
     try: os.fsync(dfd)
     finally: os.close(dfd)
+    return True
 
 
 def read_targets():
@@ -378,7 +379,8 @@ def _transaction(package_dir, runfn=run, euid=None):
     require_dir(LIBEXEC, "libexec_directory_unsafe")
     require_dir(APPARMOR, "apparmor_directory_unsafe")
     unit_inactive(runfn)
-    recover_interrupted(runfn)
+    if recover_interrupted(runfn):
+        raise Stop("interrupted_transaction_recovered_manual_review_required")
     new_bytes = package_bytes(package_dir)
     compile_profiles(new_bytes, runfn)
     for path in ORDER:
