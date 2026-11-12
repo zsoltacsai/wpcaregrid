@@ -36,8 +36,8 @@ directory in place for read-only investigation; reruns get a new path.
 
 ```bash
 ( set -euo pipefail; umask 077
-  OPS_SHA=cc46e2a7c7bd827ed5c9dab51945ca68e6f30698
-  SUMS_SHA256=968ec69929b5d6517d57c7d458be300791978edc2969e1338656724af1625176
+  OPS_SHA=0951d9e829364296796a1d4acd303feef698cbc7
+  SUMS_SHA256=70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e
   [[ $OPS_SHA =~ ^[0-9a-f]{40}$ && $SUMS_SHA256 =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: pins malformed"; exit 1; }
   RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N4 -tx1 /dev/urandom | tr -d '[:space:]')"
   [[ $RUN_ID =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] || { echo "STOP: run id malformed"; exit 1; }
@@ -53,14 +53,14 @@ directory in place for read-only investigation; reruns get a new path.
                --max-filesize 2000000 --max-time 60 --output "$1" "$B/$1" </dev/null; }
   get SHA256SUMS || { echo "STOP: download failed: SHA256SUMS"; exit 1; }
   echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict - >/dev/null || { echo "STOP: SHA256SUMS hash mismatch"; exit 1; }
-  [ "$(wc -l < SHA256SUMS)" = 21 ] || { echo "STOP: manifest entry count"; exit 1; }
-  [ "$(awk '{print $2}' SHA256SUMS | LC_ALL=C sort -u | wc -l)" = 21 ] || { echo "STOP: duplicate manifest filename"; exit 1; }
+  [ "$(wc -l < SHA256SUMS)" = 23 ] || { echo "STOP: manifest entry count"; exit 1; }
+  [ "$(awk '{print $2}' SHA256SUMS | LC_ALL=C sort -u | wc -l)" = 23 ] || { echo "STOP: duplicate manifest filename"; exit 1; }
   while read -r digest name; do
     [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $digest =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: bad SHA256SUMS entry"; exit 1; }
     get "$name" || { echo "STOP: download failed: $name"; exit 1; }
   done < SHA256SUMS
   sha256sum -c --strict SHA256SUMS >/dev/null || { echo "STOP: file hash mismatch"; exit 1; }
-  [ "$(ls -A | wc -l)" = 22 ] || { echo "STOP: unexpected file count"; exit 1; }
+  [ "$(ls -A | wc -l)" = 24 ] || { echo "STOP: unexpected file count"; exit 1; }
   for f in *; do
     [[ -f "$f" && ! -L "$f" ]] || { echo "STOP: non-regular toolkit entry"; exit 1; }
     [ "$(stat -c '%u:%g:%a' -- "$f")" = "0:0:600" ] || { echo "STOP: toolkit file metadata"; exit 1; }
@@ -94,7 +94,7 @@ PY
   cd "$D"
   echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict - >/dev/null || { echo "STOP: promoted manifest hash mismatch"; exit 1; }
   sha256sum -c --strict SHA256SUMS >/dev/null || { echo "STOP: promoted file hash mismatch"; exit 1; }
-  [ "$(ls -A | wc -l)" = 22 ] || { echo "STOP: promoted file count"; exit 1; }
+  [ "$(ls -A | wc -l)" = 24 ] || { echo "STOP: promoted file count"; exit 1; }
   for f in *; do
     [[ -f "$f" && ! -L "$f" ]] || { echo "STOP: promoted non-regular entry"; exit 1; }
     [ "$(stat -c '%u:%g:%a' -- "$f")" = "0:0:600" ] || { echo "STOP: promoted file metadata"; exit 1; }
@@ -116,13 +116,14 @@ Preserve that incoming directory unchanged as recovery evidence. Do not resume i
 copy files out of it, delete it, or rename it. The GO-0 block above now creates a fresh
 directory named from a UTC timestamp and random nonce; it never uses the old fixed incoming
 path. It requires both the final destination and generated incoming path to be absent and
-not symlinks. Each run downloads all 21 files again from the pinned toolkit commit and
-does not overwrite or trust the 11 files in the preserved directory.
+not symlinks. Each run downloads all 23 files again from the commit pinned in the GO-0 block above
+(`0951d9e829364296796a1d4acd303feef698cbc7`) and does not overwrite or trust the 11
+files in the preserved directory.
 
 After a separate Owner GO, the exact root-console block above is the recovery procedure.
-It pins toolkit commit `cc46e2a7c7bd827ed5c9dab51945ca68e6f30698` and manifest SHA-256
-`968ec69929b5d6517d57c7d458be300791978edc2969e1338656724af1625176`, verifies 21 unique
-safe filenames including `GO53-HELPER-UPGRADE.md`, checks every file checksum, exact file
+It pins toolkit commit `0951d9e829364296796a1d4acd303feef698cbc7` and manifest SHA-256
+`70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`, verifies 23 unique
+safe filenames including the GO-5.4a tools, checks every file checksum, exact file
 count, regular-file type, `root:root 0600` file metadata, and `root:root 0700` directory
 metadata. Promotion uses Linux `renameat2(..., RENAME_NOREPLACE)` through libc, which performs
 an atomic rename only when the destination does not exist. Missing `renameat2`, any error,
@@ -404,13 +405,71 @@ proven for `PARTIAL` and `UNCLEAR`; STOP. Expected for the incident: production 
 1. Run the diagnostic. `PROVEN_COMPLETE` would allow `verify-install`/`preflight` and a later GO-5.4; `PARTIAL`/`UNCLEAR` stays STOP.
 2. Find out *why* the run stalled before any retry (denials in the diagnostic, then `journalctl -k` for the AppArmor profile, storage and memory limits). A retry
    without a cause is not approved.
-3. The fixed helper must be installed (replaces helper and manifest only, hash-pinned, like the earlier hotfixes) before `initialize` runs again; the installed
-   helper still has the 180 s blind timeout. That installer is a separate follow-up change.
+3. The fixed helper must be installed (hash-pinned) before `initialize` runs again.
+   The 180 s blind-timeout statement above is historical incident context, not a
+   current-host assertion: the GO-5.4a OLD pin (`27c7e1e6…`) already contains the
+   600 s timeout and process-group cleanup. Verify the live helper hash before any
+   action; an unknown hash is STOP. The GO-5.4a transaction installs a separately
+   reviewed helper revision but does not initialize or clean either datadir.
 4. A `PARTIAL` datadir contains only system tables created by the killed run (the instance never started, no application data). Cleaning it is a
    deliberate Owner decision with its own narrowly scoped, verified procedure (state `PARTIAL`, units inactive, no process, exact path, no symlink; it must
    also reset the instance error log to an empty `mysql:mysql 0600` file, because `initialize` refuses a non-empty log with `initialize_log_not_empty`); the helper and the
    toolkit contain no such step and never will remove the datadir on their own. Until then the datadir stays untouched and `initialize` is refused with `datadir_initialization_present`.
 5. GO-5.4 (start) and GO-5.5 stay HOLD; `mysql.service`, 3306, `/etc/mysql/my.cnf`, `/etc/apparmor.d/usr.sbin.mysqld` and the restore datadir are never touched.
+
+## GO-5.4a — socket-lock AppArmor hotfix (separate gate before GO-5.4 start)
+
+This gate installs the reviewed source package and updates only the three pinned G1
+helper artifacts and the two named G1 AppArmor profiles. It does not start MySQL,
+initialize/clean a datadir, change application files, or alter `mysql.service`,
+port 3306, or the vendor AppArmor profile. The helper change is part of the reviewed
+five-file transaction and must be included in review of the full diff.
+
+**No implicit execution authorization:** a separate exact-scope Owner GO is required
+for this host transaction. PR merge, green CI, or a matching OLD hash is not that GO.
+Do not chain this gate into GO-5.4 (MySQL start).
+
+Before execution, require and record all of the following:
+
+1. The GO-0 toolkit source is the exact reviewed PR #377 merge commit
+   `0951d9e829364296796a1d4acd303feef698cbc7` in protected primary, and GO-0
+   installed the toolkit fetched from that commit. This runbook may be a later
+   docs-only primary commit; verify that its pin still names the reviewed toolkit source.
+2. The exact-head required CI, AppArmor parser validation, independent Integration QA,
+   and AppSec reviews are PASS.
+3. A fresh read-only host inventory confirms the target host, all five exact OLD hashes
+   in `docs/PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md`, file owners/modes, both G1
+   units exactly `inactive`, both G1 profiles loaded in `enforce`, stable
+   `mysql.service` MainPID/vendor profile, and unchanged datadir/log fingerprints.
+   A unit state of `failed` is not `inactive`: STOP. Do not run `reset-failed`,
+   start, reload, or retry as part of this gate.
+4. No transaction, lock, unknown journal, or unrecognized temporary file is present.
+   A verified recoverable backup or provider snapshot must exist for the applicable host
+   data and files; record its location/metadata and integrity plus restore evidence without
+   reading secret payloads. Missing or unverified recovery evidence is HOLD.
+5. The fetch package and the updater validate their exact hashes, package ownership/modes,
+   regenerated profile hashes, and parser compile before the updater writes anything.
+
+Run from the approved root console only, after the separate GO:
+
+```bash
+bash "$OPS/go54a-fetch-package.sh" 0951d9e829364296796a1d4acd303feef698cbc7
+python3 -I -B "$OPS/go54a-upgrade-apparmor.py" /root/wpcg-go54a-0951d9e
+```
+
+The first command must report `G1_GO54A_DOWNLOAD=PASS`; the second must report
+`G1_GO54A_APPARMOR=PASS`. Any non-zero exit, STOP code, interrupted journal, hash,
+ownership/mode, service, policy, datadir, log, or backup-evidence mismatch stops the
+gate. Do not retry in the same invocation. On a transaction failure, accept only the
+tool's verified `ROLLED_BACK=yes`; `ROLLED_BACK=NO` means STOP for manual recovery.
+A recognized interrupted journal is recovered and then the invocation stops for
+manual review; do not chain recovery into a new update.
+If the updater reports `G1_GO54A_APPARMOR=PASS;NOTE=already_upgraded`, it did not perform a fresh transaction. Treat that as an unchanged-state report only: verify all five NEW hashes and every post-PASS invariant independently before recording the gate result. If the fetch leaves `/root/wpcg-go54a-0951d9e.incoming-UNVERIFIED`, preserve it and STOP; do not delete it or retry until a read-only inspection and a separate exact-scope Owner decision address that path.
+
+After PASS, independently record all five NEW hashes, exact modes/owners, both profile
+enforce states, unchanged `mysql.service` MainPID and vendor profile, and unchanged
+datadir/log fingerprints. GO-5.4 (one controlled start attempt) remains a separate
+gate with its own authorization and evidence.
 
 ## GO-5 — runtime preparation (each step is its own Owner gate)
 
