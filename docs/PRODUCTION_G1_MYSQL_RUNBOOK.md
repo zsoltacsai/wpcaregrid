@@ -47,7 +47,7 @@ staging directory and renames it only after every file matched.
   get SHA256SUMS || { echo "STOP: download failed: SHA256SUMS"; exit 1; }
   echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict - >/dev/null || { echo "STOP: SHA256SUMS hash mismatch"; exit 1; }
   while read -r digest name; do
-    [[ $name =~ ^[a-z0-9][a-z0-9._-]*$ && $digest =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: bad SHA256SUMS entry"; exit 1; }
+    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $digest =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: bad SHA256SUMS entry"; exit 1; }
     get "$name" || { echo "STOP: download failed: $name"; exit 1; }
   done < SHA256SUMS
   sha256sum -c --strict SHA256SUMS >/dev/null || { echo "STOP: file hash mismatch"; exit 1; }
@@ -58,6 +58,44 @@ staging directory and renames it only after every file matched.
 ```
 
 From here on `OPS=/root/wpcg-g1-ops-<sha7>`.
+
+## GO-0 recovery after an interrupted download (Owner GO required; plan only)
+
+The Owner's read-only VPS inspection found `/root/wpcg-g1-ops-cc46e2a.incoming-UNVERIFIED`
+as `root:root 0700`, with the pinned manifest hash correct, 11 of 21 listed toolkit files
+present and checksum-correct, 10 missing, and no extra files. The final
+`/root/wpcg-g1-ops-cc46e2a` directory was absent. This is an incomplete toolkit and remains
+**HOLD**; it is not installable or usable.
+
+Preserve that incoming directory unchanged as recovery evidence. Do not resume into it,
+copy files out of it, delete it, or rename it. The GO-0 block above deliberately stops if
+either its incoming path or final destination exists. After separate Owner GO, prefer a
+new, uniquely named incoming directory for the same pinned toolkit rather than resuming
+the partial download. Use a UTC run identifier plus a random nonce in the new incoming
+directory name; require the path to be absent and not a symlink before creating it. Do not
+reuse a prior run identifier. Download all files anew from the pinned toolkit commit; do
+not overwrite or trust the 11 files in the preserved directory.
+
+The fixed `W="$D.incoming-UNVERIFIED"` assignment above must not be used for this retry.
+Before any later authorized execution, prepare and review an invocation that binds `W` to
+the new unique path while retaining the same final-destination/incoming-path absence
+checks, manifest pin, checksum verification, exact-count check, restrictive metadata, and
+no-replace promotion. Do not hand-edit commands on the VPS.
+
+Promote the new directory only after the manifest SHA-256 equals
+`968ec69929b5d6517d57c7d458be300791978edc2969e1338656724af1625176`, its 21 entries are
+unique and pass the safe-name/digest validation above, all 21 downloaded files pass
+`sha256sum -c --strict`, and the directory contains exactly those 21 files plus
+`SHA256SUMS`. Verify root ownership, regular-file types, and the required restrictive
+modes before promotion. The final destination must still be absent; promotion must not
+replace an existing path. Keep the original incomplete directory untouched after a
+successful fresh download as well. Mark `VERIFIED_COMPLETE` only after every check passes.
+
+**STOP** on an existing/symlinked new incoming path or final destination, an invalid or
+duplicate manifest entry, any checksum or pinned-manifest mismatch, a missing/extra file,
+wrong type/owner/mode, failed download, interrupted command, or failed promotion. Preserve
+all directories for read-only investigation; cleanup or another GO-0 attempt requires a
+separate Owner decision. This recovery plan authorizes no root command or GO-0 execution.
 
 ## GO-1 — preflight of the installed #325 state (read-only, done before; repeatable)
 

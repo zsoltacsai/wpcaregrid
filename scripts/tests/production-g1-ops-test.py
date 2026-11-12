@@ -81,6 +81,82 @@ class ToolkitStaticTest(unittest.TestCase):
         actual = {p.name: sha(p.read_bytes()) for p in OPS.iterdir() if p.name != "SHA256SUMS"}
         self.assertEqual(listed, actual)
 
+    def test_go0_pinned_manifest_accepts_uppercase_names_and_rejects_partial_downloads(self):
+        toolkit_commit = "cc46e2a7c7bd827ed5c9dab51945ca68e6f30698"
+        manifest_pin = "968ec69929b5d6517d57c7d458be300791978edc2969e1338656724af1625176"
+        manifest = subprocess.run(
+            ["git", "show", f"{toolkit_commit}:scripts/production-g1-ops/SHA256SUMS"],
+            cwd=SCRIPTS.parent, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        ).stdout
+        self.assertEqual(sha(manifest), manifest_pin)
+        entries = [line.split("  ", 1) for line in manifest.decode("ascii").splitlines()]
+        self.assertEqual(len(entries), 21)
+        self.assertEqual(len({name for _, name in entries}), 21)
+
+        runbook = (SCRIPTS.parent / "docs/PRODUCTION_G1_MYSQL_RUNBOOK.md").read_text(encoding="utf-8")
+        name_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+        self.assertIn(manifest_pin, runbook)
+        self.assertIn("$name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$", runbook)
+        self.assertIn('echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict -', runbook)
+        checksum_command = "sha256sum -c --strict SHA256SUMS"
+        self.assertIn(checksum_command, runbook)
+        shell_name_check = 'name=$1; [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]'
+        count_guard = next(
+            line.strip().split(" || ", 1)[0]
+            for line in runbook.splitlines()
+            if line.strip().startswith('[ "$(ls -A | wc -l)" = "$(( $(wc -l < SHA256SUMS) + 1 ))" ]')
+        )
+
+        parsed = []
+        for digest, name in entries:
+            with self.subTest(name=name):
+                self.assertRegex(digest, r"^[0-9a-f]{64}$")
+                self.assertRegex(name, name_pattern)
+                self.assertEqual(subprocess.run(
+                    ["bash", "-c", shell_name_check, "bash", name], check=False,
+                ).returncode, 0)
+                source = subprocess.run(
+                    ["git", "show", f"{toolkit_commit}:scripts/production-g1-ops/{name}"],
+                    cwd=SCRIPTS.parent, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+                ).stdout
+                self.assertEqual(sha(source), digest)
+                parsed.append((name, source))
+        self.assertIn("GO53-HELPER-UPGRADE.md", [name for _, name in entries])
+
+        for bad_name in ("../SHA256SUMS", "a/../b", "/etc/passwd", "-leading", "", "a b", "a\\b", ".hidden"):
+            with self.subTest(bad_name=bad_name):
+                self.assertIsNone(name_pattern.fullmatch(bad_name))
+                self.assertNotEqual(subprocess.run(
+                    ["bash", "-c", shell_name_check, "bash", bad_name], check=False,
+                ).returncode, 0)
+        for bad_digest in ("g" * 64, "0" * 63, "0" * 65, "../" + "0" * 61):
+            with self.subTest(bad_digest=bad_digest):
+                self.assertIsNone(re.fullmatch(r"[0-9a-f]{64}", bad_digest))
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "SHA256SUMS").write_bytes(manifest)
+            for name, content in parsed:
+                (root / name).write_bytes(content)
+            complete = subprocess.run(
+                ["sha256sum", "-c", "--strict", "SHA256SUMS"], cwd=root,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            self.assertEqual(complete.returncode, 0, complete.stderr.decode("utf-8", "replace"))
+            self.assertEqual(subprocess.run(["bash", "-c", count_guard], cwd=root, check=False).returncode, 0)
+
+            (root / "GO53-HELPER-UPGRADE.md").unlink()
+            partial = subprocess.run(
+                ["sha256sum", "-c", "--strict", "SHA256SUMS"], cwd=root,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            self.assertNotEqual(partial.returncode, 0)
+            self.assertNotEqual(subprocess.run(["bash", "-c", count_guard], cwd=root, check=False).returncode, 0)
+
+            (root / "GO53-HELPER-UPGRADE.md").write_bytes(dict(parsed)["GO53-HELPER-UPGRADE.md"])
+            (root / "unexpected-extra").write_bytes(b"unexpected")
+            self.assertNotEqual(subprocess.run(["bash", "-c", count_guard], cwd=root, check=False).returncode, 0)
+
     def test_go53_nested_datadir_owner_group_mode_and_symlink_policy(self):
         diagnostic = load(OPS / "go53-init-state.py", "go53_init_state_policy")
         helper = load(SCRIPTS / "production-g1-mysql.py", "go53_init_state_helper_policy")
