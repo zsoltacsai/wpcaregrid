@@ -1752,9 +1752,9 @@ def chain(mode):
 reset()
 before = refusal(H._run_initializer, INST, REAL)
 out("real_run", before)
-unsafe_metadata = []
-for current, directories, files in os.walk(INST.datadir, followlinks=False):
-    for entry in directories + files:
+unsafe_metadata = {}
+for current, directories, names in os.walk(INST.datadir, followlinks=False):
+    for entry in directories + names:
         path = os.path.join(current, entry)
         info = os.lstat(path)
         mode = stat.S_IMODE(info.st_mode)
@@ -1762,9 +1762,11 @@ for current, directories, files in os.walk(INST.datadir, followlinks=False):
         unsafe = (info.st_uid != UID or info.st_gid != GID or not (is_dir or is_file)
                   or (is_dir and (mode & 0o007 or mode & 0o020 or mode & 0o700 != 0o700 or mode & 0o7000))
                   or (is_file and (mode & 0o007 or mode & 0o020 or mode & 0o600 != 0o600 or mode & 0o7111)))
-        if unsafe and len(unsafe_metadata) < 50:
-            unsafe_metadata.append("%s:%d:%d:%04o" % (os.path.relpath(path, INST.datadir), info.st_uid, info.st_gid, mode))
-out("real_unsafe_metadata", ",".join(unsafe_metadata) or "none")
+        if unsafe:
+            kind = "dir" if is_dir else "file" if is_file else "special"
+            key = "%s:%d:%d:%04o" % (kind, info.st_uid, info.st_gid, mode)
+            unsafe_metadata[key] = unsafe_metadata.get(key, 0) + 1
+out("real_unsafe_metadata", ",".join("%s*%d" % item for item in sorted(unsafe_metadata.items())) or "none")
 out("real_proof", proof())
 out("real_diag", diag())
 out("real_processes", len(procs()))
