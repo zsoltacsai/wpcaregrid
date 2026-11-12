@@ -784,8 +784,10 @@ class DryRunAgainstRealMysqlTest(unittest.TestCase):
     def run_dryrun(self, shared, *, package=None, extra_script=""):
         files = {
             "/etc/mysql/my.cnf": b"!includedir /etc/mysql/conf.d/\n!includedir /etc/mysql/mysql.conf.d/\n",
+            # This is a historical GO-3 tool. Keep its package fixture pinned to
+            # the GO-5.2c contract it accepts, even as the canonical source evolves.
             "/pkg/production_g1_mysql_contract.py": package if package is not None else
-                (SCRIPTS / "production_g1_mysql_contract.py").read_bytes(),
+                (AP_PKG / "production_g1_mysql_contract.py").read_bytes(),
             "/ops/go3-effective-config-dryrun.py": (OPS / "go3-effective-config-dryrun.py").read_bytes(),
         }
         files.update({f"/etc/mysql/mysql.conf.d/{name}": body.encode() for name, body in shared.items()})
@@ -821,7 +823,7 @@ class DryRunAgainstRealMysqlTest(unittest.TestCase):
         out = self.run_dryrun({"mysqld.cnf": self.UBUNTU, "zz-wpcaregrid-production.cnf": "x"})
         self.assertIn("G1_GO3_DRYRUN=STOP;CODE=g1_option_file_already_present", out)
         out = self.run_dryrun({"mysqld.cnf": self.UBUNTU},
-                              package=(SCRIPTS / "production_g1_mysql_contract.py").read_bytes() + b"#")
+                              package=(AP_PKG / "production_g1_mysql_contract.py").read_bytes() + b"#")
         self.assertIn("G1_GO3_DRYRUN=STOP;CODE=contract_file_hash_mismatch", out)
 
 
@@ -1796,7 +1798,8 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
 
     @staticmethod
     def new_state():
-        generated = CONTRACT.artifact_files()
+        historical_contract = load(AP_PKG / "production_g1_mysql_contract.py", "historical_go52c_contract_state")
+        generated = historical_contract.artifact_files()
         parts = [(AP_PKG / "production_g1_mysql_contract.py").read_bytes(), (AP_PKG / "production-g1-mysql-manifest.json").read_bytes(),
                  generated["/etc/apparmor.d/wpcaregrid-mysql-production"], generated["/etc/apparmor.d/wpcaregrid-mysql-production-restore"]]
         return " ".join(f"{sha(data)[:8]}:644:0:0" for data in parts) + " tmp=[]"
@@ -1890,7 +1893,9 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
         self.assertEqual(upgrade.HELPER_SHA, HF2_HELPER)
         self.assertEqual(upgrade.NEW, {p: ENGINE.EXPECTED["328ap"][p] for p in upgrade.NEW})
         self.assertEqual(set(upgrade.NEW), set(upgrade.OLD))
-        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_contract.py"], sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes()))
+        # GO-5p is a historical, hash-pinned transition. Its NEW package must
+        # remain tied to the frozen GO-5.2c fixture, not the evolving generator.
+        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_contract.py"], AP_CONTRACT)
         self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_manifest.json"], AP_MANIFEST)
         self.assertEqual(ENGINE.EXPECTED["328ap"][libexec + "wpcaregrid-g1-mysql.py"], upgrade.HELPER_SHA)
         changed = {p for p in ENGINE.EXPECTED["328h2"] if ENGINE.EXPECTED["328h2"][p] != ENGINE.EXPECTED["328ap"][p]}
