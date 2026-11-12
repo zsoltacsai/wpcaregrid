@@ -431,8 +431,10 @@ Do not chain this gate into GO-5.4 (MySQL start).
 
 Before execution, require and record all of the following:
 
-1. The exact reviewed merge commit and this runbook are the protected-primary source;
-   GO-0 has installed the toolkit fetched from that same commit.
+1. The GO-0 toolkit source is the exact reviewed PR #377 merge commit
+   `0951d9e829364296796a1d4acd303feef698cbc7` in protected primary, and GO-0
+   installed the toolkit fetched from that commit. This runbook may be a later
+   docs-only primary commit; verify that its pin still names the reviewed toolkit source.
 2. The exact-head required CI, AppArmor parser validation, independent Integration QA,
    and AppSec reviews are PASS.
 3. A fresh read-only host inventory confirms the target host, all five exact OLD hashes
