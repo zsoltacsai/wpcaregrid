@@ -22,6 +22,9 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import stat
+import types
+from unittest import mock
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -77,6 +80,114 @@ class ToolkitStaticTest(unittest.TestCase):
             listed[name] = digest
         actual = {p.name: sha(p.read_bytes()) for p in OPS.iterdir() if p.name != "SHA256SUMS"}
         self.assertEqual(listed, actual)
+
+    def test_go0_runbook_accepts_the_complete_pinned_manifest_and_rejects_unsafe_entries(self):
+        pinned = "cc46e2a7c7bd827ed5c9dab51945ca68e6f30698"
+        done = subprocess.run(["git", "show", f"{pinned}:scripts/production-g1-ops/SHA256SUMS"],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        self.assertEqual(sha(done.stdout), "968ec69929b5d6517d57c7d458be300791978edc2969e1338656724af1625176")
+        manifests = [done.stdout, (OPS / "SHA256SUMS").read_bytes()]
+        runbook = (SCRIPTS.parent / "docs/PRODUCTION_G1_MYSQL_RUNBOOK.md").read_text(encoding="utf-8")
+        self.assertIn("$name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$", runbook)
+        self.assertIn('echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict -', runbook)
+        self.assertIn("sha256sum -c --strict SHA256SUMS", runbook)
+        valid_name = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+        for manifest in manifests:
+            entries = manifest.decode("ascii").splitlines()
+            self.assertTrue(entries)
+            for entry in entries:
+                digest, name = entry.split("  ", 1)
+                with self.subTest(name=name):
+                    self.assertRegex(digest, r"^[0-9a-f]{64}$")
+                    self.assertRegex(name, valid_name)
+            self.assertIn("GO53-HELPER-UPGRADE.md", [line.split("  ", 1)[1] for line in entries])
+        for bad_name in ("../SHA256SUMS", "a/../b", "/etc/passwd", "-leading", "", "a b", "a\\b"):
+            with self.subTest(bad_name=bad_name):
+                self.assertIsNone(valid_name.fullmatch(bad_name))
+        for bad_digest in ("g" * 64, "0" * 63, "0" * 65, "../" + "0" * 61):
+            with self.subTest(bad_digest=bad_digest):
+                self.assertIsNone(re.fullmatch(r"[0-9a-f]{64}", bad_digest))
+
+    def test_go53_nested_datadir_owner_group_mode_and_symlink_policy(self):
+        diagnostic = load(OPS / "go53-init-state.py", "go53_init_state_policy")
+        uid, gid = 1000, 1000
+        def entry(kind, mode, *, owner=uid, group=gid):
+            return types.SimpleNamespace(st_mode=kind | mode, st_uid=owner, st_gid=group)
+        self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFDIR, 0o750), uid, gid), [])
+        self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFREG, 0o640), uid, gid), [])
+        self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFREG, 0o640, group=0), uid, gid),
+                         ["foreign_group_in_datadir"])
+        self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFREG, 0o644), uid, gid),
+                         ["unsafe_mode_in_datadir"])
+        self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFDIR, 0o755), uid, gid),
+                         ["unsafe_mode_in_datadir"])
+        self.assertEqual(diagnostic.datadir_entry_problems(entry(stat.S_IFLNK, 0o777), uid, gid),
+                         ["symlink_in_datadir"])
+
+    def test_go53_descriptor_walks_fail_closed_on_directory_swap_to_symlink(self):
+        diagnostic = load(OPS / "go53-init-state.py", "go53_init_state_swap_policy")
+        helper = load(SCRIPTS / "production-g1-mysql.py", "go53_initializer_swap_policy")
+        uid, gid = os.getuid(), os.getgid()
+
+        def run_race(scanner):
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / "data"
+                root.mkdir(mode=0o750)
+                child = root / "mysql"
+                child.mkdir(mode=0o750)
+                payload = child / "payload"
+                payload.write_bytes(b"x")
+                payload.chmod(0o640)
+                saved = root / "mysql-race-saved"
+                root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                original_open = os.open
+                swapped = False
+
+                def racing_open(path, flags, *args, **kwargs):
+                    nonlocal swapped
+                    if path == "mysql" and kwargs.get("dir_fd") is not None and not swapped:
+                        os.rename(child, saved)
+                        os.symlink("/etc", child)
+                        swapped = True
+                    return original_open(path, flags, *args, **kwargs)
+
+                try:
+                    with mock.patch.object(os, "open", side_effect=racing_open):
+                        result = scanner(root_fd, uid, gid)
+                finally:
+                    os.close(root_fd)
+                    if child.is_symlink():
+                        child.unlink()
+                    if saved.is_dir():
+                        os.rename(saved, child)
+                self.assertTrue(swapped)
+                return result
+
+        reasons = []
+        self.assertEqual(run_race(lambda fd, uid, gid: diagnostic.scan_datadir_fd(fd, uid, gid, reasons)), 0)
+        self.assertIn("entry_unreadable", reasons)
+
+        class WalkRefused(Exception):
+            pass
+
+        with self.assertRaisesRegex(WalkRefused, "datadir_entry"):
+            run_race(lambda fd, uid, gid: helper._walk_initialized_tree(
+                fd, uid, gid, lambda token: (_ for _ in ()).throw(WalkRefused(token))))
+
+    def test_go53_package_directory_requires_root_group_and_exact_private_mode(self):
+        upgrade = load(OPS / "go53-upgrade-helper.py", "go53_package_directory_policy")
+        helper_hash = sha((SCRIPTS / "production-g1-mysql.py").read_bytes())
+        manifest_hash = sha((SCRIPTS / "production-g1-mysql-manifest.json").read_bytes())
+        self.assertEqual(upgrade.NEW[upgrade.HELPER], helper_hash)
+        self.assertEqual(upgrade.NEW[upgrade.MANIFEST], manifest_hash)
+        def metadata(kind=stat.S_IFDIR, mode=0o700, owner=0, group=0):
+            return types.SimpleNamespace(st_mode=kind | mode, st_uid=owner, st_gid=group)
+        with mock.patch.object(upgrade.os, "lstat", return_value=metadata()):
+            upgrade.check_package_dir("/fixture/pkg")
+        for bad in (metadata(owner=1), metadata(group=1), metadata(mode=0o750), metadata(kind=stat.S_IFLNK)):
+            with self.subTest(metadata=bad), mock.patch.object(upgrade.os, "lstat", return_value=bad):
+                with self.assertRaisesRegex(upgrade.Stop, "package_directory_owner_or_mode_invalid"):
+                    upgrade.check_package_dir("/fixture/pkg")
 
     def test_all_toolkit_sources_compile_and_are_lf_only(self):
         for path in OPS.iterdir():
@@ -1702,6 +1813,10 @@ mutation("missing_sys_dir", lambda: shutil.rmtree(INST.datadir + "/sys"))
 mutation("symlinked_ibdata", lambda: (os.unlink(INST.datadir + "/ibdata1"), os.symlink("/etc/passwd", INST.datadir + "/ibdata1")))
 mutation("symlink_elsewhere", lambda: os.symlink("/etc/passwd", INST.datadir + "/extra-link"))
 mutation("foreign_owner_file", lambda: os.chown(INST.datadir + "/ibdata1", 0, GID))
+mutation("foreign_group_file", lambda: os.chown(INST.datadir + "/ibdata1", UID, 0))
+mutation("world_readable_file", lambda: os.chmod(INST.datadir + "/ibdata1", 0o644))
+mutation("foreign_group_directory", lambda: os.chown(INST.datadir + "/mysql", UID, 0))
+mutation("world_accessible_directory", lambda: os.chmod(INST.datadir + "/mysql", 0o755))
 mutation("datadir_mode_755", lambda: os.chmod(INST.datadir, 0o755))
 mutation("fifo_in_datadir", lambda: os.mkfifo(INST.datadir + "/pipe"))
 def no_end():
@@ -1714,6 +1829,7 @@ def only_end():
 mutation("log_without_start_marker", only_end)
 mutation("log_error_line", lambda: open(INST.log_file, "ab").write(b"2026-01-01T00:00:00.000000Z 0 [ERROR] [MY-000000] [Server] boom" + NL.encode()))
 mutation("log_mode_644", lambda: os.chmod(INST.log_file, 0o644))
+mutation("log_foreign_group", lambda: os.chown(INST.log_file, UID, 0))
 mutation("socket_marker", lambda: open(INST.socket, "w").close())
 mutation("pid_marker", lambda: open(INST.pid_file, "w").close())
 def running():
@@ -1724,6 +1840,32 @@ def init_running():
     subprocess.Popen([sys.executable, "-c", FAKE_CHILD, SUFFIX, "--initialize"], start_new_session=True)
     time.sleep(0.5)
 mutation("initializer_running", init_running)
+
+def swapped_child_result(check):
+    restore()
+    target = INST.datadir + "/mysql"
+    saved = INST.datadir + "/mysql-race-saved"
+    if os.path.lexists(saved): shutil.rmtree(saved)
+    original_open = os.open
+    swapped = [False]
+    def racing_open(path, flags, *args, **kwargs):
+        if path == "mysql" and kwargs.get("dir_fd") is not None and not swapped[0]:
+            os.rename(target, saved)
+            os.symlink("/etc", target)
+            swapped[0] = True
+        return original_open(path, flags, *args, **kwargs)
+    os.open = racing_open
+    try:
+        result = check()
+    finally:
+        os.open = original_open
+        if os.path.islink(target): os.unlink(target)
+        if os.path.isdir(saved): os.rename(saved, target)
+    return result + " | swap=%s" % ("yes" if swapped[0] else "NO")
+
+out("race_proof", swapped_child_result(proof))
+out("race_diag", swapped_child_result(diag))
+restore()
 
 # ---- 3. partial datadir like the VPS one: the real initializer stopped by the timeout --------------------------
 reset()
@@ -1918,15 +2060,20 @@ class InitializerRecoveryTest(unittest.TestCase):
             "missing_undo": f"proof={P} | diag=UNCLEAR:end_marker_but_required_entries_missing",
             "missing_mysql_ibd": f"proof={P} | diag=UNCLEAR:end_marker_but_required_entries_missing",
             "missing_sys_dir": f"proof={P} | diag=UNCLEAR:end_marker_but_required_entries_missing",
-            "symlinked_ibdata": f"proof={P} | diag=UNCLEAR:foreign_owner_in_datadir,required_entry_wrong_type,symlink_in_datadir",
-            "symlink_elsewhere": f"proof={P} | diag=UNCLEAR:foreign_owner_in_datadir,symlink_in_datadir",
+            "symlinked_ibdata": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir,foreign_owner_in_datadir,required_entry_wrong_type,symlink_in_datadir",
+            "symlink_elsewhere": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir,foreign_owner_in_datadir,symlink_in_datadir",
             "foreign_owner_file": f"proof={P} | diag=UNCLEAR:foreign_owner_in_datadir",
+            "foreign_group_file": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir",
+            "world_readable_file": f"proof={P} | diag=UNCLEAR:unsafe_mode_in_datadir",
+            "foreign_group_directory": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir",
+            "world_accessible_directory": f"proof={P} | diag=UNCLEAR:unsafe_mode_in_datadir",
             "datadir_mode_755": "proof=managed_directory_mode_invalid | diag=UNCLEAR:datadir_owner_or_mode",
-            "fifo_in_datadir": f"proof={P} | diag=UNCLEAR:foreign_owner_in_datadir,special_file_in_datadir",
+            "fifo_in_datadir": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir,foreign_owner_in_datadir,special_file_in_datadir",
             "log_without_end_marker": f"proof={P} | diag=PARTIAL:log_end_marker_missing",
             "log_without_start_marker": f"proof={P} | diag=UNCLEAR:datadir_not_empty_but_log_has_no_start_marker",
             "log_error_line": f"proof={P} | diag=UNCLEAR:end_marker_but_error_lines",
             "log_mode_644": f"proof={P} | diag=UNCLEAR:log_type_owner_or_mode",
+            "log_foreign_group": f"proof={P} | diag=UNCLEAR:log_type_owner_or_mode",
             "socket_marker": f"proof={P} | diag=UNCLEAR:runtime_marker_present",
             "pid_marker": f"proof={P} | diag=UNCLEAR:runtime_marker_present",
             "instance_process_running": f"proof={P} | diag=UNCLEAR:instance_process_present",
@@ -1935,6 +2082,10 @@ class InitializerRecoveryTest(unittest.TestCase):
         for name, value in expected.items():
             with self.subTest(name):
                 self.assertEqual(self.get("mut_" + name), value)
+
+    def test_directory_swapped_to_symlink_between_metadata_check_and_open_fails_closed(self):
+        self.assertEqual(self.get("race_proof"), f"{self.PROOF} | swap=yes")
+        self.assertEqual(self.get("race_diag"), "UNCLEAR:entry_unreadable | swap=yes")
 
     def test_only_a_proven_complete_datadir_is_ever_called_complete(self):
         for name, value in self.r.items():

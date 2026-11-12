@@ -47,7 +47,7 @@ staging directory and renames it only after every file matched.
   get SHA256SUMS || { echo "STOP: download failed: SHA256SUMS"; exit 1; }
   echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict - >/dev/null || { echo "STOP: SHA256SUMS hash mismatch"; exit 1; }
   while read -r digest name; do
-    [[ $name =~ ^[a-z0-9][a-z0-9._-]*$ && $digest =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: bad SHA256SUMS entry"; exit 1; }
+    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $digest =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: bad SHA256SUMS entry"; exit 1; }
     get "$name" || { echo "STOP: download failed: $name"; exit 1; }
   done < SHA256SUMS
   sha256sum -c --strict SHA256SUMS >/dev/null || { echo "STOP: file hash mismatch"; exit 1; }
@@ -294,6 +294,7 @@ MySQL. GO-5.3 stays a separate Owner approval.
 * success needs proof (`initialize_completion_not_proven` otherwise, with `INITIALIZE_PROOF_MISSING=<token>`): exit 0, the exact datadir
   contents of a finished initialization (no symlink/special file/foreign owner anywhere in the tree), the server's own start line followed by its end
   line in the error log (never printed: it contains the generated root password), no `[ERROR]` line, log `mysql:mysql 0600`, no process, no socket/pid file;
+  every nested entry must also be `mysql:mysql`; directories require owner `rwx`, files owner `rw`, and neither may grant `other` access, group write, or special mode bits (group read/execute is permitted for MySQL's own group);
 * a datadir that already holds initialization artefacts is refused with `datadir_initialization_present` (other content: `datadir_not_empty`),
   so an accidental second initialization is impossible. Nothing is ever deleted, cleaned or restarted by the helper.
 

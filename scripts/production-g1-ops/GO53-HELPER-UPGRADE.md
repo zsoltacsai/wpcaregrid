@@ -2,11 +2,12 @@
 
 `go53-upgrade-helper.py` replaces only the installed initializer helper and its manifest. Supply the repository's verified four-file package directory: `production-g1-mysql.py`, `production_g1_mysql_contract.py`, `production-g1-mysql-manifest.json`, and `SHA256SUMS`. The checksum file must contain exactly the three pinned entries for helper, contract, and manifest. The installer independently checks the package contract against its pin but never installs it. It requires the exact pinned pre-upgrade or post-upgrade hashes, unchanged installed contract and both AppArmor profile hashes, inactive G1 units, and a stable `mysql.service` MainPID. It fingerprints both instance datadirs and their logs before and after the operation. No MySQL command, service start, initialization, AppArmor reload, or datadir write is part of the transaction.
 
-Recreate that package from the reviewed #349 merge commit in a trusted repository checkout (run this as the unprivileged package preparer, not on the VPS):
+Recreate the package from the reviewed merge commit named by the GO-5.3 remediation release handover in a trusted repository checkout as an unprivileged preparer, not on the VPS. The generated package is preparer-owned and is not yet an acceptable input to the root helper. When a separate Owner GO later authorizes the helper upgrade, the exact four verified files must be transferred into a root-console-created package directory owned by `root:root`, mode `0700`; each package file must be a regular, non-symlink file owned by `root:root`, mode `0600`. The helper enforces these requirements before inspecting host state. This corrects the previous mismatch between the unprivileged preparation instructions and the helper's root-owned package assumption.
 
 ```sh
 set -eu
-commit=4e276b13adbf1dc6b1f2b7b92bed2ea4c34e4ac0
+umask 077
+commit=<40-hex remediation merge commit from the release handover>
 pkg="$PWD/go53-helper-package"
 mkdir -m 0700 "$pkg"
 git show "$commit:scripts/production-g1-mysql.py" > "$pkg/production-g1-mysql.py"
