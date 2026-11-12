@@ -1,5 +1,5 @@
 """Isolated transaction tests; all paths are temporary and subprocesses are faked."""
-import base64, contextlib, fcntl, hashlib, importlib.util, io, json, os, signal, sys, tempfile, threading, time, types, unittest
+import base64, contextlib, fcntl, hashlib, importlib.util, io, json, os, re, signal, sys, tempfile, threading, time, types, unittest
 from pathlib import Path
 
 SRC=Path(__file__).parents[1]/'production-g1-ops'/'go53-upgrade-helper.py'
@@ -64,10 +64,12 @@ class TxTests(unittest.TestCase):
     source.chmod(0o600)
  def test_package_files_require_root_group(self):
   source=self.pkg/go.NAMES[go.HELPER];os.chown(source,0,1)
-  with self.assertRaisesRegex(go.Stop,'owner_invalid:production-g1-mysql.py'):self.install()
+  expected=r'^owner_invalid:'+re.escape(go.NAMES[go.HELPER])+r'$'
+  with self.assertRaisesRegex(go.Stop,expected):self.install()
  def test_package_files_require_root_owner(self):
   source=self.pkg/go.NAMES[go.HELPER];os.chown(source,1,0)
-  with self.assertRaisesRegex(go.Stop,'owner_invalid:production-g1-mysql.py'):self.install()
+  expected=r'^owner_invalid:'+re.escape(go.NAMES[go.HELPER])+r'$'
+  with self.assertRaisesRegex(go.Stop,expected):self.install()
  def test_package_symlink_is_rejected_before_any_host_read(self):
   source=self.pkg/go.NAMES[go.HELPER];source.unlink();source.symlink_to(self.files[0])
   with self.assertRaisesRegex(go.Stop,'package_entry_invalid'):self.install()
