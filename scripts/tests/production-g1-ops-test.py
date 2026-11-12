@@ -1973,7 +1973,7 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
         self.assertEqual(re.findall(r"(?m)^KERNEL_PROFILES=(.*)", code), ["/sys/kernel/security/apparmor/profiles"])
         self.assertEqual(re.findall(r"(?m)^HELPER_PIN=([0-9a-f]{64})", code), [HF2_HELPER])
         self.assertEqual(re.findall(r"(?m)^CONTRACT_OLD=([0-9a-f]{64})", code), [HF2_CONTRACT])
-        self.assertEqual(re.findall(r"(?m)^CONTRACT_NEW=([0-9a-f]{64})", code), [sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())])
+        self.assertEqual(re.findall(r"(?m)^CONTRACT_NEW=([0-9a-f]{64})", code), [AP_CONTRACT])
         self.assertEqual(re.findall(r"(?m)^PACKAGE_SUMS=([0-9a-f]{64})", code), [AP_SUMS])
 
     # ---- confined probe --------------------------------------------------------------------------------------
