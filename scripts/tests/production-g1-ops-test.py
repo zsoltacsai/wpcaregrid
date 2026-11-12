@@ -1673,7 +1673,7 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
 
 
 INIT_DRIVER = r"""
-import contextlib, importlib.util, io, os, pwd, grp, shutil, signal, subprocess, sys, threading, time
+import contextlib, importlib.util, io, os, pwd, grp, shutil, signal, stat, subprocess, sys, threading, time
 sys.dont_write_bytecode = True
 NL = chr(10)
 spec = importlib.util.spec_from_file_location("g1h", "/hp/production-g1-mysql.py")
