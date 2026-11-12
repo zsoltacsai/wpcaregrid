@@ -55,7 +55,7 @@ G1_ARTIFACTS = {
     "/etc/systemd/system/mysql@wpcaregrid-production-restore.service.d/90-wpcaregrid-g1.conf": "d5df1ab7132248defe4c529afedb7517d002da73295b98ad87aa50a6ffc9e8ad",
     "/etc/systemd/system/mysql@wpcaregrid-production.service.d/90-wpcaregrid-g1.conf": "644e98059d68462b66a575034b5fdfbb4dbc037569f2970ab7dfa7bdccecc017",
     "/usr/local/libexec/production_g1_mysql_contract.py": "270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f",
-    "/usr/local/libexec/wpcaregrid-g1-mysql.py": "27c7e1e6ba8536f7f64e9a4bd53ed31fe846678ff05b0a051ca2ca7abe705e1b",
+    "/usr/local/libexec/wpcaregrid-g1-mysql.py": "9ff1b969fa2371d3967c15ff9f6fcf4553ecf5fcda2b039b46e924d885bbf274",
 }
 SUDOERS_LINE = re.compile(
     r"deploy-staging-next ALL=\(root\) NOPASSWD: NOSETENV: "
