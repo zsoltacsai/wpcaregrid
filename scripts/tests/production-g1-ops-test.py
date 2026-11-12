@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 30651)
-Total output lines: 2054
-
 #!/usr/bin/env python3
 """Integrity and behaviour tests for the Production G1 operator toolkit (scripts/production-g1-ops).
 
@@ -1075,7 +1072,46 @@ class PostProvisionStateAndSequenceTest(unittest.TestCase):
                                                 "go5h-upgrade-installed-helper.py"),
             "state_after_fails": ("state_after", "g1-state-check.py:328hp,go5h-fetch-hotfix-package.sh,go3-manifest-check.py,"
                                                  "go5h-upgrade-installed-helper.py,g1-state-check.py:328h2p"),
-            "effective_config_fails": ("effective_config",…651 tokens truncated…FIX[path])
+            "effective_config_fails": ("effective_config", "g1-state-check.py:328hp,go5h-fetch-hotfix-package.sh,go3-manifest-check.py,"
+                                                           "go5h-upgrade-installed-helper.py,g1-state-check.py:328h2p,g1-effective-config-check.py"),
+        }
+        for name, (step, calls) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.seq_result(name), ("rc=1", f"G1_GO52H_SEQUENCE=STOP;STEP={step}", calls))
+
+    def test_a_reused_package_directory_must_pass_the_same_checks_as_a_fresh_download(self):
+        state = "g1-state-check.py:328hp"
+        for name, step in (("reuse_source", "package_hash_check"), ("reuse_extra_file", "package_file_count"),
+                           ("reuse_file_mode", "package_file_invalid"), ("reuse_dir_mode", "package_directory_invalid"),
+                           ("reuse_sums_pin", "package_sums_mismatch")):
+            with self.subTest(name):
+                self.assertEqual(self.seq_result(name), ("rc=1", f"G1_GO52H_SEQUENCE=STOP;STEP={step}", state))
+
+    def test_sequence_script_never_provisions_initializes_starts_or_deletes(self):
+        text = (OPS / "go52h-sequence.sh").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"(?m)^PACKAGE_SUMS=([0-9a-f]{64})", text), [HF2_SUMS])
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        for forbidden in ("provision-paths", "initialize", "systemctl", "rm ", "rmdir", "mv ", "chmod", "chown",
+                          "mysql.service", "/var/lib/mysql", "/etc/mysql", "apparmor_parser", "verify-install"):
+            self.assertNotIn(forbidden, code, forbidden)
+        self.assertEqual(sorted(re.findall(r"HELPER_(?:OLD|NEW)=([0-9a-f]{64})", code)),
+                         sorted([ENGINE.EXPECTED["328h"]["/usr/local/libexec/wpcaregrid-g1-mysql.py"],
+                                 ENGINE.EXPECTED["328h2"]["/usr/local/libexec/wpcaregrid-g1-mysql.py"]]))
+
+
+AP_DRIVER = r"""
+import hashlib, os, shutil, types, sys
+import importlib.util
+spec = importlib.util.spec_from_file_location("ap", "/ops/go5p-upgrade-apparmor.py")
+ap = importlib.util.module_from_spec(spec); spec.loader.exec_module(ap)
+sha = lambda b: hashlib.sha256(b).hexdigest()
+NL = chr(10)
+H, C, M, PP, PR = ap.HELPER, ap.CONTRACT, ap.MANIFEST, ap.PROFILE_P, ap.PROFILE_R
+FIX = {H: b"fixture-helper" + NL.encode(), C: b"old-contract" + NL.encode(), M: b"old-manifest" + NL.encode(),
+       PP: b"old-profile-p" + NL.encode(), PR: b"old-profile-r" + NL.encode()}
+ap.HELPER_SHA = sha(FIX[H])
+for path in (C, M, PP, PR):
+    ap.OLD[path] = sha(FIX[path])
 CALLS = []
 
 def write(path, data, mode):
