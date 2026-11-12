@@ -556,6 +556,70 @@ def _run_initializer(instance: Instance, argv: list[str], *, timeout: float = IN
             signal.signal(getattr(signal, name), handler)
 
 
+def _initialization_entry_safe(info, mysql_uid: int, mysql_gid: int, *, expected_directory: bool | None = None) -> bool:
+    """Apply the same private mysql:mysql metadata policy to required and nested datadir entries."""
+    is_dir, is_file = stat.S_ISDIR(info.st_mode), stat.S_ISREG(info.st_mode)
+    if expected_directory is not None and is_dir is not expected_directory:
+        return False
+    if (info.st_uid, info.st_gid) != (mysql_uid, mysql_gid) or not (is_dir or is_file):
+        return False
+    mode = stat.S_IMODE(info.st_mode)
+    if is_dir:
+        return not (mode & 0o007 or mode & 0o020 or mode & 0o700 != 0o700 or mode & 0o7000)
+    return not (mode & 0o007 or mode & 0o020 or mode & 0o600 != 0o600 or mode & 0o7111)
+
+
+def _same_initialized_entry(before, opened) -> bool:
+    return ((before.st_dev, before.st_ino, before.st_mode, before.st_uid, before.st_gid)
+            == (opened.st_dev, opened.st_ino, opened.st_mode, opened.st_uid, opened.st_gid))
+
+
+def _walk_initialized_tree(root_fd: int, mysql_uid: int, mysql_gid: int, not_proven) -> None:
+    stack = [os.dup(root_fd)]
+    scanned = 0
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    entry_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    try:
+        while stack:
+            current_fd = stack.pop()
+            try:
+                try:
+                    names = sorted(os.listdir(current_fd))
+                except OSError:
+                    not_proven("datadir_entry")
+                for entry in names:
+                    scanned += 1
+                    if scanned > 200000:
+                        not_proven("datadir_scan_limit")
+                    try:
+                        before = os.stat(entry, dir_fd=current_fd, follow_symlinks=False)
+                    except OSError:
+                        not_proven("datadir_entry")
+                    if not _initialization_entry_safe(before, mysql_uid, mysql_gid):
+                        not_proven("datadir_entry")
+                    flags = directory_flags if stat.S_ISDIR(before.st_mode) else entry_flags
+                    try:
+                        entry_fd = os.open(entry, flags, dir_fd=current_fd)
+                    except OSError:
+                        not_proven("datadir_entry")
+                    try:
+                        opened = os.fstat(entry_fd)
+                        if (not _same_initialized_entry(before, opened)
+                                or not _initialization_entry_safe(opened, mysql_uid, mysql_gid)):
+                            not_proven("datadir_entry")
+                        if stat.S_ISDIR(opened.st_mode):
+                            stack.append(entry_fd)
+                            entry_fd = -1
+                    finally:
+                        if entry_fd >= 0:
+                            os.close(entry_fd)
+            finally:
+                os.close(current_fd)
+    finally:
+        for pending_fd in stack:
+            os.close(pending_fd)
+
+
 def _initialization_proof(instance: Instance, *, proc_root: Path = PROC_ROOT) -> None:
     """Completion is proven by evidence, never by a file merely being there: exact datadir contents of a finished
     `--initialize` (real files, mysql-owned, no symlinks), the server's own start and end log lines in that order,
@@ -566,41 +630,37 @@ def _initialization_proof(instance: Instance, *, proc_root: Path = PROC_ROOT) ->
         refuse("initialize_completion_not_proven")
 
     mysql_uid = pwd.getpwnam("mysql").pw_uid
+    mysql_gid = grp.getgrnam("mysql").gr_gid
     data = Path(instance.datadir)
     check_directory(data, owner="mysql", group="mysql", mode=0o750)
-    for name in INIT_REQUIRED_DIRS + INIT_REQUIRED_FILES:
-        try:
-            st = (data / name).lstat()
-        except OSError:
-            not_proven(name)
-        want_dir = name in INIT_REQUIRED_DIRS
-        if (stat.S_ISDIR(st.st_mode) if want_dir else stat.S_ISREG(st.st_mode)) is not True or st.st_uid != mysql_uid:
-            not_proven(name)
-    scanned, stack = 0, [str(data)]
-    while stack:
-        current = stack.pop()
-        try:
-            names = os.listdir(current)
-        except OSError:
-            not_proven("datadir_entry")
-        for entry in names:
-            scanned += 1
-            if scanned > 200000:
-                not_proven("datadir_scan_limit")
-            path = os.path.join(current, entry)
+    root_fd = None
+    try:
+        before_root = data.lstat()
+        root_fd = os.open(data, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        opened_root = os.fstat(root_fd)
+        if (not _same_initialized_entry(before_root, opened_root)
+                or not _initialization_entry_safe(opened_root, mysql_uid, mysql_gid, expected_directory=True)):
+            not_proven("datadir")
+        for name in INIT_REQUIRED_DIRS + INIT_REQUIRED_FILES:
             try:
-                info = os.lstat(path)
+                st = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
             except OSError:
-                not_proven("datadir_entry")
-            if info.st_uid != mysql_uid or not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
-                not_proven("datadir_entry")  # symlink, special file or foreign owner anywhere in the tree
-            if stat.S_ISDIR(info.st_mode):
-                stack.append(path)
+                not_proven(name)
+            want_dir = name in INIT_REQUIRED_DIRS
+            if not _initialization_entry_safe(st, mysql_uid, mysql_gid, expected_directory=want_dir):
+                not_proven(name)
+        _walk_initialized_tree(root_fd, mysql_uid, mysql_gid, not_proven)
+    except OSError:
+        not_proven("datadir")
+    finally:
+        if root_fd is not None:
+            os.close(root_fd)
     log_fd = None
     try:
         log_fd = os.open(instance.log_file, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
         st = os.fstat(log_fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != mysql_uid or stat.S_IMODE(st.st_mode) != 0o600:
+        if (not stat.S_ISREG(st.st_mode) or (st.st_uid, st.st_gid) != (mysql_uid, mysql_gid)
+                or stat.S_IMODE(st.st_mode) != 0o600):
             not_proven("log")
         with os.fdopen(log_fd, "rb", closefd=True) as stream:
             log_fd = None

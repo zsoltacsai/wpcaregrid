@@ -11,7 +11,7 @@ PROFILE_R='/etc/apparmor.d/wpcaregrid-mysql-production-restore'
 DATADIRS=('/var/lib/mysql-wpcaregrid-production','/var/lib/mysql-wpcaregrid-production-restore')
 LOGS=('/var/log/mysql/wpcaregrid-production.log','/var/log/mysql/wpcaregrid-production-restore.log')
 OLD={HELPER:'32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e',MANIFEST:'70490acf887f3222ffaa0087c215826dc70a8b8cda7016d0f8807b7099cab6cb'}
-NEW={HELPER:'27c7e1e6ba8536f7f64e9a4bd53ed31fe846678ff05b0a051ca2ca7abe705e1b',MANIFEST:'0af365c9515e2eff34d552c185c8d46fff3a5d5f7cade6d1ab3c0de1809ef911'}
+NEW={HELPER:'30422ed4475b7b94b53b279054daeaa1aca0a8206889d6de9d688ec4f96f4428',MANIFEST:'abd987e20a459e9ec6ebef4a791b376592e162396a8ae8a62d415ff021749dd9'}
 PINS={CONTRACT:'270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f',PROFILE_P:'9a40053158880f0e6baf0db06431587651701487910634015e712e878dcfe13d',PROFILE_R:'ce56847e98f23b45590aaf55ad069df89f97dc12b672c2a289bb0fa7fb923b3e'}
 UNITS=('mysql@wpcaregrid-production.service','mysql@wpcaregrid-production-restore.service')
 NAMES={HELPER:'production-g1-mysql.py',MANIFEST:'production-g1-mysql-manifest.json'}
@@ -42,6 +42,11 @@ def check_dir(path,code):
  # A directory in which files are created and renamed must be a real root-owned directory nobody else can write to.
  s=os.lstat(path)
  if not stat.S_ISDIR(s.st_mode) or s.st_uid!=0 or stat.S_IMODE(s.st_mode)&0o022:raise Stop(code)
+def check_package_dir(path):
+ try:s=os.lstat(path)
+ except OSError:raise Stop('package_directory_invalid')
+ if not stat.S_ISDIR(s.st_mode) or (s.st_uid,s.st_gid)!=(0,0) or stat.S_IMODE(s.st_mode)!=0o700:
+  raise Stop('package_directory_owner_or_mode_invalid')
 def hash_mysql_file(path,exact_mode=None):
  flags=os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0)
  fd=os.open(path,flags)
@@ -124,8 +129,7 @@ def journal_state():
 def _main_locked(pkg,runfn=run,euid=None,replace=atomic,hook=None):
  if (os.geteuid() if euid is None else euid)!=0:raise Stop('not_root')
  if os.path.islink(pkg) or not os.path.isdir(pkg):raise Stop('package_directory_invalid')
- ps=os.lstat(pkg)
- if ps.st_uid!=0 or stat.S_IMODE(ps.st_mode)&0o022:raise Stop('package_directory_owner_or_mode_invalid')
+ check_package_dir(pkg)
  # Accept the repository's authenticated four-file G1 package. The pinned
  # contract is verified as package input but is never installed or rewritten.
  expected=set(NAMES.values())|{PACKAGE_CONTRACT,'SHA256SUMS'}
@@ -134,7 +138,7 @@ def _main_locked(pkg,runfn=run,euid=None,replace=atomic,hook=None):
  for name in expected:
   p=os.path.join(pkg,name)
   if stat.S_ISLNK(os.lstat(p).st_mode) or not stat.S_ISREG(os.lstat(p).st_mode):raise Stop('package_entry_invalid')
- sums=read(os.path.join(pkg,'SHA256SUMS')).decode('ascii')
+ sums=read(os.path.join(pkg,'SHA256SUMS'),0o600).decode('ascii')
  parsed={}
  for line in sums.splitlines():
   m=re.fullmatch(r'([0-9a-f]{64})  ([A-Za-z0-9_.-]+)',line)
@@ -143,9 +147,9 @@ def _main_locked(pkg,runfn=run,euid=None,replace=atomic,hook=None):
  expected_hashes={n:NEW[p] for p,n in NAMES.items()}
  expected_hashes[PACKAGE_CONTRACT]=PINS[CONTRACT]
  if parsed!=expected_hashes:raise Stop('sha256sums_pin_mismatch')
- package={p:read(os.path.join(pkg,n)) for p,n in NAMES.items()}
+ package={p:read(os.path.join(pkg,n),0o600) for p,n in NAMES.items()}
  if any(sha(package[p])!=NEW[p] for p in package):raise Stop('package_hash_mismatch')
- if sha(read(os.path.join(pkg,PACKAGE_CONTRACT),0o644))!=PINS[CONTRACT]:raise Stop('package_contract_hash_mismatch')
+ if sha(read(os.path.join(pkg,PACKAGE_CONTRACT),0o600))!=PINS[CONTRACT]:raise Stop('package_contract_hash_mismatch')
  if sha(read(CONTRACT,0o644))!=PINS[CONTRACT]:raise Stop('contract_changed')
  for p in (PROFILE_P,PROFILE_R):
   if sha(read(p,0o644))!=PINS[p]:raise Stop('apparmor_profile_changed')

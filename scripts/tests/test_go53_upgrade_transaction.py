@@ -23,8 +23,9 @@ class TxTests(unittest.TestCase):
   go.NAMES={go.HELPER:'helper',go.MANIFEST:'manifest'};go.MODES={go.HELPER:0o755,go.MANIFEST:0o644};go.UNITS=('prod','restore')
   for p,b,mode in [(self.files[0],self.old[go.HELPER],0o755),(self.files[1],self.old[go.MANIFEST],0o644),(Path(go.CONTRACT),b'c',0o644),(Path(go.PROFILE_P),b'ap',0o644),(Path(go.PROFILE_R),b'ar',0o644),(Path(go.LOGS[0]),b'logp',0o600),(Path(go.LOGS[1]),b'logr',0o600)]:p.write_bytes(b);p.chmod(mode)
   for d in (self.data1,self.data2): (d/'data').write_bytes(b'data');(d/'data').chmod(0o600)
-  for p,b in self.new.items():(self.pkg/go.NAMES[p]).write_bytes(b)
-  sums=''.join(f'{go.sha(b)}  {go.NAMES[p]}\n' for p,b in self.new.items())+f'{go.sha(b"c")}  {go.PACKAGE_CONTRACT}\n';(self.pkg/go.PACKAGE_CONTRACT).write_bytes(b'c');(self.pkg/go.PACKAGE_CONTRACT).chmod(0o644);(self.pkg/'SHA256SUMS').write_text(sums);self.pkg.chmod(0o700)
+  for p,b in self.new.items():
+   package_file=self.pkg/go.NAMES[p];package_file.write_bytes(b);package_file.chmod(0o600)
+  sums=''.join(f'{go.sha(b)}  {go.NAMES[p]}\n' for p,b in self.new.items())+f'{go.sha(b"c")}  {go.PACKAGE_CONTRACT}\n';(self.pkg/go.PACKAGE_CONTRACT).write_bytes(b'c');(self.pkg/go.PACKAGE_CONTRACT).chmod(0o600);(self.pkg/'SHA256SUMS').write_text(sums);(self.pkg/'SHA256SUMS').chmod(0o600);self.pkg.chmod(0o700)
   self.calls=[];self.active_unit=False;self.activate_after_verify=False
  def tearDown(self):
   (go.LIBEXEC,go.HELPER,go.MANIFEST,go.CONTRACT,go.PROFILE_P,go.PROFILE_R,go.DATADIRS,go.LOGS,go.JOURNAL,go.OLD,go.NEW,go.PINS,go.NAMES,go.MODES,go.UNITS,go.LOCK_PATH)=self.orig
@@ -48,6 +49,28 @@ class TxTests(unittest.TestCase):
  def test_package_requires_pinned_unchanged_contract(self):
   (self.pkg/go.PACKAGE_CONTRACT).unlink()
   with self.assertRaisesRegex(go.Stop,'package_contents_unexpected'):self.install()
+ def test_package_directory_requires_root_group_and_exact_private_mode(self):
+  self.pkg.chmod(0o750)
+  with self.assertRaisesRegex(go.Stop,'package_directory_owner_or_mode_invalid'):self.install()
+  self.pkg.chmod(0o700)
+  os.chown(self.pkg,0,1)
+  with self.assertRaisesRegex(go.Stop,'package_directory_owner_or_mode_invalid'):self.install()
+ def test_package_files_require_private_mode(self):
+  paths=[self.pkg/go.NAMES[go.HELPER],self.pkg/go.NAMES[go.MANIFEST],self.pkg/go.PACKAGE_CONTRACT,self.pkg/'SHA256SUMS']
+  for source in paths:
+   with self.subTest(name=source.name):
+    source.chmod(0o644)
+    with self.assertRaisesRegex(go.Stop,'mode_invalid:'+source.name):self.install()
+    source.chmod(0o600)
+ def test_package_files_require_root_group(self):
+  source=self.pkg/go.NAMES[go.HELPER];os.chown(source,0,1)
+  with self.assertRaisesRegex(go.Stop,'owner_invalid:production-g1-mysql.py'):self.install()
+ def test_package_files_require_root_owner(self):
+  source=self.pkg/go.NAMES[go.HELPER];os.chown(source,1,0)
+  with self.assertRaisesRegex(go.Stop,'owner_invalid:production-g1-mysql.py'):self.install()
+ def test_package_symlink_is_rejected_before_any_host_read(self):
+  source=self.pkg/go.NAMES[go.HELPER];source.unlink();source.symlink_to(self.files[0])
+  with self.assertRaisesRegex(go.Stop,'package_entry_invalid'):self.install()
  def test_large_mysql_log_is_hashed_in_bounded_chunks(self):
   path=Path(go.LOGS[0]);path.write_bytes(b'x'*(2*1024*1024+17));path.chmod(0o600)
   original=go.os.fdopen;reads=[]
