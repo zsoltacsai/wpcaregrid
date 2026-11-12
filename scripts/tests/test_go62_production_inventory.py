@@ -191,6 +191,8 @@ class Fixture:
             backup = gzip.compress(b"CREATE TABLE fixture (id int);\n")
             self.write(go.PRODUCTION_BACKUPS + "/" + BACKUP_NAME, backup, 0o600)
             digest = hashlib.sha256(backup).hexdigest()
+            checkpoint = dict(CHECKPOINT)
+            checkpoint["backup_sha256"] = digest
             journal = {
                 "transaction_id": TID,
                 "application_sha": RELEASE_SHA,
@@ -199,7 +201,7 @@ class Fixture:
                 "backup_sha256": digest,
                 "migrations": [],
                 "updated_at": 1763000000,
-                "evidence": {"RESTORE_REHEARSAL_VERIFIED": dict(CHECKPOINT)},
+                "evidence": {"RESTORE_REHEARSAL_VERIFIED": checkpoint},
             }
             self.write(go.PRODUCTION_STATE + "/db-release-" + TID + ".json",
                        json.dumps(journal).encode(), 0o600)
@@ -480,6 +482,8 @@ class RedactionAndInjectionTest(InventoryTestCase):
             'denied_mask="r" requested_mask="r" name="/root/.ssh/id_rsa" comm="mysqld"\n'
             'apparmor="DENIED" profile="wpcaregrid-mysql-production" operation="open" '
             'denied_mask="w" requested_mask="w" name="/var/tmp/wpcaregrid-production" comm="mysqld"\n'
+            'apparmor="DENIED" profile="wpcaregrid-mysql-production//child" operation="open" '
+            'denied_mask="r" requested_mask="r" name="/etc/mysql/my.cnf" comm="mysqld"\n'
             'apparmor="DENIED" profile="unrelated" operation="open" denied_mask="r" '
             'requested_mask="r" name="/etc/shadow" comm="other"\n'
         )
@@ -489,6 +493,7 @@ class RedactionAndInjectionTest(InventoryTestCase):
         paths = {entry["path"] for entry in apparmor["denials"]["entries"]}
         self.assertIn("REDACTED", paths)
         self.assertIn("g1_production_tmpdir", paths)
+        self.assertIn("mysql_base_config_link", paths)
         self.assertNotIn("/root/.ssh/id_rsa", json.dumps(apparmor))
         self.assertNotIn("unrelated", json.dumps(apparmor))
         self.assertTrue(apparmor["denials"]["sanitized_paths"])
@@ -622,6 +627,27 @@ class UnavailableEvidenceTest(InventoryTestCase):
         self.assertEqual(restore["status"], "UNKNOWN")
         self.assertFalse(restore["restore_checkpoint_present"])
         self.assertEqual(restore["reason"], "restore_evidence_stale_or_unmatched")
+
+    def test_restore_checkpoint_backup_sha_must_match_journal_and_disk(self):
+        self.fixture.build()
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        journal["evidence"]["RESTORE_REHEARSAL_VERIFIED"]["backup_sha256"] = "f" * 64
+        journal_path.write_text(json.dumps(journal), encoding="utf-8")
+        os.chmod(journal_path, 0o600)
+        sections = self.report()["sections"]
+        self.assertFalse(sections["journals"]["journals"][0]["restore_checkpoint_present"])
+        self.assertFalse(sections["journals"]["journals"][0]["restore_checkpoint_backup_matches_journal"])
+        self.assertEqual(sections["restore"]["status"], "UNKNOWN")
+        self.assertEqual(sections["restore"]["reason"], "restore_evidence_stale_or_unmatched")
+
+    def test_restore_checkpoint_does_not_qualify_with_bad_backup_metadata(self):
+        self.fixture.build()
+        os.chmod(self.fixture.path(go.PRODUCTION_BACKUPS) / BACKUP_NAME, 0o644)
+        sections = self.report()["sections"]
+        self.assertEqual(sections["backups"]["status"], "FAIL")
+        self.assertEqual(sections["restore"]["status"], "UNKNOWN")
+        self.assertFalse(sections["restore"]["restore_checkpoint_present"])
 
 
 class BackupIntegrityTest(InventoryTestCase):

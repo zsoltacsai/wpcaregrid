@@ -68,7 +68,10 @@ G1 installed artifacts:
 | restore profile | `/etc/apparmor.d/wpcaregrid-mysql-production-restore` | `0644` |
 
 MySQL option values (never runtime values) are read with
-`/usr/bin/my_print_defaults --defaults-file=/etc/mysql/my.cnf mysqld server mysqld-8.4`.
+`/usr/bin/my_print_defaults --defaults-file=/etc/mysql/my.cnf
+--defaults-group-suffix=@wpcaregrid-production mysqld server mysqld-8.4`, and
+once with the suffix `@wpcaregrid-production-restore`, so the two instances are
+classified independently.
 No MySQL client is invoked and no connection is opened.
 Binary logging is reported from the last applicable `--log-bin`,
 `--skip-log-bin`, or `--disable-log-bin` option. A basename such as `OFF` is

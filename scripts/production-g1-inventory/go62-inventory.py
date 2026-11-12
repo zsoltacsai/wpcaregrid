@@ -632,8 +632,9 @@ def _safe_denial(line):
         if key in {"profile", "operation", "denied_mask", "name", "comm", "requested_mask"}:
             fields[key] = value
     profile = fields.get("profile", "")
-    if profile in G1_PROFILES or profile == VENDOR_PROFILE:
-        safe_profile = profile
+    base_profile = profile.split("//", 1)[0]
+    if base_profile in G1_PROFILES or base_profile == VENDOR_PROFILE:
+        safe_profile = base_profile
     else:
         safe_profile = "OTHER_PROFILE"
     name = fields.get("name", "")
@@ -988,12 +989,19 @@ def _read_journals(root, root_uid):
             journals.append(item)
             continue
         checkpoint = evidence.get("RESTORE_REHEARSAL_VERIFIED")
-        checkpoint_ok = (
+        checkpoint_shape_ok = (
             isinstance(checkpoint, dict)
             and set(checkpoint) == RESTORE_CHECKPOINT_KEYS
             and all(isinstance(checkpoint.get(key), str) and SHA256_RE.fullmatch(checkpoint[key])
                     for key in RESTORE_CHECKPOINT_KEYS)
         )
+        journal_backup_sha = value.get("backup_sha256")
+        checkpoint_backup_matches_journal = (
+            checkpoint_shape_ok and isinstance(journal_backup_sha, str)
+            and SHA256_RE.fullmatch(journal_backup_sha)
+            and checkpoint.get("backup_sha256") == journal_backup_sha
+        )
+        checkpoint_ok = checkpoint_shape_ok and checkpoint_backup_matches_journal
         item.update({
             "status": "PASS",
             "transaction_id": txid,
@@ -1006,8 +1014,12 @@ def _read_journals(root, root_uid):
             if isinstance(value.get("backup_sha256"), str) and SHA256_RE.fullmatch(value.get("backup_sha256"))
             else "REDACTED",
             "migration_count": len(value.get("migrations", [])) if isinstance(value.get("migrations"), list) else 0,
+            "restore_checkpoint_observed": bool(checkpoint_shape_ok),
             "restore_checkpoint_present": checkpoint_ok,
-            "updated_at": value.get("updated_at") if isinstance(value.get("updated_at"), int) else opened.st_mtime_ns,
+            "restore_checkpoint_backup_matches_journal": bool(checkpoint_backup_matches_journal),
+            "updated_at": (value.get("updated_at") * 1_000_000_000
+                           if type(value.get("updated_at")) is int and value.get("updated_at") >= 0
+                           else opened.st_mtime_ns),
         })
         journals.append(item)
     return {
@@ -1226,6 +1238,7 @@ def collect_restore(root, root_uid, journals_result, release_result=None, backup
         if (item.get("restore_checkpoint_present") and active_sha
                 and item.get("application_sha") == active_sha
                 and isinstance(backup, dict) and backup.get("integrity") == "PASS"
+                and backup.get("metadata_ok") is True
                 and backup.get("evidence_match") == "PASS"
                 and backup.get("sha256") == item.get("backup_sha256")):
             with_checkpoint.append(item)
@@ -1244,7 +1257,7 @@ def collect_restore(root, root_uid, journals_result, release_result=None, backup
     elif journals:
         status = "UNKNOWN"
         reason = "restore_evidence_stale_or_unmatched" if any(
-            isinstance(item, dict) and item.get("restore_checkpoint_present") for item in journals
+            isinstance(item, dict) and item.get("restore_checkpoint_observed") for item in journals
         ) else "restore_evidence_not_recorded"
     else:
         status = "UNKNOWN"
