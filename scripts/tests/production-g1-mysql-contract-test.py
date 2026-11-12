@@ -308,6 +308,23 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         self.assertIn("/var/lib/mysql-wpcaregrid-production/** rwk,", prod)
         self.assertIn("/var/lib/mysql-wpcaregrid-production-restore/** rwk,", restore)
         self.assertIn("deny /run/mysqld/mysqld.sock", prod + restore)
+        self.assertIn("deny /run/mysqld/mysqld.sock.lock rwk,", prod + restore)
+
+    def test_generated_profiles_allow_only_the_own_socket_lock(self):
+        artifacts = CONTRACT.artifact_files()
+        for instance in CONTRACT.INSTANCES.values():
+            profile = artifacts[f"/etc/apparmor.d/{instance.apparmor_profile}"].decode("utf-8")
+            other = next(item for item in CONTRACT.INSTANCES.values() if item.name != instance.name)
+            allow_lines = [line.strip() for line in profile.splitlines()
+                           if ".sock.lock" in line and not line.lstrip().startswith("deny ")]
+            deny_lines = [line.strip() for line in profile.splitlines()
+                          if ".sock.lock" in line and line.lstrip().startswith("deny ")]
+            self.assertEqual(allow_lines, [f"{instance.socket}.lock rwk,"])
+            self.assertEqual(set(deny_lines), {
+                "deny /run/mysqld/mysqld.sock.lock rwk,",
+                f"deny {other.socket}.lock rwk,",
+            })
+            self.assertFalse(any("*" in line for line in allow_lines + deny_lines))
 
     def test_generated_profiles_keep_deny_permissions_separate_and_restrictive(self):
         artifacts = CONTRACT.artifact_files()
@@ -406,17 +423,22 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         for name, digest in sums.items():
             self.assertIn(f"| `{name}` | `{digest}` |", docs)
 
-    OLD_PROFILE_SHA = {"wpcaregrid-mysql-production": "5ad9b53b5a0001d32bffbd3e56d15d92158b026e9cf645411dda95d73f6478cd",
-                       "wpcaregrid-mysql-production-restore": "8210c0193f6487cf3f90d969560020b4e611d6e986341d28397510839872a72e"}
+    PRE_LOCK_PROFILE_SHA = {"wpcaregrid-mysql-production": "9a40053158880f0e6baf0db06431587651701487910634015e712e878dcfe13d",
+                            "wpcaregrid-mysql-production-restore": "ce56847e98f23b45590aaf55ad069df89f97dc12b672c2a289bb0fa7fb923b3e"}
 
-    def test_profiles_differ_from_the_previous_ones_by_exactly_the_mysql_cnf_read_rule(self):
+    def test_profiles_add_only_exact_socket_lock_rules_to_the_previous_profile(self):
         for instance in CONTRACT.INSTANCES.values():
             text = CONTRACT.apparmor_profile(instance)
             lines = text.splitlines()
             self.assertEqual(lines.count("  /etc/mysql/mysql.cnf r,"), 1)
             self.assertEqual(lines.index("  /etc/mysql/mysql.cnf r,"), lines.index("  /etc/mysql/my.cnf r,") + 1)
-            without = text.replace("  /etc/mysql/mysql.cnf r," + chr(10), "", 1)
-            self.assertEqual(hashlib.sha256(without.encode()).hexdigest(), self.OLD_PROFILE_SHA[instance.apparmor_profile])
+            without = text
+            for rule in (f"  {instance.socket}.lock rwk,\n",
+                         "  deny /run/mysqld/mysqld.sock.lock rwk,\n",
+                         f"  deny {next(item for item in CONTRACT.INSTANCES.values() if item.name != instance.name).socket}.lock rwk,\n"):
+                self.assertEqual(without.count(rule), 1)
+                without = without.replace(rule, "", 1)
+            self.assertEqual(hashlib.sha256(without.encode()).hexdigest(), self.PRE_LOCK_PROFILE_SHA[instance.apparmor_profile])
 
     def test_the_new_rule_is_read_only_exact_and_adds_no_write_exec_or_wildcard_access(self):
         for instance in CONTRACT.INSTANCES.values():
@@ -962,13 +984,13 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
 
         expected = {
             "production-g1-mysql.py": "9ff1b969fa2371d3967c15ff9f6fcf4553ecf5fcda2b039b46e924d885bbf274",
-            "production_g1_mysql_contract.py": "270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f",
-            "production-g1-mysql-manifest.json": "4ce04abbe0ce6f5b3d3b456bb90b89e38dbcaf69d0f480902e646049c42e435c",
+            "production_g1_mysql_contract.py": "0023be227381e617f482c1e905cd0019c1fba604a7aa7050345a95f208c89cf8",
+            "production-g1-mysql-manifest.json": "eef752c71e15c3a41f1cf5948305b699a5eba6a91b66aeae243787ba9e4e5f9b",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "6a8fb43878da6b0063ab0d5feb717fdb1ad9476a6c6a6b60f63811fa3faf3e33")
+                         "0846e20f10495edfececc96aa373a7dca774777ccc4cca6645c63f183d39fb85")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):

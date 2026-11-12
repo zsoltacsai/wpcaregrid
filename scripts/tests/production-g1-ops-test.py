@@ -64,6 +64,7 @@ HF2_SUMS = "2e67841f723ed2f82049645d842a45e1c9c6b581c84d79ea4abd4ae0094a2f38"
 # Frozen copy of the package of the installed AppArmor hotfix (merge a218882): the go5p tools are tested against it
 AP_PKG = SCRIPTS / "tests" / "fixtures" / "g1-apparmor-package"
 AP_HELPER = "32da9353289e97f1c9974d544185f51b2fea45e0c926efaaf523753bfbfb528e"
+AP_CONTRACT = "270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f"
 AP_MANIFEST = "70490acf887f3222ffaa0087c215826dc70a8b8cda7016d0f8807b7099cab6cb"
 AP_SUMS = "135430167c9ff42949efd2c1a123dabb3239003ecee328ac40763e170fc020cd"
 HF2_PROFILES = {"/etc/apparmor.d/wpcaregrid-mysql-production": "5ad9b53b5a0001d32bffbd3e56d15d92158b026e9cf645411dda95d73f6478cd",
@@ -78,8 +79,94 @@ class ToolkitStaticTest(unittest.TestCase):
         for line in raw.decode("ascii").splitlines():
             digest, name = line.split("  ", 1)
             listed[name] = digest
-        actual = {p.name: sha(p.read_bytes()) for p in OPS.iterdir() if p.name != "SHA256SUMS"}
+        actual = {p.name: sha(p.read_bytes()) for p in OPS.iterdir() if p.is_file() and p.name != "SHA256SUMS"}
         self.assertEqual(listed, actual)
+
+    def test_go54a_upgrade_is_pinned_to_the_current_installed_baseline_and_socket_lock_artifacts(self):
+        upgrade = load(OPS / "go54a-upgrade-apparmor.py", "go54a_upgrade_apparmor_static")
+        self.assertEqual(upgrade.OLD[upgrade.HELPER], "27c7e1e6ba8536f7f64e9a4bd53ed31fe846678ff05b0a051ca2ca7abe705e1b")
+        self.assertEqual(upgrade.OLD[upgrade.MANIFEST], "0af365c9515e2eff34d552c185c8d46fff3a5d5f7cade6d1ab3c0de1809ef911")
+        self.assertEqual(upgrade.NEW[upgrade.HELPER], sha((SCRIPTS / "production-g1-mysql.py").read_bytes()))
+        self.assertEqual(upgrade.NEW[upgrade.CONTRACT], sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes()))
+        self.assertEqual(upgrade.NEW[upgrade.MANIFEST], sha((SCRIPTS / "production-g1-mysql-manifest.json").read_bytes()))
+        artifacts = CONTRACT.artifact_files()
+        self.assertEqual(upgrade.NEW[upgrade.PROFILE_P], sha(artifacts[upgrade.PROFILE_P]))
+        self.assertEqual(upgrade.NEW[upgrade.PROFILE_R], sha(artifacts[upgrade.PROFILE_R]))
+        self.assertEqual(set(upgrade.PACKAGE.values()), {
+            "production-g1-mysql.py", "production_g1_mysql_contract.py", "production-g1-mysql-manifest.json",
+        })
+        source = (OPS / "go54a-upgrade-apparmor.py").read_text(encoding="utf-8")
+        fetch = (OPS / "go54a-fetch-package.sh").read_text(encoding="utf-8")
+        for guard in ("g1_unit_not_inactive", "mysql_service_identity_unverified", "vendor_apparmor_policy_changed",
+                      "datadir_changed", "mysql_logs_changed", "installed_baseline_mismatch",
+                      "post_write_hash_mismatch", "package_directory_argument_required", "ROLLED_BACK="):
+            self.assertIn(guard, source)
+        for forbidden in ('"start"', "mysqld --initialize", "aa-complain", "aa-disable"):
+            self.assertNotIn(forbidden, source)
+        for pin in ("0846e20f10495edfececc96aa373a7dca774777ccc4cca6645c63f183d39fb85",
+                    upgrade.NEW[upgrade.HELPER], upgrade.NEW[upgrade.CONTRACT], upgrade.NEW[upgrade.MANIFEST]):
+            self.assertIn(pin, fetch)
+        for forbidden in ("systemctl start", "mysqld --initialize", "aa-complain", "aa-disable"):
+            self.assertNotIn(forbidden, fetch)
+
+    def test_go54a_package_accepts_only_the_exact_three_hash_pinned_payloads(self):
+        upgrade = load(OPS / "go54a-upgrade-apparmor.py", "go54a_upgrade_package_policy")
+        payloads = {path: (SCRIPTS / "production-g1-mysql.py").read_bytes()
+                    if name == "production-g1-mysql.py" else
+                    (SCRIPTS / "production_g1_mysql_contract.py").read_bytes()
+                    if name == "production_g1_mysql_contract.py" else
+                    (SCRIPTS / "production-g1-mysql-manifest.json").read_bytes()
+                    for path, name in upgrade.PACKAGE.items()}
+        sums = "".join(f"{sha(payloads[path])}  {name}\n" for path, name in upgrade.PACKAGE.items()).encode("ascii")
+        original_lstat = os.lstat
+        with tempfile.TemporaryDirectory() as package_dir:
+            for name in list(upgrade.PACKAGE.values()) + ["SHA256SUMS"]:
+                (Path(package_dir) / name).write_bytes(sums if name == "SHA256SUMS" else
+                    payloads[next(path for path, item in upgrade.PACKAGE.items() if item == name)])
+            root_stat = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=0, st_gid=0)
+            def fake_lstat(path):
+                return root_stat if path == package_dir else original_lstat(path)
+            def fake_read(path, mode):
+                self.assertEqual(mode, 0o600)
+                name = Path(path).name
+                if name == "SHA256SUMS":
+                    return sums
+                return payloads[next(item for item, filename in upgrade.PACKAGE.items() if filename == name)]
+            with mock.patch.object(upgrade.os, "lstat", side_effect=fake_lstat), \
+                 mock.patch.object(upgrade, "read_root_file", side_effect=fake_read):
+                accepted = upgrade.package_bytes(package_dir)
+                self.assertEqual(sha(accepted[upgrade.PROFILE_P]), upgrade.NEW[upgrade.PROFILE_P])
+                self.assertEqual(sha(accepted[upgrade.PROFILE_R]), upgrade.NEW[upgrade.PROFILE_R])
+                with mock.patch.object(upgrade, "read_root_file", side_effect=lambda path, mode:
+                                       b"0" * 64 + b"  production-g1-mysql.py\n" if Path(path).name == "SHA256SUMS"
+                                       else fake_read(path, mode)):
+                    with self.assertRaises(upgrade.Stop):
+                        upgrade.package_bytes(package_dir)
+                with (Path(package_dir) / "unexpected").open("wb") as extra:
+                    extra.write(b"unlisted")
+                with mock.patch.object(upgrade.os, "lstat", side_effect=fake_lstat):
+                    with self.assertRaises(upgrade.Stop):
+                        upgrade.package_bytes(package_dir)
+
+    def test_go54a_compiles_both_exact_generated_profiles_from_private_temporary_files(self):
+        upgrade = load(OPS / "go54a-upgrade-apparmor.py", "go54a_upgrade_compile_profiles")
+        artifacts = CONTRACT.artifact_files()
+        contents = {upgrade.PROFILE_P: artifacts[upgrade.PROFILE_P],
+                    upgrade.PROFILE_R: artifacts[upgrade.PROFILE_R]}
+        observed = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            real_mkstemp = tempfile.mkstemp
+            def temp_in_test_dir(*, prefix, dir):
+                return real_mkstemp(prefix=prefix, dir=tmpdir)
+            def parser_stub(args, data=None):
+                self.assertEqual(args[:3], [upgrade.PARSER, "-Q", "-T"])
+                self.assertIsNone(data)
+                observed.append(Path(args[3]).read_bytes())
+                return types.SimpleNamespace(returncode=0)
+            with mock.patch.object(upgrade.tempfile, "mkstemp", side_effect=temp_in_test_dir):
+                upgrade.compile_profiles(contents, parser_stub)
+            self.assertEqual(observed, [contents[upgrade.PROFILE_P], contents[upgrade.PROFILE_R]])
+            self.assertEqual(list(Path(tmpdir).iterdir()), [])
 
     def test_go0_pinned_manifest_accepts_uppercase_names_and_rejects_partial_downloads(self):
         toolkit_commit = "cc46e2a7c7bd827ed5c9dab51945ca68e6f30698"
@@ -388,10 +475,8 @@ ad3e4f4ff4334056dd5d9bf0eada77b5bde16bb51d4209e6cac792aaca6d8d0d  go5p-fetch-pac
 
     def test_go53_package_directory_requires_root_group_and_exact_private_mode(self):
         upgrade = load(OPS / "go53-upgrade-helper.py", "go53_package_directory_policy")
-        helper_hash = sha((SCRIPTS / "production-g1-mysql.py").read_bytes())
-        manifest_hash = sha((SCRIPTS / "production-g1-mysql-manifest.json").read_bytes())
-        self.assertEqual(upgrade.NEW[upgrade.HELPER], helper_hash)
-        self.assertEqual(upgrade.NEW[upgrade.MANIFEST], manifest_hash)
+        self.assertEqual(upgrade.NEW[upgrade.HELPER], "9ff1b969fa2371d3967c15ff9f6fcf4553ecf5fcda2b039b46e924d885bbf274")
+        self.assertEqual(upgrade.NEW[upgrade.MANIFEST], "4ce04abbe0ce6f5b3d3b456bb90b89e38dbcaf69d0f480902e646049c42e435c")
         def metadata(kind=stat.S_IFDIR, mode=0o700, owner=0, group=0):
             return types.SimpleNamespace(st_mode=kind | mode, st_uid=owner, st_gid=group)
         with mock.patch.object(upgrade.os, "lstat", return_value=metadata()):
@@ -403,7 +488,7 @@ ad3e4f4ff4334056dd5d9bf0eada77b5bde16bb51d4209e6cac792aaca6d8d0d  go5p-fetch-pac
 
     def test_all_toolkit_sources_compile_and_are_lf_only(self):
         for path in OPS.iterdir():
-            if path.name == "SHA256SUMS":
+            if not path.is_file() or path.name == "SHA256SUMS":
                 continue
             self.assertNotIn(b"\r", path.read_bytes(), path.name)
             if path.suffix == ".py":
@@ -425,7 +510,10 @@ ad3e4f4ff4334056dd5d9bf0eada77b5bde16bb51d4209e6cac792aaca6d8d0d  go5p-fetch-pac
         libexec = "/usr/local/libexec/"
         # The repository package now carries the GO-5.3 initializer hotfix (new helper + manifest); everything else is
         # still exactly the installed AppArmor-hotfix state 328ap.
-        moved = {libexec + "wpcaregrid-g1-mysql.py", libexec + "production_g1_mysql_manifest.json"}
+        moved = {libexec + "wpcaregrid-g1-mysql.py", libexec + "production_g1_mysql_manifest.json",
+                 libexec + "production_g1_mysql_contract.py",
+                 "/etc/apparmor.d/wpcaregrid-mysql-production",
+                 "/etc/apparmor.d/wpcaregrid-mysql-production-restore"}
         self.assertEqual({k: v for k, v in expected.items() if k not in moved},
                          {k: v for k, v in ENGINE.EXPECTED["328ap"].items() if k not in moved})
         self.assertNotEqual(expected[libexec + "wpcaregrid-g1-mysql.py"], ENGINE.EXPECTED["328ap"][libexec + "wpcaregrid-g1-mysql.py"])
@@ -458,14 +546,16 @@ ad3e4f4ff4334056dd5d9bf0eada77b5bde16bb51d4209e6cac792aaca6d8d0d  go5p-fetch-pac
 
     def test_manifest_check_and_dryrun_and_diagnostic_pin_the_current_package(self):
         contract_sha = sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())
-        for name in ("go3-effective-config-dryrun.py", "g1-effective-config-check.py"):
-            text = (OPS / name).read_text(encoding="utf-8")
-            self.assertEqual(re.findall(r'CONTRACT_SHA256 = "([0-9a-f]{64})"', text), [contract_sha], name)
+        historical_dryrun = (OPS / "go3-effective-config-dryrun.py").read_text(encoding="utf-8")
+        self.assertIn(f'CONTRACT_SHA256 = "{AP_CONTRACT}"', historical_dryrun)
+        text = (OPS / "g1-effective-config-check.py").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r'CONTRACT_SHA256 = "([0-9a-f]{64})"', text), [contract_sha])
         manifest_check = (OPS / "go5p-manifest-check.py").read_text(encoding="utf-8")
-        for path, digest in CONTRACT.artifact_files().items():
+        historical_contract = load(AP_PKG / "production_g1_mysql_contract.py", "historical_go5p_contract")
+        for path, digest in historical_contract.artifact_files().items():
             self.assertIn(f'"{path}": "{sha(digest)}"', manifest_check)
         self.assertIn(f'"{AP_HELPER}", "helper_not_the_installed_hotfix"', manifest_check)
-        self.assertIn(f'"{contract_sha}", "contract_not_the_apparmor_hotfix"', manifest_check)
+        self.assertIn(f'"{AP_CONTRACT}", "contract_not_the_apparmor_hotfix"', manifest_check)
         self.assertNotIn("mysql.conf.d/90-", manifest_check)
         historical = (OPS / "go3-manifest-check.py").read_text(encoding="utf-8")
         for path, digest in HF2_PROFILES.items():
@@ -510,7 +600,7 @@ ad3e4f4ff4334056dd5d9bf0eada77b5bde16bb51d4209e6cac792aaca6d8d0d  go5p-fetch-pac
 
     def test_hotfix_fetch_script_pins_the_current_package_hashes(self):
         text = (OPS / "go5p-fetch-package.sh").read_text(encoding="utf-8")
-        for digest, name in ((AP_HELPER, "production-g1-mysql.py"), (sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes()), "production_g1_mysql_contract.py"),
+        for digest, name in ((AP_HELPER, "production-g1-mysql.py"), (AP_CONTRACT, "production_g1_mysql_contract.py"),
                              (AP_MANIFEST, "production-g1-mysql-manifest.json")):
             self.assertIn(f"{digest} {name}", text)
         self.assertIn(AP_SUMS + " SHA256SUMS", text)
@@ -551,8 +641,7 @@ ad3e4f4ff4334056dd5d9bf0eada77b5bde16bb51d4209e6cac792aaca6d8d0d  go5p-fetch-pac
         self.assertEqual(sha((AP_PKG / "production-g1-mysql.py").read_bytes()), AP_HELPER)
         self.assertEqual(sha((AP_PKG / "production-g1-mysql-manifest.json").read_bytes()), AP_MANIFEST)
         self.assertEqual(sha((AP_PKG / "SHA256SUMS").read_bytes()), AP_SUMS)
-        self.assertEqual(sha((AP_PKG / "production_g1_mysql_contract.py").read_bytes()),
-                         sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes()))
+        self.assertEqual(sha((AP_PKG / "production_g1_mysql_contract.py").read_bytes()), AP_CONTRACT)
 
     def run_manifest_check(self, mutate=None):
         with tempfile.TemporaryDirectory() as tmp:
@@ -695,8 +784,10 @@ class DryRunAgainstRealMysqlTest(unittest.TestCase):
     def run_dryrun(self, shared, *, package=None, extra_script=""):
         files = {
             "/etc/mysql/my.cnf": b"!includedir /etc/mysql/conf.d/\n!includedir /etc/mysql/mysql.conf.d/\n",
+            # This is a historical GO-3 tool. Keep its package fixture pinned to
+            # the GO-5.2c contract it accepts, even as the canonical source evolves.
             "/pkg/production_g1_mysql_contract.py": package if package is not None else
-                (SCRIPTS / "production_g1_mysql_contract.py").read_bytes(),
+                (AP_PKG / "production_g1_mysql_contract.py").read_bytes(),
             "/ops/go3-effective-config-dryrun.py": (OPS / "go3-effective-config-dryrun.py").read_bytes(),
         }
         files.update({f"/etc/mysql/mysql.conf.d/{name}": body.encode() for name, body in shared.items()})
@@ -732,7 +823,7 @@ class DryRunAgainstRealMysqlTest(unittest.TestCase):
         out = self.run_dryrun({"mysqld.cnf": self.UBUNTU, "zz-wpcaregrid-production.cnf": "x"})
         self.assertIn("G1_GO3_DRYRUN=STOP;CODE=g1_option_file_already_present", out)
         out = self.run_dryrun({"mysqld.cnf": self.UBUNTU},
-                              package=(SCRIPTS / "production_g1_mysql_contract.py").read_bytes() + b"#")
+                              package=(AP_PKG / "production_g1_mysql_contract.py").read_bytes() + b"#")
         self.assertIn("G1_GO3_DRYRUN=STOP;CODE=contract_file_hash_mismatch", out)
 
 
@@ -1707,7 +1798,8 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
 
     @staticmethod
     def new_state():
-        generated = CONTRACT.artifact_files()
+        historical_contract = load(AP_PKG / "production_g1_mysql_contract.py", "historical_go52c_contract_state")
+        generated = historical_contract.artifact_files()
         parts = [(AP_PKG / "production_g1_mysql_contract.py").read_bytes(), (AP_PKG / "production-g1-mysql-manifest.json").read_bytes(),
                  generated["/etc/apparmor.d/wpcaregrid-mysql-production"], generated["/etc/apparmor.d/wpcaregrid-mysql-production-restore"]]
         return " ".join(f"{sha(data)[:8]}:644:0:0" for data in parts) + " tmp=[]"
@@ -1801,7 +1893,9 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
         self.assertEqual(upgrade.HELPER_SHA, HF2_HELPER)
         self.assertEqual(upgrade.NEW, {p: ENGINE.EXPECTED["328ap"][p] for p in upgrade.NEW})
         self.assertEqual(set(upgrade.NEW), set(upgrade.OLD))
-        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_contract.py"], sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes()))
+        # GO-5p is a historical, hash-pinned transition. Its NEW package must
+        # remain tied to the frozen GO-5.2c fixture, not the evolving generator.
+        self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_contract.py"], AP_CONTRACT)
         self.assertEqual(upgrade.NEW[libexec + "production_g1_mysql_manifest.json"], AP_MANIFEST)
         self.assertEqual(ENGINE.EXPECTED["328ap"][libexec + "wpcaregrid-g1-mysql.py"], upgrade.HELPER_SHA)
         changed = {p for p in ENGINE.EXPECTED["328h2"] if ENGINE.EXPECTED["328h2"][p] != ENGINE.EXPECTED["328ap"][p]}
@@ -1879,7 +1973,7 @@ class AppArmorHotfixToolsTest(unittest.TestCase):
         self.assertEqual(re.findall(r"(?m)^KERNEL_PROFILES=(.*)", code), ["/sys/kernel/security/apparmor/profiles"])
         self.assertEqual(re.findall(r"(?m)^HELPER_PIN=([0-9a-f]{64})", code), [HF2_HELPER])
         self.assertEqual(re.findall(r"(?m)^CONTRACT_OLD=([0-9a-f]{64})", code), [HF2_CONTRACT])
-        self.assertEqual(re.findall(r"(?m)^CONTRACT_NEW=([0-9a-f]{64})", code), [sha((SCRIPTS / "production_g1_mysql_contract.py").read_bytes())])
+        self.assertEqual(re.findall(r"(?m)^CONTRACT_NEW=([0-9a-f]{64})", code), [AP_CONTRACT])
         self.assertEqual(re.findall(r"(?m)^PACKAGE_SUMS=([0-9a-f]{64})", code), [AP_SUMS])
 
     # ---- confined probe --------------------------------------------------------------------------------------
