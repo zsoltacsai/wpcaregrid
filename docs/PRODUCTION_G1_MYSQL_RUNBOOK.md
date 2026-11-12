@@ -27,37 +27,126 @@ why `zz-`), `scripts/production-g1-ops/` (the tools below, pinned by SHA-256).
 | Package `#328` | merge commit `bb7e20e8c62d7977b7f2650b39d76d9b203198c4` (four files, hashes in `go3-fetch-package.sh`) |
 | Toolkit `scripts/production-g1-ops/` | the merge commit of the toolkit PR and the SHA-256 of its `SHA256SUMS` (printed in the hand-over, verified by GO-0) |
 
-## GO-0 — fetch and verify the operator toolkit (writes only `/root/wpcg-g1-ops-<sha7>`)
+## GO-0 — fetch and verify the operator toolkit (writes under `/root/` only)
 
-Fill `OPS_SHA` (40 hex) and `SUMS_SHA256` (64 hex) from the hand-over. The block creates
-the directory only if it does not exist, downloads into an `…incoming-UNVERIFIED`
-staging directory and renames it only after every file matched.
+The pins below are the authorized GO-0 toolkit commit and its manifest SHA-256. The block
+creates a fresh, uniquely named incoming directory and promotes it only after every file,
+metadata check, and exact-count check passes. A failed attempt leaves its unique incoming
+directory in place for read-only investigation; reruns get a new path.
 
 ```bash
 ( set -euo pipefail; umask 077
-  OPS_SHA=<40-hex merge commit>; SUMS_SHA256=<64-hex sha256 of SHA256SUMS>
+  OPS_SHA=cc46e2a7c7bd827ed5c9dab51945ca68e6f30698
+  SUMS_SHA256=968ec69929b5d6517d57c7d458be300791978edc2969e1338656724af1625176
   [[ $OPS_SHA =~ ^[0-9a-f]{40}$ && $SUMS_SHA256 =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: pins malformed"; exit 1; }
-  D=/root/wpcg-g1-ops-${OPS_SHA:0:7}; W="$D.incoming-UNVERIFIED"
+  RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N4 -tx1 /dev/urandom | tr -d '[:space:]')"
+  [[ $RUN_ID =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] || { echo "STOP: run id malformed"; exit 1; }
+  D=/root/wpcg-g1-ops-${OPS_SHA:0:7}; W="$D.incoming-${RUN_ID}-UNVERIFIED"
+  LEGACY_W="$D.incoming-UNVERIFIED"
+  [[ "$W" != "$LEGACY_W" ]] || { echo "STOP: incoming path must be unique"; exit 1; }
   [ "$(id -u)" = 0 ] || { echo "STOP: not root"; exit 1; }
   for p in "$D" "$W"; do { [ ! -e "$p" ] && [ ! -L "$p" ]; } || { echo "STOP: $p exists"; exit 1; }; done
   install -d -o root -g root -m 0700 "$W"; cd "$W"
+  [ "$(stat -c '%u:%g:%a' -- .)" = "0:0:700" ] || { echo "STOP: incoming directory metadata"; exit 1; }
   B=https://raw.githubusercontent.com/zsoltacsai/wpcaregrid/$OPS_SHA/scripts/production-g1-ops
   get() { curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
                --max-filesize 2000000 --max-time 60 --output "$1" "$B/$1" </dev/null; }
   get SHA256SUMS || { echo "STOP: download failed: SHA256SUMS"; exit 1; }
   echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict - >/dev/null || { echo "STOP: SHA256SUMS hash mismatch"; exit 1; }
+  [ "$(wc -l < SHA256SUMS)" = 21 ] || { echo "STOP: manifest entry count"; exit 1; }
+  [ "$(awk '{print $2}' SHA256SUMS | LC_ALL=C sort -u | wc -l)" = 21 ] || { echo "STOP: duplicate manifest filename"; exit 1; }
   while read -r digest name; do
-    [[ $name =~ ^[a-z0-9][a-z0-9._-]*$ && $digest =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: bad SHA256SUMS entry"; exit 1; }
+    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $digest =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: bad SHA256SUMS entry"; exit 1; }
     get "$name" || { echo "STOP: download failed: $name"; exit 1; }
   done < SHA256SUMS
   sha256sum -c --strict SHA256SUMS >/dev/null || { echo "STOP: file hash mismatch"; exit 1; }
-  [ "$(ls -A | wc -l)" = "$(( $(wc -l < SHA256SUMS) + 1 ))" ] || { echo "STOP: unexpected file count"; exit 1; }
-  chown -R root:root .; chmod 0600 ./*
-  cd /; mv -T -- "$W" "$D"
+  [ "$(ls -A | wc -l)" = 22 ] || { echo "STOP: unexpected file count"; exit 1; }
+  for f in *; do
+    [[ -f "$f" && ! -L "$f" ]] || { echo "STOP: non-regular toolkit entry"; exit 1; }
+    [ "$(stat -c '%u:%g:%a' -- "$f")" = "0:0:600" ] || { echo "STOP: toolkit file metadata"; exit 1; }
+  done
+  cd /
+  python3 - "$W" "$D" <<'PY'
+import ctypes
+import errno
+import os
+import sys
+
+try:
+    renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+except AttributeError:
+    print("STOP: atomic renameat2(RENAME_NOREPLACE) is unavailable", file=sys.stderr)
+    raise SystemExit(2)
+renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+renameat2.restype = ctypes.c_int
+result = renameat2(-100, os.fsencode(sys.argv[1]), -100, os.fsencode(sys.argv[2]), 1)
+if result == 0:
+    raise SystemExit(0)
+error = ctypes.get_errno()
+if error == errno.EEXIST:
+    print("STOP: final destination already exists", file=sys.stderr)
+else:
+    print(f"STOP: atomic promotion failed (errno={error})", file=sys.stderr)
+raise SystemExit(1 if error == errno.EEXIST else 2)
+PY
+  { [ ! -e "$W" ] && [ ! -L "$W" ] && [ -d "$D" ] && [ ! -L "$D" ]; } || { echo "STOP: promotion collision or incomplete rename"; exit 1; }
+  [ "$(stat -c '%u:%g:%a' -- "$D")" = "0:0:700" ] || { echo "STOP: promoted directory metadata"; exit 1; }
+  cd "$D"
+  echo "$SUMS_SHA256  SHA256SUMS" | sha256sum -c --strict - >/dev/null || { echo "STOP: promoted manifest hash mismatch"; exit 1; }
+  sha256sum -c --strict SHA256SUMS >/dev/null || { echo "STOP: promoted file hash mismatch"; exit 1; }
+  [ "$(ls -A | wc -l)" = 22 ] || { echo "STOP: promoted file count"; exit 1; }
+  for f in *; do
+    [[ -f "$f" && ! -L "$f" ]] || { echo "STOP: promoted non-regular entry"; exit 1; }
+    [ "$(stat -c '%u:%g:%a' -- "$f")" = "0:0:600" ] || { echo "STOP: promoted file metadata"; exit 1; }
+  done
   echo "G1_GO0_TOOLKIT=PASS $D" )
 ```
 
 From here on `OPS=/root/wpcg-g1-ops-<sha7>`.
+
+## GO-0 recovery after an interrupted download (Owner GO required; plan only)
+
+The Owner's read-only VPS inspection found `/root/wpcg-g1-ops-cc46e2a.incoming-UNVERIFIED`
+as `root:root 0700`, with the pinned manifest hash correct, 11 of 21 listed toolkit files
+present and checksum-correct, 10 missing, and no extra files. The final
+`/root/wpcg-g1-ops-cc46e2a` directory was absent. This is an incomplete toolkit and remains
+**HOLD**; it is not installable or usable.
+
+Preserve that incoming directory unchanged as recovery evidence. Do not resume into it,
+copy files out of it, delete it, or rename it. The GO-0 block above now creates a fresh
+directory named from a UTC timestamp and random nonce; it never uses the old fixed incoming
+path. It requires both the final destination and generated incoming path to be absent and
+not symlinks. Each run downloads all 21 files again from the pinned toolkit commit and
+does not overwrite or trust the 11 files in the preserved directory.
+
+After a separate Owner GO, the exact root-console block above is the recovery procedure.
+It pins toolkit commit `cc46e2a7c7bd827ed5c9dab51945ca68e6f30698` and manifest SHA-256
+`968ec69929b5d6517d57c7d458be300791978edc2969e1338656724af1625176`, verifies 21 unique
+safe filenames including `GO53-HELPER-UPGRADE.md`, checks every file checksum, exact file
+count, regular-file type, `root:root 0600` file metadata, and `root:root 0700` directory
+metadata. Promotion uses Linux `renameat2(..., RENAME_NOREPLACE)` through libc, which performs
+an atomic rename only when the destination does not exist. Missing `renameat2`, any error,
+or an existing destination stops the procedure; it does not fall back to `mv` or a racy
+existence-check-plus-rename. It then rechecks the manifest, every file hash,
+destination type/mode, and exact count after the rename. Keep the original incomplete
+directory untouched after a successful fresh download as well. Mark `VERIFIED_COMPLETE`
+only after the post-promotion checks pass.
+
+**STOP** on a malformed pin/run ID, existing or symlinked incoming/final path, invalid or
+duplicate manifest entry, checksum/pin mismatch, missing/extra file, wrong type/owner/mode,
+failed download, interrupted command, or failed/no-replace promotion or post-promotion
+verification. Preserve all directories for read-only investigation; cleanup or another
+GO-0 attempt requires a separate Owner decision. This plan authorizes no root command or
+GO-0 execution.
+
+### Pre-push verification
+
+Before committing a GO-0 runbook or regression-test change, run the complete
+`PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/production-g1-ops-test.py` suite, the
+embedded GO-0 Bash syntax check, manifest/name and no-replace regressions, and
+`git diff --check`. Record pass, skip, and failure counts. Docker/MySQL-dependent skips
+are not passes; the corresponding required CI job must complete successfully before
+claiming full validation or starting another CI run.
 
 ## GO-1 — preflight of the installed #325 state (read-only, done before; repeatable)
 
