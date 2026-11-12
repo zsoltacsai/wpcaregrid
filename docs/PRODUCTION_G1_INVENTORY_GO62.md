@@ -79,7 +79,7 @@ settings are `UNKNOWN`, not `PASS`.
 ## Output and statuses
 
 The helper prints exactly one JSON document to stdout. The schema is `1`, the tool
-is `go62-production-inventory`, and the version is `1.0.0`.
+is `go62-production-inventory`, and the version is `1.0.1`.
 
 | Status | Meaning | Exit |
 | --- | --- | --- |
@@ -99,26 +99,37 @@ pretend to certify what it cannot observe.
 Sections:
 
 * `runtime` — OS identity, kernel, PHP CLI/FPM, Nginx and MySQL versions, and the
-  PHP-FPM, Nginx and vendor MySQL unit snapshots.
+  PHP-FPM, Nginx and vendor MySQL unit snapshots. Version `PASS` means the
+  version string was read and parsed; compatibility against a release contract
+  is not asserted by this metadata inventory.
 * `g1_systemd` — both G1 unit snapshots plus the vendor `mysql.service`, and
   whether both G1 instances are inactive.
 * `g1_artifacts` — owner, group, mode, size and SHA-256 of each fixed G1 artifact.
-* `apparmor` — loaded mode of each G1 profile and the vendor `usr.sbin.mysqld`
-  profile, plus bounded, sanitized denial summaries.
-* `mysql` — option-file binlog/trigger/read-only settings, unsafe-setting
-  classification, and always-`UNKNOWN` privilege/trigger state with an explicit
-  reason.
+* `apparmor` — loaded mode of each G1 profile and the kernel profile
+  `/usr/sbin/mysqld`, plus bounded, sanitized denial summaries. Only denials
+  attached to those three profiles affect this section's status; unrelated
+  profile denials are counted separately.
+* `mysql` — option-file binlog/trigger/read-only settings queried separately
+  with the production and restore `--defaults-group-suffix` values,
+  unsafe-setting classification per instance, and always-`UNKNOWN`
+  privilege/trigger state with an explicit reason.
 * `release` — active symlink target, release identity, release metadata and
   manifest-to-directory consistency.
 * `backups` — backup inventory, owner/mode/size, SHA-256, gzip integrity and
   journal-evidence match.
 * `restore` — restore datadir presence, restore-rehearsal evidence presence and
-  readiness. Live restore validation is never performed.
+  readiness. A checkpoint is only considered current when its application SHA
+  matches the active release and its recorded backup filename and SHA match an
+  inspected, integrity-checked backup. Truncated journal inventories remain
+  `UNKNOWN`. Live restore validation is never performed.
 * `locks` — deploy and database-release locks are observed from `/proc/locks`
   without acquiring a competing lock; the documented fact that no separate
   backup lock exists is reported as `NOT_SEPARATELY_DEFINED`.
-* `audit` (top level) — invocation identity, root identity, helper hash, syslog
-  persistence and mode.
+* `journals` — state-directory metadata, inspected/total journal counts and
+  truncation status.
+* `audit` (top level) — invocation identity, root identity, helper hash,
+  best-effort syslog submission status and mode. Delivery is not independently
+  confirmed, so the status remains `UNKNOWN`.
 
 ## Privileges and triggers are never invented
 
@@ -154,10 +165,14 @@ A journal without the checkpoint is `UNKNOWN`, never `PASS`.
   of `/usr/bin/systemctl`, `/usr/bin/journalctl`, `/usr/bin/my_print_defaults`,
   `/usr/bin/php`, `/usr/sbin/php-fpm8.4`, `/usr/sbin/nginx`, and `/usr/sbin/mysqld`.
 * No arguments are accepted. Any argument fails closed before collection.
-* Non-root invocation fails closed before collection and before audit.
-* Fixed files are opened read-only with `O_NOFOLLOW`, `O_CLOEXEC`, an `lstat`
+* Non-root invocation fails before collection; it attempts an audit record.
+* Fixed files are opened read-only with `O_NOFOLLOW`, `O_NOATIME`,
+  `O_NONBLOCK`, `O_CLOEXEC`, an `lstat`
   pre-check, an `fstat` identity check, a regular-file requirement, and size
   limits. Symlinks, non-regular files and changed files are reported as `FAIL`.
+  Fixed state, backup and release directory chains are checked for symlinks,
+  ownership and unsafe write permissions before traversal; directory entries
+  are listed through `O_NOATIME` descriptors.
 * Release symlinks must resolve inside `releases/` to a single 40-hex directory;
   traversal outside `releases/` is rejected.
 * Journal and backup filenames must match their exact patterns; anything else is
@@ -165,16 +180,23 @@ A journal without the checkpoint is `UNKNOWN`, never `PASS`.
 * Output text is restricted to safe token/path alphabets. AppArmor denial paths
   are mapped to fixed categories, with unknown paths collapsed to `REDACTED`.
 * MySQL option paths are never echoed; binary logging is classified as `ON`,
-  `OFF`, or `UNKNOWN`, and only other fixed safe settings are reported.
+  `OFF`, or `UNKNOWN` separately for each G1 instance. MySQL `loose-`,
+  `enable-`, `disable-`, and `skip-` boolean spellings are normalized for the
+  explicitly inspected settings.
 * Every invocation attempts one fixed-field start record and one finish record
   to the local syslog `auth` facility, including rejected arguments and
-  non-root calls. Failure to write the start record aborts collection; failure
-  to write the finish record downgrades accepted collection to `UNKNOWN`. Audit
-  records contain no argument, path or credential data.
+  non-root calls. Python's `syslog` API does not confirm durable delivery, so
+  the report labels this `ATTEMPTED_UNVERIFIED` and audit status `UNKNOWN` even
+  when the API call returns. An exception on the start call aborts collection;
+  a finish-call exception also leaves audit status `UNKNOWN`. Audit records
+  contain no argument, path or credential data. This is best-effort logging,
+  not fail-closed audit evidence; operators must verify both records in the
+  system journal during the separately authorized smoke test.
 
-The audit facility requires an actual root console that can write to the local
+The audit facility requires an actual root console that can submit to the local
 syslog `auth` facility. The helper does not install, configure or escalate that
-access.
+access, and cannot independently confirm that syslog persisted a submitted
+record.
 
 ## Package and install proposal
 
@@ -193,7 +215,7 @@ Proposed installation (a separate reviewed action, not performed here):
 2. In a separately authorized root-console operation, require the destination
    to be absent. Create a staging directory beside
    `/usr/local/libexec/wpcaregrid-g1-inventory/` as `root:root 0700`; install
-   the helper `root:root 0755` and manifest `root:root 0644`; verify exact hashes
+   the helper `root:root 0644` and manifest `root:root 0644`; verify exact hashes
    and ownership; then atomically promote without replacing an existing target.
    An existing target, unexpected file or failed verification is STOP.
 3. Run it only from the root console as

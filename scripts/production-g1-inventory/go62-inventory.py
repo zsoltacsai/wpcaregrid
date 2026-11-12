@@ -37,7 +37,7 @@ import zlib
 from datetime import datetime, timezone
 
 TOOL = "go62-production-inventory"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 SCHEMA = 1
 MAX_COMMAND_OUTPUT = 2 * 1024 * 1024
 MAX_TEXT_FILE = 1024 * 1024
@@ -80,7 +80,7 @@ G1_PROFILES = (
     "wpcaregrid-mysql-production",
     "wpcaregrid-mysql-production-restore",
 )
-VENDOR_PROFILE = "usr.sbin.mysqld"
+VENDOR_PROFILE = "/usr/sbin/mysqld"
 LOCK_PATHS = (
     ("deploy_lock", PRODUCTION_STATE + "/deploy.lock"),
     ("migration_lock", PRODUCTION_STATE + "/database-release.lock"),
@@ -172,6 +172,48 @@ def rooted(root, path):
     return root.rstrip("/") + path
 
 
+def _safe_directory_chain(path, root_uid, *, anchor=None, final_mode=None):
+    """Require fixed directory components to be root-owned and non-writable by others."""
+    anchor = anchor or "/"
+    path = os.path.abspath(path)
+    anchor = os.path.abspath(anchor)
+    if path != anchor and not path.startswith(anchor.rstrip("/") + "/"):
+        return False
+    relative = os.path.relpath(path, anchor)
+    current = anchor
+    components = [] if relative == "." else relative.split(os.sep)
+    for index, component in enumerate(components):
+        current = os.path.join(current, component)
+        try:
+            info = os.lstat(current)
+        except OSError:
+            return False
+        if (stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != root_uid or stat.S_IMODE(info.st_mode) & 0o022):
+            return False
+        if index == len(components) - 1 and final_mode is not None:
+            if stat.S_IMODE(info.st_mode) != final_mode:
+                return False
+    return True
+
+
+def _listdir_noatime(path):
+    flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOATIME", 0))
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        raise Unavailable("directory_unavailable") from None
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise Stop("directory_invalid")
+        return os.listdir(fd)
+    except OSError:
+        raise Unavailable("directory_unavailable") from None
+    finally:
+        os.close(fd)
+
+
 def _safe_token(value):
     if not isinstance(value, str) or not TOKEN_RE.fullmatch(value):
         return "REDACTED"
@@ -193,7 +235,7 @@ def _safe_comm(value):
 def _safe_system_path(value):
     if not isinstance(value, str) or not value.startswith("/") or ".." in value.split("/"):
         return "REDACTED"
-    if not re.fullmatch(r"/(?:usr|lib|etc|run|var)/[A-Za-z0-9._/-]{1,220}", value):
+    if not re.fullmatch(r"/(?:usr|lib|etc|run|var)/[A-Za-z0-9._@/-]{1,220}", value):
         return "REDACTED"
     return value
 
@@ -221,7 +263,8 @@ def _metadata(path, *, expected_uid=None, expected_mode=None):
 def _read_regular(path, *, limit=MAX_TEXT_FILE, expected_uid=None, expected_mode=None):
     """Read one fixed regular file without following a final symlink."""
     before = _metadata(path, expected_uid=expected_uid, expected_mode=expected_mode)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOATIME", 0))
     try:
         fd = os.open(path, flags)
     except OSError as exc:
@@ -253,7 +296,8 @@ def _read_regular(path, *, limit=MAX_TEXT_FILE, expected_uid=None, expected_mode
 
 def _sha256_regular(path, *, limit=MAX_ARTIFACT_BYTES):
     before = _metadata(path)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOATIME", 0))
     try:
         fd = os.open(path, flags)
     except OSError as exc:
@@ -295,8 +339,31 @@ def _parse_key_values(data):
         else:
             key, value = line, "ON"
         key = key.strip().lstrip("-").replace("_", "-").lower()
+        value = value.strip()
+        if key.startswith("loose-"):
+            key = key[len("loose-"):]
+        if key in {"skip-log-bin", "disable-log-bin"}:
+            values.append(("skip-log-bin", "ON"))
+            continue
+        if key == "enable-log-bin":
+            values.append(("log-bin", value or "ON"))
+            continue
+        if key.startswith(("enable-", "disable-", "skip-", "maximum-")):
+            prefix, base = key.split("-", 1)
+            # Normalize MySQL boolean aliases only for options we explicitly
+            # inspect. Other prefixed keys remain unknown to the classifier.
+            bool_keys = {"local-infile", "log-bin-trust-function-creators",
+                         "read-only", "super-read-only"}
+            if prefix in {"enable", "disable"} and base in bool_keys:
+                key = base
+                value = "ON" if prefix == "enable" else "OFF"
+            elif prefix == "skip" and base in bool_keys:
+                key = base
+                value = "OFF"
+            elif prefix == "maximum" and base in MYSQL_KEYS:
+                key = base
         if key:
-            values.append((key, value))
+            values.append((key, value or "ON"))
     return values
 
 
@@ -612,9 +679,13 @@ def collect_apparmor(run, root):
         denials = {"status": "UNKNOWN", "reason": exc.code, "entries": []}
     else:
         counted = {}
+        ignored_other_profile_denials = 0
         for line in out.decode("utf-8", "replace").splitlines()[:5000]:
             entry = _safe_denial(line)
             if entry is None:
+                continue
+            if entry["profile"] == "OTHER_PROFILE":
+                ignored_other_profile_denials += 1
                 continue
             key = (entry["profile"], entry["operation"], entry["denied_mask"],
                    entry["requested_mask"], entry["path"], entry["comm"])
@@ -627,6 +698,7 @@ def collect_apparmor(run, root):
         denials = {
             "status": "FAIL" if entries else "PASS",
             "entries": entries,
+            "ignored_other_profile_denials": ignored_other_profile_denials,
             "window": "last 2000 kernel records",
             "exhaustive": False,
             "sanitized_paths": True,
@@ -639,10 +711,11 @@ def collect_apparmor(run, root):
     }
 
 
-def collect_mysql(run):
+def _collect_mysql_instance(run, suffix):
     try:
         rc, out, _err = run((
             "/usr/bin/my_print_defaults", "--defaults-file=/etc/mysql/my.cnf",
+            "--defaults-group-suffix=" + suffix,
             "mysqld", "server", "mysqld-8.4",
         ))
     except Unavailable:
@@ -683,12 +756,12 @@ def collect_mysql(run):
     if binlog_format["value"] not in {"ROW", "STATEMENT", "MIXED", "UNKNOWN"}:
         binlog_format["value"] = "UNKNOWN"
     log_bin_options = [(key, value) for key, value in parsed
-                       if key in {"log-bin", "skip-log-bin", "disable-log-bin"}]
+                       if key in {"log-bin", "skip-log-bin"}]
     if not log_bin_options:
         log_bin = {"configured": False, "value": "UNKNOWN"}
     else:
         key, _value = log_bin_options[-1]
-        log_bin = {"configured": True, "value": "OFF" if key in {"skip-log-bin", "disable-log-bin"} else "ON"}
+        log_bin = {"configured": True, "value": "OFF" if key == "skip-log-bin" else "ON"}
     settings = {
         "log_bin": log_bin,
         "binlog_format": binlog_format,
@@ -721,6 +794,19 @@ def collect_mysql(run):
         or settings["binlog_format"]["value"] == "UNKNOWN"
         else "PASS"
     )
+    return {"status": config_status, "config_status": config_status,
+            "reason": "unsafe_mysql_configuration" if unsafe else None,
+            "unsafe": unsafe, "settings": settings,
+            "source": "/etc/mysql/my.cnf via my_print_defaults"}
+
+
+def collect_mysql(run):
+    instances = {
+        "production": _collect_mysql_instance(run, "@wpcaregrid-production"),
+        "restore": _collect_mysql_instance(run, "@wpcaregrid-production-restore"),
+    }
+    config_status = combine(item.get("config_status", item.get("status")) for item in instances.values())
+    unknown = config_status in {"UNKNOWN", "UNAVAILABLE"}
     privileges = {
         "status": "UNKNOWN",
         "classification": "UNKNOWN",
@@ -736,19 +822,17 @@ def collect_mysql(run):
         },
     }
     return {
-        "status": combine([config_status, privileges["status"]]),
+        "status": "UNAVAILABLE" if config_status == "UNAVAILABLE" else combine([config_status, privileges["status"]]),
         "config_status": config_status,
-        "reason": "unsafe_mysql_configuration" if unsafe else None,
-        "unsafe": unsafe,
-        "settings": settings,
+        "reason": "mysql_instance_configuration_incomplete" if unknown else None,
+        "instances": instances,
         "triggers": {
             "status": "UNKNOWN",
             "reason": "trigger_definitions_require_privileged_db_auth",
             "definitions_output": "REDACTED",
-            "log_bin_trust_function_creators": settings["log_bin_trust_function_creators"],
         },
         "privileges": privileges,
-        "source": "/etc/mysql/my.cnf via my_print_defaults",
+        "source": "/etc/mysql/my.cnf via per-instance my_print_defaults groups",
     }
 
 
@@ -781,8 +865,11 @@ def _safe_symlink_release(root, root_uid):
         raise Unavailable("active_release_missing")
     if stat.S_ISLNK(releases_info.st_mode) or not stat.S_ISDIR(releases_info.st_mode):
         raise Stop("releases_directory_invalid")
+    if not _safe_directory_chain(releases, root_uid, anchor=root or "/", final_mode=0o755):
+        raise Stop("releases_directory_metadata_invalid")
     if (not stat.S_ISDIR(release_info.st_mode) or stat.S_ISLNK(release_info.st_mode)
-            or release_info.st_uid != root_uid or stat.S_IMODE(release_info.st_mode) != 0o755):
+            or release_info.st_uid != root_uid or stat.S_IMODE(release_info.st_mode) != 0o755
+            or not _safe_directory_chain(target, root_uid, anchor=root or "/", final_mode=0o755)):
         raise Stop("active_release_metadata_invalid")
     return current, target, relative, release_info
 
@@ -823,7 +910,7 @@ def collect_release(root, root_uid):
     release_count = 0
     releases = rooted(root, PRODUCTION_RELEASES)
     try:
-        for name in os.listdir(releases)[:10000]:
+        for name in _listdir_noatime(releases)[:10000]:
             if SHA_RE.fullmatch(name):
                 release_count += 1
     except OSError:
@@ -862,13 +949,16 @@ def _read_journals(root, root_uid):
         raise Unavailable("state_directory_unavailable")
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise Stop("state_directory_invalid")
-    metadata_ok = info.st_uid == root_uid and stat.S_IMODE(info.st_mode) == 0o700
+    metadata_ok = (info.st_uid == root_uid and stat.S_IMODE(info.st_mode) == 0o700
+                   and _safe_directory_chain(state, root_uid, anchor=root or "/", final_mode=0o700))
     try:
-        names = sorted(os.listdir(state))
+        names = sorted(_listdir_noatime(state))
     except OSError:
         raise Unavailable("state_directory_unavailable")
+    journal_names = [item for item in names if JOURNAL_RE.fullmatch(item)]
+    truncated = len(journal_names) > MAX_JOURNALS
     journals = []
-    for name in [item for item in names if JOURNAL_RE.fullmatch(item)][:MAX_JOURNALS]:
+    for name in journal_names[:MAX_JOURNALS]:
         path = os.path.join(state, name)
         item = {"filename": "journal", "transaction_id": JOURNAL_RE.fullmatch(name).group(1)}
         try:
@@ -921,12 +1011,14 @@ def _read_journals(root, root_uid):
         })
         journals.append(item)
     return {
-        "status": "PASS" if metadata_ok and all(item.get("status") == "PASS" for item in journals) else
+        "status": "PASS" if metadata_ok and not truncated and all(item.get("status") == "PASS" for item in journals) else
         ("FAIL" if not metadata_ok or any(item.get("status") == "FAIL" for item in journals) else "UNKNOWN"),
         "state_directory_owner": f"{info.st_uid}:{info.st_gid}",
         "state_directory_mode": f"0o{stat.S_IMODE(info.st_mode):04o}",
         "state_directory_metadata_ok": metadata_ok,
-        "journal_count": len(journals),
+        "journal_count": len(journal_names),
+        "inspected_count": len(journals),
+        "truncated": truncated,
         "journals": journals[:MAX_JOURNALS],
     }
 
@@ -934,7 +1026,8 @@ def _read_journals(root, root_uid):
 def _backup_integrity(path, size, expected_info=None):
     if size > MAX_BACKUP_HASH_BYTES:
         return None, "UNKNOWN", "hash_budget_exceeded"
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOATIME", 0))
     try:
         fd = os.open(path, flags)
     except OSError as exc:
@@ -995,9 +1088,19 @@ def collect_backups(root, root_uid, journals_result=None):
         return {"status": "UNAVAILABLE", "reason": "backup_directory_unavailable"}
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         return {"status": "FAIL", "reason": "backup_directory_invalid"}
-    directory_ok = info.st_uid == root_uid and stat.S_IMODE(info.st_mode) == 0o700
+    directory_ok = (info.st_uid == root_uid and stat.S_IMODE(info.st_mode) == 0o700
+                    and _safe_directory_chain(directory, root_uid, anchor=root or "/", final_mode=0o700))
+    if not directory_ok:
+        return {"status": "FAIL", "reason": "backup_directory_metadata_invalid",
+                "backup_directory": PRODUCTION_BACKUPS,
+                "backup_directory_owner": f"{info.st_uid}:{info.st_gid}",
+                "backup_directory_mode": f"0o{stat.S_IMODE(info.st_mode):04o}",
+                "backup_directory_metadata_ok": False, "backup_count": 0,
+                "inspected_count": 0, "inspection_limit": MAX_BACKUPS,
+                "backups": [], "restore_proof": "NOT_PROVEN",
+                "metadata_only_backup_does_not_prove_restore": True}
     try:
-        names = os.listdir(directory)
+        names = _listdir_noatime(directory)
     except OSError:
         return {"status": "UNAVAILABLE", "reason": "backup_directory_unavailable"}
     candidates = [name for name in names if BACKUP_RE.fullmatch(name)]
@@ -1081,7 +1184,7 @@ def collect_backups(root, root_uid, journals_result=None):
     }
 
 
-def collect_restore(root, root_uid, journals_result):
+def collect_restore(root, root_uid, journals_result, release_result=None, backups_result=None):
     directory = rooted(root, "/var/lib/mysql-wpcaregrid-production-restore")
     try:
         info = os.lstat(directory)
@@ -1096,6 +1199,12 @@ def collect_restore(root, root_uid, journals_result):
         markers = []
     except OSError:
         return {"status": "UNKNOWN", "reason": "restore_datadir_unavailable"}
+    if isinstance(journals_result, dict) and journals_result.get("status") == "FAIL":
+        return {"status": "FAIL", "reason": "restore_evidence_invalid",
+                "datadir_present": datadir_present, "initialized_markers": markers,
+                "readiness": "INVALID_EVIDENCE", "restore_proof": "NOT_PROVEN",
+                "restore_checkpoint_present": False, "live_restore_validation": "NOT_PERFORMED",
+                "metadata_only_backup_does_not_prove_restore": True}
     if (not isinstance(journals_result, dict) or journals_result.get("status") == "UNAVAILABLE"
             or "journals" not in journals_result):
         return {
@@ -1106,12 +1215,26 @@ def collect_restore(root, root_uid, journals_result):
         }
     journals = journals_result.get("journals", [])
     usable = [item for item in journals if isinstance(item, dict) and item.get("status") == "PASS"]
-    with_checkpoint = [item for item in usable if item.get("restore_checkpoint_present")]
+    active_sha = release_result.get("application_sha") if isinstance(release_result, dict) else None
+    backup_by_name = {
+        item.get("filename"): item for item in (backups_result or {}).get("backups", [])
+        if isinstance(item, dict) and item.get("filename")
+    }
+    with_checkpoint = []
+    for item in usable:
+        backup = backup_by_name.get(item.get("backup_filename"))
+        if (item.get("restore_checkpoint_present") and active_sha
+                and item.get("application_sha") == active_sha
+                and isinstance(backup, dict) and backup.get("integrity") == "PASS"
+                and backup.get("evidence_match") == "PASS"
+                and backup.get("sha256") == item.get("backup_sha256")):
+            with_checkpoint.append(item)
     latest = max(with_checkpoint or usable, key=lambda item: item.get("updated_at", 0), default=None)
+    latest_checkpoint_qualified = latest in with_checkpoint if latest else False
     checkpoint = bool(with_checkpoint)
-    if journals_result.get("status") == "FAIL":
-        status = "FAIL"
-        reason = "restore_evidence_invalid"
+    if journals_result.get("truncated"):
+        status = "UNKNOWN"
+        reason = "restore_journal_set_truncated"
     elif checkpoint and journals_result.get("status") == "PASS":
         status = "PASS"
         reason = None
@@ -1120,7 +1243,9 @@ def collect_restore(root, root_uid, journals_result):
         reason = "restore_evidence_incomplete"
     elif journals:
         status = "UNKNOWN"
-        reason = "restore_evidence_not_recorded"
+        reason = "restore_evidence_stale_or_unmatched" if any(
+            isinstance(item, dict) and item.get("restore_checkpoint_present") for item in journals
+        ) else "restore_evidence_not_recorded"
     else:
         status = "UNKNOWN"
         reason = "restore_evidence_absent"
@@ -1144,7 +1269,7 @@ def collect_restore(root, root_uid, journals_result):
         "latest_journal": ({
             "state": latest.get("state"),
             "updated_at": latest.get("updated_at"),
-            "restore_checkpoint_present": latest.get("restore_checkpoint_present", False),
+            "restore_checkpoint_present": latest_checkpoint_qualified,
         } if latest else None),
         "live_restore_validation": "NOT_PERFORMED",
         "restore_proof": "NOT_PROVEN",
@@ -1211,8 +1336,11 @@ def collect(root, run, root_uid, root_gid=None):
     sections["mysql"] = _section(lambda: collect_mysql(run))
     sections["release"] = _section(lambda: collect_release(root, root_uid))
     journals = _section(lambda: _read_journals(root, root_uid))
+    sections["journals"] = journals
     sections["backups"] = _section(lambda: collect_backups(root, root_uid, journals))
-    sections["restore"] = _section(lambda: collect_restore(root, root_uid, journals))
+    release = sections["release"]
+    backups = sections["backups"]
+    sections["restore"] = _section(lambda: collect_restore(root, root_uid, journals, release, backups))
     sections["locks"] = _section(lambda: collect_locks(root, root_uid))
     return sections
 
@@ -1265,12 +1393,9 @@ def syslog_audit(record):
 
 def _helper_sha256():
     try:
-        with open(__file__, "rb") as stream:
-            data = stream.read(MAX_TEXT_FILE + 1)
-        if len(data) > MAX_TEXT_FILE:
-            return "UNAVAILABLE"
-        return hashlib.sha256(data).hexdigest()
-    except OSError:
+        digest, _size, _opened = _sha256_regular(__file__, limit=MAX_TEXT_FILE)
+        return digest
+    except (OSError, Stop):
         return "UNAVAILABLE"
 
 
@@ -1288,31 +1413,35 @@ def execute(argv=None, *, run=None, euid=None, root="", root_uid=0, root_gid=Non
     }
     if argv:
         report = _empty_report(invocation_id, started, status="FAIL", reason="arguments_not_allowed")
-        audit_status = "PASS"
+        audit_status = "UNKNOWN"
+        persistent = "UNAVAILABLE"
         try:
             audit(dict(audit_record))
+            persistent = "ATTEMPTED_UNVERIFIED"
             audit_record.update({"event": "finish", "result": "FAIL"})
             audit(dict(audit_record))
         except Exception:
-            audit_status = "UNKNOWN"
+            pass
         report["audit"].update({
             "uid": os.getuid(), "euid": euid, "helper_sha256": helper_sha,
-            "arguments": "REJECTED", "persistent": "SYSLOG" if audit_status == "PASS" else "UNAVAILABLE",
+            "arguments": "REJECTED", "persistent": persistent,
             "status": audit_status,
         })
         return report, exit_code("FAIL")
     if euid != 0:
         report = _empty_report(invocation_id, started, status="FAIL", reason="not_root")
-        audit_status = "PASS"
+        audit_status = "UNKNOWN"
+        persistent = "UNAVAILABLE"
         try:
             audit(dict(audit_record))
+            persistent = "ATTEMPTED_UNVERIFIED"
             audit_record.update({"event": "finish", "result": "FAIL"})
             audit(dict(audit_record))
         except Exception:
-            audit_status = "UNKNOWN"
+            pass
         report["audit"].update({
             "uid": os.getuid(), "euid": euid, "helper_sha256": helper_sha,
-            "persistent": "SYSLOG" if audit_status == "PASS" else "UNAVAILABLE",
+            "persistent": persistent,
             "status": audit_status,
         })
         return report, exit_code("FAIL")
@@ -1330,8 +1459,8 @@ def execute(argv=None, *, run=None, euid=None, root="", root_uid=0, root_gid=Non
     audit_record.update({"event": "finish", "result": overall})
     try:
         audit(dict(audit_record))
-        persistent = "SYSLOG"
-        audit_status = "PASS"
+        persistent = "ATTEMPTED_UNVERIFIED"
+        audit_status = "UNKNOWN"
     except Exception:
         persistent = "UNAVAILABLE"
         audit_status = "UNKNOWN"

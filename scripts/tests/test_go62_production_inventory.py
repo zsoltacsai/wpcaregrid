@@ -77,10 +77,12 @@ MYSQL_DEFAULTS = "\n".join((
 class FakeRun:
     """Fixed subprocess double: records argv and returns bounded fixture output."""
 
-    def __init__(self, *, fail=False, mysql_defaults=MYSQL_DEFAULTS, journal="", unit_output=None):
+    def __init__(self, *, fail=False, mysql_defaults=MYSQL_DEFAULTS, mysql_defaults_by_suffix=None,
+                 journal="", unit_output=None):
         self.calls = []
         self.fail = fail
         self.mysql_defaults = mysql_defaults
+        self.mysql_defaults_by_suffix = mysql_defaults_by_suffix or {}
         self.journal = journal
         self.unit_output = unit_output or UNIT_OUTPUT
 
@@ -97,8 +99,9 @@ class FakeRun:
                 f"SubState={sub}",
                 "UnitFileState=enabled",
                 f"MainPID={pid}",
-                "FragmentPath=/usr/lib/systemd/system/" + unit.split("@")[0],
-                "DropInPaths=",
+                "FragmentPath=/usr/lib/systemd/system/mysql@.service",
+                "DropInPaths=" + ("/etc/systemd/system/" + unit + ".d/90-wpcaregrid-g1.conf"
+                                   if unit in go.G1_UNITS.values() else ""),
                 "Result=success",
                 "ExecMainStartTimestamp=Thu 2026-11-12 20:00:00 UTC",
             )) + "\n"
@@ -114,7 +117,10 @@ class FakeRun:
         if argv[0] == "/usr/bin/journalctl":
             return 0, self.journal.encode(), b""
         if argv[0] == "/usr/bin/my_print_defaults":
-            return 0, self.mysql_defaults.encode(), b""
+            suffix = next((arg.split("=", 1)[1] for arg in argv
+                           if arg.startswith("--defaults-group-suffix=")), "")
+            data = self.mysql_defaults_by_suffix.get(suffix, self.mysql_defaults)
+            return 0, data.encode(), b""
         raise AssertionError("unexpected argv: %r" % (argv,))
 
 
@@ -152,7 +158,7 @@ class Fixture:
         self.write("/sys/kernel/security/apparmor/profiles",
                    b"wpcaregrid-mysql-production (enforce)\n"
                    b"wpcaregrid-mysql-production-restore (enforce)\n"
-                   b"usr.sbin.mysqld (enforce)\n")
+                   b"/usr/sbin/mysqld (enforce)\n")
         self.write("/proc/locks", b"", 0o644)
 
         releases = self.directory(go.PRODUCTION_RELEASES, 0o755)
@@ -246,6 +252,18 @@ class CompleteFixtureTest(InventoryTestCase):
         self.report()
         self.assertEqual(snapshot(), before)
 
+    def test_inventory_reads_do_not_update_inspected_file_atime(self):
+        self.fixture.build()
+        target = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        before = target.stat().st_atime_ns
+        directories = [self.fixture.path(path) for path in (
+            go.PRODUCTION_STATE, go.PRODUCTION_BACKUPS, go.PRODUCTION_RELEASES,
+        )]
+        before_dirs = [path.stat().st_atime_ns for path in directories]
+        self.report()
+        self.assertEqual(target.stat().st_atime_ns, before)
+        self.assertEqual([path.stat().st_atime_ns for path in directories], before_dirs)
+
     def test_all_obtainable_evidence_passes_but_privileges_keep_overall_unknown(self):
         self.fixture.build()
         report = self.report()
@@ -253,12 +271,18 @@ class CompleteFixtureTest(InventoryTestCase):
         self.assertEqual(report["schema"], 1)
         self.assertEqual(report["tool"], "go62-production-inventory")
         for name in ("runtime", "g1_systemd", "g1_artifacts", "apparmor",
-                     "release", "backups", "restore", "locks"):
+                     "release", "journals", "backups", "restore", "locks"):
             self.assertEqual(sections[name]["status"], "PASS", name)
-        self.assertEqual(report["audit"]["status"], "PASS")
+        self.assertEqual(report["audit"]["status"], "UNKNOWN")
+        self.assertEqual(report["audit"]["persistent"], "ATTEMPTED_UNVERIFIED")
         self.assertEqual(sections["mysql"]["config_status"], "PASS")
         self.assertEqual(sections["mysql"]["privileges"]["status"], "UNKNOWN")
         self.assertEqual(sections["mysql"]["status"], "UNKNOWN")
+        mysql_calls = [call for call in self.fixture.run.calls if call[0] == "/usr/bin/my_print_defaults"]
+        self.assertEqual([next(arg for arg in call if arg.startswith("--defaults-group-suffix=")) for call in mysql_calls], [
+            "--defaults-group-suffix=@wpcaregrid-production",
+            "--defaults-group-suffix=@wpcaregrid-production-restore",
+        ])
         # Privileged database facts are out of authorised scope, so the inventory can
         # never certify PASS; it reports UNKNOWN (exit 4) rather than inventing proof.
         self.assertEqual(report["overall"], "UNKNOWN")
@@ -275,6 +299,12 @@ class CompleteFixtureTest(InventoryTestCase):
         self.assertTrue(g1["both_g1_units_inactive"])
         self.assertEqual(g1["g1_units_active"], [])
         self.assertEqual(g1["mysql_service"]["main_pid"], 4242)
+        self.assertEqual(
+            g1["units"]["wpcaregrid-production"]["drop_in_paths"],
+            ["/etc/systemd/system/mysql@wpcaregrid-production.service.d/90-wpcaregrid-g1.conf"],
+        )
+        apparmor = self.report()["sections"]["apparmor"]
+        self.assertEqual(apparmor["profiles"][go.VENDOR_PROFILE]["status"], "PASS")
 
     def test_artifacts_report_owner_mode_size_and_hash(self):
         self.fixture.build()
@@ -388,35 +418,60 @@ class RedactionAndInjectionTest(InventoryTestCase):
             "--sql-mode=STRICT,EVIL;DROP",
         ))
         mysql = self.report()["sections"]["mysql"]
-        settings = mysql["settings"]
+        settings = mysql["instances"]["production"]["settings"]
         self.assertEqual(settings["log_bin"]["value"], "ON")
         self.assertNotIn("/root", json.dumps(mysql))
         self.assertEqual(settings["sql_mode"]["value"], "REDACTED")
         self.assertEqual(settings["binlog_format"]["value"], "STATEMENT")
-        self.assertIn("binlog_format_statement", mysql["unsafe"])
-        self.assertIn("log_bin_trust_function_creators_on", mysql["unsafe"])
+        self.assertIn("binlog_format_statement", mysql["instances"]["production"]["unsafe"])
+        self.assertIn("log_bin_trust_function_creators_on", mysql["instances"]["production"]["unsafe"])
         self.assertEqual(mysql["config_status"], "FAIL")
+
+    def test_mysql_prefixed_unsafe_options_are_normalized(self):
+        self.fixture.build()
+        self.fixture.run.mysql_defaults = "\n".join((
+            "--loose-local-infile=1", "--loose-skip-grant-tables",
+            "--binlog-format=ROW", "--log-bin=/var/lib/mysql/mysql-bin",
+            "--log-bin-trust-function-creators=OFF",
+        ))
+        instance = self.report()["sections"]["mysql"]["instances"]["production"]
+        self.assertEqual(instance["settings"]["local_infile"]["value"], "ON")
+        self.assertEqual(instance["settings"]["skip_grant_tables"]["value"], "ON")
+        self.assertIn("local_infile_on", instance["unsafe"])
+        self.assertIn("skip_grant_tables_on", instance["unsafe"])
+        self.assertEqual(instance["config_status"], "FAIL")
+
+    def test_mysql_configs_are_classified_per_instance_not_shared_defaults(self):
+        self.fixture.build()
+        self.fixture.run.mysql_defaults_by_suffix = {
+            "@wpcaregrid-production": "\n".join(("--log-bin=/var/lib/mysql/prod-bin", "--log-bin-trust-function-creators=OFF", "--binlog-format=ROW")),
+            "@wpcaregrid-production-restore": "\n".join(("--skip-log-bin", "--log-bin-trust-function-creators=OFF", "--binlog-format=ROW")),
+        }
+        mysql = self.report()["sections"]["mysql"]
+        self.assertEqual(mysql["instances"]["production"]["config_status"], "PASS")
+        self.assertEqual(mysql["instances"]["restore"]["config_status"], "FAIL")
+        self.assertEqual(mysql["instances"]["restore"]["settings"]["log_bin"]["value"], "OFF")
 
     def test_skip_log_bin_is_reported_as_disabled(self):
         self.fixture.build()
         self.fixture.run.mysql_defaults = "--skip-log-bin\n--log-bin-trust-function-creators=OFF\n--binlog-format=ROW\n"
-        settings = self.report()["sections"]["mysql"]["settings"]
+        settings = self.report()["sections"]["mysql"]["instances"]["production"]["settings"]
         self.assertEqual(settings["log_bin"], {"configured": True, "value": "OFF"})
 
     def test_log_bin_basename_named_off_still_means_binary_logging_on(self):
         self.fixture.build()
         self.fixture.run.mysql_defaults = "--log-bin=OFF\n--log-bin-trust-function-creators=OFF\n--binlog-format=row\n"
         mysql = self.report()["sections"]["mysql"]
-        self.assertEqual(mysql["settings"]["log_bin"], {"configured": True, "value": "ON"})
-        self.assertEqual(mysql["settings"]["binlog_format"]["value"], "ROW")
-        self.assertNotIn("binary_logging_off", mysql["unsafe"])
+        self.assertEqual(mysql["instances"]["production"]["settings"]["log_bin"], {"configured": True, "value": "ON"})
+        self.assertEqual(mysql["instances"]["production"]["settings"]["binlog_format"]["value"], "ROW")
+        self.assertNotIn("binary_logging_off", mysql["instances"]["production"]["unsafe"])
 
     def test_missing_binary_log_options_are_unknown_not_pass(self):
         self.fixture.build()
         self.fixture.run.mysql_defaults = "--sql-mode=STRICT_TRANS_TABLES\n"
         mysql = self.report()["sections"]["mysql"]
         self.assertEqual(mysql["config_status"], "UNKNOWN")
-        self.assertEqual(mysql["settings"]["log_bin"]["value"], "UNKNOWN")
+        self.assertEqual(mysql["instances"]["production"]["settings"]["log_bin"]["value"], "UNKNOWN")
 
     def test_apparmor_denials_are_sanitised_and_counted(self):
         self.fixture.build()
@@ -437,6 +492,18 @@ class RedactionAndInjectionTest(InventoryTestCase):
         self.assertNotIn("/root/.ssh/id_rsa", json.dumps(apparmor))
         self.assertNotIn("unrelated", json.dumps(apparmor))
         self.assertTrue(apparmor["denials"]["sanitized_paths"])
+        self.assertEqual(apparmor["denials"]["ignored_other_profile_denials"], 1)
+
+    def test_unrelated_apparmor_denials_do_not_fail_g1_status(self):
+        self.fixture.build()
+        self.fixture.run.journal = (
+            'apparmor="DENIED" profile="snap.foo" operation="open" denied_mask="r" '
+            'requested_mask="r" name="/etc/shadow" comm="foo"\\n'
+        )
+        apparmor = self.report()["sections"]["apparmor"]
+        self.assertEqual(apparmor["status"], "PASS")
+        self.assertEqual(apparmor["denials"]["entries"], [])
+        self.assertEqual(apparmor["denials"]["ignored_other_profile_denials"], 1)
 
     def test_safe_helpers_reject_untrusted_text(self):
         self.assertEqual(go._safe_token("plain-token_1"), "plain-token_1")
@@ -445,6 +512,8 @@ class RedactionAndInjectionTest(InventoryTestCase):
         self.assertEqual(go._safe_text("<script>"), "REDACTED")
         self.assertEqual(go._safe_system_path("/etc/passwd;rm -rf /"), "REDACTED")
         self.assertEqual(go._safe_system_path("/etc/../root"), "REDACTED")
+        self.assertEqual(go._safe_system_path("/etc/systemd/system/mysql@x.service.d/override.conf"),
+                         "/etc/systemd/system/mysql@x.service.d/override.conf")
         self.assertEqual(go._safe_mode("0777;rm"), "REDACTED")
 
     def test_command_allowlist_rejects_shell_and_arguments_injection(self):
@@ -464,10 +533,10 @@ class RedactionAndInjectionTest(InventoryTestCase):
 class UnavailableEvidenceTest(InventoryTestCase):
     def test_empty_root_reports_unavailable_and_exit_five(self):
         report = self.report(run=FakeRun(fail=True))
-        self.assertEqual(report["overall"], "UNAVAILABLE")
-        self.assertEqual(report["exit_code"], 5)
+        self.assertEqual(report["overall"], "UNKNOWN")
+        self.assertEqual(report["exit_code"], 4)
         for name in ("runtime", "g1_systemd", "g1_artifacts", "apparmor",
-                     "mysql", "release", "backups", "restore"):
+                     "mysql", "release", "journals", "backups", "restore"):
             self.assertEqual(report["sections"][name]["status"], "UNAVAILABLE", name)
 
     def test_missing_state_and_backup_directories_do_not_invent_evidence(self):
@@ -512,6 +581,48 @@ class UnavailableEvidenceTest(InventoryTestCase):
         self.assertEqual(sections["restore"]["status"], "FAIL")
         self.assertEqual(sections["restore"]["reason"], "restore_evidence_invalid")
 
+    def test_invalid_state_directory_is_exposed_and_fails_restore(self):
+        self.fixture.build()
+        import shutil
+        state = self.fixture.path(go.PRODUCTION_STATE)
+        shutil.rmtree(state)
+        state.symlink_to(self.fixture.path(go.PRODUCTION_BACKUPS))
+        sections = self.report()["sections"]
+        self.assertEqual(sections["journals"]["status"], "FAIL")
+        self.assertEqual(sections["journals"]["reason"], "state_directory_invalid")
+        self.assertEqual(sections["restore"]["status"], "FAIL")
+
+    def test_journal_truncation_is_reported_and_restore_stays_unknown(self):
+        self.fixture.build(with_evidence=False)
+        state = self.fixture.path(go.PRODUCTION_STATE)
+        for index in range(go.MAX_JOURNALS + 1):
+            txid = f"{index:032x}"
+            journal = {
+                "transaction_id": txid, "application_sha": RELEASE_SHA,
+                "state": "COMPLETE", "evidence": {}, "migrations": [],
+                "updated_at": index,
+            }
+            (state / f"db-release-{txid}.json").write_text(json.dumps(journal), encoding="utf-8")
+            os.chmod(state / f"db-release-{txid}.json", 0o600)
+        sections = self.report()["sections"]
+        self.assertEqual(sections["journals"]["journal_count"], go.MAX_JOURNALS + 1)
+        self.assertTrue(sections["journals"]["truncated"])
+        self.assertEqual(sections["journals"]["status"], "UNKNOWN")
+        self.assertEqual(sections["restore"]["status"], "UNKNOWN")
+        self.assertEqual(sections["restore"]["reason"], "restore_journal_set_truncated")
+
+    def test_restore_checkpoint_must_match_active_release_and_backup(self):
+        self.fixture.build()
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        journal["application_sha"] = "a" * 40
+        journal_path.write_text(json.dumps(journal), encoding="utf-8")
+        os.chmod(journal_path, 0o600)
+        restore = self.report()["sections"]["restore"]
+        self.assertEqual(restore["status"], "UNKNOWN")
+        self.assertFalse(restore["restore_checkpoint_present"])
+        self.assertEqual(restore["reason"], "restore_evidence_stale_or_unmatched")
+
 
 class BackupIntegrityTest(InventoryTestCase):
     def test_corrupt_gzip_is_a_failure(self):
@@ -538,6 +649,14 @@ class BackupIntegrityTest(InventoryTestCase):
         entry = self.report()["sections"]["backups"]["backups"][0]
         self.assertFalse(entry["metadata_ok"])
         self.assertEqual(entry["status"], "FAIL")
+
+    def test_insecure_backup_directory_is_not_traversed(self):
+        self.fixture.build()
+        os.chmod(self.fixture.path(go.PRODUCTION_BACKUPS), 0o777)
+        backups = self.report()["sections"]["backups"]
+        self.assertEqual(backups["status"], "FAIL")
+        self.assertEqual(backups["reason"], "backup_directory_metadata_invalid")
+        self.assertEqual(backups["backups"], [])
 
     def test_backup_symlink_is_a_failure(self):
         self.fixture.build()
@@ -677,7 +796,7 @@ class PackageTest(unittest.TestCase):
         self.assertEqual(helper["sha256"], hashlib.sha256(HELPER.read_bytes()).hexdigest())
         self.assertEqual(helper["install_path"],
                          "/usr/local/libexec/wpcaregrid-g1-inventory/go62-inventory.py")
-        self.assertEqual(helper["mode"], "0755")
+        self.assertEqual(helper["mode"], "0644")
         self.assertEqual(manifest["exit_codes"],
                          {"0": "PASS", "3": "FAIL", "4": "UNKNOWN", "5": "UNAVAILABLE"})
         self.assertIn("no database credential", manifest["scope"].lower())
