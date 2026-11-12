@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import stat
 import sys
 import types
 import unittest
@@ -18,6 +19,11 @@ CONTRACT = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = CONTRACT
 SPEC.loader.exec_module(CONTRACT)
+HELPER_SPEC = importlib.util.spec_from_file_location("production_g1_mysql_helper", ROOT / "production-g1-mysql.py")
+HELPER = importlib.util.module_from_spec(HELPER_SPEC)
+assert HELPER_SPEC and HELPER_SPEC.loader
+sys.modules[HELPER_SPEC.name] = HELPER
+HELPER_SPEC.loader.exec_module(HELPER)
 
 
 def defaults(instance):
@@ -72,6 +78,19 @@ def real_help(instance, **overrides):
 
 
 class ProductionG1MySQLContractTests(unittest.TestCase):
+    def test_initializer_proof_metadata_policy_rejects_foreign_groups_broad_modes_and_symlinks(self):
+        uid, gid = 1000, 1000
+        def entry(kind, mode, *, owner=uid, group=gid):
+            return types.SimpleNamespace(st_mode=kind | mode, st_uid=owner, st_gid=group)
+        safe_dir = entry(stat.S_IFDIR, 0o750)
+        safe_file = entry(stat.S_IFREG, 0o640)
+        self.assertTrue(HELPER._initialization_entry_safe(safe_dir, uid, gid, expected_directory=True))
+        self.assertTrue(HELPER._initialization_entry_safe(safe_file, uid, gid, expected_directory=False))
+        self.assertFalse(HELPER._initialization_entry_safe(entry(stat.S_IFREG, 0o640, group=0), uid, gid))
+        self.assertFalse(HELPER._initialization_entry_safe(entry(stat.S_IFREG, 0o644), uid, gid))
+        self.assertFalse(HELPER._initialization_entry_safe(entry(stat.S_IFDIR, 0o755), uid, gid))
+        self.assertFalse(HELPER._initialization_entry_safe(entry(stat.S_IFLNK, 0o777), uid, gid))
+
     def _load_installer(self):
         spec = importlib.util.spec_from_file_location(
             "production_g1_mysql_installer_test", ROOT / "production-g1-mysql.py")
@@ -942,14 +961,14 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
                 self.assertFalse(payload.startswith(b"_"))
 
         expected = {
-            "production-g1-mysql.py": "27c7e1e6ba8536f7f64e9a4bd53ed31fe846678ff05b0a051ca2ca7abe705e1b",
+            "production-g1-mysql.py": "30422ed4475b7b94b53b279054daeaa1aca0a8206889d6de9d688ec4f96f4428",
             "production_g1_mysql_contract.py": "270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f",
-            "production-g1-mysql-manifest.json": "0af365c9515e2eff34d552c185c8d46fff3a5d5f7cade6d1ab3c0de1809ef911",
+            "production-g1-mysql-manifest.json": "abd987e20a459e9ec6ebef4a791b376592e162396a8ae8a62d415ff021749dd9",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "9cb4ebb455bbd8c6096c10eb5ace2331e39e99b36fe3a4c63e69e97ed202e339")
+                         "e0ee70f4b6ad3a1ccb3e0d03f535924b0c4c0649c49f9dbd8ef43be877cf7bbe")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):
