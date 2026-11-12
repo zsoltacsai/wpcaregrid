@@ -230,6 +230,15 @@ def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
         facts["size"] = scan_datadir_fd(root_fd, uid, gid, unclear)
     finally:
         os.close(root_fd)
+    procs_after_scan = [argv for _, argv in live_processes(proc_root) if suffix in argv]
+    if procs_after_scan:
+        facts["processes"] = max(facts["processes"], len(procs_after_scan))
+        facts["initializer"] = max(facts["initializer"],
+                                   sum(1 for argv in procs_after_scan if "--initialize" in argv))
+        if facts["initializer"]:
+            unclear.append("initializer_running")
+        else:
+            unclear.append("instance_process_present")
     # error log: scanned for the server's own marker lines only, never printed
     log = b""
     try:

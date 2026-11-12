@@ -139,6 +139,41 @@ class ToolkitStaticTest(unittest.TestCase):
             finally:
                 os.close(root_fd)
 
+    def test_go53_diagnostic_rechecks_instance_processes_after_datadir_scan(self):
+        diagnostic = load(OPS / "go53-init-state.py", "go53_init_state_process_recheck")
+        uid, gid = os.getuid(), os.getgid()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            datadir = root / "var/lib/mysql-test"
+            datadir.mkdir(parents=True, mode=0o750)
+            datadir.chmod(0o750)
+            for name in diagnostic.REQUIRED_DIRS:
+                (datadir / name).mkdir(mode=0o750)
+            for name in diagnostic.REQUIRED_FILES:
+                path = datadir / name
+                path.write_bytes(b"x")
+                path.chmod(0o640)
+            for name in diagnostic.PRIVATE_DATADIR_FILES:
+                path = datadir / name
+                path.write_bytes(b"private")
+                path.chmod(0o600)
+            for name in diagnostic.PUBLIC_DATADIR_FILES:
+                path = datadir / name
+                path.write_bytes(b"public")
+                path.chmod(0o644)
+            log = root / "var/log/mysql/test.log"
+            log.parent.mkdir(parents=True)
+            log.write_bytes(diagnostic.START + b"\n" + diagnostic.END + b"\n")
+            log.chmod(0o600)
+            spec = {"datadir": "/var/lib/mysql-test", "log": "/var/log/mysql/test.log",
+                    "socket": "/run/mysqld/test.sock", "pid": "/run/mysqld/test.pid"}
+            suffix = "--defaults-group-suffix=@test"
+            with mock.patch.object(diagnostic, "live_processes", side_effect=[[], [(321, [suffix])]]):
+                state, reasons, _ = diagnostic.classify(
+                    "test", spec, root=str(root), proc_root=str(root / "proc"), ids=lambda: (uid, gid))
+            self.assertEqual(state, "UNCLEAR")
+            self.assertIn("instance_process_present", reasons)
+
     def test_go53_descriptor_walks_fail_closed_on_directory_swap_to_symlink(self):
         diagnostic = load(OPS / "go53-init-state.py", "go53_init_state_swap_policy")
         helper = load(SCRIPTS / "production-g1-mysql.py", "go53_initializer_swap_policy")
