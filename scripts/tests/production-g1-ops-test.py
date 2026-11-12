@@ -1983,12 +1983,12 @@ blocker.kill(); blocker.wait(); kill_all()
 captured = {}
 class Spy(subprocess.Popen):
     def __init__(self, *a, **k):
-        captured["kwargs"] = {key: k.get(key) for key in ("start_new_session", "close_fds")}
+        captured["kwargs"] = {key: k.get(key) for key in ("start_new_session", "close_fds", "umask")}
         super().__init__(*a, **k)
         captured["pid"] = self.pid
 reset(); kill_all()
 refusal(H._run_initializer, INST, chain("wait"), timeout=1.2, popen=Spy, **FAST)
-out("process_identity", "new_session=%s | group_is_child_pid=%s" % (captured["kwargs"]["start_new_session"], captured["pid"] > 1))
+out("process_identity", "new_session=%s | group_is_child_pid=%s | umask=%s" % (captured["kwargs"]["start_new_session"], captured["pid"] > 1, oct(captured["kwargs"]["umask"])))
 kill_all()
 
 # diagnostic classifier of kernel denial lines and the dmesg failure handling
@@ -2131,7 +2131,7 @@ class InitializerRecoveryTest(unittest.TestCase):
 
     def test_a_running_initializer_blocks_a_second_start_and_the_group_is_the_helpers_own_child(self):
         self.assertEqual(self.get("second_initializer_refused"), "initialize_process_already_running | started=False")
-        self.assertEqual(self.get("process_identity"), "new_session=True | group_is_child_pid=True")
+        self.assertEqual(self.get("process_identity"), "new_session=True | group_is_child_pid=True | umask=0o27")
 
     def test_the_diagnostic_never_prints_the_log_contents_and_reads_kernel_denials_safely(self):
         self.assertEqual(self.get("diag_output_has_no_log_secret"), "yes")
@@ -2150,6 +2150,7 @@ class InitializerRecoveryTest(unittest.TestCase):
         for forbidden in ("subprocess.run(", "rmtree", "os.unlink", "os.remove", "rmdir", "shutil", "systemctl\", \"start"):
             self.assertNotIn(forbidden, body, forbidden)
         self.assertIn("start_new_session=True", body)
+        self.assertIn("umask=0o027", body)
         diag = (OPS / "go53-init-state.py").read_text(encoding="utf-8")
         code = chr(10).join(line for line in diag.split('"""', 2)[2].splitlines() if not line.lstrip().startswith("#"))
         for forbidden in ("os.remove", "os.unlink", "rmtree", "os.rmdir", "os.kill", "os.chmod", "os.chown", "os.rename",

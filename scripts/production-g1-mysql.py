@@ -513,7 +513,7 @@ def _run_initializer(instance: Instance, argv: list[str], *, timeout: float = IN
         for name in ("SIGTERM", "SIGHUP", "SIGINT"):
             previous[name] = signal.signal(getattr(signal, name), lambda signum, frame: received.append(signum))
         proc = popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     close_fds=True, env=INIT_ENV, start_new_session=True)
+                     close_fds=True, env=INIT_ENV, start_new_session=True, umask=0o027)
         pgid = proc.pid
         deadline = time.monotonic() + timeout
         outcome, rc = None, None
