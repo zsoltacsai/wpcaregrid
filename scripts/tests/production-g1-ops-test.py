@@ -169,36 +169,15 @@ class ToolkitStaticTest(unittest.TestCase):
             self.assertEqual(list(Path(tmpdir).iterdir()), [])
 
     def test_go0_pinned_manifest_accepts_uppercase_names_and_rejects_partial_downloads(self):
-        toolkit_commit = "cc46e2a7c7bd827ed5c9dab51945ca68e6f30698"
-        manifest_pin = "968ec69929b5d6517d57c7d458be300791978edc2969e1338656724af1625176"
-        # Preserve the exact original manifest bytes so this regression also works in
-        # source archives that omit the historical git object.
-        manifest = b"""f0100b44e6bf7c850b576da48dbb43d436b1cffe924d931d2b81404a7bf3bb58  g1-effective-config-check.py
-7f7a626769b36aba13ef0f6968d7613aa104866016959263f590803312086bba  g1-state-check.py
-30f8881f455fbe1453f31a65bce3e4aeee94c5b8031e3e6109e098a633e7f6b0  go2-rollback.sh
-483d10ef0c77acc92a9728fe300b3b0fcef2f6b0050fbe44630400143c35fd25  go3-apparmor-compile.sh
-64fd1b8f55d24940be36e2822fd10d9ac54edd3c460849305e0669d0632a2844  go3-effective-config-dryrun.py
-4111ab922c44f5298db0170024b208dcade18f5cb4421c7747095252b485008e  go3-fetch-package.sh
-3bbeaab5d8b341731dee18aad3943d7e58eb79dc8c7749b7a9f053e5d732855b  go3-manifest-check.py
-5b0d6922b4dfe8455ecc3fe5779c57f0a2af4d1dc2097b615b8c3d9ea42e3b3e  go4b-fetch-hotfix-package.sh
-cda071a829b38f6e9d0dfa53972af187627e842b06f33342509fba261feddcf9  go4b-upgrade-installed-helper.py
-a3bd904d087579d5015cb669593ff29121b0a110da4f21715313819b25ae8d4d  go5-runtime-acceptance.py
-6cc07fe43e8b9450d4d56ef7f6bb9ad330dc8a1a221a825a41c0dfc8875ef831  go52h-sequence.sh
-032722c0881ab2901a2eb8343193a6e3a71efd082bdbe7abc800ca36de9f4456  GO53-HELPER-UPGRADE.md
-88db88cc3d2283fca63eeddd8cb828fe91290c75913b721d3f9cae5972edc6aa  go53-init-state.py
-db5872bfae6a747eb10e16b61c37633111ba4a47e0d050284d3d19d75a041bb2  go53-upgrade-helper.py
-6e7461eb146a90b2b9e1994d030d368058d940adf55df73b58ceae2566e923f0  go5h-fetch-hotfix-package.sh
-c64d64ad35f9e9c3d1d9b3ca6800bd68a47bade51e78684941318cc1224aa5ed  go5h-upgrade-installed-helper.py
-3fe5f5fd96c0e17883b4702eb75d6da7376fb42c360b2aca0b4f83bce9edea75  go5p-confined-probe.sh
-ad3e4f4ff4334056dd5d9bf0eada77b5bde16bb51d4209e6cac792aaca6d8d0d  go5p-fetch-package.sh
-07e5bf5e3e1c6f0e27609e84b712eef35b89fc381ccce350a7c0500530b5e1de  go5p-manifest-check.py
-09695009e4a2b36c8cfed084dc03adb2536450262598f3b5b2e757ec6fae5812  go5p-sequence.sh
-5e1553645088831328e0020a558b6dc32490f85fca9c543dcdb40c92cb876e96  go5p-upgrade-apparmor.py
-"""
+        toolkit_commit = "0951d9e829364296796a1d4acd303feef698cbc7"
+        manifest_pin = "70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e"
+        # Read the exact toolkit manifest shipped with this source snapshot.
+        # The pinned digest below anchors its full byte content and filename list.
+        manifest = (OPS / "SHA256SUMS").read_bytes()
         self.assertEqual(sha(manifest), manifest_pin)
         entries = [line.split("  ", 1) for line in manifest.decode("ascii").splitlines()]
-        self.assertEqual(len(entries), 21)
-        self.assertEqual(len({name for _, name in entries}), 21)
+        self.assertEqual(len(entries), 23)
+        self.assertEqual(len({name for _, name in entries}), 23)
 
         runbook = (SCRIPTS.parent / "docs/PRODUCTION_G1_MYSQL_RUNBOOK.md").read_text(encoding="utf-8")
         name_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -226,7 +205,7 @@ ad3e4f4ff4334056dd5d9bf0eada77b5bde16bb51d4209e6cac792aaca6d8d0d  go5p-fetch-pac
         count_guard = next(
             line.strip().split(" || ", 1)[0]
             for line in runbook.splitlines()
-            if line.strip().startswith('[ "$(ls -A | wc -l)" = 22 ]')
+            if line.strip().startswith('[ "$(ls -A | wc -l)" = 24 ]')
         )
 
         parsed = []
@@ -253,7 +232,7 @@ ad3e4f4ff4334056dd5d9bf0eada77b5bde16bb51d4209e6cac792aaca6d8d0d  go5p-fetch-pac
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            # Exercise sha256sum against all 21 safe names; the pinned manifest above
+            # Exercise sha256sum against all 23 safe names; the pinned manifest above
             # independently anchors the exact original names and digest list.
             fixture_manifest = "".join(f"{sha(content)}  {name}\n" for name, content in parsed)
             (root / "SHA256SUMS").write_text(fixture_manifest, encoding="ascii")
