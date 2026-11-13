@@ -91,23 +91,36 @@ is `go62-production-inventory`, and the version is `1.0.4`.
 | `UNKNOWN` | No authorized evidence exists to decide. | `4` |
 | `UNAVAILABLE` | The required source could not be read or executed. | `5` |
 
+These are status-to-exit mappings, not a promise that every outcome is reachable
+from a complete invocation. The audit section is always `UNKNOWN` because
+syslog delivery is unverified, so a complete healthy invocation normally has
+`overall=UNKNOWN` and exits `4`; `FAIL` may override it and exit `3`. `PASS`/0
+and `UNAVAILABLE`/5 are reserved mappings, not expected smoke-test outcomes.
+
 Aggregation is fail-closed and ordered: `FAIL` dominates `UNKNOWN`, which
 dominates `UNAVAILABLE`, which dominates `PASS`.
 
 Because privilege and trigger state require authenticated database access that
-this scope deliberately does not use, the `mysql` section and the overall report
-are `UNKNOWN` even when every obtainable check is `PASS`. The report does not
-pretend to certify what it cannot observe.
+this scope deliberately does not use, those facts are always `UNKNOWN`. The
+`mysql` section may be `UNKNOWN` when the settings are read but privilege/trigger
+facts remain unavailable, or `UNAVAILABLE` when its fixed option reader cannot
+run. Missing settings are `UNKNOWN`. The overall report is normally `UNKNOWN`
+because audit delivery is never confirmed. The report does not pretend to
+certify what it cannot observe.
 
 Sections:
 
 * `runtime` — OS identity, kernel, PHP CLI/FPM, Nginx and MySQL versions, and the
   PHP-FPM, Nginx and vendor MySQL unit snapshots. Version `PASS` means the
   version string was read and parsed; compatibility against a release contract
-  is not asserted by this metadata inventory.
+  is not asserted by this metadata inventory. A unit snapshot `PASS` means the
+  snapshot was read and parsed; it does not itself mean the unit is active.
 * `g1_systemd` — both G1 unit snapshots plus the vendor `mysql.service`, and
   whether both G1 instances are inactive.
 * `g1_artifacts` — owner, group, mode, size and SHA-256 of each fixed G1 artifact.
+  The section checks expected ownership/mode and reports hashes; it does not
+  compare those hashes to release pins. It covers the existing GO-5 G1 artifact
+  set, not the separately installed GO-6.2 inventory package.
 * `apparmor` — loaded mode of each G1 profile and the kernel profile
   `/usr/sbin/mysqld`, plus bounded, sanitized denial summaries. Only denials
   attached to those three profiles affect this section's status; unrelated
@@ -162,10 +175,12 @@ nine-field `RESTORE_REHEARSAL_VERIFIED` checkpoint, its transaction ID matches
 the journal filename, its state is consistent with checkpoint presence, the
 checkpoint receipt hash recomputes correctly, and the checkpoint, journal and
 on-disk backup hashes and metadata agree for the active release. It does not
-mean a restore was performed by this invocation.
+mean a restore was performed by this invocation. The receipt digest is unkeyed;
+it shows internal consistency, not who produced the receipt.
 `live_restore_validation=NOT_PERFORMED` is always reported. An early-phase
-journal without a checkpoint is `UNKNOWN`; a completed-or-later journal that
-omits a required checkpoint, or any `RECOVERY_REQUIRED` journal, is `FAIL`.
+journal without a checkpoint is `UNKNOWN`; a journal in
+`RESTORE_REHEARSAL_VERIFIED` or a later valid state that omits its required
+checkpoint, or any `RECOVERY_REQUIRED` journal, is `FAIL`.
 Journal profile/database identity, migration fields, non-empty migration lists,
 and the producer's nanosecond timestamps are validated. Timestamp values must
 be at least `1e18` and no more than five minutes ahead of the inventory host's
@@ -186,7 +201,8 @@ contain no duplicate keys, and be root-owned with mode `0644`.
   limits. Symlinks, non-regular files and changed files are reported as `FAIL`.
   Fixed state, backup and release directory chains are checked for symlinks,
   ownership and unsafe write permissions before traversal; directory entries
-  are listed through `O_NOATIME` descriptors.
+  are listed through `O_NOATIME` descriptors. If a file changes during the
+  read/verification sequence, some sections report `UNKNOWN` rather than `FAIL`.
 * Release symlinks must resolve inside `releases/` to a single 40-hex directory;
   traversal outside `releases/` is rejected.
 * Journal and backup filenames must match their exact patterns; anything else is
@@ -196,7 +212,8 @@ contain no duplicate keys, and be root-owned with mode `0644`.
 * MySQL option paths are never echoed; binary logging is classified as `ON`,
   `OFF`, or `UNKNOWN` separately for each G1 instance. MySQL `loose-`,
   `enable-`, `disable-`, and `skip-` boolean spellings are normalized for the
-  explicitly inspected settings.
+  explicitly inspected settings. Missing `local-infile` or
+  `skip-grant-tables` evidence also remains `UNKNOWN`.
 * Every invocation attempts one fixed-field start record and one finish record
   to the local syslog `auth` facility, including rejected arguments and
   non-root calls. Python's `syslog` API does not confirm durable delivery, so
@@ -207,52 +224,44 @@ contain no duplicate keys, and be root-owned with mode `0644`.
   not fail-closed audit evidence; operators must verify both records in the
   system journal during the separately authorized smoke test.
 
-The audit facility requires an actual root console that can submit to the local
-syslog `auth` facility. The helper does not install, configure or escalate that
-access, and cannot independently confirm that syslog persisted a submitted
-record.
+The authorized operator must invoke this tool from the approved root-console
+session that can submit to the local syslog `auth` facility. The helper only
+checks effective UID 0; it cannot distinguish a root login from `sudo`, and its
+audit UID fields do not prove the console path. The helper does not install,
+configure or escalate that access, and cannot independently confirm that syslog
+persisted a submitted record.
 
 ## Package and install proposal
 
 The package proposal is `scripts/production-g1-inventory/`:
 
 * `go62-inventory.py` — the helper;
-* `go62-inventory-manifest.json` — schema, version, install path, mode, exit
-  codes and helper SHA-256;
-* `SHA256SUMS` — exact checksums for the two package files.
+* `go62-inventory-manifest.json` — schema, version, helper install path/mode
+  and helper SHA-256. Its `files` list describes the helper; the manifest does
+  not hash itself;
+* `SHA256SUMS` — exact checksums for the helper and manifest. It does not hash
+  itself, so all three artifact digests must be verified out of band.
 
-Proposed installation (a separate reviewed action, not performed here):
+The exact, source-only install and rollback command procedure is in
+`docs/PRODUCTION_G1_INVENTORY_GO62_INSTALL.md`. It is a proposed procedure, not
+authorization; the command blocks are not to be run until a separate Owner
+host-install GO names the commit, host, approved root-console path, hashes,
+smoke-test scope and evidence reviewer. No secrets or production output are part
+of the package.
 
-1. Verify the exact reviewed release commit and run `sha256sum -c --strict`
-   against the package `SHA256SUMS` before transfer. No secrets or production
-   output are part of the package.
-2. In a separately authorized root-console operation, require the destination
-   to be absent. Create a staging directory beside
-   `/usr/local/libexec/wpcaregrid-g1-inventory/` as `root:root 0700`; install
-   the helper `root:root 0644` and manifest `root:root 0644`; verify exact hashes
-   and ownership; then atomically promote without replacing an existing target.
-   An existing target, unexpected file or failed verification is STOP.
-3. Run it only from the root console as
-   `python3 -I -B /usr/local/libexec/wpcaregrid-g1-inventory/go62-inventory.py`.
-   Confirm one JSON object, the schema/tool/version fields, and both syslog audit
-   records. A `UNKNOWN` MySQL result is expected until database evidence has its
-   own reviewed authorization contract.
-4. Keep stdout operator-only. Do not pipe it to CI, a public log, or a ticket
-   attachment.
+The GO-6.2 install is separate from the GO-5 G1 helper listed in the fixed-scope
+table above: the GO-6.2 directory is
+`/usr/local/libexec/wpcaregrid-g1-inventory/`, with a non-executable helper and
+manifest at mode `0644` in a root-only `0700` directory. The exact bytes of the
+installed helper must be checked against the approved out-of-band digest before
+every invocation. The manifest is installed alongside it; `SHA256SUMS` remains
+in the root-only handoff and is not installed.
 
-Rollback is only needed if an authorized installation has already promoted the
-directory. Stop using the helper, verify the installed directory still contains
-only the reviewed package hashes and no invocation is running, then rename that
-directory to a root-owned quarantine name beside it. Preserve it for review;
-do not delete or overwrite an unknown pre-existing helper. Because the proposal
-adds no service, timer, sudoers rule or database credential, rollback does not
-touch an application service or database. If the destination or hashes differ,
-STOP and preserve the evidence.
-
-The read-only smoke test is the authorized root-console invocation above. It is
-not part of CI and must not run in a production workflow automatically. A
-successful checksum or gzip test reports backup metadata/integrity only; the
-restore gate remains closed until a separate isolated restore proof exists.
+The read-only smoke test is the single authorized root-console invocation
+specified in the install runbook. It is not part of CI and must not run in a
+production workflow automatically. A successful checksum or gzip test reports
+backup metadata/integrity only; the restore gate remains closed until a separate
+isolated restore proof exists.
 
 No sudoers entry, systemd unit, timer, credential file, or deploy-priv change is
 part of this proposal.
