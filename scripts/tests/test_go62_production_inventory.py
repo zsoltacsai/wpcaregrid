@@ -36,10 +36,17 @@ go = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = go
 SPEC.loader.exec_module(go)
 
+TX_SPEC = importlib.util.spec_from_file_location("deployment_transaction_v2", SCRIPTS / "deployment_transaction_v2.py")
+tx = importlib.util.module_from_spec(TX_SPEC)
+sys.modules[TX_SPEC.name] = tx
+TX_SPEC.loader.exec_module(tx)
+tx.PROFILE = "production"
+tx.DATABASE = "wpcg_prod_app"
+
 RELEASE_SHA = "1" * 40
 BASE_SHA = "2" * 40
-TID = "3" * 32
-BACKUP_NAME = "production-" + "4" * 40 + "-20261112201500-" + "5" * 8 + ".sql.gz"
+BACKUP_NAME = "production-" + RELEASE_SHA + "-20261112201500-" + "5" * 8 + ".sql.gz"
+TEST_TIME_NS = 1763000000000000000
 CHECKPOINT = {
     "backup_sha256": "6" * 64,
     "target_schema_sha256": "7" * 64,
@@ -54,21 +61,34 @@ CHECKPOINT = {
 
 
 def receipt_for(checkpoint):
-    payload = {key: checkpoint[key] for key in sorted(go.RESTORE_CHECKPOINT_KEYS - {"restore_receipt_sha256"})}
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    payload = {key: checkpoint[key] for key in go.RESTORE_CHECKPOINT_KEYS - {"restore_receipt_sha256"}}
+    return tx.restore_receipt_sha256(payload)
 
 
-def journal_for(txid, app_sha=RELEASE_SHA, *, backup_sha="6" * 64, checkpoint=None, state="COMPLETE"):
-    return {
-        "schema": 4, "profile": "production", "database": "wpcg_production",
-        "transaction_id": txid, "application_sha": app_sha, "previous_sha": BASE_SHA,
+def producer_transaction_id(journal):
+    identity = tx.TransactionIdentity(
+        application_sha=journal["application_sha"], previous_sha=journal["previous_sha"],
+        artifact_sha256=journal["artifact_sha256"], backup_sha256=journal["backup_sha256"],
+        backup_filename=journal["backup_filename"], mysql_uuid_sha256=journal["mysql_uuid_sha256"],
+        migrations=tuple(journal["migrations"]),
+    )
+    return tx.DatabaseReleaseTransaction._identity_id(identity)
+
+
+def journal_for(app_sha=RELEASE_SHA, *, backup_sha="6" * 64, checkpoint=None,
+                state="COMPLETE", previous_sha=BASE_SHA):
+    journal = {
+        "schema": 4, "profile": "production", "database": "wpcg_prod_app",
+        "transaction_id": "0" * 32, "application_sha": app_sha, "previous_sha": previous_sha,
         "artifact_sha256": "a" * 64, "backup_sha256": backup_sha,
         "backup_filename": BACKUP_NAME, "mysql_uuid_sha256": "b" * 64,
-        "migrations": [], "state": state,
+        "migrations": ["2026_01_01_000001_fixture_migration"], "state": state,
         "evidence": ({"RESTORE_REHEARSAL_VERIFIED": checkpoint} if checkpoint is not None else {}),
         "migration_cursor": 0, "migration_before": None, "migration_started_at": None,
-        "updated_at": 1763000000000000000,
+        "updated_at": TEST_TIME_NS,
     }
+    journal["transaction_id"] = producer_transaction_id(journal)
+    return journal
 UNIT_OUTPUT = {
     go.MYSQL_UNIT: ("active", "running", 4242),
     go.FPM_UNIT: ("active", "running", 4243),
@@ -212,8 +232,9 @@ class Fixture:
             checkpoint = dict(CHECKPOINT)
             checkpoint["backup_sha256"] = digest
             checkpoint["restore_receipt_sha256"] = receipt_for(checkpoint)
-            journal = journal_for(TID, backup_sha=digest, checkpoint=checkpoint)
-            self.write(go.PRODUCTION_STATE + "/db-release-" + TID + ".json",
+            journal = journal_for(backup_sha=digest, checkpoint=checkpoint)
+            self.txid = journal["transaction_id"]
+            self.write(go.PRODUCTION_STATE + "/db-release-" + self.txid + ".json",
                        json.dumps(journal).encode(), 0o600)
         return self
 
@@ -266,7 +287,7 @@ class CompleteFixtureTest(InventoryTestCase):
 
     def test_inventory_reads_do_not_update_inspected_file_atime(self):
         self.fixture.build()
-        target = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        target = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
         before = target.stat().st_atime_ns
         directories = [self.fixture.path(path) for path in (
             go.PRODUCTION_STATE, go.PRODUCTION_BACKUPS, go.PRODUCTION_RELEASES,
@@ -358,6 +379,14 @@ class CompleteFixtureTest(InventoryTestCase):
         self.assertTrue(restore["restore_checkpoint_present"])
         self.assertEqual(restore["live_restore_validation"], "NOT_PERFORMED")
         self.assertEqual(restore["restore_proof"], "NOT_PROVEN")
+        self.assertEqual(restore["latest_journal"]["updated_at"], TEST_TIME_NS)
+
+    def test_inventory_transaction_id_matches_production_writer(self):
+        self.fixture.build()
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        self.assertEqual(journal["transaction_id"], producer_transaction_id(journal))
+        self.assertEqual(journal["transaction_id"], go._transaction_id(journal))
 
     def test_locks_absent_is_reported_free(self):
         self.fixture.build()
@@ -413,7 +442,7 @@ class RedactionAndInjectionTest(InventoryTestCase):
 
     def test_journal_filename_and_backup_path_are_redacted(self):
         self.fixture.build()
-        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
         journal["backup_filename"] = "../../etc/shadow"
         journal.pop("evidence")
@@ -608,9 +637,9 @@ class UnavailableEvidenceTest(InventoryTestCase):
         self.assertEqual(sections["restore"]["reason"], "restore_evidence_absent")
         self.assertEqual(sections["restore"]["restore_proof"], "NOT_PROVEN")
 
-    def test_journal_without_restore_checkpoint_is_unknown_not_pass(self):
+    def test_completed_journal_without_restore_checkpoint_is_invalid(self):
         self.fixture.build()
-        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
         journal["evidence"] = {}
         journal_path.write_text(json.dumps(journal), encoding="utf-8")
@@ -621,7 +650,7 @@ class UnavailableEvidenceTest(InventoryTestCase):
 
     def test_invalid_journal_fails_closed(self):
         self.fixture.build()
-        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
         journal_path.write_text("{not json", encoding="utf-8")
         sections = self.report()["sections"]
         self.assertEqual(sections["restore"]["status"], "FAIL")
@@ -643,8 +672,9 @@ class UnavailableEvidenceTest(InventoryTestCase):
         state = self.fixture.path(go.PRODUCTION_STATE)
         for index in range(go.MAX_JOURNALS + 1):
             txid = f"{index:032x}"
-            journal = journal_for(txid, checkpoint=None, state="PREPARED")
-            journal["updated_at"] = index or 1
+            journal = journal_for(checkpoint=None, state="PREPARED", previous_sha=f"{index + 1:040x}")
+            journal["updated_at"] = TEST_TIME_NS + index
+            txid = journal["transaction_id"]
             (state / f"db-release-{txid}.json").write_text(json.dumps(journal), encoding="utf-8")
             os.chmod(state / f"db-release-{txid}.json", 0o600)
         sections = self.report()["sections"]
@@ -656,11 +686,19 @@ class UnavailableEvidenceTest(InventoryTestCase):
 
     def test_restore_checkpoint_must_match_active_release_and_backup(self):
         self.fixture.build()
-        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        stale_backup_name = "production-" + "a" * 40 + "-20261112201500-" + "5" * 8 + ".sql.gz"
+        original_backup = self.fixture.path(go.PRODUCTION_BACKUPS) / BACKUP_NAME
+        original_backup.rename(self.fixture.path(go.PRODUCTION_BACKUPS) / stale_backup_name)
         journal["application_sha"] = "a" * 40
-        journal_path.write_text(json.dumps(journal), encoding="utf-8")
-        os.chmod(journal_path, 0o600)
+        journal["backup_filename"] = stale_backup_name
+        new_id = producer_transaction_id(journal)
+        journal["transaction_id"] = new_id
+        new_path = journal_path.with_name("db-release-" + new_id + ".json")
+        new_path.write_text(json.dumps(journal), encoding="utf-8")
+        os.chmod(new_path, 0o600)
+        journal_path.unlink()
         restore = self.report()["sections"]["restore"]
         self.assertEqual(restore["status"], "UNKNOWN")
         self.assertFalse(restore["restore_checkpoint_present"])
@@ -668,7 +706,7 @@ class UnavailableEvidenceTest(InventoryTestCase):
 
     def test_restore_checkpoint_backup_sha_must_match_journal(self):
         self.fixture.build()
-        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
         journal["evidence"]["RESTORE_REHEARSAL_VERIFIED"]["backup_sha256"] = "f" * 64
         journal["evidence"]["RESTORE_REHEARSAL_VERIFIED"]["restore_receipt_sha256"] = receipt_for(
@@ -676,10 +714,9 @@ class UnavailableEvidenceTest(InventoryTestCase):
         journal_path.write_text(json.dumps(journal), encoding="utf-8")
         os.chmod(journal_path, 0o600)
         sections = self.report()["sections"]
-        self.assertFalse(sections["journals"]["journals"][0]["restore_checkpoint_present"])
-        self.assertFalse(sections["journals"]["journals"][0]["restore_checkpoint_backup_matches_journal"])
-        self.assertEqual(sections["restore"]["status"], "UNKNOWN")
-        self.assertEqual(sections["restore"]["reason"], "restore_evidence_stale_or_unmatched")
+        self.assertEqual(sections["journals"]["status"], "FAIL")
+        self.assertEqual(sections["restore"]["status"], "FAIL")
+        self.assertEqual(sections["journals"]["journals"][0]["reason"], "journal_restore_checkpoint_invalid")
 
     def test_restore_checkpoint_does_not_qualify_if_disk_backup_changes(self):
         self.fixture.build()
@@ -694,18 +731,18 @@ class UnavailableEvidenceTest(InventoryTestCase):
 
     def test_restore_checkpoint_receipt_must_match_its_fields(self):
         self.fixture.build()
-        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
         journal["evidence"]["RESTORE_REHEARSAL_VERIFIED"]["target_data_sha256"] = "f" * 64
         journal_path.write_text(json.dumps(journal), encoding="utf-8")
         os.chmod(journal_path, 0o600)
         sections = self.report()["sections"]
-        self.assertFalse(sections["journals"]["journals"][0]["restore_checkpoint_receipt_valid"])
-        self.assertEqual(sections["restore"]["status"], "UNKNOWN")
+        self.assertEqual(sections["journals"]["status"], "FAIL")
+        self.assertEqual(sections["restore"]["status"], "FAIL")
 
     def test_recovery_required_journal_is_invalid_evidence(self):
         self.fixture.build()
-        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
         journal["state"] = "RECOVERY_REQUIRED"
         journal_path.write_text(json.dumps(journal), encoding="utf-8")
@@ -714,12 +751,77 @@ class UnavailableEvidenceTest(InventoryTestCase):
 
     def test_journal_transaction_id_must_match_filename(self):
         self.fixture.build()
-        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
         journal["transaction_id"] = "9" * 32
         journal_path.write_text(json.dumps(journal), encoding="utf-8")
         os.chmod(journal_path, 0o600)
         self.assertEqual(self.report()["sections"]["journals"]["status"], "FAIL")
+
+    def test_journal_transaction_id_must_bind_all_identity_fields(self):
+        self.fixture.build()
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        journal["previous_sha"] = "c" * 40
+        journal_path.write_text(json.dumps(journal), encoding="utf-8")
+        os.chmod(journal_path, 0o600)
+        self.assertEqual(self.report()["sections"]["journals"]["journals"][0]["reason"],
+                         "transaction_identity_mismatch")
+
+    def test_duplicate_journal_json_keys_fail_closed(self):
+        self.fixture.build()
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
+        journal_text = journal_path.read_text(encoding="utf-8")
+        journal_path.write_text('{"state":"RECOVERY_REQUIRED",' + journal_text[1:], encoding="utf-8")
+        os.chmod(journal_path, 0o600)
+        self.assertEqual(self.report()["sections"]["journals"]["journals"][0]["reason"], "journal_invalid")
+
+    def test_malformed_nonnull_checkpoint_in_early_state_fails(self):
+        self.fixture.build()
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        journal["state"] = "PREPARED"
+        journal["evidence"]["RESTORE_REHEARSAL_VERIFIED"] = {"unexpected": "value"}
+        journal_path.write_text(json.dumps(journal), encoding="utf-8")
+        os.chmod(journal_path, 0o600)
+        self.assertEqual(self.report()["sections"]["journals"]["journals"][0]["reason"],
+                         "journal_state_evidence_mismatch")
+
+    def test_journal_profile_database_and_timestamp_are_validated(self):
+        for field, bad_value in (("profile", "staging-next"), ("database", "wpcg_staging_next")):
+            with self.subTest(field=field):
+                self.fixture = Fixture(Path(self._temp.name) / field)
+                self.fixture.build()
+                journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
+                journal = json.loads(journal_path.read_text(encoding="utf-8"))
+                journal[field] = bad_value
+                journal_path.write_text(json.dumps(journal), encoding="utf-8")
+                os.chmod(journal_path, 0o600)
+                self.assertEqual(self.report()["sections"]["journals"]["status"], "FAIL")
+
+    def test_journal_updated_at_must_be_positive_nanoseconds(self):
+        for index, bad_value in enumerate((None, -1, 1.5, True, "abc", 1763000000)):
+            with self.subTest(updated_at=bad_value):
+                self.fixture = Fixture(Path(self._temp.name) / f"timestamp-{index}")
+                self.fixture.build()
+                journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
+                journal = json.loads(journal_path.read_text(encoding="utf-8"))
+                journal["updated_at"] = bad_value
+                journal_path.write_text(json.dumps(journal), encoding="utf-8")
+                os.chmod(journal_path, 0o600)
+                self.assertEqual(self.report()["sections"]["journals"]["status"], "FAIL")
+
+    def test_duplicate_journal_backup_references_fail_deterministically(self):
+        self.fixture.build()
+        journal = journal_for(checkpoint=None, state="PREPARED", previous_sha="f" * 40)
+        other_id = journal["transaction_id"]
+        path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + other_id + ".json")
+        path.write_text(json.dumps(journal), encoding="utf-8")
+        os.chmod(path, 0o600)
+        sections = self.report()["sections"]
+        backup = sections["backups"]["backups"][0]
+        self.assertEqual(backup["evidence_match"], "FAIL")
+        self.assertEqual(backup["evidence_match_reason"], "duplicate_backup_journal_reference")
 
     def test_restore_checkpoint_does_not_qualify_with_bad_backup_metadata(self):
         self.fixture.build()
@@ -741,13 +843,18 @@ class BackupIntegrityTest(InventoryTestCase):
 
     def test_backup_hash_mismatch_is_a_failure(self):
         self.fixture.build()
-        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + TID + ".json")
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
         journal["backup_sha256"] = "9" * 64
-        journal_path.write_text(json.dumps(journal), encoding="utf-8")
-        entry = self.report()["sections"]["backups"]["backups"][0]
-        self.assertEqual(entry["evidence_match"], "FAIL")
-        self.assertEqual(entry["status"], "FAIL")
+        new_id = producer_transaction_id(journal)
+        journal["transaction_id"] = new_id
+        new_path = journal_path.with_name("db-release-" + new_id + ".json")
+        new_path.write_text(json.dumps(journal), encoding="utf-8")
+        os.chmod(new_path, 0o600)
+        journal_path.unlink()
+        sections = self.report()["sections"]
+        self.assertEqual(sections["journals"]["status"], "FAIL")
+        self.assertEqual(sections["restore"]["status"], "FAIL")
 
     def test_wrong_backup_mode_fails_metadata(self):
         self.fixture.build()

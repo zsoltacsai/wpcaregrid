@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "package": "wpcaregrid-g1-inventory",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "tool": "go62-production-inventory",
   "scope": "Read-only, fixed-scope production inventory for the two isolated G1 MySQL instances. It uses fixed paths and fixed argv arrays, never a shell, never a caller-supplied path, and no database credential. Privileged database facts and restore proof are reported as UNKNOWN/NOT_PROVEN, never inferred.",
   "invocation": "python3 -I -B /usr/local/libexec/wpcaregrid-g1-inventory/go62-inventory.py",
@@ -18,7 +18,7 @@
       "install_path": "/usr/local/libexec/wpcaregrid-g1-inventory/go62-inventory.py",
       "owner": "root:root",
       "mode": "0644",
-      "sha256": "8890f4cdf2639866ad0876543fa2006834d6e0685a3e790c6d4feaa79e9fda44"
+      "sha256": "c1ced0ddabd9abe948f9737ad3af1c4b2b78c2954f559ba0c8b451f0a518d297"
     }
   ],
   "audit": {

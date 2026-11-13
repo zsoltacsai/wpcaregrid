@@ -37,7 +37,7 @@ import zlib
 from datetime import datetime, timezone
 
 TOOL = "go62-production-inventory"
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 SCHEMA = 1
 MAX_COMMAND_OUTPUT = 2 * 1024 * 1024
 MAX_TEXT_FILE = 1024 * 1024
@@ -47,6 +47,8 @@ MAX_BACKUPS = 16
 MAX_BACKUP_HASH_BYTES = 512 * 1024 * 1024
 MAX_BACKUP_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_JOURNALS = 16
+MIN_JOURNAL_TIMESTAMP_NS = 1_000_000_000_000_000_000
+MAX_JOURNAL_FUTURE_SKEW_NS = 300_000_000_000
 
 PRODUCTION_BASE = "/var/www/wpcaregrid-production"
 PRODUCTION_CURRENT = PRODUCTION_BASE + "/current"
@@ -116,6 +118,7 @@ BACKUP_RE = re.compile(r"production-[0-9a-f]{40}-[0-9]{1,30}-[0-9a-f]{8}\.sql\.g
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 JOURNAL_RE = re.compile(r"db-release-([0-9a-f]{32})\.json\Z")
+MIGRATION_RE = re.compile(r"[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}_[a-z0-9_]+\Z")
 TOKEN_RE = re.compile(r"[A-Za-z0-9_.:+/@=-]{1,128}\Z")
 COMM_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 TEXT_RE = re.compile(r"[A-Za-z0-9 .,()/_+:@%=-]{0,200}\Z")
@@ -169,6 +172,31 @@ class Unavailable(Stop):
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _unique_json(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate_json_key")
+        result[key] = value
+    return result
+
+
+def _transaction_id(value):
+    identity = {
+        "profile": value["profile"],
+        "database": value["database"],
+        "application_sha": value["application_sha"],
+        "previous_sha": value["previous_sha"],
+        "artifact_sha256": value["artifact_sha256"],
+        "backup_sha256": value["backup_sha256"],
+        "backup_filename": value["backup_filename"],
+        "mysql_uuid_sha256": value["mysql_uuid_sha256"],
+        "migrations": value["migrations"],
+    }
+    material = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()[:32]
 
 
 def combine(statuses):
@@ -988,7 +1016,7 @@ def _read_journals(root, root_uid):
         item = {"filename": "journal", "transaction_id": JOURNAL_RE.fullmatch(name).group(1)}
         try:
             data, opened = _read_regular(path, limit=MAX_JOURNAL_BYTES, expected_uid=root_uid, expected_mode=0o600)
-            value = json.loads(data.decode("utf-8"))
+            value = json.loads(data.decode("utf-8"), object_pairs_hook=_unique_json)
         except Unavailable:
             item.update({"status": "UNKNOWN", "reason": "journal_unavailable"})
             journals.append(item)
@@ -1003,6 +1031,13 @@ def _read_journals(root, root_uid):
             continue
         txid = value.get("transaction_id")
         app_sha = value.get("application_sha")
+        previous_sha = value.get("previous_sha")
+        database = value.get("database")
+        updated_at = value.get("updated_at")
+        migrations = value.get("migrations")
+        migration_cursor = value.get("migration_cursor")
+        migration_before = value.get("migration_before")
+        migration_started_at = value.get("migration_started_at")
         state_value = value.get("state")
         evidence = value.get("evidence")
         checkpoint = evidence.get("RESTORE_REHEARSAL_VERIFIED") if isinstance(evidence, dict) else None
@@ -1011,11 +1046,39 @@ def _read_journals(root, root_uid):
                 or txid != JOURNAL_RE.fullmatch(name).group(1)
                 or not isinstance(state_value, str)
                 or state_value not in TRANSACTION_STATES
-                or state_value == "RECOVERY_REQUIRED"
                 or not isinstance(txid, str) or not re.fullmatch(r"[0-9a-f]{32}", txid)
                 or not isinstance(app_sha, str) or not SHA_RE.fullmatch(app_sha)
+                or value.get("profile") != "production"
+                or not isinstance(database, str) or not re.fullmatch(r"wpcg_prod_[a-z0-9_]{1,48}", database)
+                or not isinstance(previous_sha, str) or not SHA_RE.fullmatch(previous_sha)
+                or not isinstance(value.get("artifact_sha256"), str)
+                or not SHA256_RE.fullmatch(value["artifact_sha256"])
+                or not isinstance(value.get("mysql_uuid_sha256"), str)
+                or not SHA256_RE.fullmatch(value["mysql_uuid_sha256"])
+                or not isinstance(value.get("backup_sha256"), str)
+                or not SHA256_RE.fullmatch(value["backup_sha256"])
+                or not isinstance(value.get("backup_filename"), str)
+                or not BACKUP_RE.fullmatch(value["backup_filename"])
+                or not value["backup_filename"].startswith("production-" + app_sha + "-")
+                or not isinstance(migrations, list)
+                or len(migrations) > 1000
+                or not all(isinstance(migration, str) and MIGRATION_RE.fullmatch(migration)
+                           for migration in migrations)
+                or len(set(migrations)) != len(migrations)
+                or type(migration_cursor) is not int
+                or not 0 <= migration_cursor <= len(migrations)
+                or type(updated_at) is not int
+                or not MIN_JOURNAL_TIMESTAMP_NS <= updated_at <= time.time_ns() + MAX_JOURNAL_FUTURE_SKEW_NS
                 or not isinstance(evidence, dict)):
             item.update({"status": "FAIL", "reason": "journal_invalid"})
+            journals.append(item)
+            continue
+        if state_value == "RECOVERY_REQUIRED":
+            item.update({"status": "FAIL", "reason": "transaction_recovery_required"})
+            journals.append(item)
+            continue
+        if _transaction_id(value) != txid:
+            item.update({"status": "FAIL", "reason": "transaction_identity_mismatch"})
             journals.append(item)
             continue
         checkpoint_shape_ok = (
@@ -1026,7 +1089,8 @@ def _read_journals(root, root_uid):
         )
         checkpoint_state_consistent = (
             (state_value in RESTORE_EVIDENCE_STATES and checkpoint_shape_ok)
-            or (state_value in {"PREPARED", "BACKUP_VERIFIED"} and not checkpoint_shape_ok)
+            or (state_value in {"PREPARED", "BACKUP_VERIFIED"}
+                and checkpoint is None)
         )
         journal_backup_sha = value.get("backup_sha256")
         checkpoint_backup_matches_journal = (
@@ -1048,6 +1112,29 @@ def _read_journals(root, root_uid):
             item.update({"status": "FAIL", "reason": "journal_state_evidence_mismatch"})
             journals.append(item)
             continue
+        if checkpoint_shape_ok and (not checkpoint_backup_matches_journal or not receipt_ok):
+            item.update({"status": "FAIL", "reason": "journal_restore_checkpoint_invalid"})
+            journals.append(item)
+            continue
+        before_keys = {
+            "schema_sha256", "ledger_sha256", "data_sha256",
+            "expected_schema_sha256", "expected_ledger_sha256", "expected_data_sha256",
+        }
+        migrating_with_checkpoint = state_value == "MIGRATING" and migration_cursor < len(migrations)
+        if migrating_with_checkpoint:
+            if (not isinstance(migration_before, dict) or set(migration_before) != before_keys
+                    or not all(isinstance(migration_before[key], str)
+                               and SHA256_RE.fullmatch(migration_before[key]) for key in before_keys)
+                    or type(migration_started_at) is not int
+                    or not MIN_JOURNAL_TIMESTAMP_NS <= migration_started_at
+                    <= time.time_ns() + MAX_JOURNAL_FUTURE_SKEW_NS):
+                item.update({"status": "FAIL", "reason": "journal_migration_checkpoint_invalid"})
+                journals.append(item)
+                continue
+        elif migration_before is not None or migration_started_at is not None:
+            item.update({"status": "FAIL", "reason": "journal_migration_checkpoint_stale"})
+            journals.append(item)
+            continue
         item.update({
             "status": "PASS",
             "transaction_id": txid,
@@ -1064,9 +1151,7 @@ def _read_journals(root, root_uid):
             "restore_checkpoint_present": checkpoint_ok,
             "restore_checkpoint_backup_matches_journal": bool(checkpoint_backup_matches_journal),
             "restore_checkpoint_receipt_valid": receipt_ok,
-            "updated_at": (value.get("updated_at") * 1_000_000_000
-                           if type(value.get("updated_at")) is int and value.get("updated_at") >= 0
-                           else opened.st_mtime_ns),
+            "updated_at": updated_at,
         })
         journals.append(item)
     return {
@@ -1163,11 +1248,11 @@ def collect_backups(root, root_uid, journals_result=None):
     except OSError:
         return {"status": "UNAVAILABLE", "reason": "backup_directory_unavailable"}
     candidates = [name for name in names if BACKUP_RE.fullmatch(name)]
-    journal_by_name = {}
+    journals_by_name = {}
     if isinstance(journals_result, dict):
         for journal in journals_result.get("journals", []):
             if isinstance(journal, dict) and journal.get("backup_filename", "REDACTED") != "REDACTED":
-                journal_by_name[journal["backup_filename"]] = journal
+                journals_by_name.setdefault(journal["backup_filename"], []).append(journal)
     ordered = []
     for name in candidates:
         try:
@@ -1204,12 +1289,15 @@ def collect_backups(root, root_uid, journals_result=None):
         item["integrity"] = integrity
         if reason:
             item["integrity_reason"] = reason
-        journal = journal_by_name.get(name)
-        if journal is None:
+        matching_journals = journals_by_name.get(name, [])
+        if not matching_journals:
             item["evidence_match"] = "UNKNOWN"
+        elif len(matching_journals) > 1:
+            item["evidence_match"] = "FAIL"
+            item["evidence_match_reason"] = "duplicate_backup_journal_reference"
         elif digest is None:
             item["evidence_match"] = "UNKNOWN"
-        elif journal.get("backup_sha256") == digest:
+        elif matching_journals[0].get("backup_sha256") == digest:
             item["evidence_match"] = "PASS"
         else:
             item["evidence_match"] = "FAIL"

@@ -82,7 +82,7 @@ settings are `UNKNOWN`, not `PASS`.
 ## Output and statuses
 
 The helper prints exactly one JSON document to stdout. The schema is `1`, the tool
-is `go62-production-inventory`, and the version is `1.0.2`.
+is `go62-production-inventory`, and the version is `1.0.3`.
 
 | Status | Meaning | Exit |
 | --- | --- | --- |
@@ -166,6 +166,9 @@ mean a restore was performed by this invocation.
 `live_restore_validation=NOT_PERFORMED` is always reported. An early-phase
 journal without a checkpoint is `UNKNOWN`; a completed-or-later journal that
 omits a required checkpoint, or any `RECOVERY_REQUIRED` journal, is `FAIL`.
+Journal profile/database identity, migration fields and the producer's positive
+nanosecond timestamps are validated; invalid timestamps or duplicate journal
+references to one backup fail closed.
 
 ## Security model
 
