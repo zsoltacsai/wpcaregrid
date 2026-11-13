@@ -320,9 +320,17 @@ set -eu
 H_HELPER=63bf9843b6949089c7a8dd05a1da553fb2c3a2b72a40abe66bd27b82fc1cdbca
 H_MANIFEST=4fd7e24144c75f76432948a8546c880a2f44fb14e56929926fc13d5fb4858d9f
 target=/usr/local/libexec/wpcaregrid-g1-inventory
+test -d "$target" && test ! -L "$target"
 test "$(stat -c '%U:%G %a' "$target")" = 'root:root 700'
+test "$(find "$target" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ')" = \
+  'go62-inventory-manifest.json go62-inventory.py '
+for f in "$target/go62-inventory.py" "$target/go62-inventory-manifest.json"; do
+  test -f "$f" && test ! -L "$f"
+done
 test "$(stat -c '%U:%G %a' "$target/go62-inventory.py")" = 'root:root 644'
 test "$(stat -c '%U:%G %a' "$target/go62-inventory-manifest.json")" = 'root:root 644'
+test "$(stat -c %s "$target/go62-inventory.py")" = 72097
+test "$(stat -c %s "$target/go62-inventory-manifest.json")" = 1299
 printf '%s  %s\n' "$H_HELPER" "$target/go62-inventory.py" \
   "$H_MANIFEST" "$target/go62-inventory-manifest.json" | sha256sum -c --strict -
 ev=/root/go62-evidence-$(date -u +%Y%m%dT%H%M%SZ)
