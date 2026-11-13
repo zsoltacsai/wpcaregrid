@@ -37,7 +37,7 @@ import zlib
 from datetime import datetime, timezone
 
 TOOL = "go62-production-inventory"
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 SCHEMA = 1
 MAX_COMMAND_OUTPUT = 2 * 1024 * 1024
 MAX_TEXT_FILE = 1024 * 1024
@@ -154,6 +154,11 @@ JOURNAL_KEYS = {
     "previous_sha", "artifact_sha256", "backup_sha256", "backup_filename",
     "mysql_uuid_sha256", "migrations", "state", "evidence", "migration_cursor",
     "migration_before", "migration_started_at", "updated_at",
+}
+RELEASE_MANIFEST_KEYS = {
+    "schema", "profile", "application_sha", "base_application_sha", "php_minimum",
+    "database_scope", "database_migrations", "helper_version", "helper_sha256",
+    "helper_contract", "frontend_build", "files_sha256", "artifact_sha256",
 }
 
 
@@ -936,19 +941,21 @@ def collect_release(root, root_uid):
         return {"status": "FAIL", "reason": exc.code}
     manifest_path = os.path.join(target, "release-manifest.json")
     try:
-        data, _m = _read_regular(manifest_path, limit=32 * 1024)
+        data, _m = _read_regular(manifest_path, limit=32 * 1024,
+                                 expected_uid=root_uid, expected_mode=0o644)
     except Unavailable:
         return {"status": "UNKNOWN", "reason": "release_manifest_unavailable", "application_sha": sha}
     except Stop as exc:
         return {"status": "FAIL", "reason": exc.code, "application_sha": sha}
     try:
-        manifest = json.loads(data.decode("utf-8"))
+        manifest = json.loads(data.decode("utf-8"), object_pairs_hook=_unique_json)
     except (UnicodeError, ValueError):
         return {"status": "FAIL", "reason": "release_manifest_invalid", "application_sha": sha}
     if not isinstance(manifest, dict):
         return {"status": "FAIL", "reason": "release_manifest_invalid", "application_sha": sha}
     identity_ok = (
-        type(manifest.get("schema")) is int
+        set(manifest) == RELEASE_MANIFEST_KEYS
+        and type(manifest.get("schema")) is int
         and manifest.get("schema") == 1
         and manifest.get("profile") == "production"
         and manifest.get("application_sha") == sha
@@ -958,6 +965,16 @@ def collect_release(root, root_uid):
         and bool(SHA256_RE.fullmatch(manifest["artifact_sha256"]))
         and isinstance(manifest.get("files_sha256"), str)
         and bool(SHA256_RE.fullmatch(manifest["files_sha256"]))
+        and isinstance(manifest.get("helper_version"), str)
+        and bool(TOKEN_RE.fullmatch(manifest["helper_version"]))
+        and isinstance(manifest.get("helper_sha256"), str)
+        and bool(SHA256_RE.fullmatch(manifest["helper_sha256"]))
+        and isinstance(manifest.get("helper_contract"), str)
+        and bool(TOKEN_RE.fullmatch(manifest["helper_contract"]))
+        and isinstance(manifest.get("php_minimum"), str)
+        and bool(TOKEN_RE.fullmatch(manifest["php_minimum"]))
+        and isinstance(manifest.get("database_migrations"), list)
+        and isinstance(manifest.get("frontend_build"), dict)
         and manifest.get("database_scope") in {"unchanged", "migrations"}
     )
     release_count = 0
@@ -1061,6 +1078,7 @@ def _read_journals(root, root_uid):
                 or not BACKUP_RE.fullmatch(value["backup_filename"])
                 or not value["backup_filename"].startswith("production-" + app_sha + "-")
                 or not isinstance(migrations, list)
+                or not migrations
                 or len(migrations) > 1000
                 or not all(isinstance(migration, str) and MIGRATION_RE.fullmatch(migration)
                            for migration in migrations)

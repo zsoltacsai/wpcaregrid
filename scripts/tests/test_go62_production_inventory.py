@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -40,8 +41,6 @@ TX_SPEC = importlib.util.spec_from_file_location("deployment_transaction_v2", SC
 tx = importlib.util.module_from_spec(TX_SPEC)
 sys.modules[TX_SPEC.name] = tx
 TX_SPEC.loader.exec_module(tx)
-tx.PROFILE = "production"
-tx.DATABASE = "wpcg_prod_app"
 
 RELEASE_SHA = "1" * 40
 BASE_SHA = "2" * 40
@@ -72,7 +71,8 @@ def producer_transaction_id(journal):
         backup_filename=journal["backup_filename"], mysql_uuid_sha256=journal["mysql_uuid_sha256"],
         migrations=tuple(journal["migrations"]),
     )
-    return tx.DatabaseReleaseTransaction._identity_id(identity)
+    with mock.patch.object(tx, "PROFILE", "production"), mock.patch.object(tx, "DATABASE", "wpcg_prod_app"):
+        return tx.DatabaseReleaseTransaction._identity_id(identity)
 
 
 def journal_for(app_sha=RELEASE_SHA, *, backup_sha="6" * 64, checkpoint=None,
@@ -208,13 +208,18 @@ class Fixture:
             "profile": "production",
             "application_sha": RELEASE_SHA,
             "base_application_sha": BASE_SHA,
-            "artifact_sha256": "f" * 64,
-            "files_sha256": "0" * 64,
+            "php_minimum": "8.4",
             "database_scope": "unchanged",
             "database_migrations": [],
-            "php_minimum": "8.4",
             "helper_version": "1.0.0",
+            "helper_sha256": "d" * 64,
             "helper_contract": "1",
+            "frontend_build": {
+                "node_version": "v22.0.0", "npm_version": "10.0.0",
+                "package_lock_sha256": "e" * 64, "files_sha256": "f" * 64,
+            },
+            "artifact_sha256": "f" * 64,
+            "files_sha256": "0" * 64,
         }
         (release / "release-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         current = self.path(go.PRODUCTION_CURRENT)
@@ -439,6 +444,26 @@ class RedactionAndInjectionTest(InventoryTestCase):
         release = self.report()["sections"]["release"]
         self.assertEqual(release["status"], "FAIL")
         self.assertEqual(release["reason"], "file_symlink_rejected")
+
+    def test_release_manifest_duplicate_keys_fail_closed(self):
+        self.fixture.build()
+        manifest = self.fixture.path(go.PRODUCTION_RELEASES) / RELEASE_SHA / "release-manifest.json"
+        original = manifest.read_text(encoding="utf-8")
+        manifest.write_text('{"profile":"staging-next",' + original[1:], encoding="utf-8")
+        self.assertEqual(self.report()["sections"]["release"]["status"], "FAIL")
+        self.assertEqual(self.report()["sections"]["release"]["reason"], "release_manifest_invalid")
+
+    def test_release_manifest_exact_schema_and_metadata_are_required(self):
+        self.fixture.build()
+        manifest = self.fixture.path(go.PRODUCTION_RELEASES) / RELEASE_SHA / "release-manifest.json"
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+        value["unexpected"] = "value"
+        manifest.write_text(json.dumps(value), encoding="utf-8")
+        self.assertEqual(self.report()["sections"]["release"]["status"], "FAIL")
+        value.pop("unexpected")
+        manifest.write_text(json.dumps(value), encoding="utf-8")
+        os.chmod(manifest, 0o600)
+        self.assertEqual(self.report()["sections"]["release"]["status"], "FAIL")
 
     def test_journal_filename_and_backup_path_are_redacted(self):
         self.fixture.build()
@@ -747,7 +772,24 @@ class UnavailableEvidenceTest(InventoryTestCase):
         journal["state"] = "RECOVERY_REQUIRED"
         journal_path.write_text(json.dumps(journal), encoding="utf-8")
         os.chmod(journal_path, 0o600)
-        self.assertEqual(self.report()["sections"]["journals"]["status"], "FAIL")
+        sections = self.report()["sections"]
+        self.assertEqual(sections["journals"]["status"], "FAIL")
+        self.assertEqual(sections["journals"]["journals"][0]["reason"],
+                         "transaction_recovery_required")
+
+    def test_empty_journal_migration_list_is_rejected(self):
+        self.fixture.build()
+        old_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
+        journal = json.loads(old_path.read_text(encoding="utf-8"))
+        journal["migrations"] = []
+        new_id = go._transaction_id(journal)
+        journal["transaction_id"] = new_id
+        new_path = old_path.with_name("db-release-" + new_id + ".json")
+        new_path.write_text(json.dumps(journal), encoding="utf-8")
+        os.chmod(new_path, 0o600)
+        old_path.unlink()
+        self.assertEqual(self.report()["sections"]["journals"]["journals"][0]["reason"],
+                         "journal_invalid")
 
     def test_journal_transaction_id_must_match_filename(self):
         self.fixture.build()
@@ -810,6 +852,36 @@ class UnavailableEvidenceTest(InventoryTestCase):
                 journal_path.write_text(json.dumps(journal), encoding="utf-8")
                 os.chmod(journal_path, 0o600)
                 self.assertEqual(self.report()["sections"]["journals"]["status"], "FAIL")
+
+    def test_journal_updated_at_future_bound_is_enforced(self):
+        self.fixture.build()
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        journal["updated_at"] = time.time_ns() + 301_000_000_000
+        journal_path.write_text(json.dumps(journal), encoding="utf-8")
+        os.chmod(journal_path, 0o600)
+        self.assertEqual(self.report()["sections"]["journals"]["journals"][0]["reason"],
+                         "journal_invalid")
+
+    def test_migrating_journal_checkpoint_and_started_at_are_validated(self):
+        self.fixture.build()
+        journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        journal["state"] = "MIGRATING"
+        journal["migration_cursor"] = 0
+        journal["migration_before"] = {key: "a" * 64 for key in (
+            "schema_sha256", "ledger_sha256", "data_sha256",
+            "expected_schema_sha256", "expected_ledger_sha256", "expected_data_sha256",
+        )}
+        journal["migration_started_at"] = TEST_TIME_NS
+        journal_path.write_text(json.dumps(journal), encoding="utf-8")
+        os.chmod(journal_path, 0o600)
+        self.assertEqual(self.report()["sections"]["journals"]["status"], "PASS")
+        journal["migration_started_at"] = True
+        journal_path.write_text(json.dumps(journal), encoding="utf-8")
+        os.chmod(journal_path, 0o600)
+        self.assertEqual(self.report()["sections"]["journals"]["journals"][0]["reason"],
+                         "journal_migration_checkpoint_invalid")
 
     def test_duplicate_journal_backup_references_fail_deterministically(self):
         self.fixture.build()
