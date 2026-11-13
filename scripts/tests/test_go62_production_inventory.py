@@ -18,7 +18,6 @@ import json
 import os
 import sys
 import tempfile
-import time
 import types
 import unittest
 from pathlib import Path
@@ -459,11 +458,39 @@ class RedactionAndInjectionTest(InventoryTestCase):
         value = json.loads(manifest.read_text(encoding="utf-8"))
         value["unexpected"] = "value"
         manifest.write_text(json.dumps(value), encoding="utf-8")
-        self.assertEqual(self.report()["sections"]["release"]["status"], "FAIL")
+        release = self.report()["sections"]["release"]
+        self.assertEqual(release["status"], "FAIL")
+        self.assertEqual(release["reason"], "release_manifest_identity_invalid")
         value.pop("unexpected")
         manifest.write_text(json.dumps(value), encoding="utf-8")
+        self.assertEqual(self.report()["sections"]["release"]["status"], "PASS")
         os.chmod(manifest, 0o600)
-        self.assertEqual(self.report()["sections"]["release"]["status"], "FAIL")
+        release = self.report()["sections"]["release"]
+        self.assertEqual(release["status"], "FAIL")
+        self.assertEqual(release["reason"], "file_mode_invalid")
+
+    def test_release_manifest_wrong_owner_is_rejected(self):
+        self.fixture.build()
+        manifest = self.fixture.path(go.PRODUCTION_RELEASES) / RELEASE_SHA / "release-manifest.json"
+        expected_path = os.fspath(manifest)
+        real_lstat = go.os.lstat
+
+        class OtherOwner:
+            def __init__(self, original):
+                self.original = original
+                self.st_uid = original.st_uid + 1
+
+            def __getattr__(self, name):
+                return getattr(self.original, name)
+
+        def lstat(path, *args, **kwargs):
+            result = real_lstat(path, *args, **kwargs)
+            return OtherOwner(result) if os.fspath(path) == expected_path else result
+
+        with mock.patch.object(go.os, "lstat", side_effect=lstat):
+            release = self.report()["sections"]["release"]
+        self.assertEqual(release["status"], "FAIL")
+        self.assertEqual(release["reason"], "file_owner_invalid")
 
     def test_journal_filename_and_backup_path_are_redacted(self):
         self.fixture.build()
@@ -851,17 +878,29 @@ class UnavailableEvidenceTest(InventoryTestCase):
                 journal["updated_at"] = bad_value
                 journal_path.write_text(json.dumps(journal), encoding="utf-8")
                 os.chmod(journal_path, 0o600)
-                self.assertEqual(self.report()["sections"]["journals"]["status"], "FAIL")
+                item = self.report()["sections"]["journals"]["journals"][0]
+                self.assertEqual(item["status"], "FAIL")
+                self.assertEqual(item["reason"], "journal_invalid")
 
-    def test_journal_updated_at_future_bound_is_enforced(self):
+    def test_journal_updated_at_exact_floor_and_future_bound(self):
         self.fixture.build()
         journal_path = self.fixture.path(go.PRODUCTION_STATE) / ("db-release-" + self.fixture.txid + ".json")
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
-        journal["updated_at"] = time.time_ns() + 301_000_000_000
-        journal_path.write_text(json.dumps(journal), encoding="utf-8")
-        os.chmod(journal_path, 0o600)
-        self.assertEqual(self.report()["sections"]["journals"]["journals"][0]["reason"],
-                         "journal_invalid")
+        fixed_now = TEST_TIME_NS
+        cases = ((1_000_000_000_000_000_000, "PASS"),
+                 (999_999_999_999_999_999, "FAIL"),
+                 (fixed_now + 300_000_000_000, "PASS"),
+                 (fixed_now + 300_000_000_001, "FAIL"))
+        with mock.patch.object(go.time, "time_ns", return_value=fixed_now):
+            for timestamp, expected in cases:
+                with self.subTest(updated_at=timestamp):
+                    journal["updated_at"] = timestamp
+                    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+                    os.chmod(journal_path, 0o600)
+                    item = self.report()["sections"]["journals"]["journals"][0]
+                    self.assertEqual(item["status"], expected)
+                    if expected == "FAIL":
+                        self.assertEqual(item["reason"], "journal_invalid")
 
     def test_migrating_journal_checkpoint_and_started_at_are_validated(self):
         self.fixture.build()
@@ -873,15 +912,34 @@ class UnavailableEvidenceTest(InventoryTestCase):
             "schema_sha256", "ledger_sha256", "data_sha256",
             "expected_schema_sha256", "expected_ledger_sha256", "expected_data_sha256",
         )}
-        journal["migration_started_at"] = TEST_TIME_NS
-        journal_path.write_text(json.dumps(journal), encoding="utf-8")
-        os.chmod(journal_path, 0o600)
-        self.assertEqual(self.report()["sections"]["journals"]["status"], "PASS")
-        journal["migration_started_at"] = True
-        journal_path.write_text(json.dumps(journal), encoding="utf-8")
-        os.chmod(journal_path, 0o600)
-        self.assertEqual(self.report()["sections"]["journals"]["journals"][0]["reason"],
-                         "journal_migration_checkpoint_invalid")
+        fixed_now = TEST_TIME_NS
+        cases = ((1_000_000_000_000_000_000, "PASS"),
+                 (999_999_999_999_999_999, "FAIL"),
+                 (fixed_now + 300_000_000_000, "PASS"),
+                 (fixed_now + 300_000_000_001, "FAIL"),
+                 (None, "FAIL"), (-1, "FAIL"), (True, "FAIL"))
+        with mock.patch.object(go.time, "time_ns", return_value=fixed_now):
+            for started_at, expected in cases:
+                with self.subTest(migration_started_at=started_at):
+                    journal["migration_started_at"] = started_at
+                    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+                    os.chmod(journal_path, 0o600)
+                    item = self.report()["sections"]["journals"]["journals"][0]
+                    self.assertEqual(item["status"], expected)
+                    if expected == "FAIL":
+                        self.assertEqual(item["reason"], "journal_migration_checkpoint_invalid")
+            journal["migration_cursor"] = len(journal["migrations"])
+            journal["migration_before"] = None
+            journal["migration_started_at"] = None
+            journal_path.write_text(json.dumps(journal), encoding="utf-8")
+            os.chmod(journal_path, 0o600)
+            self.assertEqual(self.report()["sections"]["journals"]["status"], "PASS")
+            journal["migration_before"] = {"schema_sha256": "a" * 64}
+            journal_path.write_text(json.dumps(journal), encoding="utf-8")
+            os.chmod(journal_path, 0o600)
+            item = self.report()["sections"]["journals"]["journals"][0]
+            self.assertEqual(item["status"], "FAIL")
+            self.assertEqual(item["reason"], "journal_migration_checkpoint_stale")
 
     def test_duplicate_journal_backup_references_fail_deterministically(self):
         self.fixture.build()
