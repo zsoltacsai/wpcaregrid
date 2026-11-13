@@ -37,7 +37,7 @@ import zlib
 from datetime import datetime, timezone
 
 TOOL = "go62-production-inventory"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 SCHEMA = 1
 MAX_COMMAND_OUTPUT = 2 * 1024 * 1024
 MAX_TEXT_FILE = 1024 * 1024
@@ -134,6 +134,23 @@ MYSQL_KEYS = {
     "binlog-format", "binlog-expire-logs-seconds", "binlog-row-image", "expire-logs-days",
     "local-infile", "log-bin", "skip-log-bin", "disable-log-bin", "log-bin-basename", "log-bin-trust-function-creators",
     "read-only", "skip-grant-tables", "sql-mode", "super-read-only", "sync-binlog",
+}
+MYSQL_BOOL_KEYS = {
+    "local-infile", "log-bin-trust-function-creators", "read-only",
+    "super-read-only", "skip-grant-tables",
+}
+TRANSACTION_STATES = (
+    "PREPARED", "BACKUP_VERIFIED", "RESTORE_REHEARSAL_VERIFIED",
+    "MIGRATION_REHEARSAL_VERIFIED", "FENCES_CLOSED", "MIGRATING",
+    "MIGRATIONS_VERIFIED", "RELEASE_ACTIVATED", "ACCEPTANCE_VERIFIED",
+    "COMPLETE", "RECOVERY_REQUIRED",
+)
+RESTORE_EVIDENCE_STATES = set(TRANSACTION_STATES[2:-1])
+JOURNAL_KEYS = {
+    "schema", "profile", "database", "transaction_id", "application_sha",
+    "previous_sha", "artifact_sha256", "backup_sha256", "backup_filename",
+    "mysql_uuid_sha256", "migrations", "state", "evidence", "migration_cursor",
+    "migration_before", "migration_started_at", "updated_at",
 }
 
 
@@ -348,20 +365,24 @@ def _parse_key_values(data):
         if key == "enable-log-bin":
             values.append(("log-bin", value or "ON"))
             continue
-        if key.startswith(("enable-", "disable-", "skip-", "maximum-")):
+        if key.startswith(("enable-", "disable-", "skip-")):
             prefix, base = key.split("-", 1)
-            # Normalize MySQL boolean aliases only for options we explicitly
-            # inspect. Other prefixed keys remain unknown to the classifier.
-            bool_keys = {"local-infile", "log-bin-trust-function-creators",
-                         "read-only", "super-read-only"}
-            if prefix in {"enable", "disable"} and base in bool_keys:
+            if prefix == "enable" and base == "skip-log-bin":
+                values.append(("skip-log-bin", "ON"))
+                continue
+            if prefix == "disable" and base == "skip-log-bin":
+                values.append(("log-bin", "ON"))
+                continue
+            # skip-grant-tables is itself canonical; prefixed forms refer to
+            # that option, while skip-<other bool> negates the setting.
+            if prefix in {"enable", "disable"} and base in MYSQL_BOOL_KEYS:
                 key = base
                 value = "ON" if prefix == "enable" else "OFF"
-            elif prefix == "skip" and base in bool_keys:
+            elif prefix == "skip" and base == "grant-tables":
+                key, value = "skip-grant-tables", value or "ON"
+            elif prefix == "skip" and base in MYSQL_BOOL_KEYS:
                 key = base
                 value = "OFF"
-            elif prefix == "maximum" and base in MYSQL_KEYS:
-                key = base
         if key:
             values.append((key, value or "ON"))
     return values
@@ -788,11 +809,14 @@ def _collect_mysql_instance(run, suffix):
         unsafe.append("skip_grant_tables_on")
     if settings["binlog_format"]["value"] == "STATEMENT":
         unsafe.append("binlog_format_statement")
+    uncertain_safety_settings = any(
+        settings[key]["value"] == "UNKNOWN"
+        for key in ("log_bin", "log_bin_trust_function_creators", "binlog_format",
+                    "local_infile", "skip_grant_tables")
+    )
     config_status = (
         "FAIL" if unsafe else
-        "UNKNOWN" if settings["log_bin"]["value"] == "UNKNOWN"
-        or settings["log_bin_trust_function_creators"]["value"] == "UNKNOWN"
-        or settings["binlog_format"]["value"] == "UNKNOWN"
+        "UNKNOWN" if uncertain_safety_settings
         else "PASS"
     )
     return {"status": config_status, "config_status": config_status,
@@ -981,19 +1005,28 @@ def _read_journals(root, root_uid):
         app_sha = value.get("application_sha")
         state_value = value.get("state")
         evidence = value.get("evidence")
-        if (not isinstance(txid, str) or not re.fullmatch(r"[0-9a-f]{32}", txid)
+        checkpoint = evidence.get("RESTORE_REHEARSAL_VERIFIED") if isinstance(evidence, dict) else None
+        if (set(value) != JOURNAL_KEYS
+                or type(value.get("schema")) is not int or value.get("schema") != 4
+                or txid != JOURNAL_RE.fullmatch(name).group(1)
+                or not isinstance(state_value, str)
+                or state_value not in TRANSACTION_STATES
+                or state_value == "RECOVERY_REQUIRED"
+                or not isinstance(txid, str) or not re.fullmatch(r"[0-9a-f]{32}", txid)
                 or not isinstance(app_sha, str) or not SHA_RE.fullmatch(app_sha)
-                or not isinstance(state_value, str) or not re.fullmatch(r"[A-Z_]{1,40}", state_value)
                 or not isinstance(evidence, dict)):
             item.update({"status": "FAIL", "reason": "journal_invalid"})
             journals.append(item)
             continue
-        checkpoint = evidence.get("RESTORE_REHEARSAL_VERIFIED")
         checkpoint_shape_ok = (
             isinstance(checkpoint, dict)
             and set(checkpoint) == RESTORE_CHECKPOINT_KEYS
             and all(isinstance(checkpoint.get(key), str) and SHA256_RE.fullmatch(checkpoint[key])
                     for key in RESTORE_CHECKPOINT_KEYS)
+        )
+        checkpoint_state_consistent = (
+            (state_value in RESTORE_EVIDENCE_STATES and checkpoint_shape_ok)
+            or (state_value in {"PREPARED", "BACKUP_VERIFIED"} and not checkpoint_shape_ok)
         )
         journal_backup_sha = value.get("backup_sha256")
         checkpoint_backup_matches_journal = (
@@ -1001,7 +1034,20 @@ def _read_journals(root, root_uid):
             and SHA256_RE.fullmatch(journal_backup_sha)
             and checkpoint.get("backup_sha256") == journal_backup_sha
         )
-        checkpoint_ok = checkpoint_shape_ok and checkpoint_backup_matches_journal
+        receipt_ok = False
+        if checkpoint_shape_ok:
+            receipt_fields = RESTORE_CHECKPOINT_KEYS - {"restore_receipt_sha256"}
+            receipt_payload = {key: checkpoint[key] for key in sorted(receipt_fields)}
+            receipt = hashlib.sha256(json.dumps(
+                receipt_payload, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")).hexdigest()
+            receipt_ok = checkpoint.get("restore_receipt_sha256") == receipt
+        checkpoint_ok = (checkpoint_state_consistent and checkpoint_shape_ok
+                         and checkpoint_backup_matches_journal and receipt_ok)
+        if not checkpoint_state_consistent:
+            item.update({"status": "FAIL", "reason": "journal_state_evidence_mismatch"})
+            journals.append(item)
+            continue
         item.update({
             "status": "PASS",
             "transaction_id": txid,
@@ -1017,6 +1063,7 @@ def _read_journals(root, root_uid):
             "restore_checkpoint_observed": bool(checkpoint_shape_ok),
             "restore_checkpoint_present": checkpoint_ok,
             "restore_checkpoint_backup_matches_journal": bool(checkpoint_backup_matches_journal),
+            "restore_checkpoint_receipt_valid": receipt_ok,
             "updated_at": (value.get("updated_at") * 1_000_000_000
                            if type(value.get("updated_at")) is int and value.get("updated_at") >= 0
                            else opened.st_mtime_ns),

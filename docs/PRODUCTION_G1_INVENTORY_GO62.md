@@ -82,7 +82,7 @@ settings are `UNKNOWN`, not `PASS`.
 ## Output and statuses
 
 The helper prints exactly one JSON document to stdout. The schema is `1`, the tool
-is `go62-production-inventory`, and the version is `1.0.1`.
+is `go62-production-inventory`, and the version is `1.0.2`.
 
 | Status | Meaning | Exit |
 | --- | --- | --- |
@@ -157,10 +157,15 @@ A backup is evidence of a backup, not of a restore. The helper reports:
 * `restore_proof=NOT_PROVEN` and
   `metadata_only_backup_does_not_prove_restore=true` at all times.
 
-A `restore` `PASS` only means the journal contains the nine-field
-`RESTORE_REHEARSAL_VERIFIED` checkpoint. It does not mean a restore was performed
-by this invocation. `live_restore_validation=NOT_PERFORMED` is always reported.
-A journal without the checkpoint is `UNKNOWN`, never `PASS`.
+A `restore` `PASS` means a structurally valid transaction journal contains the
+nine-field `RESTORE_REHEARSAL_VERIFIED` checkpoint, its transaction ID matches
+the journal filename, its state is consistent with checkpoint presence, the
+checkpoint receipt hash recomputes correctly, and the checkpoint, journal and
+on-disk backup hashes and metadata agree for the active release. It does not
+mean a restore was performed by this invocation.
+`live_restore_validation=NOT_PERFORMED` is always reported. An early-phase
+journal without a checkpoint is `UNKNOWN`; a completed-or-later journal that
+omits a required checkpoint, or any `RECOVERY_REQUIRED` journal, is `FAIL`.
 
 ## Security model
 
