@@ -116,7 +116,7 @@ Pozitív tiltott útvonal vagy hiányzó worker fence: FAIL/STOP. Hiányzó runt
 - GitHub primary/ref, exact workflow és checks: read-only; run 43386058267, 38/38 PASS.
 - PR/open issue snapshot és #174 lekérés: read-only; #383 Draft, QA V3 hiányzik, AppSec V3 PASS.
 - A 2.0.0 manifest hét artifact SHA pinje a 5e0e784 Git tree-hez egyezik; controller SHA a régi source baseline-on is azonos.
-- composer.json PHP ^8.4.1; a lock platform hash a candidate fájlból olvasva a9b02c90dcb7ceab75ca8e905083597287685247157c0a7b398f7c476d401ec3.
+- composer.json PHP ^8.4.1; a composer.lock fájl SHA-256 értéke a candidate tree-ben a9b02c90dcb7ceab75ca8e905083597287685247157c0a7b398f7c476d401ec3 (ez fájlhash, nem Composer platform hash).
 - Forrás/manifest/dokumentáció olvasása megtörtént; host/DB/helper/Artisan parancs nem futott.
 - SSH read-only próba auth hibával zárult; másik csatorna nem volt próbálva.
 - PHPUnit nem futott: a helyi PHP/Composer/vendor dependency hiányzik.
