@@ -443,7 +443,6 @@ printf '%s  %s\n' "$H_HELPER" go62-inventory.py \
   "$H_MANIFEST" go62-inventory-manifest.json | (cd "$dir" && sha256sum -c --strict -)
 q=/usr/local/libexec/.go62-quarantine-$(date -u +%Y%m%dT%H%M%SZ)
 test ! -e "$q" && test ! -L "$q"
-test ! -e "$dir" && test ! -L "$dir"
 /usr/bin/python3 -I - "$dir" "$q" <<'PY'
 import ctypes, os, sys
 src, dst = sys.argv[1:]
