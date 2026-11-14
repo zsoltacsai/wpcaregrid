@@ -2,23 +2,30 @@
 
 **Decision:** preparation only; production deployment is **NO-GO**.
 
-> **GO-8 status note — 2026-11-14:** This document and its manifest remain pinned
-> to the historical proposed source candidate `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`.
-> The protected primary has since advanced to `198e32d127c782bf80ff7ca837f06df82d50655a`
-> after PRs #395, #396 and #385. The candidate SHA and manifest are intentionally
-> unchanged; this dossier is not a designation of the current primary as a new
-> production candidate. The V3 controller prototype is now in primary but is not
-> connected to or installed as the production helper. Production remains NO-GO;
-> runtime, migration, backup/restore and staging gates remain unresolved.
-> Post-merge CI run `43625016661` completed successfully (38/38 jobs) on the
-> current protected primary SHA `198e32d127c782bf80ff7ca837f06df82d50655a`.
-> This is repository CI evidence for that primary only, not runtime acceptance
-> and not a change to the immutable `5e0e784…` candidate.
+> **GO-8 historical note — 2026-11-14:** This document and its manifest remain pinned
+> to the proposed source candidate `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`.
+> When this note was first recorded, primary was `198e32d127c782bf80ff7ca837f06df82d50655a`
+> after PRs #395, #396 and #385. Later that day, PR #384 was squash-merged as
+> `28f9061f59c65be8958b67ea54642245a7456a57`; issue #174 is the source for any
+> newer primary SHA. Neither primary commit replaces the immutable `5e0e784…`
+> candidate, and this dossier does not designate either as a production candidate.
+> The V3 controller prototype is in primary but is not connected to or installed as
+> the production helper. Production remains NO-GO; runtime, migration, backup/restore
+> and staging gates remain unresolved. CI runs `43625016661` (primary `198e32d…`)
+> and `43629367775` (primary `28f9061…`) both completed successfully, 38/38 jobs;
+> this is repository CI evidence only, not runtime acceptance.
 
 - **Protected primary:** `claude/ecstatic-wozniak-oemyuf`
 - **Proposed candidate:** `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`
 - **Exact-SHA CI:** [run 43386058267](https://github.com/zsoltacsai/wpcaregrid/actions/runs/43386058267), `completed/success`, 38/38 check runs successful.
 **Machine-readable manifest:** [`PRODUCTION_RELEASE_CANDIDATE_5e0e784.json`](PRODUCTION_RELEASE_CANDIDATE_5e0e784.json)
+
+The JSON is an immutable record for the proposed `5e0e784` snapshot. Its
+`PROPOSED_NOT_APPROVED` and `NO_GO` values describe that proposal; it does not
+identify a current or approved active production candidate. Check issue #174 for
+current primary and release-candidate decisions. The preserved QA and AppSec
+reports, including their source line references, are bound to the `5e0e784` tree;
+later documentation edits can shift line numbers.
 
 The candidate SHA is a verified source baseline, not a final release tag, deployment
 record, or Owner activation authorization. Repository CI is not runtime acceptance.

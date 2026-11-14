@@ -6,10 +6,12 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 
 > **Historical snapshot notice — 2026-11-14:** The release-evidence rows below
 > were prepared for proposed candidate `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`.
-> The protected primary has since advanced to `198e32d127c782bf80ff7ca837f06df82d50655a`
-> after PRs #395, #396 and #385. The candidate identity is not silently changed
-> here. Treat the rows as the 5e0e784 candidate snapshot, not as current primary,
-> staging or production evidence. Production remains NO-GO.
+> At the first GO-8 note, primary was `198e32d127c782bf80ff7ca837f06df82d50655a`
+> after PRs #395, #396 and #385; later that day #384 was squash-merged as
+> `28f9061f59c65be8958b67ea54642245a7456a57`. These are dated history, not a live
+> primary pointer. The candidate identity is not silently changed here. Treat the
+> rows as the `5e0e784` snapshot, not current primary, staging or production evidence.
+> Check issue #174 for newer state. Production remains NO-GO.
 
 ## Historical candidate `5e0e784` evidence snapshot — 2026-11-13
 
@@ -22,7 +24,7 @@ results as current acceptance evidence.
 
 | Gate | Current evidence | Status / acceptance |
 | --- | --- | --- |
-| Protected primary at snapshot time | `claude/ecstatic-wozniak-oemyuf` at [`5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`](https://github.com/zsoltacsai/wpcaregrid/commit/5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8) | Verified source baseline on 2026-11-13; proposed candidate only, not a release tag or approval. Current primary is `198e32d127c782bf80ff7ca837f06df82d50655a`; see the GO-8 notice above. |
+| Protected primary at snapshot time | `claude/ecstatic-wozniak-oemyuf` at [`5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`](https://github.com/zsoltacsai/wpcaregrid/commit/5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8) | Verified source baseline on 2026-11-13; proposed candidate only, not a release tag or approval. After #384, primary was `28f9061f59c65be8958b67ea54642245a7456a57` on 2026-11-14; this is a historical snapshot. See issue #174 for newer state. |
 | Exact-SHA CI | [Workflow 43386058267](https://github.com/zsoltacsai/wpcaregrid/actions/runs/43386058267), event `push`, exact `head_sha=5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`, `completed/success`; 38/38 check runs `completed/success` | PASS for repository CI only. It does not prove staging behavior or production readiness. |
 | Candidate source review | Exact-SHA reports are preserved at [`QA`](release-evidence/qa-5e0e784.md) (PASS for static route isolation; report SHA-256 `82d6b3ebef14fdde464fa173fbf5a91e11c496577647f4977ac8d3272a17dca4`) and [`AppSec`](release-evidence/appsec-5e0e784.md) (BLOCKED for production acceptance pending runtime worker/scheduler fence evidence; report SHA-256 `c58201104e2170cbc7f73db9da80f02ff596d515ce614eba8bb2e7a4357f6409`). Both reviewed `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`. | HOLD. The AppSec result is not PASS. V3 ledger records are not published: policy V3 requires an exact PR number/head pair, while `5e0e784…` is the protected-primary merge baseline and is not the head of an open release PR. Do not associate the reports with a different PR/head to force a record. |
 | Staging acceptance | No fresh runtime or browser evidence for this exact SHA is recorded in this snapshot | UNKNOWN / HOLD. Run the staging checklist only after its backup, restore, migration, and deployment gates are separately satisfied. |
