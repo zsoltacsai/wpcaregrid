@@ -99,9 +99,11 @@ def logged_trigger_names(event_type, info, expected_names, schema, definer):
         return set()
     # Match only the actual Query statement at its beginning. A USE context is
     # applied by the stream parser, because mysqlbinlog elides unchanged USEs.
+    # These migrations use CREATE TRIGGER without DEFINER; if the binlog renders
+    # a DEFINER clause, bind it to the expected DBA account.
     quote = r"[\x60']?"
     create_pattern = re.compile(
-        rf"^\s*CREATE\s+DEFINER\s*=\s*{quote}{re.escape(definer)}{quote}@{quote}%{quote}\s+TRIGGER\s+",
+        rf"^\s*CREATE\s+(?:DEFINER\s*=\s*{quote}{re.escape(definer)}{quote}@{quote}%{quote}\s+)?TRIGGER\s+",
         re.IGNORECASE,
     )
     create = create_pattern.match(info)
@@ -215,6 +217,12 @@ def self_test():
             expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names(
             'Query', 'DROP TRIGGER guard_x', expected, 'wpcg_qual_a', 'u')
+        assert logged_trigger_names(
+            'Query', 'CREATE TRIGGER guard_x BEFORE INSERT', expected,
+            'wpcg_qual_a', 'u') == {'guard_x'}
+        assert not logged_trigger_names(
+            'Query', 'CREATE DEFINER=other@% TRIGGER guard_x BEFORE INSERT', expected,
+            'wpcg_qual_a', 'u')
         assert not logged_trigger_names('Query', 'use wpcg_qual_a; DROP TRIGGER guard_x',
                                         expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names('Query', 'use another; CREATE DEFINER=u@% TRIGGER guard_x',
