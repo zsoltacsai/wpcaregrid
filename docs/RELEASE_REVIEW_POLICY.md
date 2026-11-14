@@ -45,6 +45,54 @@ the exact PR and head decides; a record for another head or PR is never reused; 
 roles must be `PASS` and use different agent labels; V2 records do not satisfy V3; no
 GitHub review object is read. A missing or invalid check is never a PASS.
 
+## Append-only invalidation for the two PR #377 legacy records
+
+The #174 ledger contains two Owner-authored `WPCG_RELEASE_REVIEW_V3` comments for PR
+#377 whose `agent` values do not satisfy the V3 identifier grammar:
+
+| Comment ID | Role | Agent text | Parser result | Body SHA-256 |
+|---|---|---|---|---|
+| `6834079554` | `integration_qa` | `Hermione` | `review_record_invalid` | `5be3d840822759a7815917851e2f73707890173979074b8bd7b752f5bc82e94e` |
+| `6834080385` | `appsec` | `Mad-Eye Moody` | `review_record_invalid` | `1f77060825e45c86fe693ce5290d96dd4e14877f8854fa378006c399353608fb` |
+
+The complete reports matching their declared `evidence_sha256` values were not found in
+the ledger comments or the PR #377 comments/reviews at investigation time. Their report
+content and reviewer provenance therefore cannot be independently authenticated from
+available records. These entries must not be normalized into new agent IDs or counted as
+PASS. Preserve both original comments unchanged.
+
+This proposed V3.1-compatible parser supports an explicit Owner-authored, append-only
+**invalidation** record only for the two exact comment IDs and body hashes in the table
+above. A syntactically similar malformed record—even with the same PR, head, role, or
+agent text—is not eligible. The allowlist also binds expected PR, head, role, and agent;
+the body digest binds every original field byte-for-byte:
+
+```
+WPCG_RELEASE_CORRECTION_V3
+target_comment_id=<original GitHub comment ID>
+target_body_sha256=<SHA-256 of the exact original comment body>
+target_pr=<original PR number>
+target_head_sha=<original 40-hex head SHA>
+target_role=integration_qa|appsec
+disposition=INVALIDATED
+reason_code=legacy_agent_identifier_schema
+```
+
+The verifier accepts a correction only when the Owner identity and GitHub `OWNER`
+association are present, the correction's comment ID and creation time are later than
+the target's, the target comment exists and exactly matches one allowlisted comment,
+the body digest and subject match, and there is only one correction for the target. A
+correction invalidates the old claim; it cannot
+create, repair, or supersede it with PASS. It also becomes the latest `INVALIDATED`
+decision for that exact role/PR/head, so it cannot reveal an earlier PASS that the bad
+record followed. Only a new, valid PASS comment created after the correction can restore
+that role. Malformed, ambiguous, forged, stale-subject, duplicate, or non-Owner
+corrections do not suppress the original fail-closed error. No historical comment is
+deleted, rewritten, whitelisted, or silently ignored.
+
+The parser change is a proposal pending independent QA/AppSec review and separate Owner
+authorization before integration. It does not post correction comments automatically.
+
 ## Not changed by this policy
 
 * **Owner-only decisions:** VPS configuration, privileged helper installation, staging or
