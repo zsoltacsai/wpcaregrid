@@ -80,7 +80,6 @@ def mysqlbinlog_query_statement(event):
     # mysqlbinlog prefixes this Query form with a line-continuation backslash.
     current_schema = None
     use_pattern = re.compile(r"(?is)^USE\s+[\x60']?([A-Za-z0-9_]+)[\x60']?\s*;\s*")
-    set_pattern = re.compile(r"(?is)^SET\b.*?;\s*")
     while body:
         if body.startswith('\\'):
             body = body[1:].lstrip()
@@ -89,10 +88,6 @@ def mysqlbinlog_query_statement(event):
         if use:
             current_schema = use.group(1)
             body = body[use.end():].lstrip()
-            continue
-        setting = set_pattern.match(body)
-        if setting:
-            body = body[setting.end():].lstrip()
             continue
         break
     return current_schema, body
@@ -177,8 +172,8 @@ def split_sql_statements(text):
 def logged_trigger_names(event_type, info, expected_names, schema, definer):
     if event_type != 'Query':
         return set()
-    # Session prelude may be included in the same Query event. Permit only
-    # USE/SET and mysqlbinlog's observed one-letter charset marker before DDL.
+    # Session prelude may be included in the same Query event. Permit only USE,
+    # timestamp/session SETs, and mysqlbinlog's observed charset marker.
     user_part = r"(?:`[^`]+`|'[^']+'|[A-Za-z0-9_.$-]+)"
     host_part = r"(?:`[^`]+`|'[^']+'|[A-Za-z0-9_.$:%-]+)"
     definer_part = rf"(?:CURRENT_USER(?:\(\))?|{user_part}\s*@\s*{host_part})"
@@ -190,8 +185,11 @@ def logged_trigger_names(event_type, info, expected_names, schema, definer):
         use = re.fullmatch(r"(?is)USE\s+[`']?([A-Za-z0-9_]+)[`']?", statement)
         if use and use.group(1).casefold() != schema.casefold():
             return set()
-        if use or re.match(r'(?is)^SET\b', statement) or re.fullmatch(
-                r'(?is)C\s+[A-Za-z0-9_]+', statement):
+        allowed_set = re.fullmatch(
+            r'(?is)SET\s+(?:TIMESTAMP\s*=\s*[^;]+|@@SESSION\.[A-Za-z0-9_]+\s*=\s*.+)',
+            statement,
+        )
+        if use or allowed_set or re.fullmatch(r'(?i)C\s+utf8mb4', statement):
             continue
         create = create_pattern.match(statement)
         if create is None:
@@ -206,7 +204,12 @@ def logged_trigger_names(event_type, info, expected_names, schema, definer):
 
 def mysqlbinlog_query_events(log_text):
     blocks = re.split(r'(?m)(?=^# at [0-9]+\s*$)', log_text)
-    return [block for block in blocks if re.search(r'(?m)^#.*\bQuery\b', block)]
+    events = []
+    for block in blocks:
+        header = re.search(r'(?m)^#.*\bQuery\b.*\berror_code=([0-9]+)\b', block)
+        if header and header.group(1) == '0':
+            events.append(block)
+    return events
 
 
 def mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, definer):
@@ -279,29 +282,37 @@ def self_test():
         assert binlog_trigger_identifier('use db; DROP TRIGGER guard_name') == 'guard_name'
         assert binlog_trigger_identifier('QUERY WITHOUT DDL') is None
         mysqlbinlog_text = re.sub(r'/\*!\d*\s*(.*?)\*/', r'\1',
-                                  '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\n'
+                                  '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7 error_code=0\n'
                                   'use wpcg_qual_a/*!*/;\nSET TIMESTAMP=1/*!*/;\n'
                                   'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT/*!*/;')
         query_events = mysqlbinlog_query_events(mysqlbinlog_text)
         assert len(query_events) == 1
         assert mysqlbinlog_logged_trigger_names(mysqlbinlog_text, expected,
                                                 'wpcg_qual_a', 'u') == {'guard_x'}
-        escaped_query = ('# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\n'
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7 error_code=1419\n'
+            'use wpcg_qual_a; CREATE TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\n'
+            'use wpcg_qual_a; CREATE TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
+        escaped_query = ('# at 100\n#260101 00:00:00 server id 1 Query thread_id=7 error_code=0\n'
                          'use wpcg_qual_a;\n\\CREATE TRIGGER guard_x BEFORE INSERT')
         assert mysqlbinlog_logged_trigger_names(
             escaped_query, expected, 'wpcg_qual_a', 'u') == {'guard_x'}
         assert mysqlbinlog_logged_trigger_names(
-            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\nuse wpcg_qual_a;\n'
-            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=8\n'
+            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7 error_code=0\nuse wpcg_qual_a;\n'
+            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=8 error_code=0\n'
             'SET TIMESTAMP=2; CREATE DEFINER=u@% TRIGGER guard_x',
             expected, 'wpcg_qual_a', 'u') == {'guard_x'}
         assert not mysqlbinlog_logged_trigger_names(
-            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\nuse another;\n'
-            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=8\n'
+            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7 error_code=0\nuse another;\n'
+            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=8 error_code=0\n'
             'SET TIMESTAMP=2; CREATE DEFINER=u@% TRIGGER guard_x',
             expected, 'wpcg_qual_a', 'u')
         assert not mysqlbinlog_logged_trigger_names(
-            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=8\n'
+            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=8 error_code=0\n'
             'SET TIMESTAMP=2; CREATE DEFINER=u@% TRIGGER guard_x',
             expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names(
@@ -344,9 +355,15 @@ def self_test():
             'Query', '/* comment ; CREATE PROCEDURE p() */ '
             'CREATE TRIGGER guard_x BEFORE INSERT', expected,
             'wpcg_qual_a', 'u') == {'guard_x'}
+        assert not logged_trigger_names(
+            'Query', "SET @@session.sql_mode='x; CREATE TRIGGER guard_x'",
+            expected, 'wpcg_qual_a', 'u')
         assert logged_trigger_names(
-            'Query', "SET @marker='x;y'; CREATE TRIGGER guard_x BEFORE INSERT",
+            'Query', "SET @@session.sql_mode='x;y'; CREATE TRIGGER guard_x BEFORE INSERT",
             expected, 'wpcg_qual_a', 'u') == {'guard_x'}
+        assert not logged_trigger_names(
+            'Query', 'SET @marker=1; CREATE TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names('Query', 'use wpcg_qual_a; DROP TRIGGER guard_x',
                                         expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names('Query', 'use another; CREATE DEFINER=u@% TRIGGER guard_x',
