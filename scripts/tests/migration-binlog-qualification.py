@@ -103,11 +103,14 @@ def logged_trigger_names(event_type, info, expected_names, schema, definer):
         return set()
     # Match only the actual Query statement at its beginning. A USE context is
     # applied by the stream parser, because mysqlbinlog elides unchanged USEs.
-    # These migrations use CREATE TRIGGER without DEFINER; if the binlog renders
-    # a DEFINER clause, bind it to the expected DBA account.
+    # These migrations use CREATE TRIGGER without DEFINER. If mysqlbinlog renders
+    # a server-normalized DEFINER clause, accept its syntax here; the created
+    # trigger's actual DEFINER is independently checked in information_schema.
     quote = r"[\x60']?"
+    definer_user = r"(?:`[^`]+`|'[^']+'|[A-Za-z0-9_.$-]+)"
+    definer_host = r"(?:`[^`]+`|'[^']+'|[A-Za-z0-9_.$:%-]+)"
     create_pattern = re.compile(
-        rf"^\s*CREATE\s+(?:DEFINER\s*=\s*{quote}{re.escape(definer)}{quote}@{quote}%{quote}\s+)?TRIGGER\s+",
+        rf"^\s*CREATE\s+(?:DEFINER\s*=\s*{definer_user}\s*@\s*{definer_host}\s+)?TRIGGER\s+",
         re.IGNORECASE,
     )
     create = create_pattern.match(info)
@@ -245,9 +248,10 @@ def self_test():
         assert logged_trigger_names(
             'Query', 'CREATE TRIGGER guard_x BEFORE INSERT', expected,
             'wpcg_qual_a', 'u') == {'guard_x'}
-        assert not logged_trigger_names(
+        # Binlog spelling is syntax evidence only; final object metadata verifies the DBA.
+        assert logged_trigger_names(
             'Query', 'CREATE DEFINER=other@% TRIGGER guard_x BEFORE INSERT', expected,
-            'wpcg_qual_a', 'u')
+            'wpcg_qual_a', 'u') == {'guard_x'}
         assert not logged_trigger_names('Query', 'use wpcg_qual_a; DROP TRIGGER guard_x',
                                         expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names('Query', 'use another; CREATE DEFINER=u@% TRIGGER guard_x',
