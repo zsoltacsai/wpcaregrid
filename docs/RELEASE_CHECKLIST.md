@@ -4,7 +4,95 @@ Gates before the controlled pilot and before production use. Each item is **READ
 
 How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT CONFIGURED, never prints secrets) and the owner System page. Deployment steps: [DEPLOYMENT.md](DEPLOYMENT.md); pilot: [PILOT.md](PILOT.md).
 
-## Owner release-sequence decisions — 2026-11-04
+> **Historical snapshot notice — 2026-11-14:** The release-evidence rows below
+> were prepared for proposed candidate `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`.
+> At the first GO-8 note, primary was `198e32d127c782bf80ff7ca837f06df82d50655a`
+> after PRs #395, #396 and #385; later that day #384 was squash-merged as
+> `28f9061f59c65be8958b67ea54642245a7456a57`. These are dated history, not a live
+> primary pointer. The candidate identity is not silently changed here. Treat the
+> rows as the `5e0e784` snapshot, not current primary, staging or production evidence.
+> Check issue #174 for newer state. Production remains NO-GO.
+
+## Historical candidate `5e0e784` evidence snapshot — 2026-11-13
+
+This snapshot was refreshed from GitHub repository and workflow records. It contains
+no fresh production or staging host observation. Treat all runtime values below as
+`UNKNOWN` unless accompanied by new, exact-release evidence. The detailed sections
+marked November 4 are preserved as historical decisions and observations; do not
+reuse their host identities, deployed SHAs, backup claims, runtime state, or test
+results as current acceptance evidence. Reviewer provider/model labels are copied
+from the reports and are not independently authenticated; report hashes verify
+bytes only, not reviewer identity or provenance.
+
+| Gate | Snapshot evidence | Status / acceptance |
+| --- | --- | --- |
+| Protected primary at snapshot time | `claude/ecstatic-wozniak-oemyuf` at [`5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`](https://github.com/zsoltacsai/wpcaregrid/commit/5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8) | Verified source baseline on 2026-11-13; proposed candidate only, not a release tag or approval. After #384, primary was `28f9061f59c65be8958b67ea54642245a7456a57` on 2026-11-14; this is a historical snapshot. See issue #174 for newer state. |
+| Exact-SHA CI | [Workflow 43386058267](https://github.com/zsoltacsai/wpcaregrid/actions/runs/43386058267), event `push`, exact `head_sha=5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`, `completed/success`; 38/38 check runs `completed/success` | PASS for repository CI only. It does not prove staging behavior or production readiness. |
+| Candidate source review | Exact-SHA reports are preserved at [`QA`](release-evidence/qa-5e0e784.md) (PASS for static route isolation; report SHA-256 `82d6b3ebef14fdde464fa173fbf5a91e11c496577647f4977ac8d3272a17dca4`) and [`AppSec`](release-evidence/appsec-5e0e784.md) (BLOCKED for production acceptance pending runtime worker/scheduler fence evidence; report SHA-256 `c58201104e2170cbc7f73db9da80f02ff596d515ce614eba8bb2e7a4357f6409`). Both reviewed `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`. | HOLD. The AppSec result is not PASS. V3 ledger records are not published: policy V3 requires an exact PR number/head pair, while `5e0e784…` is the protected-primary merge baseline and is not the head of an open release PR. Do not associate the reports with a different PR/head to force a record. |
+| Staging acceptance | No fresh runtime or browser evidence for this exact SHA is recorded in this snapshot | UNKNOWN / HOLD. Run the staging checklist only after its backup, restore, migration, and deployment gates are separately satisfied. |
+| Database migrations | [PR #380](https://github.com/zsoltacsai/wpcaregrid/pull/380), head `eae459a79bc335a032e68d645f961963704d8eac`, has a successful synthetic MySQL 8.4.11 qualification run ([43321682559](https://github.com/zsoltacsai/wpcaregrid/actions/runs/43321682559)). Its measured result is `least_privilege_path=UNRESOLVED_SUPER_ONLY`; the app account fails trigger creation with MySQL error 1419 under binlog ON/trust OFF. | HOLD. This is not production privilege evidence or an accepted production migration procedure. No application/global privilege or MySQL setting change is authorized by this record. |
+| Backup and restore | No current application/config/database backup bound to this candidate and no independently verified isolated restore receipt is recorded here. The earlier restore investigation is paused. | HOLD. A metadata inventory, CI, or synthetic migration test is not restore proof. |
+| Production runtime and scope isolation | No fresh evidence that current runtime settings, payment/order paths, provisioning, workers, or customer features match the marketing-only policy | UNKNOWN / HOLD. Verify on the exact deployed SHA before any release decision. |
+| Production deployment path | [`PRODUCTION_MARKETING_RELEASE_RUNBOOK.md`](PRODUCTION_MARKETING_RELEASE_RUNBOOK.md) still identifies source baseline `cf2a944c27a2a24dbdf1097bf0ba766e6edd48fe` and production helper 2.0.0; the V3 policy says that helper does not yet enforce V3. | HOLD. Reconcile the controller/helper manifest and review-evidence contract with the proposed candidate before any production authorization. Do not infer current compatibility from the historical pin. |
+| GO-6.4 inventory helper | The diagnostic package is handled by the separate [GO-6.2 installation runbook](PRODUCTION_G1_INVENTORY_GO62_INSTALL.md). The helper reports restore proof as `NOT_PROVEN` and database privilege/trigger evidence as `UNKNOWN`. | Separate diagnostic workstream, not a prerequisite to application release. Its install remains HOLD until the root-console gate; helper execution needs its own exact Owner GO. It cannot replace any release gate above. |
+| Production activation | No release authorization for this candidate is recorded | NO-GO until the exact candidate, independent reviews, staging acceptance, migration/restore evidence, rollback, scope isolation, monitoring, and applicable Owner authorization all pass. |
+
+### Proposed release scope and staging acceptance
+
+The proposed candidate is the protected-primary source SHA above. It is not approved
+for production or tagged as a release. The only intended first-release scope is the
+HU/EN public marketing surface. Keep customer registration and operational
+authentication, checkout, live payments, provisioning, Connector onboarding, paid
+SaaS operations, and unfinished customer-facing features unavailable.
+
+Staging acceptance must be fresh and tied to the exact deployed candidate SHA. Record
+the deployed SHA and non-secret environment identity, then verify application boot
+and configuration without printing secret values; database compatibility and
+migration status; HU/EN landing pages; navigation, assets and redirects; HTTPS and
+security headers; disabled customer/payment/provisioning paths; error logging; and
+browser smoke tests at desktop and mobile widths. Negative tests must not create a
+customer, order, payment, service, or Connector onboarding record. A source-level
+feature fence or CI result alone is not staging PASS.
+
+### Migration, restore, and rollback qualification
+
+The current protected controller runs migrations. Before it is used, qualify the
+complete target migration set on an isolated copy restored from a verified backup.
+MySQL 8.4 trigger creation remains an unresolved privilege issue: the synthetic
+qualification observed only a SUPER-assisted path with binlog enabled and
+`log_bin_trust_function_creators=OFF`. The app account must not receive global SUPER;
+do not enable trust-function-creators to bypass the failure. Any DBA-assisted plan
+must define a narrowly controlled operation, its exact grant/revoke lifecycle, the
+trigger DEFINER identity and its durable least-privilege permissions, partial-DDL
+recovery, and post-migration verification. This plan is not yet approved or validated
+for production.
+
+The backup gate requires a fresh, mutually associated application/configuration/
+database backup bound to the exact release SHA and timestamp, integrity verification,
+protected recovery of `.env`/`APP_KEY` without exposing either value, and an actual
+isolated restore with application/config/key pairing and structural/data checks.
+Run release migrations on a separate restored clone. Code rollback does not reverse
+schema changes. Until the Owner sets acceptable maximum data loss (RPO) and recovery
+duration (RTO), both remain `UNKNOWN`; no value is assumed here. Keep the HTTP gate
+closed on any migration, startup, smoke-test, or recovery failure and preserve the
+database state for deliberate recovery rather than running destructive down-migrations.
+
+### GO-6.4 diagnostic workstream boundary
+
+The GO-6.4 package is optional diagnostic tooling for gathering bounded host metadata.
+The production inventory helper is not part of the Laravel application release
+controller, does not inspect database privileges through authentication, and never
+proves a restore. Installation is still blocked on the Owner-only Rackforest
+root-console identity and read-only preflight; no AI/T3 deploy session is an
+acceptable substitute. Its installation or first invocation must not delay source
+review or isolated release planning, and its results cannot be substituted for the
+backup, restore, migration, staging, or exact-release gates.
+
+## Historical owner release-sequence decisions — 2026-11-04
+
+The policy decisions below remain relevant where consistent with the current
+snapshot. All host/runtime/backup/staging observations and exact-source references
+in the November 4 tables are historical only and must be refreshed before use.
 
 ### Latest decision: marketing-only MVP and backup/restore reprioritization
 
@@ -28,11 +116,11 @@ The controller's pre-deploy backup operation creates a protected database dump a
 
 The first production target is the **HU/EN marketing-only MVP**. Customer registration, Stripe Checkout/webhook provisioning, subscription activation, Connector onboarding, paid services and live payments are out of scope and must remain unavailable. Paid service activation follows separate service, financial and operational readiness gates. Full M15 customer-facing Backup & Restore is a post-production milestone. Infrastructure backup/recovery requirements depend on whether the selected supported release path can change database state, as specified in the current decision above.
 
-### Initial release gates for the enabled scope
+### Initial release gates for the enabled scope — historical snapshot as of 2026-11-04
 
-| Gate | Current evidence/state | Release acceptance |
+| Gate | State recorded 2026-11-04 | Release acceptance |
 | --- | --- | --- |
-| Exact source and CI | Current primary `06d35a28453445ed19bdc11e62592e187e17dbf8`; merge CI `41817511959` — 38/38 PASS. | Recheck target SHA and mandatory jobs immediately before release. CI does not establish staging behavior. |
+| Exact source and CI | Primary observed at that time `06d35a28453445ed19bdc11e62592e187e17dbf8`; merge CI `41817511959` — 38/38 PASS. | Recheck target SHA and mandatory jobs immediately before release. CI does not establish staging behavior. |
 | Marketing-only application QA | Marketing E2E `41748568634` — PASS on application SHA `7355788882e026db7c4a6d37db2b957740b5f385`; later primary changes were documentation-only. | Revalidate HU/EN routes, informational pricing, navigation, CTA/contact, responsive layouts, SEO and negative access checks for registration, checkout, payment, service provisioning and SaaS/background actions on the deployed exact SHA. |
 | Server PHP policy | PHP 8.4 is the staging/rollback baseline. Server CI covers PHP 8.4 and 8.5. | Keep staging baseline on 8.4. Complete 8.5 compatibility validation in CI or an approved isolated environment; this is not a PHP 8.5 cutover authorization. Connector PHP matrix remains separate and unchanged. |
 | Pre-deployment backup | Fresh, mutually associated application/configuration/database backup is not currently evidenced. The controller creates only the DB dump; no application/config snapshot or restore proof is produced by that step. | Capture immediately before a state-changing deployment; verify identity, completeness and hashes; protect `.env`/`APP_KEY` through approved secret recovery without exposing values. |
@@ -42,14 +130,14 @@ The first production target is the **HU/EN marketing-only MVP**. Customer regist
 | Production readiness | Must be evaluated against the explicitly enabled production scope. | Complete applicable security, legal/accounting, monitoring, access/secrets and release-authorization gates. Deferred M15 product gates are not silently enabled or claimed complete. |
 | Scope isolation | Owner has approved marketing-only first release; no actual production/staging sync yet. | Prove public marketing routes work and registration, checkout, Stripe webhook provisioning, Connector onboarding, customer service and SaaS background activity remain blocked. Do not accept a source-only claim instead of exact staging/browser checks. |
 
-**Current decision:** restore provisioning and transfer investigation are paused; no alternative transfer is authorized. `STAGING_DEPLOY=NO-GO` for the current controller path until verified recovery proof and all other release gates pass. The Owner-reported weekly provider backup is not restore proof. Do not contact the provider or attempt another transport.
+**Decision recorded 2026-11-04:** restore provisioning and transfer investigation were paused; no alternative transfer is authorized. `STAGING_DEPLOY=NO-GO` for the current controller path until verified recovery proof and all other release gates pass. The Owner-reported weekly provider backup is not restore proof. Do not contact the provider or attempt another transport.
 
-### MVP scope and staging sync — current evidence 2026-11-04
+### MVP scope and staging sync — historical snapshot as of 2026-11-04
 
-| Item | Current state | Acceptance / limitation |
+| Item | State recorded 2026-11-04 | Acceptance / limitation |
 |---|---|---|
-| Authoritative primary | `06d35a28453445ed19bdc11e62592e187e17dbf8`; exact merge CI `41817511959` passed 38/38. | Recheck exact current target and all mandatory jobs immediately before staging or production release. |
-| Staging application SHA | `761e0e5d37558da808ac961ca2d2a68b4ffab0db`, rechecked through `caregrid-staging` on 2026-11-04 11:27 UTC; worktree clean; PHP CLI 8.4.27. | Primary is 546 commits ahead. The target includes application, billing, Connector, backup, migrations, deployment/runtime, localization and marketing changes. Use the full protected exact-SHA controller release; do not cherry-pick marketing files. |
+| Authoritative primary at that time | `06d35a28453445ed19bdc11e62592e187e17dbf8`; exact merge CI `41817511959` passed 38/38. | Recheck exact current target and all mandatory jobs immediately before staging or production release. |
+| Staging application SHA at that time | `761e0e5d37558da808ac961ca2d2a68b4ffab0db`, rechecked through `caregrid-staging` on 2026-11-04 11:27 UTC; worktree clean; PHP CLI 8.4.27. | Primary was 546 commits ahead. The target includes application, billing, Connector, backup, migrations, deployment/runtime, localization and marketing changes. Use the full protected exact-SHA controller release; do not cherry-pick marketing files. |
 | Exact-source acceptance | Merge CI `41817511959` = 38/38 PASS; Marketing E2E `41748568634` = PASS on application SHA `7355788882e026db7c4a6d37db2b957740b5f385`, with later primary changes documentation-only. | Repository evidence only. It does not establish deployed staging behavior; actual browser QA follows a successful exact-SHA deploy. |
 | Staging deploy | **NO-GO** | The full Laravel controller runs migrations. Do not deploy until fresh backup, isolated restore/recovery proof, target migration rehearsal, current runtime/fencing/controller checks and post-deploy acceptance are evidenced. No alternate architecture is authorized. |
 | PHP policy | PHP 8.4 is staging/rollback baseline; PHP 8.5 is planned compatibility validation only. | Keep server CI on 8.4/8.5. No PHP 8.5 cutover; Connector matrix remains unchanged. |
