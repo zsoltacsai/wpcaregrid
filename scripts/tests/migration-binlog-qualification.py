@@ -99,7 +99,54 @@ def mysqlbinlog_query_statement(event):
 
 
 def split_sql_statements(text):
-    """Split at semicolons outside quoted strings and identifiers."""
+    """Strip SQL comments and split at semicolons outside quoted text."""
+    cleaned = []
+    index = 0
+    quote = None
+    while index < len(text):
+        char = text[index]
+        if quote:
+            cleaned.append(char)
+            if char == '\\' and quote in ("'", '"') and index + 1 < len(text):
+                index += 1
+                cleaned.append(text[index])
+            elif char == quote:
+                if index + 1 < len(text) and text[index + 1] == quote:
+                    index += 1
+                    cleaned.append(text[index])
+                else:
+                    quote = None
+            index += 1
+            continue
+        if char in ("'", '"', '`'):
+            quote = char
+            cleaned.append(char)
+            index += 1
+            continue
+        if text.startswith('/*!', index):
+            end = text.find('*/', index + 3)
+            if end < 0:
+                return []
+            body = re.sub(r'^\d+', '', text[index + 3:end]).strip()
+            cleaned.extend((' ', body, ' '))
+            index = end + 2
+            continue
+        if text.startswith('/*', index):
+            end = text.find('*/', index + 2)
+            if end < 0:
+                return []
+            cleaned.append(' ')
+            index = end + 2
+            continue
+        if char == '#' or (text.startswith('--', index) and
+                            (index + 2 == len(text) or text[index + 2].isspace())):
+            end = text.find('\n', index)
+            index = len(text) if end < 0 else end
+            cleaned.append(' ')
+            continue
+        cleaned.append(char)
+        index += 1
+    text = ''.join(cleaned)
     statements = []
     start = 0
     quote = None
@@ -130,29 +177,30 @@ def split_sql_statements(text):
 def logged_trigger_names(event_type, info, expected_names, schema, definer):
     if event_type != 'Query':
         return set()
-    # Match only the actual Query statement at its beginning. A USE context is
-    # applied by the stream parser, because mysqlbinlog elides unchanged USEs.
-    # These migrations use CREATE TRIGGER without DEFINER. If mysqlbinlog renders
-    # a server-normalized DEFINER clause, accept its syntax here; the created
-    # trigger's actual DEFINER is independently checked in information_schema.
-    # The server's binlog formatter has emitted several valid account spellings.
-    # Require a nonempty DEFINER clause syntactically, then validate the actual
-    # installed account through information_schema below.
+    # Session prelude may be included in the same Query event. Permit only
+    # USE/SET and mysqlbinlog's observed one-letter charset marker before DDL.
+    user_part = r"(?:`[^`]+`|'[^']+'|[A-Za-z0-9_.$-]+)"
+    host_part = r"(?:`[^`]+`|'[^']+'|[A-Za-z0-9_.$:%-]+)"
+    definer_part = rf"(?:CURRENT_USER(?:\(\))?|{user_part}\s*@\s*{host_part})"
     create_pattern = re.compile(
-        r"^\s*CREATE\s+(?:DEFINER\s*=\s*.+?\s+)?TRIGGER\s+",
-        re.IGNORECASE | re.DOTALL,
+        rf"^\s*CREATE\s+(?:DEFINER\s*=\s*{definer_part}\s+)?TRIGGER\s+",
+        re.IGNORECASE,
     )
     for statement in split_sql_statements(info):
         use = re.fullmatch(r"(?is)USE\s+[`']?([A-Za-z0-9_]+)[`']?", statement)
         if use and use.group(1).casefold() != schema.casefold():
             return set()
+        if use or re.match(r'(?is)^SET\b', statement) or re.fullmatch(
+                r'(?is)C\s+[A-Za-z0-9_]+', statement):
+            continue
         create = create_pattern.match(statement)
         if create is None:
-            continue
+            return set()
         for name in expected_names:
             name_token = rf"(?:`{re.escape(name)}`|'{re.escape(name)}'|{re.escape(name)})"
             if re.match(rf"{name_token}(?:\s|$)", statement[create.end():], re.IGNORECASE):
                 return {name}
+        return set()
     return set()
 
 
@@ -174,49 +222,10 @@ def mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, defi
                 stats[name]['events'] += 1
                 if current_schema is not None and current_schema.casefold() == schema.casefold():
                     stats[name]['schema'] += 1
-                    first = re.match(r'\s*([A-Za-z_]+)', statement)
-                    stats[name]['first'] = first.group(1).upper() if first else 'EMPTY'
-                    stripped_statement = statement.lstrip()
-                    stats[name]['leadcp'] = ord(stripped_statement[0]) if stripped_statement else 0
-                    without_leading_ticks = stripped_statement.lstrip('`')
-                    next_word = re.match(r'([A-Za-z_]+)', without_leading_ticks.lstrip())
-                    stats[name]['next_word'] = next_word.group(1).upper() if next_word else 'EMPTY'
-                    stats[name]['leading_ticks'] = len(stripped_statement) - len(stripped_statement.lstrip('`'))
-                    without_leading_slashes = stripped_statement.lstrip('\\')
-                    after_slashes = re.match(r'([A-Za-z_]+)', without_leading_slashes.lstrip())
-                    stats[name]['after_slashes'] = after_slashes.group(1).upper() if after_slashes else 'EMPTY'
-                    stats[name]['leading_slashes'] = len(stripped_statement) - len(stripped_statement.lstrip('\\'))
-                    stats[name]['create_token'] = bool(re.search(r'\bCREATE\b', statement, re.IGNORECASE))
-                    stats[name]['definer_token'] = bool(re.search(r'\bDEFINER\b', statement, re.IGNORECASE))
-                    stats[name]['trigger_token'] = bool(re.search(r'\bTRIGGER\b', statement, re.IGNORECASE))
-                    trigger = re.search(r'\bTRIGGER\s+([\x60\']?[A-Za-z0-9_]+)', statement, re.IGNORECASE)
-                    stats[name]['after_trigger'] = trigger.group(1).strip("`'").casefold() == name.casefold() if trigger else False
                 if logged_trigger_names('Query', statement, [name], schema, definer):
                     stats[name]['ddl'] += 1
                     if current_schema is not None and current_schema.casefold() == schema.casefold():
                         matched.add(name)
-                elif name == 'transition_v2_requests_immutable_insert':
-                    create_prefix = bool(re.match(r'^\s*CREATE\b', statement, re.IGNORECASE))
-                    trigger_token = re.search(r'\bTRIGGER\s+', statement, re.IGNORECASE)
-                    create_ddl_pattern = bool(re.match(
-                        r'^\s*CREATE\s+(?:DEFINER\s*=\s*.+?\s+)?TRIGGER\s+',
-                        statement, re.IGNORECASE | re.DOTALL))
-                    expected_name = bool(trigger_token and re.match(
-                        rf"(?:`{re.escape(name)}`|'{re.escape(name)}'|{re.escape(name)})(?:\s|$)",
-                        statement[trigger_token.end():], re.IGNORECASE))
-                    definer_clause = bool(re.search(r'\bDEFINER\s*=', statement, re.IGNORECASE))
-                    stats[name]['matcher_debug'] = (
-                        f'create={int(create_prefix)},ddl={int(create_ddl_pattern)},'
-                        f'trigger={int(bool(trigger_token))},'
-                        f'name={int(expected_name)},definer={int(definer_clause)},'
-                        f'cp1={".".join(str(ord(c)) for c in statement[:16])},'
-                        f'cp2={".".join(str(ord(c)) for c in statement[16:32])},'
-                        f'cp3={".".join(str(ord(c)) for c in statement[32:48])},'
-                        f'cp4={".".join(str(ord(c)) for c in statement[48:64])}'
-                    )
-                    stats[name]['statement_prefix_tail'] = '.'.join(
-                        str(ord(c)) for c in statement[64:96]
-                    )
     return matched, stats
 
 
@@ -317,6 +326,27 @@ def self_test():
         assert logged_trigger_names(
             'Query', 'CREATE DEFINER=other@% TRIGGER guard_x BEFORE INSERT', expected,
             'wpcg_qual_a', 'u') == {'guard_x'}
+        assert logged_trigger_names(
+            'Query', 'CREATE DEFINER=CURRENT_USER TRIGGER guard_x BEFORE INSERT', expected,
+            'wpcg_qual_a', 'u') == {'guard_x'}
+        for false_ddl in (
+            'CREATE DEFINER=u@% PROCEDURE p() BEGIN DROP TRIGGER guard_x; END',
+            'CREATE DEFINER=u@% EVENT e DO DROP TRIGGER guard_x',
+            "CREATE DEFINER=u@% VIEW v AS SELECT 'TRIGGER guard_x'",
+            'SELECT 1; CREATE TRIGGER guard_x BEFORE INSERT',
+            'SELECT 1 /* ; CREATE TRIGGER guard_x */',
+            '-- comment ; CREATE TRIGGER guard_x\nSELECT 1',
+            '# comment ; CREATE TRIGGER guard_x\nSELECT 1',
+        ):
+            assert not logged_trigger_names(
+                'Query', false_ddl, expected, 'wpcg_qual_a', 'u')
+        assert logged_trigger_names(
+            'Query', '/* comment ; CREATE PROCEDURE p() */ '
+            'CREATE TRIGGER guard_x BEFORE INSERT', expected,
+            'wpcg_qual_a', 'u') == {'guard_x'}
+        assert logged_trigger_names(
+            'Query', "SET @marker='x;y'; CREATE TRIGGER guard_x BEFORE INSERT",
+            expected, 'wpcg_qual_a', 'u') == {'guard_x'}
         assert not logged_trigger_names('Query', 'use wpcg_qual_a; DROP TRIGGER guard_x',
                                         expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names('Query', 'use another; CREATE DEFINER=u@% TRIGGER guard_x',
@@ -476,15 +506,10 @@ def trigger_ddl_logged(expected_names, schema, dba):
     # mysqlbinlog decorates statements with version comments such as /*!*/;.
     # Remove those wrappers only in memory; never emit raw log content.
     log_text = re.sub(r'/\*!\d*\s*(.*?)\*/', r'\1', ''.join(output_parts), flags=re.DOTALL)
-    candidates = sorted(set(re.findall(r'\bTRIGGER\s+[\x60\']?([A-Za-z0-9_]+)',
-                                      log_text, re.IGNORECASE)))
-    name_hits = sorted(name for name in expected_names if name.upper() in log_text.upper())
     record('mysqlbinlog_token_counts', 'OBSERVED',
            f"create={len(re.findall(r'\bCREATE\b', log_text, re.IGNORECASE))},"
            f"trigger={len(re.findall(r'\bTRIGGER\b', log_text, re.IGNORECASE))},"
            f"schema={log_text.upper().count(schema.upper())},definer={log_text.upper().count(dba.upper())}")
-    record('mysqlbinlog_trigger_candidates', 'OBSERVED', '+'.join(candidates) or 'none')
-    record('mysqlbinlog_expected_name_hits', 'OBSERVED', '+'.join(name_hits) or 'none')
     matched = set()
     diagnostics = {name: {'events': 0, 'schema': 0, 'ddl': 0} for name in expected_names}
     for output in output_parts:
@@ -496,20 +521,10 @@ def trigger_ddl_logged(expected_names, schema, dba):
         for name in expected_names:
             for key in ('events', 'schema', 'ddl'):
                 diagnostics[name][key] += file_stats[name][key]
-            for key in ('first', 'leadcp', 'next_word', 'leading_ticks', 'create_token',
-                        'definer_token', 'trigger_token', 'after_trigger', 'after_slashes',
-                        'leading_slashes', 'matcher_debug', 'statement_prefix_tail'):
-                if key in file_stats[name]:
-                    diagnostics[name][key] = file_stats[name][key]
     for name in sorted(expected_names):
         detail = ','.join(f'{key}={diagnostics[name].get(key, 0)}' for key in
-                          ('events', 'schema', 'ddl', 'first', 'leadcp', 'next_word', 'leading_ticks',
-                           'after_slashes', 'leading_slashes', 'create_token', 'definer_token',
-                           'trigger_token', 'after_trigger'))
+                          ('events', 'schema', 'ddl'))
         record(f'mysqlbinlog_match_{name}', 'PASS' if name in matched else 'FAIL', detail)
-        if name in diagnostics and 'matcher_debug' in diagnostics[name]:
-            record(f'mysqlbinlog_match_detail_{name}', 'OBSERVED', diagnostics[name]['matcher_debug'])
-            record(f'mysqlbinlog_match_prefix_tail_{name}', 'OBSERVED', diagnostics[name].get('statement_prefix_tail', ''))
     record('mysqlbinlog_matched_trigger_names', 'OBSERVED', '+'.join(sorted(matched)) or 'none')
     return matched == set(expected_names), (
         f'files={len(files)},bytes={total_bytes},matched={len(matched)},expected={len(expected_names)}'
