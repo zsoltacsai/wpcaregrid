@@ -3,11 +3,18 @@
 **Dátum:** 2026-11-13  
 **Státusz:** dokumentációs/read-only előkészítés; production **NO-GO**.  
 **Release candidate:** 5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8  
-**Protected primary:** claude/ecstatic-wozniak-oemyuf, aktuális SHA 5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8.
+**Protected primary a dokumentum készítésekor:** claude/ecstatic-wozniak-oemyuf, SHA 5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8.
+
+> **Történeti pillanatkép — 2026-11-14:** A #395, #396 és #385 integrációja után
+> a protected primary `198e32d127c782bf80ff7ca837f06df82d50655a`. Ez a GO-7.2A
+> dokumentum a 2026-11-13-i `5e0e784…` állapotot rögzíti; nem aktuális staging,
+> production, CI vagy üzemeltetési bizonyíték. A `5e0e784…` kandidátusazonosságot
+> nem módosítottuk. Az aktuális bizonyítékok az issue #174 ledgerben követhetők.
+> Production továbbra is NO-GO.
 
 Ez a dokumentum nem bizonyít friss staging vagy production runtime állapotot, és nem engedélyez host-, adatbázis-, staging- vagy production-műveletet.
 
-## 1. Aktuális GitHub állapot
+## 1. GitHub állapot a dokumentum készítésekor
 
 - A GitHub branch API a protected primary refet protected=true állapotban és a fenti SHA-n adta vissza.
 - A [CI run 43386058267](https://github.com/zsoltacsai/wpcaregrid/actions/runs/43386058267) ehhez a pontos SHA-hoz tartozik; push esemény, completed/success, a check-runs API 38/38 completed/success eredményt adott.
