@@ -79,6 +79,11 @@ def created_tables(directory, name):
     return re.findall(r"Schema::create\('([a-z0-9_]+)'", (Path(directory) / name).read_text(encoding='utf-8'))
 
 
+def mysql_output(text):
+    # Keep tabs in an empty final field; remove only record terminators.
+    return text.rstrip('\r\n')
+
+
 def classify(text):
     """Return (sqlstate, errno) from PHP/PDO or mysql-client error text, else ('NONE','NONE')."""
     m = re.search(r'SQLSTATE\[([0-9A-Z]{5})\]: [^:\n]+: ([0-9]{1,5})\b', text or '')
@@ -96,6 +101,8 @@ def self_test():
     assert classify('SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate') == ('23000', '1062')
     assert classify('all good') == ('NONE', 'NONE')
     assert safe('a b\nc;`x') == 'a_b_c__x'
+    binlog_row = mysql_output('bin.000001\t4\tStop\t1\t4\t\n')
+    assert binlog_row.endswith('\t') and len(binlog_row.split('\t', 5)) == 6
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
         (d / '2026_01_01_000001_a.php').write_text('<?php // plain', encoding='utf-8')
@@ -138,7 +145,7 @@ def run_mysql(user, password, sql, schema=None):
     cmd += ['--execute', sql]
     r = subprocess.run(cmd, env={**os.environ, 'MYSQL_PWD': password}, stdin=subprocess.DEVNULL,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
-    return r.returncode, r.stdout.strip(), classify(r.stderr)
+    return r.returncode, mysql_output(r.stdout), classify(r.stderr)
 
 
 def admin(sql, schema=None):
