@@ -212,9 +212,11 @@ def trigger_rows(schema):
     return [line.split('\t') for line in out.splitlines()] if out else []
 
 
-def trigger_ddl_logged(expected_names):
+def trigger_ddl_logged(expected_names, schema, dba):
     logs = admin('SHOW BINARY LOGS').splitlines()
-    stats = {'logs': len(logs), 'events': 0, 'query_events': 0, 'trigger_events': 0, 'matched': 0}
+    stats = {'logs': len(logs), 'events': 0, 'query_events': 0, 'create_queries': 0,
+             'trigger_mentions': 0, 'schema_mentions': 0, 'definer_mentions': 0,
+             'expected_name_mentions': 0, 'trigger_events': 0, 'matched': 0}
     def result(ok):
         return ok, ','.join(f'{key}={value}' for key, value in stats.items()) + f',expected={len(expected_names)}'
     if not logs or len(logs) > 20:
@@ -237,6 +239,12 @@ def trigger_ddl_logged(expected_names):
                 stats['events'] += 1
                 if columns[2] == 'Query':
                     stats['query_events'] += 1
+                    info_upper = columns[5].upper()
+                    stats['create_queries'] += int('CREATE' in info_upper)
+                    stats['trigger_mentions'] += int('TRIGGER' in info_upper)
+                    stats['schema_mentions'] += int(schema.upper() in info_upper)
+                    stats['definer_mentions'] += int(dba.upper() in info_upper)
+                    stats['expected_name_mentions'] += int(any(name.upper() in info_upper for name in expected_names))
                 names = logged_trigger_names(columns[2], columns[5], expected_names)
                 if names:
                     stats['trigger_events'] += 1
@@ -452,7 +460,7 @@ def main():
         ok &= require_contract('trigger_definer_is_dba_account', definers == [f'{dba}@%'], f'distinct_definers={len(definers)}')
         record('trigger_definition_sha256', 'OBSERVED',
                hashlib.sha256('|'.join(f'{r[0]}:{r[6]}' for r in rows).encode()).hexdigest())
-        binlog_ok, binlog_detail = trigger_ddl_logged([r[0] for r in rows])
+        binlog_ok, binlog_detail = trigger_ddl_logged([r[0] for r in rows], schema, dba)
         ok &= require_contract('trigger_ddl_present_in_bounded_binlog_read', binlog_ok, binlog_detail)
 
         # 10. idempotence: reviewed up() re-run as the app account verifies definitions without SUPER/trust
