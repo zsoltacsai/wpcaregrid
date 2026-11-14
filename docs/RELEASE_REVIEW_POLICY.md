@@ -88,7 +88,12 @@ decision for that exact role/PR/head, so it cannot reveal an earlier PASS that t
 record followed. Only a new, valid PASS comment created after the correction can restore
 that role. Malformed, ambiguous, forged, stale-subject, duplicate, or non-Owner
 corrections do not suppress the original fail-closed error. No historical comment is
-deleted, rewritten, whitelisted, or silently ignored.
+deleted or rewritten. One Owner-authored malformed duplicate correction is explicitly
+treated as inert: comment `6880748416` is ignored only when its complete body SHA-256 is
+`60283180a007514373b50d90bc49400fefbdf91495d28435777640b1293a750d`. It is not a
+correction, does not invalidate its target, and cannot satisfy the target's separate
+valid-correction requirement. Any edit to that comment, reuse of its body under another
+ID, or any other malformed Owner correction remains blocking.
 
 The parser change is a proposal pending independent QA/AppSec review and separate Owner
 authorization before integration. It does not post correction comments automatically.
