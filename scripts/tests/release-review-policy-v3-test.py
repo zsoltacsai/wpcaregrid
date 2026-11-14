@@ -229,6 +229,27 @@ class AgentReviewTests(unittest.TestCase):
                                      sha="aecc24e679de7537385d2625bbf6ef9455a89303"),
                              "review_correction_target_invalid")
 
+    def test_only_exact_allowlisted_comment_ids_and_body_hashes_are_correctable(self):
+        allowed = actual_pr377_legacy_records()[0]
+        target_sha = "4196dab735b2f73dd2b207afa960596741eda8c5"
+        good_correction = correction(allowed, 7_000_000_001, sha=target_sha)
+        self.assertEqual(refusal([allowed, good_correction], pr=377, sha=target_sha),
+                         "review_evidence_missing")
+
+        altered_body = dict(allowed, body=allowed["body"].replace("7ba0b9", "8ba0b9"))
+        changed_id = dict(allowed, id=6_834_079_555)
+        for target in (altered_body, changed_id):
+            attempted = correction(target, 7_000_000_002, sha=target_sha)
+            self.assertEqual(refusal([target, attempted], pr=377, sha=target_sha),
+                             "review_correction_target_invalid")
+
+        for kwargs in ({"pr": 378}, {"sha": SHA}, {"role": "appsec"}):
+            args = {"pr": 377, "sha": target_sha, "role": "integration_qa"}
+            args.update(kwargs)
+            attempted = correction(allowed, 7_000_000_003, **args)
+            self.assertEqual(refusal([allowed, attempted], pr=377, sha=target_sha),
+                             "review_correction_subject_mismatch")
+
     def test_invalidation_supersedes_prior_pass_until_fresh_role_pass(self):
         old = actual_pr377_legacy_records()[0]
         invalidation = correction(old, 7_000_000_001,
